@@ -357,19 +357,7 @@ serving entry and `fabrika job run` are launchers: handed
 `FABRIKA_APP_RUNTIME_DATABASE_URL` in its place (stdio inherited, signals
 forwarded, the exit code propagated). The application's environment, its
 `/proc/self/environ` and anything it spawns carry the runtime credential only.
-`fabrika db test-isolation` runs the generated tests, which load application
-code, with a throwaway provisioner instead: `fabrika_tests_<hex>`, with
-`CREATEROLE` and `CREATE` on the database and nothing of any application,
-dropped after the run with every role family it created. That needs Postgres 16
-or later, where a `CREATEROLE` role administers only the roles it created. A run
-killed before it drops them (a container's memory limit) leaves a privileged role
-behind, so the provisioner logs in for 15 minutes only (`VALID UNTIL`), and each
-run first sweeps, as the provisioning credential, every expired provisioner (or
-one without a validity, from a release before it) that has no session, neither
-as itself nor as a role it created, with everything it administers. A concurrent
-run's provisioner is still valid, so it is never swept; the sweep holds an
-advisory lock it only tries, so two runs never sweep at once and none waits. The
-test kit migrates each throwaway schema as its own migration role and connects
+The test kit migrates each throwaway schema as its own migration role and connects
 and seeds as its runtime role. It holds at most four connections per test file,
 and waits for a free one rather than fail a case on a database at its limit
 ([ADR-0043](0043-validate-and-render-one-zerops-descriptor-meaning.md)). Before it starts the application, the launcher
@@ -382,12 +370,12 @@ elsewhere (a development machine) it warns once.
 not one application's: it is the credential of the database every application
 of a deployment shares.
 
-| Where                     | The application database                                                                                       | The provisioning credential                                       |
-| ------------------------- | -------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Zerops, `cheap` namespace | One namespace-owned `postgres` service; every application of the namespace has its schema in its database `db` | The service's superuser, the same for every application           |
-| Zerops, `mid` / `full`    | The application's own PostgreSQL service                                                                       | That service's superuser                                          |
-| Local stack               | `apps-db`, one Postgres for the `apps-prod` network (today Notes only)                                         | Its superuser                                                     |
-| Test backends             | One shared cluster, a throwaway schema and role family per test database                                       | Its superuser; a `test-isolation` run's tests get a throwaway one |
+| Where                     | The application database                                                                                       | The provisioning credential                             |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| Zerops, `cheap` namespace | One namespace-owned `postgres` service; every application of the namespace has its schema in its database `db` | The service's superuser, the same for every application |
+| Zerops, `mid` / `full`    | The application's own PostgreSQL service                                                                       | That service's superuser                                |
+| Local stack               | `apps-db`, one Postgres for the `apps-prod` network (today Notes only)                                         | Its superuser                                           |
+| Test backends             | One shared cluster, a throwaway schema and role family per test database                                       | Its superuser                                           |
 
 In a shared database the provisioning credential created every application's
 role family, so it administers all of them: it may reset any of their

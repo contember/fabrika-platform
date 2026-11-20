@@ -186,9 +186,9 @@ export default serve(contract, { database: scoped(tables) })
   waits for the kicked runs.
 - `src/app.ts` composes and does nothing else. A dependency built from the application's own variables is
   `defineDeps(build)`, passed as `serve(contract, { database, deps })` and read in a handler with `get()`. Never read
-  `process.env`. `build` runs at every boot, the generated tests' too, which pass no variable: read a variable when
-  the dependency is used, and fail there (`src/links.ts` in `references/public-intake.md`). A handler of an endpoint the
-  generated tests cover records an outbox row instead, and a job calls the dependency (`references/endpoint.md`).
+  `process.env`. `build` runs at every boot, a test kit's too, which passes only the variables a test gives it: read a
+  variable when the dependency is used, and fail there (`src/links.ts` in `references/public-intake.md`). An endpoint
+  records an outbox row instead, and a job calls the dependency (`references/endpoint.md`).
   E-mail needs no dependency: a job that declares `mailer` sends through `ctx.mail` (`references/jobs.md`).
 
 ## The deploy surface (Zerops)
@@ -253,8 +253,8 @@ resolves every dependency afresh. `fabrika app build` refuses a base that cannot
 use.
 
 The platform's build runs the tests, writes the entrypoint, runs `fabrika-check` and the type check. Its init commands
-run `fabrika db migrate`, `fabrika db codegen --verify` and `fabrika db test-isolation` before the server starts: a
-version does not go live until every generated test passes. It writes every `FABRIKA_*` variable; never set one.
+run `fabrika db migrate` and `fabrika db codegen --verify` before the server starts: a version whose generated schema
+does not match its migrations does not go live. It writes every `FABRIKA_*` variable; never set one.
 
 ## The deploy surface (Cloudflare)
 

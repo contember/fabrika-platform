@@ -29,7 +29,7 @@ Usage:
   fabrika env <inspect|maintenance|operations|recover|backups|restore> <app> <env> [arguments] [--json]
   fabrika operations <issues|issue|releases|health> [options] [--json]
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]
-  fabrika db <new|migrate|codegen|test-scaffold|test-isolation> [options]
+  fabrika db <new|migrate|codegen> [options]
   fabrika job run <name>
   fabrika connect <add|pull> <app>/<export>@<version> --consumer=<app> --env=<env> [--url=<control origin>]
 

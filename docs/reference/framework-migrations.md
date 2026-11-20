@@ -18,8 +18,8 @@ this page.
 3. Run `bun install` and commit `bun.lock`. Control reads the release from the `@fabrika/app` entry of the `bun.lock`
    at the application's root, and refuses a commit without one.
 4. Follow the section of each minor you cross, oldest first.
-5. Regenerate and check: `fabrika db codegen` after the migrations, `fabrika db test-scaffold` for the generated
-   tests, then `fabrika-check` and the application's tests. The skill in `node_modules/@fabrika/app/skill/` describes
+5. Regenerate and check: `fabrika db codegen` after the migrations, then `fabrika-check` and the application's
+   tests. The skill in `node_modules/@fabrika/app/skill/` describes
    the new release.
 
 ## 0.8 → 0.9
@@ -31,6 +31,15 @@ runs in one Durable Object over its own SQLite
 ([ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)): `ctx.db`
 and table policies, jobs and kicks, webhooks, public procedures, file kinds (stored in R2), signed tokens and
 installation mail all run there. On 0.8 its Worker was stateless, and the deploy refused each of them.
+
+0.9 generates no access or isolation tests: the proxy and the data layer enforce the access forms and the policies, and
+fabrika tests that enforcement itself. Once the platform that deploys the application runs this release or a newer
+one, delete `src/db/__tests__/*.policy-isolation.test.ts`, `src/__tests__/endpoint-access.test.ts` and
+`src/__tests__/endpoint-access.fixtures.ts`, and any formatter exclude of them. A platform up to 0.9.0-dev.18 builds
+the application with its own checker, which refuses a deploy without them. `fabrika db test-scaffold` is gone, `fabrika db test-isolation` runs nothing (a platform up to 0.9.0-dev.18 still
+calls it), and the checker no longer reports
+`generated-test-hash`, `endpoint-fixture` or `generated-test-import`. On Zerops the init commands run `fabrika db
+migrate` and `fabrika db codegen --verify` only. The application's own tests stay.
 
 On Postgres the runtime role reads a view but no longer writes or locks one. A `ctx.sql` `'write'` site that inserts,
 updates or deletes through a view, or locks one with `FOR UPDATE`/`FOR SHARE` (also a bare lock over a join that reads a
@@ -76,8 +85,8 @@ An application on Cloudflare that raises its pin to 0.9:
 2. Writes its migrations in SQLite under `db/migrations/` (the skill's `references/table-and-migration.md`), runs
    `fabrika db codegen`, which needs no database URL, and serves `scoped(tables)` from `defineApp(vocabulary, tables)`
    as on Zerops. There is no `fabrika db migrate`: the object applies the framework's tables and then the
-   application's migrations when it boots. `fabrika db test-scaffold` writes the generated tests on
-   `@fabrika/db/testing-sqlite`, which runs in memory; the application's own tests import `testDatabase` from there.
+   application's migrations when it boots. The application's own tests import `testDatabase` from
+   `@fabrika/db/testing-sqlite`, which runs in memory.
    An application without tables skips this step.
 3. Keeps every procedure's and webhook's `limits.timeoutMs` at or below 25 s and declares no file kind with
    `scan: true`: a handler holds the object's transaction, and no scanner runs there. The checker (`cloudflare-scan`),
@@ -616,18 +625,7 @@ Steps:
    | `POST /api/files.<c>.remove`                  | a mutation that removes the row; the sweep deletes the unreferenced file                 |
    | `link: true` (the link mount's files)         | link procedures (`l.mutation`, `l.query`) with the same inputs and outputs               |
 
-   `download` and `remove` take a row's id. Name that field in `rows` of `src/__tests__/endpoint-access.fixtures.ts`,
-   with the row's table, so the generated access tests seed a row and send its key
-   ([`references/tests.md`](../../packages/app/skill/references/tests.md) of the skill):
-
-   ```ts
-   export const rows = {
-   	'api.attachments.download': { id: 'deal_attachments' },
-   	'api.attachments.remove': { id: 'deal_attachments' },
-   }
-   ```
-
-   Without it they send a sample id, the handler answers 404, and the generated tests fail.
+   `download` and `remove` take a row's id.
 
 6. **Move the client.** `api.files.<c>.upload(owner, file)` becomes `api.attachments.upload({ dealId, name, file })`.
    A `GET` file procedure has `api.attachments.download.url(input)` for a same-origin page (`<img src>`,

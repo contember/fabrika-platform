@@ -607,10 +607,10 @@ loses them. It commits after the handler returned, its output passed validation 
 encoded; a throw, a refused output, a file over its limit, a cancelled request or a statement the database refused
 rolls it back, and nothing the handler wrote is kept. A request handler's `ctx.signal` aborts when the client leaves
 or the handler runs past its `limits.timeoutMs` (10 s by default, at most 60 s, counted from the last body byte); its
-transaction then cannot commit (`request_cancelled`). An endpoint the generated tests cover
-calls no outside service: it records an outbox row in its transaction and a job makes the call, because the generated
-tests boot without the application's variables and a call does not roll back. A call that is the request's whole
-purpose lives in a `{ member: true }` endpoint, which they do not cover, and takes `ctx.signal`. No endpoint sends
+transaction then cannot commit (`request_cancelled`). An endpoint calls no
+outside service: it records an outbox row in its transaction and a job makes the call, because a call does not roll
+back. A call that is the request's whole purpose lives in a `{ member: true }` endpoint, which takes
+`ctx.signal`. No endpoint sends
 e-mail: it has no `ctx.mail`, so it records the message and kicks the job that sends it ([Kicks](#kicks)). A query
 and an export refuse every write and lock before anything is sent, and read in a `READ ONLY` transaction on Postgres; on
 a Durable Object's SQLite each statement runs in a transaction of its own, which rolls back one that wrote. IAM (a
@@ -1706,8 +1706,8 @@ reviewed too (`diff.ts:292`).
 | The framework's binding of the data layer and its test kit stay out of application code                                                                                                                                                                                                       | checker, runtime             | none                                                                                                  | `packages/check/src/rules/modules.ts:58`, `:108`; `packages/check/src/rules/framework.ts:149`; `packages/db/src/production.ts:22`                                                                                        |
 | The application reads no environment variable and no other application's origin itself                                                                                                                                                                                                        | checker                      | none                                                                                                  | `packages/check/src/rules/runtime.ts:326`, `:131`                                                                                                                                                                        |
 
-The generated isolation and endpoint access tests (`fabrika db test-scaffold`) catch a handler that breaks one of
-these rows in a way the layers above cannot see, such as a cache keyed by nothing; they are not an enforcer.
+An application's own tests catch a handler that breaks one of these rows in a way the layers above cannot see, such
+as a cache keyed by nothing; they are not an enforcer.
 
 ## Runtime boundary
 
@@ -1798,13 +1798,12 @@ const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedu
 its generated entrypoint would, for the audience `<app>@test`, behind the production
 proxy decision and a stand-in for IAM; it has no test-runner dependency. An
 application on `@fabrika/db` passes its connection as `options.database`, which the kit
-hands to `boot` as a runtime adapter does; without one it does not boot. A test of the
-author's that boots the application on a database runs beside the generated endpoint
-access test in one process too: a later kit of the same application takes its data layer
-over from the earlier one, which must have drained the work its requests left, and boots on
-the contract the process already compiled and hashed. The template's `test` script passes
-`--isolate`, which gives each file fresh modules; `bun test --parallel=N --no-isolate` runs
-many files per worker, and needs files that leave no module state, clock or mock behind.
+hands to `boot` as a runtime adapter does; without one it does not boot. Test files of the
+author's that boot the application on a database run in one process too: a later kit of the same application takes
+its data layer over from the earlier one, which must have drained the work its requests left, and boots on the
+contract the process already compiled and hashed. The template's `test` script passes `--isolate`, which gives each
+file fresh modules; `bun test --parallel=N --no-isolate` runs many files per worker, and needs files that leave no
+module state, clock or mock behind.
 
 ```ts
 const kit = testKit(app, { database: postgres.database }) // app: the default export of src/app.ts
@@ -1842,7 +1841,7 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
 - `kit.runJob(name)` runs a cron job once, as `fabrika job run <name>` does: under its lease in
   `fabrika_job_leases`, with the actions IAM signs for its key, its writes fenced. It answers the run's result
   (`{ status: 'succeeded', attempts }`). It first waits for the runs a `ctx.kick` started through
-  `kit.fetch`. `kit.drain()` waits for them without running a job, and each method of the generated endpoint access
+  `kit.fetch`. `kit.drain()` waits for them without running a job, and each method of the endpoint access
   kit drains before it answers, so no test closes the database under a kicked run. `FILE_SCAN_JOB` runs the scan of
   `scan: true` file kinds with the kit's `scanner`, and `FILE_SWEEP_JOB` the sweep of stored files.
 - A failed request or job names its code and reason only, as in production. `options.revealHandlerErrors` (a
@@ -1912,23 +1911,20 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   owner's own proxy decision. The owner kit issues the consumer's key with
   `testCaller(grants, { kind: 'app', app: '<consumer>' })`, an `app` token as IAM signs it.
 
-### The generated tests
+### How the enforcement is tested
 
-**What they are for.** The generated tests catch the **mistakes** of an application's author,
-who is usually an agent: a handler that serves another scope's rows, a cache keyed by
-nothing, a policy that does not hold. They do not stop a deliberately hostile author, who
-runs in the same process and can always subvert them. The data layer (`@fabrika/db`, A8–A10)
-is the enforcement.
+The proxy and the data layer (`@fabrika/db`) are the enforcement, and fabrika tests them once:
+`@fabrika/app`'s `policy-enforcement.property.test.ts` generates vocabularies, tables and policies and drives the
+isolation kits over them on SQLite, and on Postgres when `FABRIKA_TEST_POSTGRES_URL` is set. An application carries no
+test of the enforcement; its own tests check what its handlers decide. A leak sweep in the test kit, which asks every
+endpoint as a caller of one scope and looks for rows of another, is planned.
 
-`fabrika db test-scaffold` writes two kinds of test and deletes a generated test it no
-longer writes. Both run only for an application on `@fabrika/db`, and both open a test
-database with `@fabrika/db/testing`'s `testDatabase`: a fresh schema `app_test_<hex>`
-that the real migration runner fills with the framework's tables and then `db/migrations/`, as
-`fabrika db migrate` does. Without
-`FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and the file registers no
-test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The Zerops build has no
-database: it counts those skip lines and reports `fabrika-tests: N Postgres-backed test files did
-not run`. Of them only the generated isolation tests run again, at container start.
+An application's Postgres-backed test opens a test database with `@fabrika/db/testing`'s `testDatabase`: a fresh
+schema `app_test_<hex>` that the real migration runner fills with the framework's tables and then `db/migrations/`, as
+`fabrika db migrate` does. Without `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and the file
+registers no test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The Zerops build has no database: it
+counts those skip lines and reports `fabrika-tests: N Postgres-backed test files did not run`, and no later step runs
+them.
 
 - **Throwaway schemas.** A schema is held by a session-level advisory lock derived from its
   name, taken before it exists and kept for its whole life. Every test database first drops
@@ -1948,171 +1944,16 @@ not run`. Of them only the generated isolation tests run again, at container sta
   or a view over one, a `BEFORE` or `INSTEAD OF` trigger or a rule on either, and a rename of another relation to either's name, are refused too, by Control's snapshot read and
   `fabrika-check`, which read the access tables from `src/db/tables.ts`. A check before each commit rolls back a file that leaves an
   escape or an object no migration declares in the schema.
-- **Seeding.** Every seeded row lies in one of two containment chains that share no value,
-  with each container row a table owns. A column with a database default keeps it unless a
-  seed sets it, and a value a seed sets, `null` included, is written as given. Otherwise a
-  foreign key outside the chain holds `null` where
-  its columns admit it; a required one holds the key of an existing row of the referenced
-  table, or of one the fixture inserts, when that table is a reference, application or
-  unpoliced table, and of a fresh row in a chain of its own when it is a dimension or child
-  table (an existing one would lie in another chain), up to 16 referenced rows deep. A column
-  a CHECK names holds the first value of a one-column `IN` list, or `null` where it admits it.
-  The database judges each seeded row: one it refuses for a CHECK or a unique index is tried
-  again with other values in the columns that constraint names (`null`, the values its CHECKs
-  list or compare with, other samples of the type, a fresh referenced row), up to 64 rows. Every other text column the fixture fills, nullable or not,
-  holds a distinct marker; a required column of another type gets a sample of its type (a
-  number is `1`). A required number column that a unique index or a primary key covers gets
-  instead the smallest whole number above the largest of its row's group, and at least 1: the
-  rows that hold the index's other key columns as this row does (under a freshly seeded parent,
-  none, so `1`), the whole column for a one-column index, rows the fixture did not write
-  included. Only a unique index of plain key columns with no predicate counts: a partial
-  index, one on an expression and an `INCLUDE` column are left alone. A CHECK, a unique index
-  or a foreign key no row the fixture tries passes, a unique number column whose type holds no
-  larger number (or whose largest is `NaN` or infinite), and a required key nested deeper than
-  the bound or to its own table, are generator limits (`SeedLimitError`, `@fabrika/db/testing`)
-  that name the constraint or the column, never a failure of the policy or the handler. The
-  generated insert case writes the values of a probe row the database accepted (removed
-  before the case) through the handler.
-- **Policy isolation tests**, `src/db/__tests__/<table>.policy-isolation.test.ts` for
-  every dimension, child and application table, from the policies alone. They prove that the data
-  layer enforces the declared policy, not that the application uses it:
-  `policyIsolationKit` serves the table through a probe contract over the
-  application's vocabulary, booted by `testKit` on a data layer of its own, so a request
-  takes the production path and only the handler is the kit's. The caller holds every
-  action of the table in the grant dimension of one row: a dimension table's container,
-  or its own dimension at the top; a child's parent's. The cases: the own row is read,
-  updated and removed, and a list and a count reach it alone; the other row is 404 for
-  get, update and remove; insert into the other scope is 403; a child row is also 404
-  through the caller's own parent with the other key; a `Ref` for the read action is
-  refused by update and remove; a column with its own read action is never returned.
-  Insert into a top-level table is checked only for the other scope: the `in` form
-  answers 404 for an object that does not exist yet. An application table's probe
-  (`appPolicyIsolationKit`) uses `app` endpoints: a holder of the table's actions as
-  global grants gets, lists, inserts, updates and removes a seeded row; a holder of the
-  same actions in one scope only is 403 for each; a capability of the read action is
-  refused by an update or a remove of another action.
-- **Endpoint access tests**, one file `src/__tests__/endpoint-access.test.ts`, from the
-  contract. `endpointAccessKit` boots the application's own `src/app.ts` (its default
-  export, `serve(…)`) through the test kit, on the application's own data layer, once per file; a
-  later kit in the same process takes that layer over. It boots with the kit's stand-in IAM (above), which records each write it allowed and
-  seeds the invitations and links a case names. A case's caller of an endpoint that manages members holds, on its target's
-  value, the action, one assigning role of each role the input names (every membership role of the dimension when it
-  names none) and those roles' actions; one of an endpoint that issues links also holds the actions the links grant.
-  Each case asks as new callers, so no write of another case reaches them. The cases:
-  - **Denial.** For every procedure with an `on` or `in` access form, a caller holding the action in one scope names
-    the other scope's object or value and gets 404 (`on`) or 403 (`in`), exactly.
-  - **Leak.** For every `on` and `over` procedure, and every `in` procedure that declares `sql`, a caller of the other
-    scope asks first, then a caller of one scope asks for its own (`in`: for the scope value of every table that lies
-    in the dimension). Each own answer must be one the application gave — a 2xx, or a 4xx other than 401, 403 and 404,
-    so a precondition's 409 passes — and hold no key, scope value or text marker of the other scope's rows
-    (`{ answered: true, leaked: [] }`). The scanned values are every key, parent, dimension value of the row's chain and
-    text marker of the other scope. An endpoint that declares `unscoped` reaches across scopes by design and has no
-    leak case; it keeps its denial.
-  - **App form.** For every `app` procedure, a caller holding the action in one scope only is 403 (the proxy refuses
-    it), and a caller holding it as a global grant gets an answer of the application: anything but 401, 403 or a 5xx,
-    so a handler's 404 for the sampled id passes.
-  - **Creates.** For every `creates` procedure the same two cases: a caller holding the action in one value of the
-    dimension only is 403 (IAM creates a value only for a global holder), and a global holder gets an answer.
-  - **Own target.** For every `on` procedure whose action is not the read action of the table that owns its dimension
-    (a write-only role), a caller holding only that action, plus what IAM requires of a member manager or a link's
-    issuer (above), asks for its own object and gets 200: the capability reads its own target. A link mount's procedure gets the same case for the holder of a link bound to its object.
-  - **Several capabilities.** For every endpoint of several capabilities, one denied case per capability: the caller
-    holds every other one, and the named one is refused (`kit.capability`). It holds each other one's action apart from
-    the named one's scopes, so a shared action never reaches the named one's other scope: an `on` or `in` one in a
-    scope seeded for it, an `over` one in a fresh uuid of its dimension, with no row seeded. An `over` capability has no
-    case when another one needs its action on its dimension, a container of it or a dimension inside it
-    (`deniedCaseRuledOutBy` of `@fabrika/app/contract`): every caller that passes that one holds the action where the
-    list is read from, so none is refused. On an unrelated dimension the case stays. Each capability without a case gets
-    a `// Not checked:` line in the test, and `fabrika db test-scaffold` prints it.
-  - **Public.** For every public procedure, anyone with no credential, from a page of its own origin, gets an answer
-    of the application: anything but 401, 403, a 5xx or a 400 `challenge_failed` (`kit.anyone`). Behind a challenge
-    the case is that 400 instead: the kit's challenge never passes. The case name carries the actions the procedure runs with.
-  - **Files.** A file field's sample is `fabrika:file:<kind>`, and the kit sends a generated file of the kind in a
-    multipart body; a `GET` procedure's input goes into its URL. The kit serves each seeded file as an empty object, in
-    memory. The policy isolation fixture seeds a live, empty file into each file column, so its probes write file
-    columns too.
-
-  `deps` runs with an empty environment.
-- **Inputs.** A case sends a fixed literal written into the test: a sample of the input
-  schema, or, where the scaffold cannot sample one (a `regex`), the author's literal from
-  `src/__tests__/endpoint-access.fixtures.ts` (`export const fixtures = { '<endpoint id>':
-  { … } }`, plain literals only, read statically within the reader's budget). A missing
-  fixture and a fixture of no tested endpoint are `endpoint-fixture` findings; an input the
-  endpoint's schema refuses fails its cases. The access form's `from` field is replaced by
-  the seeded value.
-- **Seeds.** A precondition (`restore` only a note in the trash) is the author's seed in the same file:
-  `export const seeds = { '<endpoint id>': { <column>: <value> } }`, the state of the row of the table that owns the
-  endpoint's dimension, written into both scopes' rows. It adds a second, seeded leak case beside the unseeded one,
-  which always runs, so a seed meets a precondition without setting aside the state that leaks, and it reaches the
-  own-target case; the denial runs unseeded. A seed may not set a column that places the row in its scope, nor a text
-  column that holds a marker the leak cases look for (a text column a CHECK lists the values of, or a foreign key, it
-  may). A seed of no `on` or `in` endpoint is an `endpoint-fixture` finding.
-- **Rows.** A handler that addresses a row in its scope by id (a note's comment, a note of a workspace, the root of a
-  listed tree) finds no row for a sampled id, so the author names the field and the row's table:
-  `export const rows = { '<endpoint id>': { <field>: '<table>' } }`. The scaffold writes `GENERATED_ROW_PREFIX` and the
-  table there (`'fabrika:row:note_comments'`), and the kit seeds one row of the table in each scope and sends, per case,
-  the key of the row in the scope the case names: the other scope's in the denial, each scope's own in the leak case,
-  which also looks for the other row's key and markers, and the own in the own-target case, a link holder's included.
-  Under `on` and `in` the row lies in the object or target (`seedUnder`); under `over` it is a row of its own in each
-  side's listed scope (`seedWorlds`), which the caller of that side holds. An endpoint with `capabilities` names the
-  capability a row lies in, `'<endpoint id>#<capability>'`, and the scaffold writes `GENERATED_ROW_CAPABILITY` and its
-  name after the table (`'fabrika:row:notes@source'`); `kit.capability` seeds each in its capability's scope, the named
-  one's in the other scope, as its target. A field of an endpoint with no scope (`creates`, `app`, `member`), a row of an
-  endpoint with capabilities whose key names none of them, a field that is no string field, a table whose rows do not lie
-  directly in the `on` or `in` object (a child table of the table that owns it, or a dimension table it contains), of a
-  dimension no table owns, and a table the `over` dimension does not list are `endpoint-fixture` findings: the kit seeds
-  no container between, so a task row of an org endpoint, whose project it would need, is refused.
-- **Members.** A handler that validates a picked person with `ctx.members.get` refuses a sampled id, so the author
-  names the field in the same file: `export const members = { '<endpoint id>': ['<field>'] }`. The scaffold writes
-  `GENERATED_MEMBER` (`'fabrika:member'`, `@fabrika/app/contract`) there, and the kit replaces it, per case, with a new
-  caller holding a membership role of the directory's dimension at the value the case's object lies in. A case of an
-  endpoint whose action is the directory's `members.list` holds the action on the directory's value, where IAM checks a
-  list. A field of an endpoint with no directory, or that is no string field, is an `endpoint-fixture` finding.
-- **Invitations and links.** A handler that cancels an invitation or revokes a share link by its id gets a 404 from IAM
-  for a sampled id, so the author names the field: `export const invitations = { '<endpoint id>': ['<field>'] }` (an
-  endpoint with its dimension's `members.manage`) or `export const links = { … }` (an endpoint that issues a link
-  mount). The scaffold writes `GENERATED_INVITATION` or `GENERATED_LINK` there, and the kit replaces it, per case, with
-  an invitation its stand-in IAM holds open in the target's value, or a link of the endpoint's mount bound to the
-  target's chain and issued by the case's caller. The stand-in answers a repeated invitation with the open one, a
-  resend with a new 7 days, and an organization's mailbox for an external role with `internal_mailbox` when its
-  `OrganizationMailboxes` name one (none in the generated cases).
-- **Caller rows.** A handler that looks up the caller's own record before it answers (a person's card bound to the
-  account, `ctx.principal.id`) refuses the fresh caller of a global case, so the author gives that record once for the
-  whole application: `export const callerRows = { <table>: { <column>: <value> } }`, application tables only, a column
-  valued `'fabrika:caller'` (`GENERATED_CALLER`) getting the caller's id. The scaffold hands it to `endpointAccessKit`,
-  which seeds those rows once for its one global principal (a UUID, a person or a script as the endpoint admits), the caller of every `app` and `creates`
-  global case, and keeps them: a row a handler wrote that refers to them stays for the next case, as in production. The rule of the rows is `appRows`' (`applicationRowsPlan`); a row it refuses is an
-  `endpoint-fixture` finding.
-- **Registration.** The generated files take `test`, `describe`, `expect` and `afterAll` from
-  `@fabrika/app/testing/isolation`. The platform run preloads `@fabrika/app/testing/preload`,
-  which captures Bun's own functions before any application module loads, and a case that
-  ran no `expect` fails. The checker refuses `mock.module` of `bun:test`, of `@fabrika/*`, of a
-  generated test and with a computed specifier (`mock-module`). The kits refuse to load or
-  run in a process the generated entrypoint started (`markProductionProcess`, one
-  non-configurable property of `globalThis` that every installed package copy reads).
-- **What neither kind catches:** an application bug that needs other data or another
-  order of requests, such as a cache keyed by something the test does not vary.
-- `@fabrika/check` regenerates every generated test from the contract, the policies and the
-  fixtures it reads statically and compares the files byte for byte: a missing, edited or
-  replaced one (header or not) and a generated test the scaffold no longer writes are
-  `generated-test-hash` findings. `bunfig.toml` may not set `[test] root`,
-  `pathIgnorePatterns` or `retry` (`skipped-test`).
-- **The platform runs them** at container start on Zerops, after `fabrika db migrate`
-  and `fabrika db codegen --verify` (the build has no database), which also fails on a
-  schema that holds database code no migration declares, such as one created at runtime: `fabrika db
-  test-isolation` runs exactly the generated files with an empty `bunfig.toml` and the
-  platform's preload, against a throwaway schema of the application's database, and fails
-  unless every case name the scaffold wrote is reported as passed, with an assertion, in the
-  JUnit report. It prints none of the tests' output, only the counts and the failed case
-  names, because a dependency may write a credential into it; `--verbose`, which the start
-  script never passes, prints the output locally. A failure leaves nothing to answer the
-  readiness check.
+- **The suite stays whole.** The checker refuses `mock.module` of `bun:test`, of `@fabrika/*` and with a computed
+  specifier (`mock-module`), and a `bunfig.toml` that sets `[test] root`, `pathIgnorePatterns` or `retry`
+  (`skipped-test`). The kits refuse to load or run in a process the generated entrypoint started
+  (`markProductionProcess`, one non-configurable property of `globalThis` that every installed package copy reads).
 
 ## The agent skill
 
 `@fabrika/app`'s `skill/` (the skill `fabrika-app`) is the one text that tells a coding agent how to write an
 application. `SKILL.md` leads with the paved road in code, the declared steps off it, the loop (migrate, codegen,
-test-scaffold, typecheck, `fabrika-check`, the tests) and when to ask the human; `references/<topic>.md` holds one topic
+typecheck, `fabrika-check`, the tests) and when to ask the human; `references/<topic>.md` holds one topic
 each: `start`, `app-setup`, `table-and-migration`, `endpoint`, `jobs`, `files`, `public-intake`, `spa`,
 `webhooks-links-connectors`, `tests`, `dev` and `errors`. Its frontmatter `version` is the package's. Three places carry it, all read through
 `@fabrika/app/agent-skill`:

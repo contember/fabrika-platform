@@ -70,8 +70,8 @@ Everything below is the platform protocol of ADR-0062; none of it is the framewo
 
 - The operator does not approve data reach or destructive migrations of such an application. Its own CI and review
   hold that.
-- The platform's isolation guarantees for application data (`run_<id>` without DDL, the scoped data layer, the
-  generated isolation tests) do not hold for it. The framework's own guarantees replace them, unverified by the
+- The platform's isolation guarantees for application data (`run_<id>` without DDL, the scoped data layer) do not
+  hold for it. The framework's own guarantees replace them, unverified by the
   platform.
 
 ## Open questions

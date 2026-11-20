@@ -27,11 +27,11 @@ import { readTablesValue } from './reader/tables'
 import { type ModuleReference, moduleReferences } from './references'
 import { type ImportMappings, readImportMappings } from './resolution'
 import { checkCloudflareContract } from './rules/cloudflare'
+import { checkContractCompiles } from './rules/compile'
 import { checkContractRead } from './rules/contract'
 import { checkCrontab, contractJobs } from './rules/crontab'
 import { checkFrameworkWrite, trustedBindings } from './rules/framework'
 import { checkClientIdentity } from './rules/identity'
-import { checkGeneratedTests } from './rules/isolation'
 import { checkJsonStrings } from './rules/json'
 import { checkLiteralGraph } from './rules/literal'
 import { checkMigrationHistory, type MigrationBase } from './rules/migration-history'
@@ -52,7 +52,7 @@ import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkBackupPlan, checkMigrationClassification } from './rules/platform-migrations'
 import { checkKeyLiteralNode, checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
 import { checkStructureNode, checkStructureReferences, checkToolPackages, structurePlace } from './rules/structure'
-import { checkGeneratedTest, checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
+import { checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkComments, checkTypeNode } from './rules/types'
 import { moduleSlice, sliceFinding } from './slice'
 import { BUNFIG_FILE, checkTrustedResolution } from './trust'
@@ -119,9 +119,9 @@ interface ContractDependent {
  * A module under `tools/` runs on a developer's machine, never in the application: it is held to how its source is
  * written (`type-assertion`, `any-type`, `capability-widening`, `suppression-comment`), `key-literal`, a `declare
  * module` of a trusted package and the rules of its tests. Every other module rule guards code that runs in the
- * application. `generated-test-import` reaches it through `checkStructureReferences`, as every module.
+ * application.
  */
-const checkToolModule = async (module: ParsedModule, text: string, files: ReadonlyMap<string, string>, findings: Finding[]): Promise<void> => {
+const checkToolModule = (module: ParsedModule, findings: Finding[]): void => {
 	const report = reporter(module.file, findings)
 	const isTest = isTestFile(module.file)
 	walk(module.program, (node, ancestors) => {
@@ -129,21 +129,19 @@ const checkToolModule = async (module: ParsedModule, text: string, files: Readon
 		checkTypeNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, ancestors, report)
-		checkMockModule(node, module.file, files, report)
+		checkMockModule(node, report)
 	})
 	checkComments(module.comments, report)
-	await checkGeneratedTest(text, module.comments, report)
 }
 
-const checkSourceModule = async (
+const checkSourceModule = (
 	module: ParsedModule,
 	references: readonly ModuleReference[],
-	text: string,
 	mappings: ImportMappings,
 	files: ReadonlyMap<string, string>,
 	findings: Finding[],
 	dependent: ContractDependent,
-): Promise<void> => {
+): void => {
 	const exists = (path: string): boolean => files.has(path)
 	const report = reporter(module.file, findings)
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
@@ -180,12 +178,11 @@ const checkSourceModule = async (
 		checkTypeNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, ancestors, report)
-		checkMockModule(node, module.file, files, report)
+		checkMockModule(node, report)
 		checkStructureNode(place, node, report)
 	})
 	checkComments(module.comments, report)
 	checkModuleReferences(module.file, references, mappings, exists, report, isGeneratedEntry, isTest)
-	await checkGeneratedTest(text, module.comments, report)
 }
 
 /** `module` as its shell slice (itself when it holds no colocated handler), and the `.handle(…)` forms it refused. */
@@ -316,8 +313,8 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		modules.set(path, parsed.module)
 		const referencesOfModule = moduleReferences(parsed.module.program)
 		references.set(path, referencesOfModule)
-		if (isToolModule(path)) await checkToolModule(parsed.module, text, tree.files, findings)
-		else await checkSourceModule(parsed.module, referencesOfModule, text, mappings, tree.files, findings, dependent)
+		if (isToolModule(path)) checkToolModule(parsed.module, findings)
+		else checkSourceModule(parsed.module, referencesOfModule, mappings, tree.files, findings, dependent)
 	}
 	const structure = { files: tree.files, mappings, referencesOf: (path: string) => references.get(path) ?? [] }
 	for (const path of modules.keys()) {
@@ -341,7 +338,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const contractRead = contract !== undefined && literal.length === 0 ? checkContractRead(graph) : []
 	findings.push(...contractRead)
 	for (const module of contract === undefined ? [] : contractModules(graph, contract)) findings.push(...checkClientIdentity(module, graph))
-	findings.push(...(await checkGeneratedTests(tree.files, literal.length === 0 && trust.length === 0 && contractRead.length === 0)))
+	findings.push(...checkContractCompiles(tree.files, literal.length === 0 && trust.length === 0 && contractRead.length === 0))
 	findings.push(...checkMigrationNames(checkedPaths))
 	if (input.migrationBase !== undefined) findings.push(...checkMigrationHistory(tree.files, input.migrationBase))
 	findings.push(...checkToolPackages(checkedPaths))

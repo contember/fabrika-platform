@@ -12,7 +12,7 @@ sources:
   - where: "examples/zerops-app/fabrika.contract.ts + src/notes/endpoints.ts + src/app.ts + README.md in fabrika-platform"
     read: "The contract's mounts, `serve` over the data layer, the SPA build, and the limits of the example's local run instructions."
   - where: "docs/reference/application-runtime.md (Serving a contract, Testing a contract application) in fabrika-platform"
-    read: "The generated entrypoint, the framework variables `boot` needs, `testKit` and the generated tests."
+    read: "The generated entrypoint, the framework variables `boot` needs and `testKit`."
   - where: "docs/reference/local-development.md + packages/local-stack/CLAUDE.md in fabrika-platform"
     read: "Real IAM/proxy/Postgres topology, local endpoints and IAM-owned login bypass."
   - where: "packages/local-stack/src/app-registration.ts in fabrika-platform"
@@ -58,8 +58,7 @@ be made, report the missing prerequisite rather than adding fake auth or bypassi
 the proxy.
 
 Before the browser loop, run the application's own checks: `bun test` with
-`FABRIKA_TEST_POSTGRES_URL` set (a database test that skips proves nothing),
-`fabrika db test-scaffold` after every contract or table change, and
+`FABRIKA_TEST_POSTGRES_URL` set (a database test that skips proves nothing) and
 `fabrika-check`.
 
 ## Preview and acceptance

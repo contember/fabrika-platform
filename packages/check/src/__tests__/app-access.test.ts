@@ -1,6 +1,5 @@
 // The app access form and the application table in the static reader: it reads `@fabrika/app`'s `app-wide-fixture/`
-// into the same artifact as the evaluated contract, refuses the forms `buildArtifact` refuses, and the scaffold writes
-// the generated cases of both.
+// into the same artifact as the evaluated contract, and refuses the forms `buildArtifact` refuses.
 
 import { compileContract, defineContract } from '@fabrika/app/contract'
 import { canonicalArtifactJson } from '@fabrika/auth-core'
@@ -9,7 +8,6 @@ import { join } from 'node:path'
 import { contract } from '../../../app/src/__tests__/app-wide-fixture/fabrika.contract'
 import { tables } from '../../../app/src/__tests__/app-wide-fixture/src/db/tables'
 import { ContractSourceError, readContractSource, readTablesSource } from '../contract'
-import { ENDPOINT_ACCESS_TEST, generatedTests, policyTestPath, scaffoldInputs } from '../scaffold'
 import { readTree } from './colocated-helpers'
 
 const ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'app-wide-fixture')
@@ -91,52 +89,5 @@ export const contract = defineContract({ app: 'registry', dimensions: { candidat
 }))
 `
 		expect(refusal(new Map([['fabrika.contract.ts', source]]))).toEqual(['contract an export procedure reads in one dimension'])
-	})
-})
-
-describe('the generated cases of application-wide data', () => {
-	test('an app endpoint gets a scoped refusal and a global reach; an application table gets the probe of its actions', async () => {
-		const inputs = scaffoldInputs(readTree(ROOT))
-		const tests = await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures)
-		const endpoints = tests.get(ENDPOINT_ACCESS_TEST)?.text ?? ''
-		expect(endpoints).toContain("expect(await kit.scoped('api.admin.export', {})).toEqual({ status: 403 })")
-		expect(endpoints).toContain("expect(await kit.global('api.admin.export', {})).toEqual({ answered: true })")
-		const positions = tests.get(policyTestPath('positions'))
-		expect(positions?.text).toContain("const kit = appPolicyIsolationKit(contract, tables, 'positions', postgres)")
-		expect(positions?.cases).toEqual([
-			'get by a global holder succeeds',
-			'get by a holder in one scope only is 403',
-			'a list by a global holder succeeds',
-			'a list by a holder in one scope only is 403',
-			'insert by a global holder succeeds',
-			'insert by a holder in one scope only is 403',
-			'update by a global holder succeeds',
-			'update by a holder in one scope only is 403',
-			'update refuses a capability of positions.read',
-			'remove by a global holder succeeds',
-			'remove by a holder in one scope only is 403',
-			'remove refuses a capability of positions.read',
-			'a scoped site of positions.read reads every row',
-			'a scoped site of positions.manage reads no row',
-		])
-		expect(tests.get(policyTestPath('candidates'))?.cases.slice(-7)).toEqual([
-			'an app endpoint of candidates.export lists every row',
-			'an app endpoint of candidates.export reads the columns of its own action',
-			'an app endpoint of candidates.count counts every row',
-			'an app endpoint of candidates.count lists no row',
-			'an app endpoint of candidates.count groups no row',
-			'get leaves out notes, which has its own read action',
-			'get leaves out score, which has its own read action',
-		])
-		expect(tests.get(policyTestPath('exports'))?.cases).toEqual([
-			'get by a global holder succeeds',
-			'get by a holder in one scope only is 403',
-			'a list by a global holder succeeds',
-			'a list by a holder in one scope only is 403',
-			'insert by a global holder succeeds',
-			'insert by a holder in one scope only is 403',
-			'a scoped site of audit.read reads every row',
-			'a scoped site of candidates.export reads no row',
-		])
 	})
 })

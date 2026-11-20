@@ -29,7 +29,7 @@ bun test src/__tests__/implement.test.ts        # boot's request pipeline, with 
 bun test src/__tests__/scoped-database.test.ts  # a handler tree over @fabrika/db (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/endpoint-access.test.ts  # the endpoint access kit: own target, seeds, link holder, runJob (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/membership-stand-in.test.ts  # the kit's IAM stand-in: delegations, creates, members, links, live roles
-bun test src/__tests__/generated-cases-intake.test.ts  # the generated tests' kits beside public procedures, a challenge and a scanning kind (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/generated-cases-intake.test.ts  # the isolation kits beside public procedures, a challenge and a scanning kind (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/kit-tableless.test.ts    # defineApp(vocabulary): no tables, database: null, no ctx.db
 bun test src/__tests__/test-kit.test.ts         # the test kit: the proxy decision in front of boot, a built SPA, the stand-in IAM
 bun test src/__tests__/test-kit-links.test.ts   # a share link the app issued opens as its holder until revoked; devKit (needs FABRIKA_TEST_POSTGRES_URL)
@@ -57,7 +57,7 @@ bun test src/__tests__/request-signal.test.ts   # ctx.signal of a request handle
 bun test src/__tests__/public-egress.test.ts    # a cron job's egress: 'public': the URL rules, the installation's hosts, redirects, bounds, the resolver, pinning (the job run needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/public-egress-pinning.test.ts  # what a pinned hop relies on in Bun: Host, the certificate checked against the TLS serverName, no pooled connection (TLS half needs openssl)
 bun test src/__tests__/request-budget.test.ts   # a writing mutation past REQUEST_BUDGET_MS: aborted, 500, nothing written (10 s; needs FABRIKA_TEST_POSTGRES_URL)
-bun test src/__tests__/outbox-rule.test.ts      # the generated cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
+bun test src/__tests__/outbox-rule.test.ts      # endpointAccessKit's cases of an outbox write and of an outbound call (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/job-types.test.ts        # the job handler mistakes, compiled by tsc
 bun test src/__tests__/connect.test.ts          # an export and an import, each in its own test kit
 bun test src/__tests__/connect-hardening.test.ts # captured connect methods, a hostile owner, budgets and deadlines
@@ -164,7 +164,7 @@ src/
     caller.ts         test callers and their grants
     membership.ts     kitMembership, every kit's stand-in IAM transport: member directories from the kit's callers,
                       the writes checked as IAM checks them, live in the directory and the next token; it records them,
-                      accepts an invitation, seeds the invitations and links a generated case cancels or revokes, and
+                      accepts an invitation, seeds the invitations and links an endpoint access case cancels or revokes, and
                       resolves the key of a link it issued; it lists the invitations it sent (the dev mail view)
     dev.ts            devKit and the DevSeed types: the kit `fabrika app dev` serves, and its seed module's contract;
                       DEV_OUTBOX_ORIGIN, the DevMail of devKit's mails(), and the DevOutside the seed reads the dev
@@ -172,10 +172,10 @@ src/
     challenge.ts      passingChallenge: a siteverify stand-in that passes every token, devKit's default;
                       TURNSTILE_TEST_TOKEN, the test widget's token devKit admits at every submission;
                       solveChallengeAt, which fetches an ALTCHA challenge and solves it (kit.solveChallenge)
-    isolation.ts      @fabrika/app/testing/isolation: the kits behind the generated tests
+    isolation.ts      @fabrika/app/testing/isolation: the kits behind fabrika's own enforcement tests; pending removal
     policy-isolation.ts  policyIsolationKit and appPolicyIsolationKit: a probe contract over one table's policy
     endpoint-access.ts   endpointAccessKit: the application's own endpoints, asked from two scopes
-    runner.ts         the test functions the generated tests register through
+    runner.ts         the test functions the isolation kits' cases register through
     status.ts         statusOf: the status an application's own test asserts (200, or the refusal's); the kits' too
   contract/           @fabrika/app/contract — browser-safe
     vocabulary.ts     defineVocabulary: the first module of the staged kit
@@ -653,9 +653,7 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **Every handler's `ctx.signal` ends with its request** (`handlerSignal` in `bounded.ts`): the request's own signal
   (the client left, the runtime closed the connection) or `REQUEST_BUDGET_MS`, which equals `Bun.serve`'s default
   `idleTimeout`. A procedure commits only while it is live (`request_cancelled` otherwise). A webhook delivery gets one
-  too, but commits regardless: its delivery key already decides a redelivery. The skill's rule that an endpoint the
-  generated tests cover calls no outside service (an outbox row and a job instead) is what keeps those cases, which
-  boot without the application's variables, at 200 (`outbox-rule.test.ts`).
+  too, but commits regardless: its delivery key already decides a redelivery.
 - **Output is projected, then validated:** `project` walks the output's zod schema
   and keeps the fields it declares; a union takes the first branch, in order, whose
   schema accepts the value reduced to it. The strict output schema then validates
@@ -1076,7 +1074,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   the rest. `useCaller` and `<Can>` read the caller document and decide nothing.
 - The hook tests are DOM tests (`src/react/__tests__/*.test.tsx`, happy-dom through `dom.ts`, which keeps Bun's
   `fetch`): run them with `bun test --isolate src/react`. The root `bun run test` runs them in `test:dom`.
-- **The generated tests' kits (`@fabrika/app/testing/isolation`) add no second pipeline.**
+- **The isolation kits (`@fabrika/app/testing/isolation`) add no second pipeline.** They back fabrika's own
+  enforcement tests (`policy-enforcement.property.test.ts` and the kit tests over `access-fixture/`,
+  `members-fixture/` and `app-wide-fixture/`) and are pending removal; the skill teaches no application to use them.
   `policyIsolationKit` defines a probe contract over the application's vocabulary whose
   procedures each run one operation of `@fabrika/db/testing`'s `tableProbe`, served by
   `testKit` on a `scoped(tables)` layer of its own: it proves the policy, not the
@@ -1107,16 +1107,15 @@ vocabulary (`packages/db/CLAUDE.md`).
   `app` endpoints over one row `seedRow` writes. A leak scans every value of
   the other row's chain, so an outer dimension's value is a leak too. A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root
-  kit does not. Its API is what `fabrika db test-scaffold` writes against: a change
-  regenerates `packages/cli`'s fixture tests, `examples/zerops-app`'s and `packages/check`'s `architecture-app`.
+  kit does not. The tests committed under the three fixtures are frozen with the kits: edit them by hand.
 - **`testKit(…).runJob(name)` runs a cron job once** through `boot`'s own job runner (`application.jobs.run`): its
   lease, its key's signed actions, its fenced writes. A `link` test caller binds its key with `{ link: { mount, chain } }`.
-- **The generated tests catch mistakes; the data layer is the enforcement.** They catch what an
-  application's author, usually an agent, gets wrong. A deliberately hostile author runs in the
+- **The isolation kits catch mistakes; the data layer is the enforcement.** They catch what an
+  author gets wrong. A deliberately hostile author runs in the
   same process and can always subvert them. Never rely on them for a guarantee `@fabrika/db` or
   the pipeline does not give.
-- **The generated tests register through captured runner functions** (`testing/runner.ts`).
-  `@fabrika/app/testing/preload`, which `fabrika db test-isolation` preloads, captures Bun's
+- **The isolation kits' cases register through captured runner functions** (`testing/runner.ts`).
+  `@fabrika/app/testing/preload`, when a run preloads it, captures Bun's
   `test`, `describe`, `expect` and `afterAll` in a non-configurable global before any
   application module loads; without it the module's own import is used. A case that ran no
   `expect` fails. `endpointAccessKit` fails a case whose input the endpoint refuses (400) and

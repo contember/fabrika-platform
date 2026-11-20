@@ -4,23 +4,11 @@ import type { RuleId } from '../finding'
 import { RULE_IDS } from '../finding'
 import { checkMigrationClassification } from '../rules/platform-migrations'
 import { STRUCTURE_RULE_IDS } from '../rules/structure'
-import { generatedTestHeader } from '../rules/tests'
-import { generatedTests, scaffoldInputs } from '../scaffold'
 import { readTree } from './colocated-helpers'
-import {
-	check,
-	CLEAN_APPLICATION,
-	CLEAN_CONTRACT,
-	CLEAN_GENERATED_TESTS,
-	CLEAN_SCHEMA_GENERATED,
-	CLEAN_SCHEMAS,
-	CLEAN_TABLES,
-	CLEAN_VOCABULARY,
-	locations,
-} from './helpers'
+import { check, CLEAN_APPLICATION, CLEAN_CONTRACT, CLEAN_SCHEMA_GENERATED, CLEAN_SCHEMAS, CLEAN_TABLES, CLEAN_VOCABULARY, locations } from './helpers'
 
 /** The clean application with a file kind and a nullable file column of it on notes. */
-const FILE_COLUMN_SOURCES: Readonly<Record<string, string>> = {
+const FILE_COLUMN_APPLICATION: Readonly<Record<string, string>> = {
 	...CLEAN_APPLICATION,
 	'fabrika.contract.ts': CLEAN_CONTRACT.replace(
 		"\thealth: c.health('/healthz'),\n",
@@ -32,13 +20,8 @@ const FILE_COLUMN_SOURCES: Readonly<Record<string, string>> = {
 		"'title', 'picture']",
 	),
 }
-const fileColumnInputs = scaffoldInputs(new Map(Object.entries(FILE_COLUMN_SOURCES)))
-const FILE_COLUMN_APPLICATION: Readonly<Record<string, string>> = {
-	...FILE_COLUMN_SOURCES,
-	...Object.fromEntries([...(await generatedTests(fileColumnInputs.policies, fileColumnInputs.artifact))].map(([file, test]) => [file, test.text])),
-}
 /** The clean application whose notes a relation reaches through an access view (ADR-0076). */
-const ACCESS_VIEW_SOURCES: Readonly<Record<string, string>> = {
+const ACCESS_VIEW_APPLICATION: Readonly<Record<string, string>> = {
 	...CLEAN_APPLICATION,
 	'fabrika.contract.ts': CLEAN_CONTRACT.replace('\tactions: {', "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
 	'src/vocabulary.ts': CLEAN_VOCABULARY.replace('\tactions: {', "\trelations: { shared: { dimension: 'note' } },\n\tactions: {"),
@@ -53,11 +36,6 @@ const ACCESS_VIEW_SOURCES: Readonly<Record<string, string>> = {
 		'foreignKeys: [] } }',
 		"foreignKeys: [] }, shared_notes: { columns: ['note_id', 'principal_id'], foreignKeys: [], view: true } }",
 	),
-}
-const accessViewInputs = scaffoldInputs(new Map(Object.entries(ACCESS_VIEW_SOURCES)))
-const ACCESS_VIEW_APPLICATION: Readonly<Record<string, string>> = {
-	...ACCESS_VIEW_SOURCES,
-	...Object.fromEntries([...(await generatedTests(accessViewInputs.policies, accessViewInputs.artifact))].map(([file, test]) => [file, test.text])),
 }
 const SHARED_NOTES_VIEW = 'CREATE VIEW shared_notes AS SELECT id AS note_id, workspace_id AS principal_id FROM notes;\n'
 
@@ -79,24 +57,15 @@ const DEALS_CREATE_EGRESS: Readonly<Record<string, string>> = {
 	),
 }
 
-/** The clean application on Cloudflare: its config, a file kind, `edit` applied to its contract, and the generated tests on the SQLite kit. */
-const cloudflareApplication = async (
-	fileKind: string,
-	edit: (contract: string) => string = (contract) => contract,
-): Promise<Readonly<Record<string, string>>> => {
-	const sources = Object.fromEntries(Object.entries(CLEAN_APPLICATION).filter(([path]) => !CLEAN_GENERATED_TESTS.has(path)))
-	const files = new Map(Object.entries({
-		...sources,
-		'fabrika.config.ts': CLOUDFLARE_CONFIG,
-		'fabrika.contract.ts': edit(CLEAN_CONTRACT.replace(
-			"\thealth: c.health('/healthz'),\n",
-			`\tfiles: { pictures: ${fileKind} },\n\thealth: c.health('/healthz'),\n`,
-		)),
-	}))
-	const inputs = scaffoldInputs(files)
-	for (const [path, test] of await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures, inputs.dialect)) files.set(path, test.text)
-	return Object.fromEntries(files)
-}
+/** The clean application on Cloudflare: its config, a file kind and `edit` applied to its contract. */
+const cloudflareApplication = (fileKind: string, edit: (contract: string) => string = (contract) => contract): Readonly<Record<string, string>> => ({
+	...CLEAN_APPLICATION,
+	'fabrika.config.ts': CLOUDFLARE_CONFIG,
+	'fabrika.contract.ts': edit(CLEAN_CONTRACT.replace(
+		"\thealth: c.health('/healthz'),\n",
+		`\tfiles: { pictures: ${fileKind} },\n\thealth: c.health('/healthz'),\n`,
+	)),
+})
 
 /** The clean contract's one job, before its options close: where a case adds `limits`. */
 const JOB_ACTIONS = "c.cron('0 3 * * *', { actions: ['notes.write']"
@@ -730,18 +699,18 @@ const cases: readonly RuleCase[] = [
 	},
 	{
 		rule: 'cloudflare-scan',
-		bad: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024, scan: true })"),
+		bad: cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024, scan: true })"),
 		expected: ['fabrika.contract.ts:1:1'],
-		good: await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
+		good: cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 	},
 	{
 		rule: 'cloudflare-job-segment',
-		bad: await cloudflareApplication(
+		bad: cloudflareApplication(
 			"c.files({ types: ['image/png'], maxBytes: 1024 })",
 			(contract) => contract.replace(JOB_ACTIONS, `${JOB_ACTIONS}, limits: { timeoutMs: 840001 }`),
 		),
 		expected: ['fabrika.contract.ts:1:1'],
-		good: await cloudflareApplication(
+		good: cloudflareApplication(
 			"c.files({ types: ['image/png'], maxBytes: 1024 })",
 			(contract) => contract.replace(JOB_ACTIONS, `${JOB_ACTIONS}, limits: { timeoutMs: 840000 }`),
 		),
@@ -755,12 +724,12 @@ const cases: readonly RuleCase[] = [
 	{
 		rule: 'cloudflare-current-timestamp',
 		bad: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_audit.sql': 'CREATE TABLE audit (\n\tid TEXT PRIMARY KEY,\n\tat TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\n',
 		},
 		expected: ['db/migrations/20261024120000_audit.sql:3:1'],
 		good: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_audit.sql':
 				"CREATE TABLE audit (\n\tid TEXT PRIMARY KEY,\n\tat TIMESTAMP NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))\n);\n",
 		},
@@ -768,7 +737,7 @@ const cases: readonly RuleCase[] = [
 	{
 		rule: 'migration-refused',
 		bad: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_codes.sql': [
 				'CREATE TABLE codes (id TEXT PRIMARY KEY, code TEXT NOT NULL);',
 				"INSERT INTO codes (id, code) SELECT id, load_extension('/tmp/codes.so') FROM notes;",
@@ -777,7 +746,7 @@ const cases: readonly RuleCase[] = [
 		},
 		expected: ['db/migrations/20261024120000_codes.sql:2:1'],
 		good: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_codes.sql':
 				'CREATE TABLE codes (id TEXT PRIMARY KEY, code TEXT NOT NULL);\nINSERT INTO codes (id, code) SELECT id, lower(hex(randomblob(16))) FROM notes;\n',
 		},
@@ -785,7 +754,7 @@ const cases: readonly RuleCase[] = [
 	{
 		rule: 'backup-schema',
 		bad: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_invoices.sql': [
 				'CREATE TABLE invoices (',
 				'\tid TEXT PRIMARY KEY,',
@@ -798,7 +767,7 @@ const cases: readonly RuleCase[] = [
 		},
 		expected: ['db/migrations/20261024120000_invoices.sql:1:1'],
 		good: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_invoices.sql': [
 				"CREATE TABLE invoices (id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('invoice', 'proforma')));",
 				'ALTER TABLE invoices ADD COLUMN proforma_id TEXT REFERENCES invoices (id);',
@@ -809,7 +778,7 @@ const cases: readonly RuleCase[] = [
 	{
 		rule: 'cloudflare-framework-name',
 		bad: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_leases.sql': [
 				'CREATE VIEW leases AS SELECT * FROM fabrika_job_leases;',
 				'CREATE TRIGGER wipe AFTER INSERT ON notes BEGIN DELETE FROM [Fabrika_Wakes]; END;',
@@ -825,7 +794,7 @@ const cases: readonly RuleCase[] = [
 			'db/migrations/20261024120000_leases.sql:4:1',
 		],
 		good: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_avatars.sql':
 				'CREATE TABLE avatars (\n\tid TEXT PRIMARY KEY,\n\tfile_id TEXT NOT NULL REFERENCES fabrika_files (id)\n);\n',
 		},
@@ -833,7 +802,7 @@ const cases: readonly RuleCase[] = [
 	{
 		rule: 'cloudflare-view-trigger',
 		bad: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_notes.sql': [
 				'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL);',
 				'CREATE VIEW open_notes AS SELECT id, body FROM notes;',
@@ -843,7 +812,7 @@ const cases: readonly RuleCase[] = [
 		},
 		expected: ['db/migrations/20261024120000_notes.sql:3:1'],
 		good: {
-			...(await cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })")),
+			...cloudflareApplication("c.files({ types: ['image/png'], maxBytes: 1024 })"),
 			'db/migrations/20261024120000_notes.sql': [
 				'CREATE TABLE notes (id TEXT PRIMARY KEY, body TEXT NOT NULL);',
 				'CREATE VIEW open_notes AS SELECT id, body FROM notes;',
@@ -871,26 +840,18 @@ const cases: readonly RuleCase[] = [
 		good: { ...CLEAN_APPLICATION, 'zerops.yaml': ZEROPS_YAML },
 	},
 	{
-		rule: 'endpoint-fixture',
-		bad: { ...CLEAN_APPLICATION, 'src/__tests__/endpoint-access.fixtures.ts': "export const fixtures = { 'api.gone': { id: 'x' } }\n" },
-		expected: ['src/__tests__/endpoint-access.fixtures.ts:1:1'],
-		good: CLEAN_APPLICATION,
-	},
-	{
 		rule: 'mock-module',
 		bad: {
 			'src/app.ts': [
 				"import { mock } from 'bun:test'",
 				"mock.module('bun:test', () => ({ test: () => {} }))",
 				"mock.module('@fabrika/app/testing/isolation', () => ({}))",
-				"mock.module('./__tests__/endpoint-access.test.ts', () => ({}))",
 				"const name = 'bun:' + 'test'",
 				'mock.module(name, () => ({}))',
 				'',
 			].join('\n'),
-			'src/__tests__/endpoint-access.test.ts': '',
 		},
-		expected: ['src/app.ts:2:1', 'src/app.ts:3:1', 'src/app.ts:4:1', 'src/app.ts:6:1'],
+		expected: ['src/app.ts:2:1', 'src/app.ts:3:1', 'src/app.ts:5:1'],
 		good: {
 			'src/__tests__/notes.test.ts': [
 				"import { expect, mock, test } from 'bun:test'",
@@ -1002,8 +963,8 @@ const cases: readonly RuleCase[] = [
 ]
 
 describe('every rule has a refused and an allowed fixture', () => {
-	test('the table covers every rule id except generated-test-hash, migration-edited and the architecture rules, which have their own suites', () => {
-		expect(new Set([...cases.map((item) => item.rule), 'generated-test-hash', 'migration-edited', ...STRUCTURE_RULE_IDS])).toEqual(new Set(RULE_IDS))
+	test('the table covers every rule id except migration-edited and the architecture rules, which have their own suites', () => {
+		expect(new Set([...cases.map((item) => item.rule), 'migration-edited', ...STRUCTURE_RULE_IDS])).toEqual(new Set(RULE_IDS))
 	})
 
 	for (const item of cases) {
@@ -1036,12 +997,6 @@ describe("a developer's tool", () => {
 			'tools/cli.ts:3 any-type',
 			'tools/cli.ts:3 key-literal',
 		])
-	})
-
-	test('may not import a generated test either', async () => {
-		const findings = await check({ ...CLEAN_APPLICATION, 'tools/seed.ts': "export { describe } from '../src/__tests__/endpoint-access.test.ts'\n" })
-
-		expect(locations(findings, 'generated-test-import')).toEqual(['tools/seed.ts:1:1'])
 	})
 
 	test('only at the root: a tools/ directory elsewhere is application code', async () => {
@@ -1119,87 +1074,19 @@ describe('sql-undeclared', () => {
 	})
 })
 
-describe('generated tests', () => {
-	const path = 'src/db/__tests__/notes.policy-isolation.test.ts'
-	const endpoints = 'src/__tests__/endpoint-access.test.ts'
-	const generated = CLEAN_GENERATED_TESTS.get(path) ?? ''
-	const body = generated.slice(generated.indexOf('\n') + 1)
-	const weakened = body.replace("expect((await kit.get('other')).status).toBe(404)", "expect((await kit.get('other')).status).toBe(200)")
-	const findingsOf = async (files: Readonly<Record<string, string>>): Promise<string[]> =>
-		(await check(files)).map((finding) => `${finding.file}:${finding.line}:${finding.column} ${finding.rule} ${finding.message}`)
-	const replaced = `${path}:1:1 generated-test-hash this file is not the generated test the scaffold writes here`
-
-	test('the scaffold writes a policy test per table a store reaches and the endpoint test, as the clean application carries them', async () => {
-		expect([...CLEAN_GENERATED_TESTS.keys()]).toEqual([path, endpoints])
-		expect(generated.startsWith('// @generated by fabrika db test-scaffold sha256:')).toBe(true)
-		expect(CLEAN_GENERATED_TESTS.get(endpoints)).toContain(
-			"expect(await kit.denied('api.get', { id: '00000000-0000-4000-8000-000000000000' })).toEqual({ status: 404 })",
-		)
+describe('the contract against src/db/tables.ts', () => {
+	test('an application with tables and no test of its own passes the check', async () => {
+		expect(Object.keys(CLEAN_APPLICATION).some((path) => path.includes('__tests__'))).toBe(false)
 		expect(await check(CLEAN_APPLICATION)).toEqual([])
 	})
 
-	test('a weakened generated test fails the check: its hash no longer matches', async () => {
-		expect(weakened).not.toBe(body)
-		expect(await findingsOf({ ...CLEAN_APPLICATION, [path]: `${generated.slice(0, generated.indexOf('\n'))}\n${weakened}` })).toEqual([
-			`${path}:1:1 generated-test-hash this generated test differs from what fabrika db test-scaffold wrote`,
-		])
-	})
-
-	test('a weakened test under a recomputed hash fails too', async () => {
-		expect(await findingsOf({ ...CLEAN_APPLICATION, [path]: `${await generatedTestHeader(weakened)}\n${weakened}` })).toEqual([replaced])
-	})
-
-	test('a replacement without the header fails: every generated file is compared byte for byte', async () => {
-		expect(await findingsOf({ ...CLEAN_APPLICATION, [path]: body })).toEqual([replaced])
-		const smoke = "import { expect, test } from 'bun:test'\n\ntest('smoke', () => {\n\texpect(1).toBe(1)\n})\n"
-		expect(await findingsOf({ ...CLEAN_APPLICATION, [path]: smoke })).toEqual([replaced])
-		expect(await findingsOf({ ...CLEAN_APPLICATION, [path]: '' })).toEqual([replaced])
-	})
-
-	test('a deleted generated test is a finding', async () => {
-		const { [path]: _deleted, ...rest } = CLEAN_APPLICATION
-		expect(await findingsOf(rest)).toEqual([`${path}:1:1 generated-test-hash this generated test is missing`])
-		const { [endpoints]: _endpoints, ...withoutEndpoints } = CLEAN_APPLICATION
-		expect(await findingsOf(withoutEndpoints)).toEqual([`${endpoints}:1:1 generated-test-hash this generated test is missing`])
-	})
-
-	test('a policy change makes the generated test stale until the scaffold reruns', async () => {
-		const narrowed = CLEAN_TABLES.replace(", delete: 'notes.write'", '')
-		expect(narrowed).not.toBe(CLEAN_TABLES)
-		expect(await findingsOf({ ...CLEAN_APPLICATION, 'src/db/tables.ts': narrowed })).toEqual([replaced])
-	})
-
-	test('a generated test the scaffold no longer writes is a finding', async () => {
-		const orphan = 'src/db/__tests__/countries.policy-isolation.test.ts'
-		expect(await findingsOf({ ...CLEAN_APPLICATION, [orphan]: generated })).toEqual([
-			`${orphan}:1:1 generated-test-hash a generated test the scaffold no longer writes`,
-		])
-	})
-
-	test('an endpoint input the scaffold cannot sample needs a fixture, and the fixture becomes the case', async () => {
-		const contract = CLEAN_CONTRACT.replace('input: z.strictObject({ id: z.uuid() })', 'input: z.strictObject({ id: z.string().regex(/^n-[0-9]+$/) })')
-		expect(contract).not.toBe(CLEAN_CONTRACT)
-		const sources = { ...CLEAN_APPLICATION, 'fabrika.contract.ts': contract }
-		const generatedFor = async (files: Readonly<Record<string, string>>): Promise<Record<string, string>> => {
-			const inputs = scaffoldInputs(new Map(Object.entries(files)))
-			return Object.fromEntries([...(await generatedTests(inputs.policies, inputs.artifact, inputs.fixtures))].map(([file, test]) => [file, test.text]))
-		}
-		const without = { ...sources, ...(await generatedFor(sources)) }
-		expect(await findingsOf(without)).toEqual([
-			'src/__tests__/endpoint-access.fixtures.ts:1:1 endpoint-fixture api.get: the scaffold cannot write an input its schema admits, so its endpoint access cases need one here',
-		])
-		const fixture = "export const fixtures = { 'api.get': { id: 'n-1' } }\n"
-		const given = { ...sources, 'src/__tests__/endpoint-access.fixtures.ts': fixture }
-		const withFixture: Record<string, string> = { ...given, ...(await generatedFor(given)) }
-		expect(withFixture[endpoints]).toContain("expect(await kit.denied('api.get', { id: 'n-1' })).toEqual({ status: 404 })")
-		expect(await findingsOf(withFixture)).toEqual([])
-		const computed = {
-			...withFixture,
-			'src/__tests__/endpoint-access.fixtures.ts': "const id = 'n-1'\nexport const fixtures = { 'api.get': { id } }\n",
-		}
-		expect((await findingsOf(computed)).map((line) => line.split(' ').slice(0, 2).join(' '))).toEqual([
-			'src/__tests__/endpoint-access.fixtures.ts:1:1 endpoint-fixture',
-		])
+	test('a contract that does not compile against the policies is reported at the contract', async () => {
+		const unknownKind = CLEAN_TABLES.replace("insert: ['title'],", "insert: ['title'],\n\t\tfiles: { title: 'pictures' },")
+		const findings = await check({ ...CLEAN_APPLICATION, 'src/db/tables.ts': unknownKind })
+		expect(locations(findings, 'contract')).toEqual(['fabrika.contract.ts:1:1'])
+		expect(findings.find((finding) => finding.rule === 'contract')?.message).toContain(
+			"names the file kind 'pictures', which the contract does not declare",
+		)
 	})
 
 	test('a defineTables call of another shape names the form that needs no type arguments', async () => {

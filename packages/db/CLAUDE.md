@@ -94,7 +94,7 @@ where the capability's action is its read action or one of `actions.appRead`, wi
 A scoped site's `ctx.db.app` (a `Ref` or a `Within`) lists every application table read-only, and reads one (every
 row, its read action's columns) only where the capability's action is its read action (`scopedApplicationRead`).
 
-`@fabrika/db/testing` is the database half of the generated isolation tests (`fabrika db test-scaffold`, A11):
+`@fabrika/db/testing` is the database half of the test kits:
 `testDatabase` migrates a fresh `app_test_<hex>` schema with its own role family through `@fabrika/platform-node`'s
 application runner (`migrate`, as the migration role: the framework's tables, then the application's, as
 `fabrika db migrate` applies them), connects and seeds as its runtime role, so every test of
@@ -103,7 +103,7 @@ chains that share no value, every container row a table owns first, with the aut
 row (never a column that places it, nor a text column that holds a marker the leak cases look for), the author's pins in text columns of that row instead of their markers (the value in the own row, `<value>-other` in the other row, each among its row's markers), the known values of a dimension (`ScopeValues`, an enum the input names it by) instead of fresh ones, using a row a table holds under that key as it is stored (no seed or pin goes into one) and removing the container rows it inserted for one with the worlds, and answers each row's `chain` of dimension values (a share link's chain); `seedRow` seeds one row of an application
 table, with the author's values in any column it does not stamp or fill with a file, and `seedApplicationRows` several,
 in foreign-key order and linked (every table's values checked before the first insert, and a table that fails removes the rows seeded before it), with a `remove` that deletes them, the rows their required foreign keys and file columns made it insert, and every row that refers to any of them, however deep, each locked once found and all deleted in one statement (a foreign key is checked at its end, so rows that refer to each other go together); `seedUnder` seeds a row in a seeded row's object (a child row a fixture names); `tableProbe` reaches one table of a layer by
-name. `@fabrika/app/testing/isolation` builds the policy isolation and endpoint access tests on them. Every text
+name. `@fabrika/app/testing/isolation` builds its kits on them (fabrika's own enforcement tests; pending removal). Every text
 column the seeding fills holds a distinct marker, so a leaked value is recognised anywhere in an answer, except a
 foreign key outside the chain (`null`, the key of an existing reference or application row, or of a fresh row the
 seeding inserts, a dimension or child table's always fresh and in a chain of its own) and a column a CHECK names (an
@@ -112,12 +112,10 @@ index, the seeding tries the next combination of the values of the columns that 
 CHECKs list or compare with, other samples of the type, a fresh referenced row), up to `MAX_ROW_ATTEMPTS` rows, and it
 follows required foreign keys `MAX_REFERENCE_DEPTH` rows deep. What it still cannot satisfy is a `SeedLimitError`
 naming the constraint the preferred row failed; the schema keeps its constraints.
-There is no generated `move` case yet ([backlog 97](../../docs/backlog/97-the-generated-tests-have-no-move-case.md)):
-`t.move` needs the source and the target `Ref`, which an endpoint gets through `access: { capabilities }`.
 `@fabrika/db/testing-sqlite` is the same half for an application on Cloudflare: its `testDatabase({ migrations, label })`
 migrates a fresh in-memory `bun:sqlite` database (`bunSqliteStorage`) with the object's runner and opens it with the
 object's engine, so it needs no backend and never answers `null` (its type stays assignable to the Postgres kit's, so a
-generated test compiles against both). A process migrates each set of migrations once (keyed by every file's name and
+test compiles against both). A process migrates each set of migrations once (keyed by every file's name and
 text) and starts every later test database as a copy of that image (`bun:sqlite`'s `serialize`/`deserialize`);
 `testDatabaseTemplate({ migrations, label, seed })` keeps a migrated and seeded image, and `testDatabase({ template })`
 starts as its copy, refusing a template of other migrations. There are no roles on SQLite: the seeding writes through the same storage. The
@@ -193,10 +191,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 
 ## Invariants
 
-- **The generated tests catch mistakes; the data layer is the enforcement.** They catch what an application's author,
-  usually an agent, gets wrong: a handler that serves another scope's rows, a cache keyed by nothing, a policy that
-  does not hold. A deliberately hostile author runs in the same process and can always subvert them. Never weaken a
-  store check because a generated test covers the case.
+- **Tests catch mistakes; the data layer is the enforcement.** They catch what an author gets wrong: a handler that
+  serves another scope's rows, a cache keyed by nothing, a policy that does not hold. A deliberately hostile author runs
+  in the same process and can always subvert them. Never weaken a store check because a test covers the case.
 - **`@fabrika/db/tables` imports no Bun API, no driver and no Kysely runtime.** `@fabrika/app/contract` (the SPA)
   and the static contract reader (a Worker) import it; `tables.test.ts` bundles it for a browser.
 - **`defineTables` and `readTables` are one parse** (`parseTables`), over values nobody type-checked: plain objects
@@ -303,16 +300,14 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   `testDatabase` first drops every `app_test_*` schema and `app_test_*`/`run_test_*` role family whose lock it can
   take, and never one whose lock is held. A failed migration drops the schema and the roles, and `close` runs every
   cleanup step even when one throws. `FABRIKA_TEST_POSTGRES_URL` is a provisioning credential: it must be able to
-  create roles (a superuser, or `CREATEROLE` with `CREATE` on the database); `fabrika db test-isolation` hands it a
-  throwaway one. A family the kit cannot administer (another provisioner's) is left to its creator.
+  create roles (a superuser, or `CREATEROLE` with `CREATE` on the database). A family the kit cannot administer (another provisioner's) is left to its creator.
 - **A test database holds at most `TEST_DATABASE_CONNECTIONS` (4) and never fails a case for want of one** (ADR-0043).
   One provisioning connection holds the lock and reads the CHECK constraints, the seeder has one, the runtime role two;
   migrating, reading the catalog and the drop borrow one more each, one at a time. `openTestDatabase` opens the first
   connection of every pool before the first case (`openFirstConnection`): Bun's pool then makes a statement wait for
   an open connection when the database refuses another. A refusal while it opens (SQLSTATE 53300) closes everything it
   opened and retries on a fresh schema (`withConnectionCapacity` of `@fabrika/platform-node`, up to
-  `connectionWaitMs`, 60 s); then the file fails with `CONNECTION_CAPACITY_MESSAGE`, which `fabrika db test-isolation`
-  recognises, and every later file of the process fails at once. `close` ends the runtime role's and the seeder's
+  `connectionWaitMs`, 60 s); then the file fails with `CONNECTION_CAPACITY_MESSAGE`, and every later file of the process fails at once. `close` ends the runtime role's and the seeder's
   connections before the drop, which waits the same way.
 - **`@fabrika/db/framework` imports no Bun API and no driver**: the Worker adapter imports `boot`, which imports it.
   It takes only types from the modules that need the driver (`framework-tables.ts`, `job-leases.ts`, `admissions.ts`,
@@ -479,7 +474,7 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   JSON, so values are strings, numbers, bigints, booleans, Dates
   or null; the guard refuses anything else in a `ValueNode`. A JSON column's value is bound as its JSON text
   (`jsonInput`), which Postgres reads into `jsonb` from the untyped parameter; `codegen.test.ts` pins that. The test kits
-  bind a seeded JSON column's value the same way (`seedBinding`), so the seeded row and a generated case's write agree;
+  bind a seeded JSON column's value the same way (`seedBinding`), so the seeded row and a kit case's write agree;
   a seed value has no object form, so a JSON column's sample is the JSON string `"sample"`. The pool runs with `prepare: false`:
   otherwise Bun keeps one prepared statement per distinct SQL text, and `in` lists of different
   lengths make that grow without bound.

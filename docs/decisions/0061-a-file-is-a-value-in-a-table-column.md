@@ -187,8 +187,8 @@ does next.
 - A file shared by two records, an attachment reused by many e-mails, versioned documents, a thumbnail, metadata
   beside an attachment and a handover between owners need no new operation: they are columns and rows.
 - An application table holds file columns, so a mail template or a bulk send carries attachments.
-- Each file operation an application wants is a procedure of a few lines, which the approval reads like any other and
-  the generated access tests cover. The approval shows file reach as table reach: "`deals.write` writes
+- Each file operation an application wants is a procedure of a few lines, which the approval reads like any other. The
+  approval shows file reach as table reach: "`deals.write` writes
   `deal_attachments.file` (attachments)" ([ADR-0050](0050-approved-access.md)). A file kind adds no authority.
 - A limit per owner (0.5's `maxPerOwner`) is the handler's: a count of the owner's rows under the owner's lock.
 - An unreferenced file lives at most the pending grace. A referenced file lives until the application deletes its

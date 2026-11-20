@@ -107,7 +107,7 @@ describe('the generated execution descriptor of a contract application', () => {
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
 					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db migrate' > fabrika/migrate.generated.sh",
-					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes ./node_modules/.bin/fabrika db codegen --verify' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db test-isolation' > fabrika/verify.generated.sh",
+					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db codegen --verify' > fabrika/verify.generated.sh",
 					"printf '%s\\n' '#!/bin/sh' 'set -eu' 'cd /var/www' 'exec bun --max-http-header-size=65536 fabrika/entry.generated.ts' > fabrika/start.generated.sh",
 				],
 				deployFiles: ['./'],
@@ -141,13 +141,13 @@ describe('the generated execution descriptor of a contract application', () => {
 		})
 	})
 
-	test('the schema check and the isolation tests run after the migrations, before `run.start` opens the readiness window', async () => {
+	test('the schema check runs after the migrations, before `run.start` opens the readiness window', async () => {
 		const setup = render(await compile(contractApp()))
 		expect(mapping(setup['run'])['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
 		const commands = mapping(setup['build'])['buildCommands']
 		const verify = Array.isArray(commands) ? commands.find((command) => String(command).includes('verify.generated.sh')) : undefined
 		expect(String(verify)).toMatch(
-			/'set -eu' 'cd \/var\/www' 'FABRIKA_APP_ID=notes \S+ db codegen --verify' 'FABRIKA_APP_ID=notes exec \S+ db test-isolation'/,
+			/'set -eu' 'cd \/var\/www' 'FABRIKA_APP_ID=notes exec \S+ db codegen --verify'/,
 		)
 		const start = Array.isArray(commands) ? commands.find((command) => String(command).includes('start.generated.sh')) : undefined
 		expect(String(start)).not.toContain('fabrika db')

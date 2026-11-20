@@ -15,9 +15,9 @@ export const ZEROPS_POSTGRES_MIN_RAM_GB = 0.25
 export const ZEROPS_POSTGRES_UNAVAILABLE_CONNECTIONS = 7
 
 /**
- * The most connections one container's init commands hold at once: `fabrika db test-isolation` peaks at 4 since the
- * test kit opens a file's connections together, and at 5 with a `@fabrika/db` before that (measured locally,
- * 2026-10-16, with the Notes and CRM examples). Migrating and reading the schema take fewer, one after the other.
+ * The most connections one container's init commands hold at once, measured (2026-10-16) when they also ran `fabrika db
+ * test-isolation`, which peaked at 5. Migrating and reading the schema, all they run now, take fewer, one after the
+ * other; the budget keeps the measured value until it is measured again.
  */
 export const ZEROPS_START_CONNECTIONS = 5
 

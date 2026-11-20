@@ -20,10 +20,9 @@ import {
 import type { ModuleReference } from '../references'
 import { type ImportMappings, mappedTargets } from '../resolution'
 import { isTestKit } from './modules'
-import { isGeneratedTestPath } from './tests'
 
-/** The rules of the application architecture (docs/reference/application-architecture.md): four refusals and the hints. */
-export const STRUCTURE_RULE_IDS = ['spa-server-import', 'layer-import', 'generated-test-import', 'shared-import', ...STRUCTURE_HINT_RULE_IDS] as const
+/** The rules of the application architecture (docs/reference/application-architecture.md): three refusals and the hints. */
+export const STRUCTURE_RULE_IDS = ['spa-server-import', 'layer-import', 'shared-import', ...STRUCTURE_HINT_RULE_IDS] as const
 
 type SlicePart = 'endpoints' | 'logic' | 'queries'
 
@@ -242,14 +241,6 @@ export const checkToolPackages = (paths: readonly string[]): Finding[] =>
 export const checkStructureReferences = (graph: StructureGraph, place: StructurePlace, report: Report): void => {
 	for (const reference of graph.referencesOf(place.file)) {
 		const targets = referenceTargets(graph, place.file, reference.specifier)
-		if (targets.files.some((path) => isGeneratedTestPath(path, graph.files))) {
-			report(
-				reference.node,
-				'generated-test-import',
-				`'${reference.specifier}' is a generated test, which no module imports`,
-				'a helper module of your own; fabrika db test-scaffold rewrites the generated tests',
-			)
-		}
 		if (reference.typeOnly) continue
 		const tool = isToolModule(place.file) ? undefined : targets.files.find(isToolModule)
 		if (tool !== undefined) {

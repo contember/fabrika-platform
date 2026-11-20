@@ -1,8 +1,7 @@
 // Both application commits are ones a production build accepts: the archive Control uploads, unpacked, passes the
-// checker, and on Postgres the init commands' `fabrika db migrate`, `fabrika db codegen --verify` and
-// `fabrika db test-isolation`. The composed Notes container runs the workspace copy of the same files, so this is
-// what ties the container's behaviour to the deployed source. The agent change passing them is what "regenerated tests
-// included" means. The URL is a credential: no assertion prints it.
+// checker, and on Postgres the init commands' `fabrika db migrate` and `fabrika db codegen --verify`. The composed Notes
+// container runs the workspace copy of the same files, so this is what ties the container's behaviour to the deployed
+// source. The URL is a credential: no assertion prints it.
 
 import { checkApplication } from '@fabrika/check'
 import { dropApplicationDatabase } from '@fabrika/platform-node'
@@ -58,20 +57,17 @@ for (const kind of ['application', 'agentChange'] satisfies LocalSourceFixtureKi
 	}
 
 	describe(`the ${kind} fixture archive`, () => {
-		test('passes the checker the platform build runs, generated tests and entrypoint included', async () => {
+		test('passes the checker the platform build runs, the generated entrypoint included', async () => {
 			expect(await checkApplication({ root })).toEqual([])
 		})
 	})
 
 	describe.skipIf(url === '')(`the ${kind} fixture archive on Postgres`, () => {
-		test("passes the init commands' steps: migrate, codegen --verify and every generated case", async () => {
+		test("passes the init commands' steps: migrate and codegen --verify", async () => {
 			// The build installed the example's packages; its workspace install stands in for them.
 			await symlink(join(applicationFixtureRoot, 'node_modules'), join(root, 'node_modules'))
 			expect(await fabrika('migrate')).toMatchObject({ code: 0 })
 			expect(await fabrika('codegen')).toMatchObject({ code: 0 })
-			const isolation = await fabrika('test-isolation')
-			expect(isolation.code).toBe(0)
-			expect(isolation.output).toMatch(/^\d+ generated cases passed/m)
 		}, 120_000)
 	})
 }

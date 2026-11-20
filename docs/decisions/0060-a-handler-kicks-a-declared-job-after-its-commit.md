@@ -98,8 +98,8 @@ columns. It answers whether the row was inserted.
 
 ### 4. Tests and shutdown
 
-- The test kit tracks every kicked run. `kit.drain()` waits for them, `kit.runJob` drains before it runs, and each
-  generated access test drains before it returns its outcome. So a test never closes the database under a kicked run.
+- The test kit tracks every kicked run. `kit.drain()` waits for them, and `kit.runJob` drains before it runs. A test that
+  drains before it closes the database never closes it under a kicked run.
 - On SIGTERM, a Bun server aborts its kicked runs first. A stopped run frees its lease as failed, logs that the
   schedule runs it again, and sends no report to Operations: it is not a failure of the application. Then the server
   stops accepting requests and waits for its remaining background work for at most 10 seconds before it closes the

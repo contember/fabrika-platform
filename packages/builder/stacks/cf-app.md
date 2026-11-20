@@ -42,7 +42,7 @@ of the application.
 ## Local verification
 
 1. Install with Bun and typecheck. After a contract or table change, run
-   `fabrika db codegen`, `fabrika db test-scaffold` and `fabrika app build`.
+   `fabrika db codegen` and `fabrika app build`.
 2. Run the application's tests (`testKit` on `@fabrika/db/testing-sqlite`,
    denials included) and `fabrika-check .`.
 3. Build the SPA and start `fabrika app dev` with the `dev/seed.ts` the scenarios

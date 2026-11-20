@@ -1,121 +1,8 @@
-# references/tests.md — generated tests, seeds and your own tests
+# references/tests.md — your own tests
 
-## The generated tests
-
-`bunx fabrika db test-scaffold` writes them from the contract and the table policies, and deletes the ones it no
-longer writes. Commit them; never edit, format or import them (`generated-test-hash`).
-
-- `src/db/__tests__/<table>.policy-isolation.test.ts`: the data layer keeps each table's rows in their scope.
-- `src/__tests__/endpoint-access.test.ts`: every `on` and `in` endpoint refuses another scope's object (404 or 403);
-  every `on` and `over` endpoint, and every `in` endpoint that declares `sql`, answers nothing of another scope; a
-  caller with only an endpoint's write action, plus what IAM requires of it (below), reaches its own object (200). An
-  `app` or `creates` endpoint refuses a holder of its action in one scope only (403) and answers a global holder. An
-  endpoint of several `capabilities` adds a denied case per capability (none for an `over` one whose action another one
-  needs on its dimension, a container of it or a dimension inside it, which gets a `// Not checked:` line instead). A
-  public procedure answers anyone without a credential, or, behind a challenge, refuses a caller without a solved one.
-  A file input is sent as a generated file of its kind, or as the file the fixtures name (`files`, below); a `GET`
-  procedure's input goes in its URL.
-- Their kit stands in for IAM, as `testKit` does (below): it creates a scope, assigns or invites a member and issues a
-  link under IAM's rules for the caller's grants. A repeated invitation answers the open one, `resend` restarts its
-  7 days, and an organization's address is refused for an external role (`internal_mailbox`). So the caller of an endpoint with the dimension's `members.manage`
-  holds it on the object itself, with one role the assigned role's `assignableBy` names and the assigned role's
-  actions: the membership roles the input names, or every one of the dimension when it names none. The caller of an
-  endpoint that `issues` also holds the actions its link grants.
-
-Run them after every change of the contract or the tables. The platform runs them at every start, and the
-application is not ready until each passes. A failing generated test is a bug in the handler, the policy or the
-fixtures, never in the test: do not loosen access to make it pass. A case that throws instead of failing an
-assertion names what the generator could not build: an input the schema refuses, an input the handler refused (400),
-which the fixtures below supply, or a `SeedLimitError` of the seed (below). Do not reshape the contract or the schema
-around one; ask the human.
-
-## Fixtures and seeds
-
-`src/__tests__/endpoint-access.fixtures.ts` is yours, read statically (plain literals only):
-
-```ts src/__tests__/endpoint-access.fixtures.ts
-export const seeds = { 'api.tasks.close': { status: 'doing' } }
-export const members = { 'api.tasks.assign': ['assignee'] }
-```
-
-- `export const fixtures = { '<endpoint id>': { … } }` is an input for an endpoint whose schema the scaffold cannot
-  sample, such as a `regex` (a webhook's account):
-  `{ 'api.integrations.connectGithub': { orgId: 'acme', account: 'installation:1' } }`. The checker names each missing one,
-  and one of an endpoint that does not exist (`endpoint-fixture`). The access form's `from` field is
-  replaced by the seeded scope.
-- A `from` field that admits a fixed set of values (`z.enum(['eu', 'us', 'apac'])`, a literal or a union of them) gets
-  two of them, one per scope: an enum's first two in sorted order, a union's first two as written. A row the table that owns the dimension already holds
-  under that key (a migration wrote the regions) is used as it is; a row the case inserts is removed once it is over.
-  Such a stored row takes no `seeds` or `pins`, and a field of one value cannot be asked from two scopes: both fail the
-  case.
-- `members['<endpoint id>']` lists the input fields that name a picked person the handler checks with
-  `ctx.members.get` (`assign`'s `assignee`). The generated cases send a real member of the object's org there; without
-  it they send a sample, the handler answers 400, and the case fails.
-- `invitations['<endpoint id>']` and `links['<endpoint id>']` list the input fields that name an invitation an endpoint
-  cancels (`ctx.members.revoke(ctx.target, { invitationId })`) or a share link it revokes (`ctx.links.revoke(id)`):
-  `export const invitations = { 'api.members.cancel': ['invitationId'] }`. The generated cases send one their stand-in
-  IAM holds there: an invitation open in the object's value, a link of the endpoint's mount that the case's caller
-  issued. Without it they send a sample, IAM answers 404, and the case fails.
-- `seeds['<endpoint id>']` is the state its precondition needs, written into the row of the table that owns the
-  endpoint's dimension in both scopes: `close` answers 409 for an open task, so the seed makes it `doing`. A seed
-  sets neither a column that places the row nor a text column that holds a marker; a text column a CHECK lists the
-  values of, and a foreign key, it may set.
-- `rows['<endpoint id>']` names the input fields that address a row in the endpoint's scope, with that row's table:
-  `export const rows = { 'api.tasks.editComment': { commentId: 'task_comments' } }`. The generated cases seed one row
-  of the table in each scope and send its key there. Under `on` and `in` the table lies directly in the object or
-  target (a child table of the table that owns it, or a table it contains), and a table owns the dimension; under
-  `over` the dimension lists the table. The checker refuses anything else (`endpoint-fixture`). An endpoint with
-  `capabilities` names the capability whose scope the row lies in: `'api.tasks.copyToTask#from': { id:
-  'task_attachments' }`. Without it they send a sample, the handler finds no row (404), and the case fails.
-- `appRows['<endpoint id>']` gives the rows of application tables (`scope: { app }`) that the endpoint's handler reads
-  for the caller's own scope, by table, with the columns they need: `export const appRows = { 'portal.guide': { guides:
-  { active: true } } }`. Each of its leak and own-object cases seeds one row of each before it asks and removes them
-  once it is over, with every row that refers to them (a download the handler logged), so a handler that reads the
-  newest guide answers 200 instead of 404, and no other endpoint's case finds the row. A foreign key from one given row
-  to another holds that row's key. A text column may be given; the key, the version, the creator and a file column may
-  not (a file column holds a live, scanned file). Only application tables, and only for an endpoint with a leak or an
-  own-object case: the checker refuses a table in a scope, which `rows` and `seeds` address (`endpoint-fixture`).
-- `files['<endpoint id>']` names, by file field, a file of the repository that every case of the endpoint sends there
-  instead of the generated one, a path from the application's root:
-  `export const files = { 'api.skills.publish': { package: 'src/__tests__/fixtures/skill.zip' } }`. Give one when the
-  handler inspects the content (a package it unpacks, a document it parses) and answers 400 to the generated file, which
-  has only the leading bytes of its type. Commit the file; keep it small and free of real data. The kit sends it with the
-  first type of the field's kind its bytes are, and a file it cannot read, or of none of those types, fails the case. The
-  checker refuses a field that holds no file and a path that leaves the application, starts with `.` or has characters
-  other than letters, digits, `_`, `-`, `.` and `/` (`endpoint-fixture`).
-- `pins['<endpoint id>']` gives text columns of the row the endpoint addresses (the row of the table that owns its
-  dimension) a known value instead of the seed's marker: `export const pins = { 'api.skills.publish': { slug:
-  'published-skill' } }`, when the handler ties the column to the input or to the file in `files` (a package whose
-  `SKILL.md` names the skill's slug). The own scope's row holds the value, the other scope's `<value>-other`, which a
-  leak case still looks for in the own scope's answer. A pin of a column that places the row, or of no text column,
-  fails the case; the checker refuses one of an endpoint without an addressed row (`endpoint-fixture`).
-- `refusals['<endpoint id>']` lists the error types of the 400s the endpoint's handler answers with when its rule ties
-  the row to the input and the scope is the other one: `export const refusals = { 'api.skills.publish':
-  ['skill_frontmatter'] }`, beside the pin above. A leak case asks from the other scope first, whose pinned value the
-  package does not name; that request may answer one of them. The own case passes on 200 or one of them, and the
-  denial cases still expect 404 or 403. The answer a leak case checks, the own scope's, still fails on it, because an
-  answer that holds nothing proves no isolation: pin the row and give the file so that the own scope succeeds. Any
-  other 400 fails the case, and the checker refuses `validation`, an input the schema refuses (`endpoint-fixture`).
-- The endpoint id is `<mount>.<group>.<endpoint>` (`api.tasks.close`).
-- The seed of the tests fills every text column with a marker and every other required column with a sample of its
-  type: an enum's first label, `1`, `false`, today. A number column that a `UNIQUE` index or the primary key covers
-  gets the next number above the largest among the rows that share the index's other columns with it instead (`1`
-  under a fresh parent, `2` for the insert case beside the seeded row; the whole column for a one-column index), so
-  the row collides with no row of the table. A column with a `DEFAULT` keeps it (`status` is `open`). A column a
-  `CHECK` names gets the first value of an `IN (…)` list, or `null` where it is nullable. A foreign key outside the
-  containment chain is `null` where it is nullable, and otherwise references an existing row of a reference or
-  application table, or a row the seed inserts (of a dimension or child table always a fresh one, in a scope of its
-  own), however deep its own required keys go. When the database refuses a seeded row for a `CHECK` or a `UNIQUE`
-  index, the seed tries other values in the columns it names: `null`, the values the `CHECK` lists or compares with
-  (`IN (0, 12, 21)`, `BETWEEN 2000 AND 2100`, `kind = 'pickup'`), other samples of the type (another day, the other
-  boolean), a fresh referenced row (so `a <> b` and a unique foreign key hold). The insert case's values come from a
-  probe row the database accepted. What the seed still cannot satisfy fails the test with a `SeedLimitError` that names
-  the constraint: a limit of the generator, not a bug of the handler. Keep the constraint as the domain needs it, and
-  ask the human when the limit blocks the tests.
-- A generated case's input is a sample of the schema: no optional field, `null` for a nullable one, an enum's first
-  value, the shortest string its bounds admit (`'x'`), the smallest number, `false`, a fixed value for a format
-  (`uuid`, `email`, `iso.date`). When that input meets a precondition (`close` of an `open` task is 409), seed the
-  state, or give the whole input in `fixtures`.
+The proxy and the data layer enforce the access forms and the table policies, and fabrika tests that enforcement
+itself: an application writes no test of it. Test what your code decides. A leak sweep in the test kit, which asks
+every endpoint as a caller of one scope and looks for rows of another, is planned.
 
 ## Your own tests
 
@@ -241,10 +128,9 @@ if (postgres !== null) {
   A skip proves nothing. To confirm a file ran, run it alone (`bun test --isolate src/tasks`) and check that the pass
   count is its number of tests, or set `FABRIKA_TEST_POSTGRES_REQUIRED=1`: a missing URL then fails the file.
 - On Cloudflare import `testDatabase` from `@fabrika/db/testing-sqlite` instead, with the same options: it migrates a
-  fresh in-memory SQLite database as the Durable Object does, needs no URL and never answers `null`. The generated tests
-  already use it. A process migrates once and starts each later database as a copy;
-  `testDatabaseTemplate({ migrations, label, seed })` keeps a migrated and seeded database that
-  `testDatabase({ migrations, label, template })` starts as a copy of.
+  fresh in-memory SQLite database as the Durable Object does, needs no URL and never answers `null`. A process migrates
+  once and starts each later database as a copy; `testDatabaseTemplate({ migrations, label, seed })` keeps a migrated
+  and seeded database that `testDatabase({ migrations, label, template })` starts as a copy of.
 - `statusOf(call)` answers 200 when the call resolves and the status of the application's refusal otherwise; any other
   failure (no answer, a bug in the test) is rethrown. Import it beside `testKit`; do not write your own.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
@@ -341,7 +227,7 @@ if (postgres !== null) {
   reaches the kit's stand-in IAM under the job's own key, so a job that declares `issues` issues and revokes links in a
   plain `testKit` and under `fabrika app dev`, as IAM allows it: for its declared mount only.
 - A mutation that kicks (`kicks`, `ctx.kick`) starts its job in the background of the call. `kit.drain()` waits for
-  those runs, and `kit.runJob` first waits for them; every generated access case drains before it answers. The kicked
+  those runs, and `kit.runJob` first waits for them. The kicked
   run may start at once, so arm a fault before the call, never between the call and the run.
 - `await kit.runDueJobs({ within: 3 * 3600000 })` runs every job with a wake due now or within `within` milliseconds
   (0 by default) once, as the Cloudflare object's alarm runs it: a cron job's next fire, a kick, a failed run's retry.
@@ -370,9 +256,8 @@ if (postgres !== null) {
 - `testKit` takes no `deps`, and a test may not start a server (`Bun.serve` is `forbidden-global`). Stand in for an
   outbound dependency through its variables: `env` points it at a test URL, and `spyOn(globalThis, 'fetch')` answers
   that URL only and passes every other request on to the real `fetch`.
-- `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
-  where it is used, not in `build` (`references/public-intake.md`). A handler that calls an outbound dependency fails its
-  generated cases with 500, so an endpoint they cover writes an outbox row a job sends (`references/endpoint.md`).
+- `defineDeps(build)` runs at every boot, a kit's too, which sets only the variables its `env` names: read a variable
+  where it is used, not in `build` (`references/public-intake.md`).
 - Run with `bun test --isolate`: each file starts with fresh modules. A large suite runs faster as
   `bun test --parallel=4 --no-isolate`: a worker compiles the contract once and runs many files, and a later `testKit`
   of the application takes its data layer over from the previous file's kit, which must have drained the work its

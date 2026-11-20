@@ -203,8 +203,7 @@ At boot (after a bootstrap or a restart) the launcher reconciles to the recorded
 checks the schema types (`fabrika db codegen --verify`) itself, after Control's answer, because the sandbox's database
 still holds what the previous bootstrap left: it first runs any reset still pending. A migration or check that fails at
 boot, over an applied migration the commit edited, is the `failed` state, and its message names `reset_dev`; the
-launcher still reports its boot, so the bootstrap run completes and `reset_dev` reaches the launcher. The generated
-isolation tests (`fabrika db test-isolation`) run in a stage build, not in a sandbox.
+launcher still reports its boot, so the bootstrap run completes and `reset_dev` reaches the launcher.
 
 A sandbox gives an application less than a Zerops service:
 

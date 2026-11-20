@@ -5,7 +5,6 @@ import { describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { checkFileColumnMigrations } from '../rules/migrations'
-import { generatedTests, scaffoldInputs } from '../scaffold'
 import { check, locations } from './helpers'
 
 const FIXTURE = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'stored-files-fixture')
@@ -27,14 +26,6 @@ const TABLE = 'create table deal_attachments (\n\tid text primary key,\n\tfile u
 
 const refusals = (migrations: Readonly<Record<string, string>>): string[] =>
 	checkFileColumnMigrations(new Map(Object.entries(migrations)), ATTACHMENTS).map((finding) => `${finding.file}:${finding.line} ${finding.message}`)
-
-test('the scaffold sends a generated file of its kind in each file field of an endpoint access case', async () => {
-	const inputs = scaffoldInputs(new Map(Object.entries(fixtureFiles())))
-	const endpointTests = [...(await generatedTests(inputs.policies, inputs.artifact))].find(([path]) => path.endsWith('endpoint-access.test.ts'))?.[1]
-		.text
-	expect(endpointTests).toContain("kit.own('api.attachments.upload', { dealId: 'x', file: 'fabrika:file:attachments', name: 'x' })")
-	expect(endpointTests).toContain("kit.own('api.attachments.uploadMany', { dealId: 'x', files: [] })")
-})
 
 describe('a declared file column in the migrations', () => {
 	test('the stored-files fixture declares a foreign key and an index for each of its three file columns', async () => {

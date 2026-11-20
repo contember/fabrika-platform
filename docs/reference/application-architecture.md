@@ -3,7 +3,7 @@
 Where the code of a Fabrika application goes, and what each part may import and call. Every application, the
 examples and the template follow this layout. `fabrika-check` reads it: a break of platform integrity is a
 **refusal**, which fails the check; a step out of the structure is a **hint**, which it prints and does not fail on.
-The serving API itself (`ctx`, access forms, the generated tests) is in
+The serving API itself (`ctx`, access forms, the test kit) is in
 [`application-runtime.md`](application-runtime.md).
 
 ## The layers
@@ -51,9 +51,6 @@ crm/
     db/
       tables.ts                                 defineTables(vocabulary, columns)({ … })
       schema.generated.ts                       fabrika db codegen
-      __tests__/
-        companies.policy-isolation.test.ts      generated; committed, never edited
-        deals.policy-isolation.test.ts          generated
     companies/
       endpoints.ts                              app.group(…) with .handle(…) bodies
       queries.ts                                reusable data access over the handle a handler passes in
@@ -64,9 +61,6 @@ crm/
       __tests__/
         logic.test.ts                           authored: the rules, without a database
         reopen.test.ts                          authored: a handler, on a test database
-    __tests__/
-      endpoint-access.test.ts                   generated
-      endpoint-access.fixtures.ts               authored: inputs the scaffold cannot sample, seeds for preconditions
   web/
     index.html
     main.ts                                     the SPA: createClient(contract, 'api')
@@ -185,7 +179,7 @@ export const contract = app.contract((c) => ({
 ## Imports
 
 Rows are the importing module. "Checker" names what `fabrika-check` reports for a forbidden import. A type-only
-import (`import type`) is erased and is free everywhere, except of a generated test.
+import (`import type`) is erased and is free everywhere.
 
 | Module                             | May import                                                                                                                      | Must not import                                                                            | Checker                                              |
 | ---------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ | ---------------------------------------------------- |
@@ -202,9 +196,8 @@ import (`import type`) is erased and is free everywhere, except of a generated t
 | `fabrika.contract.ts`              | the kit, the slices' `endpoints.ts`, the schemas                                                                                | —                                                                                          | —                                                    |
 | `src/app.ts`                       | `@fabrika/app/implement` (`serve`), `@fabrika/db` (`scoped`), the contract, `src/db/tables.ts`                                  | —                                                                                          | —                                                    |
 | `web/**`                           | `@fabrika/app/client`, `fabrika.contract.ts`, the schemas, `src/shared/`, other `web/` modules, browser packages                | any other application module, any other `@fabrika/*` module, Bun and Node builtins         | `spa-server-import` (refusal)                        |
-| a test (`*.test.ts`, `__tests__/`) | anything, the test kits included                                                                                                | a generated test                                                                           | `generated-test-import` (refusal)                    |
+| a test (`*.test.ts`, `__tests__/`) | anything, the test kits included                                                                                                | —                                                                                          | —                                                    |
 | any module but a test              | —                                                                                                                               | `@fabrika/app/testing`, `@fabrika/app/react/testing`, `@fabrika/db/testing`, a test module | `test-only-import` (refusal)                         |
-| any module                         | —                                                                                                                               | a generated test                                                                           | `generated-test-import` (refusal)                    |
 | `tools/**`                         | anything: the contract, `src/shared/`, `@fabrika/app/client`, builtins                                                          |                                                                                            |                                                      |
 | any module outside `tools/`        |                                                                                                                                 | a module under `tools/`, at runtime                                                        | `tool-import` (refusal)                              |
 
@@ -278,12 +271,8 @@ An import is judged by the file or package Bun loads for it:
 
 ## Tests and fixtures
 
-- **Generated tests** — `src/db/__tests__/<table>.policy-isolation.test.ts` and
-  `src/__tests__/endpoint-access.test.ts` — are what `fabrika db test-scaffold` writes. They are committed and never
-  edited (`generated-test-hash`), and no module imports one (`generated-test-import`).
-- **Authored inputs and seeds** for the endpoint access tests are `src/__tests__/endpoint-access.fixtures.ts`, read
-  statically: `fixtures` for an input the scaffold cannot sample, `seeds` for the row state a precondition needs
-  (`export const seeds = { 'api.deals.reopen': { stage: 'won' } }`). A generated test is never edited to pass.
+- **No test of the enforcement.** The proxy and the data layer enforce the access forms and the table policies, and
+  fabrika tests that once (`@fabrika/app`'s `policy-enforcement.property.test.ts`); an application writes no test of it.
 - **Authored tests** live beside what they test: `src/<slice>/__tests__/*.test.ts` or `src/<slice>/*.test.ts`. A
   logic test calls the functions. A handler test boots the application through `testKit` from
   `@fabrika/app/testing` and calls it through the typed client; `kit.runJob(name)` runs a cron job.
@@ -292,17 +281,16 @@ An import is judged by the file or package Bun loads for it:
 
 ## What the checker reports
 
-| Rule                    | Severity | Reports                                                                                                                                                                                                                                                                                                                                  |
-| ----------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `spa-server-import`     | refusal  | a module under `web/` (not a test) that loads, also through a schema module, an application module other than `fabrika.contract.ts`, `src/schemas.ts`, `src/schemas/**`, `src/shared/**` and `web/**`, a `@fabrika/*` module other than `@fabrika/app/client`, or a Bun or Node builtin (`fs`, `fs/promises`, `node:path`, `bun:sqlite`) |
-| `layer-import`          | refusal  | `src/<slice>/logic.ts` or `queries.ts` that loads, also through a local module, a `@fabrika/*` module other than `@fabrika/app` and `@fabrika/db` (the test kits are `test-only-import`'s)                                                                                                                                               |
-| `shared-import`         | refusal  | a module under `src/shared/` (not a test) that loads at runtime anything but `zod/v4` and other modules under `src/shared/`: a slice, `src/db/`, `@fabrika/db`, a builtin                                                                                                                                                                |
-| `generated-test-import` | refusal  | any module, a test included, that imports or re-exports a generated test, type-only too                                                                                                                                                                                                                                                  |
-| `tool-import`           | refusal  | any module outside `tools/`, a test and `fabrika.config.ts` included, that loads or re-exports a module under `tools/` at runtime; a `package.json` under `tools/`                                                                                                                                                                       |
-| `logic-data-access`     | hint     | `logic.ts` that loads `@fabrika/db`, a `queries.ts` or a module of `src/db/`, or uses `ctx.db` or `ctx.sql`                                                                                                                                                                                                                              |
-| `cross-slice-queries`   | hint     | a module of one slice that loads another slice's `queries.ts`                                                                                                                                                                                                                                                                            |
-| `handler-location`      | hint     | `.handle(…)` on a `query`, `mutation`, `cron`, `webhook` or `export` procedure outside `src/<slice>/endpoints.ts`                                                                                                                                                                                                                        |
-| `data-access-location`  | hint     | `ctx.db` or `ctx.sql` outside `src/<slice>/endpoints.ts` and `queries.ts` (`logic.ts` reports `logic-data-access`)                                                                                                                                                                                                                       |
+| Rule                   | Severity | Reports                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `spa-server-import`    | refusal  | a module under `web/` (not a test) that loads, also through a schema module, an application module other than `fabrika.contract.ts`, `src/schemas.ts`, `src/schemas/**`, `src/shared/**` and `web/**`, a `@fabrika/*` module other than `@fabrika/app/client`, or a Bun or Node builtin (`fs`, `fs/promises`, `node:path`, `bun:sqlite`) |
+| `layer-import`         | refusal  | `src/<slice>/logic.ts` or `queries.ts` that loads, also through a local module, a `@fabrika/*` module other than `@fabrika/app` and `@fabrika/db` (the test kits are `test-only-import`'s)                                                                                                                                               |
+| `shared-import`        | refusal  | a module under `src/shared/` (not a test) that loads at runtime anything but `zod/v4` and other modules under `src/shared/`: a slice, `src/db/`, `@fabrika/db`, a builtin                                                                                                                                                                |
+| `tool-import`          | refusal  | any module outside `tools/`, a test and `fabrika.config.ts` included, that loads or re-exports a module under `tools/` at runtime; a `package.json` under `tools/`                                                                                                                                                                       |
+| `logic-data-access`    | hint     | `logic.ts` that loads `@fabrika/db`, a `queries.ts` or a module of `src/db/`, or uses `ctx.db` or `ctx.sql`                                                                                                                                                                                                                              |
+| `cross-slice-queries`  | hint     | a module of one slice that loads another slice's `queries.ts`                                                                                                                                                                                                                                                                            |
+| `handler-location`     | hint     | `.handle(…)` on a `query`, `mutation`, `cron`, `webhook` or `export` procedure outside `src/<slice>/endpoints.ts`                                                                                                                                                                                                                        |
+| `data-access-location` | hint     | `ctx.db` or `ctx.sql` outside `src/<slice>/endpoints.ts` and `queries.ts` (`logic.ts` reports `logic-data-access`)                                                                                                                                                                                                                       |
 
 - Hints do not apply to test files or the generated entrypoint.
 - A hint is syntactic: destructuring `ctx`, or passing a handle into a helper module, escapes it. The runtime binds

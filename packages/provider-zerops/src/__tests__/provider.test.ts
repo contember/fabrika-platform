@@ -1217,7 +1217,7 @@ describe('Zerops provider', () => {
 	})
 })
 
-// The init commands run `fabrika db test-isolation`, which the platform's 0.125 GB floor kills (ADR-0043).
+// The init commands ran `fabrika db test-isolation`, which the platform's 0.125 GB floor killed (ADR-0043); the floor stays until remeasured.
 describe("the deploy service's minimum RAM", () => {
 	const deploy = (overrides: Overrides, run: ZeropsDeployRun = deployRun(recorded)) =>
 		createZeropsDeployer(() => makeCollaborators(recorded, overrides))(run)

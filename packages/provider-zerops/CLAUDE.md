@@ -141,14 +141,12 @@ bun test
   produces or checks what deploys, and `tsc` before the checker, as the application skill's loop runs them: the checker
   refuses the cast or `any` that silences a type error, so it has the last word. The tests command counts the files
   `@fabrika/db/testing` skipped (its skip line has the same text in every release) and prints `fabrika-tests: N
-  Postgres-backed test files did not run …`: the build has no database. Of those files only the generated ones run
-  again, at container start. The init commands run
-  `fabrika db migrate`, then `fabrika db codegen --verify` and `fabrika db test-isolation` (the generated tests on
-  a throwaway schema), and the start script only `exec`s the server, so a failed migration, a stale
-  `schema.generated.ts` or a generated case that did not pass fails an init command, which stops the activation
-  (verified live 2026-10-16); the build has no database. Never move them back into the start script: the readiness
-  window (180 s, not the application's to raise) opens with `run.start`, and the CRM's isolation tests alone took
-  almost 3 minutes there (issue #27); the window opens only after the init commands (verified live 2026-10-21). A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
+  Postgres-backed test files did not run …`: the build has no database, and no later step runs them. The init
+  commands run `fabrika db migrate`, then `fabrika db codegen --verify`, and the start script only `exec`s the server,
+  so a failed migration or a stale `schema.generated.ts` fails an init command, which stops the activation (verified
+  live 2026-10-16); the build has no database. Never move them back into the start script: the readiness window (180 s,
+  not the application's to raise) opens with `run.start`, so a long migration would count against it; the window
+  opens only after the init commands (verified live 2026-10-21). A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
   (`FABRIKA_APP_DATABASE_URL`) and its one object-storage service (`FABRIKA_APP_STORAGE_*`) only as `${<host>_…}`
   references, so no credential passes through this package. That database URL is the service's SUPERUSER on the direct
   port (`zeropsProvisioningDatabaseUrl`, `src/manifest.ts`) and only the provisioning credential of the application's
@@ -171,8 +169,9 @@ bun test
   `incomplete`. Every build command, the authored ones included, can read the bearer, and so can the runtime until the
   next deploy replaces it: it reaches only this run's release and expires two hours after the run started.
 - **`raise-start-memory` raises the deploy service's minimum RAM before a version is reserved (ADR-0043).** The init
-  commands' `fabrika db test-isolation` peaks above the runtime's 0.125 GB faster than vertical autoscaling reacts, so
-  `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.5 GB with a database, 2 GB with a scanner. An import
+  commands peaked above the runtime's 0.125 GB faster than vertical autoscaling reacts when they also ran the isolation
+  tests, so `zeropsStartMinRam` (`src/execution.ts`) names the floor: 0.5 GB with a database, 2 GB with a scanner. The
+  values are kept as measured then until they are measured again for migrate and codegen alone. An import
   cannot change an existing service, so the step reads `customAutoscaling` back, sends it WHOLE with only
   `minResource.memoryGBytes` changed, under the keys `verticalAutoscaling` / `horizontalAutoscaling`, and decides by
   reading `currentAutoscaling` back. Measured live: a field left out, and the whole object under the published OpenAPI's
@@ -180,7 +179,8 @@ bun test
   and the step then refuses rather than reset a field. It only raises.
 - **`size-database` sizes each process's database connections before a version is reserved (ADR-0043).** Pure in
   `src/database-budget.ts`: `max_connections` follows the database's minimum RAM step and profile; 7 are never an
-  application role's and 5 are one container's init commands; the rest is shared by twice the deploy service's maximum
+  application role's and 5 are one container's init commands (measured when they also ran the isolation tests, and
+  kept until measured again); the rest is shared by twice the deploy service's maximum
   container count (10 when it reads none) and one process per crontab job (`zeropsJobProcesses`, the same list the
   crontab is rendered from), at most 10 each. Below 2 the step raises the application's OWN database through the same
   read-modify-write as `raise-start-memory` (`raiseMinRam`); measured live, `max_connections` follows in ~15 s through

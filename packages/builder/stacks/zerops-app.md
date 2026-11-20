@@ -55,8 +55,8 @@ or choose a replacement destination when prerequisites are missing.
 ## Local verification
 
 1. Install with Bun and typecheck the actual provider config and application.
-   After any change to the contract or `src/db/tables.ts`, run `fabrika db migrate`,
-   `fabrika db codegen` and `fabrika db test-scaffold`, and commit what they write.
+   After any change to the contract or `src/db/tables.ts`, run `fabrika db migrate`
+   and `fabrika db codegen`, and commit what it writes.
 2. Start the app's documented local composition: PostgreSQL, IAM, proxy and the
    generated Bun entrypoint. Apply migrations and the scenario's PostgreSQL seeds
    locally.
@@ -70,7 +70,7 @@ or choose a replacement destination when prerequisites are missing.
    `zerops-control-deploy`; a passing local test is not a successful remote run.
 
 The public notes example (`src/vocabulary.ts`, `src/db/tables.ts`, the `src/notes/` slice,
-`fabrika.contract.ts`, `db/migrations/`, `src/app.ts` and its generated tests, plus an
+`fabrika.contract.ts`, `db/migrations/`, `src/app.ts` and its tests, plus an
 `attachments` file collection, a `purge` job and a minimal SPA) supplies the backend/config
 reference, not an arbitrary-project dev launcher. Its `AGENTS.md` carries the
 `fabrika-app` rules. Scaffold and verify the local composition

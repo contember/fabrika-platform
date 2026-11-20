@@ -556,7 +556,7 @@ export interface Links {
 	open(sealed: string): Promise<string>
 }
 
-/** Read when a link is used: the generated tests boot the application without its variables. */
+/** Read when a link is used: a test kit boots the application without its variables. */
 const variable = (env: Readonly<Record<string, unknown>>, name: string) => {
 	const value = env[name]
 	if (typeof value !== 'string' || value === '') {
@@ -1481,20 +1481,6 @@ export const candidates = app.group({ callers: ['human'] }, (r) => ({
   `over` and `on`, which serve a scoped grant too.
 - `over: 'candidate'` lists every candidate a caller holds `candidates.read` on. HR holds it globally, so
   `ctx.within.values` is `'all'`.
-- The generated case of `decide` sends the first status (`new`) to a record that is `new`, which `canMove` refuses
-  with 409. Give it an input in `src/__tests__/endpoint-access.fixtures.ts`:
-
-```ts src/__tests__/endpoint-access.fixtures.ts
-export const fixtures = {
-	'api.candidates.decide': {
-		id: '00000000-0000-4000-8000-000000000000',
-		expectVersion: 1,
-		status: 'screening',
-		note: null,
-		reasonId: null,
-	},
-}
-```
 
 ## The code list an HR lead edits
 
@@ -1780,13 +1766,6 @@ export const testMails = app.cron('* * * * *', {
 
 ## Tests
 
-- The generated tests cover HR's endpoints, the files and the link's procedures: the endpoint access kit asks each
-  link procedure as a holder of a key bound to a seeded candidate. Each `app` endpoint gets two cases: a holder of
-  its action in one candidate only is 403, and a global holder reaches it. `positions`, `reasons`,
-  `candidate_exports` and `test_mails` get a policy probe of their actions, held globally and in one scope, and of a scoped site that
-  reads every row with the read action and none with another. The probe of `candidates` also lists every candidate
-  from an `app` endpoint of `candidates.export`, its `appRead`. An endpoint that `issues` gets the cases of any `on`
-  endpoint: the generated tests' stand-in IAM issues its link (`references/tests.md`).
 - Test the export's own action beside its refused twin: a global holder of `candidates.export` downloads the file, a
   global holder of only `candidates.read` gets 403.
 - Your own test of a link procedure makes the holder `kit.testCaller([{ action: 'candidates.verify', scope: { type:

@@ -31,8 +31,8 @@ PostgreSQL service's RAM step (50 per GB, from 20 to 500; OLAP 25 per GB, from 1
 overridden, and 7 of them are never an application role's: 3 are kept for superusers and Zerops uses up
 to 4. pgBouncer cannot admit the roles fabrika creates. A default `postgresql:single@18` on
 `oltp-hobby` (0.25 GB) has 20. Every process of the Bun runtime opened up to 10, the old and the new
-containers serve together while a deploy replaces them, and every new container runs the isolation
-tests at start. In production (2026-10-16) that failed a deploy at random in `fabrika db
+containers serve together while a deploy replaces them, and every new container runs its init commands
+at start, which then included the isolation tests. In production (2026-10-16) that failed a deploy at random in `fabrika db
 test-isolation` with SQLSTATE 53300, and the run reported 394 and then 414 of 420 cases passed
 ([platform facts](../reference/zerops-platform.md)).
 
@@ -108,35 +108,32 @@ specifiers, an `overrides` block of them alone, and their lockfile entries. The 
 command is generated and never passes it, so a deployed application still installs every `@fabrika/*` package from the
 registry with its hash.
 
-The build has no database. The migrations, the verification of the committed schema types and the
-generated isolation tests therefore run at container start, as init commands: `run.initCommands` runs
-`fabrika db migrate`, then `fabrika db codegen --verify` against the application's real schema and
-`fabrika db test-isolation` on a throwaway schema, each script under `set -eu`, and the start script only starts the
-server. A failed init command stops the activation, so a stale `schema.generated.ts` or a generated case that did not
-pass leaves the version `DEPLOY_FAILED`, and the previous version keeps serving.
+The build has no database. The migrations and the verification of the committed schema types therefore run at
+container start, as init commands: `run.initCommands` runs `fabrika db migrate`, then `fabrika db codegen --verify`
+against the application's real schema, each script under `set -eu`, and the start script only starts the server. A
+failed init command stops the activation, so a failed migration or a stale `schema.generated.ts` leaves the version
+`DEPLOY_FAILED`, and the previous version keeps serving.
 
 They run before `run.start` because the readiness window opens with `run.start`, and it is fixed at 180 s: the
-application cannot raise it. While the checks ran in the start script they shared that window with the server. The
-CRM's 605 generated cases took almost 3 minutes on a small database, and two deploys in a row failed although every
-check passed.
+application cannot raise it. A check in the start script would share that window with the server, so a long one would
+fail a deploy although every check passed.
 
-**A container starts with the memory its init commands need.** The isolation tests run as `fabrika db
-test-isolation` and its `bun test` child, which together peak at 161 MiB of anonymous memory for the Notes example
-and 225 MiB for the CRM example, within about 1.5 s. A Zerops runtime starts at 0.125 GB, and vertical autoscaling
-reacts in 10–20 s, so the platform killed the run on 2 of 3 first deploys and marked the version `DEPLOY_FAILED`
-(measured 2026-10-15, [platform facts](../reference/zerops-platform.md)). Each deploy therefore raises the deploy
+**A container starts with the memory its init commands need.** The floor was measured when the init commands also
+ran the isolation tests, whose run peaked at 161 MiB of anonymous memory for the Notes example and 225 MiB for the CRM
+example, within about 1.5 s. A Zerops runtime starts at 0.125 GB, and vertical autoscaling reacts in 10–20 s, so the
+platform killed the run on 2 of 3 first deploys and marked the version `DEPLOY_FAILED` (measured 2026-10-15,
+[platform facts](../reference/zerops-platform.md)). The floor stays until it is measured for `migrate` and
+`codegen --verify` alone. Each deploy therefore raises the deploy
 service's minimum RAM to 0.5 GB for an application with a database, and to 2 GB for one that scans uploads, in the
 `raise-start-memory` step before it reserves a version. An import cannot do it: Zerops ignores a changed
 `verticalAutoscaling` of an existing service. The step changes only that field through the autoscaling API, reads it
-back, and never lowers it. The tests still run at every container start, so an active version still proves that they
-passed for the version that serves.
+back, and never lowers it.
 
 **Every process of an application fits its database's connection limit.** The deploy's `size-database`
 step, after `raise-start-memory`, reads the minimum RAM and the profile of the application's PostgreSQL
 service and the deploy service's maximum container count (10, Zerops' maximum, when it reads none). Of
 `max_connections`, it keeps 7 for superusers and Zerops and 5 for one container's init commands (the
-isolation tests' measured peak with a test kit of v0.4.7, which an application that has not updated still
-runs; 4 since), and shares the rest between twice the maximum container count (old and new
+peak measured when they also ran the isolation tests, kept until it is measured again), and shares the rest between twice the maximum container count (old and new
 containers overlap while a deploy replaces them) and one process per crontab job. Each process gets its
 share, at most 10. When the share is below 2 (a job's fenced write and its cancellation need one
 connection each), the step raises the minimum RAM of the application's own database to the smallest
@@ -146,15 +143,13 @@ step at which it is 2, the way `raise-start-memory` raises the deploy service, a
 `FABRIKA_APP_DATABASE_CONNECTIONS`, a literal of the generated run section, and `@fabrika/app/bun`
 opens its pool with it (10 without one). An application with a database is never built without it.
 
-**The isolation tests wait for a connection; they never fail a case for want of one.** A test database
+**A test database waits for a connection; it never fails a case for want of one.** It
 holds at most 4 connections (`TEST_DATABASE_CONNECTIONS`: the provisioning connection that holds its lock
 and reads the catalog, the seeder, two of the runtime role) and opens the first of each pool before the
 first case: Bun's pool then makes a statement wait for an open connection when the database refuses
 another, so no case meets a refusal. A refusal while it opens (SQLSTATE 53300) releases everything and
 retries, with jittered exponential backoff, for up to 60 s. Then the file fails saying that the database
-had no free connection slot, and every later file of the run fails at once. `fabrika db test-isolation`
-waits the same way for its provisioner, and a run whose output reports a refused connection fails saying
-so, never as a count of passed cases.
+had no free connection slot, and every later file of the run fails at once.
 
 The overlay carries no secret value. Secrets stay managed variables
 ([ADR-0004](0004-secrets-live-in-the-platform.md)).
@@ -225,7 +220,6 @@ A contract application is a Zerops config that carries its compiled contract. Fo
 refuses every setup key the platform owns and renders the generated setup, with the checker fetched at
 the provider's own version and recorded in the run log. Not built yet:
 
-- the generated isolation tests (A11); the build runs the application's own tests;
 - `fabrika job run`, which the generated crontab calls (A15);
 - nothing of the snapshot (B6 built it): the run's snapshot records the checker version, and the contract
   Control approved at the commit decides the lock-down, so a config that drops `target.contract` cannot
@@ -249,8 +243,7 @@ execution document carries the generated `run` and `build`.
   with one actionable line.
 - The authored SPA commands run before the checks, inside the same build. An authored SPA command that
   deliberately sabotages the toolchain is not stopped. A separate build for the SPA is the next step.
-- The build is slower: every deploy installs, type-checks, checks the contract and runs migrations and
-  isolation tests.
+- The build is slower: every deploy installs, type-checks, checks the contract and runs migrations.
 - The authored descriptor loses freedom: no custom start command, no custom `run` section, no package
   overrides of `@fabrika/*`.
 - A contract application with a database costs at least 0.5 GB of RAM per container. An existing installation
@@ -274,7 +267,7 @@ execution document carries the generated `run` and `build`.
   variable, and the test kit waits and holds 4 connections, only once it updates its `@fabrika/app`, `@fabrika/db`
   and `@fabrika/cli`: the init commands run the application's own installed packages. Before that, its processes
   keep 10 connections each and only the raised database helps it.
-- The checks run before `run.start`, so a long isolation run delays a container's start but never fails its readiness
+- The checks run before `run.start`, so a long migration delays a container's start but never fails its readiness
   check. Rollout path of an existing installation: no generated installation file and no variable changes. The init
   commands and the scripts belong to the execution descriptor every application deploy generates, so `fabrika platform
   upgrade` and the application's next deploy move the checks; the application needs no package update. Until that
@@ -313,13 +306,6 @@ execution document carries the generated `run` and `build`.
   no contract could describe what it exposes. Only CSP extensions are approvable.
 - **`FABRIKA_CONTRACT_DIGEST` as a service variable.** Rejected: a service variable is mutable across
   restarts and rollbacks, so older code could start with a newer digest.
-- **Run the isolation tests with less memory.** Rejected: `--smol` on the test child saved 7 % and a forced
-  collection in the CLI nothing, and the test child alone holds more than 0.125 GB.
-- **Run the isolation tests once per version (`zsc execOnce ${ZEROPS_appVersionId}`).** Rejected: the run they
-  start on still needs the same memory, which is what failed, and the command is not established to work in an
-  init command. Running at every start keeps the check on every container. It costs about two seconds for the
-  Notes example and almost 3 minutes for the CRM on a small database, which every restart and added container now
-  waits before it starts.
 - **Make the application declare `verticalAutoscaling.minRam`, as a scanning one does.** Rejected as the only
   mechanism: an import does not change an existing service, so an installation would not converge, and every
   application would carry a platform number. The build still refuses a scanning application without its 2 GB.

@@ -120,8 +120,7 @@ The dialect is `@fabrika/check`'s `applicationDialect`, read statically from `fa
 application whose config default-exports `@fabrika/provider-cloudflare`'s `defineApp` is on SQLite, in its Durable
 Object ([ADR-0065](../../docs/decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md)),
 and every other one, a missing config included, on Postgres. On SQLite no command needs a database URL or
-`FABRIKA_APP_ID`: `migrate` refuses, `codegen` runs the migrations in memory, and the generated tests run on
-`@fabrika/db/testing-sqlite`. `db-cloudflare.test.ts` holds those paths and that a Zerops application keeps its own.
+`FABRIKA_APP_ID`: `migrate` refuses and `codegen` runs the migrations in memory. `db-cloudflare.test.ts` holds those paths and that a Zerops application keeps its own.
 
 - `db new <slug>` writes `db/migrations/<UTC YYYYMMDDHHMMSS>_<slug>.sql`, the name the
   checker's `migration-name` rule accepts, and never overwrites.
@@ -137,28 +136,11 @@ and every other one, a missing config included, on Postgres. On SQLite no comman
   generated column the module leaves out. On SQLite the schema is the bundles the object applies,
   `SQLITE_FRAMEWORK_MIGRATIONS` then `db/migrations` (`applicationMigrations` of `@fabrika/app/build`, the files the
   build bundles), run in an in-memory database by `@fabrika/db/codegen-sqlite`.
-- `db test-scaffold` writes `@fabrika/check`'s `generatedTests` of what `scaffoldInputs` reads (the checker's own
-  read of the contract and `src/db/tables.ts`) and deletes a generated test it no longer writes; a hand-written test
-  is never touched. It connects to nothing. The tests open the test database of the application's dialect
-  (`@fabrika/db/testing` or `@fabrika/db/testing-sqlite`). `src/__tests__/fixtures/isolation-app/` is an application whose
-  generated tests are committed and run with this package's suite, always on a copy in a private temporary directory
-  (concurrent runs of the suite share the committed directory); `db.test.ts` fails when they differ from what the
-  scaffold writes, and when its `schema.generated.ts` differs from codegen's.
-- `db test-isolation` is the platform's run of them (a Zerops init command): the files must equal the scaffold's
-  output and no endpoint may lack its input fixture, then `bun --config=<empty> test
-  --preload=<@fabrika/app/testing/preload> <files> --reporter=junit` runs them, as a throwaway provisioner
-  `createTestProvisioner` makes from `FABRIKA_APP_DATABASE_URL` and drops afterwards (the tests load application code,
-  so they never get the provisioning credential itself; creating it sweeps the provisioners killed runs left behind,
-  and the command prints their names), with
-  `FABRIKA_TEST_POSTGRES_REQUIRED=1` and no framework variable, and every case name the scaffold wrote must be
-  reported as passed with an assertion (`junit.ts`). The application's `bunfig.toml` (a preload, a root) never
-  applies. A database at its connection limit (SQLSTATE 53300) is waited for when the provisioner is made and dropped;
-  a failed run whose output names a refused connection (`reportsExhaustedConnections`) fails saying so, never as a
-  count of passed cases (ADR-0043). **It prints none of the child's output**, only the counts and the failed case names, which come from the
-  scaffold: a dependency may write a credential into the output in any form. `--verbose` prints it, locally only;
-  the init command never passes it. On SQLite it makes no provisioner, reads no database URL and passes no
-  `FABRIKA_TEST_POSTGRES_*` variable: the SQLite kit opens an in-memory database; the scaffold and JUnit checks are the
-  same.
+- `db test-isolation` runs nothing and exits 0: a platform release up to 0.9.0-dev.18 still runs it as an init command
+  with the application's own CLI, and its reader admits a newer prerelease of the same version (ADR-0062). Keep it while
+  such a release is in the window.
+- `src/__tests__/fixtures/db-app/` is an application whose committed `schema.generated.ts` `db.test.ts` compares with
+  what codegen writes for its migrations.
 - `FABRIKA_APP_ID` and `FABRIKA_APP_DATABASE_URL` (Postgres) come from the ENVIRONMENT ONLY.
   An error reaches the output only as the runner's own message (a `PostgresMigrationError`, which every refusal of
   the bundle is: it names files, never a URL) or a server-reported Postgres error; any other driver error is replaced,

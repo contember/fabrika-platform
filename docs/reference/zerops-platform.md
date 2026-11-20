@@ -459,7 +459,7 @@ Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIV
 
 The generated run section of a contract application
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) depends on the second row: its
-migrations, its schema check and its generated isolation tests are init commands. Its readiness check is an `exec`
+migrations and its schema check are init commands. Its readiness check is an `exec`
 against the contract's health endpoint (below).
 
 #### Verified live (2026-10-21, a throwaway `alpine/bun@1.3` service): one `exec` readiness attempt may wait for the server
@@ -1423,10 +1423,9 @@ set the variable on the deploy service to the bucket's service id, not sensitive
 and deploy again.
 
 The build container has no database, so a contract application's init commands run `fabrika db migrate`, then
-`fabrika db codegen --verify` and `fabrika db test-isolation`, and its start script only starts the server: a stale
-committed `schema.generated.ts` or a generated isolation case that did not pass fails an init command, which stops the
-activation. The checks run before `run.start`, outside the readiness window (above), however long the isolation tests
-take.
+`fabrika db codegen --verify`, and its start script only starts the server: a failed migration or a stale committed
+`schema.generated.ts` fails an init command, which stops the activation. The checks run before `run.start`, outside
+the readiness window (above), however long they take.
 
 `FABRIKA_APP_DATABASE_URL` carries the PostgreSQL service's superuser on the direct port:
 
@@ -1437,9 +1436,7 @@ postgresql://${<db>_superUser}:${<db>_superUserPassword}@${<db>_hostname}:${<db>
 fabrika uses it only as the provisioning credential of the application's role family
 ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)): `fabrika db migrate` creates `app_<id>` and
 `run_<id>` with it and applies the migrations as `app_<id>`, the server and the crontab's jobs relaunch themselves as
-`run_<id>` over the same host, port and options, and `fabrika db test-isolation` hands the generated tests a
-throwaway `CREATEROLE` provisioner instead, which it grants `CREATE` on the database and drops afterwards; the
-provisioner logs in for 15 minutes only, and the next run sweeps one that a killed run left behind. The
+`run_<id>` over the same host, port and options. The
 superuser, because the service's own user `db` can neither create roles nor create a schema; the direct port, because
 pgBouncer on `portTls` refuses every role fabrika creates (both measured below). An application on a `cheap`
 namespace gets the same URL for the shared `postgres` service. The `useSharedPostgres()` binding's own
@@ -1487,7 +1484,8 @@ anonymous. Vertical autoscaling reacts in 10–20 s, so a spike this fast is kil
 
 So a deploy raises the deploy service's minimum RAM (`raise-start-memory`, `packages/provider-zerops/src/provider.ts`)
 to `zeropsStartMinRam` (`src/execution.ts`): 0.5 GB for an application with a database, 2 GB for one that scans, before
-it reserves the version. Measured on an `alpine/bun@1.3` service imported with `minContainers: 1, maxContainers: 2`:
+it reserves the version. The init commands now run only `migrate` and `codegen --verify`; the floor stays as measured
+above with the isolation tests until it is measured for those two alone. Measured on an `alpine/bun@1.3` service imported with `minContainers: 1, maxContainers: 2`:
 
 | Call                                                                                                                                                     | Result                                                                                                                                                                                       |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1536,13 +1534,13 @@ of the Notes example (38 cases) and of the CRM example (133 cases): 5 with the t
 one provisioning connection per file for the schema's lock and the catalog. None is left once the run ended.
 
 So a deploy sizes each process's connections in `size-database` (`packages/provider-zerops/src/database-budget.ts`):
-of `max_connections` at the database's minimum RAM, 7 are never the application's and 5 are one container's start
-script; the rest is shared by twice the deploy service's maximum container count and one process per crontab job, at
+of `max_connections` at the database's minimum RAM, 7 are never the application's and 5 are one container's init
+commands (measured above with the isolation tests, and kept until measured again for `migrate` and `codegen --verify`
+alone); the rest is shared by twice the deploy service's maximum container count and one process per crontab job, at
 most 10 each, and handed over as `FABRIKA_APP_DATABASE_CONNECTIONS`. Below 2 each, it raises the application's own
 database to the smallest step that gives 2 (the Notes example, 4 containers and 2 jobs: 0.25 → 1 GB; Zerops charges
 $0.75 per 0.25 GB and 30 days); a namespace's shared `postgres` is never raised. The test kit waits up to 60 s for a
-slot on SQLSTATE 53300, and `fabrika db test-isolation` reports a refused connection as such
-([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)).
+slot on SQLSTATE 53300 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)).
 
 #### Verified live (2026-10-16, account `prg1`, a disposable project) — the autoscaling API raises a PostgreSQL service's minimum RAM and its `max_connections`
 

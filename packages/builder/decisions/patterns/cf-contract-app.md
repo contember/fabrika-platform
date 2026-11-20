@@ -52,6 +52,6 @@ this shape; do not add them.
 - **Seeds** are `dev/seed.ts`, a `DevSeed` that writes through the application's
   endpoints and names the personas a scenario signs in as. A skeleton's
   `seeds: ['x']` names data that seed creates; there are no `seeds/*.sql` files.
-- **After a contract or table change**, run `fabrika db codegen`,
-  `fabrika db test-scaffold` and `fabrika app build`. Run `fabrika-check .`
+- **After a contract or table change**, run `fabrika db codegen`
+  and `fabrika app build`. Run `fabrika-check .`
   yourself: the Cloudflare build does not run it yet.
