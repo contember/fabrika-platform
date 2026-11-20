@@ -230,6 +230,7 @@ async function flushOne(deps: OperationsReleaseProjectionDeps, row: OperationsRe
 				},
 				body: JSON.stringify(request),
 				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+				redirect: 'manual',
 			}),
 		)
 		if (!response.ok) throw new ReleaseProjectionError(`operations release returned status ${response.status}`)

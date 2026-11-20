@@ -312,6 +312,7 @@ async function sendCatalog(
 				},
 				body: JSON.stringify(payload),
 				signal: AbortSignal.any([signal, AbortSignal.timeout(CATALOG_REQUEST_TIMEOUT_MS)]),
+				redirect: 'manual',
 			}),
 		)
 	} catch {
