@@ -6,9 +6,9 @@
 import {
 	API_KEY_PREFIX,
 	buildAccessClaims,
+	canonicalArtifactJson,
 	CLIENT_ADDRESS_HEADER,
 	type ContractArtifact,
-	contractDigest,
 	contractWorkloads,
 	FABRIKA_APP_ORIGIN,
 	FABRIKA_CONTRACT_DIGEST,
@@ -37,6 +37,7 @@ import { MemoryEmailSender } from '@fabrika/email/memory'
 import type { FileObjectStore } from '@fabrika/platform'
 import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
 import { exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { challengeUrl } from '../client/contract'
@@ -48,7 +49,7 @@ import { diskAssets } from '../disk-assets'
 import type { RequestExecutionContext } from '../fetch'
 import type { FILE_SWEEP_JOB } from '../files/kinds'
 import type { FILE_SCAN_JOB, FileScanner } from '../files/scan'
-import { boot, type BootOptions, type ContractApp } from '../implement/boot'
+import { boot, type BootOptions, type CompiledContract, type ContractApp } from '../implement/boot'
 import { type ChallengeFetch, MINIMAL_CHALLENGE_WORK } from '../implement/challenge'
 import { type ConnectFetch, connectVariables } from '../implement/connect'
 import type { SpaAssets } from '../implement/dispatch'
@@ -307,6 +308,30 @@ function stripClientAsserted(headers: Headers): void {
 	}
 }
 
+/**
+ * `contractDigest` of `artifact`: the same canonical text, hashed natively. The digest of a large contract in
+ * JavaScript costs a test file about as much as everything else its kit does at boot.
+ */
+export function kitContractDigest(artifact: ContractArtifact): string {
+	return `sha256:${createHash('sha256').update(canonicalArtifactJson(artifact)).digest('hex')}`
+}
+
+const NO_TABLES: Readonly<Record<string, never>> = Object.freeze({})
+
+/** Each contract this process compiled, with the tables it was compiled against. */
+const compiled = new WeakMap<object, { readonly tables: object; readonly contract: CompiledContract }>()
+
+/** `app`'s contract compiled and hashed once per process, however many test files boot it. */
+function compiledOnce(app: ContractImplementation): CompiledContract {
+	const tables = app.database?.tables ?? NO_TABLES
+	const cached = compiled.get(app.contract)
+	if (cached !== undefined && cached.tables === tables) return cached.contract
+	const artifact = compileContract(app.contract, tables)
+	const contract: CompiledContract = Object.freeze({ artifact, digest: kitContractDigest(artifact) })
+	compiled.set(app.contract, { tables, contract })
+	return contract
+}
+
 /** Boots `app` the way its generated entrypoint would, behind the test proxy and IAM. Throws `BootError` like `boot`. */
 export function testKit<C extends AnyContract>(app: ContractImplementation<C>, options: TestKitOptions = {}): TestKit<C> {
 	return bootTestKit(app, options).kit
@@ -351,7 +376,8 @@ export function bootTestKit<C extends AnyContract>(
 	const appId = `${name}@${TEST_ENVIRONMENT}`
 	const host = `${name}.test`
 	const origin = `https://${host}`
-	const artifact = compileContract(app.contract, app.database?.tables ?? {})
+	const compiledContract = compiledOnce(app)
+	const { artifact } = compiledContract
 	const signing = generateKeyPair(TOKEN_ALG)
 	const jwks: Promise<Jwks> = signing.then(async ({ publicKey }) => {
 		const { kty, crv, x, y } = await exportJWK(publicKey)
@@ -440,12 +466,13 @@ export function bootTestKit<C extends AnyContract>(
 	const signToken = (purpose: string, claims: unknown, signOptions: { readonly days: number }): string =>
 		kitTokens.context('the test kit', [purpose]).sign(purpose, claims, signOptions)
 	const application: ContractApp = boot(app, {
+		compiledContract,
 		environment: {
 			// The deploy writes the approved contract's digest; the kit's contract is the approved one by definition.
 			framework: {
 				[FABRIKA_IAM_APP_ID]: appId,
 				[FABRIKA_IAM_ISSUER]: TEST_ISSUER,
-				[FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact),
+				[FABRIKA_CONTRACT_DIGEST]: compiledContract.digest,
 				// The deploy writes the environment's public origin; the kit's is its own.
 				[FABRIKA_APP_ORIGIN]: origin,
 				...connectVariablesOf,
