@@ -206,7 +206,7 @@ export class OidcClient {
 		// keys that vouch for identities, and the issuer check below cannot tell an echoed issuer apart.
 		const response = await fetch(url, { redirect: 'manual' })
 		if (!response.ok) {
-			throw new Error(`OIDC discovery failed for ${this.config.issuer}: ${response.status}`)
+			throw new Error(discoveryFailure(this.config.issuer, url, response))
 		}
 		const metadata = parseMetadata(await response.json().catch(() => null))
 		if (!metadata) {
@@ -231,6 +231,20 @@ export class OidcClient {
 		}
 		return resolver
 	}
+}
+
+/**
+ * Why discovery failed. A redirect names only the origin it points to, never its path or query, and says what to change:
+ * the issuer must be the URL whose own discovery document answers.
+ */
+function discoveryFailure(issuer: string, url: string, response: Response): string {
+	if (response.type !== 'opaqueredirect' && (response.status < 300 || response.status >= 400)) {
+		return `OIDC discovery failed for ${issuer}: ${response.status}`
+	}
+	const location = response.headers.get('location')
+	const target = location !== null && URL.canParse(location, url) ? ` to ${new URL(location, url).origin}` : ''
+	return `OIDC discovery failed for ${issuer}: ${response.status}, a redirect${target}, which is not followed; `
+		+ 'configure the issuer exactly as the provider publishes it, so its /.well-known/openid-configuration answers directly'
 }
 
 // ── Discovery + JWKS caches (per isolate) ──────────────────────────────────────────

@@ -203,7 +203,11 @@ describe('discovery', () => {
 		// `localhost` against `127.0.0.1`: the same machine, another origin.
 		location = `http://localhost:${target.port}/collect`
 		try {
-			await expect(new OidcClient({ ...CONFIG, issuer }).metadata()).rejects.toThrow(`OIDC discovery failed for ${issuer}: ${status}`)
+			const error = await new OidcClient({ ...CONFIG, issuer }).metadata().catch((reason: unknown) => reason)
+			expect(error instanceof Error && error.message).toStartWith(
+				`OIDC discovery failed for ${issuer}: ${status}, a redirect to http://localhost:${target.port}, which is not followed; `,
+			)
+			expect(error instanceof Error && error.message).not.toContain('/collect')
 			expect(arrivals).toEqual([])
 		} finally {
 			await idp.stop(true)
