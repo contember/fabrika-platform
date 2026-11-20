@@ -9,7 +9,15 @@ import { CONTRACT_FILE, IMPLEMENTATION_FILE } from '@fabrika/app/build'
 import { implementationAt } from '@fabrika/app/bun'
 import type { AnyContract } from '@fabrika/app/contract'
 import { BootError, type ContractImplementation } from '@fabrika/app/implement'
-import { DEV_OUTBOX_ORIGIN, type DevKit, devKit, type DevOutside, type LabelledTestCaller, type TestCaller } from '@fabrika/app/testing'
+import {
+	DEV_OUTBOX_ORIGIN,
+	type DevKit,
+	devKit,
+	type DevOutside,
+	type LabelledTestCaller,
+	type SentInvitation,
+	type TestCaller,
+} from '@fabrika/app/testing'
 import { sameOriginTarget } from '@fabrika/auth-core'
 import { type ApplicationDialect, applicationDialect, CONFIG_FILE } from '@fabrika/check'
 import { SqliteMigrationError } from '@fabrika/db/sqlite-migrate'
@@ -25,6 +33,7 @@ import {
 	type Badge,
 	type CurrentView,
 	type DevView,
+	invitationMailPage,
 	mailPage,
 	type MailView,
 	newestMail,
@@ -293,6 +302,8 @@ async function serveDevKit(
 	const callers = new Map<string, LabelledTestCaller>()
 	const invitees = new Map<string, LabelledTestCaller>()
 	const toolbar = toolbarScript(STATE_PATH)
+	const urlHost = options.host.includes(':') ? `[${options.host}]` : options.host
+	let port = options.port
 
 	/** A path of this origin to go on to; anything else is the first SPA. */
 	const nextOf = (next: string | null): string => (next !== null && sameOriginTarget(kit.origin, next) !== null ? next : firstSpa)
@@ -346,6 +357,14 @@ async function serveDevKit(
 	}
 
 	const chooseHref = (params: Record<string, string>, next: string): string => `${CHOOSE_PATH}?${new URLSearchParams({ ...params, next }).toString()}`
+	const acceptHref = (invitation: string, next: string): string => `${ACCEPT_PATH}?${new URLSearchParams({ invitation, next }).toString()}`
+
+	/**
+	 * The e-mail the stand-in IAM would have sent for an invitation, in the language IAM chooses for it: its link is this
+	 * server's accept route, where IAM's would be its own accept page.
+	 */
+	const invitationMailOf = (invitation: SentInvitation) =>
+		dev.invitationMail(invitation.id, new URL(acceptHref(invitation.id, firstSpa), `http://${urlHost}:${port}`).toString())
 
 	/** The values a membership role is offered in: the seed's, then those its personas hold. */
 	const valuesOf = (dimension: string): { readonly value: string; readonly label: string }[] => {
@@ -383,19 +402,24 @@ async function serveDevKit(
 		anonymousHref: chooseHref({ anonymous: '1' }, next),
 		links: seeded.links.map((link) => ({ title: link.title, description: link.description, href: link.url })),
 		mail: newestMail([
-			...dev.invitations().map((invitation): MailView => ({
-				to: invitation.email,
-				subject: text.invitation(invitation.role, scopeLabel(invitation.scope.type, invitation.scope.value)),
-				at: invitation.sentAt * 1000,
-				key: null,
-				status: invitation.status,
-				answer: null,
-				action: invitation.status === 'open'
-					? { label: text.accept, href: `${ACCEPT_PATH}?${new URLSearchParams({ invitation: invitation.id, next }).toString()}` }
+			...dev.invitations().map((invitation): MailView => {
+				const label = text.invitation(invitation.role, scopeLabel(invitation.scope.type, invitation.scope.value))
+				const main = invitation.status === 'open'
+					? [{ label: text.accept, href: acceptHref(invitation.id, next) }]
 					: invitation.status === 'accepted' && invitees.has(invitation.id)
-					? { label: text.continueAs, href: chooseHref({ invitation: invitation.id }, next) }
-					: null,
-			})),
+					? [{ label: text.continueAs, href: chooseHref({ invitation: invitation.id }, next) }]
+					: []
+				return {
+					to: invitation.email,
+					subject: invitationMailOf(invitation)?.subject ?? label,
+					note: `${label} · ${invitation.mailLocale}`,
+					at: invitation.sentAt * 1000,
+					key: null,
+					status: invitation.status,
+					answer: null,
+					actions: [...main, { label: text.openMessage, href: `${MAIL_PATH}${invitation.id}` }],
+				}
+			}),
 			...dev.mails().map((sent): MailView => ({
 				to: sent.to,
 				subject: sent.subject,
@@ -403,7 +427,8 @@ async function serveDevKit(
 				key: sent.key,
 				status: sent.outcome === 'accepted' ? 'sent' : sent.outcome,
 				answer: sent.answer === 'accepted' ? null : sent.answer,
-				action: { label: text.openMessage, href: `${MAIL_PATH}${sent.id}` },
+				note: null,
+				actions: [{ label: text.openMessage, href: `${MAIL_PATH}${sent.id}` }],
 			})),
 		]),
 		outbox: [...outbox.outbox()].reverse().map((message): OutboxView => ({ ...mailHeadOf(message), href: `${OUTBOX_PATH}${message.id}` })),
@@ -518,11 +543,18 @@ async function serveDevKit(
 		})
 	}
 
-	/** A message a job handed to the mail stand-in: its fields, its text, and its HTML in a sandboxed frame. */
+	/**
+	 * A message a job handed to the mail stand-in, or the e-mail of an invitation the stand-in IAM sent: its fields, its
+	 * text, and its HTML in a sandboxed frame.
+	 */
 	const mailMessage = (request: Request, path: string): Response => {
+		const view = viewOf(choiceOf(request), firstSpa)
 		const sent = dev.mails().find((candidate) => `${MAIL_PATH}${candidate.id}` === path)
-		if (sent === undefined) return plain(404, 'no such mail in app dev')
-		return new Response(mailPage(viewOf(choiceOf(request), firstSpa), sent), { headers: PAGE_HEADERS })
+		if (sent !== undefined) return new Response(mailPage(view, sent), { headers: PAGE_HEADERS })
+		const invitation = dev.invitations().find((candidate) => `${MAIL_PATH}${candidate.id}` === path)
+		const mail = invitation === undefined ? undefined : invitationMailOf(invitation)
+		if (invitation === undefined || mail === undefined) return plain(404, 'no such mail in app dev')
+		return new Response(invitationMailPage(view, invitation, mail), { headers: PAGE_HEADERS })
 	}
 
 	const devRoute = (request: Request, url: URL): Response | null => {
@@ -549,7 +581,6 @@ async function serveDevKit(
 		}
 	}
 
-	let port = options.port
 	const server = listen({
 		hostname: options.host,
 		port: options.port,
@@ -567,9 +598,8 @@ async function serveDevKit(
 		error: () => plain(500, 'app dev could not serve the request'),
 	})
 	port = server.port ?? options.port
-	const host = options.host.includes(':') ? `[${options.host}]` : options.host
 	return {
-		url: `http://${host}:${port}/`,
+		url: `http://${urlHost}:${port}/`,
 		seeded: { personas: seeded.personas.length, links: seeded.links.length },
 		async stop() {
 			try {
