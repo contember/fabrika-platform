@@ -285,7 +285,9 @@ attachments base64. Brevo takes no media type for an attachment and derives it f
 extensions its API reference lists, so the adapter refuses any other file, and a message's sender name over Brevo's 70
 characters, as `invalid_message` before the request. A configured sender name (`FABRIKA_EMAIL_FROM_NAME`, or the display
 name in `FABRIKA_EMAIL_FROM`) over 70 characters is refused earlier, as an invalid configuration when IAM, Control or an
-installer reads the transport. Brevo's `headers` take no standard header, so the adapter writes no `List-Unsubscribe`
+installer reads the transport. Through Control's relay the allowlist is checked only when Control dispatches the
+message, after the relay accepted it: a job's attachment of another type (`.json`, `.svg`, `.webp`) fails there, which
+the operator sees and the job does not. Brevo's `headers` take no standard header, so the adapter writes no `List-Unsubscribe`
 and has neither `listUnsubscribe` nor `broadcast`: it sends transactional mail only.
 
 A refusal carries a documented `code`, read only to classify it: a 402, `not_enough_credits` or `Insufficient credits`
