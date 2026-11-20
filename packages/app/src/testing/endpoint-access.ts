@@ -60,6 +60,14 @@ export type LeakOutcome =
 	| { readonly answered: true; readonly leaked: readonly string[] }
 	| { readonly answered: false; readonly status: number; readonly leaked: readonly string[] }
 
+/**
+ * A leak case of a query asked three times: `changed` is whether the own scope's answer changed when only rows that lie
+ * in no scope of the case were added (an aggregation that ignores the scope), `null` when it was not compared (a
+ * mutation, a refused answer, or an answer that changes between two asks by itself). `unvaried` are the tables the
+ * seeder could not add a row to, which the comparison therefore did not vary.
+ */
+export type SweepOutcome = LeakOutcome & { readonly changed: boolean | null; readonly unvaried: readonly string[] }
+
 /** `answered` unless the caller got a 401, a 403 or a 5xx; otherwise that status. */
 export type ReachOutcome = { readonly answered: true } | { readonly answered: false; readonly status: number }
 
@@ -93,6 +101,12 @@ export interface EndpointAccessKit {
 	 * holder downloads), each seeded first.
 	 */
 	own(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<DeniedOutcome>
+	/**
+	 * The leak sweep's case: `leaked`, and on a query, the own scope asked again after one row of every dimension and
+	 * child table was added in two fresh chains, which no caller of the case holds. An answer that changes shows an
+	 * aggregation or a lookup that ignores the scope, which holds no value of another scope to find.
+	 */
+	swept(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<SweepOutcome>
 	/**
 	 * An `app` or a `creates` endpoint asked by a caller who holds its action in one value of a dimension only, never
 	 * globally: refused (403), by the proxy for `app` and by IAM for `creates`, since both need a global grant.
@@ -190,6 +204,8 @@ interface ActionEndpoint {
 	readonly method: EndpointMethod
 	readonly path: string
 	readonly callers: readonly Caller[]
+	/** A query: it writes nothing, so asking it again changes nothing. */
+	readonly readOnly: boolean
 	readonly action: string
 	readonly access: AccessForm
 	readonly input: SchemaShape | null
@@ -199,6 +215,12 @@ interface ActionEndpoint {
 	readonly manages: string | null
 	/** The link mounts it issues for its `Ref`: their names, and the actions they grant, which IAM requires of the issuer. */
 	readonly links: readonly { readonly mount: string; readonly grants: readonly string[] }[]
+}
+
+/** One answer of a case's request. */
+interface Answer {
+	readonly status: number
+	readonly text: string
 }
 
 /** Every dimension value a target lies in, its own first: where a member directory of its scope is found. */
@@ -454,6 +476,7 @@ export function endpointAccessKit<DB, P>(
 			method: row.method,
 			path: row.path,
 			callers: row.callers,
+			readOnly: row.kind === 'query',
 			action: requirement.action,
 			access: requirement.access,
 			input: row.input,
@@ -490,6 +513,7 @@ export function endpointAccessKit<DB, P>(
 				method: row.method,
 				path: row.path,
 				callers: row.callers,
+				readOnly: row.kind === 'query',
 				action: capability.action,
 				access: capability.access,
 				input: row.input,
@@ -954,6 +978,10 @@ export function endpointAccessKit<DB, P>(
 		return [...held, ...row.links.flatMap((link) => link.grants.flatMap((action) => scopes.map((scope) => ({ action, scope }))))]
 	}
 
+	/** Whether two asks of the own scope were answered alike, status and body. */
+	const sameAnswers = (left: readonly Answer[], right: readonly Answer[]): boolean =>
+		left.length === right.length && left.every((answer, at) => answer.status === right[at]?.status && answer.text === right[at]?.text)
+
 	/** The outcome of the own scope's answers: answered unless one is a failure or an authorization refusal. */
 	const leakOutcome = (answers: readonly { readonly status: number; readonly text: string }[], values: readonly string[]): LeakOutcome => {
 		const leaked = values.filter((value) => answers.some((answer) => answer.text.includes(value)))
@@ -1005,6 +1033,78 @@ export function endpointAccessKit<DB, P>(
 			removals.push((await postgres.seedApplicationRows(tables, appRows)).remove)
 		}
 
+		/**
+		 * A leak case's requests: the other scope asks first, to fill whatever a handler keeps between requests; `askOwn`
+		 * then asks for the own scope, as often as the case needs. `values` are every value of the other scope's rows, and
+		 * the marks of what the other scope's request named.
+		 */
+		const leakCase = async (
+			endpoint: string,
+			input: Readonly<Record<string, unknown>>,
+			seed: Seed,
+			appRows: AppRows,
+		): Promise<{ readonly values: readonly string[]; readonly askOwn: () => Promise<readonly Answer[]> }> => {
+			const row = endpointOf(endpoint)
+			const { action, access } = row
+			if (access.form === 'in') {
+				await seedAppRows(appRows)
+				const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
+				const grants = (targets: readonly InTarget[]): Grant[] =>
+					targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
+				const marks: string[] = []
+				for (const side of scopes.other) {
+					const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain, 'declared')
+					marks.push(...answer.marks)
+				}
+				const askOwn = async () => {
+					const answers = []
+					for (const side of scopes.own) {
+						answers.push(await ask(row, grants(scopes.own), addressing(input, access.from, side), side.chain))
+					}
+					return answers
+				}
+				return { values: [...scopes.values, ...marks], askOwn }
+			}
+			if (access.form !== 'on' && access.form !== 'over') {
+				throw new Error(`${endpoint} has the access form ${access.form}; only on, in and over answer with rows of a scope`)
+			}
+			await seedAppRows(appRows)
+			const scopes = access.form === 'on'
+				? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
+				: await listScopesOf(action, access.dimension, rowFields(input), unpinned)
+			const from = access.form === 'on' ? access.from : null
+			// The other scope's pins differ from the own scope's, so a refusal the fixtures declare is its answer too.
+			const other = await ask(
+				row,
+				holding(row, input, scopes.other.grants, scopes.other.chain),
+				addressing(input, from, scopes.other),
+				scopes.other.chain,
+				'declared',
+			)
+			const askOwn = async () => [
+				await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), addressing(input, from, scopes.own), scopes.own.chain),
+			]
+			return { values: [...scopes.other.values, ...other.marks], askOwn }
+		}
+
+		/**
+		 * One row of every dimension and child table in two fresh chains, which no caller of a case holds: what an answer
+		 * to the own scope must not depend on. Answers the tables the seeder could not seed a row of.
+		 */
+		const seedElsewhere = async (): Promise<readonly string[]> => {
+			const unvaried: string[] = []
+			for (const name of tableNames) {
+				const mode = policies[name]?.scope.mode
+				if (mode !== 'dimension' && mode !== 'child') continue
+				try {
+					removals.push((await postgres.seedWorlds(tables, name)).remove)
+				} catch {
+					unvaried.push(name)
+				}
+			}
+			return unvaried
+		}
+
 		return {
 			async denied(endpoint, input, seed = {}) {
 				const row = endpointOf(endpoint)
@@ -1018,48 +1118,19 @@ export function endpointAccessKit<DB, P>(
 				return { status }
 			},
 			async leaked(endpoint, input, seed = {}, appRows = {}) {
+				const leak = await leakCase(endpoint, input, seed, appRows)
+				return leakOutcome(await leak.askOwn(), leak.values)
+			},
+			async swept(endpoint, input, seed = {}, appRows = {}) {
 				const row = endpointOf(endpoint)
-				const { action, access } = row
-				if (access.form === 'in') {
-					await seedAppRows(appRows)
-					const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
-					const grants = (targets: readonly InTarget[]): Grant[] =>
-						targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
-					const marks: string[] = []
-					for (const side of scopes.other) {
-						const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain, 'declared')
-						marks.push(...answer.marks)
-					}
-					const answers = []
-					for (const side of scopes.own) {
-						answers.push(await ask(row, grants(scopes.own), addressing(input, access.from, side), side.chain))
-					}
-					return leakOutcome(answers, [...scopes.values, ...marks])
-				}
-				if (access.form !== 'on' && access.form !== 'over') {
-					throw new Error(`${endpoint} has the access form ${access.form}; only on, in and over answer with rows of a scope`)
-				}
-				await seedAppRows(appRows)
-				const scopes = access.form === 'on'
-					? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
-					: await listScopesOf(action, access.dimension, rowFields(input), unpinned)
-				const from = access.form === 'on' ? access.from : null
-				// The other scope asks first, to fill whatever a handler keeps between requests; its pins differ from the own
-				// scope's, so a refusal the fixtures declare is its answer too. The own scope's answer is the one checked.
-				const other = await ask(
-					row,
-					holding(row, input, scopes.other.grants, scopes.other.chain),
-					addressing(input, from, scopes.other),
-					scopes.other.chain,
-					'declared',
-				)
-				const answer = await ask(
-					row,
-					holding(row, input, scopes.own.grants, scopes.own.chain),
-					addressing(input, from, scopes.own),
-					scopes.own.chain,
-				)
-				return leakOutcome([answer], [...scopes.other.values, ...other.marks])
+				const leak = await leakCase(endpoint, input, seed, appRows)
+				const first = await leak.askOwn()
+				const outcome = leakOutcome(first, leak.values)
+				if (!row.readOnly || !outcome.answered) return { ...outcome, changed: null, unvaried: [] }
+				const again = await leak.askOwn()
+				if (!sameAnswers(first, again)) return { ...outcome, changed: null, unvaried: [] }
+				const unvaried = await seedElsewhere()
+				return { ...outcome, changed: !sameAnswers(again, await leak.askOwn()), unvaried }
 			},
 			async own(endpoint, input, seed = {}, appRows = {}) {
 				const row = endpointOf(endpoint)
@@ -1193,6 +1264,7 @@ export function endpointAccessKit<DB, P>(
 	return Object.freeze({
 		denied: drained((cases) => cases.denied),
 		leaked: drained((cases) => cases.leaked),
+		swept: drained((cases) => cases.swept),
 		own: drained((cases) => cases.own),
 		scoped: drained((cases) => cases.scoped),
 		global: drained((cases) => cases.global),

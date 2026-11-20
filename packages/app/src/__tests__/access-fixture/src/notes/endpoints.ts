@@ -1,10 +1,24 @@
 // The cases of the endpoint access kit: a write that reads its own target, a patch whose only field is optional, a precondition (`restore` only a trashed
 // note), a report in an organization through `ctx.sql`, ones that forget their scope (also only in the state a seed would
-// skip, or only in an outer dimension's values), and a link holder's read.
+// skip, or only in an outer dimension's values, or in a count that holds no value of another scope), and a link holder's read.
 
 import { ConflictError } from '@fabrika/app'
 import { app } from '../app-kit'
-import { ById, InOrganization, InWorkspace, Note, Notes, OrganizationId, Organizations, Retitle, Saved, Title, Titles, Versioned } from '../schemas'
+import {
+	ById,
+	InOrganization,
+	InWorkspace,
+	Note,
+	NoteCount,
+	Notes,
+	OrganizationId,
+	Organizations,
+	Retitle,
+	Saved,
+	Title,
+	Titles,
+	Versioned,
+} from '../schemas'
 
 export const notes = app.group({ callers: ['human'] }, (r) => ({
 	get: r.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } })
@@ -82,6 +96,26 @@ export const notes = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ ctx }) => {
 			if ((await ctx.db.target.get()).trashed) return { titles: [] }
 			return { titles: (await ctx.sql(Title)`select title from notes order by title`).map((row) => row.title) }
+		}),
+	noteCount: r.query({
+		input: InOrganization,
+		output: NoteCount,
+		access: { action: 'notes.read', in: 'organization', from: 'organizationId' },
+		sql: 'read',
+	})
+		.handle(async ({ ctx }) => {
+			const [row] = await ctx.sql(NoteCount)`select count(*)::int as count from notes`
+			return { count: row?.count ?? 0 }
+		}),
+	scopedNoteCount: r.query({
+		input: InOrganization,
+		output: NoteCount,
+		access: { action: 'notes.read', in: 'organization', from: 'organizationId' },
+		sql: 'read',
+	})
+		.handle(async ({ ctx }) => {
+			const [row] = await ctx.sql(NoteCount)`select count(*)::int as count from notes n where ${ctx.sql.scope(ctx.target, 'notes', { alias: 'n' })}`
+			return { count: row?.count ?? 0 }
 		}),
 	organizationIds: r.query({
 		input: InOrganization,
