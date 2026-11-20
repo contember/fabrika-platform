@@ -241,7 +241,7 @@ export interface AssignMemberInput extends MembershipCaller {
 	scope: Scope
 	role: string
 	member: MemberTarget
-	/** Only with an address: the invitation's label, message and resend (`InvitationOptions`). */
+	/** Only with an address: the invitation's label, message, resend and locale (`InvitationOptions`). */
 	invitation?: InvitationOptions
 }
 

@@ -29,7 +29,8 @@ every application.**
    own as stored for the flow (invitation, password action, principal); a link's or form's `?locale=`, which IAM's own
    links carry on; the host-only `__Host-fabrika_locale` cookie a sign-in leaves; the application's `locale`; the
    browser's `Accept-Language`; the default. An e-mail has no request: the person's, else the application's, else the
-   default.
+   default; a forgot-password e-mail to a person without a language of their own takes the language of the page that
+   asked for it, so an application without a `locale` sends it in the browser's language.
 2. **The application's language ranks above the browser's.** An application that declares a `locale` and names none
    on an invitation shows exactly the pages and e-mails it showed before.
 3. **Every source picks words only.** None decides a landing, an origin or an authority. `principals.locale` is written
