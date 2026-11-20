@@ -8,6 +8,7 @@ import {
 	matchAction,
 	OAUTH_CALLER,
 	type PermissionEntry,
+	permits,
 	type TerminalTokenClaims,
 } from '@fabrika/auth-core'
 import type { PageCaller } from '../client/caller'
@@ -126,4 +127,13 @@ export function pageCallerOf(principal: UserPrincipal, perms: readonly Permissio
 		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
 		.map(([, value]) => ({ type: value.type, value: value.value, actions: [...value.actions].sort() }))
 	return { label: principal.label, email: principal.email, actions: { app: [...app].sort(), scopes } }
+}
+
+/**
+ * `ctx.holds(action)` of an RPC procedure: whether the verified token holds `action`, an action of the contract, as a
+ * global grant, the `app` form's rule. Information for the handler's own authorization: it grants no reach, builds no
+ * `ctx.db` and asks IAM nothing.
+ */
+export function globalHolds(perms: readonly PermissionEntry[], actions: readonly string[]): (action: string) => boolean {
+	return Object.freeze((action: string) => actions.includes(action) && perms.some((entry) => permits([entry], action)))
 }

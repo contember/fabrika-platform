@@ -83,6 +83,10 @@ export const WorkloadRow = z.strictObject({
   assignee of a task nobody was picked for), store `ctx.principal.id` and `ctx.principal.label`, never a
   `ctx.members.get(ctx.principal.id)` lookup: it adds a directory read the approver sees. A picked person is
   `ctx.members.get` (Members below).
+- `ctx.holds('<action>')` answers whether the caller holds an action of the vocabulary as a global grant, from its
+  token: a flag the output carries (`canClose: ctx.holds('cash.manage')`) or a branch of the handler. A grant scoped to
+  one object or container is not held. It grants nothing: `ctx.db` reaches only what the access form gives, so a write
+  the flag guards still needs an endpoint whose action the table names.
 - `ctx.target` is the capability (a `Ref`); its id is `ctx.target.value`. `ctx.within` is the `over` capability.
 - Two writes with the same `expectVersion` (two tabs, a double click) give one 200 and one 409, also when they arrive
   together: the second one finds the version moved.

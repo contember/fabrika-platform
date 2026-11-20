@@ -123,7 +123,7 @@ import {
 } from './membership'
 import { multipartBoundary, MultipartError, multipartParts, type MultipartReader } from './multipart'
 import { paramsObject, urlParams } from './params'
-import { pageCallerOf, presentedBy, type Principal } from './principal'
+import { globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
 import { type TerminalIdentification, terminalIdentification } from './terminals'
@@ -735,6 +735,7 @@ export class ContractRuntime {
 							signal,
 							client: requestClient(request, this.#parts.clientVouched),
 							url: this.#parts.url,
+							holds: globalHolds(caller.perms, this.#parts.actions),
 							...access.context,
 							...this.#facilities(served.facilities, served.row, membership, access.context['target'], {
 								credential: caller.token,
