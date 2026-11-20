@@ -39,11 +39,12 @@ describe('platform resource names', () => {
 		})
 	})
 
-	test('the fabrika names share no name with the legacy ones but the mail relay, which was named fabrika- from the start', () => {
+	// The legacy mail relay was already named `fabrika-mail`: a new installation must not adopt an older one's.
+	test('the fabrika names share no name with the legacy ones', () => {
 		const { stateNamespaces: legacyState, ...legacy } = platformNamesOf('legacy')
 		const { stateNamespaces: fabrikaState, ...fabrika } = platformNames({ FABRIKA_CLOUDFLARE_NAMES: 'fabrika' })
 		const shared = Object.values(fabrika).filter((name) => Object.values(legacy).includes(name))
-		expect(shared.sort()).toEqual(['fabrika-mail', 'fabrika-mail-content'])
+		expect(shared).toEqual([])
 		expect(Object.values(fabrikaState).filter((name) => Object.values(legacyState).includes(name))).toEqual([])
 		expect(Object.keys(fabrikaState).sort()).toEqual(Object.keys(legacyState).sort())
 		// oblaka keys a component's state by env, and every component deploys in one env: each needs its own namespace.

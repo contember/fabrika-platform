@@ -66,9 +66,9 @@ function delivery(body: unknown): Delivery {
 	}
 }
 
-function batchOf(deliveries: readonly Delivery[]): MessageBatch<unknown> {
+function batchOf(deliveries: readonly Delivery[], queue = 'stage-vozka-deploy'): MessageBatch<unknown> {
 	return {
-		queue: 'stage-vozka-deploy',
+		queue,
 		messages: deliveries.map((one) => one.message),
 		metadata: { metrics: { backlogCount: 0, backlogBytes: 0 } },
 		ackAll: () => {},
@@ -107,6 +107,22 @@ describe("the Worker's control queue consumer", () => {
 		expect(one.acked()).toBe(1)
 		expect(one.retried()).toBe(0)
 		expect(errors.mock.calls.some(([line]) => line === 'control job: undecodable payload, dropped')).toBe(true)
+	})
+
+	test.each(['stage-vozka-deploy', 'stage-fabrika-deploy'])('reads %s as the control queue', async (queue) => {
+		const one = delivery('run-1')
+		await worker().queue(batchOf([one], queue))
+		expect(one.acked()).toBe(1)
+		expect(errors.mock.calls.some(([line]) => line === 'control job: undecodable payload, dropped')).toBe(true)
+	})
+
+	// The bindings carry no mail relay, so the relay's consumer retries; the control consumer would drop the message.
+	test.each(['stage-fabrika-mail', 'stage-fabrika-control-mail'])('hands %s to the mail relay, not the control consumer', async (queue) => {
+		const one = delivery('run-1')
+		await worker().queue(batchOf([one], queue))
+		expect(one.retried()).toBe(1)
+		expect(one.acked()).toBe(0)
+		expect(errors.mock.calls).toEqual([])
 	})
 
 	test('hands a decodable deploy job to the lifecycle', async () => {

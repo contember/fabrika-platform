@@ -621,8 +621,11 @@ URL and `FABRIKA_EMAIL_PROVIDER` and redacts the key.
 Control's mail relay receives installation mail from applications on framework 0.7
 and from IAM, records it, gates it and dispatches it through Control's own transport
 (`packages/control/src/mail-relay/`). Control's Bun process runs it (Zerops and the
-local stack), and so does Control's Worker when it binds its `fabrika-mail` queue and
-`fabrika-mail-content` bucket; a Worker without them answers the row with 404.
+local stack), and so does Control's Worker when it binds its mail queue and content
+bucket (`fabrika-mail` and `fabrika-mail-content`, or `fabrika-control-mail` and
+`fabrika-control-mail-content` on an installation with the `fabrika` resource names,
+[ADR-0024](../decisions/0024-canonical-environment-names.md)); a Worker without them
+answers the row with 404.
 
 ### The wire
 
@@ -682,7 +685,7 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
   fingerprint. A repeat with the same fingerprint answers the first `messageId`; a
   different one answers `idempotency_conflict`. The recipient, the subject, the bodies
   and the attachments live only in the canonical request: on Postgres in the row's
-  `content`, on the Worker in an R2 object of `<env>-fabrika-mail-content` that the
+  `content`, on the Worker in an R2 object of the content bucket that the
   row's `content_ref` names (`messages/<id>.json`), because a D1 row holds at most
   2,000,000 bytes and the relay accepts 10 MiB of attachments. The row also keeps the
   recipient's domain, lowercase.
@@ -714,7 +717,7 @@ idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` 
 
 - The dispatcher consumes the `vozka-mail` queue (`PostgresJobQueue`, in Control's jobs
   table) on its own loop beside `vozka-deploy`, so a long deploy never delays a sign-in
-  link. On the Worker it consumes the `<env>-fabrika-mail` Cloudflare Queue in `queue()`,
+  link. On the Worker it consumes the mail Cloudflare Queue (`<env>-…-mail`) in `queue()`,
   and runs only with that queue and the content bucket both bound. One job sends one
   `queued`, due message.
 - A message can have more than one job (a retry, a release, maintenance), and Control can

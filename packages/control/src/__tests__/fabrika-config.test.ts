@@ -138,21 +138,22 @@ describe('defineApp(control config)', () => {
 	}
 
 	test.each([
-		['', 'vozka-proxy', 'vozka', 'vozka-run-logs', 'vozka-deploy', 'propustka-worker', 'operations', 'vozka-runner'],
-		['legacy', 'vozka-proxy', 'vozka', 'vozka-run-logs', 'vozka-deploy', 'propustka-worker', 'operations', 'vozka-runner'],
+		['', 'vozka-proxy', 'vozka', 'vozka-run-logs', 'vozka-deploy', 'fabrika-mail', 'propustka-worker', 'operations', 'vozka-runner'],
+		['legacy', 'vozka-proxy', 'vozka', 'vozka-run-logs', 'vozka-deploy', 'fabrika-mail', 'propustka-worker', 'operations', 'vozka-runner'],
 		[
 			'fabrika',
 			'fabrika-control-proxy',
 			'fabrika-control',
 			'fabrika-run-logs',
 			'fabrika-deploy',
+			'fabrika-control-mail',
 			'fabrika-iam',
 			'fabrika-operations',
 			'fabrika-runner',
 		],
 	])(
 		'FABRIKA_CLOUDFLARE_NAMES=%p names every resource of the installation',
-		(scheme, proxyName, controlName, logs, queue, iam, operations, runner) => {
+		(scheme, proxyName, controlName, logs, queue, mail, iam, operations, runner) => {
 			withEnvironment({ FABRIKA_CLOUDFLARE_NAMES: scheme }, () => {
 				const proxy = config.resources({ env: 'prod', domain: 'control.test.example.com' })
 				expect(proxy.options.name).toBe(proxyName)
@@ -162,8 +163,8 @@ describe('defineApp(control config)', () => {
 				expect(nameOf(binding(app, 'DB'))).toBe(controlName)
 				expect(nameOf(binding(app, 'RUN_LOGS'))).toBe(logs)
 				expect(nameOf(binding(app, 'DEPLOY_QUEUE'))).toBe(queue)
-				expect(nameOf(binding(app, 'MAIL_QUEUE'))).toBe('fabrika-mail')
-				expect(nameOf(binding(app, 'MAIL_CONTENT'))).toBe('fabrika-mail-content')
+				expect(nameOf(binding(app, 'MAIL_QUEUE'))).toBe(mail)
+				expect(nameOf(binding(app, 'MAIL_CONTENT'))).toBe(`${mail}-content`)
 				expect(remoteService(binding(app, 'IAM'), 'prod')).toBe(`prod-${iam}`)
 				expect(remoteService(binding(app, 'OPERATIONS'), 'prod')).toBe(`prod-${operations}`)
 				expect(remoteService(binding(app, 'RUNNER_SVC'), 'prod')).toBe(`prod-${runner}`)
