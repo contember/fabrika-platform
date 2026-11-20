@@ -79,6 +79,11 @@ blocked-by: []
     Seen in the Schrack CRM on Postmark: a recipient who unsubscribed through Postmark's footer has the next broadcast
     refused (406, `provider_rejected`), and the CRM still shows it as sent. A fix for item 19 should serve both senders:
     a status read by message id under the sender's own key, or a callback, not an IAM-only path.
+28. **The relay still accepts some messages its transport refuses.** It refuses a broadcast and attachments Control's
+    transport does not send, but not an `unsubscribeUrl` over a transport without `listUnsubscribe` (Brevo,
+    SmartEmailing), a body shorter than its `minBodyLength` (Lettermint), or a `fromName` over Brevo's 70 characters:
+    those fail `invalid_message` at dispatch. The first two are capabilities, so `transportRefusal`
+    (`packages/control/src/mail-relay/handler.ts`) can run them; Brevo's name limit is not one yet.
 
 ### Upgrade, keys and senders
 

@@ -386,7 +386,7 @@ describe("the mail relay: attachments Control's transport refuses", () => {
 		await expectRefused(brevo(), withFiles(file('invoice.pdf'), file('data.json')))
 	})
 
-	test("Brevo: attachments over Brevo's size cap are refused as invalid_message and not recorded", async () => {
+	test("Brevo: attachments over Brevo's size cap, which is the wire's, are refused as invalid_message and not recorded", async () => {
 		await expectRefused(brevo(), withFiles(file('a.pdf', 5 * MIB), file('b.pdf', 5 * MIB + 1)))
 	})
 

@@ -304,6 +304,7 @@ describe('a broadcast message', () => {
 			listUnsubscribe: true,
 			maxAttachmentBytes: 1024,
 			refusedAttachmentExtensions: ['exe'],
+			attachmentExtensions: ['pdf'],
 			minBodyLength: 3,
 			broadcast: true,
 		} as const
