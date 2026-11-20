@@ -202,6 +202,25 @@ describe('GitHub Environment protection', () => {
 	})
 })
 
+describe('GitHub Environment writes', () => {
+	test('every variable is set, in the order given, before any secret', async () => {
+		const recorder = await record(async (rec) => {
+			await configureEnvironment(
+				{ repo: 'acme/fabrika-platform', environment: 'acme', secrets: { A_KEY: 'a-secret-value' }, vars: { FIRST: '1', SECOND: '2' } },
+				{
+					attempt: () => Promise.resolve(OK),
+					run: (step) => {
+						rec.steps.push(step)
+						return Promise.resolve()
+					},
+				},
+			)
+		})
+
+		expect(recorder.steps.map((step) => `${step.args[0]} ${step.args[2]}`)).toEqual(['variable FIRST', 'variable SECOND', 'secret A_KEY'])
+	})
+})
+
 describe('GitHub Environment protection merge', () => {
 	const config = { repo: 'acme/fabrika-platform', environment: 'acme', secrets: {}, vars: {} }
 	const EXISTING: ShellAttempt = {

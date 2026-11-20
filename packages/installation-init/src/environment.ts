@@ -59,6 +59,12 @@ export async function configureEnvironment(
 	const protection = await createEnvironment(repo, environment, effects.attempt)
 	config.onProtection?.(protection)
 
+	// Variables first, in the caller's order: a workflow run that starts before init finishes, or a run of init that
+	// stops halfway, never sees an Environment whose credentials are set and whose configuration is not.
+	for (const [name, value] of Object.entries(vars)) {
+		await effects.run({ command: 'gh', args: ['variable', 'set', name, '--repo', repo, '--env', environment, '--body', value], cwd: ANCHOR })
+		ok(`variable ${name} set`)
+	}
 	for (const [name, value] of Object.entries(secrets)) {
 		if (value === '') {
 			warn(`Skipping secret ${name} — no value (the workflow will fail without it; set it manually).`)
@@ -66,10 +72,6 @@ export async function configureEnvironment(
 		}
 		await effects.run({ command: 'gh', args: ['secret', 'set', name, '--repo', repo, '--env', environment], cwd: ANCHOR, stdin: value })
 		ok(`secret ${name} set`)
-	}
-	for (const [name, value] of Object.entries(vars)) {
-		await effects.run({ command: 'gh', args: ['variable', 'set', name, '--repo', repo, '--env', environment, '--body', value], cwd: ANCHOR })
-		ok(`variable ${name} set`)
 	}
 	detail(`Recommended hardening — require your own approval before a deploy: ${environmentReviewerCommand(repo, environment)}`)
 }

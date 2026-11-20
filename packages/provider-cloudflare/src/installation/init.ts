@@ -234,6 +234,8 @@ export function environmentPayload(
 			...email.secrets,
 		},
 		vars: {
+			// First: an Environment that holds anything at all also holds the names its deploys will create.
+			[PLATFORM_NAMES_ENV]: collected.platformNames,
 			FABRIKA_CONTROL_DOMAIN: collected.controlPlaneDomain,
 			OPERATIONS_HOSTNAME: collected.operationsHostname,
 			FABRIKA_IAM_ISSUER: collected.iamUrl,
@@ -252,7 +254,6 @@ export function environmentPayload(
 				: {}),
 			// The same first-admin emails admit the operator to IAM itself (its own bootstrap hatch).
 			FABRIKA_IAM_BOOTSTRAP_ADMINS: JSON.stringify(collected.bootstrapAdmins),
-			[PLATFORM_NAMES_ENV]: collected.platformNames,
 		},
 	}
 }

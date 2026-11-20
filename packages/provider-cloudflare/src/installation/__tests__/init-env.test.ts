@@ -191,7 +191,7 @@ describe('Cloudflare installer resource names', () => {
 		)
 	})
 
-	test('the GitHub Environment carries the scheme as a variable', () => {
+	test('the GitHub Environment carries the scheme as its first variable, written before any secret', () => {
 		const payload = environmentPayload(COLLECTED, {
 			vaultKey: 'vault',
 			provisioning: 'px_key',
@@ -199,7 +199,7 @@ describe('Cloudflare installer resource names', () => {
 			runnerKey: 'runner-key-value',
 			signingKeys: '[]',
 		})
-		expect(payload.vars['FABRIKA_CLOUDFLARE_NAMES']).toBe('fabrika')
+		expect(Object.entries(payload.vars)[0]).toEqual(['FABRIKA_CLOUDFLARE_NAMES', 'fabrika'])
 		expect(
 			environmentPayload({ ...COLLECTED, platformNames: 'legacy' }, {
 				vaultKey: 'vault',
