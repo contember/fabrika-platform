@@ -9,6 +9,7 @@ const EDITOR: AccessMapRoleDto = {
 	role: 'editor',
 	scope: 'org',
 	assignableBy: ['owner'],
+	creatorOf: ['org'],
 	external: false,
 	actions: ['notes.read', 'notes.write'],
 	via: [],
@@ -17,20 +18,39 @@ const ADMIN: AccessMapRoleDto = {
 	role: 'admin',
 	scope: null,
 	assignableBy: [],
+	creatorOf: [],
 	external: true,
-	actions: [],
-	via: [{ relation: 'note_reviewers', dimension: 'note', actions: ['notes.read'] }],
+	actions: ['notes.read'],
+	via: [{
+		relation: 'note_reviewers',
+		dimension: 'note',
+		actions: ['notes.read'],
+		conferredBy: ['a row of reviews naming user_id at note_id; no handler inserts one'],
+	}],
 }
 const READ: AccessMapActionDto = {
 	action: 'notes.read',
 	description: 'Read notes',
-	endpoints: Array.from({ length: 10 }, (_, index) => ({ id: `api.get${index}`, method: 'POST', path: `/api/get${index}`, access: 'on note' })),
+	endpoints: Array.from(
+		{ length: 10 },
+		(_, index) => ({ id: `api.get${index}`, method: 'POST', path: `/api/get${index}`, access: 'on note', callers: ['human', 'machine'] }),
+	),
 	members: [],
 	links: ['issue share links of shared to a note, which grant notes.read'],
-	tables: [{ table: 'notes', lies: 'one row per note, inside its org', operations: ['read'] }],
+	tables: [{
+		table: 'notes',
+		lies: 'one row per note, inside its org',
+		operations: ['read'],
+		also: ['a read over a project also reaches the rows its project_id names'],
+	}],
+	files: ['read the files of attachments (rows of notes)'],
 }
-const WRITE: AccessMapActionDto = { action: 'notes.write', description: '', endpoints: [], members: [], links: [], tables: [] }
-const MAP: AccessMapDto = { roles: [EDITOR, ADMIN], actions: [READ, WRITE] }
+const WRITE: AccessMapActionDto = { action: 'notes.write', description: '', endpoints: [], members: [], links: [], tables: [], files: [] }
+const MAP: AccessMapDto = {
+	roles: [EDITOR, ADMIN],
+	actions: [READ, WRITE],
+	memberEndpoints: [{ id: 'api.me', method: 'POST', path: '/api/me', access: 'any member', callers: ['human'] }],
+}
 
 const environment = (env: string, accessMap: AccessMapDto | undefined): AppEnvDto => ({
 	appId: 'notes',
@@ -56,7 +76,7 @@ const section = (envs: readonly AppEnvDto[]): string => renderToStaticMarkup(cre
 
 describe('the access map in the console', () => {
 	test('a role says where it is granted, who assigns it and how many actions it holds', () => {
-		expect(roleSummary(EDITOR)).toBe('in each org, assigned by owner · 2 actions')
+		expect(roleSummary(EDITOR)).toBe('in each org, assigned by owner and to the creator of each new org · 2 actions')
 		expect(roleSummary(ADMIN)).toBe('app-wide, granted globally, external people too · 1 action')
 	})
 
@@ -69,7 +89,11 @@ describe('the access map in the console', () => {
 		expect(html).toContain('<code>notes</code> read')
 		expect(html).toContain('one row per note, inside its org')
 		expect(html).toContain('issue share links of shared to a note, which grant notes.read')
-		expect(html).toContain('through note_reviewers, where its row names them')
+		expect(html).toContain('through relation note_reviewers, where its row names them')
+		expect(html).toContain('conferred by a row of reviews naming user_id at note_id; no handler inserts one')
+		expect(html).toContain('a read over a project also reaches the rows its project_id names')
+		expect(html).toContain('read the files of attachments (rows of notes)')
+		expect(html).toContain('on note · people, scripts')
 	})
 
 	test('an action with more than eight endpoints folds the rest under a count', () => {
@@ -79,7 +103,13 @@ describe('the access map in the console', () => {
 		expect(html.indexOf('/api/get8')).toBeGreaterThan(html.indexOf('2 more'))
 	})
 
+	test('the endpoints any member reaches are listed once, beside the roles', () => {
+		const html = section([environment('prod', MAP)])
+		expect(html).toContain('every member')
+		expect(html).toContain('<code>POST /api/me</code>')
+	})
+
 	test('nothing shows before a publication, or from a Control that does not send the map', () => {
-		expect(section([environment('prod', { roles: [], actions: [] }), environment('dev', undefined)])).toBe('')
+		expect(section([environment('prod', { roles: [], actions: [], memberEndpoints: [] }), environment('dev', undefined)])).toBe('')
 	})
 })
