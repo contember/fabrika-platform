@@ -29,12 +29,24 @@ export const BREVO_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set(
 	('xlsx xls ods docx docm doc csv pdf txt gif jpg jpeg png tif tiff rtf bmp cgm css shtml html htm zip xml ppt pptx tar ez ics mobi msg pub '
 		+ 'eps odt mp3 m4a m4v wma ogg flac wav aif aifc aiff mp4 mov avi mkv mpeg mpg wmv pkpass xlsm').split(' '),
 )
-/** A repeated idempotency key (`duplicate_parameter`) or an identical request too soon (`duplicate_request`). */
-const DUPLICATE_CODES: ReadonlySet<string> = new Set(['duplicate_parameter', 'duplicate_request'])
+/**
+ * A repeated idempotency key (`duplicate_parameter`), an identical request too soon (`duplicate_request`), or a request
+ * the reference's error codes call already processed: each says an earlier request may have sent the message.
+ */
+const DUPLICATE_CODES: ReadonlySet<string> = new Set(['duplicate_parameter', 'duplicate_request', 'Request already processed'])
 /** The account has no credits left (402 `not_enough_credits`; the reference also lists `Insufficient credits`). */
 const NO_CREDITS_CODES: ReadonlySet<string> = new Set(['not_enough_credits', 'Insufficient credits'])
-/** The key or the account may not send: a failed authentication, a missing permission, an account still validated. */
-const NOT_ALLOWED_CODES: ReadonlySet<string> = new Set(['unauthorized', 'permission_denied', 'account_under_validation'])
+/**
+ * The key or the account may not send: a failed authentication, an unknown key, a missing permission, an account still
+ * validated. The reference lists `Authentication failed` and `api-key not found` beside the snake_case codes.
+ */
+const NOT_ALLOWED_CODES: ReadonlySet<string> = new Set([
+	'unauthorized',
+	'Authentication failed',
+	'api-key not found',
+	'permission_denied',
+	'account_under_validation',
+])
 
 export interface BrevoEmailSenderOptions extends HttpEmailSenderOptions {
 	/** An API key (v3) of the account. */

@@ -276,9 +276,9 @@ minutes. The adapter sends the message's key there as a UUID derived from it (th
 version 4 bits), the same UUID on every retry. Thirty minutes is shorter than any retry horizon here (the relay's
 dispatcher retries for about 8.5 hours), so a retry after the window could deliver twice: the adapter is **not
 idempotent**, and an unknown outcome over it (a timeout, a lost answer, a 5xx) waits for a person, as over Postmark.
-The key still stops a repeat inside the window. A repeated key (`duplicate_parameter`) or an identical request too soon
-(`duplicate_request`) is `idempotency_conflict`: Brevo took a request under the key and does not say whether its
-content matched, so the outcome is unknown and a person decides.
+The key still stops a repeat inside the window. A repeated key (`duplicate_parameter`), an identical request too soon
+(`duplicate_request`) or `Request already processed` is `idempotency_conflict`: Brevo took a request under the key and
+does not say whether its content matched, so the outcome is unknown and a person decides.
 
 Capabilities: not idempotent, `sync`, and `maxAttachmentBytes` of 10 MiB: Brevo bounds a message at 20 MB with its
 attachments base64. Brevo takes no media type for an attachment and derives it from the file name, and it takes only
@@ -290,7 +290,8 @@ header, so the adapter writes no `List-Unsubscribe` and has neither `listUnsubsc
 transactional mail only.
 
 A refusal carries a documented `code`, read only to classify it: a 402, `not_enough_credits` or `Insufficient credits`
-is `quota_exceeded`; `unauthorized`, `permission_denied` and `account_under_validation` are `provider_unauthorized`;
+is `quota_exceeded`; `unauthorized`, `Authentication failed`, `api-key not found`, `permission_denied` and `account_under_validation` are
+`provider_unauthorized`;
 every other answer by its status (401 and 403 `provider_unauthorized`, 429 `rate_limited`, 5xx
 `provider_unavailable`, any other 4xx `provider_rejected`). An account that limits its API keys to authorised IP
 addresses refuses a request from any other with a 401: Workers and Zerops send from addresses that change, so turn the
