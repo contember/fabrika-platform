@@ -72,6 +72,9 @@ as `dropped`: an operator's decision, never a silent loss.
   flags wrongly. Authentication failures, quota, rate limits, an idempotency conflict and the caller's abort each
   have a code of their own.
 - No adapter exposes provider response types in its result or error.
+- **A provider request never follows a redirect.** A followed redirect would send the credential header and the message
+  to another origin. A 3xx is `provider_rejected`: the endpoint did not take the message, and the same request gets
+  the same answer. The same holds for the sender to Control's relay.
 - **The one retry rule:** a retryable failure with an `unknown` outcome is retried only over an idempotent transport
   (`mayRetryDelivery`). Over a non-idempotent transport, an unknown outcome stays unknown for a person to resolve.
 

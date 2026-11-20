@@ -63,7 +63,7 @@ the message and `unknown` when it may have.
 | `provider_unauthorized` | no        | not_sent | 401/403: credentials, a suspended key, an unverified sender domain  |
 | `rate_limited`          | yes       | not_sent | a burst limit                                                       |
 | `quota_exceeded`        | yes       | not_sent | a daily or monthly quota                                            |
-| `provider_rejected`     | no        | not_sent | any other 4xx                                                       |
+| `provider_rejected`     | no        | not_sent | any other 4xx, or a 3xx redirect (never followed)                   |
 | `provider_unavailable`  | yes       | unknown  | 5xx, or a local store that cannot be written                        |
 | `malformed_response`    | yes       | unknown  | a success answer that cannot be parsed                              |
 
@@ -153,6 +153,14 @@ before any I/O and the conformance kit exercises. An adapter checks its credenti
 Every other refusal is classified by status alone (`refusalByStatus`): 401 and 403
 `provider_unauthorized`, 429 `rate_limited`, 5xx `provider_unavailable`, any other `provider_rejected`. A provider's
 error text never reaches an error.
+
+No provider request follows a redirect (`postToProvider` in `packages/email/src/http.ts` sends `redirect: 'manual'`).
+A followed redirect would send the credential header and the whole message again to wherever the `Location` points:
+Bun forwards custom headers such as `api-key` across origins, and Workers forwards every header, `Authorization`
+included. A 3xx, or the opaque answer of a runtime that hides it, is `provider_rejected` with its status: the endpoint
+answered without taking the message (`not_sent`), and the same request gets the same answer, so a retry cannot help
+and a person fixes the configured URL. It is classified before an adapter's own `refusal`, so no adapter reads a
+redirect's body.
 
 A new provider is one module (its sender and its `EmailProvider` declaration), its entry in
 `builtinEmailProviders` (`builtinEmailProviderVariables` lists every provider's variables from it), its release in
@@ -666,7 +674,12 @@ answers the row with 404.
 `PlatformEmailSender({ url, key, fetch?, timeoutMs? })` (`@fabrika/email/platform`)
 is the sender's side. `url` is exactly an http(s) origin. It reads any
 `EmailDeliveryErrorCode` from an answer, so the relay's `retryable` and `outcome`
-reach the caller unchanged; an answer it cannot read is `malformed_response`. It
+reach the caller unchanged; an answer it cannot read is `malformed_response`, and a
+redirect is never followed but refused as `provider_rejected`, as from any provider. So
+`url` must be the origin the relay answers on: an `http:` origin is supported where it
+is reached directly (Zerops' private `http://control:3000`, the local stack), and an
+`http:` origin that only redirects to `https:` fails every send instead of relying on
+the upgrade. It
 passes the conformance kit. Its capabilities (`PLATFORM_MAIL_CAPABILITIES`):
 idempotent, `queued`, `maxBatch` 1, `listUnsubscribe`, and `maxAttachmentBytes` of
 10 MiB.
@@ -816,7 +829,8 @@ Only `admin` holds them by default. The procedures (`controlRpc.mail`):
   `iam.mail.relay_fallback` per message (`relayWithFallback`,
   `packages/iam/src/relay-mail.ts`). Fallbacks that continue after the rollout mean the
   relay is misconfigured: its gate and Control's Mail page do not see IAM's mail. It falls back only on such a
-  definite refusal, or on its own relay settings being unusable; a timeout, a network
+  definite refusal, on a redirect from `FABRIKA_CONTROL_URL` (never followed, so the relay
+  never saw the message), or on its own relay settings being unusable; a timeout, a network
   failure or another answer may have reached the relay, and fails the send as before:
   an administrator's enrollment, reset or invitation answers 502
   `password action email delivery failed`.
