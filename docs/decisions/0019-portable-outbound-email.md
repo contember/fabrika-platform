@@ -92,7 +92,8 @@ as `dropped`: an operator's decision, never a silent loss.
   infrastructure, and AhaSend's terms allow it through the API only from a domain the account configured as a Marketing
   domain. The capability `broadcast` says whether a
   transport sends one, on its provider's channel for them; one without it refuses the message before any I/O, and the
-  relay refuses it at the handoff while Control's own transport sends none. Rejected: one transport per kind for the
+  relay refuses it at the handoff while Control's own transport sends none, as it refuses attachments that transport
+  does not send. Rejected: one transport per kind for the
   installation, which doubles every operator step for a distinction one field carries; and inferring the kind from the
   unsubscribe URL, which a transactional message may carry too.
 - Two more senders deliver nothing: **Directory** writes each message to a directory for a local composition, and

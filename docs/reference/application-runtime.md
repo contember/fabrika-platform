@@ -1526,7 +1526,8 @@ no job. `mailer: 'own'` sends through the application's own sender.
   only a `live` file whose reference the attempt holds goes out; a pending or quarantined one fails with 409
   `file_not_ready`, a rejected one with `file_rejected`. All attachments together stay within the transport's
   `maxAttachmentBytes`, else the send fails `invalid_message`, which is final; a transport without the capability
-  refuses a message that has any, on the send. The attachments are part of the content a repeated idempotency key must
+  refuses a message that has any, on the send. Under the relay the rules of Control's own transport (its size cap and
+  the file types it refuses or lists) refuse the message at the handoff the same way. The attachments are part of the content a repeated idempotency key must
   match.
 - `unsubscribe: { url }` hands the transport an exact `https` URL; a transport with the `listUnsubscribe` capability
   writes `List-Unsubscribe: <url>` and `List-Unsubscribe-Post: List-Unsubscribe=One-Click` (RFC 8058), and one

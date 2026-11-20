@@ -9,7 +9,6 @@ import { base64Of } from './content.js'
 import { EmailDeliveryError, type EmailMessage, type EmailSenderCapabilities } from './email.js'
 import { credentialVariable, type HttpEmailRequest, HttpEmailSender, type HttpEmailSenderOptions, isCredential } from './http-sender.js'
 import type { ProviderResponse } from './http.js'
-import { extensionOf } from './validation.js'
 
 const BREVO_SEND_URL = 'https://api.brevo.com/v3/smtp/email'
 const brevoSuccessSchema = z.object({ messageId: z.string() })
@@ -26,10 +25,10 @@ const BREVO_MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
  * The extensions Brevo takes an attachment with, from its API reference. It takes no media type: it derives it from the
  * file name, so the adapter refuses any other file before the request instead of losing the message to a 400.
  */
-const BREVO_ATTACHMENT_EXTENSIONS: ReadonlySet<string> = new Set(
-	('xlsx xls ods docx docm doc csv pdf txt gif jpg jpeg png tif tiff rtf bmp cgm css shtml html htm zip xml ppt pptx tar ez ics mobi msg pub '
-		+ 'eps odt mp3 m4a m4v wma ogg flac wav aif aifc aiff mp4 mov avi mkv mpeg mpg wmv pkpass xlsm').split(' '),
-)
+const BREVO_ATTACHMENT_EXTENSIONS: readonly string[] = (
+	'xlsx xls ods docx docm doc csv pdf txt gif jpg jpeg png tif tiff rtf bmp cgm css shtml html htm zip xml ppt pptx tar ez ics mobi msg pub '
+	+ 'eps odt mp3 m4a m4v wma ogg flac wav aif aifc aiff mp4 mov avi mkv mpeg mpg wmv pkpass xlsm'
+).split(' ')
 /**
  * A repeated idempotency key (`duplicate_parameter`), an identical request too soon (`duplicate_request`), or a request
  * the reference's error codes call already processed: each says an earlier request may have sent the message.
@@ -61,6 +60,7 @@ export class BrevoEmailSender extends HttpEmailSender {
 		confirmation: 'sync',
 		maxBatch: 1,
 		maxAttachmentBytes: BREVO_MAX_ATTACHMENT_BYTES,
+		attachmentExtensions: BREVO_ATTACHMENT_EXTENSIONS,
 		// No `listUnsubscribe`, and so no `broadcast`: Brevo takes no standard header in `headers`, so `List-Unsubscribe`
 		// is not known to reach the recipient.
 	}
@@ -83,9 +83,6 @@ export class BrevoEmailSender extends HttpEmailSender {
 			throw new EmailDeliveryError(`Brevo sends no sender name longer than ${BREVO_MAX_NAME_LENGTH} characters`, { code: 'invalid_message' })
 		}
 		const attachments = message.attachments ?? []
-		if (attachments.some((attachment) => !BREVO_ATTACHMENT_EXTENSIONS.has(extensionOf(attachment.filename)))) {
-			throw new EmailDeliveryError('Brevo sends no attachment of this file type', { code: 'invalid_message' })
-		}
 		return {
 			url: BREVO_SEND_URL,
 			headers: { 'api-key': this.#apiKey, Accept: 'application/json' },

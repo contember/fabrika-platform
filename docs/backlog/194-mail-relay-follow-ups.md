@@ -22,10 +22,7 @@ blocked-by: []
    final `installation:*` row at any age.
 5. **A failed enqueue at acceptance waits up to 10 minutes.** The row is `queued` and the sender's retry finds the
    existing row and enqueues nothing; maintenance re-enqueues it after `MAIL_STALE_QUEUED_S`.
-6. **The relay accepts attachments the installation's transport cannot send.** It checks against
-   `PLATFORM_MAIL_CAPABILITIES` (10 MiB), not against Control's transport. Over SmartEmailing, which sends no
-   attachments, the message is accepted and then fails `invalid_message` at dispatch.
-7. **IAM's key is derived on every request.** `authenticate` computes `installationMailKey` per request; compute it
+6. **IAM's key is derived on every request.** `authenticate` computes `installationMailKey` per request; compute it
    once at boot.
 
 ### The console
@@ -82,6 +79,11 @@ blocked-by: []
     Seen in the Schrack CRM on Postmark: a recipient who unsubscribed through Postmark's footer has the next broadcast
     refused (406, `provider_rejected`), and the CRM still shows it as sent. A fix for item 19 should serve both senders:
     a status read by message id under the sender's own key, or a callback, not an IAM-only path.
+28. **The relay still accepts some messages its transport refuses.** It refuses a broadcast and attachments Control's
+    transport does not send, but not an `unsubscribeUrl` over a transport without `listUnsubscribe` (Brevo,
+    SmartEmailing), a body shorter than its `minBodyLength` (Lettermint), or a `fromName` over Brevo's 70 characters:
+    those fail `invalid_message` at dispatch. The first two are capabilities, so `transportRefusal`
+    (`packages/control/src/mail-relay/handler.ts`) can run them; Brevo's name limit is not one yet.
 
 ### Upgrade, keys and senders
 

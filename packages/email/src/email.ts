@@ -55,6 +55,8 @@ export interface EmailSenderCapabilities {
 	readonly maxAttachmentBytes?: number
 	/** File extensions it refuses an attachment for, lowercase and without the dot; absent: none. */
 	readonly refusedAttachmentExtensions?: readonly string[]
+	/** The only file extensions it sends an attachment with, lowercase and without the dot; absent: any. */
+	readonly attachmentExtensions?: readonly string[]
 	/** The fewest characters a text or HTML body has once trimmed; absent: any body that is not blank. */
 	readonly minBodyLength?: number
 	/** Whether it sends a `broadcast` message, on its provider's channel for them where it has one; absent is no. */

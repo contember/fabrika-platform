@@ -75,8 +75,8 @@ export function validateEmailMessage(message: EmailMessage): void {
 
 /**
  * Refuses a message whose attachments `capabilities` does not carry: any attachment where the transport sends none,
- * more bytes together than its `maxAttachmentBytes`, or a file whose extension it refuses. `label` names the transport
- * in the message.
+ * more bytes together than its `maxAttachmentBytes`, or a file whose extension it refuses or does not list in
+ * `attachmentExtensions`. `label` names the transport in the message.
  */
 export function validateEmailAttachments(message: EmailMessage, capabilities: EmailSenderCapabilities, label: string): void {
 	const attachments = message.attachments ?? []
@@ -86,9 +86,12 @@ export function validateEmailAttachments(message: EmailMessage, capabilities: Em
 	const bytes = attachmentBytes(message)
 	if (bytes > limit) throw invalidMessage(`Email attachments have ${bytes} bytes, more than the ${limit} ${label} sends`)
 	const refused = capabilities.refusedAttachmentExtensions ?? []
-	if (refused.length > 0 && attachments.some((attachment) => refused.includes(extensionOf(attachment.filename)))) {
-		throw invalidMessage(`${label} sends no attachment of this file type`)
+	const allowed = capabilities.attachmentExtensions
+	const refusedType = (filename: string): boolean => {
+		const extension = extensionOf(filename)
+		return refused.includes(extension) || (allowed !== undefined && !allowed.includes(extension))
 	}
+	if (attachments.some((attachment) => refusedType(attachment.filename))) throw invalidMessage(`${label} sends no attachment of this file type`)
 }
 
 /** Refuses a `broadcast` message where the transport sends none. */

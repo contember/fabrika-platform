@@ -41,6 +41,7 @@ Each sender reports its `capabilities`:
 | `listUnsubscribe`             | Whether it writes the unsubscribe headers. Absent is no: it refuses a message with `unsubscribeUrl` as `invalid_message`.                 |
 | `maxAttachmentBytes`          | The most attachment bytes of one message, every file together. Absent: it refuses a message with any attachment as `invalid_message`.     |
 | `refusedAttachmentExtensions` | File extensions it refuses an attachment for, lowercase without the dot. Absent: none.                                                    |
+| `attachmentExtensions`        | The only file extensions it sends an attachment with, lowercase without the dot. Absent: any.                                             |
 | `minBodyLength`               | The fewest characters a text or HTML body has once trimmed. Absent: any body that is not blank.                                           |
 | `broadcast`                   | Whether it sends a `broadcast` message, on its provider's channel for them where it has one. Absent: it refuses one as `invalid_message`. |
 
@@ -285,12 +286,12 @@ content matched, so the outcome is unknown and a person decides.
 
 Capabilities: not idempotent, `sync`, and `maxAttachmentBytes` of 10 MiB: Brevo bounds a message at 20 MB with its
 attachments base64. Brevo takes no media type for an attachment and derives it from the file name, and it takes only the
-extensions its API reference lists, so the adapter refuses any other file, and a message's sender name over Brevo's 70
-characters, as `invalid_message` before the request. A configured sender name (`FABRIKA_EMAIL_FROM_NAME`, or the display
+extensions its API reference lists (its `attachmentExtensions`), so the adapter refuses any other file, and a message's
+sender name over Brevo's 70 characters, as `invalid_message` before the request. A configured sender name (`FABRIKA_EMAIL_FROM_NAME`, or the display
 name in `FABRIKA_EMAIL_FROM`) over 70 characters is refused earlier, as an invalid configuration when IAM, Control or an
-installer reads the transport. Through Control's relay the allowlist is checked only when Control dispatches the
-message, after the relay accepted it: a job's attachment of another type (`.json`, `.svg`, `.webp`) fails there, which
-the operator sees and the job does not. Brevo's `headers` take no standard header, so the adapter writes no `List-Unsubscribe`
+installer reads the transport. Through Control's relay the allowlist and the size cap are capabilities, so the relay
+refuses a job's attachment of another type (`.json`, `.svg`, `.webp`) when it receives the message, and the job sees
+`invalid_message`. Brevo's `headers` take no standard header, so the adapter writes no `List-Unsubscribe`
 and has neither `listUnsubscribe` nor `broadcast`: it sends transactional mail only.
 
 A refusal carries a documented `code`, read only to classify it: a 402, `not_enough_credits` or `Insufficient credits`
@@ -640,10 +641,12 @@ local stack), and so does Control's Worker when it binds its `fabrika-mail` queu
   field is refused) and ending in the package's own message validation.
 - The relay reads at most the base64 of 10 MiB of attachments plus 4 MiB. A larger
   body, invalid JSON, and a message that fails validation answer 400
-  `invalid_message`. So does a `broadcast` message while Control's own sender sends
-  none, refused before it is recorded, unless its key names a message already recorded (before the transport changed),
-  which gets that message's answer as any repeated key does; without a sender yet, it is held like any message, and
-  the transport decides at dispatch. The application's `PlatformEmailSender` reports `broadcast` whatever Control's
+  `invalid_message`. So does a message Control's own sender would refuse: a `broadcast` message while it sends none,
+  and attachments it does not send (any, over its `maxAttachmentBytes`, or a file type its `refusedAttachmentExtensions`
+  or `attachmentExtensions` refuses). It is refused before it is recorded, unless its key names a message already
+  recorded (before the transport changed), which gets that message's answer as any repeated key does; without a sender
+  yet, it is held like any message, and the transport decides at dispatch, which checks the same rules again. The
+  application's `PlatformEmailSender` reports `broadcast` and its own 10 MiB of attachments whatever Control's
   transport is, because the wire carries no capabilities: it learns otherwise from that first refusal.
 - A stored message holding `broadcast` does not parse in a Control older than the field, so rolling Control back
   past it settles those queued or held messages `failed`.

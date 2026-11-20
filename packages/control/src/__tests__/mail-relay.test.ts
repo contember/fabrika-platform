@@ -1,7 +1,9 @@
 // The relay's receiver: authentication, the body, idempotency and the gate, through `handleMailRelay` against the
 // shipped SQLite schema. The dispatcher and maintenance have their own files.
 
-import type { EmailMessage, EmailSender } from '@fabrika/email'
+import type { EmailAttachment, EmailMessage, EmailSender } from '@fabrika/email'
+import { BrevoEmailSender } from '@fabrika/email/brevo'
+import { CloudflareEmailSender } from '@fabrika/email/cloudflare'
 import { MemoryEmailSender } from '@fabrika/email/memory'
 import {
 	encodePlatformMailRequest,
@@ -10,6 +12,8 @@ import {
 	parsePlatformMailAnswer,
 	platformMailFingerprint,
 } from '@fabrika/email/platform'
+import { PostmarkEmailSender } from '@fabrika/email/postmark'
+import { SmartEmailingEmailSender } from '@fabrika/email/smartemailing'
 import type { JobQueue } from '@fabrika/platform'
 import { describe, expect, test } from 'bun:test'
 import type { MailRuleAction } from '../db'
@@ -351,5 +355,97 @@ describe('the mail relay: a broadcast message', () => {
 			expect(row?.content).toBe(encodePlatformMailRequest(BROADCAST))
 			expect(r.jobs).toHaveLength(1)
 		}
+	})
+})
+
+describe("the mail relay: attachments Control's transport refuses", () => {
+	const MIB = 1024 * 1024
+	const FROM = { address: 'mail@notes.example' }
+	const brevo = (): EmailSender => new BrevoEmailSender({ apiKey: 'xkeysib-relay-test', from: FROM })
+	const postmark = (): EmailSender => new PostmarkEmailSender({ serverToken: 'postmark-relay-test', from: FROM })
+	const cloudflare = (): EmailSender => new CloudflareEmailSender({ apiToken: 'cloudflare-relay-test', accountId: 'a'.repeat(32), from: FROM })
+	const smartEmailing = (): EmailSender => new SmartEmailingEmailSender({ username: 'notes', apiKey: 'smartemailing-relay-test', from: FROM })
+	const file = (filename: string, bytes = 4): EmailAttachment => ({
+		filename,
+		contentType: 'application/octet-stream',
+		content: new Uint8Array(bytes),
+	})
+	const withFiles = (...attachments: EmailAttachment[]): EmailMessage => ({ ...MESSAGE, idempotencyKey: 'report:1', attachments })
+
+	async function expectRefused(sender: EmailSender, message: EmailMessage): Promise<void> {
+		const r = await relay({ sender })
+		expect(await answer(await r.send({ body: encodePlatformMailRequest(message) }))).toEqual({
+			status: 400,
+			answer: { error: { code: 'invalid_message' } },
+		})
+		expect(await r.harness.repositories.mailMessages.list({ limit: 10 })).toEqual([])
+		expect(r.jobs).toEqual([])
+	}
+
+	test("Brevo: a file type outside Brevo's allowlist is refused as invalid_message and not recorded", async () => {
+		await expectRefused(brevo(), withFiles(file('invoice.pdf'), file('data.json')))
+	})
+
+	test("Brevo: attachments over Brevo's size cap, which is the wire's, are refused as invalid_message and not recorded", async () => {
+		await expectRefused(brevo(), withFiles(file('a.pdf', 5 * MIB), file('b.pdf', 5 * MIB + 1)))
+	})
+
+	test('Postmark: a file type Postmark refuses is refused as invalid_message and not recorded', async () => {
+		await expectRefused(postmark(), withFiles(file('invoice.pdf'), file('setup.EXE')))
+	})
+
+	test("Postmark: attachments over Postmark's size cap are refused as invalid_message and not recorded", async () => {
+		await expectRefused(postmark(), withFiles(file('a.pdf', 5 * MIB), file('b.pdf', 5 * MIB)))
+	})
+
+	test("Cloudflare: attachments over Cloudflare's size cap are refused as invalid_message and not recorded", async () => {
+		await expectRefused(cloudflare(), withFiles(file('a.pdf', 3 * MIB + 1)))
+	})
+
+	test('SmartEmailing: any attachment is refused as invalid_message and not recorded, as it sends none', async () => {
+		await expectRefused(smartEmailing(), withFiles(file('invoice.pdf')))
+	})
+
+	async function expectQueued(sender: EmailSender | undefined, message: EmailMessage): Promise<void> {
+		const r = await relay(sender === undefined ? {} : { sender })
+		await acceptedId(await r.send({ body: encodePlatformMailRequest(message) }))
+		const [row] = await r.harness.repositories.mailMessages.list({ limit: 10 })
+		expect(row?.content).toBe(encodePlatformMailRequest(message))
+		expect(r.jobs).toHaveLength(1)
+	}
+
+	test('Brevo: a listed file type, in any case, is stored and queued', async () => {
+		await expectQueued(brevo(), withFiles(file('Invoice.PDF'), file('photo.jpeg')))
+	})
+
+	test("Postmark: any other file type, up to Postmark's size cap, is stored and queued", async () => {
+		await expectQueued(postmark(), withFiles(file('data.json', 10 * MIB - 1)))
+	})
+
+	test("Cloudflare: attachments up to Cloudflare's size cap are stored and queued", async () => {
+		await expectQueued(cloudflare(), withFiles(file('setup.exe', 3 * MIB)))
+	})
+
+	test('without a sender to ask yet, any attachment the wire carries is stored and queued, for dispatch to decide', async () => {
+		await expectQueued(undefined, withFiles(file('data.json')))
+	})
+
+	test('recorded before the transport changed, its retry gets the recorded answer, and other content a conflict', async () => {
+		const r = await relay({ sender: brevo() })
+		const message = withFiles(file('data.json'))
+		const { row } = await r.harness.repositories.mailMessages.insertOrFind({
+			id: crypto.randomUUID(),
+			sender: 'notes@prod',
+			idempotency_key: message.idempotencyKey,
+			fingerprint: await platformMailFingerprint(message),
+			recipient_domain: 'example.com',
+			state: 'queued',
+			rule_id: null,
+			content: encodePlatformMailRequest(message),
+		}, NOW)
+		expect(await acceptedId(await r.send({ body: encodePlatformMailRequest(message) }))).toBe(row.id)
+		const changed = await r.send({ body: encodePlatformMailRequest({ ...message, subject: 'Another' }) })
+		expect(await answer(changed)).toEqual({ status: 409, answer: { error: { code: 'idempotency_conflict' } } })
+		expect(r.jobs).toEqual([])
 	})
 })
