@@ -446,9 +446,14 @@ input and the HTTP shape (§11).
   `capabilities`.
 - **`access: { anyOf: ['<action>', …], app: true }`** admits a caller that holds any of two to sixteen actions as a
   global grant. The proxy checks it as one requirement. The handler's `ctx.app` holds the listed actions the caller
-  holds, and `ctx.db.app` reaches what any of them reaches: a table operation, a column and a `when` condition each
-  admit the request when one held action admits it. An `anyOf` endpoint has no members, links or delegation, and
-  takes no `capabilities` or `creates`. The scoped forms do not take `anyOf`.
+  holds, and `ctx.db.app` reaches the union of what each held action reaches alone, never a row of one action with a
+  column of another. A read answers the rows any held action's `when` admits; a column with its own read action
+  shows only where that action reads every row (no `when` of its own) or is the only held one reading. An update
+  runs under the held update actions that each write every column it changes, and only their `when` admits the row;
+  when none does, it is refused. An insert writes the table's one insert list, so every held insert action covers it
+  and their `when` conditions admit the row together. The data layer's refusal of the held actions is the caller's
+  403. An `anyOf` endpoint has no members, links or delegation, and takes no `capabilities` or `creates`. The scoped
+  forms do not take `anyOf`.
 
 `capabilities` removes one cause of off-road reach, not all. Reads across tables (joins, filters over related tables,
 aggregates) and locks over many rows still need `sql`.

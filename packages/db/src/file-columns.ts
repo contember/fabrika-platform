@@ -9,7 +9,7 @@ import type { Primitive } from './description'
 import { NotFoundError, QueryRefusedError } from './errors'
 import { fileHoldingOf, fileReference, holdsFile } from './file-references'
 import { isPlainIdentifier } from './identifier'
-import type { TableModel } from './policy'
+import { type ReadReach, readsAsAction, type TableModel } from './policy'
 import { claimStoredFile, lockStoredFile, stampStoredFile, storedFilesMetadata } from './stored-files'
 
 /** Where a site's file references belong, and what claiming a pending one needs. */
@@ -25,16 +25,16 @@ export interface FileBinding {
 }
 
 /**
- * Whether a reference read with `actions` (one, or an `anyOf` endpoint's held set) lets its holder serve, open and copy
- * the file: the table's or the column's read action among them, or a table read action among `held`, the actions a job
- * holds over the whole application. A column with its own read action is answered only under that action
- * (`visibleFor`), so `held` never widens it. A table read with `'any'` admits whoever read the row: the store refused
- * every other reader.
+ * Whether a reference read under `reach` (one action, or an `anyOf` endpoint's held actions that read the row) lets its
+ * holder serve, open and copy the file: a table read action, or the column's own read action, that reads every answered
+ * row alone (`readsAsAction`), or a table read action among `held`, the actions a job holds over the whole application.
+ * A column with its own read action is answered only under that action (`visibleThrough`), so `held` never widens it. A
+ * table read with `'any'` admits whoever read the row: the store refused every other reader.
  */
-function readsFile(model: TableModel, column: string, actions: readonly string[], held: NameSet): boolean {
+function readsFile(model: TableModel, column: string, reach: ReadReach, held: NameSet): boolean {
 	const own = hasOwn(model.columnReads, column) ? model.columnReads[column] : undefined
 	if (own !== undefined) {
-		return listed(actions, own)
+		return readsAsAction(model, own, reach)
 	}
 	if (model.actions.readAny) {
 		return true
@@ -42,16 +42,7 @@ function readsFile(model: TableModel, column: string, actions: readonly string[]
 	const reads = model.actions.read
 	for (let index = 0; index < reads.length; index++) {
 		const read = reads[index]
-		if ((read !== undefined && listed(actions, read)) || inSet(held, read)) {
-			return true
-		}
-	}
-	return false
-}
-
-function listed(actions: readonly string[], action: string): boolean {
-	for (let index = 0; index < actions.length; index++) {
-		if (actions[index] === action) {
+		if (read !== undefined && (readsAsAction(model, read, reach) || inSet(held, read))) {
 			return true
 		}
 	}
@@ -61,7 +52,7 @@ function listed(actions: readonly string[], action: string): boolean {
 const NONE_HELD: NameSet = nameSet([])
 
 /**
- * Puts a file reference in each file column of `rows`, read with `actions` in `session`: one statement loads every
+ * Puts a file reference in each file column of `rows`, read under `reach` in `session`: one statement loads every
  * file's metadata. Without a binding (a store's own runner) the columns keep their ids. `held` (a queue claim's) adds
  * the actions the site holds over the whole application: a reference is readable when one of them reads the table.
  */
@@ -70,7 +61,7 @@ export async function answerFiles<R>(
 	binding: FileBinding | undefined,
 	session: Session,
 	rows: R[],
-	actions: readonly string[],
+	reach: ReadReach,
 	held: NameSet = NONE_HELD,
 ): Promise<R[]> {
 	const columns = ownKeys(model.files)
@@ -100,7 +91,7 @@ export async function answerFiles<R>(
 			if (meta === undefined) {
 				throw new QueryRefusedError('unexpected_row', `${model.name}.${column} references a file that is not stored`)
 			}
-			defineValue(row, column, fileReference(meta, binding.holder, readsFile(model, column, actions, held)))
+			defineValue(row, column, fileReference(meta, binding.holder, readsFile(model, column, reach, held)))
 		}
 	}
 	return rows

@@ -201,7 +201,7 @@ export type CapabilityContext<Acc> = Acc extends InvalidAccess ? {
 			readonly target: Unavailable<'an over endpoint holds ctx.within, the scopes it may list in: declare access with on or in for ctx.target'>
 		}
 	: Acc extends { readonly anyOf: readonly (infer A extends string)[]; readonly app: true } ? {
-			readonly app: AppCapability<A>
+			readonly app: AnyOfAppCapability<A>
 			readonly target: Unavailable<'an anyOf endpoint holds ctx.app, its held actions application-wide: declare access with on or in for ctx.target'>
 			readonly within: Unavailable<'an anyOf endpoint holds ctx.app, its held actions application-wide: declare access with over for ctx.within'>
 		}
@@ -342,6 +342,11 @@ type DirectoryContext<K extends KitTypes, N extends string, A extends string> = 
 			& MemberLookup<LabelOf<K, N>>
 			& { readonly list: Unavailable<`listing the members of ${N} needs the action '${MembersOf<K, N>['list']}'; get(principalId) checks one`> }
 	}
+
+/** `ctx.app` of an `anyOf` endpoint: the listed actions the caller holds, never one picked of them. */
+export type AnyOfAppCapability<A extends string> = Omit<AppCapability<A>, 'action'> & {
+	readonly action: Unavailable<"an anyOf endpoint's ctx.app holds several actions: read ctx.app.actions, or ask ctx.holds('<action>')">
+}
 
 /**
  * `ctx.members` of an endpoint on or in a dimension: management where the action is that dimension's `members.manage`;

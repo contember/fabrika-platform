@@ -110,13 +110,15 @@ export interface EndpointAccessKit {
 	 */
 	swept(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<SweepOutcome>
 	/**
-	 * An `app` or a `creates` endpoint asked by a caller who holds its action in one value of a dimension only, never
-	 * globally: refused (403), by the proxy for `app` and by IAM for `creates`, since both need a global grant.
+	 * An `app`, an `anyOf` or a `creates` endpoint asked by a caller who holds its action (each listed action) in one value
+	 * of a dimension only, never globally: refused (403), by the proxy for `app` and `anyOf` and by IAM for `creates`,
+	 * since each needs a global grant.
 	 */
 	scoped(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<DeniedOutcome>
 	/**
-	 * An `app` or a `creates` endpoint asked by a caller who holds its action as a global grant, and nothing else:
-	 * `answered` unless the answer is a 401, a 403 or a 5xx. The caller is the kit's one global principal, a person or a
+	 * An `app` or a `creates` endpoint asked by a caller who holds its action as a global grant, and nothing else, and an
+	 * `anyOf` endpoint by one such caller per listed action, each of whom must be answered: `answered` unless an answer is
+	 * a 401, a 403 or a 5xx. The caller is the kit's one global principal, a person or a
 	 * script as the endpoint admits, whose `callerRows` are seeded before its first case and kept.
 	 */
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
@@ -533,9 +535,37 @@ export function endpointAccessKit<DB, P>(
 	const globalEndpointOf = (id: string): ActionEndpoint => {
 		const row = endpointOf(id)
 		if (row.access.form !== 'app' && row.access.form !== 'creates') {
-			throw new Error(`${id} has the access form ${row.access.form}; only app and creates need the action held globally`)
+			throw new Error(`${id} has the access form ${row.access.form}; only app, anyOf and creates need the action held globally`)
 		}
 		return row
+	}
+
+	/**
+	 * An endpoint that needs a global grant, once per action that admits a caller: an `app` or `creates` endpoint's one, an
+	 * `anyOf` endpoint's each listed action, in the `app` form.
+	 */
+	const globalEndpointsOf = (id: string): readonly [ActionEndpoint, ...ActionEndpoint[]] => {
+		const row = kit.artifact.endpoints.find((candidate) => candidate.id === id)
+		const requirement = row?.requirement
+		if (row === undefined || requirement?.kind !== 'anyOf' || row.callers.length === 0) {
+			return [globalEndpointOf(id)]
+		}
+		const listed = (action: string): ActionEndpoint => ({
+			id: row.id,
+			link: null,
+			method: row.method,
+			path: row.path,
+			callers: row.callers,
+			readOnly: row.kind === 'query',
+			action,
+			access: { form: 'app' },
+			input: row.input,
+			directory: null,
+			manages: null,
+			links: [],
+		})
+		const [first, ...rest] = requirement.actions
+		return [listed(first), ...rest.map(listed)]
 	}
 
 	/** The dimension a table's rows are listed by: a dimension table's container or its own; a child's parent's. */
@@ -1188,9 +1218,12 @@ export function endpointAccessKit<DB, P>(
 				return { status }
 			},
 			async scoped(endpoint, input) {
-				const row = globalEndpointOf(endpoint)
+				const rows = globalEndpointsOf(endpoint)
+				const [row] = rows
 				const dimension = row.access.form === 'creates' ? row.access.dimension : scopeTypeOf(kit.artifact.dimensions)
-				const { status } = await ask(row, [{ action: row.action, scope: { type: dimension, value: freshValue(dimension, 'own', undefined) } }], input, [])
+				const scope = { type: dimension, value: freshValue(dimension, 'own', undefined) }
+				// An `anyOf` endpoint's caller holds every listed action there, and none globally.
+				const { status } = await ask(row, rows.map((each) => ({ action: each.action, scope })), input, [])
 				return { status }
 			},
 			async anyone(endpoint, input) {
@@ -1208,11 +1241,14 @@ export function endpointAccessKit<DB, P>(
 				return status >= 500 || status === 401 || status === 403 || challenged ? { answered: false, status } : { answered: true }
 			},
 			async global(endpoint, input) {
-				const row = globalEndpointOf(endpoint)
-				const { fetch } = callerFor(row, [{ action: row.action }], await globalCallerId())
-				const { status } = await askAs(row, fetch, input)
-				// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
-				return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
+				// An `anyOf` endpoint is asked once per listed action, by a caller who holds only that one: each must be answered.
+				for (const row of globalEndpointsOf(endpoint)) {
+					const { fetch } = callerFor(row, [{ action: row.action }], await globalCallerId())
+					const { status } = await askAs(row, fetch, input)
+					// No such form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
+					if (status >= 500 || status === 401 || status === 403) return { answered: false, status }
+				}
+				return { answered: true }
 			},
 			async capability(endpoint, capability, input, seed = {}) {
 				const { requirement, capabilities } = capabilitiesEndpointOf(endpoint)

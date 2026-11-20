@@ -139,16 +139,20 @@ import {
 	type PathWriter,
 	pathWriters,
 	type PolicyRow,
+	type ReadReach,
 	type RevealModel,
 	type SecondaryPath,
 	type TableModel,
 	type TableModels,
 	tableModels,
 	type Tables,
+	updatableBy,
+	updatableByAny,
 	updateActions,
 	type UpdateValues,
 	type VersionArguments,
 	visibleFor,
+	visibleThrough,
 } from './policy'
 import { frameworkSideOf, type ProvisionalBinding, register } from './registry'
 import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
@@ -1125,11 +1129,17 @@ function checkAppReach(context: TableContext, grant: AppGrant): void {
 	recordReach(context, grant, 'rows')
 }
 
+/** What an `app` capability reads of a table: the rows (`predicate`), and the reach whose columns it answers. */
+export interface AppRead {
+	readonly predicate: OperationNode
+	readonly reach: ReadReach
+}
+
 /**
- * Every row of a dimension or child table an `app` capability reads through `ctx.db.app`: `true`, for an action that
- * reaches `reach` (`checkRecordReach`).
+ * Every row of a dimension or child table an `app` capability reads through `ctx.db.app`, for its actions that reach
+ * `reach` (`recordReach`): each row within the condition of one of them, and the columns they read alone.
  */
-export function appRecordPredicate(context: TableContext, capability: unknown, reach: AppReach): OperationNode {
+export function appRecordRead(context: TableContext, capability: unknown, reach: AppReach): AppRead {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
 	const model = context.model
 	if (grant.kind !== 'app') {
@@ -1141,7 +1151,13 @@ export function appRecordPredicate(context: TableContext, capability: unknown, r
 	if (model.scope.mode !== 'dimension' && model.scope.mode !== 'child') {
 		throw new CapabilityError('table_kind', `${model.name} is not a dimension or child table`)
 	}
-	return conditionedAny(model, recordReach(context, grant, reach), 'all', new Date())
+	const actions = recordReach(context, grant, reach)
+	return { predicate: conditionedAny(model, actions, 'all', new Date()), reach: freeze({ actions, narrowed: true }) }
+}
+
+/** `appRecordRead`'s rows. */
+export function appRecordPredicate(context: TableContext, capability: unknown, reach: AppReach): OperationNode {
+	return appRecordRead(context, capability, reach).predicate
 }
 
 /** An `app` capability addresses a row by its key, and writes, only in an application table. */
@@ -1156,7 +1172,7 @@ function checkApplicationTable(context: TableContext, operation: Operation): voi
 
 /**
  * The capability of an `app` endpoint for `operation` on `table`, and its actions that are that operation's, at least
- * one (none for a read of a table read with `'any'`). An application table is written with it, and a dimension or child
+ * one. An application table is written with it, and a dimension or child
  * table read with it.
  */
 function appGrant(context: TableContext, capability: unknown, operation: Operation): AppOperation {
@@ -1169,16 +1185,18 @@ function appGrant(context: TableContext, capability: unknown, operation: Operati
 		checkApplicationTable(context, operation)
 	}
 	if (operation === 'read' && readsAny(context, grant)) {
-		return { grant, actions: [] }
+		return { grant, actions: grant.actions, narrowed: false }
 	}
 	checkAppReach(context, grant)
-	return { grant, actions: operationActions(context, operation, grant) }
+	return { grant, actions: operationActions(context, operation, grant), narrowed: true }
 }
 
-/** An `app` capability and those of its actions that allow one operation. */
-interface AppOperation {
+/**
+ * An `app` capability and those of its actions that allow one operation: every one it holds for a read of a table read
+ * with `'any'`, which no `when` narrows.
+ */
+interface AppOperation extends ReadReach {
 	readonly grant: AppGrant
-	readonly actions: readonly string[]
 }
 
 /** The actions of `grant` that allow `operation` on the table, at least one; `checkAction` over a set. */
@@ -1223,9 +1241,18 @@ function appReadPredicate(context: TableContext, held: AppOperation, branch: Ope
 	return conditionedAny(context.model, held.actions, branch, new Date())
 }
 
-/** Every row a capability of an `app` endpoint reads in `table`, by the table's read action or `'any'`: `true`. */
+/**
+ * Every row a capability of an `app` endpoint reads in an application table, by the table's read actions it holds or
+ * `'any'`, and the reach whose columns it answers.
+ */
+export function appListRead(context: TableContext, capability: unknown): AppRead {
+	const held = appGrant(context, capability, 'read')
+	return { predicate: appReadPredicate(context, held, 'all'), reach: freeze({ actions: held.actions, narrowed: held.narrowed }) }
+}
+
+/** `appListRead`'s rows. */
 export function appListPredicate(context: TableContext, capability: unknown): OperationNode {
-	return appReadPredicate(context, appGrant(context, capability, 'read'), 'all')
+	return appListRead(context, capability).predicate
 }
 
 /**
@@ -1367,6 +1394,58 @@ export function updatingApp(context: TableContext, capability: unknown): readonl
 	return updating
 }
 
+/**
+ * An `app` capability's update of the application table row `key`: `values`, read against the columns its update
+ * actions write, and the row's scope under only those actions that write every given column, any one's condition
+ * admitting the row. So several held actions never write one action's columns on rows only another one reaches.
+ */
+export function appUpdate(
+	context: TableContext,
+	capability: unknown,
+	key: unknown,
+	values: unknown,
+): { readonly scope: OperationNode; readonly changes: Map<string, Primitive | null> } {
+	const model = context.model
+	const updating = updatingApp(context, capability)
+	const writable = updatableByAny(model, updating)
+	const changes = readValues(values, writable, 'update', model)
+	// `readValues` took only columns of `writable`, so those of them `changes` sets are every column it sets.
+	const columns = namesOf(writable)
+	const written: string[] = []
+	for (let index = 0; index < columns.length; index++) {
+		const name = columns[index] ?? ''
+		if (changes.has(name)) {
+			written[written.length] = name
+		}
+	}
+	const covering: string[] = []
+	for (let index = 0; index < updating.length; index++) {
+		const action = updating[index]
+		if (action !== undefined && writesEvery(updatableBy(model, action), written)) {
+			covering[covering.length] = action
+		}
+	}
+	if (covering.length === 0) {
+		throw new CapabilityError(
+			'wrong_action',
+			`no action of ${updating.join(', ')} updates every column of this update of ${model.name} (${
+				written.join(', ')
+			}): update the columns of each action apart`,
+		)
+	}
+	return { scope: appKeyScope(model, covering, key), changes }
+}
+
+/** Whether `columns` holds each of `written`. */
+function writesEvery(columns: NameSet, written: readonly string[]): boolean {
+	for (let index = 0; index < written.length; index++) {
+		if (!inSet(columns, written[index])) {
+			return false
+		}
+	}
+	return true
+}
+
 export function childObjectPredicate(context: TableContext, parent: unknown, key: unknown, operation: Operation): OperationNode {
 	const scope = childScope(context)
 	if (typeof key !== 'string' || key.length === 0) {
@@ -1416,7 +1495,7 @@ export function fencedWork<T>(runtime: DataLayerRuntime, work: (transaction: Ses
 
 /**
  * The one action a capability holds, which its operation's checks already admitted. An `anyOf` endpoint's `app`
- * capability that holds several is refused: it reads through `ctx.db.app`, which takes `heldActions`.
+ * capability that holds several is refused: it reads through `ctx.db.app`, which reads with every action it holds.
  */
 export function heldAction(context: TableContext, capability: unknown): string {
 	const grant = runtimeOf(context.connection).capabilities.resolve(capability)
@@ -1433,9 +1512,10 @@ export function heldAction(context: TableContext, capability: unknown): string {
 	return action
 }
 
-/** Every action a capability holds: an `anyOf` endpoint's `app` capability holds several, any other one. */
-export function heldActions(context: TableContext, capability: unknown): readonly string[] {
-	return grantActions(runtimeOf(context.connection).capabilities.resolve(capability))
+/** The one action a capability holds, or `undefined` for an `anyOf` endpoint's `app` capability that holds several. */
+function soleAction(context: TableContext, capability: unknown): string | undefined {
+	const actions = grantActions(runtimeOf(context.connection).capabilities.resolve(capability))
+	return actions.length === 1 ? actions[0] : undefined
 }
 
 function storeRunner(context: TableContext): Runner {
@@ -1540,7 +1620,7 @@ async function selectRows<S>(
 	context: TableContext,
 	scope: OperationNode | undefined,
 	state: SelectState,
-	action: string,
+	action: string | undefined,
 	visible: readonly string[] = context.model.visible,
 ): Promise<S[]> {
 	const run = storeRunner(context)
@@ -1549,6 +1629,9 @@ async function selectRows<S>(
 	for (let index = 0; index < state.joins.length; index++) {
 		const join = state.joins[index]
 		if (join === undefined) continue
+		if (action === undefined) {
+			throw new CapabilityError('wrong_capability', `joining ${join.join.shape.table} takes a capability of one action, whose condition narrows it`)
+		}
 		if (!includes(join.join.readActions, action)) {
 			throw new CapabilityError(
 				'wrong_action',
@@ -1624,14 +1707,14 @@ function joinedColumns(context: TableContext, state: SelectState): RowColumns {
 
 /**
  * One row by its scope predicate, with `visible` columns (the table's read action's, unless a capability reads its own).
- * `actions` are what read it: each file column then answers a reference that reads the file only under a read action.
+ * `reach` is what read it: each file column then answers a reference that reads the file only under a read action.
  */
 export async function selectOne<O>(
 	context: TableContext,
 	run: Runner,
 	scope: OperationNode,
 	visible = context.model.visible,
-	actions?: readonly string[],
+	reach?: ReadReach,
 ): Promise<O> {
 	const start = startSelect(context.shape)
 	const state = finishSelect(start, start)
@@ -1643,8 +1726,8 @@ export async function selectOne<O>(
 	if (row === undefined) {
 		throw new NotFoundError(`${context.model.name} not found`)
 	}
-	if (actions !== undefined) {
-		await answerFiles(context.model, run.files, session, [row], actions)
+	if (reach !== undefined) {
+		await answerFiles(context.model, run.files, session, [row], reach)
 	}
 	return row
 }
@@ -2268,6 +2351,7 @@ export function prepareDimensionInsert(context: TableContext, target: unknown, v
 /** An application table's insert, for an `app` capability of its insert action: a new key, no containment. */
 export function prepareApplicationInsert(context: TableContext, capability: unknown, values: unknown, options?: unknown): PreparedInsert {
 	const { grant, actions } = appGrant(context, capability, 'insert')
+	// Every insert action writes the table's one insert list, so each held one writes all of `values`: only their conditions differ.
 	const row = readValues(values, context.model.insert, 'insert', context.model)
 	const conflict = onConflictOf(context, options, grant.actions, row)
 	stampInsert(context, grant, row, keyOf(context.model), uuidv7())
@@ -3085,15 +3169,19 @@ function probeOf(context: TableContext): TableProbe {
 		}
 		return objectPredicate(context, capability, operation)
 	}
+	const app = (capability: unknown): boolean => runtimeOf(context.connection).capabilities.resolve(capability).kind === 'app'
 	// An `app` capability reads every row through ctx.db.app: its rows with appRead, its counts with appCount too.
 	const list = (capability: unknown, reach: AppReach): OperationNode | undefined => {
-		if (runtimeOf(context.connection).capabilities.resolve(capability).kind === 'app') {
+		if (app(capability)) {
 			return appRecordPredicate(context, capability, reach)
 		}
 		return child ? childListPredicate(context, capability, 'read') : dimensionListPredicate(context, capability, 'read')
 	}
-	// A capability reads the columns of its own action, as ctx.db does.
-	const visible = (capability: unknown): readonly string[] => visibleFor(context.model, heldAction(context, capability))
+	// A capability reads the columns of its own action, as ctx.db does; an `app` one those its reaching actions read alone.
+	const visible = (capability: unknown): readonly string[] =>
+		app(capability)
+			? visibleThrough(context.model, appRecordRead(context, capability, 'rows').reach)
+			: visibleFor(context.model, heldAction(context, capability))
 	const { run, held } = probeRunner(context)
 	return freeze({
 		mode: child ? 'child' : 'dimension',
@@ -3104,7 +3192,7 @@ function probeOf(context: TableContext): TableProbe {
 				context,
 				list(capability, 'rows'),
 				finishSelect(start, start),
-				heldAction(context, capability),
+				soleAction(context, capability),
 				visible(capability),
 			)
 		},
@@ -3175,7 +3263,7 @@ function appProbeOf(context: TableContext): TableProbe {
 				context,
 				every(capability),
 				finishSelect(start, start),
-				heldAction(context, capability),
+				soleAction(context, capability),
 			)
 		},
 		count,

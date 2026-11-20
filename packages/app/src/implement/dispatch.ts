@@ -513,7 +513,9 @@ export class ContractRuntime {
 				// An expected refusal, not a failure: nothing it wrote was kept, and the caller retries.
 				return maintenanceRefusal()
 			}
-			const response = errorResponse(error, where)
+			const response = heldActionsRefused(plan, error)
+				? toErrorResponse(new ForbiddenError('The actions the caller holds do not allow this operation'))
+				: errorResponse(error, where)
 			if (response.status >= 500) {
 				const failure = { endpoint: where, selected, requestId: request.headers.get(REQUEST_ID_HEADER), status: response.status, error }
 				const delivery = this.#parts.failures.record(failure)
@@ -2284,6 +2286,15 @@ function serverError(status: number): Response {
  * One envelope, `{ error: { type, message, issues? } }`. A client error keeps its own message and issues; every
  * 5xx and every refused capability answers a fixed message; what made a 5xx reaches only `FailureReports`, as a code.
  */
+/**
+ * The data layer refusing an action in an `anyOf` endpoint: which of its listed actions the caller holds decided that, not
+ * the application's code, so it is the caller's 403. Read by name, as `errorResponse` reads `@fabrika/db` errors.
+ */
+function heldActionsRefused(plan: EndpointPlan, error: unknown): boolean {
+	return plan.outcome === 'endpoint' && plan.endpoint.requirement?.kind === 'anyOf' && error instanceof Error && error.name === 'CapabilityError'
+		&& Reflect.get(error, 'reason') === 'wrong_action'
+}
+
 export function errorResponse(error: unknown, where: string): Response {
 	if (isStructuralError(error) && error.httpStatus < 500) {
 		return toErrorResponse(error)

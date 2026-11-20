@@ -1,10 +1,12 @@
-// An `anyOf` endpoint's app capability on SQLite: it holds the set of listed actions the caller holds, and reaches what
-// they reach together. An operation is allowed when its action list shares a held action, a column when a held action
-// reads it, and a `when` keyed by an action applies as an OR over the held actions the table names for the operation.
-// A claim needs one action, so a capability of several is refused it.
+// An `anyOf` endpoint's app capability on SQLite: it holds the set of listed actions the caller holds, and reaches the
+// union of what each of them reaches alone. An operation is allowed when its action list shares a held action, and a
+// `when` keyed by an action applies as an OR over the held actions the table names for the operation. A column of its own
+// read action is answered only where that action reads every row or alone reaches them, and an update runs under only
+// the actions that write every column it sets, so one action's columns never land on another action's rows. A claim needs
+// one action, so a capability of several is refused it.
 
 import { beforeEach, describe, expect, test } from 'bun:test'
-import { CapabilityError, ConflictError, NotFoundError } from '../errors'
+import { CapabilityError, ConflictError, NotFoundError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind } from '../orm-types'
 import { defineTables } from '../policy'
@@ -23,6 +25,11 @@ const vocabulary = {
 		'desks.audit': 'Audit the closed desks',
 		'desks.manage': 'Manage every desk',
 		'entries.write': 'Record entries',
+		'staff.read': 'Read the sales staff',
+		'staff.self': 'Read your own staff records with their salary',
+		'staff.audit': 'Read every staff record with its bonus',
+		'staff.edit': 'Rename the sales staff',
+		'staff.flag': 'Flag your own staff records',
 	},
 	roles: {},
 } as const
@@ -31,12 +38,14 @@ interface DB {
 	desks: { id: string; label: string; status: string; note: string; version: number }
 	entries: { id: string; amount: number }
 	tallies: { id: string; result: string | null; attempts: number; next_attempt_at: string | null; version: number }
+	people: { id: string; name: string; dept: string; owner: string; salary: number; bonus: number; flag: string | null }
 }
 
 const columns: TypedColumnList<DB> = {
 	desks: { columns: ['id', 'label', 'status', 'note', 'version'], foreignKeys: [], notNull: ['id', 'label', 'status', 'note', 'version'] },
 	entries: { columns: ['id', 'amount'], foreignKeys: [], notNull: ['id', 'amount'] },
 	tallies: { columns: ['id', 'result', 'attempts', 'next_attempt_at', 'version'], foreignKeys: [], timestamps: ['next_attempt_at'] },
+	people: { columns: ['id', 'name', 'dept', 'owner', 'salary', 'bonus', 'flag'], foreignKeys: [] },
 }
 
 const tables = defineTables(vocabulary, columns)({
@@ -64,6 +73,19 @@ const tables = defineTables(vocabulary, columns)({
 		update: ['result'],
 		queue: { attempts: 'attempts', due: 'next_attempt_at' },
 		version: 'version',
+	},
+	// One action's rows and another one's columns: `staff.read` reads sales, `staff.self` reads alice's rows and their salary.
+	people: {
+		scope: { app: 'the staff records of every department' },
+		actions: { read: ['staff.read', 'staff.self', 'staff.audit'], update: 'staff.edit' },
+		update: ['name'],
+		columns: { salary: { read: 'staff.self' }, bonus: { read: 'staff.audit' }, flag: { write: 'staff.flag' } },
+		when: {
+			'staff.read': { dept: { eq: 'sales' } },
+			'staff.edit': { dept: { eq: 'sales' } },
+			'staff.self': { owner: { eq: 'alice' } },
+			'staff.flag': { owner: { eq: 'alice' } },
+		},
 	},
 })
 
@@ -98,6 +120,12 @@ beforeEach(async () => {
 		"insert into desks (id, label, status, note, version) values ('d1', 'one', 'open', 'x', 1), ('d2', 'two', 'closed', 'y', 1), ('d3', 'three', 'suspended', 'z', 1)",
 	)
 	storage.sql.exec('insert into tallies (id, next_attempt_at, version) values (?, ?, 1)', 't1', new Date(Date.now() - 60_000).toISOString())
+	storage.sql.exec(
+		'create table people (id text not null primary key, name text not null, dept text not null, owner text not null, salary integer not null, bonus integer not null, flag text)',
+	)
+	storage.sql.exec(
+		"insert into people (id, name, dept, owner, salary, bonus) values ('alice', 'Alice', 'hr', 'alice', 200, 20), ('bob', 'Bob', 'sales', 'bob', 100, 10), ('carol', 'Carol', 'sales', 'alice', 300, 30)",
+	)
 	const layer = scoped(tables)
 	bindScopedDatabase(layer, { database: openSqlite(storage), capabilities: alice })
 	data = dataAccessOf(layer)
@@ -145,11 +173,14 @@ describe('an app capability of several actions', () => {
 		})
 	})
 
-	test('a get reaches a row through a held action whose when admits it, and a column of a held read action is read', async () => {
+	test('a get reaches a row through a held action whose when admits it; a column of its own read action shows only where that action alone reaches', async () => {
 		await invoke('query', async (db) => {
 			const both = db.app(alice.anyOf(['desks.read', 'desks.audit']))
-			expect(await call(both, 'desks.get', 'd1')).toEqual({ id: 'd1', label: 'one', status: 'open', note: 'x', version: 1 })
-			expect(await call(both, 'desks.get', 'd2')).toMatchObject({ note: 'y' })
+			// `note` is `desks.audit`'s, and `desks.read` reaches rows too: hidden on every row, d1 being only desks.read's.
+			expect(await call(both, 'desks.get', 'd1')).toEqual({ id: 'd1', label: 'one', status: 'open', version: 1 })
+			expect(await call(both, 'desks.get', 'd2')).toEqual({ id: 'd2', label: 'two', status: 'closed', version: 1 })
+			// `entries.write` names no desk, so `desks.audit` alone reaches the row and shows its column.
+			expect(await call(db.app(alice.anyOf(['desks.audit', 'entries.write'])), 'desks.get', 'd2')).toMatchObject({ note: 'y' })
 			await expect(call(both, 'desks.get', 'd3')).rejects.toBeInstanceOf(NotFoundError)
 			expect(await call(db.app(alice.anyOf(['desks.read', 'desks.manage'])), 'desks.get', 'd3')).toEqual({
 				id: 'd3',
@@ -234,5 +265,81 @@ describe('an app capability of several actions', () => {
 		await expect(several).rejects.toThrow('a claim of tallies needs a capability of one action, got one of desks.audit, desks.manage')
 		const rows = await call(data.handles(site).app(alice.app('desks.manage')), 'tallies.claim', { limit: 1 })
 		expect(Array.isArray(rows) ? rows.map((row: unknown) => Reflect.get(Object(row), 'id')) : rows).toEqual(['t1'])
+	})
+})
+
+describe('the union of what each held action reaches alone', () => {
+	const people = (): unknown[] => storage.sql.exec('select id, name, flag from people order by id').toArray()
+	const rowsOf = (page: unknown): unknown[] => {
+		const items: unknown = typeof page === 'object' && page !== null ? Reflect.get(page, 'items') : undefined
+		return Array.isArray(items) ? [...items].sort((left, right) => String(Reflect.get(left, 'id')).localeCompare(String(Reflect.get(right, 'id')))) : []
+	}
+
+	test("one action's column is never answered on another action's rows: a list, a where on it and a get hide it", async () => {
+		await invoke('query', async (db) => {
+			const both = db.app(alice.anyOf(['staff.read', 'staff.self']))
+			// bob is only staff.read's row (sales); salary is staff.self's, whose condition admits alice's rows only.
+			expect(rowsOf(await call(both, 'people.list'))).toEqual([
+				{ id: 'alice', name: 'Alice', dept: 'hr', owner: 'alice', flag: null },
+				{ id: 'bob', name: 'Bob', dept: 'sales', owner: 'bob', flag: null },
+				{ id: 'carol', name: 'Carol', dept: 'sales', owner: 'alice', flag: null },
+			])
+			await expect(call(both, 'people.list', { where: [['salary', '=', 100]] })).rejects.toBeInstanceOf(QueryRefusedError)
+			await expect(call(both, 'people.aggregate', { groupBy: ['salary'], count: true })).rejects.toBeInstanceOf(QueryRefusedError)
+			expect(await call(both, 'people.get', 'bob')).toEqual({ id: 'bob', name: 'Bob', dept: 'sales', owner: 'bob', flag: null })
+		})
+	})
+
+	test('a column of an action without a when is answered on every row, and one of the only reaching action on its rows', async () => {
+		await invoke('query', async (db) => {
+			// staff.audit has no when: it reads every row alone, so its bonus is answered beside staff.read's rows.
+			const audit = rowsOf(await call(db.app(alice.anyOf(['staff.read', 'staff.audit'])), 'people.list'))
+			expect(audit.map((row) => [Reflect.get(Object(row), 'id'), Reflect.get(Object(row), 'bonus')])).toEqual([['alice', 20], ['bob', 10], [
+				'carol',
+				30,
+			]])
+			// staff.edit reads nothing, so staff.self alone reaches the listed rows and answers its salary.
+			const own = rowsOf(await call(db.app(alice.anyOf(['staff.edit', 'staff.self'])), 'people.list'))
+			expect(own.map((row) => [Reflect.get(Object(row), 'id'), Reflect.get(Object(row), 'salary')])).toEqual([['alice', 200], ['carol', 300]])
+		})
+	})
+
+	test('an update runs under only the held actions that write every column it sets, within their conditions', async () => {
+		const update = (id: string, values: Readonly<Record<string, unknown>>) =>
+			invoke('mutation', async (db) => await call(db.app(alice.anyOf(['staff.edit', 'staff.flag'])), 'people.update', id, values))
+		// alice is hr: staff.edit, which writes name, does not reach her, and staff.flag does not write name.
+		await expect(update('alice', { name: 'Renamed' })).rejects.toBeInstanceOf(NotFoundError)
+		// bob is not alice's: staff.flag, which writes flag, does not reach him, and staff.edit does not write flag.
+		await expect(update('bob', { flag: 'x' })).rejects.toBeInstanceOf(NotFoundError)
+		// No held action writes both columns.
+		await expect(update('carol', { name: 'Both', flag: 'x' })).rejects.toThrow('no action of staff.edit, staff.flag updates every column')
+		expect(people()).toEqual([
+			{ id: 'alice', name: 'Alice', flag: null },
+			{ id: 'bob', name: 'Bob', flag: null },
+			{ id: 'carol', name: 'Carol', flag: null },
+		])
+		// Each write one held action covers succeeds under that action's condition only.
+		await update('bob', { name: 'Robert' })
+		await update('alice', { flag: 'checked' })
+		expect(people()).toEqual([
+			{ id: 'alice', name: 'Alice', flag: 'checked' },
+			{ id: 'bob', name: 'Robert', flag: null },
+			{ id: 'carol', name: 'Carol', flag: null },
+		])
+	})
+
+	test('a single action reaches what it reached before: its rows, and its own column on them', async () => {
+		await invoke('query', async (db) => {
+			expect(rowsOf(await call(db.app(alice.app('staff.self')), 'people.list'))).toEqual([
+				{ id: 'alice', name: 'Alice', dept: 'hr', owner: 'alice', salary: 200, flag: null },
+				{ id: 'carol', name: 'Carol', dept: 'sales', owner: 'alice', salary: 300, flag: null },
+			])
+			expect(idsOf(await call(db.app(alice.app('staff.read')), 'people.list'))).toEqual(['bob', 'carol'])
+		})
+		await invoke('mutation', async (db) => await call(db.app(alice.app('staff.flag')), 'people.update', 'carol', { flag: 'own' }))
+		await expect(invoke('mutation', async (db) => await call(db.app(alice.app('staff.flag')), 'people.update', 'bob', { flag: 'x' }))).rejects
+			.toBeInstanceOf(NotFoundError)
+		await expect(invoke('mutation', async (db) => await call(db.app(alice.app('staff.flag')), 'people.update', 'carol', { name: 'x' }))).rejects
+			.toBeInstanceOf(QueryRefusedError)
 	})
 })

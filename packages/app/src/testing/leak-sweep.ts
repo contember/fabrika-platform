@@ -53,7 +53,11 @@ export function planSweep<DB, P>(
 	const artifact = compileContract(app.contract, tables)
 	const cases: SweepCase[] = []
 	const hints: string[] = []
-	const rows = [...artifact.endpoints].filter(isSwept).sort((left, right) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0))
+	const byId = (left: EndpointRow, right: EndpointRow) => (left.id < right.id ? -1 : left.id > right.id ? 1 : 0)
+	const rows = [...artifact.endpoints].filter(isSwept).sort(byId)
+	for (const row of [...artifact.endpoints].filter((candidate) => candidate.requirement?.kind === 'anyOf').sort(byId)) {
+		hints.push(`${row.id}: admits any of several actions application-wide, so it answers no scope of its own; the sweep does not ask it`)
+	}
 	for (const row of rows) {
 		const declared = artifact.declared?.[row.id]
 		if (declared !== undefined && Object.keys(declared.unscoped).length > 0) {

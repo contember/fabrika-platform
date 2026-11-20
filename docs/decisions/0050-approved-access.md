@@ -361,8 +361,9 @@ whole table or a whole column stays a removal.
   action, and reads every row of each dimension and child table whose read action is its own. The proxy admits only a
   global holder, so the form is a requirement change like any other: an endpoint that becomes `app: true`, or stops
   being one, widens. An application table's actions are compared as any table's are. An `anyOf` endpoint's capability
-  holds the listed actions the caller holds globally and reaches what any of them reaches, so its list is what the
-  diff compares.
+  holds the listed actions the caller holds globally and reaches the union of what each of them reaches alone (a
+  column of its own read action only where that action reads every row or is the only one reading; an update only
+  under an action that writes every column it changes), so its list is what the diff compares.
 - **A column read action** (`columns: { c: { read } }`) is the only action that reads, filters and sorts that
   column. A new one narrows; a removed one widens (above).
 - **A column write action** (`columns: { c: { write } }`) lets a capability of that action update exactly its

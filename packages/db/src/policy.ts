@@ -1091,20 +1091,47 @@ export function namesAction(model: TableModel, action: string): boolean {
  * one. A capability reads its own row, so a write `Ref` sees the columns of its action and none of another's.
  */
 export function visibleFor(model: TableModel, action: string): readonly string[] {
-	return visibleForAny(model, [action])
+	return visibleThrough(model, soleReach(action))
 }
 
 /**
- * The columns a capability holding `actions` reads, as one role holding them: every one that declares no read action of
- * its own, or one of these.
+ * The actions whose reach one read answers: an `app` capability's held actions that admit the operation, each row
+ * passing where one of them admits it (`conditionedAny`), and whether their `when` narrows the rows (`narrowed`), which
+ * it does not in a table read with `'any'`.
  */
-export function visibleForAny(model: TableModel, actions: readonly string[]): readonly string[] {
+export interface ReadReach {
+	readonly actions: readonly string[]
+	readonly narrowed: boolean
+}
+
+/** The reach of a capability of one action, whose own condition narrows its rows. */
+export function soleReach(action: string): ReadReach {
+	return freeze({ actions: freeze([action]), narrowed: true })
+}
+
+/**
+ * Whether every row a read of `reach` answers is a row `action` reads alone: it is one of the reaching actions, and either
+ * no `when` of its own narrows it or it alone reaches the rows. A column of its own is shown only then, so several held
+ * actions never put one action's column on another action's rows.
+ */
+export function readsAsAction(model: TableModel, action: string, reach: ReadReach): boolean {
+	if (!includes(reach.actions, action)) {
+		return false
+	}
+	return !reach.narrowed || reach.actions.length === 1 || !hasOwn(model.when, action)
+}
+
+/**
+ * The columns a read of `reach` answers, the union of what each reaching action reads alone: every one that declares no
+ * read action of its own, and one that does where that action reads every answered row (`readsAsAction`).
+ */
+export function visibleThrough(model: TableModel, reach: ReadReach): readonly string[] {
 	const columns = namesOf(model.columns)
 	const visible: string[] = []
 	for (let index = 0; index < columns.length; index++) {
 		const name = columns[index] ?? ''
 		const declared = hasOwn(model.columnReads, name) ? model.columnReads[name] : undefined
-		if (declared === undefined || includes(actions, declared)) {
+		if (declared === undefined || readsAsAction(model, declared, reach)) {
 			visible[visible.length] = name
 		}
 	}

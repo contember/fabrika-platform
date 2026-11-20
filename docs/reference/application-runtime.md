@@ -398,15 +398,23 @@ Per request, in this order:
 **Any of several actions.** `access: { anyOf: ['cash.read', 'cash.audit', 'cash.manage'], app: true }` on a group
 procedure admits a caller that holds any of two to sixteen distinct actions of the vocabulary as a global grant; the row
 lists them sorted, so their order in the source changes no digest. `ctx.app` holds H, the listed actions the verified
-token holds globally (`ctx.app.actions`; never empty), and `ctx.db.app` reaches what H reaches together: an operation
-is allowed when its action list names a held action, a column of its own read or write action when H holds it, and a
-`when` keyed by an action is an OR over the held actions the table names for the operation, a held action without one
-admitting every row. An insert under several held actions with a `when` that follows a foreign key is refused
-(`unenforceable`), `ctx.sql.scope` is refused when a held action has a `when`, and a claim needs a capability of one
-action. The types allow an operation one listed action allows and hide every column of its own read action. An
+token holds globally (`ctx.app.actions`; never empty), and `ctx.db.app` reaches the union of what each action of H
+reaches alone, never a row of one action with a column of another. An operation is allowed when its action list names
+a held action, and a `when` keyed by an action is an OR over the held actions the table names for the operation, a
+held action without one admitting every row. A column of its own read action X shows (in rows, files, filters, sorts
+and aggregates) only when X is held and either the table has no `when` for X, so X reads every row the others read,
+or X is the only held action reaching the operation; otherwise it is hidden. An update keeps the held update actions
+whose columns (a column write action's included) cover every column it changes and ORs only their `when`; when none
+covers, it is refused (`wrong_action`). An insert needs no such rule: every insert action writes the table's one
+insert list. Under an `anyOf` endpoint the data layer's `wrong_action` refusal answers 403, because which listed
+actions the caller holds decided it; elsewhere it stays a 500, a fault of the handler's code. An insert under several
+held actions with a `when` that follows a foreign key is refused (`unenforceable`), `ctx.sql.scope` is refused when a
+held action has a `when`, and a claim or a join needs a capability of one action. The types allow an operation one
+listed action allows and hide every column of its own read action; `ctx.app.action` is unavailable (read
+`ctx.app.actions` or `ctx.holds`), and at runtime it throws on a capability of several actions. An
 `anyOf` endpoint has no `ctx.target`, `ctx.within`, `ctx.members`, links or delegation, and takes no `capabilities`,
 `creates`, `issues`, link, export or public form; the scoped forms do not take `anyOf` (`any-of.test.ts`,
-`any-of-sqlite.test.ts`).
+`any-of-sqlite.test.ts`, `any-of-access-kit.test.ts`).
 
 **Several capabilities.** `access: { capabilities: { request: { action, on, from }, records: { action, over } } }`
 names at least two capabilities, each an `on`, `in` or `over` form. The proxy checks every requirement, and the runtime

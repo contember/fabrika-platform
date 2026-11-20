@@ -1,17 +1,29 @@
 // One endpoint for several actions, through the test kit on SQLite: an `anyOf` endpoint runs for a global holder of any
-// listed action and is refused (403) otherwise; its `ctx.db.app` reaches what the held actions reach together, a `when`
-// as an OR over them. A single-action endpoint beside it behaves as before.
+// listed action and is refused (403) otherwise; its `ctx.db.app` reaches the union of what each held action reaches
+// alone, a `when` as an OR over them, and the data layer's refusal of an action the caller does not hold is its 403. A
+// single-action endpoint beside it behaves as before.
 
 import { createClient, RpcError } from '@fabrika/app/client'
-import type { App, Declared, EndpointContext, KitTypes, Unavailable } from '@fabrika/app/contract'
-import { type AppCapability, serve } from '@fabrika/app/implement'
+import {
+	type AnyOfAppCapability,
+	type App,
+	type Declared,
+	defineApp,
+	type EndpointContext,
+	type KitTypes,
+	type Unavailable,
+} from '@fabrika/app/contract'
+import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { scoped } from '@fabrika/db'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
 import { afterAll, describe, expect, test } from 'bun:test'
+import { z } from 'zod/v4'
+import { CapabilityRefusedError, createCapabilityIssuer, RequestFrame } from '../implement/capability'
 import { contract } from './any-of-fixture/fabrika.contract'
 import type { app } from './any-of-fixture/src/app-kit'
 import { tables } from './any-of-fixture/src/db/tables'
+import { vocabulary } from './any-of-fixture/src/vocabulary'
 
 type Equal<A, B> = (<X>() => X extends A ? 1 : 2) extends <X>() => X extends B ? 1 : 2 ? true : false
 type Expect<T extends true> = T
@@ -24,9 +36,11 @@ type AnyOfQuery = EndpointContext<
 	Declared<never, never, never, never>
 >
 
-/** An `anyOf` endpoint holds an app capability over its listed actions, and has no target or member directory. */
+/** An `anyOf` endpoint holds an app capability over its listed actions, with no one action, and no target or member directory. */
 export type AnyOfContext = [
-	Expect<Equal<AnyOfQuery['app'], AppCapability<'cash.read' | 'cash.audit'>>>,
+	Expect<Equal<AnyOfQuery['app'], AnyOfAppCapability<'cash.read' | 'cash.audit'>>>,
+	Expect<AnyOfQuery['app']['action'] extends Unavailable<string> ? true : false>,
+	Expect<Equal<AnyOfQuery['app']['actions'], readonly ['cash.read' | 'cash.audit', ...('cash.read' | 'cash.audit')[]]>>,
 	Expect<AnyOfQuery['target'] extends Unavailable<string> ? true : false>,
 	Expect<AnyOfQuery['members'] extends Unavailable<string> ? true : false>,
 ]
@@ -80,15 +94,22 @@ describe('an anyOf endpoint', () => {
 		expect(labels(await holding('cash.read', 'cash.manage').cash.list())).toEqual(['a-open', 'b-closed', 'c-suspended'])
 	})
 
-	test('ctx.app carries the held listed actions and ctx.holds reports the held ones; a column of a held action is read', async () => {
+	test("ctx.app carries the held listed actions and ctx.holds reports the held ones; an action's column shows where it alone reads", async () => {
 		expect(await holding('cash.read').cash.detail({ id: open.id })).toEqual({
 			columns: ['created_by', 'id', 'label', 'status', 'version'],
 			held: ['cash.read'],
 			canClose: false,
 			audits: false,
 		})
-		expect(await holding('cash.read', 'cash.audit', 'cash.manage').cash.detail({ id: closed.id })).toEqual({
+		expect(await holding('cash.audit').cash.detail({ id: closed.id })).toEqual({
 			columns: ['audit_note', 'created_by', 'id', 'label', 'status', 'version'],
+			held: ['cash.audit'],
+			canClose: false,
+			audits: true,
+		})
+		// cash.read reaches desks too, under a condition of its own: cash.audit's column is not answered beside it.
+		expect(await holding('cash.read', 'cash.audit', 'cash.manage').cash.detail({ id: closed.id })).toEqual({
+			columns: ['created_by', 'id', 'label', 'status', 'version'],
 			held: ['cash.audit', 'cash.read'],
 			canClose: true,
 			audits: true,
@@ -97,12 +118,13 @@ describe('an anyOf endpoint', () => {
 		expect(await statusOf(holding('cash.read').cash.detail({ id: closed.id }))).toBe(404)
 	})
 
-	test('writes a table whose action list names only the second listed action, and refuses a holder of only the first', async () => {
+	test('writes a table whose action list names only the second listed action, and refuses a holder of only the first with 403', async () => {
 		const before = (await manager.cash.entries()).count
 		expect(await statusOf(holding('cash.manage').cash.record({ deskId: open.id, amount: 10 }))).toBe('ok')
 		expect(await statusOf(holding('cash.audit', 'cash.manage').cash.record({ deskId: open.id, amount: 20 }))).toBe('ok')
 		expect((await manager.cash.entries()).count).toBe(before + 2)
-		expect(await statusOf(holding('cash.audit').cash.record({ deskId: open.id, amount: 30 }))).toBe(500)
+		// Which listed action the caller holds decided the data layer's refusal: the caller's 403, not a server fault.
+		expect(await statusOf(holding('cash.audit').cash.record({ deskId: open.id, amount: 30 }))).toBe(403)
 		expect((await manager.cash.entries()).count).toBe(before + 2)
 	})
 
@@ -110,5 +132,48 @@ describe('an anyOf endpoint', () => {
 		expect(labels(await holding('cash.read').cash.open())).toEqual(['a-open'])
 		expect(labels(await holding('cash.read', 'cash.audit', 'cash.manage').cash.open())).toEqual(['a-open'])
 		expect(await statusOf(holding('cash.audit').cash.open())).toBe(403)
+	})
+})
+
+describe('one action of an app capability', () => {
+	test("a capability of one action names it; an anyOf endpoint's capability of several refuses to pick one", () => {
+		const { mint } = createCapabilityIssuer()
+		const frame = new RequestFrame('request-1')
+		expect(mint.app(frame, 'cash.read', 'user:alice').action).toBe('cash.read')
+		expect(mint.anyOf(frame, ['cash.audit'], 'user:alice').action).toBe('cash.audit')
+		const several = mint.anyOf(frame, ['cash.audit', 'cash.read'], 'user:alice')
+		expect(several.actions).toEqual(['cash.audit', 'cash.read'])
+		expect(() => several.action).toThrow(CapabilityRefusedError)
+		expect(() => several.action).toThrow("read ctx.app.actions, or ask ctx.holds('<action>')")
+		frame.end()
+	})
+})
+
+describe('a data-layer refusal outside an anyOf endpoint', () => {
+	const single = defineApp(vocabulary, tables)
+	/** Inserts into `entries` on a handle whose type refuses it, as a handler that defeated the types would. */
+	async function insertUntyped(handle: unknown): Promise<unknown> {
+		const entries: unknown = Reflect.get(Object(handle), 'entries')
+		const insert: unknown = Reflect.get(Object(entries), 'insert')
+		if (typeof insert !== 'function') throw new TypeError('entries has no insert')
+		return await Reflect.apply(insert, entries, [{ desk_id: 'd', amount: 1 }])
+	}
+	const misfiled = single.group({ callers: ['human'] }, (r) => ({
+		write: r.mutation({ output: z.strictObject({}), access: { action: 'cash.audit', app: true } }).handle(async ({ ctx }) => {
+			await insertUntyped(ctx.db.app)
+			return {}
+		}),
+	}))
+	const misfiledContract = single.contract((c) => ({ api: c.rpc('/api', { misfiled }) }))
+
+	test('stays a 500: a single-action endpoint that writes a table its action does not name is a fault of its code', async () => {
+		const own = await testDatabase({ migrations: new URL('./any-of-fixture/db/migrations/', import.meta.url), label: 'any-of.test.ts single' })
+		try {
+			const ownKit = testKit(serve(misfiledContract, { database: scoped(tables) }), { database: own.database })
+			const client = createClient(misfiledContract, 'api', { fetch: ownKit.browser(ownKit.testCaller([{ action: 'cash.audit' }])) })
+			expect(await statusOf(client.misfiled.write())).toBe(500)
+		} finally {
+			await own.close()
+		}
 	})
 })

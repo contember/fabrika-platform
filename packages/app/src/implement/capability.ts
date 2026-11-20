@@ -423,9 +423,18 @@ export class AppCapability<A extends string> implements AppCapabilityType<A> {
 		this.#issuer = issuer
 	}
 
-	/** The action held; for an `anyOf` endpoint the first of `actions`, which `ctx.holds` asks about one by one. */
+	/** The one action held. An `anyOf` endpoint's capability of several has none to name: read `actions`, or `ctx.holds`. */
 	get action(): A {
-		return this.#actions[0]
+		const [action, ...more] = this.#actions
+		if (more.length > 0) {
+			throw new CapabilityRefusedError(
+				'wrong_capability',
+				`this app capability holds several actions (${
+					this.#actions.join(', ')
+				}), so it has no one action: read ctx.app.actions, or ask ctx.holds('<action>')`,
+			)
+		}
+		return action
 	}
 
 	/** Every action held, sorted for an `anyOf` endpoint: one for any other. */

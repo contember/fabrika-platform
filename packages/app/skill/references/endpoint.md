@@ -133,13 +133,18 @@ A screen several application-wide roles read, each with its own reach, is one en
 
 - The proxy admits a caller who holds any listed action as a global grant; a grant in a scope only is 403. List two to
   sixteen distinct actions of the vocabulary; their order does not matter.
-- `ctx.app` holds the listed actions the caller holds (`ctx.app.actions`), and `ctx.db.app` reaches what any of them
-  reaches: a table operation whose action list names a held action, a column whose own action is held, and a row that
-  the `when` of any held action admits (a held action without a `when` admits every row). A save that took several
-  mutations, one per action, is one `anyOf` mutation in one transaction.
+- `ctx.app` holds the listed actions the caller holds (`ctx.app.actions`), and `ctx.db.app` reaches the union of what
+  each held action reaches alone: a table operation whose action list names a held action, and a row that the `when`
+  of any held action admits (a held action without a `when` admits every row). A column with its own read action
+  shows only where that action reads every row (no `when` of its own) or is the only held one reading; otherwise it
+  is hidden. An update runs only under held actions that each write every column it changes, and only their `when`
+  admits the row; when none does, it is refused with 403, so update the columns of each action apart. An insert
+  writes the table's one insert list under any held insert action. A save that took several mutations, one per
+  action, is one `anyOf` mutation in one transaction.
 - `ctx.holds('<action>')` tells the handler which of them the caller holds: `canClose: ctx.holds('cash.manage')`.
 - The types hide every column of its own read action, because which actions are held is known only per request; read
-  such a column in an endpoint of that action.
+  such a column in an endpoint of that action. `ctx.app.action` is unavailable: read `ctx.app.actions`, or ask
+  `ctx.holds`.
 - An `anyOf` endpoint has no `ctx.target`, `ctx.within`, `ctx.members`, links or delegation, and takes no `capabilities`,
   `creates` or `issues`. A link procedure, an export, a public procedure and the scoped forms (`on`, `in`, `over`)
   take no `anyOf`.
