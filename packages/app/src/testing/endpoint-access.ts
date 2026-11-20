@@ -60,6 +60,17 @@ export type LeakOutcome =
 	| { readonly answered: true; readonly leaked: readonly string[] }
 	| { readonly answered: false; readonly status: number; readonly leaked: readonly string[] }
 
+/**
+ * The leak sweep's outcome of one case: the other scope's values the first own answer held, how a query's answer
+ * compared once rows were added outside the caller's scopes, and what kept the case from checking all of it.
+ */
+export interface SweepOutcome {
+	readonly leaked: readonly string[]
+	/** `not-compared` for a mutation, a case that never reached its own answer and a refused own answer. */
+	readonly differential: 'same' | 'changed' | 'unstable' | 'not-compared'
+	readonly hints: readonly string[]
+}
+
 /** `answered` unless the caller got a 401, a 403 or a 5xx; otherwise that status. */
 export type ReachOutcome = { readonly answered: true } | { readonly answered: false; readonly status: number }
 
@@ -93,6 +104,11 @@ export interface EndpointAccessKit {
 	 * holder downloads), each seeded first.
 	 */
 	own(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<DeniedOutcome>
+	/**
+	 * `leaked`, and on a query the own scope asked again after rows were added in two fresh chains no caller holds: a
+	 * changed answer is a count or a lookup that ignores the scope. Never throws for what it cannot set up; that is a hint.
+	 */
+	swept(endpoint: string, input: Readonly<Record<string, unknown>>, seed?: Seed, appRows?: AppRows): Promise<SweepOutcome>
 	/**
 	 * An `app` or a `creates` endpoint asked by a caller who holds its action in one value of a dimension only, never
 	 * globally: refused (403), by the proxy for `app` and by IAM for `creates`, since both need a global grant.
@@ -190,6 +206,8 @@ interface ActionEndpoint {
 	readonly method: EndpointMethod
 	readonly path: string
 	readonly callers: readonly Caller[]
+	/** A query: it writes nothing, so asking it again changes nothing. */
+	readonly readOnly: boolean
 	readonly action: string
 	readonly access: AccessForm
 	readonly input: SchemaShape | null
@@ -199,6 +217,12 @@ interface ActionEndpoint {
 	readonly manages: string | null
 	/** The link mounts it issues for its `Ref`: their names, and the actions they grant, which IAM requires of the issuer. */
 	readonly links: readonly { readonly mount: string; readonly grants: readonly string[] }[]
+}
+
+/** One answer of a case's request. */
+interface Answer {
+	readonly status: number
+	readonly text: string
 }
 
 /** Every dimension value a target lies in, its own first: where a member directory of its scope is found. */
@@ -257,6 +281,9 @@ export type Grant =
 	| { readonly role: string; readonly scope: { readonly type: string; readonly value: string } }
 
 const randomHex = (): string => crypto.randomUUID().replaceAll('-', '').slice(0, 8)
+
+/** What a case that could not be set up says: the kit's own message, which names the endpoint and what it lacks. */
+const messageOf = (error: unknown): string => (error instanceof Error ? error.message : 'the case could not be set up')
 
 const errorSchema = z.object({ error: z.object({ type: z.string() }) })
 
@@ -454,6 +481,7 @@ export function endpointAccessKit<DB, P>(
 			method: row.method,
 			path: row.path,
 			callers: row.callers,
+			readOnly: row.kind === 'query',
 			action: requirement.action,
 			access: requirement.access,
 			input: row.input,
@@ -490,6 +518,7 @@ export function endpointAccessKit<DB, P>(
 				method: row.method,
 				path: row.path,
 				callers: row.callers,
+				readOnly: row.kind === 'query',
 				action: capability.action,
 				access: capability.access,
 				input: row.input,
@@ -668,15 +697,15 @@ export function endpointAccessKit<DB, P>(
 			}
 			if (declared) {
 				throw new Error(
-					`${row.id}: the handler answered its declared refusal (400 ${type}), which only the own case takes; this case proves nothing on it until the fixtures give what the handler needs (pins, files, fixtures) (${text})`,
+					`${row.id}: the handler answered its declared refusal (400 ${type}), which only the own case takes; this case proves nothing on it until it is given what the handler needs (pins, files, its input) (${text})`,
 				)
 			}
 			throw new Error(
 				type === 'validation'
-					? `${row.id}: the case's input does not match the endpoint's input schema; correct its fixture (${text})`
+					? `${row.id}: the case's input does not match the endpoint's input schema; correct its input (${text})`
 					: `${row.id}: the handler refused the case's input (400 ${
 						type ?? 'without a type'
-					}); the case cannot reach what it tests until its fixtures give what the handler needs: a picked person in members, a row of its object in rows, the state in seeds, a file it accepts in files, the whole input in fixtures, or the refusal it answers in refusals (${text})`,
+					}); the case cannot reach what it tests until it is given what the handler needs: a picked person (GENERATED_MEMBER) or a row of its object (GENERATED_ROW_PREFIX) in its input, the state in seeds, a file it accepts in files, or the refusal it answers in refusals (${text})`,
 			)
 		}
 		return { status: response.status, text }
@@ -954,6 +983,10 @@ export function endpointAccessKit<DB, P>(
 		return [...held, ...row.links.flatMap((link) => link.grants.flatMap((action) => scopes.map((scope) => ({ action, scope }))))]
 	}
 
+	/** Whether two asks of the own scope were answered alike, status and body. */
+	const sameAnswers = (left: readonly Answer[], right: readonly Answer[]): boolean =>
+		left.length === right.length && left.every((answer, at) => answer.status === right[at]?.status && answer.text === right[at]?.text)
+
 	/** The outcome of the own scope's answers: answered unless one is a failure or an authorization refusal. */
 	const leakOutcome = (answers: readonly { readonly status: number; readonly text: string }[], values: readonly string[]): LeakOutcome => {
 		const leaked = values.filter((value) => answers.some((answer) => answer.text.includes(value)))
@@ -1005,6 +1038,78 @@ export function endpointAccessKit<DB, P>(
 			removals.push((await postgres.seedApplicationRows(tables, appRows)).remove)
 		}
 
+		/**
+		 * A leak case's requests: the other scope asks first, to fill whatever a handler keeps between requests; `askOwn`
+		 * then asks for the own scope, as often as the case needs. `values` are every value of the other scope's rows, and
+		 * the marks of what the other scope's request named.
+		 */
+		const leakCase = async (
+			endpoint: string,
+			input: Readonly<Record<string, unknown>>,
+			seed: Seed,
+			appRows: AppRows,
+		): Promise<{ readonly values: readonly string[]; readonly askOwn: () => Promise<readonly Answer[]> }> => {
+			const row = endpointOf(endpoint)
+			const { action, access } = row
+			if (access.form === 'in') {
+				await seedAppRows(appRows)
+				const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
+				const grants = (targets: readonly InTarget[]): Grant[] =>
+					targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
+				const marks: string[] = []
+				for (const side of scopes.other) {
+					const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain, 'declared')
+					marks.push(...answer.marks)
+				}
+				const askOwn = async () => {
+					const answers = []
+					for (const side of scopes.own) {
+						answers.push(await ask(row, grants(scopes.own), addressing(input, access.from, side), side.chain))
+					}
+					return answers
+				}
+				return { values: [...scopes.values, ...marks], askOwn }
+			}
+			if (access.form !== 'on' && access.form !== 'over') {
+				throw new Error(`${endpoint} has the access form ${access.form}; only on, in and over answer with rows of a scope`)
+			}
+			await seedAppRows(appRows)
+			const scopes = access.form === 'on'
+				? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
+				: await listScopesOf(action, access.dimension, rowFields(input), unpinned)
+			const from = access.form === 'on' ? access.from : null
+			// The other scope's pins differ from the own scope's, so a refusal the fixtures declare is its answer too.
+			const other = await ask(
+				row,
+				holding(row, input, scopes.other.grants, scopes.other.chain),
+				addressing(input, from, scopes.other),
+				scopes.other.chain,
+				'declared',
+			)
+			const askOwn = async () => [
+				await ask(row, holding(row, input, scopes.own.grants, scopes.own.chain), addressing(input, from, scopes.own), scopes.own.chain),
+			]
+			return { values: [...scopes.other.values, ...other.marks], askOwn }
+		}
+
+		/**
+		 * One row of every dimension and child table in two fresh chains, which no caller of a case holds: what an answer
+		 * to the own scope must not depend on. Answers the tables the seeder could not seed a row of.
+		 */
+		const seedElsewhere = async (): Promise<readonly string[]> => {
+			const unvaried: string[] = []
+			for (const name of tableNames) {
+				const mode = policies[name]?.scope.mode
+				if (mode !== 'dimension' && mode !== 'child') continue
+				try {
+					removals.push((await postgres.seedWorlds(tables, name)).remove)
+				} catch {
+					unvaried.push(name)
+				}
+			}
+			return unvaried
+		}
+
 		return {
 			async denied(endpoint, input, seed = {}) {
 				const row = endpointOf(endpoint)
@@ -1018,48 +1123,47 @@ export function endpointAccessKit<DB, P>(
 				return { status }
 			},
 			async leaked(endpoint, input, seed = {}, appRows = {}) {
+				const leak = await leakCase(endpoint, input, seed, appRows)
+				return leakOutcome(await leak.askOwn(), leak.values)
+			},
+			async swept(endpoint, input, seed = {}, appRows = {}) {
 				const row = endpointOf(endpoint)
-				const { action, access } = row
-				if (access.form === 'in') {
-					await seedAppRows(appRows)
-					const scopes = await inScopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
-					const grants = (targets: readonly InTarget[]): Grant[] =>
-						targets.flatMap(({ target, chain }) => holding(row, input, [{ action, scope: { type: access.dimension, value: target } }], chain))
-					const marks: string[] = []
-					for (const side of scopes.other) {
-						const answer = await ask(row, grants(scopes.other), addressing(input, access.from, side), side.chain, 'declared')
-						marks.push(...answer.marks)
-					}
-					const answers = []
-					for (const side of scopes.own) {
-						answers.push(await ask(row, grants(scopes.own), addressing(input, access.from, side), side.chain))
-					}
-					return leakOutcome(answers, [...scopes.values, ...marks])
+				let leak: Awaited<ReturnType<typeof leakCase>>
+				let first: readonly Answer[]
+				try {
+					leak = await leakCase(endpoint, input, seed, appRows)
+					first = await leak.askOwn()
+				} catch (error) {
+					return { leaked: [], differential: 'not-compared', hints: [messageOf(error)] }
 				}
-				if (access.form !== 'on' && access.form !== 'over') {
-					throw new Error(`${endpoint} has the access form ${access.form}; only on, in and over answer with rows of a scope`)
+				const outcome = leakOutcome(first, leak.values)
+				const { leaked } = outcome
+				if (!outcome.answered) {
+					return { leaked, differential: 'not-compared', hints: [`its own scope was answered ${outcome.status}, so no answer was checked`] }
 				}
-				await seedAppRows(appRows)
-				const scopes = access.form === 'on'
-					? await scopesOf(action, access.dimension, fieldOf(row.input, access.from), seed, rowFields(input), pinningOf(endpoint))
-					: await listScopesOf(action, access.dimension, rowFields(input), unpinned)
-				const from = access.form === 'on' ? access.from : null
-				// The other scope asks first, to fill whatever a handler keeps between requests; its pins differ from the own
-				// scope's, so a refusal the fixtures declare is its answer too. The own scope's answer is the one checked.
-				const other = await ask(
-					row,
-					holding(row, input, scopes.other.grants, scopes.other.chain),
-					addressing(input, from, scopes.other),
-					scopes.other.chain,
-					'declared',
-				)
-				const answer = await ask(
-					row,
-					holding(row, input, scopes.own.grants, scopes.own.chain),
-					addressing(input, from, scopes.own),
-					scopes.own.chain,
-				)
-				return leakOutcome([answer], [...scopes.other.values, ...other.marks])
+				if (!row.readOnly) return { leaked, differential: 'not-compared', hints: [] }
+				const unstable = (why: string): SweepOutcome => ({
+					leaked,
+					differential: 'unstable',
+					hints: [`${why}, so the sweep did not compare it with rows added elsewhere`],
+				})
+				let again: readonly Answer[]
+				try {
+					again = await leak.askOwn()
+				} catch (error) {
+					return unstable(`asked again with nothing changed, it failed (${messageOf(error)})`)
+				}
+				if (!sameAnswers(first, again)) {
+					return unstable("its answer changed between two asks with nothing changed (a time, the caller's id, a member made per ask)")
+				}
+				const unvaried = await seedElsewhere()
+				const hints = unvaried.length === 0 ? [] : [`the seeder could not add a row to ${unvaried.join(', ')}, so the sweep did not vary them`]
+				try {
+					return { leaked, differential: sameAnswers(again, await leak.askOwn()) ? 'same' : 'changed', hints }
+				} catch {
+					// It answered twice alike, and fails once rows were added outside its scopes: they changed its answer.
+					return { leaked, differential: 'changed', hints }
+				}
 			},
 			async own(endpoint, input, seed = {}, appRows = {}) {
 				const row = endpointOf(endpoint)
@@ -1190,9 +1294,34 @@ export function endpointAccessKit<DB, P>(
 			if (failures.length > 1) throw new AggregateError(failures, 'the cleanup of the case failed')
 			return outcome.value
 		}
+	// The sweep's case keeps what it found when its cleanup fails, and says so in a hint instead.
+	const sweptDrained: EndpointAccessKit['swept'] = async (...args) => {
+		const removals: (() => Promise<void>)[] = []
+		const cleanup = async (): Promise<number> => {
+			let failed = 0
+			for (const step of [() => kit.drain(), ...removals]) {
+				try {
+					await step()
+				} catch {
+					failed++
+				}
+			}
+			return failed
+		}
+		let outcome: SweepOutcome
+		try {
+			outcome = await accessKitOf(removals).swept(...args)
+		} catch (error) {
+			await cleanup()
+			throw error
+		}
+		const failed = await cleanup()
+		return failed === 0 ? outcome : { ...outcome, hints: [...outcome.hints, `${failed} cleanup step(s) failed, so later cases may meet its rows`] }
+	}
 	return Object.freeze({
 		denied: drained((cases) => cases.denied),
 		leaked: drained((cases) => cases.leaked),
+		swept: sweptDrained,
 		own: drained((cases) => cases.own),
 		scoped: drained((cases) => cases.scoped),
 		global: drained((cases) => cases.global),

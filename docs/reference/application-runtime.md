@@ -1916,8 +1916,19 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
 The proxy and the data layer (`@fabrika/db`) are the enforcement, and fabrika tests them once:
 `@fabrika/app`'s `policy-enforcement.property.test.ts` generates vocabularies, tables and policies and drives the
 isolation kits over them on SQLite, and on Postgres when `FABRIKA_TEST_POSTGRES_URL` is set. An application carries no
-test of the enforcement; its own tests check what its handlers decide. A leak sweep in the test kit, which asks every
-endpoint as a caller of one scope and looks for rows of another, is planned.
+test of the enforcement; its own tests check what its handlers decide.
+
+A handler can still leak what it reads outside the access form: `ctx.sql` without its scope fragment, a cache kept
+between requests. An application that opts in calls `leakSweep(app, tables, database, options?)`
+(`@fabrika/app/testing/isolation`) once in its suite; nothing requires it, and no file is generated. The sweep plans one
+case per `on`, `in` and `over` endpoint from the compiled contract, in memory, and runs it through the endpoint access
+kit: a caller of another scope asks first, then a caller of the own scope. A case fails when the own answer holds a
+value of the other scope's rows, or, for a query, when the own answer changes after one row of every dimension and
+child table was added in two fresh chains that no caller of the case holds (a count or a sum that forgets its scope).
+Everything it cannot check is a hint printed after the run, never a failure: an input no sample admits, a row the
+seeder cannot write, an own answer that is a refusal or a 5xx, a query whose answer changes between two asks by itself,
+an endpoint that declares `unscoped`. `options.inputs` lays fields over an endpoint's sample and `options.seeds` gives
+the addressed row's state.
 
 An application's Postgres-backed test opens a test database with `@fabrika/db/testing`'s `testDatabase`: a fresh
 schema `app_test_<hex>` that the real migration runner fills with the framework's tables and then `db/migrations/`, as

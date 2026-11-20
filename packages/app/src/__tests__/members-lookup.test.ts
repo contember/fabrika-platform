@@ -179,11 +179,11 @@ describe.skipIf(postgres === null)("a deal endpoint's ctx.members in the test ki
 		expect(await statuses(null)).toEqual([500, 500])
 	})
 
-	test("a generated case's member field is a real member: without it, the handler's refusal fails the case and names members", async () => {
+	test("a generated case's member field is a real member: without it, the handler's refusal fails the case and names the member marker", async () => {
 		const input = { id: '00000000-0000-4000-8000-000000000000', expectVersion: 1 }
 		expect(await access.own('api.deals.assign', { ...input, newOwner: GENERATED_MEMBER })).toEqual({ status: 200 })
 		await expect(access.own('api.deals.assign', { ...input, newOwner: 'x' })).rejects.toThrow(
-			"api.deals.assign: the handler refused the case's input (400 bad_request); the case cannot reach what it tests until its fixtures give what the handler needs: a picked person in members",
+			"api.deals.assign: the handler refused the case's input (400 bad_request); the case cannot reach what it tests until it is given what the handler needs: a picked person (GENERATED_MEMBER)",
 		)
 	})
 })
