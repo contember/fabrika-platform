@@ -15,8 +15,6 @@ const contractWith = (search: string, replacement: string): string => {
 	return CLEAN_CONTRACT.replace(search, replacement)
 }
 
-const ZEROPS_YAML = (entry: string) => `zerops:\n  - setup: app\n    run:\n      start: bun server.ts\n      crontab:\n${entry}`
-
 const refused: readonly DirectForm[] = [
 	{
 		name: 'schema callbacks: overwrite and check',
@@ -515,19 +513,6 @@ const refused: readonly DirectForm[] = [
 		},
 		expected: ['fabrika.contract.ts:15:26', 'fabrika.contract.ts:16:28', 'fabrika.contract.ts:17:17'],
 	},
-	{
-		name: 'a crontab entry without timing, and a job wrapped in satisfies',
-		rule: 'crontab',
-		files: {
-			...CLEAN_APPLICATION,
-			'fabrika.contract.ts': contractWith(
-				"\tjobs: { purgeDeleted: c.cron('0 3 * * *', { actions: ['notes.write'] }) },",
-				"\tjobs: {\n\t\tpurgeDeleted: c.cron(nightly, { actions: ['notes.write'] }),\n\t\tdigest: c.cron('0 7 * * 1', { actions: ['notes.read'] }) satisfies object,\n\t},",
-			).replace('export const contract', "const nightly = '0 3 * * *'\nexport const contract"),
-			'zerops.yaml': ZEROPS_YAML('        - command: fabrika job run purgeDeleted\n          allContainers: false\n'),
-		},
-		expected: ['zerops.yaml:5:1', 'zerops.yaml:6:1'],
-	},
 ]
 
 describe('directly spelled forms are refused', () => {
@@ -573,7 +558,6 @@ describe('allowed forms the rules must not refuse', () => {
 					+ "const InWorkspace = { action: 'notes.write', in: 'workspace', from: 'workspaceId' } as const\nexport const extras = [Slug, Title]\n"
 					+ 'export const contract',
 			),
-			'zerops.yaml': ZEROPS_YAML("        - timing: '0 3 * * *'\n          command: fabrika job run purgeDeleted\n          allContainers: false\n"),
 			'src/settings.json': '{ "origin": "https://notes.example" }\n',
 			'src/a.test.ts': "import { expect, test } from 'bun:test'\n\ntest('maps', async () => {\n"
 				+ '\tawait Promise.all([1].map(async (n) => {\n\t\texpect(n).toBe(1)\n\t}))\n})\n',

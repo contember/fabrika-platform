@@ -13,7 +13,6 @@ export const GENERATED_ENTRY_FILE = 'fabrika/entry.generated.ts'
 /** Where a Cloudflare deploy stages the SPA mounts' built files (`@fabrika/provider-cloudflare`): build output, never source. */
 export const STAGED_ASSETS_DIR = 'fabrika/assets/'
 export const MIGRATIONS_DIR = 'db/migrations/'
-export const ZEROPS_FILES = ['zerops.yaml', 'zerops.yml'] as const
 
 /** The application architecture (docs/reference/application-architecture.md): where each layer's code lives. */
 export const VOCABULARY_FILE = 'src/vocabulary.ts'
@@ -84,7 +83,7 @@ export const isCheckedFile = (path: string): boolean => {
 	// The registry configuration and the lockfile decide what a trusted package name installs.
 	if (path === '.npmrc' || path === 'bun.lock') return true
 	if (isSkippedPath(path)) return false
-	return isSourceFile(path) || isJsonFile(path) || path.startsWith(MIGRATIONS_DIR) || ZEROPS_FILES.some((name) => name === path)
+	return isSourceFile(path) || isJsonFile(path) || path.startsWith(MIGRATIONS_DIR)
 		|| path === 'bunfig.toml'
 }
 

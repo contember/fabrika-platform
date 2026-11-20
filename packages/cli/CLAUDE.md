@@ -148,8 +148,8 @@ and every other one, a missing config included, on Postgres. On SQLite no comman
 
 ## The `job` area
 
-`src/job.ts` runs one `c.cron` job of a contract application: `fabrika job run <name>`, the command every crontab
-entry runs (the platform's generated crontab and the template's checked one). It resolves no provider. The run is
+`src/job.ts` runs one `c.cron` job of a contract application: `fabrika job run <name>`, the command each entry
+of the platform's generated crontab runs. It resolves no provider. The run is
 `@fabrika/app/bun`'s `runContractJob`, which boots the application like the server; this file only parses
 arguments and reports.
 

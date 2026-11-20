@@ -194,22 +194,21 @@ tagged as its namespaces, under a permissions boundary that keeps it off the pla
 
 Most of it is inside the provider packages, where it belongs. Outside them:
 
-| Where                                                                | Assumption                                                                    | Change for AWS                                       |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `packages/provider-zerops/src/execution.ts`                          | The contract application's build and run chain is rendered as a `zerops.yaml` | An AWS renderer of the same `contractRecipe`         |
-| `packages/check/src/rules/crontab.ts`, `layout.ts`                   | An application's cron lives in `zerops.yaml`                                  | Read schedules from the contract, not the descriptor |
-| `packages/auth-core/src/framework-variables.ts`                      | Variable values may hold Zerops `${host_NAME}` references                     | AWS values are literal or a secret reference         |
-| Zerops database URLs                                                 | `sslmode=disable`, superuser over Zerops references                           | `verify-full`, the RDS CA bundle, `rds_superuser`    |
-| `packages/app/src/bun.ts`, `packages/platform-node/src/blob-s3.ts`   | Object storage is path-style MinIO with static keys                           | Virtual-hosted S3, rotating task-role credentials    |
-| `packages/proxy/src/caddy.ts`, `generate-config.ts`                  | TLS ends at the Zerops balancer; the config is generated in the Zerops build  | Same Caddy behind the ALB; trust the VPC range       |
-| `packages/auth-core/src/wire.ts`, `packages/iam/src/proxy-proof.ts`  | "On Zerops a namespace is one private network"                                | The same scheme, enforced by security groups         |
-| `packages/control/src/github/source/transport.ts`                    | Uploads only to the measured `prg1` destination                               | Accept a presigned S3 PUT for the AWS composition    |
-| `packages/dashboard/src/lib/provider-registration.ts`                | `FormProvider = 'cloudflare' \| 'zerops'`                                     | Add `aws`                                            |
-| `packages/cli`                                                       | The official provider ids are `cloudflare` and `zerops`                       | Add `aws` (any package specifier already works)      |
-| `packages/platform-artifacts`, `provider-zerops/src/installation`    | Installation codegen and the six-step guide are Zerops-only                   | An AWS template, guide and upgrade path              |
-| `packages/local-stack` (Zerops emulator, 1,350 lines)                | The end-to-end stack emulates Zerops                                          | An AWS double, or provider tests against fakes only  |
-| `packages/platform-node/src/sql-postgres.ts`                         | No named prepared statements because of Zerops' pgBouncer                     | Nothing; harmless on RDS                             |
-| [MCP dev environment](mcp-dev-containers.md), file scanning (ClamAV) | Measured on Zerops; system packages through `run.prepareCommands`             | Later; packages go into the generated `Dockerfile`   |
+| Where                                                                | Assumption                                                                    | Change for AWS                                      |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------- | --------------------------------------------------- |
+| `packages/provider-zerops/src/execution.ts`                          | The contract application's build and run chain is rendered as a `zerops.yaml` | An AWS renderer of the same `contractRecipe`        |
+| `packages/auth-core/src/framework-variables.ts`                      | Variable values may hold Zerops `${host_NAME}` references                     | AWS values are literal or a secret reference        |
+| Zerops database URLs                                                 | `sslmode=disable`, superuser over Zerops references                           | `verify-full`, the RDS CA bundle, `rds_superuser`   |
+| `packages/app/src/bun.ts`, `packages/platform-node/src/blob-s3.ts`   | Object storage is path-style MinIO with static keys                           | Virtual-hosted S3, rotating task-role credentials   |
+| `packages/proxy/src/caddy.ts`, `generate-config.ts`                  | TLS ends at the Zerops balancer; the config is generated in the Zerops build  | Same Caddy behind the ALB; trust the VPC range      |
+| `packages/auth-core/src/wire.ts`, `packages/iam/src/proxy-proof.ts`  | "On Zerops a namespace is one private network"                                | The same scheme, enforced by security groups        |
+| `packages/control/src/github/source/transport.ts`                    | Uploads only to the measured `prg1` destination                               | Accept a presigned S3 PUT for the AWS composition   |
+| `packages/dashboard/src/lib/provider-registration.ts`                | `FormProvider = 'cloudflare' \| 'zerops'`                                     | Add `aws`                                           |
+| `packages/cli`                                                       | The official provider ids are `cloudflare` and `zerops`                       | Add `aws` (any package specifier already works)     |
+| `packages/platform-artifacts`, `provider-zerops/src/installation`    | Installation codegen and the six-step guide are Zerops-only                   | An AWS template, guide and upgrade path             |
+| `packages/local-stack` (Zerops emulator, 1,350 lines)                | The end-to-end stack emulates Zerops                                          | An AWS double, or provider tests against fakes only |
+| `packages/platform-node/src/sql-postgres.ts`                         | No named prepared statements because of Zerops' pgBouncer                     | Nothing; harmless on RDS                            |
+| [MCP dev environment](mcp-dev-containers.md), file scanning (ClamAV) | Measured on Zerops; system packages through `run.prepareCommands`             | Later; packages go into the generated `Dockerfile`  |
 
 None of these needs a structural change. The provider contract, Control's lifecycle, IAM, Operations, the proxy's
 enforcement decision and the application framework stay as they are.

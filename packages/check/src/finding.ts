@@ -33,7 +33,6 @@ export const REFUSAL_RULE_IDS = [
 	'backup-schema',
 	'migration-edited',
 	'file-column-migration',
-	'crontab',
 	'package-replacement',
 	'skipped-test',
 	'test-without-assertion',

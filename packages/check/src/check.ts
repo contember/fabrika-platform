@@ -20,7 +20,6 @@ import {
 	isTestFile,
 	isToolModule,
 	TABLES_FILE,
-	ZEROPS_FILES,
 } from './layout'
 import type { PackedSet } from './packed'
 import { ReaderProblems } from './reader/problems'
@@ -30,7 +29,6 @@ import { type ImportMappings, readImportMappings } from './resolution'
 import { checkCloudflareContract } from './rules/cloudflare'
 import { checkContractCompiles } from './rules/compile'
 import { checkContractRead } from './rules/contract'
-import { checkCrontab, contractJobs } from './rules/crontab'
 import { checkFrameworkWrite, trustedBindings } from './rules/framework'
 import { checkClientIdentity } from './rules/identity'
 import { checkJsonStrings } from './rules/json'
@@ -373,10 +371,5 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	}
 	const bunfig = tree.files.get(BUNFIG_FILE)
 	if (bunfig !== undefined) findings.push(...checkTestSuiteConfig(bunfig))
-	const jobs = contract === undefined ? [] : contractJobs(contract, graph)
-	for (const name of ZEROPS_FILES) {
-		const text = tree.files.get(name)
-		if (text !== undefined) findings.push(...checkCrontab(name, text, jobs))
-	}
 	return findings.sort(compareFindings)
 }
