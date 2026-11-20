@@ -10,6 +10,8 @@ import { join, resolve } from 'node:path'
 const PACKAGE = resolve(import.meta.dir, '..', '..')
 const WRANGLER = join(PACKAGE, 'node_modules', '.bin', 'wrangler')
 const BOOT_TIMEOUT_MS = 90_000
+/** wrangler is killed before the test times out, so a run that never prints either line leaves no process behind. */
+const WRANGLER_TIMEOUT_MS = 75_000
 
 /**
  * The address wrangler serves the Worker on, read from either stream of its output. Rejects when the runtime says it
@@ -49,7 +51,15 @@ describe("Control's Worker", () => {
 		await mkdir(join(scratch, 'assets'))
 		const child = Bun.spawn(
 			[WRANGLER, 'dev', '--port', '0', '--ip', '127.0.0.1', '--assets', join(scratch, 'assets'), '--persist-to', join(scratch, 'state')],
-			{ cwd: PACKAGE, env: { ...process.env, WRANGLER_SEND_METRICS: 'false' }, stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' },
+			{
+				cwd: PACKAGE,
+				// No metrics, and no download of the request.cf defaults, which has no timeout of its own.
+				env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_CF_FETCH_ENABLED: 'false' },
+				stdin: 'ignore',
+				stdout: 'pipe',
+				stderr: 'pipe',
+				timeout: WRANGLER_TIMEOUT_MS,
+			},
 		)
 		try {
 			const address = await readyAddress([child.stdout, child.stderr], [])
