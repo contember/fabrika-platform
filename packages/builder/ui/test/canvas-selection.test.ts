@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { canvasFilesForRevision, revisionForPhase } from '../src/lib/canvasSelection'
+import { canvasFilesForRevision, focusedGateName, revisionForPhase } from '../src/lib/canvasSelection'
 import type { RevisionMeta } from '../src/lib/types'
 
 function revision(overrides: Partial<RevisionMeta>): RevisionMeta {
@@ -78,5 +78,20 @@ describe('revisionForPhase', () => {
 
 	test('the build never shows a mockup from the former design phase', () => {
 		expect(revisionForPhase([revisions[1], revisions[4]].filter((r) => r !== undefined), 'build')?.revision).toBe(2)
+	})
+})
+
+describe('focusedGateName', () => {
+	const design = revision({ revision: 5, label: 'design-checkpoint' })
+
+	test("a gated phase answers its own gate, whatever the session's open gate is", () => {
+		expect(focusedGateName('tech', 'design-checkpoint', design)).toBe('tech')
+	})
+
+	test('inside the build, the focused canvas answers the open gate only when it is that gate', () => {
+		expect(focusedGateName(undefined, 'design-checkpoint', design)).toBe('design-checkpoint')
+		expect(focusedGateName(undefined, 'tech', design)).toBeNull()
+		expect(focusedGateName(undefined, null, design)).toBeNull()
+		expect(focusedGateName(undefined, 'design-checkpoint', null)).toBeNull()
 	})
 })

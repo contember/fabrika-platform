@@ -6,7 +6,7 @@ import { Header } from './components/Header'
 import { PhaseRail } from './components/PhaseRail'
 import { PreviewPane } from './components/PreviewPane'
 import { Workspace } from './components/Workspace'
-import { canvasFilesForRevision, revisionForPhase } from './lib/canvasSelection'
+import { canvasFilesForRevision, focusedGateName, revisionForPhase } from './lib/canvasSelection'
 import { daemon, sessionIdFromPath } from './lib/daemonClient'
 import { FIXTURE_ARTIFACTS, FIXTURE_META, FIXTURE_PHASE_STATE, FIXTURE_SESSION_ID } from './lib/fixture'
 import {
@@ -161,7 +161,7 @@ export function App(): JSX.Element {
 
 	const focusedRev = useMemo<RevisionMeta | null>(() => (meta ? revisionForPhase(meta.revisions, focused) : null), [meta, focused])
 
-	const gateName = phaseState.gateName ?? meta?.gate ?? null
+	const gateName = focusedGateName(phaseState.gateName, meta?.gate, focusedRev)
 	const isCurrentGate = live && focused === phaseState.current && !!gateName
 
 	const gateFiles = useMemo<CanvasFileInfo[]>(() => {
