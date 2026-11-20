@@ -1,4 +1,5 @@
 import type { ContractArtifact } from '@fabrika/auth-core'
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { APP, FakeIam, HOST, ISSUER, signToken } from '../../../proxy-core/src/__tests__/helpers'
@@ -11,7 +12,7 @@ const artifact: ContractArtifact = {
 }
 
 async function proxied(iam: FakeIam, method: string, path: string, headers: Record<string, string>): Promise<ProxyOutcome> {
-	const proxy = endpointProxy({ artifact, appId: APP, host: HOST, iam, issuer: ISSUER, delegations: null })
+	const proxy = endpointProxy({ table: contractProxyTable(artifact), appId: APP, host: HOST, iam, issuer: ISSUER, delegations: null })
 	return proxy({ method, url: `https://${HOST}${path}`, headers: new Headers({ 'Content-Type': 'application/json', ...headers }) })
 }
 

@@ -1,7 +1,7 @@
 // The proxy in front of the test kit's application: production's decision, proxy-core's verify service over the
 // endpoint table `contractProxyTable` compiles from the contract, asked the way the Cloudflare proxy Worker asks it.
 
-import { type ContractArtifact, DELEGATION_HEADER, ENDPOINT_HEADER, rawRequestTarget } from '@fabrika/auth-core'
+import { DELEGATION_HEADER, ENDPOINT_HEADER, rawRequestTarget } from '@fabrika/auth-core'
 import {
 	APP_QUERY_PARAM,
 	createVerifyService,
@@ -19,7 +19,7 @@ import {
 	type TokenCache,
 } from '@fabrika/proxy-core'
 import { applyCrossOriginHeaders, crossOriginHeaders } from '@fabrika/proxy-core/headers'
-import { contractProxyEntry, contractProxyTable } from '@fabrika/proxy-core/manifest'
+import { contractProxyEntry, type ContractProxyTable } from '@fabrika/proxy-core/manifest'
 
 /** What the proxy did with a request: answered it itself, or forwarded it with what only the proxy may set. */
 export type ProxyOutcome =
@@ -47,7 +47,8 @@ export interface ProxiedRequest {
 export type TestProxy = (request: ProxiedRequest) => Promise<ProxyOutcome>
 
 export interface EndpointProxyOptions {
-	readonly artifact: ContractArtifact
+	/** The contract's endpoint table, from `contractProxyTable`. */
+	readonly table: ContractProxyTable
 	readonly appId: string
 	readonly host: string
 	readonly iam: IamGateway
@@ -71,7 +72,7 @@ export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 				hosts: [options.host],
 				upstream: 'app',
 				scheme: 'https',
-				table: contractProxyTable(options.artifact),
+				table: options.table,
 				...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
 			})],
 		},

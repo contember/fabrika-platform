@@ -15,6 +15,7 @@ import { type ContractArtifact, contractDigest, FABRIKA_CONTRACT_DIGEST, FABRIKA
 import { scoped } from '@fabrika/db'
 import { type IsolationWorlds, testDatabase } from '@fabrika/db/testing'
 import { MemoryTokenCache, stripFabrikaCookies } from '@fabrika/proxy-core'
+import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { contract } from '../../app/src/__tests__/members-fixture/fabrika.contract'
@@ -99,7 +100,15 @@ async function start(): Promise<Stack> {
 	const artifact: ContractArtifact = compileContract(contract, served.database?.tables ?? {})
 	expect((await f.putSchema(schemaFromContract(artifact))).status).toBe(200)
 	const iam = createIamRpc(iamEnv(f), exec)
-	const proxy = endpointProxy({ artifact, appId: APP, host: HOST, iam, issuer: ORIGIN, delegations: iam, cache: new MemoryTokenCache() })
+	const proxy = endpointProxy({
+		table: contractProxyTable(artifact),
+		appId: APP,
+		host: HOST,
+		iam,
+		issuer: ORIGIN,
+		delegations: iam,
+		cache: new MemoryTokenCache(),
+	})
 	const app: ContractApp = boot(served, {
 		environment: {
 			framework: { [FABRIKA_IAM_APP_ID]: APP, [FABRIKA_IAM_ISSUER]: ORIGIN, [FABRIKA_CONTRACT_DIGEST]: contractDigest(artifact) },

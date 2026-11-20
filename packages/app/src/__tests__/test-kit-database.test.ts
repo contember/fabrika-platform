@@ -25,7 +25,7 @@ if (!hasPostgres) {
 const schema = applicationSchema(`kit-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`)
 
 /**
- * The fixture's contract over a data layer of its own: a data layer is bound once per process, and
+ * The fixture's contract over a data layer of its own: a layer is bound to one database at a time, and
  * `scoped-database.test.ts` binds the fixture's.
  */
 function kitNotesApp() {

@@ -1,6 +1,6 @@
 // The endpoints as a person and a script call them, behind the production proxy decision. Each allowed call has a
-// refused twin: another workspace, a missing action, no credential. Runs with `bun test --isolate`, because the
-// generated endpoint access test boots the same application, and its data layer binds once per process.
+// refused twin: another workspace, a missing action, no credential. Runs with `bun test --isolate`, and beside the
+// generated endpoint access test in one process: a later kit of the application takes its data layer over.
 
 import { createClient } from '@fabrika/app/client'
 import { statusOf, type TestCaller, testKit } from '@fabrika/app/testing'

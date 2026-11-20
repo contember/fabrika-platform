@@ -242,7 +242,9 @@ if (postgres !== null) {
   count is its number of tests, or set `FABRIKA_TEST_POSTGRES_REQUIRED=1`: a missing URL then fails the file.
 - On Cloudflare import `testDatabase` from `@fabrika/db/testing-sqlite` instead, with the same options: it migrates a
   fresh in-memory SQLite database as the Durable Object does, needs no URL and never answers `null`. The generated tests
-  already use it.
+  already use it. A process migrates once and starts each later database as a copy;
+  `testDatabaseTemplate({ migrations, label, seed })` keeps a migrated and seeded database that
+  `testDatabase({ migrations, label, template })` starts as a copy of.
 - `statusOf(call)` answers 200 when the call resolves and the status of the application's refusal otherwise; any other
   failure (no answer, a bug in the test) is rethrown. Import it beside `testKit`; do not write your own.
 - `kit.testCaller(grants, { kind })` makes a caller: a grant is a role or an action, in one scope or global. A
@@ -371,8 +373,12 @@ if (postgres !== null) {
 - `defineDeps(build)` runs at every boot, the generated tests' too, which set no application variable: read a variable
   where it is used, not in `build` (`references/public-intake.md`). A handler that calls an outbound dependency fails its
   generated cases with 500, so an endpoint they cover writes an outbox row a job sends (`references/endpoint.md`).
-- Run with `bun test --isolate`: the generated test boots the same application, and its data layer binds once per
-  process. Import the test kits from test files only (`test-only-import`).
+- Run with `bun test --isolate`: each file starts with fresh modules. A large suite runs faster as
+  `bun test --parallel=4 --no-isolate`: a worker compiles the contract once and runs many files, and a later `testKit`
+  of the application takes its data layer over from the previous file's kit, which must have drained the work its
+  requests left (`await kit.drain()`). Files then share modules, so a test helper keeps nothing between files: no cache
+  of seeded keys, no hook registered when its module loads, no clock or `mock.module` left set. Import the test kits
+  from test files only (`test-only-import`).
 - No `.skip`, `.only` or test without an assertion, and no `mock.module` of `bun:test` or `@fabrika/*`.
 
 ## Clicking through the screens

@@ -67,6 +67,59 @@ export interface TestDatabaseOptions {
 	readonly migrations: string | URL
 	/** The test file. `@fabrika/db/testing` names it when it skips; this kit never skips. */
 	readonly label: string
+	/** A database migrated and seeded once (`testDatabaseTemplate`), which this one starts as a copy of. */
+	readonly template?: TestDatabaseTemplate
+}
+
+/** A migrated database with its base seed, as an image every `testDatabase({ template })` copies. */
+export interface TestDatabaseTemplate {
+	/** The migrations it was migrated with: a database of other migrations does not start from it. */
+	readonly migrations: string
+	readonly image: Uint8Array
+}
+
+/** Each migrations' image this process migrated, by the migrations: a test file copies it instead of migrating again. */
+const migratedImages = new Map<string, Uint8Array>()
+
+/** The identity of a set of migrations: every file's name and text. */
+function migrationsKey(migrations: SqliteMigrationBundle['migrations']): string {
+	return JSON.stringify(migrations.map((migration) => [migration.name, migration.sql]))
+}
+
+/** A fresh in-memory database with the framework's and the application's migrations applied, or a copy of `image`. */
+async function migratedDatabase(migrations: SqliteMigrationBundle['migrations'], image: Uint8Array | undefined): Promise<BunDatabase> {
+	if (image !== undefined) {
+		return BunDatabase.deserialize(image)
+	}
+	const sqlite = new BunDatabase(':memory:')
+	const storage = bunSqliteStorage(sqlite)
+	try {
+		await migrateSqlite({ exec: storage.sql.exec, transactionSync: (fn) => storage.transactionSync(fn) }, [
+			{ bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: SQLITE_FRAMEWORK_MIGRATIONS },
+			{ bundle: APPLICATION_MIGRATION_BUNDLE, migrations },
+		])
+	} catch (error) {
+		sqlite.close()
+		throw error
+	}
+	return sqlite
+}
+
+/**
+ * Migrates a database once, runs `seed` in it, and keeps it as the image each `testDatabase({ template })` starts as a
+ * copy of: in milliseconds, without migrating or seeding again.
+ */
+export async function testDatabaseTemplate(
+	options: Omit<TestDatabaseOptions, 'template'> & { readonly seed?: (database: TestDatabase) => Promise<void> },
+): Promise<TestDatabaseTemplate> {
+	refuseInProduction(MODULE)
+	const { database, sqlite, migrations } = await openTestDatabase({ migrations: options.migrations, label: options.label })
+	try {
+		await options.seed?.(database)
+		return Object.freeze({ migrations, image: sqlite.serialize() })
+	} finally {
+		await database.close()
+	}
 }
 
 type Exec = (query: string, ...bindings: SqliteValue[]) => Record<string, SqliteValue>[]
@@ -494,18 +547,23 @@ function applicationMigrations(directory: string): SqliteMigrationBundle['migrat
  */
 export async function testDatabase(options: TestDatabaseOptions): Promise<TestDatabase> {
 	refuseInProduction(MODULE)
+	return (await openTestDatabase(options)).database
+}
+
+/** The test database of `options`, with its bun:sqlite database and the key of its migrations. */
+async function openTestDatabase(
+	options: TestDatabaseOptions,
+): Promise<{ readonly database: TestDatabase; readonly sqlite: BunDatabase; readonly migrations: string }> {
 	const migrations = applicationMigrations(migrationsDirectory(options.migrations))
-	const sqlite = new BunDatabase(':memory:')
-	const storage = bunSqliteStorage(sqlite)
-	try {
-		await migrateSqlite({ exec: storage.sql.exec, transactionSync: (fn) => storage.transactionSync(fn) }, [
-			{ bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: SQLITE_FRAMEWORK_MIGRATIONS },
-			{ bundle: APPLICATION_MIGRATION_BUNDLE, migrations },
-		])
-	} catch (error) {
-		sqlite.close()
-		throw error
+	const key = migrationsKey(migrations)
+	if (options.template !== undefined && options.template.migrations !== key) {
+		throw new Error(`${options.label}: the template was migrated with other migrations than ${String(options.migrations)}; build it again`)
 	}
+	const sqlite = await migratedDatabase(migrations, options.template?.image ?? migratedImages.get(key))
+	if (options.template === undefined && !migratedImages.has(key)) {
+		migratedImages.set(key, sqlite.serialize())
+	}
+	const storage = bunSqliteStorage(sqlite)
 	const exec: Exec = (query, ...bindings) => storage.sql.exec(query, ...bindings).toArray()
 	const columns = readColumns(exec)
 	const withoutRowid = new Set(
@@ -604,13 +662,17 @@ export async function testDatabase(options: TestDatabaseOptions): Promise<TestDa
 	}
 	const database = openSqlite(storage)
 	return {
-		...testSeeding(backend),
-		database,
-		schema: 'main',
-		async close() {
-			await database.close()
-			sqlite.close()
+		database: {
+			...testSeeding(backend),
+			database,
+			schema: 'main',
+			async close() {
+				await database.close()
+				sqlite.close()
+			},
 		},
+		sqlite,
+		migrations: key,
 	}
 }
 

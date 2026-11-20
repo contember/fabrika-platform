@@ -101,6 +101,12 @@ export interface BootOptions {
 	 * without it, boot compiles.
 	 */
 	readonly approvedContract?: string
+	/**
+	 * The test kit only: the artifact it compiled from this very contract, with its digest. A process of tests compiles
+	 * and hashes a contract once and boots it for every test file, so boot reads it instead of compiling and hashing again.
+	 * A runtime adapter never passes it.
+	 */
+	readonly compiledContract?: CompiledContract
 	/** Serves the SPA mounts. Without it, a contract that declares one does not boot. */
 	readonly assets?: SpaAssets
 	/** The application's Postgres connection, which the Bun adapter opens. Without it, an application on `@fabrika/db` does not boot. */
@@ -199,6 +205,12 @@ export interface BootOptions {
 /** The pool size a runtime adapter that names none is assumed to have: the Bun adapter's default. */
 const DEFAULT_CONNECTIONS = 10
 
+/** A contract compiled by `compileContract`, and `contractDigest` of it. */
+export interface CompiledContract {
+	readonly artifact: ContractArtifact
+	readonly digest: string
+}
+
 export interface ContractApp {
 	/** `exec` keeps a failure's report to Operations alive past the response (a Worker's `waitUntil`). */
 	fetch(request: Request, exec?: RequestExecutionContext): Promise<Response>
@@ -206,6 +218,11 @@ export interface ContractApp {
 	readonly jobs: ContractJobs
 	/** Aborts every kicked run in flight; a later kick starts none; the schedule recovers their work. */
 	stopKicks(): void
+	/**
+	 * Disconnects the `scoped(tables)` layer this boot bound, so a later boot of the application binds it again: the test
+	 * kit's next file of one process. This runtime must serve nothing afterwards. No runtime adapter calls it.
+	 */
+	release(): void
 }
 
 /** Everything that stops a contract application from starting, with where it is and what to do. */
@@ -264,6 +281,12 @@ function compiledArtifact(app: ContractImplementation, framework: Readonly<Recor
 	const artifact = compileContract(app.contract, app.database?.tables ?? {})
 	checkContractDigest(framework, contractDigest(artifact), problems)
 	return artifact
+}
+
+/** The test kit's artifact, compiled from the evaluated contract, checked by the digest it took. */
+function checkedCompiled(compiled: CompiledContract, framework: Readonly<Record<string, string>>, problems: string[]): ContractArtifact {
+	checkContractDigest(framework, compiled.digest, problems)
+	return compiled.artifact
 }
 
 /**
@@ -812,7 +835,12 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 	const terminalRpc = options.terminals === undefined ? undefined : platformFacility(options.terminals)
 	const workloadTokens = options.workloadTokens === undefined ? undefined : platformFacility(options.workloadTokens)
 	const variables = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
-	const artifact = options.approvedContract === undefined
+	if (options.compiledContract !== undefined && options.approvedContract !== undefined) {
+		problems.push('compiledContract and approvedContract are both set: the test kit passes the first, a runtime adapter the second')
+	}
+	const artifact = options.compiledContract !== undefined
+		? checkedCompiled(options.compiledContract, options.environment.framework, problems)
+		: options.approvedContract === undefined
 		? compiledArtifact(app, options.environment.framework, problems)
 		: approvedArtifact(options.approvedContract, options.environment.framework, problems)
 	const proxySecret = readProxySecret(options.environment.framework, options.requireProxySecret === true, problems)
@@ -1126,5 +1154,6 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		fetch: (request: Request, exec?: RequestExecutionContext) => runtime.fetch(request, exec),
 		jobs: jobs.jobs,
 		stopKicks: jobs.stopKicks,
+		release: () => binding.release?.(),
 	})
 }

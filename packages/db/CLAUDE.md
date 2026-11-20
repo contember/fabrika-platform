@@ -117,7 +117,10 @@ There is no generated `move` case yet ([backlog 97](../../docs/backlog/97-the-ge
 `@fabrika/db/testing-sqlite` is the same half for an application on Cloudflare: its `testDatabase({ migrations, label })`
 migrates a fresh in-memory `bun:sqlite` database (`bunSqliteStorage`) with the object's runner and opens it with the
 object's engine, so it needs no backend and never answers `null` (its type stays assignable to the Postgres kit's, so a
-generated test compiles against both). There are no roles on SQLite: the seeding writes through the same storage. The
+generated test compiles against both). A process migrates each set of migrations once (keyed by every file's name and
+text) and starts every later test database as a copy of that image (`bun:sqlite`'s `serialize`/`deserialize`);
+`testDatabaseTemplate({ migrations, label, seed })` keeps a migrated and seeded image, and `testDatabase({ template })`
+starts as its copy, refusing a template of other migrations. There are no roles on SQLite: the seeding writes through the same storage. The
 seeding plan, the worlds and the probe are `testing-shared.ts`, each kit giving it a `SeedingBackend` (its columns,
 CHECKs, inserts and the removal of seeded application rows). On SQLite that removal finds rows by their rowid (a
 `WITHOUT ROWID` table it reaches is a `SeedLimitError`) and defers the foreign keys to its commit; the object's one
