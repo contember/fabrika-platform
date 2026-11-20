@@ -252,13 +252,14 @@ mailbox's principal already has, else the application's. Every one of these is
 a hint for words: none decides a landing, an origin or an authority.
 
 The principal's language belongs to the person on the installation, not to the
-application that named it: once an invitation that names one is accepted, IAM's
-pages and e-mails for every application speak it, including one that declares
-a `locale` of its own. The most recently accepted invitation that names a
-language replaces the stored one, so applications that name different languages
-for the same person take turns. IAM tells no application which language a
-person keeps, and the forgot-password page answers alike whichever it is. A
-principal's language is removed with the principal.
+application that named it
+([ADR-0077](../decisions/0077-a-person-reads-iam-in-their-own-language.md)):
+once an invitation that names one is accepted, IAM's pages and e-mails for every
+application speak it, including one that declares a `locale` of its own. The
+most recently accepted invitation that names a language replaces the stored
+one. IAM tells no application which language a person keeps, and the
+forgot-password page answers alike whichever it is. A principal's language is
+removed with the principal.
 
 A page takes its language from the first of these that names one IAM speaks:
 
@@ -276,16 +277,16 @@ A page takes its language from the first of these that names one IAM speaks:
 
 An e-mail has no request, so it takes the person's language, else the
 application's, else the default; a forgot-password e-mail to a person without a
-language of their own is written in the language of the page that asked for it. The application's language ranks above
-the browser's, so an application that declares one shows every page it showed
-before; only a language the person was given wins over it. An application that
-serves people of several languages either names each person's on their
-invitation or declares no `locale` and lets the browser choose. A stored value
-IAM no longer speaks counts as none. The sign-in an application's proxy starts
-carries no `?locale=`, so on a browser where the person has not signed in yet
-it follows the remembered, the application's or the browser's language, including the sign-in
-an invitation's "sign in first" sends them to; the invitation link they then
-open again speaks theirs.
+language of their own is written in the language of the page that asked for it.
+An application that declares a language shows every page it showed before; only
+a language the person was given wins over it. An application that serves people
+of several languages either names each person's on their invitation or declares
+no `locale` and lets the browser choose. A stored value IAM no longer speaks
+counts as none. The sign-in an application's proxy starts carries no
+`?locale=`, so on a browser where the person has not signed in yet it follows
+the remembered, the application's or the browser's language, including the
+sign-in an invitation's "sign in first" sends them to; the invitation link they
+then open again speaks theirs.
 
 An application may also word IAM's e-mails itself with `mail` in its vocabulary:
 per message (`invitation`, `enrollment`, `reset`) and language, a one-line
