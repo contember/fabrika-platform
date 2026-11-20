@@ -406,20 +406,28 @@ describe("the mail relay: attachments Control's transport refuses", () => {
 		await expectRefused(smartEmailing(), withFiles(file('invoice.pdf')))
 	})
 
-	test('attachments the transport sends are stored and queued, as are any when there is no sender to ask yet', async () => {
-		const cases: Array<[EmailSender | undefined, EmailMessage]> = [
-			[brevo(), withFiles(file('Invoice.PDF', 5 * MIB), file('b.pdf', 5 * MIB))],
-			[postmark(), withFiles(file('data.json', 10 * MIB - 1))],
-			[cloudflare(), withFiles(file('setup.exe', 3 * MIB))],
-			[undefined, withFiles(file('data.json', 10 * MIB))],
-		]
-		for (const [sender, message] of cases) {
-			const r = await relay(sender === undefined ? {} : { sender })
-			await acceptedId(await r.send({ body: encodePlatformMailRequest(message) }))
-			const [row] = await r.harness.repositories.mailMessages.list({ limit: 10 })
-			expect(row?.content).toBe(encodePlatformMailRequest(message))
-			expect(r.jobs).toHaveLength(1)
-		}
+	async function expectQueued(sender: EmailSender | undefined, message: EmailMessage): Promise<void> {
+		const r = await relay(sender === undefined ? {} : { sender })
+		await acceptedId(await r.send({ body: encodePlatformMailRequest(message) }))
+		const [row] = await r.harness.repositories.mailMessages.list({ limit: 10 })
+		expect(row?.content).toBe(encodePlatformMailRequest(message))
+		expect(r.jobs).toHaveLength(1)
+	}
+
+	test('Brevo: a listed file type, in any case, is stored and queued', async () => {
+		await expectQueued(brevo(), withFiles(file('Invoice.PDF'), file('photo.jpeg')))
+	})
+
+	test("Postmark: any other file type, up to Postmark's size cap, is stored and queued", async () => {
+		await expectQueued(postmark(), withFiles(file('data.json', 10 * MIB - 1)))
+	})
+
+	test("Cloudflare: attachments up to Cloudflare's size cap are stored and queued", async () => {
+		await expectQueued(cloudflare(), withFiles(file('setup.exe', 3 * MIB)))
+	})
+
+	test('without a sender to ask yet, any attachment the wire carries is stored and queued, for dispatch to decide', async () => {
+		await expectQueued(undefined, withFiles(file('data.json')))
 	})
 
 	test('recorded before the transport changed, its retry gets the recorded answer, and other content a conflict', async () => {
