@@ -11,6 +11,8 @@ import {
 	invitationOptionsProblem,
 	type Locale,
 	LOCALE_COOKIE,
+	LOCALES,
+	mailLocale,
 	SESSION_COOKIE,
 } from '@fabrika/auth-core'
 import type { EmailMessage } from '@fabrika/email'
@@ -608,6 +610,12 @@ describe('locale selection', () => {
 		expect(chooseLocale({ remembered: 'uk', app: 'cs', browser: 'en' })).toBe('uk')
 		expect(chooseLocale({ hint: 'en', remembered: 'uk', app: 'cs' })).toBe('en')
 		expect(chooseLocale({ person: 'uk', hint: 'en', remembered: 'cs', app: 'cs', browser: 'en' })).toBe('uk')
+	})
+
+	test('an e-mail, which has no request, takes the language `mailLocale` names: the stand-in IAM of `fabrika app dev` chooses by it', () => {
+		for (const person of [...LOCALES, null]) {
+			for (const app of [...LOCALES, null]) expect(chooseLocale({ person, app })).toBe(mailLocale({ person, app }))
+		}
 	})
 
 	test("a link carries the person's language only when it is known", () => {

@@ -129,115 +129,124 @@ const expiryIn = (tag: string): ApplicationMailText['expiry'] => {
 	return (expiresAt) => `${format.format(new Date(expiresAt * 1000))} UTC`
 }
 
-const enPassword = passwordMessage((action) => `Use this one-time link to ${action}:`, 'If you did not request this, you can ignore this email.')
-const csPassword = passwordMessage((action) => `Tímto jednorázovým odkazem ${action}:`, 'Pokud jste o to nežádali, můžete tento e-mail ignorovat.')
-const ukPassword = passwordMessage(
-	(action) => `Скористайтеся цим одноразовим посиланням, щоб ${action}:`,
-	'Якщо ви цього не запитували, просто проігноруйте цей лист.',
-)
-
-const en: IamMailCatalog = {
-	messages: {
-		invitation: invitationMessage({
-			subject: (appName) => `You are invited to ${appName}`,
-			invited: (what) => `You are invited to join a ${what}.`,
-			what: ({ appName, role, scope, companyLabel }) => `${scope} of ${appName} as ${role}${companyLabel === '' ? '' : `, for ${companyLabel}`}`,
-			writes: (inviterLabel) => `${inviterLabel} writes:`,
-			accept: {
-				create: 'Open this one-time link to accept. With an account here, sign in with this address first; without one, you choose a password.',
-				sign_in: 'Open this one-time link and sign in with this address to accept.',
-				no_account:
-					'There is no account for this address here yet, and this invitation does not create one. Ask the person who invited you to have one set up, then open this one-time link and sign in to accept.',
-			},
-			button: 'Accept the invitation',
-			ignore: 'If you did not expect this, you can ignore this email.',
-		}),
-		enrollment: ({ appName, actionUrl }) =>
-			enPassword(
-				appName === null ? 'Set your Fabrika password' : `Set your password for ${appName}`,
-				appName === null ? 'set your Fabrika password' : `set your password for ${appName}`,
-				actionUrl,
-			),
-		reset: ({ appName, actionUrl }) =>
-			enPassword(
-				appName === null ? 'Reset your Fabrika password' : `Reset your password for ${appName}`,
-				appName === null ? 'reset your Fabrika password' : `reset your password for ${appName}`,
-				actionUrl,
-			),
-	},
-	applicationMail: {
-		button: { invitation: 'Accept the invitation', enrollment: 'Set your password', reset: 'Reset your password' },
-		expiry: expiryIn('en-GB'),
-	},
+function enCatalog(): IamMailCatalog {
+	const password = passwordMessage((action) => `Use this one-time link to ${action}:`, 'If you did not request this, you can ignore this email.')
+	return {
+		messages: {
+			invitation: invitationMessage({
+				subject: (appName) => `You are invited to ${appName}`,
+				invited: (what) => `You are invited to join a ${what}.`,
+				what: ({ appName, role, scope, companyLabel }) => `${scope} of ${appName} as ${role}${companyLabel === '' ? '' : `, for ${companyLabel}`}`,
+				writes: (inviterLabel) => `${inviterLabel} writes:`,
+				accept: {
+					create: 'Open this one-time link to accept. With an account here, sign in with this address first; without one, you choose a password.',
+					sign_in: 'Open this one-time link and sign in with this address to accept.',
+					no_account:
+						'There is no account for this address here yet, and this invitation does not create one. Ask the person who invited you to have one set up, then open this one-time link and sign in to accept.',
+				},
+				button: 'Accept the invitation',
+				ignore: 'If you did not expect this, you can ignore this email.',
+			}),
+			enrollment: ({ appName, actionUrl }) =>
+				password(
+					appName === null ? 'Set your Fabrika password' : `Set your password for ${appName}`,
+					appName === null ? 'set your Fabrika password' : `set your password for ${appName}`,
+					actionUrl,
+				),
+			reset: ({ appName, actionUrl }) =>
+				password(
+					appName === null ? 'Reset your Fabrika password' : `Reset your password for ${appName}`,
+					appName === null ? 'reset your Fabrika password' : `reset your password for ${appName}`,
+					actionUrl,
+				),
+		},
+		applicationMail: {
+			button: { invitation: 'Accept the invitation', enrollment: 'Set your password', reset: 'Reset your password' },
+			expiry: expiryIn('en-GB'),
+		},
+	}
 }
 
-const cs: IamMailCatalog = {
-	messages: {
-		invitation: invitationMessage({
-			subject: (appName) => `Pozvánka do aplikace ${appName}`,
-			invited: (what) => `Dostali jste pozvánku ${what}.`,
-			what: ({ appName, role, scope, companyLabel }) =>
-				`do aplikace ${appName} s rolí ${role} (${scope})${companyLabel === '' ? '' : ` za ${companyLabel}`}`,
-			writes: (inviterLabel) => `${inviterLabel} píše:`,
-			accept: {
-				create: 'Pozvánku přijmete tímto jednorázovým odkazem. Máte-li zde účet, nejprve se přihlaste touto adresou; pokud ho nemáte, zvolíte si heslo.',
-				sign_in: 'Pozvánku přijmete tímto jednorázovým odkazem po přihlášení touto adresou.',
-				no_account:
-					'Pro tuto adresu tu zatím není účet a tato pozvánka ho nezakládá. Požádejte toho, kdo vás pozval, aby vám ho zřídil; potom pozvánku přijmete tímto jednorázovým odkazem po přihlášení.',
-			},
-			button: 'Přijmout pozvánku',
-			ignore: 'Pokud jste pozvánku nečekali, můžete tento e-mail ignorovat.',
-		}),
-		enrollment: ({ appName, actionUrl }) =>
-			csPassword(appName === null ? 'Nastavení hesla' : `Nastavení hesla pro aplikaci ${appName}`, 'si nastavíte heslo', actionUrl),
-		reset: ({ appName, actionUrl }) =>
-			csPassword(appName === null ? 'Obnovení hesla' : `Obnovení hesla pro aplikaci ${appName}`, 'si obnovíte heslo', actionUrl),
-	},
-	applicationMail: {
-		button: { invitation: 'Přijmout pozvánku', enrollment: 'Nastavit heslo', reset: 'Obnovit heslo' },
-		expiry: expiryIn('cs'),
-	},
+function csCatalog(): IamMailCatalog {
+	const password = passwordMessage((action) => `Tímto jednorázovým odkazem ${action}:`, 'Pokud jste o to nežádali, můžete tento e-mail ignorovat.')
+	return {
+		messages: {
+			invitation: invitationMessage({
+				subject: (appName) => `Pozvánka do aplikace ${appName}`,
+				invited: (what) => `Dostali jste pozvánku ${what}.`,
+				what: ({ appName, role, scope, companyLabel }) =>
+					`do aplikace ${appName} s rolí ${role} (${scope})${companyLabel === '' ? '' : ` za ${companyLabel}`}`,
+				writes: (inviterLabel) => `${inviterLabel} píše:`,
+				accept: {
+					create: 'Pozvánku přijmete tímto jednorázovým odkazem. Máte-li zde účet, nejprve se přihlaste touto adresou; pokud ho nemáte, zvolíte si heslo.',
+					sign_in: 'Pozvánku přijmete tímto jednorázovým odkazem po přihlášení touto adresou.',
+					no_account:
+						'Pro tuto adresu tu zatím není účet a tato pozvánka ho nezakládá. Požádejte toho, kdo vás pozval, aby vám ho zřídil; potom pozvánku přijmete tímto jednorázovým odkazem po přihlášení.',
+				},
+				button: 'Přijmout pozvánku',
+				ignore: 'Pokud jste pozvánku nečekali, můžete tento e-mail ignorovat.',
+			}),
+			enrollment: ({ appName, actionUrl }) =>
+				password(appName === null ? 'Nastavení hesla' : `Nastavení hesla pro aplikaci ${appName}`, 'si nastavíte heslo', actionUrl),
+			reset: ({ appName, actionUrl }) =>
+				password(appName === null ? 'Obnovení hesla' : `Obnovení hesla pro aplikaci ${appName}`, 'si obnovíte heslo', actionUrl),
+		},
+		applicationMail: {
+			button: { invitation: 'Přijmout pozvánku', enrollment: 'Nastavit heslo', reset: 'Obnovit heslo' },
+			expiry: expiryIn('cs'),
+		},
+	}
 }
 
-const uk: IamMailCatalog = {
-	messages: {
-		invitation: invitationMessage({
-			subject: (appName) => `Запрошення до застосунку ${appName}`,
-			invited: (what) => `Вас запрошено ${what}.`,
-			what: ({ appName, role, scope, companyLabel }) =>
-				`до застосунку ${appName} з роллю ${role} (${scope})${companyLabel === '' ? '' : `, організація: ${companyLabel}`}`,
-			writes: (inviterLabel) => `${inviterLabel} пише:`,
-			accept: {
-				create:
-					'Щоб прийняти запрошення, відкрийте це одноразове посилання. Якщо у вас тут уже є обліковий запис, спочатку увійдіть із цією адресою; якщо немає, ви створите пароль.',
-				sign_in: 'Щоб прийняти запрошення, відкрийте це одноразове посилання й увійдіть із цією адресою.',
-				no_account:
-					'Для цієї адреси тут ще немає облікового запису, і це запрошення його не створює. Попросіть того, хто вас запросив, створити його, а потім відкрийте це одноразове посилання й увійдіть, щоб прийняти запрошення.',
-			},
-			button: 'Прийняти запрошення',
-			ignore: 'Якщо ви не очікували цього запрошення, просто проігноруйте цей лист.',
-		}),
-		enrollment: ({ appName, actionUrl }) =>
-			ukPassword(appName === null ? 'Створення пароля' : `Створення пароля для застосунку ${appName}`, 'створити пароль', actionUrl),
-		reset: ({ appName, actionUrl }) =>
-			ukPassword(appName === null ? 'Відновлення пароля' : `Відновлення пароля для застосунку ${appName}`, 'відновити пароль', actionUrl),
-	},
-	applicationMail: {
-		button: { invitation: 'Прийняти запрошення', enrollment: 'Створити пароль', reset: 'Відновити пароль' },
-		expiry: expiryIn('uk'),
-	},
+function ukCatalog(): IamMailCatalog {
+	const password = passwordMessage(
+		(action) => `Скористайтеся цим одноразовим посиланням, щоб ${action}:`,
+		'Якщо ви цього не запитували, просто проігноруйте цей лист.',
+	)
+	return {
+		messages: {
+			invitation: invitationMessage({
+				subject: (appName) => `Запрошення до застосунку ${appName}`,
+				invited: (what) => `Вас запрошено ${what}.`,
+				what: ({ appName, role, scope, companyLabel }) =>
+					`до застосунку ${appName} з роллю ${role} (${scope})${companyLabel === '' ? '' : `, організація: ${companyLabel}`}`,
+				writes: (inviterLabel) => `${inviterLabel} пише:`,
+				accept: {
+					create:
+						'Щоб прийняти запрошення, відкрийте це одноразове посилання. Якщо у вас тут уже є обліковий запис, спочатку увійдіть із цією адресою; якщо немає, ви створите пароль.',
+					sign_in: 'Щоб прийняти запрошення, відкрийте це одноразове посилання й увійдіть із цією адресою.',
+					no_account:
+						'Для цієї адреси тут ще немає облікового запису, і це запрошення його не створює. Попросіть того, хто вас запросив, створити його, а потім відкрийте це одноразове посилання й увійдіть, щоб прийняти запрошення.',
+				},
+				button: 'Прийняти запрошення',
+				ignore: 'Якщо ви не очікували цього запрошення, просто проігноруйте цей лист.',
+			}),
+			enrollment: ({ appName, actionUrl }) =>
+				password(appName === null ? 'Створення пароля' : `Створення пароля для застосунку ${appName}`, 'створити пароль', actionUrl),
+			reset: ({ appName, actionUrl }) =>
+				password(appName === null ? 'Відновлення пароля' : `Відновлення пароля для застосунку ${appName}`, 'відновити пароль', actionUrl),
+		},
+		applicationMail: {
+			button: { invitation: 'Прийняти запрошення', enrollment: 'Створити пароль', reset: 'Відновити пароль' },
+			expiry: expiryIn('uk'),
+		},
+	}
 }
 
-const catalogs: { readonly [L in Locale]: IamMailCatalog } = { en, cs, uk }
+/** Each language's words, built on first use: a consumer of this package that sends no IAM e-mail bundles none of them. */
+const catalogs: { readonly [L in Locale]: () => IamMailCatalog } = { en: enCatalog, cs: csCatalog, uk: ukCatalog }
+const built: { [L in Locale]?: IamMailCatalog } = {}
 
 /** IAM's wording of its e-mails in `locale`. */
 export function iamMailCatalog(locale: Locale): IamMailCatalog {
-	return catalogs[locale]
+	built[locale] ??= catalogs[locale]()
+	return built[locale]
 }
 
 /**
  * The language IAM writes an e-mail in: the person's own (the language an invitation names, else the one the mailbox's
- * principal keeps, ADR-0077), else the application's, else the default. An e-mail has no request to ask.
+ * principal keeps, ADR-0077), else the application's, else the default. An e-mail has no request to ask, so IAM's
+ * `chooseLocale` without one comes to the same language; IAM's tests hold the two equal.
  */
 export function mailLocale(sources: { readonly person?: Locale | null; readonly app?: Locale | null }): Locale {
 	return sources.person ?? sources.app ?? DEFAULT_LOCALE
