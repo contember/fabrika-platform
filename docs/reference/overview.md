@@ -325,6 +325,14 @@ runtime release and source-map scope identify the same source
 Keeping the runner Worker separate lets the control plane deploy itself without
 resetting the container that owns the run.
 
+On Cloudflare an application deploys from its root, the registered `workerDir` (the checkout's root by default),
+which holds the application's own `package.json` and `bun.lock`. Control reads the framework release from
+`<workerDir>/bun.lock` and refuses a root without one
+([`release-process.md`](release-process.md#the-framework-window)), and never reads a lockfile above it; the runner runs
+`bun install` there. An application in a monorepo subdirectory therefore needs its own `bun.lock` in `workerDir`, and
+that directory must sit outside every parent workspace's `workspaces` globs: inside them, `bun install` installs it as
+a member of that workspace against the root's lockfile and writes none of its own.
+
 The Cloudflare runner also owns the build filesystem, so it can upload bounded
 source maps to the release-scoped Operations artifact endpoint. Zerops builds
 inside its own platform, so its generated build uploads them as its last command
