@@ -351,7 +351,7 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
 Where application code goes — vocabulary, tables, kit, slices with their `endpoints.ts`, `logic.ts` and `queries.ts`,
 the composition entry, the SPA — is the [application architecture](../reference/application-architecture.md). The
 checker reports a break of platform integrity as a **refusal**, which fails the build, and a step out of that
-structure as a **hint**, which it prints and does not fail on. Hints stay checker output and never reach the
+structure as a **hint**, which it reports and does not fail on. Hints stay checker output and never reach the
 snapshot. A syntactic hint such as "declare `sql: 'read'` on `pipeline`" helps the author; it is not the boundary,
 because destructuring, helper modules and `ctx[k]` evade any syntactic detector. The declarations are.
 

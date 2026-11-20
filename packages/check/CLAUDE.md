@@ -22,9 +22,11 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   them). A **refusal** fails the check. A **hint** reports a step out of the application architecture
   ([`docs/reference/application-architecture.md`](../../docs/reference/application-architecture.md)); it is checker
   output only, never part of the contract or the approval snapshot.
-- Bin: `fabrika-check [<root>]` prints one line per refusal, `file:line:col rule-id message (allowed form: …)`, then
-  the hints in the same form under the heading `Hints — …`, then `N refusals, M hints` on stderr. Exit 0 with no
-  refusal (hints only included), 1 with a refusal, 2 on a usage or read error.
+- Bin: `fabrika-check [--hints] [<root>]` prints one line per refusal, `file:line:col rule-id message (allowed form: …)`,
+  then one line with the number of hints and how to list them, then `N refusals, M hints` on stderr. `--hints` lists
+  the hints in the same form under the heading `Hints — …` instead of that line: a large application has hundreds. The
+  platform build (and so `run_checks`) runs it without the flag. Exit 0 with no refusal (hints only
+  included), 1 with a refusal, 2 on a usage or read error.
 - `--packed <release-manifest.json>` (`packed.ts`, `CheckInput.packed`): `package-replacement` accepts the tarballs of a
   local pack, their `file:` specifiers, an `overrides` block of them alone and their lockfile entries, when each file
   under the root hashes to the sha512 the manifest records ([ADR-0043](../../docs/decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)).

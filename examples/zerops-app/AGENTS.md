@@ -288,7 +288,7 @@ export FABRIKA_APP_ID=tasks FABRIKA_APP_DATABASE_URL="$FABRIKA_TEST_POSTGRES_URL
 bunx fabrika db migrate && bunx fabrika db codegen          # writes src/db/schema.generated.ts
 bun test --isolate                                          # until it passes; needs FABRIKA_TEST_POSTGRES_URL; a skip proves nothing
 bunx tsc --noEmit                                           # once, at the end
-bunx fabrika-check .                                        # once, after tsc; refusals fail; hints print below them
+bunx fabrika-check .                                        # once, after tsc; refusals fail; --hints lists the hints
 ```
 
 **On Cloudflare** (`fabrika.config.ts` imports `defineApp` from `@fabrika/provider-cloudflare`, as
@@ -321,7 +321,7 @@ Format and lint only the files you wrote, with the repository's own tools: in th
 `bunx dprint fmt <files>` and `bunx oxlint <files>`, and never a generated file. An application outside that
 repository has neither configuration: use the formatter its own repository configures, or none, and never add a configuration unasked; tsc and `fabrika-check` are its gates. `FABRIKA_APP_ID` is lowercase letters, digits and `-`. An applied file is immutable: while you still
 change an uncommitted migration, migrate into a fresh schema with another `FABRIKA_APP_ID`. Read a refusal's
-"allowed form" and use it; fix hints too. `references/errors.md` explains the findings and the type errors.
+"allowed form" and use it. Fix the hints in the files you changed too: `bunx fabrika-check --hints .` lists them. `references/errors.md` explains the findings and the type errors.
 
 ## Previewing the screens
 
@@ -1768,9 +1768,10 @@ IAM answers the directory. A lookup only reads, so it may come before the write 
 
 ## The checker: refusals and hints
 
-`bunx fabrika-check .` prints one finding per line, `<file>:<line>:<col> <rule> <what> (allowed form: <fix>)`.
-Refusals come first and fail the check; hints follow under their own heading and do not. Fix both: a hint is the
-architecture, and a refusal's allowed form is the one fix that passes. There is no suppression syntax.
+`bunx fabrika-check .` prints one refusal per line, `<file>:<line>:<col> <rule> <what> (allowed form: <fix>)`, then
+the number of hints. Refusals fail the check; hints do not. `bunx fabrika-check --hints .` lists the hints too, in the
+same form under their own heading. Fix the refusals and the hints in the files you changed: a hint is the architecture,
+and a refusal's allowed form is the one fix that passes. There is no suppression syntax.
 
 The refusals agents meet most, and their fix:
 
