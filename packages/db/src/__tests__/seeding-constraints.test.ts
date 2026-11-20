@@ -51,6 +51,13 @@ CREATE TABLE invoices (
 	document_id UUID REFERENCES fabrika_files (id),
 	CHECK ((supplier_id IS NULL) = (document_id IS NULL))
 );
+CREATE TABLE retirements (
+	id TEXT PRIMARY KEY,
+	person_id TEXT NOT NULL REFERENCES people (id),
+	ended_at TEXT,
+	ended_by_id TEXT REFERENCES people (id),
+	CHECK ((ended_at IS NULL) = (ended_by_id IS NULL))
+);
 CREATE TABLE items (id TEXT PRIMARY KEY, name TEXT NOT NULL);
 CREATE TABLE variants (
 	id TEXT PRIMARY KEY,
@@ -81,6 +88,7 @@ interface DB {
 	seasons: { id: string; year: number; week: number }
 	claims: { id: string; witness_id: string | null; witness_name: string | null }
 	invoices: { id: string; supplier_id: string | null; document_id: string | null }
+	retirements: { id: string; person_id: string; ended_at: string | null; ended_by_id: string | null }
 	items: { id: string; name: string }
 	variants: { id: string; item_id: string; base_item_id: string }
 	days: { id: string; day: string }
@@ -109,6 +117,10 @@ const columns: TypedColumnList<DB> = {
 	seasons: { columns: ['id', 'year', 'week'], foreignKeys: [] },
 	claims: { columns: ['id', 'witness_id', 'witness_name'], foreignKeys: [{ columns: ['witness_id'], table: 'people', references: ['id'] }] },
 	invoices: { columns: ['id', 'supplier_id', 'document_id'], foreignKeys: [{ columns: ['supplier_id'], table: 'people', references: ['id'] }] },
+	retirements: {
+		columns: ['id', 'person_id', 'ended_at', 'ended_by_id'],
+		foreignKeys: [{ columns: ['person_id'], table: 'people', references: ['id'] }, { columns: ['ended_by_id'], table: 'people', references: ['id'] }],
+	},
 	items: { columns: ['id', 'name'], foreignKeys: [] },
 	variants: {
 		columns: ['id', 'item_id', 'base_item_id'],
@@ -146,6 +158,7 @@ const tables = defineTables(vocabulary, columns)({
 	seasons: app('a year in a range'),
 	claims: app('a witness by key or by name'),
 	invoices: app('a supplier with its document'),
+	retirements: app('ended by someone, or not ended'),
 	items: app('items'),
 	variants: app('a variant of another item'),
 	days: app('one row a day'),
@@ -215,6 +228,18 @@ for (const [dialect, database] of [['SQLite', sqlite], ['Postgres', postgres]] a
 			// The document is a file column, which the fixture fills: the supplier then has to be there too.
 			const invoice = await row('invoices')
 			expect(invoice['supplier_id'] === null).toBe(invoice['document_id'] === null)
+		})
+
+		test('rows a fixture gives fill the columns a CHECK ties to the ones it names', async () => {
+			if (database === null) return
+			const open = await database.seedApplicationRows(tables, { retirements: {} })
+			const ended = await database.seedApplicationRows(tables, { retirements: { ended_at: '2026-01-01' } })
+			const openRow = await seeded('retirements', open.keys['retirements'] ?? '')
+			const endedRow = await seeded('retirements', ended.keys['retirements'] ?? '')
+			expect([openRow['ended_at'], openRow['ended_by_id']]).toEqual([null, null])
+			expect(endedRow['ended_by_id']).toEqual(expect.any(String))
+			await open.remove()
+			await ended.remove()
 		})
 
 		test('two foreign keys a CHECK keeps apart reference two rows', async () => {
