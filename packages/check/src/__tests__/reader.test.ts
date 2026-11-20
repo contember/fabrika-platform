@@ -470,7 +470,7 @@ describe('the resource budget', () => {
 	const padded = (count: number, chars: number): ReadonlyMap<string, string> =>
 		importing(Array.from({ length: count }, (_, index) => `export const P${index} = 1\n// ${'x'.repeat(chars)}\n`))
 
-	// Each parse of a full node budget takes seconds on a CI runner, past bun's default of 5 s for a test.
+	// A test that parses a full node budget takes seconds on a CI runner and can pass bun's default of 5 s.
 	const DENSE_READ_MS = 30_000
 
 	/** `count` modules of one array literal each, `elements` syntax nodes apiece: under the byte limits, dense in nodes. */
