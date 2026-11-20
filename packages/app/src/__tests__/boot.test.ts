@@ -111,6 +111,20 @@ describe('the contract the build compiled', () => {
 		expect(() => startWith(encodedArtifactJson(compiled))()).not.toThrow()
 	})
 
+	test("does not start with the test kit's compiled contract beside it", () => {
+		const both = () =>
+			boot(app, {
+				environment: environment(frameworkEnvFor(app)),
+				iam: keySource,
+				assets: echoAssets,
+				approvedContract: encodedArtifactJson(compiled),
+				compiledContract: { artifact: compiled, digest: contractDigest(compiled) },
+			})
+		expect(problemsOf(both)).toEqual([
+			'compiledContract and approvedContract are both set: the test kit passes the first, a runtime adapter the second',
+		])
+	})
+
 	test('does not start when its digest is not the approved one, although the evaluated contract is', () => {
 		const other = encodedArtifactJson({ ...compiled, csp: { ...compiled.csp, imgSrc: [{ origin: 'https://other.test', purpose: 'avatars' }] } })
 		const [problem] = problemsOf(startWith(other))

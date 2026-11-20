@@ -835,6 +835,9 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 	const terminalRpc = options.terminals === undefined ? undefined : platformFacility(options.terminals)
 	const workloadTokens = options.workloadTokens === undefined ? undefined : platformFacility(options.workloadTokens)
 	const variables = readFramework(options.environment.framework, app.contract.vocabulary.app, problems)
+	if (options.compiledContract !== undefined && options.approvedContract !== undefined) {
+		problems.push('compiledContract and approvedContract are both set: the test kit passes the first, a runtime adapter the second')
+	}
 	const artifact = options.compiledContract !== undefined
 		? checkedCompiled(options.compiledContract, options.environment.framework, problems)
 		: options.approvedContract === undefined
