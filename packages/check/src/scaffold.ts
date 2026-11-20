@@ -364,8 +364,8 @@ const testedEndpoints = (artifact: ContractArtifact): ReadonlySet<string> =>
 const ROOT_FROM_ENDPOINT_TEST = '../'.repeat(ENDPOINT_ACCESS_TEST.split('/').length - 1)
 
 /**
- * The options of the generated test's kit: the file fixtures of the tested endpoints, each a URL beside the test. Empty
- * without any, so a test without file fixtures stays as it was.
+ * The options of the generated test's kit: the file fixtures of the tested endpoints, each a URL beside the test, their
+ * refusals and pins, and the caller rows. Empty without any, so a test without them stays as it was.
  */
 const kitOptions = (fixtures: EndpointFixtures, tested: ReadonlySet<string>): string => {
 	const files = Object.entries(fixtures.files).sort(byKey).flatMap(([id, fields]) => {
@@ -388,6 +388,7 @@ const kitOptions = (fixtures: EndpointFixtures, tested: ReadonlySet<string>): st
 		...(files.length === 0 ? [] : [`files: { ${files.join(', ')} }`]),
 		...(refusals.length === 0 ? [] : [`refusals: { ${refusals.join(', ')} }`]),
 		...(pins.length === 0 ? [] : [`pins: { ${pins.join(', ')} }`]),
+		...(Object.keys(fixtures.callerRows).length === 0 ? [] : [`callerRows: ${renderSample(fixtures.callerRows)}`]),
 	]
 	return options.length === 0 ? '' : `, { ${options.join(', ')} }`
 }
@@ -916,6 +917,14 @@ export const missingEndpointFixtures = ({ tables, policies, artifact, fixtures }
 		for (const refusal of applicationRowsPlan(tables, rows).refusals) {
 			findings.push(at(`${id}: ${applicationRowRefusalText(refusal)}`, appRowAllowed(refusal)))
 		}
+	}
+	for (const refusal of applicationRowsPlan(tables, fixtures.callerRows).refusals) {
+		findings.push(
+			at(
+				`callerRows: ${applicationRowRefusalText(refusal)}`,
+				refusal.kind === 'table' ? 'the name of a table with scope: { app } in src/db/tables.ts' : appRowAllowed(refusal),
+			),
+		)
 	}
 	for (const [id, fields] of Object.entries(fixtures.files).sort(byKey)) {
 		const row = tested.find((candidate) => candidate.id === id)

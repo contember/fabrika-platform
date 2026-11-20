@@ -1093,7 +1093,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   `seedWorlds` writes into both rows. `leaked` and `own` also take the author's application rows (`appRows`), which
   `seedApplicationRows` writes before they ask and removes, with every row that refers to them, once the case and the runs
   it kicked are over; both scopes may see them, so their values are never counted as the other scope's. An `app` or `creates` procedure gets `scoped` (a holder of the action in one
-  scope: exactly 403, from the proxy or IAM) and `global` (a global holder: answered unless a 401, 403 or 5xx), and an application table `appPolicyIsolationKit`, whose probe procedures are
+  scope: exactly 403, from the proxy or IAM) and `global` (a global holder: answered unless a 401, 403 or 5xx; the
+  author's `EndpointAccessOptions.callerRows` are seeded for that caller first, each `GENERATED_CALLER` value becoming
+  its id, and removed like `appRows`), and an application table `appPolicyIsolationKit`, whose probe procedures are
   `app` endpoints over one row `seedRow` writes. A leak scans every value of
   the other row's chain, so an outer dimension's value is a leak too. A subpath of its
   own, because it loads `@fabrika/db/testing` (Bun SQL, the migration runner) and the root

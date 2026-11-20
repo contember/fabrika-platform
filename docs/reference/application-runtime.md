@@ -2070,6 +2070,13 @@ not run`. Of them only the generated isolation tests run again, at container sta
   target's chain and issued by the case's caller. The stand-in answers a repeated invitation with the open one, a
   resend with a new 7 days, and an organization's mailbox for an external role with `internal_mailbox` when its
   `OrganizationMailboxes` name one (none in the generated cases).
+- **Caller rows.** A handler that looks up the caller's own record before it answers (a person's card bound to the
+  account, `ctx.principal.id`) refuses the fresh caller of a global case, so the author gives that record once for the
+  whole application: `export const callerRows = { <table>: { <column>: <value> } }`, application tables only, a column
+  valued `'fabrika:caller'` (`GENERATED_CALLER`) getting the caller's id. The scaffold hands it to `endpointAccessKit`,
+  which seeds those rows for the caller of each `app` and `creates` global case before it asks and removes them once
+  the case is over. The rule of the rows is `appRows`' (`applicationRowsPlan`); a row it refuses is an
+  `endpoint-fixture` finding.
 - **Registration.** The generated files take `test`, `describe`, `expect` and `afterAll` from
   `@fabrika/app/testing/isolation`. The platform run preloads `@fabrika/app/testing/preload`,
   which captures Bun's own functions before any application module loads, and a case that

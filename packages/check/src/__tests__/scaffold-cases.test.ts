@@ -94,6 +94,7 @@ describe('the endpoint access cases of a kit application', () => {
 			files: {},
 			refusals: {},
 			pins: {},
+			callerRows: {},
 		})
 		expect(read("export const rows = { 'api.notes.get': { commentId: 'note_comments' } }\n").rows).toEqual({
 			'api.notes.get': { commentId: 'note_comments' },
@@ -445,5 +446,33 @@ describe('the pins of the fixtures: known values of text columns of the row an e
 		expect(() => read("export const pins = { 'api.notes.upload': { title: 1 } }\n")).toThrow()
 		expect(() => read("export const pins = { 'api.notes.upload': { title: '' } }\n")).toThrow()
 		expect(() => read('export const pins = {}\nexport const pins = {}\n')).toThrow()
+	})
+})
+
+describe("the caller rows of the fixtures: the record each global case's caller holds", () => {
+	const APP_WIDE_ROOT = join(import.meta.dir, '..', '..', '..', 'app', 'src', '__tests__', 'app-wide-fixture')
+	const withFixtures = (text: string) => new Map([...tree(APP_WIDE_ROOT), [ENDPOINT_FIXTURES_FILE, text]])
+	const findings = (text: string) => missingEndpointFixtures(scaffoldInputs(withFixtures(text))).map((finding) => finding.message)
+	const fixture = "export const callerRows = { positions: { title: 'fabrika:caller', active: true } }\n"
+
+	test('the kit of the generated test gets them, and the cases stay as they were', async () => {
+		const text = await endpointTest(withFixtures(fixture))
+		expect(text).toContain(
+			"const kit = endpointAccessKit(app, tables, postgres, { callerRows: { positions: { title: 'fabrika:caller', active: true } } })",
+		)
+		expect(text).toContain("expect(await kit.global('api.admin.add', { title: 'x' })).toEqual({ answered: true })")
+		expect(findings(fixture)).toEqual([])
+		expect(await endpointTest(withFixtures(''))).toContain('const kit = endpointAccessKit(app, tables, postgres)\n')
+	})
+
+	test('a table that is no application table, and a stamped column, are findings; the rows are an object of tables, declared once', () => {
+		expect(findings("export const callerRows = { candidates: {}, positions: { id: 'x' } }\n")).toEqual([
+			'callerRows: candidates is a dimension table, and an application row is seeded only in an application table (scope: { app })',
+			"callerRows: positions.id is the row's key, version or creator, which the seeding stamps",
+		])
+		const read = (text: string) => scaffoldInputs(withFixtures(text)).fixtures.callerRows
+		expect(read(fixture)).toEqual({ positions: { title: 'fabrika:caller', active: true } })
+		expect(() => read("export const callerRows = { positions: 'x' }\n")).toThrow()
+		expect(() => read('export const callerRows = {}\nexport const callerRows = {}\n')).toThrow()
 	})
 })

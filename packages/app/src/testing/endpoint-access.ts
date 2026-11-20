@@ -30,6 +30,7 @@ import { deniedCaseRuledOutBy } from '../contract/capability-cases'
 import { compileContract } from '../contract/compile'
 import {
 	FILE_INPUT_PART,
+	GENERATED_CALLER,
 	GENERATED_FILE_PREFIX,
 	GENERATED_INVITATION,
 	GENERATED_LINK,
@@ -99,7 +100,7 @@ export interface EndpointAccessKit {
 	scoped(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<DeniedOutcome>
 	/**
 	 * An `app` or a `creates` endpoint asked by a caller who holds its action as a global grant, and nothing else:
-	 * `answered` unless the answer is a 401, a 403 or a 5xx.
+	 * `answered` unless the answer is a 401, a 403 or a 5xx. The kit's `callerRows` are seeded for that caller first.
 	 */
 	global(endpoint: string, input: Readonly<Record<string, unknown>>): Promise<ReachOutcome>
 	/**
@@ -141,6 +142,13 @@ export interface EndpointAccessOptions {
 	 * that names the skill's slug). `pins` of the fixtures.
 	 */
 	readonly pins?: Readonly<Record<string, Readonly<Record<string, string>>>>
+	/**
+	 * The rows of application tables that the caller of each global case holds, by table, each with its columns: the
+	 * caller's own record a handler looks up before it answers (a person's card bound to the account). A column whose
+	 * value is `fabrika:caller` (`GENERATED_CALLER`) gets the caller's id. Seeded before the case asks and removed once
+	 * it is over. `callerRows` of the fixtures.
+	 */
+	readonly callerRows?: AppRows
 }
 
 /**
@@ -160,6 +168,15 @@ interface Pinning {
 }
 
 /** Seeded worlds, their removal taken by the case when they hold pinned values or known scope values. */
+/** `rows` with each `fabrika:caller` value replaced by the caller's id. */
+const boundTo = (rows: AppRows, callerId: string): AppRows =>
+	Object.fromEntries(
+		Object.entries(rows).map(([table, columns]) => [
+			table,
+			Object.fromEntries(Object.entries(columns).map(([column, value]) => [column, value === GENERATED_CALLER ? callerId : value])),
+		]),
+	)
+
 const pinned = <W extends { readonly remove: () => Promise<void> }>(worlds: W, pinning: Pinning, scopes: ScopeValues): W => {
 	if (Object.keys(pinning.pins).length > 0 || Object.keys(scopes).length > 0) pinning.removals.push(worlds.remove)
 	return worlds
@@ -1066,7 +1083,9 @@ export function endpointAccessKit<DB, P>(
 			},
 			async global(endpoint, input) {
 				const row = globalEndpointOf(endpoint)
-				const { status } = await askAs(row, callerFor(row, [{ action: row.action }]).fetch, input)
+				const { caller, fetch } = callerFor(row, [{ action: row.action }])
+				await seedAppRows(boundTo(options.callerRows ?? {}, caller.id))
+				const { status } = await askAs(row, fetch, input)
 				// Neither form refuses with 404, so a 404 is the handler's own answer (a row the sampled input names is missing).
 				return status >= 500 || status === 401 || status === 403 ? { answered: false, status } : { answered: true }
 			},
