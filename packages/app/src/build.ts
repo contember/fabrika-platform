@@ -86,8 +86,6 @@ export async function writeGeneratedEntry(root: string, runtime: EntryRuntime): 
 	return path
 }
 
-const CONTRACT_CHILD = fileURLToPath(new URL('./build-contract-child.ts', import.meta.url))
-
 /** The compiled contract module source: the artifact's shared encoding (`encodeArtifact`) as one string, verbatim. */
 export function generatedContract(encoded: string): string {
 	return [
@@ -103,7 +101,9 @@ export function generatedContract(encoded: string): string {
  * `HOME`, writes the module under `root` and returns its path. A contract that does not compile fails the build.
  */
 export async function writeGeneratedContract(root: string): Promise<string> {
-	const child = Bun.spawn([process.execPath, CONTRACT_CHILD], {
+	// Resolved here, not at load: Control's Worker imports this module's constants, and workerd has no file URL.
+	const contractChild = fileURLToPath(new URL('./build-contract-child.ts', import.meta.url))
+	const child = Bun.spawn([process.execPath, contractChild], {
 		cwd: root,
 		env: { PATH: process.env['PATH'] ?? '', HOME: process.env['HOME'] ?? '' },
 		stdin: 'ignore',
