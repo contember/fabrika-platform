@@ -101,7 +101,8 @@ export function issuerJwks(issuer: unknown): IamKeySource {
 			if (typeof issuer !== 'string') {
 				throw new Error('FABRIKA_IAM_ISSUER is not set')
 			}
-			const response = await fetch(new URL('/.well-known/jwks.json', issuer), { headers: { accept: 'application/json' } })
+			// Never follow a redirect: the answer decides which keys vouch for a caller, and a 3xx is not ok below.
+			const response = await fetch(new URL('/.well-known/jwks.json', issuer), { headers: { accept: 'application/json' }, redirect: 'manual' })
 			const jwks = response.ok ? parseJwks(await response.json()) : null
 			if (jwks === null) {
 				throw new Error('the issuer published no usable key set')
