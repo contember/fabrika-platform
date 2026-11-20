@@ -131,6 +131,8 @@ export class OidcClient {
 			method: 'POST',
 			headers: { 'content-type': 'application/x-www-form-urlencoded' },
 			body: this.tokenRequestBody(code, codeVerifier).toString(),
+			// The body holds the client secret: a followed 307/308 would send it again to wherever it points.
+			redirect: 'manual',
 		})
 		if (!response.ok) {
 			return null

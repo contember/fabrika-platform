@@ -163,6 +163,29 @@ describe('discovery', () => {
 		}
 	})
 
+	test.each([307, 308])('a %d from the token endpoint is not followed, so the client secret stays put', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: async (request) => {
+				arrivals.push(await request.text())
+				return Response.json({ id_token: 'stolen' })
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const idp = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			const client = new OidcClient(CONFIG, { metadata: { ...METADATA, tokenEndpoint: `http://127.0.0.1:${idp.port}/token` } })
+			expect(await client.exchangeCode('code', 'verifier')).toBeNull()
+			expect(arrivals).toEqual([])
+		} finally {
+			await idp.stop(true)
+			await target.stop(true)
+		}
+	})
+
 	test('returns the injected metadata without a network call', async () => {
 		expect(await oidc().metadata()).toEqual(METADATA)
 	})

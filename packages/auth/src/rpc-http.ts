@@ -392,6 +392,8 @@ async function post(endpoint: TransportEndpoint, method: string, input: unknown)
 			},
 			body: JSON.stringify(input),
 			signal: AbortSignal.timeout(endpoint.timeoutMs),
+			// A followed redirect would carry the bearer key and the input to wherever it points; a 3xx is not ok below.
+			redirect: 'manual',
 		})
 	} catch {
 		// Swallow the cause deliberately: a fetch error stringifies the request URL and, on some
