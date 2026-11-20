@@ -418,7 +418,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   there and a row in `kit-fixture/matrix.ts`.
 - **`.handle` answers the endpoint without the handler's type.** The handler's return is checked against the output's
   input type only: a missing or mistyped declared field is a type error, a field the output does not declare is not,
-  and the answer drops it (`project`, then the strict schema). A group does not nest; a mount nests groups. A group accepts an endpoint without `.handle`, because an options-first call cannot be checked
+  and the answer drops it (`project`, then the strict schema). So a misnamed optional field, or a raw row returned for
+  an output whose camelCase fields are optional, is dropped silently; the skill sends every row through `fromRow`. A group does not nest; a mount nests groups. A group accepts an endpoint without `.handle`, because an options-first call cannot be checked
   against its own callback; `c.rpc` refuses it, naming `<group>.<endpoint>`, and refuses a group whose type is
   widened to admit one (`GroupInput`). A callback the group refused falls back to `GroupBuild`, which the mount
   skips, so the error is not repeated there.

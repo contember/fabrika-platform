@@ -52,7 +52,9 @@ The hints:
 
 ## Type errors
 
-A kit error lands on the line of the mistake, in one or two lines that name the fix. Read the last line first.
+A kit error lands on the line of the mistake, in one or two lines that name the fix. A handler's return that does not
+fit the output is the exception: a raw row for a camelCase output, or an attachment handler that returns a page instead
+of its rows, prints the whole types over several lines. Read the last line first.
 
 | The compiler says                                                               | Fix                                                                     |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -74,6 +76,10 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 | `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`         | the column has its own read action, which this capability lacks         |
 | `Type 'Date' is not assignable to type 'string'` on a `date` column             | a `YYYY-MM-DD` string                                                   |
 | `Cannot find module '@fabrika/…'` and implicit `any`s everywhere                | `bun install` (at the repository root in a monorepo)                    |
+
+A returned field the output does not declare is no error: the answer drops it. A misnamed optional field is therefore
+dropped without a word, and so is every optional camelCase field of a raw row returned as is. A row always reaches an
+output through `fromRow(Schema, row)`.
 
 ## Runtime answers
 

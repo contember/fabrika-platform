@@ -1321,6 +1321,8 @@ Mount every group in `fabrika.contract.ts`:
 - `fromRow(Schema, row)` turns snake_case columns into the schema's camelCase fields, a `Date` into ISO text, drops a
   column the schema does not declare, and parses the rest. `fromPage(Schema, page)` does it for every row of a
   `list` answer and keeps its `next`: the whole handler of a list is `fromPage(Item, await ….list({ … }))`.
+- A row always reaches an output through `fromRow`: the answer drops every field the output does not declare, so a raw
+  row returned as is loses its snake_case columns silently when the output's camelCase fields are optional.
 - `RowOf<typeof tables, '<table>'>` (`@fabrika/db/tables`) is the row a table's read action reads, for a function that
   takes one: `const toTask = (row: RowOf<typeof tables, 'tasks'>) => fromRow(Task, row)`.
 
@@ -1816,7 +1818,9 @@ The hints:
 
 ## Type errors
 
-A kit error lands on the line of the mistake, in one or two lines that name the fix. Read the last line first.
+A kit error lands on the line of the mistake, in one or two lines that name the fix. A handler's return that does not
+fit the output is the exception: a raw row for a camelCase output, or an attachment handler that returns a page instead
+of its rows, prints the whole types over several lines. Read the last line first.
 
 | The compiler says                                                               | Fix                                                                     |
 | ------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -1838,6 +1842,10 @@ A kit error lands on the line of the mistake, in one or two lines that name the 
 | `Property 'margin' does not exist on type 'Omit<DealsTable, "margin">'`         | the column has its own read action, which this capability lacks         |
 | `Type 'Date' is not assignable to type 'string'` on a `date` column             | a `YYYY-MM-DD` string                                                   |
 | `Cannot find module '@fabrika/…'` and implicit `any`s everywhere                | `bun install` (at the repository root in a monorepo)                    |
+
+A returned field the output does not declare is no error: the answer drops it. A misnamed optional field is therefore
+dropped without a word, and so is every optional camelCase field of a raw row returned as is. A row always reaches an
+output through `fromRow(Schema, row)`.
 
 ## Runtime answers
 
