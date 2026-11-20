@@ -62,10 +62,11 @@ describe('Cloudflare response boundaries', () => {
 		const location = `http://localhost:${target.port}/collect`
 		const api = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
 		// The real request, aimed at the local stand-in for the Cloudflare API.
-		fetchMock.mockImplementation((input, init) => {
+		const toLocalApi = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
 			const url = new URL(input instanceof Request ? input.url : String(input))
 			return realFetch(`http://127.0.0.1:${api.port}${url.pathname}${url.search}`, init)
-		})
+		}
+		fetchMock.mockImplementation(Object.assign(toLocalApi, { preconnect: realFetch.preconnect }))
 		try {
 			await expect(listAccounts('token')).rejects.toThrow(`Listing accounts: unexpected Cloudflare response (HTTP ${status}).`)
 			expect(await verifyToken('token', 'account')).toBe(false)
