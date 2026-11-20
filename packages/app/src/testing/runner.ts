@@ -1,6 +1,6 @@
-// The test functions the generated tests register through. The platform's run preloads `@fabrika/app/testing/preload`,
-// which captures Bun's own `test`, `describe`, `expect` and `afterAll` before any application module loads, so a
-// `mock.module('bun:test', …)` in application code cannot replace what the generated tests use. Each case counts
+// The test functions the isolation kits' cases register through. A run that preloads `@fabrika/app/testing/preload`
+// captures Bun's own `test`, `describe`, `expect` and `afterAll` before any application module loads, so a
+// `mock.module('bun:test', …)` in application code cannot replace what the kits use. Each case counts
 // the `expect` calls it ran; one that ran none fails, whatever the runner reports.
 
 import * as bunTest from 'bun:test'

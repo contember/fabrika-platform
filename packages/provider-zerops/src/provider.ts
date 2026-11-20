@@ -317,7 +317,7 @@ const activationHint = (version: ZeropsAppVersion, checks: boolean): string => {
 	if (version.status !== 'DEPLOY_FAILED') return ''
 	const failed = ': an init command failed or the readiness check never answered'
 	return checks
-		? `${failed}. The init commands run the migrations, the schema check and the generated isolation tests; the runtime lines above show how far they got`
+		? `${failed}. The init commands run the migrations and the schema check; the runtime lines above show how far they got`
 		: failed
 }
 

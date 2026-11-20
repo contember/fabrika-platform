@@ -19,7 +19,7 @@ export type SampleValue = Primitive | null
 
 /**
  * A seeded value as a backend binds it: a JSON column's value as the JSON text the layer would write for it, so a
- * seeded row and the generated cases that write the same value through the layer hold the same JSON.
+ * seeded row and the kits' cases that write the same value through the layer hold the same JSON.
  */
 export function seedBinding(columns: readonly SeedColumn[], table: string, name: string, value: SampleValue): SampleValue {
 	if (value === null || !columns.some((column) => column.table === table && column.name === name && column.json)) return value

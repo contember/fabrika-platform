@@ -147,7 +147,7 @@ interface ProbeActions {
 	readonly reads: readonly string[]
 }
 
-/** The actions a probe holds: the first of each operation, as the generated cases name them. */
+/** The actions a probe holds: the first of each operation, as the kit's cases name them. */
 function probeActions(actions: TablePolicyArtifact['actions']): ProbeActions {
 	const reads = tableActions(actions.read)
 	return {
