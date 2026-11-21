@@ -317,11 +317,18 @@ function isObject(value: unknown): value is Record<string, unknown> {
 /** Replaced with the manifest's string literal when wrangler bundles the Worker (`PROXY_MANIFEST_DEFINE` in `./proxy`). */
 declare const __FABRIKA_PROXY_MANIFEST__: string | undefined
 
-// `typeof` reads an identifier no bundle defined without throwing: an unbaked bundle serves its fixed 503.
-const BAKED_MANIFEST_JSON: string = typeof __FABRIKA_PROXY_MANIFEST__ === 'string' ? __FABRIKA_PROXY_MANIFEST__ : ''
+// `typeof` reads an identifier no bundle defined without throwing: an unbaked bundle has none.
+const BAKED_MANIFEST_JSON: string | undefined = typeof __FABRIKA_PROXY_MANIFEST__ === 'string' ? __FABRIKA_PROXY_MANIFEST__ : undefined
+
+/**
+ * The deployed Worker serves the manifest baked into its bundle and never a variable. An unbaked bundle, which only a
+ * local run builds (`composeLocalApplication`: Lopata applies no `define`), serves `FABRIKA_PROXY_MANIFEST_JSON`.
+ */
+export const proxyWorkerEnv = (env: CloudflareProxyEnv, baked: string | undefined): CloudflareProxyEnv =>
+	baked === undefined ? env : { ...env, FABRIKA_PROXY_MANIFEST_JSON: baked }
 
 export default {
 	fetch(request: Request, env: CloudflareProxyEnv): Promise<Response> {
-		return createCloudflareProxyHandler({ ...env, FABRIKA_PROXY_MANIFEST_JSON: BAKED_MANIFEST_JSON })(request)
+		return createCloudflareProxyHandler(proxyWorkerEnv(env, BAKED_MANIFEST_JSON))(request)
 	},
 }

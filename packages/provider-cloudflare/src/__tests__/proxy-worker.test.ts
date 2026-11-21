@@ -42,7 +42,7 @@ import {
 	signUserToken,
 } from '../../../proxy-core/src/__tests__/helpers'
 import { createCloudflareProxyWorker, proxyManifestJson } from '../proxy'
-import { type CloudflareProxyEnv, createCloudflareProxyHandler } from '../proxy-worker'
+import proxyWorker, { type CloudflareProxyEnv, createCloudflareProxyHandler, proxyWorkerEnv } from '../proxy-worker'
 
 /**
  * A request whose `url` is the string as written. Bun's `Request` resolves dot segments on
@@ -1220,5 +1220,20 @@ describe('Cloudflare proxy Worker, cross-origin (ADR-0022 "Cross-origin endpoint
 			crossOrigins: [],
 		})
 		expect(entryOf(none).crossOrigins).toBeUndefined()
+	})
+})
+
+describe('where the proxy Worker reads its manifest', () => {
+	test('a bundle without a baked manifest, which only a local run builds, serves the manifest variable', async () => {
+		const env = environment([protocolRow('/public/*')])
+		const answer = await proxyWorker.fetch(new Request(`https://${HOST}/public/page`), env)
+		expect(answer.status).toBe(200)
+		expect(await answer.text()).toBe('upstream')
+	})
+
+	test('a baked manifest wins over the variable, which a deployed Worker never reads', () => {
+		const env = environment([protocolRow('/public/*')])
+		expect(proxyWorkerEnv(env, 'baked').FABRIKA_PROXY_MANIFEST_JSON).toBe('baked')
+		expect(proxyWorkerEnv(env, undefined).FABRIKA_PROXY_MANIFEST_JSON).toBe(env.FABRIKA_PROXY_MANIFEST_JSON)
 	})
 })
