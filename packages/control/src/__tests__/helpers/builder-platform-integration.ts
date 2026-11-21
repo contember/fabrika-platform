@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { HttpIamRpc } from '../../../../auth/src/rpc-http'
 import { startDaemon } from '../../../../builder/daemon/src/index'
 import { PlatformStorage } from '../../../../builder/daemon/src/platform-storage'
-import { builderDaemonUrl, parseBuilderPlatformStatus } from '../../../../builder/shared'
+import { BUILDER_CLI_TOKEN_HEADER, builderDaemonUrl, parseBuilderPlatformStatus } from '../../../../builder/shared'
 import { createHarness as createIamHarness, seedInlineGrant, seedUser } from '../../../../iam/src/__tests__/helpers/harness'
 import { createIamApp } from '../../../../iam/src/app'
 import type { Env as IamEnv } from '../../../../iam/src/env'
@@ -177,9 +177,11 @@ export async function integrationFixture() {
 		cleanup.push(() => daemon.stop())
 		const localOrigin = builderDaemonUrl(daemon.port)
 		async function local(action: string, input?: unknown) {
+			// As the builder CLI calls the daemon: with the capability the daemon writes for its owner.
+			const headers = { [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken }
 			const response = await fetch(
 				`${localOrigin}/api/project/${id}/${action}`,
-				input === undefined ? {} : { method: 'POST', body: JSON.stringify(input) },
+				input === undefined ? { headers } : { method: 'POST', headers, body: JSON.stringify(input) },
 			)
 			if (!response.ok) throw new Error(`Local ${action} failed: ${response.status}`)
 			return parseBuilderPlatformStatus(await response.json())
