@@ -9,6 +9,7 @@ import {
 	FABRIKA_SOURCE_MAP_UPLOAD,
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 	type FrameworkVariableName,
+	releaseFrom,
 } from '@fabrika/auth-core'
 import type { OperationsAssetRoot, OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
 import type { JsonValue } from '@fabrika/provider-contract'
@@ -89,6 +90,11 @@ export interface ZeropsLockedExecution {
 	 * framework minor it pins: the build runs `fabrika-check` and `fabrika-source-maps` of `@fabrika/check` at it.
 	 */
 	readonly checkRelease: string
+	/**
+	 * The `@fabrika/app` release the application pins (`ProviderApprovedAccess.framework`), which the schema checks' gate
+	 * reads; null when Control approved the access before it recorded the pin.
+	 */
+	readonly framework: string | null
 	/** A `${host_…}` reference to the application's PostgreSQL service, or null when it has none. */
 	readonly databaseUrl: string | null
 	/**
@@ -278,11 +284,19 @@ export type ZeropsSchemaChecks = 'build' | 'init'
 const POSTGRES18_BUILD_BASES: ReadonlySet<string> = new Set([ZEROPS_APPLICATION_RUNTIME])
 
 /**
- * Where the schema checks of an application with a database run: in the build only when every build base is a known one
- * (a bare name such as `bun@1.3` is the `alpine/` image of the default `os`); any other build keeps them in the init
- * commands (ADR-0062).
+ * The first framework release whose `fabrika db migrate` checks the schema against every migration's declarations on
+ * each run, also with nothing to apply. `codegen --verify` at start did that before; from it the init command keeps that
+ * live check, so `codegen --verify` may move into the build. An older CLI's `migrate` checks only a file it applies.
  */
-export function zeropsSchemaChecks(authored: Pick<AuthoredBuild, 'base' | 'os'>): ZeropsSchemaChecks {
+export const MIGRATE_CHECKS_DATABASE_CODE_SINCE = '0.9.0-dev.23'
+
+/**
+ * Where the schema checks of an application with a database run: in the build only when the application's `migrate`
+ * keeps the live database-code check (`MIGRATE_CHECKS_DATABASE_CODE_SINCE`) and every build base is a known one (a bare
+ * name such as `bun@1.3` is the `alpine/` image of the default `os`); any other keeps them in the init commands (ADR-0062).
+ */
+export function zeropsSchemaChecks(authored: Pick<AuthoredBuild, 'base' | 'os'>, framework: string | null): ZeropsSchemaChecks {
+	if (framework === null || !releaseFrom(framework, MIGRATE_CHECKS_DATABASE_CODE_SINCE)) return 'init'
 	if (authored.os !== null && authored.os !== 'alpine') return 'init'
 	const bases = authored.base === null ? [ZEROPS_APPLICATION_RUNTIME] : typeof authored.base === 'string' ? [authored.base] : authored.base
 	const known = bases.length > 0 && bases.every((base) => POSTGRES18_BUILD_BASES.has(base.includes('/') ? base : `alpine/${base}`))
@@ -361,7 +375,7 @@ export function renderLockedSetup(
 	const packages = sortedUnique([...execution.runtimePackages, ...(scan ? [SCANNER_PACKAGE] : [])])
 	// Every container keeps its own signatures; one scan pass at a time holds the job's lease.
 	const crontab = [...jobCrontab(execution), ...(scan ? [{ timing: FRESHCLAM_SCHEDULE, command: FRESHCLAM, allContainers: true }] : [])]
-	const schemaChecks = zeropsSchemaChecks(authored)
+	const schemaChecks = zeropsSchemaChecks(authored, execution.framework)
 	const initCommands = generatedInitCommands(execution, schemaChecks)
 	const prepareCommands = packages.length === 0 ? [] : [`sudo apk add --no-cache ${packages.join(' ')}`, ...(scan ? [FRESHCLAM] : [])]
 	return {

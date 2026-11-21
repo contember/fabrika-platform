@@ -11,6 +11,7 @@ import { useSharedPostgres } from '../authoring'
 import { parseZeropsDescriptor } from '../descriptor'
 import {
 	FABRIKA_CHECK_VERSION,
+	MIGRATE_CHECKS_DATABASE_CODE_SINCE,
 	PLATFORM_TYPESCRIPT_VERSION,
 	renderLockedExecutionDescriptor,
 	zeropsAssetRoots,
@@ -64,10 +65,13 @@ const mapping = (value: JsonValue | undefined): Mapping => {
 	return value
 }
 
-const render = (manifest: FabrikaManifest, release: string | null = 'r1'): Mapping => {
+const render = (manifest: FabrikaManifest, release: string | null = 'r1', framework: string | null = MIGRATE_CHECKS_DATABASE_CODE_SINCE): Mapping => {
 	const execution = lockedExecutionOf(manifest)
 	if (execution === null) throw new Error('expected a contract application')
-	const rendered = renderLockedExecutionDescriptor(manifest.target.sourceDescriptor.contents, manifest.target.zeropsSetup, release, execution)
+	const rendered = renderLockedExecutionDescriptor(manifest.target.sourceDescriptor.contents, manifest.target.zeropsSetup, release, {
+		...execution,
+		framework,
+	})
 	const setups = parseZeropsDescriptor(rendered.contents).document['zerops']
 	if (!Array.isArray(setups) || setups.length !== 1) throw new Error('expected one setup')
 	return mapping(setups[0])
@@ -175,7 +179,7 @@ describe('the generated execution descriptor of a contract application', () => {
 	})
 
 	test('only build bases known to be Alpine 3.23 or later check the schema in the build; anything else at start', () => {
-		const at = (base: string | string[] | null, os: string | null = null) => zeropsSchemaChecks({ base, os })
+		const at = (base: string | string[] | null, os: string | null = null) => zeropsSchemaChecks({ base, os }, MIGRATE_CHECKS_DATABASE_CODE_SINCE)
 		// The platform's default, verified live as Alpine 3.23.5, by its name, a bare name of the default OS, or a list of them.
 		expect(at(null)).toBe('build')
 		expect(at('alpine/bun@1.3')).toBe('build')
@@ -195,6 +199,17 @@ describe('the generated execution descriptor of a contract application', () => {
 		expect(at('alpine/bun@1.2')).toBe('init')
 		expect(at('alpine/bun@latest')).toBe('init')
 		expect(at([])).toBe('init')
+	})
+
+	test('only an application whose migrate keeps the live database-code check moves the schema checks into the build', () => {
+		const at = (framework: string | null) => zeropsSchemaChecks({ base: null, os: null }, framework)
+		expect(at(MIGRATE_CHECKS_DATABASE_CODE_SINCE)).toBe('build')
+		expect(at('0.9.0')).toBe('build')
+		expect(at('0.10.0')).toBe('build')
+		// The release just below the floor, an older minor, and an access approved before Control recorded the pin.
+		expect(at('0.9.0-dev.22')).toBe('init')
+		expect(at('0.8.2')).toBe('init')
+		expect(at(null)).toBe('init')
 	})
 
 	test('the authored tests run before the reinstall, the regenerated entrypoint and every check', async () => {

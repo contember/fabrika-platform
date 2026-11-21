@@ -155,10 +155,14 @@ bun test
   Postgres-backed test files did not run …`: the tests run before any database, and no later step runs them. With a
   database, the build's last check is one command that installs `postgresql18`, starts a throwaway cluster on a unix
   socket behind a random password, migrates it from scratch, runs `fabrika db codegen --verify` on it and stops it, so
-  a failed one fails the build; the init command runs only `fabrika db migrate`. Its `$PW` is unbraced on purpose:
+  a failed one fails the build; the init command runs only `fabrika db migrate`, which checks the live schema for
+  database code no migration declares on every run, so code created outside a migration still stops the activation.
+  That holds only for an application whose `migrate` does it (`MIGRATE_CHECKS_DATABASE_CODE_SINCE`, read from
+  `ProviderApprovedAccess.framework`); an older one, or one whose pin Control has not recorded, keeps `codegen --verify`
+  in the init commands. Its `$PW` is unbraced on purpose:
   Zerops may resolve a braced `${name}` in a build command (verified live 2026-11-17), and the recipe refuses one. Only
   a build whose every base is known to be Alpine 3.23 or later (`POSTGRES18_BUILD_BASES`: `alpine/bun@1.3`, verified
-  live; a bare name is the `alpine/` one) has `postgresql18`; any other keeps the schema check in the init commands
+  live; a bare name is the `alpine/` one) has `postgresql18`; any other keeps the schema check in the init commands too
   (`zeropsSchemaChecks`): `fabrika db migrate`, then `fabrika db codegen --verify`, a failure stopping the activation
   (verified live 2026-10-16). Add a base only once its Alpine release is verified; never select by trying `apk add` in
   the build, which hides a misconfiguration. Never move the init commands into the start script: the readiness window
