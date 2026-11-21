@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { PHASES } from '../../shared/phases'
-import { builderDaemonUrl } from '../../shared/urls'
+import { BUILDER_CLI_TOKEN_HEADER, builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { derivePhaseState, type GateOracle } from '../src/phases'
 import { scratchDir } from './scratch'
@@ -14,6 +14,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 let daemon: RunningDaemon
 let base: string
 let sessionsDir: string
+
+/** What the CLI presents on its routes. */
+const cli = (): Record<string, string> => ({ [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken })
 
 beforeAll(() => {
 	sessionsDir = scratchDir('fabrika-daemon-sessions-')
@@ -77,7 +80,7 @@ describe('daemon http endpoints', () => {
 		const sessionId = 'smoke-session'
 		const res = await fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot: canvasDir, gate: 'intake' }),
 		})
 		expect(res.status).toBe(200)
@@ -110,7 +113,7 @@ describe('daemon http endpoints', () => {
 		const sessionId = 'single-view-session'
 		const res = await fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ view: vision, projectRoot: canvasDir, gate: 'vision' }),
 		})
 		expect(res.status).toBe(200)
@@ -135,7 +138,7 @@ describe('daemon http endpoints', () => {
 
 		const res = await fetch(`${base}/api/session/ambiguous-source/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ view, directory: canvasDir, projectRoot: canvasDir, gate: 'intake' }),
 		})
 		expect(res.status).toBe(400)
@@ -155,7 +158,7 @@ describe('daemon http endpoints', () => {
 		const sessionId = 'gate-unanswered-session'
 		const open = await fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot: repo, gate: 'vision' }),
 		})
 		expect(open.status).toBe(200)
@@ -172,7 +175,7 @@ describe('daemon http endpoints', () => {
 	test('POST /api/build/event + history echoes the event', async () => {
 		const res = await fetch(`${base}/api/build/event`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ issue: 'ISSUE-001', status: 'running', message: 'building' }),
 		})
 		expect(res.status).toBe(200)
@@ -182,13 +185,13 @@ describe('daemon http endpoints', () => {
 		expect(typeof body.event.at).toBe('string')
 		const recovered = await fetch(`${base}/api/build/event`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ status: 'info', issue: 42, message: null, at: 'legacy time', data: { extension: true }, ignored: true }),
 		})
 		expect(await recovered.json()).toEqual({ ok: true, event: { status: 'info', at: 'legacy time', data: { extension: true } } })
 		const rejected = await fetch(`${base}/api/build/event`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ status: 'credential-secret' }),
 		})
 		expect(rejected.status).toBe(400)
@@ -213,7 +216,7 @@ describe('daemon http endpoints', () => {
 		const sessionId = 'artifact-session'
 		await fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot, gate: 'design' }),
 		})
 
@@ -244,7 +247,7 @@ describe('daemon http endpoints', () => {
 		const push = (projectRoot: string) =>
 			fetch(`${base}/api/session/${sessionId}/plan`, {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
+				headers: { 'Content-Type': 'application/json', ...cli() },
 				body: JSON.stringify({ directory: canvasDir, projectRoot, gate: 'intake' }),
 			})
 
@@ -276,7 +279,7 @@ describe('daemon http endpoints', () => {
 		const sessionId = 'skeletons-session'
 		await fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot, gate: 'skeletons' }),
 		})
 
@@ -298,7 +301,7 @@ describe('daemon http endpoints', () => {
 		const sessionId = 'responses-session'
 		await fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot: canvasDir, gate: 'intake' }),
 		})
 
@@ -340,19 +343,19 @@ describe('daemon http endpoints', () => {
 		const sessionId = 'reset-session'
 		await fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot: canvasDir, gate: 'intake' }),
 		})
 
 		expect((await fetch(`${base}/api/session/${sessionId}/meta`)).status).toBe(200)
 
-		const reset = await fetch(`${base}/api/session/${sessionId}/reset`, { method: 'POST' })
+		const reset = await fetch(`${base}/api/session/${sessionId}/reset`, { method: 'POST', headers: cli() })
 		expect(reset.status).toBe(200)
 		expect((await reset.json()).existed).toBe(true)
 
 		expect((await fetch(`${base}/api/session/${sessionId}/meta`)).status).toBe(404)
 
-		const noop = await fetch(`${base}/api/session/${sessionId}/reset`, { method: 'POST' })
+		const noop = await fetch(`${base}/api/session/${sessionId}/reset`, { method: 'POST', headers: cli() })
 		expect((await noop.json()).existed).toBe(false)
 
 		rmSync(canvasDir, { recursive: true, force: true })

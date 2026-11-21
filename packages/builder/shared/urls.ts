@@ -1,6 +1,15 @@
 // Bound and addressed as a literal: `localhost` can bind ::1 while a client connects to 127.0.0.1.
 export const BUILDER_DAEMON_HOST = '127.0.0.1'
 
+/** The header the builder CLI sends its capability in; the daemon writes the capability to `daemon-auth-token` beside its pid file. */
+export const BUILDER_CLI_TOKEN_HEADER = 'X-Builder-CLI-Token'
+
+/** The query parameter a CLI WebSocket upgrade carries the capability in: the DOM `WebSocket` constructor takes no headers. */
+export const BUILDER_CLI_TOKEN_QUERY = 'cli_token'
+
+/** The file beside the daemon's pid file that holds the capability, under the shared temp directory. */
+export const BUILDER_CLI_AUTH_FILENAME = 'daemon-auth-token'
+
 export function builderDaemonUrl(port: number, scheme: 'http' | 'ws' = 'http'): string {
 	return `${scheme}://${BUILDER_DAEMON_HOST}:${port}`
 }

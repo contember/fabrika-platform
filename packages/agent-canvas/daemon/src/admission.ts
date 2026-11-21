@@ -1,5 +1,4 @@
-import { jsonResponse } from '@fabrika/daemon-kit'
-import { timingSafeEqual } from 'crypto'
+import { jsonResponse, matchesCapability } from '@fabrika/daemon-kit'
 
 /** The header the CLI sends its capability in; the daemon writes the capability to `CLI_AUTH_FILE`. */
 export const CLI_TOKEN_HEADER = 'X-Agent-Canvas-CLI-Token'
@@ -47,14 +46,7 @@ export function daemonOrigins(port: number): Set<string> {
 }
 
 export function hasCliToken(req: Request, cliAuthToken: string): boolean {
-	return matchesToken(req.headers.get(CLI_TOKEN_HEADER), cliAuthToken)
-}
-
-function matchesToken(presented: string | null, cliAuthToken: string): boolean {
-	if (presented === null) return false
-	const expected = Buffer.from(cliAuthToken)
-	const actual = Buffer.from(presented)
-	return actual.length === expected.length && timingSafeEqual(actual, expected)
+	return matchesCapability(req.headers.get(CLI_TOKEN_HEADER), cliAuthToken)
 }
 
 function isCliRoute(req: Request, url: URL): boolean {
@@ -97,7 +89,7 @@ export function admitRequest(req: Request, url: URL, options: AdmissionOptions):
 	}
 
 	const presented = req.headers.get(CLI_TOKEN_HEADER) ?? (isUpgrade ? url.searchParams.get(CLI_TOKEN_QUERY) : null)
-	if (isCliRoute(req, url) && !matchesToken(presented, options.cliAuthToken)) {
+	if (isCliRoute(req, url) && !matchesCapability(presented, options.cliAuthToken)) {
 		return jsonResponse({ error: 'This endpoint is available only to the local CLI' }, 401)
 	}
 

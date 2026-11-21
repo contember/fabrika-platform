@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto'
 import { chmodSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { BUILDER_DAEMON_HOST, builderDaemonUrl, parseBuilderPlatformStatus } from '../../shared'
+import { BUILDER_CLI_TOKEN_HEADER, BUILDER_DAEMON_HOST, builderDaemonUrl, parseBuilderPlatformStatus } from '../../shared'
 import { startDaemon } from '../src/index'
 import { BuilderPlatform } from '../src/platform'
 import { verifySource } from '../src/platform-source'
@@ -44,6 +44,7 @@ describe('local project API and custody', () => {
 			symlinkSync(join(f.directory, 'keys', 'secret'), join(f.root, 'secret.jsx'))
 			const canvas = await fetch(`${base}/api/session/${f.id}/plan`, {
 				method: 'POST',
+				headers: { [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken },
 				body: JSON.stringify({ view: join(f.root, 'secret.jsx'), projectRoot: f.root }),
 			})
 			expect(canvas.status).toBe(400)

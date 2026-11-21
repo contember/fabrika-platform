@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
 import { request } from 'node:http'
 import { join } from 'node:path'
-import { BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
+import { BUILDER_CLI_TOKEN_HEADER, BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
 import { admitRequest } from '../src/admission'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { scratchDir } from './scratch'
@@ -122,7 +122,7 @@ describe('daemon request admission on the bound dynamic port', () => {
 	test('allows originless CLI and exact same-origin HTTP writes', async () => {
 		for (const headers of allowedHeaders()) {
 			daemon.sessionManager.upsert('allowed', new Map([['view.jsx', '<div />']]), directory)
-			expect(await send('/api/session/allowed/reset', 'POST', headers)).toBe(200)
+			expect(await send('/api/session/allowed/reset', 'POST', { ...headers, [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken })).toBe(200)
 			expect(daemon.sessionManager.get('allowed')).toBeUndefined()
 		}
 		expect(daemon.port).toBeGreaterThan(0)
@@ -142,6 +142,7 @@ describe('daemon request admission on the bound dynamic port', () => {
 				expect(
 					await send(`/ws/${route}/protected`, 'GET', {
 						...headers,
+						...(route === 'wait' ? { [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken } : {}),
 						Connection: 'Upgrade',
 						Upgrade: 'websocket',
 						'Sec-WebSocket-Version': '13',

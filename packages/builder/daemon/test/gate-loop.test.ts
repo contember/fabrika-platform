@@ -5,7 +5,7 @@ import { fileURLToPath } from 'url'
 import { readApprovals, writeApprovals } from '../../shared/approvals'
 import { derivePhase } from '../../shared/derive'
 import { sessionMetaSchema, uiPhaseStateSchema } from '../../shared/index'
-import { builderDaemonUrl } from '../../shared/urls'
+import { BUILDER_CLI_TOKEN_HEADER, BUILDER_CLI_TOKEN_QUERY, builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { scratchDir } from './scratch'
 
@@ -21,11 +21,17 @@ let base: string
 let wsBase: string
 let dataDir: string
 let sessionsDir: string
+let cliTempDir: string
+
+/** What the CLI presents on its routes. */
+const cli = (): Record<string, string> => ({ [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken })
 
 beforeAll(() => {
 	dataDir = scratchDir('fabrika-gate-loop-')
 	sessionsDir = join(dataDir, 'sessions')
-	daemon = startDaemon({ port: 0, sessionsDir })
+	cliTempDir = join(dataDir, 'tmp')
+	// The spawned CLI reads the capability from `$TMPDIR/fabrika`, as beside a daemon it started itself.
+	daemon = startDaemon({ port: 0, sessionsDir, cliAuthFile: join(cliTempDir, 'fabrika', 'daemon-auth-token') })
 	base = builderDaemonUrl(daemon.port)
 	wsBase = builderDaemonUrl(daemon.port, 'ws')
 })
@@ -54,7 +60,7 @@ async function openGate(sessionId: string, gate: string): Promise<void> {
 	writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='Review me'>body</Section>")
 	const res = await fetch(`${base}/api/session/${sessionId}/plan`, {
 		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
+		headers: { 'Content-Type': 'application/json', ...cli() },
 		body: JSON.stringify({ directory: canvasDir, projectRoot: canvasDir, gate }),
 	})
 	const body = await res.json()
@@ -71,6 +77,7 @@ async function runCli(
 			...process.env,
 			FABRIKA_PORT: String(daemon.port),
 			FABRIKA_DATA_DIR: dataDir,
+			TMPDIR: cliTempDir,
 			...env,
 		},
 		stdout: 'pipe',
@@ -97,7 +104,7 @@ describe('gate interactive loop', () => {
 		const sessionId = 'gate-loop-submit'
 		await openGate(sessionId, 'vision')
 
-		const waiter = await openSocket(`${wsBase}/ws/wait/${sessionId}`)
+		const waiter = await openSocket(`${wsBase}/ws/wait/${sessionId}?${BUILDER_CLI_TOKEN_QUERY}=${encodeURIComponent(daemon.cliAuthToken)}`)
 
 		const feedbackMarkdown = '## General\nLooks good, tighten the hero copy.\n\n- [block-2] needs a CTA'
 
@@ -127,13 +134,13 @@ describe('gate interactive loop', () => {
 		expect(stored.feedback).toBe(feedbackMarkdown)
 
 		const consume = await (
-			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 		).json()
 		expect(consume.found).toBe(true)
 		expect(consume.feedback).toBe(feedbackMarkdown)
 
 		const consumeAgain = await (
-			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 		).json()
 		expect(consumeAgain.found).toBe(false)
 
@@ -208,7 +215,7 @@ describe('gate interactive loop', () => {
 		await new Promise((r) => setTimeout(r, 100))
 		browser1.close()
 		const consume = await (
-			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 		).json()
 		expect(consume.found).toBe(true)
 
@@ -312,7 +319,7 @@ describe('gate interactive loop', () => {
 		first.send(JSON.stringify({ type: 'submit', feedback: 'Brief good.' }))
 		await new Promise((r) => setTimeout(r, 100))
 		first.close()
-		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 
 		writeFlow(repo)
 		await openGate(sessionId, 'flows')
@@ -364,7 +371,7 @@ describe('gate interactive loop', () => {
 		old.send(JSON.stringify({ type: 'submit', feedback: 'Mockup ok.', responses: [{ id: 'verdict', value: 'Approve' }] }))
 		await new Promise((r) => setTimeout(r, 100))
 		old.close()
-		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 		const stale = await runCli(['build', 'done', 'ISSUE-004', '--dir', repo], cliEnv)
 		expect(stale.code).toBe(1)
 
@@ -401,9 +408,9 @@ describe('gate interactive loop', () => {
 		})
 
 		// The review stays readable after it was consumed; a gate never opened has none.
-		const again = await (await fetch(`${base}/api/session/${sessionId}/gate/design-checkpoint/consume`, { method: 'POST' })).json()
+		const again = await (await fetch(`${base}/api/session/${sessionId}/gate/design-checkpoint/consume`, { method: 'POST', headers: cli() })).json()
 		expect(again).toEqual({ found: true, revision: 2, verdict: 'changes' })
-		const missing = await (await fetch(`${base}/api/session/${sessionId}/gate/tech/consume`, { method: 'POST' })).json()
+		const missing = await (await fetch(`${base}/api/session/${sessionId}/gate/tech/consume`, { method: 'POST', headers: cli() })).json()
 		expect(missing).toEqual({ found: false })
 
 		rmSync(repo, { recursive: true, force: true })
@@ -449,7 +456,7 @@ describe('gate interactive loop', () => {
 		}
 
 		await submit('vision')
-		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+		await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 		await submit('flows')
 		expect(readApprovals(repo)).toBeNull()
 
@@ -490,7 +497,7 @@ describe('gate interactive loop', () => {
 			ws.send(JSON.stringify({ type: 'submit', feedback: 'Fine.', responses: [{ id: 'verdict', value: 'Approve' }] }))
 			await new Promise((r) => setTimeout(r, 100))
 			ws.close()
-			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 		}
 		expect(derivePhase(repo).current).toBe('vision')
 
@@ -520,7 +527,7 @@ describe('gate interactive loop', () => {
 			ws.send(JSON.stringify({ type: 'submit', feedback: 'Fine.', responses: [{ id: 'verdict', value: 'Approve' }] }))
 			await new Promise((r) => setTimeout(r, 100))
 			ws.close()
-			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 		}
 		const phaseUrl = `${base}/api/phase?root=${encodeURIComponent(join(repo, '.fabrika'))}&session=${sessionId}`
 		const meta = async () => sessionMetaSchema.parse(await (await fetch(`${base}/api/session/${sessionId}/meta`)).json())
@@ -541,7 +548,7 @@ describe('gate interactive loop', () => {
 		expect(submitted.gate).toBe('design-checkpoint')
 		expect(submitted.revisions.at(-1)).toMatchObject({ label: 'design-checkpoint', hasFeedback: true, feedbackConsumed: false })
 
-		const consumed = await fetch(`${base}/api/session/${sessionId}/gate/design-checkpoint/consume`, { method: 'POST' })
+		const consumed = await fetch(`${base}/api/session/${sessionId}/gate/design-checkpoint/consume`, { method: 'POST', headers: cli() })
 		expect(await consumed.json()).toMatchObject({ verdict: 'approve' })
 		expect((await meta()).gate).toBeNull()
 
@@ -612,7 +619,7 @@ describe('gate interactive loop', () => {
 		browser.close()
 
 		const consume = await (
-			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST' })
+			await fetch(`${base}/api/session/${sessionId}/feedback/consume`, { method: 'POST', headers: cli() })
 		).json()
 		expect(consume.found).toBe(true)
 		expect(consume.revision).toBe(1)

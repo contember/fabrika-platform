@@ -4,7 +4,7 @@ import { mkdirSync, rmSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
 import { activeDaemonSchema, builderDaemonUrl } from '../../shared'
 import { startDaemon } from './index'
-import { PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
+import { CLI_AUTH_FILE, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
 
 const port = parseInt(process.env['FABRIKA_PORT'] || '19410', 10)
 
@@ -45,9 +45,9 @@ if (active) {
 
 let boundPort: number
 try {
-	;({ port: boundPort } = startDaemon({ port }))
+	;({ port: boundPort } = startDaemon({ port, cliAuthFile: CLI_AUTH_FILE }))
 } catch (error: unknown) {
-	console.error(`fabrika daemon failed to bind :${port}: ${error instanceof Error ? error.message : String(error)}`)
+	console.error(`fabrika daemon failed to start on :${port}: ${error instanceof Error ? error.message : String(error)}`)
 	process.exit(1)
 }
 
@@ -59,6 +59,7 @@ console.log(`fabrika daemon listening on ${builderDaemonUrl(boundPort)}`)
 function shutdown() {
 	try {
 		rmSync(PID_FILE, { force: true })
+		rmSync(CLI_AUTH_FILE, { force: true })
 	} catch {
 	}
 	process.exit(0)
