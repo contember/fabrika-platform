@@ -98,6 +98,19 @@ reads none of that. A fragment it refused for its place (under an `OR`, in paren
 the approver's to review: keep each fragment a top-level conjunct of its WHERE or JOIN … ON. A write of a reference
 table is no longer refused by the tag; write none. `ctx.sql` now runs on Cloudflare too (step 3 below).
 
+A dimension, child or application table with a `version` column is versioned, and one with a `created_by` column has
+its writer stamped there, without `version: 'version'` or `createdBy: 'created_by'` in its policy. Those lines may go:
+the contract and its digest do not change. A table that has such a column without stating it changes at the pin raise:
+an update and a remove then take `{ expectVersion }`, an insert stamps `created_by`, and the approval diff shows the new
+version or creator column. A column of that name the application writes itself (in `insert` or `update`, through
+`ctx.sql`, or a foreign key the stamp does not fit) needs another name: rename it in a migration, or name another
+column as the table's `version` or `createdBy`. A `version` column that holds no number, or may be null, cannot be the
+version: rename it, or add an `INTEGER NOT NULL` column and name it. The platform reads every 0.9 prerelease with
+its own reader, so an application on a 0.9 prerelease before this change that has such a column without stating it
+states the line, or raises its pin, before the installation upgrades: otherwise the digest the platform approves
+differs from the one its build computes, and the deploy refuses to boot. `NormalizedPolicies` of `@fabrika/db` takes
+the schema first: `NormalizedPolicies<DB, P, V, Views>`.
+
 A job without `limits.timeoutMs` now gets 14 minutes per attempt, not 15, on both providers, so the contract and its
 digest change at the pin raise. A job that needs more on Zerops declares it.
 

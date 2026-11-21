@@ -11,6 +11,7 @@ import ts from 'typescript-platform'
 import { PolicyError } from '../errors'
 import { modelOf, readTables, tableModels } from '../policy'
 import { defineTables, tablePolicies } from '../tables'
+import { conventional, stampedColumns, stated } from './derived-tables/conventions'
 import { annotated, columns, derived, folders, noteComments, notes, tags, vocabulary, workspaces } from './derived-tables/schema'
 
 const spelledOut = defineTables(vocabulary, columns)({
@@ -206,6 +207,68 @@ describe('every action is one of the vocabulary', () => {
 	})
 })
 
+describe("a written table's version and created_by columns are its version and creator unless its policy names others", () => {
+	const spelled = defineTables(vocabulary, stampedColumns)({
+		...stated,
+		notes: { ...stated.notes, version: 'version', createdBy: 'created_by' },
+	})
+
+	test('a table with the columns gets both without declaring them, as if it stated them', () => {
+		const model = modelOf(tableModels(conventional), 'notes')
+		expect(model?.version).toBe('version')
+		expect(model?.createdBy).toBe('created_by')
+		expect(tablePolicies(conventional)).toEqual(tablePolicies(spelled))
+	})
+
+	test('readTables derives the same from unchecked values', () => {
+		expect(tablePolicies(readTables(plain(stampedColumns), plain(stated), plain(vocabulary)))).toEqual(tablePolicies(spelled))
+	})
+
+	test('a child and an application table with them get both too', () => {
+		const models = tableModels(conventional)
+		for (const table of ['note_revisions', 'settings']) {
+			expect(modelOf(models, table)?.version).toBe('version')
+			expect(modelOf(models, table)?.createdBy).toBe('created_by')
+		}
+	})
+
+	test('a table without them is unchanged, and a view or a reference table with them is never stamped', () => {
+		const models = tableModels(conventional)
+		for (const table of ['workspaces', 'note_comments', 'note_digests', 'countries']) {
+			expect(modelOf(models, table)?.version).toBeUndefined()
+			expect(modelOf(models, table)?.createdBy).toBeUndefined()
+		}
+		expect(tablePolicies(conventional)['countries']).toMatchObject({ version: null, createdBy: null })
+	})
+
+	test('a policy that names another column keeps it, and the version column is then written like any other', () => {
+		const model = modelOf(tableModels(conventional), 'releases')
+		expect(model?.version).toBe('build')
+		expect(tablePolicies(conventional)['releases']).toMatchObject({ version: 'build', update: ['version'] })
+		const creator = { ...stated, notes: { ...stated.notes, createdBy: 'revision' } } as const
+		expect(modelOf(tableModels(defineTables(vocabulary, stampedColumns)(creator)), 'notes')?.createdBy).toBe('revision')
+	})
+
+	test('a policy that writes a conventional column it does not name is refused, naming the convention', () => {
+		const writes = (field: 'insert' | 'update', column: string) => () =>
+			readTables(plain(stampedColumns), plain({ ...stated, notes: { ...stated.notes, [field]: ['title', column] } }), plain(vocabulary))
+		expect(writes('update', 'version')).toThrow(
+			"notes: version is stamped by the layer; remove it from insert and update (a written table's column named version is its version unless the policy names another)",
+		)
+		expect(writes('insert', 'created_by')).toThrow(
+			"notes: created_by is stamped by the layer; remove it from insert and update (a written table's column named created_by is its createdBy unless the policy names another)",
+		)
+		const named = () =>
+			readTables(
+				plain(stampedColumns),
+				plain({ ...stated, notes: { ...stated.notes, version: 'version', update: ['title', 'version'] } }),
+				plain(vocabulary),
+			)
+		expect(named).toThrow('notes: version is stamped by the layer; remove it from insert and update')
+		expect(named).not.toThrow('unless the policy names another')
+	})
+})
+
 /** Each mistake, by its file under `derived-mistakes/`: the diagnostic on the line after its `// mistake:` marker. */
 const MISTAKES: Readonly<Record<string, string>> = {
 	// The compiler lists a union's members in no fixed order, so a union is held to its head.
@@ -226,6 +289,7 @@ const MISTAKES: Readonly<Record<string, string>> = {
 		"Object literal may only specify known properties, and 'dimension' does not exist in type 'VocabularyChildScope<",
 	'13-table-without-a-policy.ts': "Property 'events' is missing in type",
 	'14-reference-view-with-a-column-write.ts': "Type 'string' is not assignable to type 'undefined'.",
+	'15-version-column-not-a-number.ts': "Property 'version' is missing in type",
 }
 
 /** An annotated map is checked against every dimension's scope, which the compiler elaborates past two lines. */
