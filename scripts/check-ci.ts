@@ -146,7 +146,7 @@ const dockerAvailable = (): Promise<boolean> => succeeds(['docker', 'info', '--f
 /** The containers this run started, removed at the end whatever happened. */
 const containers = new Set<string>()
 
-const removeContainers = async (names: readonly string[]): Promise<void> => {
+export const removeContainers = async (names: readonly string[]): Promise<void> => {
 	for (const name of names) containers.delete(name)
 	if (names.length > 0) await capture(['docker', 'rm', '--force', '--volumes', ...names])
 }
@@ -295,6 +295,9 @@ const runTestJob = async (
 	}
 }
 
+/** One test job per two CPUs the run may use: on 4 vCPU (2 cores), 4 jobs at once pushed tests past their 5 s timeouts. */
+export const testJobWorkers = (jobs: number): number => Math.max(1, Math.min(Math.floor(availableParallelism() / 2), jobs))
+
 const runTestMatrix = async (env: Record<string, string | undefined>, backends: TestBackends, results: StepResult[]): Promise<void> => {
 	const jobs = backends.postgres.flatMap((postgres) =>
 		TEST_SHARDS.map((shard) => ({ label: `test (${postgres.label}, shard ${shard}/${TEST_SHARDS.length})`, shard, postgres }))
@@ -304,7 +307,6 @@ const runTestMatrix = async (env: Record<string, string | undefined>, backends: 
 		for (const job of jobs) if (!await runJob(job)) throw new StepFailure(`${job.label} failed`)
 		return
 	}
-	// One job per two CPUs the run may use: on 4 vCPU (2 cores), 4 jobs at once pushed tests past their 5 s timeouts.
 	// A worker never throws, so every job has ended before the containers are removed.
 	const failed: string[] = []
 	let next = 0
@@ -317,8 +319,7 @@ const runTestMatrix = async (env: Record<string, string | undefined>, backends: 
 			}
 		}
 	}
-	const workers = Math.max(1, Math.min(Math.floor(availableParallelism() / 2), jobs.length))
-	await Promise.all(Array.from({ length: workers }, worker))
+	await Promise.all(Array.from({ length: testJobWorkers(jobs.length) }, worker))
 	if (failed.length > 0) throw new StepFailure(`${failed.join(', ')} failed`)
 }
 
