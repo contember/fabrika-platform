@@ -6,6 +6,10 @@ minting, the administration API, and the audit log. It runs on **two** targets â
 CLAUDE.md. Browser-safe admin DTOs live in `@fabrika/iam-contract`; the `IamRpc` contract, policy
 evaluation, and token shapes live in `@fabrika/auth-core`.
 
+It is published (`@fabrika/iam`) so that an application's own local stack can run it: the Worker builder is
+`buildIamWorker` of `@fabrika/iam/fabrika.config`, and the package carries `src/` (no tests) and both migration sets.
+Its main entry is the Worker (`cloudflare:workers`), so the release's tarball smoke loads `@fabrika/iam/service`.
+
 ## Commands (this package)
 
 ```bash
