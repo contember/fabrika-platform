@@ -170,6 +170,22 @@ describe('the generated execution descriptor of a contract application', () => {
 		expect(tsconfig).toContain('"include":["../fabrika.contract.ts","../src","../web","entry.generated.ts"]')
 	})
 
+	test('an application read with an older release keeps the src/ type check its own release had', async () => {
+		const manifest = await compile(contractApp())
+		const execution = lockedExecutionOf(manifest)
+		if (execution === null) throw new Error('expected a contract application')
+		const rendered = renderLockedExecutionDescriptor(manifest.target.sourceDescriptor.contents, manifest.target.zeropsSetup, 'r1', {
+			...execution,
+			checkRelease: '0.8.2',
+		})
+		const setups = parseZeropsDescriptor(rendered.contents).document['zerops']
+		if (!Array.isArray(setups) || setups.length !== 1) throw new Error('expected one setup')
+		const commands = mapping(mapping(setups[0])['build'])['buildCommands']
+		const tsconfig = Array.isArray(commands) ? String(commands.find((command) => String(command).endsWith('> fabrika/tsconfig.platform.json'))) : ''
+		expect(tsconfig).toContain('"include":["../fabrika.contract.ts","../src","entry.generated.ts"]')
+		expect(tsconfig).not.toContain('../web')
+	})
+
 	test('an application without a database runs no migration', async () => {
 		const setup = render(await compile(contractApp({ services: () => [API] })), null)
 		expect(setup['run']).toMatchObject({

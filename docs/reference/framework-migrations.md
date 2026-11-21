@@ -41,8 +41,29 @@ calls it), and the checker no longer reports
 `generated-test-hash`, `endpoint-fixture` or `generated-test-import`. On Zerops the init commands run `fabrika db
 migrate` and `fabrika db codegen --verify` only. The application's own tests stay.
 
+`testKit({ crossOrigins })` in `@fabrika/app/testing` checks its list with the proxy's own schema, as a deploy does: an
+origin listed twice, a value that is not an exact origin, or an origin on the application's own host is refused. 0.8's
+test kit took such a list, so a test that passes one fails once the pin is raised; give it the list the application
+deploys with.
+
 `fabrika-check` prints the number of hints instead of listing them; `fabrika-check --hints` lists them as 0.8 did. A
-script that reads the hints from its output passes `--hints`. Refusals and the exit status do not change.
+script that reads the hints from its output passes `--hints`. Printing the count changes no refusal and not the exit
+status.
+
+The 0.9 checker adds three refusals:
+
+- `tool-import`: a module under a root `tools/` directory is a developer's tool, which only the rules of how it is
+  written read. No module outside `tools/`, a test and `fabrika.config.ts` included, loads or re-exports one, also
+  through an import map, a `tsconfig` path or a literal `import()`; a type-only import stays. No `package.json` lies
+  under `tools/`, and a `[test] preload` in `bunfig.toml` that names a module under `tools/` is refused too, under
+  `unchecked-import`. An application that keeps code it runs under a root `tools/` moves it under `src/`; what a tool
+  and the application share goes to `src/shared/`, imported by the tool.
+- `migration-edited`: in a git work tree, `fabrika-check` refuses a file under `db/migrations/` that was edited, deleted
+  or renamed against the merge base with the remote's default branch (`origin/HEAD`, else `origin/main` or
+  `origin/master`; `--base <ref>` names another). It does not run outside a work tree, so a deploy build never meets
+  it, but a local run and the application's own CI do. Restore the applied file and write the change as a new migration.
+- `migration-refused`: `fabrika-check` runs Control's migration classifier and reports each statement it would refuse,
+  at its file and line. Control refused such a deploy before too; the checker now fails first.
 
 On Postgres the runtime role reads a view but no longer writes or locks one. A `ctx.sql` `'write'` site that inserts,
 updates or deletes through a view, or locks one with `FOR UPDATE`/`FOR SHARE` (also a bare lock over a join that reads a
@@ -85,6 +106,10 @@ An application on Cloudflare that raises its pin to 0.9:
 1. Regenerates its entry with `fabrika app build`. `fabrika/entry.generated.ts` now exports `FabrikaApplication` and
    imports `fabrika/migrations.generated.ts`, which the build writes from `db/migrations/`. Commit both where the
    application commits its entry.
+   From `0.9.0-dev.15` the build also compiles the contract into `fabrika/contract.generated.ts`, which the entry
+   imports and every build rewrites; add `/fabrika/contract.generated.ts` to `.gitignore`. It compiles in a child
+   process whose environment holds only `PATH` and `HOME`, so a module of the application that needs another variable
+   when it loads fails the build: read the environment in `deps` or in a handler instead.
 2. Writes its migrations in SQLite under `db/migrations/` (the skill's `references/table-and-migration.md`), runs
    `fabrika db codegen`, which needs no database URL, and serves `scoped(tables)` from `defineApp(vocabulary, tables)`
    as on Zerops. There is no `fabrika db migrate`: the object applies the framework's tables and then the
@@ -136,6 +161,11 @@ and delete its `envVariables` entry: the secret reaches the process as a service
 entry of the same name would collide with it. A value made of references (`${db_password}`) is never refused. List a
 name that is not a credential in `target.notSecret` of `fabrika.config.ts`. The check runs only at build, so a manifest an older release built still
 deploys.
+
+On Zerops the platform's type check of the build also reads the SPA under `web/` once the pin is 0.9, with the same
+options as `src/` (`strict`, `noUncheckedIndexedAccess`, `jsx: 'react-jsx'`); on 0.8 it read `src/` only. Bun bundles
+the SPA without checking its types, so a `web/` that never passed fails the first build at 0.9: run `tsc` over `web/`
+with those options before raising the pin.
 
 From `0.9.0-dev.13`, `schema.generated.ts` lists each table's `notNull` columns, and a condition path or a `readThrough`
 over a foreign key that holds the row's tenant requires its ancestor columns there. Run `fabrika db codegen` after
