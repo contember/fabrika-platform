@@ -376,6 +376,30 @@ describe('zbox client errors', () => {
 		expectNoBodyText(mismatch)
 	})
 
+	test.each([307, 308])('a %d is not followed, so the API key and the body stay at the Box origin', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				arrivals.push(request.url)
+				return jsonResponse(sandbox())
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const box = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			const client = createZboxClient({ baseUrl: `http://127.0.0.1:${box.port}`, apiKey: 'box-api-key', fetch: (url, init) => fetch(url, init) })
+			const error = await caught(client.createSandbox(createInput))
+			expect(error).toMatchObject({ name: 'ZboxApiError', status })
+			expect(arrivals).toEqual([])
+		} finally {
+			await box.stop(true)
+			await target.stop(true)
+		}
+	})
+
 	test('a network failure names the operation, not the runtime error', async () => {
 		const { client } = fakeBox(() => {
 			throw new Error(`connect failed ${SECRET}`)

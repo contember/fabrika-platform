@@ -70,7 +70,8 @@ export const createZboxClient = (options: ZboxClientOptions): ZboxClient => {
 			body = init.body
 		}
 		try {
-			const response = await doFetch(`${base}${path}`, { method, headers, body, signal })
+			// The API key and the body must never reach a redirect target; a 3xx is not ok below.
+			const response = await doFetch(`${base}${path}`, { method, headers, body, signal, redirect: 'manual' })
 			if (!response.ok) {
 				throw new ZboxApiError(operation, response.status, zboxErrorCode(response.status, await errorBody(response)))
 			}
