@@ -7,7 +7,7 @@ This repository verifies every pull request and `main` push. Version tags reuse 
 `.github/workflows/ci.yml` has four independent gates:
 
 1. **Quality** installs the frozen Bun lockfile, checks formatting and lint, typechecks every workspace package and the release tool, and verifies generated Zerops artifacts.
-2. **Backend tests** run the complete Bun suite once per supported PostgreSQL major (17 and 18; Zerops runs 18), each with an authenticated SeaweedFS 4.42 `mini` instance. Startup creates `fabrika-test`; readiness checks its filer directory. Telemetry and implicit bucket creation are disabled. `FABRIKA_TEST_POSTGRES_URL` and every required `FABRIKA_TEST_S3_*` value are present, so opt-in integration suites cannot become skips.
+2. **Backend tests** run the complete Bun suite against PostgreSQL 18, the major Zerops runs; the nightly scheduled run of `main` runs it once per supported major (17, the local stack's, and 18). Each run has an authenticated SeaweedFS 4.42 `mini` instance. Startup creates `fabrika-test`; readiness checks its filer directory. Telemetry and implicit bucket creation are disabled. `FABRIKA_TEST_POSTGRES_URL` and every required `FABRIKA_TEST_S3_*` value are present, so opt-in integration suites cannot become skips.
 3. **Deployable builds** build the unified dashboard and the Bun proxy executable. The proxy build uses a committed empty manifest, proving the binary and a fail-closed generated Caddy configuration without relying on local deployment state.
 4. **Release artifacts** stage, pack, install, import, and dry-run-publish every public package at a disposable prerelease version.
 
@@ -17,7 +17,7 @@ The workflow is also callable by `.github/workflows/release.yml`. A tag cannot r
 
 `bun run check:ci` (`scripts/check-ci.ts`) runs every `run` step of `ci.yml` in order: the frozen install once, the quality steps, the test matrix, the builds and the release-artifact steps. It stops at the first failing step and names it; when the test matrix runs concurrently, it lets every job finish, prints the output of each failed one and names them all.
 
-- **Test matrix.** CI's test job runs once per PostgreSQL major and shard: `bun run test:unit --shard=<n>/4` (bun splits the main suite's files round-robin), and in shard 1 also `bun run test:isolated`. `bun run test` runs both parts unsharded.
+- **Test matrix.** CI's test job runs once per PostgreSQL major of the gate (18) and shard: `bun run test:unit --shard=<n>/4` (bun splits the main suite's files round-robin), and in shard 1 also `bun run test:isolated`. `bun run test` runs both parts unsharded.
 - **PostgreSQL.** When `FABRIKA_TEST_POSTGRES_URL` is unset and docker answers, each job of the matrix gets a throwaway `postgres:<major>-alpine` container on a random loopback port, removed after its run, and the jobs run concurrently, one per two CPUs the process may use (two on 4 vCPU), with their output captured. A set `FABRIKA_TEST_POSTGRES_URL` replaces the majors, and the shards then run against it one at a time.
 - **S3.** When `FABRIKA_TEST_S3_ENDPOINT` is unset and docker answers, each job gets the same SeaweedFS `mini` instance as CI on a random loopback port, with every `FABRIKA_TEST_S3_*` value set. Otherwise the environment's own values are used as they are, by one job at a time.
 - **Release artifacts** need npm on `PATH`, as CI gets it from `setup-node`.

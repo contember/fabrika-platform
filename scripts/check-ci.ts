@@ -70,8 +70,11 @@ export const RELEASE_ARTIFACT_STEPS: readonly CiStep[] = [
 	{ job: 'release-artifacts', name: 'Verify npm publish inputs', run: 'bun run release:publish --tag=v0.0.0-ci.0 --dry-run' },
 ]
 
-/** The test job's matrix: every PostgreSQL major the platform supports. */
-export const POSTGRES_MAJORS: readonly string[] = ['17', '18']
+/** The test job's PostgreSQL majors in the gate: the one Zerops runs. `ci.yml`'s nightly run adds 17, which this script does not run. */
+export const POSTGRES_MAJORS: readonly string[] = ['18']
+
+/** The test job's PostgreSQL majors in `ci.yml`'s nightly run: every major the platform supports. */
+export const NIGHTLY_POSTGRES_MAJORS: readonly string[] = ['17', '18']
 export const postgresImage = (major: string): string => `postgres:${major}-alpine`
 export const SEAWEEDFS_IMAGE = 'chrislusf/seaweedfs:4.42'
 
