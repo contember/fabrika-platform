@@ -21,6 +21,8 @@ const dataDir = join(root, 'data')
 let server: ReturnType<typeof Bun.serve> | undefined
 let link = ''
 let pushIsNew = true
+/** Whether the push answers as this release's daemon does, with a sign-in link for a new session. */
+let pushSignsIn = true
 const linkRequests: (string | null)[] = []
 
 beforeAll(() => {
@@ -48,7 +50,7 @@ beforeAll(() => {
 				return Response.json({
 					ok: true,
 					browserUrl: page,
-					...(pushIsNew ? { signInUrl: link } : {}),
+					...(pushIsNew && pushSignsIn ? { signInUrl: link } : {}),
 					isNew: pushIsNew,
 					revision: 1,
 					canvasFiles: ['view.jsx'],
@@ -63,6 +65,7 @@ beforeEach(() => {
 	rmSync(opened, { force: true })
 	linkRequests.length = 0
 	pushIsNew = true
+	pushSignsIn = true
 })
 
 afterAll(() => {
@@ -138,4 +141,13 @@ test('`gate open` on a session that exists prints the page and opens nothing', a
 	expect(result.code).toBe(0)
 	expect(JSON.parse(result.stdout).browserUrl).toBe(`http://${BUILDER_DAEMON_HOST}:${server?.port}/s/dashboard-session`)
 	expect(openerCalls()).toEqual([])
+})
+
+test('`gate open` against a daemon of an earlier release opens the page it answers with', async () => {
+	pushSignsIn = false
+	const result = await run(['gate', 'open', 'vision', '--view', join(project, 'view.jsx')])
+	expect(result.code).toBe(0)
+	const page = `http://${BUILDER_DAEMON_HOST}:${server?.port}/s/dashboard-session`
+	expect(JSON.parse(result.stdout).browserUrl).toBe(page)
+	expect(openerCalls()).toEqual([page])
 })
