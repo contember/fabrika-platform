@@ -159,7 +159,8 @@ bun test
   database code no migration declares on every run, so code created outside a migration still stops the activation.
   That holds only for an application whose `migrate` does it (`MIGRATE_CHECKS_DATABASE_CODE_SINCE`, read from
   `ProviderApprovedAccess.framework`); an older one, or one whose pin Control has not recorded, keeps `codegen --verify`
-  in the init commands. Its `$PW` is unbraced on purpose:
+  in the init commands. Because that `migrate` is `@fabrika/cli`'s, pinned on its own, the step before the throwaway
+  cluster refuses an `@fabrika/cli` older than the `@fabrika/app` it ships with. Its `$PW` is unbraced on purpose:
   Zerops may resolve a braced `${name}` in a build command (verified live 2026-11-17), and the recipe refuses one. Only
   a build whose every base is known to be Alpine 3.23 or later (`POSTGRES18_BUILD_BASES`: `alpine/bun@1.3`, verified
   live; a bare name is the `alpine/` one) has `postgresql18`; any other keeps the schema check in the init commands too

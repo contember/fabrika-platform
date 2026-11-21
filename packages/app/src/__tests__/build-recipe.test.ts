@@ -72,7 +72,9 @@ describe('contractRecipe', () => {
 	test('the throwaway database runs after every other check: installed, started, migrated, verified, stopped', () => {
 		const steps = commands(contractRecipe(input))
 		const index = steps.findIndex((step) => step.includes('postgresql18'))
-		expect(index).toBe(steps.findIndex((step) => step.includes('fabrika-check /src')) + 1)
+		const checker = steps.findIndex((step) => step.includes('fabrika-check /src'))
+		expect(steps[checker + 1]).toContain("release('@fabrika/cli')")
+		expect(index).toBe(checker + 2)
 		const lines = (steps[index] ?? '').split('\n')
 		const at = (fragment: string): number => lines.findIndex((line) => line.includes(fragment))
 		const order = [
@@ -110,7 +112,7 @@ describe('contractRecipe', () => {
 				'FABRIKA_APP_ID=notes exec ./node_modules/.bin/fabrika db codegen --verify',
 			],
 		})
-		expect(commands(recipe).some((step) => step.includes('postgresql18'))).toBe(false)
+		expect(commands(recipe).some((step) => step.includes('postgresql18') || step.includes('@fabrika/cli'))).toBe(false)
 	})
 
 	test("schedules the contract's jobs and the framework's file jobs only when the contract has files and scans", () => {
@@ -303,5 +305,39 @@ describe.each(SHELLS)('the build schema checks command under %s', (_label, shell
 		expect(calls.at(-1)).toBe(IMMEDIATE_STOP)
 		expect(calls.some((call) => call.endsWith('--mode=fast stop'))).toBe(false)
 		expect(left).toBe(false)
+	})
+})
+
+describe('the build check of the CLI release', () => {
+	const roots: string[] = []
+	afterAll(async () => {
+		for (const root of roots) await rm(root, { recursive: true, force: true })
+	})
+
+	const run = async (releases: { readonly cli: string; readonly app: string }): Promise<{ code: number; stderr: string }> => {
+		const root = await mkdtemp(join(tmpdir(), 'fabrika-build-cli-release-'))
+		roots.push(root)
+		for (const [name, version] of [['cli', releases.cli], ['app', releases.app]] as const) {
+			await mkdir(join(root, 'node_modules', '@fabrika', name), { recursive: true })
+			await writeFile(join(root, 'node_modules', '@fabrika', name, 'package.json'), JSON.stringify({ name: `@fabrika/${name}`, version }))
+		}
+		const step = contractRecipe(input).build.find((candidate) => 'run' in candidate && candidate.run.includes("release('@fabrika/cli')"))
+		if (step === undefined || !('run' in step)) throw new Error('expected the CLI release check')
+		const child = Bun.spawn(['sh', '-c', step.run], { cwd: root, stdout: 'pipe', stderr: 'pipe' })
+		const [code, stderr] = await Promise.all([child.exited, new Response(child.stderr).text()])
+		return { code, stderr }
+	}
+
+	test('passes a CLI at the framework release or newer', async () => {
+		expect((await run({ cli: '0.9.0-dev.23', app: '0.9.0-dev.23' })).code).toBe(0)
+		expect((await run({ cli: '0.9.1', app: '0.9.0-dev.23' })).code).toBe(0)
+	})
+
+	test("refuses a CLI older than the framework, whose migrate would not check the live schema's code", async () => {
+		const { code, stderr } = await run({ cli: '0.9.0-dev.22', app: '0.9.0-dev.23' })
+		expect(code).toBe(1)
+		expect(stderr.trim()).toBe(
+			'fabrika: the build check failed: @fabrika/cli 0.9.0-dev.22 is older than @fabrika/app 0.9.0-dev.23; pin every @fabrika package to one release',
+		)
 	})
 })

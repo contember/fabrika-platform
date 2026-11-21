@@ -338,6 +338,7 @@ const storageVariables = (hostname: string): Record<StorageVariable, string> => 
 
 /** The crontab lines that run a job of the contract or of the framework, each on one container. */
 const jobCrontab = (execution: ZeropsLockedExecution): { readonly timing: string; readonly command: string; readonly allContainers: boolean }[] =>
+	// The jobs do not depend on where the schema checks run.
 	recipeOf(execution, 'build').jobs.map((job) => ({ timing: job.schedule, command: job.command, allContainers: false }))
 
 /** How many job processes the crontab may run at once, each opening the application's database. */

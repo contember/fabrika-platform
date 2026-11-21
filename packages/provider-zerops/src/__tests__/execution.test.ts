@@ -111,6 +111,7 @@ describe('the generated execution descriptor of a contract application', () => {
 					expect.stringMatching(/^printf '%s\\n' '\{"compilerOptions":.*' > fabrika\/tsconfig\.platform\.json$/),
 					`cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p /build/source/fabrika/tsconfig.platform.json`,
 					`cd /tmp && bun x --bun -p @fabrika/check@${FABRIKA_CHECK_VERSION} fabrika-check /build/source`,
+					expect.stringMatching(/^bun -e ".*release\('@fabrika\/cli'\).*Bun\.semver\.order\(cli, app\) < 0.*"$/),
 					expect.stringMatching(
 						/^set -eu\n.*sudo apk add --no-cache --quiet postgresql18\n.*fabrika db codegen --verify .*--mode=fast stop >\/dev\/null \|\| pg_ctl \S+ --mode=immediate stop >\/dev\/null$/s,
 					),
@@ -154,7 +155,8 @@ describe('the generated execution descriptor of a contract application', () => {
 		const commands = mapping(setup['build'])['buildCommands']
 		if (!Array.isArray(commands)) throw new Error('expected build commands')
 		const position = (needle: string): number => commands.findIndex((command) => String(command).includes(needle))
-		expect(position('postgresql18')).toBe(position('fabrika-check /build/source') + 1)
+		expect(position("release('@fabrika/cli')")).toBe(position('fabrika-check /build/source') + 1)
+		expect(position('postgresql18')).toBe(position('fabrika-check /build/source') + 2)
 		const lines = String(commands[position('postgresql18')]).split('\n')
 		const at = (needle: string): number => lines.findIndex((line) => line.includes(needle))
 		const order = ['initdb ', ' start ', 'db migrate', 'db codegen --verify', '--mode=fast stop'].map(at)

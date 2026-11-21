@@ -184,6 +184,19 @@ export interface ContractRecipe {
 }
 
 /**
+ * The schema check leaves container start only because the application's `fabrika db migrate` checks the live schema's
+ * code on every run, which the provider reads from the `@fabrika/app` pin. The `fabrika` binary is `@fabrika/cli`'s,
+ * pinned on its own, so a build whose CLI is older than its framework fails here rather than lose that check unseen.
+ */
+const CLI_RELEASE_CHECK = 'bun -e "'
+	+ "const release = async (name) => (await Bun.file('node_modules/' + name + '/package.json').json()).version; "
+	+ "const [cli, app] = await Promise.all([release('@fabrika/cli'), release('@fabrika/app')]); "
+	+ 'if (Bun.semver.order(cli, app) < 0) { '
+	+ "console.error('fabrika: the build check failed: @fabrika/cli ' + cli + ' is older than @fabrika/app ' + app "
+	+ "+ '; pin every @fabrika package to one release'); process.exit(1) }"
+	+ '"'
+
+/**
  * One build command that migrates a throwaway PostgreSQL from scratch with the application's migrations, runs the schema
  * check on it and stops it. It is one command because each build command runs in its own shell. The cluster listens on
  * a unix socket in a private directory only, behind a random password. A failed step names itself. The cleanup is armed
@@ -257,7 +270,7 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 			tsconfig,
 			{ run: tsc.command },
 			{ run: check.command },
-			...(database !== false && database.schemaChecks === 'build' ? [{ run: buildSchemaChecksCommand(appId) }] : []),
+			...(database !== false && database.schemaChecks === 'build' ? [{ run: CLI_RELEASE_CHECK }, { run: buildSchemaChecksCommand(appId) }] : []),
 			...init.map((generated) => ({ write: generated.path, lines: generated.lines })),
 			{ write: START_SCRIPT, lines: script([`exec ${SERVE.join(' ')}`]) },
 			// After every check, so a map is uploaded only for a build that can deploy; the report line says how it went.
