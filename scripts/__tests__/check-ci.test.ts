@@ -5,6 +5,7 @@ import {
 	BUILD_STEPS,
 	type CiStep,
 	INSTALL_STEP,
+	NIGHTLY_POSTGRES_MAJORS,
 	POSTGRES_MAJORS,
 	POSTGRES_SETTINGS_STEP_NAME,
 	POSTGRES_TEST_SETTINGS,
@@ -20,7 +21,7 @@ import {
 
 const ciSchema = z.object({
 	jobs: z.record(z.object({
-		strategy: z.object({ matrix: z.object({ postgres: z.array(z.string()), shard: z.array(z.number()).optional() }) }).optional(),
+		strategy: z.object({ matrix: z.object({ postgres: z.string().or(z.array(z.string())), shard: z.array(z.number()).optional() }) }).optional(),
 		services: z.object({ postgres: z.object({ image: z.string() }) }).optional(),
 		env: z.record(z.string()).optional(),
 		steps: z.array(z.object({ name: z.string().optional(), if: z.string().optional(), run: z.string().optional() })),
@@ -55,7 +56,10 @@ describe('check:ci', () => {
 
 	test('starts the backends of the test job', () => {
 		const job = ci.jobs['test']
-		expect(job?.strategy?.matrix.postgres).toEqual([...POSTGRES_MAJORS])
+		const majors = (list: readonly string[]): string => JSON.stringify(list)
+		expect(job?.strategy?.matrix.postgres).toBe(
+			`\${{ fromJSON(github.event_name == 'schedule' && '${majors(NIGHTLY_POSTGRES_MAJORS)}' || '${majors(POSTGRES_MAJORS)}') }}`,
+		)
 		expect(job?.services?.postgres.image).toBe(postgresImage('${{ matrix.postgres }}'))
 		const s3Start = job?.steps.find((step) => step.name === S3_START_STEP_NAME)?.run ?? ''
 		expect(s3Start).toContain(SEAWEEDFS_IMAGE)

@@ -7,12 +7,16 @@ on:
   pull_request:
     branches: [main, 'channel/**']
   workflow_call:
+  # Nightly, the test matrix adds every other supported PostgreSQL major.
+  schedule:
+    - cron: '23 3 * * *'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  # The event keeps a push to main from cancelling the nightly run of main, and the other way round.
+  group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -59,8 +63,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # Every supported major: Zerops runs 18, and `pg-catalog-names.ts` is the union of these.
-        postgres: ['17', '18']
+        # The gate (pull requests, pushes, release tags) runs the major Zerops runs. The nightly run adds 17, the local
+        # stack's major; `pg-catalog-names.ts` is the union of both.
+        postgres: ${{ fromJSON(github.event_name == 'schedule' && '["17","18"]' || '["18"]') }}
         # The serial main suite takes 11–16 minutes on one runner; bun's `--shard` splits its files round-robin.
         shard: [1, 2, 3, 4]
     services:
