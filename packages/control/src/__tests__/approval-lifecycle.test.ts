@@ -1996,6 +1996,84 @@ async function createdRun(w: World, env: string): Promise<string> {
 	return runId
 }
 
+describe('a declared secret without a value', () => {
+	/** A provider that keeps secret values itself, as Zerops does, and whose artifact declares `pipeline.secrets`. */
+	function declaring(w: World, declared: readonly string[] | undefined): RunDeps {
+		return {
+			...deps(w),
+			provider: {
+				...provider(w),
+				declaredSecrets: () => declared,
+				secrets: { put: () => Promise.resolve({ valueRef: 'provider:held' }), delete: () => Promise.resolve() },
+			},
+		}
+	}
+
+	async function deployWith(w: World, runDeps: RunDeps): Promise<string> {
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			return (await executeDeploy(runDeps, { runId: await createdRun(w, 'stage') })).status
+		} finally {
+			quiet.mockRestore()
+		}
+	}
+
+	test('fails the run before any provider step, naming every missing secret and the environment, never a value', async () => {
+		const w = world()
+		await seed(w)
+		await w.db.registry.upsertAppSecret({ appId: 'notes', env: 'stage', name: 'SET_KEY', valueRef: 'provider:held-value' })
+		expect(await deployWith(w, declaring(w, ['MAIL_KEY', 'SET_KEY', 'API_KEY', 'API_KEY']))).toBe('failed')
+		const log = [...w.logs.values()].join('\n')
+		expect(log).toContain(
+			'deploy failed: declared secrets without a value on environment `stage`: `API_KEY`, `MAIL_KEY` (`pipeline.secrets`); set them in the console, then deploy again',
+		)
+		expect(log).not.toContain('held-value')
+		expect(w.deploys).toEqual([])
+		expect(w.republished).toEqual([])
+		expect((await published(w, 'stage')).runId).toBeNull()
+	})
+
+	test('an all-environment secret counts where the vault keeps the values, and not where the provider does', async () => {
+		const w = world()
+		await seed(w)
+		await w.db.registry.upsertAppSecret({ appId: 'notes', env: null, name: 'API_KEY', valueRef: 'provider:held' })
+		// A legacy all-environment row never reaches a provider that keeps the values itself.
+		expect(await deployWith(w, declaring(w, ['API_KEY']))).toBe('failed')
+		expect(w.deploys).toEqual([])
+		const v = world()
+		await seed(v)
+		await v.db.registry.upsertAppSecret({ appId: 'notes', env: null, name: 'API_KEY', valueRef: 'vault:unsealed' })
+		const vaultKept: RunDeps = { ...deps(v), provider: { ...provider(v), declaredSecrets: () => ['API_KEY'] } }
+		// Here the row counts, and the run goes on to resolve it from the vault, which this world has none of.
+		expect(await deployWith(v, vaultKept)).toBe('failed')
+		const log = [...v.logs.values()].join('\n')
+		expect(log).not.toContain('declared secrets without a value on environment')
+		expect(log).toContain('deploy failed:')
+	})
+
+	test('a dry run is refused the same way', async () => {
+		const w = world()
+		await seed(w)
+		const runId = await createdRun(w, 'stage')
+		const quiet = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			expect((await executeDeploy(declaring(w, ['API_KEY']), { runId, dryRun: true })).status).toBe('failed')
+		} finally {
+			quiet.mockRestore()
+		}
+		expect([...w.logs.values()].join('\n')).toContain('declared secrets without a value on environment `stage`: `API_KEY`')
+		expect(w.deploys).toEqual([])
+	})
+
+	test('a provider whose artifact does not hold the declaration is not refused here', async () => {
+		const w = world()
+		await seed(w)
+		expect(await deployWith(w, declaring(w, undefined))).toBe('succeeded')
+		expect(await deployWith(w, declaring(w, []))).toBe('succeeded')
+		expect(w.deploys).toHaveLength(2)
+	})
+})
+
 describe('a dev environment', () => {
 	async function seedDev(w: World): Promise<void> {
 		await seed(w)

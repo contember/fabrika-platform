@@ -733,6 +733,12 @@ export interface ControlProvider {
 	 */
 	declaredVariables?(input: { readonly artifact: ProviderEnvelope }): readonly string[] | undefined
 	/**
+	 * The secret names this artifact declares (`pipeline.secrets`), so core can refuse a deploy before any provider step
+	 * when one of them has no value on the environment. `undefined`, as for `declaredVariables`, when the artifact does
+	 * not hold the declaration: the provider then refuses a missing secret itself, at deploy.
+	 */
+	declaredSecrets?(input: { readonly artifact: ProviderEnvelope }): readonly string[] | undefined
+	/**
 	 * The repository-relative directory this provider executes the application from, normalized as its execution
 	 * normalizes it (`''` for the repository root), or null for a root execution refuses. Control reads the run's
 	 * access snapshot there (ADR-0050). Absent means the repository root.
