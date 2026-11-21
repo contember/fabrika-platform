@@ -138,7 +138,7 @@ and every other one, a missing config included, on Postgres. On SQLite no comman
   build bundles), run in an in-memory database by `@fabrika/db/codegen-sqlite`.
 - `db codegen` takes `--config=<path>`, the config whose provider decides the dialect (`fabrika.config.ts` by default),
   as `app build` does: the Cloudflare deploy's check step names a config of another name. A release before it refuses
-  the flag, so the deploy names only a config that is not the default.
+  the flag, so the deploy names it only from `SCHEMA_CHECK_CONFIG_SINCE` of `@fabrika/provider-cloudflare`.
 - `db test-isolation` runs nothing and exits 0: a platform release up to 0.9.0-dev.18 still runs it as an init command
   with the application's own CLI, and its reader admits a newer prerelease of the same version (ADR-0062). Keep it while
   such a release is in the window.
