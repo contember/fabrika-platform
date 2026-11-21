@@ -98,6 +98,14 @@ reads none of that. A fragment it refused for its place (under an `OR`, in paren
 the approver's to review: keep each fragment a top-level conjunct of its WHERE or JOIN … ON. A write of a reference
 table is no longer refused by the tag; write none. `ctx.sql` now runs on Cloudflare too (step 3 below).
 
+A dimension, child or application table with a `version` column is versioned, and one with a `created_by` column has
+its writer stamped there, without `version: 'version'` or `createdBy: 'created_by'` in its policy. Those lines may go:
+the contract and its digest do not change. A table that has such a column without stating it changes at the pin raise:
+an update and a remove then take `{ expectVersion }`, an insert stamps `created_by`, and the approval diff shows the new
+version or creator column. A column of that name the application writes itself is refused as stamped; rename it in a
+migration, or name another column as the table's `version` or `createdBy`. A `version` column that holds no number
+needs the policy to name an INTEGER version column.
+
 A job without `limits.timeoutMs` now gets 14 minutes per attempt, not 15, on both providers, so the contract and its
 digest change at the pin raise. A job that needs more on Zerops declares it.
 

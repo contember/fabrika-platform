@@ -300,7 +300,7 @@ describe("an action's when narrows every grant", () => {
 		member('m1', 'p1', 'user:bob', 'owner', null)
 		member('m2', 'p1', 'user:carol', 'editor', null)
 		const remove = (id: string) =>
-			invoke('mutation', (db) => call(db.target(alice.ref('project', 'members.assign', 'p1'), 'on'), 'project_members.remove', id))
+			invoke('mutation', (db) => call(db.target(alice.ref('project', 'members.assign', 'p1'), 'on'), 'project_members.remove', id, { expectVersion: 1 }))
 		await expect(remove('m1')).rejects.toThrow('not found')
 		await remove('m2')
 		expect(storage.sql.exec('select id from project_members').toArray()).toEqual([{ id: 'm1' }])

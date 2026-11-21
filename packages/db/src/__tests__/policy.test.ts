@@ -512,7 +512,8 @@ describe('a queue table', () => {
 
 	test('needs a version column, an update action, and a timestamp due', () => {
 		const { version: _, ...unversioned } = outbox
-		expect(() => withOutbox(unversioned)).toThrow('outbox: a queue table needs a version column')
+		const noVersion = { ...outboxColumns, columns: ['id', 'recipient', 'attempts', 'due_at'] }
+		expect(() => withOutbox(unversioned, noVersion)).toThrow('outbox: a queue table needs a version column')
 		expect(() => withOutbox({ ...outbox, actions: { read: 'notes.read', insert: 'notes.write' } })).toThrow(
 			'outbox: a queue table needs an update action',
 		)

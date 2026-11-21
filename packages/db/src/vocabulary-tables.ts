@@ -94,11 +94,20 @@ export type VocabularyChildScope<Table extends string, Col extends string> =
 	& { readonly child: Table; readonly column?: Col; readonly inherit?: readonly Col[] }
 	& KeyField<Col>
 
-interface WritableFields<Col extends string, A extends string, Ver extends Col, Acts = TableActions<A>> {
+/** A written table whose `version` column is not an INTEGER names its version column: `version` would be it otherwise. */
+interface NamesItsVersionColumn<Ver extends string> {
+	readonly version: Ver
+}
+
+/** `version` defaults to the `version` column, so it is required only where that column holds no number. */
+type VersionField<Col extends string, Ver extends Col> = 'version' extends Col
+	? 'version' extends Ver ? { readonly version?: Ver } : NamesItsVersionColumn<Ver>
+	: { readonly version?: Ver }
+
+interface WritableFields<Col extends string, A extends string, Acts = TableActions<A>> {
 	readonly actions: Acts
 	readonly insert?: readonly Col[]
 	readonly update?: readonly Col[]
-	readonly version?: Ver
 	readonly createdBy?: Col
 	readonly columns?: ColumnPolicies<Col, A>
 	/** The file columns, each with the file kind it holds (`c.files`): a `uuid` foreign key to `fabrika_files`. */
@@ -167,11 +176,15 @@ type ChildScopes<Table extends string, Col extends string, S, P> = unknown exten
 		: ChildTableScope<Parent, StatedDimensionOf<P, Parent>, Col>
 	: VocabularyChildScope<Table, Col>
 
-type AuthoredDimensionPolicy<Col extends string, A extends string, V, Ver extends Col, S> = WritableFields<Col, A, Ver, RecordActions<A>> & {
-	readonly scope: DimensionScopes<V, Col, S>
-}
+type AuthoredDimensionPolicy<Col extends string, A extends string, V, Ver extends Col, S> =
+	& WritableFields<Col, A, RecordActions<A>>
+	& VersionField<Col, Ver>
+	& {
+		readonly scope: DimensionScopes<V, Col, S>
+	}
 type AuthoredChildPolicy<Table extends string, Col extends string, A extends string, Ver extends Col, S, P> =
-	& WritableFields<Col, A, Ver, RecordActions<A>>
+	& WritableFields<Col, A, RecordActions<A>>
+	& VersionField<Col, Ver>
 	& {
 		readonly scope: ChildScopes<Table, Col, S, P>
 	}
@@ -219,9 +232,12 @@ type ReferenceViewPolicy<Col extends string, A extends string> = ReferencePolicy
 }
 
 /** An application table's scope: why its rows belong to no dimension; `key` defaults to `id`. */
-type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends Col> = WritableFields<Col, A, Ver, ApplicationActions<A>> & {
-	readonly scope: { readonly app: string } & KeyField<Col>
-}
+type AuthoredApplicationPolicy<Col extends string, A extends string, Ver extends Col> =
+	& WritableFields<Col, A, ApplicationActions<A>>
+	& VersionField<Col, Ver>
+	& {
+		readonly scope: { readonly app: string } & KeyField<Col>
+	}
 
 /**
  * One table's policy as an application writes it under a vocabulary. `S` is its scope as written: its mode picks the
@@ -296,17 +312,27 @@ type NormalScope<S, V, P> = S extends { readonly dimension: infer D extends stri
 /** A view's normalized policy says so, which the handle types read: no site writes it. */
 type ViewMark<T, Views> = T extends Views ? { readonly view: true } : unknown
 
+/** A written table's `version` and `created_by` columns are its version and creator unless its policy names others. */
+type Conventions<Row, Pol> =
+	& (Pol extends { readonly version: string } ? unknown : 'version' extends keyof Row ? { readonly version: 'version' } : unknown)
+	& (Pol extends { readonly createdBy: string } ? unknown : 'created_by' extends keyof Row ? { readonly createdBy: 'created_by' } : unknown)
+
+/** Only a dimension, child or application table is written; a view and a reference table get no convention. */
+type WrittenConventions<DB, T, Pol, S, Views> = T extends Views ? unknown
+	: S extends { readonly reference: unknown } ? unknown
+	: Conventions<T extends keyof DB ? DB[T] : never, Pol>
+
 /**
- * The policies as the layer models them: every dimension table's key and container, and every child's key and
- * column, stated as the vocabulary and the conventions derive them; each view marked.
+ * The policies as the layer models them: every dimension table's key and container, every child's key and column,
+ * and a written table's version and creator, stated as the vocabulary and the conventions derive them; each view marked.
  */
-export type NormalizedPolicies<P, V, Views = never> = {
+export type NormalizedPolicies<DB, P, V, Views = never> = {
 	readonly [T in keyof P]: P[T] extends { readonly scope: infer S }
-		? Flat<Omit<P[T], 'scope' | 'view'> & { readonly scope: NormalScope<S, V, P> } & ViewMark<T, Views>>
+		? Flat<Omit<P[T], 'scope' | 'view'> & { readonly scope: NormalScope<S, V, P> } & ViewMark<T, Views> & WrittenConventions<DB, T, P[T], S, Views>>
 		: P[T]
 }
 
 /** Takes the policies of exactly the tables of the schema, and of any of its views, written in the vocabulary form. */
 export type DefineVocabularyPolicies<DB, V, Views extends string = never> = <const P extends VocabularyPolicyMap<DB, V, P, Views>>(
 	policies: P & { readonly [K in Exclude<keyof P, keyof DB>]: never },
-) => Tables<DB, NormalizedPolicies<P, V, Views>>
+) => Tables<DB, NormalizedPolicies<DB, P, V, Views>>

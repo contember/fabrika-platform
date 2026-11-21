@@ -427,6 +427,11 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   through a handle's own-target read (`orm.ts`, `visibleFor`): a `Ref` of any action the table names gets the row
   without every column that declares a read action other than exactly its own, the same columns `RowFor` omits from
   the type. A store's `get` and every `Within` read by the table's read action.
+- **A written table's `version` and `created_by` columns are its `version` and `createdBy` unless its policy names
+  others** (`parseTable`'s `conventional`; `NormalizedPolicies`' `Conventions` for the types). A dimension, child or
+  application table only; never a view or a reference table. The artifact carries the resolved value, so a stated
+  convention and an omitted one have one digest. The authoring types require `version` where the `version` column
+  holds no number (`NamesItsVersionColumn`); a stamp refusal of a conventional column names the convention.
 - **A column holds at most one stamped role.** The key, every containment column of the chain, `version`
   and `createdBy` are distinct columns, or `defineTables` refuses the policy (`checkStamps`). Otherwise
   one stamp overwrites another: `createdBy` on the key inserts the principal as the id, `version` on a

@@ -146,8 +146,10 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
   `org_id`), `UNIQUE (id, <chain>)`, and a composite foreign key `(<container>_id, <chain>) → <container
   table> (id, <chain>)`. A child table (`task_comments`) does the same with its parent. Without the composite key the
   table policy is refused, and an `over` list cannot reach the table from an outer dimension.
-- `version INTEGER NOT NULL` makes `expectVersion` and the 409 work; `created_by TEXT NOT NULL` with `createdBy` in
-  the policy records the caller. The data layer generates `id` and writes `version` and `created_by`.
+- `version INTEGER NOT NULL` makes `expectVersion` and the 409 work; `created_by TEXT NOT NULL` records the caller.
+  The data layer generates `id` and writes `version` and `created_by` of every dimension, child and application
+  table that has them, without a policy line. A policy names `version: '<column>'` or `createdBy: '<column>'` only for
+  another column; a column named `version` or `created_by` that the application writes itself needs another name.
 - A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: codegen types an enum as its literal
   union.
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;
@@ -241,8 +243,6 @@ export const tables = defineTables(vocabulary, columns)({
 		actions: { read: 'tasks.read', insert: 'tasks.write', update: 'tasks.write' },
 		insert: ['name'],
 		update: ['name'],
-		version: 'version',
-		createdBy: 'created_by',
 	},
 	tasks: {
 		scope: { dimension: 'task' },
@@ -254,8 +254,6 @@ export const tables = defineTables(vocabulary, columns)({
 		},
 		insert: ['title', 'due_on'],
 		update: ['title', 'status', 'due_on', 'overdue'],
-		version: 'version',
-		createdBy: 'created_by',
 		columns: {
 			assignee: { write: 'tasks.assign' },
 			assignee_label: { write: 'tasks.assign' },
@@ -265,20 +263,17 @@ export const tables = defineTables(vocabulary, columns)({
 		scope: { child: 'tasks' },
 		actions: { read: 'tasks.read', insert: 'tasks.write' },
 		insert: ['body'],
-		createdBy: 'created_by',
 	},
 	project_exports: {
 		scope: { child: 'projects' },
 		actions: { read: 'tasks.read', insert: 'tasks.read' },
 		insert: ['row_count'],
-		createdBy: 'created_by',
 	},
 	task_attachments: {
 		scope: { child: 'tasks' },
 		actions: { read: 'tasks.read', insert: 'tasks.write', delete: 'tasks.write' },
 		insert: ['file'],
 		files: { file: 'attachments' },
-		createdBy: 'created_by',
 	},
 	priorities: {
 		scope: { reference: 'the priority codes; a migration changes them' },

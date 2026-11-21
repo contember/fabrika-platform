@@ -722,6 +722,11 @@ function isViewEntry(table: string, entry: unknown): boolean {
 	return view === true
 }
 
+/** The version column of a written table whose policy names none, when the table has it. */
+const VERSION_COLUMN = 'version'
+/** The `createdBy` column of a written table whose policy names none, when the table has it. */
+const CREATED_BY_COLUMN = 'created_by'
+
 /** How a policy names its columns: one it states must exist, and so must one a convention derives for it. */
 interface ColumnReader {
 	readonly column: (name: unknown, field: string) => string
@@ -795,10 +800,13 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const actions = parseActions(table, scopeInput, ownEntry(policy, 'actions'), action)
 	const insert = nameSet(columnsOf(ownEntry(policy, 'insert'), 'insert'))
 	const update = nameSet(columnsOf(ownEntry(policy, 'update'), 'update'))
+	const writable = !view && (scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app')
+	// A written table's column named by the convention is stamped unless the policy names another (`NormalizedPolicies`).
+	const conventional = (name: string): string | undefined => (writable && inSet(columns, name) ? name : undefined)
 	const versionInput = ownEntry(policy, 'version')
 	const createdByInput = ownEntry(policy, 'createdBy')
-	const version = versionInput === undefined ? undefined : column(versionInput, 'version')
-	const createdBy = createdByInput === undefined ? undefined : column(createdByInput, 'createdBy')
+	const version = versionInput === undefined ? conventional(VERSION_COLUMN) : column(versionInput, 'version')
+	const createdBy = createdByInput === undefined ? conventional(CREATED_BY_COLUMN) : column(createdByInput, 'createdBy')
 	const restricted: string[] = []
 	const columnReads: Record<string, string> = {}
 	const columnWrites: Record<string, string> = {}
@@ -836,9 +844,8 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		throw new PolicyError(`${table}: the key ${scope.key} takes no action of its own`)
 	}
 	if (version !== undefined && hasOwn(columnPolicies, version)) {
-		throw new PolicyError(`${table}: the version ${version} takes no action of its own`)
+		throw new PolicyError(`${table}: the version ${version} takes no action of its own${conventionOf(version, VERSION_COLUMN, 'version') ?? ''}`)
 	}
-	const writable = !view && (scope.mode === 'dimension' || scope.mode === 'child' || scope.mode === 'app')
 	const queueInput = ownEntry(policy, 'queue')
 	const filesInput = ownEntry(policy, 'files')
 	// On a view, an empty insert or update list is refused too: it states a write the view never takes.
@@ -1346,6 +1353,8 @@ interface Stamp {
 	readonly role: string
 	/** An insert may set it: a queue row's first due time. */
 	readonly insertable?: true
+	/** Why a column the policy may not have named is stamped: its name is the convention's. */
+	readonly convention?: string
 }
 
 /** The columns the layer writes itself: the key, every containment link, the version and the creator. */
@@ -1361,16 +1370,22 @@ function stampsOf(table: ParsedTable, chain: readonly Container[]): readonly Sta
 		}
 	}
 	if (table.version !== undefined) {
-		stamps[stamps.length] = { column: table.version, role: 'the version' }
+		stamps[stamps.length] = { column: table.version, role: 'the version', convention: conventionOf(table.version, VERSION_COLUMN, 'version') }
 	}
 	if (table.createdBy !== undefined) {
-		stamps[stamps.length] = { column: table.createdBy, role: 'createdBy' }
+		stamps[stamps.length] = { column: table.createdBy, role: 'createdBy', convention: conventionOf(table.createdBy, CREATED_BY_COLUMN, 'createdBy') }
 	}
 	if (table.queue !== undefined) {
 		stamps[stamps.length] = { column: table.queue.attempts, role: 'queue.attempts' }
 		stamps[stamps.length] = { column: table.queue.due, role: 'queue.due', insertable: true }
 	}
 	return stamps
+}
+
+function conventionOf(column: string, conventional: string, field: string): string | undefined {
+	return column === conventional
+		? ` (a written table's column named ${conventional} is its ${field} unless the policy names another)`
+		: undefined
 }
 
 /**
@@ -1401,10 +1416,10 @@ function checkStamps(table: ParsedTable, chain: readonly Container[]): void {
 			}
 		}
 		if ((stamp.insertable !== true && inSet(table.insert, stamp.column)) || inSet(table.update, stamp.column)) {
-			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; remove it from insert and update`)
+			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; remove it from insert and update${stamp.convention ?? ''}`)
 		}
 		if (hasOwn(table.columnWrites, stamp.column)) {
-			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; it takes no write action of its own`)
+			throw new PolicyError(`${table.name}: ${stamp.column} is stamped by the layer; it takes no write action of its own${stamp.convention ?? ''}`)
 		}
 		if (inSet(table.json, stamp.column)) {
 			throw new PolicyError(`${table.name}: ${stamp.column} is a JSON column, which the layer cannot stamp as ${stamp.role}; give it a scalar type`)
