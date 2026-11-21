@@ -8,8 +8,8 @@ import ts from 'typescript-platform'
 // Such a request sets `redirect: 'manual'` (Workers refuse `'error'`) and treats a 3xx as not ok.
 //
 // This scan catches the plain forms only: a call whose callee name contains `fetch`, or a `new Request`, whose own
-// object literal names a credential in `headers`, or passes a `Headers` variable the same function gives a credential
-// with `.set`/`.append`. Headers built in another function, or an init spread into the literal (a fetch wrapper), are
+// object literal names a credential in `headers`, or passes a variable the same function declares with a credential
+// or gives one with `.set`/`.append`. Headers built in another function, or an init spread into the literal (a fetch wrapper), are
 // not seen, so the rule itself (CLAUDE.md, Critical Invariants) still applies to them.
 //
 // To satisfy a reported `file:line`, add `redirect: 'manual'` to that init and make the caller treat a 3xx as not ok.
@@ -30,7 +30,10 @@ function propertyName(property: ts.ObjectLiteralElementLike): string | null {
 	return property.name !== undefined && (ts.isIdentifier(property.name) || ts.isStringLiteral(property.name)) ? property.name.text : null
 }
 
-/** `headers` is a `Headers` variable that the enclosing function gives a credential with `.set` or `.append`. */
+/**
+ * `headers` is a variable that the enclosing function declares with a credential in its initializer, or a `Headers`
+ * variable it gives a credential with `.set` or `.append`.
+ */
 function setsCredential(headers: ts.ObjectLiteralElementLike): boolean {
 	const value = ts.isShorthandPropertyAssignment(headers) ? headers.name : ts.isPropertyAssignment(headers) ? headers.initializer : undefined
 	if (value === undefined || !ts.isIdentifier(value)) return false
@@ -38,6 +41,12 @@ function setsCredential(headers: ts.ObjectLiteralElementLike): boolean {
 	while (!ts.isFunctionLike(scope) && !ts.isSourceFile(scope)) scope = scope.parent
 	let found = false
 	const visit = (node: ts.Node): void => {
+		if (
+			ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === value.text
+			&& node.initializer !== undefined && CREDENTIAL.test(node.initializer.getText())
+		) {
+			found = true
+		}
 		if (
 			ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)
 			&& ts.isIdentifier(node.expression.expression) && node.expression.expression.text === value.text
