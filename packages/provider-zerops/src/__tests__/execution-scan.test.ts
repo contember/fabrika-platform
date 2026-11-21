@@ -11,6 +11,7 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import { parseZeropsDescriptor } from '../descriptor'
 import {
 	FABRIKA_CHECK_VERSION,
+	MIGRATE_CHECKS_DATABASE_CODE_SINCE,
 	renderLockedExecutionDescriptor,
 	ZEROPS_SCAN_MIN_RAM_GB,
 	ZEROPS_START_MIN_RAM_GB,
@@ -57,7 +58,10 @@ const mapping = (value: JsonValue | undefined): Mapping => {
 const run = (manifest: FabrikaManifest): Mapping => {
 	const execution = lockedExecutionOf(manifest)
 	if (execution === null) throw new Error('expected a contract application')
-	const rendered = renderLockedExecutionDescriptor(manifest.target.sourceDescriptor.contents, manifest.target.zeropsSetup, 'r1', execution)
+	const rendered = renderLockedExecutionDescriptor(manifest.target.sourceDescriptor.contents, manifest.target.zeropsSetup, 'r1', {
+		...execution,
+		framework: MIGRATE_CHECKS_DATABASE_CODE_SINCE,
+	})
 	const setups = parseZeropsDescriptor(rendered.contents).document['zerops']
 	if (!Array.isArray(setups) || setups.length !== 1) throw new Error('expected one setup')
 	return mapping(mapping(setups[0])['run'])
@@ -72,7 +76,6 @@ describe('a scanning contract on Zerops', () => {
 		expect(generated['initCommands']).toEqual([
 			"sudo freshclam --stdout --quiet || echo 'fabrika: freshclam did not refresh the malware signatures'",
 			'sh /var/www/fabrika/migrate.generated.sh',
-			'sh /var/www/fabrika/verify.generated.sh',
 		])
 		expect(generated['crontab']).toEqual([
 			{ timing: '0 3 * * *', command: './node_modules/.bin/fabrika job run purgeDeleted', allContainers: false },
@@ -87,7 +90,7 @@ describe('a scanning contract on Zerops', () => {
 		expect(Object.keys(manifest.target.contract ?? {})).not.toContain('scan')
 		const generated = run(manifest)
 		expect(generated['prepareCommands']).toBeUndefined()
-		expect(generated['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh', 'sh /var/www/fabrika/verify.generated.sh'])
+		expect(generated['initCommands']).toEqual(['sh /var/www/fabrika/migrate.generated.sh'])
 		expect(JSON.stringify(generated['crontab'])).not.toContain(FILE_SCAN_JOB)
 		expect(JSON.stringify(generated['crontab'])).toContain(FILE_SWEEP_JOB)
 	})

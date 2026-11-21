@@ -152,12 +152,23 @@ bun test
   produces or checks what deploys, and `tsc` before the checker, as the application skill's loop runs them: the checker
   refuses the cast or `any` that silences a type error, so it has the last word. The tests command counts the files
   `@fabrika/db/testing` skipped (its skip line has the same text in every release) and prints `fabrika-tests: N
-  Postgres-backed test files did not run …`: the build has no database, and no later step runs them. The init
-  commands run `fabrika db migrate`, then `fabrika db codegen --verify`, and the start script only `exec`s the server,
-  so a failed migration or a stale `schema.generated.ts` fails an init command, which stops the activation (verified
-  live 2026-10-16); the build has no database. Never move them back into the start script: the readiness window (180 s,
-  not the application's to raise) opens with `run.start`, so a long migration would count against it; the window
-  opens only after the init commands (verified live 2026-10-21). A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
+  Postgres-backed test files did not run …`: the tests run before any database, and no later step runs them. With a
+  database, the build's last check is one command that installs `postgresql18`, starts a throwaway cluster on a unix
+  socket behind a random password, migrates it from scratch, runs `fabrika db codegen --verify` on it and stops it, so
+  a failed one fails the build; the init command runs only `fabrika db migrate`, which checks the live schema for
+  database code no migration declares on every run, so code created outside a migration still stops the activation.
+  That holds only for an application whose `migrate` does it (`MIGRATE_CHECKS_DATABASE_CODE_SINCE`, read from
+  `ProviderApprovedAccess.framework`); an older one, or one whose pin Control has not recorded, keeps `codegen --verify`
+  in the init commands. Because that `migrate` is `@fabrika/cli`'s, pinned on its own, the step before the throwaway
+  cluster refuses an `@fabrika/cli` older than the `@fabrika/app` it ships with. Its `$PW` is unbraced on purpose:
+  Zerops may resolve a braced `${name}` in a build command (verified live 2026-11-17), and the recipe refuses one. Only
+  a build whose every base is known to be Alpine 3.23 or later (`POSTGRES18_BUILD_BASES`: `alpine/bun@1.3`, verified
+  live; a bare name is the `alpine/` one) has `postgresql18`; any other keeps the schema check in the init commands too
+  (`zeropsSchemaChecks`): `fabrika db migrate`, then `fabrika db codegen --verify`, a failure stopping the activation
+  (verified live 2026-10-16). Add a base only once its Alpine release is verified; never select by trying `apk add` in
+  the build, which hides a misconfiguration. Never move the init commands into the start script: the readiness window
+  (180 s, not the application's to raise) opens with `run.start`, so a long migration would count against it; the
+  window opens only after the init commands (verified live 2026-10-21). A `DEPLOY_FAILED` version's error names the init commands and the readiness check. The run section names the application's one PostgreSQL
   (`FABRIKA_APP_DATABASE_URL`) and its one object-storage service (`FABRIKA_APP_STORAGE_*`) only as `${<host>_…}`
   references, so no credential passes through this package. That database URL is the service's SUPERUSER on the direct
   port (`zeropsProvisioningDatabaseUrl`, `src/manifest.ts`) and only the provisioning credential of the application's

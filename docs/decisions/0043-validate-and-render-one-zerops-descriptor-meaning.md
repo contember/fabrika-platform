@@ -74,7 +74,7 @@ schema.
 **`run`** is generated:
 
 - `initCommands` runs `fabrika db migrate`
-  ([ADR-0017](0017-service-owned-postgres-migrations.md));
+  ([ADR-0017](0017-service-owned-postgres-migrations.md)); the schema check runs in the build (below);
 - `start` runs the generated entrypoint;
 - the crontab comes from the contract's jobs;
 - a generated readiness check;
@@ -108,13 +108,25 @@ specifiers, an `overrides` block of them alone, and their lockfile entries. The 
 command is generated and never passes it, so a deployed application still installs every `@fabrika/*` package from the
 registry with its hash.
 
-The build has no database. The migrations and the verification of the committed schema types therefore run at
-container start, as init commands: `run.initCommands` runs `fabrika db migrate`, then `fabrika db codegen --verify`
-against the application's real schema, each script under `set -eu`, and the start script only starts the server. A
-failed init command stops the activation, so a failed migration or a stale `schema.generated.ts` leaves the version
-`DEPLOY_FAILED`, and the previous version keeps serving.
+**The schema check runs in the build, on a throwaway database.** It moves there only for an application whose
+`@fabrika/app` pin is at least `MIGRATE_CHECKS_DATABASE_CODE_SINCE` (0.9.0-dev.23): from that release
+`fabrika db migrate` checks the live schema for database code no migration declares on every run, so the init command
+keeps the live check `codegen --verify` made at start. A build step before it refuses an `@fabrika/cli` older than the
+`@fabrika/app` it ships with, because the init command runs the CLI's `migrate`. After `fabrika-check`, one generated
+build command installs PostgreSQL 18 (`sudo apk add postgresql18`), starts a cluster on a unix socket behind a random password,
+migrates it from scratch with `fabrika db migrate`, runs `fabrika db codegen --verify` on it, and stops it. A stale
+`schema.generated.ts` or a migration that does not apply to an empty schema fails the build: the version the deploy
+reserved before it triggered the build ends `BUILD_FAILED`, never activates, and the previous one keeps serving. A
+container start runs only `fabrika db migrate` as an init command, and the start script only starts the server.
 
-They run before `run.start` because the readiness window opens with `run.start`, and it is fixed at 180 s: the
+The cluster is 18, the platform's application databases' major; an application that declares an older one still
+builds against 18, because the check needs only a server that runs its migrations. Only a build whose every base is
+known to be Alpine 3.23 or later carries `postgresql18` (today the default `alpine/bun@1.3`, verified live; Alpine 3.22
+has none, and a name does not tell the release), so any other build, and any application pinned below that release,
+keeps the earlier form: the init commands
+run `fabrika db migrate`, then `fabrika db codegen --verify` against the application's real schema, each script under
+`set -eu`, and a failed one stops the activation (ADR-0062: no application has to change its build to deploy). Init
+commands run before `run.start` because the readiness window opens with `run.start`, and it is fixed at 180 s: the
 application cannot raise it. A check in the start script would share that window with the server, so a long one would
 fail a deploy although every check passed.
 
@@ -122,8 +134,8 @@ fail a deploy although every check passed.
 ran the isolation tests, whose run peaked at 161 MiB of anonymous memory for the Notes example and 225 MiB for the CRM
 example, within about 1.5 s. A Zerops runtime starts at 0.125 GB, and vertical autoscaling reacts in 10–20 s, so the
 platform killed the run on 2 of 3 first deploys and marked the version `DEPLOY_FAILED` (measured 2026-10-15,
-[platform facts](../reference/zerops-platform.md)). The floor stays until it is measured for `migrate` and
-`codegen --verify` alone. Each deploy therefore raises the deploy
+[platform facts](../reference/zerops-platform.md)). The floor stays until it is measured for today's init commands. Each
+deploy therefore raises the deploy
 service's minimum RAM to 0.5 GB for an application with a database, and to 2 GB for one that scans uploads, in the
 `raise-start-memory` step before it reserves a version. An import cannot do it: Zerops ignores a changed
 `verticalAutoscaling` of an existing service. The step changes only that field through the autoscaling API, reads it

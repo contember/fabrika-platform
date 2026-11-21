@@ -9,6 +9,7 @@ import {
 	FABRIKA_SOURCE_MAP_UPLOAD,
 	FABRIKA_SOURCE_MAP_UPLOAD_KEY,
 	type FrameworkVariableName,
+	releaseFrom,
 } from '@fabrika/auth-core'
 import type { OperationsAssetRoot, OperationsSourceMapBuildUpload } from '@fabrika/operations-contract/releases'
 import type { JsonValue } from '@fabrika/provider-contract'
@@ -51,7 +52,8 @@ export const ZEROPS_SCAN_MIN_RAM_GB = 2
 /**
  * The RAM in GB a container of an application with a database starts with. It was measured when the init commands
  * also ran `fabrika db test-isolation` (161 MiB for the Notes example, 225 MiB for the CRM one, 2026-10-15), which
- * Zerops' 0.125 GB floor killed within a second. They now migrate and check the schema only; not measured since.
+ * Zerops' 0.125 GB floor killed within a second. They now only migrate on a known build base, and migrate and run
+ * `codegen --verify` on any other (`zeropsSchemaChecks`); neither is measured, so the floor stays for both.
  */
 export const ZEROPS_START_MIN_RAM_GB = 0.5
 
@@ -88,6 +90,11 @@ export interface ZeropsLockedExecution {
 	 * framework minor it pins: the build runs `fabrika-check` and `fabrika-source-maps` of `@fabrika/check` at it.
 	 */
 	readonly checkRelease: string
+	/**
+	 * The `@fabrika/app` release the application pins (`ProviderApprovedAccess.framework`), which the schema checks' gate
+	 * reads; null when Control approved the access before it recorded the pin.
+	 */
+	readonly framework: string | null
 	/** A `${host_…}` reference to the application's PostgreSQL service, or null when it has none. */
 	readonly databaseUrl: string | null
 	/**
@@ -192,7 +199,7 @@ export function zeropsAssetRoots(artifact: ContractArtifact): OperationsAssetRoo
 	return roots.sort((left, right) => left.prefix < right.prefix ? -1 : left.prefix > right.prefix ? 1 : 0)
 }
 
-interface AuthoredBuild {
+export interface AuthoredBuild {
 	readonly base: string | string[] | null
 	readonly os: string | null
 	readonly commands: string[]
@@ -266,16 +273,46 @@ const readinessCommand = (path: string): string => {
 	return `bun -e "const end = Date.now() + 9000; while (Date.now() < end) { try { if ((await fetch('${url}', { signal: AbortSignal.timeout(2000) })).ok) process.exit(0) } catch {} await Bun.sleep(200) } process.exit(1)"`
 }
 
+/** Where an application with a database runs its schema checks: in the build, or at container start. */
+export type ZeropsSchemaChecks = 'build' | 'init'
+
+/**
+ * The build bases whose image is known to be Alpine 3.23 or later, where `apk` carries `postgresql18`: verified live
+ * (`alpine/bun@1.3` is Alpine 3.23.5, 2026-11-17, `docs/reference/zerops-platform.md`). Alpine 3.22 has no
+ * `postgresql18`, and an image's Alpine release cannot be read from its name, so a base is added here only once verified.
+ */
+const POSTGRES18_BUILD_BASES: ReadonlySet<string> = new Set([ZEROPS_APPLICATION_RUNTIME])
+
+/**
+ * The first framework release whose `fabrika db migrate` checks the schema against every migration's declarations on
+ * each run, also with nothing to apply. `codegen --verify` at start did that before; from it the init command keeps that
+ * live check, so `codegen --verify` may move into the build. An older CLI's `migrate` checks only a file it applies.
+ */
+export const MIGRATE_CHECKS_DATABASE_CODE_SINCE = '0.9.0-dev.23'
+
+/**
+ * Where the schema checks of an application with a database run: in the build only when the application's `migrate`
+ * keeps the live database-code check (`MIGRATE_CHECKS_DATABASE_CODE_SINCE`) and every build base is a known one (a bare
+ * name such as `bun@1.3` is the `alpine/` image of the default `os`); any other keeps them in the init commands (ADR-0062).
+ */
+export function zeropsSchemaChecks(authored: Pick<AuthoredBuild, 'base' | 'os'>, framework: string | null): ZeropsSchemaChecks {
+	if (framework === null || !releaseFrom(framework, MIGRATE_CHECKS_DATABASE_CODE_SINCE)) return 'init'
+	if (authored.os !== null && authored.os !== 'alpine') return 'init'
+	const bases = authored.base === null ? [ZEROPS_APPLICATION_RUNTIME] : typeof authored.base === 'string' ? [authored.base] : authored.base
+	const known = bases.length > 0 && bases.every((base) => POSTGRES18_BUILD_BASES.has(base.includes('/') ? base : `alpine/${base}`))
+	return known ? 'build' : 'init'
+}
+
 /** `@fabrika/app/build`'s recipe at this installation's paths. */
-const recipeOf = (execution: ZeropsLockedExecution): ContractRecipe =>
+const recipeOf = (execution: ZeropsLockedExecution, schemaChecks: ZeropsSchemaChecks): ContractRecipe =>
 	contractRecipe({
 		appId: execution.appId,
 		checkRelease: execution.checkRelease,
 		sourceRoot: SOURCE_ROOT,
 		runtimeRoot: RUNTIME_ROOT,
-		// The build has no database; a container's init commands run the migrations and schema checks, and the readiness
-		// window opens only with `run.start`, after them (both verified live), so a long migration does not race it.
-		database: execution.databaseUrl !== null,
+		// A container's init commands run the migrations, and the schema check when the build cannot; the readiness window
+		// opens only with `run.start`, after them (both verified live), so a long migration does not race it.
+		database: execution.databaseUrl === null ? false : { schemaChecks },
 		sourceMaps: execution.sourceMaps !== null,
 		jobs: execution.contract.jobs,
 		files: execution.contract.files === true,
@@ -283,8 +320,8 @@ const recipeOf = (execution: ZeropsLockedExecution): ContractRecipe =>
 	})
 
 /** The generated build commands, in order; the authored SPA commands run before all of them. */
-export function generatedBuildCommands(execution: ZeropsLockedExecution): readonly string[] {
-	return recipeOf(execution).build.map((step) => 'run' in step ? step.run : writeFileCommand(step.write, step.lines))
+export function generatedBuildCommands(execution: ZeropsLockedExecution, schemaChecks: ZeropsSchemaChecks): readonly string[] {
+	return recipeOf(execution, schemaChecks).build.map((step) => 'run' in step ? step.run : writeFileCommand(step.write, step.lines))
 }
 
 const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].sort()
@@ -301,18 +338,19 @@ const storageVariables = (hostname: string): Record<StorageVariable, string> => 
 
 /** The crontab lines that run a job of the contract or of the framework, each on one container. */
 const jobCrontab = (execution: ZeropsLockedExecution): { readonly timing: string; readonly command: string; readonly allContainers: boolean }[] =>
-	recipeOf(execution).jobs.map((job) => ({ timing: job.schedule, command: job.command, allContainers: false }))
+	// The jobs do not depend on where the schema checks run.
+	recipeOf(execution, 'build').jobs.map((job) => ({ timing: job.schedule, command: job.command, allContainers: false }))
 
 /** How many job processes the crontab may run at once, each opening the application's database. */
 export const zeropsJobProcesses = (execution: ZeropsLockedExecution): number => jobCrontab(execution).length
 
 /** The commands every container runs before `run.start`, in order; any failure stops the activation. */
-export function generatedInitCommands(execution: ZeropsLockedExecution): string[] {
+export function generatedInitCommands(execution: ZeropsLockedExecution, schemaChecks: ZeropsSchemaChecks): string[] {
 	return [
 		// A container starts from the prepared image, whose signatures are as old as its build; a failed refresh leaves
 		// them to the daily one, and the scanner refuses signatures older than three days, so the scan fails closed.
 		...(execution.contract.scan === true ? [`${FRESHCLAM} || echo 'fabrika: freshclam did not refresh the malware signatures'`] : []),
-		...recipeOf(execution).init.map((path) => `sh ${RUNTIME_ROOT}/${path}`),
+		...recipeOf(execution, schemaChecks).init.map((path) => `sh ${RUNTIME_ROOT}/${path}`),
 	]
 }
 
@@ -338,14 +376,15 @@ export function renderLockedSetup(
 	const packages = sortedUnique([...execution.runtimePackages, ...(scan ? [SCANNER_PACKAGE] : [])])
 	// Every container keeps its own signatures; one scan pass at a time holds the job's lease.
 	const crontab = [...jobCrontab(execution), ...(scan ? [{ timing: FRESHCLAM_SCHEDULE, command: FRESHCLAM, allContainers: true }] : [])]
-	const initCommands = generatedInitCommands(execution)
+	const schemaChecks = zeropsSchemaChecks(authored, execution.framework)
+	const initCommands = generatedInitCommands(execution, schemaChecks)
 	const prepareCommands = packages.length === 0 ? [] : [`sudo apk add --no-cache ${packages.join(' ')}`, ...(scan ? [FRESHCLAM] : [])]
 	return {
 		setup,
 		build: {
 			base: authored.base ?? [ZEROPS_APPLICATION_RUNTIME],
 			...(authored.os === null ? {} : { os: authored.os }),
-			buildCommands: [...authored.commands, ...generatedBuildCommands(execution)],
+			buildCommands: [...authored.commands, ...generatedBuildCommands(execution, schemaChecks)],
 			...(execution.sourceMaps === null ? {} : { envVariables: sourceMapBuildVariables(execution.sourceMaps) }),
 			deployFiles: ['./'],
 			cache: ['node_modules'],
@@ -361,7 +400,7 @@ export function renderLockedSetup(
 			base: ZEROPS_APPLICATION_RUNTIME,
 			...(prepareCommands.length === 0 ? {} : { prepareCommands }),
 			...(initCommands.length === 0 ? {} : { initCommands }),
-			start: `sh ${RUNTIME_ROOT}/${recipeOf(execution).start}`,
+			start: `sh ${RUNTIME_ROOT}/${recipeOf(execution, schemaChecks).start}`,
 			ports: [{ port: ZEROPS_APPLICATION_PORT, httpSupport: true }],
 			healthCheck: { httpGet: probe, execPeriod: '10s', disconnectTimeout: '30s', recoveryTimeout: '10s', failureTimeout: '120s' },
 			...(crontab.length === 0 ? {} : { crontab }),

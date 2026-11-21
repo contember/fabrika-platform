@@ -68,10 +68,11 @@ describe('the header limit of an application server on Zerops', () => {
 			databaseUrl: 'postgres://db/notes',
 			databaseConnections: 2,
 			checkRelease: FABRIKA_CHECK_VERSION,
+			framework: FABRIKA_CHECK_VERSION,
 			storageHostname: null,
 			runtimePackages: [],
 			sourceMaps: null,
-		}).join('\n')
+		}, 'build').join('\n')
 		expect(commands).toContain(`exec bun --max-http-header-size=${APPLICATION_SERVER_MAX_HEADER_BYTES} fabrika/entry.generated.ts`)
 	})
 

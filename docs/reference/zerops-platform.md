@@ -459,7 +459,7 @@ Measured by the platform-facts table's live suite (`live: 'build'`, `FABRIKA_LIV
 
 The generated run section of a contract application
 ([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)) depends on the second row: its
-migrations and its schema check are init commands. Its readiness check is an `exec`
+migrations are an init command (and its schema check too, on a build base not known to carry `postgresql18`). Its readiness check is an `exec`
 against the contract's health endpoint (below).
 
 #### Verified live (2026-10-21, a throwaway `alpine/bun@1.3` service): one `exec` readiness attempt may wait for the server
@@ -1422,10 +1422,42 @@ remedies, neither of which needs sudo: when the bucket's `stack.create` process 
 set the variable on the deploy service to the bucket's service id, not sensitive; otherwise delete the bucket
 and deploy again.
 
-The build container has no database, so a contract application's init commands run `fabrika db migrate`, then
-`fabrika db codegen --verify`, and its start script only starts the server: a failed migration or a stale committed
-`schema.generated.ts` fails an init command, which stops the activation. The checks run before `run.start`, outside
-the readiness window (above), however long they take.
+A contract application with a database checks its schema in the build when its `@fabrika/app` pin is
+0.9.0-dev.23 or later (`MIGRATE_CHECKS_DATABASE_CODE_SINCE`) and its build base is a known Alpine 3.23 image; otherwise
+its init commands run `fabrika db codegen --verify` after the migrations, as before. In the build, a step first refuses an
+`@fabrika/cli` older than its `@fabrika/app`. After `fabrika-check`, one generated build
+command installs `postgresql18`, starts a throwaway cluster on a unix socket under `/tmp/fabrika-build-postgres` (no TCP
+listener, `scram-sha-256` with a random password), migrates it from scratch with `fabrika db migrate`, runs
+`fabrika db codegen --verify` on it and stops it; a failed step prints
+`fabrika: the build check failed: <check>` and fails the build (`contractRecipe`, `packages/app/src/build-recipe.ts`). It
+is one command because each build command runs in its own shell. The cluster is outside the source root, so nothing of
+it is deployed. The application's own database may be an older major: the check needs only a server that runs its
+migrations. Its init command runs only `fabrika db migrate`, which on every run also refuses database code in the live
+schema that no migration declares, and its start script only starts the server.
+
+Only a build whose every base is known to be Alpine 3.23 or later runs it there (`zeropsSchemaChecks`,
+`packages/provider-zerops/src/execution.ts`): today `alpine/bun@1.3`, the default, verified below, also named bare as
+`bun@1.3` under the default `os`. Alpine 3.22 has no `postgresql18`, and an image's Alpine release cannot be read from
+its name, so any other base, or a `build.os` other than `alpine`, keeps the earlier form: the init
+commands run `fabrika db migrate`, then `fabrika db codegen --verify`, before `run.start` and outside the readiness
+window (above), and a stale committed `schema.generated.ts` fails an init command, which stops the activation.
+
+#### Verified live (2026-11-17, a throwaway project, since deleted) — the build container runs a throwaway PostgreSQL
+
+Measured with build base `alpine/bun@1.3`:
+
+| Behaviour                                                                    | Result                                                                                                                                                                          |
+| ---------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `/etc/alpine-release`, `bun --version` and the user of a build command       | **3.23.5**, **1.3.14**, `zerops` (uid 2023)                                                                                                                                     |
+| `sudo apk add --no-cache postgresql18`                                       | **Works natively** (no repository pin), about 3 s; PostgreSQL 18.7                                                                                                              |
+| `initdb` and `pg_ctl start` as `zerops`, inside one multi-line build command | About 2 s; `psql` over the unix socket works                                                                                                                                    |
+| A `trap … EXIT` that stops the cluster at the end of that command            | No postgres process left: the next build command's `pgrep` found none                                                                                                           |
+| `$X`, `${X}` and `$(echo ok)` in a build command                             | Reach the shell unchanged. `${X}` was a name that is no Zerops variable; a braced name that is one may be resolved by Zerops, so a generated command uses only unbraced `$NAME` |
+
+Measured locally on `alpine:3.23` with Bun 1.3.14 as a non-root user (2026-11-17), the generated command over the Notes
+example: `apk` 6.2 s, `initdb` 1.2 s, start 0.1 s, `migrate` 1.0 s, `codegen --verify` 0.4 s; about 9 s in all. The cluster has no TCP listener and refuses a wrong password, and no postgres process is
+left after a pass or a failed check. `Bun.SQL` reaches a unix socket only through `?path=<directory>` (Bun 1.3.9 and
+1.3.14), not `?host=`.
 
 `FABRIKA_APP_DATABASE_URL` carries the PostgreSQL service's superuser on the direct port:
 
@@ -1484,8 +1516,8 @@ anonymous. Vertical autoscaling reacts in 10–20 s, so a spike this fast is kil
 
 So a deploy raises the deploy service's minimum RAM (`raise-start-memory`, `packages/provider-zerops/src/provider.ts`)
 to `zeropsStartMinRam` (`src/execution.ts`): 0.5 GB for an application with a database, 2 GB for one that scans, before
-it reserves the version. The init commands now run only `migrate` and `codegen --verify`; the floor stays as measured
-above with the isolation tests until it is measured for those two alone. Measured on an `alpine/bun@1.3` service imported with `minContainers: 1, maxContainers: 2`:
+it reserves the version. The init commands now run only `migrate` (and `codegen --verify` on a build base not known to
+carry PostgreSQL 18); the floor stays as measured above with the isolation tests until it is measured for them alone. Measured on an `alpine/bun@1.3` service imported with `minContainers: 1, maxContainers: 2`:
 
 | Call                                                                                                                                                     | Result                                                                                                                                                                                       |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1535,8 +1567,7 @@ one provisioning connection per file for the schema's lock and the catalog. None
 
 So a deploy sizes each process's connections in `size-database` (`packages/provider-zerops/src/database-budget.ts`):
 of `max_connections` at the database's minimum RAM, 7 are never the application's and 5 are one container's init
-commands (measured above with the isolation tests, and kept until measured again for `migrate` and `codegen --verify`
-alone); the rest is shared by twice the deploy service's maximum container count and one process per crontab job, at
+commands (measured above with the isolation tests, and kept until measured again for today's init commands); the rest is shared by twice the deploy service's maximum container count and one process per crontab job, at
 most 10 each, and handed over as `FABRIKA_APP_DATABASE_CONNECTIONS`. Below 2 each, it raises the application's own
 database to the smallest step that gives 2 (the Notes example, 4 containers and 2 jobs: 0.25 → 1 GB; Zerops charges
 $0.75 per 0.25 GB and 30 days); a namespace's shared `postgres` is never raised. The test kit waits up to 60 s for a

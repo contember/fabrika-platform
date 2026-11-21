@@ -595,6 +595,29 @@ describe.skipIf(!hasPostgres)('database code in an application schema, checked b
 		expect(later.map((row) => row.violation)).not.toContain('trigger deals.noop (no migration declares it)')
 	})
 
+	test('every run checks the schema, also with nothing to apply: an object created outside a migration fails it', async () => {
+		const { migrations, db } = application()
+		const files = [migration('20261008120000_init.sql', 'CREATE TABLE deals (id text PRIMARY KEY)')]
+		expect(await migrations.apply(db, files)).toEqual(['app/20261008120000_init.sql'])
+		expect(await migrations.apply(db, files)).toEqual([])
+		await db.prepare(
+			`CREATE TRIGGER noop BEFORE UPDATE ON ${migrations.schema}.deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()`,
+		).run()
+		await expect(migrations.apply(db, files)).rejects.toThrow(
+			`schema ${migrations.schema} holds database code that escapes it or that no migration declares: trigger deals.noop (no migration declares it); declare it in a migration or drop it in a new one`,
+		)
+		// Declared by a later file, the same object passes.
+		const declared = [
+			...files,
+			migration(
+				'20261009120000_noop.sql',
+				'DROP TRIGGER noop ON deals; CREATE TRIGGER noop BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION suppress_redundant_updates_trigger()',
+			),
+		]
+		expect(await migrations.apply(db, declared)).toEqual(['app/20261009120000_noop.sql'])
+		expect(await migrations.apply(db, declared)).toEqual([])
+	})
+
 	test('a routine has one signature and only an identity column has a sequence: the start check refuses the rest', async () => {
 		const { migrations, db } = application()
 		const files = [

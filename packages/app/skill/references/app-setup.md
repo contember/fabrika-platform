@@ -252,9 +252,12 @@ base without `build.base`. Raise `build.base` to `alpine/bun@1.4` rather than re
 resolves every dependency afresh. `fabrika app build` refuses a base that cannot read the lockfile and names the one to
 use.
 
-The platform's build runs the tests, writes the entrypoint, runs `fabrika-check` and the type check. Its init commands
-run `fabrika db migrate` and `fabrika db codegen --verify` before the server starts: a version whose generated schema
-does not match its migrations does not go live. It writes every `FABRIKA_*` variable; never set one.
+The platform's build runs the tests, writes the entrypoint, runs `fabrika-check` and the type check, then
+`fabrika db migrate` and `fabrika db codegen --verify` on a throwaway database: a version whose generated schema does
+not match its migrations does not deploy. Its init command runs `fabrika db migrate` before the server starts. On any
+`build.base` but `alpine/bun@1.3` (`alpine/bun@1.4` included), or a `build.os` other than `alpine`, the build has no
+database, and every container start runs `fabrika db codegen --verify` after the migrations instead. It writes every
+`FABRIKA_*` variable; never set one.
 
 ## The deploy surface (Cloudflare)
 

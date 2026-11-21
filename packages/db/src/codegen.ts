@@ -167,7 +167,7 @@ export async function introspectCatalog(url: string, schema: string, objects: re
 			if (!Array.isArray(namespaces) || namespaces.length === 0) {
 				throw new CodegenError(`schema ${schema} does not exist; run fabrika db migrate first`)
 			}
-			// The migration runner's own pre-commit check, so an object created outside a migration fails every start.
+			// The migration runner's own pre-commit check, so an object created outside a migration fails the check.
 			const code = z.array(z.object({ violation: z.string() })).parse(await tx.unsafe(databaseCodeQuery(schema, objects)))
 			if (code.length > 0) {
 				throw new CodegenError(

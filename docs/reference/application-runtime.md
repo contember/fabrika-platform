@@ -1981,9 +1981,9 @@ the addressed row's state.
 An application's Postgres-backed test opens a test database with `@fabrika/db/testing`'s `testDatabase`: a fresh
 schema `app_test_<hex>` that the real migration runner fills with the framework's tables and then `db/migrations/`, as
 `fabrika db migrate` does. Without `FABRIKA_TEST_POSTGRES_URL` it prints the standard skip message and the file
-registers no test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The Zerops build has no database: it
-counts those skip lines and reports `fabrika-tests: N Postgres-backed test files did not run`, and no later step runs
-them.
+registers no test; `FABRIKA_TEST_POSTGRES_REQUIRED=1` turns that into a failure. The Zerops build runs the tests
+before any database: it counts those skip lines and reports `fabrika-tests: N Postgres-backed test files did not run`,
+and no later step runs them.
 
 - **Throwaway schemas.** A schema is held by a session-level advisory lock derived from its
   name, taken before it exists and kept for its whole life. Every test database first drops
