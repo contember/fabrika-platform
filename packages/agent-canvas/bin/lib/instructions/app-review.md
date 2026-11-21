@@ -17,8 +17,10 @@ bunx agent-canvas review open <url> --project <name>
 
 `<url>` is where the application's dev server runs, e.g. `http://localhost:5173/`; read it from the running server or
 the project's dev script, and ask the user when you cannot tell. The daemon serves the application on a port of its own
-with the widget added to every HTML page, opens it in the user's browser and prints the address. Hot reload passes
-through. The port stays the same across daemon restarts. Only applications on `localhost` can be opened.
+with the widget added to every HTML page, opens it in the user's browser through a one-time link that signs the browser
+in to the daemon, and prints the address. Hot reload passes through. The port stays the same across daemon restarts.
+Only applications on `localhost` can be opened. With `--no-open` it prints the sign-in link to stderr instead; show it
+to the user, it works once.
 
 When the user wants the widget on the application's own address instead, add the tag to its HTML page in development
 only:
@@ -27,6 +29,10 @@ only:
 bunx agent-canvas review snippet --project <name>
 # <script src="http://localhost:19400/assets/review.js" data-project="<name>"></script>
 ```
+
+It also prints a one-time link: show it to the user, who opens it once in the browser they review in, so the widget can
+reach the daemon. The application must then be opened at `http://localhost:<port>`, not `127.0.0.1`; from any other
+host the browser does not send the widget's credential.
 
 Tell the user to use **Comment** in the bottom-right toolbar: click an element, or select text first, write the
 comment, then **Send to Claude** or **Save note**.

@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { cliAuthHeaders } from '../cli-auth.ts'
 import { BASE_URL } from '../config.ts'
 import { ensureDaemon } from '../daemon-lifecycle.ts'
-import { getSessionId, openBrowser } from '../helpers.ts'
+import { getSessionId, openLink } from '../helpers.ts'
 
 const linkResponseSchema = z.union([z.object({ browserUrl: z.string() }), z.object({ error: z.string() })])
 
@@ -25,5 +25,5 @@ export async function handleOpen(args: string[]) {
 		process.exit(1)
 	}
 	console.log(result.browserUrl)
-	if (!values['no-open']) openBrowser(result.browserUrl)
+	if (!values['no-open']) openLink(result.browserUrl)
 }

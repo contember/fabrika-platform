@@ -111,7 +111,7 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 			broadcastPlanUpdate(sessionId)
 			watchSession(sessionId, sessionManager, broadcastPlanUpdate, { tempDir: COMPILE_TEMP_DIR, components: HOST_COMPONENTS })
 
-			const browserUrl = ctx.uiLinks.issue(sessionId)
+			const browserUrl = ctx.uiLinks.issue(`/s/${encodeURIComponent(sessionId)}`)
 			return jsonResponse({
 				ok: true,
 				browserUrl,
@@ -129,7 +129,7 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 	function handleLink(_req: Request, _url: URL, match: URLPatternResult): Response {
 		const sessionId = match.pathname.groups.id!
 		if (!sessionManager.get(sessionId)) return jsonResponse({ error: `No canvas session ${sessionId}; push a canvas first` }, 404)
-		return jsonResponse({ browserUrl: ctx.uiLinks.issue(sessionId) })
+		return jsonResponse({ browserUrl: ctx.uiLinks.issue(`/s/${encodeURIComponent(sessionId)}`) })
 	}
 
 	async function handleCanvasJs(_req: Request, url: URL, match: URLPatternResult): Promise<Response> {

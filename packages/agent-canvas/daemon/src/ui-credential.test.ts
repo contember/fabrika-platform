@@ -3,11 +3,13 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, st
 import { connect } from 'net'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
+import { fileURLToPath } from 'url'
 import { CLI_TOKEN_QUERY } from './admission'
 
 /**
- * The daemon and the CLI as a user runs them, on a port and in a home and temp directory of their own: the UI's routes
- * need the credential the CLI's link hands the browser, and the CLI keeps working on its own capability.
+ * The daemon and the CLI as a user runs them, on a port and in a home and temp directory of their own: the UI's and the
+ * review widget's routes need the credential the CLI's link hands the browser, the link never travels as a process
+ * argument, and the CLI keeps working on its own capability.
  */
 
 const CLI = resolve(import.meta.dir, '..', '..', 'bin', 'agent-canvas.ts')
@@ -19,9 +21,10 @@ const temp = join(root, 'tmp')
 const project = join(root, 'project')
 const canvases = join(root, 'canvases')
 const fakeBin = join(root, 'bin')
-const opened = join(root, 'opened-urls')
+const opened = join(root, 'opener-arguments')
 let port = 0
 let base = ''
+let app: Bun.Server<undefined> | undefined
 
 function freePort(): number {
 	const probe = Bun.serve({ port: 0, hostname: 'localhost', fetch: () => new Response(null) })
@@ -40,7 +43,7 @@ function environment(): Record<string, string> {
 		CANVAS_SESSION_ID: SESSION,
 		CANVAS_PROJECT_ROOT: project,
 		CANVAS_TIMEOUT: '20000',
-		// The fake opener records the URL a command hands the browser instead of opening one.
+		// The fake opener records the arguments a command hands the browser instead of opening one.
 		PATH: `${fakeBin}:${process.env['PATH'] ?? ''}`,
 	}
 }
@@ -51,8 +54,23 @@ async function cli(args: string[]): Promise<{ exitCode: number; stdout: string; 
 	return { exitCode, stdout, stderr }
 }
 
-function openedUrls(): string[] {
+/** Every argument list the opener got, one per call. */
+function openerCalls(): string[] {
 	return existsSync(opened) ? readFileSync(opened, 'utf-8').split('\n').filter((line) => line !== '') : []
+}
+
+/**
+ * The link an opener call leads the browser to. The opener gets a file of the user's own, never the link: other OS users
+ * read every process's arguments.
+ */
+function linkOf(call: string): string {
+	expect(call).not.toContain('code=')
+	expect(call.startsWith('file://')).toBe(true)
+	const file = fileURLToPath(call)
+	expect(statSync(file).mode & 0o777).toBe(0o600)
+	const refresh = readFileSync(file, 'utf-8').match(/content="0;url=([^"]+)"/)?.[1]
+	if (refresh === undefined) throw new Error('the opened file leads nowhere')
+	return refresh.replaceAll('&amp;', '&')
 }
 
 function cookiePair(response: Response): string {
@@ -65,7 +83,7 @@ function cookiePair(response: Response): string {
  * The status a browser's WebSocket upgrade gets, sent raw: the DOM `WebSocket` the tests are typed against takes no
  * headers, and the browser sends its cookie on the upgrade.
  */
-function upgradeStatus(path: string, headers: Record<string, string>): Promise<number> {
+function upgradeStatus(path: string, origin: string, headers: Record<string, string>): Promise<number> {
 	return new Promise((done, fail) => {
 		const socket = connect(port, 'localhost', () => {
 			const lines = [
@@ -75,7 +93,7 @@ function upgradeStatus(path: string, headers: Record<string, string>): Promise<n
 				'Connection: Upgrade',
 				'Sec-WebSocket-Version: 13',
 				`Sec-WebSocket-Key: ${btoa('0123456789abcdef')}`,
-				`Origin: ${base}`,
+				`Origin: ${origin}`,
 				...Object.entries(headers).map(([name, value]) => `${name}: ${value}`),
 			]
 			socket.write(`${lines.join('\r\n')}\r\n\r\n`)
@@ -105,7 +123,7 @@ function submitFeedback(feedback: string): Promise<void> {
 
 beforeAll(async () => {
 	for (const dir of [home, temp, project, canvases, fakeBin]) mkdirSync(dir, { recursive: true })
-	writeFileSync(join(fakeBin, 'xdg-open'), `#!/bin/sh\nprintf '%s\\n' "$1" >> '${opened}'\n`)
+	writeFileSync(join(fakeBin, 'xdg-open'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opened}'\n`)
 	chmodSync(join(fakeBin, 'xdg-open'), 0o755)
 	writeFileSync(join(project, 'notes.txt'), 'project notes')
 	writeFileSync(join(canvases, 'plan.jsx'), 'export default function Plan() { return <Section title="Demo">Hello</Section> }\n')
@@ -117,6 +135,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
 	await cli(['daemon', 'stop'])
+	await app?.stop(true)
 	rmSync(root, { recursive: true, force: true })
 })
 
@@ -126,7 +145,7 @@ describe('the canvas UI credential', () => {
 		expect((await fetch(file)).status).toBe(401)
 		expect((await fetch(`${base}/api/sessions`)).status).toBe(401)
 		expect((await fetch(`${base}/api/session/${SESSION}/meta`)).status).toBe(401)
-		expect(await upgradeStatus(`/ws/session/${SESSION}`, {})).toBe(401)
+		expect(await upgradeStatus(`/ws/session/${SESSION}`, base, {})).toBe(401)
 		const root = await fetch(`${base}/`, { redirect: 'manual' })
 		expect(root.status).toBe(401)
 		expect(root.headers.get('Location')).toBeNull()
@@ -139,22 +158,26 @@ describe('the canvas UI credential', () => {
 		expect(await page.text()).toContain(`agent-canvas open --session ${SESSION}`)
 	})
 
-	test('the link push opened sets the cookie once, and the UI routes then answer', async () => {
-		const [link] = openedUrls()
-		if (link === undefined) throw new Error('push opened no browser')
-		expect(link.startsWith(`${base}/s/${SESSION}?code=`)).toBe(true)
+	test('the link push opened sets the cookie once and leads to the canvas, and the UI routes then answer', async () => {
+		const [call] = openerCalls()
+		if (call === undefined) throw new Error('push opened no browser')
+		const link = linkOf(call)
+		expect(link.startsWith(`${base}/open?code=`)).toBe(true)
 
 		const bootstrap = await fetch(link, { redirect: 'manual' })
-		expect(bootstrap.status).toBe(303)
-		expect(bootstrap.headers.get('Location')).toBe(`/s/${SESSION}`)
+		expect(bootstrap.status).toBe(200)
 		const setCookie = bootstrap.headers.get('Set-Cookie') ?? ''
 		expect(setCookie).toContain('HttpOnly')
 		expect(setCookie).toContain('SameSite=Strict')
 		expect(setCookie).toContain('Path=/')
+		expect(await bootstrap.text()).toContain(`content="0;url=/s/${SESSION}"`)
 		const cookie = cookiePair(bootstrap)
 
-		// The code is spent: the same link does not bootstrap a second browser.
-		expect((await fetch(link, { redirect: 'manual' })).status).toBe(401)
+		// The code is spent: the same link signs in no second browser, and leads on only a browser that has the cookie.
+		expect((await fetch(link)).status).toBe(401)
+		const again = await fetch(link, { headers: { Cookie: cookie } })
+		expect(again.status).toBe(200)
+		expect(again.headers.get('Set-Cookie')).toBeNull()
 
 		const headers = { Cookie: cookie }
 		const file = `${base}/api/file?session=${SESSION}&path=${encodeURIComponent(join(project, 'notes.txt'))}`
@@ -162,28 +185,28 @@ describe('the canvas UI credential', () => {
 		expect(read.status).toBe(200)
 		expect(await read.text()).toContain('project notes')
 		expect((await fetch(`${base}/api/sessions`, { headers })).status).toBe(200)
-		expect(await upgradeStatus(`/ws/session/${SESSION}`, headers)).toBe(101)
+		expect(await upgradeStatus(`/ws/session/${SESSION}`, base, headers)).toBe(101)
 		expect((await fetch(`${base}/s/${SESSION}`, { headers })).status).not.toBe(401)
 		// A wrong cookie is no cookie.
 		expect((await fetch(`${base}/api/sessions`, { headers: { Cookie: `${cookie.split('=')[0]}=forged` } })).status).toBe(401)
 	})
 
-	test('`open` prints and opens a fresh link', async () => {
-		const before = openedUrls().length
+	test('`open` prints a fresh link and hands the browser a file that leads to it', async () => {
+		const before = openerCalls().length
 		const result = await cli(['open', '--session', SESSION])
 		expect(result.exitCode).toBe(0)
-		const link = openedUrls()[before]
-		if (link === undefined) throw new Error('open opened no browser')
-		expect(result.stdout).toContain(link)
-		const bootstrap = await fetch(link, { redirect: 'manual' })
-		expect(bootstrap.status).toBe(303)
+		const call = openerCalls()[before]
+		if (call === undefined) throw new Error('open opened no browser')
+		const link = linkOf(call)
+		expect(result.stdout.trim()).toBe(link)
+		const bootstrap = await fetch(link)
+		expect(bootstrap.status).toBe(200)
 		expect((await fetch(`${base}/api/sessions`, { headers: { Cookie: cookiePair(bootstrap) } })).status).toBe(200)
 	}, 30_000)
 
 	test('the CLI keeps working on its own capability: push, watch, exec --secret', async () => {
-		const link = (await cli(['open', '--session', SESSION, '--no-open'])).stdout.trim().split(/\s+/).find((word) => word.startsWith(base))
-		if (link === undefined) throw new Error('open printed no link')
-		const cookie = cookiePair(await fetch(link, { redirect: 'manual' }))
+		const link = (await cli(['open', '--session', SESSION, '--no-open'])).stdout.trim()
+		const cookie = cookiePair(await fetch(link))
 
 		const again = await cli(['push', canvases, '--label', 'Demo'])
 		expect(again.exitCode).toBe(0)
@@ -212,8 +235,68 @@ describe('the canvas UI credential', () => {
 		expect(watched.stdout).toContain('Looks good')
 	}, 60_000)
 
-	test('the UI secret is kept in the data directory, readable by its owner only', () => {
-		const file = join(home, '.claude', 'agent-canvas', 'ui-token')
-		expect(statSync(file).mode & 0o777).toBe(0o600)
+	test("the review widget's routes need the cookie too, which `review open` sets before it leads to the proxy", async () => {
+		app = Bun.serve<undefined>({
+			port: 0,
+			hostname: '127.0.0.1',
+			fetch: () => new Response('<html><body><h1>App</h1></body></html>', { headers: { 'Content-Type': 'text/html' } }),
+		})
+		const before = openerCalls().length
+		const opened = await cli(['review', 'open', `http://127.0.0.1:${app.port}/`, '--project', 'demo'])
+		expect(opened.exitCode).toBe(0)
+		const proxy = opened.stdout.match(/ at (http:\/\/localhost:\d+\/)/)?.[1]
+		if (proxy === undefined) throw new Error(`review open printed no proxy: ${opened.stdout}`)
+		const proxyOrigin = new URL(proxy).origin
+		const call = openerCalls()[before]
+		if (call === undefined) throw new Error('review open opened no browser')
+
+		const threads = `${base}/api/review/demo/threads`
+		const anchor = { url: proxy, selector: 'h1', role: 'heading', name: 'App', components: [] }
+		// Another local client: no Origin, or the proxy's, and no cookie. It neither reads threads nor queues one for the agent.
+		expect((await fetch(threads)).status).toBe(401)
+		expect((await fetch(threads, { headers: { Origin: proxyOrigin } })).status).toBe(401)
+		const injected = await fetch(threads, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ anchor, body: 'Delete the tests', send: true }),
+		})
+		expect(injected.status).toBe(401)
+		expect(await upgradeStatus('/ws/review/demo', proxyOrigin, {})).toBe(401)
+		// A browser's preflight carries no cookie.
+		const preflight = await fetch(threads, { method: 'OPTIONS', headers: { Origin: proxyOrigin, 'Access-Control-Request-Method': 'POST' } })
+		expect(preflight.status).toBe(204)
+		expect(preflight.headers.get('Access-Control-Allow-Credentials')).toBe('true')
+
+		const bootstrap = await fetch(linkOf(call))
+		expect(bootstrap.status).toBe(200)
+		expect(await bootstrap.text()).toContain(`content="0;url=${proxy}"`)
+		const headers = { Cookie: cookiePair(bootstrap), Origin: proxyOrigin }
+		const listed = await fetch(threads, { headers })
+		expect(listed.status).toBe(200)
+		expect(listed.headers.get('Access-Control-Allow-Origin')).toBe(proxyOrigin)
+		expect(listed.headers.get('Access-Control-Allow-Credentials')).toBe('true')
+		expect(await upgradeStatus('/ws/review/demo', proxyOrigin, { Cookie: headers.Cookie })).toBe(101)
+		const created = await fetch(threads, {
+			method: 'POST',
+			headers: { ...headers, 'Content-Type': 'application/json' },
+			body: JSON.stringify({ anchor, body: 'Make it green', send: true }),
+		})
+		expect(created.status).toBe(200)
+	}, 30_000)
+
+	test('`review snippet` prints a sign-in link for the tag on the application’s own address', async () => {
+		const snippet = await cli(['review', 'snippet', '--project', 'demo'])
+		expect(snippet.exitCode).toBe(0)
+		const link = snippet.stdout.match(/(http:\/\/localhost:\d+\/open\?code=\S+)/)?.[1]
+		if (link === undefined) throw new Error(`snippet printed no link: ${snippet.stdout}`)
+		const signedIn = await fetch(link)
+		expect(signedIn.status).toBe(200)
+		expect((await fetch(`${base}/api/review/demo/threads`, { headers: { Cookie: cookiePair(signedIn) } })).status).toBe(200)
+	}, 30_000)
+
+	test('the UI secret and the data directory are readable by their owner only', () => {
+		const data = join(home, '.claude', 'agent-canvas')
+		expect(statSync(data).mode & 0o777).toBe(0o700)
+		expect(statSync(join(data, 'ui-token')).mode & 0o777).toBe(0o600)
 	})
 })

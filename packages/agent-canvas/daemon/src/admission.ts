@@ -1,5 +1,5 @@
 import { jsonResponse, matchesCapability } from '@fabrika/daemon-kit'
-import { cookieValue, linkRequiredResponse, UI_CODE_QUERY, uiCookieName } from './ui-credential'
+import { cookieValue, linkRequiredResponse, UI_LINK_PATH, uiCookieName } from './ui-credential'
 
 /** The header the CLI sends its capability in; the daemon writes the capability to `CLI_AUTH_FILE`. */
 export const CLI_TOKEN_HEADER = 'X-Agent-Canvas-CLI-Token'
@@ -24,6 +24,7 @@ const CLI_ROUTES: ReadonlyArray<{ method: string; pattern: URLPattern }> = [
 	{ method: 'GET', pattern: new URLPattern({ pathname: '/ws/review-wait/:project' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/claim' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/proxy' }) },
+	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/link' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/threads/:thread/reply' }) },
 ]
 
@@ -65,23 +66,26 @@ function isReviewPath(pathname: string): boolean {
 const SESSION_PAGE = new URLPattern({ pathname: '/s/:id' })
 
 /**
- * What answers without a credential: liveness, the static assets (the review widget's script among them), review mode
- * and a session page that carries a link's code, which its handler redeems. Everything else needs one.
+ * What answers without a credential: liveness, the static assets (the review widget's script among them), a link, whose
+ * handler redeems its code, and the preflight of a review route, which a browser sends without cookies. Everything else
+ * needs one, the review widget's routes included: the widget asks with `credentials: 'include'`, and its requests to the
+ * daemon are same-site, so the browser adds the cookie the application's scripts cannot read.
  */
-function isOpenToAnyone(url: URL): boolean {
+function isOpenToAnyone(req: Request, url: URL): boolean {
 	const { pathname } = url
-	if (pathname === '/health' || pathname.startsWith('/assets/') || isReviewPath(pathname)) return true
-	return SESSION_PAGE.test(url) && url.searchParams.has(UI_CODE_QUERY)
+	if (pathname === '/health' || pathname.startsWith('/assets/')) return true
+	if (req.method === 'OPTIONS' && isReviewPath(pathname)) return true
+	return req.method === 'GET' && pathname === UI_LINK_PATH
 }
 
-/** Whether the request carries the UI cookie; the session page's handler asks too. */
+/** Whether the request carries the UI cookie; the link handler asks too. */
 export function hasUiCookie(req: Request, options: Pick<AdmissionOptions, 'port' | 'uiToken'>): boolean {
 	return matchesCapability(cookieValue(req.headers.get('Cookie'), uiCookieName(options.port)), options.uiToken)
 }
 
 function credentialRequired(url: URL): Response {
 	if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) {
-		return jsonResponse({ error: 'Open the canvas through a link the agent-canvas CLI prints (agent-canvas open)' }, 401)
+		return jsonResponse({ error: 'Open the canvas or the review through a link the agent-canvas CLI prints' }, 401)
 	}
 	const page = SESSION_PAGE.exec(url)
 	return linkRequiredResponse(page?.pathname.groups['id'] ?? null)
@@ -96,7 +100,7 @@ function credentialRequired(url: URL): Response {
  * - every API request and upgrade a browser sends must be same-origin (`Sec-Fetch-Site`), reads included;
  * - CLI routes require the CLI capability;
  * - every other route but `isOpenToAnyone`'s requires the UI cookie or the CLI capability, so a local client that sends
- *   no `Origin` (another process or OS user on this machine) reaches nothing of the UI's.
+ *   no `Origin` (another process or OS user on this machine) reaches nothing of the UI's or review mode's.
  *
  * Returns the refusal, or null when the request is admitted.
  */
@@ -124,7 +128,7 @@ export function admitRequest(req: Request, url: URL, options: AdmissionOptions):
 	if (isCliRoute(req, url) && !cli) {
 		return jsonResponse({ error: 'This endpoint is available only to the local CLI' }, 401)
 	}
-	if (!cli && !isOpenToAnyone(url) && !hasUiCookie(req, options)) return credentialRequired(url)
+	if (!cli && !isOpenToAnyone(req, url) && !hasUiCookie(req, options)) return credentialRequired(url)
 
 	return null
 }

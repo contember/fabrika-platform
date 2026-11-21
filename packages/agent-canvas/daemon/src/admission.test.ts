@@ -109,7 +109,7 @@ describe('daemon admission', () => {
 		expect(admit(`/api/session/demo/secrets/resolve?${CLI_TOKEN_QUERY}=${TOKEN}`, { method: 'POST' })?.status).toBe(401)
 	})
 
-	test('requires the UI cookie or the CLI capability on every route but liveness, assets, review and a link', () => {
+	test('requires the UI cookie or the CLI capability on every route but liveness, assets, a link and a review preflight', () => {
 		const uiRoutes: Array<[string, string]> = [
 			['GET', '/api/sessions'],
 			['GET', '/api/file?session=s&path=/etc/hosts'],
@@ -121,7 +121,14 @@ describe('daemon admission', () => {
 			['GET', '/ws/session/demo'],
 			['GET', '/'],
 			['GET', '/s/demo'],
+			['GET', '/s/demo?code=anything'],
 			['GET', '/unknown'],
+			// The review widget's routes: it sends the cookie with `credentials: 'include'`.
+			['GET', '/api/review/app/threads'],
+			['POST', '/api/review/app/threads'],
+			['POST', '/api/review/app/threads/t1/send'],
+			['DELETE', '/api/review/app/threads/t1'],
+			['GET', '/ws/review/app'],
 		]
 		for (const [method, path] of uiRoutes) {
 			expect(admitAnonymous(path, { method })?.status).toBe(401)
@@ -132,9 +139,11 @@ describe('daemon admission', () => {
 			expect(admitAnonymous(path, { method, headers: { [CLI_TOKEN_HEADER]: TOKEN } })).toBeNull()
 		}
 		expect(admitAnonymous(`/ws/session/demo?${CLI_TOKEN_QUERY}=${TOKEN}`, { headers: { Upgrade: 'websocket' } })).toBeNull()
-		for (const path of ['/health', '/assets/review.js', '/api/review/app/threads', '/ws/review/app', '/s/demo?code=anything']) {
+		for (const path of ['/health', '/assets/review.js', '/open?code=anything', '/open']) {
 			expect(admitAnonymous(path)).toBeNull()
 		}
+		expect(admitAnonymous('/open?code=anything', { method: 'POST' })?.status).toBe(401)
+		expect(admitAnonymous('/api/review/app/threads', { method: 'OPTIONS', headers: { Origin: 'http://localhost:5173' } })).toBeNull()
 	})
 
 	test('answers a page without the cookie with the command that prints a link, and the API with JSON', async () => {

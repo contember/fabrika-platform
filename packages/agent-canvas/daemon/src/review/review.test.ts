@@ -3,7 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { connect } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { uiCookieName } from '../ui-credential'
+import { uiCookieName, UiLinks } from '../ui-credential'
 import { renderReviewRequests } from './markdown'
 import { isLoopbackOrigin, type ReviewAnchor } from './model'
 import { ReviewProxies, viteFullReloadPath } from './proxy'
@@ -163,7 +163,7 @@ describe('review routes', () => {
 
 	async function call(method: string, path: string, options: { origin?: string; body?: unknown } = {}) {
 		const proxies = new ReviewProxies(store, WIDGET, () => {})
-		const review = createReviewServer(store, proxies)
+		const review = createReviewServer(store, proxies, new UiLinks(19400))
 		const headers = new Headers({ 'Content-Type': 'application/json' })
 		if (options.origin !== undefined) headers.set('Origin', options.origin)
 		const req = new Request(`http://localhost:19400${path}`, {
@@ -185,6 +185,7 @@ describe('review routes', () => {
 		})
 		expect(created.status).toBe(200)
 		expect(created.headers.get('Access-Control-Allow-Origin')).toBe('http://localhost:4317')
+		expect(created.headers.get('Access-Control-Allow-Credentials')).toBe('true')
 
 		const claimed = await call('POST', '/api/review/demo/claim')
 		const body: unknown = await claimed.json()

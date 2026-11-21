@@ -3,7 +3,7 @@ import { createHash } from 'crypto'
 import { dirname, join } from 'path'
 import { hasUiCookie } from '../admission'
 import { DATA_DIR } from '../paths'
-import { linkRequiredResponse, UI_CODE_QUERY, uiCookieHeader, type UiLinks } from '../ui-credential'
+import { linkRequiredResponse, linkResponse, UI_CODE_QUERY, UI_LINK_PATH, uiCookieHeader, type UiLinks } from '../ui-credential'
 
 const MIME_TYPES: Record<string, string> = {
 	js: 'application/javascript',
@@ -119,19 +119,18 @@ export interface SessionPageAccess {
 }
 
 /**
- * A link's code sets the UI cookie and redirects to the clean URL, so the code stays out of the page's history entry. A
- * spent code is fine for a browser that already holds the cookie. Admission let the page through only with the cookie
- * or a code.
+ * A link's code sets the UI cookie the first time and leads on to the link's destination, so the code stays out of the
+ * destination's history entry. A spent code still leads a browser that holds the cookie on. Admission lets a link through
+ * without a credential.
  */
-function sessionPage(access: SessionPageAccess) {
-	return async (req: Request, url: URL, match: URLPatternResult): Promise<Response> => {
+function openLink(access: SessionPageAccess) {
+	return (req: Request, url: URL): Response => {
 		const code = url.searchParams.get(UI_CODE_QUERY)
-		if (code === null) return serveSessionPage()
-		const redeemed = access.links.redeem(code)
-		if (!redeemed && !hasUiCookie(req, access)) return linkRequiredResponse(match.pathname.groups['id'] ?? null)
-		const headers = new Headers({ Location: url.pathname, 'Cache-Control': 'no-store' })
-		if (redeemed) headers.set('Set-Cookie', uiCookieHeader(access.port, access.uiToken))
-		return new Response(null, { status: 303, headers })
+		const link = code === null ? null : access.links.redeem(code)
+		if (link === null) return linkRequiredResponse(null)
+		if (link.fresh) return linkResponse(link, uiCookieHeader(access.port, access.uiToken))
+		if (hasUiCookie(req, access)) return linkResponse(link, null)
+		return linkRequiredResponse(null)
 	}
 }
 
@@ -139,8 +138,13 @@ export function createStaticHandlers(access: SessionPageAccess): Route[] {
 	return [
 		{
 			method: 'GET',
+			pattern: new URLPattern({ pathname: UI_LINK_PATH }),
+			handler: openLink(access),
+		},
+		{
+			method: 'GET',
 			pattern: new URLPattern({ pathname: '/s/:id' }),
-			handler: sessionPage(access),
+			handler: serveSessionPage,
 		},
 		{
 			method: 'GET',

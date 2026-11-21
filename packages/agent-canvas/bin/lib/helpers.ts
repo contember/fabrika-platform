@@ -1,9 +1,12 @@
 import { WaitError, type WaiterSocket, waitForEvent, type WaitVerdict } from '@fabrika/daemon-kit'
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
+import { chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { pathToFileURL } from 'url'
 import { z } from 'zod'
 import { cliAuthHeaders, cliSocketUrl } from './cli-auth.ts'
-import { BASE_URL, TIMEOUT_MS, WS_URL } from './config.ts'
+import { BASE_URL, TEMP_DIR, TIMEOUT_MS, WS_URL } from './config.ts'
 
 export function getSessionId(session?: string): string {
 	if (session) return session
@@ -40,7 +43,7 @@ export async function pendingInput(sessionId: string): Promise<string | null> {
 	return (await consumeFeedback(sessionId)) ?? (await claimThreadReplies(sessionId))
 }
 
-export function openBrowser(url: string) {
+function openBrowser(url: string) {
 	const candidates = process.platform === 'darwin'
 		? ['open']
 		: ['xdg-open', 'wslview', 'sensible-browser']
@@ -53,6 +56,45 @@ export function openBrowser(url: string) {
 		}
 	}
 	console.error(`Open this URL in your browser: ${url}`)
+}
+
+const LINK_FILE = /^open-[0-9a-f-]+\.html$/
+/** Long enough for a browser to start and read the file; a later `openLink` removes it. */
+const LINK_FILE_TTL_MS = 60_000
+
+function escapeHtml(text: string): string {
+	return text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;')
+}
+
+function removeStaleLinkFiles(now: number): void {
+	for (const name of readdirSync(TEMP_DIR)) {
+		if (!LINK_FILE.test(name)) continue
+		const file = join(TEMP_DIR, name)
+		try {
+			if (now - statSync(file).mtimeMs > LINK_FILE_TTL_MS) rmSync(file, { force: true })
+		} catch {
+			// Removed meanwhile by another CLI.
+		}
+	}
+}
+
+/**
+ * Opens a link that carries a secret (a one-time sign-in code, a share key) in the browser. Never as a process argument:
+ * other OS users read every process's arguments. The link goes into a file only its owner reads, in the CLI's private
+ * temp directory, and the browser opens that file, which refreshes to the link.
+ */
+export function openLink(link: string): void {
+	mkdirSync(TEMP_DIR, { recursive: true, mode: 0o700 })
+	chmodSync(TEMP_DIR, 0o700)
+	removeStaleLinkFiles(Date.now())
+	const target = escapeHtml(link)
+	const file = join(TEMP_DIR, `open-${randomUUID()}.html`)
+	writeFileSync(
+		file,
+		`<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><meta http-equiv="refresh" content="0;url=${target}"><title>agent-canvas</title><a href="${target}">Continue</a>\n`,
+		{ mode: 0o600, flag: 'wx' },
+	)
+	openBrowser(pathToFileURL(file).href)
 }
 
 interface FeedbackWaitOptions {

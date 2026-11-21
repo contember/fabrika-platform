@@ -8,7 +8,7 @@ import { KEEPALIVE_PONG } from '../../../daemon/src/review/remote.ts'
 import { cliAuthHeaders, cliSocketUrl } from '../cli-auth.ts'
 import { BASE_URL, TIMEOUT_MS, WS_URL } from '../config.ts'
 import { ensureDaemon } from '../daemon-lifecycle.ts'
-import { openBrowser } from '../helpers.ts'
+import { openLink } from '../helpers.ts'
 import { createRemoteReview, loadRemoteReview, RemoteReviewBackend, remoteSnippet, reviewerLink } from './review-remote.ts'
 
 const USAGE = `agent-canvas review — comments on a running application
@@ -32,7 +32,8 @@ Once a project is shared, watch, fetch, reply and list talk to the share worker 
 
 const claimSchema = z.union([z.object({ found: z.literal(false) }), z.object({ found: z.literal(true), markdown: z.string() })])
 const threadsSchema = z.object({ threads: z.array(reviewThreadSchema) })
-const proxySchema = z.object({ url: z.string() })
+const proxySchema = z.object({ url: z.string(), link: z.string() })
+const linkSchema = z.object({ link: z.string() })
 const errorSchema = z.object({ error: z.string() })
 
 function defaultProject(): string {
@@ -190,15 +191,17 @@ export async function handleReview(args: string[]) {
 			if (remote !== undefined) {
 				const link = reviewerLink(remote)
 				console.log(`Review ${remote.appUrl} at ${link}`)
-				if (!values['no-open']) openBrowser(link)
+				if (!values['no-open']) openLink(link)
 				if (values.follow) return followRequests(project, new RemoteReviewBackend(project, remote))
 				return
 			}
 			if (target === undefined) throw new Error('Usage: agent-canvas review open <url> [--follow] [--no-open]')
 			await ensureDaemon()
-			const { url } = proxySchema.parse(await call(project, 'POST', '/proxy', { target: new URL(target).href }))
+			const { url, link } = proxySchema.parse(await call(project, 'POST', '/proxy', { target: new URL(target).href }))
 			console.log(`Review ${target} at ${url}`)
-			if (!values['no-open']) openBrowser(url)
+			// The widget needs the daemon's cookie, which the link sets once before it leads to the proxy.
+			if (values['no-open']) console.error(`A browser without the agent-canvas cookie opens the review once through: ${link}`)
+			else openLink(link)
 			if (values.follow) return followRequests(project, new DaemonReviewBackend(project))
 			return
 		}
@@ -216,7 +219,14 @@ export async function handleReview(args: string[]) {
 		}
 		case 'snippet': {
 			const remote = loadRemoteReview(project)
-			console.log(remote === undefined ? `<script src="${BASE_URL}/assets/review.js" data-project="${project}"></script>` : remoteSnippet(remote))
+			if (remote !== undefined) {
+				console.log(remoteSnippet(remote))
+				return
+			}
+			await ensureDaemon()
+			const { link } = linkSchema.parse(await call(project, 'POST', '/link'))
+			console.log(`<script src="${BASE_URL}/assets/review.js" data-project="${project}"></script>`)
+			console.log(`Open this link once in the browser you review in, so the widget can reach the daemon: ${link}`)
 			return
 		}
 		case 'watch': {
