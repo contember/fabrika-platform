@@ -146,7 +146,7 @@ bun test
   file writes, init commands, the crontab, ClamAV) and keeps the guards a shell needs.
   `renderLockedExecutionDescriptor` sends ONLY the generated setup: the SPA commands, the frozen install, the
   application's tests, then — because the tests are authored code — a reinstall, the regenerated entrypoint,
-  `tsc` with the platform tsconfig (the contract, `src/` and the SPA under `web/`), the checker fetched at the release
+  `tsc` with the platform tsconfig (the contract, `src/`, and from a 0.9 reader the SPA under `web/`), the checker fetched at the release
   of the reader that read the application (`ZeropsLockedExecution.checkRelease`, from `ProviderApprovedAccess.checker`:
   the newest patch of the minor its `bun.lock` pins; ADR-0062) and the scripts. Keep the tests before every step that
   produces or checks what deploys, and `tsc` before the checker, as the application skill's loop runs them: the checker

@@ -26,7 +26,10 @@ const SERVE: readonly string[] = ['bun', `--max-http-header-size=${APPLICATION_S
 const MIGRATE: readonly string[] = [FABRIKA_BIN, 'db', 'migrate']
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
-/** The first framework minor whose build type-checks the SPA under `web/`; an older application never had it checked. */
+/**
+ * The first framework minor whose build type-checks the SPA under `web/`; an older application never had it checked.
+ * Read from `checkRelease`: Control picks the reader by the pin's minor, so the two always share it.
+ */
 const SPA_TYPE_CHECK_SINCE = { major: 0, minor: 9 }
 
 /**
