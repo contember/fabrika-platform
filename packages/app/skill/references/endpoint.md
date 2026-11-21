@@ -87,6 +87,11 @@ export const WorkloadRow = z.strictObject({
   token: a flag the output carries (`canClose: ctx.holds('cash.manage')`) or a branch of the handler. A scoped grant, a
   relation's included, is not held. It grants nothing: `ctx.db` reaches only what the access form gives, so a write
   the flag guards still needs an endpoint whose action the table names.
+- `ctx.caller` is the person's own row, when `src/app-kit.ts` declares one:
+  `defineApp(vocabulary, tables, { caller: { table: 'people', principal: 'principal_id', missing: '<403 message>', refuse: [{ column: 'archived_at', not: null, message: '<403 message>' }] } })`.
+  The framework reads it before every group procedure's handler and answers the 403 itself, so a handler never reads
+  the caller's row or refuses an unbound or archived person: it uses `ctx.caller.id`. A procedure that must run before
+  the row exists (binding the account to it) declares `caller: false`. A `machine` caller gets `ctx.caller === null`.
 - `ctx.target` is the capability (a `Ref`); its id is `ctx.target.value`. `ctx.within` is the `over` capability.
 - Two writes with the same `expectVersion` (two tabs, a double click) give one 200 and one 409, also when they arrive
   together: the second one finds the version moved.

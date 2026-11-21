@@ -833,6 +833,9 @@ interface ReadGroup {
 const sameCallers = (left: readonly string[], right: readonly string[]): boolean =>
 	left.length === right.length && left.every((caller, index) => caller === right[index])
 
+/** `defineApp`'s option fields. `caller` (`ctx.caller`) is the runtime's alone: the artifact carries nothing of it. */
+const KIT_OPTIONS = ['imports', 'tokens', 'caller']
+
 /**
  * The kit's imports from `defineApp`'s options: each snapshot's identity, the procedures it calls, its deadline;
  * `undefined` without options, where the contract has no imports section.
@@ -841,7 +844,7 @@ function kitImports(options: LiteralValue | undefined): Record<string, KitImport
 	if (options === undefined) {
 		return undefined
 	}
-	const imports = strictFields(options, "defineApp's options", [], ['imports', 'tokens']).get('imports')
+	const imports = strictFields(options, "defineApp's options", [], KIT_OPTIONS).get('imports')
 	if (imports === undefined) {
 		return undefined
 	}
@@ -865,7 +868,7 @@ function kitImports(options: LiteralValue | undefined): Record<string, KitImport
 
 /** The token purposes of `defineApp`'s options, each `token(Claims, { maxDays })`; `undefined` without any. */
 function kitTokens(options: LiteralValue | undefined): TokenPurposes | undefined {
-	const tokens = options === undefined ? undefined : strictFields(options, "defineApp's options", [], ['imports', 'tokens']).get('tokens')
+	const tokens = options === undefined ? undefined : strictFields(options, "defineApp's options", [], KIT_OPTIONS).get('tokens')
 	if (options === undefined || tokens === undefined) {
 		return undefined
 	}

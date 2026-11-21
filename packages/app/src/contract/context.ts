@@ -64,6 +64,8 @@ export interface KitTypes {
 	readonly imports: KitImports
 	/** The token purposes of `defineApp`'s options, by purpose. */
 	readonly tokens: TokenPurposes
+	/** The row `ctx.caller` holds (`defineApp`'s `caller`); `never` when the kit declares none. */
+	readonly caller: unknown
 }
 
 /**

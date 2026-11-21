@@ -1,7 +1,9 @@
-// What the staged kit keeps beside a declaration, out of the declaration itself: a site's handler and a contract's
-// vendored snapshots and whether its kit had tables. `compileContract` and the static reader see only the declaration; `serve` reads these.
-// Browser-safe: a handler is held here, never called.
+// What the staged kit keeps beside a declaration, out of the declaration itself: a site's handler and whether it opts
+// out of `ctx.caller`, a contract's vendored snapshots, its caller declaration and whether its kit had tables.
+// `compileContract` and the static reader see only the declaration; `serve` reads these. Browser-safe: a handler is
+// held here, never called.
 
+import type { CallerDeclaration } from './caller'
 import type { ConnectSnapshot } from './connect'
 
 const handlers = new WeakMap<object, unknown>()
@@ -47,4 +49,30 @@ export function withKitOrigin<T extends object>(contract: T, origin: KitOrigin):
  */
 export function kitOriginOf(contract: object): KitOrigin | undefined {
 	return origins.get(contract)
+}
+
+const callers = new WeakMap<object, CallerDeclaration>()
+
+/** `contract` with the caller declaration of the kit that built it (`defineApp`'s `caller`). */
+export function withCaller<T extends object>(contract: T, declaration: CallerDeclaration): T {
+	callers.set(contract, declaration)
+	return contract
+}
+
+/** The caller declaration of the kit that built `contract`, or `undefined` when it declares none. */
+export function callerOf(contract: object): CallerDeclaration | undefined {
+	return callers.get(contract)
+}
+
+const optedOut = new WeakSet<object>()
+
+/** `site`, a procedure declared with `caller: false`: it runs without `ctx.caller`. */
+export function withoutCaller<T extends object>(site: T): T {
+	optedOut.add(site)
+	return site
+}
+
+/** Whether a procedure of the kit opts out of `ctx.caller`. */
+export function optsOutOfCaller(site: object): boolean {
+	return optedOut.has(site)
 }

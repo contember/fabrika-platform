@@ -162,6 +162,11 @@ export interface DataHandles {
 	readonly reference: object
 	/** `ctx.db.unscoped`, or `undefined` for a site that declares none. */
 	readonly unscoped: object | undefined
+	/**
+	 * At most two rows of `table` whose `column` holds `value`, as an unscoped read answers them: the framework's read of
+	 * the caller's own row (`ctx.caller` of `@fabrika/app`). No handle of an application reaches it.
+	 */
+	rowsNaming(table: string, column: string, value: string): Promise<readonly Readonly<Record<string, unknown>>[]>
 }
 
 /** The data side of one bound layer, which only the framework reaches (`@fabrika/db/framework`). */
@@ -293,6 +298,24 @@ function handlesOf(parts: DataLayerParts, site: DataSite): DataHandles {
 		},
 		reference: referenceTables(parts, site, run),
 		unscoped,
+		rowsNaming: async (table: string, column: string, value: string) => {
+			site.check()
+			const model = table.startsWith(FRAMEWORK_PREFIX) ? undefined : modelOf(parts.models, table)
+			if (model === undefined) {
+				throw new QueryRefusedError('unknown_table', `the caller's table ${table} is not a table of src/db/tables.ts`)
+			}
+			const keyed = model.scope.mode === 'dimension' || model.scope.mode === 'child' || model.scope.mode === 'app'
+			const page = await listRows(
+				parts.contextOf(table),
+				run,
+				everything(),
+				model.visible,
+				{ where: [[column, '=', value]], limit: 2 },
+				keyed ? [keyOf(model)] : model.visible,
+				soleReach(model.actions.read[0] ?? ''),
+			)
+			return page.items
+		},
 	})
 }
 

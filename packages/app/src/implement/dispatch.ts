@@ -43,7 +43,7 @@ import {
 } from '@fabrika/auth-core'
 import { DatabaseError } from '@fabrika/db'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES, type RelationHold, type WithinGrant } from '@fabrika/db/capability'
-import type { DataAccess, FileBinding, FrameworkTables } from '@fabrika/db/framework'
+import type { DataAccess, DataHandles, FileBinding, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { applyAnswerCache, INLINE_FILE_TYPES, inlineFileTypes, withResponseHeaders } from '@fabrika/proxy-core/headers'
@@ -51,6 +51,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, timingSafeEqual } from 'node:crypto'
 import { z } from 'zod/v4'
 import { fileFieldsOf } from '../contract/build'
+import type { CallerDeclaration } from '../contract/caller'
 import {
 	bodyDeadlineMs,
 	BROWSER_CONFIG_FILE,
@@ -83,6 +84,7 @@ import { approvedInput, approvedOutput } from './approved'
 import { attachmentResponse } from './attachment'
 import { boundedStream, type Deadline, deadline, handlerSignal, readBoundedBytes } from './bounded'
 import type { BrowserConfig } from './browser-config'
+import { resolveCaller } from './caller'
 import {
 	type AppCapability,
 	CapabilityLimitError,
@@ -107,6 +109,7 @@ import {
 	Invocation,
 	type KickRecorder,
 	kickRecorder,
+	NO_DECLARATION,
 	siteData,
 	type SiteDeclaration,
 	undeclaredSql,
@@ -270,6 +273,8 @@ export type ServedEndpoint =
 		readonly query?: ProcedureQuery
 		/** The webhook whose bindings `ctx.webhooks` creates and removes; absent without `binds`. */
 		readonly binds?: BindableWebhook
+		/** The caller's row read before the handler (`ctx.caller`); absent for a procedure that reads none. */
+		readonly caller?: CallerDeclaration
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
@@ -734,6 +739,11 @@ export class ContractRuntime {
 				try {
 					ran = await runInRequest(frame, async () => {
 						const membership = this.#membershipRequest(served.row, caller, request, frame)
+						const binding = this.#parts.fileKinds?.binding(work)
+						// Before the access form, which may ask IAM to create a scope: a person without a row, or one it refuses, is a 403 here.
+						const callerRow = served.caller === undefined ? {} : {
+							caller: await resolveCaller(served.caller, this.#callerHandles(served.row, invocation, caller.subject, binding), caller.principal),
+						}
 						const access = await this.#access(served.row, caller, input, frame, membership)
 						// After every check that refuses the caller, before the handler: a refused caller never reads a receipt.
 						const identity = keyed === null ? null : await requestIdentity(input, query, work, `'${served.row.id}'`)
@@ -744,7 +754,6 @@ export class ContractRuntime {
 								return { replay: replayed(served.row, approvedOutput(served.row, served.output), stored, identity) }
 							}
 						}
-						const binding = this.#parts.fileKinds?.binding(work)
 						const ctx = Object.freeze({
 							principal: caller.principal,
 							requestId: frame.id,
@@ -769,6 +778,7 @@ export class ContractRuntime {
 								: { webhooks: this.#webhookBindings(served.row.id, served.binds, invocation, caller.subject) }),
 							...this.#signing(`'${served.row.id}'`, site?.declaration.signs ?? []),
 							kick: kicks.kick,
+							...callerRow,
 						})
 						const args = { input: access.input, ctx, ...(query === undefined ? {} : { query }) }
 						const egress = served.egress
@@ -914,6 +924,14 @@ export class ContractRuntime {
 	/** `ctx.files` of a staged-kit site: `put` and `open` of the stored files, bound to the invocation and the request's work. */
 	#files(endpoint: string, invocation: Invocation, kind: DataKind, work: FileWork): object {
 		return storedFilesHandle(this.#parts.fileKinds, work, { where: `'${endpoint}'`, check: invocation.fileCheck(), writes: kind !== 'query' })
+	}
+
+	/** The handles the caller's row is read through: the invocation's, declaring nothing an application handle reaches. */
+	#callerHandles(row: EndpointRow, invocation: Invocation | null, principal: string, files: FileBinding | undefined): DataHandles {
+		if (invocation === null) {
+			throw new ServerFault('facility_unbound', `'${row.id}' reads the caller's row, and its site reaches no data`)
+		}
+		return invocation.handles('query', NO_DECLARATION, principal, 'declared', files)
 	}
 
 	#data(): DataAccess {

@@ -39,6 +39,7 @@ import {
 	GENERATED_ROW_PREFIX,
 } from '../contract/defaults'
 import type { AnyContract } from '../contract/define'
+import { callerOf } from '../contract/handled'
 import type { FileScanner, ScanVerdict } from '../files/scan'
 import { bytesAreOfType, SNIFF_BYTES } from '../files/sniff'
 import type { ApplicationEnvironment, ContractImplementation } from '../implement/implement'
@@ -184,6 +185,26 @@ type Refusals = 'declared' | 'none'
 interface Pinning {
 	readonly pins: Readonly<Record<string, string>>
 	readonly removals: (() => Promise<void>)[]
+}
+
+/**
+ * The row of the table the contract's `caller` reads, from `callerRows`, which a person of each case holds; `null` when
+ * the contract declares none. A declaration without that row in `callerRows`, bound to the caller, is refused here:
+ * every case would end in the framework's 403 and check nothing.
+ */
+function declaredCallerRow(contract: AnyContract, callerRows: AppRows | undefined): AppRows | null {
+	const caller = callerOf(contract)
+	if (caller === undefined) {
+		return null
+	}
+	const row = callerRows?.[caller.table]
+	if (row === undefined || row[caller.principal] !== GENERATED_CALLER) {
+		throw new Error(
+			`the contract reads each person's ${caller.table} row before the handler (defineApp's caller): `
+				+ `callerRows: { ${caller.table}: { ${caller.principal}: GENERATED_CALLER, … } } gives the kit's callers one`,
+		)
+	}
+	return { [caller.table]: row }
 }
 
 /** `rows` with each `fabrika:caller` value replaced by the caller's id. */
@@ -462,6 +483,7 @@ export function endpointAccessKit<DB, P>(
 		challengeFetch: () => Promise.resolve(Response.json({ success: false, 'error-codes': ['invalid-input-response'] })),
 	})
 	const policies = tablePolicies(tables)
+	const callerRow = declaredCallerRow(app.contract, options.callerRows)
 	// A view's rows come from the tables it reads, which the kit seeds instead.
 	const tableNames = Object.keys(policies).filter((name) => policies[name]?.view !== true).sort()
 
@@ -631,7 +653,24 @@ export function endpointAccessKit<DB, P>(
 	): Promise<{ readonly status: number; readonly text: string; readonly marks: readonly string[] }> => {
 		const asker = callerFor(row, grants)
 		const asked = withGenerated(row, input, chain, asker.caller)
-		return { ...(await askAs(row, asker.fetch, asked.input, refusals)), marks: asked.marks }
+		return withCallerRow(asker.caller, async () => ({ ...(await askAs(row, asker.fetch, asked.input, refusals)), marks: asked.marks }))
+	}
+
+	/**
+	 * Runs a case's request by a person who holds the row the contract's `caller` reads (ADR-0079), seeded from
+	 * `callerRows` for that request only: without it every person's request is the framework's 403, and no case would
+	 * reach a handler.
+	 */
+	const withCallerRow = async <T>(caller: TestCaller, work: () => Promise<T>): Promise<T> => {
+		if (callerRow === null || caller.kind !== 'human') {
+			return work()
+		}
+		const seeded = await postgres.seedApplicationRows(tables, boundTo(callerRow, caller.id))
+		try {
+			return await work()
+		} finally {
+			await seeded.remove()
+		}
 	}
 
 	// A seeded file column references an empty object, which a handler that serves or opens the file reads here.
@@ -1301,7 +1340,8 @@ export function endpointAccessKit<DB, P>(
 					// The caller holds the named action nowhere it lists, so its rows lie in a scope of their own.
 					asked = { ...asked, ...(await listedRows(named.action, access.dimension, rowsOf(capability))).other.rows }
 				}
-				const { status } = await askAs(named, callerFor(named, grants).fetch, asked)
+				const asker = callerFor(named, grants)
+				const { status } = await withCallerRow(asker.caller, () => askAs(named, asker.fetch, asked))
 				return { status }
 			},
 		}

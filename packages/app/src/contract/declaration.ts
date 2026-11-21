@@ -76,9 +76,17 @@ export function unknownOptions(options: object, builder: Builder): string[] {
  */
 export const DECLARED_FIELDS = ['sql', 'unscoped', 'connect', 'issues', 'mailer', 'kicks', 'binds', 'signs', 'egress'] as const
 
-/** The keys of a kit site's `options` that are neither `builder`'s option fields nor a declared field. */
+/**
+ * A kit procedure's fields that only the runtime reads, never the artifact: `caller: false` opts out of `ctx.caller`,
+ * which reads the application's own row and decides nothing the proxy or Control sees.
+ */
+export const RUNTIME_PROCEDURE_FIELDS = ['caller'] as const
+
+/** The keys of a kit site's `options` that are neither `builder`'s option fields nor a declared or runtime field. */
 export function kitUnknownOptions(options: object, builder: Builder): string[] {
-	return unknownOptions(options, builder).filter((key) => !DECLARED_FIELDS.some((field) => field === key))
+	return unknownOptions(options, builder).filter((key) =>
+		!DECLARED_FIELDS.some((field) => field === key) && !(builder === 'procedure' && RUNTIME_PROCEDURE_FIELDS.some((field) => field === key))
+	)
 }
 
 /**

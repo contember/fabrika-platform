@@ -5,6 +5,7 @@
 
 import type { JobMailer, RpcCaller, WebhookScheme } from '@fabrika/auth-core'
 import type { AnyDbIndex, DbIndex, Tables, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
+import { type CallerDeclaration, type CallerField, type CallerOption, type KitCallerRow, parseCallerDeclaration } from './caller'
 import type { Declared, JobKitContext, KickContext, KitImports, KitTypes, NoTablesIndex, SqlMode, TokensContext, WebhookKitContext } from './context'
 import {
 	type AccessDeclaration,
@@ -65,7 +66,7 @@ import type {
 	PendingIn,
 	SignsField,
 } from './group'
-import { withHandler, withKitOrigin, withSnapshots } from './handled'
+import { withCaller, withHandler, withKitOrigin, withoutCaller, withSnapshots } from './handled'
 import { ContractError } from './problems'
 import type { TokenPurposes } from './token'
 import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
@@ -73,8 +74,11 @@ import type { AnyAppVocabulary, AppVocabulary } from './vocabulary'
 /** Fields a builder sets itself: an options object that carries one does not type-check. */
 type Owned<K extends string> = { readonly [P in K]?: never }
 
-/** The kit's types, computed once from the vocabulary, the tables' index, the imports and the token purposes. */
-export type KitOf<V, Ix, Imp extends KitImports, Tk extends TokenPurposes = Record<never, never>> = V extends
+/**
+ * The kit's types, computed once from the vocabulary, the tables' index, the imports, the token purposes and the table
+ * of the caller's row.
+ */
+export type KitOf<V, Ix, Imp extends KitImports, Tk extends TokenPurposes = Record<never, never>, Cr extends string = never> = V extends
 	AppVocabulary<infer A, infer D, infer R, infer Dims, infer M, infer T> ? {
 		readonly action: A
 		readonly dimension: D
@@ -87,6 +91,7 @@ export type KitOf<V, Ix, Imp extends KitImports, Tk extends TokenPurposes = Reco
 		readonly tables: Ix extends { readonly tables: infer T } ? keyof T & string : never
 		readonly imports: Imp
 		readonly tokens: Tk
+		readonly caller: Ix extends AnyDbIndex ? KitCallerRow<Ix, Cr> : never
 	}
 	: never
 
@@ -328,30 +333,63 @@ export function defineApp<V extends AnyAppVocabulary, DB, P>(
  * Options that may be absent are no overload, and neither is an option field that may be absent: the contract's type
  * would promise an imports section, or token purposes, it may not have. Each overload requires the fields it infers.
  */
-export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports, const Tk extends TokenPurposes>(
+export function defineApp<
+	V extends AnyAppVocabulary,
+	DB,
+	P,
+	const Imp extends KitImports,
+	const Tk extends TokenPurposes,
+	const Cr extends keyof DbIndex<DB, P, V>['tables'] & string = never,
+>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
-	options: { readonly imports: Imp; readonly tokens: Tk },
-): App<KitOf<V, DbIndex<DB, P, V>, Imp, Tk>>
-export function defineApp<V extends AnyAppVocabulary, DB, P, const Tk extends TokenPurposes>(
+	options: { readonly imports: Imp; readonly tokens: Tk } & CallerField<DbIndex<DB, P, V>, Cr>,
+): App<KitOf<V, DbIndex<DB, P, V>, Imp, Tk, Cr>>
+export function defineApp<
+	V extends AnyAppVocabulary,
+	DB,
+	P,
+	const Tk extends TokenPurposes,
+	const Cr extends keyof DbIndex<DB, P, V>['tables'] & string = never,
+>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
-	options: { readonly tokens: Tk },
-): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>, Tk>>
-export function defineApp<V extends AnyAppVocabulary, DB, P, const Imp extends KitImports>(
+	options: { readonly tokens: Tk } & CallerField<DbIndex<DB, P, V>, Cr>,
+): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>, Tk, Cr>>
+/**
+ * `caller`: the caller's row, read once per request before the handler as `ctx.caller` (`./caller.ts`). Not the last
+ * overload: options that may be absent report the last one's error, which names the imports.
+ */
+export function defineApp<V extends AnyAppVocabulary, DB, P, const Cr extends keyof DbIndex<DB, P, V>['tables'] & string>(
 	vocabulary: V,
 	tables: Tables<DB, P>,
-	options: { readonly imports: Imp },
-): App<KitOf<V, DbIndex<DB, P, V>, Imp>>
+	options: { readonly caller: CallerOption<DbIndex<DB, P, V>, Cr> },
+): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>, Record<never, never>, Cr>>
+export function defineApp<
+	V extends AnyAppVocabulary,
+	DB,
+	P,
+	const Imp extends KitImports,
+	const Cr extends keyof DbIndex<DB, P, V>['tables'] & string = never,
+>(
+	vocabulary: V,
+	tables: Tables<DB, P>,
+	options: { readonly imports: Imp } & CallerField<DbIndex<DB, P, V>, Cr>,
+): App<KitOf<V, DbIndex<DB, P, V>, Imp, Record<never, never>, Cr>>
 export function defineApp(vocabulary: AnyAppVocabulary, tables?: unknown, options?: KitOptions): object {
 	return runtimeApp(vocabulary, options, tables !== undefined)
 }
 
-/** What `defineApp`'s options carry: the connectors the kit imports, and the purposes of the tokens it signs. */
+/**
+ * What `defineApp`'s options carry: the connectors the kit imports, the purposes of the tokens it signs, and the table
+ * of the caller's row.
+ */
 export interface KitOptions {
 	readonly imports?: KitImports
 	/** `{ <purpose>: token(Claims, { maxDays }) }`: each kind of signed token, declared once. */
 	readonly tokens?: TokenPurposes
+	/** `{ table, principal, missing, refuse? }`: `ctx.caller`, parsed by `parseCallerDeclaration`. */
+	readonly caller?: unknown
 }
 
 // ── The runtime ─────────────────────────────────────────────────────────────────────────────────
@@ -359,20 +397,24 @@ export interface KitOptions {
 /** A site before `.handle`: its declaration as own fields, and `handle` on the prototype, so a spread copies only them. */
 class Pending<T extends object> {
 	readonly #declaration: T
+	readonly #withoutCaller: boolean
 
-	constructor(declaration: T) {
+	constructor(declaration: T, withoutCallerRow: boolean) {
 		this.#declaration = declaration
+		this.#withoutCaller = withoutCallerRow
 	}
 
 	/** A copy of the declaration that carries `handler`; the pending site itself stays without one. */
 	handle(handler: unknown): T {
-		return withHandler({ ...this.#declaration }, handler)
+		const handled = withHandler({ ...this.#declaration }, handler)
+		return this.#withoutCaller ? withoutCaller(handled) : handled
 	}
 }
 
 type PendingSite<T extends object> = Pending<T> & T
 
-const pending = <T extends object>(declaration: T): PendingSite<T> => Object.assign(new Pending(declaration), declaration)
+const pending = <T extends object>(declaration: T, withoutCallerRow = false): PendingSite<T> =>
+	Object.assign(new Pending(declaration, withoutCallerRow), declaration)
 
 interface EndpointOptions<Access> extends DeclaredDeclaration {
 	readonly input?: Schema | null
@@ -382,6 +424,8 @@ interface EndpointOptions<Access> extends DeclaredDeclaration {
 	readonly admission?: object
 	readonly limits?: object
 	readonly http?: object
+	/** `false`: the procedure runs without `ctx.caller`. */
+	readonly caller?: unknown
 }
 
 function endpoint<Access>(type: ProcedureType, def: EndpointOptions<Access>): PendingSite<ProcedureDeclaration<Schema, Access>> {
@@ -398,7 +442,10 @@ function endpoint<Access>(type: ProcedureType, def: EndpointOptions<Access>): Pe
 		declared: declaredOf(def),
 		unknownOptions: kitUnknownOptions(def, 'procedure'),
 	}
-	return pending(declaration)
+	if (def.caller !== undefined && def.caller !== false) {
+		throw new ContractError([`caller is ${JSON.stringify(def.caller)}; a procedure opts out of ctx.caller with caller: false`])
+	}
+	return pending(declaration, def.caller === false)
 }
 
 interface RuntimeEndpointKit<Access> {
@@ -478,6 +525,7 @@ interface RuntimeApp {
 function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions | undefined, tables: boolean): RuntimeApp {
 	const imports = options?.imports
 	const tokens = options?.tokens
+	const caller = callerDeclarationOf(options, tables)
 	return {
 		group: (options, build) => {
 			const callers = options.callers ?? []
@@ -565,9 +613,25 @@ function runtimeApp(vocabulary: AnyAppVocabulary, options: KitOptions | undefine
 				surface: declared,
 			}
 			const built = withSnapshots(contract, Object.fromEntries(Object.entries(imports ?? {}).map(([name, imported]) => [name, imported.snapshot])))
-			return withKitOrigin(built, tables ? 'tables' : 'tableless')
+			const origin = withKitOrigin(built, tables ? 'tables' : 'tableless')
+			return caller === undefined ? origin : withCaller(origin, caller)
 		},
 	}
+}
+
+/** `defineApp`'s `caller`, parsed at the call: it reads a table, so a kit without tables declares none. */
+function callerDeclarationOf(options: KitOptions | undefined, tables: boolean): CallerDeclaration | undefined {
+	if (options?.caller === undefined) {
+		return undefined
+	}
+	if (!tables) {
+		throw new ContractError(['defineApp: caller reads a table; defineApp(vocabulary, tables, { caller }) declares it'])
+	}
+	const parsed = parseCallerDeclaration(options.caller)
+	if (Array.isArray(parsed)) {
+		throw new ContractError(parsed)
+	}
+	return parsed
 }
 
 /**

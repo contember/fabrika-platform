@@ -100,3 +100,4 @@ a commit message suffices.
 | [0075](0075-a-cron-job-may-reach-the-public-web.md)                                     | A cron job may reach the public web; the guard keeps it off the installation and private networks         |
 | [0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)                      | An access view decides the rows a relation reaches                                                        |
 | [0077](0077-a-person-reads-iam-in-their-own-language.md)                                | A person reads IAM in their own language, on the whole installation                                       |
+| [0079](0079-the-framework-reads-the-caller-s-row-before-the-handler.md)                 | The framework reads the caller's row before the handler                                                   |

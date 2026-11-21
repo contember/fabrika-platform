@@ -5,6 +5,7 @@
 import type { EndpointCache, RpcCaller } from '@fabrika/auth-core'
 import type { AnyDbIndex, ReadOnlyUnscoped, Unavailable, UnscopedDeclaration, UnscopedMode } from '@fabrika/db/tables'
 import type { HandlerInput } from '../implement/types'
+import type { CallerContext, CallerOptOutField } from './caller'
 import type {
 	CheckedAccess,
 	Declared,
@@ -183,9 +184,10 @@ export type ProcedureContext<
 	Ks = never,
 	Bs = never,
 	Sg = never,
+	Co = never,
 > =
 	& ([Acc] extends [PublicAccess] ? PublicContext<K, Kind, Acts[number]>
-		: EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D> & WebhooksContext<Bs>)
+		: EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D> & WebhooksContext<Bs> & CallerContext<K['caller'], Caller, Co>)
 	& KickContext<Ks>
 	& TokensContext<K, Sg>
 
@@ -297,6 +299,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Acts extends readonly K['action'][] = never,
 		Q extends InputSchema = never,
 		const Sg extends readonly string[] = never,
+		const Co extends false = never,
 	>(
 		def:
 			& EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>
@@ -304,14 +307,15 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 			& HttpField<Q, Acc>
 			& NoKick
 			& SignsField<Sg, keyof K['tokens'] & string>
-			& EgressField,
+			& EgressField
+			& CallerOptOutField<K['caller'], [Acc] extends [PublicAccess] ? true : false, Co>,
 	): EndpointBuilder<
 		'query',
 		I,
 		O,
 		Acc,
 		Declared<S, U, Cn, Is>,
-		ProcedureContext<K, Caller, 'query', Acc, Acts, Declared<S, U, Cn, Is>, never, never, Sg>,
+		ProcedureContext<K, Caller, 'query', Acc, Acts, Declared<S, U, Cn, Is>, never, never, Sg, Co>,
 		QueryArgs<Q, K['tokens']>,
 		K['tokens']
 	>
@@ -328,6 +332,7 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 		const Ks extends readonly string[] = never,
 		const Bs extends string = never,
 		const Sg extends readonly string[] = never,
+		const Co extends false = never,
 	>(
 		def:
 			& EndpointDef<I, O, Acc, S, U, Cn, Is, K['index']>
@@ -336,14 +341,15 @@ export interface GroupKit<K extends KitTypes, Caller extends RpcCaller> {
 			& KicksField<Ks>
 			& BindsField<Bs>
 			& SignsField<Sg, keyof K['tokens'] & string>
-			& EgressField,
+			& EgressField
+			& CallerOptOutField<K['caller'], [Acc] extends [PublicAccess] ? true : false, Co>,
 	): EndpointBuilder<
 		'mutation',
 		I,
 		O,
 		Acc,
 		Declared<S, U, Cn, Is>,
-		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>, Ks, Bs, Sg>,
+		ProcedureContext<K, Caller, 'mutation', Acc, Acts, Declared<S, U, Cn, Is>, Ks, Bs, Sg, Co>,
 		QueryArgs<Q, K['tokens']>,
 		K['tokens']
 	>

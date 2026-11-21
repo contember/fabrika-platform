@@ -41,6 +41,7 @@ import { builtinEmailProviders } from '@fabrika/email/providers'
 import { TokenVerifier } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
 import { parseEncodedArtifact } from '../contract/artifact-schema'
+import type { CallerDeclaration } from '../contract/caller'
 import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { containersOf } from '../contract/containers'
@@ -499,6 +500,8 @@ interface BoundHandler {
 	readonly handler: (args: { readonly input: unknown; readonly ctx: object }) => unknown
 	readonly declaration: SiteDeclaration | null
 	readonly site: boolean
+	/** The caller's row read before the handler (`ctx.caller`); `null` for any other leaf. */
+	readonly caller: CallerDeclaration | null
 }
 
 /**
@@ -520,6 +523,7 @@ function boundHandler(
 			handler: (args) => Reflect.apply(leaf.handler, undefined, [args]),
 			declaration: approvedDeclaration(where, site, leaf.declared, kind, artifact, problems),
 			site: true,
+			caller: leaf.caller,
 		}
 	}
 	if (typeof node === 'function') {
@@ -527,9 +531,28 @@ function boundHandler(
 			handler: (args) => Reflect.apply(node, undefined, [args]),
 			declaration: artifact.declared === undefined ? null : approvedReach(site, artifact),
 			site: false,
+			caller: null,
 		}
 	}
 	return null
+}
+
+/** `ctx.caller` of a site: its table must be one of the contract's, and the site must reach data to read it. */
+function callerOfSite(
+	id: string,
+	bound: BoundHandler,
+	artifact: ContractArtifact,
+	problems: string[],
+): { readonly caller?: CallerDeclaration } {
+	const caller = bound.caller
+	if (caller === null) {
+		return {}
+	}
+	if (!Object.hasOwn(artifact.tables, caller.table)) {
+		problems.push(`procedure '${id}': defineApp's caller names ${caller.table}, which is not a table of src/db/tables.ts`)
+		return {}
+	}
+	return { caller }
 }
 
 /** The origins a staged-kit site's handler reaches, a kit without tables included; nothing for a bare handler. */
@@ -986,6 +1009,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 						connect: siteConnect(connect.get(id), bound.declaration),
 						site: servedSite(procedure.type, bound),
 						...(mount.kind === 'rpc' ? { group: true } : {}),
+						...callerOfSite(id, bound, artifact, problems),
 						...egressOf(bound),
 						...bindsOf(id, bound.declaration, artifact, problems),
 						...admissionOf(id, artifact, options, problems),

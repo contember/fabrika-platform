@@ -190,6 +190,7 @@ src/
     kit.ts            defineApp(vocabulary, tables): App (group, cron, webhook, link, export, contract), ContractKit
     group.ts          the endpoint builders of a group, a link and an export; .handle
     context.ts        what a kit handler receives: ctx by access form and declaration (types only)
+    caller.ts         defineApp's `caller`: its types (ctx.caller, caller: false), parseCallerDeclaration, the refusal rules
     define.ts         defineContract, the c.* kit and every type an agent meets
     attachment.ts     attachment(): an output that answers a file of rows (the rows' array schema, marked)
     token.ts          token(Claims, { maxDays }) of defineApp's options, signedToken('<purpose>'), the claims types
@@ -228,6 +229,7 @@ src/
     urls.ts           ctx.url: an absolute link to a procedure, on FABRIKA_APP_ORIGIN, with the parameters its URL carries
     egress.ts         the guard on the global fetch: a site's handler reaches only its declared egress origins, or a
                       cron job's egress: 'public' only public hosts, every redirect hop checked, each request bounded
+    caller.ts         resolveCaller: the caller's row before the access form, or the 403 (ADR-0079)
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
     crashes.ts        a boot that throws, an uncaught exception, an unhandled rejection: one crash report each
@@ -519,11 +521,21 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **Per request, in this order** (ADR-0012 §5): proxy secret → canonical path → `planEndpoint` →
   the proxy's endpoint (`X-Fabrika-Endpoint`) → token verification with `@fabrika/jwks`'s shared verifier → caller kind →
   requirement (`satisfies`) → admission → strict input (a string or key holding U+0000, which Postgres `text` cannot
-  store, is a 400 like any other refused value; so is a path parameter holding one) → access form → remove the
-  `from` field → handler → output projection → the header policy. Caller kind,
+  store, is a 400 like any other refused value; so is a path parameter holding one) → the caller's row (`ctx.caller`,
+  ADR-0079) → access form → remove the `from` field → a keyed mutation's receipt (ADR-0078) → handler → output projection → the header policy. Caller kind,
   requirement and access form are authorization; same-origin and content type are
   admission. Neither is the proxy's enforcement decision; never reorder them so that admission or input
   parsing answers a caller the requirement refused.
+- **`ctx.caller` is the caller's row, read by the framework before the handler** (ADR-0079). `defineApp`'s
+  `caller: { table, principal, missing, refuse? }` (`contract/caller.ts`, parsed by `parseCallerDeclaration`) is kept
+  beside the contract (`withCaller`, `handled.ts`), never in it, and a procedure's `caller: false` beside its site
+  (`withoutCaller`); `kitUnknownOptions` lets `caller` through (`RUNTIME_PROCEDURE_FIELDS`) and the static reader
+  accepts both, so the artifact is the one the same contract without them compiles to. `serve` gives every RPC group
+  procedure that is not public and does not opt out the declaration (`SiteHandler.caller`), and refuses `caller:
+  false` anywhere else. `dispatch` reads the row before the access form, which may ask IAM to create a scope, through
+  `@fabrika/db`'s `rowsNaming` in the invocation's transaction with the request's file binding (`implement/caller.ts`):
+  a `user` principal without a row, or with one a `refuse` rule meets, is a 403 and neither IAM nor the handler runs; two rows are `caller_ambiguous`, a rule naming a column the row lacks
+  `caller_column`; any other principal gets `null`. It decides no access and the proxy sees none of it.
 - **An endpoint validates with its schema once its shape is the approved one** (`approved.ts`). Boot reads the
   bundled artifact and checks its digest, not the evaluated schemas. So the first time an endpoint takes an input or
   answers JSON, `approvedInput`/`approvedOutput` describe the schema the application evaluated and compare its
