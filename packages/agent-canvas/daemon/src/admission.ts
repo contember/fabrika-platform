@@ -74,7 +74,8 @@ const SESSION_PAGE = new URLPattern({ pathname: '/s/:id' })
 function isOpenToAnyone(req: Request, url: URL): boolean {
 	const { pathname } = url
 	if (pathname === '/health' || pathname.startsWith('/assets/')) return true
-	if (req.method === 'OPTIONS' && isReviewPath(pathname)) return true
+	// Only the HTTP review routes have a preflight; a review socket must never be reachable without a credential.
+	if (req.method === 'OPTIONS' && pathname.startsWith('/api/review/')) return true
 	return req.method === 'GET' && pathname === UI_LINK_PATH
 }
 

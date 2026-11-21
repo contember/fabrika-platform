@@ -144,6 +144,7 @@ describe('daemon admission', () => {
 		}
 		expect(admitAnonymous('/open?code=anything', { method: 'POST' })?.status).toBe(401)
 		expect(admitAnonymous('/api/review/app/threads', { method: 'OPTIONS', headers: { Origin: 'http://localhost:5173' } })).toBeNull()
+		expect(admitAnonymous('/ws/review/app', { method: 'OPTIONS', headers: { Origin: 'http://localhost:5173' } })?.status).toBe(401)
 	})
 
 	test('answers a page without the cookie with the command that prints a link, and the API with JSON', async () => {
