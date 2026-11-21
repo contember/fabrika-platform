@@ -520,10 +520,20 @@ vocabulary (`packages/db/CLAUDE.md`).
   the proxy's endpoint (`X-Fabrika-Endpoint`) → token verification with `@fabrika/jwks`'s shared verifier → caller kind →
   requirement (`satisfies`) → admission → strict input (a string or key holding U+0000, which Postgres `text` cannot
   store, is a 400 like any other refused value; so is a path parameter holding one) → access form → remove the
-  `from` field → handler → output projection → the header policy. Caller kind,
+  `from` field → the caller's row (`ctx.caller`, ADR-0078) → handler → output projection → the header policy. Caller kind,
   requirement and access form are authorization; same-origin and content type are
   admission. Neither is the proxy's enforcement decision; never reorder them so that admission or input
   parsing answers a caller the requirement refused.
+- **`ctx.caller` is the caller's row, read by the framework before the handler** (ADR-0078). `defineApp`'s
+  `caller: { table, principal, missing, refuse? }` (`contract/caller.ts`, parsed by `parseCallerDeclaration`) is kept
+  beside the contract (`withCaller`, `handled.ts`), never in it, and a procedure's `caller: false` beside its site
+  (`withoutCaller`); `kitUnknownOptions` lets `caller` through (`RUNTIME_PROCEDURE_FIELDS`) and the static reader
+  accepts both, so the artifact is the one the same contract without them compiles to. `serve` gives every RPC group
+  procedure that is not public and does not opt out the declaration (`SiteHandler.caller`), and refuses `caller:
+  false` anywhere else. `dispatch` reads the row after the access form through `@fabrika/db`'s `rowsNaming` in the
+  invocation's transaction (`implement/caller.ts`): a `user` principal without a row, or with one a `refuse` rule meets,
+  is a 403 and the handler does not run; two rows are `caller_ambiguous`, a rule naming a column the row lacks
+  `caller_column`; any other principal gets `null`. It decides no access and the proxy sees none of it.
 - **An endpoint validates with its schema once its shape is the approved one** (`approved.ts`). Boot reads the
   bundled artifact and checks its digest, not the evaluated schemas. So the first time an endpoint takes an input or
   answers JSON, `approvedInput`/`approvedOutput` describe the schema the application evaluated and compare its

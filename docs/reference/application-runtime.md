@@ -172,6 +172,35 @@ action of the vocabulary as a global grant, the `app` form's rule: a scoped gran
 It is information for the handler's own authorization, such as a flag the output carries. It grants no reach (`ctx.db`
 stays the access form's) and asks IAM nothing. A public, link or export procedure has none.
 
+### The caller's row
+
+An application that keeps one row per person declares it once, in `defineApp`'s options
+([ADR-0078](../decisions/0078-the-framework-reads-the-caller-s-row-before-the-handler.md)):
+
+```ts
+export const app = defineApp(vocabulary, tables, {
+	caller: {
+		table: 'people',
+		principal: 'principal_id',
+		missing: 'No staff card belongs to this account.',
+		refuse: [{
+			column: 'archived_at',
+			not: null,
+			message: 'The staff card of this account is archived.',
+		}],
+	},
+})
+```
+
+Every procedure of a group that names callers then reads the person's row after the access form and before the
+handler, in the request's transaction, as an unscoped read of `table` where `principal` is the token's principal id,
+with the columns of the table's read action. No row is a 403 with `missing`; a row that meets a `refuse` rule (`equals`
+or `not` a value; the first that matches) is a 403 with its message; two rows are a 500. The handler reads the row as
+`ctx.caller`. A `machine` caller of a group that admits one gets `ctx.caller === null`. A procedure that must run
+without a row, such as the one that binds an account to its row, declares `caller: false`; a public, link or export
+procedure, a job and a webhook read none. Nothing of it reaches the contract artifact or the proxy: it is the
+application's own authorization, like `.require()`.
+
 The token a contract application receives is at most `MAX_APPLICATION_TOKEN_BYTES` (24 KiB). On a bearer request it
 arrives twice, in `X-Fabrika-Token` and in `Authorization`. On Zerops the platform's start script runs the application's
 Bun with `--max-http-header-size=65536`, which leaves 16 KiB for the request's own headers and cookies. A token any
@@ -367,7 +396,8 @@ Per request, in this order:
    charged whatever follows (429);
 9. read the body within `limits.maxBytes` (413) and its deadline (408), parse it strictly (400), verify each
    signed token in it as it is parsed ([Signed tokens](#signed-tokens)), stage its file parts
-   ([Stored files](#stored-files)), run the access form, remove the `from` field, call the handler, project the output
+   ([Stored files](#stored-files)), run the access form, remove the `from` field, read the caller's row (403 when it
+   refuses the person; [The caller's row](#the-callers-row)), call the handler, project the output
    through its schema (a union through its first branch that accepts the value), answer `{ result }`. The handler's
    `ctx.signal` aborts when the client leaves or `limits.timeoutMs` passed, counted from the last body byte. A
    `file('<kind>')` output answers the stored file the handler returned, and a `redirect()` output answers its target
