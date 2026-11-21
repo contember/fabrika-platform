@@ -1,5 +1,6 @@
 import { type ChannelSocket, createNotificationChannel, dispatch, jsonResponse, type Route } from '@fabrika/daemon-kit'
 import type { z } from 'zod'
+import type { UiLinks } from '../ui-credential'
 import { renderReviewRequests } from './markdown'
 import {
 	addCommentBodySchema,
@@ -30,6 +31,8 @@ function corsHeaders(origin: string): Record<string, string> {
 		'Access-Control-Allow-Origin': origin,
 		'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS',
 		'Access-Control-Allow-Headers': 'Content-Type',
+		// The widget asks with the daemon's cookie; the origin above is the exact loopback one that asked, never `*`.
+		'Access-Control-Allow-Credentials': 'true',
 		Vary: 'Origin',
 	}
 }
@@ -59,7 +62,11 @@ function threadIdOf(match: URLPatternResult): string {
 type Audience = 'browser' | 'agent'
 
 /** Review mode: threads a person leaves on a running application through the injected widget, and their delivery to the agent. */
-export function createReviewServer(store: ReviewStore, proxies: ReviewProxies) {
+/**
+ * `links` hands out the links that sign a browser in to the daemon, so the widget's requests carry its cookie: one that
+ * leads to a project's proxy, or, for the widget's tag on the application's own address, the sign-in alone.
+ */
+export function createReviewServer(store: ReviewStore, proxies: ReviewProxies, links: UiLinks) {
 	const channel = createNotificationChannel<ReviewSocket>({
 		roleOf: (socket) => socket.data.role,
 		topicOf: (socket) => socket.data.project,
@@ -167,8 +174,10 @@ export function createReviewServer(store: ReviewStore, proxies: ReviewProxies) {
 		}),
 		route('POST', '/api/review/:project/proxy', 'agent', async (req, match) => {
 			const body = await parseBody(req, openProxyBodySchema)
-			return { url: proxies.open(projectOf(match), body.target) }
+			const url = proxies.open(projectOf(match), body.target)
+			return { url, link: links.issue(url) }
 		}),
+		route('POST', '/api/review/:project/link', 'agent', async () => ({ link: links.issue(null) })),
 		route('POST', '/api/review/:project/threads/:thread/reply', 'agent', async (req, match) => {
 			const project = projectOf(match)
 			const body = await parseBody(req, agentReplyBodySchema)

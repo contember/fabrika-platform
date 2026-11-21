@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { allowedHosts, daemonOrigins } from '../admission'
+import { withoutUiCookies } from '../ui-credential'
 import type { ReviewStore } from './store'
 
 /** Vite's hot reload message that makes its client reload the page. */
@@ -204,6 +205,10 @@ async function forward(req: Request, upstreamUrl: URL, proxyOrigin: string, widg
 	// Hop-by-hop: a plain request never switches protocols on the application.
 	headers.delete('Upgrade')
 	headers.delete('Connection')
+	// The browser sends the daemon's UI cookie to every localhost port; the application under review never gets it.
+	const cookies = withoutUiCookies(headers.get('Cookie'))
+	if (cookies === null) headers.delete('Cookie')
+	else headers.set('Cookie', cookies)
 	// Uncompressed, so an HTML page can take the widget's tag.
 	headers.set('Accept-Encoding', 'identity')
 	if (headers.get('Origin') === proxyOrigin) headers.set('Origin', upstreamUrl.origin)

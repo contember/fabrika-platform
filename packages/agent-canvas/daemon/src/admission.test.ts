@@ -1,13 +1,24 @@
 import { describe, expect, test } from 'bun:test'
 import { admitRequest, CLI_TOKEN_HEADER, CLI_TOKEN_QUERY } from './admission'
+import { uiCookieName } from './ui-credential'
 
 const PORT = 19400
 const TOKEN = 'dummy-cli-capability'
+const UI_TOKEN = 'dummy-ui-credential'
+const UI_COOKIE = `${uiCookieName(PORT)}=${UI_TOKEN}`
 
+/** A request as the daemon's own browser UI sends it, with its cookie, unless `headers` says otherwise. */
 function admit(path: string, init: { method?: string; headers?: Record<string, string> } = {}): Response | null {
 	const url = new URL(`http://localhost:${PORT}${path}`)
+	const request = new Request(url, { method: init.method ?? 'GET', headers: { Host: `localhost:${PORT}`, Cookie: UI_COOKIE, ...init.headers } })
+	return admitRequest(request, url, { port: PORT, cliAuthToken: TOKEN, uiToken: UI_TOKEN })
+}
+
+/** A request with no cookie, as another local client sends it. */
+function admitAnonymous(path: string, init: { method?: string; headers?: Record<string, string> } = {}): Response | null {
+	const url = new URL(`http://localhost:${PORT}${path}`)
 	const request = new Request(url, { method: init.method ?? 'GET', headers: { Host: `localhost:${PORT}`, ...init.headers } })
-	return admitRequest(request, url, { port: PORT, cliAuthToken: TOKEN })
+	return admitRequest(request, url, { port: PORT, cliAuthToken: TOKEN, uiToken: UI_TOKEN })
 }
 
 describe('daemon admission', () => {
@@ -96,5 +107,51 @@ describe('daemon admission', () => {
 		expect(admit(`/ws/wait/demo?${CLI_TOKEN_QUERY}=${TOKEN}`, { headers: { Upgrade: 'websocket' } })).toBeNull()
 		expect(admit(`/ws/wait/demo?${CLI_TOKEN_QUERY}=wrong-capability`, { headers: { Upgrade: 'websocket' } })?.status).toBe(401)
 		expect(admit(`/api/session/demo/secrets/resolve?${CLI_TOKEN_QUERY}=${TOKEN}`, { method: 'POST' })?.status).toBe(401)
+	})
+
+	test('requires the UI cookie or the CLI capability on every route but liveness, assets, a link and a review preflight', () => {
+		const uiRoutes: Array<[string, string]> = [
+			['GET', '/api/sessions'],
+			['GET', '/api/file?session=s&path=/etc/hosts'],
+			['GET', '/api/tree?session=s'],
+			['GET', '/api/session/demo/meta'],
+			['POST', '/api/session/demo/secrets/field/value'],
+			['POST', '/api/session/demo/upload'],
+			['POST', '/api/session/demo/revision/1/share'],
+			['GET', '/ws/session/demo'],
+			['GET', '/'],
+			['GET', '/s/demo'],
+			['GET', '/s/demo?code=anything'],
+			['GET', '/unknown'],
+			// The review widget's routes: it sends the cookie with `credentials: 'include'`.
+			['GET', '/api/review/app/threads'],
+			['POST', '/api/review/app/threads'],
+			['POST', '/api/review/app/threads/t1/send'],
+			['DELETE', '/api/review/app/threads/t1'],
+			['GET', '/ws/review/app'],
+		]
+		for (const [method, path] of uiRoutes) {
+			expect(admitAnonymous(path, { method })?.status).toBe(401)
+			expect(admitAnonymous(path, { method, headers: { Cookie: `${uiCookieName(PORT)}=forged` } })?.status).toBe(401)
+			// Another daemon's cookie is not this one's.
+			expect(admitAnonymous(path, { method, headers: { Cookie: `${uiCookieName(PORT + 1)}=${UI_TOKEN}` } })?.status).toBe(401)
+			expect(admitAnonymous(path, { method, headers: { Cookie: `other=1; ${UI_COOKIE}` } })).toBeNull()
+			expect(admitAnonymous(path, { method, headers: { [CLI_TOKEN_HEADER]: TOKEN } })).toBeNull()
+		}
+		expect(admitAnonymous(`/ws/session/demo?${CLI_TOKEN_QUERY}=${TOKEN}`, { headers: { Upgrade: 'websocket' } })).toBeNull()
+		for (const path of ['/health', '/assets/review.js', '/open?code=anything', '/open']) {
+			expect(admitAnonymous(path)).toBeNull()
+		}
+		expect(admitAnonymous('/open?code=anything', { method: 'POST' })?.status).toBe(401)
+		expect(admitAnonymous('/api/review/app/threads', { method: 'OPTIONS', headers: { Origin: 'http://localhost:5173' } })).toBeNull()
+		expect(admitAnonymous('/ws/review/app', { method: 'OPTIONS', headers: { Origin: 'http://localhost:5173' } })?.status).toBe(401)
+	})
+
+	test('answers a page without the cookie with the command that prints a link, and the API with JSON', async () => {
+		const page = admitAnonymous('/s/demo')
+		expect(page?.headers.get('Content-Type')).toContain('text/html')
+		expect(await page?.text()).toContain('agent-canvas open --session demo')
+		const api = admitAnonymous('/api/sessions')
+		expect(api?.headers.get('Content-Type')).toContain('application/json')
 	})
 })

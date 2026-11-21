@@ -108,6 +108,8 @@ export class DaemonReviewClient implements ReviewClient {
 	private async request(method: string, path: string, body?: unknown): Promise<unknown> {
 		const response = await fetch(`${this.daemonOrigin}/api/review/${encodeURIComponent(this.project)}${path}`, {
 			method,
+			// The daemon's cookie, which the browser adds and the application's scripts cannot read; the socket carries it too.
+			credentials: 'include',
 			...(body === undefined ? {} : { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }),
 		})
 		const result: unknown = await response.json()

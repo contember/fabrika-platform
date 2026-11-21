@@ -1,7 +1,9 @@
 import type { Route } from '@fabrika/daemon-kit'
 import { createHash } from 'crypto'
 import { dirname, join } from 'path'
+import { hasUiCookie } from '../admission'
 import { DATA_DIR } from '../paths'
+import { linkRequiredResponse, linkResponse, UI_CODE_QUERY, UI_LINK_PATH, uiCookieHeader, type UiLinks } from '../ui-credential'
 
 const MIME_TYPES: Record<string, string> = {
 	js: 'application/javascript',
@@ -110,8 +112,35 @@ async function serveStaticAsset(_req: Request, url: URL): Promise<Response> {
 	})
 }
 
-export function createStaticHandlers(): Route[] {
+export interface SessionPageAccess {
+	port: number
+	uiToken: string
+	links: UiLinks
+}
+
+/**
+ * A link's code sets the UI cookie the first time and leads on to the link's destination, so the code stays out of the
+ * destination's history entry. A spent code still leads a browser that holds the cookie on. Admission lets a link through
+ * without a credential.
+ */
+function openLink(access: SessionPageAccess) {
+	return (req: Request, url: URL): Response => {
+		const code = url.searchParams.get(UI_CODE_QUERY)
+		const link = code === null ? null : access.links.redeem(code)
+		if (link === null) return linkRequiredResponse(null)
+		if (link.fresh) return linkResponse(link, uiCookieHeader(access.port, access.uiToken))
+		if (hasUiCookie(req, access)) return linkResponse(link, null)
+		return linkRequiredResponse(null)
+	}
+}
+
+export function createStaticHandlers(access: SessionPageAccess): Route[] {
 	return [
+		{
+			method: 'GET',
+			pattern: new URLPattern({ pathname: UI_LINK_PATH }),
+			handler: openLink(access),
+		},
 		{
 			method: 'GET',
 			pattern: new URLPattern({ pathname: '/s/:id' }),

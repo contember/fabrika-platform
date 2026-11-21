@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createApiHandlers } from './handlers/api'
+import { UiLinks } from './ui-credential'
 
 const testDirectories: string[] = []
 
@@ -18,9 +19,9 @@ function setup(): { routes: Route[]; sessionId: string } {
 		sessionManager,
 		broadcastPlanUpdate: () => {},
 		broadcastRevisionUpdate: () => {},
-		port: 19400,
 		version: 'test',
 		cliAuthToken: 'test-cli-capability',
+		uiLinks: new UiLinks(19400),
 	})
 	return { routes, sessionId }
 }

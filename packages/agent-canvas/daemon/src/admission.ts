@@ -1,4 +1,5 @@
 import { jsonResponse, matchesCapability } from '@fabrika/daemon-kit'
+import { cookieValue, linkRequiredResponse, UI_LINK_PATH, uiCookieName } from './ui-credential'
 
 /** The header the CLI sends its capability in; the daemon writes the capability to `CLI_AUTH_FILE`. */
 export const CLI_TOKEN_HEADER = 'X-Agent-Canvas-CLI-Token'
@@ -14,6 +15,7 @@ const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]']
 /** Routes only the daemon owner's CLI calls: they require the CLI capability. WebSocket upgrades arrive as GET. */
 const CLI_ROUTES: ReadonlyArray<{ method: string; pattern: URLPattern }> = [
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/plan' }) },
+	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/link' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/feedback/consume' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/secrets/resolve' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/threads/claim' }) },
@@ -22,12 +24,15 @@ const CLI_ROUTES: ReadonlyArray<{ method: string; pattern: URLPattern }> = [
 	{ method: 'GET', pattern: new URLPattern({ pathname: '/ws/review-wait/:project' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/claim' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/proxy' }) },
+	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/link' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/review/:project/threads/:thread/reply' }) },
 ]
 
 export interface AdmissionOptions {
 	port: number
 	cliAuthToken: string
+	/** The browser UI's credential, presented as the daemon's cookie (`ui-credential.ts`). */
+	uiToken: string
 }
 
 /**
@@ -58,6 +63,35 @@ function isReviewPath(pathname: string): boolean {
 	return pathname.startsWith('/api/review/') || pathname.startsWith('/ws/review/')
 }
 
+const SESSION_PAGE = new URLPattern({ pathname: '/s/:id' })
+
+/**
+ * What answers without a credential: liveness, the static assets (the review widget's script among them), a link, whose
+ * handler redeems its code, and the preflight of a review route, which a browser sends without cookies. Everything else
+ * needs one, the review widget's routes included: the widget asks with `credentials: 'include'`, and its requests to the
+ * daemon are same-site, so the browser adds the cookie the application's scripts cannot read.
+ */
+function isOpenToAnyone(req: Request, url: URL): boolean {
+	const { pathname } = url
+	if (pathname === '/health' || pathname.startsWith('/assets/')) return true
+	// Only the HTTP review routes have a preflight; a review socket must never be reachable without a credential.
+	if (req.method === 'OPTIONS' && pathname.startsWith('/api/review/')) return true
+	return req.method === 'GET' && pathname === UI_LINK_PATH
+}
+
+/** Whether the request carries the UI cookie; the link handler asks too. */
+export function hasUiCookie(req: Request, options: Pick<AdmissionOptions, 'port' | 'uiToken'>): boolean {
+	return matchesCapability(cookieValue(req.headers.get('Cookie'), uiCookieName(options.port)), options.uiToken)
+}
+
+function credentialRequired(url: URL): Response {
+	if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) {
+		return jsonResponse({ error: 'Open the canvas or the review through a link the agent-canvas CLI prints' }, 401)
+	}
+	const page = SESSION_PAGE.exec(url)
+	return linkRequiredResponse(page?.pathname.groups['id'] ?? null)
+}
+
 /**
  * Admission for every request the daemon receives, before any route or WebSocket upgrade:
  * - the Host must name the daemon on loopback, which refuses DNS-rebound pages;
@@ -65,7 +99,9 @@ function isReviewPath(pathname: string): boolean {
  *   sends no `Origin` (the CLI); browsers send `Origin` on such requests, so a cross-site page is refused whatever the
  *   content type;
  * - every API request and upgrade a browser sends must be same-origin (`Sec-Fetch-Site`), reads included;
- * - CLI routes require the CLI capability.
+ * - CLI routes require the CLI capability;
+ * - every other route but `isOpenToAnyone`'s requires the UI cookie or the CLI capability, so a local client that sends
+ *   no `Origin` (another process or OS user on this machine) reaches nothing of the UI's or review mode's.
  *
  * Returns the refusal, or null when the request is admitted.
  */
@@ -89,9 +125,11 @@ export function admitRequest(req: Request, url: URL, options: AdmissionOptions):
 	}
 
 	const presented = req.headers.get(CLI_TOKEN_HEADER) ?? (isUpgrade ? url.searchParams.get(CLI_TOKEN_QUERY) : null)
-	if (isCliRoute(req, url) && !matchesCapability(presented, options.cliAuthToken)) {
+	const cli = matchesCapability(presented, options.cliAuthToken)
+	if (isCliRoute(req, url) && !cli) {
 		return jsonResponse({ error: 'This endpoint is available only to the local CLI' }, 401)
 	}
+	if (!cli && !isOpenToAnyone(req, url) && !hasUiCookie(req, options)) return credentialRequired(url)
 
 	return null
 }

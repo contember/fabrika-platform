@@ -5,7 +5,7 @@ import { z } from 'zod'
 import { cliAuthHeaders } from '../cli-auth.ts'
 import { BASE_URL } from '../config.ts'
 import { ensureDaemon, startDaemon, stopDaemon } from '../daemon-lifecycle.ts'
-import { getSessionId, openBrowser } from '../helpers.ts'
+import { getSessionId, openLink } from '../helpers.ts'
 
 const pushResponseSchema = z.union([
 	z.object({
@@ -117,7 +117,7 @@ export async function handlePush(args: string[]) {
 	}
 
 	if (result.isNew) {
-		openBrowser(result.browserUrl)
+		openLink(result.browserUrl)
 	}
 
 	console.log(JSON.stringify({

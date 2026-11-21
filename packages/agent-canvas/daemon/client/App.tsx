@@ -395,7 +395,16 @@ function App() {
 			}
 			ws.onclose = () => {
 				setConnected(false)
-				reconnectTimer = setTimeout(connect, 2000)
+				// A daemon that does not know this browser refuses everything; reloading shows how to get a fresh link.
+				void fetch(`/api/session/${encodeURIComponent(sessionId)}/meta`, { cache: 'no-store' }).then(
+					(response) => {
+						if (response.status === 401) location.reload()
+						else reconnectTimer = setTimeout(connect, 2000)
+					},
+					() => {
+						reconnectTimer = setTimeout(connect, 2000)
+					},
+				)
 			}
 			ws.onmessage = (event) => {
 				try {

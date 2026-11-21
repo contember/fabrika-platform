@@ -10,12 +10,13 @@ import { createStaticHandlers, serveErrorOptions, withDefaultCsp } from './handl
 import { createThemeHandlers } from './handlers/theme'
 import { createThreadHandlers } from './handlers/threads'
 import { createUploadHandlers } from './handlers/uploads'
-import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
+import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR, UI_TOKEN_FILE } from './paths'
 import { startRemoteFeedbackPoller } from './remote-feedback'
 import { ReviewProxies } from './review/proxy'
 import { createReviewServer, type ReviewSocketData } from './review/server'
 import { ReviewStore } from './review/store'
 import { CanvasThreadStore } from './threads'
+import { loadUiToken, UiLinks } from './ui-credential'
 
 const PORT = parseInt(process.env.CANVAS_PORT || '19400', 10)
 const VERSION = JSON.parse(readFileSync(join(dirname(import.meta.dir), '..', 'package.json'), 'utf-8')).version as string
@@ -26,12 +27,16 @@ chmodSync(TEMP_DIR, 0o700)
 writeFileSync(PID_FILE, String(process.pid))
 const cliAuthToken = createCapability()
 writeCapabilityFile(CLI_AUTH_FILE, cliAuthToken)
+// Sessions, canvases, feedback and the UI secret live here; no other OS user reads them from disk.
+chmodSync(DATA_DIR, 0o700)
+const uiToken = loadUiToken(UI_TOKEN_FILE)
+const uiLinks = new UiLinks(PORT)
 
 const sessionManager = new SessionManager(SESSIONS_DIR)
 const wsManager = createWebSocketManager(sessionManager)
 const reviewStore = new ReviewStore(REVIEWS_DIR)
 const reviewProxies = new ReviewProxies(reviewStore, `http://localhost:${PORT}/assets/review.js`, (project, path) => review.fullReload(project, path))
-const review = createReviewServer(reviewStore, reviewProxies)
+const review = createReviewServer(reviewStore, reviewProxies, uiLinks)
 
 type SocketData = WSData | ReviewSocketData
 type Socket = Bun.ServerWebSocket<SocketData>
@@ -49,9 +54,9 @@ const routes = [
 		sessionManager,
 		broadcastPlanUpdate: wsManager.broadcastPlanUpdate,
 		broadcastRevisionUpdate: wsManager.broadcastRevisionUpdate,
-		port: PORT,
 		version: VERSION,
 		cliAuthToken,
+		uiLinks,
 	}),
 	// The file routes never return the daemon's own state, the CLI capability included.
 	...createFileHandlers(sessionManager, { deniedRoots: [TEMP_DIR, DATA_DIR] }),
@@ -63,7 +68,7 @@ const routes = [
 		notifyWaiters: wsManager.notifyWaiters,
 	}),
 	...createThemeHandlers(sessionManager),
-	...createStaticHandlers(),
+	...createStaticHandlers({ port: PORT, uiToken, links: uiLinks }),
 ]
 
 type Upgrader = { upgrade(req: Request, options: { data: SocketData }): boolean }
@@ -71,7 +76,7 @@ type Upgrader = { upgrade(req: Request, options: { data: SocketData }): boolean 
 function handle(req: Request, server: Upgrader): Response | Promise<Response> | undefined {
 	const url = new URL(req.url)
 
-	const refusal = admitRequest(req, url, { port: PORT, cliAuthToken })
+	const refusal = admitRequest(req, url, { port: PORT, cliAuthToken, uiToken })
 	if (refusal !== null) return refusal
 
 	// Review mode answers its own preflights: the application under review runs on another port.
