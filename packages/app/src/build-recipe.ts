@@ -6,7 +6,7 @@
 // (ADR-0062), so the commands, script names and job names an application must accept change only additively. Never
 // render the application's own copy.
 
-import { APPLICATION_SERVER_MAX_HEADER_BYTES, FRAMEWORK_RELEASE_PATTERN } from '@fabrika/auth-core'
+import { APPLICATION_SERVER_MAX_HEADER_BYTES, FRAMEWORK_RELEASE_PATTERN, releaseAtLeast } from '@fabrika/auth-core'
 import { CONTRACT_APP_ID_PATTERN } from './contract/app-id.js'
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE } from './files/job-names.js'
 
@@ -27,28 +27,38 @@ const MIGRATE: readonly string[] = [FABRIKA_BIN, 'db', 'migrate']
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
 /**
- * The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read.
- * It covers the SPA under `web/` too: Bun bundles the SPA without checking its types.
+ * The first framework minor whose build type-checks the SPA under `web/`; an older application never had it checked.
+ * Read from `checkRelease`: Control picks the reader by the pin's minor, so the two always share it.
  */
-const PLATFORM_TSCONFIG_CONTENTS = JSON.stringify({
-	compilerOptions: {
-		target: 'ES2022',
-		module: 'ESNext',
-		moduleResolution: 'bundler',
-		lib: ['ES2022', 'DOM', 'DOM.Iterable'],
-		jsx: 'react-jsx',
-		types: ['bun'],
-		strict: true,
-		noUncheckedIndexedAccess: true,
-		noImplicitOverride: true,
-		forceConsistentCasingInFileNames: true,
-		skipLibCheck: true,
-		resolveJsonModule: true,
-		isolatedModules: true,
-		noEmit: true,
-	},
-	include: ['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts'],
-})
+const SPA_TYPE_CHECK_SINCE = { major: 0, minor: 9 }
+
+/**
+ * The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read.
+ * From 0.9 it covers the SPA under `web/` too, since Bun bundles the SPA without checking its types. An older release
+ * keeps 0.8's `src/` check, so a platform upgrade fails no build that passed before (ADR-0062).
+ */
+const platformTsconfigContents = (checkRelease: string): string =>
+	JSON.stringify({
+		compilerOptions: {
+			target: 'ES2022',
+			module: 'ESNext',
+			moduleResolution: 'bundler',
+			lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+			jsx: 'react-jsx',
+			types: ['bun'],
+			strict: true,
+			noUncheckedIndexedAccess: true,
+			noImplicitOverride: true,
+			forceConsistentCasingInFileNames: true,
+			skipLibCheck: true,
+			resolveJsonModule: true,
+			isolatedModules: true,
+			noEmit: true,
+		},
+		include: releaseAtLeast(checkRelease, SPA_TYPE_CHECK_SINCE)
+			? ['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts']
+			: ['../fabrika.contract.ts', '../src', 'entry.generated.ts'],
+	})
 
 const INSTALL = 'bun install --frozen-lockfile --ignore-scripts'
 
@@ -172,7 +182,7 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 			{ run: tests.command },
 			{ run: `rm -rf node_modules && ${INSTALL}` },
 			{ run: `bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"` },
-			{ write: PLATFORM_TSCONFIG, lines: [PLATFORM_TSCONFIG_CONTENTS] },
+			{ write: PLATFORM_TSCONFIG, lines: [platformTsconfigContents(checkRelease)] },
 			{ run: tsc.command },
 			{ run: check.command },
 			...init.map((generated) => ({ write: generated.path, lines: generated.lines })),
