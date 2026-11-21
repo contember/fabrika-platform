@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { z } from 'zod'
 import { healthInfoSchema } from '../../shared'
-import { BASE_URL, DATA_DIR, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './config'
+import { BASE_URL, CLI_AUTH_FILE, DATA_DIR, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './config'
 
 export type DaemonHealthInfo = z.output<typeof healthInfoSchema> & { pid: number }
 
@@ -30,6 +30,7 @@ export const daemonLifecycleConfig: DaemonLifecycleConfig<DaemonHealthInfo> = {
 	baseUrl: BASE_URL,
 	parseHealth: parseDaemonHealth,
 	pidFile: PID_FILE,
+	cleanupFiles: [CLI_AUTH_FILE],
 	command: [process.execPath, DAEMON_BIN, '--data-dir', DATA_DIR],
 	// Never the caller's project: its bunfig.toml preloads must not load into the daemon.
 	cwd: dirname(dirname(DAEMON_BIN)),

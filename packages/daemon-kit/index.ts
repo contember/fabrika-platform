@@ -1,3 +1,4 @@
+export { createCapability, matchesCapability, readCapabilityFile, writeCapabilityFile } from './src/capability'
 export { browserFrame, createNotificationChannel } from './src/channel'
 export type {
 	BrowserFrameHandler,

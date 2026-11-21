@@ -1,5 +1,4 @@
-import { jsonResponse } from '@fabrika/daemon-kit'
-import { timingSafeEqual } from 'crypto'
+import { jsonResponse, matchesCapability } from '@fabrika/daemon-kit'
 
 /** The header the CLI sends its capability in; the daemon writes the capability to `CLI_AUTH_FILE`. */
 export const CLI_TOKEN_HEADER = 'X-Agent-Canvas-CLI-Token'
@@ -31,27 +30,23 @@ export interface AdmissionOptions {
 	cliAuthToken: string
 }
 
-/** The Host values a browser or the CLI sends to this daemon. Anything else is a request for another name, e.g. a rebound one. */
-function allowedHosts(port: number): Set<string> {
+/**
+ * The Host values a browser or the CLI sends to a loopback listener on `port`: this daemon, or a review proxy. Anything
+ * else is a request for another name, e.g. a rebound one.
+ */
+export function allowedHosts(port: number): Set<string> {
 	const hosts = new Set(LOOPBACK_HOSTNAMES.map((hostname) => `${hostname}:${port}`))
 	if (port === 80) { for (const hostname of LOOPBACK_HOSTNAMES) hosts.add(hostname) }
 	return hosts
 }
 
-/** The origins of the daemon's own browser UI. */
-function daemonOrigins(port: number): Set<string> {
+/** The origins of the daemon's own browser UI, or of a review proxy's pages when `port` is the proxy's. */
+export function daemonOrigins(port: number): Set<string> {
 	return new Set(LOOPBACK_HOSTNAMES.map((hostname) => `http://${hostname}${port === 80 ? '' : `:${port}`}`))
 }
 
 export function hasCliToken(req: Request, cliAuthToken: string): boolean {
-	return matchesToken(req.headers.get(CLI_TOKEN_HEADER), cliAuthToken)
-}
-
-function matchesToken(presented: string | null, cliAuthToken: string): boolean {
-	if (presented === null) return false
-	const expected = Buffer.from(cliAuthToken)
-	const actual = Buffer.from(presented)
-	return actual.length === expected.length && timingSafeEqual(actual, expected)
+	return matchesCapability(req.headers.get(CLI_TOKEN_HEADER), cliAuthToken)
 }
 
 function isCliRoute(req: Request, url: URL): boolean {
@@ -94,7 +89,7 @@ export function admitRequest(req: Request, url: URL, options: AdmissionOptions):
 	}
 
 	const presented = req.headers.get(CLI_TOKEN_HEADER) ?? (isUpgrade ? url.searchParams.get(CLI_TOKEN_QUERY) : null)
-	if (isCliRoute(req, url) && !matchesToken(presented, options.cliAuthToken)) {
+	if (isCliRoute(req, url) && !matchesCapability(presented, options.cliAuthToken)) {
 		return jsonResponse({ error: 'This endpoint is available only to the local CLI' }, 401)
 	}
 

@@ -252,15 +252,18 @@ describe('ReviewProxies', () => {
 	let app: Bun.Server<undefined>
 	let proxies: ReviewProxies
 	let reloads: Array<[string, string]>
+	let appHits: number
 
 	beforeEach(() => {
 		reloads = []
+		appHits = 0
 		// One address, not a name: `localhost` may resolve to both families, and once the app stops, a connection to its
 		// port on the other family can reach another test's server.
 		app = Bun.serve<undefined>({
 			port: 0,
 			hostname: '127.0.0.1',
 			fetch(req, server) {
+				appHits++
 				const url = new URL(req.url)
 				if (url.pathname === '/hmr') {
 					return server.upgrade(req, { data: undefined, headers: { 'Sec-WebSocket-Protocol': 'vite-hmr' } })
@@ -394,6 +397,62 @@ describe('ReviewProxies', () => {
 		} finally {
 			await other.stop(true)
 		}
+	})
+
+	/** Sends one request with exactly these headers, which `fetch` and `WebSocket` would not let a test choose, and returns its status. */
+	function rawStatus(origin: string, request: { method?: string; path?: string; host?: string; headers?: Record<string, string> }): Promise<number> {
+		const { hostname, port } = new URL(origin)
+		const lines = [`${request.method ?? 'GET'} ${request.path ?? '/'} HTTP/1.1`, `Host: ${request.host ?? `${hostname}:${port}`}`]
+		for (const [name, value] of Object.entries(request.headers ?? {})) lines.push(`${name}: ${value}`)
+		if (request.method === 'POST') lines.push('Content-Type: text/plain', 'Content-Length: 1')
+		const body = request.method === 'POST' ? 'x' : ''
+		return new Promise((resolve, reject) => {
+			let response = ''
+			const socket = connect(Number(port), hostname, () => socket.write(`${lines.join('\r\n')}\r\n\r\n${body}`))
+			socket.on('data', (chunk) => {
+				response += String(chunk)
+				const status = /^HTTP\/1\.1 (\d{3})/.exec(response)?.[1]
+				if (status === undefined) return
+				socket.destroy()
+				resolve(Number(status))
+			})
+			socket.on('error', reject)
+		})
+	}
+
+	const upgrade = { Upgrade: 'websocket', Connection: 'Upgrade', 'Sec-WebSocket-Version': '13', 'Sec-WebSocket-Key': 'dGhlIHNhbXBsZSBub25jZQ==' }
+
+	test('a request for another host name is refused before it reaches the application', async () => {
+		const origin = new URL(proxies.open('demo', `http://127.0.0.1:${app.port}/`)).origin
+		const { port } = new URL(origin)
+		expect(await rawStatus(origin, { host: `attacker.example:${port}` })).toBe(403)
+		expect(await rawStatus(origin, { host: 'localhost:1' })).toBe(403)
+		expect(await rawStatus(origin, { path: '/socket', host: `attacker.example:${port}`, headers: upgrade })).toBe(403)
+		expect(appHits).toBe(0)
+	})
+
+	test('a foreign origin cannot change state or open a socket through the proxy', async () => {
+		const origin = new URL(proxies.open('demo', `http://127.0.0.1:${app.port}/`)).origin
+		expect(await rawStatus(origin, { method: 'POST', headers: { Origin: 'https://attacker.example' } })).toBe(403)
+		expect(await rawStatus(origin, { path: '/socket', headers: { ...upgrade, Origin: 'https://attacker.example' } })).toBe(403)
+		// Another loopback port is another site's origin too, e.g. a page some other local server serves.
+		expect(await rawStatus(origin, { path: '/socket', headers: { ...upgrade, Origin: `http://127.0.0.1:${app.port}` } })).toBe(403)
+		// An opaque origin (a sandboxed frame, a `data:` page) is no origin of the proxy's.
+		expect(await rawStatus(origin, { method: 'POST', headers: { Origin: 'null' } })).toBe(403)
+		// A listed protocol beside `websocket` is still an upgrade.
+		expect(await rawStatus(origin, { path: '/socket', headers: { ...upgrade, Upgrade: 'websocket, h2c', Origin: 'https://attacker.example' } }))
+			.toBe(403)
+		expect(appHits).toBe(0)
+	})
+
+	test("the proxy's own origin and a client without one still reach the application", async () => {
+		const url = proxies.open('demo', `http://127.0.0.1:${app.port}/`)
+		const origin = new URL(url).origin
+		expect(await rawStatus(origin, { method: 'POST', headers: { Origin: origin } })).toBe(200)
+		expect(await rawStatus(origin, { method: 'POST' })).toBe(200)
+		expect(await rawStatus(origin, { path: '/socket', headers: { ...upgrade, Origin: origin } })).toBe(101)
+		expect(await rawStatus(origin, { host: `127.0.0.1:${new URL(origin).port}` })).toBe(200)
+		expect(await (await fetch(url)).text()).toContain(`<script src="${WIDGET}" data-project="demo"></script>`)
 	})
 
 	test('a restarted daemon serves the proxy on the same port', () => {

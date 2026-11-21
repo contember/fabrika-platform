@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs'
+import { readCapabilityFile } from '@fabrika/daemon-kit'
 import { CLI_TOKEN_HEADER, CLI_TOKEN_QUERY } from '../../daemon/src/admission.ts'
 import { CLI_AUTH_FILE } from './config.ts'
 
@@ -7,12 +7,7 @@ import { CLI_AUTH_FILE } from './config.ts'
  * request: a restarted daemon writes a new one.
  */
 export function readCliAuthToken(): string | undefined {
-	try {
-		const token = readFileSync(CLI_AUTH_FILE, 'utf-8').trim()
-		return token === '' ? undefined : token
-	} catch {
-		return undefined
-	}
+	return readCapabilityFile(CLI_AUTH_FILE)
 }
 
 /** Headers that authenticate a CLI request to the daemon; empty when no capability is available. */

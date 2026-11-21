@@ -30,7 +30,7 @@ import {
 } from './api'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
-import { assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference } from './managed-env'
+import { assertApplicationSecretName, assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference } from './managed-env'
 import {
 	assertFabrikaManifestCoordinates,
 	createZeropsArtifactSourceDescriptor,
@@ -423,6 +423,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
 			input.signal.throwIfAborted()
 			assertAuthoredManagedInputs({ variableNames: Object.keys(input.vars), secretNames: Object.keys(input.secrets) })
+			for (const name of Object.keys(input.secrets)) assertApplicationSecretName(name)
 			const binding = privateBinding(input.sourceBinding)
 			assertEnvironmentOfApp(input.app, input.environment)
 			const placement = resolvedEnvironment(input.environment, { requireReady: true })
@@ -579,7 +580,7 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		},
 		secrets: {
 			put: async (input) => {
-				assertAuthoredManagedName(input.name)
+				assertApplicationSecretName(input.name)
 				assertNoFrameworkReference(input.name)
 				assertNoFrameworkReference(input.value)
 				assertNoPlatformOnlyReference(input.name)

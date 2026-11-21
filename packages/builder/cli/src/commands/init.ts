@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { type BuilderPlatformStatus, parseBuilderOrigin } from '../../../shared'
 import { DEFAULT_PROFILE, resolveStackPointer, unsupportedProfileNote } from '../catalog'
+import { cliAuthHeaders } from '../cli-auth'
 import { BASE_URL, SESSIONS_DIR } from '../config'
 import { ensureDaemon, openBrowser } from '../daemon-lifecycle'
 import { BuilderCliError } from '../errors'
@@ -12,7 +13,7 @@ import { platformRequest, publicPlatformStatus } from '../platform-client'
 
 async function resetStaleSession(sessionId: string): Promise<void> {
 	try {
-		await fetch(`${BASE_URL}/api/session/${encodeURIComponent(sessionId)}/reset`, { method: 'POST' })
+		await fetch(`${BASE_URL}/api/session/${encodeURIComponent(sessionId)}/reset`, { method: 'POST', headers: cliAuthHeaders() })
 	} catch {
 	}
 	try {
