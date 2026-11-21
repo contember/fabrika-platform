@@ -7,7 +7,7 @@
 // answered). On the SQLite test database, so it never skips; the statements' Postgres half is
 // `@fabrika/db`'s request-receipts.test.ts.
 
-import { defineApp, defineVocabulary, file } from '@fabrika/app/contract'
+import { defineApp, defineVocabulary, file, redirect } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { scoped, type TypedColumnList } from '@fabrika/db'
@@ -22,6 +22,7 @@ import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { runFixedStatement, sessionOf } from '../../../db/src/database'
 import { createClient } from '../client'
+import { columns as noteColumns } from './cloudflare-fixture/src/db/schema.generated'
 import { tables as noteTables } from './cloudflare-fixture/src/db/tables'
 import { vocabulary as noteVocabulary } from './cloudflare-fixture/src/vocabulary'
 
@@ -51,7 +52,7 @@ const tables = defineTables(vocabulary, columns)({
 })
 
 /** Every run of a handler, by procedure: what tells a replay from a second run. */
-const runs = { record: 0, other: 0, upload: 0, failing: 0 }
+const runs = { record: 0, other: 0, upload: 0, failing: 0, labelled: 0, refused: 0 }
 /** The next run of `failing` throws after its write. */
 let failNext = false
 
@@ -97,6 +98,31 @@ const entries = app.group({ callers: ['human'] }, (r) => ({
 		runs.upload++
 		return { run: runs.upload, size: input.scan.size }
 	}),
+	// A union output whose answer came through the second branch: a second projection could pick the first.
+	labelled: r.mutation({
+		input: z.strictObject({ id: z.string() }),
+		output: z.union([z.strictObject({ id: z.string(), n: z.optional(z.number()) }), z.strictObject({ id: z.string(), label: z.string() })]),
+		access: { action: 'entries.write', app: true },
+	}).handle(({ input }) => {
+		runs.labelled++
+		return { id: input.id, n: 'not a number', label: 'second branch' }
+	}),
+	moving: r.mutation({
+		input: z.strictObject({}),
+		output: redirect(),
+		access: { action: 'entries.write', app: true },
+	}).handle(() => {
+		runs.refused++
+		return { to: '/done' }
+	}),
+	large: r.mutation({
+		input: z.strictObject({ note: z.string() }),
+		output: z.strictObject({ text: z.string() }),
+		access: { action: 'entries.write', app: true },
+	}).handle(async ({ input, ctx }) => {
+		await ctx.db.app.entries.insert({ amount: 1, note: input.note })
+		return { text: 'ř'.repeat(40_000) }
+	}),
 	count: r.query({
 		input: z.strictObject({}),
 		output: z.strictObject({ n: z.number() }),
@@ -104,8 +130,20 @@ const entries = app.group({ callers: ['human'] }, (r) => ({
 	}).handle(async ({ ctx }) => ({ n: await ctx.db.app.entries.count() })),
 }))
 
+const visitors = app.group({}, (r) => ({
+	note: r.mutation({
+		input: z.strictObject({ note: z.string() }),
+		output: z.strictObject({ ok: z.boolean() }),
+		access: { public: true },
+		actions: ['entries.write'],
+	}).handle(() => {
+		runs.refused++
+		return { ok: true }
+	}),
+}))
+
 const contract = app.contract((c) => ({
-	api: c.rpc('/api', { entries }),
+	api: c.rpc('/api', { entries, visitors }),
 	files: { scans: c.files({ types: ['text/plain'], maxBytes: 4096 }) },
 }))
 
@@ -144,6 +182,41 @@ const notes = notesApp.group({ callers: ['human'] }, (r) => ({
 	}),
 }))
 const notesContract = notesApp.contract((c) => ({ api: c.rpc('/api', { notes }) }))
+
+// An endpoint that creates a scope: its access form creates it at IAM before any receipt could be read.
+const startingVocabulary = defineVocabulary({
+	app: 'notes',
+	dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
+	actions: { 'notes.read': 'Read notes', 'notes.write': 'Write notes', 'workspaces.create': 'Start a workspace' },
+	roles: { owner: { grants: ['notes.read', 'notes.write'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+})
+const startingTables = defineTables(startingVocabulary, noteColumns)({
+	notes: {
+		scope: { dimension: 'note', key: 'id', in: { dimension: 'workspace', column: 'workspace_id' } },
+		actions: { read: 'notes.read', insert: 'notes.write', update: 'notes.write' },
+		insert: ['title'],
+		update: ['title'],
+		version: 'version',
+		createdBy: 'created_by',
+	},
+})
+const startingApp = defineApp(startingVocabulary, startingTables)
+const workspaces = startingApp.group({ callers: ['human'] }, (r) => ({
+	start: r.mutation({
+		input: z.strictObject({ title: z.string() }),
+		output: z.strictObject({ workspace: z.string() }),
+		access: { action: 'workspaces.create', creates: 'workspace' },
+	}).handle(({ ctx }) => {
+		runs.refused++
+		return { workspace: ctx.created.value }
+	}),
+}))
+const startingContract = startingApp.contract((c) => ({ api: c.rpc('/api', { workspaces }) }))
+const startingDatabase = await testDatabase({
+	migrations: new URL('./cloudflare-fixture/db/migrations/', import.meta.url),
+	label: 'request-receipts.test.ts starting',
+})
+const startingKit = testKit(serve(startingContract, { database: scoped(startingTables) }), { database: startingDatabase.database })
 const notesDatabase = await testDatabase({
 	migrations: new URL('./cloudflare-fixture/db/migrations/', import.meta.url),
 	label: 'request-receipts.test.ts notes',
@@ -151,6 +224,7 @@ const notesDatabase = await testDatabase({
 const notesKit = testKit(serve(notesContract, { database: scoped(noteTables) }), { database: notesDatabase.database })
 
 afterAll(async () => {
+	await startingDatabase.close()
 	await notesDatabase.close()
 	await database.close()
 	rmSync(directory, { recursive: true, force: true })
@@ -165,6 +239,8 @@ beforeEach(() => {
 	runs.other = 0
 	runs.upload = 0
 	runs.failing = 0
+	runs.labelled = 0
+	runs.refused = 0
 	failNext = false
 })
 
@@ -255,7 +331,7 @@ describe('a different request under the same key', () => {
 		expect(runs.other).toBe(1)
 	})
 
-	test('a file with other bytes under the same name and size is another input', async () => {
+	test('a file with other bytes, or under another name, is another input', async () => {
 		const upload = async (bytes: string, key: string) => {
 			const form = new FormData()
 			form.append('input', JSON.stringify({ note: 'receipt scan' }))
@@ -274,6 +350,11 @@ describe('a different request under the same key', () => {
 		const other = await upload('total 99.50', key)
 		expect(other.status).toBe(409)
 		expect(await errorType(other)).toBe('request_key_reused')
+		const form = new FormData()
+		form.append('input', JSON.stringify({ note: 'receipt scan' }))
+		form.append('scan', new File(['total 12.50'], 'renamed.txt', { type: 'text/plain' }))
+		const renamed = await clerk('/api/entries.upload', { method: 'POST', headers: { 'Idempotency-Key': key }, body: form })
+		expect(renamed.status).toBe(409)
 		expect(runs.upload).toBe(1)
 	})
 })
@@ -389,6 +470,18 @@ describe('a stored output the current schema would change', () => {
 		})
 	}
 
+	test('negative control: an answer a union produced through its second branch is answered unchanged', async () => {
+		const key = freshKey()
+		const first = await call(clerk, 'labelled', { id: 'e1' }, key)
+		expect(first.status).toBe(200)
+		const answer = await first.json()
+		expect(answer).toEqual({ result: { id: 'e1', label: 'second branch' } })
+		const replay = await call(clerk, 'labelled', { id: 'e1' }, key)
+		expect(replay.status).toBe(200)
+		expect(await replay.json()).toEqual(answer)
+		expect(runs.labelled).toBe(1)
+	})
+
 	test('negative control: a stored output with its keys in another order is answered', async () => {
 		const key = freshKey()
 		const first: { result: { id: string; amount: number } } = await (await call(clerk, 'record', { amount: 5, note: 'coffee' }, key)).json()
@@ -403,6 +496,51 @@ describe('a stored output the current schema would change', () => {
 })
 
 describe('where a key is not accepted', () => {
+	test('a redirect, a public procedure and an endpoint that creates a scope refuse it with 400, and nothing runs', async () => {
+		const moving = await call(clerk, 'moving', {}, freshKey())
+		expect(moving.status).toBe(400)
+		expect(await errorType(moving)).toBe('request_key_not_accepted')
+		const visitor = await kit.fetch('/api/visitors.note', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', 'Idempotency-Key': freshKey() },
+			body: JSON.stringify({ note: 'hi' }),
+		})
+		expect(visitor.status).toBe(400)
+		expect(await errorType(visitor)).toBe('request_key_not_accepted')
+		const starter = startingKit.browser(startingKit.testCaller([{ action: 'workspaces.create' }]))
+		const start = (headers: Record<string, string>) =>
+			starter('/api/workspaces.start', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', ...headers },
+				body: JSON.stringify({ title: 'Ops' }),
+			})
+		const starting = await start({ 'Idempotency-Key': freshKey() })
+		expect(starting.status).toBe(400)
+		expect(await errorType(starting)).toBe('request_key_not_accepted')
+		expect(runs.refused).toBe(0)
+		// Negative control: without a key each of them runs.
+		expect((await call(clerk, 'moving', {})).status).toBe(303)
+		expect(
+			(await kit.fetch('/api/visitors.note', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ note: 'hi' }) }))
+				.status,
+		)
+			.toBe(200)
+		expect((await start({})).status).toBe(200)
+		expect(runs.refused).toBe(3)
+	})
+
+	test('an output larger than a receipt keeps fails the request, and nothing it wrote is kept', async () => {
+		const before = await count()
+		const key = freshKey()
+		const large = await call(clerk, 'large', { note: 'large' }, key)
+		expect(large.status).toBe(500)
+		expect(await count()).toBe(before)
+		expect(await receiptsSql(`select request_key from ${REQUEST_RECEIPTS_TABLE} where request_key = ?1`, [key])).toHaveLength(0)
+		// Negative control: without a key the same output is answered.
+		expect((await call(clerk, 'large', { note: 'large' })).status).toBe(200)
+		expect(await count()).toBe(before + 1)
+	})
+
 	test('a query, and a malformed key, are refused with 400 before anything runs', async () => {
 		const query = await call(clerk, 'count', {}, freshKey())
 		expect(query.status).toBe(400)

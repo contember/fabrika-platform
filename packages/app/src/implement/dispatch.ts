@@ -823,7 +823,8 @@ export class ContractRuntime {
 
 	/**
 	 * The request's key, when it carries one (ADR-0078): accepted only on a staged-kit mutation that answers JSON, with
-	 * the data layer bound. Anywhere else the key is a 400, so no client believes an unprotected request is protected.
+	 * the data layer bound, and that creates no scope (its access form creates the scope at IAM before any receipt could
+	 * be read). Anywhere else the key is a 400, so no client believes an unprotected request is protected.
 	 */
 	#keyed(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request, caller: Caller): KeyedRequest | null {
 		const key = requestKeyOf(request)
@@ -832,7 +833,8 @@ export class ContractRuntime {
 		}
 		const framework = this.#parts.framework
 		const writes = served.site?.kind === 'mutation' && served.readOnly !== true
-		if (!writes || framework === null || this.#parts.data === null || !answersJson(served.row)) {
+		const creates = served.row.requirement.kind === 'action' && served.row.requirement.access.form === 'creates'
+		if (!writes || creates || framework === null || this.#parts.data === null || !answersJson(served.row)) {
 			throw new HttpError(400, 'request_key_not_accepted', `'${served.row.id}' does not answer from a receipt; send it without Idempotency-Key`)
 		}
 		return { receipts: framework.receipts, principal: caller.subject, key }

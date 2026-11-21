@@ -1267,20 +1267,22 @@ A mutation whose request carries `Idempotency-Key` is answered from a receipt wh
 - **The key** is 1–128 characters of `A–Z a–z 0–9 . _ ~ : -`, bare or quoted; anything else is a 400
   `request_key_invalid`. The typed client sends it from `api.x(input, { requestKey })`.
 - **Where.** A credentialed staged-kit mutation that answers JSON, with the data layer bound. A query, an export, a
-  procedure that answers a file, an attachment or a redirect, a procedure without a site, and a public procedure refuse
-  the header with a 400 `request_key_not_accepted`, before the body is read.
+  procedure that answers a file, an attachment or a redirect, a procedure without a site, a public procedure and a
+  `creates` procedure (it creates its scope at IAM in its access form) refuse the header with a 400
+  `request_key_not_accepted`, before the body is read.
 - **When.** After the proxy, the token, the requirement, admission and the access form, inside the invocation's
   transaction and before the handler. A caller any of them refuses gets the refusal, never a stored answer.
 - **The identity** is the principal (`sub`) and the key; the receipt records the endpoint id and the SHA-256 of the
-  canonical input and `query` (keys sorted, every value tagged by kind; a file is its kind, type, size and the digest
-  its upload computed). Another endpoint or another identity under the key is a 409 `request_key_reused`.
+  canonical input and `query` (keys sorted, every value tagged by kind; a file is its kind, name, type, size and the
+  digest its upload computed). Another endpoint or another identity under the key is a 409 `request_key_reused`.
 - **A match** is answered `200 { result }` from the stored JSON without running the handler: nothing is written, no
   kick is recorded, and the files the request uploaded are released. The stored output is run through the current
-  output projection and schema first; one it refuses or would change is a 409 `request_replay_incompatible`.
+  output schema first, not projected again; one it refuses or would change is a 409 `request_replay_incompatible`.
 - **No receipt**: the handler runs, and the validated output is recorded in `fabrika_request_receipts` in the
   invocation's transaction, before the commit. A thrown handler, a refused output, a cancelled request and a failed
-  commit leave none. An output over 64 KiB of JSON fails the request (500, `request_receipt_too_large`). A receipt a
-  concurrent copy of the request recorded first makes this one a 409 `request_key_concurrent`.
+  commit leave none. An output over 64 KiB of JSON fails the request (500, `request_receipt_too_large`). On Postgres
+  the receipt read first takes a transaction lock on the principal and key, so a concurrent copy waits and then reads
+  the receipt; a receipt that still appears at the insert is a 409 `request_key_concurrent`.
 - **Retention.** Each receipt write deletes up to 32 receipts older than 7 days; a receipt that still exists answers.
 - `request-receipts.test.ts` (`@fabrika/app`) holds each rule with its negative control; the `@fabrika/db` test of the
   same name runs the statements on both dialects.

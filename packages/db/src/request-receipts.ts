@@ -17,7 +17,11 @@ export interface RequestReceipt {
 }
 
 export interface RequestReceipts {
-	/** The receipt of `principal`'s `key`, read in `session`; `null` when there is none. */
+	/**
+	 * The receipt of `principal`'s `key`, read in `session`; `null` when there is none. On Postgres it first takes the
+	 * key's transaction lock, so a concurrent copy of the request waits for this transaction and then reads its receipt
+	 * instead of running too; SQLite's one writer already serializes them.
+	 */
 	find(session: Session, principal: string, key: string): Promise<RequestReceipt | null>
 	/**
 	 * Records `receipt` under `principal`'s `key` in `session`, created at `now` (epoch ms), after pruning a batch of
@@ -31,6 +35,9 @@ const R = REQUEST_RECEIPTS_TABLE
 
 /** Receipts one write prunes at most; every write prunes, so expired receipts never outgrow the live ones. */
 const PRUNE_BATCH = 32
+
+// Held until the transaction ends; two keys whose hashes collide only wait for each other.
+const SQL_LOCK = `select 1 as locked from pg_advisory_xact_lock(hashtextextended($1 || chr(10) || $2, 0))`
 
 const SQL_FIND: DialectTexts = {
 	postgres: `select operation, identity, output from ${R} where principal = $1 and request_key = $2`,
@@ -75,6 +82,9 @@ function isRow(value: unknown): value is Readonly<Record<string, unknown>> {
 export function requestReceipts(): RequestReceipts {
 	return Object.freeze({
 		async find(session: Session, principal: string, key: string): Promise<RequestReceipt | null> {
+			if (session.dialect === 'postgres') {
+				await runFixedStatement(session, SQL_LOCK, [principal, key])
+			}
 			const rows = await runFixedStatement(session, SQL_FIND[session.dialect], [principal, key])
 			const row = rows[0]
 			if (row === undefined) {

@@ -82,9 +82,12 @@ function canonical(value: unknown, work: FileWork, where: string): string {
 		if (digest === null) {
 			throw new ServerFault('request_identity_unsupported', `${where}: the input holds a file this request did not upload`)
 		}
-		const type = Reflect.get(value, 'type')
-		const size = Reflect.get(value, 'size')
-		return `F${JSON.stringify([holding.kind, typeof type === 'string' ? type : null, typeof size === 'number' ? size : null, digest])}`
+		const text = (field: string): string | null => {
+			const read: unknown = Reflect.get(value, field)
+			return typeof read === 'string' ? read : null
+		}
+		const size: unknown = Reflect.get(value, 'size')
+		return `F${JSON.stringify([holding.kind, text('name'), text('type'), typeof size === 'number' ? size : null, digest])}`
 	}
 	if (value instanceof Date) {
 		return `d${JSON.stringify(Number.isNaN(value.getTime()) ? null : value.toISOString())}`
@@ -156,21 +159,13 @@ export function replayed(row: EndpointRow, schema: Schema, stored: RequestReceip
 	if (typeof body !== 'object' || body === null) {
 		throw incompatible()
 	}
-	const result: unknown = Reflect.get(body, 'result')
-	let output: unknown
-	try {
-		output = validatedOutput(row, schema, result)
-	} catch (error) {
-		if (error instanceof ServerFault) {
-			throw incompatible()
-		}
-		throw error
-	}
+	// The stored answer was projected once already; a second projection could pick another branch of a union.
+	const output = z.safeParse(zodSchemaOf(schema), Reflect.get(body, 'result'))
 	// What the client would read: the answer as JSON, compared with the stored one.
-	if (sortedJson(JSON.parse(JSON.stringify({ result: output }))) !== sortedJson(body)) {
+	if (!output.success || sortedJson(JSON.parse(JSON.stringify({ result: output.data }))) !== sortedJson(body)) {
 		throw incompatible()
 	}
-	return jsonResponse({ result: output }, 200)
+	return jsonResponse({ result: output.data }, 200)
 }
 
 /**

@@ -160,6 +160,45 @@ describe('Postgres', () => {
 		expect((await receipts.find(sessionOf({ database: postgres }), 'user:alice', 'k1'))?.output).toBe('{"result":1}')
 	})
 
+	test.skipIf(!hasPostgres)(
+		"a copy that reads the key while another transaction holds it waits, and then reads that transaction's receipt",
+		async () => {
+			const found = Promise.withResolvers<void>()
+			const release = Promise.withResolvers<void>()
+			const first = sessionOf({ database: postgres }).transaction(async (session) => {
+				expect(await receipts.find(session, 'user:alice', 'k1')).toBeNull()
+				found.resolve()
+				await release.promise
+				return await receipts.record(session, 'user:alice', 'k1', receipt('{"result":1}'), NOW, RETAINED_SINCE)
+			})
+			await found.promise
+			let secondRead = false
+			const second = sessionOf({ database: postgres }).transaction(async (session) => {
+				const stored = await receipts.find(session, 'user:alice', 'k1')
+				secondRead = true
+				return stored
+			})
+			await Bun.sleep(200)
+			// The second copy is still waiting for the first transaction's lock on the key.
+			expect(secondRead).toBe(false)
+			release.resolve()
+			expect(await first).toBe(true)
+			expect((await second)?.output).toBe('{"result":1}')
+			// Negative control: another principal's same key does not wait.
+			const otherFound = Promise.withResolvers<void>()
+			const otherRelease = Promise.withResolvers<void>()
+			const holding = sessionOf({ database: postgres }).transaction(async (session) => {
+				await receipts.find(session, 'user:alice', 'k2')
+				otherFound.resolve()
+				await otherRelease.promise
+			})
+			await otherFound.promise
+			expect(await sessionOf({ database: postgres }).transaction((session) => receipts.find(session, 'user:bob', 'k2'))).toBeNull()
+			otherRelease.resolve()
+			await holding
+		},
+	)
+
 	test.skipIf(!hasPostgres)('an existing schema applies 0011 alone on its next migrate, and the runtime role reads and writes receipts', async () => {
 		const appId = `receipts-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 		const earlier = FRAMEWORK_MIGRATIONS.filter((file) => file.name < '0011_request_receipts.sql')

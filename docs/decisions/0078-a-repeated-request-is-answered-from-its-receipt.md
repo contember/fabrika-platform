@@ -40,30 +40,36 @@ The dispatcher answers a repeated mutation from a receipt it stored when the fir
    is 1–128 characters of `A–Z a–z 0–9 . _ ~ : -`, bare or as a quoted string. Anything else is a 400
    (`request_key_invalid`). The typed client sends it from `api.<procedure>(input, { requestKey })`.
 2. **Where it is accepted.** On a credentialed staged-kit mutation that answers JSON. A query, a read-only procedure, a
-   procedure without a data site, a procedure that answers a file, an attachment or a redirect, and a public procedure
-   (whose caller is a visitor, not a principal) refuse a request that carries the header with a 400
-   (`request_key_not_accepted`): a client must never believe a request is protected when it is not.
+   procedure without a data site, a procedure that answers a file, an attachment or a redirect, a public procedure
+   (whose caller is a visitor, not a principal), and a procedure whose access form `creates` a scope (its access form
+   creates the scope at IAM before any receipt could be read, so a repeat would create another) refuse a request that
+   carries the header with a 400 (`request_key_not_accepted`): a client must never believe a request is protected when
+   it is not.
 3. **Authorization first.** The receipt is read after every check that refuses the request before its handler: the
-   proxy's decision, the token, caller kind and requirement, admission, the access form (`on`, `in`, `creates`, `app`,
+   proxy's decision, the token, caller kind and requirement, admission, the access form (`on`, `in`, `over`, `app`,
    capabilities) and the caller's own row (`ctx.caller`, when the contract declares it). A caller refused there gets
    the refusal, never a stored answer. A check the handler makes itself (`.require`, `can()`) does not run on a replay:
-   the receipt holds an answer this principal already received.
+   the receipt holds an answer this principal already received. Nor is the answer narrowed again: an `over` endpoint
+   admits a caller who holds the action anywhere, so a principal who lost one of its scopes may still read, for the
+   retention, the rows of that scope its own first request answered.
 4. **The identity.** A receipt is keyed by the principal (the token's subject) and the key. It records the operation
    (the endpoint id) and the SHA-256 of the request's canonical input: the input as parsed and its signed tokens
-   verified, with the procedure's `query`, object keys sorted, array order kept; a file of the input is its kind, type,
-   size and the SHA-256 of its bytes, which the upload computed, never its pending id. The same key with another
+   verified, with the procedure's `query`, object keys sorted, array order kept; a file of the input is its kind, name,
+   type, size and the SHA-256 of its bytes, which the upload computed, never its pending id. The same key with another
    operation or another identity is a 409 (`request_key_reused`); nothing runs. Another principal's key never meets
    this one: it is a new request.
 5. **Recorded in the transaction.** When there is no receipt, the handler runs. After its output passed validation the
    dispatcher writes the receipt (the output's JSON, at most 64 KiB in UTF-8) in the invocation's transaction, before
    its commit. A handler that throws, an output refused, a cancelled request or a failed commit leaves no receipt, so
    the retry runs the work again. An output over the limit fails the request with a 500
-   (`request_receipt_too_large`): the procedure answers too much to replay. A receipt the same key wrote meanwhile (two
-   copies of the request at once) makes the later one a 409 (`request_key_concurrent`), and its transaction rolls back;
-   its retry reads the receipt.
+   (`request_receipt_too_large`): the procedure answers too much to replay. Two copies of the request at once run the
+   work once: on Postgres the receipt read first takes a transaction lock on the principal and key, so the later copy
+   waits for the earlier one's commit and then reads its receipt (or runs, after a rollback); in a Durable Object one
+   writer serializes them. A receipt that still appears at the insert makes that copy a 409 (`request_key_concurrent`),
+   and its transaction rolls back.
 6. **The replay.** A receipt of the same operation and identity is answered as the first request was, `200` with
-   `{ result }`, without running the handler, recording kicks or writing anything. Its stored output is run through
-   the endpoint's current output projection and schema first. When the schema refuses it, or would change it (drop a
+   `{ result }`, without running the handler, recording kicks or writing anything. Its stored output, projected once when
+   it was recorded, is run through the endpoint's current output schema first. When the schema refuses it, or would change it (drop a
    field, fill a default, transform a value), the answer is a 409 (`request_replay_incompatible`): the client reads the
    state again. It is never taken for a missing receipt, so the work never runs a second time.
 7. **Retention.** A receipt is kept at least 7 days. Each receipt write deletes a bounded batch of receipts older than

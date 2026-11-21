@@ -428,8 +428,8 @@ once: no `request_id` column, no lookup of an earlier write, no replay branch, a
 - The same key with another input or another procedure is a 409 `request_key_reused`: a new submission (the user
   changed a field or picked another file) gets a new key.
 - A stored answer the current output schema would change is a 409 `request_replay_incompatible`: read the state again.
-- Only a mutation that answers JSON takes a key; a query, a file or attachment answer, a `redirect()` and a public
-  procedure refuse it with a 400.
+- Only a mutation that answers JSON takes a key; a query, a file or attachment answer, a `redirect()`, a public
+  procedure and a `creates` procedure refuse it with a 400.
 - A rule of the business that deduplicates (one closing per day, a counter the server derives) stays in the handler:
   the key only tells a retry from a new submission.
 
