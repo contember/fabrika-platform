@@ -84,7 +84,7 @@ export default createPage()
 					</p>
 					<Link to="builder/authorize">Connection instructions and your issued builder keys</Link>
 				</section>
-				<BuildConfigSection app={app} onDone={invalidate} />
+				<BuildConfigSection app={app} providerId={providerId} onDone={invalidate} />
 				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} providerId={providerId} onDone={invalidate} />
 				<DataLinks appId={app.id} envs={envs} />
 				<ApprovalsSection appId={app.id} envs={envs} onDone={invalidate} />

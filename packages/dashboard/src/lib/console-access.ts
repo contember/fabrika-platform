@@ -54,6 +54,11 @@ export function holdsAt(access: ConsoleAccessDto, action: string, at: { readonly
 	)
 }
 
+/** The action at an application: globally or at the app, as Control checks an app-scoped procedure. */
+export function holdsAtApp(access: ConsoleAccessDto, action: string, app: string): boolean {
+	return holdsGlobally(access, action) || access.scopes.some((scope) => scope.actions.includes(action) && scope.type === 'app' && scope.value === app)
+}
+
 /** The scope values the caller reads runs in, for a caller that holds `deploy.read` only in some. */
 export function scopedRunReads(access: ConsoleAccessDto): { apps: string[]; environments: string[] } {
 	const held = access.scopes.filter((scope) => scope.actions.includes(CONTROL_ACTIONS.DEPLOY_READ))
