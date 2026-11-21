@@ -68,6 +68,7 @@ describe('the header limit of an application server on Zerops', () => {
 			databaseUrl: 'postgres://db/notes',
 			databaseConnections: 2,
 			checkRelease: FABRIKA_CHECK_VERSION,
+			framework: FABRIKA_CHECK_VERSION,
 			storageHostname: null,
 			runtimePackages: [],
 			sourceMaps: null,

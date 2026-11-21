@@ -1,15 +1,23 @@
 // The generated init commands and start script of a contract application whose build cannot install a database (a build
 // image other than Alpine), run in Zerops' order against a REAL Postgres with the real `fabrika` CLI: a committed
 // `schema.generated.ts` that no longer matches the migrated schema fails an init command, which stops the activation
-// before the server starts. Skips cleanly without FABRIKA_TEST_POSTGRES_URL;
+// before the server starts. With the schema checks in the build, `fabrika db migrate` alone still stops it on database
+// code no migration declares. Skips cleanly without FABRIKA_TEST_POSTGRES_URL;
 // the URL is a credential and is never printed.
 
+import { SQL } from 'bun'
 import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { dropApplicationDatabase } from '../../../platform-node/src/application-postgres-migrations'
-import { FABRIKA_CHECK_VERSION, generatedBuildCommands, generatedInitCommands, type ZeropsLockedExecution } from '../execution'
+import { definePostgresApplicationMigrations, dropApplicationDatabase } from '../../../platform-node/src/application-postgres-migrations'
+import {
+	FABRIKA_CHECK_VERSION,
+	generatedBuildCommands,
+	generatedInitCommands,
+	type ZeropsLockedExecution,
+	type ZeropsSchemaChecks,
+} from '../execution'
 
 const url = process.env['FABRIKA_TEST_POSTGRES_URL'] ?? ''
 const hasPostgres = url !== ''
@@ -40,9 +48,13 @@ const sh = async (root: string, args: readonly string[]): Promise<{ code: number
 const SCRIPTS = ['fabrika/migrate.generated.sh', 'fabrika/verify.generated.sh', 'fabrika/start.generated.sh']
 
 /** Runs every init command, then the start script, stopping at the first failure as Zerops stops the activation. */
-const activate = async (root: string, execution: ZeropsLockedExecution): Promise<{ code: number; stdout: string; stderr: string }> => {
+const activate = async (
+	root: string,
+	execution: ZeropsLockedExecution,
+	schemaChecks: ZeropsSchemaChecks = 'init',
+): Promise<{ code: number; stdout: string; stderr: string }> => {
 	const output = { stdout: '', stderr: '' }
-	for (const command of [...generatedInitCommands(execution, 'init'), 'sh /var/www/fabrika/start.generated.sh']) {
+	for (const command of [...generatedInitCommands(execution, schemaChecks), 'sh /var/www/fabrika/start.generated.sh']) {
 		const step = await sh(root, ['-c', command.replaceAll('/var/www', root)])
 		output.stdout += step.stdout
 		output.stderr += step.stderr
@@ -57,6 +69,7 @@ const executionOf = (appId: string): ZeropsLockedExecution => ({
 	databaseUrl: '${notesdb_connectionTlsString}/${notesdb_dbName}?sslmode=require',
 	databaseConnections: 2,
 	checkRelease: FABRIKA_CHECK_VERSION,
+	framework: FABRIKA_CHECK_VERSION,
 	storageHostname: null,
 	runtimePackages: [],
 	sourceMaps: null,
@@ -109,6 +122,30 @@ describe.skipIf(!hasPostgres)('the generated init commands and start script agai
 		const current = await activate(root, execution)
 		expect(current.code).toBe(0)
 		expect(current.stdout).toContain(STARTED)
+	})
+
+	test('with the schema checks in the build, the init command alone stops the activation on database code no migration declares', async () => {
+		const appId = `code-${crypto.randomUUID().replaceAll('-', '').slice(0, 10)}`
+		appIds.push(appId)
+		const execution = executionOf(appId)
+		expect(generatedInitCommands(execution, 'build').map((command) => command.split('/').at(-1))).toEqual(['migrate.generated.sh'])
+		const root = await generatedApplication(execution)
+		const first = await activate(root, execution, 'build')
+		expect(first.code).toBe(0)
+		expect(first.stdout).toContain(STARTED)
+
+		// Created outside a migration, as code running in the application could: no file declares it.
+		const { schema } = definePostgresApplicationMigrations({ appId, directory: join(root, 'db', 'migrations') })
+		const sql = new SQL({ url, max: 1 })
+		try {
+			await sql.unsafe(`CREATE FUNCTION ${schema}.sneaky() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$`)
+		} finally {
+			await sql.close()
+		}
+		const again = await activate(root, execution, 'build')
+		expect(again.code).not.toBe(0)
+		expect(again.stderr).toContain('function sneaky (no migration declares it)')
+		expect(again.stdout).not.toContain(STARTED)
 	})
 
 	test('a migration that fails stops the activation before the schema is verified', async () => {
