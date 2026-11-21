@@ -137,6 +137,11 @@ entry of the same name would collide with it. A value made of references (`${db_
 name that is not a credential in `target.notSecret` of `fabrika.config.ts`. The check runs only at build, so a manifest an older release built still
 deploys.
 
+On Zerops the platform's type check of the build also reads the SPA under `web/` once the pin is 0.9, with the same
+options as `src/` (`strict`, `noUncheckedIndexedAccess`, `jsx: 'react-jsx'`); on 0.8 it read `src/` only. Bun bundles
+the SPA without checking its types, so a `web/` that never passed fails the first build at 0.9: run `tsc` over `web/`
+with those options before raising the pin.
+
 From `0.9.0-dev.13`, `schema.generated.ts` lists each table's `notNull` columns, and a condition path or a `readThrough`
 over a foreign key that holds the row's tenant requires its ancestor columns there. Run `fabrika db codegen` after
 raising the pin: `codegen --verify` refuses the stale file at build, and a list without `notNull` names none, so the
