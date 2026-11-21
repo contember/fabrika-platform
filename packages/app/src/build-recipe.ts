@@ -86,20 +86,37 @@ const bunEvalCommand = (script: readonly string[]): string => {
 	return `bun -e "${source}"`
 }
 
+/**
+ * The first framework minor whose build runs the application's own `test` script of `package.json` when it has one; an
+ * older application keeps `bun test --isolate --pass-with-no-tests`, so a platform upgrade changes no build of it.
+ */
+const OWN_TEST_SCRIPT_SINCE = { major: 0, minor: 9 }
+
+const DEFAULT_TESTS = "[process.execPath, 'test', '--isolate', '--pass-with-no-tests']"
+
 // The tests run before any database, so every Postgres-backed test file skips and the run still passes. This command runs the
-// tests as before and then says how many files did not run, so a green test step does not read as a tested database.
-const TESTS_COMMAND = bunEvalCommand([
-	"const child = Bun.spawn([process.execPath, 'test', '--isolate', '--pass-with-no-tests'], { stdout: 'inherit', stderr: 'pipe' });",
-	'const decoder = new TextDecoder();',
-	"let output = '';",
-	'for await (const chunk of child.stderr) { process.stderr.write(chunk); output += decoder.decode(chunk, { stream: true }) }',
-	'const code = await child.exited;',
-	`const marker = '${DATABASE_TEST_SKIP_MARKER}';`,
-	'const skipped = output.split(String.fromCharCode(10)).filter((line) => line.includes(marker)).map((line) => line.slice(0, line.indexOf(marker)).trim());',
-	`const prefix = '${TESTS_REPORT_PREFIX}';`,
-	"console.warn(skipped.length === 0 ? prefix + ' no Postgres-backed test file skipped' : prefix + ' ' + skipped.length + ' Postgres-backed test files did not run, because the build has no database: ' + skipped.join(', '));",
-	'process.exit(code);',
-])
+// tests and then says how many files did not run, so a green test step does not read as a tested database.
+const testsCommand = (ownScript: boolean): string =>
+	bunEvalCommand([
+		...(ownScript
+			? [
+				"const manifest = Bun.file('package.json');",
+				'const scripts = (await manifest.exists()) ? (await manifest.json()).scripts : undefined;',
+				"const own = typeof scripts?.test === 'string';",
+				`console.warn('${TESTS_REPORT_PREFIX} ' + (own ? 'runs the test script of package.json' : 'runs bun test --isolate --pass-with-no-tests'));`,
+				`const child = Bun.spawn(own ? [process.execPath, 'run', 'test'] : ${DEFAULT_TESTS}, { stdout: 'inherit', stderr: 'pipe' });`,
+			]
+			: [`const child = Bun.spawn(${DEFAULT_TESTS}, { stdout: 'inherit', stderr: 'pipe' });`]),
+		'const decoder = new TextDecoder();',
+		"let output = '';",
+		'for await (const chunk of child.stderr) { process.stderr.write(chunk); output += decoder.decode(chunk, { stream: true }) }',
+		'const code = await child.exited;',
+		`const marker = '${DATABASE_TEST_SKIP_MARKER}';`,
+		'const skipped = output.split(String.fromCharCode(10)).filter((line) => line.includes(marker)).map((line) => line.slice(0, line.indexOf(marker)).trim());',
+		`const prefix = '${TESTS_REPORT_PREFIX}';`,
+		"console.warn(skipped.length === 0 ? prefix + ' no Postgres-backed test file skipped' : prefix + ' ' + skipped.length + ' Postgres-backed test files did not run, because the build has no database: ' + skipped.join(', '));",
+		'process.exit(code);',
+	])
 
 /** A `c.cron` job name, which a crontab line carries unquoted. */
 export const CONTRACT_JOB_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_]*$/
@@ -159,7 +176,7 @@ export function contractChecks(sourceRoot: string, checkRelease: string): Contra
 	return {
 		tsconfig: { write: PLATFORM_TSCONFIG, lines: [platformTsconfigContents(checkRelease)] },
 		checks: [
-			{ name: 'tests', command: TESTS_COMMAND },
+			{ name: 'tests', command: testsCommand(releaseAtLeast(checkRelease, OWN_TEST_SCRIPT_SINCE)) },
 			{ name: 'tsc', command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${sourceRoot}/${PLATFORM_TSCONFIG}` },
 			{ name: 'fabrika-check', command: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}` },
 		],
@@ -234,8 +251,10 @@ const buildSchemaChecksCommand = (appId: string): string => {
 
 /**
  * The recipe of one contract application. The application's tests run first: they are authored code, so everything
- * after them is reinstalled, regenerated or checked again. They run `--isolate`, as the application skill runs them: a
- * test file's DOM globals otherwise leak into the next file. `tsc` runs before the checker, as in the skill's loop: the
+ * after them is reinstalled, regenerated or checked again. They run as the application runs them, through the `test`
+ * script of its `package.json`, so the build and the author's loop share one mode (which paths, `--isolate` or not, how
+ * parallel). Without that script they run `bun test --isolate --pass-with-no-tests`, as the application skill runs
+ * them: a test file's DOM globals otherwise leak into the next file. `tsc` runs before the checker, as in the skill's loop: the
  * usual quick fix of a type error is a cast or an `any`, which only the checker refuses, so the checker is the last word
  * on the code. With a database, the schema check runs last, on a throwaway PostgreSQL the build migrates from scratch,
  * and only the migrations run at container start; a build image without `apk` runs it as an init script instead, after
