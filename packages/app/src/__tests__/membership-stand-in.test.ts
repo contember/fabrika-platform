@@ -670,7 +670,14 @@ describe('the stand-in answers an invitation as IAM does: the open one again, a 
 			expect(czech.invitationMail(ukrainian, ACCEPT)?.subject).toBe('Запрошення до застосунку Poznámky')
 			expect(czech.invitationMail(plain, ACCEPT)?.subject).toBe('Pozvánka do aplikace Poznámky')
 			const english = membershipOf()
-			expect(english.invitationMail(await assign(english, 'ann@example.test'), ACCEPT)?.subject).toBe('You are invited to notes')
+			expect(english.invitationMail(await assign(english, 'ann@example.test'), ACCEPT)?.subject).toBe('You are invited to notes@test')
+		})
+
+		test('without a display name it names the application by its environment id, as IAM does', async () => {
+			const membership = membershipOf({ mail: { invitation: { en: { subject: 'Join {{displayName}}', text: '{{actionUrl}}' } } } })
+			const named = membershipOf({ displayName: 'Notes' })
+			expect(membership.invitationMail(await assign(membership, 'ann@example.test'), ACCEPT)?.subject).toBe('Join notes@test')
+			expect(named.invitationMail(await assign(named, 'ann@example.test'), ACCEPT)?.subject).toBe('You are invited to Notes')
 		})
 
 		test("it names the inviter's message and company, places the link, and says how the addressee accepts", async () => {
@@ -693,10 +700,10 @@ describe('the stand-in answers an invitation as IAM does: the open one again, a 
 				mail: { invitation: { uk: { subject: 'Ласкаво просимо до {{displayName}}', text: 'Посилання: {{actionUrl}}' } } },
 			})
 			expect(membership.invitationMail(await assign(membership, 'ann@example.test', { locale: 'uk' }), ACCEPT)).toMatchObject({
-				subject: 'Ласкаво просимо до notes',
+				subject: 'Ласкаво просимо до notes@test',
 				text: `Посилання: ${ACCEPT}`,
 			})
-			expect(membership.invitationMail(await assign(membership, 'bo@example.test'), ACCEPT)?.subject).toBe('Pozvánka do aplikace notes')
+			expect(membership.invitationMail(await assign(membership, 'bo@example.test'), ACCEPT)?.subject).toBe('Pozvánka do aplikace notes@test')
 		})
 
 		test("a template that names {{appUrl}} is used with the application's address, IAM's wording without one", async () => {
@@ -705,10 +712,10 @@ describe('the stand-in answers an invitation as IAM does: the open one again, a 
 			})
 			const id = await assign(membership, 'ann@example.test')
 			expect(membership.invitationMail(id, ACCEPT, 'http://localhost:4000/')).toMatchObject({
-				subject: 'Join notes',
+				subject: 'Join notes@test',
 				text: `Accept: ${ACCEPT}\n\nThen open http://localhost:4000/`,
 			})
-			expect(membership.invitationMail(id, ACCEPT)?.subject).toBe('You are invited to notes')
+			expect(membership.invitationMail(id, ACCEPT)?.subject).toBe('You are invited to notes@test')
 		})
 
 		test("an accepted invitation's language is the person's, for the next invitation that names none; a resend may name another", async () => {

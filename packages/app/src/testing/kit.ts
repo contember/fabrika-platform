@@ -78,6 +78,7 @@ import {
 	type KitMembership,
 	kitMembership,
 	type MintedToken,
+	TEST_ENVIRONMENT,
 	type TestMembership,
 } from './membership'
 import { endpointProxy } from './proxy'
@@ -91,7 +92,7 @@ const NO_IDENTIFICATIONS: IamTerminalRpc = Object.freeze({
 	assertIdentity: noIdentification,
 	cancelIdentification: noIdentification,
 })
-export const TEST_ENVIRONMENT = 'test'
+export { TEST_ENVIRONMENT }
 const KEY_ID = 'test-key'
 const TOKEN_TTL_SECONDS = 300
 

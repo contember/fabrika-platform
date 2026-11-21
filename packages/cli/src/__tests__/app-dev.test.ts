@@ -466,7 +466,7 @@ describe.skipIf(url === '')('fabrika app dev on the template application, seeded
 		expect(before.mail).toHaveLength(1)
 		const [invitation] = before.mail
 		// What IAM would send: its subject in the application's language, since the invitation names none.
-		expect(invitation?.subject).toBe('Pozvánka do aplikace notes')
+		expect(invitation?.subject).toBe('Pozvánka do aplikace notes@test')
 		expect(invitation?.detail).toBe('Pozvánka: guest v Design · cs · Komu: marta@studio.example · čeká')
 		const accept = invitation?.action?.href ?? ''
 		expect(accept).toStartWith('/__fabrika/dev/accept?invitation=')

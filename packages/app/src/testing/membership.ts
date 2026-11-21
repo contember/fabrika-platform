@@ -8,6 +8,7 @@
 
 import {
 	API_KEY_PREFIX,
+	appEnvironmentId,
 	type AppMemberItem,
 	type AssignMemberInput,
 	type AssignMemberResult,
@@ -468,6 +469,9 @@ interface DelegationGrant {
 	readonly expiresAt: number
 }
 
+/** The environment the kit's IAM knows the application under: its id is `<app>@test`. */
+export const TEST_ENVIRONMENT = 'test'
+
 /**
  * The directory of the kit's callers, and every write checked against the caller's grants as IAM checks it.
  * `organization` names the mailboxes IAM's configuration would; by default none.
@@ -855,7 +859,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	const invitationMail = (invitationId: string, actionUrl: string, appUrl: string | null = null): RenderedMessage | undefined => {
 		const invitation = invitations.get(invitationId)
 		if (invitation === undefined) return undefined
-		const displayName = artifact.displayName ?? artifact.app
+		// As IAM: without a display name, the application environment's id (`<app>@<env>`).
+		const displayName = artifact.displayName ?? appEnvironmentId(artifact.app, TEST_ENVIRONMENT)
 		const render = iamMessageTemplate('invitation', {
 			locale: invitation.mailLocale,
 			template: artifact.mail?.invitation?.[invitation.mailLocale] ?? null,
