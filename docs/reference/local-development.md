@@ -446,7 +446,13 @@ repair tick, which re-arms it), after which the list shows each note's `reviewed
 endpoint header is 503 and one with a forged token is 401.
 
 An application outside this repository runs IAM from the published `@fabrika/iam`: its Worker builder is
-`buildIamWorker` of `@fabrika/iam/fabrika.config`, and the package carries `src/` and both migration sets. The object
+`buildIamWorker` of `@fabrika/iam/fabrika.config`, and the package carries `src/` and both migration sets. The Worker's
+`dir` is `.` and its `main` and D1 `migrationsDir` are relative, and oblaka resolves them against the working
+directory, so the application resolves them against the package's directory (`dirname` of the resolved
+`@fabrika/iam/package.json`) or generates IAM's config from there. Locally (`env: 'local'`) IAM's issuer is
+`http://localhost:18191`; a stack that serves IAM elsewhere sets `ISSUER` to its origin, the `iamOrigin` it composes
+the application with. Importing the module also evaluates its default `defineApp`, which reads `FABRIKA_EMAIL_*` and
+`FABRIKA_IAM_*_ENABLED` from the environment and throws on an invalid set. The object
 reads its bindings' methods without `in`, which a Lopata service-binding stub does not answer. The application runtime
 itself is also witnessed in Lopata by `packages/app/src/__tests__/cloudflare-runtime.test.ts`, which runs the Worker, its
 object and the R2 bucket in process:

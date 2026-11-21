@@ -1062,6 +1062,7 @@ export interface LocalApplicationOptions {
 	/**
 	 * The key of every job, webhook and public procedure by its variable (`issueLocalWorkloadKeys`), which Control
 	 * writes into a deploy. Without it the run supplies them itself (`.dev.vars`), or the application does not boot.
+	 * They are written as plain vars, like the proxy secret, so the generated config must stay out of version control.
 	 */
 	readonly workloadKeys?: Readonly<Record<string, string>>
 }
