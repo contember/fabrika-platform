@@ -1,11 +1,11 @@
 // `fabrika app dev` on the template application and on `fixtures/dev-app/`, each with its `dev/seed.ts`: the seed's
 // personas are on the picker and choosing one is that caller on the API and the SPA, a link the seed issued opens as
 // its holder, every SPA page carries the dev toolbar (and a kit's own responses never do), the toolbar's switch and the
-// mail view change the caller, and nothing but loopback is served. The served runs need FABRIKA_TEST_POSTGRES_URL, the
+// mail view change the caller, an invitation's mail is in the language IAM writes it in, and nothing but loopback is served. The served runs need FABRIKA_TEST_POSTGRES_URL, the
 // tests' database, and skip cleanly without it. The URL is a credential: no assertion prints it, and the command's
 // output is checked for it, for a link key and for a mailbox.
 
-import { type DevMail, testKit } from '@fabrika/app/testing'
+import { type DevMail, type SentInvitation, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing'
 import { SQL, type Subprocess } from 'bun'
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
@@ -16,7 +16,7 @@ import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { parseAppDevArgs } from '../app-dev'
 import { devOutbox, readDevEnv } from '../app-dev-outside'
-import { mailPage, type MailView, MAX_MAIL_ROWS, newestMail } from '../app-dev-ui'
+import { invitationMailPage, mailPage, type MailView, MAX_MAIL_ROWS, newestMail } from '../app-dev-ui'
 
 setDefaultTimeout(60_000)
 
@@ -194,7 +194,17 @@ describe("app dev's stand-ins for the outside, without serving", () => {
 })
 
 describe("app dev's mail view, without serving", () => {
-	const row = (subject: string, at: number): MailView => ({ to: 'a@example.test', subject, at, key: null, status: 'sent', answer: null, action: null })
+	const row = (subject: string, at: number): MailView => ({
+		to: 'a@example.test',
+		subject,
+		subjectLocale: null,
+		at,
+		key: null,
+		status: 'sent',
+		answer: null,
+		note: null,
+		actions: [],
+	})
 	const view: Parameters<typeof mailPage>[0] = { locale: 'en', title: 'Shop', current: null, pickerHref: '/__fabrika/dev' }
 	const mail: DevMail = {
 		id: 1,
@@ -232,6 +242,34 @@ describe("app dev's mail view, without serving", () => {
 		const plainText = mailPage(view, { ...mail, html: null })
 		expect(plainText).not.toContain('<iframe')
 		expect(plainText).toContain('The message has no HTML part.')
+	})
+
+	test("an invitation's e-mail shows its language beside the page's own, and its HTML only in the sandboxed frame", () => {
+		const invitation: SentInvitation = {
+			id: 'invitation-1',
+			email: 'olena@example.test',
+			role: 'member',
+			scope: { type: 'board', value: 'roadmap' },
+			expiresAt: 1_900_000_000,
+			sentAt: 1_899_000_000,
+			status: 'open',
+			locale: 'uk',
+			mailLocale: 'uk',
+		}
+		const page = invitationMailPage(view, invitation, {
+			subject: 'Запрошення до застосунку Shop',
+			text: 'Вас запрошено <до> Shop.',
+			html: '<p>Вас запрошено</p><script>alert(1)</script>',
+		}, [{ label: 'Accept invitation', href: '/__fabrika/dev/accept?invitation=invitation-1&next=%2F' }])
+		expect(page).toContain('<html lang="en">')
+		expect(page).toContain('<h1 lang="uk">Запрошення до застосунку Shop</h1>')
+		expect(page).toContain('<pre class="text" lang="uk">')
+		expect(page).toContain('<a class="button quiet" href="/__fabrika/dev/accept?invitation=invitation-1&amp;next=%2F">Accept invitation</a>')
+		expect(page).toContain('<dt>Language</dt><dd>uk</dd>')
+		expect(page).toContain('<dt>State</dt><dd>waiting</dd>')
+		expect(page).toContain('Вас запрошено &lt;до&gt; Shop.')
+		expect(page).toContain('srcdoc="&lt;p&gt;Вас запрошено&lt;/p&gt;&lt;script&gt;alert(1)&lt;/script&gt;"')
+		expect(page).not.toContain('<script')
 	})
 })
 
@@ -427,16 +465,31 @@ describe.skipIf(url === '')('fabrika app dev on the template application, seeded
 		const before = await stateOf(origin, null)
 		expect(before.mail).toHaveLength(1)
 		const [invitation] = before.mail
-		expect(invitation?.subject).toBe('Pozvánka: guest v Design')
-		expect(invitation?.detail).toBe('Komu: marta@studio.example · čeká')
+		// What IAM would send: its subject in the application's language, since the invitation names none.
+		expect(invitation?.subject).toBe('Pozvánka do aplikace notes@test')
+		expect(invitation?.detail).toBe('Pozvánka: guest v Design · cs · Komu: marta@studio.example · čeká')
 		const accept = invitation?.action?.href ?? ''
 		expect(accept).toStartWith('/__fabrika/dev/accept?invitation=')
+		const id = new URL(accept, origin).searchParams.get('invitation') ?? ''
+		const opened = await fetch(`${origin}__fabrika/dev/mail/${id}`)
+		expect(opened.status).toBe(200)
+		const message = await opened.text()
+		expect(message).toContain('Petra Nováková píše:')
+		expect(message).toContain('Join us for the brand review.')
+		expect(message).toContain(`${origin}__fabrika/dev/accept?invitation=${id}`)
+		// The link inside the sandboxed frame opens nothing, so the page offers what the row offers.
+		expect(message).toContain(`<a class="button quiet" href="/__fabrika/dev/accept?invitation=${id}&amp;next=%2F">Přijmout pozvánku</a>`)
 		const marta = await chosen(new URL(accept, origin).href, '/')
 		expect(await meOf(marta)).toBe('marta@studio.example')
 		expect(await titlesOf(marta)).toContain('Interview notes, week 41')
 		const after = await stateOf(origin, marta)
 		expect(after.current.name).toBe('marta@studio.example')
-		expect(after.mail[0]?.detail).toBe('Komu: marta@studio.example · přijata')
+		expect(after.mail[0]?.detail).toBe('Pozvánka: guest v Design · cs · Komu: marta@studio.example · přijata')
+		const reopened = await (await fetch(`${origin}__fabrika/dev/mail/${id}`)).text()
+		// Once accepted, the page offers to continue as its invitee instead (the message itself still says to accept).
+		const actions = /<p class="actions">.*?<\/p>/.exec(reopened)?.[0] ?? ''
+		expect(actions).toContain('>Pokračovat jako tato osoba</a>')
+		expect(actions).not.toContain('Přijmout pozvánku')
 		expect(after.mail[0]?.action?.label).toBe('Pokračovat jako tato osoba')
 		const again = await fetch(new URL(accept, origin), { redirect: 'manual' })
 		expect(again.status).toBe(409)
@@ -485,6 +538,28 @@ describe.skipIf(url === '')('fabrika app dev on an application with a share link
 			headers: { 'Content-Type': 'application/json', Authorization: 'Bearer px_link_0' },
 		})
 		expect(forged.status).toBe(401)
+	})
+
+	test("each invitation's e-mail is in the language IAM would write it in: the invitee's, else the application's", async () => {
+		const page = await (await fetch(`${origin}__fabrika/dev`)).text()
+		expect(page).toContain('>Запрошення до застосунку Cards<')
+		expect(page).toContain('>You are invited to Cards<')
+		expect(page).toContain('>Invitation: member in Roadmap · uk<')
+		const { mail } = await stateOf(origin, null)
+		const ukrainian = mail.find((sent) => sent.subject === 'Запрошення до застосунку Cards')
+		const id = new URL(ukrainian?.action?.href ?? '', origin).searchParams.get('invitation') ?? ''
+		const opened = await fetch(`${origin}__fabrika/dev/mail/${id}`)
+		expect(opened.status).toBe(200)
+		const message = await opened.text()
+		// The page around it speaks the application's language; the message is the invitee's.
+		expect(message).toContain('<html lang="en">')
+		expect(message).toContain('<dt>Language</dt><dd>uk</dd>')
+		expect(message).toContain('<h1 lang="uk">Запрошення до застосунку Cards</h1>')
+		expect(page).toContain('<span class="subject" lang="uk">Запрошення до застосунку Cards</span>')
+		expect(page).toContain('<span class="subject">You are invited to Cards</span>')
+		expect(message).toContain('Вас запрошено до застосунку Cards з роллю member (board).')
+		expect(message).toContain(`${origin}__fabrika/dev/accept?invitation=${id}`)
+		expect((await fetch(`${origin}__fabrika/dev/mail/invitation-unknown`)).status).toBe(404)
 	})
 
 	test("the built SPA page has the toolbar before its </body> under app dev, and none from the kit's own browser", async () => {

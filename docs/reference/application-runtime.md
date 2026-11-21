@@ -1909,8 +1909,13 @@ const api = createClient(contract, 'api', { fetch: kit.browser(editor) })
   (`kit.mail`), and the mail view lists it with the invitations the stand-in IAM sent, newest first, at most 200: the
   recipient, the subject, the job's key, the time and the transport's answer. A job's message opens at
   `/__fabrika/dev/mail/<id>` with every field, its text, and its HTML in a `sandbox=""` `srcdoc` frame under the page's
-  `default-src 'none'` policy, so it runs no script and loads nothing. Every request the process sends to
-  `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN`, the dev outbox, for another outside service) is captured, answered
+  `default-src 'none'` policy, so it runs no script and loads nothing. An invitation's row shows the subject IAM would
+  send, and its message opens at `/__fabrika/dev/mail/<invitation id>` the same way, written as IAM writes it
+  (`iamMessageTemplate` of `@fabrika/auth-core`): in the invitation's language, else the one the mailbox's person keeps
+  from an earlier accepted invitation, else the application's, from the application's `mail` template of that
+  language or IAM's own wording, with the dev accept route as its link and this server's address as `{{appUrl}}`. The
+  page around it keeps the application's language and offers the row's accept (or continue-as) button, since a link
+  inside the frame opens nothing. Every request the process sends to `https://outbox.invalid` (`DEV_OUTBOX_ORIGIN`, the dev outbox, for another outside service) is captured, answered
   200 and listed in a section of its own. A `ctx.kick` starts its job; cron schedules do not run.
   What the seed throws is printed with its stack, and so is what a request's 5xx or a job attempt threw
   (`BootOptions.revealHandlerErrors`), after the log line that names its code and reason. A seed module (`--seed`, or `dev/seed.ts`)

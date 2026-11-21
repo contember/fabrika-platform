@@ -8,7 +8,7 @@ const NewCard = z.strictObject({ boardId: z.string().min(1).max(100), title: z.s
 const ById = z.strictObject({ id: z.uuid() })
 const Done = z.strictObject({ id: z.uuid() })
 const Shared = z.strictObject({ url: z.string() })
-const Invite = z.strictObject({ boardId: z.string().min(1).max(100), email: z.email() })
+const Invite = z.strictObject({ boardId: z.string().min(1).max(100), email: z.email(), locale: z.enum(['en', 'cs', 'uk']).optional() })
 const Invited = z.strictObject({ invitationId: z.string() })
 
 export const cards = app.group({ callers: ['human'] }, (r) => ({
@@ -23,7 +23,7 @@ export const cards = app.group({ callers: ['human'] }, (r) => ({
 export const boards = app.group({ callers: ['human'] }, (r) => ({
 	invite: r.mutation({ input: Invite, output: Invited, access: { action: 'members.manage', in: 'board', from: 'boardId' } })
 		.handle(async ({ input, ctx }) => {
-			const result = await ctx.members.assign(ctx.target, { email: input.email }, 'member')
+			const result = await ctx.members.assign(ctx.target, { email: input.email }, 'member', input.locale === undefined ? {} : { locale: input.locale })
 			return { invitationId: 'invited' in result ? result.invited.invitationId : result.assigned.principalId }
 		}),
 }))

@@ -637,6 +637,107 @@ describe('the stand-in answers an invitation as IAM does: the open one again, a 
 		expect(membership.invitations().find((sent) => sent.email === 'bo@example.test')).not.toHaveProperty('locale')
 	})
 
+	describe('its e-mail is written in the language IAM would choose', () => {
+		const ACCEPT = 'http://localhost:4000/__fabrika/dev/accept?invitation=x'
+		const membershipOf = (overrides: Partial<Pick<typeof artifact, 'locale' | 'displayName' | 'mail'>> = {}) =>
+			kitMembership(
+				{ ...artifact, ...overrides },
+				callersOf([{ caller: owner, memberships: [{ role: 'owner', scope: ACME }] }, { caller: coOwner, memberships: [{ role: 'owner', scope: ACME }] }]),
+			)
+		const assign = async (
+			membership: ReturnType<typeof membershipOf>,
+			email: string,
+			invitation: { readonly locale?: 'uk' | 'cs' | 'en'; readonly message?: string; readonly label?: string; readonly resend?: boolean } = {},
+			sender = owner,
+		) => {
+			const invited = await membership.rpc.assignMember({
+				...as(sender),
+				delegation: await delegation(membership, sender, 'api.members.invite'),
+				scope: ACME,
+				role: 'editor',
+				member: { email },
+				invitation,
+			})
+			if (!invited.ok || !('invited' in invited)) throw new Error('no invitation')
+			return invited.invited.invitationId
+		}
+
+		test("the invitation's language beats the application's; without either it is English", async () => {
+			const czech = membershipOf({ locale: 'cs', displayName: 'Poznámky' })
+			const ukrainian = await assign(czech, 'ann@example.test', { locale: 'uk' })
+			const plain = await assign(czech, 'bo@example.test')
+			expect(czech.invitations().map((sent) => [sent.email, sent.mailLocale])).toEqual([['ann@example.test', 'uk'], ['bo@example.test', 'cs']])
+			expect(czech.invitationMail(ukrainian, ACCEPT)?.subject).toBe('Запрошення до застосунку Poznámky')
+			expect(czech.invitationMail(plain, ACCEPT)?.subject).toBe('Pozvánka do aplikace Poznámky')
+			const english = membershipOf()
+			expect(english.invitationMail(await assign(english, 'ann@example.test'), ACCEPT)?.subject).toBe('You are invited to notes@test')
+		})
+
+		test('without a display name it names the application by its environment id, as IAM does', async () => {
+			const membership = membershipOf({ mail: { invitation: { en: { subject: 'Join {{displayName}}', text: '{{actionUrl}}' } } } })
+			const named = membershipOf({ displayName: 'Notes' })
+			expect(membership.invitationMail(await assign(membership, 'ann@example.test'), ACCEPT)?.subject).toBe('Join notes@test')
+			expect(named.invitationMail(await assign(named, 'ann@example.test'), ACCEPT)?.subject).toBe('You are invited to Notes')
+		})
+
+		test("it names the inviter's message and company, places the link, and says how the addressee accepts", async () => {
+			const membership = membershipOf()
+			const toStranger = await assign(membership, 'ann@example.test', { locale: 'uk', message: 'Вітаємо', label: 'Acme' })
+			const mail = membership.invitationMail(toStranger, ACCEPT)
+			expect(mail?.text).toContain(ACCEPT)
+			expect(mail?.text).toContain('owner@notes.test пише:')
+			expect(mail?.text).toContain('Вітаємо')
+			expect(mail?.text).toContain('організація: Acme')
+			expect(mail?.text).toContain('тут ще немає облікового запису')
+			const toPerson = await assign(membership, 'owner@notes.test')
+			expect(membership.invitationMail(toPerson, ACCEPT)?.text).toContain('sign in with this address to accept')
+			expect(membership.invitationMail('invitation-unknown', ACCEPT)).toBeUndefined()
+		})
+
+		test("the application's template of the e-mail's language is used, IAM's wording for a language without one", async () => {
+			const membership = membershipOf({
+				locale: 'cs',
+				mail: { invitation: { uk: { subject: 'Ласкаво просимо до {{displayName}}', text: 'Посилання: {{actionUrl}}' } } },
+			})
+			expect(membership.invitationMail(await assign(membership, 'ann@example.test', { locale: 'uk' }), ACCEPT)).toMatchObject({
+				subject: 'Ласкаво просимо до notes@test',
+				text: `Посилання: ${ACCEPT}`,
+			})
+			expect(membership.invitationMail(await assign(membership, 'bo@example.test'), ACCEPT)?.subject).toBe('Pozvánka do aplikace notes@test')
+		})
+
+		test("a template that names {{appUrl}} is used with the application's address, IAM's wording without one", async () => {
+			const membership = membershipOf({
+				mail: { invitation: { en: { subject: 'Join {{displayName}}', text: 'Accept: {{actionUrl}}\n\nThen open {{appUrl}}' } } },
+			})
+			const id = await assign(membership, 'ann@example.test')
+			expect(membership.invitationMail(id, ACCEPT, 'http://localhost:4000/')).toMatchObject({
+				subject: 'Join notes@test',
+				text: `Accept: ${ACCEPT}\n\nThen open http://localhost:4000/`,
+			})
+			expect(membership.invitationMail(id, ACCEPT)?.subject).toBe('You are invited to notes@test')
+		})
+
+		test("an accepted invitation's language is the person's, for the next invitation that names none; a resend may name another", async () => {
+			const membership = membershipOf({ locale: 'cs' })
+			membership.accept(await assign(membership, 'ann@example.test', { locale: 'uk' }))
+			const next = await assign(membership, 'ann@example.test')
+			expect(membership.invitations().find((sent) => sent.id === next)?.mailLocale).toBe('uk')
+			await assign(membership, 'ann@example.test', { locale: 'en', resend: true })
+			expect(membership.invitations().find((sent) => sent.id === next)?.mailLocale).toBe('en')
+		})
+
+		test('a resend keeps the message it names none for, and names the member who sent it again, as IAM names its caller', async () => {
+			const membership = membershipOf()
+			const id = await assign(membership, 'ann@example.test', { message: 'Welcome aboard' })
+			expect(membership.invitationMail(id, ACCEPT)?.text).toContain('owner@notes.test writes:')
+			await assign(membership, 'ann@example.test', { resend: true }, coOwner)
+			const resent = membership.invitationMail(id, ACCEPT)?.text
+			expect(resent).toContain('co-owner@notes.test writes:')
+			expect(resent).toContain('Welcome aboard')
+		})
+	})
+
 	test('a cancelled or expired invitation is no longer open: the next one has a new id; a repeated cancel answers the same', async () => {
 		const membership = standIn()
 		const first = await invite(membership)

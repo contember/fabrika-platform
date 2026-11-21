@@ -1,6 +1,5 @@
-import { escapeHtml } from '../html'
-import type { Catalog, RenderedMessage } from './index'
-import { quotedNote } from './quoted-note'
+import { iamMailCatalog } from '@fabrika/auth-core'
+import type { Catalog } from './index'
 
 export const cs: Catalog = {
 	pages: {
@@ -144,55 +143,5 @@ export const cs: Catalog = {
 				'Tato pozvánka je neplatná, vypršela, byla zrušena, nebo už byla použita. Pokud jste ji ještě nepřijali, požádejte toho, kdo vás pozval, aby ji poslal znovu.',
 		},
 	},
-	messages: {
-		invitation: ({ appName, role, scope, inviterLabel, companyLabel, message, actionUrl, acceptance }) => {
-			const what = `do aplikace ${appName} s rolí ${role} (${scope})${companyLabel === '' ? '' : ` za ${companyLabel}`}`
-			const note = message === '' ? null : { intro: `${inviterLabel} píše:`, message }
-			const accept = {
-				create: 'Pozvánku přijmete tímto jednorázovým odkazem. Máte-li zde účet, nejprve se přihlaste touto adresou; pokud ho nemáte, zvolíte si heslo.',
-				sign_in: 'Pozvánku přijmete tímto jednorázovým odkazem po přihlášení touto adresou.',
-				no_account:
-					'Pro tuto adresu tu zatím není účet a tato pozvánka ho nezakládá. Požádejte toho, kdo vás pozval, aby vám ho zřídil; potom pozvánku přijmete tímto jednorázovým odkazem po přihlášení.',
-			}[acceptance]
-			return {
-				subject: `Pozvánka do aplikace ${appName}`,
-				text: [`Dostali jste pozvánku ${what}.`, ...(note === null ? [] : [note.intro, note.message]), accept, actionUrl, IGNORE_INVITATION].join(
-					'\n\n',
-				),
-				html: `<p>Dostali jste pozvánku ${escapeHtml(what)}.</p>${quotedNote(note)}<p>${escapeHtml(accept)}</p><p><a href="${
-					escapeHtml(actionUrl)
-				}">Přijmout pozvánku</a></p><p>${escapeHtml(IGNORE_INVITATION)}</p>`,
-			}
-		},
-		enrollment: ({ appName, actionUrl }) =>
-			passwordMessage(
-				appName === null ? 'Nastavení hesla' : `Nastavení hesla pro aplikaci ${appName}`,
-				'si nastavíte heslo',
-				actionUrl,
-			),
-		reset: ({ appName, actionUrl }) =>
-			passwordMessage(
-				appName === null ? 'Obnovení hesla' : `Obnovení hesla pro aplikaci ${appName}`,
-				'si obnovíte heslo',
-				actionUrl,
-			),
-	},
-	applicationMail: {
-		button: { invitation: 'Přijmout pozvánku', enrollment: 'Nastavit heslo', reset: 'Obnovit heslo' },
-		expiry: (expiresAt) => `${expiryFormat.format(new Date(expiresAt * 1000))} UTC`,
-	},
-}
-
-const IGNORE_INVITATION = 'Pokud jste pozvánku nečekali, můžete tento e-mail ignorovat.'
-
-const expiryFormat = new Intl.DateTimeFormat('cs', { dateStyle: 'long', timeStyle: 'short', timeZone: 'UTC' })
-
-function passwordMessage(subject: string, action: string, actionUrl: string): RenderedMessage {
-	return {
-		subject,
-		text: `Tímto jednorázovým odkazem ${action}:\n\n${actionUrl}\n\nPokud jste o to nežádali, můžete tento e-mail ignorovat.`,
-		html: `<p>Tímto jednorázovým odkazem ${escapeHtml(action)}:</p><p><a href="${escapeHtml(actionUrl)}">${
-			escapeHtml(subject)
-		}</a></p><p>Pokud jste o to nežádali, můžete tento e-mail ignorovat.</p>`,
-	}
+	...iamMailCatalog('cs'),
 }

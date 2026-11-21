@@ -169,6 +169,7 @@ src/
                       the writes checked as IAM checks them, live in the directory and the next token; it records them,
                       accepts an invitation, seeds the invitations and links an endpoint access case cancels or revokes, and
                       resolves the key of a link it issued; it lists the invitations it sent (the dev mail view)
+                      and writes each one's e-mail as IAM would (invitationMail, auth-core's iamMessageTemplate)
     dev.ts            devKit and the DevSeed types: the kit `fabrika app dev` serves, and its seed module's contract;
                       DEV_OUTBOX_ORIGIN, the DevMail of devKit's mails(), and the DevOutside the seed reads the dev
                       outbox (outbox()) and the jobs' mail (mails()) through

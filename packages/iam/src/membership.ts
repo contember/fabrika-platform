@@ -18,6 +18,7 @@ import {
 	DELEGATION_GRANT_TTL_SECONDS,
 	type FindMemberInput,
 	type FindMemberResult,
+	type InvitationAcceptance,
 	type InvitationOptions,
 	invitationOptionsProblem,
 	invitedAddress,
@@ -50,7 +51,6 @@ import { EmailDeliveryError, type EmailMessage } from '@fabrika/email'
 import { uuidv7 } from '@fabrika/platform'
 import { appQuery, presentationFor } from './app-presentation'
 import { type CallerResolution, resolveCaller, resolveLinkCaller } from './auth'
-import type { InvitationAcceptance } from './catalog'
 import { contractGrantProblem, externalGrantProblem } from './contract-rules'
 import {
 	type AppMembersRow,

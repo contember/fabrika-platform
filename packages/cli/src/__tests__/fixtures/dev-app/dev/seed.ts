@@ -8,6 +8,7 @@ const seed: DevSeed<typeof contract> = async (dev) => {
 	const { id } = await api.cards.create({ boardId: 'roadmap', title: 'Ship the preview' })
 	const { url } = await api.cards.share({ id })
 	await api.boards.invite({ boardId: 'roadmap', email: 'max@cards.example' })
+	await api.boards.invite({ boardId: 'roadmap', email: 'olena@cards.example', locale: 'uk' })
 	return {
 		personas: [{ name: 'Lena', description: 'Leads every board', caller: lena }],
 		links: [{ title: 'The shared card', description: 'What a visitor without an account sees', url }],

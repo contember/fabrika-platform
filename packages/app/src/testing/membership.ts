@@ -8,6 +8,7 @@
 
 import {
 	API_KEY_PREFIX,
+	appEnvironmentId,
 	type AppMemberItem,
 	type AssignMemberInput,
 	type AssignMemberResult,
@@ -21,6 +22,9 @@ import {
 	type FindMemberInput,
 	type FindMemberResult,
 	type IamMembershipRpc,
+	iamMessageTemplate,
+	type InvitationAcceptance,
+	type InvitationOptions,
 	invitationOptionsProblem,
 	invitedAddress,
 	type IssueLinkInput,
@@ -30,6 +34,7 @@ import {
 	type ListMembersInput,
 	type ListMembersResult,
 	type Locale,
+	mailLocale,
 	matchAction,
 	MAX_APP_MEMBERS_PAGE,
 	MAX_LINK_CHAIN_LENGTH,
@@ -42,6 +47,7 @@ import {
 	normalizeEmailIdentity,
 	type PermissionEntry,
 	permits,
+	type RenderedMessage,
 	type RequestDelegationInput,
 	type RequestDelegationResult,
 	type RevokeLinkInput,
@@ -50,6 +56,7 @@ import {
 	type RevokeMemberResult,
 	type Scope,
 } from '@fabrika/auth-core'
+import { MAX_EMAIL_SUBJECT_LENGTH } from '@fabrika/email'
 import { type LabelledTestCaller, relationEntries, type TestCaller, type TestScope } from './caller'
 
 /** A role a test caller holds in one scope value, or globally (`null`). */
@@ -129,6 +136,13 @@ export interface KitMembership {
 	membershipsOf(caller: TestCaller): readonly TestMembership[]
 	/** Every invitation it opened, the seeded ones included, in the order they were first opened. */
 	invitations(): readonly SentInvitation[]
+	/**
+	 * The e-mail IAM would have sent for its invitation `invitationId` at its latest send, with `actionUrl` as its link:
+	 * the application's `mail` template of the e-mail's language, else IAM's own wording; `undefined` for any other id.
+	 * `appUrl` is the application's address IAM builds `{{appUrl}}` from (its registered return origin, with a trailing
+	 * slash); without one, a template that names `{{appUrl}}` is IAM's wording, as IAM sends it then.
+	 */
+	invitationMail(invitationId: string, actionUrl: string, appUrl?: string | null): RenderedMessage | undefined
 }
 
 /** A share link the stand-in issued, as its key resolves. */
@@ -150,6 +164,11 @@ export interface SentInvitation {
 	readonly status: 'open' | 'accepted' | 'cancelled' | 'expired'
 	/** The invited person's language, as the invitation (or its latest resend) named it; absent when it named none. */
 	readonly locale?: Locale
+	/**
+	 * The language its e-mail was written in at its latest send, as IAM chooses it: the invitation's, else the one the
+	 * mailbox's person keeps from an earlier accepted invitation that named one, else the application's, else `en`.
+	 */
+	readonly mailLocale: Locale
 }
 
 /**
@@ -163,6 +182,9 @@ export interface OrganizationMailboxes {
 
 const NO_ORGANIZATION: OrganizationMailboxes = { emails: [], domains: [] }
 
+/** An invitation's label or message as IAM stores it: an empty one is none. */
+const nonEmpty = (value: string | undefined): string | null => (value === undefined || value === '' ? null : value)
+
 /** An invitation the stand-in opened, open until it is cancelled, accepted or its lifetime ends. */
 interface KitInvitation {
 	readonly id: string
@@ -175,6 +197,13 @@ interface KitInvitation {
 	/** The principal that opened it, whose authority IAM checks again at acceptance; `null` for a seeded one. */
 	readonly inviter: string | null
 	readonly locale: Locale | null
+	/** The label of the member who sent it last, as its e-mail names them; empty for a seeded one never resent. */
+	readonly inviterLabel: string
+	readonly companyLabel: string | null
+	readonly message: string | null
+	/** What its latest send knew, as IAM decides it when it sends: the e-mail's language and how the addressee accepts. */
+	readonly mailLocale: Locale
+	readonly acceptance: InvitationAcceptance
 }
 
 /** A share link the stand-in issued; a revoked one is still found, so a repeated revoke answers the same. */
@@ -440,6 +469,9 @@ interface DelegationGrant {
 	readonly expiresAt: number
 }
 
+/** The environment the kit's IAM knows the application under: its id is `<app>@test`. */
+export const TEST_ENVIRONMENT = 'test'
+
 /**
  * The directory of the kit's callers, and every write checked against the caller's grants as IAM checks it.
  * `organization` names the mailboxes IAM's configuration would; by default none.
@@ -450,6 +482,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	const changes = membershipChanges(artifact, callers)
 	const invitations = new Map<string, KitInvitation>()
 	const links = new Map<string, KitLink>()
+	/** The language each mailbox's person keeps, as IAM keeps `principals.locale`: from an accepted invitation that named one. */
+	const personLocales = new Map<string, Locale>()
 	const live: DirectoryCallers = {
 		byCredential: (app, credential) => callers.byCredential(app, credential),
 		jobByCredential: (app, credential) => callers.jobByCredential(app, credential),
@@ -487,8 +521,23 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			&& invitation.email === email
 		)
 
-	const openNew = (scope: Scope, role: string, email: string, inviter: string | null, locale: Locale | null = null): KitInvitation => {
+	/**
+	 * What IAM decides when it sends an invitation to `email` of `role`: the e-mail's language (the invitation's, else the
+	 * mailbox person's, else the application's) and how its addressee accepts. A role declared external creates the
+	 * person of a mailbox nobody holds; a mailbox a person of the kit holds signs in; any other has no account to accept with.
+	 */
+	const sendFacts = (email: string, role: string, locale: Locale | null): Pick<KitInvitation, 'mailLocale' | 'acceptance'> => {
+		const held = callers.all().some(({ caller }) => caller.kind === 'human' && caller.email === email)
+		const creates = !held && artifact.roles[role]?.external === true && !organizationMailbox(email)
+		return {
+			mailLocale: mailLocale({ person: locale ?? personLocales.get(email) ?? null, app: artifact.locale ?? null }),
+			acceptance: creates ? 'create' : held ? 'sign_in' : 'no_account',
+		}
+	}
+
+	const openNew = (scope: Scope, role: string, email: string, inviter: TestCaller | null, options: InvitationOptions = {}): KitInvitation => {
 		const sentAt = now()
+		const locale = options.locale ?? null
 		const invitation = {
 			id: `invitation-${randomId()}`,
 			scope,
@@ -497,17 +546,34 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			expiresAt: sentAt + INVITATION_TTL_SECONDS,
 			sentAt,
 			closed: null,
-			inviter,
+			inviter: inviter?.id ?? null,
 			locale,
+			inviterLabel: inviter?.label ?? '',
+			companyLabel: nonEmpty(options.label),
+			message: nonEmpty(options.message),
+			...sendFacts(email, role, locale),
 		}
 		invitations.set(invitation.id, invitation)
 		return invitation
 	}
 
-	/** As IAM, a resend that names a language replaces the stored one; one that names none keeps it. */
-	const resent = (invitation: KitInvitation, locale: Locale | null): KitInvitation => {
+	/**
+	 * As IAM, a resend that names a language, a label or a message replaces the stored one; one that names none keeps it.
+	 * Its e-mail names the member who sent it again, as IAM's names its caller.
+	 */
+	const resent = (invitation: KitInvitation, sender: TestCaller, options: InvitationOptions): KitInvitation => {
 		const sentAt = now()
-		return { ...invitation, expiresAt: sentAt + INVITATION_TTL_SECONDS, sentAt, locale: locale ?? invitation.locale }
+		const locale = options.locale ?? invitation.locale
+		return {
+			...invitation,
+			expiresAt: sentAt + INVITATION_TTL_SECONDS,
+			sentAt,
+			locale,
+			inviterLabel: sender.label ?? '',
+			companyLabel: nonEmpty(options.label) ?? invitation.companyLabel,
+			message: nonEmpty(options.message) ?? invitation.message,
+			...sendFacts(invitation.email, invitation.role, locale),
+		}
 	}
 
 	/** Spends the request's grant before its binding is compared, as IAM does, so each attempt is single use. */
@@ -621,9 +687,9 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		// As IAM: a repeat answers the open invitation and sends nothing; a resend gives it a new link and 7 days.
 		const open = openInvitation(input.scope, input.role, email)
 		const invitation = open === undefined
-			? openNew(input.scope, input.role, email, caller.id, input.invitation?.locale ?? null)
+			? openNew(input.scope, input.role, email, caller, input.invitation)
 			: input.invitation?.resend === true
-			? resent(open, input.invitation.locale ?? null)
+			? resent(open, caller, input.invitation)
 			: open
 		invitations.set(invitation.id, invitation)
 		asked.push({
@@ -779,7 +845,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		return link === undefined || link.revoked ? undefined : { id: link.id, mount: link.mount, chain: link.chain }
 	}
 	const invitationsSent = (): readonly SentInvitation[] =>
-		[...invitations.values()].map(({ id, email, role, scope, expiresAt, sentAt, closed, locale }) => ({
+		[...invitations.values()].map(({ id, email, role, scope, expiresAt, sentAt, closed, locale, mailLocale }) => ({
 			id,
 			email,
 			role,
@@ -788,7 +854,33 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			sentAt,
 			status: closed ?? (expiresAt > now() ? 'open' : 'expired'),
 			...(locale === null ? {} : { locale }),
+			mailLocale,
 		}))
+	const invitationMail = (invitationId: string, actionUrl: string, appUrl: string | null = null): RenderedMessage | undefined => {
+		const invitation = invitations.get(invitationId)
+		if (invitation === undefined) return undefined
+		// As IAM: without a display name, the application environment's id (`<app>@<env>`).
+		const displayName = artifact.displayName ?? appEnvironmentId(artifact.app, TEST_ENVIRONMENT)
+		const render = iamMessageTemplate('invitation', {
+			locale: invitation.mailLocale,
+			template: artifact.mail?.invitation?.[invitation.mailLocale] ?? null,
+			displayName,
+			appUrl,
+			maxSubjectLength: MAX_EMAIL_SUBJECT_LENGTH,
+		})
+		return render({
+			appName: displayName,
+			role: invitation.role,
+			scope: invitation.scope.type,
+			recipient: invitation.email,
+			inviterLabel: invitation.inviterLabel,
+			companyLabel: invitation.companyLabel ?? '',
+			message: invitation.message ?? '',
+			actionUrl,
+			expiresAt: invitation.expiresAt,
+			acceptance: invitation.acceptance,
+		})
+	}
 	const accept = (invitationId: string, recipient?: TestCaller): AcceptedInvitation => {
 		const invitation = invitations.get(invitationId)
 		if (invitation === undefined || invitation.closed !== null || invitation.expiresAt <= now()) {
@@ -810,6 +902,8 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			)
 		}
 		invitations.set(invitation.id, { ...invitation, closed: 'accepted' })
+		// As IAM: the language the invitation names becomes the person's, for the next invitation that names none.
+		if (invitation.locale !== null) personLocales.set(invitation.email, invitation.locale)
 		if (recipient !== undefined) changes.assign(recipient.id, invitation.role, invitation.scope)
 		return { scope: invitation.scope, role: invitation.role, email: invitation.email }
 	}
@@ -823,5 +917,6 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		linkOfKey,
 		membershipsOf: (caller: TestCaller) => changes.heldBy(caller.id, membershipsOf(callers, caller.id)),
 		invitations: invitationsSent,
+		invitationMail,
 	})
 }
