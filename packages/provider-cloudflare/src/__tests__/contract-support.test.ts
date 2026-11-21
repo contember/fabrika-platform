@@ -1,12 +1,10 @@
-import type { ContractArtifact } from '@fabrika/auth-core'
+import { applicationRelease, type ContractArtifact, releaseFrom } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import {
-	applicationRelease,
 	capsJobSegments,
 	needsMinuteTick,
 	pinsGeneratedEntry,
-	releaseFrom,
 	runsInObject,
 	servesAlarms,
 	servesDataOperations,

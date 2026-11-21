@@ -1,4 +1,11 @@
-import { type AppEnvironment, appEnvironmentId, type ApplicationObjects, FABRIKA_PROXY_SECRET, parseAppEnvironmentId } from '@fabrika/auth-core'
+import {
+	type AppEnvironment,
+	appEnvironmentId,
+	type ApplicationObjects,
+	applicationRelease,
+	FABRIKA_PROXY_SECRET,
+	parseAppEnvironmentId,
+} from '@fabrika/auth-core'
 import type {
 	ControlProvider,
 	JsonValue,
@@ -21,7 +28,6 @@ import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { cloudflareArtifactCodec } from './codec'
 import {
-	applicationRelease,
 	assertCloudflareContract,
 	assertStatelessEnvironment,
 	capsJobSegments,
