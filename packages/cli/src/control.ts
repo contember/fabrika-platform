@@ -82,8 +82,9 @@ Usage:
   fabrika control runs log --run=<id>
 
 \`register\` CREATES an app and refuses a second one with the same id. Re-registering a changed
-manifest — a new \`zerops.yaml\`, a new import document — is \`apps environments put\`, which replaces
-one environment's envelopes and leaves the app row alone.
+manifest — a new import document, or a new \`zerops.yaml\` of an app without a contract — is
+\`apps environments put\`, which replaces one environment's envelopes and leaves the app row alone. A
+contract app's deploy registers the \`zerops.yaml\` of its commit itself.
 
 A manifest that publishes the app through the namespace proxy is routed by HOST, so \`--domain\` is
 REQUIRED for it — on \`register\` and on \`apps environments put\` alike — and a registration without one is

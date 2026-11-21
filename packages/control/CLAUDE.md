@@ -355,6 +355,11 @@ other environment, before the provider prepares anything, and the write maps a r
   `superseded by run <id>` (ADR-0044). Queue order is not run order (a deferred run is enqueued again), and
   an approved parked run is covered the same way. Cloudflare's `resolveSource` resolves a webhook or poll run's BRANCH
   and refuses it (`commit_mismatch`) when the branch moved past the recorded commit (ADR-0048).
+- **A deploy run is the one writer of an environment's artifact besides the registry API (ADR-0043).** On a
+  `descriptor_mismatch` at resolve it asks the provider's `withSourceDescriptor` for the artifact with the commit's
+  descriptor, deploys with it, and stores it with `replaceAppEnvArtifactForRun` once its publication passed: under the
+  run lease, only over the artifact the run read. Never from a dev bootstrap or a workspace branch's run, which fail as
+  before.
 - **Control is the only writer of a run's row (ADR-0044).** A Cloudflare run settles in exactly two ways,
   both under the run's lease: the awaited `startRun` result (`executeDeploy`), or — after a Control
   restart such as a self-deploy — `reconcileProviderRuns`, where the provider's `reconcile` reads the

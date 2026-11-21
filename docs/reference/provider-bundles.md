@@ -185,7 +185,8 @@ state to Operations before releasing the run lease.
 No Zerops deploy uses `buildFromGit`: Zerops builds a revision-suffixed Git source from the default
 branch ([platform facts](zerops-platform.md)). Public and private GitHub repositories share one
 upload path, run in-process by control (`packages/control/src/github/source/`, ADR-0029): resolve the exact
-commit and the registered root `zerops.yaml` digest; create and record an application version; stream
+commit and the registered root `zerops.yaml` digest (a contract application's run first registers a changed one,
+below); create and record an application version; stream
 the repository tarball for that commit into the version's upload; call `build-and-deploy` with the
 validated, canonically rendered descriptor and selected setup. Namespace proxies use the same path
 with the commit pinned in the namespace
@@ -287,9 +288,14 @@ transport settles the archive verdict before it blames the network: the run sees
 such failure is pre-trigger, and the provider deletes the app version on every pre-trigger failure.
 A `descriptor_mismatch` from the archive pass names the descriptor's path, the commit and both digests
 (`SourceDescriptorMismatch`), neutrally, since the namespace proxy's source pin reads through the same
-pass. A deploy run's log adds that the expectation was the environment's manifest and both remedies: push the
-commit the manifest was built from, or rebuild the manifest from the deployed commit and `put` it with the
-stored domain and trigger ref (`descriptorMismatchRemedy`, `packages/control/src/run-lifecycle.ts`).
+pass. A deploy run of a contract application does not fail on it at resolve: it deploys with the commit's
+`zerops.yaml`, through the parse a registration runs, resolves again at that commit and stores it once its
+publication passed
+(`reregisterSourceDescriptor`, `packages/control/src/run-lifecycle.ts`;
+[ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)). Any other run, and a dev bootstrap
+or a run of a workspace branch, fails, and its log adds that the expectation was the environment's manifest and both
+remedies: push the commit the manifest was built from, or rebuild the manifest from the deployed commit and `put` it
+with the stored domain and trigger ref (`descriptorMismatchRemedy`).
 
 The same example commit reached `ACTIVE` through application-version upload while the repository was
 public and again after it became private. A later private push also completed the scoped webhook path

@@ -180,6 +180,46 @@ boot and on every sync itself, and reports health to Control. A sandbox refuses 
 ClamAV scan and a `${…}` reference, in one line each. The artifact passes the same compile as any other, so the exposure
 refusals below apply unchanged.
 
+### A deploy registers its commit's descriptor
+
+The registered manifest keeps its copy of `zerops.yaml`, and every reader reads that copy: the deploy renders the
+execution descriptor from it, the dev sandbox takes its SPA commands from it, and the setup name and build base come
+from it. When a deploy run's commit carries a `zerops.yaml` whose digest is not the registered one's, the run
+re-registers it instead of failing on the mismatch: Control reads the file at that commit, the provider replaces the
+manifest's source descriptor with it and parses the result with `parseFabrikaManifest`, the parse a registration's
+decode runs (`withSourceDescriptor`), and Control resolves the source again at that commit. The run deploys with that
+manifest and stores it once its publication passed, so a run that parks for approval stores it only when it resumes
+approved, and a refused one never. Nothing reads the stored descriptor in between: the publication reads the
+environment's placement and routing, which the descriptor does not change. A file the parse refuses fails the run before any build, in one line that names the commit
+and the refused key. An unchanged file writes nothing. No `fabrika app build --env` and no `apps environments put`
+follows an edit of `zerops.yaml`.
+
+- **Who.** Only a deploy run of the environment, which already passed its own authorization: on a protected
+  environment, a person's deploy or a push to its trigger ref ([ADR-0050](0050-approved-access.md)). A dev bootstrap
+  never re-registers, because every workspace's sandbox shares the dev environment's manifest, and neither does a run
+  of a workspace branch: that branch reaches an environment's manifest once it is merged into a ref outside the
+  workspaces. So the MCP paths cannot reach it: a workspace write deploys nothing, `bind_dev` starts at most a dev
+  bootstrap, and `deploy_stage` deploys a workspace branch. The run log records the commit and both digests; the run
+  row records who started it. A registration through the API is audited (`app.env.upsert`); a run's is not, since no
+  request carries it.
+- **Concurrency.** The write happens under the run's lease and only while the stored manifest is still the one the run
+  read, so a second run of the environment waits for the first, and a registration that lands in between fails the run
+  rather than being overwritten. It compares the manifest, not the registry generation, because the run's own
+  publication advances that.
+- **Only a contract application.** `fabrika app build` also refuses a plain credential in the run section of an
+  application without a contract, against the `notSecret` list of its config, which the stored manifest does not carry.
+  Its run would skip that check, so such an application keeps the earlier behaviour: the mismatch fails the run and its
+  line names `fabrika app build --env` and `apps environments put`. For a contract application the check differs in
+  scope: `fabrika app build` reads the `envVariables` and `routing.headers` of every setup of `zerops.yaml`, the run's
+  parse only the setup that runs, which may hold neither (above). So another setup of the file, one this application
+  never runs, can now carry a value that looks like a credential, and Control stores it with the manifest. It never
+  reaches a Zerops service of this application; it was already readable in the repository.
+- **Not checked at deploy.** The build base against `bun.lock` is checked by `fabrika app build` and the builder, not by
+  the run; a base that cannot read the lockfile fails the Zerops build instead. The approval diff of
+  [ADR-0050](0050-approved-access.md) covers access, not the build, so a changed `zerops.yaml` is not an approval item.
+- The namespace proxy's source pin reads through the same digest check and still fails on a mismatch: its pin changes
+  only through `namespaces update --proxy-source` ([ADR-0045](0045-upload-immutable-platform-and-namespace-proxy-sources.md)).
+
 ### Exposure is refused, with no approval path
 
 The compiler refuses these fields on application services:
@@ -281,6 +321,11 @@ execution document carries the generated `run` and `build`.
   `stack.create` process ran under the platform's token sets the variable by hand, not sensitive;
   otherwise the bucket is deleted and the next deploy creates it. A variable a release up to v0.4.2
   wrote sensitive reads back without its value and is treated as absent, with the same remedies.
+
+- A deploy re-registers a contract application's changed `zerops.yaml`. Rollout path of an existing installation: no
+  generated installation file, variable or provider state changes. The registered manifest keeps its form (manifest
+  version 3), and `fabrika platform upgrade` brings the Control that re-registers; an application needs neither a
+  package update nor a new manifest, and its next deploy with a changed `zerops.yaml` stores it.
 
 ## Alternatives considered
 
