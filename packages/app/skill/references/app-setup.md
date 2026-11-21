@@ -254,8 +254,10 @@ use.
 
 The platform's build runs the tests, writes the entrypoint, runs `fabrika-check` and the type check, then
 `fabrika db migrate` and `fabrika db codegen --verify` on a throwaway database: a version whose generated schema does
-not match its migrations does not deploy. Its init command runs `fabrika db migrate` before the server starts. It
-writes every `FABRIKA_*` variable; never set one.
+not match its migrations does not deploy. Its init command runs `fabrika db migrate` before the server starts. On any
+`build.base` but `alpine/bun@1.3` (`alpine/bun@1.4` included), or a `build.os` other than `alpine`, the build has no
+database, and every container start runs `fabrika db codegen --verify` after the migrations instead. It writes every
+`FABRIKA_*` variable; never set one.
 
 ## The deploy surface (Cloudflare)
 

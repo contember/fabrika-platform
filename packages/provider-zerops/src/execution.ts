@@ -51,7 +51,8 @@ export const ZEROPS_SCAN_MIN_RAM_GB = 2
 /**
  * The RAM in GB a container of an application with a database starts with. It was measured when the init commands
  * also ran `fabrika db test-isolation` (161 MiB for the Notes example, 225 MiB for the CRM one, 2026-10-15), which
- * Zerops' 0.125 GB floor killed within a second. They now migrate and check the schema only; not measured since.
+ * Zerops' 0.125 GB floor killed within a second. They now only migrate on a known build base, and migrate and run
+ * `codegen --verify` on any other (`zeropsSchemaChecks`); neither is measured, so the floor stays for both.
  */
 export const ZEROPS_START_MIN_RAM_GB = 0.5
 
