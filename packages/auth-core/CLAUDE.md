@@ -9,7 +9,7 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · client-address · contract-canonical · device · egress · endpoint-digest · endpoints · environment · framework-variables · iam-mail · json · locale · managed-environment · ops · ops-dump · permissions · requirement · resource-token · sha256 · token · wire · workloads
+bun test               # app-environment · canonical-path · client-address · contract-canonical · device · egress · endpoint-digest · endpoints · environment · framework-release · framework-variables · iam-mail · json · locale · managed-environment · ops · ops-dump · permissions · requirement · resource-token · sha256 · token · wire · workloads
 ```
 
 | Module                     | What it owns                                                                                                                                                                                                                                                 |
@@ -22,6 +22,7 @@ bun test               # app-environment · canonical-path · client-address · 
 | `egress.ts`                | `parseEgressEntry` and `egressAdmits` — a site's `egress` entry (an exact origin or `https://*.<domain>`) and the URLs it admits.                                                                                                                            |
 | `endpoint-digest.ts`       | `requirementDigest`, `contractDigest`, `exportDigest`, the `X-Fabrika-Endpoint` value, and `FABRIKA_CONTRACT_DIGEST`.                                                                                                                                        |
 | `endpoints.ts`             | The endpoint matcher — `assertNoAmbiguity`, `compileEndpointTable`, `planEndpoint` — for every endpoint table.                                                                                                                                               |
+| `framework-release.ts`     | `FRAMEWORK_RELEASE_PATTERN` — the form a framework release takes before it reaches a generated command — and `releaseAtLeast`, the minor gate of ADR-0062.                                                                                                   |
 | `installation-endpoint.ts` | The forms only an installation entry may use: `protocol`/`service`, method `*`, caller `oauth`, requirement `authenticated`.                                                                                                                                 |
 | `locale.ts`                | `LOCALES`, `DEFAULT_LOCALE`, `LOCALE_COOKIE`, `LOCALE_PARAM` and `displayNameProblem` — the languages IAM speaks, the language cookie and parameter, and the display-name rule.                                                                              |
 | `iam-mail.ts`              | IAM's own e-mails in every locale (`iamMailCatalog`), `mailLocale` (the person's, else the application's, else the default) and `iamMessageTemplate` (an application's `mail` template or the catalog's): IAM and the dev stand-in IAM render the same mail. |

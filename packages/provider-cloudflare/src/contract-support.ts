@@ -6,6 +6,7 @@ import {
 	isPlatformTransportVariable,
 	isWorkloadKeyVariable,
 	managedValue,
+	releaseAtLeast,
 } from '@fabrika/auth-core'
 import type { ProviderManagedEnvironment } from '@fabrika/provider-contract'
 
@@ -81,17 +82,6 @@ export const assertCloudflareContract = (contract: ContractArtifact, { capsSegme
  */
 export const needsMinuteTick = (contract: ContractArtifact): boolean =>
 	Object.keys(contract.jobs).length > 0 || Object.keys(contract.fileKinds ?? {}).length > 0
-
-/**
- * Whether framework release `release` is at least `since`. A prerelease counts as its `major.minor`; a release that
- * does not start with `<major>.<minor>.` is never at least anything (ADR-0062).
- */
-export const releaseAtLeast = (release: string, since: { readonly major: number; readonly minor: number }): boolean => {
-	const match = /^(\d+)\.(\d+)\./.exec(release)
-	if (match === null) return false
-	const major = Number(match[1])
-	return major > since.major || (major === since.major && Number(match[2]) >= since.minor)
-}
 
 /** The first framework minor whose Cloudflare entry exports the application's Durable Object (ADR-0065). */
 const OBJECT_RUNTIME_SINCE = { major: 0, minor: 9 }

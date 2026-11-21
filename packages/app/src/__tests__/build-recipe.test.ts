@@ -28,6 +28,21 @@ describe('contractRecipe', () => {
 		expect(commands(contractRecipe({ ...input, sourceMaps: false })).some((step) => step.includes('fabrika-source-maps'))).toBe(false)
 	})
 
+	test("type-checks the SPA under web/ only for an application read with a 0.9 or later checker; an older one keeps 0.8's src/ check", () => {
+		const included = (checkRelease: string): unknown => {
+			const step = contractRecipe({ ...input, checkRelease }).build.find((candidate) =>
+				'write' in candidate && candidate.write === 'fabrika/tsconfig.platform.json'
+			)
+			if (step === undefined || !('lines' in step)) throw new Error('the recipe writes no platform tsconfig')
+			const parsed: unknown = JSON.parse(step.lines.join('\n'))
+			return typeof parsed === 'object' && parsed !== null && 'include' in parsed ? parsed.include : undefined
+		}
+		const withWeb = ['../fabrika.contract.ts', '../src', '../web', 'entry.generated.ts']
+		const withoutWeb = ['../fabrika.contract.ts', '../src', 'entry.generated.ts']
+		for (const release of ['0.9.0', '0.9.0-dev.21', '0.9.1', '0.10.0', '1.0.0']) expect(included(release)).toEqual(withWeb)
+		for (const release of ['0.4.8', '0.5.5', '0.6.0', '0.7.0', '0.8.2']) expect(included(release)).toEqual(withoutWeb)
+	})
+
 	test('a database migrates and verifies its schema before the server starts; without one nothing runs first', () => {
 		const recipe = contractRecipe(input)
 		expect(recipe.init).toEqual(['fabrika/migrate.generated.sh', 'fabrika/verify.generated.sh'])
