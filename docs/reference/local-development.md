@@ -424,26 +424,38 @@ cd ../../examples/app && bun run build:web && bun run oblaka && bun run dev
 composes them with, from the minimal `fabrika.config.ts` and the compiled contract. Before that, it stages the SPA that
 `bun run build:web` wrote into `fabrika/assets` with `stageLocalAssets`, the deploy's staging, and binds it as `ASSETS`. It writes the framework variables
 into the application Worker's ignored `wrangler.jsonc`, with a `FABRIKA_PROXY_SECRET` it draws anew each time; the Worker sends it on its hop to the object, and the proxy Worker sends
-none. Lopata must show `APP -> example-app`, `IAM -> propustka-worker (PropustkaApplication)`,
+none. The proxy Worker's manifest is its `FABRIKA_PROXY_MANIFEST_JSON` variable: Lopata applies no wrangler `define`, so
+the local composition does not bake it as a deploy does, and a proxy bundle without a baked manifest reads the variable.
+`bun run oblaka` writes the application Worker's config only when the example and `@fabrika/provider-cloudflare` resolve
+one copy of `oblaka-iac`, because oblaka recurses only into Workers of its own class. Lopata must show `APP -> example-app`, `IAM -> propustka-worker (PropustkaApplication)`,
 `FABRIKA_APPLICATION -> FabrikaApplication` and `FABRIKA_FILES (example-app-files)`; the app Worker config has no
 public route and sets `workers_dev: false` and `preview_urls: false`. `lopata.config.ts` gives the app Worker the local
 host `app.localhost`, so a request can skip the proxy, and IAM `iam.localhost`.
 
 Before the application boots, IAM's D1 needs its migrations, the example's schema reconciled for `example-app@local`
 (`PUT /admin/apps/example-app@local/schema`), and the `review` job's workload key (`workloads.issueKey` on
-`/admin/rpc`) in `examples/app/.dev.vars` as `FABRIKA_JOB_REVIEW_KEY`. A caller key comes from `POST /admin/api-keys`.
+`/admin/rpc`) in `examples/app/.dev.vars` as `FABRIKA_JOB_REVIEW_KEY`. An application that composes its own stack
+gets every key at once from `issueLocalWorkloadKeys` (`@fabrika/provider-cloudflare`), which makes Control's call with
+IAM's provisioning key, and passes them to `composeLocalApplication` as `workloadKeys`, which refuses a set that is not
+exactly the contract's. An object that does not boot, for a missing key or binding, logs the framework's problems once
+per streak of failures. A caller key comes from `POST /admin/api-keys`.
 Then, through the proxy: a `POST /notes/create` with the caller's key writes a note (a multipart body adds a file),
 `POST /notes/list` reads it back, `GET /notes/attachment?id=…` downloads the file, and
 within a minute the object's alarm runs the `review` job (`/cdn-cgi/handler/scheduled?worker=example-app` sends the
 repair tick, which re-arms it), after which the list shows each note's `reviewedAt`. Straight to the app Worker (`Host: app.localhost`), a request without the proxy's
 endpoint header is 503 and one with a forged token is 401.
 
-`bun run dev` does not serve that yet. Lopata does not apply wrangler's `define`, which carries the proxy manifest, so
-the proxy Worker answers 503 `proxy unavailable`. And the object's binding readers (`method()` in
-`packages/app/src/cloudflare/bindings.ts`) test a binding's methods with `in`, which a Lopata service-binding stub does
-not answer, so the object refuses to boot with `the IAM binding is missing`. The application runtime itself is
-witnessed in Lopata by `packages/app/src/__tests__/cloudflare-runtime.test.ts`, which runs the Worker, its object and
-the R2 bucket in process:
+An application outside this repository runs IAM from the published `@fabrika/iam`: its Worker builder is
+`buildIamWorker` of `@fabrika/iam/fabrika.config`, and the package carries `src/` and both migration sets. The Worker's
+`dir` is `.` and its `main` and D1 `migrationsDir` are relative, and oblaka resolves them against the working
+directory, so the application resolves them against the package's directory (`dirname` of the resolved
+`@fabrika/iam/package.json`) or generates IAM's config from there. Locally (`env: 'local'`) IAM's issuer is
+`http://localhost:18191`; a stack that serves IAM elsewhere sets `ISSUER` to its origin, the `iamOrigin` it composes
+the application with. Importing the module also evaluates its default `defineApp`, which reads `FABRIKA_EMAIL_*` and
+`FABRIKA_IAM_*_ENABLED` from the environment and throws on an invalid set. The object
+reads its bindings' methods without `in`, which a Lopata service-binding stub does not answer. The application runtime
+itself is also witnessed in Lopata by `packages/app/src/__tests__/cloudflare-runtime.test.ts`, which runs the Worker, its
+object and the R2 bucket in process:
 
 ```bash
 bun test packages/app/src/__tests__/cloudflare-runtime.test.ts

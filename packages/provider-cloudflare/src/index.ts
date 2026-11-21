@@ -30,6 +30,7 @@ export { deployCloudflareConfig, loadCloudflareCommandConfig } from './command'
 export type { CloudflareCommandDeployOptions, LoadedCloudflareCommandConfig } from './command'
 export { cloudflareStoredTargetCodec, createCloudflareControlProvider } from './control'
 export type { CloudflareCloneSource, CloudflareControlOptions, CloudflareRunnerJob, CloudflareStoredTarget } from './control'
+export { issueLocalWorkloadKeys, type LocalWorkloadKeyOptions, type LocalWorkloadKeys, localWorkloadKeyVariables } from './local-workload-keys'
 export { buildPlan, findMigratableDatabases } from './plan'
 export type { CloudflareStep, CloudflareStepKind, MigratableDatabase } from './plan'
 export {

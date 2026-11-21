@@ -8,6 +8,7 @@ import {
 	SCHEMA_TYPES_CHECK,
 } from '@fabrika/app/build'
 import {
+	API_KEY_PREFIX,
 	type AppEnvironment,
 	appEnvironmentId,
 	type ApplicationObjects,
@@ -30,7 +31,7 @@ import {
 } from '@fabrika/auth-core'
 import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type SchemaReconciler } from '@fabrika/provider-contract'
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
-import { contractProxyTable } from '@fabrika/proxy-core/manifest'
+import { contractProxyTable, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-core/manifest'
 import { createHash } from 'node:crypto'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
@@ -62,9 +63,10 @@ import {
 	servesRawSql,
 } from './contract-support'
 import { deployOrder } from './deploy-order'
+import { localWorkloadKeyVariables } from './local-workload-keys'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
-import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
+import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE, proxyManifestJson } from './proxy'
 import { CHECKOUT_INSTALL_ARGS, type RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 import { type AssetMount, assetMounts, SPA_ASSETS, SPA_ASSETS_DIRECTORY, stageSpaAssets } from './spa-assets'
@@ -1057,6 +1059,38 @@ export interface LocalApplicationOptions {
 	readonly iamOrigin: string
 	readonly env: string
 	readonly domain?: string
+	/**
+	 * The key of every job, webhook and public procedure by its variable (`issueLocalWorkloadKeys`), which Control
+	 * writes into a deploy. Without it the run supplies them itself (`.dev.vars`), or the application does not boot.
+	 * They are written as plain vars, like the proxy secret, so the generated config must stay out of version control.
+	 */
+	readonly workloadKeys?: Readonly<Record<string, string>>
+}
+
+/** The local run's workload keys: exactly the contract's variables, each a `px_` key. */
+const localWorkloadKeys = (contract: ContractArtifact, keys: Readonly<Record<string, string>> | undefined): Readonly<Record<string, string>> => {
+	if (keys === undefined) return {}
+	const expected = localWorkloadKeyVariables(contract)
+	const missing = expected.filter((name) => keys[name] === undefined)
+	const unknown = Object.keys(keys).filter((name) => !expected.includes(name)).sort()
+	if (missing.length > 0 || unknown.length > 0) {
+		const named = [...missing.map((name) => `missing ${name}`), ...unknown.map((name) => `${name} names no workload of the contract`)]
+		throw new Error(`composeLocalApplication: \`workloadKeys\` must hold the key of every workload: ${named.join(', ')}`)
+	}
+	const malformed = expected.filter((name) => !(keys[name] ?? '').startsWith(API_KEY_PREFIX))
+	if (malformed.length > 0) throw new Error(`composeLocalApplication: ${malformed.join(', ')} is not a ${API_KEY_PREFIX} key`)
+	return keys
+}
+
+/**
+ * The proxy Worker of a local run with its manifest as the `FABRIKA_PROXY_MANIFEST_JSON` variable instead of a baked
+ * `define`, which Lopata does not apply; an unbaked proxy Worker reads the variable. Locally no 5 KB cap applies.
+ */
+const withManifestVariable = (proxy: Worker): Worker => {
+	const manifest = proxyManifestJson(proxy)
+	if (manifest === null) throw new Error('composeLocalApplication: the proxy Worker carries no manifest')
+	const { define: _baked, ...options } = proxy.options
+	return new Worker({ ...options, vars: { ...options.vars, [FABRIKA_PROXY_MANIFEST_JSON]: manifest } })
 }
 
 /**
@@ -1064,7 +1098,8 @@ export interface LocalApplicationOptions {
  * the platform's proxy over the contract's endpoint table, and the application's object, files bucket and repair tick,
  * as a release that serves alarms gets them. No deploy takes it. With no Control to write them, the framework values
  * come from here, and the proxy secret, which a deploy uploads as a Worker secret, is drawn anew on each call and
- * written as a variable into the ignored `wrangler.jsonc`.
+ * written as a variable into the ignored `wrangler.jsonc`, with the workload keys it is given. The proxy's manifest is a
+ * variable, not the deploy's baked `define`.
  */
 export const composeLocalApplication = (options: LocalApplicationOptions): Worker => {
 	const { config, contract, env } = options
@@ -1080,6 +1115,7 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 			[FABRIKA_IAM_ISSUER]: options.iamOrigin,
 			[FABRIKA_IAM_APP_ID]: iamAppId,
 			[FABRIKA_PROXY_SECRET]: `${crypto.randomUUID()}${crypto.randomUUID()}`.replaceAll('-', ''),
+			...localWorkloadKeys(contract, options.workloadKeys),
 		}),
 	}
 	// The local run reads the contract with this release, so it is gated as a local deploy is.
@@ -1108,5 +1144,5 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 			'composeLocalApplication: the contract serves SPA files; stage them first with `await stageLocalAssets(contract, <application root>)` and pass its result as `assets`',
 		)
 	}
-	return withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true), false, spaAssets)
+	return withManifestVariable(withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true), false, spaAssets))
 }

@@ -238,7 +238,12 @@ this one import.
   calls it. Its SPA files are staged by `stageLocalAssets`, the deploy's `stageSpaAssets` over the application root,
   awaited at the top of `oblaka.ts` (oblaka imports the module before it calls the synchronous `define` callback);
   `composeLocalApplication` binds `ASSETS` as a deploy does and refuses a contract with an SPA or link mount without
-  what was staged for exactly those mounts, or with it beside an authored `assets`.
+  what was staged for exactly those mounts, or with it beside an authored `assets`. The local proxy carries its manifest
+  as the `FABRIKA_PROXY_MANIFEST_JSON` variable, not the deploy's `define`, which Lopata does not apply; `proxy-worker.ts`
+  reads the variable only when its bundle has no baked manifest, so a deployed proxy never does. `workloadKeys` (exactly
+  the contract's `FABRIKA_<KIND>_<NAME>_KEY` variables, each a `px_` key) are written like the other framework values;
+  `issueLocalWorkloadKeys` (`src/local-workload-keys.ts`) issues them through IAM's `workloads.issueKey` with the
+  provisioning key, as Control does, over `createIamAdminClient` (no redirect followed).
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
 - **The plan is ordered step kinds**, not free-form work: `build` → `check` → `provision-resources` →

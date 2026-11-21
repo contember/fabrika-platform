@@ -71,4 +71,11 @@ describe('the bundled proxy Worker (backlog 177)', () => {
 		const answer = await baked.fetch(new Request(`https://${HOST}/api/unknown`), env())
 		expect(answer.status).toBe(403)
 	})
+
+	test('a manifest variable does not replace the baked one', async () => {
+		const baked = await load(bakedPath)
+		const empty = JSON.stringify({ apps: [] })
+		const answer = await baked.fetch(new Request(`https://${HOST}/api/unknown`), { ...env(), FABRIKA_PROXY_MANIFEST_JSON: empty })
+		expect(answer.status).toBe(403)
+	})
 })

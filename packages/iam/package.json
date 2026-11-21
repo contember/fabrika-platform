@@ -1,7 +1,21 @@
 {
 	"name": "@fabrika/iam",
 	"version": "0.9.0-dev.23",
-	"private": true,
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/contember/fabrika-platform.git",
+		"directory": "packages/iam"
+	},
+	"publishConfig": {
+		"access": "public"
+	},
+	"files": [
+		"src",
+		"!src/**/__tests__/**",
+		"migrations",
+		"migrations-postgres",
+		"fabrika.config.ts"
+	],
 	"type": "module",
 	"exports": {
 		".": {
@@ -23,6 +37,11 @@
 			"bun": "./src/node/server.ts",
 			"types": "./src/node/server.ts",
 			"default": "./src/node/server.ts"
+		},
+		"./fabrika.config": {
+			"bun": "./fabrika.config.ts",
+			"types": "./fabrika.config.ts",
+			"default": "./fabrika.config.ts"
 		}
 	},
 	"scripts": {
@@ -43,6 +62,7 @@
 		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
+		"@fabrika/provider-cloudflare": "workspace:*",
 		"@fabrika/proxy-core": "workspace:*",
 		"jose": "^5.9.0",
 		"zod": "^3.25.76"
@@ -51,7 +71,6 @@
 		"@cloudflare/workers-types": "^4.20260702.1",
 		"@fabrika/cli": "workspace:*",
 		"@fabrika/db": "workspace:*",
-		"@fabrika/provider-cloudflare": "workspace:*",
 		"@types/bun": "^1.4.3",
 		"lopata": "^0.21.0",
 		"oblaka-iac": "^0.0.22",

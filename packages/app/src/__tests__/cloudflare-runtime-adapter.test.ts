@@ -121,11 +121,37 @@ describe('the environment object', () => {
 		})
 	})
 
-	test('without the IAM binding it does not boot, and every request answers the failure', async () => {
+	test('without the IAM binding it does not boot, every request answers the failure, and the log names it once', async () => {
 		await keepingProcessEnvironment(async () => {
-			const { object } = start(notesApp(new Map()), { ASSETS: assets })
-			await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('the IAM binding is missing')
-			await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('the IAM binding is missing')
+			const log = spyOn(console, 'error').mockImplementation(() => {})
+			try {
+				const { object } = start(notesApp(new Map()), { ASSETS: assets })
+				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('the IAM binding is missing')
+				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('the IAM binding is missing')
+				expect(log.mock.calls).toEqual([[expect.stringContaining('fabrika: the application does not boot:\n- the IAM binding is missing (env.IAM)')]])
+			} finally {
+				log.mockRestore()
+			}
+		})
+	})
+
+	test("an application's own throw at boot reaches the log as its code, never its message", async () => {
+		await keepingProcessEnvironment(async () => {
+			const failing = serve(sqliteContract, {
+				database: scoped(sqliteTables),
+				deps: defineDeps(() => {
+					throw new Error('secret-bearing dependency message')
+				}),
+			})
+			createContractWorker(() => Promise.resolve({ default: failing }), { migrations: await applicationMigrations(FIXTURE_ROOT) })
+			const log = spyOn(console, 'error').mockImplementation(() => {})
+			try {
+				const { object } = sqliteObject(failing, bunSqliteStorage())
+				await expect(object.fetch(forwarded('/healthz'))).rejects.toThrow('secret-bearing dependency message')
+				expect(log.mock.calls).toEqual([['fabrika: the application did not boot: boot_failed']])
+			} finally {
+				log.mockRestore()
+			}
 		})
 	})
 })
@@ -327,6 +353,17 @@ describe('the environment object: IAM membership on the IAM binding', () => {
 			} finally {
 				log.mockRestore()
 			}
+		})
+	})
+
+	test('a service binding stub that answers its methods without owning them (Lopata) boots and is asked', async () => {
+		await keepingProcessEnvironment(async () => {
+			const served = binding(() => Promise.resolve({ ok: true, scope: { type: 'workspace', value: 'w9' }, role: 'owner' }))
+			// Lopata's stub: every method is read through `get`, and `in` answers false for each.
+			const stub = new Proxy({}, { get: (_target, name) => Reflect.get(served, name) })
+			expect('getJwks' in stub).toBe(false)
+			const { object } = start(startingApp, { IAM: stub })
+			expect(await (await object.fetch(await startRequest())).json()).toEqual({ result: { workspace: 'w9' } })
 		})
 	})
 

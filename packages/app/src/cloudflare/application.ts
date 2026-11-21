@@ -21,7 +21,7 @@ import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
 import type { RequestExecutionContext } from '../fetch.js'
 import { FILE_TOMBSTONE_RETENTION_MS } from '../files/kinds.js'
-import { boot, type ContractApp } from '../implement/boot.js'
+import { boot, BootError, type ContractApp } from '../implement/boot.js'
 import { type CrashEvents, environmentCrashReporter, reportSurvivedCrashes } from '../implement/crashes.js'
 import { MaintenanceFenceError, maintenanceRefusal, proxySecretDigest, runGated } from '../implement/dispatch.js'
 import { type CapturedEnvironment, captureEnvironment } from '../implement/environment.js'
@@ -370,10 +370,14 @@ async function attach(
 		if (isMigrationsPending(error)) {
 			throw error
 		}
-		failed(bootFailure(error, environmentScrubber(environment)))
-		if (crashes !== null && !setup.failureReported) {
+		const scrubber = environmentScrubber(environment)
+		failed(bootFailure(error, scrubber))
+		if (!setup.failureReported) {
 			setup.failureReported = true
-			state.waitUntil(crashes.report('boot_failed', error))
+			logBootFailure(error, scrubber)
+			if (crashes !== null) {
+				state.waitUntil(crashes.report('boot_failed', error))
+			}
 		}
 		throw error
 	}
@@ -401,6 +405,14 @@ async function attachOnce(
 		await migrate(state.storage, setup.options.migrations ?? [], policy)
 	}
 	return booted
+}
+
+/**
+ * The first failed boot of a streak on the log, which a local run shows where it keeps no trace: a `BootError` lists the
+ * framework's own problems; anything else, which application code may have thrown, is only its code.
+ */
+function logBootFailure(error: unknown, scrubber: Scrubber): void {
+	console.error(error instanceof BootError ? scrubber.scrub(`fabrika: ${error.message}`) : 'fabrika: the application did not boot: boot_failed')
 }
 
 /** A failed boot as the ops view shows it, its text scrubbed as a crash report's is. */

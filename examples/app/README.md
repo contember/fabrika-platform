@@ -83,10 +83,10 @@ expects IAM's issuer at `http://localhost:18191`. The application boots only wit
 locally, issue one with IAM's `workloads.issueKey` for `example-app@local` after the schema is reconciled, and put it
 in `.dev.vars` as `FABRIKA_JOB_REVIEW_KEY`. The IAM Worker's D1 needs its migrations applied first.
 
-This run does not serve yet: lopata does not apply wrangler's `define`, which carries the proxy manifest, so the proxy
-answers 503 `proxy unavailable`; and the object's `IAM` binding check (`method()` in
-`packages/app/src/cloudflare/bindings.ts`) tests the binding's methods with `in`, which a lopata service-binding stub
-does not answer, so the application refuses to boot. See
+The proxy Worker carries its manifest as the `FABRIKA_PROXY_MANIFEST_JSON` variable, because lopata applies no
+wrangler `define`, and an object that does not boot logs why. `bun run oblaka` writes the application Worker's config
+only when this example and `@fabrika/provider-cloudflare` resolve one copy of `oblaka-iac`: oblaka recurses only into
+Workers of its own class. See
 [the Cloudflare Worker proxy witness](../../docs/reference/local-development.md#cloudflare-worker-proxy-witness).
 
 ## Managed Operations configuration

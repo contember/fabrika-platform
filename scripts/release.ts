@@ -25,6 +25,7 @@ const EXPECTED_PUBLIC_PACKAGES = [
 	'@fabrika/db',
 	'@fabrika/email',
 	'@fabrika/github-app',
+	'@fabrika/iam',
 	'@fabrika/iam-contract',
 	'@fabrika/installation-init',
 	'@fabrika/jwks',
@@ -42,6 +43,11 @@ const EXPECTED_PUBLIC_PACKAGES = [
 const UNSCOPED_PUBLIC_PACKAGES: ReadonlySet<string> = new Set(['agent-canvas'])
 /** Public packages that ship only a command, so the consumer smoke runs it instead of importing a main entry. */
 const COMMAND_ONLY_PACKAGES: ReadonlySet<string> = new Set(['agent-canvas'])
+/**
+ * Public packages whose main entry is a Worker module (`cloudflare:workers`), which Bun cannot load: the consumer smoke
+ * loads the named runtime-neutral entry instead.
+ */
+const WORKER_MAIN_SMOKE_ENTRIES: ReadonlyMap<string, string> = new Map([['@fabrika/iam', '@fabrika/iam/service']])
 const TAG_PATTERN =
 	/^v((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?)$/
 
@@ -449,7 +455,7 @@ const filesSchema = z.array(z.string()).optional()
 const SCRIPT_FILE = /\.[cm]?[jt]sx?$/
 
 /** Package-relative paths a tarball would carry, read off `files` the way npm applies it. */
-const packedFiles = async (item: PackageInfo): Promise<readonly string[]> => {
+export const packedFiles = async (item: PackageInfo): Promise<readonly string[]> => {
 	const entries = filesSchema.parse(item.manifest['files'], { path: [item.name, 'files'] }) ?? ['**']
 	const toPattern = async (entry: string): Promise<string> => {
 		const path = entry.replace(/^\.\//, '')
@@ -693,7 +699,9 @@ const runConsumerSmoke = async (
 		await writeFile(
 			join(consumer, 'smoke.ts'),
 			[
-				entryImportSmoke(Object.keys(dependencies).filter((name) => !COMMAND_ONLY_PACKAGES.has(name))),
+				entryImportSmoke(
+					Object.keys(dependencies).filter((name) => !COMMAND_ONLY_PACKAGES.has(name)).map((name) => WORKER_MAIN_SMOKE_ENTRIES.get(name) ?? name),
+				),
 				"const modules = await Promise.all([import('@fabrika/annotations'), import('@fabrika/app'), import('@fabrika/builder'), import('@fabrika/canvas-kernel'), import('@fabrika/daemon-kit'), import('@fabrika/provider-cloudflare'), import('@fabrika/provider-cloudflare/installation'), import('@fabrika/provider-zerops'), import('@fabrika/provider-zerops/installation')])",
 				"if (modules.some((module) => Object.keys(module).length === 0)) throw new Error('A public entry point has no exports')",
 				"const builder = await import('@fabrika/builder')",

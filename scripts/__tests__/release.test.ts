@@ -18,6 +18,7 @@ import {
 	localVersion,
 	packageGraph,
 	packageInfo,
+	packedFiles,
 	parseOptions,
 	parseReleaseManifest,
 	publishCommand,
@@ -636,5 +637,22 @@ describe('packed files import only what a consumer can resolve', () => {
 		expect(message).toContain('src/index.ts imports @fabrika/control/gates, which is not a declared dependency')
 		expect(message).toContain('src/nested/a.ts imports ../../../elsewhere/src/b, which is outside the package')
 		expect(message).toContain('src/nested/a.ts imports @fabrika/private, which is a private package')
+	})
+})
+
+describe('the IAM package an application runs in its own local stack', () => {
+	test('ships its Worker entry, its config builder and both migration sets, and no test', async () => {
+		const iam = (await readPackages()).find((item) => item.name === '@fabrika/iam')
+		if (iam === undefined) throw new Error('no @fabrika/iam package')
+		expect(iam.publishable).toBe(true)
+		const files = await packedFiles(iam)
+		expect(files).toContain('fabrika.config.ts')
+		expect(files).toContain('src/index.ts')
+		for (const directory of ['migrations', 'migrations-postgres']) {
+			const migrations = (await readdir(join(iam.directory, directory))).filter((name) => name.endsWith('.sql'))
+			expect(migrations.length).toBeGreaterThan(0)
+			expect(migrations.filter((name) => !files.includes(`${directory}/${name}`))).toEqual([])
+		}
+		expect(files.filter((file) => file.includes('__tests__') || file.endsWith('.test.ts'))).toEqual([])
 	})
 })

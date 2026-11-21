@@ -30,6 +30,8 @@ import {
 	IAM_APPLICATION_ENTRYPOINT,
 	iamServiceReference,
 	isCloudflareAppConfig,
+	issueLocalWorkloadKeys,
+	localWorkloadKeyVariables,
 	type StagedLocalAssets,
 	stageLocalAssets,
 } from '..'
@@ -2546,6 +2548,63 @@ describe('the application Worker `defineApp` builds for a config without `resour
 		expect(() => composeLocalApplication({ config: loose, contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'stage' })).toThrow(
 			'this deployment serves a contract',
 		)
+	})
+
+	test("a local run's proxy carries the deploy's manifest as a variable, which Lopata reads, not as a baked define", async () => {
+		const root = await localCheckout()
+		const assets = await stageLocalAssets(notesArtifact, root)
+		const local = composeLocalApplication({ config: defineApp({ id: 'demo' }), contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'local' })
+		const proxy = (await generateWranglerConfigs(local, 'local')).configs.find((item) => item.config.name === 'local-demo-proxy')?.config
+		expect(proxy?.define).toBeUndefined()
+		const manifest = proxy?.vars?.['FABRIKA_PROXY_MANIFEST_JSON']
+		expect(typeof manifest === 'string' ? parseProxyManifestJson(manifest)?.apps[0]?.id : null).toBe('demo@local')
+		expect(proxy?.vars?.['FABRIKA_IAM_ISSUER']).toBe(LOCAL_IAM)
+	})
+
+	test("a local run writes the workload keys it is given into the application Worker, exactly the contract's", async () => {
+		const root = await localCheckout()
+		const assets = await stageLocalAssets(notesArtifact, root)
+		const compose = (workloadKeys: Readonly<Record<string, string>>) =>
+			composeLocalApplication({ config: defineApp({ id: 'demo' }), contract: notesArtifact, assets, iamOrigin: LOCAL_IAM, env: 'local', workloadKeys })
+		expect(localWorkloadKeyVariables(notesArtifact)).toEqual(['FABRIKA_JOB_PURGE_DELETED_KEY', 'FABRIKA_WEBHOOK_GITHUB_KEY'])
+		const keys = { FABRIKA_JOB_PURGE_DELETED_KEY: 'px_job', FABRIKA_WEBHOOK_GITHUB_KEY: 'px_hook' }
+		const application = (await generateWranglerConfigs(compose(keys), 'local')).configs.find((item) => item.config.name === 'local-demo')?.config
+		expect(application?.vars).toMatchObject(keys)
+		expect(() => compose({ FABRIKA_JOB_PURGE_DELETED_KEY: 'px_job' })).toThrow('missing FABRIKA_WEBHOOK_GITHUB_KEY')
+		expect(() => compose({ ...keys, FABRIKA_JOB_OTHER_KEY: 'px_other' })).toThrow('FABRIKA_JOB_OTHER_KEY names no workload of the contract')
+		expect(() => compose({ ...keys, FABRIKA_WEBHOOK_GITHUB_KEY: 'hook' })).toThrow('FABRIKA_WEBHOOK_GITHUB_KEY is not a px_ key')
+	})
+
+	test('a local run issues its workload keys through IAM as Control does, with the provisioning key and no redirect', async () => {
+		const asked: { url: string; authorization: string | null; redirect: RequestRedirect | undefined; input: unknown }[] = []
+		const fetch = async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+			const body: unknown = JSON.parse(typeof init?.body === 'string' ? init.body : '{}')
+			asked.push({ url: String(input), authorization: new Headers(init?.headers).get('authorization'), redirect: init?.redirect, input: body })
+			const name = typeof body === 'object' && body !== null ? Reflect.get(Reflect.get(body, 'input'), 'name') : ''
+			return Response.json({ result: { key: `px_${String(name)}`, credentialId: 'c', principalId: 'p', expiresAt: 0 } })
+		}
+		const now = new Date('2026-11-21T00:00:00Z')
+		const issued = await issueLocalWorkloadKeys({
+			contract: notesArtifact,
+			appId: 'demo',
+			env: 'local',
+			iamOrigin: LOCAL_IAM,
+			provisioningKey: 'px_provisioning',
+			fetch,
+			now,
+		})
+		expect(issued).toEqual({
+			expiresAt: now.getTime() / 1000 + 30 * 24 * 3600,
+			variables: { FABRIKA_JOB_PURGE_DELETED_KEY: 'px_purgeDeleted', FABRIKA_WEBHOOK_GITHUB_KEY: 'px_github' },
+		})
+		expect(asked.map(({ url, authorization, redirect }) => ({ url, authorization, redirect }))).toEqual([
+			{ url: `${LOCAL_IAM}/admin/rpc`, authorization: 'Bearer px_provisioning', redirect: 'manual' },
+			{ url: `${LOCAL_IAM}/admin/rpc`, authorization: 'Bearer px_provisioning', redirect: 'manual' },
+		])
+		expect(asked.map(({ input }) => input)).toEqual([
+			{ method: 'workloads.issueKey', input: { app: 'demo@local', kind: 'job', name: 'purgeDeleted', expiresAt: issued.expiresAt, keep: null } },
+			{ method: 'workloads.issueKey', input: { app: 'demo@local', kind: 'webhook', name: 'github', expiresAt: issued.expiresAt, keep: null } },
+		])
 	})
 
 	test("a local run stages the SPA mounts with the deploy's code, and its ASSETS directory holds no ignored file", async () => {
