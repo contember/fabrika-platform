@@ -92,6 +92,15 @@ describe('daemon request admission on the bound dynamic port', () => {
 		}
 	})
 
+	test('a sign-in link opened from a local file arrives cross-site and is admitted; nothing else is', async () => {
+		const crossSite = { 'Sec-Fetch-Site': 'cross-site', 'Sec-Fetch-Mode': 'navigate' }
+		// Admitted, then refused by the link handler: the code is unknown.
+		expect(await send('/open?code=unknown', 'GET', crossSite)).toBe(401)
+		expect(await send('/open?code=unknown', 'POST', crossSite)).toBe(403)
+		expect(await send('/s/protected', 'GET', crossSite)).toBe(403)
+		expect(await send('/open?code=unknown', 'GET', { ...crossSite, Origin: 'https://foreign.example' })).toBe(403)
+	})
+
 	test('rejects HTTP writes before session deletion, including originless browser requests', async () => {
 		for (const headers of [...deniedHeaders(), { 'Sec-Fetch-Site': 'none' }]) {
 			expect(await send('/api/session/protected/reset', 'POST', headers)).toBe(403)

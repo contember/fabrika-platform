@@ -10,7 +10,9 @@ export function admitRequest(req: Request, url: URL, port: number): Response | n
 	const expectedPort = port === 80 ? '' : String(port)
 	const origin = req.headers.get('origin')
 	const site = req.headers.get('sec-fetch-site')
-	const safeNavigation = site === 'none' && (req.method === 'GET' || req.method === 'HEAD')
+	// A sign-in link arrives from wherever the CLI opened it (a local file is cross-site); it reads nothing but its code.
+	const safeNavigation = (site === 'none' && (req.method === 'GET' || req.method === 'HEAD'))
+		|| (req.method === 'GET' && url.pathname === UI_LINK_PATH)
 
 	if (
 		!allowedHostname || !allowedAuthority || url.protocol !== 'http:' || url.port !== expectedPort || url.username !== '' || url.password !== ''
