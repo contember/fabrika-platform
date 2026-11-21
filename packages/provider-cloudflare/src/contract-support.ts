@@ -200,8 +200,8 @@ const RAW_SQL_SINCE = '0.9.0-dev.5'
 export const servesRawSql = (release: string): boolean => releaseFrom(release, RAW_SQL_SINCE)
 
 /**
- * The first framework release whose CLI runs `fabrika db codegen --verify` and `fabrika db test-isolation` on a
- * Cloudflare application's SQLite; an older one asks for a database URL. Every `cloudflare.<n>` sorts below it.
+ * The first framework release whose CLI runs `fabrika db codegen --verify` on a Cloudflare application's SQLite; an
+ * older one asks for a database URL. Every `cloudflare.<n>` sorts below it.
  */
 const SQLITE_SCHEMA_CHECKS_SINCE = '0.9.0-dev.5'
 
@@ -209,10 +209,10 @@ const SQLITE_SCHEMA_CHECKS_SINCE = '0.9.0-dev.5'
 export const checksSqliteSchema = (release: string): boolean => releaseFrom(release, SQLITE_SCHEMA_CHECKS_SINCE)
 
 /**
- * The first framework release whose `fabrika db codegen` and `fabrika db test-isolation` take `--config=<file>`; an
- * older one refuses any argument, so it reads only `fabrika.config.ts`.
+ * The first framework release whose `fabrika db codegen` takes `--config=<file>`; an older one refuses any argument, so
+ * it reads only `fabrika.config.ts`.
  */
-export const SCHEMA_CHECK_CONFIG_SINCE = '0.9.0-dev.14'
+export const SCHEMA_CHECK_CONFIG_SINCE = '0.9.0-dev.23'
 
 /** Whether the deploy may name a config of another name to the schema checks of an application on release `release`. */
 export const namesSchemaCheckConfig = (release: string): boolean => releaseFrom(release, SCHEMA_CHECK_CONFIG_SINCE)

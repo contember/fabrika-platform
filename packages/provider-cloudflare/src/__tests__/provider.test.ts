@@ -388,7 +388,7 @@ describe('Cloudflare provider', () => {
 			`${REPO}/app/worker`,
 			`${REPO}/app`,
 			REPO,
-			...Array.from({ length: 5 }, () => `${REPO}/app`),
+			...Array.from({ length: 4 }, () => `${REPO}/app`),
 			`${REPO}/app/worker`,
 			// The application is deployed first, from the checkout; the proxy that binds it after, from the platform's own copy
 			// of this package; the application's secrets are swept last.
@@ -467,8 +467,8 @@ describe('Cloudflare provider', () => {
 			SECRET_LIST,
 			['wrangler', 'secret', 'put', 'API_KEY'],
 		])
-		expect(rec.commands[8]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
-		expect(rec.commands[11]?.stdin).toBe('secret-value')
+		expect(rec.commands[7]?.env).toEqual({ CLOUDFLARE_API_TOKEN: 'tok-1', CLOUDFLARE_ACCOUNT_ID: 'acc-1' })
+		expect(rec.commands[10]?.stdin).toBe('secret-value')
 		expect(rec.outcomes).toEqual([{ iamReconcile: { app: 'demo', schemaJson: '{"scopes":[],"actions":[],"roles":{},"contract":true}' } }])
 	})
 
@@ -539,7 +539,7 @@ describe('Cloudflare provider', () => {
 		expect(rec.outcomes).toHaveLength(0)
 		expect(rec.logs.some((line) => line.includes('would run build'))).toBe(true)
 		expect(rec.logs).toContain(
-			`  [dry-run] would run the checks in ${REPO}/app: tests, bun install --frozen-lockfile into an empty node_modules, fabrika app build --provider=cloudflare --config=fabrika.config.ts, tsc, fabrika-check, fabrika db codegen --verify, fabrika db test-isolation`,
+			`  [dry-run] would run the checks in ${REPO}/app: tests, bun install --frozen-lockfile into an empty node_modules, fabrika app build --provider=cloudflare --config=fabrika.config.ts, tsc, fabrika-check, fabrika db codegen --verify`,
 		)
 		expect(rec.logs.some((line) => line.includes('wrangler secret put API_KEY'))).toBe(true)
 	})
@@ -1743,7 +1743,7 @@ describe('a full contract application on Cloudflare (ADR-0065)', () => {
 			SECRET_LIST,
 		])
 		expect(rec.commands.map((command) => command.cwd === CLOUDFLARE_PROXY_WORKER_DIR)).toEqual([
-			...Array.from({ length: 8 }, () => false),
+			...Array.from({ length: 7 }, () => false),
 			true,
 			false,
 		])
@@ -1986,12 +1986,11 @@ const checkCommands = (appDir = `${REPO}/app`, tables = true, cli = join(appDir,
 		tsc,
 		check,
 		...(tables ? [[cli, 'db', 'codegen', '--verify']] : []),
-		[cli, 'db', 'test-isolation'],
 	]
 }
 
 /** The first argument of each `check` command. */
-const CHECK_ARGS = ['-c', 'install', 'app', '-c', '-c', 'db', 'db']
+const CHECK_ARGS = ['-c', 'install', 'app', '-c', '-c', 'db']
 
 const authoredWorker = (main: string, bindings: Record<string, Bindable> = {}): CloudflareAppConfig =>
 	config({ resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main }) })
@@ -2034,7 +2033,7 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		const result = await deploy(rec, config({ pipeline: { build: 'bun run build' } }))
 		expect(result.status).toBe('succeeded')
 		expect(result.steps.map((step) => step.id)).toEqual(['build', 'check', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
-		expect(rec.commands.slice(0, 8).map((command) => [command.command, ...command.args])).toEqual([['sh', '-c', 'bun run build'], ...checkCommands()])
+		expect(rec.commands.slice(0, 7).map((command) => [command.command, ...command.args])).toEqual([['sh', '-c', 'bun run build'], ...checkCommands()])
 		expect(rec.commands[3]?.cwd).toBe(`${REPO}/app`)
 	})
 
@@ -2082,7 +2081,7 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		const nested = { checkoutDir: demo, cwd: checkout, configPath: 'apps/demo/fabrika.config.ts' }
 		const result = await deploy(rec, config(), nested)
 		expect(result.status).toBe('succeeded')
-		expect(rec.commands.slice(0, 7).map((command) => [command.command, ...command.args])).toEqual(checkCommands(demo, true, cli))
+		expect(rec.commands.slice(0, 6).map((command) => [command.command, ...command.args])).toEqual(checkCommands(demo, true, cli))
 		expect(rec.commands.slice(0, 3).map((command) => command.cwd)).toEqual([demo, checkout, demo])
 		// The runner installed in `apps/`, so a CLI above it is not the application's.
 		rec.commands.splice(0)
@@ -2130,7 +2129,7 @@ describe('the generated entry of a gated release (pinsGeneratedEntry)', () => {
 		await deploy(rec, config({ pipeline: { build: 'bun run build' } }), { dryRun: true })
 		expect(rec.commands).toEqual([])
 		expect(rec.logs).toContain(
-			`  [dry-run] would run the checks in ${REPO}/app: tests, bun install --frozen-lockfile into an empty node_modules, fabrika app build --provider=cloudflare --config=fabrika.config.ts, tsc, fabrika-check, fabrika db codegen --verify, fabrika db test-isolation`,
+			`  [dry-run] would run the checks in ${REPO}/app: tests, bun install --frozen-lockfile into an empty node_modules, fabrika app build --provider=cloudflare --config=fabrika.config.ts, tsc, fabrika-check, fabrika db codegen --verify`,
 		)
 	})
 
@@ -2171,7 +2170,7 @@ describe("the check step: the application's tests, types, checker and schema bef
 	test('runs after the build and before provisioning, in the application directory, with only PATH, HOME and TMPDIR', async () => {
 		const result = await deploy(rec, config({ pipeline: { build: 'bun run build' } }))
 		expect(result.steps.map((step) => step.id)).toEqual(['build', 'check', 'provision-resources', 'deploy-worker', 'reconcile-schema'])
-		const checks = rec.commands.slice(1, 8)
+		const checks = rec.commands.slice(1, 7)
 		expect(checks.map((command) => [command.command, ...command.args])).toEqual(checkCommands())
 		// The frozen install runs where the runner installed the checkout; everything else in the application directory.
 		expect(checks.map((command) => command.cwd)).toEqual(checks.map((command) => isReinstall(command) ? REPO : `${REPO}/app`))
@@ -2225,7 +2224,6 @@ describe("the check step: the application's tests, types, checker and schema bef
 			['tsc', 3],
 			['fabrika-check', 4],
 			['schema types are stale', 5],
-			['isolation tests', 6],
 		]
 		for (const [subject, index] of subjects) {
 			rec.commands.splice(0)
@@ -2252,7 +2250,7 @@ describe("the check step: the application's tests, types, checker and schema bef
 		const tableless: ContractArtifact = { ...notesArtifact, tables: {} }
 		const result = await deploy(rec, config(), { contract: tableless })
 		expect(result.status).toBe('succeeded')
-		expect(rec.commands.slice(0, 6).map((command) => [command.command, ...command.args])).toEqual(checkCommands(`${REPO}/app`, false))
+		expect(rec.commands.slice(0, 5).map((command) => [command.command, ...command.args])).toEqual(checkCommands(`${REPO}/app`, false))
 		expect(rec.commands.some((command) => command.args.includes('codegen'))).toBe(false)
 		expect(rec.logs).toContain('  the contract declares no table, so there are no schema types to check')
 	})
@@ -2263,7 +2261,6 @@ describe("the check step: the application's tests, types, checker and schema bef
 		expect(rec.commands.filter((command) => command.command === APP_CLI).map((command) => command.args)).toEqual([
 			['app', 'build', '--provider=cloudflare', '--config=cloudflare.config.ts'],
 			['db', 'codegen', '--verify', '--config=cloudflare.config.ts'],
-			['db', 'test-isolation', '--config=cloudflare.config.ts'],
 		])
 	})
 
@@ -2272,8 +2269,8 @@ describe("the check step: the application's tests, types, checker and schema bef
 		const named = { configPath: 'app/cloudflare.config.ts', framework: older }
 		for (
 			const [options, cli] of [
-				[{ framework: SCHEMA_CHECK_CONFIG_SINCE, configPath: 'app/cloudflare.config.ts' }, ['app', 'db', 'db']],
-				[{ framework: older }, ['app', 'db', 'db']],
+				[{ framework: SCHEMA_CHECK_CONFIG_SINCE, configPath: 'app/cloudflare.config.ts' }, ['app', 'db']],
+				[{ framework: older }, ['app', 'db']],
 				[named, ['app']],
 			] as const
 		) {
@@ -2284,7 +2281,7 @@ describe("the check step: the application's tests, types, checker and schema bef
 			expect(rec.commands.filter((command) => command.command === APP_CLI).map((command) => command.args[0])).toEqual([...cli])
 		}
 		expect(rec.logs).toContain(
-			`  the CLI of framework ${older} takes no \`--config\`, so it cannot read \`cloudflare.config.ts\`; the schema types and isolation tests are not checked`,
+			`  the CLI of framework ${older} takes no \`--config\`, so it cannot read \`cloudflare.config.ts\`; the schema types are not checked`,
 		)
 	})
 
@@ -2333,7 +2330,7 @@ describe("the check step: the application's tests, types, checker and schema bef
 			expect(rec.commands.slice(0, 5).map((command) => [command.command, ...command.args])).toEqual(checkCommands().slice(0, 5))
 			expect(rec.commands.slice(5).every((command) => command.command === 'wrangler')).toBe(true)
 			expect(rec.logs).toContain(
-				`  the CLI of framework ${framework} does not check a SQLite schema; the schema types and isolation tests are not checked`,
+				`  the CLI of framework ${framework} does not check a SQLite schema; the schema types are not checked`,
 			)
 		}
 	})

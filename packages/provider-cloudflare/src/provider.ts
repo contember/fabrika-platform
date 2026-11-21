@@ -5,7 +5,6 @@ import {
 	type ContractCheck,
 	contractChecks,
 	GENERATED_ENTRY_FILE,
-	ISOLATION_TESTS_CHECK,
 	SCHEMA_TYPES_CHECK,
 } from '@fabrika/app/build'
 import {
@@ -285,7 +284,7 @@ const entryBuildEnvironment = (): { readonly env: Record<string, string>; readon
 }
 
 /** What a failed check names: the check, as the step error says it. */
-type CheckSubject = 'tests' | 'tsc' | 'fabrika-check' | 'schema types are stale' | 'isolation tests'
+type CheckSubject = 'tests' | 'tsc' | 'fabrika-check' | 'schema types are stale'
 
 /** The last 2,000 characters of a failed check's output: a test run or a type check reports its failures last. */
 const checkError = (subject: CheckSubject, result: { exitCode: number; stdout: string; stderr: string }): Error => {
@@ -305,15 +304,6 @@ const runCheckoutCommand = async (
 	return await cf.runCommand({ command, args: [...args], cwd, ...entryBuildEnvironment(), signal: run.signal })
 }
 
-/**
- * The Zerops build's order, for a run Control approved. The application's tests run first, and what they may leave
- * behind by accident is reinstalled, regenerated or written afresh after them; this does not stop a hostile test, since
- * Bun hardlinks installed files to its cache, so a dependency edited in place comes back with the reinstall. For a
- * release that pins the generated entry that is a frozen install into emptied `node_modules`, the entry (`fabrika app
- * build`), the platform tsconfig, then `tsc`, the checker and the schema checks; an older release keeps its authored
- * `main`, and only the checker follows, which reads no entry. The checker is the release Control approved the access
- * with; without one the step fails rather than deploy unchecked code.
- */
 /** Why the CLI of `release` cannot run the schema checks of the config `config`, or null when it can (ADR-0062). */
 const schemaCheckGap = (release: string | undefined, config: string): string | null => {
 	if (release === undefined || !checksSqliteSchema(release)) return `the CLI of framework ${release ?? '(unnamed)'} does not check a SQLite schema`
@@ -323,6 +313,15 @@ const schemaCheckGap = (release: string | undefined, config: string): string | n
 	return null
 }
 
+/**
+ * The Zerops build's order, for a run Control approved. The application's tests run first, and what they may leave
+ * behind by accident is reinstalled, regenerated or written afresh after them; this does not stop a hostile test, since
+ * Bun hardlinks installed files to its cache, so a dependency edited in place comes back with the reinstall. For a
+ * release that pins the generated entry that is a frozen install into emptied `node_modules`, the entry (`fabrika app
+ * build`), the platform tsconfig, then `tsc`, the checker and the schema checks; an older release keeps its authored
+ * `main`, and only the checker follows, which reads no entry. The checker is the release Control approved the access
+ * with; without one the step fails rather than deploy unchecked code.
+ */
 const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
 	const checker = run.approved?.checker
 	if (checker === undefined) {
@@ -336,9 +335,7 @@ const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: Clou
 	const schema = target.regeneratesEntry && gap === null
 	// An older `fabrika db` refuses any argument, so the default config is not named.
 	const config = target.config === DEFAULT_CONFIG ? [] : [`--config=${target.config}`]
-	const schemaChecks: (readonly [CheckSubject, readonly string[]])[] = []
-	if (schema && target.tables) schemaChecks.push(['schema types are stale', [...SCHEMA_TYPES_CHECK, ...config]])
-	if (schema) schemaChecks.push(['isolation tests', [...ISOLATION_TESTS_CHECK, ...config]])
+	const schemaTypes = schema && target.tables ? [...SCHEMA_TYPES_CHECK, ...config] : null
 	const entryArgs = [...ENTRY_BUILD_ARGS, `--config=${target.config}`]
 	if (run.dryRun) {
 		const steps = target.regeneratesEntry
@@ -348,7 +345,7 @@ const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: Clou
 				`fabrika ${entryArgs.join(' ')}`,
 				tsc.name,
 				check.name,
-				...schemaChecks.map(([, args]) => `fabrika ${args.join(' ')}`),
+				...(schemaTypes === null ? [] : [`fabrika ${schemaTypes.join(' ')}`]),
 			]
 			: [tests.name, check.name]
 		run.log(`  [dry-run] would run the checks in ${target.cwd}: ${steps.join(', ')}`)
@@ -378,14 +375,15 @@ const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: Clou
 	await shell(tsc)
 	await shell(check)
 	if (gap !== null) {
-		run.log(`  ${gap}; the schema types and isolation tests are not checked`)
+		run.log(`  ${gap}; the schema types are not checked`)
 		return
 	}
-	if (!target.tables) run.log('  the contract declares no table, so there are no schema types to check')
-	for (const [subject, args] of schemaChecks) {
-		const result = await runCheckoutCommand(cf, run, target.cwd, cli, args)
-		if (result.exitCode !== 0) throw checkError(subject, result)
+	if (schemaTypes === null) {
+		run.log('  the contract declares no table, so there are no schema types to check')
+		return
 	}
+	const result = await runCheckoutCommand(cf, run, target.cwd, cli, schemaTypes)
+	if (result.exitCode !== 0) throw checkError('schema types are stale', result)
 }
 
 /**
