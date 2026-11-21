@@ -23,7 +23,7 @@ export function ensureRuntimeDir(directory: string): string {
 	const stat = lstatSync(directory)
 	const uid = process.getuid?.()
 	if (!stat.isDirectory() || (uid !== undefined && stat.uid !== uid)) {
-		throw new Error(`${directory} is not a directory owned by this user; remove it, or set XDG_RUNTIME_DIR`)
+		throw new Error(`${directory} is not a private directory of this user (a symlink, a file or another user's); set XDG_RUNTIME_DIR to one`)
 	}
 	// Not a symlink and ours: in a sticky temp directory or a private runtime one, nobody else can swap it before this.
 	chmodSync(directory, 0o700)

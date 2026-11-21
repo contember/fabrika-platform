@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { connect } from 'net'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
@@ -329,6 +329,24 @@ describe('the runtime files', () => {
 		expect(statSync(join(own, 'daemon-auth-token')).mode & 0o777).toBe(0o600)
 		expect(readdirSync(temp)).toEqual([])
 	})
+
+	test('a push from the old shared directory, where earlier skills keep canvases, closes it or refuses a symlink there', async () => {
+		const legacy = join(temp, 'agent-canvas')
+		const elsewhere = join(root, 'elsewhere')
+		mkdirSync(join(elsewhere, 'session'), { recursive: true })
+		writeFileSync(join(elsewhere, 'session', 'plan.jsx'), '<Section title="Planted">x</Section>\n')
+		symlinkSync(elsewhere, legacy)
+		const refused = await cli(['push', join(legacy, 'session'), '--label', 'Planted'])
+		expect(refused.exitCode).toBe(1)
+		expect(refused.stderr).toContain('agent-canvas install')
+		rmSync(legacy)
+
+		mkdirSync(join(legacy, 'session'), { recursive: true })
+		chmodSync(legacy, 0o777)
+		writeFileSync(join(legacy, 'session', 'plan.jsx'), '<Section title="Legacy">x</Section>\n')
+		expect((await cli(['push', join(legacy, 'session'), '--label', 'Legacy'])).exitCode).toBe(0)
+		expect(statSync(legacy).mode & 0o777).toBe(0o700)
+	}, 30_000)
 
 	test('`dir` prints that directory, where the skill keeps canvas files', async () => {
 		const result = await cli(['dir'])

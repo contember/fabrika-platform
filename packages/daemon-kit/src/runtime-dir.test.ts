@@ -40,7 +40,7 @@ test('a symlink in its place is refused and not followed, so its target stays as
 	chmodSync(target, 0o755)
 	const link = join(root, 'agent-canvas')
 	symlinkSync(target, link)
-	expect(() => ensureRuntimeDir(link)).toThrow('is not a directory owned by this user')
+	expect(() => ensureRuntimeDir(link)).toThrow('is not a private directory of this user')
 	expect(lstatSync(link).isSymbolicLink()).toBe(true)
 	expect(statSync(target).mode & 0o777).toBe(0o755)
 	expect(readdirSync(target)).toEqual([])

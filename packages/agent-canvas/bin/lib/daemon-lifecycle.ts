@@ -1,5 +1,4 @@
 import { createDaemonLifecycle, type DaemonEvent, DaemonStartError, ensureRuntimeDir } from '@fabrika/daemon-kit'
-import { readFileSync } from 'fs'
 import { join } from 'path'
 import { BASE_URL, CLI_AUTH_FILE, PACKAGE_ROOT, PID_FILE, TEMP_DIR, VERSION } from './config.ts'
 
@@ -12,24 +11,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
-/**
- * Transitional: daemons before the pid landed in `/health` only leave a pid file
- * behind. Drop this fallback once no such daemon can still be running.
- */
-function legacyPidFromFile(): number | undefined {
-	try {
-		const pid = Number(readFileSync(PID_FILE, 'utf-8').trim())
-		return Number.isInteger(pid) && pid > 0 ? pid : undefined
-	} catch {
-		return undefined
-	}
-}
-
 function parseHealth(body: unknown): CanvasHealth | undefined {
 	if (!isRecord(body) || body.ok !== true || typeof body.version !== 'string') return undefined
-	const pid = typeof body.pid === 'number' ? body.pid : legacyPidFromFile()
-	if (pid === undefined) return undefined
-	return { pid, version: body.version }
+	// Only the pid the daemon reports is signalled; a pid file in the runtime directory may name an unrelated process.
+	if (typeof body.pid !== 'number') return undefined
+	return { pid: body.pid, version: body.version }
 }
 
 function report(event: DaemonEvent) {
