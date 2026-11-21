@@ -1086,6 +1086,32 @@ describe('Zerops ControlProvider lifecycle', () => {
 		})
 	}
 
+	// A secret becomes a variable of the service whose init commands hold the provisioning credential.
+	const runtimeNames = ['BUN_OPTIONS', 'BUN_CONFIG_REGISTRY', 'LD_PRELOAD', 'BASH_ENV', 'ENV', 'PATH', 'HOME', 'HTTP_PROXY', 'https_proxy', 'ZEROPS_X']
+	for (const name of runtimeNames) {
+		test(`refuses a secret or variable named ${name}, which steers the runtime's processes, before any platform call`, async () => {
+			const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded) })
+			if (control.secrets === undefined) throw new Error('missing secrets')
+			const refusal = `\`${name}\` is read by the runtime`
+			await expect(control.secrets.put({ environment: environment(), name, value: '--eval=1' })).rejects.toThrow(refusal)
+			await expect(control.deploy({ ...deployInput(recorded), secrets: { [name]: '--eval=1' } })).rejects.toThrow(refusal)
+			await expect(control.deploy({ ...deployInput(recorded), vars: { [name]: '--eval=1' } })).rejects.toThrow(refusal)
+			expect(recorded.calls).toEqual([])
+			expect(recorded.envWrites).toEqual([])
+			// A secret stored before the rule must stay removable.
+			await control.secrets.delete({ environment: environment(), name })
+		})
+	}
+
+	for (const name of ['NODE_ENV', 'NODE_OPTIONS', 'BUNDLE_ID', 'MY_PROXY', 'PATHNAME', 'API_KEY']) {
+		test(`accepts an application secret named ${name}`, async () => {
+			const control = createTestControlProvider({ accessToken: 'token', api: makeApi(recorded) })
+			if (control.secrets === undefined) throw new Error('missing secrets')
+			await control.secrets.put({ environment: environment(), name, value: 'value' })
+			expect(recorded.envWrites.map((write) => write.key)).toEqual([name])
+		})
+	}
+
 	for (const { status, code } of [{ status: 400, code: 'otherError' }, { status: 404, code: 'appVersionNotFound' }]) {
 		test(`absence recovery refuses an unverified ${status}/${code} error`, async () => {
 			const control = createTestControlProvider({

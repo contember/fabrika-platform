@@ -75,7 +75,7 @@ import {
 	type StorageProvenanceMarker,
 	unprovenBucketReason,
 } from './exposure'
-import { assertAuthoredManagedDocument, assertAuthoredManagedInputs, overlayRelease } from './managed-env'
+import { assertApplicationValueNames, assertAuthoredManagedDocument, assertAuthoredManagedInputs, overlayRelease } from './managed-env'
 import {
 	applicationDatabaseOf,
 	type FabrikaImportDocument,
@@ -1168,7 +1168,7 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 	if (run.artifact.app.env !== run.env) {
 		throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
 	}
-	assertAuthoredManagedInputs({ variableNames: Object.keys(run.vars), secretNames: Object.keys(run.secrets) })
+	assertApplicationValueNames({ variableNames: Object.keys(run.vars), secretNames: Object.keys(run.secrets) })
 	const hostnames = manifestServiceHostnames(run.artifact)
 	const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
 	const compiled = { yaml: renderYaml(document), hostnames }

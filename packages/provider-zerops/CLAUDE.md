@@ -118,6 +118,11 @@ bun test
   App vars, secrets and descriptors may not author any name of `FRAMEWORK_VARIABLE_NAMES` (`@fabrika/auth-core`,
   the one list Control refuses too); `MANAGED_VARIABLE_NAMES` (`@fabrika/auth-core`) is the part of it Control hands every
   deploy, parsed once by Control (`parseManagedEnvironment`); this provider re-checks none of it.
+  An application secret or variable may not take a name the runtime reads either (`isRuntimeVariableName`,
+  `src/managed-env.ts`: `BUN_*`, `LD_*`, `PATH`, `BASH_ENV`, the proxy variables, `ZEROPS_*`, …): a secret is a variable
+  of the service whose init commands hold the provisioning credential, and `BUN_OPTIONS=--eval=…` runs code from the
+  value alone. `secrets.put` and every deploy refuse one; `secrets.delete` and the manifest decode do not, so a stored
+  one stays removable and a stored manifest keeps decoding (ADR-0062).
   `FABRIKA_APP_ORIGIN` is read back and compared; `FABRIKA_TOKEN_KEYS` is sensitive, rewritten every deploy, and
   removed by a null. Beside them Control hands each job's and webhook's key (`FABRIKA_<KIND>_<NAME>_KEY`), each public
   procedure's (`FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`) and each connector
