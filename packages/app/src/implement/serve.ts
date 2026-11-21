@@ -3,9 +3,10 @@
 
 import type { EmailSender } from '@fabrika/email'
 import { AsyncLocalStorage } from 'node:async_hooks'
+import type { CallerDeclaration } from '../contract/caller'
 import { isProcedure, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
 import type { AnyContract, Schema } from '../contract/define'
-import { handlerOf, kitOriginOf, snapshotsOf } from '../contract/handled'
+import { callerOf, handlerOf, kitOriginOf, optsOutOfCaller, snapshotsOf } from '../contract/handled'
 import { ContractError } from '../contract/problems'
 import {
 	type ApplicationEnvironment,
@@ -99,19 +100,31 @@ export function serve<const C extends AnyContract>(contract: C, options: ServeOp
  */
 function handlerTree(contract: AnyContract, withDeps: WithDeps): Record<string, unknown> {
 	const missing: string[] = []
-	const served = (site: { readonly declared?: unknown }, path: string): SiteHandler | undefined => {
+	const misplaced: string[] = []
+	const kitCaller = callerOf(contract)
+	const served = (site: { readonly declared?: unknown }, path: string, caller: CallerDeclaration | null = null): SiteHandler | undefined => {
 		const handler = handlerOf(site)
 		if (typeof handler !== 'function') {
 			missing.push(path)
 			return undefined
 		}
-		return siteHandler((args) => withDeps(() => Reflect.apply(handler, undefined, [args])), site.declared ?? {})
+		return siteHandler((args) => withDeps(() => Reflect.apply(handler, undefined, [args])), site.declared ?? {}, caller)
 	}
-	const procedureHandlers = <Access>(procedures: ProcedureTreeDeclaration<Schema, Access>, path: string): Record<string, unknown> =>
+	// A group procedure that names callers reads the caller's row unless it opts out; nothing else reads one.
+	const callerFor = (node: { readonly access: unknown }, path: string, group: boolean): CallerDeclaration | null => {
+		const resolves = group && kitCaller !== undefined && !isPublic(node.access)
+		if (optsOutOfCaller(node) && !resolves) {
+			misplaced.push(path)
+		}
+		return resolves && !optsOutOfCaller(node) ? kitCaller : null
+	}
+	const procedureHandlers = <Access>(procedures: ProcedureTreeDeclaration<Schema, Access>, path: string, group = false): Record<string, unknown> =>
 		Object.fromEntries(
 			Object.entries(procedures).map(([name, node]) => [
 				name,
-				isProcedure(node) ? served(node, `${path}.${name}`) : procedureHandlers(node, `${path}.${name}`),
+				isProcedure(node)
+					? served(node, `${path}.${name}`, callerFor(node, `${path}.${name}`, group))
+					: procedureHandlers(node, `${path}.${name}`, group),
 			]),
 		)
 	const tree: Record<string, unknown> = {}
@@ -120,7 +133,7 @@ function handlerTree(contract: AnyContract, withDeps: WithDeps): Record<string, 
 			continue
 		}
 		if (entry.kind === 'rpc') {
-			tree[name] = procedureHandlers(entry.procedures, name)
+			tree[name] = procedureHandlers(entry.procedures, name, true)
 		} else if (entry.kind === 'link') {
 			tree[name] = procedureHandlers(entry.procedures, name)
 		} else if (entry.kind === 'webhook') {
@@ -137,10 +150,15 @@ function handlerTree(contract: AnyContract, withDeps: WithDeps): Record<string, 
 			exports.map(([name, declaration]) => [name, procedureHandlers(declaration.procedures, `exports.${name}`)]),
 		)
 	}
-	if (missing.length > 0) {
-		throw new ContractError(
-			missing.map((site) => `${site}: add .handle(…) beside its declaration; serve binds every endpoint, job and webhook to its own`),
-		)
+	if (missing.length > 0 || misplaced.length > 0) {
+		throw new ContractError([
+			...missing.map((site) => `${site}: add .handle(…) beside its declaration; serve binds every endpoint, job and webhook to its own`),
+			...misplaced.map((site) => `${site}: caller: false opts a group procedure out of the kit's caller row; this one reads none (remove caller)`),
+		])
 	}
 	return tree
+}
+
+function isPublic(access: unknown): boolean {
+	return typeof access === 'object' && access !== null && 'public' in access && access.public === true
 }

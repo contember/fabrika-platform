@@ -17,6 +17,7 @@ import {
 	type SqlTag,
 } from '@fabrika/db/framework'
 import type { DataKind, UnscopedMode } from '@fabrika/db/tables'
+import type { CallerDeclaration } from '../contract/caller'
 import type { SqlMode } from '../contract/context'
 import { DECLARED_FIELDS } from '../contract/declaration'
 import { CapabilityRefusedError, isActiveRequest, type RequestFrame } from './capability'
@@ -53,13 +54,15 @@ export type SiteFunction = (args: { readonly input?: unknown; readonly ctx: obje
 export interface SiteHandler {
 	readonly handler: SiteFunction
 	readonly declared: unknown
+	/** The caller's row the framework reads before the handler (`ctx.caller`); `null` for a site that has none. */
+	readonly caller: CallerDeclaration | null
 }
 
 const sites = new WeakSet<object>()
 
 /** The leaf `serve` puts in the handler tree for one site. */
-export function siteHandler(handler: SiteFunction, declared: unknown): SiteHandler {
-	const site = Object.freeze({ handler, declared })
+export function siteHandler(handler: SiteFunction, declared: unknown, caller: CallerDeclaration | null = null): SiteHandler {
+	const site = Object.freeze({ handler, declared, caller })
 	sites.add(site)
 	return site
 }
@@ -69,7 +72,7 @@ export function isSiteHandler(node: unknown): node is SiteHandler {
 	return typeof node === 'object' && node !== null && sites.has(node)
 }
 
-const NO_DECLARATION: SiteDeclaration = Object.freeze({
+export const NO_DECLARATION: SiteDeclaration = Object.freeze({
 	sql: null,
 	unscoped: Object.freeze({}),
 	connect: Object.freeze([]),

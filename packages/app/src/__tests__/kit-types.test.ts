@@ -57,6 +57,8 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'58-webhooks-without-binds.ts': "declare binds: '<webhook>' on this mutation to create and remove its bindings",
 	'59-input-field-removed-by-capabilities.ts': "Property 'companyId' does not exist on type",
 	'60-public-egress-on-a-mutation.ts': "egress: 'public' is a cron job's only: record a row and kick a job that declares it",
+	'61-caller-without-declaration.ts': "declare caller in defineApp's options: { caller: { table, principal, missing } }",
+	'62-caller-opt-out-without-declaration.ts': 'the kit declares no caller: defineApp(vocabulary, tables, { caller })',
 }
 
 /**

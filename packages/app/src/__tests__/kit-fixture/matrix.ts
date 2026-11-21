@@ -333,6 +333,8 @@ type Policies = typeof tables extends Tables<DB, infer P> ? P : never
 export type Composition = [
 	Expect<Equal<Get, Endpoint<'query', typeof ById, typeof Deal, { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }, None>>>,
 	Expect<Equal<K['index'], DbIndex<DB, Policies>>>,
+	// A kit whose options declare no caller has no caller row: `ctx.caller` names the declaration instead.
+	Expect<Equal<K['caller'], never>>,
 	Expect<Equal<typeof tables extends Tables<infer Rows, infer _Policies> ? Rows : never, DB>>,
 	Expect<Equal<typeof contract extends AnyContract ? true : false, true>>,
 	Expect<Equal<typeof contract.surface.api.callers, readonly ['human']>>,
