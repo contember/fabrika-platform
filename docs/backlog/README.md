@@ -163,7 +163,6 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [281](281-the-review-proxy-binds-a-name.md): The `agent-canvas` review proxy binds and prints one loopback address instead of `localhost`, so no other server on the other family answers in its place.
 - [282](282-the-solution-build-refuses-a-missing-reference.md): A check fails when a project's program holds another project's sources, so a missing `references` entry is no longer silent.
 - [283](283-the-contract-subpath-names-every-type-its-results-carry.md): `@fabrika/app/contract` re-exports the `@fabrika/auth-core` types its public results carry, so an application's declarations name them under TypeScript 7.1.
-- [284](284-the-canvas-ui-has-no-credential.md): The `agent-canvas` browser UI calls the daemon without a credential, so a local client that sends no `Origin` reaches files, sessions and secret storage.
 - [285](285-a-quoted-export-default-in-an-inlined-file-drops-the-canvas-wrapper.md): A canvas whose inlined file contains a quoted `export default` compiles without its `Plan` wrapper.
 - [286](286-access-view-statements-without-a-test.md): Aggregates, queue claims, deletes, moves and unowned-node inserts through an access view have no test.
 - [287](287-an-attachments-row-schema-is-not-compared-with-its-approved-columns.md): An attachment's cells are validated by the evaluated row schema, not the approved columns.
