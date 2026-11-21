@@ -1,11 +1,11 @@
-// The Build config section edits an application's default branch and worker directory (backlog 296): only the changed
-// fields reach `apps.update`, and Control's refusal (a protected environment takes a person) is shown as it is.
+// The Build config section edits an application's default branch and worker directory: only the changed fields reach
+// `apps.update`, and Control's refusal (a protected environment takes a person) is shown as it is.
 
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { SourceFields } from '../components/app-detail/BuildConfigSection'
-import { type AppDto, type ConsoleAccessDto, type ControlFetch, createControlClient } from '../lib/api'
-import { saveSource, sourceChange } from '../lib/app-source'
+import { ApiError, type AppDto, type ConsoleAccessDto, type ControlFetch, createControlClient } from '../lib/api'
+import { saveSource, type SourceChange, sourceChange, submitSource } from '../lib/app-source'
 import { ConsoleAccessContext } from '../lib/console-caller'
 
 const app = (overrides: Partial<AppDto> = {}): AppDto => ({
@@ -35,20 +35,21 @@ const fields = (access: ConsoleAccessDto | null, readsWorkerDir = true, subject 
 
 describe('the source fields of an application', () => {
 	test('a caller holding app.manage globally or at the app may edit them', () => {
-		expect(fields(holding(['app.manage']))).toContain('Edit</button>')
-		expect(fields(holding([], { type: 'app', value: 'notes', actions: ['app.manage'] }))).toContain('Edit</button>')
+		expect(fields(holding(['app.manage']))).toContain('Edit source</button>')
+		expect(fields(holding([], { type: 'app', value: 'notes', actions: ['app.manage'] }))).toContain('Edit source</button>')
 	})
 
 	test('a caller holding it at another app or only at an environment may not, as Control checks the app scope', () => {
-		expect(fields(holding([], { type: 'app', value: 'other', actions: ['app.manage'] }))).not.toContain('Edit</button>')
-		expect(fields(holding([], { type: 'environment', value: 'prod', actions: ['app.manage'] }))).not.toContain('Edit</button>')
-		expect(fields(holding(['deploy.trigger']))).not.toContain('Edit</button>')
+		expect(fields(holding([], { type: 'app', value: 'other', actions: ['app.manage'] }))).not.toContain('Edit source</button>')
+		expect(fields(holding([], { type: 'environment', value: 'prod', actions: ['app.manage'] }))).not.toContain('Edit source</button>')
+		expect(fields(holding(['deploy.trigger']))).not.toContain('Edit source</button>')
 	})
 
 	test('the worker directory shows only where the provider deploys from one, its root by name', () => {
 		expect(fields(holding(['app.manage']))).toContain('repository root')
 		expect(fields(holding(['app.manage']), true, app({ workerDir: './fabrika/' }))).toContain('<code>fabrika</code>')
 		expect(fields(holding(['app.manage']), false)).not.toContain('Worker dir')
+		expect(fields(holding(['app.manage']), true, app({ workerDir: '/srv/app' }))).toContain('not a path inside the repository')
 	})
 })
 
@@ -76,6 +77,8 @@ describe('what the form sends', () => {
 		})
 		expect(sourceChange(app(), { defaultBranch: 'main', workerDir: '../other' })).toHaveProperty('problem')
 		expect(sourceChange(app(), { defaultBranch: 'main', workerDir: '/abs' })).toHaveProperty('problem')
+		expect(sourceChange(app(), { defaultBranch: 'main', workerDir: 'my app' })).toHaveProperty('problem')
+		expect(sourceChange(app(), { defaultBranch: 'main', workerDir: 'app\tdir' })).toHaveProperty('problem')
 	})
 
 	test('saving calls apps.update with the change alone', async () => {
@@ -93,6 +96,50 @@ describe('what the form sends', () => {
 	test("Control's refusal rejects with its message, which the form shows", async () => {
 		const message = "environment `prod` is protected: only a person changes its application's defaultBranch"
 		const fetcher: ControlFetch = async () => Response.json({ error: { type: 'forbidden', message } }, { status: 403 })
-		await expect(saveSource(createControlClient(fetcher), 'notes', { defaultBranch: 'main' })).rejects.toThrow(message)
+		const refusal = saveSource(createControlClient(fetcher), 'notes', { defaultBranch: 'main' })
+		await expect(refusal).rejects.toBeInstanceOf(ApiError)
+		await expect(refusal).rejects.toThrow(message)
+	})
+})
+
+describe('submitting the form', () => {
+	const recorder = () => {
+		const sent: SourceChange[] = []
+		return { sent, save: async (change: SourceChange) => void sent.push(change) }
+	}
+
+	test('a changed field is saved and closes the form', async () => {
+		const { sent, save } = recorder()
+		expect(await submitSource(app({ workerDir: 'fabrika' }), { defaultBranch: 'main', workerDir: ' ./fabrika ' }, save)).toEqual({ kind: 'saved' })
+		expect(sent).toEqual([{ defaultBranch: 'main' }])
+	})
+
+	test('an unchanged form closes without sending', async () => {
+		const { sent, save } = recorder()
+		expect(await submitSource(app(), { defaultBranch: 'feat/launch', workerDir: '' }, save)).toEqual({ kind: 'unchanged' })
+		expect(sent).toEqual([])
+	})
+
+	test('an invalid value stays in the form with its reason, and nothing is sent', async () => {
+		const { sent, save } = recorder()
+		expect(await submitSource(app(), { defaultBranch: 'refs/heads/main', workerDir: null }, save)).toEqual({
+			kind: 'refused',
+			message: 'Name the branch alone, without refs/heads/.',
+		})
+		expect(sent).toEqual([])
+	})
+
+	test("Control's refusal is shown with its message, anything else as a failed save", async () => {
+		const message = "environment `prod` is protected: only a person changes its application's defaultBranch"
+		const refused: ControlFetch = async () => Response.json({ error: { type: 'forbidden', message } }, { status: 403 })
+		const client = createControlClient(refused)
+		expect(await submitSource(app(), { defaultBranch: 'main', workerDir: null }, (change) => saveSource(client, 'notes', change))).toEqual({
+			kind: 'refused',
+			message,
+		})
+		const broken = async () => {
+			throw new TypeError('network down')
+		}
+		expect(await submitSource(app(), { defaultBranch: 'main', workerDir: null }, broken)).toEqual({ kind: 'refused', message: 'Save failed.' })
 	})
 })
