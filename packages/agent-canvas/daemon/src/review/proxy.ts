@@ -47,7 +47,8 @@ export function admitProxyRequest(req: Request, port: number): Response | null {
 	const host = req.headers.get('Host')
 	if (host === null || !allowedHosts(port).has(host.toLowerCase())) return refuse('host not allowed')
 	const changesState = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS'
-	const isUpgrade = req.headers.get('Upgrade')?.toLowerCase() === 'websocket'
+	// Any `Upgrade`, not only `websocket`: `forward` would otherwise hand a listed protocol on to the application.
+	const isUpgrade = req.headers.has('Upgrade')
 	const origin = req.headers.get('Origin')
 	if ((changesState || isUpgrade) && origin !== null && !daemonOrigins(port).has(origin)) return refuse('origin not allowed')
 	return null
@@ -200,6 +201,9 @@ export class ReviewProxies {
 async function forward(req: Request, upstreamUrl: URL, proxyOrigin: string, widgetTag: string): Promise<Response> {
 	const headers = new Headers(req.headers)
 	headers.delete('Host')
+	// Hop-by-hop: a plain request never switches protocols on the application.
+	headers.delete('Upgrade')
+	headers.delete('Connection')
 	// Uncompressed, so an HTML page can take the widget's tag.
 	headers.set('Accept-Encoding', 'identity')
 	if (headers.get('Origin') === proxyOrigin) headers.set('Origin', upstreamUrl.origin)

@@ -437,6 +437,11 @@ describe('ReviewProxies', () => {
 		expect(await rawStatus(origin, { path: '/socket', headers: { ...upgrade, Origin: 'https://attacker.example' } })).toBe(403)
 		// Another loopback port is another site's origin too, e.g. a page some other local server serves.
 		expect(await rawStatus(origin, { path: '/socket', headers: { ...upgrade, Origin: `http://127.0.0.1:${app.port}` } })).toBe(403)
+		// An opaque origin (a sandboxed frame, a `data:` page) is no origin of the proxy's.
+		expect(await rawStatus(origin, { method: 'POST', headers: { Origin: 'null' } })).toBe(403)
+		// A listed protocol beside `websocket` is still an upgrade.
+		expect(await rawStatus(origin, { path: '/socket', headers: { ...upgrade, Upgrade: 'websocket, h2c', Origin: 'https://attacker.example' } }))
+			.toBe(403)
 		expect(appHits).toBe(0)
 	})
 
