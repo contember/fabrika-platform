@@ -224,6 +224,7 @@ describe('the wakes migration', () => {
 		expect((await migrateSqlite(port, [{ bundle: 'fabrika', migrations: SQLITE_FRAMEWORK_MIGRATIONS }])).applied).toEqual([
 			'fabrika/0003_file_deletions_recorded_at.sql',
 			'fabrika/0004_job_wakes_owned.sql',
+			'fabrika/0005_request_receipts.sql',
 		])
 		const migrated = frameworkTablesOf(connected(tables, { database: openSqlite(storage), capabilities: new TestAuthority() }).database).wakes
 		const due = at(MINUTE)

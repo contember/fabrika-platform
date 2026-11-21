@@ -155,6 +155,7 @@ import {
 	visibleThrough,
 } from './policy'
 import { frameworkSideOf, type ProvisionalBinding, register } from './registry'
+import { requestReceipts } from './request-receipts'
 import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
 import { storedFiles, storedFilesMetadata } from './stored-files'
 import { type TablePolicies, tablePolicies } from './tables'
@@ -3504,6 +3505,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			wakes: jobWakes(() => runtimeOf(connection)),
 			admissions: admissions(() => runtimeOf(connection)),
 			files: storedFiles(() => runtimeOf(connection)),
+			receipts: requestReceipts(),
 		}),
 		data: dataAccess({
 			models,

@@ -253,6 +253,7 @@ describe.skipIf(!hasPostgres)('a test database on Postgres', () => {
 				{ bundle: 'fabrika', name: '0008_files.sql' },
 				{ bundle: 'fabrika', name: '0009_job_wakes.sql' },
 				{ bundle: 'fabrika', name: '0010_job_wakes_owned.sql' },
+				{ bundle: 'fabrika', name: '0011_request_receipts.sql' },
 				{ bundle: 'app', name: '20261009120000_init.sql' },
 			])
 		} finally {

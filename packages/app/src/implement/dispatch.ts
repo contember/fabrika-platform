@@ -126,6 +126,7 @@ import { paramsObject, urlParams } from './params'
 import { globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
+import { answersJson, type KeyedRequest, recorded, replayed, requestIdentity, requestKeyOf, validatedOutput } from './receipts'
 import { type TerminalIdentification, terminalIdentification } from './terminals'
 import type { SignedTokens } from './tokens'
 import type { AppUrl } from './urls'
@@ -687,9 +688,10 @@ export class ContractRuntime {
 		const caller = await this.#authorize(served.row, request)
 		const admission = served.admission ?? DEFAULT_ADMISSION
 		await this.#admit(served.row, admission, request, caller.subject)
+		const keyed = this.#keyed(served, request, caller)
 		const body = await procedureBody(served, request, this.#parts.fileKinds)
 		try {
-			return await this.#procedureInvocation(served, request, exec, caller, admission, body)
+			return await this.#procedureInvocation(served, request, exec, caller, admission, body, keyed)
 		} finally {
 			// Whatever refuses the request once the body is open, a multipart body's stream and deadline end here.
 			await body.multipart?.close()
@@ -703,6 +705,7 @@ export class ContractRuntime {
 		caller: Caller,
 		admission: ProcedureAdmission,
 		body: Awaited<ReturnType<typeof procedureBody>>,
+		keyed: KeyedRequest | null,
 	): Promise<Response | FileDownload> {
 		// Signed tokens are verified as the input is parsed; the texts they carry are what the request may redirect to.
 		const carried = new Set<string>()
@@ -727,11 +730,20 @@ export class ContractRuntime {
 			budget = handlerSignal(request, admission.timeoutMs)
 			const { signal } = budget
 			const answer = await enclosedAnswer(invocation, this.#hold(served.row.id, exec), async () => {
-				let result: unknown
+				let ran: { readonly replay: Response } | { readonly result: unknown; readonly identity: string | null }
 				try {
-					result = await runInRequest(frame, async () => {
+					ran = await runInRequest(frame, async () => {
 						const membership = this.#membershipRequest(served.row, caller, request, frame)
 						const access = await this.#access(served.row, caller, input, frame, membership)
+						// After every check that refuses the caller, before the handler: a refused caller never reads a receipt.
+						const identity = keyed === null ? null : await requestIdentity(input, query, work, `'${served.row.id}'`)
+						if (keyed !== null && identity !== null && invocation !== null) {
+							const session = await invocation.frameworkSite('a request receipt').session()
+							const stored = await keyed.receipts.find(session, keyed.principal, keyed.key)
+							if (stored !== null) {
+								return { replay: replayed(served.row, approvedOutput(served.row, served.output), stored, identity) }
+							}
+						}
 						const binding = this.#parts.fileKinds?.binding(work)
 						const ctx = Object.freeze({
 							principal: caller.principal,
@@ -760,16 +772,30 @@ export class ContractRuntime {
 						})
 						const args = { input: access.input, ctx, ...(query === undefined ? {} : { query }) }
 						const egress = served.egress
-						return egress === undefined
+						const result = egress === undefined
 							? await served.handler(args)
 							: await runAsSite(`'${served.row.id}'`, egress, async () => await served.handler(args))
+						return { result, identity }
 					})
 				} finally {
 					frame.end()
 				}
+				// A replay writes nothing: the invocation rolls back, and the files this request staged are released.
+				if ('replay' in ran) {
+					return ran.replay
+				}
 				// Before the answer opens a file's stream: a failed write then has nothing to cancel.
 				await this.#recordKicks(invocation, kicks)
-				const answer = await this.#answerOf(served, result, request, work, carried)
+				const answer = keyed === null || ran.identity === null || invocation === null
+					? await this.#answerOf(served, ran.result, request, work, carried)
+					: await recorded(
+						keyed,
+						await invocation.frameworkSite('a request receipt').session(),
+						served.row,
+						ran.identity,
+						validatedOutput(served.row, approvedOutput(served.row, served.output), ran.result),
+						Date.now(),
+					)
 				outcome = 'committing'
 				await commitAnswer(invocation, signal, answer)
 				return answer
@@ -793,6 +819,25 @@ export class ContractRuntime {
 				await this.#parts.fileKinds?.release(work)
 			}
 		}
+	}
+
+	/**
+	 * The request's key, when it carries one (ADR-0078): accepted only on a staged-kit mutation that answers JSON, with
+	 * the data layer bound, and that creates no scope (its access form creates the scope at IAM before any receipt could
+	 * be read). Anywhere else the key is a 400, so no client believes an unprotected request is protected.
+	 */
+	#keyed(served: Extract<ServedEndpoint, { kind: 'procedure' }>, request: Request, caller: Caller): KeyedRequest | null {
+		const key = requestKeyOf(request)
+		if (key === null) {
+			return null
+		}
+		const framework = this.#parts.framework
+		const writes = served.site?.kind === 'mutation' && served.readOnly !== true
+		const creates = served.row.requirement.kind === 'action' && served.row.requirement.access.form === 'creates'
+		if (!writes || creates || framework === null || this.#parts.data === null || !answersJson(served.row)) {
+			throw new HttpError(400, 'request_key_not_accepted', `'${served.row.id}' does not answer from a receipt; send it without Idempotency-Key`)
+		}
+		return { receipts: framework.receipts, principal: caller.subject, key }
 	}
 
 	/** A multipart body's input: its JSON part with every file part staged for `work`, parsed strictly as one input. */
@@ -1375,6 +1420,14 @@ export class ContractRuntime {
 		exec: RequestExecutionContext | undefined,
 	): Promise<Response | FileDownload> {
 		admitContentType(served.row, request)
+		// A visitor is no principal a receipt could be kept for (ADR-0078).
+		if (requestKeyOf(request) !== null) {
+			throw new HttpError(
+				400,
+				'request_key_not_accepted',
+				`'${served.row.id}' is public and does not answer from a receipt; send it without Idempotency-Key`,
+			)
+		}
 		const release = this.#parts.publicShare.enter()
 		if (release === null) {
 			throw new HttpError(503, 'public_share_full', 'Too many anonymous requests at once; try again shortly')
@@ -1842,25 +1895,11 @@ function holdsOnChain(perms: PermissionEntry[], action: string, dimension: strin
  * request's verified tokens carry: a URL among them is a target the application signed.
  */
 function outputResponse(row: EndpointRow, schema: Schema, result: unknown, request: Request, carried: ReadonlySet<string>): Response {
-	const output = z.safeParse(zodSchemaOf(schema), projectSchema(row.id, schema, result))
-	if (!output.success) {
-		throw new ServerFault('output_refused', `'${row.id}' returned a value its output schema refuses`)
-	}
+	const output = validatedOutput(row, schema, result)
 	if (row.output !== null && isRedirectShape(row.output)) {
-		return redirectResponse(row, row.output, output.data, request, carried)
+		return redirectResponse(row, row.output, output, request, carried)
 	}
-	return jsonResponse({ result: output.data }, 200)
-}
-
-function projectSchema(endpoint: string, output: Schema, result: unknown): unknown {
-	try {
-		return project(output, result)
-	} catch (error) {
-		if (error instanceof ProjectionRefusedError) {
-			throw new ServerFault('output_refused', `'${endpoint}' returned a value no branch of its output union accepts`)
-		}
-		throw error
-	}
+	return jsonResponse({ result: output }, 200)
 }
 
 /** The principal a public procedure's capabilities are granted to: its workload, never a visitor. */

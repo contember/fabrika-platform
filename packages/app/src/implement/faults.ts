@@ -21,6 +21,8 @@ export const SERVER_FAULTS = {
 	workload_unauthorized: "the workload's key or token does not carry the authority its declaration needs",
 	terminal_refused: "IAM refused the application's own credential for an identification at a terminal",
 	request_cancelled: 'the request was cancelled or outlived its budget before its transaction committed; nothing it wrote is kept',
+	request_identity_unsupported: "a keyed request's input holds a value that has no identity (not plain data, or a file it did not upload)",
+	request_receipt_too_large: "a keyed request's output is larger than a receipt keeps; nothing it wrote is kept",
 	file_object_missing: "a file's object is missing from storage",
 	file_object_mismatch: "a file's object has another size than its row records",
 	file_key_taken: "a new file's object key already held an object this upload did not write",

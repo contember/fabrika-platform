@@ -234,6 +234,7 @@ src/
     principal.ts      caller kinds and principals from a verified token
     headers.ts        the response header policy
     project.ts        output projection over the output's zod schema
+    receipts.ts       a keyed mutation's receipt (ADR-0078): Idempotency-Key, the input identity, replay and record
     environment.ts    captureEnvironment: the FABRIKA_* variables out of the process
     connect.ts        Connector, wireImports, connectContext (ctx.connect per request), connectVariables
     bounded.ts        readBoundedBytes: a body under a byte budget and a deadline
