@@ -144,7 +144,7 @@ const postgresSchema = async (deps: DbCommandDependencies): Promise<GeneratedMod
 	const migrations = applicationMigrations(required(deps.source, 'FABRIKA_APP_ID'), deps.cwd)
 	const url = required(deps.source, 'FABRIKA_APP_DATABASE_URL')
 	try {
-		// The migrations' manifest: the start check refuses any database object no migration declares.
+		// The migrations' manifest: the check refuses any database object no migration declares.
 		return await generateSchema(url, migrations.schema, migrations.objects())
 	} catch (error) {
 		throw reportable(error)

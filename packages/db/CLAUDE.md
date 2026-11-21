@@ -568,8 +568,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   schema and `pg_catalog`, a sequence other than an identity column's, a routine overload) and any trigger,
   rule, view, function, policy or domain no migration
   declares: a store's guarded write would fire such code unseen, and a declared one is a deviation the
-  approver already saw. This is what finds an object created at runtime, at every start (`codegen
-  --verify`) and in the test kit. It runs in a read-only transaction that pins `search_path` and
+  approver already saw. This is what finds an object created at runtime: `fabrika db migrate` runs it on every run
+  (`checkDatabaseCode`, `@fabrika/platform-node`), `codegen --verify` in the build, or at start on an older pin or
+  another build base, and so does the test kit. It runs in a read-only transaction that pins `search_path` and
   `standard_conforming_strings`, so a role-level setting cannot blind it.
 
 ## Relations, conditions and reveals (ADR-0073)

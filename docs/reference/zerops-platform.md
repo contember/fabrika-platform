@@ -1422,14 +1422,18 @@ remedies, neither of which needs sudo: when the bucket's `stack.create` process 
 set the variable on the deploy service to the bucket's service id, not sensitive; otherwise delete the bucket
 and deploy again.
 
-A contract application with a database checks its schema in the build. After `fabrika-check`, one generated build
+A contract application with a database checks its schema in the build when its `@fabrika/app` pin is
+0.9.0-dev.23 or later (`MIGRATE_CHECKS_DATABASE_CODE_SINCE`) and its build base is a known Alpine 3.23 image; otherwise
+its init commands run `fabrika db codegen --verify` after the migrations, as before. In the build, a step first refuses an
+`@fabrika/cli` older than its `@fabrika/app`. After `fabrika-check`, one generated build
 command installs `postgresql18`, starts a throwaway cluster on a unix socket under `/tmp/fabrika-build-postgres` (no TCP
 listener, `scram-sha-256` with a random password), migrates it from scratch with `fabrika db migrate`, runs
 `fabrika db codegen --verify` on it and stops it; a failed step prints
 `fabrika: the build check failed: <check>` and fails the build (`contractRecipe`, `packages/app/src/build-recipe.ts`). It
 is one command because each build command runs in its own shell. The cluster is outside the source root, so nothing of
 it is deployed. The application's own database may be an older major: the check needs only a server that runs its
-migrations. Its init command runs only `fabrika db migrate`, and its start script only starts the server.
+migrations. Its init command runs only `fabrika db migrate`, which on every run also refuses database code in the live
+schema that no migration declares, and its start script only starts the server.
 
 Only a build whose every base is known to be Alpine 3.23 or later runs it there (`zeropsSchemaChecks`,
 `packages/provider-zerops/src/execution.ts`): today `alpine/bun@1.3`, the default, verified below, also named bare as
