@@ -44,13 +44,24 @@ export const SHARD_PLACEHOLDER = '${{ matrix.shard }}'
 /** The test job's shard axis of the matrix; every shard runs against every PostgreSQL major. */
 export const TEST_SHARDS: readonly number[] = [1, 2, 3, 4]
 
+/** Each main-suite file's measured duration, which `bun test --timings` splits the shards by; `bun run test:timings` rewrites it. */
+export const TEST_TIMINGS_FILE = 'test-timings.json'
+
 /**
  * Run once per test job. `ci.yml`'s other test steps are backends this script starts: "Start SeaweedFS", and the
  * Postgres settings step, which this script passes to its Postgres as `-c` flags instead.
+ * The isolated suites (`test:isolated`) are spread over the shards by their measured time, the longest on its own.
  */
 export const TEST_STEPS: readonly TestStep[] = [
-	{ job: 'test', name: 'Run a shard of the main suite', run: `bun run test:unit --shard=${SHARD_PLACEHOLDER}/${TEST_SHARDS.length}` },
-	{ job: 'test', name: 'Run the isolated suites', run: 'bun run test:isolated', onlyInShard: 1 },
+	{
+		job: 'test',
+		name: 'Run a shard of the main suite',
+		run: `bun run test:unit --shard=${SHARD_PLACEHOLDER}/${TEST_SHARDS.length} --timings=${TEST_TIMINGS_FILE}`,
+	},
+	{ job: 'test', name: 'Run the builder suite', run: 'bun run test:builder', onlyInShard: 1 },
+	{ job: 'test', name: 'Run the Lopata suites', run: 'bun run test:lopata', onlyInShard: 2 },
+	{ job: 'test', name: 'Run the agent-interface and DOM suites', run: 'bun run test:agent-interfaces && bun run test:dom', onlyInShard: 3 },
+	{ job: 'test', name: 'Run the example suites', run: 'bun run test:examples', onlyInShard: 4 },
 ]
 export const S3_START_STEP_NAME = 'Start SeaweedFS'
 export const POSTGRES_SETTINGS_STEP_NAME = 'Run the test Postgres without durability'
@@ -89,7 +100,7 @@ export const S3_VALUES = {
 const READINESS_ATTEMPTS = 60
 
 /** One test job's backend: the environment values that name it, and the container this run started for it. */
-interface Backend {
+export interface Backend {
 	readonly env: Record<string, string>
 	/** Removed once its test job ends. */
 	readonly container?: string
@@ -140,7 +151,7 @@ const removeContainers = async (names: readonly string[]): Promise<void> => {
 	if (names.length > 0) await capture(['docker', 'rm', '--force', '--volumes', ...names])
 }
 
-const removeAllContainers = (): Promise<void> => removeContainers([...containers])
+export const removeAllContainers = (): Promise<void> => removeContainers([...containers])
 
 const startContainer = async (prefix: string, args: readonly string[]): Promise<string> => {
 	const name = `${prefix}-${randomUUID().slice(0, 8)}`
@@ -166,7 +177,7 @@ const waitUntil = async (what: string, probe: readonly string[]): Promise<void> 
 	throw new StepFailure(`${what} was not ready after ${READINESS_ATTEMPTS} s`)
 }
 
-const startPostgres = async (major: string): Promise<Backend> => {
+export const startPostgres = async (major: string): Promise<Backend> => {
 	const name = await startContainer(`fabrika-check-ci-postgres-${major}`, [
 		'--publish',
 		'127.0.0.1::5432',
@@ -181,7 +192,7 @@ const startPostgres = async (major: string): Promise<Backend> => {
 	return { env: { FABRIKA_TEST_POSTGRES_URL: `postgres://postgres:postgres@127.0.0.1:${await publishedPort(name, 5432)}/postgres` }, container: name }
 }
 
-const startSeaweedfs = async (): Promise<Backend> => {
+export const startSeaweedfs = async (): Promise<Backend> => {
 	const name = await startContainer('fabrika-check-ci-s3', [
 		'--publish',
 		'127.0.0.1::9000',

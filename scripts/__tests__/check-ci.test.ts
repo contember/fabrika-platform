@@ -17,6 +17,7 @@ import {
 	SEAWEEDFS_IMAGE,
 	TEST_SHARDS,
 	TEST_STEPS,
+	TEST_TIMINGS_FILE,
 } from '../check-ci'
 
 const ciSchema = z.object({
@@ -27,6 +28,8 @@ const ciSchema = z.object({
 		steps: z.array(z.object({ name: z.string().optional(), if: z.string().optional(), run: z.string().optional() })),
 	})),
 })
+
+const ROOT = resolve(import.meta.dir, '..', '..')
 
 const ci = ciSchema.parse(Bun.YAML.parse(await Bun.file(resolve(import.meta.dir, '..', '..', '.github/workflows/ci.yml')).text()))
 
@@ -52,6 +55,19 @@ describe('check:ci', () => {
 		expect(job?.strategy?.matrix.shard).toEqual([...TEST_SHARDS])
 		const conditions = TEST_STEPS.map((step) => job?.steps.find((ciStep) => ciStep.name === step.name)?.if)
 		expect(conditions).toEqual(TEST_STEPS.map((step) => step.onlyInShard === undefined ? undefined : `matrix.shard == ${step.onlyInShard}`))
+	})
+
+	test('runs every isolated suite in exactly one shard', async () => {
+		const packageJson = z.object({ scripts: z.record(z.string()) }).parse(await Bun.file(resolve(ROOT, 'package.json')).json())
+		const parts = (run: string): string[] => run.split('&&').map((part) => part.trim())
+		const isolated = TEST_STEPS.filter((step) => step.onlyInShard !== undefined).flatMap((step) => parts(step.run))
+		expect(isolated.toSorted()).toEqual(parts(packageJson.scripts['test:isolated'] ?? '').toSorted())
+	})
+
+	// bun reads a missing or unreadable timings file as none and falls back to splitting by count, silently.
+	test('splits the main suite by committed timings that bun can read', async () => {
+		const timings = z.object({ version: z.literal(1), files: z.record(z.number()) }).parse(await Bun.file(resolve(ROOT, TEST_TIMINGS_FILE)).json())
+		expect(Object.keys(timings.files).length).toBeGreaterThan(0)
 	})
 
 	test('starts the backends of the test job', () => {

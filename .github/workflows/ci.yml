@@ -66,7 +66,7 @@ jobs:
         # The gate (pull requests, pushes, release tags) runs the major Zerops runs. The nightly run adds 17, the local
         # stack's major; `pg-catalog-names.ts` is the union of both.
         postgres: ${{ fromJSON(github.event_name == 'schedule' && '["17","18"]' || '["18"]') }}
-        # The serial main suite takes 11–16 minutes on one runner; bun's `--shard` splits its files round-robin.
+        # The serial main suite takes 10–16 minutes on one runner; `--shard` with `--timings` splits its files by measured time.
         shard: [1, 2, 3, 4]
     services:
       postgres:
@@ -131,12 +131,26 @@ jobs:
           done
           docker exec fabrika-test-s3 curl -fsS -o /dev/null 'http://127.0.0.1:8888/buckets/fabrika-test/?limit=1'
 
+      # `test-timings.json` holds each file's measured duration (`bun run test:timings`), so the shards split by time.
       - name: Run a shard of the main suite
-        run: bun run test:unit --shard=${{ matrix.shard }}/4
+        run: bun run test:unit --shard=${{ matrix.shard }}/4 --timings=test-timings.json
 
-      - name: Run the isolated suites
+      # The isolated suites, spread over the shards by their measured time (36, 25, 13 and 10 s).
+      - name: Run the builder suite
         if: matrix.shard == 1
-        run: bun run test:isolated
+        run: bun run test:builder
+
+      - name: Run the Lopata suites
+        if: matrix.shard == 2
+        run: bun run test:lopata
+
+      - name: Run the agent-interface and DOM suites
+        if: matrix.shard == 3
+        run: bun run test:agent-interfaces && bun run test:dom
+
+      - name: Run the example suites
+        if: matrix.shard == 4
+        run: bun run test:examples
 
   build:
     name: Build deployable artifacts

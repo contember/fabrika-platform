@@ -17,6 +17,7 @@
 		"test:builder": "bun run --filter @fabrika/builder test",
 		"test:examples": "bun run --cwd examples/zerops-app test && bun run --cwd examples/crm test && bun run --cwd examples/app test",
 		"test:live": "bun test packages/provider-zerops/src/__tests__/platform-facts.live.test.ts",
+		"test:timings": "bun scripts/test-timings.ts",
 		"check:ci": "bun scripts/check-ci.ts",
 		"lint": "oxlint",
 		"format": "dprint fmt",
