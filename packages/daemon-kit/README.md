@@ -9,9 +9,11 @@ Bun daemon infrastructure without canvas or browser dependencies:
 - `jsonResponse`, `corsHeaders`: HTTP response helpers.
 - `createCapability`, `writeCapabilityFile`, `readCapabilityFile`, `matchesCapability`: the CLI capability a daemon
   writes for its owner (`0600` in a `0700` directory) and checks in constant time on the routes only its CLI calls.
-- `loadUiToken`, `uiCookieName`, `hasUiCookie`, `UiLinks`, `openLinkResponse`, `uiPage`, `withoutCookies`,
-  `openLinkThroughFile`: a browser UI's credential. A per-daemon secret (`0600`, created exclusively) held by the browser
-  as an `HttpOnly; SameSite=Strict` cookie named after the port; one-time links with a destination the daemon chose,
+- `userRuntimeDir`, `ensureRuntimeDir`: a host's per-user runtime directory, `$XDG_RUNTIME_DIR/<app>` or
+  `<tmpdir>/<app>-<uid>`, created `0700`; a symlink, a file or another user's directory there is refused.
+- `uiCookieName`, `hasUiCookie`, `UiLinks`, `openLinkResponse`, `uiPage`, `withoutCookies`, `openLinkThroughFile`: a
+  browser UI's credential. A secret each daemon start makes afresh (`createCapability`, held in memory only), held by
+  the browser as an `HttpOnly; SameSite=Strict` cookie named after the port; one-time links with a destination the daemon chose,
   which `/open` trades for the cookie through a page that refreshes; and the CLI side, which hands the browser such a
   link through a `0600` file, never as a process argument. The daemon supplies its cookie prefix and its pages.
 - `@fabrika/daemon-kit/ui-client` `reconnectOrReload`: a UI whose socket dropped reloads when the daemon answers 401, so

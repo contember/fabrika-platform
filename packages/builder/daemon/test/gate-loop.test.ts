@@ -32,7 +32,7 @@ beforeAll(async () => {
 	dataDir = scratchDir('fabrika-gate-loop-')
 	sessionsDir = join(dataDir, 'sessions')
 	cliTempDir = join(dataDir, 'tmp')
-	// The spawned CLI reads the capability from `$TMPDIR/fabrika`, as beside a daemon it started itself.
+	// The spawned CLI reads the capability from `$XDG_RUNTIME_DIR/fabrika`, as beside a daemon it started itself.
 	daemon = startDaemon({ port: 0, sessionsDir, cliAuthFile: join(cliTempDir, 'fabrika', 'daemon-auth-token') })
 	base = builderDaemonUrl(daemon.port)
 	wsBase = builderDaemonUrl(daemon.port, 'ws')
@@ -81,6 +81,7 @@ async function runCli(
 			FABRIKA_PORT: String(daemon.port),
 			FABRIKA_DATA_DIR: dataDir,
 			TMPDIR: cliTempDir,
+			XDG_RUNTIME_DIR: cliTempDir,
 			...env,
 		},
 		stdout: 'pipe',

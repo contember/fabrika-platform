@@ -1,5 +1,5 @@
 import { createWebSocketManager, SessionManager, unwatchAll, type WSData } from '@fabrika/canvas-kernel/server'
-import { createCapability, dispatch, loadUiToken, uiCookieName, UiLinks, writeCapabilityFile } from '@fabrika/daemon-kit'
+import { createCapability, dispatch, uiCookieName, UiLinks, writeCapabilityFile } from '@fabrika/daemon-kit'
 import { resolve } from 'path'
 import { BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
 import { admitCredential, admitRequest } from './admission'
@@ -31,11 +31,6 @@ export interface StartDaemonOptions {
 	platform?: BuilderPlatformOptions
 	/** Where the CLI capability is written once the port is bound, `0600` in a `0700` directory. */
 	cliAuthFile?: string
-	/**
-	 * The dashboard's secret, kept across restarts so open tabs keep their cookie; created `0600` on first use. Without it
-	 * the secret lasts as long as the process.
-	 */
-	uiTokenFile?: string
 }
 
 export interface RunningDaemon {
@@ -59,7 +54,8 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 
 	const portRef = { value: port }
 	const cliAuthToken = createCapability()
-	const uiToken = opts.uiTokenFile === undefined ? createCapability() : loadUiToken(opts.uiTokenFile)
+	// Fresh on every start: a cookie a browser kept, or sent to whatever held the port meanwhile, opens nothing here.
+	const uiToken = createCapability()
 	const uiCredential = () => ({ cookieName: uiCookieName(BUILDER_UI_COOKIE_PREFIX, portRef.value), token: uiToken })
 	const uiLinks = new UiLinks(() => builderDaemonUrl(portRef.value))
 
@@ -75,6 +71,7 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 		},
 		version: VERSION,
 		uiLinks,
+		...(opts.cliAuthFile === undefined ? {} : { cliAuthFile: opts.cliAuthFile }),
 	}
 
 	const routes = [

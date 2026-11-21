@@ -77,6 +77,7 @@ function startMockDaemon(opts: {
 					dataDir: dirname(sessionsDir),
 					sessionsDir,
 					sessions: 1,
+					cliAuthFile: join(ISOLATED_TEMP, 'fabrika', 'daemon-auth-token'),
 				})
 			}
 			if (url.pathname.endsWith('/plan') && req.method === 'POST') {
@@ -113,6 +114,7 @@ async function run(args: string[], port: number) {
 			...process.env,
 			HOME: ISOLATED_HOME,
 			TMPDIR: ISOLATED_TEMP,
+			XDG_RUNTIME_DIR: ISOLATED_TEMP,
 			FABRIKA_DATA_DIR: ISOLATED_DATA_DIR,
 			FABRIKA_PORT: String(port),
 			FABRIKA_SESSION_ID: 's_int',
@@ -137,7 +139,7 @@ test('ensure-daemon rejects an unmanaged daemon with a different data root', asy
 
 	const result = await run(['ensure-daemon'], port)
 	expect(result.code).toBe(1)
-	expect(result.stderr).toContain('data-root mismatch')
+	expect(result.stderr).toContain('data-root or capability mismatch')
 	expect(result.stderr).toContain('Not starting a second daemon')
 	expect(result.stdout).toContain('"running":false')
 	// A daemon spawned here would bind the port as soon as the unmanaged one stops.

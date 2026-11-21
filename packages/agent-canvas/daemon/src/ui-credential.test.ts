@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { connect } from 'net'
 import { tmpdir } from 'os'
 import { join, resolve } from 'path'
@@ -18,6 +18,8 @@ const SESSION = 'ui-credential-demo'
 const root = mkdtempSync(join(tmpdir(), 'agent-canvas-ui-credential-'))
 const home = join(root, 'home')
 const temp = join(root, 'tmp')
+/** The user's runtime directory, `$XDG_RUNTIME_DIR`; the daemon and the CLI keep their files in `agent-canvas` under it. */
+const runtime = join(root, 'run')
 const project = join(root, 'project')
 const canvases = join(root, 'canvases')
 const fakeBin = join(root, 'bin')
@@ -39,6 +41,7 @@ function environment(): Record<string, string> {
 		...process.env,
 		HOME: home,
 		TMPDIR: temp,
+		XDG_RUNTIME_DIR: runtime,
 		CANVAS_PORT: String(port),
 		CANVAS_SESSION_ID: SESSION,
 		CANVAS_PROJECT_ROOT: project,
@@ -109,7 +112,7 @@ function upgradeStatus(path: string, origin: string, headers: Record<string, str
 /** Submits feedback on a browser socket and resolves once the daemon has saved it (it then announces the revision). */
 function submitFeedback(feedback: string): Promise<void> {
 	return new Promise((done, fail) => {
-		const token = readFileSync(join(temp, 'agent-canvas', 'daemon-auth-token'), 'utf-8')
+		const token = readFileSync(join(runtime, 'agent-canvas', 'daemon-auth-token'), 'utf-8')
 		const socket = new WebSocket(`ws://localhost:${port}/ws/session/${SESSION}?${CLI_TOKEN_QUERY}=${token}`)
 		socket.onopen = () => socket.send(JSON.stringify({ type: 'submit', feedback }))
 		socket.onmessage = (event) => {
@@ -123,6 +126,10 @@ function submitFeedback(feedback: string): Promise<void> {
 
 beforeAll(async () => {
 	for (const dir of [home, temp, project, canvases, fakeBin]) mkdirSync(dir, { recursive: true })
+	mkdirSync(runtime, { mode: 0o700 })
+	// The UI secret an earlier release kept across restarts; the daemon removes it.
+	mkdirSync(join(home, '.claude', 'agent-canvas'), { recursive: true })
+	writeFileSync(join(home, '.claude', 'agent-canvas', 'ui-token'), 'x'.repeat(43), { mode: 0o600 })
 	writeFileSync(join(fakeBin, 'xdg-open'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opened}'\n`)
 	chmodSync(join(fakeBin, 'xdg-open'), 0o755)
 	writeFileSync(join(project, 'notes.txt'), 'project notes')
@@ -294,9 +301,56 @@ describe('the canvas UI credential', () => {
 		expect((await fetch(`${base}/api/review/demo/threads`, { headers: { Cookie: cookiePair(signedIn) } })).status).toBe(200)
 	}, 30_000)
 
-	test('the UI secret and the data directory are readable by their owner only', () => {
+	test('the data directory is readable by its owner only and holds no UI secret', () => {
 		const data = join(home, '.claude', 'agent-canvas')
 		expect(statSync(data).mode & 0o777).toBe(0o700)
-		expect(statSync(join(data, 'ui-token')).mode & 0o777).toBe(0o600)
+		expect(existsSync(join(data, 'ui-token'))).toBe(false)
+	})
+
+	test('a cookie from an earlier daemon run is refused after a restart, and a fresh link signs the browser in again', async () => {
+		const cookie = cookiePair(await fetch((await cli(['open', '--session', SESSION, '--no-open'])).stdout.trim()))
+		expect((await fetch(`${base}/api/sessions`, { headers: { Cookie: cookie } })).status).toBe(200)
+
+		expect((await cli(['daemon', 'restart'])).exitCode).toBe(0)
+		expect((await fetch(`${base}/api/sessions`, { headers: { Cookie: cookie } })).status).toBe(401)
+		expect(await upgradeStatus(`/ws/session/${SESSION}`, base, { Cookie: cookie })).toBe(401)
+
+		const fresh = cookiePair(await fetch((await cli(['open', '--session', SESSION, '--no-open'])).stdout.trim()))
+		expect(fresh).not.toBe(cookie)
+		expect((await fetch(`${base}/api/sessions`, { headers: { Cookie: fresh } })).status).toBe(200)
+	}, 30_000)
+})
+
+describe('the runtime files', () => {
+	test("sit in the user's runtime directory, 0700, and none in the shared temp directory", () => {
+		const own = join(runtime, 'agent-canvas')
+		expect(statSync(own).mode & 0o777).toBe(0o700)
+		expect(readdirSync(own)).toEqual(expect.arrayContaining(['daemon.pid', 'daemon-auth-token', 'daemon-startup.log']))
+		expect(statSync(join(own, 'daemon-auth-token')).mode & 0o777).toBe(0o600)
+		expect(readdirSync(temp)).toEqual([])
+	})
+
+	test('a push from the old shared directory, where earlier skills keep canvases, closes it or refuses a symlink there', async () => {
+		const legacy = join(temp, 'agent-canvas')
+		const elsewhere = join(root, 'elsewhere')
+		mkdirSync(join(elsewhere, 'session'), { recursive: true })
+		writeFileSync(join(elsewhere, 'session', 'plan.jsx'), '<Section title="Planted">x</Section>\n')
+		symlinkSync(elsewhere, legacy)
+		const refused = await cli(['push', join(legacy, 'session'), '--label', 'Planted'])
+		expect(refused.exitCode).toBe(1)
+		expect(refused.stderr).toContain('agent-canvas install')
+		rmSync(legacy)
+
+		mkdirSync(join(legacy, 'session'), { recursive: true })
+		chmodSync(legacy, 0o777)
+		writeFileSync(join(legacy, 'session', 'plan.jsx'), '<Section title="Legacy">x</Section>\n')
+		expect((await cli(['push', join(legacy, 'session'), '--label', 'Legacy'])).exitCode).toBe(0)
+		expect(statSync(legacy).mode & 0o777).toBe(0o700)
+	}, 30_000)
+
+	test('`dir` prints that directory, where the skill keeps canvas files', async () => {
+		const result = await cli(['dir'])
+		expect(result.exitCode).toBe(0)
+		expect(result.stdout.trim()).toBe(join(runtime, 'agent-canvas'))
 	})
 })

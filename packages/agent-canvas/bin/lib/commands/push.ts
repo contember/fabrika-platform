@@ -1,5 +1,7 @@
+import { ensureRuntimeDir } from '@fabrika/daemon-kit'
 import { existsSync, statSync } from 'fs'
-import { basename, resolve } from 'path'
+import { tmpdir } from 'os'
+import { basename, join, resolve, sep } from 'path'
 import { parseArgs } from 'util'
 import { z } from 'zod'
 import { cliAuthHeaders } from '../cli-auth.ts'
@@ -22,6 +24,22 @@ const pushResponseSchema = z.union([
 		unconsumedFeedback: z.string().optional(),
 	}),
 ])
+
+/**
+ * A skill installed before `agent-canvas dir` keeps canvases in `<tmpdir>/agent-canvas`, which the daemon no longer
+ * closes; the push keeps it private as the daemon did, and refuses one that is a symlink or another user's.
+ */
+function assertPrivateLegacyDirectory(path: string): void {
+	const legacy = join(tmpdir(), 'agent-canvas')
+	if (path !== legacy && !path.startsWith(legacy + sep)) return
+	try {
+		ensureRuntimeDir(legacy)
+	} catch (error: unknown) {
+		console.error(`Error: ${error instanceof Error ? error.message : String(error)}`)
+		console.error('Run `bunx agent-canvas install` to update the skill: it keeps canvases in the directory `agent-canvas dir` prints.')
+		process.exit(1)
+	}
+}
 
 export async function handlePush(args: string[]) {
 	const { values, positionals } = parseArgs({
@@ -51,6 +69,8 @@ export async function handlePush(args: string[]) {
 		console.error('Usage: agent-canvas push <directory>')
 		process.exit(1)
 	}
+
+	assertPrivateLegacyDirectory(resolvedPath)
 
 	const sessionId = getSessionId(values.session)
 	const projectRoot = process.env.CANVAS_PROJECT_ROOT || process.cwd()

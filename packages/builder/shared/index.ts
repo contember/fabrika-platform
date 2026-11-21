@@ -99,13 +99,15 @@ export const healthInfoSchema = z.object({
 	dataDir: optionalTextSchema,
 	sessionsDir: z.string(),
 	sessions: z.union([wireNumberSchema, z.array(z.string())]).optional().catch(undefined),
-}).transform(({ ok, version, pid, dataDir, sessionsDir, sessions }) => ({
+	cliAuthFile: optionalTextSchema,
+}).transform(({ ok, version, pid, dataDir, sessionsDir, sessions, cliAuthFile }) => ({
 	ok,
 	...(version === undefined ? {} : { version }),
 	...(pid === undefined ? {} : { pid }),
 	...(dataDir === undefined ? {} : { dataDir }),
 	sessionsDir,
 	...(sessions === undefined ? {} : { sessions }),
+	...(cliAuthFile === undefined ? {} : { cliAuthFile }),
 }))
 export const uiHealthSchema = z.object({
 	ok: z.literal(true),

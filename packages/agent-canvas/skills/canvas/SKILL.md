@@ -20,8 +20,15 @@ entire workflow:
 echo "${CANVAS_SESSION_ID:-${CODEX_THREAD_ID:-${CLAUDE_CODE_SESSION_ID:-$(uuidgen)}}}"
 ```
 
-Write the printed value into every canvas command as `--session "<id>"`, and
-store canvas files in `${TMPDIR:-/tmp}/agent-canvas/<id>/`.
+Write the printed value into every canvas command as `--session "<id>"`. Resolve
+the canvas directory once the same way:
+
+```bash
+bunx agent-canvas dir
+```
+
+It prints a directory only the user can read; store canvas files in
+`<printed directory>/<id>/`.
 
 Do NOT rely on `export` — in some hosts (Claude Code) each shell call starts
 fresh, so the variable will not survive between commands.

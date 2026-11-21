@@ -5,16 +5,17 @@ Canvas opens a rich, annotatable document in the user's browser. You write JSX, 
 Use it whenever structured visual communication beats inline chat: plans, reviews, decisions, explanations, discovery interviews.
 
 **Note**: Replace all `<session-id>` references below with the stable canvas
-session ID resolved by the skill.
+session ID resolved by the skill, and `<canvas-dir>` with the directory
+`bunx agent-canvas dir` prints (private to the user).
 
 ## Core Workflow
 
 ### 1. Write JSX
 
-Use the **Write** tool to create `.jsx` files in `${TMPDIR:-/tmp}/agent-canvas/<session-id>/`:
+Use the **Write** tool to create `.jsx` files in `<canvas-dir>/<session-id>/`:
 
 ```jsx
-// ${TMPDIR:-/tmp}/agent-canvas/<session-id>/plan.jsx
+// <canvas-dir>/<session-id>/plan.jsx
 
 <Section title="Authentication Redesign">
 	A proposal to replace session-based auth with JWT tokens.
@@ -42,7 +43,7 @@ Components are auto-available — no imports needed. The file can be a JSX fragm
 Push the directory to open all canvases in the browser:
 
 ```bash
-bunx agent-canvas push ${TMPDIR:-/tmp}/agent-canvas/<session-id>/ --session <session-id> --label "Implementation Plan"
+bunx agent-canvas push <canvas-dir>/<session-id>/ --session <session-id> --label "Implementation Plan"
 ```
 
 All `*.jsx` files in the directory are pushed as a snapshot. Each file appears as a separate tab. **Always show the `browserUrl` from the output to the user.** The link signs the browser in once, and the first push opens it. When the user sees "Open this canvas from its link" (another browser, or the link was already used), run `bunx agent-canvas open --session <session-id> --no-open` and show them the fresh link it prints.
@@ -140,7 +141,7 @@ Returns immediately — prints feedback if available, otherwise no output.
 Use different files for different phases or concerns:
 
 ```
-${TMPDIR:-/tmp}/agent-canvas/<session-id>/
+<canvas-dir>/<session-id>/
   discovery.jsx    # Discovery interview
   requirements.jsx # Requirements spec
   plan.jsx         # Implementation plan
@@ -150,7 +151,7 @@ Write new files as phases progress, then push the directory. Previous files rema
 
 ## File Location
 
-All canvas files go in `${TMPDIR:-/tmp}/agent-canvas/<session-id>/`. This is a system temp directory — no `.gitignore` needed.
+All canvas files go in `<canvas-dir>/<session-id>/`. It is the user's private runtime directory (`$XDG_RUNTIME_DIR/agent-canvas`, else `agent-canvas-<uid>` in the system temp directory) — no `.gitignore` needed.
 
 ## Components
 
@@ -247,7 +248,7 @@ To collect comments on a running application instead of a canvas, read `bunx age
 
 ## Important Rules
 
-- **Never `cd`** before running `bunx agent-canvas` commands. The daemon uses the current working directory to resolve project file paths (`<FilePreview>`, file browser). Always run commands from the project root. Since canvas files are in `${TMPDIR:-/tmp}`, use absolute paths to reference them — e.g. `bunx agent-canvas push ${TMPDIR:-/tmp}/agent-canvas/<session-id>/`.
+- **Never `cd`** before running `bunx agent-canvas` commands. The daemon uses the current working directory to resolve project file paths (`<FilePreview>`, file browser). Always run commands from the project root. Since canvas files are in `<canvas-dir>`, use absolute paths to reference them — e.g. `bunx agent-canvas push <canvas-dir>/<session-id>/`.
 - **Write** canvas files using the Write tool. Never use bash heredocs.
 - **Edit** canvas files using the Edit tool. Never rewrite entire files.
 - Every `<Item>` and interactive component needs a unique `id`.

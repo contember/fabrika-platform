@@ -1,5 +1,6 @@
+import { ensureRuntimeDir, userRuntimeDir } from '@fabrika/daemon-kit'
 import { mkdirSync } from 'fs'
-import { homedir, tmpdir } from 'os'
+import { homedir } from 'os'
 import { join } from 'path'
 
 /**
@@ -14,7 +15,7 @@ export interface CanvasPaths {
 	dataDir: string
 	/** Session + revision store. */
 	sessionsDir: string
-	/** Ephemeral root — may be lost on reboot. */
+	/** Ephemeral root, private to the user — may be lost on reboot. */
 	tempDir: string
 	/** Daemon PID file. */
 	pidFile: string
@@ -33,7 +34,7 @@ export interface CanvasPathsConfig {
 	 * and pass the result; the kernel holds no migration policy.
 	 */
 	dataDir?: string
-	/** Ephemeral root. Defaults to `<tmpdir>/<appName>`. */
+	/** Ephemeral root. Defaults to the per-user runtime directory, `userRuntimeDir(appName)`. */
 	tempDir?: string
 	/** Create the directories. Pass `false` when only the strings are needed. */
 	ensure?: boolean
@@ -42,7 +43,7 @@ export interface CanvasPathsConfig {
 export function createCanvasPaths(config: CanvasPathsConfig): CanvasPaths {
 	const { appName, ensure = true } = config
 	const dataDir = config.dataDir ?? join(homedir(), '.claude', appName)
-	const tempDir = config.tempDir ?? join(tmpdir(), appName)
+	const tempDir = config.tempDir ?? userRuntimeDir(appName)
 
 	const paths: CanvasPaths = {
 		dataDir,
@@ -54,6 +55,7 @@ export function createCanvasPaths(config: CanvasPathsConfig): CanvasPaths {
 	}
 
 	if (ensure) {
+		ensureRuntimeDir(tempDir)
 		mkdirSync(paths.sessionsDir, { recursive: true })
 		mkdirSync(paths.compileTempDir, { recursive: true })
 		mkdirSync(paths.uploadsDir, { recursive: true })

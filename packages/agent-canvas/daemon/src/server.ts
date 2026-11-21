@@ -1,6 +1,6 @@
 import { createWebSocketManager, SessionManager, type WSData } from '@fabrika/canvas-kernel/server'
-import { corsHeaders, createCapability, dispatch, jsonResponse, loadUiToken, UiLinks, writeCapabilityFile } from '@fabrika/daemon-kit'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { corsHeaders, createCapability, dispatch, jsonResponse, UiLinks, writeCapabilityFile } from '@fabrika/daemon-kit'
+import { chmodSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { admitRequest } from './admission'
 import { createApiHandlers } from './handlers/api'
@@ -10,7 +10,7 @@ import { createStaticHandlers, serveErrorOptions, withDefaultCsp } from './handl
 import { createThemeHandlers } from './handlers/theme'
 import { createThreadHandlers } from './handlers/threads'
 import { createUploadHandlers } from './handlers/uploads'
-import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR, UI_TOKEN_FILE } from './paths'
+import { CLI_AUTH_FILE, DATA_DIR, LEGACY_UI_TOKEN_FILE, PID_FILE, REVIEWS_DIR, SESSIONS_DIR, TEMP_DIR } from './paths'
 import { startRemoteFeedbackPoller } from './remote-feedback'
 import { ReviewProxies } from './review/proxy'
 import { createReviewServer, type ReviewSocketData } from './review/server'
@@ -20,15 +20,15 @@ import { CanvasThreadStore } from './threads'
 const PORT = parseInt(process.env.CANVAS_PORT || '19400', 10)
 const VERSION = JSON.parse(readFileSync(join(dirname(import.meta.dir), '..', 'package.json'), 'utf-8')).version as string
 
-// Write PID file so CLI can find and stop us
-mkdirSync(TEMP_DIR, { recursive: true, mode: 0o700 })
-chmodSync(TEMP_DIR, 0o700)
+// Write PID file so CLI can find and stop us; `paths` made TEMP_DIR the user's private runtime directory.
 writeFileSync(PID_FILE, String(process.pid))
 const cliAuthToken = createCapability()
 writeCapabilityFile(CLI_AUTH_FILE, cliAuthToken)
-// Sessions, canvases, feedback and the UI secret live here; no other OS user reads them from disk.
+// Sessions, canvases and feedback live here; no other OS user reads them from disk.
 chmodSync(DATA_DIR, 0o700)
-const uiToken = loadUiToken(UI_TOKEN_FILE)
+// Fresh on every start: a cookie a browser kept, or sent to whatever held the port meanwhile, opens nothing here.
+const uiToken = createCapability()
+rmSync(LEGACY_UI_TOKEN_FILE, { force: true })
 const uiLinks = new UiLinks(() => `http://localhost:${PORT}`)
 
 const sessionManager = new SessionManager(SESSIONS_DIR)

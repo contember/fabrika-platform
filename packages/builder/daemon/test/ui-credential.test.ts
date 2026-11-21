@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { connect } from 'node:net'
 import { join } from 'node:path'
 import { BUILDER_CLI_TOKEN_HEADER, BUILDER_CLI_TOKEN_QUERY, BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
@@ -15,7 +15,6 @@ const SESSION = 'owned'
 
 let daemon: RunningDaemon
 let directory: string
-let uiTokenFile: string
 let cliAuthFile: string
 let base: string
 let token: string
@@ -48,14 +47,12 @@ function start(port: number): RunningDaemon {
 		port,
 		sessionsDir: join(data, 'sessions'),
 		cliAuthFile,
-		uiTokenFile,
 		platform: { dataDir: data, stateDir: join(data, 'projects'), credentialDir: join(directory, 'credentials') },
 	})
 }
 
 beforeAll(async () => {
 	directory = scratchDir('builder-ui-credential-')
-	uiTokenFile = join(directory, 'data', 'ui-token')
 	cliAuthFile = join(directory, 'tmp', 'fabrika', 'daemon-auth-token')
 	mkdirSync(join(directory, 'data'), { recursive: true, mode: 0o700 })
 	mkdirSync(join(directory, 'credentials'), { mode: 0o700 })
@@ -234,11 +231,16 @@ test('the CLI flow keeps working on its capability: reads, push, wait, gate cons
 	expect(await status('POST', `/api/session/${SESSION}/gate/vision/consume`, undefined, cli)).not.toBe(401)
 })
 
-test('the UI secret is readable by its owner only and survives a restart', async () => {
-	expect(statSync(uiTokenFile).mode & 0o777).toBe(0o600)
+test('a cookie from an earlier daemon run is refused after a restart, and a fresh link signs the browser in again', async () => {
 	const { cookie } = await redeem(await issueLink())
+	expect(await status('GET', '/api/sessions', undefined, { Cookie: cookie })).toBe(200)
 	const port = daemon.port
 	daemon.stop()
 	daemon = start(port)
-	expect(await status('GET', '/api/sessions', undefined, { Cookie: cookie })).toBe(200)
+	token = readFileSync(cliAuthFile, 'utf-8')
+	expect(await status('GET', '/api/sessions', undefined, { Cookie: cookie })).toBe(401)
+	expect(await upgradeStatus({ Cookie: cookie })).toBe(401)
+	const again = await redeem(await issueLink())
+	expect(again.cookie).not.toBe(cookie)
+	expect(await status('GET', '/api/sessions', undefined, { Cookie: again.cookie })).toBe(200)
 })

@@ -1,10 +1,11 @@
 #!/usr/bin/env bun
 
+import { ensureRuntimeDir } from '@fabrika/daemon-kit'
 import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
 import { activeDaemonSchema, builderDaemonUrl } from '../../shared'
 import { startDaemon } from './index'
-import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, SESSIONS_DIR, TEMP_DIR, UI_TOKEN_FILE } from './paths'
+import { CLI_AUTH_FILE, DATA_DIR, LEGACY_UI_TOKEN_FILE, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
 
 const port = parseInt(process.env['FABRIKA_PORT'] || '19410', 10)
 
@@ -45,16 +46,17 @@ if (active) {
 
 let boundPort: number
 try {
-	// Sessions, project bindings and the dashboard's secret live here; no other OS user reads them from disk.
+	// Sessions and project bindings live here; no other OS user reads them from disk.
 	mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
 	chmodSync(DATA_DIR, 0o700)
-	;({ port: boundPort } = startDaemon({ port, cliAuthFile: CLI_AUTH_FILE, uiTokenFile: UI_TOKEN_FILE }))
+	rmSync(LEGACY_UI_TOKEN_FILE, { force: true })
+	ensureRuntimeDir(TEMP_DIR)
+	;({ port: boundPort } = startDaemon({ port, cliAuthFile: CLI_AUTH_FILE }))
 } catch (error: unknown) {
 	console.error(`fabrika daemon failed to start on :${port}: ${error instanceof Error ? error.message : String(error)}`)
 	process.exit(1)
 }
 
-mkdirSync(TEMP_DIR, { recursive: true })
 writeFileSync(PID_FILE, String(process.pid))
 
 console.log(`fabrika daemon listening on ${builderDaemonUrl(boundPort)}`)
