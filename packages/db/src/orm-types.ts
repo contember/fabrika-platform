@@ -554,7 +554,7 @@ type PublicRefusal<Op extends string> = Unavailable<`a public procedure does not
 
 /** A public procedure updates and removes only a versioned row, by an id a verified signed token of its request carries. */
 type PublicVersioned<T extends string, E extends IndexedTable, Member> = E['versioned'] extends true ? Member
-	: Unavailable<`a public procedure updates and removes only a versioned row: declare version in the policy of ${T}`>
+	: Unavailable<`a public procedure updates and removes only a versioned row: give ${T} a version column`>
 
 /**
  * An application table of a public procedure of action `A`, in a site of kind `K`: read under its read action only,

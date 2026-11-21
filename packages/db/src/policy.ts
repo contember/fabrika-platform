@@ -506,6 +506,8 @@ type ParsedTable =
 		readonly writeThroughInput: unknown
 		readonly memberRevealsInput: unknown
 		readonly accessInput: unknown
+		/** The stamped columns the policy did not name: a written table's `version` and `created_by` (`conventional`). */
+		readonly byConvention: NameSet
 	}
 
 let readModels: <DB, P>(tables: Tables<DB, P>) => TableModels
@@ -807,6 +809,14 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const createdByInput = ownEntry(policy, 'createdBy')
 	const version = versionInput === undefined ? conventional(VERSION_COLUMN) : column(versionInput, 'version')
 	const createdBy = createdByInput === undefined ? conventional(CREATED_BY_COLUMN) : column(createdByInput, 'createdBy')
+	const unnamed: string[] = []
+	if (versionInput === undefined && version !== undefined) {
+		unnamed[unnamed.length] = version
+	}
+	if (createdByInput === undefined && createdBy !== undefined) {
+		unnamed[unnamed.length] = createdBy
+	}
+	const byConvention = nameSet(unnamed)
 	const restricted: string[] = []
 	const columnReads: Record<string, string> = {}
 	const columnWrites: Record<string, string> = {}
@@ -844,7 +854,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		throw new PolicyError(`${table}: the key ${scope.key} takes no action of its own`)
 	}
 	if (version !== undefined && hasOwn(columnPolicies, version)) {
-		throw new PolicyError(`${table}: the version ${version} takes no action of its own${conventionOf(version, VERSION_COLUMN, 'version') ?? ''}`)
+		throw new PolicyError(`${table}: the version ${version} takes no action of its own${conventionOf(byConvention, version, 'version') ?? ''}`)
 	}
 	const queueInput = ownEntry(policy, 'queue')
 	const filesInput = ownEntry(policy, 'files')
@@ -905,6 +915,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 		writeThroughInput: ownEntry(policy, 'writeThrough'),
 		memberRevealsInput: ownEntry(policy, 'memberReveals'),
 		accessInput: ownEntry(policy, 'access'),
+		byConvention,
 	}
 }
 
@@ -1370,10 +1381,10 @@ function stampsOf(table: ParsedTable, chain: readonly Container[]): readonly Sta
 		}
 	}
 	if (table.version !== undefined) {
-		stamps[stamps.length] = { column: table.version, role: 'the version', convention: conventionOf(table.version, VERSION_COLUMN, 'version') }
+		stamps[stamps.length] = { column: table.version, role: 'the version', convention: conventionOf(table.byConvention, table.version, 'version') }
 	}
 	if (table.createdBy !== undefined) {
-		stamps[stamps.length] = { column: table.createdBy, role: 'createdBy', convention: conventionOf(table.createdBy, CREATED_BY_COLUMN, 'createdBy') }
+		stamps[stamps.length] = { column: table.createdBy, role: 'createdBy', convention: conventionOf(table.byConvention, table.createdBy, 'createdBy') }
 	}
 	if (table.queue !== undefined) {
 		stamps[stamps.length] = { column: table.queue.attempts, role: 'queue.attempts' }
@@ -1382,10 +1393,9 @@ function stampsOf(table: ParsedTable, chain: readonly Container[]): readonly Sta
 	return stamps
 }
 
-function conventionOf(column: string, conventional: string, field: string): string | undefined {
-	return column === conventional
-		? ` (a written table's column named ${conventional} is its ${field} unless the policy names another)`
-		: undefined
+/** Why a column the policy did not name is stamped, or nothing when the policy named it. */
+function conventionOf(byConvention: NameSet, column: string, field: string): string | undefined {
+	return inSet(byConvention, column) ? ` (a written table's column named ${column} is its ${field} unless the policy names another)` : undefined
 }
 
 /**
@@ -1504,7 +1514,8 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel,
 	const linkedTable = (name: string): LinkedTable | undefined => {
 		const target = ownEntry(byName, name)
 		if (target === undefined) return undefined
-		const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, ...rest } = target
+		const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, byConvention, ...rest } =
+			target
 		return { ...rest, ...resolve(target, []) }
 	}
 	const hopRule: HopRule = (from, column, to, key, backward) => {
@@ -1547,8 +1558,18 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel,
 		const table = parsed[index]
 		if (table !== undefined) {
 			const { scope, chain } = resolve(table, [])
-			const { confersInput, whenInput, relationWhenInput, revealsInput, readThroughInput, writeThroughInput, memberRevealsInput, accessInput, ...rest } =
-				table
+			const {
+				confersInput,
+				whenInput,
+				relationWhenInput,
+				revealsInput,
+				readThroughInput,
+				writeThroughInput,
+				memberRevealsInput,
+				accessInput,
+				byConvention,
+				...rest
+			} = table
 			const linked = { ...rest, scope, chain }
 			const ownerOf = (dimension: string): ResolvedOwner | undefined => {
 				const owner = ownEntry(owners, dimension)

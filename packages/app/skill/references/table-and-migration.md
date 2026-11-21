@@ -149,7 +149,8 @@ INSERT INTO priorities (code, label, rank) VALUES ('low', 'Low', 1), ('normal', 
 - `version INTEGER NOT NULL` makes `expectVersion` and the 409 work; `created_by TEXT NOT NULL` records the caller.
   The data layer generates `id` and writes `version` and `created_by` of every dimension, child and application
   table that has them, without a policy line. A policy names `version: '<column>'` or `createdBy: '<column>'` only for
-  another column; a column named `version` or `created_by` that the application writes itself needs another name.
+  another column; a column named `version` or `created_by` that the application writes itself, or a `version` that is
+  not `INTEGER NOT NULL`, needs another name.
 - A column with a fixed set of values is an `ENUM` type, not a `CHECK` on text: codegen types an enum as its literal
   union.
 - Codegen types: `date` is a `YYYY-MM-DD` string; `timestamptz` reads a `Date` and takes a `Date` or a strict ISO 8601 string with `Z` or an offset;

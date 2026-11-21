@@ -224,9 +224,17 @@ describe("a written table's version and created_by columns are its version and c
 		expect(tablePolicies(readTables(plain(stampedColumns), plain(stated), plain(vocabulary)))).toEqual(tablePolicies(spelled))
 	})
 
-	test('a table without them is unchanged, and a reference table with them is never stamped', () => {
+	test('a child and an application table with them get both too', () => {
 		const models = tableModels(conventional)
-		for (const table of ['workspaces', 'note_comments', 'countries']) {
+		for (const table of ['note_revisions', 'settings']) {
+			expect(modelOf(models, table)?.version).toBe('version')
+			expect(modelOf(models, table)?.createdBy).toBe('created_by')
+		}
+	})
+
+	test('a table without them is unchanged, and a view or a reference table with them is never stamped', () => {
+		const models = tableModels(conventional)
+		for (const table of ['workspaces', 'note_comments', 'note_digests', 'countries']) {
 			expect(modelOf(models, table)?.version).toBeUndefined()
 			expect(modelOf(models, table)?.createdBy).toBeUndefined()
 		}
@@ -250,6 +258,14 @@ describe("a written table's version and created_by columns are its version and c
 		expect(writes('insert', 'created_by')).toThrow(
 			"notes: created_by is stamped by the layer; remove it from insert and update (a written table's column named created_by is its createdBy unless the policy names another)",
 		)
+		const named = () =>
+			readTables(
+				plain(stampedColumns),
+				plain({ ...stated, notes: { ...stated.notes, version: 'version', update: ['title', 'version'] } }),
+				plain(vocabulary),
+			)
+		expect(named).toThrow('notes: version is stamped by the layer; remove it from insert and update')
+		expect(named).not.toThrow('unless the policy names another')
 	})
 })
 
