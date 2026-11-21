@@ -20,9 +20,9 @@ export function assertAuthoredManagedName(name: string): void {
 
 /**
  * Names the runtime, its loader and its shells read to decide what a process runs, loads or sends its traffic through
- * (`BUN_OPTIONS=--eval=…` runs code from the value alone), and the prefix Zerops keeps for itself. An application secret
- * becomes a variable of the service whose init commands hold the provisioning credential, so whoever may manage the
- * application's secrets would run code beside it. `NODE_OPTIONS` is absent: the Bun runtime does not read it.
+ * (`BUN_OPTIONS=--eval=…` runs code from the value alone). An application secret becomes a variable of the service whose
+ * init commands hold the provisioning credential, so whoever may manage the application's secrets would run code beside
+ * it. `NODE_OPTIONS` is absent: the Bun runtime does not read it.
  */
 const RUNTIME_NAMES: ReadonlySet<string> = new Set([
 	'PATH',
@@ -31,6 +31,9 @@ const RUNTIME_NAMES: ReadonlySet<string> = new Set([
 	'TMPDIR',
 	'ENV',
 	'BASH_ENV',
+	'LD_PRELOAD',
+	'LD_LIBRARY_PATH',
+	'LD_AUDIT',
 	'SSL_CERT_FILE',
 	'SSL_CERT_DIR',
 	'HTTP_PROXY',
@@ -40,30 +43,36 @@ const RUNTIME_NAMES: ReadonlySet<string> = new Set([
 	'https_proxy',
 	'all_proxy',
 ])
-const RUNTIME_PREFIXES: readonly string[] = ['BUN_', 'LD_', 'BASH_FUNC_', 'ZEROPS_']
+const RUNTIME_PREFIXES: readonly string[] = ['BUN_', 'BASH_FUNC_']
+
+/** The prefix Zerops keeps for its own variables; it refuses a custom one, so a stored service variable never has it. */
+const ZEROPS_PREFIX = 'ZEROPS_'
 
 /** Whether the runtime of an application service reads `name` itself. */
 export function isRuntimeVariableName(name: string): boolean {
 	return RUNTIME_NAMES.has(name) || RUNTIME_PREFIXES.some((prefix) => name.startsWith(prefix))
 }
 
+const runtimeNameRefusal = (name: string): Error =>
+	new Error(
+		`zerops: application secret \`${name}\` is read by the runtime to decide what its processes run; `
+			+ "delete it with `fabrika control apps secrets delete` (add --env=<env> for one environment's), rename it if the code reads it, and deploy again",
+	)
+
 /**
- * Refuse a name an application's secret or variable may not take on Zerops: a framework-only one, or one the runtime
- * reads. Deleting a secret checks only the first, so a secret stored before a name joined the second stays removable.
+ * Refuse a name an application secret may not take on Zerops: a framework-only one, one the runtime reads, or one in
+ * Zerops' own prefix. Deleting a secret checks only the first, so a secret stored before a name joined the others stays
+ * removable. An application variable needs no such rule: on Zerops it only fills a placeholder the repository declared.
  */
-export function assertApplicationValueName(name: string): void {
+export function assertApplicationSecretName(name: string): void {
 	assertAuthoredManagedName(name)
-	if (isRuntimeVariableName(name)) {
-		throw new Error(
-			`zerops: application secret or variable \`${name}\` is read by the runtime to decide what its processes run; `
-				+ 'rename it (delete a stored secret with `fabrika control apps secrets delete`) and deploy again',
-		)
-	}
+	if (isRuntimeVariableName(name) || name.startsWith(ZEROPS_PREFIX)) throw runtimeNameRefusal(name)
 }
 
-/** The deploy-time check of every secret and variable Control hands a run. */
-export function assertApplicationValueNames(input: { variableNames: readonly string[]; secretNames: readonly string[] }): void {
-	for (const name of [...input.variableNames, ...input.secretNames]) assertApplicationValueName(name)
+/** Refuse a deploy to a service that already holds a secret the runtime reads, e.g. one stored before the rule. */
+export function assertNoStoredRuntimeVariable(keys: readonly string[]): void {
+	const stored = keys.find(isRuntimeVariableName)
+	if (stored !== undefined) throw runtimeNameRefusal(stored)
 }
 
 type AuthoredDocumentValue = string | number | boolean | null | readonly AuthoredDocumentValue[] | { readonly [key: string]: AuthoredDocumentValue }
