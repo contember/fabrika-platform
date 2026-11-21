@@ -471,6 +471,28 @@ const assertUnmanagedNames = (kind: 'variable' | 'secret', appId: string, names:
 	)
 }
 
+/**
+ * Refuse a deploy whose artifact declares a secret (`pipeline.secrets`) the environment has no row for, before any
+ * provider step, for every provider whose artifact holds the declaration (`declaredSecrets`). Names only, never a value.
+ */
+const assertDeclaredSecretsSet = async (
+	deps: RunDeps,
+	appId: string,
+	env: string,
+	artifact: ProviderEnvelope,
+): Promise<void> => {
+	const declared = deps.provider.declaredSecrets?.({ artifact })
+	if (declared === undefined || declared.length === 0) return
+	const set = new Set((await deps.repositories.registry.getAppSecretsForEnv(appId, env)).map((row) => row.name))
+	const missing = [...new Set(declared)].filter((name) => !set.has(name)).sort()
+	if (missing.length === 0) return
+	throw new Error(
+		`declared secrets without a value on environment \`${env}\`: ${
+			missing.map((name) => `\`${name}\``).join(', ')
+		} (\`pipeline.secrets\`); set them in the console, then deploy again`,
+	)
+}
+
 /** The row reached a terminal state before this invocation's write: nothing is left for it to do. */
 class RunSettled extends Error {}
 
@@ -718,6 +740,7 @@ async function deployUnder(
 		let registration = deps.provider.normalizeRegistration?.({ app: appInput, environment: environmentInput })
 			?? { app: appInput, environment: environmentInput }
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
+		await assertDeclaredSecretsSet(deps, app.id, appEnv.env, registration.environment.artifact)
 		const resolveSource = deps.provider.resolveSource
 		/** The snapshot this run published, and how to classify its data changes again when it predates the classifier. */
 		let published: { readonly candidate: PublishedCandidate; readonly reread: () => Promise<readonly MigrationDataLoss[] | null> } | null = null

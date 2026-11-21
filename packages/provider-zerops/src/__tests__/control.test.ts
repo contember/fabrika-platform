@@ -374,6 +374,14 @@ describe('Zerops ControlProvider registration', () => {
 		expect(control.declaredVariables?.({ artifact: { ...artifact, version: 0 } })).toBeUndefined()
 	})
 
+	test('returns the declared secret names, never a value, and undefined for an invalid artifact', () => {
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const manifest = compileFabrikaManifest({ ...config, pipeline: { secrets: ['TOKEN', 'MAIL_KEY'] } }, 'prod', SOURCE_DESCRIPTOR)
+		const artifact = { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) }
+		expect(control.declaredSecrets?.({ artifact })).toEqual(['TOKEN', 'MAIL_KEY'])
+		expect(control.declaredSecrets?.({ artifact: { ...artifact, payload: {} } })).toBeUndefined()
+	})
+
 	for (const [name, contents] of rejectedDescriptorCorpus) {
 		test(`rejects ${name} before registration, hooks, or provider effects`, async () => {
 			const manifest = compileFabrikaManifest(config, 'prod', SOURCE_DESCRIPTOR)

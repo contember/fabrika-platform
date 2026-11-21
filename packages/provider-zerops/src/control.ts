@@ -414,6 +414,13 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 				return undefined
 			}
 		},
+		declaredSecrets: ({ artifact }) => {
+			try {
+				return decodeEnvelope('artifact', 'zerops', artifact, zeropsArtifactCodec).app.pipeline.secrets
+			} catch {
+				return undefined
+			}
+		},
 		resolveSource,
 		withSourceDescriptor,
 		validateAccess: ({ environment, access }) => {
