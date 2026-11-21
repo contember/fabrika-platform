@@ -91,8 +91,9 @@ describe('daemon http endpoints', () => {
 		expect(body.ok).toBe(true)
 		expect(body.revision).toBe(1)
 		expect(body.gate).toBe('intake')
-		// A sign-in link that leads to the session's page; the page itself needs the cookie it sets.
-		expect(body.browserUrl).toStartWith(`${base}/open?code=`)
+		expect(body.browserUrl).toBe(`${base}/s/${sessionId}`)
+		// A new session's sign-in link, which leads to that page and sets the cookie the page needs.
+		expect(body.signInUrl).toStartWith(`${base}/open?code=`)
 		expect(body.canvasFiles).toContain('view.jsx')
 
 		const meta = await (await dashboard.fetch(`${base}/api/session/${sessionId}/meta`)).json()

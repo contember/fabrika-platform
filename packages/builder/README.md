@@ -49,7 +49,7 @@ fabrika builder init
 
 Initialization installs the Fabrika skill and the `fabrika-app` application rules (from `@fabrika/app`) for Claude Code and Codex, starts the local daemon, and opens the dashboard. The coding agent then drives the phase loop.
 
-The dashboard opens only through a link the CLI hands out: `init` and `gate open` print it as `browserUrl` and open it when they open the dashboard, and `fabrika builder dashboard` prints and opens a fresh one. Each link signs one browser in once; another browser, or one that lost its cookie, gets a page that names `fabrika builder dashboard`. See [the local builder](../../docs/reference/local-builder.md#protocol-ownership) for what the credential covers.
+The dashboard opens only through a link the CLI hands out: `init` prints it as `browserUrl` and opens it, `gate open` does so for a session its push creates, and `fabrika builder dashboard` prints and opens a fresh one. Each link signs one browser in once; another browser, or one that lost its cookie, gets a page that names `fabrika builder dashboard`. See [the local builder](../../docs/reference/local-builder.md#protocol-ownership) for what the credential covers.
 
 ```text
 fabrika builder next

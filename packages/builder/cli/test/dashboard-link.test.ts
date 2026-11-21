@@ -20,6 +20,7 @@ const opened = join(root, 'opener-arguments')
 const dataDir = join(root, 'data')
 let server: ReturnType<typeof Bun.serve> | undefined
 let link = ''
+let pushIsNew = true
 const linkRequests: (string | null)[] = []
 
 beforeAll(() => {
@@ -40,9 +41,19 @@ beforeAll(() => {
 			if (url.pathname === '/health') return Response.json({ ok: true, pid: process.pid, sessionsDir: join(dataDir, 'sessions') })
 			if (url.pathname.endsWith('/link')) {
 				linkRequests.push(request.headers.get(BUILDER_CLI_TOKEN_HEADER))
-				return Response.json({ browserUrl: link })
+				return Response.json({ signInUrl: link })
 			}
-			if (url.pathname.endsWith('/plan')) return Response.json({ ok: true, browserUrl: link, isNew: true, revision: 1, canvasFiles: ['view.jsx'] })
+			if (url.pathname.endsWith('/plan')) {
+				const page = `${url.origin}/s/dashboard-session`
+				return Response.json({
+					ok: true,
+					browserUrl: page,
+					...(pushIsNew ? { signInUrl: link } : {}),
+					isNew: pushIsNew,
+					revision: 1,
+					canvasFiles: ['view.jsx'],
+				})
+			}
 			return Response.json({ error: 'Not found' }, { status: 404 })
 		},
 	})
@@ -51,6 +62,7 @@ beforeAll(() => {
 beforeEach(() => {
 	rmSync(opened, { force: true })
 	linkRequests.length = 0
+	pushIsNew = true
 })
 
 afterAll(() => {
@@ -118,4 +130,12 @@ test('`gate open` opens the link its push answered with through a private file',
 	const calls = openerCalls()
 	expect(calls).toHaveLength(1)
 	expect(linkOf(calls[0] ?? '')).toBe(link)
+})
+
+test('`gate open` on a session that exists prints the page and opens nothing', async () => {
+	pushIsNew = false
+	const result = await run(['gate', 'open', 'vision', '--view', join(project, 'view.jsx')])
+	expect(result.code).toBe(0)
+	expect(JSON.parse(result.stdout).browserUrl).toBe(`http://${BUILDER_DAEMON_HOST}:${server?.port}/s/dashboard-session`)
+	expect(openerCalls()).toEqual([])
 })

@@ -106,15 +106,15 @@ async function gateOpen(argv: string[]): Promise<number> {
 		return 1
 	}
 
-	// The daemon answers a push with a sign-in link, which never goes to the browser as a process argument.
-	if (result.isNew && result.browserUrl) {
-		openDashboardLink(result.browserUrl)
+	// A new session's push answers with a sign-in link, which never goes to the browser as a process argument.
+	if (result.isNew && result.signInUrl) {
+		openDashboardLink(result.signInUrl)
 	}
 
 	console.log(
 		JSON.stringify({
 			ok: true,
-			browserUrl: result.browserUrl ?? browserUrl,
+			browserUrl: result.signInUrl ?? result.browserUrl ?? browserUrl,
 			revision: result.revision,
 			gate: name,
 			sessionId: ctx.sessionId,

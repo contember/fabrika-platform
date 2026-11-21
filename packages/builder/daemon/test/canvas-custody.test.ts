@@ -42,6 +42,7 @@ if (process.env['FABRIKA_CANVAS_CUSTODY_CHILD'] !== '1') {
 			broadcastPlanUpdate: () => {},
 			broadcastRevisionUpdate: () => {},
 			buildStream: new BuildStream(),
+			port: 19410,
 			version: 'test',
 			uiLinks: new UiLinks(() => 'http://127.0.0.1:19410'),
 		})

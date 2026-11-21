@@ -60,7 +60,7 @@ function setup() {
 			if (path === '/health') return Response.json({ ok: true, pid: process.pid, sessionsDir: join(fx.root, 'data', 'sessions') })
 			const body = await request.text()
 			requests.push({ path, method: request.method, body: body ? JSON.parse(body) : null })
-			if (path.endsWith('/link')) return Response.json({ browserUrl: `${new URL(request.url).origin}/open?code=dummy-code` })
+			if (path.endsWith('/link')) return Response.json({ signInUrl: `${new URL(request.url).origin}/open?code=dummy-code` })
 			if (path.endsWith('/platform')) onPlatform?.()
 			if (refused) return Response.json({ error: 'SECRET_PROOF' }, { status: 400 })
 			if (path.endsWith('/connect')) {

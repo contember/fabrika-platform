@@ -70,6 +70,9 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 		buildStream,
 		platform,
 		sessionsDir,
+		get port() {
+			return portRef.value
+		},
 		version: VERSION,
 		uiLinks,
 	}

@@ -10,7 +10,7 @@ import { jsonResponse, type Route, type UiLinks } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import type { z } from 'zod'
-import { buildEventSchema, planInputSchema } from '../../shared'
+import { builderDaemonUrl, buildEventSchema, planInputSchema } from '../../shared'
 import { gateVerdict } from '../../shared/gate'
 import type { BuildEvent, BuildStream } from './build-stream'
 import { COMPILE_TEMP_DIR } from './paths'
@@ -34,6 +34,7 @@ export interface HandlerContext {
 	broadcastRevisionUpdate: (id: string) => void
 	buildStream: BuildStream
 	sessionsDir: string
+	port: number
 	version: string
 	platform?: BuilderPlatform
 	/** Sign-in links to the dashboard, for the CLI to hand a browser. */
@@ -130,7 +131,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 	}
 
 	function handleLink(_req: Request, _url: URL, match: URLPatternResult): Response {
-		return jsonResponse({ browserUrl: dashboardLink(routeParam(match, 'id')) })
+		return jsonResponse({ signInUrl: dashboardLink(routeParam(match, 'id')) })
 	}
 
 	function handleHealth(): Response {
@@ -220,10 +221,12 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			broadcastPlanUpdate(sessionId)
 			watchSession(sessionId, sessionManager, broadcastPlanUpdate, { tempDir: COMPILE_TEMP_DIR, assertReadable })
 
-			const browserUrl = dashboardLink(sessionId)
+			// `browserUrl` stays the page itself: a CLI of an earlier release hands it to the opener as a process argument.
+			// Only a new session gets a sign-in link, which only this release's CLI reads and opens through a file.
 			return jsonResponse({
 				ok: true,
-				browserUrl,
+				browserUrl: `${builderDaemonUrl(ctx.port)}/s/${sessionId}`,
+				...(isNew ? { signInUrl: dashboardLink(sessionId) } : {}),
 				isNew,
 				revision: session.currentRevision,
 				sessionId,

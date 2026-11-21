@@ -80,9 +80,8 @@ afterAll(() => {
 	rmSync(directory, { recursive: true, force: true })
 })
 
-function pushPlan(): Promise<Response> {
-	const project = join(directory, 'project')
-	return fetch(`${base}/api/session/${SESSION}/plan`, {
+function pushPlan(session = SESSION, project = join(directory, 'project')): Promise<Response> {
+	return fetch(`${base}/api/session/${session}/plan`, {
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json', [BUILDER_CLI_TOKEN_HEADER]: token },
 		body: JSON.stringify({ directory: join(project, 'canvas'), projectRoot: project }),
@@ -138,17 +137,22 @@ function upgradeStatus(headers: Record<string, string>): Promise<number> {
 	})
 }
 
-function browserUrlOf(body: unknown): string {
-	if (typeof body !== 'object' || body === null || !('browserUrl' in body) || typeof body.browserUrl !== 'string') {
-		throw new Error('The response carries no browserUrl')
-	}
-	return body.browserUrl
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** A text field of a JSON response, or undefined. */
+function textField(body: unknown, name: string): string | undefined {
+	const value = isRecord(body) ? body[name] : undefined
+	return typeof value === 'string' ? value : undefined
 }
 
 async function issueLink(): Promise<string> {
 	const response = await fetch(`${base}/api/session/${SESSION}/link`, { method: 'POST', headers: { [BUILDER_CLI_TOKEN_HEADER]: token } })
 	expect(response.status).toBe(200)
-	return browserUrlOf(await response.json())
+	const link = textField(await response.json(), 'signInUrl')
+	if (link === undefined) throw new Error('The daemon issued no link')
+	return link
 }
 
 /** Follows a link as a browser does; `cookie` is the cookie it set, as a `Cookie` header value. */
@@ -179,10 +183,18 @@ test('liveness, assets and the link route answer without a credential', async ()
 	expect(await status('GET', '/open?code=unknown', undefined, {})).toBe(401)
 })
 
-test('only the CLI gets a link, and a pushed canvas answers with one', async () => {
+test("only the CLI gets a link, and only a new session's push answers with one, beside a browserUrl without a code", async () => {
 	expect(await status('POST', `/api/session/${SESSION}/link`, undefined, {})).toBe(401)
-	const push = await pushPlan()
-	expect(browserUrlOf(await push.json())).toMatch(new RegExp(`^${base}/open\\?code=[A-Za-z0-9_-]{32}$`))
+	const fresh = join(directory, 'fresh-project')
+	mkdirSync(join(fresh, 'canvas'), { recursive: true })
+	writeFileSync(join(fresh, 'canvas', 'view.jsx'), '<Section title="Plan">body</Section>')
+	const created: unknown = await (await pushPlan('fresh', fresh)).json()
+	// A CLI of an earlier release hands `browserUrl` to the opener as a process argument: it must carry no code.
+	expect(textField(created, 'browserUrl')).toBe(`${base}/s/fresh`)
+	expect(textField(created, 'signInUrl')).toMatch(new RegExp(`^${base}/open\\?code=[A-Za-z0-9_-]{32}$`))
+	const repeated: unknown = await (await pushPlan()).json()
+	expect(textField(repeated, 'browserUrl')).toBe(`${base}/s/${SESSION}`)
+	expect(textField(repeated, 'signInUrl')).toBeUndefined()
 })
 
 test('the link sets the cookie once, and the dashboard routes and the socket then answer', async () => {

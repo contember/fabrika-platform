@@ -42,8 +42,9 @@ ensure daemon → fabrika builder next → do packet work → gate → advance �
      `init` warns.
    - Otherwise run `bunx fabrika builder ensure-daemon`.
    - The dashboard opens only through a sign-in link: show the human the
-     `browserUrl` that `init` or `gate open` prints. Each link signs one browser
-     in once. When the human sees "Open the builder dashboard from its link"
+     `browserUrl` that `init` prints (and `gate open` for a new session). Each
+     link signs one browser in once. When the human sees "Open the builder
+     dashboard from its link"
      (another browser, or the link was already used), run
      `bunx fabrika builder dashboard --no-open` and show them the fresh link.
 

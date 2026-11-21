@@ -39,7 +39,7 @@ export async function requestDashboardLink(sessionId: string): Promise<string | 
 		})
 		if (!res.ok) return null
 		const result = dashboardLinkSchema.safeParse(await res.json())
-		return result.success ? result.data.browserUrl : null
+		return result.success ? result.data.signInUrl : null
 	} catch {
 		return null
 	}
@@ -48,6 +48,8 @@ export async function requestDashboardLink(sessionId: string): Promise<string | 
 export interface PlanResult {
 	ok: boolean
 	browserUrl?: string
+	/** A sign-in link, only for a new session: it is opened through a file, never as a process argument. */
+	signInUrl?: string
 	revision?: number
 	isNew?: boolean
 	canvasFiles?: string[]
