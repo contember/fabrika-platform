@@ -392,6 +392,12 @@ export interface ListOptions<Row> {
 	readonly after?: string
 }
 
+/** What `all()` takes: a list's filter and order, and no page; it answers every row or refuses past `MAX_ALL_ROWS`. */
+export interface AllOptions<Row> {
+	readonly where?: readonly ConditionTuple<Row>[]
+	readonly orderBy?: readonly OrderTerm<Row>[]
+}
+
 export interface CountOptions<Row> {
 	readonly where?: readonly ConditionTuple<Row>[]
 }
@@ -436,6 +442,7 @@ export interface UnownedTarget<D extends string> {
 /** A child table of the target: its rows are addressed by their own key under the target; a view's are only read. */
 export interface ChildRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: Read<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly all: Read<T, E, A, (options?: AllOptions<RowFor<E, A>>) => Promise<RowFor<E, A>[]>>
 	readonly get: Read<T, E, A, (key: string) => Promise<RowFor<E, A>>>
 	readonly insert: E['view'] extends true ? Unavailable<`${T} is a view, which no site writes: write the tables it reads`>
 		: Write<T, E, 'insert', A, K, InsertMethod<E>>
@@ -453,6 +460,7 @@ export interface ChildRows<T extends string, E extends IndexedTable, A extends s
 /** A dimension table the target contains: listed in it, and inserted into it by a mutation of its insert action. */
 export interface ContainedRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: Read<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly all: Read<T, E, A, (options?: AllOptions<RowFor<E, A>>) => Promise<RowFor<E, A>[]>>
 	readonly insert: Write<T, E, 'insert', A, K, InsertMethod<E>>
 }
 
@@ -474,6 +482,7 @@ export interface WithinRows<T extends string, E extends IndexedTable, A extends 
 	readonly claim: Claim<T, E, A, K>
 	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
 		: Unavailable<ListRefusal<T, E, A>>
+	readonly all: A extends E['actions']['read'] ? (options?: AllOptions<RowFor<E, A>>) => Promise<RowFor<E, A>[]> : Unavailable<ListRefusal<T, E, A>>
 	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number> : Unavailable<ListRefusal<T, E, A>>
 	readonly aggregate: A extends E['actions']['read']
 		? <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>
@@ -519,6 +528,7 @@ type PublicRead<T extends string, E extends IndexedTable, A extends string, Memb
  */
 export interface ApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: AppList<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly all: AppList<T, E, A, (options?: AllOptions<RowFor<E, A>>) => Promise<RowFor<E, A>[]>>
 	readonly count: AppList<T, E, A, (options?: CountOptions<RowFor<E, A>>) => Promise<number>>
 	readonly aggregate: AppList<T, E, A, <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>>
 	/** One row by its key; a column that declares another read action than `A` is hidden. */
@@ -563,6 +573,7 @@ type PublicVersioned<T extends string, E extends IndexedTable, Member> = E['vers
  */
 export interface PublicApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: PublicRead<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly all: Unavailable<'a public procedure reads a page at a time: use list, which bounds what one anonymous request reads'>
 	readonly count: PublicRead<T, E, A, (options?: CountOptions<RowFor<E, A>>) => Promise<number>>
 	readonly aggregate: PublicRead<T, E, A, <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>>
 	readonly get: PublicRead<T, E, A, (key: string) => Promise<RowFor<E, A>>>
@@ -604,6 +615,10 @@ export interface AppRecordRows<T extends string, E extends IndexedTable, A exten
 		: Unavailable<
 			`a list of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead, and this endpoint holds '${A}'`
 		>
+	readonly all: AnyAllowed<A, E['actions']['read'] | E['appRead']> extends true ? (options?: AllOptions<RowFor<E, A>>) => Promise<RowFor<E, A>[]>
+		: Unavailable<
+			`a list of ${T} needs its read action '${E['actions']['read'] & string}' or an action of its appRead, and this endpoint holds '${A}'`
+		>
 	readonly count: AnyAllowed<A, E['actions']['read'] | E['appRead'] | E['appCount']> extends true
 		? (options?: CountOptions<RowFor<E, A>>) => Promise<number>
 		: Unavailable<
@@ -636,6 +651,7 @@ type TableRow<E extends IndexedTable> = RowFor<E, E['actions']['read']>
  */
 export interface ScopedApplicationRows<E extends IndexedTable> {
 	list(options?: ListOptions<TableRow<E>>): Promise<ListPage<TableRow<E>>>
+	all(options?: AllOptions<TableRow<E>>): Promise<TableRow<E>[]>
 	count(options?: CountOptions<TableRow<E>>): Promise<number>
 	aggregate<const S extends AggregateSpec<TableRow<E>>>(spec: S): Promise<AggregateRow<TableRow<E>, S>[]>
 	/** One row by its key. */
@@ -665,6 +681,7 @@ export type ScopedApplicationTables<Ix extends AnyDbIndex, A extends string> = {
 /** A reference table: every endpoint reads it, through its read action, and none writes it. */
 export interface ReferenceRows<E extends IndexedTable> {
 	list(options?: ListOptions<TableRow<E>>): Promise<ListPage<TableRow<E>>>
+	all(options?: AllOptions<TableRow<E>>): Promise<TableRow<E>[]>
 	count(options?: CountOptions<TableRow<E>>): Promise<number>
 }
 
@@ -700,6 +717,7 @@ type KeylessMessage<T extends string> = `${T} is a reference table, which has no
 /** A table a site declared `unscoped`: its scope predicate is `true`, and `'read'` writes nothing. */
 export interface UnscopedRows<T extends string, E extends IndexedTable, M extends UnscopedMode, K extends DataKind> {
 	list(options?: ListOptions<TableRow<E>>): Promise<ListPage<TableRow<E>>>
+	all(options?: AllOptions<TableRow<E>>): Promise<TableRow<E>[]>
 	count(options?: CountOptions<TableRow<E>>): Promise<number>
 	aggregate<const S extends AggregateSpec<TableRow<E>>>(spec: S): Promise<AggregateRow<TableRow<E>, S>[]>
 	readonly get: E['mode'] extends 'reference' ? Unavailable<KeylessMessage<T>> : (key: string) => Promise<TableRow<E>>

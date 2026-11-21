@@ -64,6 +64,11 @@ export type ReadAnyTypes = [
 			: false
 	>,
 	Expect<
+		PublicApplicationTables<Index, 'intake.submit', 'query'>['notices']['all'] extends
+			Unavailable<'a public procedure reads a page at a time: use list, which bounds what one anonymous request reads'> ? true
+			: false
+	>,
+	Expect<
 		ScopedApplicationTables<Index, 'notes.read'>['notices'] extends
 			Unavailable<"a scoped endpoint does not read notices: it is read with 'any', which an app endpoint, a job and a webhook hold"> ? true
 			: false
@@ -164,6 +169,8 @@ describe("an application table read with 'any'", () => {
 					})
 				}
 				await expect(call(intake, 'notices.get', 'n1')).rejects.toBeInstanceOf(CapabilityError)
+				// all() would let one anonymous request read MAX_ALL_ROWS rows instead of a page.
+				await expect(call(intake, 'notices.all')).rejects.toMatchObject({ reason: 'public_reach' })
 			},
 			true,
 		)

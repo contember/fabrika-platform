@@ -48,6 +48,7 @@ export {
 } from './errors'
 export type { JsonColumnValue, JsonValue } from './json'
 export type {
+	AllOptions,
 	AnyDbIndex,
 	ChildRows,
 	ContainedRows,

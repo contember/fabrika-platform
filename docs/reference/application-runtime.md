@@ -661,6 +661,10 @@ names the same fix at runtime.
   last as the tiebreak, and `next`, the opaque cursor `after` takes, `null` on the last page. Filters and orderings
   name only the columns the capability reads. The cursor holds each order column as the database prints it, so a timestamp keeps its
   microseconds. Every capability reads the key and the version; a column policy on either is refused.
+- **`all({ where, orderBy })` reads every row a list would**, in one statement, as an array, wherever `list` is but in
+  a public procedure, which pages. More than `MAX_ALL_ROWS` (10 000) is a `QueryRefusedError` `too_many_rows`, never a
+  truncated answer: 10 000 rows of about 1 KB is about 10 MB, which one invocation holds safely in a 128 MB Durable
+  Object isolate.
 - **`ctx.db.unscoped.<table>`** exists only for the tables the site declares, in their mode: the scope predicate is
   `true`, every statement is still guarded and runs in the invocation's transaction, `'read'` refuses every write,
   an insert names the containment columns no capability stamps, and no declaration reaches a `fabrika_*` table. A

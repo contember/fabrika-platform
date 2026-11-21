@@ -232,6 +232,9 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
 
 - `list({ where, orderBy, limit, after })` answers `{ items, next }`: a keyset page of at most `limit` rows (50 by
   default, 500 at most). Pass `next` back as `after`; it is `null` on the last page.
+- `all({ where, orderBy })`, wherever `list` is but in a public procedure, answers every matching row as an array, in
+  one statement, never a page. Past 10 000 rows it throws (`too_many_rows`) instead of truncating: use it for a set
+  that stays bounded (a container's children, a code list), and `list` pages for one that grows without bound.
 - `where` is AND of `[column, operator, value]`: `=`, `<>`, `<`, `<=`, `>`, `>=`, `in` and `not in` (a list),
   `like`, `ilike`, `not like`, `not ilike`, `contains`, and `is` and `is not` with `null` on a nullable column
   (`['processed_at', 'is', null]`). Optional filters are conditional spreads, each tuple
