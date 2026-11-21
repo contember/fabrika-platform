@@ -229,7 +229,7 @@ src/
     urls.ts           ctx.url: an absolute link to a procedure, on FABRIKA_APP_ORIGIN, with the parameters its URL carries
     egress.ts         the guard on the global fetch: a site's handler reaches only its declared egress origins, or a
                       cron job's egress: 'public' only public hosts, every redirect hop checked, each request bounded
-    caller.ts         resolveCaller: the caller's row before the access form, or the 403 (ADR-0078)
+    caller.ts         resolveCaller: the caller's row before the access form, or the 403 (ADR-0079)
     faults.ts         ServerFault: a framework failure whose message only the log sees
     failures.ts       FailureReports: a 5xx as one log line and one rate-limited Operations event, by code
     crashes.ts        a boot that throws, an uncaught exception, an unhandled rejection: one crash report each
@@ -522,11 +522,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   the proxy's endpoint (`X-Fabrika-Endpoint`) → token verification with `@fabrika/jwks`'s shared verifier → caller kind →
   requirement (`satisfies`) → admission → strict input (a string or key holding U+0000, which Postgres `text` cannot
   store, is a 400 like any other refused value; so is a path parameter holding one) → the caller's row (`ctx.caller`,
-  ADR-0078) → access form → remove the `from` field → handler → output projection → the header policy. Caller kind,
+  ADR-0079) → access form → remove the `from` field → a keyed mutation's receipt (ADR-0078) → handler → output projection → the header policy. Caller kind,
   requirement and access form are authorization; same-origin and content type are
   admission. Neither is the proxy's enforcement decision; never reorder them so that admission or input
   parsing answers a caller the requirement refused.
-- **`ctx.caller` is the caller's row, read by the framework before the handler** (ADR-0078). `defineApp`'s
+- **`ctx.caller` is the caller's row, read by the framework before the handler** (ADR-0079). `defineApp`'s
   `caller: { table, principal, missing, refuse? }` (`contract/caller.ts`, parsed by `parseCallerDeclaration`) is kept
   beside the contract (`withCaller`, `handled.ts`), never in it, and a procedure's `caller: false` beside its site
   (`withoutCaller`); `kitUnknownOptions` lets `caller` through (`RUNTIME_PROCEDURE_FIELDS`) and the static reader

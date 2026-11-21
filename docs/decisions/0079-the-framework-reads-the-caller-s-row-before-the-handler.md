@@ -1,11 +1,11 @@
 ---
-id: 0078
+id: 0079
 title: The framework reads the caller's row before the handler
 status: accepted
 date: 2026-11-21
 ---
 
-# 0078 — The framework reads the caller's row before the handler
+# 0079 — The framework reads the caller's row before the handler
 
 ## Context
 

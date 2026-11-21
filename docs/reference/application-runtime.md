@@ -175,7 +175,7 @@ stays the access form's) and asks IAM nothing. A public, link or export procedur
 ### The caller's row
 
 An application that keeps one row per person declares it once, in `defineApp`'s options
-([ADR-0078](../decisions/0078-the-framework-reads-the-caller-s-row-before-the-handler.md)):
+([ADR-0079](../decisions/0079-the-framework-reads-the-caller-s-row-before-the-handler.md)):
 
 ```ts
 export const app = defineApp(vocabulary, tables, {
@@ -1301,7 +1301,7 @@ A mutation whose request carries `Idempotency-Key` is answered from a receipt wh
   procedure that answers a file, an attachment or a redirect, a procedure without a site, a public procedure and a
   `creates` procedure (it creates its scope at IAM in its access form) refuse the header with a 400
   `request_key_not_accepted`, before the body is read.
-- **When.** After the proxy, the token, the requirement, admission and the access form, inside the invocation's
+- **When.** After the proxy, the token, the requirement, admission, the caller's row and the access form, inside the invocation's
   transaction and before the handler. A caller any of them refuses gets the refusal, never a stored answer.
 - **The identity** is the principal (`sub`) and the key; the receipt records the endpoint id and the SHA-256 of the
   canonical input and `query` (keys sorted, every value tagged by kind; a file is its kind, name, type, size and the

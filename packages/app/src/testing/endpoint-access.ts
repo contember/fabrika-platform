@@ -657,7 +657,7 @@ export function endpointAccessKit<DB, P>(
 	}
 
 	/**
-	 * Runs a case's request by a person who holds the row the contract's `caller` reads (ADR-0078), seeded from
+	 * Runs a case's request by a person who holds the row the contract's `caller` reads (ADR-0079), seeded from
 	 * `callerRows` for that request only: without it every person's request is the framework's 403, and no case would
 	 * reach a handler.
 	 */

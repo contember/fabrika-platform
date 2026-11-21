@@ -1,4 +1,4 @@
-// The endpoint access kit over a contract that declares `caller` (ADR-0078): every person a case asks as holds the
+// The endpoint access kit over a contract that declares `caller` (ADR-0079): every person a case asks as holds the
 // declared row, seeded from `callerRows` for that request, so a leak case reaches the handler and finds a planted leak.
 // Without that row in `callerRows` every case would end in the framework's 403 and check nothing, so the kit refuses to
 // start. On SQLite, which needs no service.
