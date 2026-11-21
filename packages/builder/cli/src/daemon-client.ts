@@ -10,6 +10,7 @@ import {
 } from '../../shared'
 import type { PhaseState } from '../../shared/derive'
 import type { GateVerdict } from '../../shared/gate'
+import { cliAuthHeaders, cliSocketUrl } from './cli-auth'
 import { BASE_URL, TIMEOUT_MS, WS_URL } from './config'
 
 const HEALTH_TIMEOUT_MS = 1000
@@ -49,7 +50,7 @@ export async function pushPlan(
 	try {
 		const res = await fetch(`${BASE_URL}/api/session/${sessionId}/plan`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cliAuthHeaders() },
 			body: JSON.stringify(body),
 		})
 		const result = planResultSchema.safeParse(await res.json())
@@ -92,6 +93,7 @@ export async function consumeFeedback(sessionId: string): Promise<ConsumedFeedba
 	try {
 		const res = await fetch(`${BASE_URL}/api/session/${sessionId}/feedback/consume`, {
 			method: 'POST',
+			headers: cliAuthHeaders(),
 			signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
 		})
 		const result = consumedFeedbackSchema.safeParse(await res.json())
@@ -111,6 +113,7 @@ export async function consumeGate(sessionId: string, gateName: string): Promise<
 	try {
 		const res = await fetch(`${BASE_URL}/api/session/${encodeURIComponent(sessionId)}/gate/${encodeURIComponent(gateName)}/consume`, {
 			method: 'POST',
+			headers: cliAuthHeaders(),
 			signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
 		})
 		const result = consumedGateSchema.safeParse(await res.json())
@@ -131,7 +134,7 @@ export async function postBuildEvent(event: BuildEvent): Promise<boolean> {
 	try {
 		const res = await fetch(`${BASE_URL}/api/build/event`, {
 			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
+			headers: { 'Content-Type': 'application/json', ...cliAuthHeaders() },
 			body: JSON.stringify(event),
 			signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
 		})
@@ -143,7 +146,7 @@ export async function postBuildEvent(event: BuildEvent): Promise<boolean> {
 
 export function waitForFeedback(sessionId: string, timeoutMs: number = TIMEOUT_MS): Promise<string> {
 	return waitForEvent({
-		url: `${WS_URL}/ws/wait/${sessionId}`,
+		url: cliSocketUrl(`${WS_URL}/ws/wait/${sessionId}`),
 		timeoutMs,
 		onFrame: (frame) => {
 			const result = submitFeedbackSchema.safeParse(frame)

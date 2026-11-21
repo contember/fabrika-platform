@@ -1,8 +1,8 @@
 import { createWebSocketManager, SessionManager, unwatchAll, type WSData } from '@fabrika/canvas-kernel/server'
-import { dispatch } from '@fabrika/daemon-kit'
+import { createCapability, dispatch, writeCapabilityFile } from '@fabrika/daemon-kit'
 import { resolve } from 'path'
 import { BUILDER_DAEMON_HOST } from '../../shared/urls'
-import { admitRequest } from './admission'
+import { admitCliRoute, admitRequest } from './admission'
 import { BuildStream } from './build-stream'
 import { createHandlers } from './handlers'
 import { SESSIONS_DIR } from './paths'
@@ -28,12 +28,16 @@ export interface StartDaemonOptions {
 	port?: number
 	sessionsDir?: string
 	platform?: BuilderPlatformOptions
+	/** Where the CLI capability is written once the port is bound, `0600` in a `0700` directory. */
+	cliAuthFile?: string
 }
 
 export interface RunningDaemon {
 	server: import('bun').Server<WSData>
 	port: number
 	sessionManager: SessionManager
+	/** What the CLI routes require; only the owner can read it from `cliAuthFile`. */
+	cliAuthToken: string
 	stop(): void
 }
 
@@ -48,6 +52,7 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 	const platform = new BuilderPlatform((id) => sessionManager.get(id)?.projectRoot, opts.platform)
 
 	const portRef = { value: port }
+	const cliAuthToken = createCapability()
 
 	const handlerCtx = {
 		sessionManager,
@@ -71,6 +76,8 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 			const url = new URL(req.url)
 			const rejection = admitRequest(req, url, portRef.value)
 			if (rejection) return rejection
+			const cliRefusal = admitCliRoute(req, url, cliAuthToken)
+			if (cliRefusal) return cliRefusal
 
 			if (req.method === 'OPTIONS') {
 				return new Response(null, { status: 204 })
@@ -116,11 +123,21 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 
 	const boundPort = server.port ?? port
 	portRef.value = boundPort
+	// After the bind, so a second daemon that fails to bind never replaces the running one's capability.
+	if (opts.cliAuthFile !== undefined) {
+		try {
+			writeCapabilityFile(opts.cliAuthFile, cliAuthToken)
+		} catch (error) {
+			server.stop(true)
+			throw error
+		}
+	}
 
 	return {
 		server,
 		port: boundPort,
 		sessionManager,
+		cliAuthToken,
 		stop() {
 			platform.stop()
 			try {

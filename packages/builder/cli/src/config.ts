@@ -1,7 +1,7 @@
 import { createHash } from 'crypto'
 import { homedir, tmpdir } from 'os'
 import { join, resolve } from 'path'
-import { builderDaemonUrl } from '../../shared/urls'
+import { BUILDER_CLI_AUTH_FILENAME, builderDaemonUrl } from '../../shared/urls'
 
 export const DAEMON_PORT = parseInt(process.env['FABRIKA_PORT'] || '19410', 10)
 export const BASE_URL = builderDaemonUrl(DAEMON_PORT)
@@ -14,6 +14,7 @@ export const DATA_DIR = resolveDataDir()
 export const SESSIONS_DIR = join(DATA_DIR, 'sessions')
 export const TEMP_DIR = join(tmpdir(), 'fabrika')
 export const PID_FILE = join(TEMP_DIR, 'daemon.pid')
+export const CLI_AUTH_FILE = join(TEMP_DIR, BUILDER_CLI_AUTH_FILENAME)
 
 export const FABRIKA_DIRNAME = '.fabrika'
 
