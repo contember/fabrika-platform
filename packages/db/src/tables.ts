@@ -35,6 +35,7 @@ export type { ApplicationRowRefusal, ApplicationRowsPlan } from './application-r
 export { PolicyError } from './errors'
 export type { FileReference } from './file-references'
 export type {
+	AllOptions,
 	AnyDbIndex,
 	ApplicationRows,
 	ApplicationTables,

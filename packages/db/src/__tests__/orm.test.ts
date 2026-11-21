@@ -156,6 +156,11 @@ function itemsOf(page: unknown): Record<string, unknown>[] {
 	return Array.isArray(items) ? items : []
 }
 
+/** The rows `all()` answers. */
+function rowsOf(rows: unknown): Record<string, unknown>[] {
+	return Array.isArray(rows) ? rows : []
+}
+
 function nextOf(page: unknown): unknown {
 	return typeof page === 'object' && page !== null ? Reflect.get(page, 'next') : undefined
 }
@@ -352,6 +357,27 @@ describe.skipIf(!hasPostgres)('the mini-ORM on Postgres', () => {
 		await expect(call(within, 'notes.list', { offset: 2 })).rejects.toThrow('offset is not an option of list')
 		await expect(call(within, 'notes.list', { limit: 501 })).rejects.toThrow('limit must be an integer from 1 to 500')
 		expect(keysOf(within)).toEqual(['note_comments', 'note_flags', 'notes'])
+		await transaction.commit()
+	})
+
+	test('all() answers every matching row in one call, past a page, in the order asked, and takes no page options', async () => {
+		await admin((sql) => sql.unsafe(`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ('wa', 'o1', 'WA', 'u')`))
+		for (let index = 0; index < 60; index++) {
+			await seedNote(`t${String(index).padStart(2, '0')}`, 'wa')
+		}
+		const { transaction, handles } = invocation('query')
+		const within = handles.within(alice.within('workspace', 'notes.read', ['wa']))
+		const every = rowsOf(await call(within, 'notes.all', { orderBy: [['title', 'desc']] })).map((row) => row['title'])
+		expect(every).toHaveLength(60)
+		expect([every[0], every[59]]).toEqual(['t59', 't00'])
+		const some = await call(within, 'notes.all', { where: [['title', 'in', ['t01', 't02']]], orderBy: [['title', 'asc']] })
+		expect(rowsOf(some).map((row) => row['title'])).toEqual(['t01', 't02'])
+		expect(await call(handles.within(alice.within('workspace', 'notes.read', [])), 'notes.all')).toEqual([])
+		await expect(call(within, 'notes.all', { limit: 10 })).rejects.toThrow('limit is not an option of all')
+		await expect(call(within, 'notes.all', { where: [['internal', '=', 'x']] })).rejects.toThrow('internal is not a column of notes')
+		await expect(call(handles.within(alice.within('workspace', 'notes.write', ['wa'])), 'notes.all')).rejects.toBeInstanceOf(CapabilityError)
+		const countries = await call(handles.reference, 'countries.all', { orderBy: [['name', 'asc']] })
+		expect(rowsOf(countries).map((row) => row['code'])).toEqual(['AT', 'CZ', 'DE'])
 		await transaction.commit()
 	})
 

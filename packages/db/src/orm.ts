@@ -108,6 +108,12 @@ import { answerRows, timestampInput } from './temporal'
 /** A list page holds this many rows unless the caller asks for fewer, and never more than `MAX_LIST_LIMIT`. */
 export const DEFAULT_LIST_LIMIT = 50
 export const MAX_LIST_LIMIT = 500
+/**
+ * The most rows `all()` answers; past it, it refuses instead of truncating. It bounds rows, not bytes: 10 000 rows of
+ * ~1 KB, held two or three times over (driver, answer, response), is tens of MB of the one 128 MB Durable Object
+ * isolate every concurrent invocation of the environment shares. Wide rows or a growing set page with `list`.
+ */
+export const MAX_ALL_ROWS = 10_000
 
 /** The framework's own tables; no declaration reaches one. */
 const FRAMEWORK_PREFIX = 'fabrika_'
@@ -434,6 +440,10 @@ function childRows(context: TableContext, site: DataSite, run: Runner, capabilit
 			const grant = namedRef(context, capability, parent)
 			return listRows(context, run, parentPredicate(context, grant), visibleFor(context.model, grant.action), options, [key], soleReach(grant.action))
 		}),
+		all: bound(site, async (options?: unknown) => {
+			const grant = namedRef(context, capability, parent)
+			return allRows(context, run, parentPredicate(context, grant), visibleFor(context.model, grant.action), options, [key], soleReach(grant.action))
+		}),
 		get: bound(site, async (id: unknown) => {
 			const grant = namedRef(context, capability, parent)
 			if (typeof id !== 'string' || id.length === 0) {
@@ -467,6 +477,11 @@ function containedRows(context: TableContext, site: DataSite, run: Runner, capab
 			const grant = namedRef(context, capability, dimension)
 			const scope = refScope(context, context.model, context.model.chain, grant, new Date())
 			return listRows(context, run, scope, visibleFor(context.model, grant.action), options, [keyOf(context.model)], soleReach(grant.action))
+		}),
+		all: bound(site, async (options?: unknown) => {
+			const grant = namedRef(context, capability, dimension)
+			const scope = refScope(context, context.model, context.model.chain, grant, new Date())
+			return allRows(context, run, scope, visibleFor(context.model, grant.action), options, [keyOf(context.model)], soleReach(grant.action))
 		}),
 		insert: writing(
 			site,
@@ -525,6 +540,10 @@ function listedRows(
 			const predicate = scope()
 			return listRows(context, run, predicate, visible(), options, key, soleReach(heldAction(context, capability)))
 		}),
+		all: bound(site, async (options?: unknown) => {
+			const predicate = scope()
+			return allRows(context, run, predicate, visible(), options, key, soleReach(heldAction(context, capability)))
+		}),
 		count: bound(site, async (options?: unknown) => {
 			const predicate = scope()
 			return countRows(context, run, predicate, visible(), options)
@@ -572,6 +591,10 @@ function appRecordRows(context: TableContext, site: DataSite, run: Runner, capab
 			const { predicate, reach } = appRecordRead(context, capability, 'rows')
 			return listRows(context, run, predicate, visibleThrough(model, reach), options, key, reach)
 		}),
+		all: bound(site, async (options?: unknown) => {
+			const { predicate, reach } = appRecordRead(context, capability, 'rows')
+			return allRows(context, run, predicate, visibleThrough(model, reach), options, key, reach)
+		}),
 		count: bound(site, async (options?: unknown) => {
 			const { predicate, reach } = appRecordRead(context, capability, 'counts')
 			return countRows(context, run, predicate, visibleThrough(model, reach), options)
@@ -604,6 +627,7 @@ function scopedApplicationRows(context: TableContext, site: DataSite, run: Runne
 	const scope = () => scopedApplicationRead(context, capability)
 	return freeze({
 		list: bound(site, async (options?: unknown) => listRows(context, run, scope(), visible, options, key, soleReach(heldAction(context, capability)))),
+		all: bound(site, async (options?: unknown) => allRows(context, run, scope(), visible, options, key, soleReach(heldAction(context, capability)))),
 		count: bound(site, async (options?: unknown) => countRows(context, run, scope(), visible, options)),
 		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, scope(), context.shape, spec)),
 		get: bound(
@@ -688,6 +712,10 @@ function applicationRows(
 			const { predicate, reach } = appListRead(context, capability)
 			return listRows(context, run, predicate, visibleThrough(model, reach), options, key, reach)
 		}),
+		all: bound(site, async (options?: unknown) => {
+			const { predicate, reach } = appListRead(context, capability)
+			return allRows(context, run, predicate, visibleThrough(model, reach), options, key, reach)
+		}),
 		count: bound(site, async (options?: unknown) => {
 			const { predicate, reach } = appListRead(context, capability)
 			return countRows(context, run, predicate, visibleThrough(model, reach), options)
@@ -746,6 +774,11 @@ function publicApplicationRows(
 	}
 	return freeze({
 		list: rows['list'],
+		all: bound(site, async () => {
+			// The table's own read refusal first, as list answers it, so the message never points to a list it refuses too.
+			appListPredicate(context, capability)
+			throw new QueryRefusedError('public_reach', 'a public procedure pages its reads: read the table with list')
+		}),
 		count: rows['count'],
 		aggregate: rows['aggregate'],
 		get: bound(site, async (id: unknown) => {
@@ -1043,6 +1076,7 @@ function referenceTables(parts: DataLayerParts, site: DataSite, run: Runner): ob
 				model.name,
 				freeze({
 					list: bound(site, async (options?: unknown) => listRows(context, run, everything(), model.visible, options, model.visible)),
+					all: bound(site, async (options?: unknown) => allRows(context, run, everything(), model.visible, options, model.visible)),
 					count: bound(site, async (options?: unknown) => countRows(context, run, everything(), model.visible, options)),
 				}),
 			)
@@ -1113,6 +1147,10 @@ function unscopedRows(context: TableContext, site: DataSite, run: Runner, mode: 
 		list: bound(
 			site,
 			async (options?: unknown) => listRows(context, run, everything(), visible, options, keyed ? [keyOf(model)] : visible, soleReach(unscopedRead)),
+		),
+		all: bound(
+			site,
+			async (options?: unknown) => allRows(context, run, everything(), visible, options, keyed ? [keyOf(model)] : visible, soleReach(unscopedRead)),
 		),
 		count: bound(site, async (options?: unknown) => countRows(context, run, everything(), visible, options)),
 		aggregate: bound(site, async <Row>(spec: AggregateSpec<Row>) => aggregateRows(context, run, everything(), context.shape, spec)),
@@ -1394,6 +1432,45 @@ async function listRows(
 		items: reach === undefined ? items : await answerFiles(context.model, run.files, session, items, reach),
 		next: rows.length > limit && last !== undefined ? encodeCursor(last, order) : null,
 	}
+}
+
+/**
+ * Every row of a read in one statement, in the order asked with the tiebreak last, or a refusal when more than
+ * `MAX_ALL_ROWS` match: it never answers a truncated set.
+ */
+async function allRows(
+	context: TableContext,
+	run: Runner,
+	scope: OperationNode | undefined,
+	visible: readonly string[],
+	input: unknown,
+	tiebreak: readonly string[],
+	reach?: ReadReach,
+): Promise<Readonly<Record<string, unknown>>[]> {
+	const table = context.model.name
+	const options = readOptions(input, ['where', 'orderBy'], 'all')
+	const shape = actionShape(context.model, visible)
+	const conditions = conditionsOf(context, shape, options['where'])
+	const order = orderOf(shape, options['orderBy'], tiebreak)
+	if (scope === undefined) {
+		return []
+	}
+	const dialect = dialectOf(context)
+	const node = selectNode(rowState(table, conditions, order, MAX_ALL_ROWS + 1), visible, scope, undefined, context.model.dates, dialect)
+	const session = await run.read()
+	const rows = await session.run<Readonly<Record<string, unknown>>>(node, {
+		root: 'SelectQueryNode',
+		table,
+		joins: {},
+		scope,
+		subqueries: context.subqueries,
+		through: context.through,
+	})
+	if (rows.length > MAX_ALL_ROWS) {
+		throw new QueryRefusedError('too_many_rows', `all() of ${table} matches more than ${MAX_ALL_ROWS} rows: narrow it with where, or page it with list`)
+	}
+	const items = answerRows(dialect, table, rowColumnsOf(context.model), rows)
+	return reach === undefined ? items : await answerFiles(context.model, run.files, session, items, reach)
 }
 
 async function countRows(

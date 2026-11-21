@@ -49,6 +49,7 @@ export const QUERY_REFUSALS = {
 	statement_shape: 'the compiled statement has a form the guard does not admit',
 	scope_predicate: 'the scope predicate is missing or is not a top-level conjunct',
 	list_page: 'a list limit, cursor or order outside what a page admits',
+	too_many_rows: 'all() matched more rows than its cap (MAX_ALL_ROWS); it refuses rather than truncate',
 	undeclared_reach: 'the site reaches data it did not declare (sql or unscoped, or their mode)',
 	sql_template: 'ctx.sql was not called as one tagged template whose values are interpolated whole',
 	sql_statement: 'ctx.sql runs one statement of an admitted kind, and none inside another',
@@ -60,7 +61,7 @@ export const QUERY_REFUSALS = {
 	file_scan: "a scan verdict outside the scan job's lease",
 	claim_site: 'claim leases rows in a transaction of its own: a job calls it on ctx.db, never inside ctx.transaction or a request',
 	on_conflict: "an insert's onConflict names no column of the table, a column the insert leaves empty, or another action",
-	public_reach: "a public procedure updates, removes, locks or claims no row, and an insert's conflict writes nothing",
+	public_reach: "a public procedure updates, removes, locks or claims no row, reads none with all(), and an insert's conflict writes nothing",
 	file_value:
 		"a file column takes a file reference this request holds and may read (an incoming file, a put, or a read under the table's read action) of the column's kind, or null",
 	file_scope: 'a file is referenced from another top-level scope than the one its first reference set',

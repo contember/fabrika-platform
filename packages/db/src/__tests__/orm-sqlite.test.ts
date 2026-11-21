@@ -7,6 +7,7 @@ import { z } from 'zod/v4'
 import { runApplicationStatement } from '../database'
 import { QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
+import { MAX_ALL_ROWS } from '../orm'
 import type { DataKind } from '../orm-types'
 import { openSqlite } from '../sqlite'
 import { type BunSqliteStorage, bunSqliteStorage } from '../sqlite-bun'
@@ -354,6 +355,46 @@ describe('a keyset page over a nullable column', () => {
 
 	test('a page that ends inside the nulls continues among them', async () => {
 		expect(await pages([['rank', 'asc'], ['name', 'desc']], 4)).toEqual([['a', 'b', 'c', 'n2'], ['n1']])
+	})
+})
+
+describe('all(): every row of a read, bounded', () => {
+	/** Inserts `count` projects into `org` in one statement, named `<prefix>-<n>`. */
+	function insertMany(count: number, org: string, prefix: string): void {
+		storage.sql.exec(
+			`with recursive n(i) as (select 1 union all select i + 1 from n where i < ${count})
+			insert into projects (id, organization_id, name, version) select '${prefix}-' || i, '${org}', '${prefix}-' || i, 1 from n`,
+		)
+	}
+	const all = (options?: unknown, ids: readonly string[] = ['o1']) =>
+		invoke('query', (db) => call(db.within(inOrganizations('projects.read', ids)), 'projects.all', options))
+	const count = (rows: unknown) => (Array.isArray(rows) ? rows.length : -1)
+
+	test('answers every row of its scope up to the cap, not a page of them, and none of another scope', async () => {
+		insertMany(MAX_ALL_ROWS, 'o1', 'a')
+		insertMany(5, 'o2', 'b')
+		const rows = await all()
+		expect(count(rows)).toBe(MAX_ALL_ROWS)
+		expect(Array.isArray(rows) && rows.every((row) => field(row, 'organization_id') === 'o1')).toBe(true)
+		expect(count(await all(undefined, ['o2']))).toBe(5)
+	})
+
+	test('refuses one row past the cap instead of truncating, and where narrows what counts', async () => {
+		insertMany(MAX_ALL_ROWS + 1, 'o1', 'a')
+		const refused = await all().then(() => null, (error: unknown) => error)
+		expect(refused).toBeInstanceOf(QueryRefusedError)
+		expect(field(refused, 'reason')).toBe('too_many_rows')
+		expect(count(await all({ where: [['name', '=', 'a-1']] }))).toBe(1)
+	})
+
+	test('honours where and orderBy, with the key as the tiebreak', async () => {
+		for (const [name, rank] of [['c', 1], ['a', 2], ['b', 1]] as const) {
+			await insertProject({ name, rank })
+		}
+		const names = (rows: unknown) => (Array.isArray(rows) ? rows.map((row) => field(row, 'name')) : [])
+		expect(names(await all({ orderBy: [['name', 'desc']] }))).toEqual(['c', 'b', 'a'])
+		expect(names(await all({ where: [['rank', '=', 1]], orderBy: [['name', 'asc']] }))).toEqual(['b', 'c'])
+		await expect(all({ after: 'x' })).rejects.toThrow('after is not an option of all')
 	})
 })
 
