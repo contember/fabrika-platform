@@ -21,3 +21,6 @@ decided work or status.
   existing contract. What it takes, what it costs to run against Zerops, and why to build it with the first installation that needs it.
 - [A dev environment for MCP authoring](mcp-dev-containers.md) — a `dev` environment that takes each workspace
   commit in about two seconds through an in-container launcher that pulls from Control; measured on Zerops.
+- [Start memory and init connections without the isolation tests](start-memory-without-isolation-tests.md) — the
+  container init on 0.9.0-dev.22 peaks at ~38 MiB and 1 connection (was ~180–200 MiB and 4); measured locally, not yet
+  on Zerops; the 0.5 GB floor and the 5-connection budget are unchanged.
