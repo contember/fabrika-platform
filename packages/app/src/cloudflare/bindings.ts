@@ -5,15 +5,18 @@ import { DecodedIamMembership, DecodedIamTerminals } from '@fabrika/auth'
 import type { IamMembershipRpc, IamTerminalRpc, MintFromKeyResult } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
 import { z } from 'zod/v4'
-import type { IamKeySource } from '../implement/boot.js'
+import { BootError, type IamKeySource } from '../implement/boot.js'
 import { CONNECT_BINDING_PREFIX, type ConnectFetch } from '../implement/connect.js'
 import type { SpaAssets } from '../implement/dispatch.js'
 import type { WorkloadTokenSource } from '../implement/workload.js'
 import { isPageRoute } from '../spa-fallback.js'
 
-/** The method `name` of a binding, bound to it, or `null` when it has none. */
+/**
+ * The method `name` of a binding, bound to it, or `null` when it has none. Read, never tested with `in`: a service
+ * binding stub may answer a method without owning the property (Lopata's has no `has` trap).
+ */
 export function method(target: unknown, name: string): ((...args: unknown[]) => unknown) | null {
-	if (typeof target !== 'object' || target === null || !(name in target)) {
+	if (typeof target !== 'object' || target === null) {
 		return null
 	}
 	const found: unknown = Reflect.get(target, name)
@@ -23,7 +26,7 @@ export function method(target: unknown, name: string): ((...args: unknown[]) => 
 export function bindingKeySource(binding: unknown): IamKeySource {
 	const getJwks = method(binding, 'getJwks')
 	if (getJwks === null) {
-		throw new Error('the IAM binding is missing (env.IAM); the platform binds it to every application Worker')
+		throw new BootError(['the IAM binding is missing (env.IAM); the platform binds it to every application Worker'])
 	}
 	return {
 		async getJwks() {
