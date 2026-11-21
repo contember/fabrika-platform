@@ -41,9 +41,10 @@ calls it), and the checker no longer reports
 `generated-test-hash`, `endpoint-fixture` or `generated-test-import`. On Zerops the init commands run `fabrika db
 migrate` and `fabrika db codegen --verify` only. The application's own tests stay.
 
-`endpointProxy` in `@fabrika/app/testing` builds its proxy entry with the proxy's own schema, so it refuses an entry a
-deploy refuses: a placement, an `operationsOrigin` or a cross-origin list that 0.8's test kit took. A test that relied
-on such an entry fails once the pin is raised; give it the entry the application deploys with.
+`testKit({ crossOrigins })` in `@fabrika/app/testing` checks its list with the proxy's own schema, as a deploy does: an
+origin listed twice, a value that is not an exact origin, or an origin on the application's own host is refused. 0.8's
+test kit took such a list, so a test that passes one fails once the pin is raised; give it the list the application
+deploys with.
 
 `fabrika-check` prints the number of hints instead of listing them; `fabrika-check --hints` lists them as 0.8 did. A
 script that reads the hints from its output passes `--hints`. Printing the count changes no refusal and not the exit
@@ -53,9 +54,10 @@ The 0.9 checker adds three refusals:
 
 - `tool-import`: a module under a root `tools/` directory is a developer's tool, which only the rules of how it is
   written read. No module outside `tools/`, a test and `fabrika.config.ts` included, loads or re-exports one, also
-  through an import map, a `tsconfig` path or a literal `import()`; a type-only import stays. A `[test] preload` in
-  `bunfig.toml` names none, and no `package.json` lies under `tools/`. An application that keeps code it runs under a
-  root `tools/` moves it under `src/`; what a tool and the application share goes to `src/shared/`, imported by the tool.
+  through an import map, a `tsconfig` path or a literal `import()`; a type-only import stays. No `package.json` lies
+  under `tools/`, and a `[test] preload` in `bunfig.toml` that names a module under `tools/` is refused too, under
+  `unchecked-import`. An application that keeps code it runs under a root `tools/` moves it under `src/`; what a tool
+  and the application share goes to `src/shared/`, imported by the tool.
 - `migration-edited`: in a git work tree, `fabrika-check` refuses a file under `db/migrations/` that was edited, deleted
   or renamed against the merge base with the remote's default branch (`origin/HEAD`, else `origin/main` or
   `origin/master`; `--base <ref>` names another). It does not run outside a work tree, so a deploy build never meets
@@ -106,7 +108,7 @@ An application on Cloudflare that raises its pin to 0.9:
    application commits its entry.
    From `0.9.0-dev.15` the build also compiles the contract into `fabrika/contract.generated.ts`, which the entry
    imports and every build rewrites; add `/fabrika/contract.generated.ts` to `.gitignore`. It compiles in a child
-   process whose environment holds only `PATH` and `HOME`, so a module of the application that reads its environment
+   process whose environment holds only `PATH` and `HOME`, so a module of the application that needs another variable
    when it loads fails the build: read the environment in `deps` or in a handler instead.
 2. Writes its migrations in SQLite under `db/migrations/` (the skill's `references/table-and-migration.md`), runs
    `fabrika db codegen`, which needs no database URL, and serves `scoped(tables)` from `defineApp(vocabulary, tables)`
