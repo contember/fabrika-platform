@@ -18,6 +18,7 @@ import {
 	JOB_KICKS_TABLE,
 	JOB_LEASES_TABLE,
 	JOB_WAKES_TABLE,
+	REQUEST_RECEIPTS_TABLE,
 	WEBHOOK_BINDINGS_TABLE,
 	WEBHOOK_DELIVERIES_TABLE,
 } from './migrations'
@@ -158,6 +159,23 @@ CREATE INDEX ${FILE_DELETIONS_TABLE}_recorded_at ON ${FILE_DELETIONS_TABLE} (rec
 		sql: `-- The wakes the run holding the job's lease took when it took the lease: its finish consumes or retries exactly these.
 -- A wake written or merged into afterwards is not taken, though due before the run started: the run may not have read its work.
 ALTER TABLE ${JOB_WAKES_TABLE} ADD COLUMN owned INTEGER NOT NULL DEFAULT 0 CHECK (owned IN (0, 1));
+`,
+	}),
+	Object.freeze({
+		name: '0005_request_receipts.sql',
+		sql: `-- The answer of a mutation whose request carried a key (ADR-0078), for a repeat of that request: the principal's key,
+-- the operation and the SHA-256 of its input, and the output's JSON. created_at is epoch milliseconds; each write prunes
+-- a batch of receipts past the retention.
+CREATE TABLE ${REQUEST_RECEIPTS_TABLE} (
+	principal TEXT NOT NULL,
+	request_key TEXT NOT NULL,
+	operation TEXT NOT NULL,
+	identity TEXT NOT NULL,
+	output TEXT NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (principal, request_key)
+) STRICT;
+CREATE INDEX ${REQUEST_RECEIPTS_TABLE}_created_at ON ${REQUEST_RECEIPTS_TABLE} (created_at);
 `,
 	}),
 ])

@@ -9,6 +9,7 @@ import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
 import type { JobWakes } from './job-wakes'
 import type { DataAccess } from './orm'
+import type { RequestReceipts } from './request-receipts'
 import type { DataLayerRuntime, TableContext, TableProbe } from './store'
 import type { StoredFiles } from './stored-files'
 
@@ -63,6 +64,8 @@ export interface FrameworkTables {
 	readonly admissions: Admissions
 	/** Every stored file (`fabrika_files`): staged before its object, claimed at its first reference, swept unreferenced. */
 	readonly files: StoredFiles
+	/** The answers of keyed mutations, read and written in the invocation's transaction (ADR-0078). */
+	readonly receipts: RequestReceipts
 }
 
 /** A connection of the layer and its locator. Only its holder can `release` it, which lets the layer be bound again. */

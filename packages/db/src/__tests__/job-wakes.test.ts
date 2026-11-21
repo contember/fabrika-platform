@@ -562,15 +562,16 @@ describe.skipIf(!hasPostgres)("hasten, the test kit's, on Postgres", () => {
 describe.skipIf(!hasPostgres)('the wakes migration', () => {
 	test('an existing schema that holds the earlier framework files applies 0009 and 0010 alone, and the runtime role writes the table', async () => {
 		const appId = `wakes-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
+		const throughWakes = FRAMEWORK_MIGRATIONS.filter((file) => file.name <= '0010_job_wakes_owned.sql')
 		const earlier = FRAMEWORK_MIGRATIONS.filter((file) => file.name < '0009_job_wakes.sql')
-		expect(earlier).toHaveLength(FRAMEWORK_MIGRATIONS.length - 2)
+		expect(earlier).toHaveLength(throughWakes.length - 2)
 		const migrationsOf = (framework: typeof FRAMEWORK_MIGRATIONS) =>
 			definePostgresApplicationMigrations({ appId, directory: '/nonexistent', framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: framework } })
 		try {
 			const app = [{ name: '20261024120000_init.sql', sql: 'CREATE TABLE notes (id TEXT PRIMARY KEY)' }]
 			const before = migrationsOf(earlier)
 			expect(await before.migrate(url, app)).toEqual([...earlier.map((file) => `fabrika/${file.name}`), `app/${app[0]?.name}`])
-			const after = migrationsOf(FRAMEWORK_MIGRATIONS)
+			const after = migrationsOf(throughWakes)
 			expect(await after.migrate(url, app)).toEqual(['fabrika/0009_job_wakes.sql', 'fabrika/0010_job_wakes_owned.sql'])
 			const runtime = openPostgres({ url: applicationRuntimeUrl(url, appId), schema: after.schema, max: 1 })
 			try {

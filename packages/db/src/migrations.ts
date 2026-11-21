@@ -16,6 +16,7 @@ export const FORM_FILES_TABLE = 'fabrika_form_files'
 export const FORM_BYTES_TABLE = 'fabrika_form_bytes'
 export const FILES_TABLE = 'fabrika_files'
 export const FILE_DELETIONS_TABLE = 'fabrika_file_deletions'
+export const REQUEST_RECEIPTS_TABLE = 'fabrika_request_receipts'
 /** The function an application's last adoption migration calls with the name of a file collection it adopted. */
 export const FILES_RELEASE_FUNCTION = 'fabrika_files_release'
 /**
@@ -279,6 +280,23 @@ CREATE UNIQUE INDEX ${JOB_WAKES_TABLE}_dedupe ON ${JOB_WAKES_TABLE} (dedupe) WHE
 		sql: `-- The wakes the run holding the job's lease took when it took the lease: its finish consumes or retries exactly these.
 -- A wake written or merged into afterwards is not taken, though due before the run started: the run may not have read its work.
 ALTER TABLE ${JOB_WAKES_TABLE} ADD COLUMN owned BOOLEAN NOT NULL DEFAULT false;
+`,
+	}),
+	Object.freeze({
+		name: '0011_request_receipts.sql',
+		sql: `-- The answer of a mutation whose request carried a key (ADR-0078), for a repeat of that request: the principal's key,
+-- the operation and the SHA-256 of its input, and the output's JSON. created_at is epoch milliseconds; each write prunes
+-- a batch of receipts past the retention.
+CREATE TABLE ${REQUEST_RECEIPTS_TABLE} (
+	principal TEXT NOT NULL,
+	request_key TEXT NOT NULL,
+	operation TEXT NOT NULL,
+	identity TEXT NOT NULL,
+	output TEXT NOT NULL,
+	created_at BIGINT NOT NULL,
+	PRIMARY KEY (principal, request_key)
+);
+CREATE INDEX ${REQUEST_RECEIPTS_TABLE}_created_at ON ${REQUEST_RECEIPTS_TABLE} (created_at);
 `,
 	}),
 ])
