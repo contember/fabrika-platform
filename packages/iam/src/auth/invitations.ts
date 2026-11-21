@@ -1,12 +1,13 @@
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
-import { actionLandingOrigin, type AppPresentation, appQuery, landingUrl, localeQuery, presentationFor } from '../app-presentation'
+import { actionLandingOrigin, type AppPresentation, appQuery, landingUrl, localeQuery, presentationFor, withPersonLocale } from '../app-presentation'
 import { type InvitationRow, principalStatus } from '../db'
 import { type RequestContext } from '../env'
 import { acceptCreatingPrincipal, acceptInvitation, INVITATION_ACCEPT_PATH, invitationOffer } from '../membership'
 import { passwordMinLength } from '../password-minimum'
 import { authFailurePage, invitationOutcomePage, invitationPage, invitationPasswordPage } from '../password-pages'
 import { validatePassword } from '../password-policy'
+import { parseLocale, rememberLocaleCookie } from '../person-locale'
 import type { Services } from '../services'
 import { methodNotAllowed, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
 import { currentSession, issueSession } from './sessions'
@@ -87,15 +88,8 @@ export async function handleInvitation(request: Request, services: Services, ctx
 				status: 403,
 			})
 		}
-		// The application's own address signs the browser in through its handoff, in its language; without one, IAM's.
-		const signIn = landingUrl(linked) ?? ownSignIn(services, linked)
-		return invitationOutcomePage({
-			presentation: linked,
-			title: (t) => t.signInFirstTitle,
-			text: (t) => t.signInFirstText,
-			status: 401,
-			signIn,
-		})
+		// The invitation's own language beats the link's, as on every other page of this flow.
+		return signInFirst(services, withPersonLocale(linked, parseLocale(offer.invitation.locale)))
 	}
 	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
 	if (principal === null || principalStatus(principal) === 'disabled') {
@@ -188,14 +182,32 @@ function creationRefused(
 		case 'not_eligible':
 			return invitationOutcomePage({ presentation, title: (t) => t.unavailableTitle, text: (t) => t.roleNotEligible, status: 403 })
 		case 'sign_in':
-			return invitationOutcomePage({
-				presentation,
-				title: (t) => t.signInFirstTitle,
-				text: (t) => t.signInFirstText,
-				status: 401,
-				signIn: landingUrl(presentation) ?? ownSignIn(services, presentation),
-			})
+			return signInFirst(services, presentation)
 	}
+}
+
+/**
+ * The page that asks the person to sign in with the invited address and open the link again. The application's own
+ * address signs the browser in through its handoff; without one, IAM's own sign-in does. The handoff's sign-in page is
+ * built from the proxy's bounce and carries no `?locale=` of IAM's, so the page's language (`personLocale`: the
+ * invitation's, else the link's `?locale=`, else IAM's cookie) is remembered for this browser (`rememberLocaleCookie`)
+ * and that page speaks it too, unless the application's own language cookie names another. IAM's own sign-in carries
+ * it as `?locale=`. It picks words only.
+ */
+function signInFirst(services: Services, presentation: AppPresentation): Response {
+	const locale = presentation.personLocale
+	const landing = landingUrl(presentation)
+	const response = invitationOutcomePage({
+		presentation,
+		title: (t) => t.signInFirstTitle,
+		text: (t) => t.signInFirstText,
+		status: 401,
+		signIn: landing ?? ownSignIn(services, presentation),
+	})
+	if (landing !== null && locale !== null) {
+		response.headers.append('Set-Cookie', rememberLocaleCookie(locale))
+	}
+	return response
 }
 
 /** IAM's own sign-in, back to this page: the browser opens the invitation link again there. */

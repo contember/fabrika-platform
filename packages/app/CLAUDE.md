@@ -141,6 +141,7 @@ src/
                       ResultOf, InputOf
     share.ts          shareKey: the key the share SPA's bootstrap kept
     caller.ts         parsePageCaller: the caller document an SPA mount serves at <prefix>/__fabrika-me.json
+    locale.ts         rememberSignInLocale: the language the next sign-in its proxy starts speaks (ADR-0077)
     rpc.ts            createRpcClient: the client of the { method, input } wire protocol (exported from the root)
     error-reporting.ts  the page's uncaught errors as Sentry error events to the DSN of <prefix>/__fabrika-config.json
                       (not exported; FabrikaProvider starts it)

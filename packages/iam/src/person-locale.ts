@@ -2,22 +2,11 @@
 // one of their own, which an application names on an invitation and IAM keeps (`principals.locale`). Every source is
 // a hint for words and nothing else: none of them decides a landing, an origin or an authority.
 
-import { DEFAULT_LOCALE, isLocale, type Locale } from '@fabrika/auth-core'
+import { DEFAULT_LOCALE, isLocale, type Locale, LOCALE_COOKIE, LOCALE_PARAM } from '@fabrika/auth-core'
 import { clearCookie, readCookie, serializeCookie } from './auth/cookies'
-
-/**
- * The language a browser last signed in with here, for the pages IAM shows before it knows who is reading: a sign-in
- * page reads it, so a person whose language differs from the application's keeps theirs after the first visit. A
- * sign-in of a person without a language of their own clears it, so a shared browser does not keep the previous
- * person's. Host-only, like every cookie IAM writes, and words only: nothing reads it as a claim about the person.
- */
-export const LOCALE_COOKIE = '__Host-fabrika_locale'
 
 /** A year: the cookie is a preference, renewed by each sign-in of a person with a language of their own. */
 const LOCALE_COOKIE_MAX_AGE_SECONDS = 365 * 24 * 60 * 60
-
-/** The query parameter of a link or a form IAM builds for a person whose language it knows (`appQuery`). */
-export const LOCALE_PARAM = 'locale'
 
 /** The most `Accept-Language` entries read; a browser sends a handful, and a longer list buys nothing. */
 const MAX_LANGUAGE_RANGES = 32
@@ -97,7 +86,18 @@ export function browserLocale(header: string | null): Locale | null {
  */
 export function signInLocaleCookie(request: Request, locale: Locale | null): string | null {
 	if (locale !== null) {
-		return serializeCookie(LOCALE_COOKIE, locale, { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: LOCALE_COOKIE_MAX_AGE_SECONDS })
+		return rememberLocaleCookie(locale)
 	}
 	return readCookie(request.headers.get('Cookie'), LOCALE_COOKIE) === null ? null : clearCookie(LOCALE_COOKIE)
+}
+
+/**
+ * The `Set-Cookie` that remembers `locale` in `LOCALE_COOKIE` on IAM's host, for the pages IAM shows before it knows
+ * who is reading: a sign-in page reads it, so a person whose language differs from the application's keeps theirs
+ * after the first visit. A sign-in writes it, and so does an invitation's "sign in first", whose sign-in the
+ * application's proxy starts without a `?locale=` of IAM's. Host-only, like every cookie IAM writes, and words only:
+ * nothing reads it as a claim about the person.
+ */
+export function rememberLocaleCookie(locale: Locale): string {
+	return serializeCookie(LOCALE_COOKIE, locale, { httpOnly: true, secure: true, sameSite: 'Lax', maxAge: LOCALE_COOKIE_MAX_AGE_SECONDS })
 }

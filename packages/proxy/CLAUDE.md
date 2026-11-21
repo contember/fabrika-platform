@@ -45,7 +45,9 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   in-flight POST into a bodyless GET. The signal is `Sec-Fetch-Mode` and not `Accept` because `Sec-`
   is a forbidden header prefix — the browser states it and page JS cannot, so it describes the caller
   instead of letting the caller choose the answer. Both forms carry the SAME login URL (`app=` +
-  `redirect=`, ADR-0022). Verified against caddy 2.10.2: `forward_auth` forwards `Sec-Fetch-*`
+  `redirect=`, ADR-0022), plus `locale=` when the application left a language IAM speaks in
+  `__Host-fabrika_locale` on its host (ADR-0077). That value picks IAM's words only and changes no
+  decision. Verified against caddy 2.10.2: `forward_auth` forwards `Sec-Fetch-*`
   verbatim and returns a non-2xx auth response — status, `Content-Type` and body — to the client.
 - **The service binds to LOOPBACK.** It answers "is this request allowed" and hands back a signed
   token, so a publicly routable instance is a token oracle. Caddy is the only thing that may dial it.

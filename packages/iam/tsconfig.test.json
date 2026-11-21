@@ -23,6 +23,7 @@
 		{ "path": "./tsconfig.lib.json" },
 		{ "path": "../platform-node/tsconfig.lib.json" },
 		{ "path": "../platform/tsconfig.lib.json" },
-		{ "path": "../proxy-core/tsconfig.lib.json" }
+		{ "path": "../proxy-core/tsconfig.lib.json" },
+		{ "path": "../proxy-core/tsconfig.test.json" }
 	]
 }

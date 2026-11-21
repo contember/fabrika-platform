@@ -29,6 +29,10 @@ import {
 	FORM_MULTIPART_TYPE,
 	FORM_URLENCODED_TYPE,
 	formatEndpointHeader,
+	isLocale,
+	type Locale,
+	LOCALE_COOKIE,
+	LOCALE_PARAM,
 	planEndpoint,
 	sameOriginTarget,
 	satisfies,
@@ -650,7 +654,7 @@ export class Authorizer {
 		return {
 			outcome: 'login',
 			status: isDocumentNavigation(request.headers) ? 302 : 401,
-			location: this.loginUrl(app, request.url, handoff),
+			location: this.loginUrl(app, request.url, signInLocale(request.headers), handoff),
 			reason,
 			handoff,
 		}
@@ -662,8 +666,12 @@ export class Authorizer {
 	 * The scheme comes from the MANIFEST, not from the forwarded request: behind a TLS-terminating
 	 * balancer the proxy is reached over plain HTTP and `X-Forwarded-Proto` says so, which would send
 	 * the browser back to an `http://` URL for an origin only served over `https://`.
+	 *
+	 * `locale` is the language the application left for this browser on its host (`signInLocale`), passed on as IAM's
+	 * `?locale=` so the first sign-in page speaks it. It picks IAM's words only: the decision, the return URL and the
+	 * handoff are the same without it.
 	 */
-	private loginUrl(app: ProxyApp, url: URL, handoff: HandoffAttempt): string {
+	private loginUrl(app: ProxyApp, url: URL, locale: Locale | null, handoff: HandoffAttempt): string {
 		const target = new URL(url)
 		target.protocol = `${app.scheme}:`
 		// `readProxyEnv` already reduces the issuer to an origin; this covers a composition root that
@@ -672,6 +680,9 @@ export class Authorizer {
 		const login = new URL('/auth/login', issuer)
 		login.searchParams.set('app', audienceOf(app))
 		login.searchParams.set(LOGIN_REDIRECT_PARAM, target.toString())
+		if (locale !== null) {
+			login.searchParams.set(LOCALE_PARAM, locale)
+		}
 		setHandoffParams(login, handoff)
 		return login.toString()
 	}
@@ -688,6 +699,15 @@ function admittedOrigin(app: ProxyApp, row: ManifestEndpointRow, origin: string)
 		return '*'
 	}
 	return form === 'environment' && isApplicationEntry(app) && (app.crossOrigins ?? []).includes(origin) ? origin : null
+}
+
+/**
+ * The language an application left for this browser in `LOCALE_COOKIE` on its own host, or null for none or for a
+ * value IAM does not speak. A client can set it, which is why it only ever picks words on IAM's sign-in page.
+ */
+function signInLocale(headers: Headers): Locale | null {
+	const value = readCookie(headers.get('Cookie'), LOCALE_COOKIE)
+	return isLocale(value) ? value : null
 }
 
 /** Whether a redeemed code's return URL is on the host the callback arrived at, and that host is one of the entry's. */

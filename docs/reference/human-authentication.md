@@ -268,8 +268,11 @@ A page takes its language from the first of these that names one IAM speaks:
    the signed-in principal's);
 2. a link's or a form's `?locale=`, which the links and forms IAM builds for a
    person whose language it knows carry on, its own sign-in included (the
-   return from an SSO provider does not);
-3. the remembered cookie;
+   return from an SSO provider does not), and which an application's proxy
+   writes on its sign-in bounce from the application's own language cookie
+   (below);
+3. the remembered cookie, which a sign-in leaves and an invitation's "sign in
+   first" sets to the invitation's language;
 4. the application's `locale`;
 5. the browser's `Accept-Language`, by weight, each range matched by its
    primary subtag (`uk-UA` is `uk`);
@@ -282,11 +285,28 @@ An application that declares a language shows every page it showed before; only
 a language the person was given wins over it. An application that serves people
 of several languages either names each person's on their invitation or declares
 no `locale` and lets the browser choose. A stored value IAM no longer speaks
-counts as none. The sign-in an application's proxy starts carries no
-`?locale=`, so on a browser where the person has not signed in yet it follows
-the remembered, the application's or the browser's language, including the
-sign-in an invitation's "sign in first" sends them to; the invitation link they
-then open again speaks theirs.
+counts as none.
+
+The sign-in an application's proxy starts names the language the application
+left for the browser on its own host: an application may set the host-only
+`__Host-fabrika_locale` cookie (`LOCALE_COOKIE` in `@fabrika/auth-core`; `Secure`,
+`Path=/`, no `Domain`, as the prefix requires) to one of the languages above,
+from its server or its page (`rememberSignInLocale` of `@fabrika/app/client`
+writes it from an SPA), and the proxy adds that value to IAM's login URL as
+`?locale=`. A value IAM does not speak is not passed on. The proxy decides
+exactly as without it, on Cloudflare and Zerops alike, and the cookie reaches
+the application with its other cookies. The helper keeps the cookie for a
+year, but Safari keeps a cookie a script writes for seven days at most, so a
+page that wants it longer calls the helper on each visit or lets its server
+write the cookie.
+
+An invitation's "sign in first" sends the browser to the application's
+address, so the answer remembers the invitation's language in IAM's own cookie
+and the sign-in page the proxy's bounce opens speaks it, unless the
+application's own language cookie names another; the invitation link the
+person then opens again speaks theirs too. Without either cookie,
+on a browser where the person has not signed in yet, that page follows the
+application's or the browser's language.
 
 An application may also word IAM's e-mails itself with `mail` in its vocabulary:
 per message (`invitation`, `enrollment`, `reset`) and language, a one-line

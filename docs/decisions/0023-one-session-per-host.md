@@ -50,7 +50,9 @@ They are different `sessions` rows with the same cookie name.
 The session cookie is `__Host-px_session`; handoff cookies are `__Host-px_handoff_<state>`. IAM's OIDC
 flight cookie `__Host-fabrika_oidc`, its known-device cookie `__Host-fabrika_device` and its remembered-language
 cookie `__Host-fabrika_locale` sit outside the `__Host-px_` prefix the proxy strips upstream, because IAM itself reads
-them. The browser refuses a cookie
+them. An application may write its own `__Host-fabrika_locale` on its host, which the proxy reads only to name IAM's
+sign-in language ([ADR-0077](0077-a-person-reads-iam-in-their-own-language.md)) and leaves on the application's request:
+it picks words only and is no credential. The browser refuses a cookie
 with the `__Host-` prefix unless it has `Secure`, `Path=/` and no `Domain`, so a sibling host cannot shadow
 it. `Secure` is unconditional. The socket behind a TLS-terminating balancer is plain HTTP, so a derived
 `Secure` was the wrong signal, and without `Secure` the browser stores nothing anyway.

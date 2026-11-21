@@ -9,7 +9,7 @@
  *     make the Caddy layer itself fail-closed.
  */
 
-import { FABRIKA_HOP_HEADERS, IAM_PROXY_SECRET_VARIABLE, PROXY_SECRET_HEADER, proxySecretVariable } from '@fabrika/auth-core'
+import { FABRIKA_HOP_HEADERS, IAM_PROXY_SECRET_VARIABLE, LOCALE_COOKIE, PROXY_SECRET_HEADER, proxySecretVariable } from '@fabrika/auth-core'
 import {
 	CLIENT_ADDRESS_HEADER,
 	DELEGATION_HEADER,
@@ -351,6 +351,17 @@ describe('the per-app chain is fail-closed by construction', () => {
 			cookie = cookie.replace(new RegExp(replacement.search_regexp, 'g'), replacement.replace)
 		}
 		expect(cookie).toBe('app-cookie=kept; theme=dark')
+	})
+
+	test("the application's language cookie reaches both the auth service, which reads it, and the app upstream", () => {
+		const steps = subrouteOf(routes[0] as CaddyRoute).routes
+		let cookie = `__Host-px_session=session; ${LOCALE_COOKIE}=uk; __Host-px_handoff_state=verifier`
+		for (const replacement of proxyHandler(steps[2]).headers?.request?.replace?.['Cookie'] ?? []) {
+			cookie = cookie.replace(new RegExp(replacement.search_regexp, 'g'), replacement.replace)
+		}
+		expect(cookie).toBe(`${LOCALE_COOKIE}=uk`)
+		expect(JSON.stringify(steps[0])).not.toContain('Cookie')
+		expect(JSON.stringify(proxyHandler(steps[1]).headers ?? {})).not.toContain('Cookie')
 	})
 
 	test('no reverse_proxy anywhere dials an app upstream outside such a chain', () => {

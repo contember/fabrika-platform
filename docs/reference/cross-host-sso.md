@@ -27,7 +27,10 @@ design.
 
 Step 1 answers in the shape the caller can act on: a **302** for a document
 navigation, a **401** carrying `{ error: { type, message, loginUrl } }` for anything
-else. The signal is `Sec-Fetch-Mode`; both forms carry the same login URL.
+else. The signal is `Sec-Fetch-Mode`; both forms carry the same login URL. It
+also carries `locale` when the application left a language IAM speaks in
+`__Host-fabrika_locale` on its host; that picks IAM's words and nothing else
+([ADR-0077](../decisions/0077-a-person-reads-iam-in-their-own-language.md)).
 
 The reserved callback path is `/__fabrika/auth/callback`. The proxy answers it
 itself, **before it selects an endpoint** — it is how a browser obtains a session,

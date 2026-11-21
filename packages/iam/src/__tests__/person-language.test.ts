@@ -10,17 +10,20 @@ import {
 	AUTH_HANDOFF_STATE_PARAM,
 	invitationOptionsProblem,
 	type Locale,
+	LOCALE_COOKIE,
 	SESSION_COOKIE,
 } from '@fabrika/auth-core'
 import type { EmailMessage } from '@fabrika/email'
+import { createVerifyService } from '@fabrika/proxy-core'
 import { describe, expect, test } from 'bun:test'
+import { FakeIam, manifestWith, serviceRow, verifyRequest } from '../../../proxy-core/src/__tests__/helpers'
 import { appQuery, INSTALLATION_PRESENTATION } from '../app-presentation'
 import { handleAuth } from '../auth/routes'
 import { assignMember, createScope, requestDelegation } from '../membership'
 import { pkceChallenge } from '../oidc'
 import type { PasswordHasher, StoredPasswordHash } from '../password-crypto'
 import { issuePasswordAction } from '../password-service'
-import { browserLocale, chooseLocale, LOCALE_COOKIE } from '../person-locale'
+import { browserLocale, chooseLocale } from '../person-locale'
 import { hashToken } from '../secret'
 import { createHarness, type Harness } from './helpers/harness'
 import {
@@ -388,6 +391,42 @@ describe('every page a person invited in their language reaches', () => {
 		expect(await other.text()).toContain('<h1>Ви ввійшли з іншим обліковим записом</h1>')
 	})
 
+	test("its \"sign in first\" remembers the invitation's language on IAM's host, even without the link's ?locale=", async () => {
+		const n = await notes()
+		await invitee(n)
+		const { path, token } = await invited(n)
+		const signInFirst = await n.send(post(path.replace('&locale=uk', ''), { token }))
+		expect(signInFirst.status).toBe(401)
+		expect(await lang(signInFirst)).toBe('uk')
+		const remembered = signInFirst.headers.getSetCookie().find((cookie) => cookie.startsWith(`${LOCALE_COOKIE}=`))
+		expect(remembered).toStartWith(`${LOCALE_COOKIE}=uk;`)
+		expect(remembered).toContain('HttpOnly; Secure; SameSite=Lax')
+	})
+
+	test("without the application's address its \"sign in first\" sends IAM's own sign-in the invitation's language", async () => {
+		const n = await notes()
+		await n.f.repositories.handoff.setReturnOrigins(APP, [])
+		await invitee(n)
+		const { path, token } = await invited(n)
+		const signInFirst = await n.send(post(path.replace('&locale=uk', ''), { token }))
+		expect(signInFirst.status).toBe(401)
+		expect(cookieOf(signInFirst, LOCALE_COOKIE)).toBeNull()
+		const html = await signInFirst.text()
+		expect(html).toContain('<html lang="uk">')
+		expect(html).toContain(`href="${ORIGIN}/auth/login?locale=uk&amp;redirect=`)
+	})
+
+	test('a "sign in first" of an invitation that names no language remembers none', async () => {
+		const n = await notes()
+		await invitee(n)
+		await n.invite(INVITEE)
+		const { url, token } = linkOf(lastMail(n.email))
+		const signInFirst = await n.send(post(`${url.pathname}${url.search}`, { token }))
+		expect(signInFirst.status).toBe(401)
+		expect(await lang(signInFirst)).toBe('cs')
+		expect(cookieOf(signInFirst, LOCALE_COOKIE)).toBeNull()
+	})
+
 	test("IAM's sign-in reached with the language keeps it through a refused password and its links", async () => {
 		const n = await notes()
 		await invitee(n)
@@ -431,6 +470,88 @@ describe('every page a person invited in their language reaches', () => {
 		)
 		expect(refused.status).toBe(403)
 		expect(await lang(refused)).toBe('uk')
+	})
+})
+
+describe("the application's proxy and IAM, end to end", () => {
+	// proxy-core's real verify service for the application's address, in front of the same IAM `handleAuth` serves.
+	const proxy = () =>
+		createVerifyService({
+			manifest: manifestWith([serviceRow('/*', ['human'])], { id: APP, hosts: [new URL(LANDING).host] }),
+			iam: new FakeIam({}),
+			issuer: ORIGIN,
+			cache: null,
+		})
+	/** The browser opening the application's address: the proxy's bounce, as the request IAM receives. */
+	async function bounce(appCookie?: string, iamCookie?: string): Promise<Request> {
+		const answer = await proxy()(verifyRequest({ app: APP, path: '/', host: new URL(LANDING).host, cookie: appCookie }))
+		expect(answer.status).toBe(302)
+		const location = answer.headers.get('location')
+		if (location === null) throw new Error('no bounce')
+		return new Request(location, iamCookie === undefined ? {} : { headers: { Cookie: iamCookie } })
+	}
+	/** The sign-in page's form: where it posts and its hidden fields, the proxy's handoff among them. */
+	function signInForm(html: string): { action: string; fields: Record<string, string> } {
+		const action = /<form method="post" action="([^"]+)"/.exec(html)?.[1]
+		if (action === undefined) throw new Error('no sign-in form')
+		const hidden = html.matchAll(/<input type="hidden" name="([^"]+)" value="([^"]*)"/g)
+		return { action, fields: Object.fromEntries([...hidden].map(([, name = '', value = '']) => [name, value.replaceAll('&amp;', '&')])) }
+	}
+	const signIn = (html: string, headers: Record<string, string> = {}) => {
+		const { action, fields } = signInForm(html)
+		return post(action, { ...fields, email: INVITEE, password: 'the old long passphrase' }, headers)
+	}
+
+	test('an invitation\'s "sign in first" reaches a sign-in in its language, which then signs the browser in to the application', async () => {
+		const n = await notes()
+		await invitee(n)
+		await n.invite(INVITEE, { locale: 'uk' })
+		const { url, token } = linkOf(lastMail(n.email))
+		const invitation = `${url.pathname}${url.search}`
+		const signInFirst = await n.send(post(invitation, { token }))
+		expect(await signInFirst.text()).toContain(`href="${LANDING}/"`)
+		const remembered = cookieOf(signInFirst, LOCALE_COOKIE)
+		expect(remembered).toBe(`${LOCALE_COOKIE}=uk`)
+
+		// The browser follows the link to the application's address; its proxy bounces it to IAM with no `?locale=`.
+		const bounced = await bounce(undefined, remembered ?? undefined)
+		expect(new URL(bounced.url).searchParams.has('locale')).toBe(false)
+		const page = await n.send(bounced)
+		const html = await page.text()
+		expect(html).toContain('<html lang="uk">')
+		expect(html).toContain('<h1>Вхід до застосунку Poznámky</h1>')
+
+		// Signing in through the page's form, which carries the proxy's handoff, returns the browser to the application.
+		const signedIn = await n.send(signIn(html, { Cookie: remembered ?? '' }))
+		expect(signedIn.status).toBe(302)
+		expect(signedIn.headers.get('location')?.startsWith(`${LANDING}/`)).toBe(true)
+		// The person has no language of their own until they accept, so the sign-in clears the cookie as any such
+		// sign-in does; the invitation link they open again carries the invitation's.
+		expect(cookieOf(signedIn, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=`)
+		expect(await lang(await n.send(new Request(new URL(invitation, ORIGIN))))).toBe('uk')
+		const session = cookieOf(signedIn, SESSION_COOKIE)
+		if (session === null) throw new Error('no session')
+		expect((await n.send(post(invitation, { token }, { Cookie: session }))).status).toBe(302)
+
+		// Accepting kept the language as the person's: their next sign-in through the proxy remembers it again.
+		const next = await n.send(signIn(await (await n.send(await bounce())).text()))
+		expect(next.status).toBe(302)
+		expect(cookieOf(next, LOCALE_COOKIE)).toBe(`${LOCALE_COOKIE}=uk`)
+	})
+
+	test("the language the application left on its own host reaches IAM's sign-in through its proxy, and its form keeps it", async () => {
+		const n = await notes()
+		const bounced = await bounce(`theme=dark; ${LOCALE_COOKIE}=uk`)
+		const query = new URL(bounced.url).searchParams
+		expect(query.get('locale')).toBe('uk')
+		const html = await (await n.send(bounced)).text()
+		expect(html).toContain('<html lang="uk">')
+		const { action, fields } = signInForm(html)
+		expect(action).toBe('/auth/login?locale=uk')
+		expect(fields['state']).toBe(query.get('state') ?? '')
+		expect(fields['code_challenge']).toBe(query.get('code_challenge') ?? '')
+		expect(await lang(await n.send(await bounce('theme=dark')))).toBe('cs')
+		expect(await lang(await n.send(await bounce(`${LOCALE_COOKIE}=de`)))).toBe('cs')
 	})
 })
 

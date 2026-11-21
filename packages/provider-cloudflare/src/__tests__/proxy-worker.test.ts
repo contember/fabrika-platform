@@ -6,6 +6,8 @@ import {
 	FABRIKA_HOP_HEADERS,
 	formatEndpointHeader,
 	type Jwks,
+	LOCALE_COOKIE,
+	LOCALE_PARAM,
 	PROXY_SECRET_HEADER,
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
@@ -262,6 +264,40 @@ describe('Cloudflare proxy Worker', () => {
 		expect(response.status).toBe(302)
 		expect(response.headers.get('location')).toContain(`${ISSUER}/auth/login`)
 		expect(calls).toBe(0)
+	})
+
+	test("the login bounce carries the application host's language, and the cookie still reaches the application", async () => {
+		const token = await signUserToken()
+		let seen: Request | undefined
+		const env = environment(
+			[serviceRow('/*', ['human'])],
+			{
+				fetch: (request: Request) => {
+					seen = request
+					return Promise.resolve(new Response('ok'))
+				},
+			},
+		)
+		const bounced = await createCloudflareProxyHandler(env)(
+			new Request(`https://${HOST}/private`, { headers: { Cookie: `theme=dark; ${LOCALE_COOKIE}=uk` } }),
+		)
+		expect(bounced.status).toBe(302)
+		expect(bounced.headers.get('cache-control')).toBe('no-store')
+		const login = new URL(bounced.headers.get('location') ?? '')
+		expect(login.searchParams.get(LOCALE_PARAM)).toBe('uk')
+		expect(login.searchParams.get('redirect')).toBe(`https://${HOST}/private`)
+		const unspoken = await createCloudflareProxyHandler(env)(new Request(`https://${HOST}/private`, { headers: { Cookie: `${LOCALE_COOKIE}=de` } }))
+		expect(new URL(unspoken.headers.get('location') ?? '').searchParams.has(LOCALE_PARAM)).toBe(false)
+
+		const signedIn: CloudflareProxyEnv = {
+			...env,
+			IAM: new FakeIam({ mintToken: { ok: true, token, expiresAt: Math.floor(Date.now() / 1000) + 300 } }),
+		}
+		const response = await createCloudflareProxyHandler(signedIn)(
+			new Request(`https://${HOST}/private`, { headers: { Cookie: `__Host-px_session=session; ${LOCALE_COOKIE}=uk` } }),
+		)
+		expect(response.status).toBe(200)
+		expect(seen?.headers.get('Cookie')).toBe(`${LOCALE_COOKIE}=uk`)
 	})
 
 	test('denies an invalid machine credential and a malformed manifest before the app', async () => {
