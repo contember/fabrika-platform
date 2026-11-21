@@ -31,15 +31,18 @@ export interface AdmissionOptions {
 	cliAuthToken: string
 }
 
-/** The Host values a browser or the CLI sends to this daemon. Anything else is a request for another name, e.g. a rebound one. */
-function allowedHosts(port: number): Set<string> {
+/**
+ * The Host values a browser or the CLI sends to a loopback listener on `port`: this daemon, or a review proxy. Anything
+ * else is a request for another name, e.g. a rebound one.
+ */
+export function allowedHosts(port: number): Set<string> {
 	const hosts = new Set(LOOPBACK_HOSTNAMES.map((hostname) => `${hostname}:${port}`))
 	if (port === 80) { for (const hostname of LOOPBACK_HOSTNAMES) hosts.add(hostname) }
 	return hosts
 }
 
-/** The origins of the daemon's own browser UI. */
-function daemonOrigins(port: number): Set<string> {
+/** The origins of the daemon's own browser UI, or of a review proxy's pages when `port` is the proxy's. */
+export function daemonOrigins(port: number): Set<string> {
 	return new Set(LOOPBACK_HOSTNAMES.map((hostname) => `http://${hostname}${port === 80 ? '' : `:${port}`}`))
 }
 
