@@ -27,9 +27,18 @@ export type ClientMount<C> =
  * it parses with (`@fabrika/app/react` reads a cached answer back through it).
  */
 export type ProcedureCall<I, O extends Schema> =
-	& ([I] extends [InputSchema] ? (input: ClientInput<SchemaInput<I>>) => Promise<SchemaOutput<O>>
-		: (input?: Record<never, never>) => Promise<SchemaOutput<O>>)
+	& ([I] extends [InputSchema] ? (input: ClientInput<SchemaInput<I>>, options?: CallOptions) => Promise<SchemaOutput<O>>
+		: (input?: Record<never, never>, options?: CallOptions) => Promise<SchemaOutput<O>>)
 	& { readonly output: O }
+
+/** One call's own options. */
+export interface CallOptions {
+	/**
+	 * Sent as `Idempotency-Key` (ADR-0078): a mutation repeated with the same key and input is answered from the receipt
+	 * of its first commit instead of running again. One key per submission, the same one for each retry of it.
+	 */
+	readonly requestKey?: string
+}
 
 export type ClientTree<T> = {
 	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, unknown>
@@ -114,7 +123,7 @@ function getRequestOf(options: ClientOptions): () => RequestInit {
 	}
 }
 
-function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
+function requestOf(options: ClientOptions, input: unknown, call: CallOptions | undefined): () => RequestInit {
 	return () => {
 		const files = fileValues(input)
 		// A multipart body's boundary is the one `fetch` writes, so its Content-Type is left to it.
@@ -122,6 +131,9 @@ function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
 		const headers = new Headers(files === null ? { 'Content-Type': 'application/json', Accept: 'application/json' } : { Accept: 'application/json' })
 		if (options.key !== undefined) {
 			headers.set('Authorization', `Bearer ${options.key}`)
+		}
+		if (call?.requestKey !== undefined) {
+			headers.set('Idempotency-Key', call.requestKey)
 		}
 		const body = files === null ? JSON.stringify(input ?? {}) : multipartBody(files)
 		return { method: 'POST', credentials: options.key === undefined ? 'same-origin' : 'omit', headers, body, ...keyRedirect(options) }
@@ -173,10 +185,10 @@ function withParams(url: string, input: unknown): string {
 }
 
 function caller(target: CallTarget, at: TreeAt, options: ClientOptions, bounce: BounceConfig | null) {
-	const call = async (input?: unknown): Promise<unknown> => {
+	const call = async (input?: unknown, callOptions?: CallOptions): Promise<unknown> => {
 		const result = target.method === 'GET'
 			? await exchange(options.fetch ?? fetch, withParams(target.url, input), getRequestOf(options), bounce)
-			: await exchange(options.fetch ?? fetch, target.url, requestOf(options, input), bounce)
+			: await exchange(options.fetch ?? fetch, target.url, requestOf(options, input, callOptions), bounce)
 		const parsed = z.safeParse(zodSchemaOf(target.output), result)
 		if (!parsed.success) {
 			throw new RpcError({ type: 'invalid-response', message: `'${target.id}' answered a value its output schema refuses`, httpStatus: 200 })
@@ -394,7 +406,7 @@ export async function downloadFile(procedure: object, input: unknown): Promise<D
 	const doFetch = request.options.fetch ?? fetch
 	const { body, disposition } = request.method === 'GET'
 		? await exchangeFile(doFetch, withParams(request.url, input), getRequestOf(request.options), request.bounce)
-		: await exchangeFile(doFetch, request.url, requestOf(request.options, input), request.bounce)
+		: await exchangeFile(doFetch, request.url, requestOf(request.options, input, undefined), request.bounce)
 	const file = new DownloadedFile([body], request.filename ?? dispositionName(disposition) ?? 'download', { type: body.type })
 	if (request.filename !== null) {
 		saveFile(file)

@@ -69,6 +69,7 @@ export class FileWork {
 	readonly request: string
 	readonly #staged: string[] = []
 	readonly #written = new Map<string, string>()
+	readonly #digests = new Map<string, string>()
 
 	constructor(holder: object, request: string) {
 		this.holder = holder
@@ -82,6 +83,15 @@ export class FileWork {
 	/** The work wrote the object of a file it staged, under a key no other file has. */
 	wrote(id: string, objectKey: string): void {
 		this.#written.set(id, objectKey)
+	}
+
+	/** The SHA-256 (hex) of the bytes of a file the work received or put, which its upload computed. */
+	digested(id: string, sha256: string): void {
+		this.#digests.set(id, sha256)
+	}
+
+	digestOf(id: string): string | null {
+		return this.#digests.get(id) ?? null
 	}
 
 	get stagedIds(): readonly string[] {
@@ -206,6 +216,7 @@ export class StoredFileKinds {
 			work.wrote(id, objectKey)
 			const sha256 = body.digest()
 			await this.#files.written(id, { size, sha256 })
+			work.digested(id, sha256)
 			return fileReference({ id, kind: kind.name, name, type, size, status: 'pending' }, work.holder, true)
 		} catch (error) {
 			if (isNamed(error, 'ObjectExistsError')) {

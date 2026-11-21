@@ -417,6 +417,22 @@ Mount every group in `fabrika.contract.ts`:
 - `RowOf<typeof tables, '<table>'>` (`@fabrika/db/tables`) is the row a table's read action reads, for a function that
   takes one: `const toTask = (row: RowOf<typeof tables, 'tasks'>) => fromRow(Task, row)`.
 
+## A repeated submission: `requestKey`
+
+A dialog whose answer may get lost (a dropped connection, a retry) sends one key per submission:
+`await api.tasks.create(input, { requestKey })`, with `requestKey` created when the user submits
+(`crypto.randomUUID()`) and kept for every retry of that submission. The framework answers a repeat with the same key and
+input from the receipt of the first commit, without running the handler again. So write the mutation as if it runs
+once: no `request_id` column, no lookup of an earlier write, no replay branch, and no replay test of your own.
+
+- The same key with another input or another procedure is a 409 `request_key_reused`: a new submission (the user
+  changed a field or picked another file) gets a new key.
+- A stored answer the current output schema would change is a 409 `request_replay_incompatible`: read the state again.
+- Only a mutation that answers JSON takes a key; a query, a file or attachment answer, a `redirect()` and a public
+  procedure refuse it with a 400.
+- A rule of the business that deduplicates (one closing per day, a counter the server derives) stays in the handler:
+  the key only tells a retry from a new submission.
+
 ## Shared data access: `queries.ts`
 
 A function of the slice's `queries.ts` takes the handle as a parameter typed with `DbHandle` and returns plain values.

@@ -4,6 +4,7 @@ export { isLocale, type Locale, LOCALE_COOKIE, LOCALES } from '@fabrika/auth-cor
 export { type PageCaller, parsePageCaller } from './caller'
 export {
 	type AttachmentProcedure,
+	type CallOptions,
 	challengeUrl,
 	type ClientMount,
 	type ClientOptions,
