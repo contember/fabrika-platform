@@ -122,8 +122,8 @@ const isHeldToWriting = (file: string, generated: boolean): boolean => !generate
 
 /**
  * A module under `tools/` runs on a developer's machine, never in the application: it is held to how its source is
- * written (`type-assertion`, `any-type`, `capability-widening`, `suppression-comment`), `key-literal`, a `declare
- * module` of a trusted package and the rules of its tests. Every other module rule guards code that runs in the
+ * written (`type-assertion`, `any-type` and `suppression-comment` outside its tests; `capability-widening`), `key-literal`,
+ * a `declare module` of a trusted package and the rules of its tests. Every other module rule guards code that runs in the
  * application.
  */
 const checkToolModule = (module: ParsedModule, generated: boolean, findings: Finding[]): void => {
