@@ -573,7 +573,7 @@ type PublicVersioned<T extends string, E extends IndexedTable, Member> = E['vers
  */
 export interface PublicApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: PublicRead<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
-	readonly all: Unavailable<'a public procedure reads a page at a time: use list, which bounds what one anonymous request reads'>
+	readonly all: Unavailable<'a public procedure pages its reads: read the table with list'>
 	readonly count: PublicRead<T, E, A, (options?: CountOptions<RowFor<E, A>>) => Promise<number>>
 	readonly aggregate: PublicRead<T, E, A, <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>>
 	readonly get: PublicRead<T, E, A, (key: string) => Promise<RowFor<E, A>>>

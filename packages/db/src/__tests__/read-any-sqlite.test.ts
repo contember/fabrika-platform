@@ -1,6 +1,7 @@
 // An application table read with `'any'`, on SQLite: every `app` capability but a public procedure's reads it, whatever
 // its action, unconditioned and without a column of another read action; a public procedure and a scoped site are
-// refused; a `when` narrows only the writes of its action; `ctx.sql.scope` follows the same rule.
+// refused; a `when` narrows only the writes of its action; `ctx.sql.scope` follows the same rule. A public procedure
+// pages even a table it reads (`submissions`): it has no `all()`.
 
 import { beforeEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
@@ -30,11 +31,20 @@ const vocabulary = {
 
 interface DB {
 	notices: { id: string; body: string; status: string; internal: string }
+	submissions: { id: string; body: string }
 }
 
 const columns: TypedColumnList<DB> = {
 	notices: { columns: ['id', 'body', 'status', 'internal'], foreignKeys: [], notNull: ['id', 'body', 'status', 'internal'] },
+	submissions: { columns: ['id', 'body'], foreignKeys: [], notNull: ['id', 'body'] },
 }
+
+/** An application table a public procedure reads by its read action. */
+const submissions = {
+	scope: { app: 'anonymous submissions' },
+	actions: { read: 'intake.submit', insert: 'intake.submit' },
+	insert: ['body'],
+} as const
 
 const tables = defineTables(vocabulary, columns)({
 	notices: {
@@ -45,6 +55,7 @@ const tables = defineTables(vocabulary, columns)({
 		columns: { internal: { read: 'notices.audit' } },
 		when: { 'notices.edit': { status: { eq: 'open' } } },
 	},
+	submissions,
 })
 
 type Policies = typeof tables extends Tables<DB, infer P> ? P : never
@@ -64,8 +75,8 @@ export type ReadAnyTypes = [
 			: false
 	>,
 	Expect<
-		PublicApplicationTables<Index, 'intake.submit', 'query'>['notices']['all'] extends
-			Unavailable<'a public procedure reads a page at a time: use list, which bounds what one anonymous request reads'> ? true
+		PublicApplicationTables<Index, 'intake.submit', 'query'>['submissions']['all'] extends
+			Unavailable<'a public procedure pages its reads: read the table with list'> ? true
 			: false
 	>,
 	Expect<
@@ -82,6 +93,8 @@ beforeEach(async () => {
 	const storage = bunSqliteStorage()
 	storage.sql.exec('create table notices (id text not null primary key, body text not null, status text not null, internal text not null)')
 	storage.sql.exec("insert into notices (id, body, status, internal) values ('n1', 'open one', 'open', 'x'), ('n2', 'closed one', 'closed', 'y')")
+	storage.sql.exec('create table submissions (id text not null primary key, body text not null)')
+	storage.sql.exec("insert into submissions (id, body) values ('s1', 'first')")
 	const layer = scoped(tables)
 	bindScopedDatabase(layer, { database: openSqlite(storage), capabilities: alice })
 	data = dataAccessOf(layer)
@@ -169,8 +182,14 @@ describe("an application table read with 'any'", () => {
 					})
 				}
 				await expect(call(intake, 'notices.get', 'n1')).rejects.toBeInstanceOf(CapabilityError)
-				// all() would let one anonymous request read MAX_ALL_ROWS rows instead of a page.
-				await expect(call(intake, 'notices.all')).rejects.toMatchObject({ reason: 'public_reach' })
+				// On a table it may not read, all() answers the table's own refusal, as list does.
+				await expect(call(intake, 'notices.all')).rejects.toMatchObject({ reason: 'wrong_capability' })
+				// On one it reads, it pages: list answers, all() is refused.
+				expect(idsOf(await call(intake, 'submissions.list'))).toEqual(['s1'])
+				await expect(call(intake, 'submissions.all')).rejects.toMatchObject({
+					reason: 'public_reach',
+					message: 'a public procedure pages its reads: read the table with list',
+				})
 			},
 			true,
 		)
@@ -212,6 +231,7 @@ describe("an application table read with 'any'", () => {
 					columns: { internal: { read: 'notices.audit' } },
 					when: { 'notices.audit': { status: { eq: 'open' } } },
 				},
+				submissions,
 			})
 		).toThrow("notices: when.notices.audit narrows nothing: the table is read with 'any'")
 	})

@@ -109,8 +109,9 @@ import { answerRows, timestampInput } from './temporal'
 export const DEFAULT_LIST_LIMIT = 50
 export const MAX_LIST_LIMIT = 500
 /**
- * The most rows `all()` answers; past it, it refuses instead of truncating. Bounded by what one invocation holds in
- * memory: 10 000 rows of ~1 KB is ~10 MB, safe in a 128 MB Durable Object isolate; a larger set is paged with `list`.
+ * The most rows `all()` answers; past it, it refuses instead of truncating. It bounds rows, not bytes: 10 000 rows of
+ * ~1 KB, held two or three times over (driver, answer, response), is tens of MB of the one 128 MB Durable Object
+ * isolate every concurrent invocation of the environment shares. Wide rows or a growing set page with `list`.
  */
 export const MAX_ALL_ROWS = 10_000
 
@@ -773,7 +774,11 @@ function publicApplicationRows(
 	}
 	return freeze({
 		list: rows['list'],
-		all: refused(site, 'public_reach', 'a public procedure reads a page at a time: use list, which bounds what one anonymous request reads'),
+		all: bound(site, async () => {
+			// The table's own read refusal first, as list answers it, so the message never points to a list it refuses too.
+			appListPredicate(context, capability)
+			throw new QueryRefusedError('public_reach', 'a public procedure pages its reads: read the table with list')
+		}),
 		count: rows['count'],
 		aggregate: rows['aggregate'],
 		get: bound(site, async (id: unknown) => {
