@@ -2265,7 +2265,7 @@ describe("the check step: the application's tests, types, checker and schema bef
 	})
 
 	test('a CLI before `--config` checks the schema of the default config, and leaves the schema of another one unchecked, saying so', async () => {
-		const older = '0.9.0-dev.13'
+		const older = '0.9.0-dev.22'
 		const named = { configPath: 'app/cloudflare.config.ts', framework: older }
 		for (
 			const [options, cli] of [
