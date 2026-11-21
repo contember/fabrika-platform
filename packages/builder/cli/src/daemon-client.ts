@@ -2,6 +2,7 @@ import { waitForEvent } from '@fabrika/daemon-kit'
 import {
 	consumedFeedbackSchema,
 	consumedGateSchema,
+	dashboardLinkSchema,
 	feedbackMetaSchema,
 	feedbackTextSchema,
 	phaseStateSchema,
@@ -19,10 +20,26 @@ export async function fetchPhase(fabrikaDir: string, sessionId?: string): Promis
 	try {
 		let url = `${BASE_URL}/api/phase?root=${encodeURIComponent(fabrikaDir)}`
 		if (sessionId) url += `&session=${encodeURIComponent(sessionId)}`
-		const res = await fetch(url, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
+		const res = await fetch(url, { headers: cliAuthHeaders(), signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
 		if (!res.ok) return null
 		const result = phaseStateSchema.safeParse(await res.json())
 		return result.success ? result.data : null
+	} catch {
+		return null
+	}
+}
+
+/** A link that signs one browser in to the session's dashboard page; null when the daemon is down or refuses. */
+export async function requestDashboardLink(sessionId: string): Promise<string | null> {
+	try {
+		const res = await fetch(`${BASE_URL}/api/session/${encodeURIComponent(sessionId)}/link`, {
+			method: 'POST',
+			headers: cliAuthHeaders(),
+			signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+		})
+		if (!res.ok) return null
+		const result = dashboardLinkSchema.safeParse(await res.json())
+		return result.success ? result.data.browserUrl : null
 	} catch {
 		return null
 	}
@@ -62,7 +79,10 @@ export async function pushPlan(
 
 export async function peekFeedback(sessionId: string): Promise<string | null> {
 	try {
-		const metaRes = await fetch(`${BASE_URL}/api/session/${sessionId}/meta`, { signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS) })
+		const metaRes = await fetch(`${BASE_URL}/api/session/${sessionId}/meta`, {
+			headers: cliAuthHeaders(),
+			signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
+		})
 		if (!metaRes.ok) return null
 		const meta = feedbackMetaSchema.safeParse(await metaRes.json())
 		if (!meta.success) return null
@@ -71,6 +91,7 @@ export async function peekFeedback(sessionId: string): Promise<string | null> {
 			const revision = revisions[i]!
 			if (revision.hasFeedback && !revision.feedbackConsumed) {
 				const fbRes = await fetch(`${BASE_URL}/api/session/${sessionId}/revision/${revision.revision}/feedback`, {
+					headers: cliAuthHeaders(),
 					signal: AbortSignal.timeout(HEALTH_TIMEOUT_MS),
 				})
 				if (!fbRes.ok) return null

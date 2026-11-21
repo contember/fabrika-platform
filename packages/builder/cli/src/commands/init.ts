@@ -5,7 +5,8 @@ import { type BuilderPlatformStatus, parseBuilderOrigin } from '../../../shared'
 import { DEFAULT_PROFILE, resolveStackPointer, unsupportedProfileNote } from '../catalog'
 import { cliAuthHeaders } from '../cli-auth'
 import { BASE_URL, SESSIONS_DIR } from '../config'
-import { ensureDaemon, openBrowser } from '../daemon-lifecycle'
+import { requestDashboardLink } from '../daemon-client'
+import { ensureDaemon, openBrowser, openDashboardLink } from '../daemon-lifecycle'
 import { BuilderCliError } from '../errors'
 import { type AgentHost, injectAgentSupport, parseAgentHosts } from '../inject-skills'
 import { readConfig, scaffold } from '../layout'
@@ -91,7 +92,8 @@ export async function cmdInit(argv: string[]): Promise<number> {
 		console.error(`[fabrika] agent support: source dir not found, skipped installation`)
 	}
 
-	const browserUrl = `${BASE_URL}/s/${result.config.sessionId}`
+	// A sign-in link once the daemon is up; the page alone asks a browser without the dashboard's cookie for one.
+	let browserUrl = `${BASE_URL}/s/${result.config.sessionId}`
 	let platform: BuilderPlatformStatus | undefined
 	if (!values['no-daemon']) {
 		const up = await ensureDaemon({ quiet: true })
@@ -112,10 +114,13 @@ export async function cmdInit(argv: string[]): Promise<number> {
 		} else if (origin) {
 			throw new Error('Local builder daemon is unavailable.')
 		}
+		const link = up ? await requestDashboardLink(result.config.sessionId) : null
+		if (link !== null) browserUrl = link
 		if (up && !values['no-open'] && platform?.pairing?.status === 'pending') {
 			openBrowser(platform.pairing.authorizationUrl, browserUrl)
 		} else if (up && !values['no-open']) {
-			openBrowser(browserUrl)
+			if (link === null) openBrowser(browserUrl)
+			else openDashboardLink(link)
 		} else if (!up) {
 			console.error(`[fabrika] daemon not started (offline). Dashboard: ${browserUrl}`)
 		}

@@ -1,4 +1,5 @@
 import { type BuilderPlatformStatus, builderProjectPath, parseBuilderPlatformStatus } from '../../shared'
+import { cliAuthHeaders } from './cli-auth'
 import { BASE_URL } from './config'
 import { BuilderCliError } from './errors'
 
@@ -13,7 +14,7 @@ export async function platformRequest(
 		response = await fetch(`${BASE_URL}${builderProjectPath(sessionId, suffix)}`, {
 			method: body === undefined ? 'GET' : 'POST',
 			redirect: 'error',
-			headers: body === undefined ? {} : { 'Content-Type': 'application/json' },
+			headers: { ...cliAuthHeaders(), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) },
 			...(body === undefined ? {} : { body: JSON.stringify(body) }),
 			signal: AbortSignal.timeout(timeoutMs),
 		})

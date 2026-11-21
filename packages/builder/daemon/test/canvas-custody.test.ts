@@ -15,7 +15,7 @@ if (process.env['FABRIKA_CANVAS_CUSTODY_CHILD'] !== '1') {
 	}, 30_000)
 } else {
 	const { compileJsx, SessionManager, watchSession, unwatchSession, unwatchAll } = await import('@fabrika/canvas-kernel/server')
-	const { dispatch } = await import('@fabrika/daemon-kit')
+	const { dispatch, UiLinks } = await import('@fabrika/daemon-kit')
 	const { createHandlers } = await import('../src/handlers')
 	const { BuilderPlatform } = await import('../src/platform')
 	const { BuildStream } = await import('../src/build-stream')
@@ -42,8 +42,8 @@ if (process.env['FABRIKA_CANVAS_CUSTODY_CHILD'] !== '1') {
 			broadcastPlanUpdate: () => {},
 			broadcastRevisionUpdate: () => {},
 			buildStream: new BuildStream(),
-			port: 19410,
 			version: 'test',
+			uiLinks: new UiLinks(() => 'http://127.0.0.1:19410'),
 		})
 		async function request(path: string, body?: unknown) {
 			const req = new Request(

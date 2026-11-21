@@ -5,7 +5,7 @@ import { parseArgs } from 'util'
 import { BASE_URL, TIMEOUT_MS } from '../config'
 import { resolveContext } from '../context'
 import { pushPlan, waitForFeedback } from '../daemon-client'
-import { ensureDaemon, openBrowser } from '../daemon-lifecycle'
+import { ensureDaemon, openDashboardLink } from '../daemon-lifecycle'
 
 export async function cmdGate(argv: string[]): Promise<number> {
 	const sub = argv[0]
@@ -106,8 +106,9 @@ async function gateOpen(argv: string[]): Promise<number> {
 		return 1
 	}
 
+	// The daemon answers a push with a sign-in link, which never goes to the browser as a process argument.
 	if (result.isNew && result.browserUrl) {
-		openBrowser(result.browserUrl)
+		openDashboardLink(result.browserUrl)
 	}
 
 	console.log(

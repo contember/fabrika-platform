@@ -5,19 +5,22 @@ import { join } from 'node:path'
 import { BUILDER_CLI_TOKEN_HEADER, BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
 import { admitRequest } from '../src/admission'
 import { type RunningDaemon, startDaemon } from '../src/index'
+import { type Dashboard, signIn } from './dashboard'
 import { scratchDir } from './scratch'
 
 let daemon: RunningDaemon
 let directory: string
 let authority: string
 let origin: string
+let dashboard: Dashboard
 
-beforeAll(() => {
+beforeAll(async () => {
 	directory = scratchDir('builder-admission-')
 	daemon = startDaemon({ port: 0, sessionsDir: join(directory, 'sessions') })
 	origin = builderDaemonUrl(daemon.port)
 	authority = new URL(origin).host
 	daemon.sessionManager.upsert('protected', new Map([['view.jsx', '<div />']]), directory)
+	dashboard = await signIn(daemon)
 })
 
 afterAll(() => {
@@ -142,7 +145,7 @@ describe('daemon request admission on the bound dynamic port', () => {
 				expect(
 					await send(`/ws/${route}/protected`, 'GET', {
 						...headers,
-						...(route === 'wait' ? { [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken } : {}),
+						...(route === 'wait' ? { [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken } : { Cookie: dashboard.cookie }),
 						Connection: 'Upgrade',
 						Upgrade: 'websocket',
 						'Sec-WebSocket-Version': '13',
@@ -155,7 +158,7 @@ describe('daemon request admission on the bound dynamic port', () => {
 
 	test('OPTIONS grants no cross-origin access', async () => {
 		for (const headers of allowedHeaders()) {
-			const res = await fetch(`${origin}/health`, { method: 'OPTIONS', headers })
+			const res = await dashboard.fetch(`${origin}/health`, { method: 'OPTIONS', headers })
 			expect(res.status).toBe(204)
 			expect(res.headers.get('access-control-allow-origin')).toBeNull()
 		}

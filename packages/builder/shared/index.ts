@@ -115,6 +115,8 @@ export const uiHealthSchema = z.object({
 	.transform(({ ok, version, sessions }) => ({ ok, ...(version === undefined ? {} : { version }), ...(sessions === undefined ? {} : { sessions }) }))
 export const activeDaemonSchema = z.object({ ok: z.literal(true), sessionsDir: z.string() })
 export const builderPlatformErrorSchema = z.object({ error: z.object({ code: z.literal('builder_platform'), message: z.string().max(1000) }) })
+/** A link that signs one browser in to a session's dashboard page, which the daemon hands only to the CLI. */
+export const dashboardLinkSchema = z.object({ browserUrl: z.string() })
 export const planResultSchema = z.object({
 	ok: z.boolean(),
 	browserUrl: optionalTextSchema,

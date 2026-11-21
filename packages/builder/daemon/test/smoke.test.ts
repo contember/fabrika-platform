@@ -5,6 +5,7 @@ import { PHASES } from '../../shared/phases'
 import { BUILDER_CLI_TOKEN_HEADER, builderDaemonUrl } from '../../shared/urls'
 import { type RunningDaemon, startDaemon } from '../src/index'
 import { derivePhaseState, type GateOracle } from '../src/phases'
+import { type Dashboard, signIn } from './dashboard'
 import { scratchDir } from './scratch'
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -14,14 +15,16 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 let daemon: RunningDaemon
 let base: string
 let sessionsDir: string
+let dashboard: Dashboard
 
 /** What the CLI presents on its routes. */
 const cli = (): Record<string, string> => ({ [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken })
 
-beforeAll(() => {
+beforeAll(async () => {
 	sessionsDir = scratchDir('fabrika-daemon-sessions-')
 	daemon = startDaemon({ port: 0, sessionsDir })
 	base = builderDaemonUrl(daemon.port)
+	dashboard = await signIn(daemon)
 })
 
 afterAll(() => {
@@ -40,7 +43,7 @@ function writeIntent(fabrikaDir: string): void {
 
 describe('daemon http endpoints', () => {
 	test('GET /health responds with ok + version + sessions', async () => {
-		const res = await fetch(`${base}/health`)
+		const res = await dashboard.fetch(`${base}/health`)
 		expect(res.status).toBe(200)
 		const body = await res.json()
 		expect(body.ok).toBe(true)
@@ -56,7 +59,7 @@ describe('daemon http endpoints', () => {
 		const fabrikaDir = join(repo, '.fabrika')
 		mkdirSync(fabrikaDir, { recursive: true })
 
-		const res = await fetch(`${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}`)
+		const res = await dashboard.fetch(`${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}`)
 		expect(res.status).toBe(200)
 		const state = await res.json()
 		expect(state.current).toBe('intake')
@@ -69,7 +72,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('GET /api/phase without root → 400', async () => {
-		const res = await fetch(`${base}/api/phase`)
+		const res = await dashboard.fetch(`${base}/api/phase`)
 		expect(res.status).toBe(400)
 	})
 
@@ -78,7 +81,7 @@ describe('daemon http endpoints', () => {
 		writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='Hi'>x</Section>")
 
 		const sessionId = 'smoke-session'
-		const res = await fetch(`${base}/api/session/${sessionId}/plan`, {
+		const res = await dashboard.fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot: canvasDir, gate: 'intake' }),
@@ -88,15 +91,16 @@ describe('daemon http endpoints', () => {
 		expect(body.ok).toBe(true)
 		expect(body.revision).toBe(1)
 		expect(body.gate).toBe('intake')
-		expect(body.browserUrl).toBe(`${base}/s/${sessionId}`)
+		// A sign-in link that leads to the session's page; the page itself needs the cookie it sets.
+		expect(body.browserUrl).toStartWith(`${base}/open?code=`)
 		expect(body.canvasFiles).toContain('view.jsx')
 
-		const meta = await (await fetch(`${base}/api/session/${sessionId}/meta`)).json()
+		const meta = await (await dashboard.fetch(`${base}/api/session/${sessionId}/meta`)).json()
 		expect(meta.currentRevision).toBe(1)
 		expect(meta.revisions[0].label).toBe('intake')
 		expect(meta.revisions[0].canvasScope).toEqual({ kind: 'directory' })
 
-		const js = await fetch(`${base}/api/session/${sessionId}/canvas/view.js`)
+		const js = await dashboard.fetch(`${base}/api/session/${sessionId}/canvas/view.js`)
 		expect(js.status).toBe(200)
 		expect(js.headers.get('content-type')).toContain('javascript')
 
@@ -111,7 +115,7 @@ describe('daemon http endpoints', () => {
 		writeFileSync(vision, "<Section title='Current'>current questions</Section>")
 
 		const sessionId = 'single-view-session'
-		const res = await fetch(`${base}/api/session/${sessionId}/plan`, {
+		const res = await dashboard.fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ view: vision, projectRoot: canvasDir, gate: 'vision' }),
@@ -120,13 +124,13 @@ describe('daemon http endpoints', () => {
 		const body = await res.json()
 		expect(body.canvasFiles).toEqual(['vision.jsx'])
 
-		const meta = await (await fetch(`${base}/api/session/${sessionId}/meta`)).json()
+		const meta = await (await dashboard.fetch(`${base}/api/session/${sessionId}/meta`)).json()
 		expect(meta.canvasFiles).toEqual(['vision.jsx'])
 		expect(meta.revisions[0].canvasFiles).toEqual([{ filename: 'vision.jsx' }])
 		expect(meta.revisions[0].canvasScope).toEqual({ kind: 'view', filename: 'vision.jsx' })
 
-		expect((await fetch(`${base}/api/session/${sessionId}/canvas/vision.js`)).status).toBe(200)
-		expect((await fetch(`${base}/api/session/${sessionId}/canvas/brief.js`)).status).toBe(404)
+		expect((await dashboard.fetch(`${base}/api/session/${sessionId}/canvas/vision.js`)).status).toBe(200)
+		expect((await dashboard.fetch(`${base}/api/session/${sessionId}/canvas/brief.js`)).status).toBe(404)
 
 		rmSync(canvasDir, { recursive: true, force: true })
 	})
@@ -136,7 +140,7 @@ describe('daemon http endpoints', () => {
 		const view = join(canvasDir, 'view.jsx')
 		writeFileSync(view, "<Section title='X'>x</Section>")
 
-		const res = await fetch(`${base}/api/session/ambiguous-source/plan`, {
+		const res = await dashboard.fetch(`${base}/api/session/ambiguous-source/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ view, directory: canvasDir, projectRoot: canvasDir, gate: 'intake' }),
@@ -156,7 +160,7 @@ describe('daemon http endpoints', () => {
 		writeFileSync(join(canvasDir, 'brief.jsx'), "<Section title='Brief'>x</Section>")
 
 		const sessionId = 'gate-unanswered-session'
-		const open = await fetch(`${base}/api/session/${sessionId}/plan`, {
+		const open = await dashboard.fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot: repo, gate: 'vision' }),
@@ -164,7 +168,7 @@ describe('daemon http endpoints', () => {
 		expect(open.status).toBe(200)
 
 		const url = `${base}/api/phase?root=${encodeURIComponent(fabrikaDir)}&session=${sessionId}`
-		const state = await (await fetch(url)).json()
+		const state = await (await dashboard.fetch(url)).json()
 		expect(state.current).toBe('vision')
 		expect(state.completed).not.toContain('vision')
 
@@ -173,7 +177,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('POST /api/build/event + history echoes the event', async () => {
-		const res = await fetch(`${base}/api/build/event`, {
+		const res = await dashboard.fetch(`${base}/api/build/event`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ issue: 'ISSUE-001', status: 'running', message: 'building' }),
@@ -183,13 +187,13 @@ describe('daemon http endpoints', () => {
 		expect(body.ok).toBe(true)
 		expect(body.event.status).toBe('running')
 		expect(typeof body.event.at).toBe('string')
-		const recovered = await fetch(`${base}/api/build/event`, {
+		const recovered = await dashboard.fetch(`${base}/api/build/event`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ status: 'info', issue: 42, message: null, at: 'legacy time', data: { extension: true }, ignored: true }),
 		})
 		expect(await recovered.json()).toEqual({ ok: true, event: { status: 'info', at: 'legacy time', data: { extension: true } } })
-		const rejected = await fetch(`${base}/api/build/event`, {
+		const rejected = await dashboard.fetch(`${base}/api/build/event`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ status: 'credential-secret' }),
@@ -199,7 +203,7 @@ describe('daemon http endpoints', () => {
 	})
 
 	test('GET /api/sessions lists the created session', async () => {
-		const res = await fetch(`${base}/api/sessions`)
+		const res = await dashboard.fetch(`${base}/api/sessions`)
 		expect(res.status).toBe(200)
 		const list: unknown = await res.json()
 		expect(Array.isArray(list) && list.some((entry: unknown) => isRecord(entry) && entry['id'] === 'smoke-session')).toBe(true)
@@ -214,27 +218,27 @@ describe('daemon http endpoints', () => {
 		writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='D'>x</Section>")
 
 		const sessionId = 'artifact-session'
-		await fetch(`${base}/api/session/${sessionId}/plan`, {
+		await dashboard.fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot, gate: 'design' }),
 		})
 
-		const ok = await fetch(
+		const ok = await dashboard.fetch(
 			`${base}/api/session/${sessionId}/artifact?path=${encodeURIComponent('.fabrika/architecture/design.md')}`,
 		)
 		expect(ok.status).toBe(200)
 		const body = await ok.json()
 		expect(body.content).toContain('--x:1')
 
-		const escape = await fetch(
+		const escape = await dashboard.fetch(
 			`${base}/api/session/${sessionId}/artifact?path=${encodeURIComponent('../../../etc/passwd')}`,
 		)
 		expect(escape.status).toBe(403)
 
-		expect((await fetch(`${base}/api/session/${sessionId}/artifact?path=nope.md`)).status).toBe(404)
-		expect((await fetch(`${base}/api/session/${sessionId}/artifact`)).status).toBe(400)
-		expect((await fetch(`${base}/api/session/ghost/artifact?path=x`)).status).toBe(404)
+		expect((await dashboard.fetch(`${base}/api/session/${sessionId}/artifact?path=nope.md`)).status).toBe(404)
+		expect((await dashboard.fetch(`${base}/api/session/${sessionId}/artifact`)).status).toBe(400)
+		expect((await dashboard.fetch(`${base}/api/session/ghost/artifact?path=x`)).status).toBe(404)
 
 		rmSync(projectRoot, { recursive: true, force: true })
 	})
@@ -245,7 +249,7 @@ describe('daemon http endpoints', () => {
 		const sessionId = 'projectroot-session'
 
 		const push = (projectRoot: string) =>
-			fetch(`${base}/api/session/${sessionId}/plan`, {
+			dashboard.fetch(`${base}/api/session/${sessionId}/plan`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json', ...cli() },
 				body: JSON.stringify({ directory: canvasDir, projectRoot, gate: 'intake' }),
@@ -255,7 +259,7 @@ describe('daemon http endpoints', () => {
 		await push(originalRoot)
 		await push(join(canvasDir, 'some-other-cwd'))
 
-		const meta = await (await fetch(`${base}/api/session/${sessionId}/meta`)).json()
+		const meta = await (await dashboard.fetch(`${base}/api/session/${sessionId}/meta`)).json()
 		expect(meta.projectRoot).toBe(originalRoot)
 
 		rmSync(canvasDir, { recursive: true, force: true })
@@ -277,13 +281,13 @@ describe('daemon http endpoints', () => {
 		writeFileSync(join(canvasDir, 'g.jsx'), "<Section title='S'>x</Section>")
 
 		const sessionId = 'skeletons-session'
-		await fetch(`${base}/api/session/${sessionId}/plan`, {
+		await dashboard.fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot, gate: 'skeletons' }),
 		})
 
-		const { skeletons } = await (await fetch(`${base}/api/session/${sessionId}/skeletons`)).json()
+		const { skeletons } = await (await dashboard.fetch(`${base}/api/session/${sessionId}/skeletons`)).json()
 		expect(skeletons.length).toBe(1)
 		const s = skeletons[0]
 		expect(s.name).toBe('checks out')
@@ -299,13 +303,13 @@ describe('daemon http endpoints', () => {
 		const canvasDir = scratchDir('fabrika-resp-')
 		writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='R'>x</Section>")
 		const sessionId = 'responses-session'
-		await fetch(`${base}/api/session/${sessionId}/plan`, {
+		await dashboard.fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot: canvasDir, gate: 'intake' }),
 		})
 
-		const empty = await (await fetch(`${base}/api/session/${sessionId}/revision/1/responses`)).json()
+		const empty = await (await dashboard.fetch(`${base}/api/session/${sessionId}/revision/1/responses`)).json()
 		expect(empty.responses).toBeNull()
 
 		const payload = {
@@ -315,19 +319,19 @@ describe('daemon http endpoints', () => {
 			feedbackEntries: [],
 			futureDraft: { nested: ['preserve', null] },
 		}
-		const put = await fetch(`${base}/api/session/${sessionId}/revision/1/responses`, {
+		const put = await dashboard.fetch(`${base}/api/session/${sessionId}/revision/1/responses`, {
 			method: 'PUT',
 			headers: { 'Content-Type': 'application/json' },
 			body: JSON.stringify(payload),
 		})
 		expect(put.status).toBe(200)
 
-		const got = await (await fetch(`${base}/api/session/${sessionId}/revision/1/responses`)).json()
+		const got = await (await dashboard.fetch(`${base}/api/session/${sessionId}/revision/1/responses`)).json()
 		expect(got.responses.generalNote).toBe('hi')
 		expect(got.responses.responses[0][0]).toBe('k')
 		expect(got.responses).toEqual(payload)
 
-		const ghost = await fetch(`${base}/api/session/ghost/revision/1/responses`, {
+		const ghost = await dashboard.fetch(`${base}/api/session/ghost/revision/1/responses`, {
 			method: 'PUT',
 			headers: { 'Content-Type': 'application/json' },
 			body: '{}',
@@ -341,21 +345,21 @@ describe('daemon http endpoints', () => {
 		const canvasDir = scratchDir('fabrika-reset-')
 		writeFileSync(join(canvasDir, 'view.jsx'), "<Section title='X'>x</Section>")
 		const sessionId = 'reset-session'
-		await fetch(`${base}/api/session/${sessionId}/plan`, {
+		await dashboard.fetch(`${base}/api/session/${sessionId}/plan`, {
 			method: 'POST',
 			headers: { 'Content-Type': 'application/json', ...cli() },
 			body: JSON.stringify({ directory: canvasDir, projectRoot: canvasDir, gate: 'intake' }),
 		})
 
-		expect((await fetch(`${base}/api/session/${sessionId}/meta`)).status).toBe(200)
+		expect((await dashboard.fetch(`${base}/api/session/${sessionId}/meta`)).status).toBe(200)
 
-		const reset = await fetch(`${base}/api/session/${sessionId}/reset`, { method: 'POST', headers: cli() })
+		const reset = await dashboard.fetch(`${base}/api/session/${sessionId}/reset`, { method: 'POST', headers: cli() })
 		expect(reset.status).toBe(200)
 		expect((await reset.json()).existed).toBe(true)
 
-		expect((await fetch(`${base}/api/session/${sessionId}/meta`)).status).toBe(404)
+		expect((await dashboard.fetch(`${base}/api/session/${sessionId}/meta`)).status).toBe(404)
 
-		const noop = await fetch(`${base}/api/session/${sessionId}/reset`, { method: 'POST', headers: cli() })
+		const noop = await dashboard.fetch(`${base}/api/session/${sessionId}/reset`, { method: 'POST', headers: cli() })
 		expect((await noop.json()).existed).toBe(false)
 
 		rmSync(canvasDir, { recursive: true, force: true })
