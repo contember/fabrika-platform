@@ -469,7 +469,7 @@ later. A server that listened 4 s after start, behind an `exec` check whose comm
 for up to 9 s, logged `ready after 1 attempts (took 5s)`. With an `httpGet` check the Notes example logged a refused first
 attempt and `ready after 2 attempts (took 10s)`. Activation followed readiness by about 21 s in both cases.
 
-#### Verified live (2026-10-21, account Contember, project `fabrika-live`): the readiness window opens with `run.start`, after the init commands
+#### Verified live (2026-10-21, a throwaway `alpine/bun@1.3` service): the readiness window opens with `run.start`, after the init commands
 
 Measured by the platform-facts row `slow-init-command-precedes-the-readiness-window` (`live: 'build'`,
 `FABRIKA_LIVE_ZEROPS_SLOW=1`) on its throwaway `alpine/bun@1.3` service: a version whose init command is `sleep 240`,
@@ -477,7 +477,7 @@ behind an `httpGet` readiness check with `retryPeriod: 10s` and `failureTimeout:
 commands do not count against the readiness window, and an init command may run at least 240 s. No upper limit on an
 init command's duration is known.
 
-The Schrack CRM's runtime log (`intake/prod`, run `01a15ec9`) shows the same: the init commands ran 14:12:04–14:12:21,
+A production application's runtime log shows the same: the init commands ran 14:12:04–14:12:21,
 Zerops logged `Readiness check: failureTimeout 3m0s`, and the first of 18 readiness attempts came at 14:12:22.
 
 #### The PostgreSQL connection target
