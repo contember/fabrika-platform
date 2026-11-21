@@ -47,9 +47,9 @@ unless marked, size S.
 14. **A binding's method cannot be feature-detected.** On workerd an RPC stub answers `in` and `typeof` with a function
     for every name (local workerd, `wrangler dev` 4.74.0), so `method()` (`packages/app/src/cloudflare/bindings.ts`)
     never reports a missing IAM method, and `boot`'s "no membership transport" refusal cannot fire on Cloudflare; a
-    missing method fails at its call. Lopata's stub answers `false`, unlike workerd, which also breaks `bun run dev`
-    of `examples/app` (the object finds no `IAM`), and Lopata applies no wrangler `define`, so the example's proxy has no
-    manifest. Both are Lopata fixes. So is a third: `lopata/testing` replaces the global `Request` with one that keeps
+    missing method fails at its call. (`method()` reads without `in`, which Lopata's stub answers `false`, and the local
+    composition gives the proxy its manifest as a variable, since Lopata applies no wrangler `define`.) A Lopata fix
+    remains: `lopata/testing` replaces the global `Request` with one that keeps
     the source request's headers when `new Request(request, { headers })` passes others, which broke the proxy tests run
     after it in one process; `bun run test` runs the Lopata suites in `test:lopata`, isolated, until Lopata is fixed.
 15. **A job's transaction has no cap.** `CLOUDFLARE_MAX_HANDLER_MS` bounds procedures and webhooks, but a job's
@@ -71,7 +71,7 @@ unless marked, size S.
 1. The sweep lists the bucket's keys and deletes an object past the pending grace that no row names. 2. Document it,
    or fold with a registered function. 3. Detect the tag and refuse with a message. 4–6. Deduplicate. 7. Document it;
    open the transaction at the first statement where the input gate allows. 8. A platform-owned name no application id
-   can produce, or refuse such an id at registration. 9–13. As stated. 14. Detect by the IAM release, or drop the detection; fix Lopata's stub and `define`. 15. Cap a job's transaction, or its `timeoutMs`, on Cloudflare. 16–17. Count only what the object runs; refuse at boot. 18. Abort the read and cancel its body. 19. Queue an outside statement behind the open transaction. Each with a test where one can reach it.
+   can produce, or refuse such an id at registration. 9–13. As stated. 14. Detect by the IAM release, or drop the detection; fix Lopata's `Request`. 15. Cap a job's transaction, or its `timeoutMs`, on Cloudflare. 16–17. Count only what the object runs; refuse at boot. 18. Abort the read and cancel its body. 19. Queue an outside statement behind the open transaction. Each with a test where one can reach it.
 
 ## Touch points
 
