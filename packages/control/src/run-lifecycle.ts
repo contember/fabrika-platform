@@ -478,12 +478,16 @@ const assertUnmanagedNames = (kind: 'variable' | 'secret', appId: string, names:
 const assertDeclaredSecretsSet = async (
 	deps: RunDeps,
 	appId: string,
-	env: string,
+	appEnv: Pick<AppEnvRow, 'env' | 'kind'>,
 	artifact: ProviderEnvelope,
 ): Promise<void> => {
 	const declared = deps.provider.declaredSecrets?.({ artifact })
 	if (declared === undefined || declared.length === 0) return
-	const set = new Set((await deps.repositories.registry.getAppSecretsForEnv(appId, env)).map((row) => row.name))
+	const { env } = appEnv
+	const rows = await deps.repositories.registry.getAppSecretsForEnv(appId, env)
+	// A provider that keeps the values holds only an environment's own; an all-environment row never reaches it.
+	const keptByProvider = providerKeepsSecrets(deps.provider, appEnv)
+	const set = new Set(rows.filter((row) => !keptByProvider || row.env === env).map((row) => row.name))
 	const missing = [...new Set(declared)].filter((name) => !set.has(name)).sort()
 	if (missing.length === 0) return
 	throw new Error(
@@ -740,7 +744,7 @@ async function deployUnder(
 		let registration = deps.provider.normalizeRegistration?.({ app: appInput, environment: environmentInput })
 			?? { app: appInput, environment: environmentInput }
 		await assertNamespaceResourceClaims(deps.repositories.registry, deps.provider, registration)
-		await assertDeclaredSecretsSet(deps, app.id, appEnv.env, registration.environment.artifact)
+		await assertDeclaredSecretsSet(deps, app.id, appEnv, registration.environment.artifact)
 		const resolveSource = deps.provider.resolveSource
 		/** The snapshot this run published, and how to classify its data changes again when it predates the classifier. */
 		let published: { readonly candidate: PublishedCandidate; readonly reread: () => Promise<readonly MigrationDataLoss[] | null> } | null = null
