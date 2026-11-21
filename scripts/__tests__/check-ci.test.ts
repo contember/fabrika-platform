@@ -60,8 +60,13 @@ describe('check:ci', () => {
 	test('runs every isolated suite in exactly one shard', async () => {
 		const packageJson = z.object({ scripts: z.record(z.string()) }).parse(await Bun.file(resolve(ROOT, 'package.json')).json())
 		const parts = (run: string): string[] => run.split('&&').map((part) => part.trim())
-		const isolated = TEST_STEPS.filter((step) => step.onlyInShard !== undefined).flatMap((step) => parts(step.run))
-		expect(isolated.toSorted()).toEqual(parts(packageJson.scripts['test:isolated'] ?? '').toSorted())
+		const isolated = parts(packageJson.scripts['test:isolated'] ?? '')
+		const placed = TEST_STEPS.flatMap((step) =>
+			parts(step.run).filter((part) => isolated.includes(part)).map((part) => ({ part, shard: step.onlyInShard }))
+		)
+		expect(placed.map(({ part }) => part).toSorted()).toEqual(isolated.toSorted())
+		// A step without a shard runs in every shard; one with a shard outside the matrix runs in none.
+		for (const { part, shard } of placed) expect(TEST_SHARDS, part).toContain(shard ?? 0)
 	})
 
 	// bun reads a missing or unreadable timings file as none and falls back to splitting by count, silently.

@@ -7,38 +7,49 @@
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { z } from 'zod'
 import { POSTGRES_MAJORS, removeAllContainers, startPostgres, startSeaweedfs, TEST_TIMINGS_FILE } from './check-ci'
 
 const ROOT = resolve(import.meta.dir, '..')
 
-const spawn = async (command: readonly string[], env: Record<string, string | undefined>): Promise<number> =>
-	await Bun.spawn([...command], { cwd: ROOT, env, stdout: 'inherit', stderr: 'inherit' }).exited
+/** What bun's `--update-timings` writes and `--timings` reads. */
+const timingsSchema = z.object({ version: z.literal(1), files: z.record(z.number()) })
 
-const main = async (): Promise<void> => {
+const main = async (scratch: string): Promise<void> => {
 	const major = POSTGRES_MAJORS[0]
 	if (major === undefined) throw new Error('POSTGRES_MAJORS is empty')
-	const scratch = await mkdtemp(join(tmpdir(), 'fabrika-test-timings-'))
-	try {
-		const [postgres, s3] = await Promise.all([startPostgres(major), startSeaweedfs()])
-		const env = { ...process.env, ...postgres.env, ...s3.env }
-		// A fresh file, so a deleted or renamed test file does not keep its old entry.
-		const measured = join(scratch, 'timings.json')
-		const exitCode = await spawn(['bun', 'run', 'test:unit', `--timings=${measured}`, '--update-timings'], env)
-		if (exitCode !== 0) throw new Error(`the main suite failed (exit ${exitCode}); ${TEST_TIMINGS_FILE} is unchanged`)
-		await Bun.write(join(ROOT, TEST_TIMINGS_FILE), Bun.file(measured))
-		if (await spawn(['bun', 'run', 'format', TEST_TIMINGS_FILE], process.env) !== 0) throw new Error(`could not format ${TEST_TIMINGS_FILE}`)
-		console.info(`\nWrote ${TEST_TIMINGS_FILE}.`)
-	} finally {
-		await removeAllContainers()
-		await rm(scratch, { recursive: true, force: true })
-	}
+	// One after the other: a start that fails while the other's `docker run` is pending would leave that container behind.
+	const postgres = await startPostgres(major)
+	const s3 = await startSeaweedfs()
+	// A fresh file, so a deleted or renamed test file does not keep its old entry.
+	const measured = join(scratch, 'timings.json')
+	const command = ['bun', 'run', 'test:unit', `--timings=${measured}`, '--update-timings']
+	const exitCode = await Bun.spawn(command, { cwd: ROOT, env: { ...process.env, ...postgres.env, ...s3.env }, stdout: 'inherit', stderr: 'inherit' })
+		.exited
+	if (exitCode !== 0) throw new Error(`the main suite failed (exit ${exitCode}); ${TEST_TIMINGS_FILE} is unchanged`)
+	const timings = timingsSchema.parse(await Bun.file(measured).json())
+	// Tabs and a final newline, as dprint formats it.
+	await Bun.write(join(ROOT, TEST_TIMINGS_FILE), `${JSON.stringify(timings, null, '\t')}\n`)
+	console.info(`\nWrote ${TEST_TIMINGS_FILE}: ${Object.keys(timings.files).length} files.`)
 }
 
 if (import.meta.main) {
+	const scratch = await mkdtemp(join(tmpdir(), 'fabrika-test-timings-'))
+	const cleanUp = async (): Promise<void> => {
+		await removeAllContainers()
+		await rm(scratch, { recursive: true, force: true })
+	}
+	const interrupt = (): void => {
+		void cleanUp().finally(() => process.exit(130))
+	}
+	process.on('SIGINT', interrupt)
+	process.on('SIGTERM', interrupt)
 	try {
-		await main()
+		await main(scratch)
 	} catch (error) {
 		console.error(`test:timings failed: ${error instanceof Error ? error.message : String(error)}`)
-		process.exit(1)
+		process.exitCode = 1
+	} finally {
+		await cleanUp()
 	}
 }
