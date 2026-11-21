@@ -1,4 +1,4 @@
-import { createDaemonLifecycle, type DaemonEvent, DaemonStartError } from '@fabrika/daemon-kit'
+import { createDaemonLifecycle, type DaemonEvent, DaemonStartError, ensureRuntimeDir } from '@fabrika/daemon-kit'
 import { readFileSync } from 'fs'
 import { join } from 'path'
 import { BASE_URL, CLI_AUTH_FILE, PACKAGE_ROOT, PID_FILE, TEMP_DIR, VERSION } from './config.ts'
@@ -65,11 +65,22 @@ function reportStartFailure(error: unknown): never {
 	process.exit(1)
 }
 
+/** The pid and log files of a daemon the CLI spawns go into the runtime directory, so it is made private first. */
+function ensureTempDir(): void {
+	try {
+		ensureRuntimeDir(TEMP_DIR)
+	} catch (error: unknown) {
+		reportStartFailure(error)
+	}
+}
+
 export async function startDaemon(): Promise<void> {
+	ensureTempDir()
 	await lifecycle.start().catch(reportStartFailure)
 }
 
 export async function ensureDaemon(): Promise<void> {
+	ensureTempDir()
 	await lifecycle.ensure().catch(reportStartFailure)
 }
 

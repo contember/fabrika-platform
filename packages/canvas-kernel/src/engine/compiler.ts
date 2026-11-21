@@ -1,7 +1,7 @@
+import { ensureRuntimeDir, userRuntimeDir } from '@fabrika/daemon-kit'
 import { randomUUID } from 'crypto'
 import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs'
 import { parse as parseMermaid } from 'mermaid-parser-bundle'
-import { tmpdir } from 'os'
 import { join, resolve } from 'path'
 import { type ComponentChildren, type ComponentType, Fragment, h, isValidElement, type Key } from 'preact'
 import renderToString from 'preact-render-to-string'
@@ -68,9 +68,6 @@ export interface CompileOptions {
 	 */
 	components?: CanvasComponents
 }
-
-/** Fallback scratch dir for hosts that compile without wiring CanvasPaths. */
-const FALLBACK_COMPILE_DIR = join(tmpdir(), 'canvas-kernel', 'compile')
 
 function componentImports(components: CanvasComponents): string {
 	return `import React from 'react';
@@ -338,7 +335,8 @@ export async function compileJsx(jsx: string, options: CompileOptions = {}): Pro
 		return { ok: false, error: formatBuildError(syntaxError, lineOffset) }
 	}
 
-	const compileDir = options.tempDir ?? FALLBACK_COMPILE_DIR
+	// The fallback for hosts that compile without wiring CanvasPaths.
+	const compileDir = options.tempDir ?? join(ensureRuntimeDir(userRuntimeDir('canvas-kernel')), 'compile')
 	mkdirSync(compileDir, { recursive: true })
 	const tmpFile = join(compileDir, `plan-${randomUUID()}.jsx`)
 	const configFile = `${tmpFile}.json`

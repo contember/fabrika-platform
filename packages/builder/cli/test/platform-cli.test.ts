@@ -57,7 +57,14 @@ function setup() {
 		hostname: BUILDER_DAEMON_HOST,
 		async fetch(request) {
 			const path = new URL(request.url).pathname
-			if (path === '/health') return Response.json({ ok: true, pid: process.pid, sessionsDir: join(fx.root, 'data', 'sessions') })
+			if (path === '/health') {
+				return Response.json({
+					ok: true,
+					pid: process.pid,
+					sessionsDir: join(fx.root, 'data', 'sessions'),
+					cliAuthFile: join(fx.root, 'run', 'fabrika', 'daemon-auth-token'),
+				})
+			}
 			const body = await request.text()
 			requests.push({ path, method: request.method, body: body ? JSON.parse(body) : null })
 			if (path.endsWith('/link')) return Response.json({ signInUrl: `${new URL(request.url).origin}/open?code=dummy-code` })
@@ -74,7 +81,13 @@ function setup() {
 	async function run(args: string[]) {
 		const process = Bun.spawn(['bun', bin, ...args], {
 			cwd: fx.root,
-			env: { ...Bun.env, FABRIKA_PORT: String(port), FABRIKA_DATA_DIR: join(fx.root, 'data'), FABRIKA_SESSION_ID: 'ignored-override' },
+			env: {
+				...Bun.env,
+				XDG_RUNTIME_DIR: join(fx.root, 'run'),
+				FABRIKA_PORT: String(port),
+				FABRIKA_DATA_DIR: join(fx.root, 'data'),
+				FABRIKA_SESSION_ID: 'ignored-override',
+			},
 			stdout: 'pipe',
 			stderr: 'pipe',
 		})

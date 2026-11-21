@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { isAbsolute, join } from 'path'
 
@@ -16,7 +16,7 @@ function unusedPort(): number {
 async function runInCli(script: string, opts: { temp: string; env?: Record<string, string> }) {
 	const child = Bun.spawn([process.execPath, '-e', script], {
 		cwd: opts.temp,
-		env: { ...process.env, TMPDIR: opts.temp, FABRIKA_PORT: String(unusedPort()), ...opts.env },
+		env: { ...process.env, TMPDIR: opts.temp, XDG_RUNTIME_DIR: opts.temp, FABRIKA_PORT: String(unusedPort()), ...opts.env },
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})
@@ -38,7 +38,7 @@ test('stop leaves a foreign live process named by the pid file untouched', async
 	const temp = mkdtempSync(join(tmpdir(), 'fabrika-lifecycle-'))
 	const foreign = Bun.spawn(['sleep', '30'])
 	try {
-		// The CLI derives its pid file from TMPDIR, so the child sees only this fixture.
+		// The CLI derives its pid file from XDG_RUNTIME_DIR, so the child sees only this fixture.
 		mkdirSync(join(temp, 'fabrika'), { recursive: true })
 		writeFileSync(join(temp, 'fabrika', 'daemon.pid'), `${foreign.pid}\n`)
 
@@ -78,3 +78,64 @@ test('the daemon is spawned outside the caller project with an absolute data roo
 		rmSync(temp, { recursive: true, force: true })
 	}
 })
+
+test('a daemon that wrote its capability where this CLI does not read it is restarted, as one of an earlier release', async () => {
+	const root = mkdtempSync(join(tmpdir(), 'fabrika-lifecycle-'))
+	const earlier = join(root, 'earlier')
+	const current = join(root, 'current')
+	mkdirSync(earlier, { mode: 0o700 })
+	mkdirSync(current, { mode: 0o700 })
+	const env = { FABRIKA_PORT: String(unusedPort()), FABRIKA_DATA_DIR: join(root, 'data') }
+	const ensure = `const { daemon, ensureDaemon } = await import(${JSON.stringify(LIFECYCLE_MODULE)})
+		const ensured = await ensureDaemon({ quiet: true })
+		console.log(JSON.stringify({ ensured, health: await daemon.health() }))`
+	try {
+		const first = JSON.parse(await runInCli(ensure, { temp: earlier, env }))
+		expect(first.health.cliAuthFile).toBe(join(earlier, 'fabrika', 'daemon-auth-token'))
+
+		const second = JSON.parse(await runInCli(ensure, { temp: current, env }))
+		expect(second.ensured).toBe(true)
+		expect(second.health.pid).not.toBe(first.health.pid)
+		expect(second.health.cliAuthFile).toBe(join(current, 'fabrika', 'daemon-auth-token'))
+		expect(existsSync(join(current, 'fabrika', 'daemon-auth-token'))).toBe(true)
+		expect(isAlive(first.health.pid)).toBe(false)
+	} finally {
+		await runInCli(`const { daemon } = await import(${JSON.stringify(LIFECYCLE_MODULE)}); await daemon.stop()`, { temp: current, env })
+		rmSync(root, { recursive: true, force: true })
+	}
+}, 30_000)
+
+test('the dashboard cookie of an earlier daemon run is refused by the restarted daemon, and the old ui-token file is removed', async () => {
+	const root = mkdtempSync(join(tmpdir(), 'fabrika-lifecycle-'))
+	const data = join(root, 'data')
+	mkdirSync(data, { mode: 0o700 })
+	// The UI secret a release before this one kept across restarts.
+	writeFileSync(join(data, 'ui-token'), 'x'.repeat(43), { mode: 0o600 })
+	const modules = {
+		lifecycle: LIFECYCLE_MODULE,
+		auth: new URL('../src/cli-auth.ts', import.meta.url).pathname,
+		config: new URL('../src/config.ts', import.meta.url).pathname,
+	}
+	try {
+		const stdout = await runInCli(
+			`const { daemon, ensureDaemon } = await import(${JSON.stringify(modules.lifecycle)})
+			const { cliAuthHeaders } = await import(${JSON.stringify(modules.auth)})
+			const { BASE_URL } = await import(${JSON.stringify(modules.config)})
+			const sessions = (cookie) => fetch(BASE_URL + '/api/sessions', { headers: { Cookie: cookie } }).then((response) => response.status)
+			await ensureDaemon({ quiet: true })
+			const link = await fetch(BASE_URL + '/api/session/s1/link', { method: 'POST', headers: cliAuthHeaders() }).then((response) => response.json())
+			const cookie = (await fetch(link.signInUrl, { redirect: 'manual' })).headers.get('Set-Cookie').split(';')[0]
+			const before = await sessions(cookie)
+			await daemon.stop()
+			await ensureDaemon({ quiet: true })
+			const after = await sessions(cookie)
+			await daemon.stop()
+			console.log(JSON.stringify({ before, after }))`,
+			{ temp: root, env: { FABRIKA_DATA_DIR: data } },
+		)
+		expect(JSON.parse(stdout)).toEqual({ before: 200, after: 401 })
+		expect(existsSync(join(data, 'ui-token'))).toBe(false)
+	} finally {
+		rmSync(root, { recursive: true, force: true })
+	}
+}, 30_000)

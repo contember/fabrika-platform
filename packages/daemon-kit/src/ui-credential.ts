@@ -1,13 +1,15 @@
 import { randomBytes, randomUUID } from 'crypto'
-import { chmodSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'fs'
+import { readdirSync, rmSync, statSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { pathToFileURL } from 'url'
 import { matchesCapability } from './capability'
+import { ensureRuntimeDir } from './runtime-dir'
 
 /**
- * A daemon's browser UI credential: a per-daemon secret the browser holds as a cookie. It reaches a browser only through a
- * one-time code on a link the CLI hands out, and the CLI hands a browser that link through a file only its owner reads,
- * never through a process argument.
+ * A daemon's browser UI credential: a secret the browser holds as a cookie, made fresh by every daemon start (the daemon
+ * makes it with `createCapability` and keeps it in memory). It reaches a browser only through a one-time code on a link
+ * the CLI hands out, and the CLI hands a browser that link through a file only its owner reads, never through a process
+ * argument.
  */
 
 /** The path of a link that bootstraps the cookie, and its query parameter. */
@@ -17,7 +19,6 @@ const UI_CODE_QUERY = 'code'
 /** A link the CLI printed stays usable for as long as the CLI waits for feedback by default. */
 const CODE_TTL_MS = 60 * 60 * 1000
 const COOKIE_MAX_AGE_SECONDS = 30 * 24 * 60 * 60
-const TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/
 
 /** The secret a daemon's UI cookie carries, and the cookie's name. */
 export interface UiCredential {
@@ -28,45 +29,6 @@ export interface UiCredential {
 /** Cookies are not separated by port on a loopback host, so each daemon port names its own. */
 export function uiCookieName(prefix: string, port: number): string {
 	return `${prefix}${port}`
-}
-
-function readToken(file: string): string | undefined {
-	try {
-		const token = readFileSync(file, 'utf-8').trim()
-		return TOKEN_PATTERN.test(token) ? token : undefined
-	} catch {
-		return undefined
-	}
-}
-
-function isAlreadyExists(error: unknown): boolean {
-	return error instanceof Error && 'code' in error && error.code === 'EEXIST'
-}
-
-/**
- * The UI secret kept in `file`, created on first use. It survives a daemon restart, which a CLI does on a version change or
- * a failed compile, so open tabs keep working; deleting the file revokes every browser. Daemons on other ports share the
- * file, so a first start creates it exclusively and takes the one another daemon wrote first.
- */
-export function loadUiToken(file: string): string {
-	let token = readToken(file)
-	if (token === undefined) {
-		const fresh = randomBytes(32).toString('base64url')
-		try {
-			writeFileSync(file, fresh, { mode: 0o600, flag: 'wx' })
-			token = fresh
-		} catch (error) {
-			if (!isAlreadyExists(error)) throw error
-			token = readToken(file)
-			// A file that holds no token (empty, or edited by hand) is replaced.
-			if (token === undefined) {
-				writeFileSync(file, fresh, { mode: 0o600 })
-				token = fresh
-			}
-		}
-	}
-	chmodSync(file, 0o600)
-	return token
 }
 
 /** The value of cookie `name` in a `Cookie` header, or null. */
@@ -214,12 +176,11 @@ function removeStaleLinkFiles(directory: string, now: number): void {
 
 /**
  * Opens a link that carries a secret (a one-time sign-in code) in the browser. Never as a process argument: other OS
- * users read every process's arguments. The link goes into a file only its owner reads, in the CLI's private temporary
- * `directory`, and `openUrl` gets that file's URL, which refreshes to the link.
+ * users read every process's arguments. The link goes into a file only its owner reads, in the CLI's runtime
+ * `directory` (`ensureRuntimeDir`), and `openUrl` gets that file's URL, which refreshes to the link.
  */
 export function openLinkThroughFile(link: string, directory: string, title: string, openUrl: (url: string) => void): void {
-	mkdirSync(directory, { recursive: true, mode: 0o700 })
-	chmodSync(directory, 0o700)
+	ensureRuntimeDir(directory)
 	removeStaleLinkFiles(directory, Date.now())
 	const target = escapeHtml(link)
 	const file = join(directory, `open-${randomUUID()}.html`)

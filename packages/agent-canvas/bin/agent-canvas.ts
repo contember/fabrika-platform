@@ -1,6 +1,7 @@
 #!/usr/bin/env bun
 
 import { handleDaemon } from './lib/commands/daemon.ts'
+import { handleDir } from './lib/commands/dir.ts'
 import { handleExec } from './lib/commands/exec.ts'
 import { handleFetch } from './lib/commands/fetch.ts'
 import { handleInstall } from './lib/commands/install.ts'
@@ -18,6 +19,7 @@ function printUsage() {
 Commands:
   agent-canvas install [local|global]  Install skill for Claude Code
   agent-canvas instructions [topic]    Show usage instructions (for AI agents)
+  agent-canvas dir                     Print the private directory to keep canvas files in
   agent-canvas push <directory>        Push canvases, open browser
   agent-canvas open [--session <id>] [--no-open]
                                       Print and open a fresh link to a canvas (each link works once)
@@ -56,6 +58,8 @@ async function main() {
 	const rest = args.slice(1)
 
 	switch (command) {
+		case 'dir':
+			return handleDir()
 		case 'push':
 			return handlePush(rest)
 		case 'open':

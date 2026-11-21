@@ -14,8 +14,8 @@ export const UPLOADS_DIR = paths.uploadsDir
 /** Capability used only by the CLI to resolve secret values */
 export const CLI_AUTH_FILE = join(paths.tempDir, 'daemon-auth-token')
 
-/** The browser UI's credential (`ui-credential.ts`); in the data directory, so a restarted daemon keeps open tabs working */
-export const UI_TOKEN_FILE = join(paths.dataDir, 'ui-token')
+/** Where releases before the UI secret was made per start kept it; a daemon removes the file it no longer reads. */
+export const LEGACY_UI_TOKEN_FILE = join(paths.dataDir, 'ui-token')
 
 /** Review-mode threads, one JSON file per project */
 export const REVIEWS_DIR = join(paths.dataDir, 'reviews')

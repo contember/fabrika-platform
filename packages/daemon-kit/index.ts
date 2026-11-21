@@ -25,10 +25,10 @@ export type {
 } from './src/lifecycle'
 export { dispatch } from './src/router'
 export type { Route, RouteHandler } from './src/router'
+export { ensureRuntimeDir, userRuntimeDir } from './src/runtime-dir'
 export {
 	escapeHtml,
 	hasUiCookie,
-	loadUiToken,
 	openLinkResponse,
 	openLinkThroughFile,
 	UI_LINK_PATH,

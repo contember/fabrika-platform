@@ -1,10 +1,11 @@
+import { userRuntimeDir } from '@fabrika/daemon-kit'
 import { readFileSync } from 'fs'
-import { tmpdir } from 'os'
 import { dirname, join, resolve } from 'path'
 
 export const PACKAGE_ROOT = resolve(join(dirname(import.meta.path), '../..'))
 export const VERSION = JSON.parse(readFileSync(join(PACKAGE_ROOT, 'package.json'), 'utf-8')).version as string
-export const TEMP_DIR = join(tmpdir(), 'agent-canvas')
+/** The daemon's runtime directory (`daemon/src/paths.ts`); `ensureDaemon` creates it before it writes there. */
+export const TEMP_DIR = userRuntimeDir('agent-canvas')
 export const DAEMON_PORT = parseInt(process.env.CANVAS_PORT || '19400', 10)
 export const BASE_URL = `http://localhost:${DAEMON_PORT}`
 export const WS_URL = `ws://localhost:${DAEMON_PORT}`

@@ -39,6 +39,8 @@ export interface HandlerContext {
 	platform?: BuilderPlatform
 	/** Sign-in links to the dashboard, for the CLI to hand a browser. */
 	uiLinks: UiLinks
+	/** Where the CLI capability was written; `/health` names it, so a CLI that reads it elsewhere restarts the daemon. */
+	cliAuthFile?: string
 }
 
 function gateOracleFor(sm: SessionManager): GateOracle {
@@ -142,6 +144,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			dataDir: dirname(ctx.sessionsDir),
 			sessionsDir: ctx.sessionsDir,
 			sessions: sessionManager.list().map((s) => s.id),
+			...(ctx.cliAuthFile === undefined ? {} : { cliAuthFile: ctx.cliAuthFile }),
 		})
 	}
 

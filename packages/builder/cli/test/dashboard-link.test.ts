@@ -40,7 +40,14 @@ beforeAll(() => {
 		async fetch(request) {
 			const url = new URL(request.url)
 			link = `${url.origin}/open?code=dummy-sign-in-code`
-			if (url.pathname === '/health') return Response.json({ ok: true, pid: process.pid, sessionsDir: join(dataDir, 'sessions') })
+			if (url.pathname === '/health') {
+				return Response.json({
+					ok: true,
+					pid: process.pid,
+					sessionsDir: join(dataDir, 'sessions'),
+					cliAuthFile: join(temp, 'fabrika', 'daemon-auth-token'),
+				})
+			}
 			if (url.pathname.endsWith('/link')) {
 				linkRequests.push(request.headers.get(BUILDER_CLI_TOKEN_HEADER))
 				return Response.json({ signInUrl: link })
@@ -80,6 +87,7 @@ async function run(args: string[]): Promise<{ code: number; stdout: string; stde
 			...process.env,
 			HOME: root,
 			TMPDIR: temp,
+			XDG_RUNTIME_DIR: temp,
 			FABRIKA_PORT: String(server?.port),
 			FABRIKA_DATA_DIR: dataDir,
 			FABRIKA_SESSION_ID: 'dashboard-session',

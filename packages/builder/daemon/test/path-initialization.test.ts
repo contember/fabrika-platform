@@ -43,7 +43,7 @@ test('importing startDaemon does not initialize default paths; explicit startup 
 		`,
 		], {
 			cwd: root,
-			env: { HOME: home, TMPDIR: temp, FABRIKA_DATA_DIR: join(blocked, 'data'), PATH: process.env['PATH'] ?? '' },
+			env: { HOME: home, TMPDIR: temp, XDG_RUNTIME_DIR: temp, FABRIKA_DATA_DIR: join(blocked, 'data'), PATH: process.env['PATH'] ?? '' },
 			stdout: 'pipe',
 			stderr: 'pipe',
 			timeout: 30_000,
@@ -82,7 +82,13 @@ test('default startup initializes the configured sessions root after a side-effe
 		`,
 		], {
 			cwd: root,
-			env: { HOME: join(root, 'home'), TMPDIR: join(root, 'temp'), FABRIKA_DATA_DIR: data, PATH: process.env['PATH'] ?? '' },
+			env: {
+				HOME: join(root, 'home'),
+				TMPDIR: join(root, 'temp'),
+				XDG_RUNTIME_DIR: join(root, 'temp'),
+				FABRIKA_DATA_DIR: data,
+				PATH: process.env['PATH'] ?? '',
+			},
 			stdout: 'pipe',
 			stderr: 'pipe',
 			timeout: 30_000,

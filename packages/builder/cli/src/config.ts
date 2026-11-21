@@ -1,5 +1,6 @@
+import { userRuntimeDir } from '@fabrika/daemon-kit'
 import { createHash } from 'crypto'
-import { homedir, tmpdir } from 'os'
+import { homedir } from 'os'
 import { join, resolve } from 'path'
 import { BUILDER_CLI_AUTH_FILENAME, builderDaemonUrl } from '../../shared/urls'
 
@@ -12,7 +13,8 @@ export const TIMEOUT_MS = parseInt(process.env['FABRIKA_TIMEOUT'] || String(60 *
 export const NEUTRAL_DATA_DIR = join(homedir(), '.fabrika')
 export const DATA_DIR = resolveDataDir()
 export const SESSIONS_DIR = join(DATA_DIR, 'sessions')
-export const TEMP_DIR = join(tmpdir(), 'fabrika')
+/** The daemon's runtime directory (`daemon/src/paths.ts`); `ensureDaemon` creates it before it writes there. */
+export const TEMP_DIR = userRuntimeDir('fabrika')
 export const PID_FILE = join(TEMP_DIR, 'daemon.pid')
 export const CLI_AUTH_FILE = join(TEMP_DIR, BUILDER_CLI_AUTH_FILENAME)
 

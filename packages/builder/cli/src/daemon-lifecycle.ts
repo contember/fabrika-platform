@@ -1,4 +1,4 @@
-import { createDaemonLifecycle, type DaemonLifecycleConfig, DaemonStartError, openLinkThroughFile } from '@fabrika/daemon-kit'
+import { createDaemonLifecycle, type DaemonLifecycleConfig, DaemonStartError, ensureRuntimeDir, openLinkThroughFile } from '@fabrika/daemon-kit'
 import { spawn } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -24,6 +24,10 @@ export function healthMatchesDataRoot(info: { sessionsDir: string }, expectedSes
 	return comparablePath(info.sessionsDir) === comparablePath(expectedSessionsDir)
 }
 
+function daemonIdentity(sessionsDir: string, cliAuthFile: string | undefined): string {
+	return `${comparablePath(sessionsDir)} (capability ${cliAuthFile === undefined ? 'not named' : comparablePath(cliAuthFile)})`
+}
+
 const DAEMON_BIN = fileURLToPath(new URL('../../daemon/src/bin.ts', import.meta.url))
 
 export const daemonLifecycleConfig: DaemonLifecycleConfig<DaemonHealthInfo> = {
@@ -35,10 +39,11 @@ export const daemonLifecycleConfig: DaemonLifecycleConfig<DaemonHealthInfo> = {
 	// Never the caller's project: its bunfig.toml preloads must not load into the daemon.
 	cwd: dirname(dirname(DAEMON_BIN)),
 	logFile: join(TEMP_DIR, 'daemon.log'),
-	// A daemon serving another data root is restarted, like one of another version.
+	// A daemon serving another data root, or writing its capability where this CLI does not read it (a release before the
+	// runtime directory, another XDG_RUNTIME_DIR), is restarted, like one of another version.
 	versionCheck: {
-		expected: comparablePath(SESSIONS_DIR),
-		of: (health) => comparablePath(health.sessionsDir),
+		expected: daemonIdentity(SESSIONS_DIR, CLI_AUTH_FILE),
+		of: (health) => daemonIdentity(health.sessionsDir, health.cliAuthFile),
 	},
 }
 
@@ -52,11 +57,13 @@ export async function ensureDaemon(opts: { quiet?: boolean } = {}): Promise<bool
 		...daemonLifecycleConfig,
 		onEvent: (event) => {
 			if (event.type === 'version-mismatch') {
-				report(`daemon data-root mismatch: active ${event.running}, requested ${event.expected}; restarting the daemon.`)
+				report(`daemon data-root or capability mismatch: active ${event.running}, requested ${event.expected}; restarting the daemon.`)
 			}
 		},
 	})
 	try {
+		// The pid and log files of a daemon the CLI spawns go into the runtime directory, so it is made private first.
+		ensureRuntimeDir(TEMP_DIR)
 		const health = await lifecycle.ensure()
 		if (healthMatchesDataRoot(health)) return true
 		report(`daemon data-root mismatch: active ${health.sessionsDir}, requested ${SESSIONS_DIR}`)

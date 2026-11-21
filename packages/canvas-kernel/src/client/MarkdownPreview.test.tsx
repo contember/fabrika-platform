@@ -103,10 +103,13 @@ describe('MarkdownPreview keeps ordinary markdown', () => {
 		expect(hrefs).toEqual(['https://example.com/a?b=1', 'mailto:a@example.com', '/s/abc', '#x'])
 	})
 
-	test('an upload image is rewritten to the uploads API and an https image kept', async () => {
-		const container = await renderPreview('![screenshot](/tmp/agent-canvas/uploads/shot.png)\n\n![remote](https://example.com/i.png)')
+	test('an upload image under any runtime directory is rewritten to the uploads API and an https image kept', async () => {
+		const container = await renderPreview(
+			'![a](/run/user/1000/agent-canvas/uploads/a.png) ![b](/tmp/agent-canvas-1000/uploads/b.png) ![c](/tmp/agent-canvas/uploads/c.png)'
+				+ '\n\n![remote](https://example.com/i.png)',
+		)
 		const srcs = [...container.querySelectorAll('img')].map((img) => img.getAttribute('src'))
-		expect(srcs).toEqual(['/api/uploads/shot.png', 'https://example.com/i.png'])
+		expect(srcs).toEqual(['/api/uploads/a.png', '/api/uploads/b.png', '/api/uploads/c.png', 'https://example.com/i.png'])
 	})
 })
 
