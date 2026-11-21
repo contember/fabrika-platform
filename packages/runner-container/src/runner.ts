@@ -10,6 +10,7 @@ import type { RunLogLine } from '@fabrika/control-contract'
 import {
 	APPLICATION_OBJECTS_ENV,
 	APPROVED_ACCESS_FILE_ENV,
+	CHECKOUT_INSTALL_ARGS,
 	checkoutRelativeDirectory,
 	type CloudflareRunnerJob,
 	CROSS_ORIGINS_ENV,
@@ -570,9 +571,13 @@ export class Runner {
 		// ── install ──
 		this.state = 'installing'
 		this.emit('meta', `Installing dependencies in ${dir}`)
-		const install = await this.step({ command: 'bun', args: ['install'], cwd: dir })
+		// Frozen, as the Zerops build installs: a `bun.lock` that disagrees with package.json fails it. Without a `bun.lock`
+		// bun installs unpinned versions; Control refuses to approve a contract application's commit without one.
+		const install = await this.step({ command: 'bun', args: [...CHECKOUT_INSTALL_ARGS], cwd: dir })
 		if (install.exitCode !== 0) {
-			this.finish('failed', { error: `bun install failed (exit ${install.exitCode})` })
+			this.finish('failed', {
+				error: `bun ${CHECKOUT_INSTALL_ARGS.join(' ')} failed (exit ${install.exitCode}); a bun.lock that does not match package.json fails it`,
+			})
 			this.emit('meta', `Install failed (exit ${install.exitCode})`)
 			return this.status()
 		}

@@ -1,7 +1,7 @@
 import { Worker } from 'oblaka-iac'
 import type { CloudflareAppConfig } from './authoring'
 
-export type CloudflareStepKind = 'build' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
+export type CloudflareStepKind = 'build' | 'check' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
 
 export interface CloudflareStep {
 	readonly id: string
@@ -48,17 +48,31 @@ export const findMigratableDatabases = (worker: Worker): MigratableDatabase[] =>
 
 const ENTRY_BUILD = '`fabrika app build --provider=cloudflare`'
 
-/** `regeneratesEntry`: the release pins the generated entry, so the build step always runs, after `pipeline.build`. */
-export const buildPlan = (config: CloudflareAppConfig, worker: Worker, regeneratesEntry: boolean): readonly CloudflareStep[] => {
+/**
+ * `checks`: an application deploy Control approved, which the check step checks before any resource is touched; null for
+ * a local or a platform deploy. With `regeneratesEntry` the release pins the generated entry, which that step regenerates
+ * after the tests.
+ */
+export const buildPlan = (
+	config: CloudflareAppConfig,
+	worker: Worker,
+	checks: { readonly regeneratesEntry: boolean } | null,
+): readonly CloudflareStep[] => {
 	const steps: CloudflareStep[] = []
 
 	const build = config.pipeline?.build
-	if (build !== undefined && regeneratesEntry) {
-		steps.push({ id: 'build', kind: 'build', description: `Build the Worker (\`${build}\`), then regenerate its entry (${ENTRY_BUILD})` })
-	} else if (build !== undefined) {
+	if (build !== undefined) {
 		steps.push({ id: 'build', kind: 'build', description: `Build the Worker (\`${build}\`)` })
-	} else if (regeneratesEntry) {
-		steps.push({ id: 'build', kind: 'build', description: `Regenerate the Worker's entry (${ENTRY_BUILD})` })
+	}
+
+	if (checks !== null) {
+		steps.push({
+			id: 'check',
+			kind: 'check',
+			description: checks.regeneratesEntry
+				? `Check the application: its tests, then a frozen install, its entry (${ENTRY_BUILD}), \`tsc\`, \`fabrika-check\` and its schema`
+				: 'Check the application: its tests, then `fabrika-check`',
+		})
 	}
 
 	steps.push({ id: 'provision-resources', kind: 'provision-resources', description: 'Provision Cloudflare resources via oblaka' })

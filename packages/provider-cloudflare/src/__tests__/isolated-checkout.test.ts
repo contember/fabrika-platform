@@ -62,7 +62,7 @@ const deployCheckout = async (
 		vars: {},
 		managedEnvironment: parseManagedEnvironment({ FABRIKA_IAM_ISSUER: 'https://iam.example.test' }),
 		installationApps: [{ app: 'otherapp', env: 'stage' }],
-		approved: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact) },
+		approved: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact), checker: '0.9.1' },
 		dryRun: false,
 		signal: new AbortController().signal,
 		log: () => {},

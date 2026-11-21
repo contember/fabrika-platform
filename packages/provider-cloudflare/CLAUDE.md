@@ -41,7 +41,7 @@ this one import.
   serves a contract registers the schema itself, so it must declare one. A declared one must say `contract: true`
   (`assertContractSchema`). `createCloudflareProxyWorker` takes an endpoint table or an installation table, and refuses `gates`.
 - **The job carries Control's approved access** (`CloudflareRunnerJob.approvedAccess`: the contract and its
-  digest). Control refuses a non-dry deploy without it, the job schema refuses one too, and it parses the contract and
+  digest, the framework release the application pins and the `@fabrika/check` release Control read it with). Control refuses a non-dry deploy without it, the job schema refuses one too, and it parses the contract and
   checks its digest. The runner writes it to `<workspace>/<runId>.access.json` beside the checkout and names it in
   `FABRIKA_APPROVED_ACCESS_FILE`, set after every job-supplied name; the executor reads it (`readApprovedAccess`)
   before the config runs. Unset outside a runner (a local deploy).
@@ -108,14 +108,14 @@ this one import.
 - **From `pinsGeneratedEntry` the application Worker runs only the entry the deploy regenerates** (`src/contract-support.ts`).
   For a release Control names at or above that gate, `assertGeneratedEntry` (`src/bounds.ts`) requires the Worker's
   `main` to resolve to `fabrika/entry.generated.ts` beside the config, and refuses `workflows`, `containers` and any
-  Durable Object binding but `FABRIKA_APPLICATION`: the generated entry exports none of them. The plan then always has
-  `build`: `pipeline.build` first, if any, then the application's own `fabrika app build --provider=cloudflare` in the
-  config's directory, so the entry and the inlined migrations come from the pinned commit, not the committed copies.
-  The CLI is the first `node_modules/.bin/fabrika` from the config's directory up to the executor's working directory
-  (where the runner installed), never above. It is checkout code whose failed output is logged, so it inherits nothing
-  of the executor's environment or the run's values: it gets `PATH`, `HOME` and
-  `TMPDIR` only. An older release, a Control that
-  names no release, and a local deploy keep their authored `main` and the old plan (ADR-0062).
+  Durable Object binding but `FABRIKA_APPLICATION`: the generated entry exports none of them. The `check` step (below)
+  then runs the application's own `fabrika app build --provider=cloudflare --config=<config>` in the config's
+  directory after the tests, so the entry and the inlined migrations come from the pinned commit, not the committed
+  copies. The CLI is the first `node_modules/.bin/fabrika` from the config's directory up to the executor's working
+  directory (where the runner installed), never above. It is checkout code whose failed output is logged, so it
+  inherits nothing of the executor's environment or the run's values: it gets `PATH`, `HOME` and `TMPDIR` only. An
+  older release and a Control that names no release keep their authored `main` (ADR-0062); a local deploy keeps it
+  too, and has no `check` step.
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
   workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. The executor
   parses what its job carries with `parseManagedEnvironment` (`@fabrika/auth-core`, in `command.ts`), and an entry is a
@@ -241,13 +241,35 @@ this one import.
   what was staged for exactly those mounts, or with it beside an authored `assets`.
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
-- **The plan is ordered step kinds**, not free-form work: `build` → `provision-resources` →
-  `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `build` is present when the config sets
-  `pipeline.build` or the release pins the generated entry. `runSteps` executes them in the
-  order supplied and never interprets a step's `kind`.
+- **The plan is ordered step kinds**, not free-form work: `build` → `check` → `provision-resources` →
+  `migrate` → `deploy-worker` → `reconcile-schema` → `sync-secrets`. `build` is present exactly when the config sets
+  `pipeline.build`, and `check` exactly when Control approved the run (`run.approved`, `platformResources: 'refuse'`):
+  a local deploy and fabrika's own components (`allow`) are not checked. `runSteps` executes them in the order supplied
+  and never interprets a step's `kind`.
+- **`check` refuses what the Zerops build refuses, in its order, before any resource is touched** (`runChecks`,
+  `src/provider.ts`). Every command gets only `PATH`, `HOME` and `TMPDIR`. The application's tests run first
+  (`contractChecks` of `@fabrika/app/build`). For a release that pins the generated entry, what they may have left
+  behind is then redone: every `node_modules` from where the runner installed down to the application directory (each
+  one the CLI is looked for in) is emptied, `bun install --frozen-lockfile` runs where the runner installed, the entry is
+  regenerated, the platform tsconfig is written afresh (never through a file or link the tests left), then `tsc` at the
+  platform TypeScript, `fabrika-check` at the checker release, and the application CLI's `SCHEMA_TYPES_CHECK` (only when
+  the contract declares a table). An older release keeps its authored `main`, and runs only
+  the tests and the checker, which reads no generated entry.
+  This guards against accidental leftovers, not a hostile test: Bun hardlinks installed files to its cache, so a test
+  that edits an installed dependency in place edits the cache, and the frozen reinstall brings the edit back. A
+  tamper-proof build needs a sandboxed runner, which is deferred.
+  The error names the check (`tests`, `tsc`, `fabrika-check`, `schema types are stale`) and keeps
+  the last 2,000 characters of its output. The checker release is `approvedAccess.checker`: a Control older than the
+  runner sends none, and the step then fails saying to upgrade Control; it never skips the checker. A release before
+  `checksSqliteSchema` (`0.9.0-dev.5`; every `cloudflare.<n>`) has a CLI that checks no SQLite schema, so that check is
+  left out and the log says so (ADR-0062). The schema check gets `--config=<config>` only for a config of another name,
+  and only from `SCHEMA_CHECK_CONFIG_SINCE` (`namesSchemaCheckConfig`): an older CLI refuses any argument, so for such a
+  config it is left out the same way, and the log says why.
 - **Only declared application secrets reach the Worker.** Control hands the deploy every secret stored for the
   environment; `sync-secrets` writes those `pipeline.secrets` names, and `deploy-worker` logs every other one by name
-  (`undeclaredSecrets`), never its value, so a secret set in the console but not declared does not vanish silently.
+  (`undeclaredSecrets`), never its value, so a secret set in the console but not declared does not vanish silently. A
+  declared one without a value fails the deploy before any step (`assertDeclaredSecrets`), naming every missing name and
+  the environment, never a value; `sync-secrets` would find it only after `deploy-worker` shipped the Worker.
 - **The proxy topology is: public Worker owns the route, private application Worker is bound to it.**
   IAM remains a global service binding, at its application entrypoint. See ADR-0022.
 - **`deploy-worker` deploys the generated configs in dependency order** (`src/deploy-order.ts`), not oblaka's,

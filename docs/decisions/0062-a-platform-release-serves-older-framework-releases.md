@@ -129,7 +129,8 @@ upgraded first.
 - The build step changes: a Zerops build runs `@fabrika/check` and `fabrika-source-maps` at the bundled reader's
   release, the newest patch of the application's minor, not at the installation's release and not at the exact patch
   the application pins (`@fabrika/check@0.4.1` has no `fabrika-source-maps`). The snapshot's `checker` names it. The
-  Cloudflare build runs no checker.
+  Cloudflare deploy's `check` step runs the checker at the same release, which the runner job carries as
+  `approvedAccess.checker`.
 - The migration classifier may only tighten for migrations an application adds after the platform release. A framework
   bundle migration of a release in the window keeps the verdict it had.
 - The MCP authoring rules describe the installation's release. An application pinned to an older one follows the skill

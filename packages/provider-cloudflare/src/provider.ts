@@ -1,4 +1,12 @@
-import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING, GENERATED_ENTRY_FILE } from '@fabrika/app/build'
+import {
+	CLOUDFLARE_APPLICATION_BINDING,
+	CLOUDFLARE_APPLICATION_CLASS,
+	CLOUDFLARE_FILES_BINDING,
+	type ContractCheck,
+	contractChecks,
+	GENERATED_ENTRY_FILE,
+	SCHEMA_TYPES_CHECK,
+} from '@fabrika/app/build'
 import {
 	type AppEnvironment,
 	appEnvironmentId,
@@ -24,7 +32,7 @@ import { type DeployStepResult, type ProviderManagedEnvironment, runSteps, type 
 import { isPolicyOrigin } from '@fabrika/proxy-core/headers'
 import { contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { createHash } from 'node:crypto'
-import { stat } from 'node:fs/promises'
+import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
 import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
@@ -39,11 +47,13 @@ import {
 	generateWranglerConfigs,
 } from './bounds'
 import { runnerWorkerGraph } from './checkout'
-import { type CloudflareCollaborators, defaultCloudflareCollaborators } from './collaborators'
+import { type CloudflareCollaborators, type CommandResult, defaultCloudflareCollaborators } from './collaborators'
 import { configSchema } from './config-schema'
 import {
 	assertCloudflareContract,
 	capsJobSegments,
+	checksSqliteSchema,
+	namesSchemaCheckConfig,
 	needsMinuteTick,
 	pinsGeneratedEntry,
 	runsInObject,
@@ -55,7 +65,7 @@ import { deployOrder } from './deploy-order'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
 import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE } from './proxy'
-import type { RunnerApprovedAccess } from './runner-protocol'
+import { CHECKOUT_INSTALL_ARGS, type RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 import { type AssetMount, assetMounts, SPA_ASSETS, SPA_ASSETS_DIRECTORY, stageSpaAssets } from './spa-assets'
 
@@ -201,12 +211,16 @@ const applicationRuntime = (run: ApplicationTarget, contract: ContractArtifact, 
 	entry,
 })
 
-/** Where `fabrika app build` runs: the application directory, beside its config and contract, and the config it reads. */
-interface EntryBuild {
+/** Where the check step works: the application directory, beside its config and contract, and the config it reads. */
+interface CheckTarget {
 	readonly cwd: string
 	readonly config: string
 	/** The directory the runner installed the checkout's dependencies in; the CLI is looked for no higher. */
 	readonly root: string
+	/** The release pins the generated entry: after the tests the deploy reinstalls, regenerates it and checks it. */
+	readonly regeneratesEntry: boolean
+	/** The contract declares a table, so the application commits its schema types (`SCHEMA_TYPES_CHECK`). */
+	readonly tables: boolean
 }
 
 /** The application's own CLI, where the checkout's `bun install` links it, as the Zerops build runs it. */
@@ -214,7 +228,10 @@ const APPLICATION_CLI = ['node_modules', '.bin', 'fabrika']
 
 const ENTRY_BUILD_ARGS = ['app', 'build', '--provider=cloudflare']
 
-/** All the CLI gets of the executor's environment: what Bun needs to run. */
+/** The config the application CLI reads when it is named nothing else; an older `fabrika db` takes no `--config`. */
+const DEFAULT_CONFIG = 'fabrika.config.ts'
+
+/** All a checkout command gets of the executor's environment: what Bun needs to run. */
 const ENTRY_BUILD_VARIABLES: readonly string[] = ['PATH', 'HOME', 'TMPDIR']
 
 const isFile = async (path: string): Promise<boolean> => {
@@ -225,12 +242,22 @@ const isFile = async (path: string): Promise<boolean> => {
 	}
 }
 
-/** The first `node_modules/.bin/fabrika` from the application directory up to `root`: a workspace links it at its root. */
-const applicationCli = async ({ cwd, root }: EntryBuild): Promise<string> => {
+/** The directories from the application directory up to `root`, where the CLI is looked for, nearest first. */
+const cliSearchPath = ({ cwd, root }: CheckTarget): readonly string[] => {
+	const dirs: string[] = []
 	for (let dir = cwd; isWithin(root, dir); dir = dirname(dir)) {
+		dirs.push(dir)
+		if (dir === root) break
+	}
+	return dirs
+}
+
+/** The first `node_modules/.bin/fabrika` from the application directory up to `root`: a workspace links it at its root. */
+const applicationCli = async (target: CheckTarget): Promise<string> => {
+	const { cwd, root } = target
+	for (const dir of cliSearchPath(target)) {
 		const candidate = resolve(dir, ...APPLICATION_CLI)
 		if (await isFile(candidate)) return candidate
-		if (dir === root) break
 	}
 	throw new Error(
 		`fabrika app build: no \`${APPLICATION_CLI.join('/')}\` from \`${cwd}\` up to \`${root}\`; the application installs \`@fabrika/cli\``,
@@ -244,7 +271,7 @@ const isWithin = (root: string, dir: string): boolean => {
 
 /**
  * The executor holds the platform credentials in its environment and the run's application and managed secrets in
- * memory, and the CLI is checkout code whose failed output reaches the log: it inherits nothing and gets only
+ * memory, and every check runs checkout code whose failed output reaches the log: it inherits nothing and gets only
  * `ENTRY_BUILD_VARIABLES`.
  */
 const entryBuildEnvironment = (): { readonly env: Record<string, string>; readonly omitEnv: readonly string[] } => {
@@ -256,17 +283,129 @@ const entryBuildEnvironment = (): { readonly env: Record<string, string>; readon
 	return { env, omitEnv: Object.keys(process.env) }
 }
 
-/** Regenerate the entry and the inlined migrations from the checkout, with the application's own release of the CLI. */
-const buildEntry = async (build: EntryBuild, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
-	const args = [...ENTRY_BUILD_ARGS, `--config=${build.config}`]
+/** What a failed check names: the check, as the step error says it. */
+type CheckSubject = 'tests' | 'tsc' | 'fabrika-check' | 'schema types are stale'
+
+/** The last 2,000 characters of a failed check's output: a test run or a type check reports its failures last. */
+const checkError = (subject: CheckSubject, result: { exitCode: number; stdout: string; stderr: string }): Error => {
+	const detail = (result.stderr.trim() || result.stdout.trim() || '(no output)').slice(-2000)
+	return new Error(`check failed: ${subject} (exit ${result.exitCode}): ${detail}`)
+}
+
+/** One checkout command in `cwd`, with only what `entryBuildEnvironment` passes on. */
+const runCheckoutCommand = async (
+	cf: CloudflareCollaborators,
+	run: CloudflareDeployRun,
+	cwd: string,
+	command: string,
+	args: readonly string[],
+): Promise<CommandResult> => {
+	assertRunning(run.signal)
+	return await cf.runCommand({ command, args: [...args], cwd, ...entryBuildEnvironment(), signal: run.signal })
+}
+
+/** Why the CLI of `release` cannot run the schema checks of the config `config`, or null when it can (ADR-0062). */
+const schemaCheckGap = (release: string | undefined, config: string): string | null => {
+	if (release === undefined || !checksSqliteSchema(release)) return `the CLI of framework ${release ?? '(unnamed)'} does not check a SQLite schema`
+	if (config !== DEFAULT_CONFIG && !namesSchemaCheckConfig(release)) {
+		return `the CLI of framework ${release} takes no \`--config\`, so it cannot read \`${config}\``
+	}
+	return null
+}
+
+/**
+ * The Zerops build's order, for a run Control approved. The application's tests run first, and what they may leave
+ * behind by accident is reinstalled, regenerated or written afresh after them; this does not stop a hostile test, since
+ * Bun hardlinks installed files to its cache, so a dependency edited in place comes back with the reinstall. For a
+ * release that pins the generated entry that is a frozen install into emptied `node_modules`, the entry (`fabrika app
+ * build`), the platform tsconfig, then `tsc`, the checker and the schema checks; an older release keeps its authored
+ * `main`, and only the checker follows, which reads no entry. The checker is the release Control approved the access
+ * with; without one the step fails rather than deploy unchecked code.
+ */
+const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
+	const checker = run.approved?.checker
+	if (checker === undefined) {
+		throw new Error(
+			'check: Control named no `@fabrika/check` release for this run, so the application cannot be checked; upgrade Control to the release of its runner, then deploy again',
+		)
+	}
+	const { tsconfig, checks: [tests, tsc, check] } = contractChecks(target.cwd, checker)
+	const release = run.approved?.framework
+	const gap = target.regeneratesEntry ? schemaCheckGap(release, target.config) : null
+	const schema = target.regeneratesEntry && gap === null
+	// An older `fabrika db` refuses any argument, so the default config is not named.
+	const config = target.config === DEFAULT_CONFIG ? [] : [`--config=${target.config}`]
+	const schemaTypes = schema && target.tables ? [...SCHEMA_TYPES_CHECK, ...config] : null
+	const entryArgs = [...ENTRY_BUILD_ARGS, `--config=${target.config}`]
 	if (run.dryRun) {
-		run.log(`  [dry-run] would run: fabrika ${args.join(' ')} in ${build.cwd}`)
+		const steps = target.regeneratesEntry
+			? [
+				tests.name,
+				`bun ${CHECKOUT_INSTALL_ARGS.join(' ')} into an empty node_modules`,
+				`fabrika ${entryArgs.join(' ')}`,
+				tsc.name,
+				check.name,
+				...(schemaTypes === null ? [] : [`fabrika ${schemaTypes.join(' ')}`]),
+			]
+			: [tests.name, check.name]
+		run.log(`  [dry-run] would run the checks in ${target.cwd}: ${steps.join(', ')}`)
 		return
 	}
-	assertRunning(run.signal)
-	const command = await applicationCli(build)
-	const result = await cf.runCommand({ command, args, cwd: build.cwd, ...entryBuildEnvironment(), signal: run.signal })
-	if (result.exitCode !== 0) throw commandError('fabrika app build', result)
+	const shell = async (step: ContractCheck): Promise<void> => {
+		const result = await runCheckoutCommand(cf, run, target.cwd, 'sh', ['-c', step.command])
+		if (result.exitCode !== 0) throw checkError(step.name, result)
+	}
+	await shell(tests)
+	if (!target.regeneratesEntry) {
+		await shell(check)
+		return
+	}
+	// Every `node_modules` the CLI is looked for in, so none the tests left on the way wins the lookup.
+	for (const dir of cliSearchPath(target)) await rm(resolve(dir, 'node_modules'), { recursive: true, force: true })
+	const installed = await runCheckoutCommand(cf, run, target.root, 'bun', CHECKOUT_INSTALL_ARGS)
+	if (installed.exitCode !== 0) throw commandError(`bun ${CHECKOUT_INSTALL_ARGS.join(' ')}`, installed)
+	const cli = await applicationCli(target)
+	const built = await runCheckoutCommand(cf, run, target.cwd, cli, entryArgs)
+	if (built.exitCode !== 0) throw commandError('fabrika app build', built)
+	// Written afresh, so a file or link the tests left under that name is never what `tsc` reads or what is written through.
+	const tsconfigPath = resolve(target.cwd, tsconfig.write)
+	await mkdir(dirname(tsconfigPath), { recursive: true })
+	await rm(tsconfigPath, { force: true })
+	await writeFile(tsconfigPath, `${tsconfig.lines.join('\n')}\n`, { flag: 'wx' })
+	await shell(tsc)
+	await shell(check)
+	if (gap !== null) {
+		run.log(`  ${gap}; the schema types are not checked`)
+		return
+	}
+	if (schemaTypes === null) {
+		run.log('  the contract declares no table, so there are no schema types to check')
+		return
+	}
+	const result = await runCheckoutCommand(cf, run, target.cwd, cli, schemaTypes)
+	if (result.exitCode !== 0) throw checkError('schema types are stale', result)
+}
+
+/**
+ * Every secret `pipeline.secrets` declares that the run has no value for, refused before any step runs: found in
+ * `sync-secrets`, it would fail the run after `deploy-worker` had shipped a Worker without it. Names only, never a value.
+ */
+const assertDeclaredSecrets = (config: CloudflareAppConfig, run: CloudflareDeployRun, platformResources: 'refuse' | 'allow'): void => {
+	// An own property only: `constructor` or `toString` would otherwise read as set.
+	const missing = [...new Set(config.pipeline?.secrets ?? [])].filter((name) => {
+		if (!Object.hasOwn(run.secrets, name)) return true
+		const value: unknown = run.secrets[name]
+		return typeof value !== 'string' || value === ''
+	})
+	if (missing.length === 0) return
+	const names = missing.map((name) => `\`${name}\``).join(', ')
+	const where = platformResources === 'allow' ? "in the deploy's environment" : 'in the console'
+	const declared = `declared in ${basename(run.configPath)}`
+	throw new Error(
+		missing.length === 1
+			? `cloudflare: secret ${names} is ${declared} but has no value on environment \`${run.env}\`; set it ${where} before deploying`
+			: `cloudflare: secrets ${names} are ${declared} but have no value on environment \`${run.env}\`; set them ${where} before deploying`,
+	)
 }
 
 /**
@@ -478,8 +617,8 @@ interface StepEnv {
 	readonly bounds: DeploymentBounds
 	/** The managed credentials the application Worker's version is uploaded with, as Worker secrets. */
 	readonly managedSecrets: Readonly<Record<string, string>>
-	/** Where the build step regenerates the entry, after `pipeline.build`; null for a release that keeps its authored `main`. */
-	readonly entryBuild: EntryBuild | null
+	/** What the check step checks: an application deploy Control approved; null for a local or a platform deploy. */
+	readonly checks: CheckTarget | null
 	/**
 	 * The mounts whose files the deploy stages into the application Worker's assets, from the application's root; null
 	 * when the Worker declares its own `assets` or no mount serves files.
@@ -581,7 +720,11 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				})
 				if (result.exitCode !== 0) throw commandError(`build (\`${build}\`)`, result)
 			}
-			if (env.entryBuild !== null) await buildEntry(env.entryBuild, run, cf)
+			return
+		}
+		case 'check': {
+			if (env.checks === null) throw new Error('check: the deploy checks only an application deploy Control approved')
+			await runChecks(env.checks, run, cf)
 			return
 		}
 		case 'provision-resources': {
@@ -689,6 +832,7 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			const secretsDir = resolve(dir, applicationWorker(worker).options.dir)
 			for (const name of config.pipeline?.secrets ?? []) {
 				const value = run.secrets[name]
+				// Unreachable after `assertDeclaredSecrets`; kept so this step never pipes an absent value.
 				if (value === undefined) throw new Error(`sync-secrets: missing value for secret \`${name}\` (not in run.secrets)`)
 				if (dryRun) {
 					run.log(`  [dry-run] would run: wrangler secret put ${name} (value piped from run.secrets)`)
@@ -793,6 +937,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		throw new Error(`Cloudflare config declares app "${loaded.config.id}", expected "${run.appId}"`)
 	}
 	const platformResources = options.platformResources ?? 'refuse'
+	assertDeclaredSecrets(loaded.config, run, platformResources)
 	const served = await servedContract(cf, loaded.cwd, run.approved)
 	const contract = served?.contract ?? null
 	// Fabrika's own components (`allow`) are its trusted installation path; an application needs a contract.
@@ -866,13 +1011,20 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		reconcileSchema: options.reconcileSchema ?? defaultReconcileSchema,
 		bounds,
 		managedSecrets: managed.secrets,
-		entryBuild: runtime !== null && runtime.entry !== null
-			? { cwd: loaded.cwd, config: basename(resolve(run.cwd, run.configPath)), root: resolve(run.cwd) }
+		// A local deploy and fabrika's own components are not checked: only a run Control approved names a checker.
+		checks: platformResources === 'refuse' && run.approved !== undefined
+			? {
+				cwd: loaded.cwd,
+				config: basename(resolve(run.cwd, run.configPath)),
+				root: resolve(run.cwd),
+				regeneratesEntry: runtime !== null && runtime.entry !== null,
+				tables: Object.keys(run.approved.contract.tables).length > 0,
+			}
 			: null,
 		spaAssets,
 		generatedConfigs: [],
 	}
-	const result = await runSteps(buildPlan(loaded.config, worker, env.entryBuild !== null), run, (step) => runStep(step, env))
+	const result = await runSteps(buildPlan(loaded.config, worker, env.checks), run, (step) => runStep(step, env))
 	return { appId: run.appId, env: run.env, ...result }
 }
 

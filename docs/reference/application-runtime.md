@@ -1707,7 +1707,7 @@ Control joins the two sides (ADR-0022 "Principal kinds"):
 ## Who enforces each guarantee
 
 What the paved road promises an application, and which layer keeps each promise. The layers: **types** (tsc, at the
-line that breaks it), **checker** (`fabrika-check`, a refusal fails the build), **boot** (`boot` refuses to start),
+line that breaks it), **checker** (`fabrika-check`, a refusal fails the Zerops build and the Cloudflare deploy's `check` step), **boot** (`boot` refuses to start),
 **runtime** (the call is refused before anything is sent), **proxy** (the one enforcement decision, ADR-0022) and
 **review** (a line of the approval diff, `packages/control/src/approval/diff.ts`, that a human approves on a protected
 environment, ADR-0050). The data layer runs in the application's process: it stops honest mistakes and makes a bypass

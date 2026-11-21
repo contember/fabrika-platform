@@ -17,6 +17,7 @@ import {
 	RUNNER_PORT,
 	RUNNER_RUN_PATH,
 	RUNNER_STATUS_PATH,
+	runnerJobRefusal,
 } from '@fabrika/provider-cloudflare/runner'
 import { Runner, type RunnerEnv } from './runner'
 
@@ -52,7 +53,7 @@ export const createServer = (env: RunnerEnv): RunnerServer => {
 		}
 		const parsed = cloudflareRunnerJobSchema.safeParse(body)
 		if (!parsed.success) {
-			return json({ error: 'body is not a valid CloudflareRunnerJob' }, 400)
+			return json({ error: `body is not a valid CloudflareRunnerJob: ${runnerJobRefusal(parsed.error)}` }, 400)
 		}
 		const active = new Runner(parsed.data, env)
 		runner = active
