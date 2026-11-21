@@ -265,9 +265,10 @@ if (postgres !== null) {
   requests left (`await kit.drain()`). Files then share modules, so a test helper keeps nothing between files: no cache
   of seeded keys, no hook registered when its module loads, no clock or `mock.module` left set. Import the test kits
   from test files only (`test-only-import`).
-- The platform build runs the `test` script of `package.json` when there is one, and `bun test --isolate
-  --pass-with-no-tests` when there is none, before any database exists. Put the suite's mode and paths in that script
-  (`"test": "bun test --parallel=4 --no-isolate src web"`), and leave out every test that needs a running application.
+- The platform build runs the `test` script of `package.json` when there is one (with its `pretest` and `posttest`),
+  and `bun test --isolate --pass-with-no-tests` when there is none, before any database exists. Put the suite's mode
+  and every test directory in that script (`"test": "bun test --parallel=4 --no-isolate src web tools"`), and leave out
+  every test that needs a running application.
 - No `.skip`, `.only` or test without an assertion, and no `mock.module` of `bun:test` or `@fabrika/*`.
 
 ## The leak sweep (opt in)

@@ -218,16 +218,40 @@ describe("the build's tests command", () => {
 		expect(result.stderr).toContain('fabrika-tests: 1 Postgres-backed test files did not run, because the build has no database: a.test.ts')
 	})
 
-	test('runs bun test --isolate --pass-with-no-tests without a test script', async () => {
-		// The first file leaves a global behind; only a run that isolates each file passes the second.
-		const leaking = "import { expect, test } from 'bun:test'\ntest('leaks', () => { Reflect.set(globalThis, 'leaked', 1); expect(1).toBe(1) })\n"
-		const checking = "import { expect, test } from 'bun:test'\ntest('is isolated', () => expect(Reflect.get(globalThis, 'leaked')).toBeUndefined())\n"
-		const isolated = await run('0.9.1', { 'package.json': manifest({ build: 'exit 1' }), 'a.test.ts': leaking, 'b.test.ts': checking })
-		expect(isolated.stderr).toContain('fabrika-tests: runs bun test --isolate --pass-with-no-tests')
-		expect(isolated.stderr).toContain('2 pass')
-		expect(isolated.code).toBe(0)
-		const collected = await run('0.9.1', { 'package.json': manifest({}), 'a.test.ts': PASSING, 'tests/browser.test.ts': FAILING })
-		expect(collected.code).not.toBe(0)
+	test('counts the skipped Postgres-backed files of a test script that sends its stderr to stdout', async () => {
+		const result = await run('0.9.1', {
+			'package.json': manifest({ test: 'bun test src 2>&1' }),
+			'src/a.test.ts': `console.warn('a.test.ts skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests')\n${PASSING}`,
+		})
+		expect(result.code).toBe(0)
+		expect(result.stderr).toContain('fabrika-tests: 1 Postgres-backed test files did not run, because the build has no database: a.test.ts')
+	})
+
+	// The first file leaves a global behind; only a run that isolates each file passes the second.
+	const LEAKING = "import { expect, test } from 'bun:test'\ntest('leaks', () => { Reflect.set(globalThis, 'leaked', 1); expect(1).toBe(1) })\n"
+	const CHECKING = "import { expect, test } from 'bun:test'\ntest('is isolated', () => expect(Reflect.get(globalThis, 'leaked')).toBeUndefined())\n"
+
+	test('runs bun test --isolate without a test script', async () => {
+		const result = await run('0.9.1', { 'package.json': manifest({ build: 'exit 1' }), 'a.test.ts': LEAKING, 'b.test.ts': CHECKING })
+		expect(result.stderr).toContain('fabrika-tests: runs bun test --isolate --pass-with-no-tests')
+		expect(result.stderr).toContain('2 pass')
+		expect(result.code).toBe(0)
+	})
+
+	test('runs bun test --isolate for an empty or a non-string test script', async () => {
+		for (const scripts of [{ test: ' ' }, { test: ['bun test'] }]) {
+			const result = await run('0.9.1', { 'package.json': JSON.stringify({ name: 'notes', scripts }), 'a.test.ts': LEAKING, 'b.test.ts': CHECKING })
+			expect(result.stderr).toContain('fabrika-tests: runs bun test --isolate --pass-with-no-tests')
+			expect(result.code).toBe(0)
+		}
+	})
+
+	test('without a test script, every test file is collected', async () => {
+		const result = await run('0.9.1', { 'package.json': manifest({}), 'a.test.ts': PASSING, 'tests/browser.test.ts': FAILING })
+		expect(result.code).not.toBe(0)
+	})
+
+	test('without a test script or without package.json, an application with no tests passes', async () => {
 		const empty = await run('0.9.1', { 'package.json': manifest({}) })
 		expect(empty.code).toBe(0)
 		expect(empty.stderr).toContain('fabrika-tests: no Postgres-backed test file skipped')

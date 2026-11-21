@@ -102,14 +102,19 @@ const testsCommand = (ownScript: boolean): string =>
 			? [
 				"const manifest = Bun.file('package.json');",
 				'const scripts = (await manifest.exists()) ? (await manifest.json()).scripts : undefined;',
-				"const own = typeof scripts?.test === 'string';",
+				"const own = typeof scripts?.test === 'string' && scripts.test.trim().length > 0;",
 				`console.warn('${TESTS_REPORT_PREFIX} ' + (own ? 'runs the test script of package.json' : 'runs bun test --isolate --pass-with-no-tests'));`,
-				`const child = Bun.spawn(own ? [process.execPath, 'run', 'test'] : ${DEFAULT_TESTS}, { stdout: 'inherit', stderr: 'pipe' });`,
+				`const child = Bun.spawn(own ? [process.execPath, 'run', 'test'] : ${DEFAULT_TESTS}, { stdout: 'pipe', stderr: 'pipe' });`,
+				// A script may send its stderr to stdout, so both streams are read, each whole, for the skip lines.
+				"const read = async (stream, sink) => { const decoder = new TextDecoder(); let text = ''; for await (const chunk of stream) { sink.write(chunk); text += decoder.decode(chunk, { stream: true }) } return text };",
+				'const output = (await Promise.all([read(child.stdout, process.stdout), read(child.stderr, process.stderr)])).join(String.fromCharCode(10));',
 			]
-			: [`const child = Bun.spawn(${DEFAULT_TESTS}, { stdout: 'inherit', stderr: 'pipe' });`]),
-		'const decoder = new TextDecoder();',
-		"let output = '';",
-		'for await (const chunk of child.stderr) { process.stderr.write(chunk); output += decoder.decode(chunk, { stream: true }) }',
+			: [
+				`const child = Bun.spawn(${DEFAULT_TESTS}, { stdout: 'inherit', stderr: 'pipe' });`,
+				'const decoder = new TextDecoder();',
+				"let output = '';",
+				'for await (const chunk of child.stderr) { process.stderr.write(chunk); output += decoder.decode(chunk, { stream: true }) }',
+			]),
 		'const code = await child.exited;',
 		`const marker = '${DATABASE_TEST_SKIP_MARKER}';`,
 		'const skipped = output.split(String.fromCharCode(10)).filter((line) => line.includes(marker)).map((line) => line.slice(0, line.indexOf(marker)).trim());',

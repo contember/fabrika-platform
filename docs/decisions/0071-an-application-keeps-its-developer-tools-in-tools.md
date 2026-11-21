@@ -47,8 +47,9 @@ We will treat `tools/` at the application root as a developer's tools.
   loads it. A Cloudflare deploy bundles from the generated entrypoint and never reaches it.
 - An application's own build commands could still run a tool. They are the author's, and the checker never claimed to
   judge them.
-- A tool's tests are tests like any other: the platform build's tests step (`bun test` over the repository) runs them.
-  That step runs before
+- A tool's tests are tests like any other: the platform build's tests step runs them, through the application's `test`
+  script, which names `tools` among its paths, or through `bun test --isolate` over the repository without one. The
+  script is the author's, like the build commands above. That step runs before
   `fabrika-check`, so the checker never vouched for what a test does in the build, in `tools/` or anywhere else. A
   tool's test must therefore pass in the build: it tests the tool's logic, and reaches no keychain and no network.
 - The checker's rules are the framework API: an application meets the change when it raises its `@fabrika/check` pin.
