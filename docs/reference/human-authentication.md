@@ -302,7 +302,8 @@ write the cookie.
 
 An invitation's "sign in first" sends the browser to the application's
 address, so the answer remembers the invitation's language in IAM's own cookie
-and the sign-in page the proxy's bounce opens speaks it; the invitation link the
+and the sign-in page the proxy's bounce opens speaks it, unless the
+application's own language cookie names another; the invitation link the
 person then opens again speaks theirs too. Without either cookie,
 on a browser where the person has not signed in yet, that page follows the
 application's or the browser's language.

@@ -189,9 +189,10 @@ function creationRefused(
 /**
  * The page that asks the person to sign in with the invited address and open the link again. The application's own
  * address signs the browser in through its handoff; without one, IAM's own sign-in does. The handoff's sign-in page is
- * built from the proxy's bounce and carries no `?locale=` of IAM's, so the person's language, where IAM knows it, is
- * remembered for this browser (`rememberLocaleCookie`) and that page speaks it too. IAM's own sign-in carries it as
- * `?locale=`. It picks words only.
+ * built from the proxy's bounce and carries no `?locale=` of IAM's, so the page's language (`personLocale`: the
+ * invitation's, else the link's `?locale=`, else IAM's cookie) is remembered for this browser (`rememberLocaleCookie`)
+ * and that page speaks it too, unless the application's own language cookie names another. IAM's own sign-in carries
+ * it as `?locale=`. It picks words only.
  */
 function signInFirst(services: Services, presentation: AppPresentation): Response {
 	const locale = presentation.personLocale

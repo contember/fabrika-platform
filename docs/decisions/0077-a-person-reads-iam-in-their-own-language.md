@@ -47,7 +47,8 @@ every application.**
    the application). One rule in `@fabrika/proxy-core` serves the Cloudflare proxy Worker and the Zerops proxy alike.
 6. **An invitation's "sign in first" remembers the person's language.** It sends the browser to the application's
    address, whose proxy starts a sign-in that IAM's `?locale=` cannot reach, so the answer sets
-   `__Host-fabrika_locale` on IAM's host to the invitation's language (else the link's). The sign-in that follows
+   `__Host-fabrika_locale` on IAM's host to the invitation's language (else the link's). An application's own language
+   cookie, passed by its proxy as `?locale=`, still outranks it on that sign-in. The sign-in that follows
    replaces or clears it as any sign-in does; the invitation link the person then opens again carries the
    invitation's language itself.
 
