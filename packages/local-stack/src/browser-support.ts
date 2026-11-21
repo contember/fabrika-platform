@@ -219,8 +219,9 @@ async function operationsRpc(session: string, method: string, input: unknown): P
 			'sec-fetch-site': 'same-origin',
 		},
 		body: JSON.stringify({ method, input }),
+		redirect: 'manual',
 	})
-	const value: unknown = await response.json()
+	const value: unknown = await response.json().catch(() => null)
 	const parsed = rpcResponseSchema.safeParse(value)
 	if (!response.ok || !parsed.success) {
 		throw new Error(`Operations RPC fixture ${method} failed with status ${response.status}`)

@@ -18,7 +18,7 @@ import ts from 'typescript-platform'
 // `fixtures/credentialed-fetch.ts` shows each form, marked `// flagged` or `// passes:`.
 
 const root = resolve(import.meta.dir, '../..')
-const CREDENTIAL = /authorization|bearer|api[-_]?key|secret|token/i
+const CREDENTIAL = /authorization|bearer|api[-_]?key|secret|token|cookie/i
 
 function calleeName(node: ts.Expression): string {
 	if (ts.isIdentifier(node)) return node.text

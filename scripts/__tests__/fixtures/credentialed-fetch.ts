@@ -7,6 +7,7 @@ export async function requests(doFetch: typeof fetch): Promise<void> {
 	await fetch('https://api.test', { headers: { authorization: `Bearer ${key}` }, redirect: 'manual' }) // passes: says what a redirect does
 	await doFetch('https://api.test', { method: 'POST', headers: { 'x-api-key': key }, body: '{}' }) // flagged
 	await doFetch('https://api.test', { headers: { accept: 'application/json' } }) // passes: no credential
+	await doFetch('https://api.test', { method: 'POST', headers: { cookie: `session=${key}` }, body: '{}' }) // flagged
 	await send(new Request('https://api.test', { headers: { 'X-Service-Secret': key } })) // flagged
 	await fetch('https://api.test', { ...{ redirect: 'error' as const }, headers: { authorization: key } }) // passes: a spread is not read
 	const headers = new Headers({ accept: 'application/json' })
