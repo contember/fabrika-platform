@@ -26,7 +26,7 @@ rules for application code.
 We will treat `tools/` at the application root as a developer's tools.
 
 - A module under `tools/` (its tests included) is checked only for how it is written (`type-assertion`, `any-type`,
-  `suppression-comment`, `capability-widening`), `key-literal`, `package-replacement` and the rules of its
+  `suppression-comment`, which skip a test file as everywhere; `capability-widening`), `key-literal`, `package-replacement` and the rules of its
   tests. Every other rule is lifted there.
 - `tool-import` (a refusal) refuses a value load or re-export of a module under `tools/` from any module outside it:
   a server module, the SPA, a test, `fabrika.config.ts`, through an import map, a `tsconfig` path or a literal

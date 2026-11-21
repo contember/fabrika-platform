@@ -115,6 +115,12 @@ interface ContractDependent {
 }
 
 /**
+ * Whether `type-assertion`, `any-type` and `suppression-comment` (how a module's own source is written) apply: not to
+ * a generated module, nor to a test file, which never ships and which `test-only-import` keeps out of shipped code.
+ */
+const isHeldToWriting = (file: string, generated: boolean): boolean => !generated && !isTestFile(file)
+
+/**
  * A module under `tools/` runs on a developer's machine, never in the application: it is held to how its source is
  * written (`type-assertion`, `any-type`, `capability-widening`, `suppression-comment`), `key-literal`, a `declare
  * module` of a trusted package and the rules of its tests. Every other module rule guards code that runs in the
@@ -123,18 +129,19 @@ interface ContractDependent {
 const checkToolModule = (module: ParsedModule, generated: boolean, findings: Finding[]): void => {
 	const report = reporter(module.file, findings)
 	const isTest = isTestFile(module.file)
+	const writing = isHeldToWriting(module.file, generated)
 	walk(module.program, (node, ancestors) => {
 		checkKeyLiteralNode(node, report)
-		if (!generated) checkTypeNode(node, report)
+		if (writing) checkTypeNode(node, report)
 		checkCapabilityNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, ancestors, report)
 		checkMockModule(node, report)
 	})
-	if (!generated) checkComments(module.comments, report)
+	if (writing) checkComments(module.comments, report)
 }
 
-/** A generated module (`isGeneratedModule`) is not held to `type-assertion`, `any-type`, `suppression-comment` and the hints. */
+/** A generated module (`isGeneratedModule`) is not held to `type-assertion`, `any-type`, `suppression-comment` and the hints; a test file not to the first three. */
 const checkSourceModule = (
 	module: ParsedModule,
 	generated: boolean,
@@ -148,6 +155,7 @@ const checkSourceModule = (
 	const report = reporter(module.file, findings)
 	const isGeneratedEntry = module.file === GENERATED_ENTRY_FILE
 	const isTest = isTestFile(module.file)
+	const writing = isHeldToWriting(module.file, generated)
 	const deferred = (at: AstNode, rule: 'cross-app-fetch' | 'url-endpoint' | 'on-conflict-index', message: string, allowed: string): Finding[] => {
 		const found: Finding[] = []
 		reporter(module.file, found)(at, rule, message, allowed)
@@ -177,14 +185,14 @@ const checkSourceModule = (
 	walk(module.program, (node, ancestors) => {
 		checkRuntimeNode(node, ancestors, context)
 		checkFrameworkWrite(node, ancestors, trusted, report)
-		if (!generated) checkTypeNode(node, report)
+		if (writing) checkTypeNode(node, report)
 		checkCapabilityNode(node, report)
 		checkAmbientModule(node, report)
 		if (isTest) checkTestNode(node, ancestors, report)
 		checkMockModule(node, report)
 		checkStructureNode(place, node, report)
 	})
-	if (!generated) checkComments(module.comments, report)
+	if (writing) checkComments(module.comments, report)
 	checkModuleReferences(module.file, references, mappings, exists, report, isGeneratedEntry, isTest)
 }
 

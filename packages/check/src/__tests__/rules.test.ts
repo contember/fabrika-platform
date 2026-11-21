@@ -977,6 +977,68 @@ describe("a developer's tool", () => {
 	})
 })
 
+describe('a test file', () => {
+	/** A test helper's cast, `any` and a suppression comment: how its source is written. */
+	const HELPER = [
+		'export const handle = <T>(value: unknown): T => value as T',
+		'// @ts-expect-error -- a fake row',
+		'export const loose: any = handle(1)',
+		'',
+	].join('\n')
+	const SUITE = [
+		"import { expect, test } from 'bun:test'",
+		'',
+		"test('reads', () => expect(JSON.parse('1') as number).toBe(1))",
+		'',
+	].join('\n')
+
+	test('is not held to type-assertion, any-type or suppression-comment, under __tests__/ or named *.test.ts', async () => {
+		expect(
+			await check({
+				'src/__tests__/memory-handle.ts': HELPER,
+				'src/notes/__tests__/notes.test.ts': SUITE,
+				'src/notes/logic.test.ts': SUITE,
+				'tools/__tests__/client.ts': HELPER,
+				'tools/cli.test.ts': SUITE,
+			}),
+		).toEqual([])
+	})
+
+	test('the same source outside a test file is still refused', async () => {
+		const findings = await check({ 'src/memory-handle.ts': HELPER, 'src/notes/logic.ts': SUITE, 'tools/client.ts': HELPER })
+		expect(findings.map(({ file, line, rule }) => `${file}:${line} ${rule}`)).toEqual([
+			'src/memory-handle.ts:1 type-assertion',
+			'src/memory-handle.ts:2 suppression-comment',
+			'src/memory-handle.ts:3 any-type',
+			'src/notes/logic.ts:3 type-assertion',
+			'tools/client.ts:1 type-assertion',
+			'tools/client.ts:2 suppression-comment',
+			'tools/client.ts:3 any-type',
+		])
+	})
+
+	test('is still held to every rule about what it does and what it loads', async () => {
+		const findings = await check({
+			'src/__tests__/helpers.ts': [
+				"import type { Ref } from '@fabrika/app'",
+				'export type Wide = Ref<string, string>',
+				"export const key = 'px_live'",
+				'export const url = process.env.DATABASE_URL',
+				'',
+			].join('\n'),
+			'src/notes.test.ts': "import { expect, test } from 'bun:test'\n\ntest.skip('reads', () => expect(1 as number).toBe(1))\n",
+			'src/app.ts': "export { key } from './__tests__/helpers.ts'\n",
+		})
+		expect(findings.map(({ file, line, rule }) => `${file}:${line} ${rule}`)).toEqual([
+			'src/__tests__/helpers.ts:2 capability-widening',
+			'src/__tests__/helpers.ts:3 key-literal',
+			'src/__tests__/helpers.ts:4 env-read',
+			'src/app.ts:1 test-only-import',
+			'src/notes.test.ts:3 skipped-test',
+		])
+	})
+})
+
 describe('literal: a schema method on an imported literal schema', () => {
 	const withStatus = (schemas: string, input: string): Readonly<Record<string, string>> => ({
 		...CLEAN_APPLICATION,
