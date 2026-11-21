@@ -1,6 +1,5 @@
 import { createWebSocketManager, SessionManager, type WSData } from '@fabrika/canvas-kernel/server'
-import { corsHeaders, dispatch, jsonResponse } from '@fabrika/daemon-kit'
-import { randomBytes } from 'crypto'
+import { corsHeaders, createCapability, dispatch, jsonResponse, writeCapabilityFile } from '@fabrika/daemon-kit'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { admitRequest } from './admission'
@@ -25,9 +24,8 @@ const VERSION = JSON.parse(readFileSync(join(dirname(import.meta.dir), '..', 'pa
 mkdirSync(TEMP_DIR, { recursive: true, mode: 0o700 })
 chmodSync(TEMP_DIR, 0o700)
 writeFileSync(PID_FILE, String(process.pid))
-const cliAuthToken = randomBytes(32).toString('base64url')
-writeFileSync(CLI_AUTH_FILE, cliAuthToken, { mode: 0o600 })
-chmodSync(CLI_AUTH_FILE, 0o600)
+const cliAuthToken = createCapability()
+writeCapabilityFile(CLI_AUTH_FILE, cliAuthToken)
 
 const sessionManager = new SessionManager(SESSIONS_DIR)
 const wsManager = createWebSocketManager(sessionManager)
