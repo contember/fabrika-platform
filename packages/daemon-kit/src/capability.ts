@@ -1,5 +1,5 @@
 import { randomBytes, timingSafeEqual } from 'crypto'
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'fs'
 import { dirname } from 'path'
 
 /**
@@ -11,15 +11,16 @@ export function createCapability(): string {
 }
 
 /**
- * Writes the capability for the owner's CLI: the directory `0700`, the file `0600`. Throws when either cannot be made so,
+ * Writes the capability for the owner's CLI into a new file: the directory `0700`, the file `0600`. Throws when either cannot be made so,
  * e.g. a directory another user created first.
  */
 export function writeCapabilityFile(path: string, capability: string): void {
 	const directory = dirname(path)
 	mkdirSync(directory, { recursive: true, mode: 0o700 })
 	chmodSync(directory, 0o700)
-	writeFileSync(path, capability, { mode: 0o600 })
-	chmodSync(path, 0o600)
+	// A new file, never one already there: a symlink or a file planted before the directory was private is not followed.
+	rmSync(path, { force: true })
+	writeFileSync(path, capability, { mode: 0o600, flag: 'wx' })
 }
 
 /** The capability a running daemon wrote, or undefined when there is none. Read per request: a restarted daemon writes a new one. */

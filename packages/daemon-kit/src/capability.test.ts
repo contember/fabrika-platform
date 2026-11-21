@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'fs'
+import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createCapability, matchesCapability, readCapabilityFile, writeCapabilityFile } from './capability'
@@ -30,6 +30,18 @@ test('the file is written 0600 in a 0700 directory and read back trimmed', () =>
 	writeCapabilityFile(path, 'capability')
 	expect(statSync(directory).mode & 0o777).toBe(0o700)
 	expect(statSync(path).mode & 0o777).toBe(0o600)
+	expect(readCapabilityFile(path)).toBe('capability')
+})
+
+test('a symlink at the path is replaced, never followed', () => {
+	const directory = scratchDir()
+	const target = join(directory, 'elsewhere')
+	writeFileSync(target, 'untouched')
+	const path = join(directory, 'token')
+	symlinkSync(target, path)
+	writeCapabilityFile(path, 'capability')
+	expect(lstatSync(path).isSymbolicLink()).toBe(false)
+	expect(readFileSync(target, 'utf-8')).toBe('untouched')
 	expect(readCapabilityFile(path)).toBe('capability')
 })
 
