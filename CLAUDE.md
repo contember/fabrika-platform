@@ -155,6 +155,14 @@ needed only when there is no app config. Platform commands load the provider's
   cast — ask first.
 - **NEVER log credentials or secret values.** They flow control-plane → `RunnerJob` → child env (credentials) or a run file beside the checkout (an application's secrets) only;
   on error log a short message, never an error object that may carry a clone URL with an embedded token.
+- **An outbound request that carries a credential never follows a redirect.** A bearer, an API key or a secret header,
+  a secret in the body, or a request whose answer decides where a credential goes or which keys to trust (OIDC
+  discovery, a JWKS) sets `redirect: 'manual'` and treats a 3xx as not ok. A followed redirect re-sends custom headers
+  (on Workers every header) and, on 307/308, the body to the `Location` origin; Workers refuse `redirect: 'error'`.
+  Exceptions: a presigned URL (the signature is in the URL, which a redirect does not carry), the proxy passing an
+  application's own redirect to its caller, and Control forwarding the console's request to IAM, which keeps that
+  request's `manual` mode. `scripts/__tests__/credentialed-fetch.test.ts` catches the plain form; it cannot see
+  headers built in another function or an init spread into the literal, so a fetch wrapper follows the rule by review.
 - **The proxy is the ONLY enforcement point: exactly one enforcement decision, in `@fabrika/proxy-core`
   over `@fabrika/auth-core`'s planner, and only the proxy runs it** (ADR-0022). App services are not
   publicly routed; an application reads the proxy-injected `X-Fabrika-Token`, verifies it locally, and

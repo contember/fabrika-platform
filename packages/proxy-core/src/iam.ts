@@ -214,6 +214,8 @@ export class HttpIamGateway implements IamGateway, DelegationIssuer {
 				headers,
 				body,
 				signal: AbortSignal.timeout(this.timeoutMs),
+				// The proxy key and the credential in the body must never reach a redirect target; a 3xx is not ok below.
+				redirect: 'manual',
 			})
 		} catch {
 			// Deliberately swallow the cause: a fetch error stringifies the request URL and, on some

@@ -157,6 +157,29 @@ describe('a hostile or broken IAM always denies', () => {
 		})
 	}
 
+	test.each([307, 308])('a %d is not followed, so the proxy key and the px_ key stay at the configured origin', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: async (request) => {
+				arrivals.push(await request.text())
+				return Response.json({ ok: true, token: 'jwt', expiresAt: 10 })
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const iam = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			const gateway = new HttpIamGateway({ origin: `http://127.0.0.1:${iam.port}`, key: 'proxy-key-0123456789abcdef' })
+			await expect(gateway.mintFromKey({ app: 'a', key: 'px_k', requestId: 'r' })).rejects.toThrow(IamUnavailableError)
+			expect(arrivals).toEqual([])
+		} finally {
+			await iam.stop(true)
+			await target.stop(true)
+		}
+	})
+
 	test('a rejected fetch raises IamUnavailableError and carries no cause', async () => {
 		const fetchImpl: FetchLike = () => Promise.reject(new Error('connect ECONNREFUSED https://iam.test?session=SECRET'))
 		const gateway = new HttpIamGateway({ origin: 'https://iam.test', fetch: fetchImpl })

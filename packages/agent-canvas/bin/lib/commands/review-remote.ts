@@ -61,8 +61,10 @@ export async function createRemoteReview(project: string, appUrl: URL): Promise<
 		method: 'POST',
 		headers: { 'Content-Type': 'application/json', ...(config.authToken === undefined ? {} : { Authorization: `Bearer ${config.authToken}` }) },
 		body: JSON.stringify({ origins: [appUrl.origin] }),
+		// The bearer must never reach a redirect target; a 3xx is not ok below.
+		redirect: 'manual',
 	})
-	const body: unknown = await response.json()
+	const body: unknown = await response.json().catch(() => null)
 	if (!response.ok) {
 		const error = errorSchema.safeParse(body)
 		throw new Error(`The share worker refused the review project: ${error.success ? error.data.error : response.status}`)
@@ -175,8 +177,9 @@ export class RemoteReviewBackend {
 				...(body === undefined ? {} : { 'Content-Type': 'application/json' }),
 			},
 			...(body === undefined ? {} : { body: JSON.stringify(body) }),
+			redirect: 'manual',
 		})
-		const result: unknown = await response.json()
+		const result: unknown = await response.json().catch(() => null)
 		if (!response.ok) {
 			const error = errorSchema.safeParse(result)
 			throw new Error(error.success ? error.data.error : `The share worker answered ${response.status}`)

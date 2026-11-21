@@ -1,5 +1,5 @@
-// The request half both HTTP adapters share: the caller's signal, the adapter's own timeout, and how a thrown fetch
-// is classified. Messages name the provider and nothing the request carried.
+// The request half both HTTP adapters share: the caller's signal, the adapter's own timeout, how a thrown fetch is
+// classified, and a redirect that is never followed. Messages name the provider and nothing the request carried.
 
 import { EmailDeliveryError, type EmailFetch } from './email.js'
 
@@ -21,7 +21,10 @@ export interface ProviderResponse {
 	readonly body: unknown
 }
 
-/** The answer with its body already read, so an abort or a timeout while the body arrives is classified as one. */
+/**
+ * The answer with its body already read, so an abort or a timeout while the body arrives is classified as one. A redirect
+ * is never followed: a followed one would send the credential headers and the message to wherever it points.
+ */
 export async function postToProvider(request: ProviderRequest): Promise<ProviderResponse> {
 	if (request.signal.aborted) throw abortedError(request.label)
 	const timeout = AbortSignal.timeout(request.timeoutMs)
@@ -32,14 +35,37 @@ export async function postToProvider(request: ProviderRequest): Promise<Provider
 			headers: { ...request.headers, 'Content-Type': 'application/json' },
 			signal,
 			body: JSON.stringify(request.body),
+			redirect: 'manual',
 		})
+		if (isRedirect(response)) {
+			void response.body?.cancel().catch(() => undefined)
+			throw redirectError(request.label, response.status)
+		}
 		const text = await untilAborted(response.text(), signal)
 		return { ok: response.ok, status: response.status, body: parseJson(text) }
-	} catch {
+	} catch (error) {
+		if (error instanceof EmailDeliveryError) throw error
 		if (request.signal.aborted) throw abortedError(request.label)
 		if (timeout.aborted) throw new EmailDeliveryError(`${request.label} request timed out`, { code: 'request_timeout' })
 		throw new EmailDeliveryError(`${request.label} request failed`, { code: 'network_error' })
 	}
+}
+
+/**
+ * A 3xx, or the opaque answer a browser-like runtime gives for one under `redirect: 'manual'`. The endpoint answered
+ * without taking the message, and the same request gets the same answer, so it is a permanent `provider_rejected`: the
+ * configured URL is not the provider's API, and a person fixes it.
+ */
+function isRedirect(response: Response): boolean {
+	return response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)
+}
+
+function redirectError(label: string, status: number): EmailDeliveryError {
+	const shown = status === 0 ? '' : ` (HTTP ${status})`
+	return new EmailDeliveryError(`${label} answered with a redirect${shown}, which is not followed`, {
+		code: 'provider_rejected',
+		...(status === 0 ? {} : { httpStatus: status }),
+	})
 }
 
 export function parseTimeout(label: string, value: number | undefined): number {

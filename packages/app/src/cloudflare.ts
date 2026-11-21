@@ -167,6 +167,7 @@ export function createContractWorker(load: ImplementationLoader, options: Contra
 			const tick = new Request('https://application.invalid/', {
 				method: 'POST',
 				headers: { [PROXY_SECRET_HEADER]: proxySecretOf(env), [TICK_HEADER]: String(controller.scheduledTime) },
+				redirect: 'manual',
 			})
 			const response = await applicationObject(env, applicationObjects(env).object)(tick)
 			if (!response.ok) {

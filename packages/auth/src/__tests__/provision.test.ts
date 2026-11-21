@@ -169,6 +169,36 @@ describe('reconcileSchema', () => {
 		expect(spy.mock.calls).toHaveLength(0)
 	})
 
+	test.each([307, 308])('a %d is not followed: the admin key and the body never reach the target', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				arrivals.push(request.headers.get('authorization') ?? '')
+				return Response.json({})
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const admin = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			const error = await reconcileSchema({
+				url: `http://127.0.0.1:${admin.port}`,
+				app: 'opice',
+				schema: SCHEMA,
+				returnOrigins: ['https://opice.example.com'],
+				adminKey: 'px_admin-key',
+			}).catch((reason: unknown) => reason)
+			expect(error).toBeInstanceOf(ReconcileSchemaError)
+			expect(error instanceof ReconcileSchemaError && error.status).toBe(status)
+			expect(arrivals).toEqual([])
+		} finally {
+			await admin.stop(true)
+			await target.stop(true)
+		}
+	})
+
 	test('aborts an in-flight request with the signal native cancellation reason', async () => {
 		const controller = new AbortController()
 		const started = Promise.withResolvers<void>()

@@ -81,6 +81,7 @@ export const requestJson = async (
 		method,
 		headers,
 		...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+		redirect: 'manual',
 	})
 	const text = await response.text()
 	let body: unknown = null
@@ -248,6 +249,7 @@ export const triggerByScopedWebhook = async (webhookSecret: string, commitSha: s
 			'x-github-event': 'push',
 		},
 		body,
+		redirect: 'manual',
 	})
 	if (response.status !== 200) {
 		throw new Error(`the scoped local webhook answered ${response.status}, not 200 with a triggered run`)

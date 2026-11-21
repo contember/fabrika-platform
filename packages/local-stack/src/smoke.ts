@@ -486,6 +486,7 @@ const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 			method: 'POST',
 			headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
 			body: '{}',
+			redirect: 'manual',
 		})
 		const connectSrc = (listing.headers.get('content-security-policy') ?? '').split(';').map((part) => part.trim().split(/\s+/))
 			.find((directive) => directive[0] === 'connect-src')
@@ -570,6 +571,7 @@ const proveOperationsPublicBoundary = async (machineKey: string): Promise<void> 
 		method: 'POST',
 		headers: { authorization: 'Bearer local-smoke-not-an-upload-credential', 'content-type': 'application/json' },
 		body: '{}',
+		redirect: 'manual',
 	})
 	if (upload.status !== 401 || !(upload.headers.get('content-type') ?? '').startsWith('application/json')) {
 		throw new Error(`public Operations upload returned ${upload.status} from the proxy, expected Operations' own credential check`)

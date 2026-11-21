@@ -330,6 +330,8 @@ class Launcher {
 			headers: { authorization: `Bearer ${this.options.source.key}`, 'content-type': 'application/json' },
 			body,
 			signal,
+			// The key and the body must never reach a redirect target; a 3xx is not ok for either caller.
+			redirect: 'manual',
 		})
 	}
 

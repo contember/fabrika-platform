@@ -131,6 +131,8 @@ export class OidcClient {
 			method: 'POST',
 			headers: { 'content-type': 'application/x-www-form-urlencoded' },
 			body: this.tokenRequestBody(code, codeVerifier).toString(),
+			// The body holds the client secret: a followed 307/308 would send it again to wherever it points.
+			redirect: 'manual',
 		})
 		if (!response.ok) {
 			return null
@@ -200,9 +202,11 @@ export class OidcClient {
 			return cached.metadata
 		}
 		const url = `${this.config.issuer.replace(/\/+$/, '')}/.well-known/openid-configuration`
-		const response = await fetch(url)
+		// Never follow a redirect: the document picks the endpoint that receives the client secret and the
+		// keys that vouch for identities, and the issuer check below cannot tell an echoed issuer apart.
+		const response = await fetch(url, { redirect: 'manual' })
 		if (!response.ok) {
-			throw new Error(`OIDC discovery failed for ${this.config.issuer}: ${response.status}`)
+			throw new Error(discoveryFailure(this.config.issuer, url, response))
 		}
 		const metadata = parseMetadata(await response.json().catch(() => null))
 		if (!metadata) {
@@ -227,6 +231,20 @@ export class OidcClient {
 		}
 		return resolver
 	}
+}
+
+/**
+ * Why discovery failed. A redirect names only the origin it points to, never its path or query, and says what to change:
+ * the issuer must be the URL whose own discovery document answers.
+ */
+function discoveryFailure(issuer: string, url: string, response: Response): string {
+	if (response.type !== 'opaqueredirect' && (response.status < 300 || response.status >= 400)) {
+		return `OIDC discovery failed for ${issuer}: ${response.status}`
+	}
+	const location = response.headers.get('location')
+	const target = location !== null && URL.canParse(location, url) ? ` to ${new URL(location, url).origin}` : ''
+	return `OIDC discovery failed for ${issuer}: ${response.status}, a redirect${target}, which is not followed; `
+		+ 'configure the issuer exactly as the provider publishes it, so its /.well-known/openid-configuration answers directly'
 }
 
 // ── Discovery + JWKS caches (per isolate) ──────────────────────────────────────────

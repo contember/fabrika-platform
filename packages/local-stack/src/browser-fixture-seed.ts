@@ -36,6 +36,7 @@ async function postPrivate(path: string, body: unknown): Promise<unknown> {
 		method: 'POST',
 		headers: { authorization: `Bearer ${syncKey}`, 'content-type': 'application/json' },
 		body: JSON.stringify(body),
+		redirect: 'manual',
 	})
 	if (!response.ok) throw new Error(`fixture projection failed with status ${response.status}`)
 	return response.json()
@@ -138,6 +139,7 @@ async function uploadSourceMap(
 			[OPERATIONS_ARTIFACT_HEADERS.digest]: digestHex,
 		},
 		body,
+		redirect: 'manual',
 	})
 	if (!response.ok) throw new Error(`browser source-map fixture failed with status ${response.status}`)
 }

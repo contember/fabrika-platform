@@ -81,6 +81,7 @@ const provision = async (provisioningKey: string): Promise<string> => {
 		// No `app`: a cross-app grant, so the same credential works for every service the local stack
 		// fronts. `['*']` is the only pattern a cross-app grant accepts today.
 		body: JSON.stringify({ label: 'local stack machine operator', type: 'service', permissions: ['*'] }),
+		redirect: 'manual',
 	})
 	if (!response.ok) {
 		throw new Error(`IAM refused to provision the local machine key (${response.status})`)

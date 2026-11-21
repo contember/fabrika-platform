@@ -774,7 +774,7 @@ export interface ZeropsApi {
  */
 export type FetchLike = (
 	input: string,
-	init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal },
+	init?: { method?: string; headers?: Record<string, string>; body?: string; signal?: AbortSignal; redirect?: RequestRedirect },
 ) => Promise<Response>
 
 /** How the real client is built. `fetchImpl` exists so a test can drive the REAL client offline. */

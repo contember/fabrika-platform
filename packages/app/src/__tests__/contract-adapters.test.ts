@@ -198,4 +198,28 @@ describe('issuerJwks', () => {
 		await expect(issuerJwks(undefined).getJwks()).rejects.toThrow('FABRIKA_IAM_ISSUER is not set')
 		await expect(issuerJwks(`http://localhost:${impostor.port}`).getJwks()).rejects.toThrow('no usable key set')
 	})
+
+	test.each([307, 308])('a %d to another origin is not followed, so foreign keys are never trusted', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				arrivals.push(request.url)
+				return Response.json(jwks)
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/jwks.json`
+		const redirecting = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			await expect(issuerJwks(`http://127.0.0.1:${redirecting.port}`).getJwks()).rejects.toThrow(
+				`no usable key set: it answered ${status}, a redirect, which is not followed; set FABRIKA_IAM_ISSUER`,
+			)
+			expect(arrivals).toEqual([])
+		} finally {
+			await redirecting.stop(true)
+			await target.stop(true)
+		}
+	})
 })

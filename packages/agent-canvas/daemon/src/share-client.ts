@@ -200,6 +200,8 @@ export async function pushShareToWorker(payload: SharePayload, config: ShareEndp
 		method: 'POST',
 		headers,
 		body: JSON.stringify(payload),
+		// The bearer and the payload must never reach a redirect target; a 3xx is not ok below.
+		redirect: 'manual',
 	})
 	if (!res.ok) {
 		const text = await res.text().catch(() => '')
@@ -236,6 +238,7 @@ export async function revokeShareOnWorker(endpoint: string, shareId: string, own
 	const res = await fetch(`${endpoint}/shares/${encodeURIComponent(shareId)}/revoke`, {
 		method: 'POST',
 		headers: { 'Authorization': `Bearer ${ownerToken}` },
+		redirect: 'manual',
 	})
 	if (!res.ok) {
 		const text = await res.text().catch(() => '')

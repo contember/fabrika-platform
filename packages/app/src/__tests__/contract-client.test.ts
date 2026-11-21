@@ -176,6 +176,29 @@ describe('serialization and destinations', () => {
 		expect(sent[0]?.url).toBe('https://other.test/api/me')
 	})
 
+	test.each([307, 308])('a client with a key does not follow a %d, so the key and the input stay at baseUrl', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				arrivals.push(request.url)
+				return Response.json({ result: { id: 'm', label: 'machine' } })
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const app = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		try {
+			const api = createClient(contract, 'api', { key: 'px_script', baseUrl: `http://127.0.0.1:${app.port}` })
+			expect((await failure(api.me())).httpStatus).toBe(status)
+			expect(arrivals).toEqual([])
+		} finally {
+			await app.stop(true)
+			await target.stop(true)
+		}
+	})
+
 	test('in a browser, a key goes only to the page origin', async () => {
 		const { sent, fetch } = recording(answering({ result: { id: 'm', label: 'machine' } }))
 		Reflect.set(globalThis, 'location', new URL('https://notes.test/app/'))

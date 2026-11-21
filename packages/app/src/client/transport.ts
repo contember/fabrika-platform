@@ -78,13 +78,22 @@ function normalizeError(
 	return { type: 'error', message: `HTTP ${httpStatus}`, httpStatus }
 }
 
-/** Sends one request; a network failure, or an input `init` cannot serialize, is an `RpcError`. */
+/**
+ * Sends one request; a network failure, or an input `init` cannot serialize, is an `RpcError`. So is a redirect, which
+ * only a request that does not follow one (a client with a key) sees: an RPC surface never answers with one.
+ */
 async function send(doFetch: RpcFetch, url: string, init: () => RequestInit): Promise<Response> {
+	let response: Response
 	try {
-		return await doFetch(url, init())
+		response = await doFetch(url, init())
 	} catch {
 		throw new RpcError({ type: 'transport', message: 'Network request failed', httpStatus: 0 })
 	}
+	if (response.type === 'opaqueredirect' || (response.status >= 300 && response.status < 400)) {
+		void response.body?.cancel().catch(() => undefined)
+		throw new RpcError({ type: 'transport', message: `HTTP ${response.status}: a redirect, which is not followed`, httpStatus: response.status })
+	}
+	return response
 }
 
 /** The `{ error }` envelope as an `RpcError`, or a sign-in redirect that never settles. */

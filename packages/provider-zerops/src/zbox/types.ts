@@ -123,7 +123,7 @@ export type ZboxBody = Uint8Array<ArrayBuffer> | ReadableStream<Uint8Array>
 
 export type ZboxFetch = (
 	input: string,
-	init: { method: string; headers: Record<string, string>; body?: string | ZboxBody; signal: AbortSignal },
+	init: { method: string; headers: Record<string, string>; body?: string | ZboxBody; signal: AbortSignal; redirect?: RequestRedirect },
 ) => Promise<Response>
 
 export interface ZboxClientOptions {

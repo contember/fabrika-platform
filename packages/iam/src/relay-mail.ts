@@ -10,13 +10,19 @@ import type { AuditEventInput } from './repositories/audit'
  * - `provider_unauthorized`: Control knows no such key (a Control that holds an older secret, or none);
  * - `mail_not_configured`: Control has no transport of its own;
  * - a 404: Control runs no relay (an older release, or a Worker without its queue and bucket);
+ * - a 3xx: the URL is not where the relay answers (an `http:` origin that redirects to `https:`, say); the sender
+ *   never follows it, so the relay never saw the message;
  * - `invalid_configuration`: IAM's own relay settings cannot reach it.
  * A timeout, a network failure or a provider outage may have reached the relay, so they never fall back.
  */
 export function relayRefused(error: unknown): error is EmailDeliveryError {
 	if (!(error instanceof EmailDeliveryError)) return false
 	return error.code === 'provider_unauthorized' || error.code === 'mail_not_configured' || error.code === 'invalid_configuration'
-		|| error.httpStatus === 404
+		|| error.httpStatus === 404 || isRedirectStatus(error.httpStatus)
+}
+
+function isRedirectStatus(status: number | undefined): boolean {
+	return status !== undefined && status >= 300 && status < 400
 }
 
 /**

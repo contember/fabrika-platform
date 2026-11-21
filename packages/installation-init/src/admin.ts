@@ -61,7 +61,8 @@ export const createIamAdminClient = ({ origin, provisioningKey, fetch: fetcher }
 		fetch: (input, init) => {
 			const headers = new Headers(init?.headers)
 			headers.set('authorization', `Bearer ${provisioningKey}`)
-			return call(input, { ...init, headers })
+			// The provisioning key must never reach a redirect target; the client reads a 3xx as a failed call.
+			return call(input, { ...init, headers, redirect: 'manual' })
 		},
 	})
 }

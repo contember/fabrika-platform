@@ -68,9 +68,12 @@ async function cfJson(response: Response, what: string): Promise<unknown> {
 	return body.result
 }
 
-/** Authorization header for the token. Kept local so the value never leaks into a log statement. */
-function authHeaders(token: string): Record<string, string> {
-	return { Authorization: `Bearer ${token}` }
+/**
+ * Request init carrying the token. Kept local so the value never leaks into a log statement. A redirect is
+ * never followed: it would carry the bearer to wherever it points, and a 3xx fails `cfJson` instead.
+ */
+function authorized(token: string): RequestInit {
+	return { headers: { Authorization: `Bearer ${token}` }, redirect: 'manual' }
 }
 
 /**
@@ -86,7 +89,7 @@ export async function verifyToken(token: string, accountId?: string): Promise<bo
 		: [`${CF_API}/user/tokens/verify`]
 	for (const endpoint of endpoints) {
 		try {
-			const response = await fetch(endpoint, { headers: authHeaders(token) })
+			const response = await fetch(endpoint, authorized(token))
 			const result = await cfJson(response, 'Token verification')
 			if (tokenSchema.safeParse(result).success) {
 				return true
@@ -100,7 +103,7 @@ export async function verifyToken(token: string, accountId?: string): Promise<bo
 
 /** List the accounts the token can act on: `GET /accounts`. */
 export async function listAccounts(token: string): Promise<CfAccount[]> {
-	const response = await fetch(`${CF_API}/accounts`, { headers: authHeaders(token) })
+	const response = await fetch(`${CF_API}/accounts`, authorized(token))
 	const result = await cfJson(response, 'Listing accounts')
 	return namedResources(result)
 }
@@ -138,7 +141,7 @@ export function selectAccount(accounts: readonly CfAccount[], accountId: string 
  */
 export async function findZone(token: string, hostname: string): Promise<CfZone | null> {
 	const domain = registrableDomain(hostname)
-	const response = await fetch(`${CF_API}/zones?name=${encodeURIComponent(domain)}`, { headers: authHeaders(token) })
+	const response = await fetch(`${CF_API}/zones?name=${encodeURIComponent(domain)}`, authorized(token))
 	const result = await cfJson(response, 'Zone lookup')
 	const entries = entriesSchema.safeParse(result)
 	if (!entries.success) {

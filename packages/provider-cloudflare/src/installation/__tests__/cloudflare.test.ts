@@ -1,6 +1,7 @@
 import { afterAll, afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { findZone, listAccounts, selectAccount, verifyToken } from '../cloudflare'
 
+const realFetch = globalThis.fetch
 const fetchMock = spyOn(globalThis, 'fetch')
 afterEach(() => fetchMock.mockReset())
 afterAll(() => fetchMock.mockRestore())
@@ -45,6 +46,35 @@ describe('Cloudflare response boundaries', () => {
 		])
 		fetchMock.mockRejectedValueOnce(new Error('offline'))
 		expect(await verifyToken('token')).toBe(false)
+	})
+
+	test.each([307, 308])('a %d from the API is not followed, so the token stays put and the envelope check fails', async (status) => {
+		const arrivals: string[] = []
+		const target = Bun.serve({
+			hostname: '127.0.0.1',
+			port: 0,
+			fetch: (request) => {
+				arrivals.push(request.headers.get('authorization') ?? '')
+				return Response.json({ success: true, result: [{ id: 'stolen', name: 'Stolen' }] })
+			},
+		})
+		// `localhost` against `127.0.0.1`: the same machine, another origin.
+		const location = `http://localhost:${target.port}/collect`
+		const api = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+		// The real request, aimed at the local stand-in for the Cloudflare API.
+		const toLocalApi = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const url = new URL(input instanceof Request ? input.url : String(input))
+			return realFetch(`http://127.0.0.1:${api.port}${url.pathname}${url.search}`, init)
+		}
+		fetchMock.mockImplementation(Object.assign(toLocalApi, { preconnect: realFetch.preconnect }))
+		try {
+			await expect(listAccounts('token')).rejects.toThrow(`Listing accounts: unexpected Cloudflare response (HTTP ${status}).`)
+			expect(await verifyToken('token', 'account')).toBe(false)
+			expect(arrivals).toEqual([])
+		} finally {
+			await api.stop(true)
+			await target.stop(true)
+		}
 	})
 })
 

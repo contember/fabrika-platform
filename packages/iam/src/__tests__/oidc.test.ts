@@ -36,6 +36,39 @@ async function signIdToken(claims: JWTPayload, opts: { issuer?: string; audience
 		.sign(privateKey)
 }
 
+/**
+ * A server on `127.0.0.1` that answers every request with a `status` redirect to another origin (`localhost`, the same
+ * machine), where `answer` replies and every arrival is recorded: a test asserts `arrivals` stays empty.
+ */
+function crossOriginRedirect(
+	status: number,
+	answer: (request: Request, origin: string) => Response,
+): { readonly origin: string; readonly targetOrigin: string; readonly arrivals: string[]; stop(): Promise<void> } {
+	const arrivals: string[] = []
+	let location = ''
+	const from = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch: () => new Response(null, { status, headers: { location } }) })
+	const origin = `http://127.0.0.1:${from.port}`
+	const target = Bun.serve({
+		hostname: '127.0.0.1',
+		port: 0,
+		fetch: (request) => {
+			arrivals.push(request.url)
+			return answer(request, origin)
+		},
+	})
+	const targetOrigin = `http://localhost:${target.port}`
+	location = `${targetOrigin}/collect`
+	return {
+		origin,
+		targetOrigin,
+		arrivals,
+		stop: async () => {
+			await from.stop(true)
+			await target.stop(true)
+		},
+	}
+}
+
 /** A client with discovery + JWKS injected (no network). */
 function oidc(overrides: Partial<OidcConfig> = {}): OidcClient {
 	return new OidcClient({ ...CONFIG, ...overrides }, { metadata: METADATA, jwks: localJwks })
@@ -160,6 +193,49 @@ describe('discovery', () => {
 			expect(await client.exchangeCode('code', 'verifier')).toBeNull()
 		} finally {
 			await server.stop(true)
+		}
+	})
+
+	test.each([307, 308])('a %d from the token endpoint is not followed, so the client secret stays put', async (status) => {
+		const idp = crossOriginRedirect(status, () => Response.json({ id_token: 'stolen' }))
+		try {
+			const client = new OidcClient(CONFIG, { metadata: { ...METADATA, tokenEndpoint: `${idp.origin}/token` } })
+			expect(await client.exchangeCode('code', 'verifier')).toBeNull()
+			expect(idp.arrivals).toEqual([])
+		} finally {
+			await idp.stop()
+		}
+	})
+
+	test.each([301, 302, 307, 308])('a %d from discovery is not followed, so a foreign document cannot pick the endpoints', async (status) => {
+		// Echoes the configured issuer, so the issuer check alone would accept it.
+		const idp = crossOriginRedirect(
+			status,
+			(request, issuer) =>
+				Response.json({ issuer, authorization_endpoint: `${request.url}/a`, token_endpoint: `${request.url}/t`, jwks_uri: `${request.url}/k` }),
+		)
+		try {
+			const error = await new OidcClient({ ...CONFIG, issuer: idp.origin }).metadata().catch((reason: unknown) => reason)
+			expect(error instanceof Error && error.message).toStartWith(
+				`OIDC discovery failed for ${idp.origin}: ${status}, a redirect to ${idp.targetOrigin}, which is not followed; `,
+			)
+			expect(error instanceof Error && error.message).not.toContain('/collect')
+			expect(idp.arrivals).toEqual([])
+		} finally {
+			await idp.stop()
+		}
+	})
+
+	test.each([307, 308])('a %d from the JWKS endpoint is not followed, so foreign keys never vouch for a token', async (status) => {
+		const idp = crossOriginRedirect(status, () => Response.json(jwks))
+		try {
+			// jose's remote JWKS fetch sends `redirect: 'manual'` itself; this pins that across upgrades.
+			const client = new OidcClient(CONFIG, { metadata: { ...METADATA, jwksUri: `${idp.origin}/jwks` } })
+			const token = await signIdToken({ sub: 's', email: 'a@b.cz', email_verified: true })
+			expect(await client.verifyIdToken(token)).toBeNull()
+			expect(idp.arrivals).toEqual([])
+		} finally {
+			await idp.stop()
 		}
 	})
 

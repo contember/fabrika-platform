@@ -110,7 +110,7 @@ function getRequestOf(options: ClientOptions): () => RequestInit {
 		if (options.key !== undefined) {
 			headers.set('Authorization', `Bearer ${options.key}`)
 		}
-		return { method: 'GET', credentials: options.key === undefined ? 'same-origin' : 'omit', headers }
+		return { method: 'GET', credentials: options.key === undefined ? 'same-origin' : 'omit', headers, ...keyRedirect(options) }
 	}
 }
 
@@ -124,8 +124,13 @@ function requestOf(options: ClientOptions, input: unknown): () => RequestInit {
 			headers.set('Authorization', `Bearer ${options.key}`)
 		}
 		const body = files === null ? JSON.stringify(input ?? {}) : multipartBody(files)
-		return { method: 'POST', credentials: options.key === undefined ? 'same-origin' : 'omit', headers, body }
+		return { method: 'POST', credentials: options.key === undefined ? 'same-origin' : 'omit', headers, body, ...keyRedirect(options) }
 	}
+}
+
+/** A key never follows a redirect: a followed one would carry the bearer and the input to wherever it points. */
+function keyRedirect(options: ClientOptions): { readonly redirect?: RequestRedirect } {
+	return options.key === undefined ? {} : { redirect: 'manual' }
 }
 
 /** An input's file fields and the rest: `null` when it holds no `Blob`, so it goes as JSON. */
