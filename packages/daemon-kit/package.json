@@ -22,6 +22,11 @@
 			"bun": "./index.ts",
 			"types": "./index.ts",
 			"default": "./index.ts"
+		},
+		"./ui-client": {
+			"bun": "./src/ui-client.ts",
+			"types": "./src/ui-client.ts",
+			"default": "./src/ui-client.ts"
 		}
 	},
 	"scripts": {

@@ -1,5 +1,5 @@
-import { jsonResponse, matchesCapability } from '@fabrika/daemon-kit'
-import { cookieValue, linkRequiredResponse, UI_LINK_PATH, uiCookieName } from './ui-credential'
+import { hasUiCookie as carriesUiCookie, jsonResponse, matchesCapability, UI_LINK_PATH } from '@fabrika/daemon-kit'
+import { linkRequiredResponse, uiCookieName } from './ui-credential'
 
 /** The header the CLI sends its capability in; the daemon writes the capability to `CLI_AUTH_FILE`. */
 export const CLI_TOKEN_HEADER = 'X-Agent-Canvas-CLI-Token'
@@ -81,7 +81,7 @@ function isOpenToAnyone(req: Request, url: URL): boolean {
 
 /** Whether the request carries the UI cookie; the link handler asks too. */
 export function hasUiCookie(req: Request, options: Pick<AdmissionOptions, 'port' | 'uiToken'>): boolean {
-	return matchesCapability(cookieValue(req.headers.get('Cookie'), uiCookieName(options.port)), options.uiToken)
+	return carriesUiCookie(req, { cookieName: uiCookieName(options.port), token: options.uiToken })
 }
 
 function credentialRequired(url: URL): Response {

@@ -1,12 +1,11 @@
 import { compileJsx, type SessionManager, watchSession } from '@fabrika/canvas-kernel/server'
-import { jsonResponse, type Route } from '@fabrika/daemon-kit'
+import { jsonResponse, type Route, type UiLinks } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync } from 'fs'
 import { errorMessage } from '../../client/errorMessage'
 import { hasCliToken } from '../admission'
 import { HOST_COMPONENTS } from '../components'
 import { COMPILE_TEMP_DIR } from '../paths'
 import { loadShareConfig, revokeShare, shareRevision } from '../share'
-import type { UiLinks } from '../ui-credential'
 
 const SECRET_FIELD_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MAX_SECRET_BYTES = 64 * 1024

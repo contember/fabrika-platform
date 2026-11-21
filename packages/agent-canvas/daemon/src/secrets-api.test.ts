@@ -1,11 +1,11 @@
 import { SessionManager } from '@fabrika/canvas-kernel/server'
 import { dispatch, type Route } from '@fabrika/daemon-kit'
+import { UiLinks } from '@fabrika/daemon-kit'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync } from 'fs'
 import { tmpdir } from 'os'
 import { join } from 'path'
 import { createApiHandlers } from './handlers/api'
-import { UiLinks } from './ui-credential'
 
 const testDirectories: string[] = []
 
@@ -21,7 +21,7 @@ function setup(): { routes: Route[]; sessionId: string } {
 		broadcastRevisionUpdate: () => {},
 		version: 'test',
 		cliAuthToken: 'test-cli-capability',
-		uiLinks: new UiLinks(19400),
+		uiLinks: new UiLinks(() => 'http://localhost:19400'),
 	})
 	return { routes, sessionId }
 }

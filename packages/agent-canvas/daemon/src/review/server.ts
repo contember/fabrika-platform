@@ -1,6 +1,5 @@
-import { type ChannelSocket, createNotificationChannel, dispatch, jsonResponse, type Route } from '@fabrika/daemon-kit'
+import { type ChannelSocket, createNotificationChannel, dispatch, jsonResponse, type Route, type UiLinks } from '@fabrika/daemon-kit'
 import type { z } from 'zod'
-import type { UiLinks } from '../ui-credential'
 import { renderReviewRequests } from './markdown'
 import {
 	addCommentBodySchema,

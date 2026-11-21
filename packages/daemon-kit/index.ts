@@ -25,5 +25,18 @@ export type {
 } from './src/lifecycle'
 export { dispatch } from './src/router'
 export type { Route, RouteHandler } from './src/router'
+export {
+	escapeHtml,
+	hasUiCookie,
+	loadUiToken,
+	openLinkResponse,
+	openLinkThroughFile,
+	UI_LINK_PATH,
+	uiCookieName,
+	UiLinks,
+	uiPage,
+	withoutCookies,
+} from './src/ui-credential'
+export type { RedeemedLink, UiCredential, UiLinkPages } from './src/ui-credential'
 export { WaitError, waitForEvent } from './src/waiter'
 export type { WaiterSocket, WaitFailure, WaitMessages, WaitOptions, WaitVerdict } from './src/waiter'

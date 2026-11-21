@@ -1,9 +1,10 @@
+import { UiLinks } from '@fabrika/daemon-kit'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { connect } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
-import { uiCookieName, UiLinks } from '../ui-credential'
+import { uiCookieName } from '../ui-credential'
 import { renderReviewRequests } from './markdown'
 import { isLoopbackOrigin, type ReviewAnchor } from './model'
 import { ReviewProxies, viteFullReloadPath } from './proxy'
@@ -163,7 +164,7 @@ describe('review routes', () => {
 
 	async function call(method: string, path: string, options: { origin?: string; body?: unknown } = {}) {
 		const proxies = new ReviewProxies(store, WIDGET, () => {})
-		const review = createReviewServer(store, proxies, new UiLinks(19400))
+		const review = createReviewServer(store, proxies, new UiLinks(() => 'http://localhost:19400'))
 		const headers = new Headers({ 'Content-Type': 'application/json' })
 		if (options.origin !== undefined) headers.set('Origin', options.origin)
 		const req = new Request(`http://localhost:19400${path}`, {

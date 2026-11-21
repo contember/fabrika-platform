@@ -34,6 +34,7 @@ import {
 	type SubmittedAnnotation,
 	useAnnotations,
 } from '@fabrika/canvas-kernel/client'
+import { reconnectOrReload } from '@fabrika/daemon-kit/ui-client'
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { answeredResponses, type SharedResponse } from '../src/share-responses'
@@ -395,15 +396,12 @@ function App() {
 			}
 			ws.onclose = () => {
 				setConnected(false)
-				// A daemon that does not know this browser refuses everything; reloading shows how to get a fresh link.
-				void fetch(`/api/session/${encodeURIComponent(sessionId)}/meta`, { cache: 'no-store' }).then(
-					(response) => {
-						if (response.status === 401) location.reload()
-						else reconnectTimer = setTimeout(connect, 2000)
-					},
+				reconnectOrReload(
+					() => fetch(`/api/session/${encodeURIComponent(sessionId)}/meta`, { cache: 'no-store' }),
 					() => {
 						reconnectTimer = setTimeout(connect, 2000)
 					},
+					() => location.reload(),
 				)
 			}
 			ws.onmessage = (event) => {

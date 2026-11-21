@@ -1,5 +1,5 @@
 import { createWebSocketManager, SessionManager, type WSData } from '@fabrika/canvas-kernel/server'
-import { corsHeaders, createCapability, dispatch, jsonResponse, writeCapabilityFile } from '@fabrika/daemon-kit'
+import { corsHeaders, createCapability, dispatch, jsonResponse, loadUiToken, UiLinks, writeCapabilityFile } from '@fabrika/daemon-kit'
 import { chmodSync, mkdirSync, readFileSync, writeFileSync } from 'fs'
 import { dirname, join } from 'path'
 import { admitRequest } from './admission'
@@ -16,7 +16,6 @@ import { ReviewProxies } from './review/proxy'
 import { createReviewServer, type ReviewSocketData } from './review/server'
 import { ReviewStore } from './review/store'
 import { CanvasThreadStore } from './threads'
-import { loadUiToken, UiLinks } from './ui-credential'
 
 const PORT = parseInt(process.env.CANVAS_PORT || '19400', 10)
 const VERSION = JSON.parse(readFileSync(join(dirname(import.meta.dir), '..', 'package.json'), 'utf-8')).version as string
@@ -30,7 +29,7 @@ writeCapabilityFile(CLI_AUTH_FILE, cliAuthToken)
 // Sessions, canvases, feedback and the UI secret live here; no other OS user reads them from disk.
 chmodSync(DATA_DIR, 0o700)
 const uiToken = loadUiToken(UI_TOKEN_FILE)
-const uiLinks = new UiLinks(PORT)
+const uiLinks = new UiLinks(() => `http://localhost:${PORT}`)
 
 const sessionManager = new SessionManager(SESSIONS_DIR)
 const wsManager = createWebSocketManager(sessionManager)
