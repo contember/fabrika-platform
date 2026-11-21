@@ -91,6 +91,17 @@ describe('fabrika db on Cloudflare', () => {
 		)
 	})
 
+	test('--config names a config of another name, whose provider decides the dialect, as `fabrika app build` takes it', async () => {
+		const root = appRoot(ZEROPS_CONFIG)
+		writeFileSync(join(root, 'cloudflare.config.ts'), CLOUDFLARE_CONFIG)
+		writeMigration(root, '20261022120000_notes.sql', NOTES)
+		expect(await run(root, 'codegen', ['--config=cloudflare.config.ts'])).toBe(`${SCHEMA}\n`)
+		expect(await run(root, 'codegen', ['--verify', '--config=cloudflare.config.ts'])).toBe(`${SCHEMA} is current\n`)
+		// Without it, `fabrika.config.ts` is read: here a Zerops application, on Postgres.
+		expect(await failure(run(root, 'codegen', ['--verify']))).toBe('FABRIKA_APP_ID is required')
+		expect(await failure(run(root, 'codegen', ['--config=a.ts', '--config=b.ts']))).toStartWith('db: --config names one config file')
+	})
+
 	test('a Zerops application still needs the Postgres environment for migrate and codegen', async () => {
 		const root = appRoot(ZEROPS_CONFIG)
 		expect(await failure(run(root, 'migrate'))).toBe('FABRIKA_APP_ID is required')

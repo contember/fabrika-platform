@@ -27,9 +27,10 @@ export const DB_USAGE = `fabrika db — an application's database schema: Postgr
 Usage:
   fabrika db new <slug>           Write ${MIGRATIONS_DIR}/<UTC YYYYMMDDHHMMSS>_<slug>.sql; the slug is lowercase snake_case.
   fabrika db migrate              Apply the framework's tables, then ${MIGRATIONS_DIR}, to the application's schema app_<id>.
-  fabrika db codegen [--verify]   Write ${SCHEMA_FILE} from the migrated schema; --verify only fails when it is stale.
+  fabrika db codegen [--verify] [--config=<path>]  Write ${SCHEMA_FILE} from the migrated schema; --verify only fails when it is stale.
 
-Run from the application root. \`migrate\` and \`codegen\` read FABRIKA_APP_ID and FABRIKA_APP_DATABASE_URL from
+Run from the application root. \`--config\` names the application's config, ${CONFIG_FILE} by default, as \`fabrika app
+build\` takes it: its provider decides the dialect. \`migrate\` and \`codegen\` read FABRIKA_APP_ID and FABRIKA_APP_DATABASE_URL from
 the environment only. FABRIKA_APP_DATABASE_URL is the provisioning credential: \`migrate\` uses it only to create
 the application's roles (app_<id> owns the schema, run_<id> gets DML on its tables) and fails when it cannot create
 roles. It applies the files as app_<id>, holds a lock derived from the application id, runs each file in one
@@ -59,10 +60,20 @@ const refuseArguments = (command: string, argv: readonly string[]): void => {
 	if (argv.length > 0) throw new Error(`db ${command} takes no argument ${argv[0]}\n\n${DB_USAGE}`)
 }
 
-/** The dialect `fabrika.config.ts` names, read as the checker reads it; Postgres without a config. */
-const dialectAt = async (cwd: string): Promise<ApplicationDialect> => {
-	const config = await readFile(join(cwd, CONFIG_FILE), 'utf8').catch(() => undefined)
+/** The dialect the config at `configPath` names, read as the checker reads `fabrika.config.ts`; Postgres without a config. */
+const dialectAt = async (cwd: string, configPath: string = CONFIG_FILE): Promise<ApplicationDialect> => {
+	const config = await readFile(join(cwd, configPath), 'utf8').catch(() => undefined)
 	return applicationDialect(new Map(config === undefined ? [] : [[CONFIG_FILE, config]]))
+}
+
+const CONFIG_OPTION = '--config='
+
+/** `--config=<path>`, relative to the application root, and the arguments besides it. */
+const configOption = (argv: readonly string[]): { readonly config: string; readonly rest: readonly string[] } => {
+	const named = argv.filter((arg) => arg.startsWith(CONFIG_OPTION))
+	const config = named.at(-1)?.slice(CONFIG_OPTION.length)
+	if (named.length > 1 || config === '') throw new Error(`db: --config names one config file\n\n${DB_USAGE}`)
+	return { config: config ?? CONFIG_FILE, rest: argv.filter((arg) => !arg.startsWith(CONFIG_OPTION)) }
 }
 
 const timestamp = (date: Date): string => date.toISOString().replace(/\.\d{3}Z$/, '').replaceAll(/[-:T]/g, '')
@@ -148,9 +159,10 @@ const sqliteSchema = async (cwd: string): Promise<GeneratedModule> =>
 	])
 
 const codegen = async (argv: readonly string[], deps: DbCommandDependencies): Promise<void> => {
-	const verify = argv.includes('--verify')
-	refuseArguments('codegen', argv.filter((arg) => arg !== '--verify'))
-	const { source, leftOut } = (await dialectAt(deps.cwd)) === 'sqlite' ? await sqliteSchema(deps.cwd) : await postgresSchema(deps)
+	const { config, rest } = configOption(argv)
+	const verify = rest.includes('--verify')
+	refuseArguments('codegen', rest.filter((arg) => arg !== '--verify'))
+	const { source, leftOut } = (await dialectAt(deps.cwd, config)) === 'sqlite' ? await sqliteSchema(deps.cwd) : await postgresSchema(deps)
 	const path = join(deps.cwd, SCHEMA_FILE)
 	// Named on every run, --verify's too, so a column the module leaves out is never silent.
 	for (const column of leftOut) deps.write(`${leftOutText(`${column.table}.${column.column}`, column.type, column.of)}\n`)
