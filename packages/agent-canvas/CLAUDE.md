@@ -70,8 +70,8 @@ bun daemon/build.ts --watch
 # 3. Push the demo plan
 CANVAS_SESSION_ID=planner-demo bun bin/agent-canvas.ts push example --label "Demo"
 
-# 4. Open in browser
-#    http://localhost:19400/s/planner-demo
+# 4. The first push opens the canvas through a one-time link; for another browser print a fresh one
+bun bin/agent-canvas.ts open --session planner-demo
 ```
 
 The CLI blocks waiting for feedback after push — press Ctrl+C to exit without submitting. Each push creates a new revision visible in the browser's revision selector.

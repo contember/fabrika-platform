@@ -6,6 +6,7 @@ import { hasCliToken } from '../admission'
 import { HOST_COMPONENTS } from '../components'
 import { COMPILE_TEMP_DIR } from '../paths'
 import { loadShareConfig, revokeShare, shareRevision } from '../share'
+import type { UiLinks } from '../ui-credential'
 
 const SECRET_FIELD_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
 const MAX_SECRET_BYTES = 64 * 1024
@@ -29,13 +30,14 @@ export interface ApiContext {
 	sessionManager: SessionManager
 	broadcastPlanUpdate: (id: string) => void
 	broadcastRevisionUpdate: (id: string) => void
-	port: number
 	version: string
 	cliAuthToken: string
+	/** Issues the links that bootstrap the browser UI's cookie; only CLI routes hand one out. */
+	uiLinks: UiLinks
 }
 
 export function createApiHandlers(ctx: ApiContext): Route[] {
-	const { sessionManager, broadcastPlanUpdate, broadcastRevisionUpdate, port } = ctx
+	const { sessionManager, broadcastPlanUpdate, broadcastRevisionUpdate } = ctx
 
 	/**
 	 * Read *.jsx canvas files from a directory.
@@ -109,7 +111,7 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 			broadcastPlanUpdate(sessionId)
 			watchSession(sessionId, sessionManager, broadcastPlanUpdate, { tempDir: COMPILE_TEMP_DIR, components: HOST_COMPONENTS })
 
-			const browserUrl = `http://localhost:${port}/s/${sessionId}`
+			const browserUrl = ctx.uiLinks.issue(sessionId)
 			return jsonResponse({
 				ok: true,
 				browserUrl,
@@ -121,6 +123,13 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 		} catch (e) {
 			return jsonResponse({ error: errorMessage(e) }, 500)
 		}
+	}
+
+	/** A fresh link to an existing session's page, for a browser that has no cookie yet (`agent-canvas open`). */
+	function handleLink(_req: Request, _url: URL, match: URLPatternResult): Response {
+		const sessionId = match.pathname.groups.id!
+		if (!sessionManager.get(sessionId)) return jsonResponse({ error: `No canvas session ${sessionId}; push a canvas first` }, 404)
+		return jsonResponse({ browserUrl: ctx.uiLinks.issue(sessionId) })
 	}
 
 	async function handleCanvasJs(_req: Request, url: URL, match: URLPatternResult): Promise<Response> {
@@ -331,6 +340,7 @@ export function createApiHandlers(ctx: ApiContext): Route[] {
 	return [
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/health' }), handler: handleHealth },
 		{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/plan' }), handler: handlePlanPost },
+		{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/link' }), handler: handleLink },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/canvas/:filename' }), handler: handleCanvasJs },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/meta' }), handler: handleMeta },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/revision/:rev/feedback' }), handler: handleFeedbackGet },

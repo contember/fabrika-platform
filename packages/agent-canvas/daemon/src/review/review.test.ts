@@ -3,6 +3,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'fs'
 import { connect } from 'net'
 import { tmpdir } from 'os'
 import { join } from 'path'
+import { uiCookieName } from '../ui-credential'
 import { renderReviewRequests } from './markdown'
 import { isLoopbackOrigin, type ReviewAnchor } from './model'
 import { ReviewProxies, viteFullReloadPath } from './proxy'
@@ -276,6 +277,7 @@ describe('ReviewProxies', () => {
 				if (url.pathname === '/away') return new Response(null, { status: 302, headers: { Location: `${url.origin}0/x` } })
 				if (url.pathname === '/userinfo') return new Response(null, { status: 302, headers: { Location: `${url.origin}@example.com/x` } })
 				if (url.pathname === '/data.json') return Response.json({ search: url.search })
+				if (url.pathname === '/cookies') return Response.json({ cookie: req.headers.get('Cookie') })
 				if (url.pathname.includes('127.0.0.1:')) return new Response(`app ${url.pathname}${url.search}`)
 				return new Response('<html><body><h1>App</h1></body></html>', { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
 			},
@@ -303,6 +305,13 @@ describe('ReviewProxies', () => {
 		expect(url).toMatch(/^http:\/\/localhost:\d+\/admin\?tab=1$/)
 		expect(await (await fetch(url)).text()).toBe(`<html><body><h1>App</h1><script src="${WIDGET}" data-project="demo"></script></body></html>`)
 		expect(await (await fetch(new URL('/data.json?x=1', url))).json()).toEqual({ search: '?x=1' })
+	})
+
+	test("withholds the daemon's UI cookie from the application and forwards its own", async () => {
+		const url = proxies.open('demo', `http://127.0.0.1:${app.port}/`)
+		const cookies = async (cookie: string): Promise<unknown> => (await (await fetch(new URL('/cookies', url), { headers: { Cookie: cookie } })).json())
+		expect(await cookies(`app_session=1; ${uiCookieName(19400)}=dummy-ui; theme=dark`)).toEqual({ cookie: 'app_session=1; theme=dark' })
+		expect(await cookies(`${uiCookieName(19400)}=dummy-ui`)).toEqual({ cookie: null })
 	})
 
 	test('keeps redirects on the proxy', async () => {

@@ -43,7 +43,9 @@ Once installed, use the `/canvas` command to create a canvas:
 > /canvas Review this PR
 ```
 
-Claude creates a JSX document, pushes it to a local daemon, and opens it in your browser at `http://localhost:19400/s/<session-id>`.
+Claude creates a JSX document, pushes it to a local daemon, and opens it in your browser at `http://localhost:19400/s/<session-id>`. The
+first push opens a link that signs the browser in to the daemon; another browser, or one that lost its cookie, gets a fresh
+link from `bunx agent-canvas open --session <session-id>`.
 
 ### Flow patterns
 
@@ -92,7 +94,7 @@ bunx agent-canvas exec \
 
 Secret resolution requires a daemon capability available to the CLI but not to canvas JavaScript. A new canvas revision, daemon shutdown, or session cleanup clears the value. The target command must not print its environment or credentials.
 
-The daemon answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]` on its port. It refuses state-changing requests and WebSocket upgrades from any origin other than its own UI, requires the CLI capability on the routes only the CLI calls (push, feedback, secret resolution, thread replies and claims, review agent routes), and never serves its own temporary or data directory through the file routes. The file routes serve a session's project root and, outside it, only the files its canvases name in `FilePreview path`, `Markdown file`, `ImageView src` or `Download path`, symlinks resolved; they list no directory outside it. `/api/download`, behind `<Download path>`, serves only a named file, inside the root too, as an `application/octet-stream` attachment. The canvas author controls that list, so it stops reads of paths no canvas names, not a hostile canvas. The canvas page carries a Content-Security-Policy that lets canvas JavaScript connect only to the daemon. Images, fonts, stylesheets and media may come from any https origin, and such a URL, like a navigation, can still carry data out. Every other daemon response carries an inert policy, so a frame or window of it cannot be scripted past the page's.
+The daemon answers only requests addressed to `localhost`, `127.0.0.1` or `[::1]` on its port. It refuses state-changing requests and WebSocket upgrades from any origin other than its own UI, requires the CLI capability on the routes only the CLI calls (push, feedback, secret resolution, thread replies and claims, review agent routes), and never serves its own temporary or data directory through the file routes. Every other route but `/health`, `/assets/*` and the review routes requires the UI credential or the CLI capability, so another process or OS user that reaches the port reads no file, session, feedback or secret status. The UI credential is a secret in the daemon's data directory (`ui-token`, mode `0600`), held by the browser as an `HttpOnly; SameSite=Strict` cookie named after the port. A browser gets it only through a link the CLI prints (`push`, `open`): the link carries a one-time code, valid for an hour, which the page trades for the cookie before it redirects to the clean URL. The secret survives a daemon restart, so open tabs keep working; deleting `ui-token` signs every browser out. Browsers send cookies to every port of `localhost`, so the review proxy strips the daemon's cookie before it forwards a request to the application under review. The file routes serve a session's project root and, outside it, only the files its canvases name in `FilePreview path`, `Markdown file`, `ImageView src` or `Download path`, symlinks resolved; they list no directory outside it. `/api/download`, behind `<Download path>`, serves only a named file, inside the root too, as an `application/octet-stream` attachment. The canvas author controls that list, so it stops reads of paths no canvas names, not a hostile canvas. The canvas page carries a Content-Security-Policy that lets canvas JavaScript connect only to the daemon. Images, fonts, stylesheets and media may come from any https origin, and such a URL, like a navigation, can still carry data out. Every other daemon response carries an inert policy, so a frame or window of it cannot be scripted past the page's.
 
 ### Review mode
 
@@ -119,6 +121,9 @@ origins (`localhost`, `127.0.0.1`, `*.localhost`) and agent requests only from c
 page cannot queue work for the agent. The review proxy answers only requests addressed to `localhost`, `127.0.0.1` or
 `[::1]` on its own port, and refuses state-changing requests and WebSocket upgrades from any origin other than its own,
 so a web page cannot drive the application through it.
+The widget's routes take no UI credential: the widget runs in the application's
+own origin, where any of the application's scripts could read a credential handed to it, and the routes hold only review
+threads. The agent routes that act on them still require the CLI capability.
 
 #### Remote review
 
@@ -222,8 +227,8 @@ bun daemon/build.ts --watch    # watch mode
 
 # Test with demo canvas
 bun bin/agent-canvas.ts daemon start
-CANVAS_SESSION_ID=demo bun bin/agent-canvas.ts push example --label "Demo"
-# Open http://localhost:19400/s/demo
+CANVAS_SESSION_ID=demo bun bin/agent-canvas.ts push example --label "Demo"   # opens the canvas through a one-time link
+bun bin/agent-canvas.ts open --session demo                                  # a fresh link for another browser
 ```
 
 ## License

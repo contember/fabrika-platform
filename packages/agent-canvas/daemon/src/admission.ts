@@ -1,4 +1,5 @@
 import { jsonResponse, matchesCapability } from '@fabrika/daemon-kit'
+import { cookieValue, linkRequiredResponse, UI_CODE_QUERY, uiCookieName } from './ui-credential'
 
 /** The header the CLI sends its capability in; the daemon writes the capability to `CLI_AUTH_FILE`. */
 export const CLI_TOKEN_HEADER = 'X-Agent-Canvas-CLI-Token'
@@ -14,6 +15,7 @@ const LOOPBACK_HOSTNAMES = ['localhost', '127.0.0.1', '[::1]']
 /** Routes only the daemon owner's CLI calls: they require the CLI capability. WebSocket upgrades arrive as GET. */
 const CLI_ROUTES: ReadonlyArray<{ method: string; pattern: URLPattern }> = [
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/plan' }) },
+	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/link' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/feedback/consume' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/secrets/resolve' }) },
 	{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/threads/claim' }) },
@@ -28,6 +30,8 @@ const CLI_ROUTES: ReadonlyArray<{ method: string; pattern: URLPattern }> = [
 export interface AdmissionOptions {
 	port: number
 	cliAuthToken: string
+	/** The browser UI's credential, presented as the daemon's cookie (`ui-credential.ts`). */
+	uiToken: string
 }
 
 /**
@@ -58,6 +62,31 @@ function isReviewPath(pathname: string): boolean {
 	return pathname.startsWith('/api/review/') || pathname.startsWith('/ws/review/')
 }
 
+const SESSION_PAGE = new URLPattern({ pathname: '/s/:id' })
+
+/**
+ * What answers without a credential: liveness, the static assets (the review widget's script among them), review mode
+ * and a session page that carries a link's code, which its handler redeems. Everything else needs one.
+ */
+function isOpenToAnyone(url: URL): boolean {
+	const { pathname } = url
+	if (pathname === '/health' || pathname.startsWith('/assets/') || isReviewPath(pathname)) return true
+	return SESSION_PAGE.test(url) && url.searchParams.has(UI_CODE_QUERY)
+}
+
+/** Whether the request carries the UI cookie; the session page's handler asks too. */
+export function hasUiCookie(req: Request, options: Pick<AdmissionOptions, 'port' | 'uiToken'>): boolean {
+	return matchesCapability(cookieValue(req.headers.get('Cookie'), uiCookieName(options.port)), options.uiToken)
+}
+
+function credentialRequired(url: URL): Response {
+	if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/ws/')) {
+		return jsonResponse({ error: 'Open the canvas through a link the agent-canvas CLI prints (agent-canvas open)' }, 401)
+	}
+	const page = SESSION_PAGE.exec(url)
+	return linkRequiredResponse(page?.pathname.groups['id'] ?? null)
+}
+
 /**
  * Admission for every request the daemon receives, before any route or WebSocket upgrade:
  * - the Host must name the daemon on loopback, which refuses DNS-rebound pages;
@@ -65,7 +94,9 @@ function isReviewPath(pathname: string): boolean {
  *   sends no `Origin` (the CLI); browsers send `Origin` on such requests, so a cross-site page is refused whatever the
  *   content type;
  * - every API request and upgrade a browser sends must be same-origin (`Sec-Fetch-Site`), reads included;
- * - CLI routes require the CLI capability.
+ * - CLI routes require the CLI capability;
+ * - every other route but `isOpenToAnyone`'s requires the UI cookie or the CLI capability, so a local client that sends
+ *   no `Origin` (another process or OS user on this machine) reaches nothing of the UI's.
  *
  * Returns the refusal, or null when the request is admitted.
  */
@@ -89,9 +120,11 @@ export function admitRequest(req: Request, url: URL, options: AdmissionOptions):
 	}
 
 	const presented = req.headers.get(CLI_TOKEN_HEADER) ?? (isUpgrade ? url.searchParams.get(CLI_TOKEN_QUERY) : null)
-	if (isCliRoute(req, url) && !matchesCapability(presented, options.cliAuthToken)) {
+	const cli = matchesCapability(presented, options.cliAuthToken)
+	if (isCliRoute(req, url) && !cli) {
 		return jsonResponse({ error: 'This endpoint is available only to the local CLI' }, 401)
 	}
+	if (!cli && !isOpenToAnyone(url) && !hasUiCookie(req, options)) return credentialRequired(url)
 
 	return null
 }

@@ -5,6 +5,7 @@ import { handleExec } from './lib/commands/exec.ts'
 import { handleFetch } from './lib/commands/fetch.ts'
 import { handleInstall } from './lib/commands/install.ts'
 import { handleInstructions } from './lib/commands/instructions.ts'
+import { handleOpen } from './lib/commands/open.ts'
 import { handlePush } from './lib/commands/push.ts'
 import { handleReply } from './lib/commands/reply.ts'
 import { handleReview } from './lib/commands/review.ts'
@@ -18,6 +19,8 @@ Commands:
   agent-canvas install [local|global]  Install skill for Claude Code
   agent-canvas instructions [topic]    Show usage instructions (for AI agents)
   agent-canvas push <directory>        Push canvases, open browser
+  agent-canvas open [--session <id>] [--no-open]
+                                      Print and open a fresh link to a canvas (each link works once)
   agent-canvas fetch [--session <id>]  Check for feedback (returns immediately)
   agent-canvas watch [--session <id>]  Wait for user feedback or a thread reply (blocks until one arrives)
   agent-canvas watch --follow          Keep watching; print every submit, thread reply, render error
@@ -55,6 +58,8 @@ async function main() {
 	switch (command) {
 		case 'push':
 			return handlePush(rest)
+		case 'open':
+			return handleOpen(rest)
 		case 'fetch':
 			return handleFetch(rest)
 		case 'watch':

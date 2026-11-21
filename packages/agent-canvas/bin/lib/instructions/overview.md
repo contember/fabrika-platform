@@ -45,7 +45,7 @@ Push the directory to open all canvases in the browser:
 bunx agent-canvas push ${TMPDIR:-/tmp}/agent-canvas/<session-id>/ --session <session-id> --label "Implementation Plan"
 ```
 
-All `*.jsx` files in the directory are pushed as a snapshot. Each file appears as a separate tab. **Always show the `browserUrl` from the output to the user.**
+All `*.jsx` files in the directory are pushed as a snapshot. Each file appears as a separate tab. **Always show the `browserUrl` from the output to the user.** The link signs the browser in once, and the first push opens it. When the user sees "Open this canvas from its link" (another browser, or the link was already used), run `bunx agent-canvas open --session <session-id> --no-open` and show them the fresh link it prints.
 
 Options:
 

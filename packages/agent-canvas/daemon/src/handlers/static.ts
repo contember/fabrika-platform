@@ -1,7 +1,9 @@
 import type { Route } from '@fabrika/daemon-kit'
 import { createHash } from 'crypto'
 import { dirname, join } from 'path'
+import { hasUiCookie } from '../admission'
 import { DATA_DIR } from '../paths'
+import { linkRequiredResponse, UI_CODE_QUERY, uiCookieHeader, type UiLinks } from '../ui-credential'
 
 const MIME_TYPES: Record<string, string> = {
 	js: 'application/javascript',
@@ -110,12 +112,35 @@ async function serveStaticAsset(_req: Request, url: URL): Promise<Response> {
 	})
 }
 
-export function createStaticHandlers(): Route[] {
+export interface SessionPageAccess {
+	port: number
+	uiToken: string
+	links: UiLinks
+}
+
+/**
+ * A link's code sets the UI cookie and redirects to the clean URL, so the code stays out of the page's history entry. A
+ * spent code is fine for a browser that already holds the cookie. Admission let the page through only with the cookie
+ * or a code.
+ */
+function sessionPage(access: SessionPageAccess) {
+	return async (req: Request, url: URL, match: URLPatternResult): Promise<Response> => {
+		const code = url.searchParams.get(UI_CODE_QUERY)
+		if (code === null) return serveSessionPage()
+		const redeemed = access.links.redeem(code)
+		if (!redeemed && !hasUiCookie(req, access)) return linkRequiredResponse(match.pathname.groups['id'] ?? null)
+		const headers = new Headers({ Location: url.pathname, 'Cache-Control': 'no-store' })
+		if (redeemed) headers.set('Set-Cookie', uiCookieHeader(access.port, access.uiToken))
+		return new Response(null, { status: 303, headers })
+	}
+}
+
+export function createStaticHandlers(access: SessionPageAccess): Route[] {
 	return [
 		{
 			method: 'GET',
 			pattern: new URLPattern({ pathname: '/s/:id' }),
-			handler: serveSessionPage,
+			handler: sessionPage(access),
 		},
 		{
 			method: 'GET',
