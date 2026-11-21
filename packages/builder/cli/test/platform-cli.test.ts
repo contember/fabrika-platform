@@ -60,6 +60,7 @@ function setup() {
 			if (path === '/health') return Response.json({ ok: true, pid: process.pid, sessionsDir: join(fx.root, 'data', 'sessions') })
 			const body = await request.text()
 			requests.push({ path, method: request.method, body: body ? JSON.parse(body) : null })
+			if (path.endsWith('/link')) return Response.json({ signInUrl: `${new URL(request.url).origin}/open?code=dummy-code` })
 			if (path.endsWith('/platform')) onPlatform?.()
 			if (refused) return Response.json({ error: 'SECRET_PROOF' }, { status: 400 })
 			if (path.endsWith('/connect')) {
@@ -137,7 +138,7 @@ test('malformed config and incompatible init refuse before writing; repeat init 
 	expect((await f.run(['init', '--profile=cf-lightweight', '--url=https://control.example'])).code).toBe(1)
 	expect((await f.run(['init', '--profile=cf-app', '--url=https://control.example'])).code).toBe(1)
 	expect((await f.run(['init', '--url=https://control.example', '--no-open'])).code).toBe(0)
-	expect(f.requests.map(r => r.path.split('/').at(-1))).toEqual(['register'])
+	expect(f.requests.map(r => r.path.split('/').at(-1))).toEqual(['register', 'link'])
 	expect(JSON.parse(readFileSync(join(f.fx.root, '.fabrika/config.json'), 'utf8')).connection).toEqual(connection)
 	expect(readFileSync(join(f.fx.root, '.fabrika/intent/brief.md'), 'utf8')).toBe('keep this')
 	const next = await f.run(['next', '--json'])
@@ -169,7 +170,7 @@ test('connected init defaults to zerops-app and validates options before registr
 	const result = await f.run(['init', '--url=https://control.example', '--no-open'])
 	expect(result.code).toBe(0)
 	expect(JSON.parse(result.stdout).profile).toBe('zerops-app')
-	expect(f.requests.map(r => r.path.split('/').at(-1))).toEqual(['reset', 'register', 'connect'])
+	expect(f.requests.map(r => r.path.split('/').at(-1))).toEqual(['reset', 'register', 'connect', 'link'])
 	f.requests.length = 0
 	for (
 		const args of [['deploy', '--timeout=1'], ['deploy', '--wait', '--timeout=NaN'], ['status', '--url=https://control.example'], [
@@ -208,9 +209,10 @@ test('repeat connected init reuses pending and approved pairing without a second
 	const pending = await f.run(args)
 	expect(pending.code).toBe(0)
 	expect(JSON.parse(pending.stdout).platform.pairing).toEqual({ status: 'pending', expiresAt: 9999999999 })
-	expect(JSON.parse(pending.stdout).browserUrl).toContain('/s/configured-session')
+	// The sign-in link the daemon issued for the session, for the human to open.
+	expect(JSON.parse(pending.stdout).browserUrl).toEndWith('/open?code=dummy-code')
 	expect(pending.stdout).not.toContain('authorizationUrl')
-	expect(f.requests.map(r => r.path.split('/').at(-1))).toEqual(['register', 'connect', 'register'])
+	expect(f.requests.map(r => r.path.split('/').at(-1))).toEqual(['register', 'connect', 'link', 'register', 'link'])
 	const mismatch = await f.run(['init', '--url=https://other.example', '--no-open', '--json'])
 	expect(mismatch.code).toBe(1)
 	expect(mismatch.stdout).toBe('')

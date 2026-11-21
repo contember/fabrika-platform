@@ -5,7 +5,7 @@ import { parseArgs } from 'util'
 import { BASE_URL, TIMEOUT_MS } from '../config'
 import { resolveContext } from '../context'
 import { pushPlan, waitForFeedback } from '../daemon-client'
-import { ensureDaemon, openBrowser } from '../daemon-lifecycle'
+import { ensureDaemon, openBrowser, openDashboardLink } from '../daemon-lifecycle'
 
 export async function cmdGate(argv: string[]): Promise<number> {
 	const sub = argv[0]
@@ -106,14 +106,18 @@ async function gateOpen(argv: string[]): Promise<number> {
 		return 1
 	}
 
-	if (result.isNew && result.browserUrl) {
+	// A new session's push answers with a sign-in link, which never goes to the browser as a process argument. A daemon
+	// of an earlier release sends none and serves the page without a credential; its `browserUrl` never held a code.
+	if (result.isNew && result.signInUrl) {
+		openDashboardLink(result.signInUrl)
+	} else if (result.isNew && result.browserUrl) {
 		openBrowser(result.browserUrl)
 	}
 
 	console.log(
 		JSON.stringify({
 			ok: true,
-			browserUrl: result.browserUrl ?? browserUrl,
+			browserUrl: result.signInUrl ?? result.browserUrl ?? browserUrl,
 			revision: result.revision,
 			gate: name,
 			sessionId: ctx.sessionId,

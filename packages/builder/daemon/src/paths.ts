@@ -25,6 +25,8 @@ export const SESSIONS_DIR = paths.sessionsDir
 export const TEMP_DIR = paths.tempDir
 export const PID_FILE = paths.pidFile
 export const CLI_AUTH_FILE = join(paths.tempDir, BUILDER_CLI_AUTH_FILENAME)
+/** The dashboard's secret, in the data directory: it outlives the daemon, so open tabs keep their cookie. */
+export const UI_TOKEN_FILE = join(paths.dataDir, 'ui-token')
 export const COMPILE_TEMP_DIR = paths.compileTempDir
 export const UPLOADS_DIR = paths.uploadsDir
 

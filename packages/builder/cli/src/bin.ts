@@ -3,6 +3,7 @@
 import { InvalidApprovalsError } from '../../shared/approvals'
 import { cmdAdvance } from './commands/advance'
 import { cmdBuild } from './commands/build'
+import { cmdDashboard } from './commands/dashboard'
 import { cmdDesign } from './commands/design'
 import { cmdEnsureDaemon } from './commands/ensure-daemon'
 import { cmdFlows } from './commands/flows'
@@ -35,6 +36,7 @@ Usage:
   fabrika builder gate open <name> --view <f.jsx>    Push a canvas gate and open the dashboard
   fabrika builder gate wait [--gate <n>] [--timeout] Wait for submitted gate feedback
   fabrika builder ensure-daemon                      Start the daemon if it is not running
+  fabrika builder dashboard [--no-open]              Print and open a link that signs a browser in to the dashboard
   fabrika builder flows review                       Write the flows gate view: the route map from the flow files
   fabrika builder design review                      Write the design checkpoint view: overrides, contrast, routes
   fabrika builder induce [--force]                   Derive issues from opice skeleton metadata
@@ -89,6 +91,8 @@ async function dispatchBuilderCli(argv: readonly string[]): Promise<number> {
 			return cmdGate(rest)
 		case 'ensure-daemon':
 			return cmdEnsureDaemon(rest)
+		case 'dashboard':
+			return cmdDashboard(rest)
 		case 'flows':
 			return cmdFlows(rest)
 		case 'design':

@@ -7,6 +7,7 @@ import { BUILDER_CLI_TOKEN_HEADER, BUILDER_DAEMON_HOST, builderDaemonUrl, parseB
 import { startDaemon } from '../src/index'
 import { BuilderPlatform } from '../src/platform'
 import { verifySource } from '../src/platform-source'
+import { signIn } from './dashboard'
 import { fixture, git, type PlatformFixture, source, TOKEN, until } from './platform-fixture'
 
 const fixtures: PlatformFixture[] = []
@@ -25,37 +26,41 @@ describe('local project API and custody', () => {
 		const daemon = startDaemon({ port: 0, sessionsDir: join(f.directory, 'sessions'), platform: f.options })
 		const base = builderDaemonUrl(daemon.port)
 		try {
-			const response = await fetch(`${base}/api/project/${f.id}/register`, { method: 'POST', body: JSON.stringify({ projectRoot: f.root }) })
+			const dashboard = await signIn(daemon)
+			const response = await dashboard.fetch(`${base}/api/project/${f.id}/register`, { method: 'POST', body: JSON.stringify({ projectRoot: f.root }) })
 			expect(response.status).toBe(200)
 			expect(parseBuilderPlatformStatus(await response.json()).credential.available).toBe(false)
 			expect(daemon.sessionManager.get(f.id)).toBeUndefined()
-			const meta = await (await fetch(`${base}/api/session/${f.id}/meta`)).json()
+			const meta = await (await dashboard.fetch(`${base}/api/session/${f.id}/meta`)).json()
 			expect(meta.revisions).toEqual([])
 			expect(meta.currentRevision).toBe(0)
-			expect((await fetch(`${base}/api/phase?session=${f.id}`)).status).toBe(200)
-			const preview = await fetch(`${base}/api/project/${f.id}/preview`, { method: 'POST', body: JSON.stringify({ url: 'http://localhost:6123/' }) })
+			expect((await dashboard.fetch(`${base}/api/phase?session=${f.id}`)).status).toBe(200)
+			const preview = await dashboard.fetch(`${base}/api/project/${f.id}/preview`, {
+				method: 'POST',
+				body: JSON.stringify({ url: 'http://localhost:6123/' }),
+			})
 			expect(parseBuilderPlatformStatus(await preview.json()).previewUrl).toBe('http://localhost:6123/')
 			expect(f.config()['profile']).toBe('app')
 			writeFileSync(join(f.root, 'design.md'), 'safe artifact')
-			expect((await (await fetch(`${base}/api/session/${f.id}/artifact?path=design.md`)).json()).content).toBe('safe artifact')
+			expect((await (await dashboard.fetch(`${base}/api/session/${f.id}/artifact?path=design.md`)).json()).content).toBe('safe artifact')
 			writeFileSync(join(f.directory, 'keys', 'secret'), TOKEN, { mode: 0o600 })
 			symlinkSync(join(f.directory, 'keys'), join(f.root, 'outside'))
-			expect((await fetch(`${base}/api/session/${f.id}/artifact?path=outside/secret`)).status).toBe(403)
+			expect((await dashboard.fetch(`${base}/api/session/${f.id}/artifact?path=outside/secret`)).status).toBe(403)
 			symlinkSync(join(f.directory, 'keys', 'secret'), join(f.root, 'secret.jsx'))
-			const canvas = await fetch(`${base}/api/session/${f.id}/plan`, {
+			const canvas = await dashboard.fetch(`${base}/api/session/${f.id}/plan`, {
 				method: 'POST',
 				headers: { [BUILDER_CLI_TOKEN_HEADER]: daemon.cliAuthToken },
 				body: JSON.stringify({ view: join(f.root, 'secret.jsx'), projectRoot: f.root }),
 			})
 			expect(canvas.status).toBe(400)
 			expect(await canvas.text()).not.toContain(TOKEN)
-			const connect = await fetch(`${base}/api/project/${f.id}/connect`, { method: 'POST', body: JSON.stringify({ controlOrigin: f.origin }) })
+			const connect = await dashboard.fetch(`${base}/api/project/${f.id}/connect`, { method: 'POST', body: JSON.stringify({ controlOrigin: f.origin }) })
 			expect(parseBuilderPlatformStatus(await connect.json()).pairing?.status).toBe('pending')
 			f.tick()
 			await until(() => f.platform.storage.credential(f.id) !== null)
-			const connected = await fetch(`${base}/api/project/${f.id}/platform`)
+			const connected = await dashboard.fetch(`${base}/api/project/${f.id}/platform`)
 			expect(parseBuilderPlatformStatus(await connected.json()).credential.available).toBe(true)
-			const disconnect = await fetch(`${base}/api/project/${f.id}/disconnect`, { method: 'POST', body: '{}' })
+			const disconnect = await dashboard.fetch(`${base}/api/project/${f.id}/disconnect`, { method: 'POST', body: '{}' })
 			expect(parseBuilderPlatformStatus(await disconnect.json()).credential.available).toBe(false)
 		} finally {
 			daemon.stop()

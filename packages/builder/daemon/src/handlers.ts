@@ -6,7 +6,7 @@ import {
 	type SessionManager,
 	watchSession,
 } from '@fabrika/canvas-kernel/server'
-import { jsonResponse, type Route } from '@fabrika/daemon-kit'
+import { jsonResponse, type Route, type UiLinks } from '@fabrika/daemon-kit'
 import { existsSync, readdirSync, readFileSync, statSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import type { z } from 'zod'
@@ -37,6 +37,8 @@ export interface HandlerContext {
 	port: number
 	version: string
 	platform?: BuilderPlatform
+	/** Sign-in links to the dashboard, for the CLI to hand a browser. */
+	uiLinks: UiLinks
 }
 
 function gateOracleFor(sm: SessionManager): GateOracle {
@@ -122,6 +124,15 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 	const { sessionManager, broadcastPlanUpdate, broadcastRevisionUpdate, buildStream } = ctx
 	const platform = ctx.platform ?? new BuilderPlatform((id) => sessionManager.get(id)?.projectRoot)
 	const assertReadable: AssertReadable = (path) => platform.storage.assertPublicFile(path)
+
+	/** A link that signs one browser in to the dashboard and leads to the session's page. */
+	function dashboardLink(sessionId: string): string {
+		return ctx.uiLinks.issue(`/s/${encodeURIComponent(sessionId)}`)
+	}
+
+	function handleLink(_req: Request, _url: URL, match: URLPatternResult): Response {
+		return jsonResponse({ signInUrl: dashboardLink(routeParam(match, 'id')) })
+	}
 
 	function handleHealth(): Response {
 		return jsonResponse({
@@ -210,10 +221,12 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 			broadcastPlanUpdate(sessionId)
 			watchSession(sessionId, sessionManager, broadcastPlanUpdate, { tempDir: COMPILE_TEMP_DIR, assertReadable })
 
-			const browserUrl = `${builderDaemonUrl(ctx.port)}/s/${sessionId}`
+			// `browserUrl` stays the page itself: a CLI of an earlier release hands it to the opener as a process argument.
+			// Only a new session gets a sign-in link, which only this release's CLI reads and opens through a file.
 			return jsonResponse({
 				ok: true,
-				browserUrl,
+				browserUrl: `${builderDaemonUrl(ctx.port)}/s/${sessionId}`,
+				...(isNew ? { signInUrl: dashboardLink(sessionId) } : {}),
 				isNew,
 				revision: session.currentRevision,
 				sessionId,
@@ -487,6 +500,7 @@ export function createHandlers(ctx: HandlerContext): Route[] {
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/health' }), handler: handleHealth },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/phase' }), handler: handlePhase },
 		{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/plan' }), handler: handlePlanPost },
+		{ method: 'POST', pattern: new URLPattern({ pathname: '/api/session/:id/link' }), handler: handleLink },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/canvas/:filename' }), handler: handleCanvasJs },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/meta' }), handler: handleMeta },
 		{ method: 'GET', pattern: new URLPattern({ pathname: '/api/session/:id/artifact' }), handler: handleArtifact },

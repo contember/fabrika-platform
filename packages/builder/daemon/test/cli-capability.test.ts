@@ -58,7 +58,7 @@ test('a local client without the capability cannot bind a session to a directory
 	const push = await pushPlan('stolen', secrets)
 	expect(push.status).toBe(401)
 	const read = await fetch(`${base}/api/session/stolen/artifact?path=credentials`)
-	expect(read.status).toBe(404)
+	expect(read.status).toBe(401)
 	expect(await read.text()).not.toContain('dummy-credential')
 
 	const forged = await pushPlan('stolen', secrets, { [BUILDER_CLI_TOKEN_HEADER]: `${token.slice(0, -1)}x` })
@@ -84,7 +84,7 @@ test('the CLI flow works with the capability', async () => {
 	const project = credentialsDirectory('own-project')
 	const push = await pushPlan('owned', project, { [BUILDER_CLI_TOKEN_HEADER]: token })
 	expect(push.status).toBe(200)
-	const read = await fetch(`${base}/api/session/owned/artifact?path=credentials`)
+	const read = await fetch(`${base}/api/session/owned/artifact?path=credentials`, { headers: { [BUILDER_CLI_TOKEN_HEADER]: token } })
 	expect(await read.json()).toEqual({ path: 'credentials', content: 'dummy-credential' })
 
 	const consumed = await fetch(`${base}/api/session/owned/feedback/consume`, { method: 'POST', headers: { [BUILDER_CLI_TOKEN_HEADER]: token } })

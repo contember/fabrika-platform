@@ -1,3 +1,4 @@
+import { reconnectOrReload } from '@fabrika/daemon-kit/ui-client'
 import type { JSX } from 'react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { AnnotationPanel } from './components/AnnotationPanel'
@@ -132,7 +133,14 @@ export function App(): JSX.Element {
 			ws.onclose = () => {
 				if (closed) return
 				setStatus('offline')
-				reconnect = setTimeout(connect, 2000)
+				reconnectOrReload(
+					() => fetch(`/api/session/${encodeURIComponent(sessionId)}/meta`, { cache: 'no-store' }),
+					() => {
+						if (!closed) reconnect = setTimeout(connect, 2000)
+					},
+					// A daemon that no longer knows this browser refuses everything; its page names the command for a fresh link.
+					() => location.reload(),
+				)
 			}
 		}
 		connect()

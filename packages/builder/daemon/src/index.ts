@@ -1,14 +1,15 @@
 import { createWebSocketManager, SessionManager, unwatchAll, type WSData } from '@fabrika/canvas-kernel/server'
-import { createCapability, dispatch, writeCapabilityFile } from '@fabrika/daemon-kit'
+import { createCapability, dispatch, loadUiToken, uiCookieName, UiLinks, writeCapabilityFile } from '@fabrika/daemon-kit'
 import { resolve } from 'path'
-import { BUILDER_DAEMON_HOST } from '../../shared/urls'
-import { admitCliRoute, admitRequest } from './admission'
+import { BUILDER_DAEMON_HOST, builderDaemonUrl } from '../../shared/urls'
+import { admitCredential, admitRequest } from './admission'
 import { BuildStream } from './build-stream'
 import { createHandlers } from './handlers'
 import { SESSIONS_DIR } from './paths'
 import { BuilderPlatform, type BuilderPlatformOptions } from './platform'
 import { createPlatformRoutes } from './platform-routes'
 import { createStaticHandlers } from './static'
+import { BUILDER_UI_COOKIE_PREFIX, createLinkRoute } from './ui-credential'
 
 export { type Phase, type PhaseId, PHASES } from '../../shared/phases'
 export type { BuildEvent } from './build-stream'
@@ -30,6 +31,11 @@ export interface StartDaemonOptions {
 	platform?: BuilderPlatformOptions
 	/** Where the CLI capability is written once the port is bound, `0600` in a `0700` directory. */
 	cliAuthFile?: string
+	/**
+	 * The dashboard's secret, kept across restarts so open tabs keep their cookie; created `0600` on first use. Without it
+	 * the secret lasts as long as the process.
+	 */
+	uiTokenFile?: string
 }
 
 export interface RunningDaemon {
@@ -53,6 +59,9 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 
 	const portRef = { value: port }
 	const cliAuthToken = createCapability()
+	const uiToken = opts.uiTokenFile === undefined ? createCapability() : loadUiToken(opts.uiTokenFile)
+	const uiCredential = () => ({ cookieName: uiCookieName(BUILDER_UI_COOKIE_PREFIX, portRef.value), token: uiToken })
+	const uiLinks = new UiLinks(() => builderDaemonUrl(portRef.value))
 
 	const handlerCtx = {
 		sessionManager,
@@ -65,9 +74,15 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 			return portRef.value
 		},
 		version: VERSION,
+		uiLinks,
 	}
 
-	const routes = [...createPlatformRoutes(platform), ...createHandlers(handlerCtx), ...createStaticHandlers()]
+	const routes = [
+		...createPlatformRoutes(platform),
+		...createHandlers(handlerCtx),
+		...createStaticHandlers(),
+		createLinkRoute(uiCredential, uiLinks),
+	]
 
 	const server = Bun.serve<WSData>({
 		port,
@@ -76,8 +91,8 @@ export function startDaemon(opts: StartDaemonOptions = {}): RunningDaemon {
 			const url = new URL(req.url)
 			const rejection = admitRequest(req, url, portRef.value)
 			if (rejection) return rejection
-			const cliRefusal = admitCliRoute(req, url, cliAuthToken)
-			if (cliRefusal) return cliRefusal
+			const refusal = admitCredential(req, url, { cliAuthToken, ui: uiCredential() })
+			if (refusal) return refusal
 
 			if (req.method === 'OPTIONS') {
 				return new Response(null, { status: 204 })

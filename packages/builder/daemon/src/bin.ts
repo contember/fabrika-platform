@@ -1,10 +1,10 @@
 #!/usr/bin/env bun
 
-import { mkdirSync, rmSync, writeFileSync } from 'fs'
+import { chmodSync, mkdirSync, rmSync, writeFileSync } from 'fs'
 import { resolve } from 'path'
 import { activeDaemonSchema, builderDaemonUrl } from '../../shared'
 import { startDaemon } from './index'
-import { CLI_AUTH_FILE, PID_FILE, SESSIONS_DIR, TEMP_DIR } from './paths'
+import { CLI_AUTH_FILE, DATA_DIR, PID_FILE, SESSIONS_DIR, TEMP_DIR, UI_TOKEN_FILE } from './paths'
 
 const port = parseInt(process.env['FABRIKA_PORT'] || '19410', 10)
 
@@ -45,7 +45,10 @@ if (active) {
 
 let boundPort: number
 try {
-	;({ port: boundPort } = startDaemon({ port, cliAuthFile: CLI_AUTH_FILE }))
+	// Sessions, project bindings and the dashboard's secret live here; no other OS user reads them from disk.
+	mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 })
+	chmodSync(DATA_DIR, 0o700)
+	;({ port: boundPort } = startDaemon({ port, cliAuthFile: CLI_AUTH_FILE, uiTokenFile: UI_TOKEN_FILE }))
 } catch (error: unknown) {
 	console.error(`fabrika daemon failed to start on :${port}: ${error instanceof Error ? error.message : String(error)}`)
 	process.exit(1)

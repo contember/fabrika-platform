@@ -115,18 +115,22 @@ export const uiHealthSchema = z.object({
 	.transform(({ ok, version, sessions }) => ({ ok, ...(version === undefined ? {} : { version }), ...(sessions === undefined ? {} : { sessions }) }))
 export const activeDaemonSchema = z.object({ ok: z.literal(true), sessionsDir: z.string() })
 export const builderPlatformErrorSchema = z.object({ error: z.object({ code: z.literal('builder_platform'), message: z.string().max(1000) }) })
+/** A link that signs one browser in to a session's dashboard page, which the daemon hands only to the CLI. */
+export const dashboardLinkSchema = z.object({ signInUrl: z.string() })
 export const planResultSchema = z.object({
 	ok: z.boolean(),
 	browserUrl: optionalTextSchema,
+	signInUrl: optionalTextSchema,
 	revision: wireNumberSchema.optional().catch(undefined),
 	isNew: z.boolean().optional().catch(undefined),
 	canvasFiles: z.array(z.string()).optional().catch(undefined),
 	gate: optionalTextSchema,
 	error: optionalTextSchema,
 	errors: z.record(z.string()).optional().catch(undefined),
-}).transform(({ ok, browserUrl, revision, isNew, canvasFiles, gate, error, errors }) => ({
+}).transform(({ ok, browserUrl, signInUrl, revision, isNew, canvasFiles, gate, error, errors }) => ({
 	ok,
 	...(browserUrl === undefined ? {} : { browserUrl }),
+	...(signInUrl === undefined ? {} : { signInUrl }),
 	...(revision === undefined ? {} : { revision }),
 	...(isNew === undefined ? {} : { isNew }),
 	...(canvasFiles === undefined ? {} : { canvasFiles }),

@@ -1,4 +1,4 @@
-import { createDaemonLifecycle, type DaemonLifecycleConfig, DaemonStartError } from '@fabrika/daemon-kit'
+import { createDaemonLifecycle, type DaemonLifecycleConfig, DaemonStartError, openLinkThroughFile } from '@fabrika/daemon-kit'
 import { spawn } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -90,4 +90,9 @@ export function openBrowser(url: string, fallbackUrl: string = url): void {
 		}
 	}
 	console.error(`Open this URL in your browser: ${fallbackUrl}`)
+}
+
+/** Opens a sign-in link to the dashboard through a file only its owner reads: a process argument would show its code. */
+export function openDashboardLink(link: string): void {
+	openLinkThroughFile(link, TEMP_DIR, 'Fabrika builder', (url) => openBrowser(url))
 }

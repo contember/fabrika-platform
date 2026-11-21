@@ -1,9 +1,8 @@
-import type { Route } from '@fabrika/daemon-kit'
+import { openLinkResponse, type Route, UI_LINK_PATH, type UiLinks } from '@fabrika/daemon-kit'
 import { createHash } from 'crypto'
 import { dirname, join } from 'path'
-import { hasUiCookie } from '../admission'
 import { DATA_DIR } from '../paths'
-import { linkRequiredResponse, linkResponse, UI_CODE_QUERY, UI_LINK_PATH, uiCookieHeader, type UiLinks } from '../ui-credential'
+import { LINK_PAGES, uiCookieName } from '../ui-credential'
 
 const MIME_TYPES: Record<string, string> = {
 	js: 'application/javascript',
@@ -124,14 +123,8 @@ export interface SessionPageAccess {
  * without a credential.
  */
 function openLink(access: SessionPageAccess) {
-	return (req: Request, url: URL): Response => {
-		const code = url.searchParams.get(UI_CODE_QUERY)
-		const link = code === null ? null : access.links.redeem(code)
-		if (link === null) return linkRequiredResponse(null)
-		if (link.fresh) return linkResponse(link, uiCookieHeader(access.port, access.uiToken))
-		if (hasUiCookie(req, access)) return linkResponse(link, null)
-		return linkRequiredResponse(null)
-	}
+	const credential = { cookieName: uiCookieName(access.port), token: access.uiToken }
+	return (req: Request, url: URL): Response => openLinkResponse(req, url, credential, access.links, LINK_PAGES)
 }
 
 export function createStaticHandlers(access: SessionPageAccess): Route[] {
