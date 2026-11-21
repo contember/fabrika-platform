@@ -84,8 +84,10 @@ Read this before moving a service onto this driver.
   (`nameReferences`, `sql-names.ts`), so `NEW.x` and `alias.col` stay columns. Inside the migration's
   transaction, before its commit, `databaseCodeCheck` (`database-code.ts`) fails it on an integrity
   escape or on any database object the manifest folded through that file does not name. The classifier
-  feeds the approval (Control cannot reach the database); the catalog check is its runtime witness, and
-  `@fabrika/db`'s codegen runs the same `databaseCodeQuery` against the whole manifest at every start.
+  feeds the approval (Control cannot reach the database); the catalog check is its runtime witness. Every application
+  run also checks the whole manifest once more after the files, with nothing to apply too (`checkDatabaseCode`), so an
+  object created outside a migration fails `fabrika db migrate`, the init command, before a version activates.
+  `@fabrika/db`'s codegen runs the same `databaseCodeQuery` against the whole manifest.
 - **No stored code writes an access table.** Access tables are written only by the platform: given
   `ClassifyMigrationsOptions.accessTables` (`accessTables` of `@fabrika/db/tables`, lowercased), the classifier
   refuses a function or procedure body or a rule action whose `INSERT INTO`, `MERGE INTO`, `UPDATE` or

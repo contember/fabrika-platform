@@ -202,6 +202,7 @@ export async function applyPostgresMigrations(
 				fresh.push(identity)
 			}
 		}
+		if (plan.application !== undefined) await checkDatabaseCode(db, plan, manifests)
 		if (plan.application?.runtimeRole !== undefined) {
 			await grantRuntimeRole(db, plan.application.schema, plan.ledgerTable, plan.application.runtimeRole)
 		}
@@ -221,6 +222,32 @@ export async function applyPostgresMigrations(
 	if (migrationFailed) throw migrationError
 	if (unlockFailed) throw new Error('Postgres migration advisory unlock failed')
 	return fresh
+}
+
+/**
+ * The schema against every migration's declarations, on every run and not only after a file: an object created outside a
+ * migration (a hand-run statement, code that created one at runtime) fails the run, so the init command stops activation.
+ */
+async function checkDatabaseCode(
+	db: SqlDatabase,
+	plan: PostgresMigrationPlan,
+	manifests: ReadonlyMap<string, readonly DatabaseObject[]>,
+): Promise<void> {
+	const application = plan.application
+	if (application === undefined) return
+	const last = plan.bundles.flatMap((bundle) => bundle.migrations.map((migration) => postgresMigrationIdentity(bundle.name, migration.name))).at(-1)
+	try {
+		await db.batch(databaseCodeStatements(db, application, last === undefined ? [] : manifests.get(last) ?? []))
+	} catch (error) {
+		if (error instanceof Error && error.message.startsWith(DATABASE_CODE_FAILURE)) {
+			throw new PostgresMigrationError(
+				`schema ${application.schema} holds database code that escapes it or that no migration declares: ${
+					error.message.slice(DATABASE_CODE_FAILURE.length)
+				}; declare it in a migration or drop it in a new one`,
+			)
+		}
+		throw new PostgresMigrationError('the database code check failed', { cause: error })
+	}
 }
 
 function validateBundle(bundle: PostgresMigrationBundle): void {
