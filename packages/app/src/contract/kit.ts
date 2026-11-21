@@ -356,6 +356,15 @@ export function defineApp<
 	tables: Tables<DB, P>,
 	options: { readonly tokens: Tk } & CallerField<DbIndex<DB, P, V>, Cr>,
 ): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>, Tk, Cr>>
+/**
+ * `caller`: the caller's row, read once per request before the handler as `ctx.caller` (`./caller.ts`). Not the last
+ * overload: options that may be absent report the last one's error, which names the imports.
+ */
+export function defineApp<V extends AnyAppVocabulary, DB, P, const Cr extends keyof DbIndex<DB, P, V>['tables'] & string>(
+	vocabulary: V,
+	tables: Tables<DB, P>,
+	options: { readonly caller: CallerOption<DbIndex<DB, P, V>, Cr> },
+): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>, Record<never, never>, Cr>>
 export function defineApp<
 	V extends AnyAppVocabulary,
 	DB,
@@ -367,12 +376,6 @@ export function defineApp<
 	tables: Tables<DB, P>,
 	options: { readonly imports: Imp } & CallerField<DbIndex<DB, P, V>, Cr>,
 ): App<KitOf<V, DbIndex<DB, P, V>, Imp, Record<never, never>, Cr>>
-/** `caller`: the caller's row, read once per request before the handler as `ctx.caller` (`./caller.ts`). */
-export function defineApp<V extends AnyAppVocabulary, DB, P, const Cr extends keyof DbIndex<DB, P, V>['tables'] & string>(
-	vocabulary: V,
-	tables: Tables<DB, P>,
-	options: { readonly caller: CallerOption<DbIndex<DB, P, V>, Cr> },
-): App<KitOf<V, DbIndex<DB, P, V>, Record<never, never>, Record<never, never>, Cr>>
 export function defineApp(vocabulary: AnyAppVocabulary, tables?: unknown, options?: KitOptions): object {
 	return runtimeApp(vocabulary, options, tables !== undefined)
 }
