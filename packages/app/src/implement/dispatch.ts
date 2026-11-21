@@ -739,6 +739,11 @@ export class ContractRuntime {
 				try {
 					ran = await runInRequest(frame, async () => {
 						const membership = this.#membershipRequest(served.row, caller, request, frame)
+						const binding = this.#parts.fileKinds?.binding(work)
+						// Before the access form, which may ask IAM to create a scope: a person without a row, or one it refuses, is a 403 here.
+						const callerRow = served.caller === undefined ? {} : {
+							caller: await resolveCaller(served.caller, this.#callerHandles(served.row, invocation, caller.subject, binding), caller.principal),
+						}
 						const access = await this.#access(served.row, caller, input, frame, membership)
 						// After every check that refuses the caller, before the handler: a refused caller never reads a receipt.
 						const identity = keyed === null ? null : await requestIdentity(input, query, work, `'${served.row.id}'`)
@@ -748,11 +753,6 @@ export class ContractRuntime {
 							if (stored !== null) {
 								return { replay: replayed(served.row, approvedOutput(served.row, served.output), stored, identity) }
 							}
-						}
-						const binding = this.#parts.fileKinds?.binding(work)
-						// After authorization and before the handler: a person without a row, or one it refuses, is a 403 here.
-						const callerRow = served.caller === undefined ? {} : {
-							caller: await resolveCaller(served.caller, this.#callerHandles(served.row, invocation, caller.subject), caller.principal),
 						}
 						const ctx = Object.freeze({
 							principal: caller.principal,
@@ -927,11 +927,11 @@ export class ContractRuntime {
 	}
 
 	/** The handles the caller's row is read through: the invocation's, declaring nothing an application handle reaches. */
-	#callerHandles(row: EndpointRow, invocation: Invocation | null, principal: string): DataHandles {
+	#callerHandles(row: EndpointRow, invocation: Invocation | null, principal: string, files: FileBinding | undefined): DataHandles {
 		if (invocation === null) {
 			throw new ServerFault('facility_unbound', `'${row.id}' reads the caller's row, and its site reaches no data`)
 		}
-		return invocation.handles('query', NO_DECLARATION, principal)
+		return invocation.handles('query', NO_DECLARATION, principal, 'declared', files)
 	}
 
 	#data(): DataAccess {

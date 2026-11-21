@@ -5,6 +5,7 @@ import type { DataHandles } from '@fabrika/db/framework'
 import { type CallerDeclaration, callerRefusal } from '../contract/caller'
 import { ForbiddenError } from '../errors'
 import { ServerFault } from './faults'
+import type { Principal } from './principal'
 
 /**
  * The person's row of the declared table. Only a person (`user`) has one: any other principal gets `null`, which the
@@ -12,10 +13,10 @@ import { ServerFault } from './faults'
  */
 export async function resolveCaller(
 	declaration: CallerDeclaration,
-	handles: DataHandles,
-	principal: { readonly kind: string; readonly id?: string },
+	handles: Pick<DataHandles, 'rowsNaming'>,
+	principal: Principal,
 ): Promise<Readonly<Record<string, unknown>> | null> {
-	if (principal.kind !== 'user' || principal.id === undefined) {
+	if (principal.kind !== 'user') {
 		return null
 	}
 	const rows = await handles.rowsNaming(declaration.table, declaration.principal, principal.id)

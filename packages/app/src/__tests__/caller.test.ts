@@ -239,4 +239,14 @@ describe('the caller declaration', () => {
 		const built = plain.contract((c) => ({ api: c.rpc('/api', { people }) }))
 		expect(() => serve(built, { database: scoped(tables) })).toThrow(/caller: false opts a group procedure out/)
 	})
+
+	test('serve refuses caller: false on a public procedure of a kit that declares a caller', () => {
+		// The types refuse it too (kit-mistakes/61): a public procedure reads no caller row to opt out of.
+		const visitors = app.group({}, (r) => ({
+			hello: r.query({ output: z.null(), access: { public: true }, actions: ['people.read'] }).handle(() => null),
+		}))
+		withoutCaller(visitors.endpoints.hello)
+		const built = app.contract((c) => ({ api: c.rpc('/api', { visitors }) }))
+		expect(() => serve(built, { database: scoped(tables) })).toThrow(/api\.visitors\.hello: caller: false opts a group procedure out/)
+	})
 })

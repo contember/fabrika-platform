@@ -31,10 +31,11 @@ only because that table is readable by every action.
 2. **Every procedure of an RPC group that names callers reads it, unless it opts out with `caller: false`.** The
    default is on, so a new endpoint cannot forget it. A public procedure, a link or export procedure, a job and a
    webhook read none; `caller: false` anywhere else is refused by the types and again by `serve`.
-3. **The read runs after authorization and before the handler, in the invocation's transaction.** Order: the
-   requirement, admission, the input, the access form, then the caller's row, then the handler. A person without a
-   row or with a refused one gets the 403 before the handler runs; nothing the handler would write is written. The
-   handler gets the row as `ctx.caller`, typed as the table's row read with its read action.
+3. **The read runs after the proxy's decision and before the access form, in the invocation's transaction.** Order:
+   the requirement, admission, the input, the caller's row, the access form, then the handler. A `creates` access form
+   asks IAM to create a scope, so a person without a row or with a refused one gets the 403 before IAM is asked and
+   before the handler runs; nothing is created or written. The handler gets the row as `ctx.caller`, typed as the
+   table's row read with its read action; a file column of it is a reference the request may serve and open.
 4. **Only a person has a row.** A `human` caller's principal id is looked up; any other caller kind of the group
    (`machine`) gets `ctx.caller === null`, which the type says (`Row | null` for a group of `['human', 'machine']`).
 5. **The read is the framework's own, of one table, by the principal column only.** `@fabrika/db`'s handles gain
@@ -44,8 +45,8 @@ only because that table is readable by every action.
    (`caller_column`), never a pass.
 6. **It is framework API, not platform protocol.** Neither the declaration nor `caller: false` reaches the contract
    artifact: the static reader accepts both and the artifact is the one the same contract without them compiles to.
-   The proxy, Control and IAM see nothing of it, and it decides no access: the proxy's decision and the access form
-   already ran. It is authorization in the vocabulary of `docs/reference/overview.md`, like `.require`.
+   The proxy, Control and IAM see nothing of it, and it decides no access: the proxy's decision already ran, and the
+   access form still runs after it. It is authorization in the vocabulary of `docs/reference/overview.md`, like `.require`.
 
 ## Consequences
 

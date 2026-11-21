@@ -192,11 +192,12 @@ export const app = defineApp(vocabulary, tables, {
 })
 ```
 
-Every procedure of a group that names callers then reads the person's row after the access form and before the
-handler, in the request's transaction, as an unscoped read of `table` where `principal` is the token's principal id,
-with the columns of the table's read action. No row is a 403 with `missing`; a row that meets a `refuse` rule (`equals`
-or `not` a value; the first that matches) is a 403 with its message; two rows are a 500. The handler reads the row as
-`ctx.caller`. A `machine` caller of a group that admits one gets `ctx.caller === null`. A procedure that must run
+Every procedure of a group that names callers then reads the person's row before the access form, so a refused person
+never makes IAM create a scope, and so before the handler. It reads in the request's transaction, as an unscoped read
+of `table` where `principal` is the token's principal id, with the columns of the table's read action. No row is a 403
+with `missing`; a row that meets a `refuse` rule (`equals` or `not` a value; the first that matches) is a 403 with its
+message; two rows are a 500. The handler reads the row as `ctx.caller`; a file column of it is a reference the request
+may serve and open, as one read through `ctx.db` is. A `machine` caller of a group that admits one gets `ctx.caller === null`. A procedure that must run
 without a row, such as the one that binds an account to its row, declares `caller: false`; a public, link or export
 procedure, a job and a webhook read none. Nothing of it reaches the contract artifact or the proxy: it is the
 application's own authorization, like `.require()`.
@@ -396,8 +397,8 @@ Per request, in this order:
    charged whatever follows (429);
 9. read the body within `limits.maxBytes` (413) and its deadline (408), parse it strictly (400), verify each
    signed token in it as it is parsed ([Signed tokens](#signed-tokens)), stage its file parts
-   ([Stored files](#stored-files)), run the access form, remove the `from` field, read the caller's row (403 when it
-   refuses the person; [The caller's row](#the-callers-row)), call the handler, project the output
+   ([Stored files](#stored-files)), read the caller's row (403 when it refuses the person;
+   [The caller's row](#the-callers-row)), run the access form, remove the `from` field, call the handler, project the output
    through its schema (a union through its first branch that accepts the value), answer `{ result }`. The handler's
    `ctx.signal` aborts when the client leaves or `limits.timeoutMs` passed, counted from the last body byte. A
    `file('<kind>')` output answers the stored file the handler returned, and a `redirect()` output answers its target
