@@ -75,7 +75,13 @@ import {
 	type StorageProvenanceMarker,
 	unprovenBucketReason,
 } from './exposure'
-import { assertAuthoredManagedDocument, assertAuthoredManagedInputs, overlayRelease } from './managed-env'
+import {
+	assertApplicationSecretName,
+	assertAuthoredManagedDocument,
+	assertAuthoredManagedInputs,
+	assertNoStoredRuntimeVariable,
+	overlayRelease,
+} from './managed-env'
 import {
 	applicationDatabaseOf,
 	type FabrikaImportDocument,
@@ -639,6 +645,9 @@ const writeServiceEnv = async (env: StepEnv): Promise<void> => {
 	assertRunning(signal)
 	// One read: every write below waits for its own user-data sync, so the build request never meets `userDataSyncRunning`.
 	const records = await zerops.api.listServiceEnv({ serviceId, signal })
+	// Control hands a non-dev deploy no secret: Zerops keeps them on this service, as the sensitive records `secrets.put`
+	// writes. A descriptor's `run.envVariables` are listed here too, readable, and are the repository's to author.
+	assertNoStoredRuntimeVariable(records.filter((record) => record.sensitive).map((record) => record.key))
 	const changes: ServiceEnvChange[] = []
 	const put = (key: string, value: string, sensitive: boolean): void => {
 		changes.push({ line: `${key}: updated`, apply: () => zerops.api.putServiceEnv({ serviceId, key, value, sensitive, signal }) })
@@ -1169,6 +1178,7 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		throw new Error(`zerops: artifact environment drift: expected \`${run.env}\`, got \`${run.artifact.app.env}\``)
 	}
 	assertAuthoredManagedInputs({ variableNames: Object.keys(run.vars), secretNames: Object.keys(run.secrets) })
+	for (const name of Object.keys(run.secrets)) assertApplicationSecretName(name)
 	const hostnames = manifestServiceHostnames(run.artifact)
 	const document = interpolateManifest(run.artifact.target.importDocument, run.artifact.app.pipeline.vars, run.vars, hostnames)
 	const compiled = { yaml: renderYaml(document), hostnames }

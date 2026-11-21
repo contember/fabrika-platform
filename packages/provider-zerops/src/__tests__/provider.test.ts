@@ -1182,6 +1182,34 @@ describe('Zerops provider', () => {
 		expect(log).not.toContain('private-service-key')
 	})
 
+	test('refuses a deploy to a service that already holds a secret the runtime reads, before any variable write or version', async () => {
+		const provider = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv: [{ id: 'env-bun', key: 'BUN_OPTIONS', content: '--eval=1', type: 'USER', sensitive: true }],
+			})
+		)
+		await expect(execute(deployRun(recorded), provider)).rejects.toThrow('`BUN_OPTIONS` is read by the runtime')
+		expect(recorded.envWrites).toEqual([])
+		expect(recorded.envDeletes).toEqual([])
+		expect(recorded.calls.filter((call) => call.startsWith('createAppVersion'))).toEqual([])
+	})
+
+	test("deploys a service whose descriptor authors a runtime name, which '/env' lists as a readable variable", async () => {
+		const provider = createZeropsDeployer(() =>
+			makeCollaborators(recorded, {
+				serviceEnv: [{ id: 'env-path', key: 'PATH', content: '/app/bin:/usr/bin', type: 'USER', sensitive: false }],
+			})
+		)
+		await execute(deployRun(recorded), provider)
+		expect(recorded.envDeletes).toEqual([])
+	})
+
+	test('refuses a secret the runtime reads when it is handed to the run', async () => {
+		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
+		await expect(provider({ ...deployRun(recorded), secrets: { LD_PRELOAD: '/tmp/x.so' } })).rejects.toThrow('`LD_PRELOAD` is read by the runtime')
+		expect(recorded.calls).toEqual([])
+	})
+
 	test('rejects artifact identity drift', async () => {
 		const provider = createZeropsDeployer(() => makeCollaborators(recorded))
 		const run = deployRun(recorded)
