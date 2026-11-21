@@ -26,6 +26,9 @@ const SERVE: readonly string[] = ['bun', `--max-http-header-size=${APPLICATION_S
 const MIGRATE: readonly string[] = [FABRIKA_BIN, 'db', 'migrate']
 const PLATFORM_TSCONFIG = 'fabrika/tsconfig.platform.json'
 
+/** The application CLI's arguments that fail when the committed schema types are stale, run from the application root. */
+export const SCHEMA_TYPES_CHECK: readonly string[] = ['db', 'codegen', '--verify']
+
 /**
  * The first framework minor whose build type-checks the SPA under `web/`; an older application never had it checked.
  * Read from `checkRelease`: Control picks the reader by the pin's minor, so the two always share it.
@@ -127,6 +130,33 @@ export interface ContractCheck {
 	readonly command: string
 }
 
+/** The checks of a build, and the platform tsconfig its `tsc` check reads, which the build writes into the source root first. */
+export interface ContractChecks {
+	readonly tsconfig: { readonly write: string; readonly lines: readonly string[] }
+	/** In the order a build runs them. */
+	readonly checks: readonly [tests: ContractCheck, tsc: ContractCheck, check: ContractCheck]
+}
+
+/** An absolute path of characters no shell reads as more than one word. */
+const SOURCE_ROOT_PATTERN = /^\/[A-Za-z0-9._@+/-]*$/
+
+/**
+ * The checks of an application whose source is at `sourceRoot` (absolute), with `@fabrika/check` at `checkRelease`. Each
+ * command runs in the source root. `tsc` and the checker run from `/tmp`, so neither resolves the application's own copy.
+ */
+export function contractChecks(sourceRoot: string, checkRelease: string): ContractChecks {
+	if (!SOURCE_ROOT_PATTERN.test(sourceRoot)) throw new Error('the source root must be an absolute path a shell reads as one word')
+	if (!FRAMEWORK_RELEASE_PATTERN.test(checkRelease)) throw new Error('the checker release must be a release version')
+	return {
+		tsconfig: { write: PLATFORM_TSCONFIG, lines: [platformTsconfigContents(checkRelease)] },
+		checks: [
+			{ name: 'tests', command: TESTS_COMMAND },
+			{ name: 'tsc', command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${sourceRoot}/${PLATFORM_TSCONFIG}` },
+			{ name: 'fabrika-check', command: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}` },
+		],
+	}
+}
+
 export interface ContractRecipe {
 	/** The steps after the authored SPA commands, in order. */
 	readonly build: readonly ContractBuildStep[]
@@ -164,25 +194,18 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 		? [
 			{ path: MIGRATE_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${MIGRATE.join(' ')}`]) },
 			// The committed schema types must match the migrated schema.
-			{ path: VERIFY_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${FABRIKA_BIN} db codegen --verify`]) },
+			{ path: VERIFY_SCRIPT, lines: script([`FABRIKA_APP_ID=${appId} exec ${[FABRIKA_BIN, ...SCHEMA_TYPES_CHECK].join(' ')}`]) },
 		]
 		: []
-	const tests: ContractCheck = { name: 'tests', command: TESTS_COMMAND }
-	const tsc: ContractCheck = {
-		name: 'tsc',
-		command: `cd /tmp && bun x --bun -p typescript@${PLATFORM_TYPESCRIPT_VERSION} tsc -p ${sourceRoot}/${PLATFORM_TSCONFIG}`,
-	}
-	const check: ContractCheck = {
-		name: 'fabrika-check',
-		command: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-check ${sourceRoot}`,
-	}
+	const { tsconfig, checks } = contractChecks(sourceRoot, checkRelease)
+	const [tests, tsc, check] = checks
 	return {
 		build: [
 			{ run: INSTALL },
 			{ run: tests.command },
 			{ run: `rm -rf node_modules && ${INSTALL}` },
 			{ run: `bun -e "await import('@fabrika/app/build').then((build) => build.writeGeneratedEntry('.', 'bun'))"` },
-			{ write: PLATFORM_TSCONFIG, lines: [platformTsconfigContents(checkRelease)] },
+			tsconfig,
 			{ run: tsc.command },
 			{ run: check.command },
 			...init.map((generated) => ({ write: generated.path, lines: generated.lines })),
@@ -190,7 +213,7 @@ export function contractRecipe(input: ContractRecipeInput): ContractRecipe {
 			// After every check, so a map is uploaded only for a build that can deploy; the report line says how it went.
 			...(input.sourceMaps ? [{ run: `cd /tmp && bun x --bun -p @fabrika/check@${checkRelease} fabrika-source-maps ${sourceRoot} || true` }] : []),
 		],
-		checks: [tests, tsc, check],
+		checks,
 		init: init.map((generated) => generated.path),
 		start: START_SCRIPT,
 		serve: SERVE,
