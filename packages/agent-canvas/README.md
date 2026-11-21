@@ -116,7 +116,9 @@ the thread's state show up next to the element.
 
 Threads are stored per project under the daemon's data directory. The daemon accepts widget requests only from loopback
 origins (`localhost`, `127.0.0.1`, `*.localhost`) and agent requests only from clients that send no `Origin`, so a web
-page cannot queue work for the agent.
+page cannot queue work for the agent. The review proxy answers only requests addressed to `localhost`, `127.0.0.1` or
+`[::1]` on its own port, and refuses state-changing requests and WebSocket upgrades from any origin other than its own,
+so a web page cannot drive the application through it.
 
 #### Remote review
 

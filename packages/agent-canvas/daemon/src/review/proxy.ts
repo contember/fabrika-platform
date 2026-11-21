@@ -1,4 +1,5 @@
 import { z } from 'zod'
+import { allowedHosts, daemonOrigins } from '../admission'
 import type { ReviewStore } from './store'
 
 /** Vite's hot reload message that makes its client reload the page. */
@@ -30,6 +31,27 @@ type ProxyServer = Bun.Server<ProxySocketData>
 interface RunningProxy {
 	target: string
 	server: ProxyServer
+}
+
+function refuse(reason: string): Response {
+	return new Response(`agent-canvas review: ${reason}`, { status: 403, headers: { 'Content-Type': 'text/plain; charset=utf-8' } })
+}
+
+/**
+ * Admission for a proxy listener on `port`, before any upstream connection. The Host must name the proxy on loopback,
+ * which refuses a DNS-rebound page. A request that changes state, and every WebSocket upgrade, must come from the
+ * proxy's own origin or send none: the application gets the request under its own origin, so it cannot refuse a
+ * foreign page itself. Returns the refusal, or null when the request is admitted.
+ */
+export function admitProxyRequest(req: Request, port: number): Response | null {
+	const host = req.headers.get('Host')
+	if (host === null || !allowedHosts(port).has(host.toLowerCase())) return refuse('host not allowed')
+	const changesState = req.method !== 'GET' && req.method !== 'HEAD' && req.method !== 'OPTIONS'
+	// Any `Upgrade`, not only `websocket`: `forward` would otherwise hand a listed protocol on to the application.
+	const isUpgrade = req.headers.has('Upgrade')
+	const origin = req.headers.get('Origin')
+	if ((changesState || isUpgrade) && origin !== null && !daemonOrigins(port).has(origin)) return refuse('origin not allowed')
+	return null
 }
 
 /** Puts the widget's tag before `</body>`, or at the end of a document without one. */
@@ -116,6 +138,8 @@ export class ReviewProxies {
 			port,
 			hostname: 'localhost',
 			fetch: async (req, server) => {
+				const refusal = admitProxyRequest(req, server.port ?? port)
+				if (refusal !== null) return refusal
 				const url = new URL(req.url)
 				// The path is set, not resolved against `target`: a path like `//host/x` stays a path on the application.
 				const upstreamUrl = new URL(target)
@@ -177,6 +201,9 @@ export class ReviewProxies {
 async function forward(req: Request, upstreamUrl: URL, proxyOrigin: string, widgetTag: string): Promise<Response> {
 	const headers = new Headers(req.headers)
 	headers.delete('Host')
+	// Hop-by-hop: a plain request never switches protocols on the application.
+	headers.delete('Upgrade')
+	headers.delete('Connection')
 	// Uncompressed, so an HTML page can take the widget's tag.
 	headers.set('Accept-Encoding', 'identity')
 	if (headers.get('Origin') === proxyOrigin) headers.set('Origin', upstreamUrl.origin)
