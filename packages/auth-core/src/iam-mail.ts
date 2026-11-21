@@ -1,6 +1,6 @@
 // IAM's own e-mails, in every language it speaks, and how an application's wording of them (`mail`, `MailTemplate`)
 // is rendered. IAM sends them; `fabrika app dev`'s stand-in IAM shows the same messages, so both read them from here
-// and a preview never drifts from what IAM sends. A value is plain text: every one is escaped where HTML inserts it.
+// and a preview matches what IAM of the same release sends. A value is plain text: every one is escaped where HTML inserts it.
 // The wording is IAM's and changes with IAM, in any release: an application words its e-mails through its contract's
 // `mail` templates, not by reading these strings.
 

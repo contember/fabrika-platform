@@ -567,7 +567,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   installation: ADR-0077.
   `messageTemplateFor` (`src/messages.ts`) is the one place a message's template is chosen. The e-mails' words and
   their rendering live in `@fabrika/auth-core` (`iamMailCatalog`, `iamMessageTemplate`), which `src/catalog/` spreads
-  into each language's catalog, so `fabrika app dev`'s stand-in IAM shows exactly the mail IAM sends. A refused
+  into each language's catalog, so `fabrika app dev`'s stand-in IAM shows the mail IAM of the same release sends. A refused
   browser-facing request answers `authFailurePage` with a typed `AuthFailure`, in the request's language where an application is known before the
   refusal; a failure before any application is known, logout and the terminal pages speak the reader's language
   (`readerLocale`: the request's hints, else the default). The account question speaks the signed-in principal's
