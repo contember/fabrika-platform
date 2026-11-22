@@ -198,4 +198,63 @@ describe('a path that could leave the tenant is refused', () => {
 		)
 		expect(() => tablesWith(when, [labelKey, tenantKey], undefined, ['id', 'project_id', 'org_id'])).not.toThrow()
 	})
+
+	test('a path through the parent column whose covering key has an ancestor column that may be null', () => {
+		const parentKey: TaskKey = { columns: ['project_id'], table: 'projects', references: ['id'] }
+		const when = { 'project_id.label_id': { isNull: false } }
+		expect(() => tablesWith(when, [parentKey, labelKey, tenantKey], undefined, ['id', 'project_id', 'label_id'])).toThrow(
+			"tasks.project_id: org_id of tasks may be null, and a null skips the foreign key that holds the row's tenant",
+		)
+		expect(() => tablesWith(when, [parentKey, labelKey, tenantKey])).not.toThrow()
+	})
+})
+
+describe("a path through a dimension table's container column", () => {
+	interface Nested {
+		orgs: { id: string; version: number }
+		projects: { id: string; org_id: string; archived: ColumnType<boolean, boolean, boolean>; version: number }
+		milestones: { id: string; project_id: string; org_id: string; version: number }
+	}
+	type MilestoneColumn = keyof Nested['milestones'] & string
+
+	function nestedTables(milestoneNotNull: readonly MilestoneColumn[]) {
+		const columns: TypedColumnList<Nested> = {
+			orgs: { columns: ['id', 'version'], foreignKeys: [], notNull: ['id', 'version'] },
+			projects: {
+				columns: ['id', 'org_id', 'archived', 'version'],
+				foreignKeys: [{ columns: ['org_id'], table: 'orgs', references: ['id'] }],
+				booleans: ['archived'],
+				notNull: ['id', 'org_id', 'archived', 'version'],
+			},
+			milestones: {
+				columns: ['id', 'project_id', 'org_id', 'version'],
+				foreignKeys: [
+					{ columns: ['project_id'], table: 'projects', references: ['id'] },
+					{ columns: ['project_id', 'org_id'], table: 'projects', references: ['id', 'org_id'] },
+				],
+				notNull: milestoneNotNull,
+			},
+		}
+		const nested = {
+			app: 'nested',
+			dimensions: { org: {}, project: { in: 'org' }, milestone: { in: 'project' } },
+			actions: { 'milestones.read': 'Read milestones' },
+			roles: {},
+		} as const
+		return defineTables(nested, columns)({
+			orgs: { scope: { dimension: 'org' }, actions: { read: 'milestones.read' }, version: 'version' },
+			projects: { scope: { dimension: 'project' }, actions: { read: 'milestones.read' }, version: 'version' },
+			milestones: {
+				scope: { dimension: 'milestone' },
+				actions: { read: 'milestones.read' },
+				version: 'version',
+				when: { 'milestones.read': { 'project_id.archived': { eq: false } } },
+			},
+		})
+	}
+
+	test('is refused while an ancestor column of its covering key may be null', () => {
+		expect(() => nestedTables(['id', 'project_id', 'version'])).toThrow('milestones.project_id: org_id of milestones may be null')
+		expect(() => nestedTables(['id', 'project_id', 'org_id', 'version'])).not.toThrow()
+	})
 })

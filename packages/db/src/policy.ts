@@ -1555,15 +1555,20 @@ function linkTables(parsed: readonly ParsedTable[], vocabulary: VocabularyModel,
 			return false
 		}
 		const scope = resolve(source, []).scope
+		// A view's parent row is read through its parent subquery, which scopes it; a table's through its covering key.
+		const covered = (): boolean => {
+			if (!source.view) requireNotNullAncestors(`${from}.${column}`, source, containmentPairs(column, key, into.chain))
+			return true
+		}
 		// The container column must lead to the table that owns the container dimension, not to any table its key references.
 		if (
 			scope.mode === 'dimension' && scope.container !== undefined && scope.container.column === column && into.scope.mode === 'dimension'
 			&& into.scope.dimension === scope.container.dimension
 		) {
-			return true
+			return covered()
 		}
 		if (scope.mode === 'child' && scope.column === column && scope.parent === to) {
-			return true
+			return covered()
 		}
 		// Any other foreign key reaches a row of the same tenant only when it also holds every ancestor the two share.
 		const pairs = tenantPairs(resolve(source, []), column, into.scope.key, into.chain)
@@ -2960,6 +2965,19 @@ function requireCoveringKey(table: ParsedTable, link: Container, owner: ParsedTa
 			columns.join(', ')
 		}) references ${owner.name} (${referenced.join(', ')}) in a migration, with unique (${referenced.join(', ')}) on ${owner.name}`,
 	)
+}
+
+/**
+ * The column pairs of the covering key a containment column follows (`requireCoveringKey`): the column and the key,
+ * then each column of the owner's chain, which the contained row carries under the same name.
+ */
+function containmentPairs(column: string, key: string, ownerChain: readonly Container[]): [string, string][] {
+	const pairs: [string, string][] = [[column, key]]
+	for (let index = 0; index < ownerChain.length; index++) {
+		const link = ownerChain[index]
+		if (link !== undefined) pairs[pairs.length] = [link.column, link.column]
+	}
+	return pairs
 }
 
 /**

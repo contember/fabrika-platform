@@ -229,8 +229,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   row in a scope its owner is not in.
 - **A foreign key that holds a row's tenant needs its ancestor columns NOT NULL** (`requireNotNullAncestors`). A
   condition's path into another scoped table and a `readThrough` follow one foreign key of exactly the column and every
-  ancestor the two tables share; under MATCH SIMPLE a null ancestor skips the whole key, so a row written raw with one
-  would reach another tenant's row. The column list's `notNull` (codegen's, from the catalog; an older list without it
+  ancestor the two tables share, and a path through a row's own container or parent column rests on its covering key
+  (`containmentPairs`; a view's parent column is scoped by its parent subquery instead); under MATCH SIMPLE a null
+  ancestor skips the whole key, so a row written raw with one would reach another tenant's row. The column list's `notNull` (codegen's, from the catalog; an older list without it
   names none) must hold each ancestor column, or the parse refuses and names it.
 - **Every action is the vocabulary's.** Table actions and a column's own read and write actions are refused unless the
   vocabulary declares them, in the one parse: the reader refuses them from source too.
