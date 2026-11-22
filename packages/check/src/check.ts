@@ -50,7 +50,7 @@ import { checkModuleReferences } from './rules/modules'
 import { checkAmbientModule, checkPackageReplacement } from './rules/packages'
 import { checkBackupPlan, checkMigrationClassification } from './rules/platform-migrations'
 import { checkKeyLiteralNode, checkRuntimeNode, crossAppFetchMessage, rawSqlBindings } from './rules/runtime'
-import { checkStructureNode, checkStructureReferences, checkToolPackages, structurePlace } from './rules/structure'
+import { checkSingleSliceQueries, checkStructureNode, checkStructureReferences, checkToolPackages, structurePlace } from './rules/structure'
 import { checkMockModule, checkTestNode, checkTestSuiteConfig } from './rules/tests'
 import { checkCapabilityNode, checkComments, checkTypeNode } from './rules/types'
 import { moduleSlice, sliceFinding } from './slice'
@@ -334,6 +334,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	for (const path of modules.keys()) {
 		checkStructureReferences(structure, structurePlace(path, path === GENERATED_ENTRY_FILE, generated.has(path)), reporter(path, findings))
 	}
+	findings.push(...checkSingleSliceQueries(structure, new Map([...modules].map(([path, module]) => [path, module.program])), generated))
 
 	// The contract rules read each module's shell slice: a colocated handler, and what only it uses, is application
 	// code, which the rules above checked in full.
