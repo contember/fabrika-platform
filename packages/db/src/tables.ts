@@ -169,9 +169,10 @@ function artifactOf(model: TableModel): TablePolicyArtifact {
 	const declared = [...ownKeys(model.columnReads), ...ownKeys(model.columnWrites)]
 	for (let index = 0; index < declared.length; index++) {
 		const name = declared[index] ?? ''
-		const read = ownEntry(model.columnReads, name)
+		// A single read action stays its text, so a policy that names one keeps its digest.
+		const read = actionArtifact(ownEntry(model.columnReads, name) ?? [])
 		const write = ownEntry(model.columnWrites, name)
-		setOwn(columns, name, { ...(read === undefined ? {} : { read }), ...(write === undefined ? {} : { write }) })
+		setOwn(columns, name, { ...(read === null ? {} : { read }), ...(write === undefined ? {} : { write }) })
 	}
 	return {
 		scope: scopeOf(model.scope),

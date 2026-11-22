@@ -460,8 +460,10 @@ function appReachKit<DB, P>(
 	seed: () => Promise<IsolationWorlds>,
 ) {
 	const policy = tablePolicies(tables)[table]
-	const columnReads: Readonly<Record<string, string>> = Object.fromEntries(
-		Object.entries(policy?.columns ?? {}).flatMap(([column, declared]) => (declared.read === undefined ? [] : [[column, declared.read]])),
+	const columnReads: Readonly<Record<string, readonly string[]>> = Object.fromEntries(
+		Object.entries(policy?.columns ?? {}).flatMap(([column, declared]) =>
+			declared.read === undefined ? [] : [[column, typeof declared.read === 'string' ? [declared.read] : declared.read]]
+		),
 	)
 	const refusedBy = async (run: () => Promise<unknown>): Promise<{ readonly refused: boolean }> => {
 		try {
@@ -528,8 +530,8 @@ function appReachKit<DB, P>(
 				const declared = Object.entries(columnReads)
 				return {
 					status: 200,
-					leaked: declared.filter(([column, read]) => read !== action && answered.has(column)).map(([column]) => column),
-					missing: declared.filter(([column, read]) => read === action && !answered.has(column)).map(([column]) => column),
+					leaked: declared.filter(([column, reads]) => !reads.includes(action) && answered.has(column)).map(([column]) => column),
+					missing: declared.filter(([column, reads]) => reads.includes(action) && !answered.has(column)).map(([column]) => column),
 				}
 			}, (status) => ({ status, leaked: [], missing: [] }))
 		},

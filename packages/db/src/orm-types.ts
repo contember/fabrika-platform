@@ -48,9 +48,11 @@ type AppActionsOf<P, T, F extends 'appRead' | 'appCount'> = PolicyOf<P, T> exten
 	{ readonly actions: { readonly [K in F]: readonly (infer A extends string)[] } } ? A
 	: never
 
-/** Each column that declares its own read action, by column. */
+/** Each column that declares its own read actions, by column: the union of the actions it lists. */
 type ColumnReadsOf<P, T> = PolicyOf<P, T> extends { readonly columns: infer C } ? {
-		readonly [K in keyof C as C[K] extends { readonly read: string } ? K : never]: C[K] extends { readonly read: infer A extends string } ? A : never
+		readonly [K in keyof C as C[K] extends { readonly read: string | readonly string[] } ? K : never]: C[K] extends
+			{ readonly read: infer A extends string | readonly string[] } ? A extends readonly (infer L extends string)[] ? L : A
+			: never
 	}
 	: Record<never, never>
 
@@ -235,10 +237,13 @@ type ListedIn<Ix extends AnyDbIndex, D> = Lookup<Ix['listed'], D>
 type WithinIn<Ix extends AnyDbIndex, D> = Lookup<Ix['within'], D>
 
 /**
- * The columns a capability of action `A` cannot read: each that declares a read action other than exactly `A`. A
- * union `A` (a widened capability type) holds no single action provably, so it reads none of them.
+ * The columns a capability of action `A` cannot read: each whose own read actions do not include `A`. A union `A` (a
+ * widened capability type) holds no single action provably, so it reads none of them.
  */
-type HiddenFor<Reads, A> = { [C in keyof Reads]: [A] extends [Reads[C]] ? ([Reads[C]] extends [A] ? never : C) : C }[keyof Reads]
+type HiddenFor<Reads, A> = { [C in keyof Reads]: IsSingle<A> extends true ? ([A] extends [Reads[C]] ? never : C) : C }[keyof Reads]
+
+/** Whether `A` is one literal, not a union of several. */
+type IsSingle<A, All = A> = [A] extends [never] ? false : A extends unknown ? ([All] extends [A] ? true : false) : never
 
 /**
  * A row as a capability of action `A` reads, filters and sorts it: a column that declares another read action is

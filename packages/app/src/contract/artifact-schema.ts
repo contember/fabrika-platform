@@ -405,7 +405,7 @@ const tablePolicy: z.ZodType<TablePolicyArtifact> = z.strictObject({
 	update: names,
 	version: nullableName,
 	createdBy: nullableName,
-	columns: record(z.strictObject({ read: action.optional(), write: action.optional() })),
+	columns: record(z.strictObject({ read: tableAction.optional(), write: action.optional() })),
 	files: z.record(name, name).optional(),
 	view: z.literal(true).optional(),
 	confers: record(z.strictObject({

@@ -124,6 +124,25 @@ describe('classifyAccess', () => {
 		})
 	})
 
+	test("each action a column's read list gains widens, and each it loses narrows", () => {
+		const reading = (read: TablePolicyArtifact['actions']['read']) => snapshot(BASE, { notes: { ...NOTES_TABLE, columns: { secret: { read } } } })
+		const listed = reading(['notes.delete', 'notes.write'])
+		expect(classifyAccess(snapshot(), listed)).toEqual({
+			outcome: 'widening',
+			changes: [{ effect: 'widens', line: 'Column `notes.secret` is read with `notes.write`' }],
+		})
+		expect(classifyAccess(listed, snapshot())).toEqual({
+			outcome: 'no-widening',
+			changes: [{ effect: 'narrows', line: 'Column `notes.secret` is no longer read with `notes.write`' }],
+		})
+		expect(classifyAccess(snapshot(), reading('notes.delete'))).toEqual({ outcome: 'none', changes: [] })
+		const { secret: _secret, ...columns } = NOTES_TABLE.columns
+		expect(classifyAccess(snapshot(BASE, { notes: { ...NOTES_TABLE, columns } }), listed)).toEqual({
+			outcome: 'no-widening',
+			changes: [{ effect: 'narrows', line: 'Column `notes.secret` is read with `notes.delete` or `notes.write` instead of `notes.read`' }],
+		})
+	})
+
 	test('a new column write action widens, and so does a column that moves under one; dropping one only removes', () => {
 		const assigned = snapshot(BASE, { notes: { ...NOTES_TABLE, columns: { ...NOTES_TABLE.columns, owner: { write: 'notes.delete' } } } })
 		expect(classifyAccess(snapshot(), assigned)).toEqual({

@@ -153,7 +153,7 @@ function tableOperations(policy: TablePolicyArtifact, action: string): string[] 
 		...(actions.appRead?.includes(action) === true ? ['read every row'] : []),
 		...(actions.appCount?.includes(action) === true ? ['count every row'] : []),
 		...columns.flatMap(([column, own]) => [
-			...(own.read === action ? [`read ${column}`] : []),
+			...(tableActions(own.read ?? null).includes(action) ? [`read ${column}`] : []),
 			...(own.write === action ? [`write ${column}`] : []),
 		]),
 	]

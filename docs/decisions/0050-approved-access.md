@@ -367,8 +367,9 @@ whole table or a whole column stays a removal.
   holds the listed actions the caller holds globally and reaches the union of what each of them reaches alone (a
   column of its own read action only where that action reads every row or is the only one reading; an update only
   under an action that writes every column it changes), so its list is what the diff compares.
-- **A column read action** (`columns: { c: { read } }`) is the only action that reads, filters and sorts that
-  column. A new one narrows; a removed one widens (above).
+- **A column read action** (`columns: { c: { read } }`, one action or a list) is the only action, or the listed
+  actions, that read, filter and sort that column. A new one narrows; a removed one widens (above); each action a list
+  gains widens and each it loses narrows.
 - **A column write action** (`columns: { c: { write } }`) lets a capability of that action update exactly its
   columns through the target's `update`; the table's update action no longer updates them. A new or a changed
   column write action widens. A removed one narrows. A column moved from the table's update list under its own write

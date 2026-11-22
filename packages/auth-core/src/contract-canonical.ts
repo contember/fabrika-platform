@@ -4,6 +4,7 @@
 import type {
 	BodyAdmission,
 	Caller,
+	ColumnPolicyArtifact,
 	ColumnTestArtifact,
 	ConditionArtifact,
 	ConditionLiteralArtifact,
@@ -160,6 +161,7 @@ function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
 		scope: table.scope.mode === 'child' ? { ...table.scope, inherit: sorted(table.scope.inherit) } : table.scope,
 		insert: sorted(table.insert),
 		update: sorted(table.update),
+		columns: mapValues(table.columns, canonicalColumn),
 		...(table.when === undefined ? {} : { when: mapValues(table.when, canonicalCondition) }),
 		...(table.relationWhen === undefined
 			? {}
@@ -168,6 +170,11 @@ function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
 		...(table.reveals === undefined ? {} : { reveals: mapValues(table.reveals, canonicalReveals) }),
 		...(table.memberReveals === undefined ? {} : { memberReveals: mapValues(table.memberReveals, canonicalMemberReveals) }),
 	}
+}
+
+/** A column's list of read actions sorted; one action, and a column without its own read, as they are. */
+function canonicalColumn(column: ColumnPolicyArtifact): ColumnPolicyArtifact {
+	return column.read === undefined || typeof column.read === 'string' ? column : { ...column, read: sorted(column.read) }
 }
 
 function canonicalConfers(confers: ConfersArtifact): ConfersArtifact {

@@ -206,7 +206,7 @@ interface ReadOnlyFields<Col extends string, A extends string> {
 	readonly createdBy?: never
 	readonly queue?: never
 	readonly files?: never
-	readonly columns?: { readonly [C in Col]?: { readonly read: A; readonly write?: never } }
+	readonly columns?: { readonly [C in Col]?: { readonly read: TableAction<A>; readonly write?: never } }
 }
 
 /**
@@ -228,7 +228,7 @@ export type VocabularyViewPolicy<Table extends string, Col extends string, A ext
 
 type ReferenceViewPolicy<Col extends string, A extends string> = ReferencePolicy<Col, A> & {
 	readonly actions: NoWriteActions
-	readonly columns?: { readonly [C in Col]?: { readonly read: A; readonly write?: never } }
+	readonly columns?: { readonly [C in Col]?: { readonly read: TableAction<A>; readonly write?: never } }
 }
 
 /** An application table's scope: why its rows belong to no dimension; `key` defaults to `id`. */
