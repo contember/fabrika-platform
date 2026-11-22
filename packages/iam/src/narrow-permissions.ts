@@ -1,4 +1,4 @@
-import { type KeyGrant, matchAction, type PermissionEntry, type Scope } from '@fabrika/auth-core'
+import { type KeyGrant, matchAction, type PermissionEntry, type Scope, uniquePermissions } from '@fabrika/auth-core'
 
 /**
  * Intersect live permissions with a ceiling: an OAuth scope's grants, or a terminal's patterns for an application. The
@@ -7,19 +7,15 @@ import { type KeyGrant, matchAction, type PermissionEntry, type Scope } from '@f
  */
 export function narrowPermissions(live: readonly PermissionEntry[], ceiling: readonly KeyGrant[]): PermissionEntry[] {
 	const result: PermissionEntry[] = []
-	const seen = new Set<string>()
 	for (const held of live) {
 		for (const limit of ceiling) {
 			const action = matchAction(limit.action, held.action) ? held.action : matchAction(held.action, limit.action) ? limit.action : null
 			const scope = narrowerScope(held.scope, limit.scope ?? null)
 			if (action === null || scope === undefined) continue
-			const key = `${action} ${scope === null ? '' : `${scope.type}:${scope.value}`} ${held.source}`
-			if (seen.has(key)) continue
-			seen.add(key)
 			result.push({ action, scope, source: held.source })
 		}
 	}
-	return result
+	return uniquePermissions(result)
 }
 
 /** `null` is global; `undefined` means the two scopes do not overlap. */

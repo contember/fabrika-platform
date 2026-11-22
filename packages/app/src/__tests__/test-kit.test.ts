@@ -323,8 +323,8 @@ describe('the token size bound', () => {
 })
 
 describe('roles that grant the same actions', () => {
-	// Two roles of 200 actions each: their entries together sign a token above the bound, each entry once one below it.
-	const actions = Array.from({ length: 200 }, (_, index) => `items.action${String(index).padStart(3, '0')}`)
+	// Two roles of 150 actions each: their entries together sign a token above the bound, each entry once one below it.
+	const actions = Array.from({ length: 150 }, (_, index) => `items.action${String(index).padStart(3, '0')}`)
 	const vocabulary = defineVocabulary({
 		app: 'overlap',
 		dimensions: { project: {} },
