@@ -60,7 +60,7 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [164](164-a-job-without-handle-prints-the-builders-type.md) — A job, webhook, link or export procedure without `.handle` prints the builder's type, not a one-line fix.
 - [165](165-app-dev-has-no-stand-in-for-an-import.md) — `fabrika app dev` stands in for a form's challenge and an outside HTTP provider, not for a `connect` import.
 - [166](166-the-ui-kit-has-no-prop-or-token-for-common-layout-rules.md) — `DataTable`, `PageHeader` and `Checkbox` lack a prop, a wrapped column breaks inside words, and many layout rules read no token.
-- [167](167-a-mutations-mutate-is-new-every-render-and-the-screen-test-dom-empties-a-form.md) — `mutate` cannot drive an effect, there is no `useQueries`, and `installDom` makes `Form` submit an empty `FormData`.
+- [167](167-a-mutations-mutate-is-new-every-render-and-the-screen-test-dom-empties-a-form.md) — `mutate` cannot drive an effect, and there is no `useQueries`.
 - [168](168-the-error-union-drops-the-refusals-type.md) — A failed challenge reads as any 400, and issue codes are dropped.
 - [169](169-app-dev-runs-no-cron-job-and-the-stand-in-iam-lists-no-invitation.md) — `app dev` runs cron jobs only from the seed or a `then` kick, and the stand-in IAM lists no open invitation.
 - [170](170-a-column-write-scoped-update-cannot-bump-the-version.md) — A raw UPDATE under a column's write action is refused when it also bumps `version`.

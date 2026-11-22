@@ -741,7 +741,7 @@ if (postgres !== null) {
   `TransformStream`, because the clients, the kit, a challenge, a file field and a download run on them, and
   turns navigation off, so a download's link click leaves the page for the next test. Its `FormData` reads a form's
   controls as a browser does, so a submitted `Form` hands `onSubmit` the typed fields. A DOM registration of your own
-  keeps the same classes of Bun, or an input with a file fails in the kit, and a `FormData` of a form is empty. Run the
+  keeps the same classes of Bun, or an input with a file fails in the kit; with Bun's `FormData` kept, a `FormData` of a form is empty. Run the
   tests with `bun test --isolate`, which gives each file its own globals.
 - `await type('Title', 'report')` types into the control whose label (or `aria-label`) is `Title` as React reads a
   person typing; a select takes the option's value. `controlByLabel(label)` answers the control, and

@@ -20,7 +20,7 @@ describe('installDom', () => {
 
 	test('a submitted form gives its handler the fields a browser sends, in a FormData of Bun', async () => {
 		let submitted: FormData | undefined
-		// What `Form` of @fabrika/ui does on submit.
+		// `Form`'s handler of @fabrika/ui, plus the submitter a browser passes.
 		const onSubmit = (event: FormEvent<HTMLFormElement>) => {
 			event.preventDefault()
 			submitted = new FormData(event.currentTarget, event.nativeEvent instanceof SubmitEvent ? event.nativeEvent.submitter : null)
@@ -55,7 +55,9 @@ describe('installDom', () => {
 		await press(view.container.querySelector('button[value="save"]'))
 		await view.unmount()
 		expect(submitted).toBeInstanceOf(FormData)
-		const entries = [...(submitted?.entries() ?? [])].map(([name, value]) => [name, typeof value === 'string' ? value : value.name])
+		const entries = [...(submitted?.entries() ?? [])].map((
+			[name, value]: readonly [string, unknown],
+		) => [name, value instanceof File ? value.name : value])
 		expect(entries).toEqual([
 			['title', 'Report'],
 			['note', 'first\nsecond'],
