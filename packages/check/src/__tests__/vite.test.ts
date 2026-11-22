@@ -30,6 +30,9 @@ const HANDLER_TEXT = ['only a won or lost deal reopens', 'select d.stage']
 
 /** The policy parse `defineTables` runs, and the column list only the policies read: the server's, never the SPA's. */
 const POLICY_MODULES = /packages\/db\/src\/|src\/db\/schema\.generated\.ts$/
+
+/** What the framework's barrels re-export that the client never reads; `sideEffects: false` lets the bundler drop it. */
+const UNREAD_MODULES = /packages\/app\/src\/contract\/artifact-schema\.ts$|packages\/(auth-core|proxy-core)\/src\//
 const POLICY_TEXT = 'defineTables takes the vocabulary and the generated column list'
 
 /** Modules only handlers import, and the stand-in Vite bundles for a Node builtin. */
@@ -90,6 +93,12 @@ describe('a Vite build of the SPA through the plugin', () => {
 		expect(result.ok).toBe(true)
 		expect(result.modules.filter((id) => POLICY_MODULES.test(id))).toEqual([])
 		expect(scripts(sliced)).not.toContain(POLICY_TEXT)
+	})
+
+	test("holds none of the barrels' modules the client never reads", () => {
+		const result = viteBuild(materialize(spaTree()))
+		expect(result.ok).toBe(true)
+		expect(result.modules.filter((id) => UNREAD_MODULES.test(id))).toEqual([])
 	})
 
 	test('a table policy the parse refuses fails the build, as defineTables would refuse it in the page', () => {

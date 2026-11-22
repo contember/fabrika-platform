@@ -53,8 +53,9 @@ export function shellSlicePlugin(options: ShellSliceOptions = {}): ShellSliceVit
 				throw new Error(`${path} is not the contract of the plugin's root ${root}: pass shellSlicePlugin({ root }) the application's root`)
 			}
 			if (code === undefined) return null
-			// Vite watches only its root and the files it loads itself; the shell lies beside `web/`.
-			this.addWatchFile(path)
+			// Vite watches only its root and the files it loads itself; the shell lies beside `web/`, and the SPA loads
+			// no module only the table policies import, which the next read checks again.
+			for (const file of shell.keys()) this.addWatchFile(file)
 			return { code }
 		},
 		watchChange() {

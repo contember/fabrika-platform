@@ -97,9 +97,10 @@ Three constraints shape the answer:
    - Both plugins load the module that declares the table policies with `tables = {}` in place of its
      `defineTables(…)(…)` call, and what only that call imports blanked: the client never reads the policies, and
      `defineApp` reads of `tables` only that it is given. The build parses them instead, with the reader's
-     `readTables`, so a policy the parse refuses fails the build rather than the page. `@fabrika/app`, `@fabrika/db`,
-     `@fabrika/auth-core` and `@fabrika/proxy-core` declare `"sideEffects": false`, so a bundler drops what their
-     barrels re-export and the client does not use (the artifact schema, auth-core's mail and egress rules).
+     `readTables`, so a policy the parse refuses fails the build rather than the page. `@fabrika/auth-core` and
+     `@fabrika/proxy-core` declare `"sideEffects": false`, and `@fabrika/app` and `@fabrika/db` name only their test
+     kits' entry modules, whose production guard runs at load, so a bundler drops what their barrels re-export and the
+     client does not use (the artifact schema, auth-core's mail and egress rules).
    - What the contract adds to a minified Vite bundle, measured on an SPA that calls one endpoint of five (Vite 8.3.8,
      gzip level 6): about 83 KB (23 KB gzip) of fixed cost over a page that calls `fetch` by hand, down from 165 KB
      (49 KB gzip) before the two changes above, then about 0.26 KB per endpoint with its own three-field input and

@@ -69,9 +69,9 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   the policies, `defineApp` reads only that `tables` is given, and the parse is about 50 KB of a minified bundle.
 - Vite plugin: `@fabrika/check/vite-plugin` (`shellSlicePlugin({ root? })`, a structural part of Vite's `Plugin`, so the
   package depends on no Vite) loads the same slices (`shell-modules.ts`, which both plugins share) in Vite's `load`
-  hook, `enforce: 'pre'`, and leaves every other module to Vite. It watches each shell module it loads
-  (`addWatchFile`: Vite watches only its root, usually `web/`) and reads the shell graph again after any change
-  (`watchChange`). It throws for a `fabrika.contract.ts` that is not the one under `root` (a config run from `web/`
+  hook, `enforce: 'pre'`, and leaves every other module to Vite. Once it loads a shell module it watches every one
+  (`addWatchFile`: Vite watches only its root, usually `web/`, and the SPA loads no module only the policies import)
+  and reads the shell graph again after any change (`watchChange`). It throws for a `fabrika.contract.ts` that is not the one under `root` (a config run from `web/`
   without `root`, a symbolic link Vite keeps): Vite would bundle it, handlers included. The package ships TypeScript,
   so Vite runs on Bun (`bun --bun vite build`); Node refuses to strip types under `node_modules` (ADR-0052 decision 9).
 - Source maps: `@fabrika/check/source-maps` finds a build's `*.map` files and uploads them to Operations with the
