@@ -60,13 +60,17 @@ type Lacks<R, C extends string> = C extends keyof R ? false : true
 type Policies = typeof tables extends Tables<DB, infer P> ? P : never
 type Row<A extends 'people.read' | 'people.contact' | 'people.ship' | 'people.pay'> = RowOf<typeof tables, 'people', A>
 
-/** The row types follow the list: each listed action has the column, a third action and a union of two do not. */
+/**
+ * The row types follow the list: each listed action has the column, and so does a union of listed actions none of
+ * which has a `when`; a third action and a union with one off the list do not.
+ */
 export type ColumnReadListTypes = [
 	Expect<Has<Row<'people.contact'>, 'email'>>,
 	Expect<Has<Row<'people.ship'>, 'email'>>,
 	Expect<Lacks<Row<'people.read'>, 'email'>>,
 	Expect<Lacks<Row<'people.pay'>, 'email'>>,
-	Expect<Lacks<Row<'people.contact' | 'people.ship'>, 'email'>>,
+	Expect<Has<Row<'people.contact' | 'people.ship'>, 'email'>>,
+	Expect<Lacks<Row<'people.contact' | 'people.read'>, 'email'>>,
 	Expect<Has<Row<'people.pay'>, 'salary'>>,
 	Expect<Lacks<Row<'people.contact'>, 'salary'>>,
 	Expect<Lacks<Row<'people.read'>, 'salary'>>,

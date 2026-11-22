@@ -449,7 +449,9 @@ input and the HTTP shape (§11).
   global grant. The proxy checks it as one requirement. The handler's `ctx.app` holds the listed actions the caller
   holds, and `ctx.db.app` reaches the union of what each held action reaches alone, never a row of one action with a
   column of another. A read answers the rows any held action's `when` admits; a column with its own read actions
-  shows only where one of them reads every row (no `when` of its own) or is the only held one reading. An update
+  shows only where one of them reads every row (no `when` of its own) or is the only held one reading. The types,
+  which cannot know the held actions, show such a column only when every listed action is one of its read actions and
+  none has a `when`, so whatever the caller holds the runtime answers it; otherwise they hide it. An update
   runs under the held update actions that each write every column it changes, and only their `when` admits the row;
   when none does, it is refused. An insert writes the table's one insert list, so every held insert action covers it
   and their `when` conditions admit the row together. An insert that updates on a conflict needs one held action that

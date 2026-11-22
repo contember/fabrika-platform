@@ -263,8 +263,11 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   unique symbol, so `defineTables(vocabulary, columns)` needs no type argument; a list without the brand makes the
   policies' builder an `Unavailable` that names `fabrika db codegen`.
 - **A capability reads a column that declares its own read actions only when its action is one of them**
-  (`RowFor` in `orm-types.ts`; a column's `read` is one action or a list, as a table operation's): a capability type
-  widened to several actions proves none of them. The row type omits
+  (`RowFor` in `orm-types.ts`; a column's `read` is one action or a list, as a table operation's). A capability type
+  of several actions (an `anyOf` endpoint's, or a widened one) reads it only when every one of them is on the list and
+  none has a `when` (`IndexedTable.conditioned`): then every subset a caller may hold reads it at run time
+  (`readsAsAction`). Options take the condition and order unions (`ListQuery`, `AllQuery`, `CountQuery`), not the row,
+  so a handle that reads more columns is assignable to one that reads fewer, and never the reverse. The row type omits
   the hidden column (`Omit<DealsTable, "margin">`, which a diagnostic names), so a read of it is TypeScript's plain
   "does not exist" error; reference and unscoped rows read through the table's read action. An `unscoped` declaration's
   mode that may be `'write'` (a union or an optional one too) of a reference table is an `Unavailable` at its

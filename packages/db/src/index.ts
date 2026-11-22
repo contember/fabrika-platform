@@ -49,15 +49,18 @@ export {
 export type { JsonColumnValue, JsonValue } from './json'
 export type {
 	AllOptions,
+	AllQuery,
 	AnyDbIndex,
 	ChildRows,
 	ContainedRows,
 	CountOptions,
+	CountQuery,
 	DataKind,
 	DbIndex,
 	IndexedTable,
 	ListOptions,
 	ListPage,
+	ListQuery,
 	NoUnscoped,
 	OrderTerm,
 	OwnerRow,

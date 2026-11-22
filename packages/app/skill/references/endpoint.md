@@ -151,9 +151,12 @@ A screen several application-wide roles read, each with its own reach, is one en
 - A refusal of the data layer answers 403 to a caller holding only some listed actions, and 500 to one holding all of
   them: then no caller could be allowed, so the handler's code is at fault and the failure is recorded.
 - `ctx.holds('<action>')` tells the handler which of them the caller holds: `canClose: ctx.holds('cash.manage')`.
-- The types hide every column of its own read action, because which actions are held is known only per request; read
-  such a column in an endpoint of that action. `ctx.app.action` is unavailable: read `ctx.app.actions`, or ask
-  `ctx.holds`.
+- The types show a column with its own read list only when every listed action of the endpoint is on that list and
+  none of them has a `when` on the table, because which actions are held is known only per request; otherwise they
+  hide it, and you read it in an endpoint of one action on the list. `ctx.app.action` is unavailable: read
+  `ctx.app.actions`, or ask `ctx.holds`.
+- A handle that reads more columns passes where a handle that reads fewer is expected: a shared read function typed for
+  one action's `Pick<…, 'list' | 'get' | 'count'>` takes the handle of an action that also reads the column.
 - An `anyOf` endpoint has no `ctx.target`, `ctx.within`, `ctx.members`, links or delegation, and takes no `capabilities`,
   `creates` or `issues`. A link procedure, an export, a public procedure and the scoped forms (`on`, `in`, `over`)
   take no `anyOf`.
