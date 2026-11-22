@@ -160,7 +160,7 @@ export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleReques
 	if (target === null || target.type !== 'user') {
 		return fail(404, 'IAM knows no person by that address; an IAM administrator invites people')
 	}
-	const contract = await contractGrantProblem(appSchema, administered.app, { roleKey: role.role_key, permissions: null, scopeType: null })
+	const contract = await contractGrantProblem(appSchema, administered.app, { roleKey: role.role_key, permissions: null, scopeType: null }, false)
 	if (contract !== null) return fail(400, contract)
 	try {
 		// S8: the grant ends no later than the administrator's own grants of `manage` and of every action the role carries.

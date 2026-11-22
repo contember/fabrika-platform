@@ -18,6 +18,9 @@ export const BUILTIN_ROLES: Record<string, RoleDef> = {
 	admin: { name: 'Admin', permissions: ['*'] },
 }
 
+/** The built-in `admin`. At a contract application a person's grant of it holds the declared actions instead of `*`. */
+export const ADMIN_ROLE_KEY = 'admin'
+
 /**
  * Build a request-scoped `RoleSource` over the built-ins layered on top of an app's
  * DB roles, already loaded into `appRoles` (role_key -> def). Resolution stays PURE:

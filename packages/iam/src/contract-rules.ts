@@ -1,6 +1,6 @@
 import type { AppSchemaRepository } from './repositories/app-schema'
 import type { PrincipalRow } from './repositories/principals'
-import { BUILTIN_ROLES } from './roles'
+import { ADMIN_ROLE_KEY, BUILTIN_ROLES } from './roles'
 import { parseStoredPermissions } from './stored-permissions'
 
 // ADR-0022 rule 6: what IAM refuses to write, on every write path. A CONTRACT application (its schema
@@ -25,13 +25,15 @@ export async function contractPatternsProblem(appSchema: ContractSchema, app: st
 /**
  * Why this grant may not be written at `app`, or null. A membership role is granted only in a value of its
  * own scope dimension, never globally. For a contract application a grant also carries no wildcard,
- * inline or through its role, the built-in `admin` included. A cross-app grant (`app` null) is not
- * checked: it never reaches an application token.
+ * inline or through its role. The one exception is the built-in `admin` given to a person (`toPerson`), which resolves
+ * there to the declared actions (`listContractAdminActions`); a key's never does, so it never grows with the catalog.
+ * A cross-app grant (`app` null) is not checked: it never reaches an application token.
  */
 export async function contractGrantProblem(
 	appSchema: ContractSchema,
 	app: string | null,
 	grant: { roleKey: string | null; permissions: readonly string[] | null; scopeType: string | null },
+	toPerson: boolean,
 ): Promise<string | null> {
 	if (app === null) {
 		return null
@@ -46,6 +48,9 @@ export async function contractGrantProblem(
 	if (grant.roleKey === null) {
 		const wildcard = firstWildcard(grant.permissions ?? [])
 		return wildcard === undefined ? null : `a contract application lists exact actions, not the wildcard: ${wildcard}`
+	}
+	if (grant.roleKey === ADMIN_ROLE_KEY) {
+		return toPerson ? null : `role '${ADMIN_ROLE_KEY}' is granted only to a person in a contract application: a key lists exact actions`
 	}
 	const permissions = role === null ? BUILTIN_ROLES[grant.roleKey]?.permissions ?? [] : parseStoredPermissions(role.permissions)
 	const wildcard = firstWildcard(permissions)

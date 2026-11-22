@@ -1,4 +1,4 @@
-import { terminalIdentifyProblem, type WorkloadKind } from '@fabrika/auth-core'
+import { parseJsonStringArray, terminalIdentifyProblem, type WorkloadKind } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
 
 import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
@@ -292,6 +292,19 @@ export class AppSchemaRepository {
 			.bind(app)
 			.all<AppScopeRow>()
 		return results
+	}
+
+	/**
+	 * What a person's grant of the built-in `admin` holds at a contract application: every declared action but those of
+	 * its public procedures, which no role may grant (ADR-0022 rule 6).
+	 */
+	async listContractAdminActions(app: string): Promise<string[]> {
+		const { results } = await this.db
+			.prepare(`SELECT actions FROM app_workloads WHERE app = ? AND kind = 'public'`)
+			.bind(app)
+			.all<{ actions: string }>()
+		const publicActions = new Set(results.flatMap((row) => parseJsonStringArray(row.actions)))
+		return (await this.listActionCatalog(app)).filter((action) => !publicActions.has(action))
 	}
 
 	async listAppActions(app: string): Promise<AppActionRow[]> {

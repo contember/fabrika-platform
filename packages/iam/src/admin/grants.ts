@@ -25,15 +25,20 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	if (!scope.ok) {
 		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
 	}
-	const contractProblem = await contractGrantProblem(c.services.repositories.appSchema, app, { ...roleOrInline, scopeType: scope.scopeType })
-	if (contractProblem !== null) {
-		return fail(400, contractProblem)
-	}
-	const expiresAt = Number.isFinite(input.expiresAt) ? input.expiresAt ?? null : null
 	const principal = await c.services.repositories.principals.getPrincipalById(principalId)
 	if (!principal) {
 		return fail(404, 'principal not found')
 	}
+	const contractProblem = await contractGrantProblem(
+		c.services.repositories.appSchema,
+		app,
+		{ ...roleOrInline, scopeType: scope.scopeType },
+		principal.type === 'user',
+	)
+	if (contractProblem !== null) {
+		return fail(400, contractProblem)
+	}
+	const expiresAt = Number.isFinite(input.expiresAt) ? input.expiresAt ?? null : null
 	requireGrantablePrincipal(c, principal)
 	const external = await externalGrantProblem(c.services.repositories.appSchema, principal, app, roleOrInline)
 	if (external !== null) {
@@ -118,7 +123,12 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 	if (!authorization.ok) return fail(400, authorization.message)
 	const scope = parseScope(input)
 	if (!scope.ok) return fail(400, 'scopeType and scopeValue must be both set or both omitted')
-	const problem = await contractGrantProblem(c.services.repositories.appSchema, grant.app, { ...authorization, scopeType: scope.scopeType })
+	const problem = await contractGrantProblem(
+		c.services.repositories.appSchema,
+		grant.app,
+		{ ...authorization, scopeType: scope.scopeType },
+		principal.type === 'user',
+	)
 		?? await externalGrantProblem(c.services.repositories.appSchema, principal, grant.app, authorization)
 	if (problem !== null) return fail(409, problem)
 	const expiresAt = input.expiresAt ?? null

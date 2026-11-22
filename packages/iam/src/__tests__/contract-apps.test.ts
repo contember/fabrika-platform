@@ -4,6 +4,7 @@ import { describe, expect, test } from 'bun:test'
 import { handleAdmin } from '../admin/router'
 import { createIamApp } from '../app'
 import type { Env, RequestContext } from '../env'
+import { resolvePermissionsAt } from '../resolve'
 import { createHarness, type Harness, seedGrant, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 // ADR-0022 rule 6, for a contract application: IAM refuses a wildcard action on every write path and
@@ -169,7 +170,6 @@ describe('declaring a membership role over existing grants', () => {
 describe('grants at a contract application', () => {
 	test.each([
 		['an inline wildcard', { permissions: ['note.*'] }, 'not the wildcard: note.*'],
-		['the built-in admin role', { roleKey: 'admin' }, "role 'admin' lists the wildcard *"],
 		['a global grant of a membership role', { roleKey: 'owner' }, "membership role 'owner' is granted only in a value of scope 'workspace'"],
 		['a membership role in another dimension', { roleKey: 'owner', scopeType: 'team', scopeValue: 't1' }, "scope 'workspace'"],
 	])('refuses %s', async (_name, grant, message) => {
@@ -190,6 +190,41 @@ describe('grants at a contract application', () => {
 		) {
 			expect((await rpc(admin, 'grants.create', { principalId: admin.grantee, app: NOTES, ...grant })).status).toBe(200)
 		}
+	})
+
+	test("grants the built-in admin to a person, holding exactly the declared actions but a public procedure's", async () => {
+		const admin = await asAdmin()
+		const schema: AppSchema = {
+			...CONTRACT_SCHEMA,
+			actions: [...CONTRACT_SCHEMA.actions, { action: 'form.submit' }],
+			workloads: [{ kind: 'public', name: 'site.forms.submit', actions: ['form.submit'] }],
+		}
+		expect((await putSchema(admin, NOTES, schema)).status).toBe(200)
+		expect((await rpc(admin, 'grants.create', { principalId: admin.grantee, app: NOTES, roleKey: 'admin' })).status).toBe(200)
+		const grantee = await admin.h.repositories.principals.getPrincipalById(admin.grantee)
+		if (grantee === null) throw new Error('fixture')
+		const services = admin.h.makeServices({ environment: 'stage', issuer: ORIGIN })
+		const held = await resolvePermissionsAt(services, grantee, NOTES)
+		expect(held.map((entry) => [entry.action, entry.scope]).sort()).toEqual([['members.manage', null], ['note.read', null], ['note.write', null]])
+
+		// A later approved revision is what the grant holds next: an action it adds is held, one it drops is not.
+		const revised: AppSchema = {
+			...schema,
+			actions: [{ action: 'note.read' }, { action: 'note.archive' }, { action: 'members.manage' }, { action: 'form.submit' }],
+		}
+		revised.roles = { reader: { name: 'Reader', permissions: ['note.read'] } }
+		expect((await putSchema(admin, NOTES, revised)).status).toBe(200)
+		expect((await resolvePermissionsAt(services, grantee, NOTES)).map((entry) => entry.action).sort()).toEqual([
+			'members.manage',
+			'note.archive',
+			'note.read',
+		])
+	})
+
+	test('refuses the built-in admin to an api key, which lists exact actions', async () => {
+		const admin = await withContractApp()
+		const provisioned = await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, roleKey: 'admin' })
+		expect([provisioned.status, provisioned.message]).toEqual([400, expect.stringContaining("role 'admin' is granted only to a person")])
 	})
 
 	test('an app that is not a contract keeps the pattern rule, and its membership role still needs its scope', async () => {
