@@ -22,7 +22,11 @@ import { type AccessSnapshot, isBundledMigration, type MigrationEntry, storedSna
 
 /** What one snapshot read may cost: files, rounds of import discovery, bytes per file and in all. */
 export const SNAPSHOT_LIMITS = {
-	readerFiles: 256,
+	/**
+	 * Memory and parse work are bounded by `readerTotalChars` and `readerRounds`, not by this count; each file costs one
+	 * read of the commit, a sequential GitHub request on Cloudflare.
+	 */
+	readerFiles: 512,
 	readerRounds: 32,
 	/** One module's limit, which every reader of the window holds: an older reader parses what it is given before it counts. */
 	readerFileBytes: CONTRACT_LIMITS.moduleBytes,
