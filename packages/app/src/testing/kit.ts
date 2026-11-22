@@ -27,6 +27,7 @@ import {
 	SESSION_COOKIE,
 	type TerminalFailure,
 	TOKEN_ALG,
+	uniquePermissions,
 	UNTRUSTED_FORWARD_HEADERS,
 	workloadKeyVariable,
 } from '@fabrika/auth-core'
@@ -630,7 +631,7 @@ export function bootTestKit<C extends AnyContract>(
 			...(caller.link === null ? {} : { link: { mount: caller.link.mount, chain: [...caller.link.chain] } }),
 			label: caller.label,
 			...(caller.email === null ? {} : { email: caller.email }),
-			permissions: [...(standIn?.permsOf(caller) ?? caller.perms)],
+			permissions: uniquePermissions(standIn?.permsOf(caller) ?? caller.perms),
 			issuedAt: now,
 			expiresAt: now + TOKEN_TTL_SECONDS,
 		})

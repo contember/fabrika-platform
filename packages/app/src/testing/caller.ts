@@ -64,6 +64,10 @@ interface TestCallerCredential {
 	readonly disabled: boolean
 	/** A human's last sign-in to the application (`TestCallerOptions.lastSignInAt`); `null` for one that never did and every other caller. */
 	readonly lastSignInAt: number | null
+	/**
+	 * Each grant's entries, a repeat included, so a role the stand-in IAM removes takes away only its own; the kit's token
+	 * carries each entry once (`uniquePermissions`), as IAM resolves them.
+	 */
 	readonly perms: readonly PermissionEntry[]
 	/** The `px_` key a key caller presents as a bearer; `null` for a session. */
 	readonly key: string | null

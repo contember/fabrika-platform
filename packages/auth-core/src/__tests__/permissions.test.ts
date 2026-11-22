@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isActionAllowed, matchAction, permits, scopedValues } from '../permissions'
+import { isActionAllowed, matchAction, permits, scopedValues, uniquePermissions } from '../permissions'
 import type { PermissionEntry, Scope } from '../types'
 
 describe('matchAction', () => {
@@ -187,5 +187,20 @@ describe('isActionAllowed', () => {
 
 	test('unknown non-wildcard pattern is rejected', () => {
 		expect(isActionAllowed('nope', catalog)).toBe(false)
+	})
+})
+
+describe('uniquePermissions', () => {
+	test('keeps the first of each identical action, scope and source, in order', () => {
+		const read: PermissionEntry = { action: 'notes.read', scope: { type: 'workspace', value: 'w1' }, source: 'grant' }
+		const write: PermissionEntry = { action: 'notes.write', scope: null, source: 'grant' }
+		const bootstrap: PermissionEntry = { action: 'notes.read', scope: { type: 'workspace', value: 'w1' }, source: 'bootstrap' }
+		expect(uniquePermissions([read, write, { ...read }, bootstrap, { ...write }])).toEqual([read, write, bootstrap])
+	})
+
+	test('keeps scopes apart whose type and value join to the same text', () => {
+		const left: PermissionEntry = { action: 'a', scope: { type: 'x:y', value: 'z' }, source: 'grant' }
+		const right: PermissionEntry = { action: 'a', scope: { type: 'x', value: 'y:z' }, source: 'grant' }
+		expect(uniquePermissions([left, right])).toEqual([left, right])
 	})
 })
