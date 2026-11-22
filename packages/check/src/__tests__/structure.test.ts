@@ -149,7 +149,7 @@ describe('a step out of the structure is a hint', () => {
 			])
 		})
 
-		test('an export list, a whole-module load and a caller outside every slice', async () => {
+		test('an export list, an alias, a whole-module load and a caller outside every slice', async () => {
 			const queries =
 				`${fileOf('src/deals/queries.ts')}\nconst countOf = async (deals: { list: () => Promise<unknown[]> }) => (await deals.list()).length\n`
 				+ 'export { countOf as dealCount }\n'
@@ -164,8 +164,16 @@ describe('a step out of the structure is a hint', () => {
 				'src/deals/queries.ts': queries,
 				'src/companies/endpoints.ts': companiesCalling("import * as deals from '../deals/queries'"),
 			})
-			// `lockedStage` is also the deals slice's own; `dealCount` only the companies slice's.
-			expect(whole).toEqual(['src/companies/endpoints.ts:1:1 hint cross-slice-queries', 'src/deals/queries.ts:9:10 hint single-slice-queries'])
+			// A whole-module load from another slice names no function, so it blames that slice for none.
+			expect(whole).toEqual(['src/companies/endpoints.ts:1:1 hint cross-slice-queries'])
+			const aliased = await structureFindings({
+				...ARCHITECTURE_APP,
+				'src/deals/queries.ts': `${queries}export { countOf as countDeals }\n`,
+				'src/deals/endpoints.ts': withImport('src/deals/endpoints.ts', "import { countDeals } from './queries'"),
+				'src/companies/endpoints.ts': companiesCalling("import { dealCount } from '../deals/queries'"),
+			})
+			// One function under two names, used by two slices.
+			expect(aliased).toEqual(['src/companies/endpoints.ts:1:1 hint cross-slice-queries'])
 			const outside = await structureFindings({
 				...ARCHITECTURE_APP,
 				'src/deals/queries.ts': queries,

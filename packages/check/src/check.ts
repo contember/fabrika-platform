@@ -334,7 +334,7 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	for (const path of modules.keys()) {
 		checkStructureReferences(structure, structurePlace(path, path === GENERATED_ENTRY_FILE, generated.has(path)), reporter(path, findings))
 	}
-	findings.push(...checkSingleSliceQueries(structure, new Map([...modules].map(([path, module]) => [path, module.program])), generated))
+	findings.push(...checkSingleSliceQueries(structure, new Map([...modules].map(([path, module]) => [path, module.program]))))
 
 	// The contract rules read each module's shell slice: a colocated handler, and what only it uses, is application
 	// code, which the rules above checked in full.

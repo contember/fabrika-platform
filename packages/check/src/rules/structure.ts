@@ -301,14 +301,11 @@ const usedWithin = (program: AstNode, declarations: ReadonlyMap<string, AstNode>
 
 /**
  * `single-slice-queries`: a function of `src/<a>/queries.ts` that exactly one other slice `src/<b>/` uses belongs in
- * `src/<b>/queries.ts`. A caller is any module but a test; a module outside every slice counts as a caller of its own, so
- * a function a tool or `src/app.ts` also uses stays. A whole-module load (`import *`, `export *`) uses every function.
+ * `src/<b>/queries.ts`. A caller is any module but a test, and a use is a named import or re-export; a function
+ * exported under two names is one function. A module outside every slice, and a whole-module load (`import *`,
+ * `export *`) from another slice, which names no function, leave every function they reach where it is.
  */
-export const checkSingleSliceQueries = (
-	graph: StructureGraph,
-	programs: ReadonlyMap<string, AstNode>,
-	generated: ReadonlySet<string>,
-): Finding[] => {
+export const checkSingleSliceQueries = (graph: StructureGraph, programs: ReadonlyMap<string, AstNode>): Finding[] => {
 	// Who loads each queries module: the importer's slice (`undefined` outside every slice) and the names it takes.
 	const loads = new Map<string, { readonly slice: string | undefined; readonly names: readonly string[] }[]>()
 	for (const importer of programs.keys()) {
@@ -326,26 +323,30 @@ export const checkSingleSliceQueries = (
 	const findings: Finding[] = []
 	for (const [file, program] of programs) {
 		const slice = sliceOf(file)
-		if (slicePart(file) !== 'queries' || slice === undefined || generated.has(file)) continue
+		if (slicePart(file) !== 'queries' || slice === undefined) continue
 		const exported = exportedFunctions(program)
-		// Each function's callers: the slices that use it, and `outside` once a module outside every slice does.
-		const callers = new Map([...exported.keys()].map((name) => [name, { slices: new Set<string>(), outside: false }]))
-		const use = (name: string, caller: string | undefined): void => {
-			const entry = callers.get(name)
+		// Each function's callers, by its local name: the slices that use it, and `unjudged` once a use names no slice.
+		const callers = new Map([...exported.values()].map((fn) => [fn.local, { slices: new Set<string>(), unjudged: false }]))
+		const use = (local: string | undefined, caller: string | undefined): void => {
+			const entry = local === undefined ? undefined : callers.get(local)
 			if (entry === undefined) return
-			if (caller === undefined) entry.outside = true
+			if (caller === undefined) entry.unjudged = true
 			else entry.slices.add(caller)
 		}
 		const within = usedWithin(program, new Map([...exported.values()].map((fn) => [fn.local, fn.declaration])))
-		for (const [name, fn] of exported) if (within.has(fn.local)) use(name, slice)
+		for (const local of within) use(local, slice)
 		for (const load of loads.get(file) ?? []) {
-			for (const name of load.names.includes('*') ? exported.keys() : load.names) use(name, load.slice)
+			if (load.names.includes('*')) {
+				for (const local of callers.keys()) use(local, load.slice === slice ? slice : undefined)
+			} else {
+				for (const name of load.names) use(exported.get(name)?.local, load.slice)
+			}
 		}
 		const report = reporter(file, findings)
 		for (const [name, fn] of exported) {
-			const entry = callers.get(name)
+			const entry = callers.get(fn.local)
 			const [only, ...rest] = entry?.slices ?? []
-			if (entry === undefined || entry.outside || only === undefined || rest.length > 0 || only === slice) continue
+			if (entry === undefined || entry.unjudged || only === undefined || rest.length > 0 || only === slice) continue
 			report(
 				fn.at,
 				'single-slice-queries',
