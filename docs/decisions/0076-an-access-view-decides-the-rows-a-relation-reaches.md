@@ -196,20 +196,29 @@ the approver reads.
     built or not, the declarations express 3,421; the access view takes 968 of the 988 they leave out.
   - A replay measured the access-view part. It took the 976 rules that the declarations leave out and that read no IAM
     data, and generated an access view from each rule's own predicate: the source system's compiled condition, with
-    each variable a column of a cross-joined domain. A rule whose OR mixes bindings became one view per binding. On
-    Postgres with random rows, the replay compared the rows the data layer reaches through the view with the rows the
-    source system's own SQL admits. Reads went through a `Within`. Writes read the existing rows through a `Ref` of the
-    write action; no write ran.
+    each variable a column of a cross-joined domain. A rule whose OR mixes bindings became one view per binding, except
+    the split described below. On Postgres with random rows, the replay compared the rows the data layer reaches
+    through the view with the rows the source system's own SQL admits. Reads went through a `Within`. Writes read the
+    existing rows through a `Ref` of the write action; no write ran.
   - Each of the 968 runnable rules agrees on every seed for a caller whose principal the rows name. 910 of them had a
-    seed where the rule both admits and refuses rows.
+    seed where the rule both admits and refuses rows. With the split below, every rule bound to a principal also agrees
+    for a principal that no row names.
   - The 20 exceptions, not replayed:
     - 12 rules read other principals' memberships from IAM, which an application's database does not hold;
     - 6 rules take their condition from the membership itself, not a value;
     - 2 rules require memberships at two dimensions at once, an AND that one term cannot express.
-  - **A principal-bound view reaches only the principals that the application's rows name.** For a principal no row
-    names, 262 rules reach fewer rows than the source system, never more: each has a branch for every holder of a role,
-    an OR with no variable. It needs a `member` binding, or a table of the application's principals that the view joins.
-    The replay did not run either remedy.
+  - **A branch for every holder of a role needs a second hold.** A principal-bound view reaches only the principals that
+    the application's rows name.
+    - 262 rules OR a branch bound to the principal with a branch that names no variable. Each comes from a role that
+      names no node, so it ports as a role held anywhere (`~rel`). As one principal-bound view, each reached fewer rows
+      than the source system for a principal no row names, never more.
+    - The replay kept the rule as one principal-bound view, held anywhere. It added the branch with no variable as a
+      second view under a second relation, bound by `member` to one node the view maps to every row the branch admits.
+      With both holds, the 262 rules agree for such a principal on all 6 seeds, as they do for a named one.
+    - So the port needs two roles: the role held anywhere, and a membership in that one node. One role inside the node
+      would not do: a hold inside a node narrows the principal-bound term to that node (section 2).
+    - A role held anywhere alone still reaches fewer rows. It needs a table of the application's principals that the
+      view joins. The replay did not run that remedy.
   - The replay does not measure a view's cost, hand-written views, SQLite, or the SQL of the source system's own view
     entities, which it seeded as tables. The data layer's own access-view tests run on SQLite.
 - **A wrong view widens access, across tenants too**: for example a `cross join` without a filter, or a missing tenant
@@ -219,7 +228,8 @@ the approver reads.
   - the framework's skill, which shows how to test what a given principal reads.
 - **Cost.** Each statement under the relation evaluates the view's subquery, so its cost is the view's. An application
   whose view is slow writes the access as a relation source table instead (ADR-0073 section 1) and pays the delegation
-  bound for it.
+  bound for it. Postgres runs two ORed terms as hashed subqueries, so a `Ref`'s statement reads each view whole: in the
+  replay, a `Ref` statement over two generated views took up to about 7 s.
 - **The view's writers, and a membership assigner, delegate without a bound** (section 5). An application that wants
   bounded delegation uses a relation source.
 - **Rollout of an existing installation.** No generated installation file, environment variable, provider state or IAM
