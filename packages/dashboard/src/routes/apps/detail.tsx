@@ -2,6 +2,7 @@ import { createPage, Link, useNavigate } from '@buzola/router'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { AccessMapSection } from '../../components/app-detail/AccessMapSection'
+import { AdminAccessSection } from '../../components/app-detail/AdminAccessSection'
 import { ApprovalsSection } from '../../components/app-detail/ApprovalsSection'
 import { BuildConfigSection } from '../../components/app-detail/BuildConfigSection'
 import { DeviationsSection } from '../../components/app-detail/DeviationsSection'
@@ -17,6 +18,7 @@ import { api, type AppEnvDto } from '../../lib/api'
 import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
+import { readSelfAdmin } from '../../lib/self-admin'
 
 // App detail: the per-app registry + operations view: its meta, its environments (each with a
 // Deploy button + edit/delete), its secret references (names + layer + vault ref, values never shown),
@@ -25,16 +27,19 @@ import { fmtDate } from '../../lib/format'
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
-		const [app, envs, secrets, vars, runs, namespaces, installation] = await Promise.all([
+		const environments = api.apps.environments.list({ appId: params.id })
+		const [app, envs, secrets, vars, runs, namespaces, installation, selfAdmin] = await Promise.all([
 			api.apps.get({ appId: params.id }),
-			api.apps.environments.list({ appId: params.id }),
+			environments,
 			api.apps.secrets.list({ appId: params.id }),
 			api.apps.variables.list({ appId: params.id }),
 			api.runs.list({ appId: params.id, limit: 10 }),
 			api.namespaces.list(),
 			api.installation(),
+			environments.then((listed) => readSelfAdmin(params.id, listed.items.map((env) => env.env))),
 		])
 		return {
+			selfAdmin,
 			app,
 			envs: envs.items,
 			secrets: secrets.items,
@@ -46,7 +51,7 @@ export default createPage()
 	})
 	.route('/apps/:id')
 	.render(({ data, invalidate }) => {
-		const { app, envs, secrets, vars, runs, namespaces, providerId } = data
+		const { app, envs, secrets, vars, runs, namespaces, providerId, selfAdmin } = data
 		const [confirming, setConfirming] = useState(false)
 		const navigate = useNavigate()
 
@@ -87,6 +92,7 @@ export default createPage()
 				<BuildConfigSection app={app} providerId={providerId} onDone={invalidate} />
 				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} providerId={providerId} onDone={invalidate} />
 				<DataLinks appId={app.id} envs={envs} />
+				<AdminAccessSection state={selfAdmin} onDone={invalidate} />
 				<ApprovalsSection appId={app.id} envs={envs} onDone={invalidate} />
 				<SurfaceSection envs={envs} />
 				<AccessMapSection envs={envs} />

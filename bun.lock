@@ -393,6 +393,7 @@
       "dependencies": {
         "@buzola/router": "^0.0.16",
         "@fabrika/app": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
         "@fabrika/control-contract": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",

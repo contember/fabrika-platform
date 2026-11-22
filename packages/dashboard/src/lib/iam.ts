@@ -23,7 +23,7 @@ export interface SignedInPrincipal {
 }
 
 /** For best-effort reads: an IAM refusal never triggers the Delivery login bounce. */
-function quietIamClient(fetcher: RpcFetch) {
+export function quietIamClient(fetcher: RpcFetch) {
 	return createRpcClient<IamAdminRpcContract>({ baseUrl: RPC_BASE, fetch: fetcher, bounceOnAuth: false })
 }
 

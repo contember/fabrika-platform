@@ -57,6 +57,11 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   IAM's `passwordPolicy.get` / `.set`; `lib/password-policy.ts` holds a typed value to the range IAM answers with
   (`minLengthFloor`–`maxLength`) and words the risk: a note below the default, a `notice-bad` warning below 8. IAM checks
   the value again.
+- **An application's page offers an IAM administrator "Grant me Admin" per environment** (`lib/self-admin.ts`,
+  `components/app-detail/AdminAccessSection.tsx`): an ordinary `grants.create` of the built-in `admin` to the caller,
+  no expiry by default (8 hours or 7 days selectable). It is offered where IAM knows the environment, it is not an
+  installation app, and the caller's `me` administers its people; IAM decides again on the write. At a contract
+  application that grant holds the declared actions (ADR-0022 rule 6). The section is absent when IAM does not answer.
 - **An IAM application reads as its display name** (`src/access/lib/app-names.tsx`). The Access layout reads
   `apps.list` once and provides the names; `AppName` renders the name with the id as its tooltip, and a picker
   option shows both. The console itself is `vozka`, named `Console`.
