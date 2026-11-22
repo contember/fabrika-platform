@@ -1,4 +1,4 @@
-import { type AstNode, child, children, identifierName, memberPath, staticKey, staticString, stringField, walk } from './ast'
+import { type AstNode, child, children, identifierName, memberPath, type ParsedModule, staticKey, staticString, stringField, walk } from './ast'
 
 /**
  * One way a module names another: a static import, a re-export, a dynamic `import()`, `require()` (also `module.require`
@@ -92,4 +92,19 @@ export const moduleReferences = (program: AstNode): readonly ModuleReference[] =
 		if (reference !== undefined) references.push(reference)
 	})
 	return references
+}
+
+const STATIC_DECLARATIONS = new Set(['ImportDeclaration', 'ExportNamedDeclaration', 'ExportAllDeclaration'])
+
+/**
+ * The sources of a module's import and re-export declarations that Bun evaluates: a type-only one, also one left with
+ * `type` specifiers alone once the slice removed the rest, is erased. `rules/literal.ts` decides which are allowed.
+ */
+export const importedSpecifiers = (module: ParsedModule): string[] => {
+	const specifiers: string[] = []
+	for (const statement of children(module.program, 'body')) {
+		const reference = statement !== null && STATIC_DECLARATIONS.has(statement.type) ? referenceOf(statement, []) : undefined
+		if (reference !== undefined && !reference.typeOnly) specifiers.push(reference.specifier)
+	}
+	return specifiers
 }
