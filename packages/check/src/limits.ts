@@ -20,9 +20,6 @@ export const CONTRACT_LIMITS = {
 	astDepth: 128,
 	/** Schema nodes once every shared schema is expanded where the contract uses it, over the whole contract. */
 	schemaNodes: 60_000,
-	/**
-	 * Nesting of one schema: objects, arrays, unions and wrappers. It bounds the recursion of compiling, digesting and
-	 * diffing a schema; in Bun that chain first overflows the stack at a depth of 8 689.
-	 */
+	/** Nesting of one schema: objects, arrays, unions and wrappers; it bounds the recursion of compiling and diffing one. */
 	schemaDepth: 64,
 } as const

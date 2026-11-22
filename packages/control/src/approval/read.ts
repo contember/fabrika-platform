@@ -24,7 +24,7 @@ import { type AccessSnapshot, isBundledMigration, type MigrationEntry, storedSna
 export const SNAPSHOT_LIMITS = {
 	/**
 	 * Memory and parse work are bounded by `readerTotalChars` and `readerRounds`, not by this count; each file costs one
-	 * read of the commit (a GitHub request on Cloudflare). A large application's contract needs 283.
+	 * read of the commit, a sequential GitHub request on Cloudflare.
 	 */
 	readerFiles: 512,
 	readerRounds: 32,
