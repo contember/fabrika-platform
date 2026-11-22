@@ -261,8 +261,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **The generated column list carries the row types.** `TypedColumnList<DB>` brands `ColumnList<DB>` with a type-only
   unique symbol, so `defineTables(vocabulary, columns)` needs no type argument; a list without the brand makes the
   policies' builder an `Unavailable` that names `fabrika db codegen`.
-- **A capability reads a column that declares its own read action only when its action is exactly that one**
-  (`RowFor` in `orm-types.ts`): a capability type widened to several actions proves none of them. The row type omits
+- **A capability reads a column that declares its own read actions only when its action is one of them**
+  (`RowFor` in `orm-types.ts`; a column's `read` is one action or a list, as a table operation's): a capability type
+  widened to several actions proves none of them. The row type omits
   the hidden column (`Omit<DealsTable, "margin">`, which a diagnostic names), so a read of it is TypeScript's plain
   "does not exist" error; reference and unscoped rows read through the table's read action. An `unscoped` declaration's
   mode that may be `'write'` (a union or an optional one too) of a reference table is an `Unavailable` at its
@@ -513,8 +514,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   Each element is validated before it is copied.
 - **Unknown keys in insert and update data are refused, not dropped**, so an agent learns about them.
   The key, scope columns, version and `createdBy` are stamped by the layer and can never be written.
-- **A column with its own read action** (`columns: { c: { read } }`) is read, filtered and sorted only by a capability
-  of exactly that action reading its own target; a read by the table's read action never returns it.
+- **A column with its own read actions** (`columns: { c: { read } }`, one action or a list) is read, filtered and
+  sorted only by a capability of one of them; a read by a table read action it does not list never returns it. The
+  artifact keeps one action as its text and several as a list (`columnReads` holds a list either way).
 - **A column with its own write action** (`columns: { assignee: { write: 'tasks.assign' } }`) is updated only by a
   capability of that action, through a handle's `update` (`updatingRef` + `updatableBy`), and the table's update action
   does not update it: such a column is not in `update`, its action is not the table's update action, and no stamped

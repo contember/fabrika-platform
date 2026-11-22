@@ -101,6 +101,23 @@ describe('the access map', () => {
 		expect(of('notes.delete')?.tables[0]?.also).toEqual(['through relation author, only a row its condition holds'])
 	})
 
+	test('a column read by a list is read by each listed action and by no other', () => {
+		const people: TablePolicyArtifact = {
+			scope: { mode: 'app', reason: 'every person', key: 'id' },
+			actions: { read: ['notes.read', 'notes.admin', 'notes.share'], insert: null, update: null, delete: null },
+			insert: [],
+			update: [],
+			version: null,
+			createdBy: null,
+			columns: { email: { read: ['notes.admin', 'notes.share'] } },
+		}
+		const map = accessMap({ ...notesArtifact, tables: { people } })
+		const operations = (name: string) => map.actions.find((action) => action.action === name)?.tables[0]?.operations
+		expect(operations('notes.admin')).toEqual(['read', 'read email'])
+		expect(operations('notes.share')).toEqual(['read', 'read email'])
+		expect(operations('notes.read')).toEqual(['read'])
+	})
+
 	test('a path column, a reveal and a member reveal say where else a grant reaches the rows', () => {
 		const deals: TablePolicyArtifact = {
 			scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },

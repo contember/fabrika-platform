@@ -311,7 +311,8 @@ export const tables = defineTables(vocabulary, columns)({
   `appCount: ['<action>', …]`, actions with which it only counts rows (`count({ where })`) and reads none, no aggregate
   (an operations counter). Each is a widening the approver sees.
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
-  and in the types. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
+  and in the types; `read: ['<action>', '<action>']` lets each listed action read, filter and sort by it, so a column
+  most handlers read is hidden from just the actions the list leaves out. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
   action updates nothing else); the column is then not in `update`.
 - `files: { <column>: '<kind>' }` makes a column a file column of a kind the contract declares (`c.files`):
   `task_attachments.file` holds the files of a task (`references/files.md`). Its migration writes

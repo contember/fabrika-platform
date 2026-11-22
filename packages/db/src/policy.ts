@@ -205,20 +205,20 @@ export interface ConfersPolicy<Col extends string> {
 export type FilePolicies<Col extends string> = { readonly [C in Col]?: string }
 
 /**
- * A column's own actions. `read`: only a capability of exactly that action reads, filters or sorts by the column;
+ * A column's own actions. `read`: only a capability of one of those actions reads, filters or sorts by the column;
  * without one it falls back to the table's read action. `write`: only a capability of that action updates the column,
  * and the table's update action does not, so the column is not in `update`.
  */
 export type ColumnPolicies<Col extends string, A extends string> = { readonly [C in Col]?: ColumnPolicy<A> }
 
-/** A column's own read action, its own write action, or both. */
+/** A column's own read actions (one, or a list as a table's read takes), its own write action, or both. */
 export interface ColumnPolicy<A extends string> {
-	readonly read?: A
+	readonly read?: TableAction<A>
 	readonly write?: A
 }
 
 /** A table no handler writes (a reference table) declares column read actions only. */
-export type ColumnReadPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: A } }
+export type ColumnReadPolicies<Col extends string, A extends string> = { readonly [C in Col]?: { readonly read: TableAction<A> } }
 
 export interface DimensionPolicy<Col extends string, A extends string, V extends Col = Col> extends WritablePolicy<Col, A, V, RecordActions<A>> {
 	readonly scope: DimensionScope<Col>
@@ -342,8 +342,8 @@ export interface TableModel {
 	readonly queue: QueueModel | undefined
 	/** The file columns, each with its file kind: a reference to `fabrika_files`, written only with a file reference. */
 	readonly files: Readonly<Record<string, string>>
-	/** The columns that declare their own read action, as declared (also those equal to the table's). */
-	readonly columnReads: Readonly<Record<string, string>>
+	/** The columns that declare their own read actions, as declared (also those equal to the table's). */
+	readonly columnReads: Readonly<Record<string, readonly string[]>>
 	/** The columns that declare their own write action: only a capability of it updates them. */
 	readonly columnWrites: Readonly<Record<string, string>>
 	/** The columns of Postgres type `date`, read as `YYYY-MM-DD` text. */
@@ -818,7 +818,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	}
 	const byConvention = nameSet(unnamed)
 	const restricted: string[] = []
-	const columnReads: Record<string, string> = {}
+	const columnReads: Record<string, readonly string[]> = {}
 	const columnWrites: Record<string, string> = {}
 	const columnsInput = ownEntry(policy, 'columns')
 	const columnPolicies = columnsInput === undefined ? freeze({}) : plainRecord(columnsInput, `${table}: columns`)
@@ -833,10 +833,12 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 			throw new PolicyError(`${table}: columns.${name} declares no action; it takes read, write or both`)
 		}
 		if (readInput !== undefined) {
-			const read = action(readInput, `columns.${name}.read`)
-			setOwn(columnReads, name, read)
-			// With several read actions, a column of one of them is hidden from the others.
-			if (actions.read.length > 1 || !includes(actions.read, read)) {
+			const reads = isArray(readInput)
+				? distinctActions(table, readInput, `columns.${name}.read`, action)
+				: freeze([action(readInput, `columns.${name}.read`)])
+			setOwn(columnReads, name, reads)
+			// Hidden from a table read action its list leaves out; `'any'` names none, so it hides it from every one.
+			if (actions.read.length === 0 || !everyIncluded(actions.read, reads)) {
 				restricted[restricted.length] = name
 			}
 		}
@@ -1105,8 +1107,8 @@ export function namesAction(model: TableModel, action: string): boolean {
 }
 
 /**
- * The columns a capability of `action` reads: every one that declares no read action of its own, or exactly this
- * one. A capability reads its own row, so a write `Ref` sees the columns of its action and none of another's.
+ * The columns a capability of `action` reads: every one that declares no read action of its own, or one whose own
+ * read actions include this one. A capability reads its own row, so a write `Ref` sees the columns of its action and none of another's.
  */
 export function visibleFor(model: TableModel, action: string): readonly string[] {
 	return visibleThrough(model, soleReach(action))
@@ -1149,11 +1151,31 @@ export function visibleThrough(model: TableModel, reach: ReadReach): readonly st
 	for (let index = 0; index < columns.length; index++) {
 		const name = columns[index] ?? ''
 		const declared = hasOwn(model.columnReads, name) ? model.columnReads[name] : undefined
-		if (declared === undefined || readsAsAction(model, declared, reach)) {
+		if (declared === undefined || readsAsOneOf(model, declared, reach)) {
 			visible[visible.length] = name
 		}
 	}
 	return freeze(visible)
+}
+
+/** Whether one of a column's own read actions reads every row a read of `reach` answers (`readsAsAction`). */
+export function readsAsOneOf(model: TableModel, actions: readonly string[], reach: ReadReach): boolean {
+	for (let index = 0; index < actions.length; index++) {
+		if (readsAsAction(model, actions[index] ?? '', reach)) {
+			return true
+		}
+	}
+	return false
+}
+
+/** Whether every one of `actions` is in `list`. */
+function everyIncluded(actions: readonly string[], list: readonly string[]): boolean {
+	for (let index = 0; index < actions.length; index++) {
+		if (!includes(list, actions[index] ?? '')) {
+			return false
+		}
+	}
+	return true
 }
 
 /** Every action that updates a column of `model`: its update action and each column's own write action. */
@@ -1721,7 +1743,10 @@ function tableActionNames(table: LinkedTable): NameSet {
 	}
 	const reads = ownKeys(table.columnReads)
 	for (let index = 0; index < reads.length; index++) {
-		names[names.length] = ownEntry(table.columnReads, reads[index] ?? '') ?? ''
+		const actions = ownEntry(table.columnReads, reads[index] ?? '') ?? []
+		for (let position = 0; position < actions.length; position++) {
+			names[names.length] = actions[position] ?? ''
+		}
 	}
 	const writes = ownKeys(table.columnWrites)
 	for (let index = 0; index < writes.length; index++) {

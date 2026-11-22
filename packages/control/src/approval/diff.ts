@@ -2209,14 +2209,23 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 		const before: ColumnPolicyArtifact = from.columns[column] ?? {}
 		const after: ColumnPolicyArtifact = to.columns[column] ?? {}
 		if (before.read === undefined && after.read !== undefined) {
-			columns.push(...ruled('table.column-read', [narrowing(`${subject} is read with \`${after.read}\` instead of ${actionsText(from.actions.read)}`)]))
+			columns.push(
+				...ruled('table.column-read', [narrowing(`${subject} is read with ${actionsText(after.read)} instead of ${actionsText(from.actions.read)}`)]),
+			)
 		} else if (before.read !== undefined && after.read === undefined) {
 			// Without its own policy the column falls back to the table's read action (ADR-0050 §3).
 			columns.push(
-				...ruled('table.column-read', [widening(`${subject} loses its read policy \`${before.read}\` and is read with ${actionsText(to.actions.read)}`)]),
+				...ruled('table.column-read', [
+					widening(`${subject} loses its read policy ${actionsText(before.read)} and is read with ${actionsText(to.actions.read)}`),
+				]),
 			)
-		} else if (before.read !== undefined && after.read !== undefined) {
+		} else if (typeof before.read === 'string' && typeof after.read === 'string') {
 			columns.push(...ruled('table.column-read', valueChange(`${subject} read action`, before.read, after.read)))
+		} else if (before.read !== undefined && after.read !== undefined) {
+			// A list: each action the column gains widens, each it loses narrows.
+			columns.push(
+				...ruled('table.column-read', setChanges(subject, tableActions(before.read), tableActions(after.read), 'is read with', 'is no longer read with')),
+			)
 		}
 		// A column's own write action is one more action that updates the table; the update list's lines cover the rest.
 		if (before.write === undefined && after.write !== undefined) {

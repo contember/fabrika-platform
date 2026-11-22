@@ -282,11 +282,12 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   their own actions. An application table's read may say `'any'` instead: every `app` endpoint, job and webhook reads
   it, whatever its action, and no public procedure, `on`, `in` or `over` endpoint, link procedure or export reads it
   through `ctx.db` (a declared `unscoped` read or raw `sql` stays the approver's to see, as on any table). A column
-  with its own read action stays readable only with it, writes keep their actions, and a `when` keyed by an action
+  with its own read actions stays readable only with them, writes keep their actions, and a `when` keyed by an action
   narrows only that action's writes there; one keyed by an action that writes nothing is refused. `'any'` is written per table; a table without a read action is
   read by none, so nothing becomes readable by omission. A
-  capability reads its own target, except a column that declares another action's read
-  ([ADR-0050](0050-approved-access.md) §3). Writes answer `{ id, version }`; `update` and `remove` take
+  capability reads its own target, except a column whose own read actions leave its action out
+  ([ADR-0050](0050-approved-access.md) §3). A column's read takes one action or a list, as a table operation does, so a
+  column many handlers read can still be hidden from one or two actions that read its table. Writes answer `{ id, version }`; `update` and `remove` take
   `expectVersion`; `getForUpdate()` is the precondition read a concurrent write waits behind. `fromRow(Schema, row)`
   turns a row into an output.
 - **The transaction is the invocation's.** An endpoint request and a webhook delivery each run every statement in

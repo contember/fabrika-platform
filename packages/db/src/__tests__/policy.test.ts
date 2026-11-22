@@ -362,6 +362,11 @@ describe('an application table', () => {
 		expect(artifact?.actions.read).toBe('any')
 	})
 
+	test("read with 'any', a column whose read lists actions stays hidden from every other reader", () => {
+		const anyRead = { ...settings, actions: { ...settings.actions, read: 'any' }, columns: { name: { read: ['notes.read', 'notes.admin'] } } }
+		expect(modelOf(tableModels(withSettings(anyRead)), 'settings')?.visible).not.toContain('name')
+	})
+
 	test("refuses 'any' for every other operation and every other kind of table", () => {
 		expect(() => withSettings({ ...settings, actions: { ...settings.actions, insert: 'any' } })).toThrow(PolicyError)
 		expect(() => define(columns, { notes: { ...notes, actions: { ...notes.actions, read: 'any' } }, note_comments: comments, countries })).toThrow(
@@ -482,6 +487,27 @@ describe('a list of actions per table action', () => {
 			'notes',
 		)
 		expect(model?.visible).not.toContain('title')
+	})
+
+	test("a column's read takes a list too: non-empty, of distinct actions of the vocabulary", () => {
+		const actions = { read: 'notes.read', insert: 'notes.write', update: 'notes.write' }
+		expect(() => withNotes(actions, { columns: { title: { read: [] } } })).toThrow('notes: columns.title.read lists no action; leave it out')
+		expect(() => withNotes(actions, { columns: { title: { read: ['notes.admin', 'notes.admin'] } } })).toThrow(
+			'notes: columns.title.read names notes.admin twice',
+		)
+		expect(() => withNotes(actions, { columns: { title: { read: ['notes.admin', 'notes.amdin'] } } })).toThrow(
+			'notes: columns.title.read names notes.amdin, which is not an action of the vocabulary',
+		)
+	})
+
+	test("a column's list hides it from each table read action it leaves out; a list of one is that action", () => {
+		const visible = (read: unknown, title: unknown) =>
+			modelOf(tableModels(withNotes({ read, insert: 'notes.write', update: 'notes.write' }, { columns: { title: { read: title } } })), 'notes')
+				?.visible
+		expect(visible(['notes.read', 'notes.admin'], ['notes.read', 'notes.admin'])).toContain('title')
+		expect(visible(['notes.read', 'notes.admin'], ['notes.admin', 'notes.write'])).not.toContain('title')
+		expect(visible('notes.read', ['notes.read'])).toEqual(visible('notes.read', 'notes.read'))
+		expect(visible('notes.read', ['notes.admin'])).toEqual(visible('notes.read', 'notes.admin'))
 	})
 
 	test("a column's own write action is none of the update actions", () => {

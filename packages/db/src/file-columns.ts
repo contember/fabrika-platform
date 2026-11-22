@@ -9,7 +9,7 @@ import type { Primitive } from './description'
 import { NotFoundError, QueryRefusedError } from './errors'
 import { fileHoldingOf, fileReference, holdsFile } from './file-references'
 import { isPlainIdentifier } from './identifier'
-import { includes, type ReadReach, readsAsAction, type TableModel } from './policy'
+import { includes, type ReadReach, readsAsAction, readsAsOneOf, type TableModel } from './policy'
 import { claimStoredFile, lockStoredFile, stampStoredFile, storedFilesMetadata } from './stored-files'
 
 /** Where a site's file references belong, and what claiming a pending one needs. */
@@ -26,17 +26,17 @@ export interface FileBinding {
 
 /**
  * Whether a reference read under `reach` (one action, or an `anyOf` endpoint's held actions that read the row) lets its
- * holder serve, open and copy the file: a table read action, or the column's own read action, that reads every answered
+ * holder serve, open and copy the file: a table read action, or one of the column's own read actions, that reads every answered
  * row alone (`readsAsAction`), or a table read action among `held`, the actions a job holds over the whole application.
  * When every action of the reach is a table read action, each answered row was admitted by one that alone reads it,
- * so a column without its own read action is readable. A column with its own read action is answered only under that
- * action (`visibleThrough`), so `held` never widens it. A table read with `'any'` admits whoever read the row: the
+ * so a column without its own read action is readable. A column with its own read actions is answered only under one of
+ * them (`visibleThrough`), so `held` never widens it. A table read with `'any'` admits whoever read the row: the
  * store refused every other reader.
  */
 function readsFile(model: TableModel, column: string, reach: ReadReach, held: NameSet): boolean {
 	const own = hasOwn(model.columnReads, column) ? model.columnReads[column] : undefined
 	if (own !== undefined) {
-		return readsAsAction(model, own, reach)
+		return readsAsOneOf(model, own, reach)
 	}
 	if (model.actions.readAny || readsThroughEvery(model, reach)) {
 		return true
