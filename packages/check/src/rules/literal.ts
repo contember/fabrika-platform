@@ -635,12 +635,19 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 		const declaration = statement.type === 'ExportNamedDeclaration' ? (child(statement, 'declaration') ?? statement) : statement
 		if (declaration.type === 'TSTypeAliasDeclaration' || declaration.type === 'TSInterfaceDeclaration') continue
 		if (declaration.type === 'ExportNamedDeclaration') {
-			// A relative re-export is checked with the imports (`checkLiteralGraph`), as its binding.
+			// A relative re-export is checked with the imports (`checkLiteralGraph`), as its binding. Bun erases one whose
+			// every specifier is a type, and evaluates the source of `export {} from`, as of `import {} from`.
 			const source = staticString(child(declaration, 'source'))
-			if (source !== undefined && !isRelativeSpecifier(source) && stringField(declaration, 'exportKind') !== 'type') {
-				fail(declaration, `re-export from the package '${source}'`, 'import the builder in the module that uses it')
+			if (source !== undefined) {
+				const specifiers = children(declaration, 'specifiers').filter((item): item is AstNode => item !== null)
+				const erased = stringField(declaration, 'exportKind') === 'type'
+					|| (specifiers.length > 0 && specifiers.every((item) => stringField(item, 'exportKind') === 'type'))
+				if (!erased && specifiers.length === 0) fail(declaration, `side-effect re-export of '${source}'`, 'named imports of literal consts')
+				else if (!erased && !isRelativeSpecifier(source)) {
+					fail(declaration, `re-export from the package '${source}'`, 'import the builder in the module that uses it')
+				}
+				continue
 			}
-			if (source !== undefined) continue
 			for (const item of children(declaration, 'specifiers')) {
 				const local = item ? identifierName(child(item, 'local')) : undefined
 				if (item !== null && local !== undefined && !index.consts.has(local) && !index.imports.has(local)) {

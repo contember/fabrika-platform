@@ -1,0 +1,3 @@
+import { Fields } from './shared'
+
+Object.assign(Fields, { ownerId: Fields.id })

@@ -1126,6 +1126,20 @@ describe('literal: a spread of a constant object and a re-export', () => {
 		expect(locations(await check(files), 'literal')).toEqual(['src/barrel.ts:1:1', 'src/barrel.ts:2:10', 'src/shared.ts:1:25'])
 	})
 
+	test('refused: a side-effect re-export, which Bun evaluates; a type-only re-export, which Bun erases, passes', async () => {
+		const files = {
+			...withShared(
+				"import { z } from 'zod/v4'\n\nexport const IdField = { id: z.uuid() }\nexport type Id = string\n",
+				`${IMPORT}\nimport { IdField } from './src/barrel'`,
+				'z.strictObject({ ...IdField })',
+			),
+			'src/barrel.ts': "export {} from './side'\nexport { IdField } from './shared'\nexport { type Id } from './shared'\n"
+				+ "export type { Id as Key } from './shared'\nexport { type infer } from 'zod/v4'\n",
+			'src/side.ts': 'export const side = 1\n',
+		}
+		expect(locations(await check(files), 'literal')).toEqual(['src/barrel.ts:1:1'])
+	})
+
 	test('client-identity sees the fields a spread brings into an input', async () => {
 		const files = withShared(
 			"import { z } from 'zod/v4'\n\nexport const Owner = { ownerId: z.uuid() }\n",

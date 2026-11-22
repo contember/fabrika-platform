@@ -393,6 +393,11 @@ const PAIRED: Readonly<Record<string, PairedCase>> = {
 		reader: "fabrika.contract.ts:14:43 literal spread of 'Base', which is not a constant object literal",
 		runtime: { error: 'TypeError' },
 	},
+	'side-effect-reexport': {
+		kind: 'refused',
+		reader: "fabrika.contract.ts:4:1 literal side-effect re-export of './src/side'",
+		runtime: { includes: '"ownerId"' },
+	},
 	'duplicate-keys': { kind: 'same', includes: '"machine"' },
 	'constant-spread': { kind: 'same', includes: '"maxLength":200' },
 	reexport: { kind: 'same', includes: '"maxLength":120' },

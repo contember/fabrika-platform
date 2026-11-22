@@ -241,8 +241,8 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
   not again at each import of it. A const defined through itself and an import cycle among literal modules are refused. A
   relative import names one file: its exact name, or exactly one extension candidate; two candidates (`m.ts` and
   `m.tsx`) and a directory import are refused, because Bun's choice there is not one the reader repeats. Every runtime import and every
-  export of a literal module is checked, used or not; no side-effect import, namespace import of a relative module
-  or `export *`. A named re-export of a relative module (`export { x as y } from './m'`, a barrel) is read as the
+  export of a literal module is checked, used or not; no side-effect import or re-export (`export {} from`, which
+  Bun evaluates), namespace import of a relative module or `export *`. A re-export of types only is erased. A named re-export of a relative module (`export { x as y } from './m'`, a barrel) is read as the
   import it stands for, under the same rules, through any number of barrels; a re-export from a package is refused.
 - **Builders:** `z` (named, renamed or namespace) from `zod/v4` or `@fabrika/app/schema` (the same subset, read alike), its members written with a dot (`z['string']` is
   refused); `defineApp` from `@fabrika/app/contract`, called once as `defineApp(vocabulary, tables, { imports }?)` in a

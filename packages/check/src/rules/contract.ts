@@ -20,8 +20,9 @@ export const checkContractRead = (graph: ModuleGraph): Finding[] => {
 		return [...read.findings]
 	}
 	const module = graph.module(CONTRACT_FILE)
-	const binding = module === undefined ? undefined : graph.binding(module, CONTRACT_EXPORT)
-	const at = binding?.kind === 'const' && binding.init !== undefined ? positionOf(binding.init) : { line: 1, column: 1 }
+	const binding = module === undefined ? undefined : graph.exported(module, CONTRACT_EXPORT)
+	// A contract declared in another module (an import or a re-export) is reported at this file's start.
+	const at = binding?.kind === 'const' && binding.module === module && binding.init !== undefined ? positionOf(binding.init) : { line: 1, column: 1 }
 	try {
 		return memberAdmitsExternal(describeContract(read.contract), at)
 	} catch (error) {
