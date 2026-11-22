@@ -448,8 +448,8 @@ input and the HTTP shape (§11).
 - **`access: { anyOf: ['<action>', …], app: true }`** admits a caller that holds any of two to sixteen actions as a
   global grant. The proxy checks it as one requirement. The handler's `ctx.app` holds the listed actions the caller
   holds, and `ctx.db.app` reaches the union of what each held action reaches alone, never a row of one action with a
-  column of another. A read answers the rows any held action's `when` admits; a column with its own read action
-  shows only where that action reads every row (no `when` of its own) or is the only held one reading. An update
+  column of another. A read answers the rows any held action's `when` admits; a column with its own read actions
+  shows only where one of them reads every row (no `when` of its own) or is the only held one reading. An update
   runs under the held update actions that each write every column it changes, and only their `when` admits the row;
   when none does, it is refused. An insert writes the table's one insert list, so every held insert action covers it
   and their `when` conditions admit the row together. An insert that updates on a conflict needs one held action that

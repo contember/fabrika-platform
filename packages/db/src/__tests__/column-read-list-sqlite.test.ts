@@ -6,11 +6,11 @@ import { beforeEach, describe, expect, test } from 'bun:test'
 import { QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
 import type { DataKind, RowOf } from '../orm-types'
-import { defineTables, modelOf, tableModels, visibleFor } from '../policy'
+import { defineTables, modelOf, type PolicyRow, tableModels, visibleFor } from '../policy'
 import { openSqlite } from '../sqlite'
 import { bunSqliteStorage } from '../sqlite-bun'
 import { scoped } from '../store'
-import { tablePolicies } from '../tables'
+import { tablePolicies, type Tables } from '../tables'
 import type { TypedColumnList } from '../vocabulary-tables'
 import { TestAuthority } from './fixtures/authority'
 
@@ -28,6 +28,7 @@ const vocabulary = {
 
 interface DB {
 	people: { id: string; team_id: string; name: string; email: string; salary: number; version: number }
+	contacts: { code: string; email: string }
 }
 
 const columns: TypedColumnList<DB> = {
@@ -36,6 +37,7 @@ const columns: TypedColumnList<DB> = {
 		foreignKeys: [],
 		notNull: ['id', 'team_id', 'name', 'email', 'salary', 'version'],
 	},
+	contacts: { columns: ['code', 'email'], foreignKeys: [] },
 }
 
 const tables = defineTables(vocabulary, columns)({
@@ -44,11 +46,18 @@ const tables = defineTables(vocabulary, columns)({
 		actions: { read: ['people.read', 'people.contact', 'people.ship', 'people.pay'] },
 		columns: { email: { read: ['people.contact', 'people.ship'] }, salary: { read: 'people.pay' } },
 	},
+	// A list that names every read action of its table hides the column from none of them.
+	contacts: {
+		scope: { reference: 'contacts every team reads' },
+		actions: { read: ['people.contact', 'people.ship'] },
+		columns: { email: { read: ['people.ship', 'people.contact'] } },
+	},
 })
 
 type Expect<T extends true> = T
 type Has<R, C extends string> = C extends keyof R ? true : false
 type Lacks<R, C extends string> = C extends keyof R ? false : true
+type Policies = typeof tables extends Tables<DB, infer P> ? P : never
 type Row<A extends 'people.read' | 'people.contact' | 'people.ship' | 'people.pay'> = RowOf<typeof tables, 'people', A>
 
 /** The row types follow the list: each listed action has the column, a third action and a union of two do not. */
@@ -61,6 +70,8 @@ export type ColumnReadListTypes = [
 	Expect<Has<Row<'people.pay'>, 'salary'>>,
 	Expect<Lacks<Row<'people.contact'>, 'salary'>>,
 	Expect<Lacks<Row<'people.read'>, 'salary'>>,
+	Expect<Lacks<PolicyRow<DB, Policies, 'people'>, 'email'>>,
+	Expect<Has<PolicyRow<DB, Policies, 'contacts'>, 'email'>>,
 ]
 
 const alice = new TestAuthority('user:alice')
@@ -171,6 +182,7 @@ describe('the parsed list', () => {
 		expect(model.visible).toEqual(['id', 'team_id', 'name', 'version'])
 		expect(visibleFor(model, 'people.ship')).toEqual(['id', 'team_id', 'name', 'email', 'version'])
 		expect(visibleFor(model, 'people.read')).toEqual(['id', 'team_id', 'name', 'version'])
+		expect(modelOf(tableModels(tables), 'contacts')?.visible).toEqual(['code', 'email'])
 	})
 
 	test('the artifact keeps one action as its text and several as a list', () => {
@@ -178,5 +190,6 @@ describe('the parsed list', () => {
 			email: { read: ['people.contact', 'people.ship'] },
 			salary: { read: 'people.pay' },
 		})
+		expect(tablePolicies(tables)['contacts']?.columns).toEqual({ email: { read: ['people.ship', 'people.contact'] } })
 	})
 })

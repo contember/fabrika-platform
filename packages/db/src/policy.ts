@@ -3094,11 +3094,11 @@ type Flat<T> = { [K in keyof T]: T[K] }
 
 type ColumnPoliciesOf<P, T> = PolicyOf<P, T> extends { readonly columns: infer C } ? C : never
 type TableReadAction<P, T> = PolicyOf<P, T> extends { readonly scope: { readonly read: infer A } } ? A : ActionOf<P, T, 'read'>
-/** Columns whose own read action is not the table's: no read by the table's read action returns them. */
+/** Columns whose own read actions leave out one of the table's: no read by the table's read action returns them. */
 type RestrictedColumns<P, T> = [ColumnPoliciesOf<P, T>] extends [never] ? never
 	: {
 		[K in keyof ColumnPoliciesOf<P, T>]: ColumnPoliciesOf<P, T>[K] extends { readonly read: infer R }
-			? ([TableReadAction<P, T>] extends [R] ? never : K)
+			? ([TableReadAction<P, T>] extends [R extends readonly (infer L extends string)[] ? L : R] ? never : K)
 			: never
 	}[keyof ColumnPoliciesOf<P, T>]
 
