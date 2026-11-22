@@ -71,7 +71,10 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
   their text (`access/<hex>.json`), and `runs.snapshot_json` and `runs.classification_json` hold `sha256:<hex>`: a D1
   row holds at most 2,000,000 bytes, and a large application's snapshot and classification together exceed it. A read
   checks the text against the digest. On Postgres the row holds the text. A row written before the objects keeps its
-  text and reads as it did. The publication on `app_envs` stays text, bounded by `STORED_SNAPSHOT_BYTES`.
+  text and reads as it did. The publication on `app_envs` stays text, bounded by `STORED_SNAPSHOT_BYTES`. Every deploy
+  reads the last succeeded run's snapshot, and a missing object fails it, so nothing may expire or delete `access/` (a
+  lifecycle rule may expire `runs/`). Unlike mail content (ADR-0019), a snapshot holds no secret, the bucket is bound on
+  every Cloudflare Control, and the digest proves its text, so it needs no bucket of its own.
 - Control reads the snapshot at the provider's `applicationRoot`, the directory the provider executes
   from, with the same normalization (`checkoutRelativeDirectory` on Cloudflare). A root outside the
   repository fails the run.

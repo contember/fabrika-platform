@@ -2303,6 +2303,8 @@ describe('a large application on D1', () => {
 		expect(bytes(snapshot) + bytes(classification)).toBeGreaterThan(2_700_000)
 		expect(parseSnapshot(snapshot).contract?.endpoints.filter((endpoint) => endpoint.id.startsWith('api.q'))).toHaveLength(1400)
 
+		const listed = await listApprovalsUseCase(approvals(w, auth()))
+		expect(listed.items.map((item) => item.run.id)).toEqual([parked.runId])
 		const detail = await getApprovalUseCase(approvals(w, auth()), parked.runId)
 		expect(detail.changes.map((change) => change.line)).toContain(DELETES_NOTES_LINE)
 		expect(detail.changes.filter((change) => change.rule === 'endpoint.added')).toHaveLength(1401)
@@ -2313,6 +2315,13 @@ describe('a large application on D1', () => {
 		expect(await published(w, 'prod')).toEqual({ runId: parked.runId, generation: 1 })
 		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'prod'))?.contract?.endpoints).toHaveLength(1401)
 		expect(w.deploys).toHaveLength(1)
+
+		// The next deploy reads the migrations the running version applied from that run's object: an edited one is refused.
+		w.files = { ...large.files, 'db/migrations/0001_purge.sql': 'DELETE FROM notes WHERE true;' }
+		const edit = await deploy(w, 'prod')
+		expect(edit.status).toBe('failed')
+		expect(w.logs.get(`runs/${edit.runId}/logs.ndjson`)).toContain('0001_purge.sql: an applied migration changed')
+		expect(w.deploys).toHaveLength(1)
 	}, 60_000)
 
 	test('without the objects the same run fails: D1 refuses its row', async () => {
@@ -2322,7 +2331,7 @@ describe('a large application on D1', () => {
 		w.contract = large.contract
 		w.files = { ...large.files, ...DELETES_NOTES }
 		const parked = await deploy(w, 'prod')
-		expect(parked.status).not.toBe('awaiting_approval')
+		expect(parked.status).toBe('running')
 		expect((await run(w, parked.runId)).classification_json).toBeNull()
 		expect(w.deploys).toEqual([])
 	}, 60_000)
@@ -2337,6 +2346,16 @@ describe('a large application on D1', () => {
 		w.sqlite.run('UPDATE runs SET classification_json = ? WHERE id = ?', [stored, parked.runId])
 		expect((await getApprovalUseCase(approvals(w, auth()), parked.runId)).changes.map((change) => change.line)).toContain(DELETES_NOTES_LINE)
 		expect((await approve(w, parked.runId)).run.status).toBe('pending')
+	})
+
+	test('a person refuses a run whose row names its classification: the run fails', async () => {
+		const w = world({ documents: new MemoryBlobs() })
+		await seed(w)
+		w.files = DELETES_NOTES
+		const parked = await deploy(w, 'prod')
+		expect((await run(w, parked.runId)).classification_json).toMatch(/^sha256:[0-9a-f]{64}$/)
+		expect((await refuse(w, parked.runId)).run.status).toBe('failed')
+		expect(w.deploys).toEqual([])
 	})
 
 	test('an object that does not match the digest its row names is refused', async () => {

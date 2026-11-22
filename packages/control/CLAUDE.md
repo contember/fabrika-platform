@@ -663,7 +663,8 @@ other environment, before the provider prepares anything, and the write maps a r
   refuses a snapshot whose stored form still exceeds the ceiling as `contract-too-large` (`storedSnapshotFits`). On the Worker
   a run's snapshot and classification are objects in `RUN_LOGS` under `access/<sha256>.json` and the row holds
   `sha256:<hex>` (`RunRepository` with `runDocuments`); on Postgres the row holds the text. Read a run's
-  `snapshot_json` or `classification_json` only through `runs.document`, never parse the column. Snapshot log lines are codes and counts only. A new write path must take it the same way; reading access
+  `snapshot_json` or `classification_json` only through `runs.document`, never parse the column. Every deploy reads
+  the last succeeded run's object, and a missing one fails it: never expire or delete `access/` in `RUN_LOGS`. Snapshot log lines are codes and counts only. A new write path must take it the same way; reading access
   from the provider artifact is a bug. An approval names both digests and holds only for them.
 - **An application is read by the reader of the framework release it pins (ADR-0062, `readers.ts`, `formats.ts`).**
   `readAccessSnapshot` reads the `@fabrika/app` release from `<root>/bun.lock` and picks this release's reader for its

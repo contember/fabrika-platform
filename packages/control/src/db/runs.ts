@@ -107,7 +107,8 @@ function documentKey(hex: string): string {
  * Runs. With `documents` (the Worker, whose D1 row holds at most 2,000,000 bytes) a run's snapshot and classification
  * are objects named by the SHA-256 of their text, and the row holds `sha256:<hex>`; without (Postgres) the row holds the
  * text. A row written before the objects holds the text on either, and reads as it did. The object is written before
- * the row names it and never removed, so a row never names a missing object.
+ * the row names it and never removed, so a row never names a missing object. Runs share an object when their text is
+ * the same: a pruner collects against every row's reference, never deletes per run.
  */
 export class RunRepository {
 	constructor(
