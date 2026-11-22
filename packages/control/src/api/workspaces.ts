@@ -604,7 +604,7 @@ export async function getDeploymentUseCase(
 	) fail(404, 'run not found')
 	const run = await getRunUseCase(c, input.runId)
 	const log = await getRunLogUseCase(c, input.runId)
-	const changes = row.classification_json === null ? [] : parseClassification(row.classification_json).changes
+	const changes = row.classification_json === null ? [] : parseClassification(await c.repositories.runs.document(row.classification_json)).changes
 	const approval = row.status === 'awaiting_approval' && row.classification_json !== null
 		? {
 			url: c.consoleOrigin === undefined ? null : `${c.consoleOrigin}/approvals/${encodeURIComponent(row.id)}`,

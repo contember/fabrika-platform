@@ -67,6 +67,11 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
   `runs.pending_access_json` is no longer read or written; a later migration drops it.
 - The published snapshot is stored on `app_envs.published_snapshot_json`, written by the same
   compare-and-swap as `published_run_id`.
+- On Cloudflare a run's snapshot and its classification are objects in the run-log bucket, named by the SHA-256 of
+  their text (`access/<hex>.json`), and `runs.snapshot_json` and `runs.classification_json` hold `sha256:<hex>`: a D1
+  row holds at most 2,000,000 bytes, and a large application's snapshot and classification together exceed it. A read
+  checks the text against the digest. On Postgres the row holds the text. A row written before the objects keeps its
+  text and reads as it did. The publication on `app_envs` stays text, bounded by `STORED_SNAPSHOT_BYTES`.
 - Control reads the snapshot at the provider's `applicationRoot`, the directory the provider executes
   from, with the same normalization (`checkoutRelativeDirectory` on Cloudflare). A root outside the
   repository fails the run.

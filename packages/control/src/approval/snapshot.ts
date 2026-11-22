@@ -141,7 +141,10 @@ export function serializeSnapshot(snapshot: AccessSnapshot): string {
 	return JSON.stringify({ ...rest, contract: encodeArtifact(contract) })
 }
 
-/** The plain stored snapshot's ceiling: a D1 row holds at most 2,000,000 bytes, and the run's other columns share it. */
+/**
+ * The plain stored snapshot's ceiling: a D1 row holds at most 2,000,000 bytes, and the environment's publication
+ * (`app_envs.published_snapshot_json`) shares its row. A run's copy is an object on D1 (`RunRepository`).
+ */
 export const STORED_SNAPSHOT_BYTES = 1_500_000
 
 /**

@@ -6,7 +6,7 @@
 import { Database, type SQLQueryBindings } from 'bun:sqlite'
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type ControlRepositories, createControlRepositories } from '../../db'
+import { type ControlRepositories, type ControlRepositoryOptions, createControlRepositories } from '../../db'
 
 // ── Cumulative migrations (every migrations/*.sql, filename order) ─────────────
 
@@ -148,13 +148,14 @@ export interface Harness {
 /**
  * Stand up a fresh in-memory database and repository bundle. Call once per test for isolation. `now`
  * (unix SECONDS) overrides repository clocks so caller-stamped `*_at` assertions are deterministic.
+ * `options` are the composition's other repository options, as a runtime root passes them.
  */
-export function createHarness(now?: () => number): Harness {
+export function createHarness(now?: () => number, options: Omit<ControlRepositoryOptions, 'now'> = {}): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
 	sqlite.exec(migration)
 	const d1 = new TestD1Database(sqlite)
-	const repositories = createControlRepositories(d1, { ...(now === undefined ? {} : { now }) })
+	const repositories = createControlRepositories(d1, { ...options, ...(now === undefined ? {} : { now }) })
 	databases.set(repositories, d1)
 	return { sqlite, repositories, db: repositories, d1 }
 }

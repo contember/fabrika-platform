@@ -183,7 +183,7 @@ export async function publishRunSnapshot(
 ): Promise<PublicationResult> {
 	const runs = deps.repositories.runs
 	const stored = input.run.snapshot_json
-	const candidate = stored === null ? await readCandidate(deps, invocation, input) : parseSnapshot(stored)
+	const candidate = stored === null ? await readCandidate(deps, invocation, input) : parseSnapshot(await runs.document(stored))
 	const publishedCandidate: PublishedCandidate = { snapshot: candidate, dataLossRead: stored === null || candidate.dataLoss !== undefined }
 	// A run whose snapshot was stored without a contract, before those were refused, is refused like a new one.
 	const access = approvedAccess(candidate)
@@ -277,8 +277,7 @@ export async function rereadDataLoss(
  * migrations, so its files may still be edited. A succeeded snapshot this release cannot read holds none.
  */
 export async function appliedMigrations(runs: ControlRepositories['runs'], run: RunRow): Promise<readonly MigrationEntry[]> {
-	const running = await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env })
-	return readableSnapshot(running?.snapshot_json ?? null)?.migrations ?? []
+	return (await runningSnapshot(runs, run))?.migrations ?? []
 }
 
 async function readAtCommit(
@@ -367,7 +366,7 @@ async function assertMailCustody(
 	published: ActiveSnapshot,
 	log: (line: string) => void,
 ): Promise<void> {
-	const running = readableSnapshot((await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env }))?.snapshot_json ?? null)
+	const running = await runningSnapshot(runs, run)
 	const held = running === null ? [published.snapshot] : [published.snapshot, running]
 	const refusal = mailCustodyRefusal(held, candidate)
 	if (refusal === null) return
@@ -381,6 +380,12 @@ function assertRelationGrants(candidate: AccessSnapshot, log: (line: string) => 
 	if (refusal === null) return
 	log(`access: ${refusal}`)
 	throw new FrameworkReleaseRefused(refusal)
+}
+
+/** The stored snapshot of the environment's last succeeded run that stored one, as `readableSnapshot` reads it. */
+async function runningSnapshot(runs: ControlRepositories['runs'], run: RunRow): Promise<AccessSnapshot | null> {
+	const running = await runs.getLatestSucceededRunWithSnapshot({ appId: run.app_id, env: run.env })
+	return running === null || running.snapshot_json === null ? null : readableSnapshot(await runs.document(running.snapshot_json))
 }
 
 /**
