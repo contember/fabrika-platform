@@ -39,9 +39,9 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   bundle read is read as its slice: each `<x>.query|mutation|cron|webhook(…).handle(<inline function>)` loses its
   `.handle(…)`, and so does every import specifier, function, const of an inline function and type that only those
   handlers used (followed until nothing more goes; an exported declaration, and one nobody uses, stays). Removed text
-  becomes spaces, so every finding keeps its line and column. An import or re-export left with `type` specifiers alone is
-  erased, as Bun erases it, so neither the reader nor `contractReaderInputs` follows it (`importedSpecifiers`). Control therefore never fetches, parses or runs a module
-  only a handler imports; `boot`'s contract digest backs what the slice cannot see. Any other call of a member
+  becomes spaces, so every finding keeps its line and column. An import or re-export left with `type` specifiers alone
+  is erased, as Bun erases it, so neither the reader nor `contractReaderInputs` follows it (`importedSpecifiers`).
+  Control therefore never fetches, parses or runs a module only a handler imports; `boot`'s contract digest backs what the slice cannot see. Any other call of a member
   statically named `handle` (a named or wrapped function; `['handle'](…)`, `.handle!(…)`, a parenthesised, `as`,
   `satisfies` or `<T>` wrapped callee or receiver; a receiver that is no endpoint, job or webhook builder) is refused at
   its `handle` (rule `literal`), and its arguments, type arguments and wrapping types are removed all the same, so what
@@ -75,6 +75,8 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   and reads the shell graph again after any change (`watchChange`). It throws for a `fabrika.contract.ts` that is not the one under `root` (a config run from `web/`
   without `root`, a symbolic link Vite keeps): Vite would bundle it, handlers included. The package ships TypeScript,
   so Vite runs on Bun (`bun --bun vite build`); Node refuses to strip types under `node_modules` (ADR-0052 decision 9).
+  Not covered: under `verbatimModuleSyntax`, Vite's esbuild keeps `import { type T } from './m'` as `import {} from './m'`,
+  and a module the shell graph reaches only so (`importedSpecifiers` skips it) loads whole, its handlers included.
 - Source maps: `@fabrika/check/source-maps` finds a build's `*.map` files and uploads them to Operations with the
   run-scoped bearer Control minted (`uploadSourceMaps`; never throws, a refused or failed upload is `incomplete`).
   `collectSourceMaps` reads each map's logical path from its own `file` field (the Cloudflare runner);
