@@ -439,10 +439,17 @@ describe('the resource budget', () => {
 		})
 	}
 
-	test('a schema nested deeper than the limit', () => {
-		const nested = `${'z.array('.repeat(CONTRACT_LIMITS.schemaDepth)}z.string()${')'.repeat(CONTRACT_LIMITS.schemaDepth)}`
-		const findings = refusal(application(BASE, `import { z } from 'zod/v4'\n\nexport const Note = ${nested}\n`))
-		expect(findings).toEqual([`src/schemas.ts:3:21 contract the schema expands to 33 nodes nested 33 deep`])
+	test('a schema nested to the limit is read, one level deeper is refused', () => {
+		// One const per level, so the syntax stays shallow and only the schema nests.
+		const nested = (levels: number): string => {
+			const consts = Array.from({ length: levels - 1 }, (_, index) => `const L${index + 1} = z.array(L${index})\n`).join('')
+			return `import { z } from 'zod/v4'\n\nconst L0 = z.string()\n${consts}export const Note = L${levels - 1}\n`
+		}
+		const limit = CONTRACT_LIMITS.schemaDepth
+		expect(refusal(application(BASE, nested(limit)))).toEqual([])
+		expect(refusal(application(BASE, nested(limit + 1)))).toEqual([
+			`src/schemas.ts:${limit + 3}:${`const L${limit} = `.length + 1} contract the schema expands to ${limit + 1} nodes nested ${limit + 1} deep`,
+		])
 	})
 
 	test('placements that together expand past the budget, though each schema fits', () => {

@@ -514,6 +514,14 @@ describe('the files a snapshot may read', () => {
 		expect(snapshot.contract?.app).toBe('notes')
 	})
 
+	test('a contract of 300 modules is read; one whose modules alone reach the file limit is refused', async () => {
+		const read = await snapshotOf(padded(Array.from({ length: 300 }, () => 16)))
+		expect(read.contract?.app).toBe('notes')
+		await expect(snapshotOf(padded(Array.from({ length: SNAPSHOT_LIMITS.readerFiles }, () => 16)))).rejects.toEqual(
+			new SnapshotRefused('contract-too-large'),
+		)
+	})
+
 	test('modules a round names that together pass the total are refused before they are parsed', async () => {
 		const size = Math.floor(SNAPSHOT_LIMITS.readerFileBytes * 0.75)
 		const sizes = Array.from({ length: Math.floor(SNAPSHOT_LIMITS.readerTotalChars / size) + 1 }, () => size)

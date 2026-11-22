@@ -335,7 +335,7 @@ platform build controls.
 | `astNodes`    | 400 000 | syntax nodes of each graph (the contract's, the tables'), top-level type declarations left out, after each module is parsed |
 | `astDepth`    | 128     | syntax nesting of each module, measured without recursion, before any rule walks it                                         |
 | `schemaNodes` | 60 000  | schema nodes with shared schemas expanded: per schema while built, per placement summed                                     |
-| `schemaDepth` | 32      | nesting of one schema, while it is built                                                                                    |
+| `schemaDepth` | 64      | nesting of one schema, while it is built                                                                                    |
 
 A schema value carries its expanded node count, so a const reused at every level (`S1 = { left: S0, right: S0 }`,
 …) is refused at the level that crosses the budget, without expanding it.
