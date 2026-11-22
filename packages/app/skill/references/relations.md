@@ -291,19 +291,26 @@ column, and a `principal`-bound access view over it ("read and update the entry 
 view reaches only what the rows name. IAM neither writes that table nor tells the application who joined or left, so
 the application keeps it in step:
 
-- Write the row in the handler that changes the membership, in the same request: after `ctx.members.assign(ref,
-  { principalId }, role)` insert it (or clear its archive flag); after `ctx.members.revoke(ref, { principalId })`
-  archive it or clear its principal id.
+- Write the row in the handler that changes the membership, in the same request, and call IAM last: insert the row
+  (or clear its archive flag), then `ctx.members.assign(ref, { principalId }, role)`; archive the row, then
+  `ctx.members.revoke(ref, { principalId })`. A refused IAM call throws and rolls the row back; the other order leaves
+  a grant without a row.
 - A person invited by `{ email }` has no principal id until they accept. Insert the row with the address, and bind
-  the principal at their first sign-in in a `caller: false` procedure that matches `ctx.principal.email`.
-- A role an operator grants or removes in IAM's console reaches no handler. Compare the table with
-  `ctx.members.list()` (`references/endpoint.md`, Members) from an administrator's endpoint, and archive the rows of
-  principals it no longer lists.
+  the principal at their first sign-in in a `caller: false` procedure that matches `ctx.principal.email`. The view
+  gives an unbound person no reach to the row, so the procedure declares it (`unscoped: { <table>: 'write' }`), and
+  binds only a row whose principal id is still empty, in a scope the caller now holds a role in.
+- When the table is also the far end of a `principal` path (above), no update may write its principal column: bind,
+  unbind and rebind by deleting the row and inserting a new one.
+- A role an operator grants or removes in IAM's console reaches no handler. In an application whose roles are global
+  grants the console is the only path. Compare the table with the directory from an administrator's endpoint: with
+  `ctx.members.list()` of the dimension's `members.list`, or page through `ctx.members.list({ after })` of an
+  `app: true` endpoint (`references/endpoint.md`, Members). Insert the rows of principals it lists and the table
+  lacks, and archive the rows of principals it no longer lists. A job has no `ctx.members`, so no job can run it.
 
 When the two drift:
 
 - A person IAM admits without a row reaches nothing through the view: the own entry is 404 and a list is empty. With
-  a `caller` declaration every procedure answers its `missing` 403 first.
+  a `caller` declaration every procedure without `caller: false` answers its `missing` 403 first.
 - A removed person's row stays. Their access ends with their token, at most 300 s, but the table still lists them as
   a person, and a picker that reads the table still offers them.
 - A row bound to the wrong principal gives that principal the entry: they read and update it, and the person it
