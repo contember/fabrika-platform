@@ -197,10 +197,9 @@ the approver reads.
   - A replay measured the access-view part. It took the 976 rules that the declarations leave out and that read no IAM
     data, and generated an access view from each rule's own predicate: the source system's compiled condition, with
     each variable a column of a cross-joined domain. A rule whose OR mixes bindings became one view per binding, except
-    the split described below. On
-    Postgres with random rows, the replay compared the rows the data layer reaches through the view with the rows the
-    source system's own SQL admits. Reads went through a `Within`. Writes read the existing rows through a `Ref` of the
-    write action; no write ran.
+    the split described below. On Postgres with random rows, the replay compared the rows the data layer reaches
+    through the view with the rows the source system's own SQL admits. Reads went through a `Within`. Writes read the
+    existing rows through a `Ref` of the write action; no write ran.
   - Each of the 968 runnable rules agrees on every seed for a caller whose principal the rows name. 910 of them had a
     seed where the rule both admits and refuses rows. With the split below, every rule bound to a principal also agrees
     for a principal that no row names.
