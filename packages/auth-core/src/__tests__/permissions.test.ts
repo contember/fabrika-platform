@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { isActionAllowed, matchAction, permits, scopedValues, uniquePermissions } from '../permissions'
+import { isActionAllowed, matchAction, narrowPermissions, permits, scopedValues, uniquePermissions } from '../permissions'
 import type { PermissionEntry, Scope } from '../types'
 
 describe('matchAction', () => {
@@ -202,5 +202,24 @@ describe('uniquePermissions', () => {
 		const left: PermissionEntry = { action: 'a', scope: { type: 'x:y', value: 'z' }, source: 'grant' }
 		const right: PermissionEntry = { action: 'a', scope: { type: 'x', value: 'y:z' }, source: 'grant' }
 		expect(uniquePermissions([left, right])).toEqual([left, right])
+	})
+})
+
+describe('narrowPermissions', () => {
+	test('takes the narrower action and scope of each pair, and never adds what is not held', () => {
+		const live = [
+			{ action: 'source.*', scope: null, source: 'grant' as const },
+			{ action: 'deploy.run', scope: { type: 'app', value: 'alpha' }, source: 'grant' as const },
+		]
+		expect(narrowPermissions(live, [{ action: 'source.workspace.read', scope: { type: 'app', value: 'alpha' } }])).toEqual([
+			{ action: 'source.workspace.read', scope: { type: 'app', value: 'alpha' }, source: 'grant' },
+		])
+		expect(narrowPermissions(live, [{ action: 'deploy.*' }])).toEqual([{
+			action: 'deploy.run',
+			scope: { type: 'app', value: 'alpha' },
+			source: 'grant',
+		}])
+		expect(narrowPermissions(live, [{ action: 'deploy.run', scope: { type: 'app', value: 'beta' } }])).toEqual([])
+		expect(narrowPermissions(live, [{ action: 'admin.*' }])).toEqual([])
 	})
 })

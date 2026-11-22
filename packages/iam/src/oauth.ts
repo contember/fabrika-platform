@@ -1,4 +1,11 @@
-import { buildResourceAccessClaims, DEFAULT_TOKEN_TTL_SECONDS, type KeyGrant, parseOAuthScopes, type PermissionEntry } from '@fabrika/auth-core'
+import {
+	buildResourceAccessClaims,
+	DEFAULT_TOKEN_TTL_SECONDS,
+	type KeyGrant,
+	narrowPermissions,
+	parseOAuthScopes,
+	type PermissionEntry,
+} from '@fabrika/auth-core'
 import type {
 	OAuthAuthorizationRequest,
 	OAuthClientMetadataDocument,
@@ -12,7 +19,6 @@ import { sessionUsable } from './auth'
 import { type AuditEventInput, type OAuthGrantRow, type PrincipalRow, principalStatus, type SessionRow } from './db'
 import type { Env } from './env'
 import { parseJsonOrNull } from './json'
-import { narrowPermissions } from './narrow-permissions'
 import { clientMetadata } from './oauth-client'
 import type { ManagedOAuthClient, OAuthConfig } from './oauth-config'
 import { pkceChallenge } from './oidc'

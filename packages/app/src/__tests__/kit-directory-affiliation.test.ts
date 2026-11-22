@@ -15,6 +15,7 @@ function caller(id: string, affiliation: TestCaller['affiliation'], actions: rea
 		kind: 'human',
 		app: null,
 		link: null,
+		terminal: null,
 		id,
 		label: `${id}@notes.test`,
 		email: `${id}@notes.test`,

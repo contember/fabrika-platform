@@ -1,7 +1,14 @@
 // Test callers: a principal of the test IAM with the permissions its grants resolve to, as IAM resolves them, and
 // the credential it presents.
 
-import { type PermissionEntry, type PrincipalAffiliation, RELATION_SCOPE_TYPE, relationInsideScope, type Scope } from '@fabrika/auth-core'
+import {
+	narrowPermissions,
+	type PermissionEntry,
+	type PrincipalAffiliation,
+	RELATION_SCOPE_TYPE,
+	relationInsideScope,
+	type Scope,
+} from '@fabrika/auth-core'
 import type { ActionOf, AnyContract, DimensionOf, RoleOf } from '../contract/define'
 
 /** `app` is the connector of another application: its key reaches only the exports that application consumes. */
@@ -17,7 +24,7 @@ export type TestGrant<C> =
 	| { readonly action: ActionOf<C>; readonly scope?: TestScope<DimensionOf<C>> }
 	| { readonly role: RoleOf<C>; readonly scope?: TestScope<DimensionOf<C>> }
 
-export interface TestCallerOptions {
+export interface TestCallerOptions<C = AnyContract> {
 	/** Defaults to `human`. */
 	readonly kind?: TestCallerKind
 	/** How a human signs in: the IAM session (default) or a `px_` key bound to the person. Other kinds use a key. */
@@ -48,6 +55,32 @@ export interface TestCallerOptions {
 	 * caller without one holds a key bound to nothing, which no procedure admits.
 	 */
 	readonly link?: TestLink
+	/**
+	 * The enrolled terminal an application asserted the person's session on (ADR-0067): the token names it, as IAM signs
+	 * a terminal session's. Only a person signed in through the session has one, and only in a contract that declares
+	 * `terminal: { identify }`.
+	 */
+	readonly terminal?: TestTerminal<C>
+}
+
+/** An enrolled terminal and what its profile gives the application (ADR-0067 §4). */
+export interface TestTerminal<C = AnyContract> {
+	/** The terminal's principal id. */
+	readonly id?: string
+	/** The label an administrator gave it. */
+	readonly label?: string
+	/** The patterns of the person's own permissions that survive on it; none by default, as IAM's ceiling. */
+	readonly ceiling?: readonly string[]
+	/** The terminal principal's own grants, which every session on it adds with the source `terminal`. */
+	readonly grants?: readonly TestGrant<C>[]
+}
+
+/** A caller's terminal as the kit's IAM holds it: the claim's id and label, the ceiling, and the entries it adds. */
+export interface TestCallerTerminal {
+	readonly id: string
+	readonly label: string
+	readonly ceiling: readonly string[]
+	readonly perms: readonly PermissionEntry[]
 }
 
 export interface TestLink {
@@ -84,6 +117,8 @@ export interface LabelledTestCaller extends TestCallerCredential {
 	readonly label: string
 	/** A human's normalized address, which its token carries; `null` for a script and a connector. */
 	readonly email: string | null
+	/** The terminal a person's session was asserted on (`TestCallerOptions.terminal`); `null` for every other caller. */
+	readonly terminal: TestCallerTerminal | null
 }
 
 /** A person, whose token carries its address: `ctx.principal.email` of its requests. */
@@ -100,6 +135,7 @@ export interface LinkTestCaller extends TestCallerCredential {
 	readonly link: TestLink | null
 	readonly label: null
 	readonly email: null
+	readonly terminal: null
 }
 
 export type TestCaller = LabelledTestCaller | LinkTestCaller
@@ -126,6 +162,15 @@ export function resolveGrants<C extends AnyContract>(contract: C, grants: readon
 		const entries: PermissionEntry[] = role.grants.map((action) => ({ action, scope, source: 'grant' }))
 		return role.external === true ? entries : [...entries, ...relationEntries(role.via, scope)]
 	})
+}
+
+/**
+ * What IAM signs for `caller` out of its own permissions `own`: on a terminal, the entries the terminal's ceiling keeps
+ * and the terminal's own (ADR-0067 §4); otherwise `own`.
+ */
+export function signedPermissions(caller: TestCaller, own: readonly PermissionEntry[]): readonly PermissionEntry[] {
+	if (caller.terminal === null) return own
+	return [...narrowPermissions(own, caller.terminal.ceiling.map((action) => ({ action }))), ...caller.terminal.perms]
 }
 
 /**

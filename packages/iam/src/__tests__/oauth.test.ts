@@ -3,7 +3,6 @@ import { afterEach, describe, expect, jest, setSystemTime, spyOn, test } from 'b
 import { decodeJwt, decodeProtectedHeader } from 'jose'
 import { resolveAdmin } from '../admin/router'
 import { resolveCaller } from '../auth'
-import { narrowPermissions } from '../narrow-permissions'
 import { clientMetadata } from '../oauth-client'
 import { parseOAuthConfig } from '../oauth-config'
 import { handleOAuth } from '../oauth-http'
@@ -392,25 +391,6 @@ describe('OAUTH_CONFIG', () => {
 		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, clients: [{ ...valid.clients[0], metadataUrl: 'http://x.test/cimd' }] }))).toThrow()
 		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, resources: [...valid.resources, ...valid.resources] }))).toThrow()
 		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, clients: [] }))).toThrow()
-	})
-})
-
-describe('narrowPermissions', () => {
-	test('takes the narrower action and scope of each pair, and never adds what is not held', () => {
-		const live = [
-			{ action: 'source.*', scope: null, source: 'grant' as const },
-			{ action: 'deploy.run', scope: { type: 'app', value: 'alpha' }, source: 'grant' as const },
-		]
-		expect(narrowPermissions(live, [{ action: 'source.workspace.read', scope: { type: 'app', value: 'alpha' } }])).toEqual([
-			{ action: 'source.workspace.read', scope: { type: 'app', value: 'alpha' }, source: 'grant' },
-		])
-		expect(narrowPermissions(live, [{ action: 'deploy.*' }])).toEqual([{
-			action: 'deploy.run',
-			scope: { type: 'app', value: 'alpha' },
-			source: 'grant',
-		}])
-		expect(narrowPermissions(live, [{ action: 'deploy.run', scope: { type: 'app', value: 'beta' } }])).toEqual([])
-		expect(narrowPermissions(live, [{ action: 'admin.*' }])).toEqual([])
 	})
 })
 

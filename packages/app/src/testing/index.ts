@@ -16,9 +16,11 @@ export type {
 	TestCaller,
 	TestCallerKind,
 	TestCallerOptions,
+	TestCallerTerminal,
 	TestGrant,
 	TestLink,
 	TestScope,
+	TestTerminal,
 } from './caller'
 export { passingChallenge } from './challenge'
 export {
