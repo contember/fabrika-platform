@@ -190,7 +190,8 @@ bun test               # app-environment · canonical-path · client-address · 
   the entries layout is above the caller's bound, because a parser older than `gperms` reads such a token without those
   grants (ADR-0022, "Global grants travel as names"). IAM and the test kit sign through it; never sign a compact token
   below the bound, and never read the raw `perms` claim around `parseAccessClaims`. `gperms`, when present, is a
-  non-empty array of non-empty strings, or the token is refused.
+  non-empty array of non-empty strings, or the token is refused. `global-grant-token-compat.test.ts` (`packages/control`)
+  holds every auth-core release of the window to keeping a compact token and reading no global grant from it.
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
   malformed field. It runs on a payload whose signature has been checked but whose custom claims
   have not, so a lenient read is a trust bug, not a convenience.

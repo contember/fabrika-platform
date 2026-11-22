@@ -305,8 +305,8 @@ export async function mintFromWorkloadKey(services: Services, env: MintEnv, inpu
 			permissions: effective.permissions,
 			issuedAt: now,
 			expiresAt,
-		}),
-		{ app: input.app, subject: effective.subject },
+		}, MAX_ACCESS_TOKEN_BYTES),
+		{ app: input.app, subject: effective.subject, bytes: MAX_ACCESS_TOKEN_BYTES },
 	)
 	if (token === null) {
 		return refused
@@ -505,7 +505,7 @@ export async function signAccessToken(
 	services: Services,
 	env: MintEnv,
 	params: Omit<Parameters<typeof buildAccessClaims>[0], 'iss'>,
-	bound: number = MAX_ACCESS_TOKEN_BYTES,
+	bound: number,
 ): Promise<string> {
 	const signer = await getSigner(env)
 	const claims: AccessTokenClaims = buildAccessClaims({ ...params, iss: services.config.issuer })

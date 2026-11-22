@@ -777,7 +777,9 @@ still refuses any `Authorization` header, as authorization.
   entries are about 25 KiB, gets about 8.5 KiB. A reader older than `gperms` (an application's framework, a namespace
   proxy pinned to an older release) ignores it and sees fewer permissions, never more; it receives the compact layout
   only where the entries would have been refused with `token_too_large`, so no token that an older reader accepts
-  changes (ADR-0062 rule 4). Every token below its bound keeps the entries layout until no release in the support
+  changes (ADR-0062 rule 4). Such an application answers a person whose grants outgrew the bound with a 403 where IAM
+  used to log `token_too_large`; raising its framework pin and deploying again fixes it. An OAuth resource token keeps
+  the entries layout and its 8 KiB bound. Every token below its bound keeps the entries layout until no release in the support
   window reads `perms` alone: switching every token, or gating it per application, needs the framework release of the
   application and of its namespace proxy at IAM's mint, which neither IAM nor Control records today. Tokens in flight
   across an upgrade are ordinary entries tokens, which every release reads, and they expire within

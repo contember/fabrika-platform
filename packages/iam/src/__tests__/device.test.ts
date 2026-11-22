@@ -1,4 +1,5 @@
 import {
+	MAX_ACCESS_TOKEN_BYTES,
 	parsePollDeviceAuthorizationResult,
 	parseStartDeviceAuthorizationResult,
 	permits,
@@ -76,7 +77,7 @@ function token(subject: string, type: 'user' | 'service' = 'user', app = 'vozka'
 		issuedAt: now(),
 		expiresAt: now() + 300,
 		session: true,
-	})
+	}, MAX_ACCESS_TOKEN_BYTES)
 }
 
 async function attempt() {

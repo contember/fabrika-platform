@@ -428,6 +428,35 @@ describe('a person holding the built-in admin at a contract application with 300
 		expect(permits(claims.perms, 'orders.row001.edit', WORKSPACE)).toBe(true)
 	})
 
+	test('a token whose entries fit the bound keeps them, from a session and from a key, so an older reader still reads it', async () => {
+		// 150 global grants sign between 8 KiB and the application bound: compacting them would hide them from a reader
+		// older than `gperms`, which accepts this token today.
+		const h = createHarness()
+		const fitting = ACTIONS.slice(0, 150)
+		await h.repositories.appSchema.reconcileAppSchema({
+			app: APP,
+			scopes: [],
+			actions: fitting.map((action) => ({ action })),
+			roles: [],
+			contract: true,
+		})
+		const principalId = seedUser(h.sqlite, { sub: 'g-fits', email: 'fits@b.cz' })
+		seedInlineGrant(h.sqlite, principalId, fitting, null, APP)
+		const key = 'px_fitting-key'
+		await h.repositories.credentials.createCredential({ tokenHash: await hashToken(key), principalId, app: APP, issuedBy: principalId, grants: [] })
+		const services = h.makeServices({ issuer: 'https://iam.test' })
+		const fromSession = await mintToken(services, ENV, { app: APP, session: await h.signSession(principalId), requestId: 'fits' })
+		const fromKey = await mintFromKey(services, ENV, { app: APP, key, requestId: 'fits-key' })
+		const signer = await getSigner(ENV)
+		for (const { result } of [fromSession, fromKey]) {
+			if (!result.ok) throw new Error(`expected a token: ${result.reason}`)
+			expect(result.token.length).toBeGreaterThan(MAX_ACCESS_TOKEN_BYTES)
+			const { payload } = await jwtVerify(result.token, createLocalJWKSet(signer.jwks()), { issuer: 'https://iam.test', audience: APP })
+			expect(payload).not.toHaveProperty('gperms')
+			expect(payload['perms']).toHaveLength(150)
+		}
+	})
+
 	test('a global grant removed from the names is denied, and only that one', async () => {
 		const { claims: minted, signer } = await adminToken()
 		const compact = accessTokenPayload(minted, 'compact')

@@ -1,4 +1,4 @@
-import { MAX_KEY_LIFETIME_SECONDS, type PermissionEntry } from '@fabrika/auth-core'
+import { MAX_ACCESS_TOKEN_BYTES, MAX_KEY_LIFETIME_SECONDS, type PermissionEntry } from '@fabrika/auth-core'
 import { installationMailKey, PLATFORM_MAIL_SEND_PATH } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { ResendEmailSender } from '@fabrika/email/resend'
@@ -279,7 +279,7 @@ async function applicationToken(env: Env, principalId: string, app: string, perm
 		permissions,
 		issuedAt: now,
 		expiresAt: now + 300,
-	})
+	}, MAX_ACCESS_TOKEN_BYTES)
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -309,7 +309,7 @@ describe('Propustka RPC entrypoint (TEST-4)', () => {
 			issuedAt: now,
 			expiresAt: now + 300,
 			session: true,
-		})
+		}, MAX_ACCESS_TOKEN_BYTES)
 		const approvalVerifier = randomToken(32)
 		const started = await env.REPOSITORIES.device.start({
 			app: 'vozka',
