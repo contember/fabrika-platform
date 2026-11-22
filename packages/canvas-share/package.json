@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/canvas-share",
-	"version": "0.9.0-dev.25",
+	"version": "0.9.0-dev.26",
 	"private": true,
 	"type": "module",
 	"scripts": {
