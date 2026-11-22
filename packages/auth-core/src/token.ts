@@ -105,7 +105,10 @@ export interface AccessTokenClaims {
 	iat: number
 	/** Expiry (unix seconds). */
 	exp: number
-	/** Resolved/effective permissions; `can(action, scope?)` = `permits(perms, action, scope)`. */
+	/**
+	 * Resolved/effective permissions; `can(action, scope?)` = `permits(perms, action, scope)`. On the wire a compact token
+	 * carries its global grants in `gperms` (`AccessTokenPayload`); the parser reads them back into this list.
+	 */
 	perms: PermissionEntry[]
 	/** Present only when the token is bound to a principal (`sub` is that principal). */
 	ptype?: TokenPrincipalType
@@ -282,6 +285,47 @@ export function matchesTokenAudience(claims: AccessTokenClaims, profile: TokenAu
 	return claims.oauth !== undefined && claims.aud === profile.resource && claims.oauth.app === profile.app
 }
 
+/**
+ * How an access token's claims travel. `entries` writes every permission into `perms`. `compact` writes each global
+ * grant (scope null, source `grant`) into `gperms` as its bare action name and the rest into `perms`; it is a third of
+ * the size for a person holding a few hundred actions. `parseAccessClaims` reads both into the same `perms`.
+ */
+export type AccessTokenLayout = 'entries' | 'compact'
+
+/** The signed payload: the claims, with the global grants of the compact layout in `gperms`. */
+export interface AccessTokenPayload extends AccessTokenClaims {
+	/** The compact layout's global grants, by action name; absent in the entries layout and when there are none. */
+	gperms?: string[]
+}
+
+/** The payload that carries `claims` in `layout`. */
+export function accessTokenPayload(claims: AccessTokenClaims, layout: AccessTokenLayout): AccessTokenPayload {
+	const gperms = layout === 'compact' ? claims.perms.filter(isGlobalGrant).map((entry) => entry.action) : []
+	return gperms.length === 0 ? { ...claims } : { ...claims, perms: claims.perms.filter((entry) => !isGlobalGrant(entry)), gperms }
+}
+
+/**
+ * Sign `claims` in the entries layout, or in the compact one when the entries layout is above `bound` bytes; the caller
+ * refuses a result still above it. A reader older than `gperms` reads a compact token without its global grants, which
+ * denies more and never allows more, and receives one only where the entries layout would have been refused anyway, so
+ * a platform release never changes a token an older framework release or a pinned proxy reads (ADR-0062).
+ */
+export async function signAccessClaims(
+	claims: AccessTokenClaims,
+	bound: number,
+	sign: (payload: AccessTokenPayload) => Promise<string>,
+): Promise<string> {
+	const entries = await sign(accessTokenPayload(claims, 'entries'))
+	if (entries.length <= bound || !claims.perms.some(isGlobalGrant)) {
+		return entries
+	}
+	return sign(accessTokenPayload(claims, 'compact'))
+}
+
+function isGlobalGrant(entry: PermissionEntry): boolean {
+	return entry.scope === null && entry.source === 'grant'
+}
+
 /** Assemble the claim object for an access token. Pure — the caller signs the result. */
 export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims {
 	const claims: AccessTokenClaims = {
@@ -340,15 +384,17 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	const sub = stringField(payload, 'sub')
 	const iat = numberField(payload, 'iat')
 	const exp = numberField(payload, 'exp')
-	const perms = parsePermissionEntries(prop(payload, 'perms'))
+	const entries = parsePermissionEntries(prop(payload, 'perms'))
+	const globalGrants = parseGlobalGrants(prop(payload, 'gperms'))
 	const label = parseNullableString(prop(payload, 'label'))
 	const ptype = parseOptionalPrincipalType(prop(payload, 'ptype'))
 	if (iss === undefined || aud === undefined || sub === undefined || iat === undefined || exp === undefined) {
 		return null
 	}
-	if (perms === null || label === undefined || ptype === undefined) {
+	if (entries === null || globalGrants === null || label === undefined || ptype === undefined) {
 		return null
 	}
+	const perms = [...entries, ...globalGrants]
 	const oauth = parseOAuthClaims(payload)
 	if (oauth === undefined || (oauth !== null && (ptype !== 'user' || !isOAuthResourceUri(aud)))) {
 		return null
@@ -537,6 +583,24 @@ function parseSource(value: unknown): PermissionSource | null {
 		return `group:${value.slice('group:'.length)}`
 	}
 	return null
+}
+
+/** The compact layout's `gperms`: absent → none; a non-empty array of non-empty action names → their global grants. */
+function parseGlobalGrants(value: unknown): PermissionEntry[] | null {
+	if (value === undefined) {
+		return []
+	}
+	if (!Array.isArray(value) || value.length === 0) {
+		return null
+	}
+	const out: PermissionEntry[] = []
+	for (const action of value) {
+		if (typeof action !== 'string' || action === '') {
+			return null
+		}
+		out.push({ action, scope: null, source: 'grant' })
+	}
+	return out
 }
 
 function parsePermissionEntries(value: unknown): PermissionEntry[] | null {

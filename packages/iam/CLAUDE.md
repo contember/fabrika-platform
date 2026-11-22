@@ -468,7 +468,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   `mintToken` or `mintFromKey` mints at a contract application, bounded by `MAX_APPLICATION_TOKEN_BYTES` (24576;
   `proxyMintedBound`). A client sends the 8 KiB kinds itself (OAuth, console bearers), through the proxy's auth service
   and to installation services, whose Bun keeps its 16 KiB header limit; only the proxy injects the application token,
-  twice on a bearer request, toward an application started with a 64 KiB limit. A workload's token keeps 8 KiB. Every bearer passes `boundedToken`: both mint fronts answer
+  twice on a bearer request, toward an application started with a 64 KiB limit. A workload's token keeps 8 KiB. `signAccessToken` signs the
+  compact layout of global grants (`gperms`) only when the entries layout is above the bound (`signAccessClaims`,
+  `@fabrika/auth-core`), so an older reader never meets it on a token it accepted before. Every bearer passes `boundedToken`: both mint fronts answer
   `token_too_large`, a decided refusal the proxy turns into a 403 — never a login bounce, because a
   new login mints the same token — and the OAuth code exchange and refresh answer `invalid_grant`.
 - **AN ACCESS TOKEN NEVER OUTLIVES THE GRANTS IT CARRIES** (`authorityDeadline`, `src/resolve.ts`). Every mint front

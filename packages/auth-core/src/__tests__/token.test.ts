@@ -1,6 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import { normalizeEmailIdentity } from '../membership'
-import { accessClaimsToResolved, type AccessTokenClaims, buildAccessClaims, parseAccessClaims, principalKind } from '../token'
+import {
+	accessClaimsToResolved,
+	type AccessTokenClaims,
+	type AccessTokenPayload,
+	accessTokenPayload,
+	buildAccessClaims,
+	parseAccessClaims,
+	principalKind,
+	signAccessClaims,
+} from '../token'
 import type { PermissionEntry } from '../types'
 
 const ISS = 'https://iam.example.com'
@@ -374,5 +383,68 @@ describe('the terminal of a person signed in on one (ADR-0067)', () => {
 		for (const value of [{ id: 'terminal-1' }, { id: 7, label: 'Entrance' }, { id: 'terminal-1', label: '' }, 'terminal-1', null]) {
 			expect(parseAccessClaims({ ...plain, amr: 'terminal_assertion', terminal: value })).toBeNull()
 		}
+	})
+})
+
+describe('the compact layout of global grants', () => {
+	const mixed: PermissionEntry[] = [
+		{ action: 'order.read', scope: null, source: 'grant' },
+		{ action: 'order.read', scope: { type: 'shop', value: 's-1' }, source: 'grant' },
+		{ action: '*', scope: null, source: 'bootstrap' },
+		{ action: 'order.write', scope: null, source: 'grant' },
+		{ action: 'report.read', scope: null, source: 'group:acme/core' },
+		{ action: 'order.ship', scope: null, source: 'terminal' },
+	]
+	const claims = principalClaims({ perms: mixed })
+	/** The JSON a signer would carry, read back as a verifier reads it. */
+	const wire = (payload: object): unknown => JSON.parse(JSON.stringify(payload))
+	const sorted = (entries: readonly PermissionEntry[]) => entries.map((entry) => JSON.stringify(entry)).sort()
+
+	test('moves only global grants into gperms, by name, and keeps every other entry whole', () => {
+		const payload = accessTokenPayload(claims, 'compact')
+		expect(payload.gperms).toEqual(['order.read', 'order.write'])
+		expect(payload.perms).toEqual(mixed.filter((entry) => entry.scope !== null || entry.source !== 'grant'))
+	})
+
+	test('both layouts parse to the same permissions', () => {
+		const entries = parseAccessClaims(wire(accessTokenPayload(claims, 'entries')))
+		const compact = parseAccessClaims(wire(accessTokenPayload(claims, 'compact')))
+		expect(sorted(compact?.perms ?? [])).toEqual(sorted(mixed))
+		expect(sorted(entries?.perms ?? [])).toEqual(sorted(mixed))
+	})
+
+	test('the entries layout carries no gperms, nor does a compact one without a global grant', () => {
+		expect('gperms' in accessTokenPayload(claims, 'entries')).toBe(false)
+		const scopedOnly = principalClaims({ perms: [{ action: 'order.read', scope: { type: 'shop', value: 's-1' }, source: 'grant' }] })
+		expect(accessTokenPayload(scopedOnly, 'compact')).toEqual(scopedOnly)
+	})
+
+	test.each([
+		['a string', 'order.read'],
+		['an empty list', []],
+		['an empty name', ['order.read', '']],
+		['a non-string name', ['order.read', 7]],
+		['an entry instead of a name', [{ action: 'order.read', scope: null, source: 'grant' }]],
+		['null', null],
+	])('refuses gperms that is %s', (_, gperms) => {
+		expect(parseAccessClaims(wire({ ...accessTokenPayload(claims, 'entries'), gperms }))).toBeNull()
+	})
+
+	test('signs the entries layout while it fits the bound, the compact one only above it', async () => {
+		const sign = (payload: AccessTokenPayload) => Promise.resolve(JSON.stringify(payload))
+		const entriesBytes = (await sign(accessTokenPayload(claims, 'entries'))).length
+		expect(JSON.parse(await signAccessClaims(claims, entriesBytes, sign))).not.toHaveProperty('gperms')
+		expect(JSON.parse(await signAccessClaims(claims, entriesBytes - 1, sign))).toHaveProperty('gperms', ['order.read', 'order.write'])
+	})
+
+	test('a claims set without a global grant is signed once, in the entries layout, whatever the bound', async () => {
+		const scopedOnly = principalClaims({ perms: [{ action: 'order.read', scope: { type: 'shop', value: 's-1' }, source: 'grant' }] })
+		const signed: AccessTokenPayload[] = []
+		const sign = (payload: AccessTokenPayload) => {
+			signed.push(payload)
+			return Promise.resolve(JSON.stringify(payload))
+		}
+		await signAccessClaims(scopedOnly, 1, sign)
+		expect(signed).toEqual([scopedOnly])
 	})
 })

@@ -352,6 +352,41 @@ describe('roles that grant the same actions', () => {
 	})
 })
 
+describe('a caller holding 300 actions globally', () => {
+	// With names this long the entries layout of 300 global grants is above the bound, so IAM and the kit sign the names (`gperms`).
+	const actions = Array.from({ length: 300 }, (_, index) => `catalog.product${String(index).padStart(3, '0')}.update`)
+	const last = actions.at(-1) ?? ''
+	const vocabulary = defineVocabulary({
+		app: 'wide',
+		dimensions: { project: {} },
+		actions: Object.fromEntries(actions.map((action) => [action, action])),
+		roles: { everything: { grants: actions }, allButLast: { grants: actions.filter((action) => action !== last) } },
+	})
+	const app = defineApp(vocabulary)
+	const projects = app.group({ callers: ['human'] }, (r) => ({
+		visible: r.query({ output: z.strictObject({ all: z.boolean() }), access: { action: last, over: 'project' } })
+			.handle(({ ctx }) => ({ all: ctx.within.values === 'all' })),
+	}))
+	const wide = app.contract((c) => ({ api: c.rpc('/api', { projects }) }))
+
+	test('gets a token under 60 % of the bound, and the proxy and the application read every grant from it', async () => {
+		const kit = testKit(serve(wide, { database: null }))
+		const caller = kit.testCaller([{ role: 'everything' }])
+		const session = caller.cookie?.slice(caller.cookie.indexOf('=') + 1) ?? null
+		const minted = await kit.iam.mintToken({ app: kit.appId, session, requestId: 'wide' })
+		expect(minted.ok ? minted.token.length : Number.POSITIVE_INFINITY).toBeLessThan(MAX_APPLICATION_TOKEN_BYTES * 0.6)
+		const response = await kit.browser(caller)('/api/projects.visible', post({}))
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ result: { all: true } })
+	})
+
+	test('a caller without the one global grant the endpoint requires is refused', async () => {
+		const kit = testKit(serve(wide, { database: null }))
+		const response = await kit.browser(kit.testCaller([{ role: 'allButLast' }]))('/api/projects.visible', post({}))
+		expect(response.status).toBe(403)
+	})
+})
+
 describe("the kit serves an SPA's built directory as the deploy does", () => {
 	const root = mkdtempSync(join(tmpdir(), 'fabrika-kit-spa-'))
 	afterAll(() => rmSync(root, { recursive: true, force: true }))

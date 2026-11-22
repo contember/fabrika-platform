@@ -1,10 +1,19 @@
-import { DEFAULT_TOKEN_TTL_SECONDS, MAX_ACCESS_TOKEN_BYTES, MAX_APPLICATION_TOKEN_BYTES, parseAccessClaims, permits } from '@fabrika/auth-core'
+import {
+	type AccessTokenClaims,
+	accessTokenPayload,
+	DEFAULT_TOKEN_TTL_SECONDS,
+	MAX_ACCESS_TOKEN_BYTES,
+	MAX_APPLICATION_TOKEN_BYTES,
+	parseAccessClaims,
+	permits,
+	satisfies,
+} from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, jwtVerify } from 'jose'
 import { hashToken } from '../secret'
 import { getSigner } from '../signing'
 import { mintFromKey, mintToken } from '../tokens'
-import { createHarness, seedInlineGrant, seedService, seedUser } from './helpers/harness'
+import { createHarness, seedGrant, seedInlineGrant, seedService, seedUser } from './helpers/harness'
 
 const ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const FUTURE = Math.floor(Date.now() / 1000) + 3600
@@ -351,6 +360,86 @@ describe('the access token size bound', () => {
 		const { result } = await mintToken(services, ENV, { app: 'example-app', session, requestId: 'narrow' })
 		expect(result.ok).toBe(true)
 		if (result.ok) expect(result.token.length).toBeLessThanOrEqual(MAX_ACCESS_TOKEN_BYTES)
+	})
+})
+
+describe('a person holding the built-in admin at a contract application with 300 actions', () => {
+	const APP = 'catalog-app'
+	const ACTIONS = Array.from({ length: 300 }, (_, index) => `orders.row${String(index).padStart(3, '0')}.edit`)
+	const PUBLIC_ACTION = ACTIONS[0] ?? ''
+	const WORKSPACE = { type: 'workspace', value: 'workspace-1' }
+
+	async function adminToken() {
+		const h = createHarness()
+		await h.repositories.appSchema.reconcileAppSchema({
+			app: APP,
+			scopes: [{ scopeType: 'workspace' }],
+			actions: ACTIONS.map((action) => ({ action })),
+			roles: [],
+			contract: true,
+			// A public procedure's action is not the admin's, so the token holds 299 of the 300 globally.
+			workloads: [{ kind: 'public', name: 'site.forms.submit', actions: [PUBLIC_ACTION] }],
+		})
+		const principalId = seedUser(h.sqlite, { sub: 'g-admin', email: 'admin@b.cz' })
+		seedGrant(h.sqlite, principalId, 'admin', null, APP)
+		seedInlineGrant(h.sqlite, principalId, ['orders.row001.edit'], WORKSPACE, APP)
+		const services = h.makeServices({ issuer: 'https://iam.test' })
+		const { result } = await mintToken(services, ENV, { app: APP, session: await h.signSession(principalId), requestId: 'admin' })
+		if (!result.ok) throw new Error(`expected a token: ${result.reason}`)
+		const signer = await getSigner(ENV)
+		const { payload } = await jwtVerify(result.token, createLocalJWKSet(signer.jwks()), { issuer: 'https://iam.test', audience: APP })
+		const claims = parseAccessClaims(payload)
+		if (claims === null) throw new Error('expected access claims')
+		return { token: result.token, payload, claims, signer }
+	}
+
+	/** Every decision a consumer takes from the claims: each action globally, in a scope, and as an application-wide requirement. */
+	function decisions(claims: AccessTokenClaims): boolean[] {
+		return [...ACTIONS, 'orders.unknown.edit'].flatMap((action) => [
+			permits(claims.perms, action),
+			permits(claims.perms, action, WORKSPACE),
+			satisfies({ kind: 'action', action, access: { form: 'app' } }, claims.perms),
+		])
+	}
+
+	test('its token carries the global grants as names and stays under 60 % of MAX_APPLICATION_TOKEN_BYTES', async () => {
+		const { token, payload, signer } = await adminToken()
+		expect(token.length).toBeLessThan(MAX_APPLICATION_TOKEN_BYTES * 0.6)
+		expect(payload['gperms']).toHaveLength(299)
+		// The scoped entry keeps its full form.
+		expect(payload['perms']).toEqual([{ action: 'orders.row001.edit', scope: WORKSPACE, source: 'grant' }])
+		// The same claims in the entries layout are above the bound: IAM refused this person before the compact layout.
+		const claims = parseAccessClaims(payload)
+		if (claims === null) throw new Error('expected access claims')
+		expect((await signer.sign(accessTokenPayload(claims, 'entries'))).length).toBeGreaterThan(MAX_APPLICATION_TOKEN_BYTES)
+	})
+
+	test('a consumer allows and denies from it exactly as from the entries layout', async () => {
+		const { claims, signer } = await adminToken()
+		const entries = parseAccessClaims(
+			(await jwtVerify(await signer.sign(accessTokenPayload(claims, 'entries')), createLocalJWKSet(signer.jwks()), { audience: APP })).payload,
+		)
+		if (entries === null) throw new Error('expected access claims')
+		expect(entries.perms.filter((entry) => entry.scope === null)).toHaveLength(299)
+		expect(decisions(claims)).toEqual(decisions(entries))
+		expect(permits(claims.perms, 'orders.row299.edit')).toBe(true)
+		expect(permits(claims.perms, PUBLIC_ACTION)).toBe(false)
+		expect(permits(claims.perms, PUBLIC_ACTION, WORKSPACE)).toBe(false)
+		expect(permits(claims.perms, 'orders.row001.edit', WORKSPACE)).toBe(true)
+	})
+
+	test('a global grant removed from the names is denied, and only that one', async () => {
+		const { claims: minted, signer } = await adminToken()
+		const compact = accessTokenPayload(minted, 'compact')
+		const { payload: narrowed } = await jwtVerify(
+			await signer.sign({ ...compact, gperms: (compact.gperms ?? []).filter((name) => name !== 'orders.row150.edit') }),
+			createLocalJWKSet(signer.jwks()),
+			{ audience: APP },
+		)
+		const claims = parseAccessClaims(narrowed)
+		if (claims === null) throw new Error('expected access claims')
+		expect(permits(claims.perms, 'orders.row150.edit')).toBe(false)
+		expect(ACTIONS.filter((action) => !permits(claims.perms, action))).toEqual([PUBLIC_ACTION, 'orders.row150.edit'])
 	})
 })
 

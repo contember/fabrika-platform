@@ -184,6 +184,13 @@ bun test               # app-environment · canonical-path · client-address · 
   the Cloudflare proxy Worker delete exactly that list, so a header the proxy starts to set joins it in
   the same change; `wire.test.ts` fails on an `X-Fabrika-*` constant of `wire.ts` missing from it. The
   Operations upload headers stay out: a client sends them to Operations through the platform proxy.
+- **A token carries its global grants in one of two layouts, and the parser reads both into `perms`.** The entries
+  layout writes every `PermissionEntry` into `perms`; the compact one writes each global grant (scope null, source
+  `grant`) into `gperms` as its action name (`accessTokenPayload`). `signAccessClaims` signs the compact layout only when
+  the entries layout is above the caller's bound, because a parser older than `gperms` reads such a token without those
+  grants (ADR-0022, "Global grants travel as names"). IAM and the test kit sign through it; never sign a compact token
+  below the bound, and never read the raw `perms` claim around `parseAccessClaims`. `gperms`, when present, is a
+  non-empty array of non-empty strings, or the token is refused.
 - **The claim parser must reject rather than coerce.** `parseAccessClaims` returns `null` on any
   malformed field. It runs on a payload whose signature has been checked but whose custom claims
   have not, so a lenient read is a trust bug, not a convenience.
