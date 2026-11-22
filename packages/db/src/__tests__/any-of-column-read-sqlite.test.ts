@@ -17,7 +17,7 @@ import { TestAuthority } from './fixtures/authority'
 
 const vocabulary = {
 	app: 'staff',
-	dimensions: { team: {} },
+	dimensions: { team: {}, squad: {} },
 	actions: {
 		'p.read': 'Read the staff',
 		'p.pay': 'Pay the staff',
@@ -31,11 +31,13 @@ const vocabulary = {
 interface DB {
 	people: { id: string; team: string; name: string; salary: number; review: string }
 	teams: { id: string; name: string; budget: number }
+	squads: { id: string; name: string; budget: number }
 }
 
 const columns: TypedColumnList<DB> = {
 	people: { columns: ['id', 'team', 'name', 'salary', 'review'], foreignKeys: [], notNull: ['id', 'team', 'name', 'salary', 'review'] },
 	teams: { columns: ['id', 'name', 'budget'], foreignKeys: [], notNull: ['id', 'name', 'budget'] },
+	squads: { columns: ['id', 'name', 'budget'], foreignKeys: [], notNull: ['id', 'name', 'budget'] },
 }
 
 const tables = defineTables(vocabulary, columns)({
@@ -51,6 +53,13 @@ const tables = defineTables(vocabulary, columns)({
 		actions: { read: ['p.read', 'p.pay', 'p.hr'] },
 		columns: { budget: { read: ['p.pay', 'p.hr'] } },
 	},
+	// A dimension table whose listed action has a `when`; only the types read it.
+	squads: {
+		scope: { dimension: 'squad' },
+		actions: { read: ['p.pay', 'p.hr'] },
+		columns: { budget: { read: ['p.pay', 'p.hr'] } },
+		when: { 'p.hr': { name: { eq: 'hr' } } },
+	},
 })
 
 type Policies = typeof tables extends Tables<DB, infer P> ? P : never
@@ -61,6 +70,7 @@ type Lacks<R, C extends string> = C extends keyof R ? false : true
 type Assignable<S, T> = [S] extends [T] ? true : false
 type People<A extends string> = ApplicationTables<Index, A, 'query'>['people']
 type Teams<A extends string> = ApplicationTables<Index, A, 'query'>['teams']
+type Squads<A extends string> = ApplicationTables<Index, A, 'query'>['squads']
 type TeamsWithin<A extends string> = WithinTables<Index, 'team', A, 'query'>['teams']
 type Listed<H> = H extends { readonly list: (...args: never[]) => Promise<ListPage<infer R>> } ? R : never
 type Got<H> = H extends { readonly get: (...args: never[]) => Promise<infer R> } ? R : never
@@ -80,6 +90,8 @@ export type AnyOfColumnTypes = [
 	Expect<Lacks<Listed<Teams<'p.read' | 'p.hr'>>, 'budget'>>,
 	// Every action on the list, but each has a when: hidden.
 	Expect<Lacks<Listed<People<'p.audit' | 'p.self'>>, 'review'>>,
+	Expect<Lacks<Listed<Squads<'p.pay' | 'p.hr'>>, 'budget'>>,
+	Expect<Has<Listed<Squads<'p.hr'>>, 'budget'>>,
 	// One action reads its column on its own rows, when or not, as before.
 	Expect<Has<Listed<People<'p.audit'>>, 'review'>>,
 	Expect<Lacks<Listed<People<'p.read'>>, 'salary'>>,

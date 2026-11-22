@@ -515,8 +515,9 @@ export interface WithinRows<T extends string, E extends IndexedTable, A extends 
 }
 
 /**
- * `Member` where a `Within` of `A` lists the table by its read action. An alias, not inline in `WithinRows`: inline, the
- * interface is measured invariant in `A`, and a `Pick` of a handle that reads more columns fails where one of fewer is expected.
+ * `Member` where a `Within` of `A` lists the table by its read action. An alias, not inline in `WithinRows`: inline, a
+ * `Pick` of a handle that reads more columns is refused where one of fewer is expected. A `Within` typed for a union of
+ * actions reads its row by the union rule (`HiddenFor`), stricter than the one action it holds at run time.
  */
 type WithinRead<T extends string, E extends IndexedTable, A extends string, Member> = A extends E['actions']['read'] ? Member
 	: Unavailable<ListRefusal<T, E, A>>
