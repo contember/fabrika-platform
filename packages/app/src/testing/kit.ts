@@ -646,6 +646,9 @@ export function bootTestKit<C extends AnyContract>(
 		if (unknown !== undefined) {
 			throw new Error(`the terminal's ceiling '${unknown}' names no action of the contract`)
 		}
+		if (terminal.id === '' || terminal.label === '') {
+			throw new Error('a terminal has a non-empty id and label, as IAM enrols one: testCaller(grants, { terminal: { id, label } })')
+		}
 		terminals += 1
 		return Object.freeze({
 			id: terminal.id ?? `terminal-${terminals}`,

@@ -240,6 +240,7 @@ describe('a test kit caller on a terminal', () => {
 		expect(() => kit.testCaller([], { terminal: { ceiling: ['reports.*'] } })).toThrow(
 			"the terminal's ceiling 'reports.*' names no action of the contract",
 		)
+		expect(() => kit.testCaller([], { terminal: { label: '' } })).toThrow('a terminal has a non-empty id and label')
 		const personal = testKit(serve(kioskless(), { database: null }))
 		expect(() => personal.testCaller([], { terminal: {} })).toThrow('the contract declares no terminal')
 	})
