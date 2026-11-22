@@ -236,8 +236,9 @@ function credentialGrantToKeyGrant(row: CredentialGrantRow): KeyGrant[] {
  * app cannot probe or end another app's keys. Within the app, authorization mirrors the old capability
  * revoke: the original issuer may always revoke; otherwise, for an ANONYMOUS credential (a share
  * link), the caller must be able to re-issue its grants — hold every granted action, checked with the
- * same `findUncoveredGrant` as issue. A principal-bound credential is managed through the principal
- * path (the api-keys page), so a non-issuer caller cannot revoke it by id here. Idempotent — a second
+ * same `findUncoveredGrant` as issue; one with no grant but reserved rows is the issuer's alone. A
+ * principal-bound credential is managed through the principal path (the api-keys page), so a
+ * non-issuer caller cannot revoke it by id here. Idempotent — a second
  * revoke returns `{ ok: true, revoked: false }`.
  */
 export async function revokeKey(
@@ -256,7 +257,8 @@ export async function revokeKey(
 			return { ok: false, reason: 'not_allowed' }
 		}
 		const grants = (await services.repositories.credentials.getCredentialGrants(cred.id)).flatMap(credentialGrantToKeyGrant)
-		if (findUncoveredGrant(revoker.permissions, grants) !== null) {
+		// No grant left to re-issue (a legacy key of reserved rows only) proves no right over the key: its issuer's alone.
+		if (grants.length === 0 || findUncoveredGrant(revoker.permissions, grants) !== null) {
 			return { ok: false, reason: 'not_allowed' }
 		}
 	}

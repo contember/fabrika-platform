@@ -133,7 +133,10 @@ references the target's key, or a key into a reference table; a `some` follows s
 a reference table, whose row every tenant's rows name: it reads only rows of the named row's own tenant. Every hop also
 needs a single-column foreign key on its column, which the subquery follows: along a containment chain that is a second
 foreign key beside the composite one that holds the tenant, so a table with only `(project_id, org_id) references
-projects (id, org_id)` takes no path through `project_id`. Each form is the
+projects (id, org_id)` takes no path through `project_id`. The composite key that holds the tenant, the covering key of a
+container or parent column included, needs every ancestor column NOT NULL in the column list: under MATCH SIMPLE a null
+one skips the key, and the hop would read a row of another tenant. A child view's parent column is excepted: its
+parent subquery scopes the parent row. Each form is the
 one subquery shape `T.<column> in (select X.<column> from X where …)`, so the guard admits it by its table and column,
 nested at most four deep under a reveal. A child view's parent column is such a hop, though no foreign key declares it
 ([ADR-0072](0072-a-view-is-a-read-only-table.md)). An insert's condition is judged on the inserted row; one with a path,

@@ -187,6 +187,13 @@ parse refuses such a path, and a condition's `not` over any path, until the file
 `confers` and `when`; [ADR-0073](../decisions/0073-a-relation-grant-is-application-data-read-on-every-statement.md))
 need `0.9.0-dev.13` or later: Control refuses to publish them for an application pinned to an earlier release.
 
+From the release after `0.9.0-dev.28`, a condition path through a row's own container or parent column requires the
+ancestor columns of that column's covering key in `notNull` too (`(project_id, org_id) references projects (id,
+org_id)` needs `org_id`). The parse names each nullable one: declare it `NOT NULL` in a migration and run
+`fabrika db codegen`. Control reads every 0.9 prerelease with its own release's reader, so an application on an
+earlier 0.9 prerelease meets this rule at its first deploy after the platform upgrade, not only when it raises its pin;
+the running version keeps running.
+
 From the release after `0.9.0-dev.13`, a `memberReveals` entry holds its actions for an `on` or `in` endpoint too, writes included;
 `0.9.0-dev.13` held them for an `over` list's reads only. The declaration and the approval diff do not change, so
 review the actions each `memberReveals` entry lists before raising the pin from `dev.13`, and keep only those its

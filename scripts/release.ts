@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { basename, dirname, join, relative, resolve } from 'node:path'
 import ts from 'typescript-platform'
 import { z } from 'zod'
+import { PUBLISH_FLOORS } from '../packages/control/src/approval/floors'
 import { checkConsumerDeclarations, declarationManifest, emitDeclarations, shipsDeclarations, tsconfigTypes } from './declarations'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -257,6 +258,39 @@ export const assertTagMatchesSource = (tag: string, version: string, sourceVersi
 	if (version === sourceVersion) return
 	throw new Error(
 		`${tag} does not match the source version ${sourceVersion}. Run \`bun run release:bump --tag=${tag}\`, commit the result, and tag that commit.`,
+	)
+}
+
+/** The publish floors of this checkout: the first release whose source enforces what Control publishes from it. */
+const PUBLISH_FLOOR_VERSIONS: readonly string[] = PUBLISH_FLOORS.map((floor) => floor.text)
+
+/**
+ * A release ships the enforcement its source carries, so its tag may not sort below a publish floor of that source:
+ * the floor would leave the release out, and the floor test would then pass a floor no release names. A channel
+ * prerelease that SemVer orders below a floor (`0.9.0-cloudflare.1` below `0.9.0-dev.13`) is refused too.
+ */
+export const assertTagReachesFloors = (tag: string, version: string, floors: readonly string[]): void => {
+	const above = floors.filter((floor) => compareVersions(version, floor, 'publish floor') < 0)
+	if (above.length === 0) return
+	const [noun, them] = above.length === 1 ? ['floor', 'it'] : ['floors', 'them']
+	throw new Error(
+		`${tag} sorts below the publish ${noun} ${
+			above.join(', ')
+		} of its own source, which enforces ${them}. Tag the release at or above ${them}, or, for a channel, decide backlog 240 first.`,
+	)
+}
+
+/**
+ * A hotfix is its base release plus some commits, so it enforces no publish floor its base is below. A tag that reaches
+ * such a floor would make Control publish the floor's fields for an application pinned to a release that ignores them,
+ * which widens access (ADR-0073 §5). The floors are this checkout's, since the base's source predates them.
+ */
+export const assertHotfixBelowFloors = (from: string, tag: string, floors: readonly string[]): void => {
+	const crossed = floors.filter((floor) => compareVersions(from, floor, 'hotfix') < 0 && compareVersions(tag, floor, 'hotfix') >= 0)
+	const [floor] = crossed
+	if (floor === undefined) return
+	throw new Error(
+		`v${tag} reaches the publish floor ${floor}, and v${from} is below it: the hotfix would not enforce what Control publishes from ${floor}. Take a version below ${floor}, or move the floor past the hotfix first.`,
 	)
 }
 
@@ -1245,6 +1279,7 @@ export const parseHotfixRequest = (argv: readonly string[], repository: string):
 	const source = parseReleaseTag(from)
 	const next = parseReleaseTag(tag)
 	assertBumpForward(source.version, next.version)
+	assertHotfixBelowFloors(source.version, next.version, PUBLISH_FLOOR_VERSIONS)
 	return { repository, from: source.tag, tag: next.tag, commits, push }
 }
 
@@ -1335,7 +1370,10 @@ const main = async (): Promise<void> => {
 		await bump(options, packages, sourceVersion)
 		return
 	}
-	if (options.command === 'validate') assertTagMatchesSource(options.tag, options.version, sourceVersion)
+	if (options.command === 'validate') {
+		assertTagMatchesSource(options.tag, options.version, sourceVersion)
+		assertTagReachesFloors(options.tag, options.version, PUBLISH_FLOOR_VERSIONS)
+	}
 	if (options.command === 'validate' || options.command === 'pack') {
 		const publicNames = new Set(publicPackages.map((item) => item.name))
 		for (const item of publicPackages) await assertPackedImports(item, publicNames)

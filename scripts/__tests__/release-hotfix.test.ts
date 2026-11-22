@@ -3,7 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod'
-import { hotfix, type HotfixRequest, type HotfixSteps, parseHotfixRequest } from '../release'
+import { PUBLISH_FLOORS } from '../../packages/control/src/approval/floors'
+import { assertHotfixBelowFloors, hotfix, type HotfixRequest, type HotfixSteps, parseHotfixRequest } from '../release'
 
 const git = (cwd: string, ...args: string[]): string => {
 	const result = Bun.spawnSync(['git', ...args], { cwd, stdout: 'pipe', stderr: 'pipe' })
@@ -173,5 +174,23 @@ describe('the hotfix command line', () => {
 		expect(() => parseHotfixRequest(['--from=v0.4.5', '--tag=v0.4.5', 'abc123'], '/repository')).toThrow('bump must move forward')
 		expect(() => parseHotfixRequest(['--from=0.4.5', '--tag=v0.4.6', 'abc123'], '/repository')).toThrow('Invalid release tag')
 		expect(() => parseHotfixRequest(['--from=v0.4.5', '--tag=v0.4.6', '--dry-run', 'abc123'], '/repository')).toThrow('Unknown option: --dry-run')
+	})
+
+	test('refuses a tag that reaches a publish floor its base is below, since the hotfix lacks that enforcement', () => {
+		const floors = ['0.9.0-dev.13']
+		expect(() => assertHotfixBelowFloors('0.9.0-dev.12', '0.9.0-dev.13', floors)).toThrow(
+			'v0.9.0-dev.13 reaches the publish floor 0.9.0-dev.13, and v0.9.0-dev.12 is below it',
+		)
+		expect(() => assertHotfixBelowFloors('0.9.0-dev.12', '0.9.1', floors)).toThrow('reaches the publish floor 0.9.0-dev.13')
+		expect(() => assertHotfixBelowFloors('0.9.0-dev.12', '0.9.0-dev.12.1', floors)).not.toThrow()
+		expect(() => assertHotfixBelowFloors('0.9.0-dev.13', '0.9.0-dev.13.1', floors)).not.toThrow()
+	})
+
+	test("checks this checkout's publish floors", () => {
+		const [first] = PUBLISH_FLOORS
+		if (first === undefined) throw new Error('no publish floor')
+		expect(() => parseHotfixRequest(['--from=v0.0.1', `--tag=v${first.text}`, 'abc123'], '/repository')).toThrow(
+			`reaches the publish floor ${first.text}`,
+		)
 	})
 })
