@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/db",
-	"version": "0.9.0-dev.29",
+	"version": "0.9.0-dev.30",
 	"type": "module",
 	"sideEffects": [
 		"./src/testing.ts",
