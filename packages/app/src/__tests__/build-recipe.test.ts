@@ -2,6 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import ts from 'typescript-platform'
 import {
 	contractChecks,
 	contractRecipe,
@@ -162,6 +163,46 @@ describe('contractChecks', () => {
 			],
 		})
 		expect(SCHEMA_TYPES_CHECK).toEqual(['db', 'codegen', '--verify'])
+	})
+
+	test('the platform tsconfig admits the ES2023 library that workerd and Bun run', async () => {
+		const root = await mkdtemp(join(tmpdir(), 'fabrika-platform-tsconfig-'))
+		try {
+			const { tsconfig } = contractChecks(root, '0.9.1')
+			await mkdir(join(root, 'fabrika'), { recursive: true })
+			await mkdir(join(root, 'src'), { recursive: true })
+			await writeFile(join(root, tsconfig.write), tsconfig.lines.join('\n'))
+			await writeFile(
+				join(root, 'src', 'es2023.ts'),
+				[
+					'const totals: readonly number[] = [3, -1, 2]',
+					'export const last = totals.findLast((total) => total < 0)',
+					'export const lastIndex = totals.findLastIndex((total) => total > 0)',
+					'export const sorted = totals.toSorted((a, b) => a - b)',
+					'export const reversed = totals.toReversed()',
+					"export const signed = new Intl.NumberFormat('en', { signDisplay: 'negative' }).format(-1)",
+					'',
+				].join('\n'),
+			)
+			const configPath = join(root, tsconfig.write)
+			const parsed = ts.getParsedCommandLineOfConfigFile(configPath, undefined, {
+				...ts.sys,
+				onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+					throw new Error(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'))
+				},
+			})
+			if (parsed === undefined) throw new Error('the platform tsconfig did not parse')
+			// The scratch application installs no `@types/bun`; the library is what is under test.
+			const program = ts.createProgram(parsed.fileNames, { ...parsed.options, types: [] })
+			const messages = [...parsed.errors, ...ts.getPreEmitDiagnostics(program)].map((diagnostic) =>
+				ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n')
+			)
+			expect(ts.version).toBe(PLATFORM_TYPESCRIPT_VERSION)
+			expect(parsed.fileNames).toContain(join(root, 'src', 'es2023.ts'))
+			expect(messages).toEqual([])
+		} finally {
+			await rm(root, { recursive: true, force: true })
+		}
 	})
 
 	test('refuses a source root or a release a shell would read as more than one word', () => {

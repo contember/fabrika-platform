@@ -43,15 +43,16 @@ const SPA_TYPE_CHECK_SINCE = { major: 0, minor: 9 }
 /**
  * The compiler options of the platform's type check; the application's own `tsconfig.json` and its `paths` are not read.
  * From 0.9 it covers the SPA under `web/` too, since Bun bundles the SPA without checking its types. An older release
- * keeps 0.8's `src/` check, so a platform upgrade fails no build that passed before (ADR-0062).
+ * keeps 0.8's `src/` check, so a platform upgrade fails no build that passed before (ADR-0062). The lib is ES2023, which
+ * both runtimes (workerd and Bun) run; raising it only admits more code, so every release reads the same one.
  */
 const platformTsconfigContents = (checkRelease: string): string =>
 	JSON.stringify({
 		compilerOptions: {
-			target: 'ES2022',
+			target: 'ES2023',
 			module: 'ESNext',
 			moduleResolution: 'bundler',
-			lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+			lib: ['ES2023', 'DOM', 'DOM.Iterable'],
 			jsx: 'react-jsx',
 			types: ['bun'],
 			strict: true,
