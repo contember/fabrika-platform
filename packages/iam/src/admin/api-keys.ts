@@ -111,7 +111,7 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 	if (!scope.ok) {
 		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
 	}
-	const contractProblem = await contractGrantProblem(c.services.repositories.appSchema, app, { ...roleOrInline, scopeType: scope.scopeType })
+	const contractProblem = await contractGrantProblem(c.services.repositories.appSchema, app, { ...roleOrInline, scopeType: scope.scopeType }, false)
 	if (contractProblem !== null) {
 		return fail(400, contractProblem)
 	}

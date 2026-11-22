@@ -274,9 +274,28 @@ describe('computePermissions — a contract application holds exact actions only
 		expect(entries.map((entry) => entry.action).sort()).toEqual(['project.read', 'report.export', 'report.read'])
 	})
 
-	test('the built-in admin grants nothing there', () => {
+	test('the built-in admin grants nothing there without the declared actions', () => {
 		expect(computePermissions({ ...base, grants: [roleGrant('admin', null)], exactActions: true }, roles)).toEqual([])
 		expect(computePermissions({ ...base, grants: [roleGrant('admin', null)] }, roles)).toHaveLength(1)
+	})
+
+	const declared = ['project.read', 'project.write', 'report.read']
+	const contract = { ...base, exactActions: true, contractAdmin: declared }
+
+	test('a grant of the built-in admin at the application holds exactly the declared actions, at its scope and expiry', () => {
+		const global = computeAuthority({ ...contract, grants: [{ ...roleGrant('admin', null), expires_at: 900 }] }, roles)
+		expect(global.permissions).toEqual(declared.map((action) => ({ action, scope: null, source: 'grant' })))
+		expect(global.supports.every((held) => held.until === 900)).toBe(true)
+		const scoped = computePermissions({ ...contract, grants: [roleGrant('admin', TEAM('acme'))] }, roles)
+		expect(scoped.every((entry) => scopeEq(entry.scope, TEAM('acme')))).toBe(true)
+		expect(scoped).toHaveLength(3)
+	})
+
+	test('a cross-app admin grant, an external principal and the bootstrap admin get no declared action', () => {
+		const crossApp = { ...roleGrant('admin', null), app: null }
+		expect(computePermissions({ ...contract, grants: [crossApp] }, roles)).toEqual([])
+		expect(computePermissions({ ...contract, grants: [roleGrant('admin', null)], affiliation: 'external' }, roles)).toEqual([])
+		expect(computePermissions({ ...contract, isBootstrapAdmin: true }, roles)).toEqual([])
 	})
 })
 

@@ -270,7 +270,7 @@ async function roleAuthorityProblem(
 		roleKey: role.role_key,
 		permissions: null,
 		scopeType: scope.type,
-	})
+	}, false)
 	return contract === null ? null : invalid(contract)
 }
 
@@ -374,7 +374,7 @@ export async function createScope(services: Services, env: CallerEnv, ctx: Reque
 		roleKey: role.role_key,
 		permissions: null,
 		scopeType: input.dimension,
-	})
+	}, false)
 	if (contract !== null) return invalid(contract)
 	const external = await externalGrantProblem(services.repositories.appSchema, caller.principal, caller.app, { roleKey: role.role_key })
 	if (external !== null) return invalid(external)

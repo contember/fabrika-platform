@@ -14,7 +14,7 @@ import {
 import type { AuditEventInput, GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import { logWarn } from './log'
-import { makeRoleSource } from './roles'
+import { ADMIN_ROLE_KEY, makeRoleSource } from './roles'
 import type { Config } from './services'
 import { parseStoredPermissions, parseStoredVia } from './stored-permissions'
 
@@ -38,10 +38,16 @@ export interface ResolutionInputs {
 	 */
 	affiliation: PrincipalAffiliation
 	/**
-	 * A contract application holds exact actions of its approved catalog: a pattern (a stored `*` or `prefix.*`, the
-	 * built-in `admin` included) contributes nothing there, so nothing tracks the catalog beyond its approved revision.
+	 * A contract application holds exact actions of its approved catalog: a pattern (a stored `*` or `prefix.*`)
+	 * contributes nothing there, so nothing tracks the catalog beyond its approved revision. The built-in `admin` holds
+	 * `contractAdmin` there instead, or nothing without it.
 	 */
 	exactActions?: boolean
+	/**
+	 * At a contract application, what an internal user's grant of the built-in `admin` at that application holds: its
+	 * declared actions but those of its public procedures. Absent, such a grant contributes nothing.
+	 */
+	contractAdmin?: readonly string[]
 }
 
 /**
@@ -154,7 +160,11 @@ export function computeAuthority(inputs: ResolutionInputs, roles: RoleSource): R
 			// A row stored before `~` was reserved: IAM alone derives a `~` entry, so the row grants nothing.
 			continue
 		}
-		if (grant.role_key !== null) {
+		if (grant.role_key === ADMIN_ROLE_KEY && grant.app === inputs.app && inputs.contractAdmin !== undefined && !external) {
+			for (const action of inputs.contractAdmin) {
+				add(action, scope, 'grant', grant.expires_at)
+			}
+		} else if (grant.role_key !== null) {
 			expandRole(grant.role_key, scope, 'grant', grant.expires_at)
 		} else if (grant.permissions !== null) {
 			for (const pattern of parseStoredPermissions(grant.permissions)) {
@@ -392,5 +402,9 @@ export async function resolveAuthorityAt(
 		&& services.config.bootstrapAdmins.has(normalizeEmailIdentity(principal.email))
 	const roles = await loadRoleSource(services.repositories, app)
 	const exactActions = await services.repositories.appSchema.isContractApp(app)
-	return computeAuthority({ app, grants, isBootstrapAdmin, affiliation: principal.affiliation, exactActions }, roles)
+	// Only a person's own grant of `admin` at the application reads the catalog; a key never grows with it.
+	const personAdmin = exactActions && principal.type === 'user' && principal.affiliation === 'internal'
+		&& grants.some((grant) => grant.role_key === ADMIN_ROLE_KEY && grant.app === app)
+	const contractAdmin = personAdmin ? await services.repositories.appSchema.listContractAdminActions(app) : undefined
+	return computeAuthority({ app, grants, isBootstrapAdmin, affiliation: principal.affiliation, exactActions, contractAdmin }, roles)
 }

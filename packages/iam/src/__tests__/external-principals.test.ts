@@ -168,11 +168,11 @@ for (const backend of BACKENDS) {
 			const policy = await f.adminRpc('policies.create', { app: APP, policy: { key: 'reader-policy', name: 'Reader', permissions: ['notes.read'] } })
 			expect(policy.status).toBe(200)
 
-			// The built-in `admin` of a contract application is already refused for its wildcard (400); cross-app it is the rule's.
+			// The built-in `admin`, which a contract application gives an internal person, is the external rule's at every app.
 			const refusals: [unknown, number][] = [
 				[{ ...at, permissions: ['notes.read'] }, 409],
 				[{ principalId: external.id, app: null, roleKey: 'admin' }, 409],
-				[{ principalId: external.id, app: APP, roleKey: 'admin' }, 400],
+				[{ principalId: external.id, app: APP, roleKey: 'admin' }, 409],
 				[{ principalId: external.id, app: APP, roleKey: 'reader-policy' }, 409],
 				[{ ...at, roleKey: 'editor' }, 409],
 			]

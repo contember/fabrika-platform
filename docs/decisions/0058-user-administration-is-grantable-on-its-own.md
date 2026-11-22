@@ -121,8 +121,8 @@ Within X, `grants.create` takes what it takes from an installation admin:
 - inline permissions from X's catalog;
 - globally or in one of X's scope values.
 
-The existing rules still apply. A contract application refuses a wildcard, so it also refuses the built-in `admin`
-(`packages/iam/src/contract-rules.ts:31-53`). A membership role is granted only in its own dimension. An external
+The existing rules still apply. A contract application refuses a wildcard; the built-in `admin` there goes only to a
+person and holds X's declared actions, not `*` (`packages/iam/src/contract-rules.ts`, ADR-0022 rule 6). A membership role is granted only in its own dimension. An external
 principal holds only external roles ([ADR-0051](0051-external-principals.md)).
 
 The caller is refused:
@@ -141,8 +141,8 @@ application:
 - **An action means something only to its application.** A grant row at X counts only when IAM resolves permissions
   at X: `getActiveGrantsForApp` matches `app = X`, and cross-app rows only for a platform audience
   (`packages/iam/src/repositories/grants.ts:117-129`).
-- **The built-in `admin` granted at X is `*` at X only.** It expands where X's grants resolve (`resolve.ts:85-98`,
-  `packages/iam/src/roles.ts:17-19`). It never reaches another application, another environment of X, or the
+- **The built-in `admin` granted at X is `*` at X only**, or X's declared actions when X is a contract application. It
+  expands where X's grants resolve (`resolve.ts`, `packages/iam/src/roles.ts`). It never reaches another application, another environment of X, or the
   installation.
 - **An action that X names `iam.admin` is X's own string.** IAM resolves its administration at `propustka`
   (`router.ts:121`), never at X.

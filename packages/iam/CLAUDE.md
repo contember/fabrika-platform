@@ -297,7 +297,9 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A CONTRACT APPLICATION LISTS EXACT ACTIONS ON EVERY WRITE PATH (`src/contract-rules.ts`).** A
   schema reconciled with `contract: true` (`contract_apps`, written in the reconcile's own batch) makes
   IAM refuse a wildcard in its roles (`appSchemaSchema`), custom policies, grants — inline or through a
-  role, the built-in `admin` included — provisioned keys and device keys. The device exchange
+  role — provisioned keys and device keys. The one exception is the built-in `admin` granted to a person
+  (`toPerson`): there it resolves to the declared actions minus the public procedures' (`listContractAdminActions`),
+  never `*`; a service principal is refused it. The device exchange
   writes its grant by raw SQL (`repositories/device.ts`), so the rule is checked at approval, again
   at exchange, and inside the issuing batch's claim, which matches no row for a wildcard key of a
   contract application. A
@@ -685,8 +687,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   already-fetched rows, so it is unit-testable without a database. Unparseable inline grant JSON and
   an unresolvable role key both contribute ZERO permissions. Wildcards stay as patterns — `permits()`
   in `@fabrika/auth-core` matches them; never pre-expand. At a CONTRACT application a pattern contributes nothing
-  (`exactActions`), the built-in `admin` included, so no grant tracks the catalog beyond its approved revision; only a
-  platform audience still resolves one. Migration `0027_application_exact_actions.sql` is the preflight: it refuses
+  (`exactActions`), so no grant tracks the catalog beyond its approved revision; only a platform audience still
+  resolves one. An internal user's grant of the built-in `admin` at the application itself resolves to the declared
+  actions instead (`contractAdmin`); a cross-app one, an external's and the bootstrap `admin` give nothing there. Migration `0027_application_exact_actions.sql` is the preflight: it refuses
   while a contract application holds a pattern in a grant, a role or a key, or a grant of `admin`.
 - **A RELATION IS HELD ANYWHERE THROUGH A GLOBAL GRANT, AND INSIDE ITS NODE THROUGH A SCOPED ONE; IAM DERIVES THE ENTRY**
   (ADR-0073). `roles.via` (migrations `0029_role_via` and `0030_membership_role_via`, reconciled from a role's `via`;
