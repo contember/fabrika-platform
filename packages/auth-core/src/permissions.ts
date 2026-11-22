@@ -30,6 +30,22 @@ export function matchAction(pattern: string, action: string): boolean {
 }
 
 /**
+ * `entries` with each identical action, scope and source once, the first kept in order: how IAM resolves a principal's
+ * permissions, so two roles granting one action at one scope put one entry into the token.
+ */
+export function uniquePermissions(entries: readonly PermissionEntry[]): PermissionEntry[] {
+	const seen = new Set<string>()
+	return entries.filter((entry) => {
+		const key = JSON.stringify([entry.action, entry.scope?.type ?? null, entry.scope?.value ?? null, entry.source])
+		if (seen.has(key)) {
+			return false
+		}
+		seen.add(key)
+		return true
+	})
+}
+
+/**
  * Does `entries` grant `action` at the given scope? Mirrors `can()` semantics exactly:
  *  - scope === undefined → scope-less: ONLY entries with scope === null satisfy (global perms only).
  *  - scope === <Scope>   → entries with scope === null OR an entry scoped to the SAME

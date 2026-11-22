@@ -322,6 +322,36 @@ describe('the token size bound', () => {
 	})
 })
 
+describe('roles that grant the same actions', () => {
+	// Two roles of 150 actions each: their entries together sign a token above the bound, each entry once one below it.
+	const actions = Array.from({ length: 150 }, (_, index) => `items.action${String(index).padStart(3, '0')}`)
+	const vocabulary = defineVocabulary({
+		app: 'overlap',
+		dimensions: { project: {} },
+		actions: Object.fromEntries(actions.map((action) => [action, action])),
+		roles: { staff: { grants: actions }, owner: { grants: actions } },
+	})
+	const app = defineApp(vocabulary)
+	const projects = app.group({ callers: ['human'] }, (r) => ({
+		visible: r.query({ output: z.strictObject({ values: z.array(z.string()) }), access: { action: 'items.action000', over: 'project' } })
+			.handle(({ ctx }) => ({ values: ctx.within.values === 'all' ? [] : [...ctx.within.values] })),
+	}))
+	const overlapping = app.contract((c) => ({ api: c.rpc('/api', { projects }) }))
+
+	test('sign one entry per action and scope, as IAM resolves them, so the caller stays under the bound', async () => {
+		const kit = testKit(serve(overlapping, { database: null }))
+		const P1 = { type: 'project', value: 'p1' } as const
+		const caller = kit.testCaller([{ role: 'staff', scope: P1 }, { role: 'owner', scope: P1 }])
+		const session = caller.cookie?.slice(caller.cookie.indexOf('=') + 1) ?? null
+		const minted = await kit.iam.mintToken({ app: kit.appId, session, requestId: 'overlap' })
+		expect(minted).toMatchObject({ ok: true })
+		expect(minted.ok ? minted.token.length : Number.POSITIVE_INFINITY).toBeLessThan(MAX_APPLICATION_TOKEN_BYTES)
+		const response = await kit.browser(caller)('/api/projects.visible', post({}))
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({ result: { values: ['p1'] } })
+	})
+})
+
 describe("the kit serves an SPA's built directory as the deploy does", () => {
 	const root = mkdtempSync(join(tmpdir(), 'fabrika-kit-spa-'))
 	afterAll(() => rmSync(root, { recursive: true, force: true }))

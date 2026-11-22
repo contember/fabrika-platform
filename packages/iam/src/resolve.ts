@@ -9,6 +9,7 @@ import {
 	type RoleDef,
 	type RoleSource,
 	type Scope,
+	uniquePermissions,
 } from '@fabrika/auth-core'
 import type { AuditEventInput, GrantRow, IamRepositories, PrincipalRow, RoleRow } from './db'
 import { normalizeEmailIdentity } from './email-identity'
@@ -96,7 +97,6 @@ export function computePermissions(inputs: ResolutionInputs, roles: RoleSource):
 /** `computePermissions`, plus each entry's latest supporting expiry. */
 export function computeAuthority(inputs: ResolutionInputs, roles: RoleSource): ResolvedAuthority {
 	const entries: PermissionEntry[] = []
-	const seen = new Set<string>()
 	const supports = new Map<string, HeldEntry>()
 
 	const add = (action: string, scope: Scope | null, source: PermissionSource, until: number | null): void => {
@@ -110,11 +110,6 @@ export function computeAuthority(inputs: ResolutionInputs, roles: RoleSource): R
 		} else if (held.until !== null) {
 			held.until = until === null ? null : Math.max(held.until, until)
 		}
-		const key = `${action} ${scopeKey} ${source}`
-		if (seen.has(key)) {
-			return
-		}
-		seen.add(key)
 		entries.push({ action, scope, source })
 	}
 
@@ -174,7 +169,7 @@ export function computeAuthority(inputs: ResolutionInputs, roles: RoleSource): R
 		expandRole('admin', null, 'bootstrap', null)
 	}
 
-	return { permissions: entries, supports: [...supports.values()] }
+	return { permissions: uniquePermissions(entries), supports: [...supports.values()] }
 }
 
 /**
