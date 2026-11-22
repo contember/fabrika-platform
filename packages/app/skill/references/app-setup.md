@@ -416,7 +416,9 @@ await Bun.write(
 
 - The SPA imports `@fabrika/app/client`, `@fabrika/app/react`, `@fabrika/ui`, React, `fabrika.contract.ts`,
   `src/schemas.ts`, `src/shared/` and its own modules; never a slice, `src/db/` or a Bun or Node module. The plugin loads the
-  contract without its handlers. A row type the screen declares (`Task` above) is checked against the answer where
+  contract without its handlers. An SPA that already builds with Vite keeps Vite: it adds
+  `shellSlicePlugin({ root })` of `@fabrika/check/vite-plugin` to the Vite config's `plugins` and runs Vite on Bun
+  (`bun --bun vite build`, `bun --bun vite`). Without the plugin, Vite bundles every handler. A row type the screen declares (`Task` above) is checked against the answer where
   the rows are passed in.
 - The last step points the page's assets at the SPA's prefix (`/`): the mount answers `index.html` for every page
   route under it (a path without an extension, or a navigation), so a deep link such as `/tasks/<id>` renders; a

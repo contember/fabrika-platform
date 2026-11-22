@@ -19,8 +19,10 @@ different.
 
 Three constraints shape the answer:
 
-- The SPA is built by `Bun.build` from `web/` through `@fabrika/check/bun-plugin`, which loads the contract without its
-  handlers. No Vite, no second build tool, no codegen step the checker would have to accept.
+- The SPA imports `fabrika.contract.ts` for the typed client, and the bundle must hold none of its handlers. A build
+  plugin loads the contract's shell modules as their slices (`@fabrika/check`'s shell slice): `Bun.build` through
+  `@fabrika/check/bun-plugin`, or Vite through `@fabrika/check/vite-plugin` (decision 9). No codegen step the checker
+  would have to accept.
 - The proxy's CSP is same-origin for scripts, and for styles and fonts unless the contract names more origins
   (`packages/proxy-core/src/headers.ts`). A kit that needed a stylesheet or font from a service would make every
   application declare one.
@@ -84,6 +86,20 @@ Three constraints shape the answer:
    opts out; without a DSN it installs nothing. The SPA build writes external source maps, which the platform build
    uploads and no mount serves.
 
+9. **The SPA builds with `Bun.build`, or with Vite on Bun.** The template and the examples build with `Bun.build`
+   through `@fabrika/check/bun-plugin`. An application whose SPA already builds with Vite keeps Vite and adds
+   `@fabrika/check/vite-plugin` (`shellSlicePlugin({ root })`), which loads each shell module as its slice exactly as
+   the Bun plugin does, watches those files in the dev server, and fails the build when the static reader refuses the
+   shell; every other module stays Vite's. The packages ship TypeScript sources with no JavaScript build (ADR-0068),
+   and Node refuses to strip types under `node_modules`, so the Vite that loads the plugin runs on Bun:
+   `bun --bun vite build` and `bun --bun vite`. The SPA bundle itself is Vite's, so it runs in any browser.
+   - What the contract adds to a minified Vite bundle, measured on an SPA that calls one endpoint (Vite 8.3.8, gzip
+     level 6): about 165 KB (49 KB gzip) of fixed cost over a page that calls `fetch` by hand, then about 0.26 KB per
+     endpoint with its own three-field input and six-field output (gzip about 12 B each, flattered by the repetition
+     of generated endpoints). 1 105 endpoints came to 457 KB (63 KB gzip) in all. Of the fixed cost, zod is about
+     58 KB and `@fabrika/db`'s table policy parse, which `src/db/tables.ts` runs at load, about 46 KB (Bun's metafile of
+     the same SPA).
+
 ## Consequences
 
 - An application's `package.json` gains `react`, `react-dom` and `@fabrika/ui`, its `tsconfig.json` `"jsx":
@@ -98,6 +114,10 @@ Three constraints shape the answer:
 - The hooks have no retry, no refetch on window focus and no time-based expiry. A page refetches by invalidation or
   `refetch()`.
 - The router has no nested layouts, loaders or search-parameter state; a screen keeps its filters in React state.
+- A Vite application runs its `vite` commands with `bun --bun`; under Node the config cannot load the plugin. A Vite
+  application whose contract carries no handlers needs no plugin, but every staged-kit contract colocates them.
+- The SPA carries the contract's table policies and the artifact schema although the client reads neither. Keeping
+  `src/db/tables.ts` out of the SPA graph would remove most of the framework's fixed cost; it is not done.
 
 ## Alternatives considered
 
@@ -108,6 +128,10 @@ Three constraints shape the answer:
 - **A third-party runtime kit** (MUI, Mantine, Chakra): large runtime dependencies, CSS-in-JS runtimes or their own
   theming systems, and fonts or styles that a same-origin CSP admits only with work in each application.
 - **TanStack Query** for the cache: see decision 3.
+- **Vite without the plugin**: it bundles every handler the contract's group modules colocate, and what they import
+  (a test build carries the handlers' SQL and error messages).
+- **A JavaScript build of the Vite plugin, so Vite runs on Node**: the only JavaScript build in the workspace, for
+  one config-time module; Bun is already every application's toolchain.
 - **`@buzola/router`**: see decision 5. It stays the console's router (`packages/dashboard`), which is built with Vite.
 - **`@sentry/browser` for the page's errors**, started by each application (as the template did) or by the provider:
   about 30 KB gzip in every bundle with only the global handlers, for sessions, tracing and replay that Operations does

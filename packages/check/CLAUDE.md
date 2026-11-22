@@ -11,7 +11,7 @@ static contract reader (B1), which Control runs on the files of a commit.
 
 ```bash
 bun run typecheck
-bun test                    # rules · direct-forms · generated · structure · spike-contract · cli · reader · differential · colocated · colocated-scale · dialect
+bun test                    # rules · direct-forms · generated · structure · spike-contract · cli · reader · differential · colocated · colocated-scale · vite · dialect
 bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check`
 ```
 
@@ -64,6 +64,12 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   refused `.handle(…)` included), and loads each shell module, of every extension the reader reads, as its slice; the
   application's other modules load as they are. An SPA build that imports `fabrika.contract.ts` therefore holds no
   handler code, with every package bundled.
+- Vite plugin: `@fabrika/check/vite-plugin` (`shellSlicePlugin({ root? })`, a structural part of Vite's `Plugin`, so the
+  package depends on no Vite) loads the same slices (`shell-modules.ts`, which both plugins share) in Vite's `load`
+  hook, `enforce: 'pre'`, and leaves every other module to Vite. It watches each shell module it loads
+  (`addWatchFile`: Vite watches only its root, usually `web/`) and reads the shell graph again after any change
+  (`watchChange`). The package ships TypeScript, so Vite runs on Bun (`bun --bun vite build`); Node refuses to strip
+  types under `node_modules` (ADR-0052 decision 9).
 - Source maps: `@fabrika/check/source-maps` finds a build's `*.map` files and uploads them to Operations with the
   run-scoped bearer Control minted (`uploadSourceMaps`; never throws, a refused or failed upload is `incomplete`).
   `collectSourceMaps` reads each map's logical path from its own `file` field (the Cloudflare runner);
@@ -111,6 +117,8 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
 | `contract.ts`                  | `@fabrika/check/contract`: the reader's entry, which parses only the contract's import graph.                                                                                                                                                                                                                                                                                                                             |
 | `slice.ts`                     | The shell slice: a module without its colocated handlers and what only they use, every position kept.                                                                                                                                                                                                                                                                                                                     |
 | `bun-plugin.ts`                | `@fabrika/check/bun-plugin`: the Bun plugin that loads application modules as their slices, for the SPA build.                                                                                                                                                                                                                                                                                                            |
+| `vite-plugin.ts`               | `@fabrika/check/vite-plugin`: the same slices in a Vite build or dev server.                                                                                                                                                                                                                                                                                                                                              |
+| `shell-modules.ts`             | The shell graph read from disk, each module as its slice: what both plugins load.                                                                                                                                                                                                                                                                                                                                         |
 | `rules/compile.ts`             | `checkContractCompiles`: what the reader refuses of `src/db/tables.ts`, and a contract that does not compile against its policies (`contract`).                                                                                                                                                                                                                                                                           |
 | `rules/cloudflare.ts`          | `checkCloudflareContract`: on SQLite, what the compiled artifact declares that a Cloudflare application cannot run (`cloudflare-scan`, `cloudflare-job-segment`), and a mutation that declares an outside call (`cloudflare-held-call`), each reported at `fabrika.contract.ts` 1:1. The migrations' `cloudflare-current-timestamp`, `cloudflare-framework-name` and `cloudflare-view-trigger` are `rules/migrations.ts`. |
 | `rules/platform-migrations.ts` | What the platform refuses of the migrations, before the push: Control's classifier at each refused statement (`migration-refused`, every dialect), and on SQLite the backup's plan of the schema the migrations build in memory (`backup-schema`, `withMigratedSqlite` + `describeOpsDumpSchema` + `planOpsDump`).                                                                                                        |
@@ -141,7 +149,10 @@ plugin build holds no handler code, with every package bundled and from a JavaSc
 refuses it; a named, decorated, computed (`['handle']`) or non-null (`.handle!`) handler is refused before its module
 is requested, and fails the build; every wrapped spelling slices to text that parses without what it names; the forms the
 slice keeps are the literal rule's; and the whole check of `fixtures/architecture-app/` is clean. Each plugin build runs in a process of its own (`fixtures/plugin-build.mjs`): Bun's bundler
-reads stale module state across plugin builds in one process. `colocated-scale.test.ts` reads 200 colocated endpoints in 10 group modules.
+reads stale module state across plugin builds in one process. `vite.test.ts` builds `fixtures/architecture-app/`'s SPA with Vite
+(`fixtures/vite-build.ts`, with and without the plugin), runs the page in happy-dom (`fixtures/vite-page.ts`) and sees
+its one call go to the contract's path and its answer pass the output schema; it also holds the plugin's dev-server
+hooks. `colocated-scale.test.ts` reads 200 colocated endpoints in 10 group modules.
 
 ## The rules
 

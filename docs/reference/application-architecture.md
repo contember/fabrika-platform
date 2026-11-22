@@ -257,7 +257,8 @@ An import is judged by the file or package Bun loads for it:
   procedures of the slice that owns that table.
 - **`src/app.ts`** composes and does nothing else: no route, no middleware, no handler.
 - **The SPA** builds its client with `createClient(contract, 'api')` from `@fabrika/app/client`. Its bundle is built
-  through `@fabrika/check/bun-plugin`, which loads `fabrika.contract.ts` without its handlers. It imports
+  through `@fabrika/check/bun-plugin`, or with Vite (on Bun) through `@fabrika/check/vite-plugin`; either loads
+  `fabrika.contract.ts` without its handlers. It imports
   `src/schemas.ts` for shared constants and schemas, `src/shared/` for shared functions, and never a slice.
 - **Shared code** (`src/shared/`) is what the SPA and the server must compute alike: one function, not two copies
   that drift. It loads `zod/v4` and other shared modules only, so it holds no data access, no framework call and no

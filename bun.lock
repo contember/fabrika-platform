@@ -279,6 +279,10 @@
         "@fabrika/platform-node": "workspace:*",
         "zod": "^3.25.76",
       },
+      "devDependencies": {
+        "@happy-dom/global-registrator": "^20.11.2",
+        "vite": "^7.0.0",
+      },
     },
     "packages/cli": {
       "name": "@fabrika/cli",
