@@ -94,11 +94,18 @@ Three constraints shape the answer:
    handlers); every other module stays Vite's. The packages ship TypeScript sources with no JavaScript build (ADR-0068),
    and Node refuses to strip types under `node_modules`, so the Vite that loads the plugin runs on Bun:
    `bun --bun vite build` and `bun --bun vite`. The SPA bundle itself is Vite's, so it runs in any browser.
-   - What the contract adds to a minified Vite bundle, measured on an SPA that calls one endpoint (Vite 8.3.8, gzip
-     level 6): about 165 KB (49 KB gzip) of fixed cost over a page that calls `fetch` by hand, then about 0.26 KB per
-     endpoint with its own three-field input and six-field output (gzip about 12 B each, flattered by the repetition
-     of generated endpoints). 1 105 endpoints came to 457 KB (63 KB gzip) in all. Of the fixed cost, zod is about
-     58 KB and `@fabrika/db`'s table policy parse, which `src/db/tables.ts` runs at load, about 46 KB (Bun's metafile of
+   - Both plugins load the module that declares the table policies with `tables = {}` in place of its
+     `defineTables(…)(…)` call, and what only that call imports blanked: the client never reads the policies, and
+     `defineApp` reads of `tables` only that it is given. The build parses them instead, with the reader's
+     `readTables`, so a policy the parse refuses fails the build rather than the page. `@fabrika/auth-core` and
+     `@fabrika/proxy-core` declare `"sideEffects": false`, and `@fabrika/app` and `@fabrika/db` name only their test
+     kits' entry modules, whose production guard runs at load, so a bundler drops what their barrels re-export and the
+     client does not use (the artifact schema, auth-core's mail and egress rules).
+   - What the contract adds to a minified Vite bundle, measured on an SPA that calls one endpoint of five (Vite 8.3.8,
+     gzip level 6): about 83 KB (23 KB gzip) of fixed cost over a page that calls `fetch` by hand, down from 165 KB
+     (49 KB gzip) before the two changes above, then about 0.26 KB per endpoint with its own three-field input and
+     six-field output (gzip about 12 B each, flattered by the repetition of generated endpoints; measured before
+     them). Of the fixed cost, zod is about 56 KB, which the application's own schemas need anyway (Bun's metafile of
      the same SPA).
 
 ## Consequences

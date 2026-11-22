@@ -26,14 +26,14 @@ import type { Finding } from './finding'
 /** Builders whose result takes `.handle(handler)`: an endpoint of a group, a link or an export, a job and a webhook. */
 const HANDLED_BUILDERS = new Set(['query', 'mutation', 'cron', 'webhook'])
 
-interface Range {
+export interface Range {
 	readonly start: number
 	readonly end: number
 }
 
 const isFunction = (node: AstNode | null | undefined): boolean => node?.type === 'ArrowFunctionExpression' || node?.type === 'FunctionExpression'
 
-const offsets = (node: AstNode): Range | undefined => {
+export const offsets = (node: AstNode): Range | undefined => {
 	const start = node['start']
 	const end = node['end']
 	return typeof start === 'number' && typeof end === 'number' ? { start, end } : undefined
@@ -245,10 +245,11 @@ export interface ShellSlice {
 
 /**
  * The slice of one parsed module: `module`'s text with every `.handle(…)` and everything only the handlers used
- * blanked. A module without a handler comes back unchanged.
+ * blanked. A module without a handler comes back unchanged. Each range of `removed` goes as a handler does, with what
+ * only it uses.
  */
-export function moduleSlice(module: ParsedModule, text: string): ShellSlice {
-	const handles: Range[] = []
+export function moduleSlice(module: ParsedModule, text: string, removed: readonly Range[] = []): ShellSlice {
+	const handles: Range[] = [...removed]
 	const refusals: SliceRefusal[] = []
 	const visit = (node: AstNode): 'skip' | undefined => {
 		const site = handleSite(node)
