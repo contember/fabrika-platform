@@ -8,14 +8,14 @@ import { type TablePolicies, tablePolicies, type Tables } from '@fabrika/db/tabl
 import { child, children, importedSpecifiers, nodeCount, nodeDepth, type ParsedModule, utf8Bytes } from './ast'
 import { type Finding, formatFinding } from './finding'
 import { ModuleGraph } from './graph'
-import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative, TABLES_FILE } from './layout'
+import { CONTRACT_EXPORT, CONTRACT_FILE, isRelativeSpecifier, isSourceFile, resolveRelative, TABLES_EXPORT, TABLES_FILE } from './layout'
 import { CONTRACT_LIMITS } from './limits'
 import { ReaderProblems } from './reader/problems'
 import { readContractValue } from './reader/surface'
 import { readTablesValue } from './reader/tables'
 import { ValueReader } from './reader/value'
 import { checkLiteralGraph } from './rules/literal'
-import { parseShellModule } from './slice'
+import { offsets, parseShellModule, type Range } from './slice'
 import { checkTrustedResolution } from './trust'
 
 export { ContractError } from '@fabrika/app/contract'
@@ -70,6 +70,20 @@ export function readTablesSource(files: ReadonlyMap<string, string>): TablePolic
  * `src/db/schema.generated.ts`) and the configuration `readContract` names. Throws `ContractSourceError`.
  */
 export function readTablesDefinition(files: ReadonlyMap<string, string>): Tables<unknown, unknown> | null {
+	return readTablesDeclaration(files)?.tables ?? null
+}
+
+/** The policies `readTablesDefinition` reads, and where the `defineTables(…)(…)` call that declares them stands. */
+export interface TablesDeclaration {
+	readonly tables: Tables<unknown, unknown>
+	/** The module of the call: `src/db/tables.ts`, or the module it re-exports `tables` from. */
+	readonly file: string
+	/** The call's offsets in that module's text, the same in its shell slice. */
+	readonly call: Range
+}
+
+/** `readTablesDefinition` with the place of the call; `null` when `files` has no `src/db/tables.ts`. */
+export function readTablesDeclaration(files: ReadonlyMap<string, string>): TablesDeclaration | null {
 	if (!files.has(TABLES_FILE)) {
 		return null
 	}
@@ -95,7 +109,13 @@ export function readTablesDefinition(files: ReadonlyMap<string, string>): Tables
 	if (tables === null || problems.findings.length > 0) {
 		throw new ContractSourceError(problems.findings)
 	}
-	return tables
+	// readTablesValue read the policies from this binding's initializer, so it is a const with one.
+	const binding = parsed.graph.exported(module, TABLES_EXPORT)
+	const call = binding.kind === 'const' && binding.init !== undefined ? offsets(binding.init) : undefined
+	if (binding.kind !== 'const' || call === undefined) {
+		throw new Error(`${TABLES_FILE}: the policies were read, but not where their call stands`)
+	}
+	return { tables, file: binding.module.file, call }
 }
 
 /**

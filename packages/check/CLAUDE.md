@@ -63,7 +63,10 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   export uses it) reads the shell graph under `root` as Control does, fails the build when the reader refuses it (a
   refused `.handle(…)` included), and loads each shell module, of every extension the reader reads, as its slice; the
   application's other modules load as they are. An SPA build that imports `fabrika.contract.ts` therefore holds no
-  handler code, with every package bundled.
+  handler code, with every package bundled. Both plugins also read the table policies (`readTablesDeclaration`), fail
+  the build when the parse refuses them, and load the module that declares them with `tables = {}` in place of the
+  `defineTables(…)(…)` call and what only that call imports blanked (`moduleSlice`'s `removed`): the client never reads
+  the policies, `defineApp` reads only that `tables` is given, and the parse is about 50 KB of a minified bundle.
 - Vite plugin: `@fabrika/check/vite-plugin` (`shellSlicePlugin({ root? })`, a structural part of Vite's `Plugin`, so the
   package depends on no Vite) loads the same slices (`shell-modules.ts`, which both plugins share) in Vite's `load`
   hook, `enforce: 'pre'`, and leaves every other module to Vite. It watches each shell module it loads
@@ -82,7 +85,8 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   provider reads back from the build log, and always exits 0. It never prints the bearer or an error object.
 - Reader: `@fabrika/check/contract` exports `readContractSource(files, tables?) → ContractArtifact`,
   `readContract(files) → AnyContract`, `readTablesSource(files) → TablePolicies` and
-  `readTablesDefinition(files) → Tables | null` (what `defineTables` returns). `files` holds
+  `readTablesDefinition(files) → Tables | null` (what `defineTables` returns; `readTablesDeclaration` adds the module
+  and offsets of the call). `files` holds
   `fabrika.contract.ts`, `src/db/tables.ts`, the modules their shell slices import (path → text) and every `package.json`,
   `tsconfig.json`, `jsconfig.json` and `bunfig.toml` that applies to them: the root's and those of each directory of
   such a module. For an import without an extension, `files` holds every candidate that

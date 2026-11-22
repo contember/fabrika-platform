@@ -28,6 +28,10 @@ const spaTree = (): Map<string, string> => new Map([...readTree(ARCHITECTURE_ROO
 /** Text of the fixture's handlers that minification keeps: an error message and a SQL template. */
 const HANDLER_TEXT = ['only a won or lost deal reopens', 'select d.stage']
 
+/** The policy parse `defineTables` runs, and the column list only the policies read: the server's, never the SPA's. */
+const POLICY_MODULES = /packages\/db\/src\/|src\/db\/schema\.generated\.ts$/
+const POLICY_TEXT = 'defineTables takes the vocabulary and the generated column list'
+
 /** Modules only handlers import, and the stand-in Vite bundles for a Node builtin. */
 const SERVER_MODULES = /src\/(deals|companies)\/(logic|queries)\.ts$|src\/app\.ts$|__vite-browser-external/
 
@@ -74,6 +78,28 @@ describe('a Vite build of the SPA through the plugin', () => {
 		const code = scripts(sliced)
 		expect(code).toContain('/api')
 		for (const text of HANDLER_TEXT) expect(code).not.toContain(text)
+	})
+
+	test('holds no table policy parse, which a build without the plugin bundles', () => {
+		const plain = materialize(spaTree())
+		expect(viteBuild(plain, 'plain').modules.filter((id) => POLICY_MODULES.test(id)).length).toBeGreaterThan(0)
+		expect(scripts(plain)).toContain(POLICY_TEXT)
+
+		const sliced = materialize(spaTree())
+		const result = viteBuild(sliced)
+		expect(result.ok).toBe(true)
+		expect(result.modules.filter((id) => POLICY_MODULES.test(id))).toEqual([])
+		expect(scripts(sliced)).not.toContain(POLICY_TEXT)
+	})
+
+	test('a table policy the parse refuses fails the build, as defineTables would refuse it in the page', () => {
+		const tree = spaTree()
+		const tables = tree.get('src/db/tables.ts') ?? ''
+		expect(tables).toContain("read: 'crm.read', insert: 'deals.write'")
+		tree.set('src/db/tables.ts', tables.replace("read: 'crm.read', insert: 'deals.write'", "read: 'crm.read', insert: 'deals.archive'"))
+		const result = viteBuild(materialize(tree))
+		expect(result.ok).toBe(false)
+		expect(result.error).toMatch(/src\/db\/tables\.ts:\d+:\d+ contract .*deals\.archive/)
 	})
 
 	test("a root that is not the contract's fails the build instead of bundling the handlers", () => {
