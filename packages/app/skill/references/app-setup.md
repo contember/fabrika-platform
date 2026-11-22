@@ -86,10 +86,10 @@ the SPA is added with it.
 ```json tsconfig.json
 {
 	"compilerOptions": {
-		"target": "ES2022",
+		"target": "ES2023",
 		"module": "ESNext",
 		"moduleResolution": "bundler",
-		"lib": ["ES2022", "DOM", "DOM.Iterable"],
+		"lib": ["ES2023", "DOM", "DOM.Iterable"],
 		"jsx": "react-jsx",
 		"strict": true,
 		"noUncheckedIndexedAccess": true,
@@ -105,8 +105,8 @@ the SPA is added with it.
 }
 ```
 
-The tsconfig stands alone: no `extends` of a file outside the application. `lib` is ES2022, so `toSorted` and other
-newer methods are not there.
+The tsconfig stands alone: no `extends` of a file outside the application. `lib` is ES2023, as in the platform's type
+check, so `findLast` and `toSorted` are there and ES2024 methods such as `Object.groupBy` are not.
 
 ## The composition
 

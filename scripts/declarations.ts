@@ -167,10 +167,10 @@ const typedSpecifiers = async (consumer: string, name: string): Promise<readonly
  */
 const consumerOptions = (consumer: string, types: readonly string[] | null): ts.CompilerOptions => {
 	const { options, errors } = ts.convertCompilerOptionsFromJson({
-		target: 'ES2022',
+		target: 'ES2023',
 		module: 'ESNext',
 		moduleResolution: 'bundler',
-		lib: ['ES2022', 'DOM', 'DOM.Iterable'],
+		lib: ['ES2023', 'DOM', 'DOM.Iterable'],
 		jsx: 'react-jsx',
 		strict: true,
 		noUncheckedIndexedAccess: true,
