@@ -752,8 +752,9 @@ still refuses any `Authorization` header, as authorization.
   there, and only for an internal user's grant at that application: it resolves to the application's declared
   actions, those of its public procedures excepted, as named entries, never `*`. So the token still carries no action
   the approved contract does not declare; what the grant tracks is the approved catalog, which is what an
-  administrator of the application is. A service principal (an API key) is refused it, because a key never grows with
-  the catalog; a cross-app `admin`, an external principal and a bootstrap mailbox get none of it. **Rollout:** IAM's migration 0027
+  administrator of the application is. A service principal (a provisioned API key) is refused it, because such a key never
+  grows with the catalog; a person's own key without inline grants carries the person's live set, this one included,
+  as it carries any role's. A cross-app `admin`, an external principal and a bootstrap mailbox get none of it. **Rollout:** IAM's migration 0027
   refuses while a contract application holds such a row, so the deploy stops with the old release serving until an
   administrator gives the row exact actions; it changes no row. In every IAM schema, an installation service's included, IAM refuses a
   global grant of a role declared with `member.scope`, and such a grant resolves to no permission.

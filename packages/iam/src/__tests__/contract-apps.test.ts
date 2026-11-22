@@ -221,10 +221,38 @@ describe('grants at a contract application', () => {
 		])
 	})
 
-	test('refuses the built-in admin to an api key, which lists exact actions', async () => {
+	test('refuses the built-in admin to an api key, which lists exact actions, on provisioning and as a later grant', async () => {
 		const admin = await withContractApp()
 		const provisioned = await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, roleKey: 'admin' })
 		expect([provisioned.status, provisioned.message]).toEqual([400, expect.stringContaining("role 'admin' is granted only to a person")])
+		expect((await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, permissions: ['note.read'] })).status).toBe(200)
+		const [key] = await admin.h.repositories.principals.listPrincipals({ type: 'service', limit: 1 })
+		if (key === undefined) throw new Error('no key principal')
+		const granted = await rpc(admin, 'grants.create', { principalId: key.id, app: NOTES, roleKey: 'admin' })
+		expect([granted.status, granted.message]).toEqual([400, expect.stringContaining("role 'admin' is granted only to a person")])
+	})
+
+	test('a key that held admin before its app became a contract resolves no declared action there', async () => {
+		const admin = await asAdmin()
+		expect((await putSchema(admin, NOTES, { ...CONTRACT_SCHEMA, contract: false })).status).toBe(200)
+		expect((await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, roleKey: 'admin' })).status).toBe(200)
+		expect((await putSchema(admin, NOTES, CONTRACT_SCHEMA)).status).toBe(200)
+		const [key] = await admin.h.repositories.principals.listPrincipals({ type: 'service', limit: 1 })
+		if (key === undefined) throw new Error('no key principal')
+		const services = admin.h.makeServices({ environment: 'stage', issuer: ORIGIN })
+		expect(await resolvePermissionsAt(services, key, NOTES)).toEqual([])
+	})
+
+	test('a public procedure whose stored actions do not parse leaves admin with nothing', async () => {
+		const admin = await asAdmin()
+		const schema: AppSchema = { ...CONTRACT_SCHEMA, workloads: [{ kind: 'public', name: 'site.forms.submit', actions: ['note.write'] }] }
+		schema.roles = { reader: { name: 'Reader', permissions: ['note.read'] } }
+		expect((await putSchema(admin, NOTES, schema)).status).toBe(200)
+		expect((await rpc(admin, 'grants.create', { principalId: admin.grantee, app: NOTES, roleKey: 'admin' })).status).toBe(200)
+		admin.h.sqlite.run(`UPDATE app_workloads SET actions = 'not json' WHERE app = ?`, [NOTES])
+		const grantee = await admin.h.repositories.principals.getPrincipalById(admin.grantee)
+		if (grantee === null) throw new Error('fixture')
+		expect(await resolvePermissionsAt(admin.h.makeServices({ environment: 'stage', issuer: ORIGIN }), grantee, NOTES)).toEqual([])
 	})
 
 	test('an app that is not a contract keeps the pattern rule, and its membership role still needs its scope', async () => {

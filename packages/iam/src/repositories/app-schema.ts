@@ -296,15 +296,24 @@ export class AppSchemaRepository {
 
 	/**
 	 * What a person's grant of the built-in `admin` holds at a contract application: every declared action but those of
-	 * its public procedures, which no role may grant (ADR-0022 rule 6).
+	 * its public procedures, which no role may grant (ADR-0022 rule 6). One statement reads both, so a reconcile never
+	 * pairs one revision's catalog with another's public actions; a public procedure whose actions do not parse to a
+	 * non-empty list (the schema requires one) gives nothing at all.
 	 */
 	async listContractAdminActions(app: string): Promise<string[]> {
 		const { results } = await this.db
-			.prepare(`SELECT actions FROM app_workloads WHERE app = ? AND kind = 'public'`)
-			.bind(app)
-			.all<{ actions: string }>()
-		const publicActions = new Set(results.flatMap((row) => parseJsonStringArray(row.actions)))
-		return (await this.listActionCatalog(app)).filter((action) => !publicActions.has(action))
+			.prepare(`SELECT 'action' AS kind, action AS value FROM app_actions WHERE app = ?
+				UNION ALL SELECT 'public' AS kind, actions AS value FROM app_workloads WHERE app = ? AND kind = 'public'`)
+			.bind(app, app)
+			.all<{ kind: string; value: string }>()
+		const publicActions = new Set<string>()
+		for (const row of results) {
+			if (row.kind !== 'public') continue
+			const actions = parseJsonStringArray(row.value)
+			if (actions.length === 0) return []
+			for (const action of actions) publicActions.add(action)
+		}
+		return results.filter((row) => row.kind === 'action' && !publicActions.has(row.value)).map((row) => row.value).sort()
 	}
 
 	async listAppActions(app: string): Promise<AppActionRow[]> {

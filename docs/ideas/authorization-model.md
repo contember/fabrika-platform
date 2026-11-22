@@ -198,8 +198,8 @@ reachable whatever grants remain on their org.
 - **Wildcards** in application vocabularies: they hide widenings from the approval diff.
 - **Ancestor delegation:** IAM is flat, so the same grant data would mean different things on the two sides.
 - **Deny grants:** guardrails in code cover the need without the explanation cost.
-- **The built-in `admin` role at a contract application.** It keeps resolving to nothing there: an application's
-  administrator is a role of its own catalog, which the approval shows.
+- **The built-in `admin` role at a contract application as a wildcard.** A person's grant of it there resolves to the
+  declared actions, those of public procedures excepted (ADR-0022 rule 6), never to `*`; a key is refused it.
 - **Lifting the creator-role clamp.** A scope's creator role keeps ending no later than the grant that let its holder
   create the scope (S8); creating a value is delegation like any other.
 

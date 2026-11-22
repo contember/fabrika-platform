@@ -22,9 +22,9 @@ or explain.
 3. **A signed-in person without an application role sees a bare `forbidden`.** The installation's `admin` grant holds
    no application action, so the first thing an administrator sees on a stage URL is a plain-text `forbidden` with no
    hint that an application grant is missing.
-4. **The grant dialog offers `admin` for a contract application.** Picking it fails with "role 'admin' lists the
-   wildcard * and cannot be granted in a contract application". The dialog should list only roles the application
-   can take.
+4. **The grant dialog offers `admin` on an API key at a contract application.** IAM gives a contract application's
+   `admin` to a person, as its declared actions (ADR-0022 rule 6), and refuses it to a key: "role 'admin' is granted
+   only to a person in a contract application". The key's grant page should not offer it.
 5. **A namespace's environment must equal the application environment's name.** `register` refuses with "deployment
    namespace belongs to environment <name>", but neither the guide nor `namespaces create --help` says so before the
    namespace is created.
@@ -37,7 +37,7 @@ or explain.
    in the console, with the same refusals as the RPC.
 3. The proxy's refusal for a signed-in principal without any grant on the application renders a page that names the
    missing application grant, without leaking which actions exist.
-4. The grant dialog lists, for a contract application, only the roles its contract declares.
+4. A key's grant page at a contract application lists only the roles its contract declares, never `admin`.
 5. The guide (step 5.1) and `namespaces create --help` state that the namespace's `--env` must equal the application
    environment it will serve.
 

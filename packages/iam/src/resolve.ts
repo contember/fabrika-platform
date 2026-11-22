@@ -38,8 +38,9 @@ export interface ResolutionInputs {
 	 */
 	affiliation: PrincipalAffiliation
 	/**
-	 * A contract application holds exact actions of its approved catalog: a pattern (a stored `*` or `prefix.*`, the
-	 * built-in `admin` included) contributes nothing there, so nothing tracks the catalog beyond its approved revision.
+	 * A contract application holds exact actions of its approved catalog: a pattern (a stored `*` or `prefix.*`)
+	 * contributes nothing there, so nothing tracks the catalog beyond its approved revision. The built-in `admin` holds
+	 * `contractAdmin` there instead, or nothing without it.
 	 */
 	exactActions?: boolean
 	/**
