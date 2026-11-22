@@ -172,6 +172,100 @@ describe('contractChecks', () => {
 	})
 })
 
+// The build's tests command, run by `sh` in a scratch application, as the build's shell runs it in the source root.
+describe("the build's tests command", () => {
+	const directories: string[] = []
+	afterAll(async () => {
+		await Promise.all(directories.map((directory) => rm(directory, { recursive: true, force: true })))
+	})
+
+	const run = async (release: string, files: Readonly<Record<string, string>>): Promise<{ readonly code: number; readonly stderr: string }> => {
+		const directory = await mkdtemp(join(tmpdir(), 'fabrika-build-tests-'))
+		directories.push(directory)
+		for (const [name, text] of Object.entries(files)) {
+			await mkdir(join(directory, name, '..'), { recursive: true })
+			await writeFile(join(directory, name), text)
+		}
+		const [tests] = contractChecks('/src', release).checks
+		const child = Bun.spawn(['sh', '-c', tests.command], { cwd: directory, env: { PATH: process.env['PATH'] ?? '' }, stdout: 'ignore', stderr: 'pipe' })
+		const [stderr, code] = await Promise.all([new Response(child.stderr).text(), child.exited])
+		return { code, stderr }
+	}
+
+	const PASSING = "import { expect, test } from 'bun:test'\ntest('passes', () => expect(1).toBe(1))\n"
+	const FAILING = "import { expect, test } from 'bun:test'\ntest('fails', () => expect(1).toBe(2))\n"
+	const manifest = (scripts: Readonly<Record<string, string>>): string => JSON.stringify({ name: 'notes', private: true, scripts })
+
+	test("runs the application's own test script, with its paths and mode", async () => {
+		const result = await run('0.9.1', {
+			'package.json': manifest({ test: 'bun test --no-isolate src' }),
+			'src/a.test.ts': PASSING,
+			'tests/browser.test.ts': FAILING,
+		})
+		expect(result.stderr).toContain('fabrika-tests: runs the test script of package.json')
+		expect(result.stderr).toContain('1 pass')
+		expect(result.code).toBe(0)
+	})
+
+	test("fails the build when the application's test script fails, and still counts the skipped Postgres-backed files", async () => {
+		const result = await run('0.9.1', {
+			'package.json': manifest({ test: 'bun test src' }),
+			'src/a.test.ts': `console.warn('a.test.ts skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests')\n${PASSING}`,
+			'src/b.test.ts': FAILING,
+		})
+		expect(result.code).not.toBe(0)
+		expect(result.stderr).toContain('1 fail')
+		expect(result.stderr).toContain('fabrika-tests: 1 Postgres-backed test files did not run, because the build has no database: a.test.ts')
+	})
+
+	test('counts the skipped Postgres-backed files of a test script that sends its stderr to stdout', async () => {
+		const result = await run('0.9.1', {
+			'package.json': manifest({ test: 'bun test src 2>&1' }),
+			'src/a.test.ts': `console.warn('a.test.ts skipped: set FABRIKA_TEST_POSTGRES_URL to run the Postgres-backed tests')\n${PASSING}`,
+		})
+		expect(result.code).toBe(0)
+		expect(result.stderr).toContain('fabrika-tests: 1 Postgres-backed test files did not run, because the build has no database: a.test.ts')
+	})
+
+	// The first file leaves a global behind; only a run that isolates each file passes the second.
+	const LEAKING = "import { expect, test } from 'bun:test'\ntest('leaks', () => { Reflect.set(globalThis, 'leaked', 1); expect(1).toBe(1) })\n"
+	const CHECKING = "import { expect, test } from 'bun:test'\ntest('is isolated', () => expect(Reflect.get(globalThis, 'leaked')).toBeUndefined())\n"
+
+	test('runs bun test --isolate without a test script', async () => {
+		const result = await run('0.9.1', { 'package.json': manifest({ build: 'exit 1' }), 'a.test.ts': LEAKING, 'b.test.ts': CHECKING })
+		expect(result.stderr).toContain('fabrika-tests: runs bun test --isolate --pass-with-no-tests')
+		expect(result.stderr).toContain('2 pass')
+		expect(result.code).toBe(0)
+	})
+
+	test('runs bun test --isolate for an empty or a non-string test script', async () => {
+		for (const scripts of [{ test: ' ' }, { test: ['bun test'] }]) {
+			const result = await run('0.9.1', { 'package.json': JSON.stringify({ name: 'notes', scripts }), 'a.test.ts': LEAKING, 'b.test.ts': CHECKING })
+			expect(result.stderr).toContain('fabrika-tests: runs bun test --isolate --pass-with-no-tests')
+			expect(result.code).toBe(0)
+		}
+	})
+
+	test('without a test script, every test file is collected', async () => {
+		const result = await run('0.9.1', { 'package.json': manifest({}), 'a.test.ts': PASSING, 'tests/browser.test.ts': FAILING })
+		expect(result.code).not.toBe(0)
+	})
+
+	test('without a test script or without package.json, an application with no tests passes', async () => {
+		const empty = await run('0.9.1', { 'package.json': manifest({}) })
+		expect(empty.code).toBe(0)
+		expect(empty.stderr).toContain('fabrika-tests: no Postgres-backed test file skipped')
+		expect((await run('0.9.1', { 'a.test.ts': PASSING })).code).toBe(0)
+	})
+
+	test('an application before 0.9 keeps bun test --isolate and ignores its test script, as before', async () => {
+		const result = await run('0.8.4', { 'package.json': manifest({ test: 'exit 7' }), 'a.test.ts': PASSING })
+		expect(result.stderr).not.toContain('runs the test script')
+		expect(result.stderr).toContain('1 pass')
+		expect(result.code).toBe(0)
+	})
+})
+
 // The build's throwaway database command, run by `sh` and BusyBox `sh` with stand-ins for `sudo`, `initdb`, `pg_ctl` and
 // the CLI that log each call, so its order, its cleanup and its failures are observed without a PostgreSQL. Its
 // directory moves under the test's own root, so parallel runs do not share it.

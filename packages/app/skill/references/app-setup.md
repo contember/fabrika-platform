@@ -16,7 +16,7 @@ the SPA is added with it.
 		"build:manifest": "fabrika app build --env=prod",
 		"build:web": "bun build-web.ts",
 		"typecheck": "tsc --noEmit",
-		"test": "bun test --isolate"
+		"test": "bun test --isolate --pass-with-no-tests"
 	},
 	"dependencies": {
 		"@fabrika/app": "0.9.0-dev.25",
