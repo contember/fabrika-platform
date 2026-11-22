@@ -2,6 +2,7 @@
 	"name": "@fabrika/app",
 	"version": "0.9.0-dev.27",
 	"type": "module",
+	"sideEffects": false,
 	"license": "MIT",
 	"repository": {
 		"type": "git",
