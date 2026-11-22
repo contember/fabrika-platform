@@ -1066,6 +1066,11 @@ vocabulary (`packages/db/CLAUDE.md`).
   it are its credential at `kitMembership`'s link operations (`jobByCredential`), held to IAM's rules for a job: its
   declared actions app-wide, issuing for its declared `issues` mount only, revoking only links it issued; every other
   membership call of a workload answers `invalid_token`, as IAM's `resolveCaller` does.
+- **A test caller on a terminal** (`testCaller(grants, { terminal })`, ADR-0067) is a person's session in a contract
+  that declares `terminal`, as IAM refuses any other. Its token carries `session`, `amr` and `terminal`, and its
+  permissions are `signedPermissions`: its own entries narrowed by the ceiling (auth-core's `narrowPermissions`, IAM's
+  own) plus the terminal's grants with the source `terminal`. `kitMembership`'s `permsOf` resolves its membership
+  requests against the same set, as IAM does.
 - `options.connect` wires each import to an owner: its origin, the edge key, and the `fetch` that reaches
   it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision. The owner kit's
   `testCaller(grants, { kind: 'app', app })` is the consumer's key: an `app` token naming the consumer.

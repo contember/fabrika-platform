@@ -1012,7 +1012,9 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   (`terminal_refused`), IAM out of reach a 503. The application throttles guesses per terminal and signs the person out
   at `/__fabrika/auth/signout?redirect=<path>`. `boot` refuses such a contract without the transport; the test kit
   answers every identification `not_found` unless `options.terminals` replaces it. Elsewhere `ctx.terminals` is
-  unavailable.
+  unavailable. A kit test reaches a terminal-only endpoint as a person on a terminal: `testCaller(grants, { terminal: {
+  id, label, ceiling, grants } })`, whose token carries `amr` and `terminal` and the permissions IAM signs there (the
+  person's own entries the ceiling keeps, none by default, and the terminal's grants with the source `terminal`).
 - **The public intake recipe** (a public page, a public procedure, a cron job, a link mount). A public procedure
   inserts a registration into an application table and answers `{}`; the job claims the registrations, creates the
   records, then delivers each record's

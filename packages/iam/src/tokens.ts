@@ -24,6 +24,7 @@ import {
 	type MintFromKeyResult,
 	type MintTokenInput,
 	type MintTokenResult,
+	narrowPermissions,
 	type PermissionEntry,
 	permits,
 	type Scope,
@@ -34,7 +35,6 @@ import type { CredentialGrantRow, CredentialRow, PrincipalRow, SessionTerminal }
 import { principalStatus, sessionTerminal } from './db'
 import { issuerAuthority, issuerCoverage } from './delegation'
 import type { Env } from './env'
-import { narrowPermissions } from './narrow-permissions'
 import { authorityDeadline, reachesCrossAppAuthority, resolveAuthorityAt, type ResolvedAuthority } from './resolve'
 import { hashToken } from './secret'
 import type { Services } from './services'

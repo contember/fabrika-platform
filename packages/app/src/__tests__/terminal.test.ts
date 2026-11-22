@@ -188,6 +188,72 @@ describe('a person signed in on a terminal', () => {
 	})
 })
 
+describe('a test kit caller on a terminal', () => {
+	// Only the terminal grants `attendance.record`; a person brings `notes.read` only under a ceiling that keeps it.
+	const app = defineApp(defineVocabulary({
+		app: 'kiosk',
+		dimensions: { workspace: {} },
+		actions: { 'attendance.record': 'Record attendance', 'notes.read': 'Read notes' },
+		roles: { staff: { grants: ['notes.read'] } },
+		terminal: { identify: '/identify' },
+	}))
+	const kiosk = app.group({ callers: ['human'] }, (r) => ({
+		record: r.mutation({ output: Whoami, access: { action: 'attendance.record', app: true } })
+			.handle(({ ctx }) => ({ id: ctx.principal.id, terminal: ctx.principal.terminal ?? null })),
+		notes: r.query({ output: Whoami, access: { action: 'notes.read', app: true } })
+			.handle(({ ctx }) => ({ id: ctx.principal.id, terminal: ctx.principal.terminal ?? null })),
+	}))
+	const served = serve(
+		app.contract((c) => ({
+			api: c.rpc('/api', { kiosk }),
+			identify: c.spa('/identify', { dir: 'dist/identify', access: { public: true } }),
+		})),
+		{ database: null },
+	)
+	const call = (kit: ReturnType<typeof testKit>, caller: Parameters<ReturnType<typeof testKit>['browser']>[0], path: string) =>
+		kit.browser(caller)(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
+	const entrance = { id: 'terminal-7', label: 'Entrance', grants: [{ action: 'attendance.record' }] } as const
+
+	test('reaches a terminal-only endpoint with the terminal, which the token names, and is refused without it', async () => {
+		const kit = testKit(served)
+		const onTerminal = kit.testCaller([{ role: 'staff' }], { id: 'person-1', terminal: entrance })
+		const recorded = await call(kit, onTerminal, '/api/kiosk.record')
+		expect(recorded.status).toBe(200)
+		expect(await recorded.json()).toEqual({ result: { id: 'person-1', terminal: { id: 'terminal-7', label: 'Entrance' } } })
+		const personal = kit.testCaller([{ role: 'staff' }], { id: 'person-1' })
+		const refused = await call(kit, personal, '/api/kiosk.record')
+		expect([refused.status, await refused.text()]).toEqual([403, 'forbidden'])
+	})
+
+	test("keeps of the person's own permissions only what the ceiling names, as IAM signs a terminal session", async () => {
+		const kit = testKit(served)
+		const withoutCeiling = kit.testCaller([{ role: 'staff' }], { terminal: entrance })
+		expect((await call(kit, withoutCeiling, '/api/kiosk.notes')).status).toBe(403)
+		const underCeiling = kit.testCaller([{ role: 'staff' }], { terminal: { ...entrance, ceiling: ['notes.*'] } })
+		expect((await call(kit, underCeiling, '/api/kiosk.notes')).status).toBe(200)
+	})
+
+	test('is refused where IAM signs no terminal session', () => {
+		const kit = testKit(served)
+		expect(() => kit.testCaller([], { via: 'key', terminal: entrance })).toThrow("only a person's session is asserted at a terminal")
+		expect(() => kit.testCaller([], { kind: 'machine', terminal: entrance })).toThrow("only a person's session is asserted at a terminal")
+		expect(() => kit.testCaller([], { terminal: { ceiling: ['reports.*'] } })).toThrow(
+			"the terminal's ceiling 'reports.*' names no action of the contract",
+		)
+		const personal = testKit(serve(kioskless(), { database: null }))
+		expect(() => personal.testCaller([], { terminal: {} })).toThrow('the contract declares no terminal')
+	})
+})
+
+function kioskless() {
+	const app = defineApp(defineVocabulary(base))
+	const kiosk = app.group({ callers: ['human'] }, (r) => ({
+		whoami: r.query({ output: Whoami, access: { action: 'attendance.record', app: true } })
+			.handle(({ ctx }) => ({ id: ctx.principal.id, terminal: ctx.principal.terminal ?? null })),
+	}))
+	return app.contract((c) => ({ api: c.rpc('/api', { kiosk }) }))
+}
+
 describe('ctx.terminals', () => {
 	const app = serve(kioskContract('/identify'), { database: null })
 

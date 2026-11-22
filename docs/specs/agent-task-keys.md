@@ -104,7 +104,7 @@ resource=https://<console>/mcp
 IAM looks the secret up by hash, then resolves authority like `grantAuthority` does for a code or refresh
 (`packages/iam/src/oauth.ts:223`), without its client check (below): the task live and unexpired, the resource and each of the task's scopes still
 configured, the principal an active user, its live permissions at the app narrowed by the scopes' grants and then by
-the task's ceiling (`narrowPermissions`, `packages/iam/src/narrow-permissions.ts:8`). It mints the resource token as
+the task's ceiling (`narrowPermissions`, `packages/auth-core/src/permissions.ts`). It mints the resource token as
 `mintForGrant` does (`packages/iam/src/oauth.ts:187`), with `oauth.scopes` the task's scopes, and with three
 differences: the TTL is 60 s instead of `DEFAULT_TOKEN_TTL_SECONDS` (300), `exp` is also capped at the task's expiry,
 and the token carries `act`. No refresh
@@ -302,7 +302,7 @@ task key (the self-healing loop, an unattended Operations or review agent) is pl
 - **Unattended issuance.** The self-healing loop needs a task when no person is present. Default: out of scope here;
   backlog 270 decides whether a person pre-approves a standing task template that an alert instantiates.
 - **Environment-scoped grants.** The ceiling is scoped to the app, so a person whose grant is scoped only to an
-  environment name loses it under a task (`narrowerScope`, `packages/iam/src/narrow-permissions.ts`). Default: accept
+  environment name loses it under a task (`narrowerScope`, `packages/auth-core/src/permissions.ts`). Default: accept
   and say so on the form; the authoring environment is one per app.
 - **Ending tasks with the session.** Default: a task outlives logout, bounded by 24 h; the Tasks panel has "revoke
   all".

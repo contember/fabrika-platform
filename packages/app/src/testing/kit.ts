@@ -17,6 +17,7 @@ import {
 	FABRIKA_TOKEN_KEYS,
 	type IamMembershipRpc,
 	type IamTerminalRpc,
+	isActionAllowed,
 	isNormalizedMailbox,
 	type Jwks,
 	MAX_ACCESS_TOKEN_BYTES,
@@ -66,10 +67,14 @@ import {
 	type LinkTestCaller,
 	type PersonTestCaller,
 	resolveGrants,
+	signedPermissions,
 	type TestCaller,
+	type TestCallerKind,
 	type TestCallerOptions,
+	type TestCallerTerminal,
 	type TestGrant,
 	type TestScope,
+	type TestTerminal,
 } from './caller'
 import { solveChallengeAt } from './challenge'
 import {
@@ -173,10 +178,10 @@ export interface TestKit<C extends AnyContract> {
 	/** The contract as compiled for `boot`. */
 	readonly artifact: ContractArtifact
 	/** A new principal of the test IAM holding `grants`, with a fresh credential; only a link holder has no label. */
-	testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions & { readonly kind: 'link' }): LinkTestCaller
-	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions & { readonly kind?: 'human' }): PersonTestCaller
-	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions & { readonly kind?: LabelledTestCaller['kind'] }): LabelledTestCaller
-	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions): TestCaller
+	testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions<C> & { readonly kind: 'link' }): LinkTestCaller
+	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions<C> & { readonly kind?: 'human' }): PersonTestCaller
+	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions<C> & { readonly kind?: LabelledTestCaller['kind'] }): LabelledTestCaller
+	testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions<C>): TestCaller
 	/**
 	 * One value of the contract's dimension `dimension`, for a grant's `scope`. Stored in a variable it keeps its
 	 * dimension, where an object literal's `type` widens to `string`: `const acme = kit.scope('org', 'acme')`.
@@ -531,15 +536,16 @@ export function bootTestKit<C extends AnyContract>(
 	})
 
 	let issued = 0
+	let terminals = 0
 
-	function testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions & { readonly kind: 'link' }): LinkTestCaller
-	function testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions & { readonly kind?: 'human' }): PersonTestCaller
+	function testCaller(grants: readonly TestGrant<C>[], options: TestCallerOptions<C> & { readonly kind: 'link' }): LinkTestCaller
+	function testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions<C> & { readonly kind?: 'human' }): PersonTestCaller
 	function testCaller(
 		grants: readonly TestGrant<C>[],
-		options?: TestCallerOptions & { readonly kind?: LabelledTestCaller['kind'] },
+		options?: TestCallerOptions<C> & { readonly kind?: LabelledTestCaller['kind'] },
 	): LabelledTestCaller
-	function testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions): TestCaller
-	function testCaller(grants: readonly TestGrant<C>[], callerOptions: TestCallerOptions = {}): TestCaller {
+	function testCaller(grants: readonly TestGrant<C>[], options?: TestCallerOptions<C>): TestCaller
+	function testCaller(grants: readonly TestGrant<C>[], callerOptions: TestCallerOptions<C> = {}): TestCaller {
 		return issue(grants, callerOptions)
 	}
 
@@ -582,6 +588,7 @@ export function bootTestKit<C extends AnyContract>(
 		if (callerOptions.lastSignInAt !== undefined && kind !== 'human') {
 			throw new Error('only a person signs in: testCaller(grants, { lastSignInAt }) is a human')
 		}
+		const terminal = callerOptions.terminal === undefined ? null : terminalOf(callerOptions.terminal, kind, via)
 		const credentials = {
 			id: callerOptions.id ?? `${kind}-${issued}`,
 			affiliation,
@@ -599,11 +606,20 @@ export function bootTestKit<C extends AnyContract>(
 				app: null,
 				label: null,
 				email: null,
+				terminal: null,
 				link: link === undefined
 					? null
 					: Object.freeze({ mount: link.mount, chain: Object.freeze(link.chain.map((scope) => Object.freeze({ ...scope }))) }),
 			})
-			: Object.freeze({ ...credentials, kind, app: consumer, label: callerOptions.label ?? `${kind}-${issued}@${name}.test`, email, link: null })
+			: Object.freeze({
+				...credentials,
+				kind,
+				app: consumer,
+				label: callerOptions.label ?? `${kind}-${issued}@${name}.test`,
+				email,
+				link: null,
+				terminal,
+			})
 		memberships.set(
 			caller,
 			grants.flatMap((grant) => ('role' in grant ? [{ role: grant.role, scope: grant.scope ?? null }] : [])),
@@ -614,6 +630,31 @@ export function bootTestKit<C extends AnyContract>(
 			bySession.set(credential, caller)
 		}
 		return caller
+	}
+
+	/** A terminal as IAM enrols it for this application: refused where IAM would mint no terminal session. */
+	function terminalOf(terminal: TestTerminal, kind: TestCallerKind, via: 'session' | 'key'): TestCallerTerminal {
+		if (kind !== 'human' || via !== 'session') {
+			throw new Error("only a person's session is asserted at a terminal: testCaller(grants, { terminal }) signs in through the session")
+		}
+		if (artifact.terminal === undefined) {
+			throw new Error("the contract declares no terminal, so IAM signs no terminal session: terminal: { identify: '/identify' } in the vocabulary")
+		}
+		const catalog = Object.keys(app.contract.vocabulary.actions)
+		const ceiling = terminal.ceiling ?? []
+		const unknown = ceiling.find((pattern) => !isActionAllowed(pattern, catalog))
+		if (unknown !== undefined) {
+			throw new Error(`the terminal's ceiling '${unknown}' names no action of the contract`)
+		}
+		terminals += 1
+		return Object.freeze({
+			id: terminal.id ?? `terminal-${terminals}`,
+			label: terminal.label ?? `Terminal ${terminals}`,
+			ceiling: Object.freeze([...ceiling]),
+			perms: Object.freeze(
+				resolveGrants<AnyContract>(app.contract, terminal.grants ?? []).map((entry): PermissionEntry => ({ ...entry, source: 'terminal' })),
+			),
+		})
 	}
 
 	const scope = <D extends DimensionOf<C>>(dimension: D, value: string): TestScope<D> => Object.freeze({ type: dimension, value })
@@ -631,7 +672,8 @@ export function bootTestKit<C extends AnyContract>(
 			...(caller.link === null ? {} : { link: { mount: caller.link.mount, chain: [...caller.link.chain] } }),
 			label: caller.label,
 			...(caller.email === null ? {} : { email: caller.email }),
-			permissions: uniquePermissions(standIn?.permsOf(caller) ?? caller.perms),
+			...(caller.terminal === null ? {} : { session: true, terminal: { id: caller.terminal.id, label: caller.terminal.label } }),
+			permissions: uniquePermissions(standIn?.permsOf(caller) ?? signedPermissions(caller, caller.perms)),
 			issuedAt: now,
 			expiresAt: now + TOKEN_TTL_SECONDS,
 		})
@@ -666,6 +708,7 @@ export function bootTestKit<C extends AnyContract>(
 			app: null,
 			label: null,
 			email: null,
+			terminal: null,
 			lastSignInAt: null,
 			link: Object.freeze({ mount: link.mount, chain }),
 		})

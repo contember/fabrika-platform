@@ -57,7 +57,7 @@ import {
 	type Scope,
 } from '@fabrika/auth-core'
 import { MAX_EMAIL_SUBJECT_LENGTH } from '@fabrika/email'
-import { type LabelledTestCaller, relationEntries, type TestCaller, type TestScope } from './caller'
+import { type LabelledTestCaller, relationEntries, signedPermissions, type TestCaller, type TestScope } from './caller'
 
 /** A role a test caller holds in one scope value, or globally (`null`). */
 export interface TestMembership {
@@ -490,8 +490,14 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		all: () => callers.all().map(({ caller, memberships }) => ({ caller, memberships: changes.heldBy(caller.id, memberships) })),
 	}
 
+	/**
+	 * What IAM signs for `caller` now, and resolves its membership requests against: its own permissions, narrowed on a
+	 * terminal (`signedPermissions`).
+	 */
+	const permsOf = (caller: TestCaller): readonly PermissionEntry[] => signedPermissions(caller, ownPermsOf(caller))
+
 	/** The test's permissions of `caller`, less one entry for each action of a role it lost, plus those of each role it gained. */
-	const permsOf = (caller: TestCaller): readonly PermissionEntry[] => {
+	const ownPermsOf = (caller: TestCaller): readonly PermissionEntry[] => {
 		if (!changes.touched(caller.id)) return caller.perms
 		const given = membershipsOf(callers, caller.id)
 		const held = changes.heldBy(caller.id, given)
