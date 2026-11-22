@@ -27,8 +27,8 @@ export function AdminAccessSection({ state, onDone }: { state: SelfAdminState | 
 				<h2>Your admin access</h2>
 			</div>
 			<p className="hint">
-				Admin holds every action the environment's approved contract declares. Granting it to yourself is an ordinary grant: Access lists it under your
-				account, the audit log records it, and you revoke it there like any other.
+				At a contract application, Admin holds every action its approved contract declares; at any other application, every action. Granting it to
+				yourself is an ordinary grant: Access lists it under your account, the audit log records it, and you revoke it there like any other.
 			</p>
 			<Table
 				head={

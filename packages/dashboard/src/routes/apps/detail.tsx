@@ -19,6 +19,7 @@ import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
 import { readSelfAdmin } from '../../lib/self-admin'
+import { consoleSession } from '../../lib/session'
 
 // App detail: the per-app registry + operations view: its meta, its environments (each with a
 // Deploy button + edit/delete), its secret references (names + layer + vault ref, values never shown),
@@ -36,7 +37,7 @@ export default createPage()
 			api.runs.list({ appId: params.id, limit: 10 }),
 			api.namespaces.list(),
 			api.installation(),
-			environments.then((listed) => readSelfAdmin(params.id, listed.items.map((env) => env.env))),
+			Promise.all([environments, consoleSession()]).then(([listed, session]) => readSelfAdmin(params.id, listed.items.map((env) => env.env), session)),
 		])
 		return {
 			selfAdmin,

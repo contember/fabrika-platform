@@ -2,7 +2,7 @@ import type { RpcFetch } from '@fabrika/app'
 import { appEnvironmentId } from '@fabrika/auth-core'
 import type { AppDto, GrantDto, IamAdministrationScope } from '@fabrika/iam-contract'
 import { quietIamClient } from './iam'
-import { consoleSession } from './session'
+import type { ConsoleSession } from './session'
 
 /** The built-in role whose grant the button issues; at a contract application it holds the declared actions. */
 export const ADMIN_ROLE = 'admin'
@@ -71,8 +71,12 @@ export interface SelfAdminState {
  * The caller's self-Admin state at `appId`, or null when it administers no people or IAM does not answer: the section
  * is then absent, and the application page loads as before.
  */
-export async function readSelfAdmin(appId: string, envs: readonly string[], fetcher: RpcFetch = fetch): Promise<SelfAdminState | null> {
-	const session = await consoleSession()
+export async function readSelfAdmin(
+	appId: string,
+	envs: readonly string[],
+	session: Pick<ConsoleSession, 'principal' | 'iam'>,
+	fetcher: RpcFetch = fetch,
+): Promise<SelfAdminState | null> {
 	if (session.principal === null || session.iam === null || session.iam === false) return null
 	try {
 		const iam = quietIamClient(fetcher)
