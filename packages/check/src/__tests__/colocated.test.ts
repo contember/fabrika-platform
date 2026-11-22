@@ -11,7 +11,7 @@ import { contract as kitContract } from '../../../app/src/__tests__/kit-fixture/
 import { tables as kitTables } from '../../../app/src/__tests__/kit-fixture/src/db/tables'
 import { parseModule } from '../ast'
 import { checkApplication } from '../check'
-import { ContractSourceError, readContractSource } from '../contract'
+import { CONTRACT_LIMITS, ContractSourceError, readContractSource } from '../contract'
 import { shellSlice } from '../slice'
 import {
 	ARCHITECTURE_ROOT,
@@ -327,6 +327,58 @@ const refusalsWith = (replaced: ReadonlyMap<string, string>): string[] => {
 	}
 	return []
 }
+
+describe('a statement left with type specifiers only is not followed', () => {
+	/** The handler-only module, over the byte limit of one module, so that the read refuses it once it follows the statement. */
+	const LARGE_LOGIC = `${THROWING_LOGIC}export type Reopenable = string\nexport const STAGES = 'read'\n// ${'x'.repeat(CONTRACT_LIMITS.moduleBytes)}\n`
+	const IMPORT = "import { canReopen } from './logic'"
+	const SHELL_TYPE = '\nexport type ReopenableDeal = Reopenable\n'
+	/** The deals module with `statement` in place of its import of `./logic`, the shell naming `Reopenable`. */
+	const deals = (statement: string, shell = SHELL_TYPE): string => {
+		expect(DEALS).toContain(IMPORT)
+		return `${DEALS.replace(IMPORT, statement)}${shell}`
+	}
+	const commit = (endpoints: string): Map<string, string> =>
+		new Map([...kitTree(), ['src/deals/endpoints.ts', endpoints], ['src/deals/logic.ts', LARGE_LOGIC]])
+
+	const typeOnly: ReadonlyArray<readonly [string, string]> = [
+		['an import whose value specifiers only handlers used', "import { canReopen, type Reopenable } from './logic'"],
+		['an import of inline type specifiers', "import { canReopen } from './logic'\nimport { type Reopenable } from './logic'"],
+		[
+			'a re-export of inline type specifiers',
+			"import { canReopen } from './logic'\nexport { type Reopenable } from './logic'\nimport type { Reopenable } from './logic'",
+		],
+	]
+	for (const [name, statement] of typeOnly) {
+		test(`${name}: its module is never requested, and the read stays small`, () => {
+			const endpoints = deals(statement)
+			expect(shellSlice('src/deals/endpoints.ts', endpoints).text).not.toContain('canReopen')
+			expect(fetchedByControl(commit(endpoints)).has('src/deals/logic.ts')).toBe(false)
+			expect(canonicalArtifactJson(readContractSource(commit(endpoints)))).toBe(evaluated)
+		})
+	}
+
+	const bytes = new TextEncoder().encode(LARGE_LOGIC).byteLength
+	const followed: ReadonlyArray<readonly [string, string, string]> = [
+		[
+			'an import with a value specifier the shell uses',
+			"import { canReopen, STAGES, type Reopenable } from './logic'",
+			`${SHELL_TYPE}export const DEAL_STAGES = STAGES\n`,
+		],
+		['a re-export with a value specifier', "import { canReopen } from './logic'\nexport { STAGES, type Reopenable } from './logic'", ''],
+		['an import of no specifier', "import { canReopen } from './logic'\nimport {} from './logic'", ''],
+	]
+	for (const [name, statement, shell] of followed) {
+		test(`${name} is still followed`, () => {
+			const endpoints = deals(statement, shell)
+			expect(fetchedByControl(commit(endpoints)).has('src/deals/logic.ts')).toBe(true)
+			expect(refusalsWith(new Map([['src/deals/endpoints.ts', endpoints], ['src/deals/logic.ts', LARGE_LOGIC]]))).toEqual([
+				'src/deals/logic.ts:1:1 contract',
+			])
+			expect(() => readContractSource(commit(endpoints))).toThrow(`the module is ${bytes} bytes, over ${CONTRACT_LIMITS.moduleBytes} for one module`)
+		})
+	}
+})
 
 describe('the checker reads the shell slice too', () => {
 	test("the architecture fixture's whole check is clean", async () => {

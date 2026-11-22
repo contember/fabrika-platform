@@ -39,7 +39,8 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   bundle read is read as its slice: each `<x>.query|mutation|cron|webhook(…).handle(<inline function>)` loses its
   `.handle(…)`, and so does every import specifier, function, const of an inline function and type that only those
   handlers used (followed until nothing more goes; an exported declaration, and one nobody uses, stays). Removed text
-  becomes spaces, so every finding keeps its line and column. Control therefore never fetches, parses or runs a module
+  becomes spaces, so every finding keeps its line and column. An import or re-export left with `type` specifiers alone is
+  erased, as Bun erases it, so neither the reader nor `contractReaderInputs` follows it (`importedSpecifiers`). Control therefore never fetches, parses or runs a module
   only a handler imports; `boot`'s contract digest backs what the slice cannot see. Any other call of a member
   statically named `handle` (a named or wrapped function; `['handle'](…)`, `.handle!(…)`, a parenthesised, `as`,
   `satisfies` or `<T>` wrapped callee or receiver; a receiver that is no endpoint, job or webhook builder) is refused at
@@ -413,7 +414,7 @@ Each has a fixture in `direct-forms.test.ts` that asserts it passes, so that clo
   `buildArtifact`) does every check and default. A change to the kit's builders (`BUILDER_FIELDS`, a new option) is
   a change to `reader/surface.ts`; `differential.test.ts` fails when they drift.
 - **`@fabrika/check/contract` is Worker-safe.** `contract.ts`, `slice.ts`, `reader/*`, `graph.ts`, `ast.ts`, `layout.ts`,
-  `finding.ts`, `trust.ts`, `jsonc.ts`, `toml.ts`, `limits.ts`, `inputs.ts`, `version.ts` and `rules/literal.ts` import no
+  `finding.ts`, `references.ts`, `trust.ts`, `jsonc.ts`, `toml.ts`, `limits.ts`, `inputs.ts`, `version.ts` and `rules/literal.ts` import no
   `node:*`, `bun` or file API. A Worker bundle of the reader measured
   638 KiB, 153 KiB gzip with wrangler 4.72 `--dry-run --minify` (Babel ~71 KiB gzip of it), and reads the notes
   contract in workerd.

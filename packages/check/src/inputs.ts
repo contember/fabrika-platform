@@ -1,10 +1,11 @@
 // Which files of an application the static reader needs. Control reads a commit file by file, and the reader cannot
 // tell a missing file from one it was not given, so the caller asks here until nothing is missing. Worker-safe.
 
-import { importedSpecifiers, utf8Bytes } from './ast'
+import { utf8Bytes } from './ast'
 import { parseJsonc } from './jsonc'
 import { CONTRACT_FILE, isRelativeSpecifier, isSourceFile, joinRelative, resolveRelative, TABLES_FILE } from './layout'
 import { CONTRACT_LIMITS } from './limits'
+import { importedSpecifiers } from './references'
 import { parseShellModule } from './slice'
 import { BUNFIG_FILE } from './trust'
 
