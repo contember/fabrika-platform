@@ -34,6 +34,11 @@
 			"types": "./src/bun-plugin.ts",
 			"default": "./src/bun-plugin.ts"
 		},
+		"./vite-plugin": {
+			"bun": "./src/vite-plugin.ts",
+			"types": "./src/vite-plugin.ts",
+			"default": "./src/vite-plugin.ts"
+		},
 		"./source-maps": {
 			"bun": "./src/source-maps.ts",
 			"types": "./src/source-maps.ts",
@@ -52,5 +57,9 @@
 		"@fabrika/operations-contract": "workspace:*",
 		"@fabrika/platform-node": "workspace:*",
 		"zod": "^3.25.76"
+	},
+	"devDependencies": {
+		"@happy-dom/global-registrator": "^20.11.2",
+		"vite": "^7.0.0"
 	}
 }
