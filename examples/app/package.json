@@ -12,19 +12,19 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"@fabrika/app": "0.9.0-dev.28",
-		"@fabrika/auth-core": "0.9.0-dev.28",
-		"@fabrika/db": "0.9.0-dev.28",
-		"@fabrika/provider-cloudflare": "0.9.0-dev.28",
-		"@fabrika/proxy-core": "0.9.0-dev.28",
+		"@fabrika/app": "0.9.0-dev.29",
+		"@fabrika/auth-core": "0.9.0-dev.29",
+		"@fabrika/db": "0.9.0-dev.29",
+		"@fabrika/provider-cloudflare": "0.9.0-dev.29",
+		"@fabrika/proxy-core": "0.9.0-dev.29",
 		"kysely": "0.29.6",
 		"zod": "^3.25.76"
 	},
 	"devDependencies": {
 		"@cloudflare/workers-types": "^4.20260702.1",
-		"@fabrika/check": "0.9.0-dev.28",
-		"@fabrika/cli": "0.9.0-dev.28",
-		"@fabrika/platform": "0.9.0-dev.28",
+		"@fabrika/check": "0.9.0-dev.29",
+		"@fabrika/cli": "0.9.0-dev.29",
+		"@fabrika/platform": "0.9.0-dev.29",
 		"@types/bun": "^1.4.3",
 		"lopata": "^0.30.1",
 		"oblaka-iac": "^0.0.22",
