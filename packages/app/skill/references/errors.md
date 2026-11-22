@@ -50,6 +50,7 @@ The hints:
 | `data-access-location` | `ctx.db` or `ctx.sql` outside `endpoints.ts` and `queries.ts`                                            | pass the handle into a function of the slice's `queries.ts`                            |
 | `logic-data-access`    | `logic.ts` reaches data                                                                                  | keep `logic.ts` pure; pass it plain values                                             |
 | `cross-slice-queries`  | a slice loads another slice's `queries.ts`                                                               | move the function, or call that slice's endpoint                                       |
+| `single-slice-queries` | a function of a slice's `queries.ts` that one other slice alone uses                                     | move it, with the helpers only it uses, into that slice's `queries.ts`                 |
 | `sql-undeclared`       | `ctx.sql` in a handler whose endpoint declares no `sql`                                                  | add `sql: 'read'` (or `'write'`) to that endpoint                                      |
 | `cloudflare-held-call` | on Cloudflare, a mutation that declares `egress` or `connect` holds the whole environment while it waits | record a row and `ctx.kick('<job>')`; the job makes the call outside `ctx.transaction` |
 

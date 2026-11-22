@@ -98,6 +98,92 @@ describe('a step out of the structure is a hint', () => {
 		expect(findings).toEqual(['src/companies/endpoints.ts:1:1 hint cross-slice-queries'])
 	})
 
+	describe("a function of a slice's queries.ts that one other slice alone uses", () => {
+		/** `src/deals/queries.ts` with `dealCount`, which reads through the handle its caller passes in. */
+		const withDealCount = (extra = ''): string =>
+			`${
+				fileOf('src/deals/queries.ts')
+			}\nexport const dealCount = async (deals: { list: () => Promise<unknown[]> }) => (await deals.list()).length\n${extra}`
+		const companiesCalling = (line: string): string => withImport('src/companies/endpoints.ts', line)
+
+		test('one caller: the function belongs in that slice; a test of the owning slice is no caller', async () => {
+			const findings = await structureFindings({
+				...ARCHITECTURE_APP,
+				'src/deals/queries.ts': withDealCount(),
+				'src/companies/endpoints.ts': companiesCalling("import { dealCount } from '../deals/queries'"),
+				'src/deals/__tests__/count.test.ts': "import { expect, test } from 'bun:test'\nimport { dealCount } from '../queries'\n\n"
+					+ "test('counts', async () => expect(await dealCount({ list: async () => [1] })).toBe(1))\n",
+			})
+			expect(findings).toEqual([
+				'src/companies/endpoints.ts:1:1 hint cross-slice-queries',
+				'src/deals/queries.ts:8:14 hint single-slice-queries',
+			])
+		})
+
+		test('two slices: the function stays where both reach it', async () => {
+			const findings = await structureFindings({
+				...ARCHITECTURE_APP,
+				'src/deals/queries.ts': withDealCount(),
+				'src/companies/endpoints.ts': companiesCalling("import { dealCount } from '../deals/queries'"),
+				'src/reports/queries.ts': "import { dealCount } from '../deals/queries'\n\nexport const total = dealCount\n",
+			})
+			expect(findings).toEqual([
+				'src/companies/endpoints.ts:1:1 hint cross-slice-queries',
+				'src/reports/queries.ts:1:1 hint cross-slice-queries',
+			])
+		})
+
+		test("the owning slice and one other: its own module's use counts, its own recursion does not", async () => {
+			const helper = 'export const pages = async (read: (page: number) => Promise<unknown[]>, page = 0): Promise<number> =>\n'
+				+ '\t(await read(page)).length === 0 ? page : pages(read, page + 1)\n'
+			const findings = await structureFindings({
+				...ARCHITECTURE_APP,
+				'src/deals/queries.ts': withDealCount(
+					`${helper}export const counted = async (read: (page: number) => Promise<unknown[]>) => dealCount({ list: () => read(0) })\n`,
+				),
+				'src/companies/endpoints.ts': companiesCalling("import { dealCount, pages } from '../deals/queries'"),
+			})
+			expect(findings).toEqual([
+				'src/companies/endpoints.ts:1:1 hint cross-slice-queries',
+				'src/deals/queries.ts:9:14 hint single-slice-queries',
+			])
+		})
+
+		test('an export list, an alias, a whole-module load and a caller outside every slice', async () => {
+			const queries =
+				`${fileOf('src/deals/queries.ts')}\nconst countOf = async (deals: { list: () => Promise<unknown[]> }) => (await deals.list()).length\n`
+				+ 'export { countOf as dealCount }\n'
+			const listed = await structureFindings({
+				...ARCHITECTURE_APP,
+				'src/deals/queries.ts': queries,
+				'src/companies/endpoints.ts': companiesCalling("import { dealCount } from '../deals/queries'"),
+			})
+			expect(listed).toEqual(['src/companies/endpoints.ts:1:1 hint cross-slice-queries', 'src/deals/queries.ts:9:10 hint single-slice-queries'])
+			const whole = await structureFindings({
+				...ARCHITECTURE_APP,
+				'src/deals/queries.ts': queries,
+				'src/companies/endpoints.ts': companiesCalling("import * as deals from '../deals/queries'"),
+			})
+			// A whole-module load from another slice names no function, so it blames that slice for none.
+			expect(whole).toEqual(['src/companies/endpoints.ts:1:1 hint cross-slice-queries'])
+			const aliased = await structureFindings({
+				...ARCHITECTURE_APP,
+				'src/deals/queries.ts': `${queries}export { countOf as countDeals }\n`,
+				'src/deals/endpoints.ts': withImport('src/deals/endpoints.ts', "import { countDeals } from './queries'"),
+				'src/companies/endpoints.ts': companiesCalling("import { dealCount } from '../deals/queries'"),
+			})
+			// One function under two names, used by two slices.
+			expect(aliased).toEqual(['src/companies/endpoints.ts:1:1 hint cross-slice-queries'])
+			const outside = await structureFindings({
+				...ARCHITECTURE_APP,
+				'src/deals/queries.ts': queries,
+				'src/companies/endpoints.ts': companiesCalling("import { dealCount } from '../deals/queries'"),
+				'tools/count.ts': "import { dealCount } from '../src/deals/queries'\n\nexport const count = dealCount\n",
+			})
+			expect(outside).toEqual(['src/companies/endpoints.ts:1:1 hint cross-slice-queries'])
+		})
+	})
+
 	test("a handler outside a slice's endpoints.ts", async () => {
 		const findings = await structureFindings({
 			...ARCHITECTURE_APP,

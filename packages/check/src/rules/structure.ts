@@ -1,6 +1,6 @@
 import { isBuiltin } from 'node:module'
-import { type AstNode, child, identifierName, staticKey } from '../ast'
-import { type Finding, type Report, STRUCTURE_HINT_RULE_IDS } from '../finding'
+import { type AstNode, child, children, identifierName, isValueReference, staticKey, staticString, stringField, unwrap, walk } from '../ast'
+import { type Finding, type Report, reporter, STRUCTURE_HINT_RULE_IDS } from '../finding'
 import {
 	CONTRACT_FILE,
 	DATABASE_DIR,
@@ -19,6 +19,7 @@ import {
 } from '../layout'
 import type { ModuleReference } from '../references'
 import { type ImportMappings, mappedTargets } from '../resolution'
+import { declaringScope } from '../scope'
 import { isTestKit } from './modules'
 
 /** The rules of the application architecture (docs/reference/application-architecture.md): three refusals and the hints. */
@@ -223,6 +224,138 @@ const checkSliceReference = (place: StructurePlace, reference: ModuleReference, 
 		`'${reference.specifier}' is the queries module of the slice '${sliceOf(other)}'`,
 		"a function in this slice's own queries.ts; share a rule through the other slice's logic.ts",
 	)
+}
+
+/** A top-level function of a module: its local name, its declaration, and the node a finding points at. */
+interface TopLevelFunction {
+	readonly local: string
+	readonly declaration: AstNode
+	readonly at: AstNode
+}
+
+const isFunctionValue = (node: AstNode | undefined): boolean => {
+	const value = node === undefined ? undefined : unwrap(node)
+	return value?.type === 'ArrowFunctionExpression' || value?.type === 'FunctionExpression'
+}
+
+/** `function f() {}` and `const f = () => …` (or a function expression) at the top level, by local name. */
+const topLevelFunctions = (statement: AstNode): readonly TopLevelFunction[] => {
+	if (statement.type === 'FunctionDeclaration') {
+		const id = child(statement, 'id')
+		const local = identifierName(id)
+		return local === undefined || id === undefined ? [] : [{ local, declaration: statement, at: id }]
+	}
+	if (statement.type !== 'VariableDeclaration') return []
+	return children(statement, 'declarations').flatMap((declarator) => {
+		const id = declarator === null ? undefined : child(declarator, 'id')
+		const local = identifierName(id)
+		if (declarator === null || id === undefined || local === undefined || !isFunctionValue(child(declarator, 'init'))) return []
+		return [{ local, declaration: declarator, at: id }]
+	})
+}
+
+/** The functions a module exports by name: `export function`, `export const f = () => …`, `export { f as g }` of one. */
+const exportedFunctions = (program: AstNode): ReadonlyMap<string, TopLevelFunction> => {
+	const statements = children(program, 'body').filter((statement): statement is AstNode => statement !== null)
+	const declared = new Map<string, TopLevelFunction>()
+	for (const statement of statements) {
+		const declaration = statement.type === 'ExportNamedDeclaration' ? child(statement, 'declaration') : statement
+		for (const fn of declaration === undefined ? [] : topLevelFunctions(declaration)) declared.set(fn.local, fn)
+	}
+	const exported = new Map<string, TopLevelFunction>()
+	for (const statement of statements) {
+		if (statement.type !== 'ExportNamedDeclaration' || stringField(statement, 'exportKind') === 'type') continue
+		const declaration = child(statement, 'declaration')
+		if (declaration !== undefined) {
+			for (const fn of topLevelFunctions(declaration)) exported.set(fn.local, fn)
+			continue
+		}
+		if (child(statement, 'source') !== undefined) continue
+		for (const specifier of children(statement, 'specifiers')) {
+			if (specifier === null || stringField(specifier, 'exportKind') === 'type') continue
+			const fn = declared.get(identifierName(child(specifier, 'local')) ?? '')
+			const name = identifierName(child(specifier, 'exported')) ?? staticString(child(specifier, 'exported'))
+			if (fn !== undefined && name !== undefined) exported.set(name, { ...fn, at: specifier })
+		}
+	}
+	return exported
+}
+
+/** Whether `node` is the name a declaration binds: `const f = …`, `function f() {}`. */
+const isDeclaredName = (node: AstNode, parent: AstNode): boolean =>
+	(parent.type === 'VariableDeclarator' || parent.type === 'FunctionDeclaration') && child(parent, 'id') === node
+
+/** Which of the top-level functions (local name → declaration) the module's own code uses as a value, outside its own declaration. */
+const usedWithin = (program: AstNode, declarations: ReadonlyMap<string, AstNode>): ReadonlySet<string> => {
+	const used = new Set<string>()
+	walk(program, (node, ancestors) => {
+		const name = identifierName(node)
+		const declaration = name === undefined ? undefined : declarations.get(name)
+		const parent = ancestors.at(-1)
+		if (name === undefined || declaration === undefined || parent === undefined || isDeclaredName(node, parent)) return
+		if (!isValueReference(node, parent) || declaringScope(name, ancestors) !== program || ancestors.includes(declaration)) return
+		used.add(name)
+	})
+	return used
+}
+
+/**
+ * `single-slice-queries`: a function of `src/<a>/queries.ts` that exactly one other slice `src/<b>/` uses belongs in
+ * `src/<b>/queries.ts`. A caller is any module but a test, and a use is a named import or re-export; a function
+ * exported under two names is one function. A module outside every slice, and a whole-module load (`import *`,
+ * `export *`) from another slice, which names no function, leave every function they reach where it is.
+ */
+export const checkSingleSliceQueries = (graph: StructureGraph, programs: ReadonlyMap<string, AstNode>): Finding[] => {
+	// Who loads each queries module: the importer's slice (`undefined` outside every slice) and the names it takes.
+	const loads = new Map<string, { readonly slice: string | undefined; readonly names: readonly string[] }[]>()
+	for (const importer of programs.keys()) {
+		if (isTestFile(importer)) continue
+		for (const reference of graph.referencesOf(importer)) {
+			if (reference.typeOnly) continue
+			for (const target of referenceTargets(graph, importer, reference.specifier).files) {
+				if (target === importer || slicePart(target) !== 'queries') continue
+				const into = loads.get(target) ?? []
+				into.push({ slice: sliceOf(importer), names: reference.names })
+				loads.set(target, into)
+			}
+		}
+	}
+	const findings: Finding[] = []
+	for (const [file, program] of programs) {
+		const slice = sliceOf(file)
+		if (slicePart(file) !== 'queries' || slice === undefined) continue
+		const exported = exportedFunctions(program)
+		// Each function's callers, by its local name: the slices that use it, and `unjudged` once a use names no slice.
+		const callers = new Map([...exported.values()].map((fn) => [fn.local, { slices: new Set<string>(), unjudged: false }]))
+		const use = (local: string | undefined, caller: string | undefined): void => {
+			const entry = local === undefined ? undefined : callers.get(local)
+			if (entry === undefined) return
+			if (caller === undefined) entry.unjudged = true
+			else entry.slices.add(caller)
+		}
+		const within = usedWithin(program, new Map([...exported.values()].map((fn) => [fn.local, fn.declaration])))
+		for (const local of within) use(local, slice)
+		for (const load of loads.get(file) ?? []) {
+			if (load.names.includes('*')) {
+				for (const local of callers.keys()) use(local, load.slice === slice ? slice : undefined)
+			} else {
+				for (const name of load.names) use(exported.get(name)?.local, load.slice)
+			}
+		}
+		const report = reporter(file, findings)
+		for (const [name, fn] of exported) {
+			const entry = callers.get(fn.local)
+			const [only, ...rest] = entry?.slices ?? []
+			if (entry === undefined || entry.unjudged || only === undefined || rest.length > 0 || only === slice) continue
+			report(
+				fn.at,
+				'single-slice-queries',
+				`'${name}' of ${file} is used only by the slice '${only}'`,
+				`the function in src/${only}/queries.ts, with the helpers only it uses; ${file} keeps what two or more slices use`,
+			)
+		}
+	}
+	return findings
 }
 
 /**

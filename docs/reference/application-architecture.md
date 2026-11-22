@@ -240,7 +240,8 @@ An import is judged by the file or package Bun loads for it:
   argument. Its tests need no database.
 - **A query function** (`queries.ts`) takes the handle as a parameter (`ctx.db.target`, `ctx.db.within.<table>`,
   `ctx.sql`), typed by `DbHandle`, `SqlHandle` or by the methods it calls, and returns plain values. It decides no authorization: the capability
-  already bounds the handle. It is called from its own slice's handlers.
+  already bounds the handle. It is called from its own slice's handlers. A function another slice alone calls moves to that slice's `queries.ts`, with
+  the helpers only it uses; one that two or more slices call stays where both reach it.
 - **A job** is an `app.cron` declaration with its `.handle(…)` in the `endpoints.ts` of the slice whose data it works
   on; the contract's `jobs` section names it. An attempt retries, so its writes are idempotent. A queue table's rows
   are claimed by a job (`claim`).
@@ -290,6 +291,7 @@ An import is judged by the file or package Bun loads for it:
 | `tool-import`          | refusal  | any module outside `tools/`, a test and `fabrika.config.ts` included, that loads or re-exports a module under `tools/` at runtime; a `package.json` under `tools/`                                                                                                                                                                       |
 | `logic-data-access`    | hint     | `logic.ts` that loads `@fabrika/db`, a `queries.ts` or a module of `src/db/`, or uses `ctx.db` or `ctx.sql`                                                                                                                                                                                                                              |
 | `cross-slice-queries`  | hint     | a module of one slice that loads another slice's `queries.ts`                                                                                                                                                                                                                                                                            |
+| `single-slice-queries` | hint     | a function of a slice's `queries.ts` that exactly one other slice uses (tests aside): it belongs in that slice's `queries.ts`; a function two slices use, or one a module outside every slice uses, stays                                                                                                                                |
 | `handler-location`     | hint     | `.handle(…)` on a `query`, `mutation`, `cron`, `webhook` or `export` procedure outside `src/<slice>/endpoints.ts`                                                                                                                                                                                                                        |
 | `data-access-location` | hint     | `ctx.db` or `ctx.sql` outside `src/<slice>/endpoints.ts` and `queries.ts` (`logic.ts` reports `logic-data-access`)                                                                                                                                                                                                                       |
 

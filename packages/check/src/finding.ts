@@ -49,7 +49,13 @@ export const REFUSAL_RULE_IDS = [
 ] as const
 
 /** Rules that report a step out of the application architecture. */
-export const STRUCTURE_HINT_RULE_IDS = ['logic-data-access', 'cross-slice-queries', 'handler-location', 'data-access-location'] as const
+export const STRUCTURE_HINT_RULE_IDS = [
+	'logic-data-access',
+	'cross-slice-queries',
+	'single-slice-queries',
+	'handler-location',
+	'data-access-location',
+] as const
 
 /**
  * Rules whose findings never fail the check: the architecture's, a `ctx.sql` its site does not declare, a
