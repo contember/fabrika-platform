@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/jwks",
-	"version": "0.9.0-dev.30",
+	"version": "0.9.0-dev.31",
 	"type": "module",
 	"repository": {
 		"type": "git",
