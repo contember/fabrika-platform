@@ -66,3 +66,46 @@ export function snapshot05(
 	const sources = new Map(Object.entries({ ...files, 'fabrika.contract.ts': contract }))
 	return { version: 1, ...fromOlder(readContractSource05(sources, tables)), migrations: [], checker: CHECKER_05 }
 }
+
+/**
+ * A contract of `endpoints` query procedures with 160-character names, each with its own output schema, in modules of
+ * 100 schemas (one module may hold 512 KiB). At 1400 the stored snapshot is about 1.4 MB and its classification against
+ * the empty baseline about 1.36 MB: together over a D1 row, each within the snapshot's own ceiling.
+ */
+export function largeContract(endpoints: number): { readonly contract: string; readonly files: Record<string, string> } {
+	const perModule = 100
+	const name = (index: number): string => `q${index}_`.padEnd(160, 'n')
+	const files: Record<string, string> = {}
+	for (let module = 0; module * perModule < endpoints; module++) {
+		const schemas = Array.from({ length: Math.min(perModule, endpoints - module * perModule) }, (_, offset) => {
+			const index = module * perModule + offset
+			return `export const S${index} = z.strictObject({ ${`f${index}_`.padEnd(40, 'x')}: z.string() })`
+		})
+		files[`src/large/s${module}.ts`] = `import { z } from 'zod/v4'\n${schemas.join('\n')}\n`
+	}
+	const imports = Array.from({ length: endpoints }, (_, index) => `import { S${index} } from './src/large/s${Math.floor(index / perModule)}'`)
+	const procedures = Array.from(
+		{ length: endpoints },
+		(_, index) =>
+			`\t\t${
+				name(index)
+			}: c.query({ input: z.strictObject({ id: z.uuid() }), output: S${index}, access: { action: 'notes.read', on: 'note', from: 'id' } }),`,
+	)
+	const contract = `import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+${imports.join('\n')}
+
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: { creator: 'owner' }, note: { in: 'workspace' } },
+	actions: { 'notes.read': 'Read notes' },
+	roles: { owner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] } } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['human'] }, {
+${procedures.join('\n')}
+	}),
+	health: c.health('/healthz'),
+}))
+`
+	return { contract, files }
+}

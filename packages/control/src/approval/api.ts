@@ -20,7 +20,7 @@ import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { snapshotAccessMap } from './access-map'
 import { type ConsoleAdmission, requireHumanApprover } from './human'
 import { parseApproval, parseClassification, type StoredApproval } from './publish'
-import { parseSnapshot } from './snapshot'
+import { type AccessSnapshot, parseSnapshot } from './snapshot'
 import { snapshotSurface } from './surface'
 
 export interface ApprovalUseCaseContext extends ConsoleAdmission {
@@ -36,12 +36,13 @@ const LIST_LIMIT = 100
 
 export async function listApprovalsUseCase(c: ApprovalUseCaseContext): Promise<ListResponse<ApprovalDto>> {
 	const rows = await c.repositories.runs.listRunsAwaitingApproval(LIST_LIMIT)
-	return { items: rows.filter((row) => mayApprove(c.auth, row)).map((row) => toApprovalDto(row, 'list')) }
+	const runs = c.repositories.runs
+	return { items: await Promise.all(rows.filter((row) => mayApprove(c.auth, row)).map((row) => toApprovalDto(runs, row, 'list'))) }
 }
 
 export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: string): Promise<ApprovalDto> {
 	const run = await requireClassifiedRun(c, runId)
-	const approval = toApprovalDto(run)
+	const approval = await toApprovalDto(c.repositories.runs, run)
 	const crossOrigins = await pendingCrossOrigins(c, approval)
 	return {
 		...approval,
@@ -59,7 +60,7 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 	const approver = requireHumanApprover(c.auth, c)
 	const run = await requireClassifiedRun(c, input.runId)
 	if (run.status !== 'awaiting_approval' || run.classification_json === null) fail(409, 'the run is not waiting for approval')
-	const classification = parseClassification(run.classification_json)
+	const classification = parseClassification(await c.repositories.runs.document(run.classification_json))
 	if (classification.candidateDigest !== input.candidateDigest || classification.baselineDigest !== input.baselineDigest) {
 		fail(409, 'the change was classified again since it was read; reload it and decide again')
 	}
@@ -94,7 +95,7 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 		},
 	})
 	if (input.decision === 'approve') await c.queue.send({ runId: run.id })
-	return toApprovalDto(await requireClassifiedRun(c, run.id))
+	return await toApprovalDto(c.repositories.runs, await requireClassifiedRun(c, run.id))
 }
 
 /** Set an environment's `protected` flag: the same human rule as approving, and audited (ADR-0050 §4). */
@@ -159,26 +160,27 @@ async function pendingCrossOrigins(c: ApprovalUseCaseContext, approval: Approval
 }
 
 /** The candidate's surface of the endpoints the lines name, so the page shows what stands in front of each. */
-function namedEndpoints(run: RunRow, changes: readonly AccessChangeDto[]): ApprovalDto['endpoints'] {
-	if (run.snapshot_json === null) return []
+function namedEndpoints(snapshot: AccessSnapshot | null, changes: readonly AccessChangeDto[]): ApprovalDto['endpoints'] {
+	if (snapshot === null) return []
 	const named = new Set(changes.flatMap((change) => (change.subject?.kind === 'endpoint' ? [change.subject.name] : [])))
-	return named.size === 0 ? [] : snapshotSurface(parseSnapshot(run.snapshot_json), named)
+	return named.size === 0 ? [] : snapshotSurface(snapshot, named)
 }
 
 /**
  * The approval as the console reads it. The list reads no snapshot: it shows no endpoint, and one stored snapshot that
  * no longer parses must not take the whole list down with it.
  */
-function toApprovalDto(run: RunRow, view: 'list' | 'detail' = 'detail'): ApprovalDto {
+async function toApprovalDto(runs: ControlRepositories['runs'], run: RunRow, view: 'list' | 'detail' = 'detail'): Promise<ApprovalDto> {
 	if (run.classification_json === null) throw new Error(`run ${run.id} has no classification`)
-	const classification = parseClassification(run.classification_json)
+	const classification = parseClassification(await runs.document(run.classification_json))
 	const approval = run.approval_json === null ? null : parseApproval(run.approval_json)
+	const snapshot = view === 'list' || run.snapshot_json === null ? null : parseSnapshot(await runs.document(run.snapshot_json))
 	return {
 		run: toRunDto(run),
 		outcome: classification.outcome,
 		changes: [...classification.changes],
-		endpoints: view === 'list' ? [] : namedEndpoints(run, classification.changes),
-		...(view === 'list' || run.snapshot_json === null ? {} : { accessMap: snapshotAccessMap(parseSnapshot(run.snapshot_json)) }),
+		endpoints: namedEndpoints(snapshot, classification.changes),
+		...(snapshot === null ? {} : { accessMap: snapshotAccessMap(snapshot) }),
 		candidateDigest: classification.candidateDigest,
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,

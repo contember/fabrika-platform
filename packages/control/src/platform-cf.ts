@@ -48,7 +48,7 @@ export interface WorkerBindings
 	DB: D1Database
 	/** Control-plane SPA static assets. */
 	ASSETS: Fetcher
-	/** R2 bucket the runner Worker writes run logs + terminal status into, keyed by run id. */
+	/** R2 bucket the runner Worker writes run logs + terminal status into, keyed by run id; Control keeps run documents under `access/`. */
 	RUN_LOGS: R2Bucket
 	/** Deploy job queue — producer here, consumer via the Worker's `queue()` handler. */
 	DEPLOY_QUEUE: Queue<ControlJobMessage>
@@ -123,18 +123,20 @@ function installationMail(bindings: WorkerBindings): InstallationMail {
 
 /** Present the Worker's bindings as the runtime-neutral `Env` the shared layer consumes. */
 export function controlEnv(bindings: WorkerBindings, waitUntil: Env['WAIT_UNTIL']): Env {
+	const runLogs = r2BlobStore(bindings.RUN_LOGS)
 	const env: Env = {
 		...bindings,
 		// The Worker's equivalent of the process's boot check: a Worker has no boot, so the first request
 		// is where a `local` claim from a publicly-served console fails. Same shape as IAM's `buildOidc`.
 		ENVIRONMENT: readEnvironmentName(bindings.ENVIRONMENT, controlPublicOrigin(bindings)),
 		DB: bindings.DB,
-		REPOSITORIES: createControlRepositories(
-			bindings.DB,
-			bindings.MAIL_CONTENT === undefined ? {} : { mailContent: r2BlobStore(bindings.MAIL_CONTENT) },
-		),
+		REPOSITORIES: createControlRepositories(bindings.DB, {
+			// A run's snapshot and classification share the run-log bucket under `access/`, keyed by their SHA-256.
+			runDocuments: runLogs,
+			...(bindings.MAIL_CONTENT === undefined ? {} : { mailContent: r2BlobStore(bindings.MAIL_CONTENT) }),
+		}),
 		ASSETS: bindings.ASSETS,
-		RUN_LOGS: r2BlobStore(bindings.RUN_LOGS),
+		RUN_LOGS: runLogs,
 		DEPLOY_QUEUE: cfJobQueue(bindings.DEPLOY_QUEUE),
 		WAIT_UNTIL: waitUntil,
 		...(bindings.IAM === undefined ? {} : { IAM: bindings.IAM, IAM_ADMIN: bindings.IAM }),

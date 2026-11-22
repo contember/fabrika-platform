@@ -12,6 +12,7 @@ import { CHECKER_VERSION, readContractSource } from '@fabrika/check/contract'
 import { hashPlatformKey } from '@fabrika/email/platform'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
+import { MemoryBlobs } from '@fabrika/platform/testing'
 import { checkoutRelativeDirectory } from '@fabrika/provider-cloudflare/runner'
 import type { ControlProvider, ProviderDeployInput, ProviderDeployOutcome, ProviderNamespaceMember } from '@fabrika/provider-contract'
 import { describe, expect, spyOn, test } from 'bun:test'
@@ -44,7 +45,7 @@ import { VaultSecretResolver } from '../secret-resolver'
 import { Vault } from '../vault'
 import { VaultWorkloadCredentials, type WorkloadKeyIssuer } from '../workload-credentials'
 import { frameworkLockfile, memoryCommits } from './helpers/commits'
-import { BASE, edited, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
+import { BASE, edited, largeContract, WITH_EXPORT, WITHOUT_REMOVE } from './helpers/contracts'
 import { createHarness, harnessDatabase, queryRows } from './helpers/harness'
 import { kitFiles } from './helpers/kit-contract'
 import { fixtureProtect, makeFakeLock } from './helpers/lock'
@@ -72,9 +73,30 @@ interface World {
 	nextOutcome?: ProviderDeployOutcome
 }
 
-function world(): World {
-	const { db, sqlite } = createHarness()
+/**
+ * `documents` is the Worker's composition: a run's snapshot and classification are objects, and the harness's SQLite
+ * refuses a `runs` row over D1's 2,000,000 bytes, as D1 does.
+ */
+function world(options: { readonly documents?: BlobStore } = {}): World {
+	const { db, sqlite } = createHarness(undefined, options.documents === undefined ? {} : { runDocuments: options.documents })
+	if (options.documents !== undefined) withD1RunRowLimit(sqlite)
 	return { db, sqlite, deploys: [], republished: [], queued: [], logs: new Map(), contract: BASE, files: {} }
+}
+
+const D1_ROW_LIMIT_BYTES = 2_000_000
+
+/** D1 refuses a row over its limit; SQLite would store it, so the harness refuses a `runs` row the same way. */
+function withD1RunRowLimit(sqlite: World['sqlite']): void {
+	const bytes = ['snapshot_json', 'classification_json', 'approval_json', 'provider_state_json']
+		.map((column) => `COALESCE(length(CAST(NEW.${column} AS BLOB)), 0)`)
+		.join(' + ')
+	for (const event of ['INSERT', 'UPDATE']) {
+		sqlite.exec(`
+			CREATE TRIGGER runs_d1_row_limit_${event.toLowerCase()} BEFORE ${event} ON runs
+			WHEN ${bytes} > ${D1_ROW_LIMIT_BYTES}
+			BEGIN SELECT RAISE(ABORT, 'string or blob too big: SQLITE_TOOBIG'); END
+		`)
+	}
 }
 
 const HARBOR_ARTIFACT = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
@@ -228,7 +250,7 @@ function approvals(w: World, caller: AuthContext, request = consoleRequest()): A
 async function approve(w: World, runId: string, caller: AuthContext = auth(), request?: Request) {
 	const row = await run(w, runId)
 	if (row.classification_json === null) throw new Error('the run has no classification')
-	const classification = parseClassification(row.classification_json)
+	const classification = parseClassification(await w.db.runs.document(row.classification_json))
 	return completeApprovalUseCase(approvals(w, caller, request), {
 		runId,
 		decision: 'approve',
@@ -240,7 +262,7 @@ async function approve(w: World, runId: string, caller: AuthContext = auth(), re
 /** A person refuses the parked run, against the classification it shows now. */
 async function refuse(w: World, runId: string) {
 	const row = await run(w, runId)
-	const classification = parseClassification(row.classification_json ?? '')
+	const classification = parseClassification(await w.db.runs.document(row.classification_json ?? ''))
 	return completeApprovalUseCase(approvals(w, auth()), {
 		runId,
 		decision: 'reject',
@@ -2257,5 +2279,93 @@ describe('a protected environment is checked again when its run starts', () => {
 		}
 		expect(w.deploys).toEqual([])
 		expect(w.logs.get(`runs/${runId}/logs.ndjson`)).toContain(NOT_A_PERSON)
+	})
+})
+
+describe('a large application on D1', () => {
+	const large = largeContract(1400)
+	const bytes = (text: string): number => new TextEncoder().encode(text).byteLength
+
+	test('a snapshot and classification over a D1 row approve and read back: the row holds their digests', async () => {
+		const documents = new MemoryBlobs()
+		const w = world({ documents })
+		await seed(w)
+		w.contract = large.contract
+		w.files = { ...large.files, ...DELETES_NOTES }
+		const parked = await deploy(w, 'prod')
+		expect(parked.status).toBe('awaiting_approval')
+
+		const row = await run(w, parked.runId)
+		expect(row.snapshot_json).toMatch(/^sha256:[0-9a-f]{64}$/)
+		expect(row.classification_json).toMatch(/^sha256:[0-9a-f]{64}$/)
+		const snapshot = await w.db.runs.document(row.snapshot_json ?? '')
+		const classification = await w.db.runs.document(row.classification_json ?? '')
+		expect(bytes(snapshot) + bytes(classification)).toBeGreaterThan(2_700_000)
+		expect(parseSnapshot(snapshot).contract?.endpoints.filter((endpoint) => endpoint.id.startsWith('api.q'))).toHaveLength(1400)
+
+		const listed = await listApprovalsUseCase(approvals(w, auth()))
+		expect(listed.items.map((item) => item.run.id)).toEqual([parked.runId])
+		const detail = await getApprovalUseCase(approvals(w, auth()), parked.runId)
+		expect(detail.changes.map((change) => change.line)).toContain(DELETES_NOTES_LINE)
+		expect(detail.changes.filter((change) => change.rule === 'endpoint.added')).toHaveLength(1401)
+		expect(detail.accessMap).toBeDefined()
+
+		await approve(w, parked.runId)
+		expect((await executeDeploy(deps(w), { runId: parked.runId })).status).toBe('succeeded')
+		expect(await published(w, 'prod')).toEqual({ runId: parked.runId, generation: 1 })
+		expect(approvedSnapshotOf(await w.db.registry.getAppEnv('notes', 'prod'))?.contract?.endpoints).toHaveLength(1401)
+		expect(w.deploys).toHaveLength(1)
+
+		// The next deploy reads the migrations the running version applied from that run's object: an edited one is refused.
+		w.files = { ...large.files, 'db/migrations/0001_purge.sql': 'DELETE FROM notes WHERE true;' }
+		const edit = await deploy(w, 'prod')
+		expect(edit.status).toBe('failed')
+		expect(w.logs.get(`runs/${edit.runId}/logs.ndjson`)).toContain('0001_purge.sql: an applied migration changed')
+		expect(w.deploys).toHaveLength(1)
+	}, 60_000)
+
+	test('without the objects the same run fails: D1 refuses its row', async () => {
+		const w = world()
+		withD1RunRowLimit(w.sqlite)
+		await seed(w)
+		w.contract = large.contract
+		w.files = { ...large.files, ...DELETES_NOTES }
+		const parked = await deploy(w, 'prod')
+		expect(parked.status).toBe('running')
+		expect((await run(w, parked.runId)).classification_json).toBeNull()
+		expect(w.deploys).toEqual([])
+	}, 60_000)
+
+	test('a row written before the objects keeps its text and reads as it did', async () => {
+		const documents = new MemoryBlobs()
+		const w = world({ documents })
+		await seed(w)
+		w.files = DELETES_NOTES
+		const parked = await deploy(w, 'prod')
+		const stored = await w.db.runs.document((await run(w, parked.runId)).classification_json ?? '')
+		w.sqlite.run('UPDATE runs SET classification_json = ? WHERE id = ?', [stored, parked.runId])
+		expect((await getApprovalUseCase(approvals(w, auth()), parked.runId)).changes.map((change) => change.line)).toContain(DELETES_NOTES_LINE)
+		expect((await approve(w, parked.runId)).run.status).toBe('pending')
+	})
+
+	test('a person refuses a run whose row names its classification: the run fails', async () => {
+		const w = world({ documents: new MemoryBlobs() })
+		await seed(w)
+		w.files = DELETES_NOTES
+		const parked = await deploy(w, 'prod')
+		expect((await run(w, parked.runId)).classification_json).toMatch(/^sha256:[0-9a-f]{64}$/)
+		expect((await refuse(w, parked.runId)).run.status).toBe('failed')
+		expect(w.deploys).toEqual([])
+	})
+
+	test('an object that does not match the digest its row names is refused', async () => {
+		const documents = new MemoryBlobs()
+		const w = world({ documents })
+		await seed(w)
+		w.files = DELETES_NOTES
+		const parked = await deploy(w, 'prod')
+		const reference = (await run(w, parked.runId)).classification_json ?? ''
+		await documents.put(`access/${reference.slice('sha256:'.length)}.json`, '{}')
+		expect(await status(getApprovalUseCase(approvals(w, auth()), parked.runId))).toBe(500)
 	})
 })

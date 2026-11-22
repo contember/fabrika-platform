@@ -1,4 +1,5 @@
-import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
+import { sha256Hex } from '@fabrika/auth-core'
+import type { BlobStore, SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
 import type { LeaseFence } from '../lease'
 import { runCoordinateLockStatements } from './coordinate-lock'
@@ -31,9 +32,15 @@ export interface RunRow {
 	cancel_requested_at: number | null
 	/** Who created the run: `user:<id>`, `service:<id>`, `oauth:<id>`, `webhook:<connection>` or `poll`; NULL before actors. */
 	actor: string | null
-	/** The access snapshot read at the pinned commit (`src/approval/snapshot.ts`). */
+	/**
+	 * The access snapshot read at the pinned commit (`src/approval/snapshot.ts`): the JSON, or the `sha256:` reference to
+	 * the object that holds it. Read through `RunRepository.document`.
+	 */
 	snapshot_json: string | null
-	/** The diff against the active snapshot the run was last compared with (`src/approval/diff.ts`). */
+	/**
+	 * The diff against the active snapshot the run was last compared with (`src/approval/diff.ts`): the JSON, or the
+	 * `sha256:` reference to the object that holds it. Read through `RunRepository.document`.
+	 */
 	classification_json: string | null
 	/** The human approval of the classified change, bound to both digests. */
 	approval_json: string | null
@@ -89,8 +96,47 @@ export const serializeProviderJson = (value: JsonValue): string => {
 
 // ── Runs ─────────────────────────────────────────────────────────────────────
 
+const DOCUMENT_REFERENCE = /^sha256:([0-9a-f]{64})$/
+
+/** The object of a run document: content-addressed, so a run that stores the same text names the same object. */
+function documentKey(hex: string): string {
+	return `access/${hex}.json`
+}
+
+/**
+ * Runs. With `documents` (the Worker, whose D1 row holds at most 2,000,000 bytes) a run's snapshot and classification
+ * are objects named by the SHA-256 of their text, and the row holds `sha256:<hex>`; without (Postgres) the row holds the
+ * text. A row written before the objects holds the text on either, and reads as it did. The object is written before
+ * the row names it and never removed, so a row never names a missing object. Runs share an object when their text is
+ * the same: a pruner collects against every row's reference, never deletes per run.
+ */
 export class RunRepository {
-	constructor(protected readonly d1: SqlDatabase, protected readonly now: () => number = () => Math.floor(Date.now() / 1000)) {}
+	constructor(
+		protected readonly d1: SqlDatabase,
+		protected readonly now: () => number = () => Math.floor(Date.now() / 1000),
+		private readonly documents: BlobStore | null = null,
+	) {}
+
+	/** What a run's row stores for a snapshot or classification: the text, or the reference to its object. */
+	private async storedDocument(text: string): Promise<string> {
+		if (this.documents === null) return text
+		const hex = sha256Hex(text)
+		await this.documents.put(documentKey(hex), text)
+		return `sha256:${hex}`
+	}
+
+	/** The text of a run's `snapshot_json` or `classification_json`, from its object when the row names one. */
+	async document(stored: string): Promise<string> {
+		const reference = DOCUMENT_REFERENCE.exec(stored)
+		if (reference === null) return stored
+		const hex = reference[1] ?? ''
+		if (this.documents === null) throw new Error('a run names a document object, and this Control has no store for one')
+		const object = await this.documents.get(documentKey(hex))
+		if (object === null) throw new Error(`the run document ${hex} is missing from its store`)
+		const text = await object.text()
+		if (sha256Hex(text) !== hex) throw new Error(`the run document ${hex} does not match its digest`)
+		return text
+	}
 
 	/** Every lifecycle write is holder-fenced on the run's `<app>:<env>` lease. */
 	/** `after` runs in the same batch, so it sees the run's update and the still-locked lease row. */
@@ -332,7 +378,7 @@ export class RunRepository {
 			id,
 			`UPDATE runs SET snapshot_json = ?
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
-			[snapshotJson, id],
+			[await this.storedDocument(snapshotJson), id],
 			fence,
 		)
 	}
@@ -343,7 +389,7 @@ export class RunRepository {
 			id,
 			`UPDATE runs SET classification_json = ?
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
-			[classificationJson, id],
+			[await this.storedDocument(classificationJson), id],
 			fence,
 		)
 	}
@@ -358,33 +404,34 @@ export class RunRepository {
 			id,
 			`UPDATE runs SET status = 'awaiting_approval', classification_json = ?
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
-			[classificationJson, id],
+			[await this.storedDocument(classificationJson), id],
 			fence,
 		)
 	}
 
 	/**
 	 * Record a human approval of a parked run and queue it again, only while it still shows the classification the
-	 * approver read. Executed under the run's lease, like every lifecycle write.
+	 * approver read: `storedClassification` is the row's `classification_json` as read, the reference or the text.
+	 * Executed under the run's lease, like every lifecycle write.
 	 */
-	async approveParkedRun(id: string, classificationJson: string, approvalJson: string, fence: LeaseFence): Promise<boolean> {
+	async approveParkedRun(id: string, storedClassification: string, approvalJson: string, fence: LeaseFence): Promise<boolean> {
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET status = 'pending', approval_json = ?
 			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?`,
-			[approvalJson, id, classificationJson],
+			[approvalJson, id, storedClassification],
 			fence,
 		)
 	}
 
-	/** Refuse a parked run: it fails without touching the provider. */
-	async rejectParkedRun(id: string, classificationJson: string, fence: LeaseFence): Promise<boolean> {
+	/** Refuse a parked run: it fails without touching the provider. `storedClassification` as in `approveParkedRun`. */
+	async rejectParkedRun(id: string, storedClassification: string, fence: LeaseFence): Promise<boolean> {
 		// A refusal decides the run: an approval that lapsed before it approved nothing this run ran with.
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET status = 'failed', finished_at = ?, approval_json = NULL
 			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?`,
-			[this.now(), id, classificationJson],
+			[this.now(), id, storedClassification],
 			fence,
 		)
 	}

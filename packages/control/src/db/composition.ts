@@ -47,6 +47,8 @@ export interface ControlRepositoryOptions {
 	now?: () => number
 	/** Where the relay keeps message content its rows cannot hold (D1); without it, the rows hold it (Postgres). */
 	mailContent?: BlobStore
+	/** Where a run keeps its snapshot and classification, which its row cannot hold (D1); without it, the row holds them (Postgres). */
+	runDocuments?: BlobStore
 }
 
 /** The portable repository bundle. */
@@ -55,7 +57,7 @@ export function createControlRepositories(db: SqlDatabase, options: ControlRepos
 	return {
 		builderConnections: new BuilderConnectionRepository(db, now),
 		registry: new ControlRegistryRepository(db, now),
-		runs: new RunRepository(db, now),
+		runs: new RunRepository(db, now, options.runDocuments ?? null),
 		polling: new RepoPollingRepository(db),
 		operationsCatalog: new OperationsCatalogRepository(db, now),
 		operationsReleases: new OperationsReleaseRepository(db, now),

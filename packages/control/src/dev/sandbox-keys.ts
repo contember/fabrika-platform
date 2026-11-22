@@ -119,7 +119,7 @@ export async function workspacePublication(
 	const run = await repositories.runs.getRun(row.published_run_id)
 	if (run === null || run.snapshot_json === null) return null
 	if (run.app_id !== row.app_id || run.env !== row.env || run.lane !== row.workspace_id) return null
-	const snapshot = parseSnapshot(run.snapshot_json)
+	const snapshot = parseSnapshot(await repositories.runs.document(run.snapshot_json))
 	const access = approvedAccess(snapshot)
 	return access === undefined ? null : { runId: run.id, snapshot, access }
 }
