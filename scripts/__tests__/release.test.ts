@@ -8,6 +8,7 @@ import {
 	assertPackedImports,
 	assertStandaloneCheckout,
 	assertTagMatchesSource,
+	assertTagReachesFloors,
 	awaitRegistryTag,
 	bumpedDecision,
 	bumpedManifest,
@@ -258,6 +259,19 @@ describe('the source version', () => {
 		expect(() => assertTagMatchesSource('v0.4.3', '0.4.3', '0.4.3')).not.toThrow()
 		expect(() => assertTagMatchesSource('v0.4.3', '0.4.3', '0.0.4')).toThrow(
 			'v0.4.3 does not match the source version 0.0.4. Run `bun run release:bump --tag=v0.4.3`',
+		)
+	})
+
+	test('a release tag may not sort below a publish floor of its source, which enforces that floor', () => {
+		const floors = ['0.9.0-dev.13', '0.9.0-dev.14']
+		expect(() => assertTagReachesFloors('v0.9.0-dev.14', '0.9.0-dev.14', floors)).not.toThrow()
+		expect(() => assertTagReachesFloors('v0.9.0', '0.9.0', floors)).not.toThrow()
+		expect(() => assertTagReachesFloors('v0.9.0-dev.13', '0.9.0-dev.13', floors)).toThrow(
+			'v0.9.0-dev.13 sorts below the publish floor 0.9.0-dev.14 of its own source',
+		)
+		// A channel prerelease sorts below `dev`, so it sorts below both floors.
+		expect(() => assertTagReachesFloors('v0.9.0-cloudflare.3', '0.9.0-cloudflare.3', floors)).toThrow(
+			'sorts below the publish floors 0.9.0-dev.13, 0.9.0-dev.14 of its own source, which enforces them',
 		)
 	})
 

@@ -40,4 +40,6 @@ the published `cloudflare.1`–`cloudflare.2` still pass none.
 ## Touch points
 
 `packages/provider-cloudflare/src/contract-support.ts` and its test, `packages/provider-cloudflare/src/__tests__/published-prereleases.ts`,
-`scripts/release.ts` (`RELEASE_CHANNELS`, the bump's ordering rule), `docs/reference/release-process.md`.
+`scripts/release.ts` (`RELEASE_CHANNELS`, the bump's ordering rule, and `assertTagReachesFloors`, which refuses a
+channel tag below Control's publish floors in `packages/control/src/approval/floors.ts`),
+`docs/reference/release-process.md`.

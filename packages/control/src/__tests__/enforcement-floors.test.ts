@@ -5,10 +5,8 @@
 
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
-import { RELATION_GRANTS_SINCE, RELATION_WHEN_SINCE } from '../approval/enforcement'
+import { PUBLISH_FLOORS } from '../approval/floors'
 import { comparePrecedence, parseRelease, type Release } from '../approval/readers'
-
-const FLOORS: readonly Release[] = [RELATION_GRANTS_SINCE, RELATION_WHEN_SINCE]
 
 async function sourceVersion(): Promise<Release> {
 	const manifest = z.object({ version: z.string() }).parse(await Bun.file(new URL('../../../app/package.json', import.meta.url)).json())
@@ -24,7 +22,7 @@ function nextPrerelease(release: Release): string | null {
 }
 
 describe('a publish floor', () => {
-	for (const floor of FLOORS) {
+	for (const floor of PUBLISH_FLOORS) {
 		test(`${floor.text} is the source version, an earlier release, or the next prerelease`, async () => {
 			const source = await sourceVersion()
 			if (comparePrecedence(floor, source) <= 0) return

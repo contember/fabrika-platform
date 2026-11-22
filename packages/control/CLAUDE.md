@@ -676,14 +676,16 @@ other environment, before the provider prepares anything, and the write maps a r
   diff still serve; the upcast gives a job's `timeout` as `timeoutMs` (15 min without one) and a webhook the 10 s it ran
   with. A model change adds its upcast rule in `formats.ts`, and `framework-compat.test.ts` keeps every older minor of
   the window reading as its own platform read it.
-- **Relation fields publish only to a framework that enforces them** (ADR-0073 §5, `src/approval/enforcement.ts`).
+- **Relation fields publish only to a framework that enforces them** (ADR-0073 §5, `src/approval/enforcement.ts`, the
+  floors in `src/approval/floors.ts`).
   `relationGrantsRefusal` refuses a snapshot that declares a relation, a role's `via`, a table's `confers` or `when`
   for an application pinned before `RELATION_GRANTS_SINCE`, and a table's `relationWhen` before `RELATION_WHEN_SINCE`
   (`relationFloors`, one list of floors; the refusal names the highest one missed), compared by prerelease precedence
   (`comparePrecedence`), before anything publishes: a reader that ignores a narrowing field widens access. A floor is
   the first release whose source enforces its fields, so a field that lands between releases takes the next prerelease
   after the source version; `enforcement-floors.test.ts` holds every floor at or below the source version or at that
-  next prerelease. The approval diff classifies each relation field (`table.confers`, `table.when`,
+  next prerelease. `release:validate` refuses a tag below a floor of its source, and `release:hotfix` a tag that reaches
+  a floor its base is below (`PUBLISH_FLOORS`, which `scripts/release.ts` imports, so `floors.ts` takes type imports only). The approval diff classifies each relation field (`table.confers`, `table.when`,
   `table.relation-when`, `table.reveals`, `table.read-through`, `table.write-through`, `table.member-reveals`,
   `table.access`, a role's `via`): a new `via` action, source table, reveal, read-through or write-through action
   widens, a longer or self delegation widens, an added `when` or `relationWhen` narrows, a removed or changed one

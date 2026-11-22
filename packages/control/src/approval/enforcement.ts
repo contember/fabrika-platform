@@ -3,22 +3,8 @@
 // that minor, so a deploy of a release before the first one that enforces them is refused before anything publishes.
 
 import type { ContractArtifact } from '@fabrika/auth-core'
+import { RELATION_GRANTS_SINCE, RELATION_WHEN_SINCE } from './floors'
 import { comparePrecedence, FRAMEWORK_PACKAGE, parseRelease, type Release } from './readers'
-
-// A floor is the first release whose source enforces its fields: the release after the source version when the
-// enforcement lands, since the source version names the last release cut. `enforcement-floors.test.ts` holds that.
-
-/**
- * The first framework release whose data layer and dispatch enforce relations, `via`, `confers` and `when`. Compared
- * with its prerelease: every earlier `0.9.0-*` release reads none of them and would widen access.
- */
-export const RELATION_GRANTS_SINCE: Release = { text: '0.9.0-dev.13', major: 0, minor: 9, patch: 0 }
-
-/**
- * The first framework release that ANDs a table's `relationWhen` onto its relation's terms, and reads a table's access
- * views (ADR-0076). An earlier one ignores `relationWhen` and refuses `access` at build and boot.
- */
-export const RELATION_WHEN_SINCE: Release = { text: '0.9.0-dev.14', major: 0, minor: 9, patch: 0 }
 
 /** The fields of a contract one floor guards, as `field` or `field of name`. */
 export interface FloorFields {

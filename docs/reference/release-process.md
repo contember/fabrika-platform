@@ -44,7 +44,7 @@ The source tree carries the version of its next release. An installation does no
 
 When the development of a minor that breaks the framework starts, the source version moves to that minor first (`release:bump --tag=v0.7.0`, before the first breaking change). Otherwise the source still carries the previous minor's newest release, and bun links the bundled reader of that minor to the working tree instead of installing it from npm ([The framework window](#the-framework-window)).
 
-`release:validate` therefore refuses a tag whose version differs from the source version, and the release workflow stops before anything is packed. Set the version before tagging:
+`release:validate` therefore refuses a tag whose version differs from the source version, and the release workflow stops before anything is packed. It also refuses a tag that sorts below a publish floor of its source (`PUBLISH_FLOORS`, `packages/control/src/approval/floors.ts`): a floor names the first release that enforces its fields, and a release ships every enforcement its source carries. Set the version before tagging:
 
 ```bash
 bun run release:bump --tag=v1.2.3
@@ -120,7 +120,7 @@ It works in a temporary git worktree of the same repository, so the caller's che
 
 Without `--push` it prints the push command, `git push origin hotfix/v1.2.4 v1.2.4`; with `--push` it runs it. The tag push starts `release.yml`, whose `verify` job runs the full CI against the tagged commit before anything is published. The command runs no tests of its own.
 
-It refuses a `--from` that is not a local tag, a `--tag` that does not move past it, and a tag or branch that already exists. When a commit does not apply, the bump leaves an untracked file, or the validation fails, it removes the worktree and the branch, so a re-run starts clean. A commit that conflicts needs a back-port: make it on a branch off the `--from` tag and pass that commit instead.
+It refuses a `--from` that is not a local tag, a `--tag` that does not move past it, a `--tag` that reaches a publish floor of the caller's checkout that `--from` is below (the hotfix lacks that floor's enforcement, so Control would publish its fields to an application that ignores them; take a version below the floor, such as `0.9.0-dev.12.1`), and a tag or branch that already exists. When a commit does not apply, the bump leaves an untracked file, or the validation fails, it removes the worktree and the branch, so a re-run starts clean. A commit that conflicts needs a back-port: make it on a branch off the `--from` tag and pass that commit instead.
 
 The release commit stays on the hotfix branch. `main` keeps its source version, so the next release from `main` must take a version past the hotfix.
 
@@ -173,7 +173,7 @@ A prerelease never moves `latest`, and the `example-mirror` job of `release.yml`
 The Cloudflare provider's release gates (`packages/provider-cloudflare/src/contract-support.ts`) read the application's pin in two ways, and only one of them ignores the channel:
 
 - **Minor gates** (`releaseAtLeast`: the object runtime, the pinned entry, the ops channel) read a prerelease as its minor, so every 0.9.0 prerelease is a 0.9 application to them, whatever its channel.
-- **Release floors** (`releaseFrom`) compare SemVer precedence, prerelease included. The alarm, the job segment cap, the data operations and raw SQL start at `0.9.0-dev.5`. Every `0.9.0-cloudflare.<n>` and `0.9.0-alpha.<n>` sorts below it ([Ordering](#ordering)), so an application pinned to one gets none of them, even when its channel release was cut from a `main` that has them. Before the next channel release, see [backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md).
+- **Release floors** (`releaseFrom`) compare SemVer precedence, prerelease included. The alarm, the job segment cap, the data operations and raw SQL start at `0.9.0-dev.5`. Every `0.9.0-cloudflare.<n>` and `0.9.0-alpha.<n>` sorts below it ([Ordering](#ordering)), so an application pinned to one gets none of them, even when its channel release was cut from a `main` that has them. The same order puts a channel tag below Control's publish floors (`0.9.0-dev.13`), so `release:validate` refuses it. Before the next channel release, see [backlog 240](../backlog/240-channel-prereleases-sort-below-the-release-floors.md).
 
 ### A channel branch
 
