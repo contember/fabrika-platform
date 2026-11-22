@@ -90,7 +90,8 @@ Three constraints shape the answer:
    through `@fabrika/check/bun-plugin`. An application whose SPA already builds with Vite keeps Vite and adds
    `@fabrika/check/vite-plugin` (`shellSlicePlugin({ root })`), which loads each shell module as its slice exactly as
    the Bun plugin does, watches those files in the dev server, and fails the build when the static reader refuses the
-   shell; every other module stays Vite's. The packages ship TypeScript sources with no JavaScript build (ADR-0068),
+   shell or when the SPA imports a `fabrika.contract.ts` other than its root's (a wrong `root` would bundle the
+   handlers); every other module stays Vite's. The packages ship TypeScript sources with no JavaScript build (ADR-0068),
    and Node refuses to strip types under `node_modules`, so the Vite that loads the plugin runs on Bun:
    `bun --bun vite build` and `bun --bun vite`. The SPA bundle itself is Vite's, so it runs in any browser.
    - What the contract adds to a minified Vite bundle, measured on an SPA that calls one endpoint (Vite 8.3.8, gzip
@@ -130,8 +131,9 @@ Three constraints shape the answer:
 - **TanStack Query** for the cache: see decision 3.
 - **Vite without the plugin**: it bundles every handler the contract's group modules colocate, and what they import
   (a test build carries the handlers' SQL and error messages).
-- **A JavaScript build of the Vite plugin, so Vite runs on Node**: the only JavaScript build in the workspace, for
-  one config-time module; Bun is already every application's toolchain.
+- **A JavaScript bundle of the Vite plugin, so Vite runs on Node**: the plugin runs the static reader, about 115
+  modules of `@fabrika/check`, `@fabrika/app`, `@fabrika/db` and `@fabrika/auth-core`, so it would be the first
+  JavaScript artifact of a release, which ships sources (ADR-0068); Bun is already every application's toolchain.
 - **`@buzola/router`**: see decision 5. It stays the console's router (`packages/dashboard`), which is built with Vite.
 - **`@sentry/browser` for the page's errors**, started by each application (as the template did) or by the provider:
   about 30 KB gzip in every bundle with only the global handlers, for sessions, tracing and replay that Operations does

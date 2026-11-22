@@ -4,7 +4,8 @@
 // TypeScript, so the Vite that loads this plugin runs on Bun (`bun --bun vite build`).
 
 import { realpathSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
+import { CONTRACT_FILE } from './layout'
 import { applicationModules, shellModules } from './shell-modules'
 
 export interface ShellSliceOptions {
@@ -21,7 +22,10 @@ export interface WatchContext {
 export interface ShellSliceVitePlugin {
 	readonly name: string
 	readonly enforce: 'pre'
-	/** A shell module's slice, its file watched; `null` leaves the module to Vite's own load. */
+	/**
+	 * A shell module's slice, its file watched; `null` leaves the module to Vite's own load. Throws for a
+	 * `fabrika.contract.ts` that is not the root's: Vite would bundle it, handlers included.
+	 */
 	load(this: WatchContext, id: string): { readonly code: string } | null
 	/** Any change of a watched file: the next load reads the shell graph again. */
 	watchChange(): void
@@ -39,11 +43,15 @@ export function shellSlicePlugin(options: ShellSliceOptions = {}): ShellSliceVit
 		name: 'fabrika-shell-slice',
 		enforce: 'pre',
 		load(id) {
-			// Vite's id is the file's real path, with a query for a variant (`?import`, `?v=…`).
+			// Vite's id is the file's real path, with a query for a variant (`?raw`, `?url`), which gets the slice too.
 			const path = id.split('?', 1)[0] ?? id
-			if (!modules.test(path)) return null
+			const contract = basename(path) === CONTRACT_FILE
+			if (!contract && !modules.test(path)) return null
 			shell ??= shellModules(root)
 			const code = shell.get(path)
+			if (code === undefined && contract) {
+				throw new Error(`${path} is not the contract of the plugin's root ${root}: pass shellSlicePlugin({ root }) the application's root`)
+			}
 			if (code === undefined) return null
 			// Vite watches only its root and the files it loads itself; the shell lies beside `web/`.
 			this.addWatchFile(path)

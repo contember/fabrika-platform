@@ -68,8 +68,9 @@ bun src/cli.ts <app-root>   # what an application's build runs as `fabrika-check
   package depends on no Vite) loads the same slices (`shell-modules.ts`, which both plugins share) in Vite's `load`
   hook, `enforce: 'pre'`, and leaves every other module to Vite. It watches each shell module it loads
   (`addWatchFile`: Vite watches only its root, usually `web/`) and reads the shell graph again after any change
-  (`watchChange`). The package ships TypeScript, so Vite runs on Bun (`bun --bun vite build`); Node refuses to strip
-  types under `node_modules` (ADR-0052 decision 9).
+  (`watchChange`). It throws for a `fabrika.contract.ts` that is not the one under `root` (a config run from `web/`
+  without `root`, a symbolic link Vite keeps): Vite would bundle it, handlers included. The package ships TypeScript,
+  so Vite runs on Bun (`bun --bun vite build`); Node refuses to strip types under `node_modules` (ADR-0052 decision 9).
 - Source maps: `@fabrika/check/source-maps` finds a build's `*.map` files and uploads them to Operations with the
   run-scoped bearer Control minted (`uploadSourceMaps`; never throws, a refused or failed upload is `incomplete`).
   `collectSourceMaps` reads each map's logical path from its own `file` field (the Cloudflare runner);
@@ -150,9 +151,10 @@ refuses it; a named, decorated, computed (`['handle']`) or non-null (`.handle!`)
 is requested, and fails the build; every wrapped spelling slices to text that parses without what it names; the forms the
 slice keeps are the literal rule's; and the whole check of `fixtures/architecture-app/` is clean. Each plugin build runs in a process of its own (`fixtures/plugin-build.mjs`): Bun's bundler
 reads stale module state across plugin builds in one process. `vite.test.ts` builds `fixtures/architecture-app/`'s SPA with Vite
-(`fixtures/vite-build.ts`, with and without the plugin), runs the page in happy-dom (`fixtures/vite-page.ts`) and sees
-its one call go to the contract's path and its answer pass the output schema; it also holds the plugin's dev-server
-hooks. `colocated-scale.test.ts` reads 200 colocated endpoints in 10 group modules.
+(`fixtures/vite-build.ts`, with and without the plugin, and with a wrong root), reads the modules the bundle holds,
+runs the page in happy-dom (`fixtures/vite-page.ts`) and sees its one call go to the contract's path and its answer
+pass the output schema; it also serves a shell module from a Vite dev server, watched outside its root, before and
+after an edit. `colocated-scale.test.ts` reads 200 colocated endpoints in 10 group modules.
 
 ## The rules
 
