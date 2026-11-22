@@ -407,6 +407,27 @@ describe('revokeKey: only a credential of the caller app', () => {
 		expect(await revokeKey(services, { app: 'reports', credential: null, requestId: 'r', id }, { id: issuerId, permissions: [] }, 'reports'))
 			.toEqual({ ok: false, reason: 'not_found' })
 	})
+
+	test('a legacy anonymous key of reserved rows only is revoked by its issuer, not by a caller without rights', async () => {
+		const h = createHarness()
+		const services = h.makeServices({ issuer: ISSUER })
+		const issuerId = seedUser(h.sqlite, { sub: 'iss-reserved', email: 'reserved@contember.com' })
+		const strangerId = seedUser(h.sqlite, { sub: 'stranger', email: 'stranger@contember.com' })
+		const id = await services.repositories.credentials.createCredential({
+			tokenHash: await hashToken('px_reserved-only'),
+			app: 'reports',
+			issuedBy: issuerId,
+			expiresAt: inOneHour(),
+			grants: [{ action: 'report.read', scopeType: '~rel', scopeValue: 'owner:project:demo' }],
+		})
+
+		expect(await revokeKey(services, { app: 'reports', credential: null, requestId: 'r', id }, { id: strangerId, permissions: [] }, 'reports'))
+			.toEqual({ ok: false, reason: 'not_allowed' })
+		expect((await services.repositories.credentials.getCredentialById(id))?.revoked_at).toBeNull()
+
+		expect(await revokeKey(services, { app: 'reports', credential: null, requestId: 'r', id }, { id: issuerId, permissions: [] }, 'reports'))
+			.toEqual({ ok: true, revoked: true })
+	})
 })
 
 describe('S8: a key one principal issues for another ends with, and carries no more than, its issuer authority', () => {
