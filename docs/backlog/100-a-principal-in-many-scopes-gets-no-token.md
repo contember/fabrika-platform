@@ -22,6 +22,8 @@ effort.
   started with a 64 KiB header limit (`APPLICATION_SERVER_MAX_HEADER_BYTES`, `packages/auth-core/src/token.ts`, passed
   as `--max-http-header-size` by `packages/app/src/build-recipe.ts`). A raise past that needs a larger limit there, and the client-sent kinds stay at 8 KiB for the proxy's auth service and installation services, which
   keep Bun's 16 KiB. A token with a UUIDv7 scope value per entry passes 24 KiB at about 150 entries (8 KiB at about 50).
+- Global grants already have a compact form: above the bound they travel as action names in `gperms` (ADR-0022,
+  "Global grants travel as names"). Scoped entries, the subject of this item, do not.
 - Behind it, a `Within` carries at most `MAX_WITHIN_VALUES` (1000) scope values, its own, its containers' and its
   contained grants' together (`packages/db/src/capability.ts`). The framework refuses to mint a larger one
   (`packages/app/src/implement/capability.ts`), the layer refuses to use one (`packages/db/src/store.ts`), and the

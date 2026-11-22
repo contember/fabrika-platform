@@ -28,6 +28,7 @@ import {
 	type PermissionEntry,
 	permits,
 	type Scope,
+	signAccessClaims,
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { sessionUsable } from './auth'
@@ -120,6 +121,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 		// A terminal's own entries are its principal's grants, and end with them.
 		(onTerminal === null ? null : authorityDeadline(onTerminal.authority, onTerminal.additions, now)) ?? Number.POSITIVE_INFINITY,
 	)
+	const bound = await proxyMintedBound(services, input.app)
 	const token = await boundedToken(
 		signAccessToken(services, env, {
 			app: input.app,
@@ -132,8 +134,8 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 			permissions,
 			issuedAt: now,
 			expiresAt,
-		}),
-		{ app: input.app, subject: principal.id, bytes: await proxyMintedBound(services, input.app) },
+		}, bound),
+		{ app: input.app, subject: principal.id, bytes: bound },
 	)
 	if (token === null) {
 		return refused('token_too_large', principal.id)
@@ -249,6 +251,7 @@ export async function mintFromKey(
 		cred.expires_at ?? Number.POSITIVE_INFINITY,
 		effective.expiresAt ?? Number.POSITIVE_INFINITY,
 	)
+	const bound = await proxyMintedBound(services, input.app)
 	const token = await boundedToken(
 		signAccessToken(services, env, {
 			app: input.app,
@@ -261,8 +264,8 @@ export async function mintFromKey(
 			...(effective.link === undefined ? {} : { link: effective.link }),
 			issuedAt: now,
 			expiresAt,
-		}),
-		{ app: input.app, subject: effective.subject, bytes: await proxyMintedBound(services, input.app) },
+		}, bound),
+		{ app: input.app, subject: effective.subject, bytes: bound },
 	)
 	if (token === null) {
 		return { result: { ok: false, reason: 'token_too_large' }, principalId: cred.principal_id, credentialId: cred.id }
@@ -302,8 +305,8 @@ export async function mintFromWorkloadKey(services: Services, env: MintEnv, inpu
 			permissions: effective.permissions,
 			issuedAt: now,
 			expiresAt,
-		}),
-		{ app: input.app, subject: effective.subject },
+		}, MAX_ACCESS_TOKEN_BYTES),
+		{ app: input.app, subject: effective.subject, bytes: MAX_ACCESS_TOKEN_BYTES },
 	)
 	if (token === null) {
 		return refused
@@ -494,13 +497,17 @@ export async function boundedToken(
 	return null
 }
 
-/** Sign an access token with the isolate's active signing key. Shared by every mint front. */
+/**
+ * Sign an access token with the isolate's active signing key, in the compact layout only when the entries layout is
+ * above `bound` (`signAccessClaims`); `boundedToken` refuses one still above it. Shared by every mint front.
+ */
 export async function signAccessToken(
 	services: Services,
 	env: MintEnv,
 	params: Omit<Parameters<typeof buildAccessClaims>[0], 'iss'>,
+	bound: number,
 ): Promise<string> {
 	const signer = await getSigner(env)
 	const claims: AccessTokenClaims = buildAccessClaims({ ...params, iss: services.config.issuer })
-	return signer.sign(claims)
+	return signAccessClaims(claims, bound, (payload) => signer.sign(payload))
 }

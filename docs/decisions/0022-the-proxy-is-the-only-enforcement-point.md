@@ -769,6 +769,22 @@ still refuses any `Authorization` header, as authorization.
   16 KiB of request headers by default, which the proxy's auth service and installation services keep; the platform
   starts an application with 64 KiB, which fits the application token twice (`X-Fabrika-Token` and `Authorization`).
   Caddy (1 MiB) and Cloudflare (128 KiB) allow more.
+- **Global grants travel as names when the entries do not fit.** A token whose `perms` would carry it above its bound
+  is signed in the compact layout instead (`signAccessClaims`, `@fabrika/auth-core`): each global grant (scope null,
+  source `grant`) moves to `gperms` as its bare action name, and every other entry stays whole in `perms`.
+  `parseAccessClaims` reads both layouts into the same `perms`, so `permits`, `satisfies`, the proxy and the framework
+  decide alike from either. A person holding the built-in `admin` at an application of 300 declared actions, whose
+  entries are about 25 KiB, gets about 8.5 KiB. A reader older than `gperms` (an application's framework, a namespace
+  proxy pinned to an older release) ignores it and sees fewer permissions, never more; it receives the compact layout
+  only where the entries would have been refused with `token_too_large`, so no token that an older reader accepts
+  changes (ADR-0062 rule 4). Such an application answers a person whose grants outgrew the bound with a 403 where IAM
+  used to log `token_too_large`; raising its framework pin and deploying again fixes it. An OAuth resource token keeps
+  the entries layout and its 8 KiB bound. Every token below its bound keeps the entries layout until no release in the support
+  window reads `perms` alone: switching every token, or gating it per application, needs the framework release of the
+  application and of its namespace proxy at IAM's mint, which neither IAM nor Control records today. Tokens in flight
+  across an upgrade are ordinary entries tokens, which every release reads, and they expire within
+  `DEFAULT_TOKEN_TTL_SECONDS` (300 s). An action a job declares stays in an administrator's token: it is an ordinary
+  catalog action, which a procedure's requirement, a table policy or `can()` may read, and IAM sees none of them.
 - **Revocation takes effect within the token lifetime of 300 s.** This holds for sessions and for keys,
   share links included. Membership operations are checked live at IAM. An expiring grant is a hard deadline: a token
   expires no later than the earliest time at which an entry it carries loses its last supporting grant.

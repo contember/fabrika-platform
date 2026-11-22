@@ -12,7 +12,15 @@
  * One Signer per isolate, memoised like the `JwtValidator` (jose imports the key once).
  */
 
-import { type AccessTokenClaims, type Jwks, parseAccessClaims, type PublicJwk, RESOURCE_ACCESS_TOKEN_TYP, TOKEN_ALG } from '@fabrika/auth-core'
+import {
+	type AccessTokenClaims,
+	type AccessTokenPayload,
+	type Jwks,
+	parseAccessClaims,
+	type PublicJwk,
+	RESOURCE_ACCESS_TOKEN_TYP,
+	TOKEN_ALG,
+} from '@fabrika/auth-core'
 import {
 	calculateJwkThumbprint,
 	createLocalJWKSet,
@@ -43,15 +51,15 @@ export class Signer {
 	private constructor(private readonly keys: LoadedKey[]) {}
 
 	/**
-	 * Sign a claims object with the ACTIVE key. The `kid` goes in the protected header so the SDK
-	 * picks the matching public JWK. The claims already carry `iss`/`aud`/`exp` (built in core).
+	 * Sign an access token payload (`accessTokenPayload`) with the ACTIVE key. The `kid` goes in the protected header so
+	 * the SDK picks the matching public JWK. The claims already carry `iss`/`aud`/`exp` (built in core).
 	 */
-	sign(claims: AccessTokenClaims): Promise<string> {
+	sign(payload: AccessTokenPayload): Promise<string> {
 		const active = this.keys[0]
 		if (!active) {
 			throw new Error('Signer has no keys')
 		}
-		return new SignJWT({ ...claims })
+		return new SignJWT({ ...payload })
 			.setProtectedHeader({ alg: TOKEN_ALG, kid: active.kid })
 			.sign(active.key)
 	}

@@ -26,6 +26,7 @@ import {
 	type PermissionEntry,
 	PROXY_TOKEN_HEADER,
 	SESSION_COOKIE,
+	signAccessClaims,
 	type TerminalFailure,
 	TOKEN_ALG,
 	uniquePermissions,
@@ -461,7 +462,11 @@ export function bootTestKit<C extends AnyContract>(
 				expiresAt: now + TOKEN_TTL_SECONDS,
 			})
 			const { privateKey } = await signing
-			const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey)
+			const token = await signAccessClaims(
+				claims,
+				MAX_ACCESS_TOKEN_BYTES,
+				(payload) => new SignJWT({ ...payload }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey),
+			)
 			const job = jobCredentials.get(key)?.job
 			if (job !== undefined) jobCredentials.set(token, { job, expiresAt: claims.exp })
 			return { ok: true, token, expiresAt: claims.exp }
@@ -681,9 +686,14 @@ export function bootTestKit<C extends AnyContract>(
 			expiresAt: now + TOKEN_TTL_SECONDS,
 		})
 		const { privateKey } = await signing
-		const token = await new SignJWT({ ...claims }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey)
 		// IAM bounds a workload's own token as any installation token, and a token the proxy injects at the application's.
-		if (token.length > (caller.app === null ? MAX_APPLICATION_TOKEN_BYTES : MAX_ACCESS_TOKEN_BYTES)) return { ok: false, reason: 'token_too_large' }
+		const bound = caller.app === null ? MAX_APPLICATION_TOKEN_BYTES : MAX_ACCESS_TOKEN_BYTES
+		const token = await signAccessClaims(
+			claims,
+			bound,
+			(payload) => new SignJWT({ ...payload }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey),
+		)
+		if (token.length > bound) return { ok: false, reason: 'token_too_large' }
 		byToken.set(token, { caller, expiresAt: claims.exp })
 		return { ok: true, token, expiresAt: claims.exp }
 	}
