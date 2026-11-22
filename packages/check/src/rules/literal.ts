@@ -1,6 +1,6 @@
 import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey, staticString, stringField } from '../ast'
 import { type Finding, type Report, reporter } from '../finding'
-import type { Binding, ModuleGraph } from '../graph'
+import { type Binding, type ModuleGraph, unwrapValue } from '../graph'
 import { isRelativeSpecifier } from '../layout'
 
 /**
@@ -165,6 +165,7 @@ const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, nu
 const ALLOWED_SCHEMA = 'a schema of the supported z subset (packages/check/CLAUDE.md): strict objects, no transforms, refinements or pipes'
 const ALLOWED_CALLBACK =
 	'a function only as a builder callback: defineContract(…, (c) => ({ … })), app.contract((c) => ({ … })), app.group(…, (r) => ({ … })), procedures: (l) => ({ … }) of a link or an export, and the handler of .handle(…)'
+const ALLOWED_SPREAD = "a spread of a const whose value is an object literal (this module's or a named import), or the entries written out"
 const ALLOWED_IMPORT =
 	'z from zod/v4 or @fabrika/app/schema, defineContract, defineVocabulary or defineApp from @fabrika/app/contract, defineTables from @fabrika/db/tables, or a literal const of the application'
 
@@ -527,7 +528,7 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 		for (const property of children(node, 'properties')) {
 			if (property === null) continue
 			if (property.type === 'SpreadElement') {
-				fail(property, 'spread', 'the entries written out')
+				checkObjectSpread(property, scope, dependencies)
 				continue
 			}
 			if (property['computed'] === true) {
@@ -547,6 +548,23 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 			if (callbackKey !== undefined && staticKey(property, 'key') === callbackKey) checkBuilderCallback(value, scope, dependencies, callbackKit)
 			else checkExpression(value, scope, dependencies)
 		}
+	}
+
+	/**
+	 * `{ ...Base }`: a spread of an object literal, written in place or as a const of this module or an imported one (through
+	 * `as const`, `satisfies` and parentheses), whose entries the reader copies as evaluating it would.
+	 */
+	const checkObjectSpread = (spread: AstNode, scope: Scope, dependencies: string[]): void => {
+		const argument = child(spread, 'argument')
+		const value = argument === undefined ? undefined : unwrapValue(argument)
+		if (value?.type === 'ObjectExpression') return checkObject(value, scope, dependencies)
+		const name = identifierName(value)
+		if (value === undefined || name === undefined) return fail(spread, 'spread of a value that is not a constant object', ALLOWED_SPREAD)
+		const before = reported
+		checkIdentifier(value, scope, dependencies)
+		if (reported !== before) return
+		const resolved = graph.resolveValue({ module, node: value })
+		if (resolved?.node.type !== 'ObjectExpression') fail(spread, `spread of '${name}', which is not a constant object literal`, ALLOWED_SPREAD)
 	}
 
 	const checkExpression = (node: AstNode, scope: Scope, dependencies: string[]): void => {
@@ -617,8 +635,17 @@ const readModule = (module: ParsedModule, graph: ModuleGraph, findings: Finding[
 		const declaration = statement.type === 'ExportNamedDeclaration' ? (child(statement, 'declaration') ?? statement) : statement
 		if (declaration.type === 'TSTypeAliasDeclaration' || declaration.type === 'TSInterfaceDeclaration') continue
 		if (declaration.type === 'ExportNamedDeclaration') {
-			if (child(declaration, 'source') !== undefined) {
-				fail(declaration, 're-export', 'import the const, then export it')
+			// A relative re-export is checked with the imports (`checkLiteralGraph`), as its binding. Bun erases one whose
+			// every specifier is a type, and evaluates the source of `export {} from`, as of `import {} from`.
+			const source = staticString(child(declaration, 'source'))
+			if (source !== undefined) {
+				const specifiers = children(declaration, 'specifiers').filter((item): item is AstNode => item !== null)
+				const erased = stringField(declaration, 'exportKind') === 'type'
+					|| (specifiers.length > 0 && specifiers.every((item) => stringField(item, 'exportKind') === 'type'))
+				if (!erased && specifiers.length === 0) fail(declaration, `side-effect re-export of '${source}'`, 'named imports of literal consts')
+				else if (!erased && !isRelativeSpecifier(source)) {
+					fail(declaration, `re-export from the package '${source}'`, 'import the builder in the module that uses it')
+				}
 				continue
 			}
 			for (const item of children(declaration, 'specifiers')) {
@@ -665,7 +692,7 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 	for (let module = queue.shift(); module !== undefined; module = queue.shift()) {
 		if (summaries.has(module.file)) continue
 		summaries.set(module.file, readModule(module, graph, findings))
-		for (const binding of graph.index(module).imports.values()) {
+		for (const binding of graph.links(module)) {
 			const target = graph.resolve(module.file, binding.specifier)
 			if (target !== undefined) queue.push(target)
 		}
@@ -709,7 +736,11 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 		for (const name of summary.consts.keys()) {
 			isLiteral(name === 'default' ? graph.exported(summary.module, 'default') : graph.binding(summary.module, name))
 		}
-		for (const imported of graph.index(summary.module).imports.values()) {
+		const index = graph.index(summary.module)
+		for (const imported of graph.links(summary.module)) {
+			const reexport = index.reexports.get(imported.local) === imported
+			// A package re-export is refused at its declaration (`readModule`).
+			if (reexport && !isRelativeSpecifier(imported.specifier)) continue
 			if (!isRelativeSpecifier(imported.specifier)) {
 				const browserSafe = SERVER_ENTRY_OF[imported.specifier]
 				if (browserSafe !== undefined && BUILDER_IMPORTS[browserSafe]?.[imported.imported] !== undefined) {
@@ -741,7 +772,7 @@ export const checkLiteralGraph = (entries: readonly string[], graph: ModuleGraph
 				)
 				continue
 			}
-			const binding = graph.binding(summary.module, imported.local)
+			const binding = reexport ? graph.exported(summary.module, imported.local) : graph.binding(summary.module, imported.local)
 			if (binding.kind === 'unresolved') summary.report(imported.node, 'literal', binding.reason, 'a named import of a const the module exports')
 			else if (!isLiteral(binding) && !refusedInPlace(binding)) {
 				summary.report(
@@ -761,7 +792,7 @@ const reportImportCycles = (summaries: ReadonlyMap<string, LiteralSummary>, grap
 	const state = new Map<string, 'visiting' | 'done'>()
 	const visit = (summary: LiteralSummary): void => {
 		state.set(summary.module.file, 'visiting')
-		for (const imported of graph.index(summary.module).imports.values()) {
+		for (const imported of graph.links(summary.module)) {
 			const target = graph.resolve(summary.module.file, imported.specifier)
 			const next = target === undefined ? undefined : summaries.get(target.file)
 			if (next === undefined) continue

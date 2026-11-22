@@ -41,6 +41,8 @@ interface ModuleIndex {
 	readonly imports: ReadonlyMap<string, ImportBinding>
 	/** Exported name → the local name it exports, or the default export's expression. */
 	readonly exports: ReadonlyMap<string, string | AstNode>
+	/** `export { x as y } from './m'`: the exported name (`local`) → the module and the name it takes from it. */
+	readonly reexports: ReadonlyMap<string, ImportBinding>
 }
 
 const importedName = (specifier: AstNode): string => {
@@ -55,6 +57,7 @@ const indexModule = (module: ParsedModule): ModuleIndex => {
 	const others = new Set<string>()
 	const imports = new Map<string, ImportBinding>()
 	const exports = new Map<string, string | AstNode>()
+	const reexports = new Map<string, ImportBinding>()
 	for (const statement of children(module.program, 'body')) {
 		if (statement === null) continue
 		if (statement.type === 'ImportDeclaration') {
@@ -73,13 +76,17 @@ const indexModule = (module: ParsedModule): ModuleIndex => {
 			continue
 		}
 		const isExport = statement.type === 'ExportNamedDeclaration'
-		if (isExport && child(statement, 'source') === undefined && stringField(statement, 'exportKind') !== 'type') {
+		const source = isExport ? staticString(child(statement, 'source')) : undefined
+		if (isExport && stringField(statement, 'exportKind') !== 'type') {
 			for (const item of children(statement, 'specifiers')) {
 				if (item === null || stringField(item, 'exportKind') === 'type') continue
-				const local = identifierName(child(item, 'local'))
+				const localNode = child(item, 'local')
+				const local = identifierName(localNode) ?? staticString(localNode)
 				const exported = child(item, 'exported')
 				const name = identifierName(exported) ?? staticString(exported)
-				if (local !== undefined && name !== undefined) exports.set(name, local)
+				if (local === undefined || name === undefined) continue
+				if (source === undefined) exports.set(name, local)
+				else reexports.set(name, { local: name, specifier: source, imported: local, node: item })
 			}
 		}
 		const declaration = isExport ? child(statement, 'declaration') : statement
@@ -103,7 +110,7 @@ const indexModule = (module: ParsedModule): ModuleIndex => {
 		}
 		if (isExport) { for (const name of declared) exports.set(name, name) }
 	}
-	return { consts, others, imports, exports }
+	return { consts, others, imports, exports, reexports }
 }
 
 /** Erased wrappers: `x satisfies T`, `x as const`, parentheses. */
@@ -143,6 +150,12 @@ export class ModuleGraph {
 		return resolveRelative((path) => this.#modules.has(path), from, specifier)
 	}
 
+	/** What a module loads by name: its value imports and its re-exports. */
+	links(module: ParsedModule): readonly ImportBinding[] {
+		const index = this.index(module)
+		return [...index.imports.values(), ...index.reexports.values()]
+	}
+
 	/** The checked module a relative specifier names; none when two candidates compete, the index of a directory import. */
 	resolve(from: string, specifier: string): ParsedModule | undefined {
 		if (!isRelativeSpecifier(specifier)) return undefined
@@ -169,7 +182,17 @@ export class ModuleGraph {
 
 	/** What an exported name of `module` denotes. */
 	exported(module: ParsedModule, name: string, seen: ReadonlySet<string> = new Set()): Binding {
-		const exported = this.index(module).exports.get(name)
+		const index = this.index(module)
+		const reexported = index.reexports.get(name)
+		if (reexported !== undefined) {
+			const key = `${module.file}#export ${name}`
+			if (seen.has(key)) return { kind: 'unresolved', reason: `'${name}' is re-exported in a cycle` }
+			if (!isRelativeSpecifier(reexported.specifier)) return { kind: 'package', specifier: reexported.specifier, imported: reexported.imported }
+			const target = this.resolve(module.file, reexported.specifier)
+			if (target === undefined) return { kind: 'unresolved', reason: `unresolved module '${reexported.specifier}'` }
+			return this.exported(target, reexported.imported, new Set([...seen, key]))
+		}
+		const exported = index.exports.get(name)
 		if (exported === undefined) return { kind: 'unresolved', reason: `'${module.file}' does not export '${name}'` }
 		if (typeof exported !== 'string') return { kind: 'default', module, expression: exported }
 		return this.binding(module, exported, seen)
@@ -194,13 +217,27 @@ export class ModuleGraph {
 	}
 }
 
-/** The value of `key` in an object literal, read statically; spreads and computed keys are not followed. */
-export const propertyValue = (located: Located, key: string): Located | undefined => {
-	if (located.node.type !== 'ObjectExpression') return undefined
+/**
+ * The entries of an object literal by key, in the order the object holds them, as evaluating it would build them: a
+ * spread of a value that resolves to an object literal contributes its entries, and a later key overrides an earlier
+ * one. A computed key, a method and a spread of anything else are not followed.
+ */
+export const objectEntries = (graph: ModuleGraph, located: Located, depth = 0): ReadonlyMap<string, Located> => {
+	const entries = new Map<string, Located>()
+	if (located.node.type !== 'ObjectExpression' || depth > 32) return entries
 	for (const property of children(located.node, 'properties')) {
-		if (property?.type !== 'Property' || staticKey(property, 'key') !== key) continue
-		const value = child(property, 'value')
-		return value === undefined ? undefined : { module: located.module, node: value }
+		if (property?.type === 'SpreadElement') {
+			const argument = child(property, 'argument')
+			const spread = argument === undefined ? undefined : graph.resolveValue({ module: located.module, node: argument })
+			if (spread !== undefined) { for (const [key, value] of objectEntries(graph, spread, depth + 1)) entries.set(key, value) }
+			continue
+		}
+		const key = property?.type === 'Property' && property['computed'] !== true ? staticKey(property, 'key') : undefined
+		const value = property === null || key === undefined ? undefined : child(property, 'value')
+		if (key !== undefined && value !== undefined) entries.set(key, { module: located.module, node: value })
 	}
-	return undefined
+	return entries
 }
+
+/** The value of `key` in an object literal, read statically through `objectEntries`. */
+export const propertyValue = (graph: ModuleGraph, located: Located, key: string): Located | undefined => objectEntries(graph, located).get(key)

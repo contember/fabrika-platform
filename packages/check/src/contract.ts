@@ -142,7 +142,7 @@ export function readContractModule(graph: ModuleGraph): ContractRead {
 	return contract === null || problems.findings.length > 0 ? { ok: false, findings: problems.findings } : { ok: true, contract }
 }
 
-/** The contract module and every module its value imports reach. */
+/** The contract module and every module its value imports and re-exports reach. */
 export function contractModules(graph: ModuleGraph, entry: ParsedModule): ParsedModule[] {
 	const reached = new Map<string, ParsedModule>()
 	const queue = [entry]
@@ -151,7 +151,7 @@ export function contractModules(graph: ModuleGraph, entry: ParsedModule): Parsed
 			continue
 		}
 		reached.set(module.file, module)
-		for (const imported of graph.index(module).imports.values()) {
+		for (const imported of graph.links(module)) {
 			const target = graph.resolve(module.file, imported.specifier)
 			if (target !== undefined) {
 				queue.push(target)

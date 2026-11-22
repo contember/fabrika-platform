@@ -1,0 +1,15 @@
+import { defineContract } from '@fabrika/app/contract'
+import { Note, Workspace } from './src/index'
+
+// Names re-exported through a barrel, renamed and through a second barrel, read as Bun resolves them.
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: Workspace },
+	actions: { 'notes.read': 'Read notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['machine'] }, {
+		get: c.query({ output: Note, access: { action: 'notes.read', over: 'workspace' } }),
+	}),
+	health: c.health('/healthz'),
+}))

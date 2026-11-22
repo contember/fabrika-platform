@@ -1,0 +1,17 @@
+import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+import { Fields } from './src/shared'
+export {} from './src/side'
+
+// `export {} from` evaluates its module, which can rewrite a const the reader reads as written: the reader refuses it.
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: { members: { manage: 'notes.read', list: 'notes.read' } } },
+	actions: { 'notes.read': 'Read notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['machine'] }, {
+		get: c.query({ output: z.strictObject({ ...Fields }), access: { action: 'notes.read', over: 'workspace' } }),
+	}),
+	health: c.health('/healthz'),
+}))

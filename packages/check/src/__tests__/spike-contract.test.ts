@@ -18,14 +18,14 @@ const readFixture = async (): Promise<ReadonlyMap<string, string>> => {
 }
 
 describe('the parser spike sample contract', () => {
-	test('yields the 14 literal findings the spike measured, at the same positions, and the import of the non-literal readRoles', async () => {
+	test('yields the literal findings the spike measured, at the same positions, and the import of the non-literal readRoles', async () => {
 		const findings = await checkApplication({ root: FIXTURE, files: await readFixture() })
 
 		expect(locations(findings, 'literal')).toEqual([
 			// The spike validated imports only where a value used them; every runtime import is validated now.
 			'fabrika.contract.ts:4:10',
 			'fabrika.contract.ts:7:1',
-			'fabrika.contract.ts:20:3',
+			// 20:3, the spread of the constant object `base`, is accepted now.
 			'fabrika.contract.ts:23:3',
 			'fabrika.contract.ts:32:10',
 			'fabrika.contract.ts:34:47',
