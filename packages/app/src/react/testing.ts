@@ -38,6 +38,59 @@ export interface DomOptions {
 	readonly url?: string
 }
 
+/** Whether `element` is a button that submits its form, the only kind a FormData takes as its submitter. */
+function isSubmitButton(element: HTMLElement): element is HTMLButtonElement | HTMLInputElement {
+	if (element instanceof HTMLButtonElement) return element.type === 'submit'
+	return element instanceof HTMLInputElement && (element.type === 'submit' || element.type === 'image')
+}
+
+/** The entries a browser builds from `form`'s controls on submit, as the HTML standard's entry list orders them. */
+function formEntries(form: HTMLFormElement, submitter: HTMLElement | null): [string, string | File][] {
+	const entries: [string, string | File][] = []
+	for (const control of form.elements) {
+		if (!(isControl(control) || control instanceof HTMLButtonElement) || control.closest('datalist') !== null) continue
+		// happy-dom's `:disabled` does not see a disabled fieldset.
+		if (control.disabled || control.closest('fieldset[disabled]') !== null) continue
+		if (control instanceof HTMLButtonElement || ['submit', 'reset', 'button', 'image'].includes(control.type)) {
+			if (control !== submitter) continue
+			if (control instanceof HTMLInputElement && control.type === 'image') {
+				const prefix = control.name === '' ? '' : `${control.name}.`
+				entries.push([`${prefix}x`, '0'], [`${prefix}y`, '0'])
+				continue
+			}
+		}
+		const name = control.name
+		if (name === '') continue
+		if (control instanceof HTMLSelectElement) {
+			for (const option of control.selectedOptions) if (!option.disabled) entries.push([name, option.value])
+		} else if (control instanceof HTMLInputElement && (control.type === 'checkbox' || control.type === 'radio')) {
+			if (control.checked) entries.push([name, control.value])
+		} else if (control instanceof HTMLInputElement && control.type === 'file') {
+			const files = control.files === null ? [] : [...control.files]
+			if (files.length === 0) entries.push([name, new File([], '', { type: 'application/octet-stream' })])
+			for (const file of files) entries.push([name, file])
+		} else {
+			entries.push([name, control.value])
+		}
+	}
+	return entries
+}
+
+/** Bun's FormData, which reads no field of a form element, filled from the form's controls as a browser fills it. */
+function formFilling(BunFormData: typeof FormData): typeof FormData {
+	return class FormData extends BunFormData {
+		constructor(form?: HTMLFormElement, submitter?: HTMLElement | null) {
+			super()
+			if (form === undefined) return
+			if (submitter !== undefined && submitter !== null) {
+				if (!isSubmitButton(submitter)) throw new TypeError('The submitter is not a submit button')
+				if (submitter.form !== form) throw new DOMException('The submitter is not owned by this form', 'NotFoundError')
+			}
+			for (const [name, value] of formEntries(form, submitter ?? null)) this.append(name, value)
+		}
+	}
+}
+
 /**
  * Installs happy-dom's window as the globals, keeping Bun's fetch, abort, URL, blob, file and form classes, with
  * navigation off: a download's link click leaves the page where it is, so a later test of the file still has it. Call
@@ -45,6 +98,7 @@ export interface DomOptions {
  */
 export function installDom(options: DomOptions = {}): InstalledDom {
 	const kept = BUN_GLOBALS.map((name) => [name, Reflect.get(globalThis, name)] as const)
+	const BunFormData = globalThis.FormData
 	GlobalRegistrator.register({
 		url: options.url ?? 'http://app.test/',
 		settings: {
@@ -57,6 +111,8 @@ export function installDom(options: DomOptions = {}): InstalledDom {
 		},
 	})
 	for (const [name, value] of kept) Reflect.set(globalThis, name, value)
+	// Bun's FormData reads no field of a happy-dom form, and happy-dom's refuses the Bun File the client uploads.
+	Reflect.set(globalThis, 'FormData', formFilling(BunFormData))
 	Reflect.set(globalThis, 'IS_REACT_ACT_ENVIRONMENT', true)
 	return {
 		async uninstall() {
