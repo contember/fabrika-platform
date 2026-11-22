@@ -449,7 +449,8 @@ more might have been allowed; a caller holding every listed action gets a 500, s
 fault is the handler's code, and so is it outside `anyOf`. An insert under several
 held actions with a `when` that follows a foreign key is refused (`unenforceable`), `ctx.sql.scope` is refused when a
 held action has a `when`, and a claim or a join needs a capability of one action. The types allow an operation one
-listed action allows and hide every column of its own read action; `ctx.app.action` is unavailable (read
+listed action allows, and show a column with its own read actions only when every listed action is one of them and
+none has a `when` (every set of them a caller may hold then reads it at run time); otherwise they hide it; `ctx.app.action` is unavailable (read
 `ctx.app.actions` or `ctx.holds`), and at runtime it throws on a capability of several actions. An
 `anyOf` endpoint has no `ctx.target`, `ctx.within`, `ctx.members`, links or delegation, and takes no `capabilities`,
 `creates`, `issues`, link, export or public form; the scoped forms do not take `anyOf` (`any-of.test.ts`,

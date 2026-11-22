@@ -36,6 +36,7 @@ export { PolicyError } from './errors'
 export type { FileReference } from './file-references'
 export type {
 	AllOptions,
+	AllQuery,
 	AnyDbIndex,
 	ApplicationRows,
 	ApplicationTables,
@@ -46,6 +47,7 @@ export type {
 	ClaimOptions,
 	ContainedRows,
 	CountOptions,
+	CountQuery,
 	DataKind,
 	DbIndex,
 	FragmentTable,
@@ -54,6 +56,7 @@ export type {
 	InsertMethod,
 	ListOptions,
 	ListPage,
+	ListQuery,
 	NoUnscoped,
 	OrderTerm,
 	OwnerRow,

@@ -56,6 +56,9 @@ type ColumnReadsOf<P, T> = PolicyOf<P, T> extends { readonly columns: infer C } 
 	}
 	: Record<never, never>
 
+/** The actions the table's `when` narrows; every action of a policy typed wider than its literal, which may hold one. */
+type ConditionedOf<P, T> = PolicyOf<P, T> extends { readonly when?: infer W } ? keyof NonNullable<W> & string : never
+
 type ColumnPoliciesOf<P, T> = PolicyOf<P, T> extends { readonly columns: infer C } ? C : never
 
 /** The columns that declare `A` as their own write action. */
@@ -96,6 +99,8 @@ export interface IndexedTable {
 	readonly row: object
 	/** The columns that declare their own read action. */
 	readonly reads: object
+	/** The actions whose `when` narrows the rows they reach. */
+	readonly conditioned: string
 	readonly insert: object
 	readonly update: object
 	/** Each action that updates the table, with the values it updates (`columns: { assignee: { write: 'tasks.assign' } }`). */
@@ -129,6 +134,7 @@ type IndexedTableOf<DB, P, T extends keyof P & keyof DB & string, V = unknown> =
 	readonly appCount: AppActionsOf<P, T, 'appCount'>
 	readonly row: WithFiles<RowType<DB[T]>, FileColumnsOf<P, T>>
 	readonly reads: ColumnReadsOf<P, T>
+	readonly conditioned: ConditionedOf<P, T>
 	readonly insert: WithFiles<InsertValues<DB, P, T>, FileColumnsOf<P, T>>
 	readonly update: WithFiles<UpdateValues<DB, P, T>, FileColumnsOf<P, T>>
 	readonly writes: { readonly [A in keyof UpdatesOf<DB, P, T>]: WithFiles<UpdatesOf<DB, P, T>[A], FileColumnsOf<P, T>> }
@@ -237,21 +243,27 @@ type ListedIn<Ix extends AnyDbIndex, D> = Lookup<Ix['listed'], D>
 type WithinIn<Ix extends AnyDbIndex, D> = Lookup<Ix['within'], D>
 
 /**
- * The columns a capability of action `A` cannot read: each whose own read actions do not include `A`. A union `A` (a
- * widened capability type) holds no single action provably, so it reads none of them.
+ * The columns a capability of `A` cannot read: each whose own read actions do not include every action of `A`. A union
+ * `A` (an `anyOf` endpoint's, or a widened capability type) reads one only where no action of it is `Conditioned`: the
+ * runtime answers it where every reaching action reads every row alone (`readsAsAction`), and the held ones are known
+ * only per request.
  */
-type HiddenFor<Reads, A> = { [C in keyof Reads]: IsSingle<A> extends true ? ([A] extends [Reads[C]] ? never : C) : C }[keyof Reads]
+type HiddenFor<Reads, A, Conditioned> = {
+	[C in keyof Reads]: [A] extends [never] ? C
+		: [A] extends [Reads[C]] ? (IsSingle<A> extends true ? never : [Extract<A, Conditioned>] extends [never] ? never : C)
+		: C
+}[keyof Reads]
 
 /** Whether `A` is one literal, not a union of several. */
 type IsSingle<A, All = A> = [A] extends [never] ? false : A extends unknown ? ([All] extends [A] ? true : false) : never
 
 /**
- * A row as a capability of action `A` reads, filters and sorts it: a column that declares another read action is
- * absent. The type keeps the generated row's name, so a read of a hidden column reports
- * `Property 'margin' does not exist on type 'Omit<Selectable<DealsTable>, "margin">'`.
+ * A row as a capability of `A` reads, filters and sorts it: a column whose own read actions leave out an action of `A`
+ * is absent, and so is one a union `A` with a `when` may not read (`HiddenFor`). The type keeps the generated row's
+ * name, so a read of a hidden column reports `Property 'margin' does not exist on type 'Omit<Selectable<DealsTable>, "margin">'`.
  */
-export type RowFor<E extends IndexedTable, A extends string> = [HiddenFor<E['reads'], A>] extends [never] ? E['row']
-	: Omit<E['row'], HiddenFor<E['reads'], A>>
+export type RowFor<E extends IndexedTable, A extends string> = [HiddenFor<E['reads'], A, E['conditioned']>] extends [never] ? E['row']
+	: Omit<E['row'], HiddenFor<E['reads'], A, E['conditioned']>>
 
 /** What a paved-road write answers: the key, and the new version of a versioned table. */
 export type Saved<E extends IndexedTable> = E['versioned'] extends true ? { readonly id: string; readonly version: number } : { readonly id: string }
@@ -390,22 +402,33 @@ export interface ListPage<Row> {
 
 export type OrderTerm<Row> = { [C in ComparableColumn<Row>]: readonly [C, 'asc' | 'desc'] }[ComparableColumn<Row>]
 
-export interface ListOptions<Row> {
-	readonly where?: readonly ConditionTuple<Row>[]
-	readonly orderBy?: readonly OrderTerm<Row>[]
+/**
+ * What `list()` takes, by the conditions and order terms of its row. It is generic in those unions, not the row, so a
+ * handle that reads more columns, whose options take more, passes where one that reads fewer is expected.
+ */
+export interface ListQuery<Condition, Order> {
+	readonly where?: readonly Condition[]
+	readonly orderBy?: readonly Order[]
 	readonly limit?: number
 	readonly after?: string
 }
+/** `ListQuery` over the columns of `Row`. */
+export type ListOptions<Row> = ListQuery<ConditionTuple<Row>, OrderTerm<Row>>
 
 /** What `all()` takes: a list's filter and order, and no page; it answers every row or refuses past `MAX_ALL_ROWS`. */
-export interface AllOptions<Row> {
-	readonly where?: readonly ConditionTuple<Row>[]
-	readonly orderBy?: readonly OrderTerm<Row>[]
+export interface AllQuery<Condition, Order> {
+	readonly where?: readonly Condition[]
+	readonly orderBy?: readonly Order[]
 }
+/** `AllQuery` over the columns of `Row`. */
+export type AllOptions<Row> = AllQuery<ConditionTuple<Row>, OrderTerm<Row>>
 
-export interface CountOptions<Row> {
-	readonly where?: readonly ConditionTuple<Row>[]
+/** What `count()` takes: a list's filter. */
+export interface CountQuery<Condition> {
+	readonly where?: readonly Condition[]
 }
+/** `CountQuery` over the columns of `Row`. */
+export type CountOptions<Row> = CountQuery<ConditionTuple<Row>>
 
 /** The target's own row: `ctx.db.target` (or `ctx.db.created`) of an `on`, `in` or `creates` endpoint. */
 export interface TargetRow<T extends string, E extends IndexedTable, A extends string, K extends DataKind, F extends TargetForm> {
@@ -485,14 +508,18 @@ export type ScopeTarget<Ix extends AnyDbIndex, D extends string, A extends strin
 /** A table listed in an `over` endpoint's dimension, read through its `Within`; a job claims a queue table's rows through it. */
 export interface WithinRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly claim: Claim<T, E, A, K>
-	readonly list: A extends E['actions']['read'] ? (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>
-		: Unavailable<ListRefusal<T, E, A>>
-	readonly all: A extends E['actions']['read'] ? (options?: AllOptions<RowFor<E, A>>) => Promise<RowFor<E, A>[]> : Unavailable<ListRefusal<T, E, A>>
-	readonly count: A extends E['actions']['read'] ? (options?: CountOptions<RowFor<E, A>>) => Promise<number> : Unavailable<ListRefusal<T, E, A>>
-	readonly aggregate: A extends E['actions']['read']
-		? <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>
-		: Unavailable<ListRefusal<T, E, A>>
+	readonly list: WithinRead<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
+	readonly all: WithinRead<T, E, A, (options?: AllOptions<RowFor<E, A>>) => Promise<RowFor<E, A>[]>>
+	readonly count: WithinRead<T, E, A, (options?: CountOptions<RowFor<E, A>>) => Promise<number>>
+	readonly aggregate: WithinRead<T, E, A, <const S extends AggregateSpec<RowFor<E, A>>>(spec: S) => Promise<AggregateRow<RowFor<E, A>, S>[]>>
 }
+
+/**
+ * `Member` where a `Within` of `A` lists the table by its read action. An alias, not inline in `WithinRows`: inline, the
+ * interface is measured invariant in `A`, and a `Pick` of a handle that reads more columns fails where one of fewer is expected.
+ */
+type WithinRead<T extends string, E extends IndexedTable, A extends string, Member> = A extends E['actions']['read'] ? Member
+	: Unavailable<ListRefusal<T, E, A>>
 
 /** Inlined where used: an alias of its own would be printed by name, with the table's index entry spelled out. */
 type ListRefusal<T extends string, E extends IndexedTable, A extends string> = `a list of ${T} needs its read action '${
@@ -528,8 +555,9 @@ type PublicRead<T extends string, E extends IndexedTable, A extends string, Memb
 
 /**
  * An application table under the capability of an `app` endpoint of action `A`, in a site of kind `K`; an `anyOf`
- * endpoint's `A` is its listed actions, and an operation any of them allows is typed. A column with its own read action
- * stays hidden there (`RowFor`): which listed actions the caller holds is known only at run time.
+ * endpoint's `A` is its listed actions, and an operation any of them allows is typed. A column with its own read actions
+ * shows only where every listed action is one of them and none has a `when` (`RowFor`): which listed actions the
+ * caller holds is known only at run time.
  */
 export interface ApplicationRows<T extends string, E extends IndexedTable, A extends string, K extends DataKind> {
 	readonly list: AppList<T, E, A, (options?: ListOptions<RowFor<E, A>>) => Promise<ListPage<RowFor<E, A>>>>
