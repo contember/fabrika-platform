@@ -228,8 +228,13 @@ The static contract reader (B1) runs `rules/literal.ts` first and reads exactly 
 where the types refuse too (see below). Change the rule, `reader/value.ts` and `reader/schema.ts` together.
 
 - **Values:** strings, numbers (`-` before a number), booleans, `null`, templates without `${…}`, object and array
-  literals without spreads, computed keys, methods, holes or a `__proto__` key; `x as const`, `x satisfies T`. A
-  regular-expression literal only as the argument of `.regex()`.
+  literals without computed keys, methods, holes or a `__proto__` key; `x as const`, `x satisfies T`. A
+  regular-expression literal only as the argument of `.regex()`. An array takes no spread. An object takes a spread
+  of a constant object literal (`{ ...Base, key: … }`): written in place, or a name that resolves through consts and
+  imports (and `as const`, `satisfies`, parentheses) to an object literal; its entries come in order and a later key
+  overrides an earlier one, as evaluating it would. A spread of anything else (a schema, an array, a call, a `let`) is
+  refused at the spread. The rules that read an object statically (`client-identity`'s fields and access) follow the
+  same spreads (`objectEntries` in `graph.ts`).
 - **Names:** a top-level `const` of the module declared above its use (the module reads it eagerly; an unused
   forward reference is refused too), or a named import of an exported literal `const` from a relative module (export
   aliases are followed). A const whose own initializer is refused is reported there, at the offending expression, and
@@ -237,7 +242,8 @@ where the types refuse too (see below). Change the rule, `reader/value.ts` and `
   relative import names one file: its exact name, or exactly one extension candidate; two candidates (`m.ts` and
   `m.tsx`) and a directory import are refused, because Bun's choice there is not one the reader repeats. Every runtime import and every
   export of a literal module is checked, used or not; no side-effect import, namespace import of a relative module
-  or re-export with a source.
+  or `export *`. A named re-export of a relative module (`export { x as y } from './m'`, a barrel) is read as the
+  import it stands for, under the same rules, through any number of barrels; a re-export from a package is refused.
 - **Builders:** `z` (named, renamed or namespace) from `zod/v4` or `@fabrika/app/schema` (the same subset, read alike), its members written with a dot (`z['string']` is
   refused); `defineApp` from `@fabrika/app/contract`, called once as `defineApp(vocabulary, tables, { imports }?)` in a
   const (the kit; `src/app-kit.ts`), whose `app.<builder>(…)` calls are `group`, `contract`, `cron`, `webhook`, `link`

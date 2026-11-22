@@ -4,7 +4,7 @@
 import { file, signedToken, WebhookSecret } from '@fabrika/app/contract'
 import type { z } from 'zod/v4'
 import { type AstNode, child, children, identifierName, isConstAssertion, type ParsedModule, staticKey } from '../ast'
-import type { Located, ModuleGraph } from '../graph'
+import { type Located, type ModuleGraph, unwrapValue } from '../graph'
 import { CONTRACT_LIMITS } from '../limits'
 import {
 	BUILDER_IMPORTS,
@@ -98,6 +98,7 @@ const VOCABULARY_SECTIONS = [
 ] as const
 
 const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, null, the c.* and z.* builders, and const imports of such values'
+const ALLOWED_SPREAD = "a spread of a const whose value is an object literal (this module's or a named import), or the entries written out"
 
 export class ValueReader {
 	readonly #graph: ModuleGraph
@@ -256,13 +257,19 @@ export class ValueReader {
 				continue
 			}
 			const at = { module: located.module, node: property }
+			if (property.type === 'SpreadElement') {
+				const spread = this.#spread(at, scope)
+				if (spread === null) complete = false
+				else for (const [key, value] of spread) entries.set(key, value)
+				continue
+			}
 			const key = staticKey(property, 'key')
 			const value = child(property, 'value')
 			if (
 				property.type !== 'Property' || property['computed'] === true || property['kind'] !== 'init' || property['method'] === true
 				|| key === undefined || key === '__proto__' || value === undefined
 			) {
-				this.#problems.add(at, 'a spread, computed key, method or __proto__ key', 'a plain or quoted key with a literal value')
+				this.#problems.add(at, 'a computed key, method or __proto__ key', 'a plain or quoted key with a literal value')
 				complete = false
 				continue
 			}
@@ -275,6 +282,20 @@ export class ValueReader {
 			}
 		}
 		return complete ? { kind: 'object', entries, at: located } : null
+	}
+
+	/** The entries `{ ...x }` copies: those of an object literal, in place or a const's (`rules/literal.ts`' spread). */
+	#spread(at: Located, scope: Scope): ReadonlyMap<string, LiteralValue> | null {
+		const argument = child(at.node, 'argument')
+		const value = argument === undefined ? undefined : unwrapValue(argument)
+		const target = value === undefined ? undefined : this.#graph.resolveValue({ module: at.module, node: value })
+		const read = value === undefined || target?.node.type !== 'ObjectExpression'
+			? undefined
+			: this.#read({ module: at.module, node: value }, scope, null)
+		if (read === null) return null
+		if (read?.kind === 'object') return read.entries
+		this.#problems.add(at, 'spread of a value that is not a constant object literal', ALLOWED_SPREAD)
+		return null
 	}
 
 	#identifier(located: Located, scope: Scope): LiteralValue | null {

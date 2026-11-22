@@ -1,6 +1,6 @@
 import { type AstNode, child, children, type ParsedModule, staticKey, walk } from '../ast'
 import { type Finding, reporter } from '../finding'
-import { type Located, type ModuleGraph, propertyValue } from '../graph'
+import { type Located, type ModuleGraph, objectEntries, propertyValue } from '../graph'
 
 const IDENTITY_FIELDS = new Set([
 	'userId',
@@ -35,10 +35,7 @@ const schemaFields = (located: Located, graph: ModuleGraph, depth = 0): Readonly
 	if (method === undefined || !argument) return fields
 	if (SHAPE_METHODS.has(method)) {
 		const shape = graph.resolveValue({ module: value.module, node: argument })
-		for (const property of shape?.node.type === 'ObjectExpression' ? children(shape.node, 'properties') : []) {
-			const key = property === null ? undefined : staticKey(property, 'key')
-			if (key !== undefined) fields.add(key)
-		}
+		for (const key of shape === undefined ? [] : objectEntries(graph, shape).keys()) fields.add(key)
 	} else if (MERGE_METHODS.has(method)) add({ module: value.module, node: argument })
 	return fields
 }
@@ -46,8 +43,8 @@ const schemaFields = (located: Located, graph: ModuleGraph, depth = 0): Readonly
 /** The field an `in`/`on` access form takes from the input; the framework removes it and checks the caller's access to it. */
 const checkedField = (access: Located | undefined, graph: ModuleGraph): string | undefined => {
 	const value = access === undefined ? undefined : graph.resolveValue(access)
-	if (value === undefined || (propertyValue(value, 'in') === undefined && propertyValue(value, 'on') === undefined)) return undefined
-	const from = propertyValue(value, 'from')
+	if (value === undefined || (propertyValue(graph, value, 'in') === undefined && propertyValue(graph, value, 'on') === undefined)) return undefined
+	const from = propertyValue(graph, value, 'from')
 	return from === undefined ? undefined : graph.resolveString(from)
 }
 
@@ -61,9 +58,9 @@ export const checkClientIdentity = (contract: ParsedModule, graph: ModuleGraph):
 		for (const argument of children(node, 'arguments')) {
 			if (argument === null) continue
 			const options = graph.resolveValue({ module: contract, node: argument })
-			const input = options === undefined ? undefined : propertyValue(options, 'input')
+			const input = options === undefined ? undefined : propertyValue(graph, options, 'input')
 			if (options === undefined || input === undefined) continue
-			const checked = checkedField(propertyValue(options, 'access'), graph)
+			const checked = checkedField(propertyValue(graph, options, 'access'), graph)
 			const at: AstNode = input.module === contract ? input.node : argument
 			for (const field of schemaFields(input, graph)) {
 				if (!IDENTITY_FIELDS.has(field) || field === checked) continue

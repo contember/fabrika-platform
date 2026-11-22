@@ -1065,6 +1065,77 @@ describe('literal: a schema method on an imported literal schema', () => {
 	})
 })
 
+describe('literal: a spread of a constant object and a re-export', () => {
+	const IMPORT = "import { CreateNote, Note } from './src/schemas/notes'"
+	/** The clean application with `src/shared.ts`, and the contract's import line, `get` input and RPC options replaced. */
+	const withShared = (
+		shared: string,
+		imports: string,
+		input: string,
+		extra = '',
+		options = "{ callers: ['human'] }",
+	): Readonly<Record<string, string>> => ({
+		...CLEAN_APPLICATION,
+		'src/shared.ts': shared,
+		'fabrika.contract.ts': CLEAN_CONTRACT.replace(IMPORT, imports).replace('input: z.strictObject({ id: z.uuid() })', `input: ${input}`)
+			.replace('export const contract', `${extra}export const contract`).replace("c.rpc('/api', { callers: ['human'] }", `c.rpc('/api', ${options}`),
+	})
+
+	test('allowed: a spread of a const object literal of this module, of an imported one and in place; names re-exported by a barrel', async () => {
+		const files = {
+			...withShared(
+				"import { z } from 'zod/v4'\n\nexport const IdField = { id: z.uuid() } as const\nexport const Options = { callers: ['human'] }\n",
+				`import { CreateNote, IdField, Note, Options } from './src/barrel'`,
+				'z.strictObject({ ...IdField, ...Extra, ...{ draft: z.boolean() } })',
+				'const Extra = { tag: z.string() }\n',
+				'{ ...Options }',
+			),
+			'src/barrel.ts': "export { IdField, Options } from './shared'\nexport { CreateNote, Note as Note } from './schemas/notes'\n",
+		}
+		expect(await check(files)).toEqual([])
+	})
+
+	test('refused: a spread of anything but a constant object literal', async () => {
+		const files = withShared(
+			"import { z } from 'zod/v4'\n\nexport const Schema = z.strictObject({ id: z.uuid() })\nexport const List = ['id']\n",
+			`${IMPORT}\nimport { List, Schema } from './src/shared'`,
+			'z.strictObject({ ...Schema, ...List, ...z.strictObject({}), ...Mutable, ...Later })',
+			'let Mutable = { id: z.uuid() }\n',
+		)
+		const contract = `${files['fabrika.contract.ts'] ?? ''}const Later = { id: z.uuid() }\n`
+		expect(locations(await check({ ...files, 'fabrika.contract.ts': contract }), 'literal')).toEqual([
+			'fabrika.contract.ts:6:1',
+			// The let declaration; Schema and List hold no object literal; a call; Mutable is no const; Later comes later.
+			'fabrika.contract.ts:14:42',
+			'fabrika.contract.ts:14:53',
+			'fabrika.contract.ts:14:62',
+			'fabrika.contract.ts:14:88',
+			'fabrika.contract.ts:14:100',
+		])
+	})
+
+	test('refused: a re-export from a package, of a name the module does not export, of a const that is no literal', async () => {
+		const files = {
+			...withShared(
+				"export const Computed = 'notes'.trim()\n",
+				`${IMPORT}\nimport { Computed } from './src/barrel'`,
+				'z.strictObject({ id: z.uuid(), name: z.literal(Computed) })',
+			),
+			'src/barrel.ts': "export { z } from 'zod/v4'\nexport { Missing } from './shared'\nexport { Computed } from './shared'\n",
+		}
+		expect(locations(await check(files), 'literal')).toEqual(['src/barrel.ts:1:1', 'src/barrel.ts:2:10', 'src/shared.ts:1:25'])
+	})
+
+	test('client-identity sees the fields a spread brings into an input', async () => {
+		const files = withShared(
+			"import { z } from 'zod/v4'\n\nexport const Owner = { ownerId: z.uuid() }\n",
+			`${IMPORT}\nimport { Owner } from './src/shared'`,
+			'z.strictObject({ id: z.uuid(), ...Owner })',
+		)
+		expect(locations(await check(files), 'client-identity')).toEqual(['fabrika.contract.ts:13:25'])
+	})
+})
+
 describe('member-admits-external', () => {
 	test('names a { member: true } endpoint a human reaches, and not one of a machine-only mount', async () => {
 		const external = CLEAN_CONTRACT.replace(

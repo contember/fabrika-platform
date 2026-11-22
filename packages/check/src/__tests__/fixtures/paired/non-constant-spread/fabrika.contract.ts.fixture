@@ -1,0 +1,17 @@
+import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+
+// A spread of a schema copies the schema object's own fields into the shape, not its fields: the reader refuses it.
+const Base = z.strictObject({ id: z.uuid() })
+
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { workspace: { members: { manage: 'notes.read', list: 'notes.read' } } },
+	actions: { 'notes.read': 'Read notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (c) => ({
+	api: c.rpc('/api', { callers: ['machine'] }, {
+		get: c.query({ output: z.strictObject({ ...Base, title: z.string() }), access: { action: 'notes.read', over: 'workspace' } }),
+	}),
+	health: c.health('/healthz'),
+}))

@@ -1,0 +1,1 @@
+export const WorkspaceDimension = { members: { manage: 'notes.read', list: 'notes.read' } }

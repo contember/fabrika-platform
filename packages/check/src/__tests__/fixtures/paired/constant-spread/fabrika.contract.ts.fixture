@@ -1,0 +1,23 @@
+import { defineContract } from '@fabrika/app/contract'
+import { z } from 'zod/v4'
+import { Common, ReadActions } from './src/shared'
+
+// A spread of a constant object, of this module or imported, in place or nested: its entries in order, a later key
+// overriding an earlier one, in the reader as in the evaluated module.
+const Workspace = { workspace: { members: { manage: 'notes.write', list: 'notes.read' } } } as const
+const Fields = { id: z.uuid(), title: z.string() }
+
+export const contract = defineContract({
+	app: 'notes',
+	dimensions: { ...Workspace },
+	actions: { 'notes.write': 'first', ...ReadActions, 'notes.write': 'Write notes' },
+	roles: { reader: { grants: ['notes.read'] } },
+}, (c) => ({
+	api: c.rpc('/api', { ...Common, callers: ['human', 'machine'] }, {
+		list: c.query({
+			output: z.strictObject({ ...Fields, ...{ body: z.string() }, title: z.string().max(200) }),
+			access: { action: 'notes.read', over: 'workspace' },
+		}),
+	}),
+	health: c.health('/healthz'),
+}))
