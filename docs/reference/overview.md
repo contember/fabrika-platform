@@ -508,6 +508,8 @@ variable for this path.
 - [`cross-host-sso.md`](cross-host-sso.md) — the session handoff: how a browser
   authenticated at IAM ends up authenticated at an app, on any host, with no shared
   cookie.
+- [`security-runtime.md`](security-runtime.md) and [`security-deployment.md`](security-deployment.md) — the
+  runtime security model and the deployment gates, for a reader evaluating the platform.
 - [`deployment-namespaces.md`](deployment-namespaces.md) — placement lifecycle,
   resource claims, Zerops presets, and operator interfaces.
 - [`zerops-platform.md`](zerops-platform.md) — the established facts about Zerops
