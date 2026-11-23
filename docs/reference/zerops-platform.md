@@ -49,7 +49,9 @@ overrides the project's, and "explicit variable referencing is still possible
 regardless of the isolation setting". The cross-service reference mechanism is
 prefixing the key with the service hostname, e.g. `mariadb1_connectionString`
 ([import JSON schema](https://api.app-prg1.zerops.io/api/rest/public/settings/import-project-yml-json-schema.json),
-[env variables](https://docs.zerops.io/nodejs/how-to/env-variables)).
+[env variables](https://docs.zerops.io/nodejs/how-to/env-variables)). Code in a container can write such a
+reference into its own service with `zsc` and read the value at its next start, so `envIsolation` does not keep
+one service's code from another service's variables (measured 2026-11-23, below).
 
 The public project read response does not expose the project's `envIsolation`
 setting, so a client cannot verify that value after creation. Fabrika writes
@@ -328,6 +330,37 @@ Consequences:
   can quote the rejected value, so a client that writes secrets must drop the message
   and keep the code — otherwise it cannot tell a duplicate key from a missing service
   without leaking.
+
+### Verified live (2026-11-23, account `prg1`, a throwaway project since deleted) — a container writes its own variables
+
+A project with `envIsolation: service` on the project and on every service: `postgres` (`postgresql@18`, `NON_HA`),
+`probe` (`bun@1.3`, resolved to `ubuntu/bun@1.3`) and `victim` (`alpine/bun@1.3`) with an `envSecrets` marker. Each
+row ran in `probe`'s start command as user `zerops`, with no API token in the container. The reference text was
+assembled by the shell at run time, so no file Zerops reads spelled it. The calls and answers are in
+[backlog 198](../backlog/198-an-in-container-env-write-may-reach-another-services-credentials.md).
+
+| Behaviour                                                                                    | Result                                                                                                                                                                       |
+| -------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `zsc set-env KEY '${postgres_superUserPassword}'` in a runtime container                     | exit 0. `/env` lists a `USER` record, `sensitive: false`, holding the reference literal                                                                                      |
+| `zsc set-env --sensitive KEY …`; `zsc setSecretEnv KEY …` on a key `envSecrets` created      | exit 0 each, `sensitive: true` records holding the literal. `setSecretEnv` prints that it is deprecated in favour of `set-env --sensitive`                                   |
+| The next container start (`PUT /service-stack/{id}/restart`, a deploy, a replacement)        | **Each resolves**, across services and under `envIsolation: service`: the value opened `postgres:5432/db` as `postgres`, `rolsuper = true`                                   |
+| `${victim_VICTIM_SECRET}`, another runtime service's secret, written the same way            | Resolves: the value's SHA-256 matched the marker's                                                                                                                           |
+| A redeploy of the writing service                                                            | Keeps the written records, resolved                                                                                                                                          |
+| The start command exits 1                                                                    | Restarted 2 s later in the SAME container with its old environment; nothing new resolves                                                                                     |
+| `zsc fail-me`                                                                                | exit 0; the container goes `FAILED` and a replacement starts about 50 s later with the written references resolved. The whole chain needs nothing from outside the container |
+| `zsc set-env` / `setSecretEnv` in a BUILD container                                          | Refused, `serviceStackIsSystemNotSupported` ("ServiceStack should not be system"), and the version goes `BUILD_FAILED` although the build command passed                     |
+| `sudo -n true` as `zerops` in a runtime container                                            | Succeeds on `ubuntu/bun@1.3` and on `alpine/bun@1.3` (Alpine 3.23.5)                                                                                                         |
+| A process after `prctl(PR_SET_DUMPABLE, 0)` (`bun:ffi`, as `packages/app/src/undumpable.ts`) | Another `zerops` process cannot read its `/proc/<pid>/environ`; `sudo` can                                                                                                   |
+
+Consequences:
+
+- **Inside one project, services' variables have no boundary for code that runs there.** `envIsolation` decides
+  what a container starts with; the container may then write any `${<host>_<KEY>}` of the project into its own
+  service and receive the value at its next start, which it can cause itself.
+- **fabrika's reference checks bound only what fabrika writes** (`platformOnlyServiceReference` and
+  `foreignReferenceHost`, `packages/provider-zerops/src/service-references.ts`). They cannot see this path.
+- **The build cannot write a variable**, so the reference checks on the descriptor still close the build's path.
+- **`prctl` does not protect a process from the application on Zerops**, because the application has `sudo`.
 
 ### Verified live (2026-08-05, account `prg1`, project `fabrika-test`) — import semantics, sizing, probes, DSN
 

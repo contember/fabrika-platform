@@ -257,7 +257,9 @@ Their confidentiality rests on Zerops' network isolation.
 
 Known gaps:
 
-- An in-container environment write on Zerops may resolve another service's credentials
+- On Zerops, code in a container obtains every variable of every service in its project through an in-container
+  environment write, so applications in a `cheap` or `mid` namespace are not isolated from each other, and the
+  launcher's protection does not hold against an application that has `sudo`
   ([backlog 198](../backlog/198-an-in-container-env-write-may-reach-another-services-credentials.md)).
 - Deleting an application or environment leaves its vault rows and IAM keys valid
   ([backlog 203](../backlog/203-deleting-an-app-or-env-leaves-its-secrets-and-iam-keys.md)).
