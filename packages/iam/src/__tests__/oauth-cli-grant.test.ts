@@ -3,7 +3,6 @@ import { parseOAuthResourceDto, resolveOAuthAuthorizationScopes } from '@fabrika
 import { uuidv7 } from '@fabrika/platform'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
-import type { OAuthConfig } from '../oauth-config'
 import { handleOAuth } from '../oauth-http'
 import { unixNow } from '../repositories/sql'
 import { generateToken, hashToken } from '../secret'
@@ -11,7 +10,9 @@ import type { Services } from '../services'
 import { createHarness } from './helpers/harness'
 import { ISSUER, oauthFixture, RESOURCE, SIGNING_ENV, tokenBody } from './helpers/oauth'
 
-const SECOND_RESOURCE = 'https://control.example.test/api/rpc'
+// The command-line client's resources; the fixture's managed client keeps `RESOURCE` (`/mcp`).
+const CLI_RESOURCE = 'https://control.example.test/api/rpc'
+const SECOND_RESOURCE = 'https://control.example.test/operations/api/rpc'
 const CLI_CLIENT = OAUTH_CLI_CLIENT_ID
 
 type Fixture = Awaited<ReturnType<typeof oauthFixture>>
@@ -22,22 +23,20 @@ afterEach(() => {
 	active = null
 })
 
-/** The shared fixture with a parameterized `deploy` scope on both resources, served by `services`. */
+/** The shared fixture with the command-line client's two resources, each with a parameterized `deploy` scope. */
 async function fixture() {
-	const f = await oauthFixture(createHarness().repositories)
-	active = f
 	const scopeGrants = [
 		{ scope: 'authoring', permissions: [{ action: 'source.workspace.*' }] },
 		{ scope: 'deploy', parameter: 'app', permissions: [{ action: 'source.workspace.read' }, { action: 'deploy.run' }] },
 	]
-	const config: OAuthConfig = {
-		clients: f.config.clients,
-		resources: [
-			{ app: 'control', resource: RESOURCE, defaultScopes: ['authoring'], scopeGrants },
-			{ app: 'control', resource: SECOND_RESOURCE, scopeGrants },
+	const f = await oauthFixture(createHarness().repositories, {
+		extraResources: [
+			{ app: 'control', resource: CLI_RESOURCE, defaultScopes: ['authoring'], scopeGrants, client: 'cli' },
+			{ app: 'control', resource: SECOND_RESOURCE, scopeGrants, client: 'cli' },
 		],
-	}
-	const services: Services = { ...f.services, config: { ...f.services.config, oauth: config } }
+	})
+	active = f
+	const services: Services = f.services
 	const call = (request: Request) => handleOAuth(request, services, SIGNING_ENV, 'req-oauth', null)
 	const post = (path: string, form: Record<string, string>) =>
 		call(
@@ -49,7 +48,10 @@ async function fixture() {
 		)
 
 	/** A CLI grant for both resources, as the device flow records one, and its first refresh token. */
-	async function cliGrant(scopes: string[], resources: string[] = [RESOURCE, SECOND_RESOURCE]): Promise<{ grantId: string; refreshToken: string }> {
+	async function cliGrant(
+		scopes: string[],
+		resources: string[] = [CLI_RESOURCE, SECOND_RESOURCE],
+	): Promise<{ grantId: string; refreshToken: string }> {
 		const grantId = uuidv7()
 		const now = unixNow()
 		await f.repositories.oauth.createGrant(
@@ -59,7 +61,7 @@ async function fixture() {
 				session_id: f.sessionId,
 				client_id: CLI_CLIENT,
 				app: 'control',
-				resource: resources[0] ?? RESOURCE,
+				resource: resources[0] ?? CLI_RESOURCE,
 				resources: JSON.stringify(resources),
 				scopes: JSON.stringify(scopes),
 				created_at: now,
@@ -92,7 +94,7 @@ describe('a parameterized scope', () => {
 		// Beside the fixture's grants at app `alpha`, the person holds `deploy.run` everywhere.
 		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: 'control', permissions: ['deploy.run'] })
 		const alpha = await cliGrant(['deploy:alpha'])
-		const minted = await tokenBody(await refresh(alpha.refreshToken, RESOURCE))
+		const minted = await tokenBody(await refresh(alpha.refreshToken, CLI_RESOURCE))
 		expect(minted.scope).toBe('deploy:alpha')
 		const claims = permissionsOf(minted.access_token)
 		expect(claims.perms.map((entry) => `${entry.action}@${entry.scope?.type}:${entry.scope?.value}`).sort()).toEqual([
@@ -103,7 +105,7 @@ describe('a parameterized scope', () => {
 
 		// At app `beta` only the global grant reaches the token, narrowed to `beta`.
 		const beta = await cliGrant(['deploy:beta'])
-		const betaClaims = permissionsOf((await tokenBody(await refresh(beta.refreshToken, RESOURCE))).access_token)
+		const betaClaims = permissionsOf((await tokenBody(await refresh(beta.refreshToken, CLI_RESOURCE))).access_token)
 		expect(betaClaims.perms.map((entry) => `${entry.action}@${entry.scope?.type}:${entry.scope?.value}`)).toEqual(['deploy.run@app:beta'])
 	})
 
@@ -158,8 +160,8 @@ describe('a grant for several resources', () => {
 		const first = await tokenBody(await refresh(grant.refreshToken, SECOND_RESOURCE))
 		const claims = permissionsOf(first.access_token)
 		expect(claims.aud).toBe(SECOND_RESOURCE)
-		const second = await tokenBody(await refresh(first.refresh_token ?? '', RESOURCE))
-		expect(permissionsOf(second.access_token).aud).toBe(RESOURCE)
+		const second = await tokenBody(await refresh(first.refresh_token ?? '', CLI_RESOURCE))
+		expect(permissionsOf(second.access_token).aud).toBe(CLI_RESOURCE)
 
 		const elsewhere = await refresh(second.refresh_token ?? '', 'https://control.example.test/other')
 		expect(elsewhere.status).toBe(400)
@@ -168,7 +170,7 @@ describe('a grant for several resources', () => {
 
 	test('a single-resource grant still refuses a token for another resource the server knows', async () => {
 		const { cliGrant, refresh } = await fixture()
-		const grant = await cliGrant(['deploy:alpha'], [RESOURCE])
+		const grant = await cliGrant(['deploy:alpha'], [CLI_RESOURCE])
 		const refused = await refresh(grant.refreshToken, SECOND_RESOURCE)
 		expect(await refused.json()).toEqual({ error: 'invalid_grant' })
 	})
@@ -178,10 +180,10 @@ describe('the CLI client', () => {
 	test('refreshes and revokes without a key, and a rotated token presented again revokes the grant', async () => {
 		const { f, cliGrant, refresh, post } = await fixture()
 		const grant = await cliGrant(['deploy:alpha'])
-		const rotated = await tokenBody(await refresh(grant.refreshToken, RESOURCE))
+		const rotated = await tokenBody(await refresh(grant.refreshToken, CLI_RESOURCE))
 		expect(rotated.refresh_token).toBeString()
 
-		const replay = await refresh(grant.refreshToken, RESOURCE)
+		const replay = await refresh(grant.refreshToken, CLI_RESOURCE)
 		expect(await replay.json()).toEqual({ error: 'invalid_grant' })
 		expect((await f.repositories.oauth.grant(grant.grantId))?.revoked_at).not.toBeNull()
 
@@ -194,7 +196,7 @@ describe('the CLI client', () => {
 	test('is refused with a client assertion, for an authorization code, and at the authorization endpoint', async () => {
 		const { f, cliGrant, refresh } = await fixture()
 		const grant = await cliGrant(['deploy:alpha'])
-		const asserted = await refresh(grant.refreshToken, RESOURCE, CLI_CLIENT, {
+		const asserted = await refresh(grant.refreshToken, CLI_RESOURCE, CLI_CLIENT, {
 			client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
 			client_assertion: 'a.b.c',
 		})
@@ -222,6 +224,24 @@ describe('the CLI client', () => {
 		const foreign = await post('/oauth/revoke', { client_id: f.clientId, token: grant.refreshToken })
 		expect(foreign.status).toBe(200)
 		expect((await f.repositories.oauth.grant(grant.grantId))?.revoked_at).toBeNull()
-		expect((await refresh(grant.refreshToken, RESOURCE)).status).toBe(200)
+		expect((await refresh(grant.refreshToken, CLI_RESOURCE)).status).toBe(200)
+	})
+})
+
+describe('a resource is served to one kind of client', () => {
+	test('a managed client may not ask for a command-line resource, nor the command-line client mint for a managed one', async () => {
+		const { f, cliGrant, refresh } = await fixture()
+		const authorize = await f.authorize({ resource: CLI_RESOURCE, scope: 'deploy:alpha' })
+		expect(new URL(authorize.headers.get('location') ?? '').searchParams.get('error')).toBe('invalid_target')
+
+		// A grant recorded for the managed resource (as a config that served it to both would have) mints nothing for the CLI.
+		const grant = await cliGrant(['authoring'], [RESOURCE])
+		expect(await (await refresh(grant.refreshToken, RESOURCE)).json()).toEqual({ error: 'invalid_grant' })
+	})
+
+	test('the declaration accepts `client: cli` and refuses any other value', () => {
+		const base = { app: 'control', resource: CLI_RESOURCE, scopeGrants: [{ scope: 'read', permissions: [{ action: 'deploy.read' }] }] }
+		expect(parseOAuthResourceDto({ ...base, client: 'cli' })?.client).toBe('cli')
+		expect(parseOAuthResourceDto({ ...base, client: 'managed' })).toBeNull()
 	})
 })

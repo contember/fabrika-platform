@@ -304,6 +304,8 @@ describe('OAuth on the console, resolved', () => {
 		expect(rpc?.scopeGrants.find((grant) => grant.scope === 'deploy')?.parameter).toBe('app')
 		expect(rpc?.scopeGrants.find((grant) => grant.scope === 'create')?.parameter).toBeUndefined()
 		expect(config.resources[2]?.defaultScopes).toEqual(['authoring'])
+		// Each resource is served to one kind of client: the RPC ones to the command-line client only, MCP's to the managed ones.
+		expect(config.resources.map((entry) => entry.client)).toEqual(['cli', 'cli', undefined])
 	})
 
 	test('only the console serves OAuth clients', () => {

@@ -1,5 +1,5 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
-import type { OAuthClientProvider } from '@fabrika/iam-contract'
+import type { OAuthClientProvider, OAuthResourceDto } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { spyOn } from 'bun:test'
 import type { IamRepositories } from '../../db'
@@ -30,6 +30,8 @@ export async function oauthFixture(
 		stallFirstFetch?: boolean
 		/** The registered client's kind; `claude` when absent. */
 		provider?: OAuthClientProvider
+		/** Resources served beside the managed client's `RESOURCE`, such as the command-line client's. */
+		extraResources?: readonly OAuthResourceDto[]
 	} = {},
 ) {
 	const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
@@ -59,7 +61,7 @@ export async function oauthFixture(
 				{ scope: 'authoring', permissions: [{ action: 'source.workspace.*' }] },
 				{ scope: 'deploy', permissions: [{ action: 'deploy.run', scope: { type: 'app', value: 'beta' } }] },
 			],
-		}],
+		}, ...(options.extraResources ?? [])],
 	}
 	const document = options.document?.(clientId, jwksUri) ?? {
 		client_id: clientId,

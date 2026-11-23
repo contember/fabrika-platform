@@ -267,9 +267,13 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
 
    Without the list, the console's table makes `/mcp` a session-only row that Control answers `404`,
    so no MCP client reaches it. An https deploy still writes `FABRIKA_IAM_OAUTH_CONFIG`, with no client and
-   only the command-line client's resources (`https://<console>/api/rpc` and `/operations/api/rpc`, for
-   `fabrika control auth device`). A plain-http deploy writes none, leaves the variable on `iam` as it is, and
+   only the command-line client's resources (`https://<console>/api/rpc` and `/operations/api/rpc`, served to that
+   client alone through its device grant). A plain-http deploy writes none, leaves the variable on `iam` as it is, and
    warns that it is still set; delete it there to stop IAM issuing tokens.
+
+   **Rolling `iam` back** to a release from before the command-line client's resources: that IAM refuses a
+   `FABRIKA_IAM_OAUTH_CONFIG` with no client and stops at boot, and its deploy does not clear the variable. On an
+   installation without MCP clients, delete the variable on `iam` before the rollback.
 
    **A sidecar generated before this variable existed does not forward it** until its workflow is
    regenerated: `platform upgrade` and `platform init` both rewrite `.github/workflows/platform.yml`

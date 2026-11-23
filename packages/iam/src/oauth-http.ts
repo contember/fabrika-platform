@@ -20,7 +20,7 @@ import { principalStatus } from './db'
 import type { Env } from './env'
 import { escapeHtml } from './html'
 import { installationBrand } from './installation-brand'
-import { establishClient, exchangeOAuthToken, grantAuthorization, type ManagedClient, revokeOAuthToken, scopeCeiling } from './oauth'
+import { establishClient, exchangeOAuthToken, grantAuthorization, type ManagedClient, revokeOAuthToken, scopeCeiling, servesClient } from './oauth'
 import { authenticateOAuthClient, authenticateRevokingClient } from './oauth-client-auth'
 import type { OAuthConfig } from './oauth-config'
 import { OAUTH_DEVICE_PATH, redeemDeviceCode, startDeviceAuthorization } from './oauth-device'
@@ -108,7 +108,8 @@ async function checkAuthorization(issuer: string, config: OAuthConfig, input: Re
 	const client = await establishClient(config, coordinates.client_id, coordinates.redirect_uri)
 	if (client === null) return { kind: 'refused', message: 'The client or its redirect URI is not registered.' }
 	if (attempt.kind === 'invalid_scope') return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }
-	const resource = config.resources.find((entry) => entry.resource === coordinates.resource)
+	// The command-line client's resources are served through the device grant only, never to a managed client.
+	const resource = config.resources.find((entry) => entry.resource === coordinates.resource && servesClient(entry, false))
 	if (resource === undefined) return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_target' }) }
 	const scopes = resolveOAuthAuthorizationScopes(attempt.request.scope, resource)
 	if (scopes === null) return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }

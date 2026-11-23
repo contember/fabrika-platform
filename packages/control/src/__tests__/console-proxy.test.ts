@@ -129,4 +129,11 @@ describe('the console behind its MCP table', () => {
 		expect(response.status).toBe(200)
 		expect(await response.text()).toBe('mcp')
 	})
+
+	test("the command-line client's token for the RPC passes the proxy, and Control does not accept one yet", async () => {
+		const token = await testResourceToken({ resource: `${CONSOLE_ORIGIN}${CONTROL_RPC_PATH}`, label: 'agent', actions: ['*'] })
+		const response = await fetch(rpc({ authorization: `Bearer ${token}` }))
+		expect(response.status).toBe(401)
+		expect(response.headers.get('www-authenticate')).toBeNull()
+	})
 })

@@ -64,6 +64,11 @@ export interface OAuthResourceDto {
 	scopeGrants: OAuthScopeGrant[]
 	/** Used only when scope is omitted. No configured default means invalid_scope, never all scopes. */
 	defaultScopes?: string[]
+	/**
+	 * `cli`: served only to the installation's command-line client, through the device grant. Absent: served only to the
+	 * operator's managed clients, through an authorization code. A token for one never comes from the other's flow.
+	 */
+	client?: 'cli'
 }
 
 /** No access token, refresh token, hash, or authorization code appears in a grant DTO. */
@@ -262,6 +267,8 @@ export function parseOAuthResourceDto(value: unknown): OAuthResourceDto | null {
 	const resource = field(value, 'resource')
 	const rawGrants = field(value, 'scopeGrants')
 	const rawDefaultScopes = field(value, 'defaultScopes')
+	const client = field(value, 'client')
+	if (client !== undefined && client !== 'cli') return null
 	if (
 		!isNonemptyText(app) || app.includes('*') || !isOAuthResourceUri(resource) || !Array.isArray(rawGrants) || rawGrants.length === 0
 		|| rawGrants.length > 64
@@ -287,7 +294,7 @@ export function parseOAuthResourceDto(value: unknown): OAuthResourceDto | null {
 		if (!isScopeParameterText(parameter) || permissions.some((permission) => permission.scope != null)) return null
 		scopeGrants.push({ scope, permissions, parameter })
 	}
-	const dto: OAuthResourceDto = { app, resource, scopeGrants }
+	const dto: OAuthResourceDto = { app, resource, scopeGrants, ...(client === undefined ? {} : { client }) }
 	if (rawDefaultScopes !== undefined) {
 		const defaultScopes = parseOAuthScopes(rawDefaultScopes)
 		if (

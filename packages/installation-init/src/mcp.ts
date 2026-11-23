@@ -78,7 +78,8 @@ export const parseMcpClientsJson = (raw: string): readonly McpClient[] => {
 
 /**
  * IAM's OAuth configuration for one placed installation: the MCP clients (none when MCP authoring is off; the
- * command-line client is IAM's own and is never listed), and every resource the composition registers.
+ * command-line client is IAM's own and is never listed), and every resource the composition registers, each marked
+ * for the one kind of client it is served to.
  */
 export const platformIamOAuthConfig = (
 	template: PlatformProxyManifestTemplate,
@@ -88,7 +89,7 @@ export const platformIamOAuthConfig = (
 	const resources: OAuthResourceDto[] = []
 	for (const app of template.apps) {
 		const served = platformOAuthServed(app, composition)
-		for (const entry of served?.resources ?? []) {
+		for (const { template: entry, cli } of served?.resources ?? []) {
 			const { resource } = platformOAuthResourceUris(composition, composition.placement[app.service].hosts, entry)
 			resources.push({
 				app: app.id,
@@ -99,6 +100,8 @@ export const platformIamOAuthConfig = (
 					...(grant.parameter === undefined ? {} : { parameter: grant.parameter }),
 					permissions: grant.actions.map((action) => ({ action })),
 				})),
+				// IAM serves a resource to one kind of client: the command-line client's never reach an MCP client, nor MCP's it.
+				...(cli ? { client: 'cli' } : {}),
 			})
 		}
 	}

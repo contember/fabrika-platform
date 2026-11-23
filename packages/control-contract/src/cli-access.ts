@@ -34,7 +34,8 @@ export const CONTROL_CLI_RPC_GRANTS: readonly ControlCliScopeGrant[] = [
 	{ scope: 'read', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: READ },
 	{ scope: 'deploy', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: DEPLOY },
 	{ scope: 'operate', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [...DEPLOY, CONTROL_ACTIONS.SECRET_MANAGE, CONTROL_ACTIONS.APP_MANAGE] },
-	// Registering an application needs `app.manage` held globally; IAM's consent page warns about it.
+	// Registering an application needs `app.manage` held globally, which also changes and deletes every app and its
+	// environments the person may; IAM's consent page warns about a scope bound to no value.
 	{ scope: 'create', actions: [CONTROL_ACTIONS.APP_MANAGE] },
 ]
 

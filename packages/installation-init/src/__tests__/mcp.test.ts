@@ -55,6 +55,7 @@ const RPC_RESOURCE = {
 	app: 'vozka',
 	resource: 'https://console.example.test/api/rpc',
 	scopeGrants: [{ scope: 'deploy', parameter: 'app', permissions: [{ action: 'deploy.trigger' }] }],
+	client: 'cli',
 }
 
 describe('the MCP client list', () => {

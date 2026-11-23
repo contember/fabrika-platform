@@ -183,16 +183,24 @@ const registeredResource = (
 	scopesSupported: [...template.scopes],
 })
 
-/** An app's OAuth table and resource templates on this composition, or null when it serves no OAuth client. */
+/** One resource an app serves on a composition, and whether only the command-line client is served it. */
+export interface PlatformOAuthServedResource {
+	readonly template: PlatformOAuthResourceTemplate
+	/** True for the command-line client's resources, false for MCP's, which only the managed clients are served. */
+	readonly cli: boolean
+}
+
+/** An app's OAuth table and resources on this composition, or null when it serves no OAuth client. */
 export const platformOAuthServed = (
 	app: PlatformProxyApp,
 	composition: Pick<PlatformProxyComposition, 'authorizationServer' | 'mcp'>,
-): { readonly table: InstallationEndpointTable; readonly resources: readonly PlatformOAuthResourceTemplate[] } | null => {
+): { readonly table: InstallationEndpointTable; readonly resources: readonly PlatformOAuthServedResource[] } | null => {
 	if (app.oauth === undefined || composition.authorizationServer === undefined) return null
+	const cli = app.oauth.resources.map((template) => ({ template, cli: true }))
 	const mcp = composition.mcp ? app.oauth.mcp : undefined
 	return mcp === undefined
-		? { table: app.oauth.table, resources: app.oauth.resources }
-		: { table: mcp.table, resources: [...app.oauth.resources, mcp.resource] }
+		? { table: app.oauth.table, resources: cli }
+		: { table: mcp.table, resources: [...cli, { template: mcp.resource, cli: false }] }
 }
 
 /** Only a composition that names an authorization server registers an app's resources and serves its OAuth rows. */
@@ -206,7 +214,7 @@ const resolvedApp = (app: PlatformProxyApp, composition: PlatformProxyCompositio
 	return {
 		...base,
 		...serviceProxyTable(served.table, { oauth: true }),
-		oauthResources: served.resources.map((template) => registeredResource(hosts, template, composition, server)),
+		oauthResources: served.resources.map(({ template }) => registeredResource(hosts, template, composition, server)),
 	}
 }
 

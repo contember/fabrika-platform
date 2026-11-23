@@ -247,7 +247,7 @@ Naming NO host derives all three from the proxy service's Zerops subdomains and 
 subdomain is published.
 
 On --scheme=https, IAM gets FABRIKA_IAM_OAUTH_CONFIG and the console's RPC admits the command-line
-client's OAuth bearers (\`fabrika control auth device\`). On plain http neither happens and
+client's OAuth bearers (its RFC 8628 device grant). On plain http neither happens and
 FABRIKA_IAM_OAUTH_CONFIG on iam is left as it is.
 
 MCP authoring (ADR-0049) is opt-in on top, and needs https. --mcp-clients takes a JSON array of the MCP

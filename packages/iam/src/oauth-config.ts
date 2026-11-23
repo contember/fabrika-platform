@@ -16,7 +16,7 @@ const MAX_CLIENTS = 16
 const MAX_RESOURCES = 32
 const CONFIG_KEYS = ['clients', 'resources']
 const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl']
-const RESOURCE_KEYS = ['app', 'resource', 'defaultScopes', 'scopeGrants']
+const RESOURCE_KEYS = ['app', 'resource', 'defaultScopes', 'scopeGrants', 'client']
 
 /**
  * Parse `OAUTH_CONFIG`. Absent or empty disables OAuth; anything malformed THROWS, so a typo fails the boot instead of

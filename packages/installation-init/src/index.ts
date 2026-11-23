@@ -58,6 +58,7 @@ export {
 	type PlatformOAuthResourceTemplate,
 	type PlatformOAuthScopeGrant,
 	platformOAuthServed,
+	type PlatformOAuthServedResource,
 	platformOrigin,
 	type PlatformProxyApp,
 	platformProxyAppFor,
