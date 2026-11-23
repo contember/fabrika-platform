@@ -116,7 +116,7 @@ export async function grantAuthorization(
 	return code
 }
 
-export type OAuthTokenOutcome = { ok: true; body: OAuthTokenResponse } | { ok: false; error: 'invalid_grant' }
+export type OAuthTokenOutcome = { ok: true; body: OAuthTokenResponse } | { ok: false; error: 'invalid_grant' | 'unauthorized_client' }
 
 /** Redeem a code or rotate a refresh token for a client `authenticateOAuthClient` established. */
 export async function exchangeOAuthToken(
@@ -128,7 +128,8 @@ export async function exchangeOAuthToken(
 ): Promise<OAuthTokenOutcome> {
 	const grantTypes = clientGrantTypes(client)
 	if (input.grant_type === 'authorization_code') {
-		return client.kind === 'managed' ? redeemCode(services, env, client.metadata, input, requestId) : { ok: false, error: 'invalid_grant' }
+		// RFC 6749 §5.2: the CLI client may not use this grant type; refused before the code is spent.
+		return client.kind === 'managed' ? redeemCode(services, env, client.metadata, input, requestId) : { ok: false, error: 'unauthorized_client' }
 	}
 	return rotateRefreshToken(services, env, grantTypes, input, requestId)
 }

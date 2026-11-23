@@ -220,6 +220,14 @@ function parseClientGrantTypes(value: unknown): OAuthClientMetadataDocument['gra
 	return grants.includes('authorization_code') ? grants : null
 }
 
+const SCOPE_GRANT_KEYS = ['scope', 'permissions', 'parameter']
+const PERMISSION_KEYS = ['action', 'scope']
+const PERMISSION_SCOPE_KEYS = ['type', 'value']
+
+function hasOnlyKeys(value: unknown, allowed: readonly string[]): boolean {
+	return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).every((key) => allowed.includes(key))
+}
+
 export function parseOAuthResourceDto(value: unknown): OAuthResourceDto | null {
 	const app = field(value, 'app')
 	const resource = field(value, 'resource')
@@ -231,6 +239,8 @@ export function parseOAuthResourceDto(value: unknown): OAuthResourceDto | null {
 	) return null
 	const scopeGrants: OAuthScopeGrant[] = []
 	for (const entry of rawGrants) {
+		// An unknown key is refused: a misspelled `parameter` would otherwise leave the scope unnarrowed.
+		if (!hasOnlyKeys(entry, SCOPE_GRANT_KEYS)) return null
 		const scope = field(entry, 'scope')
 		const permissions = parseResourcePermissions(field(entry, 'permissions'))
 		const parameter = field(entry, 'parameter')
@@ -267,13 +277,13 @@ function parseResourcePermissions(value: unknown): KeyGrant[] | null {
 	for (const entry of value) {
 		const action = field(entry, 'action')
 		const rawScope = field(entry, 'scope')
-		if (!isNonemptyText(action)) return null
+		if (!hasOnlyKeys(entry, PERMISSION_KEYS) || !isNonemptyText(action)) return null
 		if (rawScope === undefined) permissions.push({ action })
 		else if (rawScope === null) permissions.push({ action, scope: null })
 		else {
 			const type = field(rawScope, 'type')
 			const scopeValue = field(rawScope, 'value')
-			if (!isNonemptyText(type) || !isNonemptyText(scopeValue)) return null
+			if (!hasOnlyKeys(rawScope, PERMISSION_SCOPE_KEYS) || !isNonemptyText(type) || !isNonemptyText(scopeValue)) return null
 			permissions.push({ action, scope: { type, value: scopeValue } })
 		}
 	}

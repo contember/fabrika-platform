@@ -1,4 +1,5 @@
 import type { SqlDatabase } from '@fabrika/platform'
+import { parseJsonOrNull } from '../json'
 import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
 
 export interface OAuthGrantRow {
@@ -43,6 +44,10 @@ export class OAuthRepository {
 
 	/** Record a consent, its one authorization code and `audit` together. */
 	async createGrant(grant: OAuthGrantRow, code: Omit<OAuthCodeRow, 'grant_id' | 'used_at'>, audit?: AuditEventInput): Promise<void> {
+		const listed = grant.resources === null ? null : parseJsonOrNull(grant.resources)
+		if (listed !== null && (!Array.isArray(listed) || listed[0] !== grant.resource)) {
+			throw new Error('an OAuth grant names its first resource as `resource`')
+		}
 		await this.db.batch([
 			this.db.prepare(`INSERT INTO oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at,
 				revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).bind(

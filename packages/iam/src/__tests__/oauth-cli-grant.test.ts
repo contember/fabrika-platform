@@ -89,6 +89,8 @@ function permissionsOf(token: string) {
 describe('a parameterized scope', () => {
 	test('narrows its actions to the value it names and drops what the person holds elsewhere', async () => {
 		const { f, cliGrant, refresh } = await fixture()
+		// Beside the fixture's grants at app `alpha`, the person holds `deploy.run` everywhere.
+		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: 'control', permissions: ['deploy.run'] })
 		const alpha = await cliGrant(['deploy:alpha'])
 		const minted = await tokenBody(await refresh(alpha.refreshToken, RESOURCE))
 		expect(minted.scope).toBe('deploy:alpha')
@@ -99,9 +101,10 @@ describe('a parameterized scope', () => {
 		])
 		expect(claims.sub).toBe(f.principal.id)
 
-		// The person holds nothing at app `beta`, so a grant for it carries no permission.
+		// At app `beta` only the global grant reaches the token, narrowed to `beta`.
 		const beta = await cliGrant(['deploy:beta'])
-		expect(permissionsOf((await tokenBody(await refresh(beta.refreshToken, RESOURCE))).access_token).perms).toEqual([])
+		const betaClaims = permissionsOf((await tokenBody(await refresh(beta.refreshToken, RESOURCE))).access_token)
+		expect(betaClaims.perms.map((entry) => `${entry.action}@${entry.scope?.type}:${entry.scope?.value}`)).toEqual(['deploy.run@app:beta'])
 	})
 
 	test('is refused bare, and a value is refused on a scope that takes none', () => {
@@ -134,6 +137,17 @@ describe('a parameterized scope', () => {
 		expect(parseOAuthResourceDto({ ...base, scopeGrants: [{ scope: 'deploy:x', permissions: [{ action: 'deploy.run' }] }] })).toBeNull()
 		expect(parseOAuthResourceDto({ ...base, scopeGrants: [{ scope: 'deploy', parameter: 'a:b', permissions: [{ action: 'deploy.run' }] }] }))
 			.toBeNull()
+	})
+
+	test('a resource declaration refuses an unknown key, so a misspelled parameter cannot leave a scope unnarrowed', () => {
+		const base = { app: 'control', resource: RESOURCE }
+		expect(parseOAuthResourceDto({ ...base, scopeGrants: [{ scope: 'deploy', paramter: 'app', permissions: [{ action: 'deploy.run' }] }] }))
+			.toBeNull()
+		expect(parseOAuthResourceDto({ ...base, scopeGrants: [{ scope: 'deploy', permissions: [{ action: 'deploy.run', scop: null }] }] })).toBeNull()
+		expect(parseOAuthResourceDto({
+			...base,
+			scopeGrants: [{ scope: 'deploy', permissions: [{ action: 'deploy.run', scope: { type: 'app', value: 'a', extra: 1 } }] }],
+		})).toBeNull()
 	})
 })
 
@@ -178,7 +192,7 @@ describe('the CLI client', () => {
 	})
 
 	test('is refused with a client assertion, for an authorization code, and at the authorization endpoint', async () => {
-		const { f, cliGrant, refresh, call } = await fixture()
+		const { f, cliGrant, refresh } = await fixture()
 		const grant = await cliGrant(['deploy:alpha'])
 		const asserted = await refresh(grant.refreshToken, RESOURCE, CLI_CLIENT, {
 			client_assertion_type: 'urn:ietf:params:oauth:client-assertion-type:jwt-bearer',
@@ -186,11 +200,28 @@ describe('the CLI client', () => {
 		})
 		expect(asserted.status).toBe(401)
 
+		// Refused before the code is spent: the client it was issued to still redeems it.
 		const code = await f.approve()
 		const redeemed = await f.exchange(code, { client_id: CLI_CLIENT })
-		expect(await redeemed.json()).toEqual({ error: 'invalid_grant' })
+		expect(await redeemed.json()).toEqual({ error: 'unauthorized_client' })
+		expect((await f.exchange(code)).status).toBe(200)
 
-		const authorize = await call(new Request(`${ISSUER}/oauth/authorize?${new URLSearchParams({ client_id: CLI_CLIENT })}`))
+		// A complete, otherwise valid authorization request is refused for the CLI client, never redirected.
+		const authorize = await f.authorize({ client_id: CLI_CLIENT })
 		expect(authorize.status).toBe(400)
+		expect(authorize.headers.get('location')).toBeNull()
+	})
+
+	test("neither refreshes another client's grant nor has its own grant revoked by another client", async () => {
+		const { f, cliGrant, refresh, post } = await fixture()
+		const managed = await tokenBody(await f.exchange(await f.approve()))
+		const crossed = await refresh(managed.refresh_token ?? '', RESOURCE)
+		expect(await crossed.json()).toEqual({ error: 'invalid_grant' })
+
+		const grant = await cliGrant(['deploy:alpha'])
+		const foreign = await post('/oauth/revoke', { client_id: f.clientId, token: grant.refreshToken })
+		expect(foreign.status).toBe(200)
+		expect((await f.repositories.oauth.grant(grant.grantId))?.revoked_at).toBeNull()
+		expect((await refresh(grant.refreshToken, RESOURCE)).status).toBe(200)
 	})
 })
