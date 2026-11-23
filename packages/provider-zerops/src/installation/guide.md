@@ -294,8 +294,8 @@ an existing version 1 lockfile at 1), which Bun 1.3 refuses, so the build fails 
 on `alpine/bun@1.3`, the oldest Bun base Zerops offers; version 2 needs `alpine/bun@1.4` or later. Raise
 `build.base` to `alpine/bun@1.4`, or regenerate `bun.lock` with the base's Bun (delete it and run `bun install` with
 Bun 1.3), which resolves every dependency afresh. `fabrika app build` and `app register` refuse a base that cannot
-read the lockfile and name the one to use. A deploy checks the committed `bun.lock` against the registered base
-the same way, so a lockfile regenerated after registration fails the run with that message before the build starts.
+read the lockfile and name the one to use. A deploy checks the committed `bun.lock` against the base it builds on
+(the commit's, when the commit changed `zerops.yaml`) the same way, so a lockfile regenerated after registration fails the run with that message before the build starts.
 
 1. **Create a namespace** with the preset and core package the human chose (see Decisions). Without a
    custom domain bound to its proxy, pass `--public-access=zerops-subdomain`; the default is

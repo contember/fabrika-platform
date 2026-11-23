@@ -661,6 +661,24 @@ describe('provider-neutral run lifecycle', () => {
 			)
 		})
 
+		test("the commit's bun.lock is checked against the build of the file the commit registers, not the one it replaces", async () => {
+			const { db } = createHarness()
+			const { runId } = await seedRegistered(db, 'base: alpine/bun@1.3')
+			const inputs: ProviderDeployInput[] = []
+			const { provider } = descriptorProvider(inputs, 'base: alpine/bun@1.4', (input) => Promise.resolve(registered(input.contents)))
+			const checked: ProviderEnvelope[] = []
+			provider.lockfileRefusal = ({ environment }) => {
+				checked.push(environment.artifact)
+				return String(environment.artifact.payload) === 'artifact:base: alpine/bun@1.4'
+					? null
+					: 'bun.lock has lockfileVersion 2, which Bun 1.3 cannot read'
+			}
+
+			expect((await executeDeploy({ ...makeDeps(db, provider), commits: commitsWith('base: alpine/bun@1.4') }, { runId })).status).toBe('succeeded')
+			expect(checked).toEqual([registered('base: alpine/bun@1.4')])
+			expect(inputs).toHaveLength(1)
+		})
+
 		test('an unchanged file registers nothing', async () => {
 			const { db } = createHarness()
 			const { runId, generation } = await seedRegistered(db, 'build: [bun install]')

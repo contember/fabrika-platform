@@ -229,7 +229,8 @@ follows an edit of `zerops.yaml`.
 - **The build base against `bun.lock` is checked at deploy too.** `fabrika app build`, `app register` and the builder
   check the lockfile beside them; a run checks the `bun.lock` of the commit it deploys against the build base of the
   artifact it deploys with (the re-registered one when the commit changed `zerops.yaml`), when Control reads the run's
-  snapshot, before anything publishes or builds, with the same message. This is no protocol change under
+  snapshot, before anything publishes or builds, with the same message. A run that reuses its stored snapshot (an
+  approved one) reuses the check made when it was read. This is no protocol change under
   [ADR-0062](0062-a-platform-release-serves-older-framework-releases.md): it refuses only a commit whose frozen install
   would fail in the build container, and only moves that failure earlier with a named remedy. The approval diff of
   [ADR-0050](0050-approved-access.md) covers access, not the build, so a changed `zerops.yaml` is not an approval item.
