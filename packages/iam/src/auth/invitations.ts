@@ -10,6 +10,7 @@ import { validatePassword } from '../password-policy'
 import { parseLocale, rememberLocaleCookie } from '../person-locale'
 import type { Services } from '../services'
 import { methodNotAllowed, readForm, redirectHeaders, sameOrigin, stringValue } from './http'
+import type { AuthEnv } from './oidc-flight'
 import { currentSession, issueSession } from './sessions'
 
 const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
@@ -29,7 +30,13 @@ const tokenSchema = z.string().max(512).regex(/^[A-Za-z0-9_-]{32,}$/)
  * The link's `?app=` picks the page's language; an accepted invitation lands on its own application's
  * registered origin, where the application's proxy signs the browser in through the normal handoff.
  */
-export async function handleInvitation(request: Request, services: Services, ctx: RequestContext, requestId: string): Promise<Response> {
+export async function handleInvitation(
+	request: Request,
+	services: Services,
+	env: AuthEnv,
+	ctx: RequestContext,
+	requestId: string,
+): Promise<Response> {
 	const linked = await presentationFor(services, new URL(request.url).searchParams.get('app'), { request })
 	if (request.method === 'GET') {
 		return invitationPage(linked)
@@ -66,7 +73,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 		}
 		const password = stringValue(form?.get('password') ?? null)
 		if (password !== null) {
-			return createAndAccept(request, services, ctx, { invitation: offer.invitation, token: token.data, password, requestId, brand: linked.brand })
+			return createAndAccept(request, services, env, ctx, { invitation: offer.invitation, token: token.data, password, requestId, brand: linked.brand })
 		}
 		const presentation = await presentationFor(services, offer.invitation.app, { request, brand: linked.brand, locale: offer.invitation.locale })
 		return invitationPasswordPage({
@@ -131,6 +138,7 @@ export async function handleInvitation(request: Request, services: Services, ctx
 async function createAndAccept(
 	request: Request,
 	services: Services,
+	env: AuthEnv,
 	ctx: RequestContext,
 	input: {
 		readonly invitation: InvitationRow
@@ -159,7 +167,7 @@ async function createAndAccept(
 	if (!outcome.ok) {
 		return creationRefused(services, presentation, outcome.reason)
 	}
-	return issueSession(request, services, ctx, {
+	return issueSession(request, services, env, ctx, {
 		principalId: outcome.principal.id,
 		email: outcome.principal.email,
 		authenticationMethod: 'password',

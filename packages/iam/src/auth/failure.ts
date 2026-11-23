@@ -21,5 +21,10 @@ export type AuthFailure =
 	| { readonly kind: 'terminal_enrolment_unavailable' }
 	/** A terminal identification completed by another browser, twice, too late, or after its login ended. */
 	| { readonly kind: 'terminal_completion_refused' }
+	/** The challenge cookie of a sign-in waiting for its second factor is missing, forged or older than its five minutes. */
+	| { readonly kind: 'second_factor_expired' }
+	/** The browser holds no login of a principal that may enrol an authenticator. */
+	| { readonly kind: 'second_factor_not_allowed' }
+	| { readonly kind: 'second_factor_unavailable' }
 	/** A refusal of the principal resolution; `reason` is its fixed code, never what the caller sent. */
 	| { readonly kind: 'login_refused'; readonly reason: string }

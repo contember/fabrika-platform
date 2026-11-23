@@ -19,7 +19,7 @@ import { parseOidcSessionSeconds } from '../oidc-session'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { mintToken } from '../tokens'
-import { CONSOLE_APP, createHarness, makeServicesFor, TestSqlDatabase } from './helpers/harness'
+import { CONSOLE_APP, createHarness, makeServicesFor, TEST_SIGNING_ENV, TestSqlDatabase } from './helpers/harness'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
 const ISSUER = 'https://iam.test'
@@ -215,7 +215,7 @@ describe('the OIDC session cap — SQLite', () => {
 		const oidcUser = await harness.repositories.principals.createUser('cap-new-oidc', 'cap-new-oidc@contember.com')
 		const passwordUser = await harness.repositories.principals.createUser('cap-new-password', 'cap-new-password@contember.com')
 		const open = (principalId: string, authenticationMethod: AuthenticationMethod) =>
-			issueSession(new Request(`${ISSUER}/auth/callback`), services, ctx, {
+			issueSession(new Request(`${ISSUER}/auth/callback`), services, TEST_SIGNING_ENV, ctx, {
 				principalId,
 				...(authenticationMethod === 'oidc' ? { idpSub: `idp-${principalId}` } : {}),
 				authenticationMethod,

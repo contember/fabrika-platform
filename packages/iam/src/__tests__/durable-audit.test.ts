@@ -21,7 +21,7 @@ import { assignMember, createScope, requestDelegation, revokeMember } from '../m
 import { pkceChallenge, randomToken } from '../oidc'
 import { resolveUserPrincipal } from '../resolve'
 import { hashToken } from '../secret'
-import { adminTokenFor, createHarness, makeServicesFor, TEST_SIGNING_KEYS, TestSqlDatabase } from './helpers/harness'
+import { adminTokenFor, createHarness, makeServicesFor, TEST_SIGNING_ENV, TEST_SIGNING_KEYS, TestSqlDatabase } from './helpers/harness'
 import {
 	APP,
 	CALLER_ENV,
@@ -684,7 +684,7 @@ function durableAuditSuite(backend: () => Backend): void {
 	describe('logins and logouts', () => {
 		async function login(b: Backend, principalId: string, requestId: string): Promise<Response> {
 			const services = (await membershipFixture(b.repositories)).services
-			return issueSession(new Request(`${ORIGIN}/auth/login`), services, { waitUntil() {} }, {
+			return issueSession(new Request(`${ORIGIN}/auth/login`), services, TEST_SIGNING_ENV, { waitUntil() {} }, {
 				principalId,
 				email: null,
 				authenticationMethod: 'password',

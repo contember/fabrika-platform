@@ -17,7 +17,9 @@ import { type Handoff, handoffLocation } from './handoff'
 import { authFailurePage } from '../password-pages'
 import { redirectHeaders, safeRedirect, sameOrigin } from './http'
 
-import { endingFlightCookies } from './oidc-flight'
+import { knownDeviceCookie } from './known-device'
+import { type AuthEnv, endingFlightCookies } from './oidc-flight'
+import { challengeSecondFactor, endingChallengeCookie } from './second-factor-challenge'
 
 /** SSO session lifetime — the long-lived credential a browser carries (30 days). */
 const SESSION_TTL_SECONDS = 30 * 24 * 60 * 60
@@ -55,30 +57,65 @@ export async function currentLogin(request: Request, services: Services): Promis
 	return { session, principal }
 }
 
+/** A login a proven first factor opens. */
+export interface LoginInput {
+	principalId: string
+	idpSub?: string | null
+	email?: string | null
+	authenticationMethod?: AuthenticationMethod
+	/** Where the login lands; null for no destination of its own, which is the installation's landing. */
+	redirect: string | null
+	reason: string
+	/** The correlation id the composition root allowed; see `src/request-id.ts`. */
+	requestId: string
+	clearOidc?: boolean
+	/** When set, land on the app's callback with a code instead of on `redirect` (ADR-0022). */
+	handoff?: Handoff | null
+	/** Set the known-device cookie once the login is recorded: a password login's (`auth/known-device.ts`). */
+	rememberDevice?: boolean
+	/** Set only by the second-factor form, after the principal's code or recovery code was accepted. */
+	secondFactor?: 'verified'
+}
+
 /**
  * Open a login: the session and its `auth_log` row are written in one batch, before the answer. A login that cannot
  * be logged opens no session and answers 503. A principal that administers at IAM, the installation or the people of
  * an application (ADR-0058), is logged `privileged`.
+ *
+ * A principal with a confirmed second factor gets no session here until its code is verified: the answer is the code
+ * form and a challenge cookie holding this login (`second-factor-challenge.ts`). Every password, OIDC, password-action
+ * and invitation login passes through here, so none skips the factor; only the local-dev bypass does, which no
+ * installation outside `ENVIRONMENT=local` serves.
  */
 export async function issueSession(
 	request: Request,
 	services: Services,
+	env: AuthEnv,
 	ctx: RequestContext,
-	input: {
-		principalId: string
-		idpSub?: string | null
-		email?: string | null
-		authenticationMethod?: AuthenticationMethod
-		/** Where the login lands; null for no destination of its own, which is the installation's landing. */
-		redirect: string | null
-		reason: string
-		/** The correlation id the composition root allowed; see `src/request-id.ts`. */
-		requestId: string
-		clearOidc?: boolean
-		/** When set, land on the app's callback with a code instead of on `redirect` (ADR-0022). */
-		handoff?: Handoff | null
-	},
+	input: LoginInput,
 ): Promise<Response> {
+	const method = input.authenticationMethod ?? 'oidc'
+	if (input.secondFactor !== 'verified' && (method === 'oidc' || method === 'password')) {
+		let required: boolean
+		try {
+			required = await services.repositories.secondFactors.isConfirmed(input.principalId)
+		} catch (err) {
+			logError(`the second factor of login for request '${input.requestId}' could not be read`, err)
+			return authFailurePage(await installationPresentation(services, { request }), { kind: 'login_unavailable' }, 503)
+		}
+		if (required) {
+			return challengeSecondFactor(services, env, request, {
+				principalId: input.principalId,
+				idpSub: input.idpSub ?? null,
+				email: input.email ?? null,
+				authenticationMethod: method,
+				redirect: input.redirect,
+				reason: input.reason,
+				handoff: input.handoff ?? null,
+				rememberDevice: input.rememberDevice === true,
+			})
+		}
+	}
 	const sessionToken = randomToken(32)
 	// An OIDC login stores the installation's cap as its expiry, so its app sessions, OAuth grants and cookie end with it.
 	const lifetime = (input.authenticationMethod ?? 'oidc') === 'oidc'
@@ -133,6 +170,12 @@ export async function issueSession(
 			headers.append('Set-Cookie', cookie)
 		}
 	}
+	if (input.secondFactor === 'verified') {
+		headers.append('Set-Cookie', endingChallengeCookie())
+	}
+	if (input.rememberDevice === true) {
+		headers.append('Set-Cookie', await knownDeviceCookie(env, input.principalId))
+	}
 	return new Response(null, { status: 302, headers })
 }
 
@@ -155,6 +198,9 @@ export type LoginRefusal =
 	| 'oidc_unknown_principal'
 	| 'oidc_external_principal'
 	| 'local_login_refused'
+	| 'second_factor_invalid'
+	| 'second_factor_throttled'
+	| 'second_factor_expired'
 
 export async function refuseLogin(
 	services: Services,
