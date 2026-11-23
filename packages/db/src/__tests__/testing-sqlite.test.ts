@@ -180,6 +180,13 @@ describe('a test database on SQLite', () => {
 		expect(sqlite.schema).toBe('main')
 	})
 
+	test('a seeded text key carries a random v4 uuid, so a 10,000-row seed does not collide', async () => {
+		// 122 random bits: a 10,000-row seed collides with odds of about 1e-29. The 32 bits it held before collided in ~1%.
+		const keys = await Promise.all(Array.from({ length: 10_000 }, async () => (await sqlite.seedRow(tables, 'settings')).key))
+		for (const key of keys) expect(key).toMatch(/^settings-app-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+		expect(new Set(keys).size).toBe(keys.length)
+	})
+
 	test('seeds two rows of a contained table in chains that share no value, with every container row', async () => {
 		const worlds = await sqlite.seedWorlds(tables, 'notes')
 		expect(worlds.dimension).toBe('workspace')
