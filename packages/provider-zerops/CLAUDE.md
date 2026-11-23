@@ -295,6 +295,12 @@ bun test
   `FABRIKA_PROXY_MANIFEST_BRAND` (`zeropsProxyAcceptsBrand`, `src/proxy-manifest-carrier.ts`). An older source's strict
   parser refuses the key and would fail its build, so it keeps fabrika's mark until the namespace is re-pinned. The
   logo is inside the manifest digest: a new logo is a new attempt. Never drop the marker from the generated proxy setup.
+- **A suspended member reaches only a proxy that parses the flag.** Its entries keep their hosts and carry
+  `suspended: true` (`src/namespace/manifest.ts`), and only a pin whose proxy build declares
+  `FABRIKA_PROXY_MANIFEST_SUSPEND: "1"` (`zeropsProxyAcceptsSuspension`) reads it: 0.4–0.6's strict parsers refuse the
+  key, so the build would fail and the previous manifest would keep serving the environment. `assertSuspendable`
+  refuses such a namespace for Control before it records anything, and `deployProxy` refuses a republish carrying one
+  before any platform write (`ZEROPS_PROXY_SUSPENSION_UNSUPPORTED`). Never drop the marker from the generated proxy setup.
 - **`fabrika app build` refuses a credential in plain configuration** (`src/plain-credentials.ts`): a `zerops.yaml`
   `envVariables` or `routing.headers` value that `plainCredentialFinding` flags, unless `target.notSecret` names it. It
   runs in `compileFabrikaManifest` after the parse and NEVER in `parseFabrikaManifest`: a decode-time refusal would stop

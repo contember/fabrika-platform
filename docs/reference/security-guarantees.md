@@ -119,11 +119,29 @@ in [`signing.ts`](../../packages/iam/src/signing.ts) and the JWKS cache in
 
 ### Taking an application offline
 
-On Cloudflare, `fabrika env maintenance <app> <env> closed` refuses every request to the environment, and `read-only`
-refuses writes ([ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md)). Zerops has no
-such switch: the operator stops the service in the Zerops GUI. Deleting an environment in Control is no takedown: on
-Zerops it is refused while the environment holds namespace resources, and where it succeeds it removes the route but
-deletes no cloud resource and leaves its keys valid for up to 30 days
+`fabrika control apps environments suspend --app=<app> --env=<env>` takes an environment offline (the procedure
+`apps.environments.suspend`, `app.manage` on the application, audited as `app.env.suspend`). `resume` undoes it
+(`app.env.resume`) and restores exactly what was there before. Repeating either is a retry.
+
+- **Zerops.** Control records the suspension and republishes the namespace proxy, whose entry for the environment then
+  answers 503 to every request, on every path, before any credential is read and without dialling the application
+  ([`deployment-namespaces.md`](deployment-namespaces.md)). The environment keeps its hosts, so no sibling can take
+  them. The command returns once the proxy build has started; the 503 holds from the moment the new proxy version is
+  live, a few minutes later (`fabrika control namespaces get --namespace=<id>` follows it). A namespace whose proxy is
+  pinned to an older source (0.4.8, 0.5.5, 0.6.0, or any commit before the suspension marker) is refused with a 409
+  naming the re-pin, `fabrika control namespaces update --namespace=<id> --proxy-source=current`, because its strict
+  parser would refuse the manifest and the previous proxy would keep serving.
+- **Cloudflare.** The environment's object goes into maintenance `closed` (refusing every ordinary request,
+  [ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md)), and `resume` returns it to the
+  mode it was in, `open` or `read-only`. `fabrika env maintenance <app> <env> closed` does the same without recording
+  the mode to return to. An object already `closed` or in `inspect`, or one whose operation is still running, is
+  refused.
+
+A suspension stops traffic through the platform's entry point; it does not stop the application's service, which keeps
+running with its keys and can still call out. To stop the process too, or when Control is unreachable, the operator
+stops the service in the Zerops GUI or the Worker in the Cloudflare dashboard. Deleting an environment in Control is no
+takedown: on Zerops it is refused while the environment holds namespace resources, and where it succeeds it removes the
+route but deletes no cloud resource and leaves its keys valid for up to 30 days
 ([`deployment-namespaces.md`](deployment-namespaces.md),
 [backlog 203](../backlog/203-deleting-an-app-or-env-leaves-its-secrets-and-iam-keys.md)).
 

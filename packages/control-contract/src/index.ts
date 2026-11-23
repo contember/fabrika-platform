@@ -276,6 +276,11 @@ export interface AppEnvDto {
 	 * a Control released before it.
 	 */
 	accessMap?: AccessMapDto
+	/**
+	 * When Control took the environment offline (`apps.environments.suspend`), in Unix seconds; absent while it serves,
+	 * and from a Control released before it.
+	 */
+	suspendedAt?: number
 	namespaceId: string | null
 	provider: string
 	target: ProviderEnvelopeDto

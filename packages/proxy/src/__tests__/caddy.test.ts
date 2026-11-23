@@ -1047,3 +1047,36 @@ describe('an installation entry — the hop of an installation service', () => {
 		expect(proxyHandler(steps[1]).handle_response).toBeUndefined()
 	})
 })
+
+describe('a suspended environment', () => {
+	const HEALTH = anonymousRow({ id: 'health', kind: 'health', method: 'GET', path: '/health', admission: null })
+	const entry = (id: string, host: string, upstream: string, suspended: boolean): ContractProxyApp => ({
+		id,
+		hosts: [host],
+		upstream,
+		scheme: 'https',
+		endpoints: [HEALTH],
+		reservedPrefixes: [],
+		snapshot: `sha256:${'0'.repeat(64)}`,
+		csp: NO_CSP_ORIGINS,
+		...(suspended ? { suspended: true } : {}),
+	})
+	const prod = entry('notes@prod', 'notes.example.com', 'notesprod:3000', true)
+	const stage = entry('notes@stage', 'stage.example.com', 'notesstage:3000', false)
+	const config = buildCaddyConfig({ apps: [prod, stage] }, OPTIONS)
+	const routes = config.apps.http.servers['proxy']?.routes ?? []
+
+	test("its hosts answer 503 under the entry's policy, the page to a navigation", () => {
+		expect(routes[0]).toEqual({
+			match: [{ host: ['notes.example.com'] }],
+			terminal: true,
+			handle: [refusal(503, 'unavailable', appHeaderPolicy(prod))],
+		})
+	})
+
+	test('neither the auth service nor its upstream is dialled, and a sibling keeps its chain', () => {
+		expect(JSON.stringify(routes[0])).not.toContain('reverse_proxy')
+		expect(JSON.stringify(config)).not.toContain('notesprod:3000')
+		expect(upstreamOf(subrouteOf(routes[1] ?? { handle: [] }).routes.at(-1)).upstreams).toEqual([{ dial: 'notesstage:3000' }])
+	})
+})

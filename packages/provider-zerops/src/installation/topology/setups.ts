@@ -92,7 +92,12 @@
 // arrives fully resolved). Only the proxy needs this, and it declares it explicitly below.
 
 import type { ZeropsHealthCheckSpec, ZeropsReadinessCheckSpec, ZeropsYamlSetupSpec, ZeropsYamlSpec } from '../../index'
-import { FABRIKA_PROXY_MANIFEST_BRAND, FABRIKA_PROXY_MANIFEST_SANDBOXES, FABRIKA_PROXY_MANIFEST_SANDBOXES_VALUE } from '../../proxy-manifest-carrier'
+import {
+	FABRIKA_PROXY_MANIFEST_BRAND,
+	FABRIKA_PROXY_MANIFEST_SANDBOXES,
+	FABRIKA_PROXY_MANIFEST_SANDBOXES_VALUE,
+	FABRIKA_PROXY_MANIFEST_SUSPEND,
+} from '../../proxy-manifest-carrier'
 
 // ── Readiness and liveness: two mechanisms, two questions ──────────────────────────────────────────
 //
@@ -414,6 +419,9 @@ const proxy: ZeropsYamlSetupSpec = {
 			[FABRIKA_PROXY_MANIFEST_BRAND]: '1',
 			// The same kind of marker for dev sandbox entries (`zeropsProxyAcceptsSandboxes`); its value says what the hop does.
 			[FABRIKA_PROXY_MANIFEST_SANDBOXES]: FABRIKA_PROXY_MANIFEST_SANDBOXES_VALUE,
+			// The same kind of marker for a suspended entry (`zeropsProxyAcceptsSuspension`): Control suspends an environment
+			// only behind a proxy whose parser reads the flag and answers it 503.
+			[FABRIKA_PROXY_MANIFEST_SUSPEND]: '1',
 		},
 		// CGO off makes the binary static, which is what lets it run on Alpine/musl.
 		prepareCommands: ['CGO_ENABLED=0 GOBIN=/tmp/gobin go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2'],

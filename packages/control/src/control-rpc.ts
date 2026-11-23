@@ -40,6 +40,7 @@ import {
 	listOwnBuilderPairings,
 	revokeBuilderPairing,
 } from './api/builder-pairing'
+import { dataOperationResult, failUnavailable } from './api/data-operation-result'
 import { fail } from './api/domain'
 import {
 	adoptNamespaceUseCase,
@@ -60,6 +61,7 @@ import { deleteAppVarUseCase, listAppSecretsUseCase, listAppVarsUseCase, putAppV
 import { type RegistryUseCaseContext } from './api/registry/context'
 import { deleteAppEnvUseCase, listAppEnvsUseCase, putAppEnvUseCase, rotateTokenKeyUseCase } from './api/registry/environments'
 import { registerAppUseCase } from './api/registry/registration'
+import { resumeAppEnvUseCase, suspendAppEnvUseCase, type SuspensionUseCaseContext } from './api/registry/suspension'
 import { APP_VAR_VALUE_MAX_LENGTH, assertAppVarValue } from './api/registry/validation'
 import {
 	canAtCoordinates,
@@ -92,11 +94,9 @@ import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
 import {
 	type DataOperationDeps,
-	type DataOperationOutcome,
 	listDataOperations,
 	type OpsInspection,
 	type OpsTransport,
-	type OpsUnavailable,
 	recordedObjects,
 	startMaintenance,
 	startRecovery,
@@ -353,6 +353,12 @@ export function createControlRpcRouter(
 				rotateTokenKey: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation((
 					{ ctx, input },
 				) => controlCall(() => rotateTokenKeyUseCase(registryContext(ctx), input.appId, input.env, Math.floor(Date.now() / 1000)))),
+				suspend: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+					controlCall(() => suspendAppEnvUseCase(suspensionContext(ctx), input.appId, input.env, nowSeconds()))
+				),
+				resume: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
+					controlCall(() => resumeAppEnvUseCase(suspensionContext(ctx), input.appId, input.env))
+				),
 			}),
 			secrets: rpc.router({
 				list: rpc.procedure.input(appId).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).query(({ ctx, input }) =>
@@ -536,6 +542,14 @@ export function createControlRpcRouter(
 			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
 			...(deps.commits === undefined ? {} : { commits: deps.commits }),
 			admission: { request: ctx.request },
+		}
+	}
+
+	function suspensionContext(ctx: ControlRpcContext): SuspensionUseCaseContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		return {
+			...registryContext(ctx),
+			...(deps.lock === undefined || deps.opsTransport === undefined ? {} : { maintenance: { lock: deps.lock, ops: deps.opsTransport } }),
 		}
 	}
 
@@ -840,27 +854,6 @@ async function restoreDeps(c: DataUseCaseContext): Promise<DataOperationDeps> {
 	const deps = operationDeps(c)
 	if (c.runDeps === undefined) fail(503, 'restores are unavailable: this composition does not deploy from a data operation')
 	return { ...deps, deploys: operationDeploys(await c.runDeps()) }
-}
-
-/** The record as the operation left it: one the object left unanswered is still `running`, at its step. */
-function dataOperationResult(outcome: DataOperationOutcome): DataOperationDto {
-	if (outcome.kind === 'busy') fail(409, 'a deploy or another data operation holds this environment')
-	if (outcome.kind === 'driven' || outcome.kind === 'started') return toDataOperationDto(outcome.operation)
-	if (outcome.reason === 'operation_running') fail(409, 'an operation of this environment is still running: recover it first')
-	if (outcome.reason === 'not_recoverable') fail(409, 'that operation is not one this environment can recover')
-	if (outcome.reason === 'superseded') fail(409, 'a newer operation of this environment supersedes that one')
-	if (outcome.reason === 'not_open') fail(409, 'the environment is not open: open it first')
-	if (outcome.reason === 'too_many_objects') fail(409, "the environment's object list is full (16 names): no clone can be listed")
-	if (outcome.reason === 'nothing_deployed') fail(409, 'the environment has no succeeded deploy to redeploy')
-	if (outcome.reason === 'no_deploys') fail(503, 'restores are unavailable: this composition does not deploy from a data operation')
-	if (outcome.reason === 'not_past') fail(400, 'the restore time must lie in the past')
-	failUnavailable(outcome.reason)
-}
-
-function failUnavailable(reason: OpsUnavailable): never {
-	if (reason === 'no_channel') fail(409, 'the environment has no ops channel: it needs a domain and a deploy at a release that serves one')
-	if (reason === 'not_served') fail(409, "the environment's release does not serve this operation: deploy it at a release that does")
-	fail(502, reason === 'channel_refused' ? "the environment's ops channel refused Control" : "the environment's object gave no usable answer")
 }
 
 function toMailMessageDto(row: MailMessageRow): MailMessageDto {

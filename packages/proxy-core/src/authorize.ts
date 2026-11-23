@@ -97,6 +97,8 @@ export type DenyReason =
 	| 'delegation_refused'
 	/** The `Host` maps to no app in the manifest. */
 	| 'no_app'
+	/** The entry is suspended (`ContractProxyApp.suspended`): its environment is offline, whatever the request. */
+	| 'suspended'
 	/** The forwarded-request headers are missing or malformed — we cannot know what was asked for. */
 	| 'bad_forward'
 	/** The forwarded path is not canonical (`isCanonicalPath`); refused before any endpoint is planned. */

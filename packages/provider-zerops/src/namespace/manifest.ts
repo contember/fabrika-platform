@@ -36,6 +36,7 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 					upstream: SANDBOX_UPSTREAM,
 					upstreamHost: sandbox.upstreamHost,
 					scheme: 'https',
+					suspended: member.suspended === true,
 					table: contractProxyTable(sandbox.access.contract, sandbox.access.contractDigest),
 					...(member.operationsOrigin === undefined ? {} : { operationsOrigin: member.operationsOrigin }),
 					...(member.crossOrigins === undefined ? {} : { crossOrigins: member.crossOrigins }),
@@ -56,6 +57,7 @@ export function compileNamespaceProxyManifest(namespaceId: string, members: read
 			// A Zerops public domain is always served over the project's TLS-terminating L7 balancer, so the
 			// browser speaks https even though the proxy itself is reached over plain HTTP (ADR-0022).
 			scheme: 'https',
+			suspended: member.suspended === true,
 			table: contractProxyTable(access.contract, access.contractDigest),
 			...(member.operationsOrigin === undefined ? {} : { operationsOrigin: member.operationsOrigin }),
 			...(member.crossOrigins === undefined ? {} : { crossOrigins: member.crossOrigins }),

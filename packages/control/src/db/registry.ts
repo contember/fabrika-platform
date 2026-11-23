@@ -1112,6 +1112,28 @@ export class ControlRegistryRepository {
 		return (result.meta.changes ?? 0) > 0
 	}
 
+	/**
+	 * Record the environment's suspension, or clear it with null, under its coordinate lock. It changes no `generation`:
+	 * nothing a publication or a protection change compares depends on it. Null when the environment does not exist.
+	 */
+	async setAppEnvSuspension(
+		appId: string,
+		env: string,
+		suspension: { readonly at: number; readonly fromMode: 'open' | 'read-only' | null } | null,
+	): Promise<AppEnvRow | null> {
+		const lock = coordinateLockStatements(this.d1, appId, env)
+		const results = await this.d1.batch<AppEnvRow>([
+			...lock,
+			this.d1.prepare('UPDATE app_envs SET suspended_at = ?, suspended_from_mode = ? WHERE app_id = ? AND env = ? RETURNING *').bind(
+				suspension?.at ?? null,
+				suspension?.fromMode ?? null,
+				appId,
+				env,
+			),
+		])
+		return results[lock.length]?.results[0] ?? null
+	}
+
 	/** The contract digest IAM accepted for the environment's schema; written under the environment's coordinate lock. */
 	async recordAppEnvIamDigest(appId: string, env: string, digest: string): Promise<boolean> {
 		const lock = coordinateLockStatements(this.d1, appId, env)

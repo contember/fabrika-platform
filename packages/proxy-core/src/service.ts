@@ -158,6 +158,12 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				const fields = { requestId, host: forwarded.url.host, path: redactPath(forwarded.url.pathname) }
 				return withPolicy(denied(logger, fields, { outcome: 'deny', status: 403, reason: 'no_app' }, { asPage, brand }), BASE_HEADER_POLICY)
 			}
+			// Before anything else of the entry, the callback and the sign-out included: a suspended environment serves nothing.
+			if (isApplicationEntry(resolved.app) && resolved.app.suspended === true) {
+				const fields = { requestId, app: resolved.app.id, host: forwarded.url.host, path: redactPath(forwarded.url.pathname) }
+				const answer = denied(logger, fields, { outcome: 'deny', status: 503, reason: 'suspended' }, { asPage, brand })
+				return withPolicy(answer, policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
+			}
 
 			if (url.pathname === OAUTH_METADATA_VERIFY_PATH) {
 				const metadata = findOAuthMetadata(resolved.app, forwarded.url)

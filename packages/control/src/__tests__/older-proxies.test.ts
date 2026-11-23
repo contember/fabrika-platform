@@ -6,8 +6,13 @@
 import { type BodyAdmission, type ContractArtifact, contractDigest, type EndpointRow } from '@fabrika/auth-core'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
 import { entriesNeedingCurrentProxy } from '@fabrika/provider-zerops'
-import { proxyEndpointRowSchema as proxyEndpointRowSchema05 } from '@fabrika/proxy-core-0.5/manifest'
-import { contractProxyTable, type ProxyEndpointRow, proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
+import { contractProxyAppSchema as contractProxyAppSchema04 } from '@fabrika/proxy-core-0.4/manifest'
+import {
+	contractProxyAppSchema as contractProxyAppSchema05,
+	proxyEndpointRowSchema as proxyEndpointRowSchema05,
+} from '@fabrika/proxy-core-0.5/manifest'
+import { contractProxyAppSchema as contractProxyAppSchema06 } from '@fabrika/proxy-core-0.6/manifest'
+import { contractProxyEntry, contractProxyTable, type ProxyEndpointRow, proxyEndpointRowSchema } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { z } from 'zod'
@@ -225,4 +230,20 @@ describe('the CRM at v0.7.0, for a namespace proxy pinned to an older source', (
 		if (approved === undefined) throw new Error('the snapshot has no contract')
 		expect(entriesNeedingCurrentProxy(approved, OLDER_PROXY_READERS)).toEqual(['api.attachments.download', 'api.attachments.upload'])
 	})
+})
+
+describe('a suspended entry, for a namespace proxy pinned to an older source', () => {
+	const placement = { id: 'notes@prod', hosts: ['notes.example.com'], upstream: 'notes:3000', table: contractProxyTable(notesArtifact) }
+	const served = contractProxyEntry({ ...placement, scheme: 'https' })
+	const suspended = contractProxyEntry({ ...placement, scheme: 'https', suspended: true })
+
+	// Why Control refuses `apps.environments.suspend` there: the strict parser would refuse the whole manifest, the build
+	// would fail, and the previous manifest would keep serving the environment.
+	test.each([['0.4.8', contractProxyAppSchema04], ['0.5.5', contractProxyAppSchema05], ['0.6.0', contractProxyAppSchema06]])(
+		'%s parses the served entry and refuses the suspended one',
+		(_release, schema) => {
+			expect(schema.safeParse(served).success).toBe(true)
+			expect(schema.safeParse(suspended).success).toBe(false)
+		},
+	)
 })

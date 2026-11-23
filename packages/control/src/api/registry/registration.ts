@@ -251,6 +251,7 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		deviationSubjects: snapshotDeviations(snapshot),
 		surface: snapshotSurface(snapshot),
 		accessMap: snapshotAccessMap(snapshot),
+		...(row.suspended_at === null ? {} : { suspendedAt: row.suspended_at }),
 		namespaceId: row.namespace_id,
 		provider: row.provider,
 		target: parseStoredEnvelope(row.provider_target_json, `target for ${row.app_id}/${row.env}`),

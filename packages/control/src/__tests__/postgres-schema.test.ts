@@ -174,6 +174,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0031_github_owner_type.sql' },
 			{ bundle: 'control', name: '0032_github_setup_handoff.sql' },
 			{ bundle: 'control', name: '0033_ops_key_domain.sql' },
+			{ bundle: 'control', name: '0034_app_env_suspension.sql' },
 		])
 	})
 

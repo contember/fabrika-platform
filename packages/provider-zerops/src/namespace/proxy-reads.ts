@@ -5,8 +5,8 @@
 
 import { type ProviderApprovedAccess, ProviderNamespaceError } from '@fabrika/provider-contract'
 import { contractProxyTable, type OlderProxyReaders } from '@fabrika/proxy-core/manifest'
-import { zeropsProxyAcceptsSandboxes } from '../proxy-manifest-carrier'
-import { ZEROPS_PROXY_SANDBOXES_UNSUPPORTED } from './errors'
+import { zeropsProxyAcceptsSandboxes, zeropsProxyAcceptsSuspension } from '../proxy-manifest-carrier'
+import { ZEROPS_PROXY_SANDBOXES_UNSUPPORTED, ZEROPS_PROXY_SUSPENSION_UNSUPPORTED } from './errors'
 import type { ZeropsNamespaceProxySource } from './types'
 
 export type { OlderProxyReader, OlderProxyReaders } from '@fabrika/proxy-core/manifest'
@@ -65,6 +65,19 @@ export function assertNamespaceProxyAcceptsSandboxes(namespace: string, pinned: 
 	throw new ProviderNamespaceError(
 		`the proxy of deployment namespace \`${namespace}\` is pinned to a source that cannot serve dev sandboxes; re-pin it with \`fabrika control namespaces update --namespace=${namespace} --proxy-source=current\`, then try again`,
 		ZEROPS_PROXY_SANDBOXES_UNSUPPORTED,
+		false,
+	)
+}
+
+/**
+ * Refuses a suspended member for a namespace whose pinned proxy cannot parse the flag (0.4–0.6 and every source before
+ * the marker): its strict parser would fail the build, and the previous manifest would keep serving the environment.
+ */
+export function assertNamespaceProxyAcceptsSuspension(namespace: string, pinned: ZeropsNamespaceProxySource): void {
+	if (zeropsProxyAcceptsSuspension(pinned.descriptor.contents)) return
+	throw new ProviderNamespaceError(
+		`the proxy of deployment namespace \`${namespace}\` is pinned to a source that cannot take an environment offline; re-pin it with \`fabrika control namespaces update --namespace=${namespace} --proxy-source=current\`, wait for the namespace to be ready, then suspend again, or stop the application's service in the Zerops GUI`,
+		ZEROPS_PROXY_SUSPENSION_UNSUPPORTED,
 		false,
 	)
 }

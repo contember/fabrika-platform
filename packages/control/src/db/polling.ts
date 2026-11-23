@@ -43,7 +43,8 @@ export class RepoPollingRepository {
 						e.namespace_id AS e_namespace_id,
 						e.provider AS e_provider, e.provider_target_json AS e_provider_target_json,
 						e.provider_artifact_json AS e_provider_artifact_json,
-						e.iam_digest AS e_iam_digest, e.created_at AS e_created_at
+						e.iam_digest AS e_iam_digest, e.suspended_at AS e_suspended_at,
+						e.suspended_from_mode AS e_suspended_from_mode, e.created_at AS e_created_at
 				FROM apps a
 				JOIN app_envs e ON e.app_id = a.id
 				WHERE a.github_installation_id IS NULL AND e.trigger_ref IS NOT NULL
@@ -80,6 +81,8 @@ export class RepoPollingRepository {
 				provider_target_json: r.e_provider_target_json,
 				provider_artifact_json: r.e_provider_artifact_json,
 				iam_digest: r.e_iam_digest,
+				suspended_at: r.e_suspended_at,
+				suspended_from_mode: r.e_suspended_from_mode,
 				created_at: r.e_created_at,
 			},
 		}))
@@ -149,5 +152,7 @@ interface PollEligibleJoinRow {
 	e_provider_target_json: string
 	e_provider_artifact_json: string
 	e_iam_digest: string | null
+	e_suspended_at: number | null
+	e_suspended_from_mode: 'open' | 'read-only' | null
 	e_created_at: number
 }

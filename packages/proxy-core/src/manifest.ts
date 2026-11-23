@@ -69,6 +69,11 @@ export interface ContractProxyApp extends ProxyAppBase {
 	audience?: string
 	/** The `Host` the proxy sends upstream in place of the client's; absent, the client's passes. */
 	upstreamHost?: string
+	/**
+	 * The environment is taken offline: every request to its hosts answers 503 and nothing reaches its upstream. Absent on
+	 * an entry that serves. Older proxies' strict parsers refuse it; a producer sends it only to a proxy that reads it.
+	 */
+	suspended?: true
 }
 
 /** The IAM app id an entry's tokens are minted for and verified against: its `audience`, or else its id. */
@@ -408,6 +413,7 @@ export const contractProxyAppSchema = z.object({
 	crossOrigins: z.array(z.string().refine(isCrossOrigin)).nonempty().max(MAX_CROSS_ORIGINS).optional(),
 	audience: z.string().refine((value) => parseAppEnvironmentId(value) !== null).optional(),
 	upstreamHost: z.string().refine(isProxyHost).optional(),
+	suspended: z.literal(true).optional(),
 }).strict().superRefine((app, ctx) => {
 	checkAudience(app, ctx)
 	checkCrossOrigins(app, ctx)
@@ -558,6 +564,8 @@ export interface ContractEntryPlacement {
 	/** A dev sandbox entry's `<app>@<env>`; see `ContractProxyApp.audience`. */
 	readonly audience?: string
 	readonly upstreamHost?: string
+	/** See `ContractProxyApp.suspended`; false or absent serves the entry. */
+	readonly suspended?: boolean
 }
 
 /**
@@ -581,7 +589,7 @@ export type OlderProxyReaders = readonly [OlderProxyReader, ...OlderProxyReader[
  * would refuse it, naming the fields and never their values, because an origin with userinfo may carry a key.
  */
 export function contractProxyEntry(placement: ContractEntryPlacement): ContractProxyApp {
-	const { table, operationsOrigin, crossOrigins = [], audience, upstreamHost } = placement
+	const { table, operationsOrigin, crossOrigins = [], audience, upstreamHost, suspended = false } = placement
 	const entry: ContractProxyApp = {
 		id: placement.id,
 		hosts: [...placement.hosts],
@@ -595,6 +603,7 @@ export function contractProxyEntry(placement: ContractEntryPlacement): ContractP
 		...(crossOrigins.length === 0 ? {} : { crossOrigins: [...crossOrigins] }),
 		...(audience === undefined ? {} : { audience }),
 		...(upstreamHost === undefined ? {} : { upstreamHost }),
+		...(suspended ? { suspended: true } : {}),
 	}
 	const parsed = contractProxyAppSchema.safeParse(entry)
 	if (!parsed.success) {

@@ -713,6 +713,14 @@ other environment, before the provider prepares anything, and the write maps a r
   floor of its own: a framework before `0.9.0-dev.14` refuses to build one, and reads no `~relin` entry, which IAM
   signs for a scoped grant of a role with `via`; `relation-token-compat.test.ts` holds every auth-core release of the
   window to reading neither `~rel` nor `~relin` as a value or a global grant.
+- **`apps.environments.suspend` takes an environment offline; `resume` restores exactly what it had**
+  (`src/api/registry/suspension.ts`, `app.manage`, audited `app.env.suspend` / `app.env.resume`). A provider with a
+  namespace republish records `app_envs.suspended_at` and republishes, so the member reaches the provider `suspended`
+  and its entry answers 503; it asks `namespaces.assertSuspendable` first, and a refusal (a pin whose parser does not
+  read the flag) is a 409 before anything is written. Any other provider goes through the environment's object: the
+  row records the maintenance mode it was in (`suspended_from_mode`, `open` or `read-only`) BEFORE the `closed`
+  operation starts, so a `resume` after an interrupted close still restores it; a refused start clears the record. The
+  suspension changes no `generation`. Both verbs are retries: a repeated suspend republishes (or closes) again.
 - **A Zerops namespace pinned to an older proxy source is judged by that release's own manifest parser
   (`src/zerops/older-proxies.ts`).** It holds the parsers of `@fabrika/proxy-core` 0.4.8, 0.5.5 and 0.6.0, and the
   Zerops provider refuses a deploy of a row none of them parses, or of a CSP none of them parses (the CSP field of each

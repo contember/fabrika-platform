@@ -194,6 +194,13 @@ export interface ControlRpcContract {
 			protect: RpcProcedure<SetEnvironmentProtectionRequest, AppEnvDto>
 			/** The environment's next deploy retires the key its signed tokens are signed with and signs with a new one. */
 			rotateTokenKey: RpcProcedure<AppEnvironmentInput, RotateTokenKeyResponse>
+			/**
+			 * Take the environment offline in an incident: on a namespace proxy every request to it answers 503 once the
+			 * republished proxy is live; on Cloudflare its object goes into maintenance `closed`. Repeating it is a retry.
+			 */
+			suspend: RpcProcedure<AppEnvironmentInput, AppEnvDto>
+			/** Undo `suspend`: the proxy routes the environment again, or the object returns to the mode it was in. */
+			resume: RpcProcedure<AppEnvironmentInput, AppEnvDto>
 		}
 		secrets: {
 			list: RpcProcedure<AppIdInput, ListResponse<AppSecretDto>>
