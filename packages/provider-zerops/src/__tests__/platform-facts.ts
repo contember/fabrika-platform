@@ -161,6 +161,7 @@ const SECTION_VALUE_SIZE = 'Verified live (2026-10-15) — a service variable va
 const SECTION_USER_DATA_SENSITIVE_DEFAULT =
 	'Verified live (2026-10-15) — a sensitive value is `REDACTED` outside sudo mode — docs/reference/zerops-platform.md'
 const SECTION_START_MEMORY = "Verified live (2026-10-15) — a deploy raises the deploy service's minimum RAM — docs/reference/zerops-platform.md"
+const SECTION_CONTAINER_ENV_WRITE = 'Verified live (2026-11-23) — a container writes its own variables — docs/reference/zerops-platform.md'
 const SECTION_ENV_ACTIVATION = 'Verified live (2026-09-23) — service variables across activation and rollback — docs/reference/zerops-platform.md:874'
 
 /** The keys the rows write. Literals, not credentials — nothing here is a secret and nothing is printed. */
@@ -1342,6 +1343,41 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 		liveNote: "needs a database whose backup runs past the platform's 10 s window; the table seeds none",
 		emulator: false,
 		emulatorNote: 'the double answers every backup finished, `async: false`',
+	},
+	{
+		id: 'container-env-write-resolves-a-cross-service-reference',
+		section: SECTION_CONTAINER_ENV_WRITE,
+		// `zsc set-env KEY '${postgres_superUserPassword}'` from a runtime container is a USER record holding the literal; the
+		// next container start resolves it under `envIsolation: service`, and `zsc fail-me` starts that container (backlog 198).
+		request: { method: 'PUT', path: '/service-stack/{serviceId}/restart' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; it needs a deployed runtime that runs `zsc` in its start command and a second service to reference',
+		emulator: false,
+		emulatorNote: 'the double has no container, no `zsc` and no start-time resolution',
+	},
+	{
+		id: 'build-container-env-write-fails-the-build',
+		section: SECTION_CONTAINER_ENV_WRITE,
+		// `zsc setSecretEnv` in a build command answers `serviceStackIsSystemNotSupported`, and the version goes BUILD_FAILED.
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified; it needs a build whose command runs `zsc`',
+		emulator: false,
+		emulatorNote: 'the double runs no build commands',
+	},
+	{
+		id: 'runtime-sudo-reads-an-undumpable-environ',
+		section: SECTION_CONTAINER_ENV_WRITE,
+		// The runtime user `zerops` has passwordless sudo, which reads `/proc/<pid>/environ` of a process after
+		// `prctl(PR_SET_DUMPABLE, 0)`; another `zerops` process cannot.
+		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
+		expect: { status: 200 },
+		live: 'not-probed',
+		liveNote: 'manually verified on `ubuntu/bun@1.3` and `alpine/bun@1.3`; it is a fact of the running container, not of the API',
+		emulator: false,
+		emulatorNote: 'the double runs no containers',
 	},
 ]
 
