@@ -19,6 +19,12 @@ delegation to reach Control, its own database for a delegation journal, and a se
 authorization check. Control already owns the application registry, the deploy runs and their
 authorization, and it already holds each GitHub connection's App key in its vault (ADR-0029).
 
+Agents and scripts on a person's own machine call the console too, through the `fabrika` CLI's `control`, `env`,
+`operations` and `connect` commands. A `px_` key is a service principal with its own grants,
+issued through the IAM administration surface, living up to 30 days whatever happens to the person who wanted it, and
+as wide as its issuer chose. A person should be able to hand such an agent their own access, narrowed to one
+application and short-lived, by approving it in the browser, as an MCP client gets it.
+
 A hosted agent has no shell and no local toolchain. It edits files of a workspace and reads the build
 log. When a request is refused, it loosens whatever refused it. Protecting every `fabrika.*` file
 stops it from widening access, but it also stops it from adding an endpoint or a table. With approval
@@ -57,14 +63,42 @@ workspace its own running application, where one pinned service could show only 
    that resource's `scopeGrants` ceiling, and the redirect URIs the operator registered, which its document cannot
    widen. It gets no implicit grant, no client secret, no token for an unregistered resource and no scope outside the
    ceiling, and its token is refused where a resource token is: on every native IAM path and by `approvals.complete`
-   (rule 8). The only resource an installation registers is the console's `/mcp`, so an external client's token is an
-   authoring token like Claude's; registering one trusts it as much.
+   (rule 8). The only resource an installation serves the managed clients is the console's `/mcp`, so an external
+   client's token is an authoring token like Claude's; registering one trusts it as much.
+
+   **The installation's own command-line client** is a built-in public client, `fabrika-cli`, with no document and no
+   redirect URI. It obtains a grant only through the RFC 8628 device grant
+   ([CLI device grant](../reference/cli-device-grant.md)):
+   - The CLI shows a code. The person enters it at IAM's `/oauth/device` in a signed-in IAM session, sees the actions,
+     and picks a lifetime of 1 h, 24 h or 7 days.
+   - The grant ends no later than that session, and its tokens act as that person, never as a separate principal.
+   - A grant covers the console's RPC resources its preset needs: `read`, `deploy` and `operate` cover `/api/rpc` and
+     `/operations/api/rpc`, `create` covers `/api/rpc` alone. Each token names one resource, and a refresh for a
+     resource outside the grant is refused (`invalid_target`) without spending the refresh token.
+   - The presets (`read`, `deploy`, `operate` and `create`, from `@fabrika/control-contract`'s `cli-access.ts`) are
+     scopes parameterized by app. `deploy:alpha` holds its actions at `alpha` only. `create` holds `app.manage` wherever
+     the person does, and the consent page warns about it.
+   - No preset carries access approval, namespaces, source connections, mail or data content.
+
+   **Each resource is served to one kind of client.** The two RPC resources go to `fabrika-cli`, through the device
+   grant. `/mcp` goes to the managed clients, through an authorization code. So an MCP client never holds an RPC
+   token, and the CLI never holds an authoring one.
+
+   Refresh tokens rotate, and a reused one revokes the grant. The CLI therefore keeps its refresh token in a credential
+   helper the operator chooses, refreshes under a local lock, and never resends a code or a token after a lost answer.
 3. **The proxy enforces it.** `/mcp` is a `service` row of the console's installation entry that
    admits the caller `oauth`, with `oauth: { scopes }` on the row and a registered `oauthResources`
    entry for its path ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Installation
    entries"). The proxy verifies the bearer as a resource token for that resource and scopes, and serves
    the RFC 9728 resource metadata. ADR-0022 holds: Control verifies the injected token for the resource
    profile and makes no enforcement decision.
+   With the command-line client's table, the console's `rpc` and `operations-rpc` rows admit `oauth` too, with no row
+   scope: the token is bound to that row's resource, and the service authorizes from the permissions inside it.
+   - Control accepts that resource token beside native tokens (`createIam(…, { oauthResource })`).
+   - Operations accepts only the resource the deploy names in `FABRIKA_OPERATIONS_OAUTH_RESOURCE`. IAM lists people only
+     to a native token, so Operations refuses a delegated caller there with a 403.
+   - Control's `isPerson` (a user, with no `oauth` claims and no link) gates every flow that needs the person
+     themselves, and the bootstrap-admin elevation.
 4. **A workspace is a Git branch** `fabrika/<workspace id>` created from the default branch. Edits
    are ordinary commits that name the expected head; a stale head fails. Control stores workspace
    metadata only, never file contents. Control performs every GitHub read and write itself, through
@@ -87,8 +121,8 @@ workspace its own running application, where one pinned service could show only 
 7. **Production is not an MCP operation.** The tool opens a pull request. A human reviews and merges
    in GitHub, and the existing Delivery trigger deploys the merged commit. When that commit carries
    a change that needs closer review on a protected environment, the run waits for approval. Control enforces it in its use cases
-   (authorization, not the proxy's enforcement decision): only a person, a user principal without OAuth or
-   link claims, starts a manual run of a protected environment, so `deploy_stage` and any other agent or key
+   (authorization, not the proxy's enforcement decision): only a person (`isPerson`: a user principal without OAuth or
+   link claims) starts a manual run of a protected environment, so `deploy_stage` and any other agent or key
    is refused there with a 403, and a workspace ref is refused there whoever asks. The ref must be a full ref or a
    commit SHA, so no short spelling of a workspace branch passes, and Control checks the run again when it starts
    (ADR-0050 §4). `apps.environments.put`
@@ -97,7 +131,8 @@ workspace its own running application, where one pinned service could show only 
    environment.
 8. **No MCP token approves.** An OAuth or MCP token is refused by `approvals.complete`, whatever its
    scope (ADR-0050). Every run records its actor, including runs created through MCP.
-9. **Zerops only** for this version.
+9. **Zerops only** for this version. MCP authoring is opt-in, on an https installation and on the local stack. The
+   command-line client's grant is served by every https deploy and by the local stack. A Cloudflare installation serves neither yet.
 10. **An application may have one `dev` environment, and each MCP workspace gets its own sandbox in it.** A commit to
     a workspace reaches that workspace's running sandbox through the dev launcher, without a run. `deploy_stage` stays
     the only path to a checked build.
@@ -203,6 +238,14 @@ was built can be; `deploy_stage` to such a target is refused until an operator c
 ## Consequences
 
 - One service owns authoring authorization; no delegation tokens, journal or second database.
+- A person hands an agent on their machine a grant that holds at most their own permissions, at one application for
+  every preset but `create`,
+  cannot outlive their IAM session, and needs no administrator. A `px_` key stays for a machine that must act after
+  the person has left.
+- A grant on the command line is fragile by design. A lost refresh answer, or a crash before the helper stores the
+  rotated token, spends the grant. The CLI says so, and the person approves a new one.
+- Every https deploy writes `FABRIKA_IAM_OAUTH_CONFIG` on `iam` and `FABRIKA_OPERATIONS_OAUTH_RESOURCE` on
+  `operations`. A plain-http deploy leaves both as they are and warns about each one still set.
 - Control gains the MCP SDK dependency and a second user protocol.
 - MCP cannot scale separately from Control.
 - Concurrent edits are serialized by the expected head; there is no automatic rebase.
@@ -248,6 +291,19 @@ was built can be; `deploy_stage` to such a target is refused until an operator c
   call, authorization in two places, another service and database to operate.
 - **Separate MCP gateway forwarding a multi-audience token.** Lost: token passthrough to Control RPC,
   which the MCP specification warns against, and a weaker audience check in every verifier.
+- **A `px_` key per agent.** Lost as the only way: an administrator issues it, it lives up to 30 days
+  whatever happens to the person's session, and it carries what its issuer chose, not what the person may.
+- **The builder's pairing ([ADR-0042](0042-connect-local-builders-through-human-consent.md)) for the CLI.** Lost: pairing
+  delegates a separate service principal whose key outlives the approving session. That is right for a daemon that
+  keeps deploying, and wrong for handing a person's own access to an agent for an afternoon.
+- **Authorization code with a loopback redirect for the CLI.** Lost: an agent in a remote terminal cannot receive the
+  redirect. The device grant works wherever the person has a browser.
+- **One OAuth resource for the whole console.** Lost: the proxy binds a resource to one row's path, so each RPC path is
+  its own resource, and one grant covers both.
+- **One resource list for every client.** Lost: an MCP client could then ask for the RPC's `operate` preset, and the CLI
+  for `/mcp`.
+- **A refresh-token file the CLI writes itself.** Lost: a helper lets the operator choose the custody (a keychain, a
+  secret store), and the CLI never handles a file of secrets.
 - **Keep every `fabrika.*` file protected.** Lost: the agent cannot add an endpoint or a table, so
   every feature needs an operator. Classification makes the change visible to a human instead.
 - **Open every `fabrika.*` file, or `fabrika.config.ts` too.** Lost: they declare resources and

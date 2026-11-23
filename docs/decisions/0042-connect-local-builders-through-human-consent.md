@@ -34,6 +34,8 @@ We will keep the builder and coding agent local. The installed console will auth
 11. **The builder key cannot approve.** It is a service principal, and only a human user principal with `access.approve` approves an access change (ADR-0050). Consent never delegates `access.approve`.
 12. **The builder key cannot deploy to a protected environment.** Only a person starts a manual run of one (ADR-0050 §4). The key deploys to an unprotected environment; a commit reaches production through a person's merge into its trigger ref, or a person's own deploy.
 
+13. **The builder's pairing is not the command-line client's device grant** ([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 2). Both show a code that a person approves in the browser, and they share no state. Pairing yields a separate service principal, whose key outlives the approving session because the daemon keeps deploying after the person leaves. The `fabrika` CLI's grant acts as the person, holds the one preset it was approved for (bound to one application, except `create`), and ends with their IAM session.
+
 Item 11 is built: `approvals.complete` refuses every service principal, key and OAuth token (work unit B6).
 Item 12 is built: a manual run of a protected environment refuses every service principal, the builder key among them,
 and every OAuth token.
@@ -65,4 +67,5 @@ Local user-level file permissions protect credentials from unrelated users, not 
 - **Reuse the browser session handoff.** That protocol establishes host-bound browser sessions at the proxy. Giving its output to a daemon would violate the established custody boundary.
 - **Let the builder key approve the changes it deploys.** Rejected: the local agent holds the key, so it could approve its own widening.
 - **Keep the proxy table and the IAM schema in the uploaded manifest.** Rejected: the local build that writes the manifest is code the agent edits, so the platform would enforce the application's self-report.
+- **Replace pairing with the command-line client's device grant.** Rejected: that grant ends with the person's session and acts as the person, while the builder's daemon needs its own identity that keeps deploying after the person leaves.
 - **Carry deployment metadata inside IAM's authorization object.** Couples identity to Control's provider placement. A typed Control receipt keeps ownership explicit without a generic opaque metadata channel.
