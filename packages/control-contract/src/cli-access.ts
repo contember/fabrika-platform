@@ -3,6 +3,7 @@
 // one application it holds its actions at (`deploy:<app>`); IAM narrows every action to that app, whatever wider
 // grant the person holds.
 
+import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract'
 import { CONTROL_ACTIONS, CONTROL_SCOPES } from './access.js'
 
 /** The console's RPC paths, each its own OAuth resource: the proxy binds a resource to exactly one row's path. */
@@ -39,7 +40,31 @@ export const CONTROL_CLI_RPC_GRANTS: readonly ControlCliScopeGrant[] = [
 	{ scope: 'create', actions: [CONTROL_ACTIONS.APP_MANAGE] },
 ]
 
-/** The resources a preset's grant covers: `create` concerns the console's RPC alone. */
+/**
+ * Operations through the console, under the same presets: reading on `read` and `deploy`, triage on `operate`, nothing
+ * on `create`. Managing sources, alerts and retention stays with a person in the console.
+ */
+export const CONTROL_CLI_OPERATIONS_GRANTS: readonly ControlCliScopeGrant[] = [
+	{ scope: 'read', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ] },
+	{ scope: 'deploy', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ] },
+	{ scope: 'operate', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ, OPERATIONS_ACTIONS.TRIAGE] },
+]
+
+/** One OAuth resource of the console the command-line client is served, by its path on the console's origin. */
+export interface ControlCliResource {
+	readonly path: string
+	readonly grants: readonly ControlCliScopeGrant[]
+	/** The service that verifies the resource's tokens itself: Control's gateway forwards Operations' path unchanged. */
+	readonly verifiedBy?: 'operations'
+}
+
+/** Every installation that serves the device grant registers exactly these, whichever provider composes it. */
+export const CONTROL_CLI_RESOURCES: readonly ControlCliResource[] = [
+	{ path: CONTROL_RPC_PATH, grants: CONTROL_CLI_RPC_GRANTS },
+	{ path: CONTROL_OPERATIONS_RPC_PATH, grants: CONTROL_CLI_OPERATIONS_GRANTS, verifiedBy: 'operations' },
+]
+
+/** The resources a preset's grant covers: those with a grant for it, so `create` concerns the console's RPC alone. */
 export function controlCliPresetPaths(preset: ControlCliPreset): readonly string[] {
-	return preset === 'create' ? [CONTROL_RPC_PATH] : [CONTROL_RPC_PATH, CONTROL_OPERATIONS_RPC_PATH]
+	return CONTROL_CLI_RESOURCES.filter((resource) => resource.grants.some((grant) => grant.scope === preset)).map((resource) => resource.path)
 }
