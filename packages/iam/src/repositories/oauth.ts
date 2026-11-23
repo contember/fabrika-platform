@@ -1,6 +1,6 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { parseJsonOrNull } from '../json'
-import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
+import { type AuditEventInput, auditEventStatement, AuditWriter, guardedInsert, type SqlGuard } from './audit'
 
 export interface OAuthGrantRow {
 	id: string
@@ -73,8 +73,8 @@ export class OAuthRepository {
 		private readonly writer: AuditWriter = new AuditWriter(db, 'sqlite'),
 	) {}
 
-	/** Record a consent, with its one authorization code when it has one (a device grant has none), and `audit` together. */
-	async createGrant(grant: OAuthGrantRow, code: Omit<OAuthCodeRow, 'grant_id' | 'used_at'> | null, audit?: AuditEventInput): Promise<void> {
+	/** Record a consent, its one authorization code and `audit` together. */
+	async createGrant(grant: OAuthGrantRow, code: Omit<OAuthCodeRow, 'grant_id' | 'used_at'>, audit?: AuditEventInput): Promise<void> {
 		const listed = grant.resources === null ? null : parseJsonOrNull(grant.resources)
 		if (listed !== null && (!Array.isArray(listed) || listed[0] !== grant.resource)) {
 			throw new Error('an OAuth grant names its first resource as `resource`')
@@ -93,10 +93,8 @@ export class OAuthRepository {
 				grant.created_at,
 				grant.expires_at,
 			),
-			...(code === null ? [] : [
-				this.db.prepare('INSERT INTO oauth_codes (token_hash, grant_id, redirect_uri, challenge, expires_at, used_at) VALUES (?, ?, ?, ?, ?, NULL)')
-					.bind(code.token_hash, grant.id, code.redirect_uri, code.challenge, code.expires_at),
-			]),
+			this.db.prepare('INSERT INTO oauth_codes (token_hash, grant_id, redirect_uri, challenge, expires_at, used_at) VALUES (?, ?, ?, ?, ?, NULL)')
+				.bind(code.token_hash, grant.id, code.redirect_uri, code.challenge, code.expires_at),
 			...(audit === undefined ? [] : [auditEventStatement(this.db, audit)]),
 		])
 	}
@@ -219,11 +217,52 @@ export class OAuthRepository {
 		return false
 	}
 
-	/** Spend an approved attempt for the grant `grantId`. Exactly one caller gets the row back. */
-	claimDeviceAuthorization(deviceCodeHash: string, grantId: string, now: number): Promise<OAuthDeviceAuthorizationRow | null> {
-		return this.db.prepare(`UPDATE oauth_device_authorizations SET status = 'redeemed', grant_id = ?
-			WHERE device_code_hash = ? AND status = 'approved' AND expires_at > ? RETURNING *`)
-			.bind(grantId, deviceCodeHash, now).first<OAuthDeviceAuthorizationRow>()
+	/**
+	 * Spend an approved attempt for `grant`: the claim, the grant, its record and its first refresh token in one batch.
+	 * Every write after the claim requires the claim this batch made (`grant_id` names this grant), so exactly one poll
+	 * gives a grant, and a refused or failed claim writes nothing. Answers the claimed row, or null.
+	 */
+	async redeemDeviceAuthorization(
+		deviceCodeHash: string,
+		grant: OAuthGrantRow,
+		refreshTokenHash: string,
+		audit: AuditEventInput,
+		now: number,
+	): Promise<OAuthDeviceAuthorizationRow | null> {
+		const claimed: SqlGuard = {
+			sql: 'SELECT 1 FROM oauth_device_authorizations WHERE device_code_hash = ? AND grant_id = ?',
+			binds: [deviceCodeHash, grant.id],
+		}
+		const grantInsert = guardedInsert(
+			'oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at, revoked_at)',
+			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL',
+			[
+				grant.id,
+				grant.principal_id,
+				grant.session_id,
+				grant.client_id,
+				grant.app,
+				grant.resource,
+				grant.resources,
+				grant.scopes,
+				grant.created_at,
+				grant.expires_at,
+			],
+			claimed,
+		)
+		const refreshInsert = guardedInsert('oauth_refresh_tokens (token_hash, grant_id, expires_at, used_at)', '?, ?, ?, NULL', [
+			refreshTokenHash,
+			grant.id,
+			grant.expires_at,
+		], claimed)
+		const [claim] = await this.db.batch<OAuthDeviceAuthorizationRow>([
+			this.db.prepare(`UPDATE oauth_device_authorizations SET status = 'redeemed', grant_id = ?
+				WHERE device_code_hash = ? AND status = 'approved' AND expires_at > ? RETURNING *`).bind(grant.id, deviceCodeHash, now),
+			this.db.prepare(grantInsert.sql).bind(...grantInsert.binds),
+			auditEventStatement(this.db, audit, claimed),
+			this.db.prepare(refreshInsert.sql).bind(...refreshInsert.binds),
+		])
+		return claim?.results[0] ?? null
 	}
 
 	/** Record an accepted client assertion's `jti`. False when the client already presented it: a replay. */

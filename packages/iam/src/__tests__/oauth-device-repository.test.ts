@@ -1,5 +1,5 @@
 // The device authorization statements on both engines: a start refused on a taken code, a poll admitted once per
-// interval, a decision and a redemption that each happen once, a grant without a code, and the prune. Postgres runs
+// interval, a decision and a redemption that each happen once, the redemption's writes guarded by its claim, and the prune. Postgres runs
 // when FABRIKA_TEST_POSTGRES_URL is set and skips cleanly otherwise.
 
 import { uuidv7 } from '@fabrika/platform'
@@ -68,7 +68,7 @@ for (const engine of engines) {
 			expect(await repositories.oauth.admitDevicePoll(row.device_code_hash, now + 9 + 14)).toBe(true)
 		})
 
-		test('an attempt is decided once and redeemed once, and the grant it gives is written without a code', async () => {
+		test('an attempt is decided once and redeemed once, and only the redemption that claimed it writes a grant', async () => {
 			const repositories = engine.repositories()
 			const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
 			const now = unixNow()
@@ -87,37 +87,47 @@ for (const engine of engines) {
 			expect(await repositories.oauth.denyDeviceAuthorization(row.user_code_hash, now)).toBe(false)
 			expect(await repositories.oauth.pendingDeviceAuthorization(row.user_code_hash, now)).toBeNull()
 
-			const grantId = uuidv7()
-			const claimed = await repositories.oauth.claimDeviceAuthorization(row.device_code_hash, grantId, now)
+			const grant = {
+				id: uuidv7(),
+				principal_id: principal.id,
+				session_id: sessionId,
+				client_id: 'fabrika-cli',
+				app: 'control',
+				resource: 'https://control.example.test/api/rpc',
+				resources: '["https://control.example.test/api/rpc"]',
+				scopes: '["deploy:alpha"]',
+				created_at: now,
+				expires_at: now + 3600,
+				revoked_at: null,
+			}
+			const audit = {
+				requestId: 'request-device',
+				principalId: principal.id,
+				principalLabel: principal.id,
+				app: 'propustka',
+				action: 'iam.oauth.grant.create',
+				resourceType: 'oauth_grant',
+				resourceId: grant.id,
+			}
+			const claimed = await repositories.oauth.redeemDeviceAuthorization(row.device_code_hash, grant, `refresh-${grant.id}`, audit, now)
 			expect(claimed?.principal_id).toBe(principal.id)
-			expect(claimed?.grant_id).toBe(grantId)
-			expect(await repositories.oauth.claimDeviceAuthorization(row.device_code_hash, uuidv7(), now)).toBeNull()
-
-			await repositories.oauth.createGrant(
-				{
-					id: grantId,
-					principal_id: principal.id,
-					session_id: sessionId,
-					client_id: 'fabrika-cli',
-					app: 'control',
-					resource: 'https://control.example.test/api/rpc',
-					resources: '["https://control.example.test/api/rpc"]',
-					scopes: '["deploy:alpha"]',
-					created_at: now,
-					expires_at: now + 3600,
-					revoked_at: null,
-				},
-				null,
-				{
-					requestId: 'request-device',
-					principalId: principal.id,
-					principalLabel: principal.id,
-					app: 'propustka',
-					action: 'iam.oauth.grant.create',
-					resourceType: 'oauth_grant',
-					resourceId: grantId,
-				},
+			expect(claimed?.grant_id).toBe(grant.id)
+			// A second redemption claims nothing, so it writes no grant, no record and no refresh token.
+			const second = { ...grant, id: uuidv7() }
+			expect(
+				await repositories.oauth.redeemDeviceAuthorization(
+					row.device_code_hash,
+					second,
+					`refresh-${second.id}`,
+					{ ...audit, resourceId: second.id },
+					now,
+				),
 			)
+				.toBeNull()
+			expect(await repositories.oauth.grant(second.id)).toBeNull()
+			expect(await repositories.oauth.refreshToken(`refresh-${second.id}`)).toBeNull()
+			expect((await repositories.oauth.refreshToken(`refresh-${grant.id}`))?.grant_id).toBe(grant.id)
+			const grantId = grant.id
 			expect((await repositories.oauth.grant(grantId))?.session_id).toBe(sessionId)
 			const events = await repositories.audit.listAuditEvents({ principalId: principal.id, limit: 10 })
 			expect(events.map((event) => event.action)).toEqual(['iam.oauth.grant.create'])

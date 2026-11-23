@@ -4,6 +4,7 @@ import { decodeJwt } from 'jose'
 import type { OAuthConfig } from '../oauth-config'
 import { handleOAuth } from '../oauth-http'
 import { unixNow } from '../repositories/sql'
+import { hashToken } from '../secret'
 import type { Services } from '../services'
 import { createHarness } from './helpers/harness'
 import { ISSUER, oauthFixture, RESOURCE, SIGNING_ENV, tokenBody } from './helpers/oauth'
@@ -133,11 +134,16 @@ describe('the device authorization endpoint', () => {
 		expect(await errorOf(await start('deploy:alpha', [RESOURCE, RESOURCE]))).toBe('invalid_request')
 	})
 
-	test('limits starts per client address where the composition names one', async () => {
-		const { start } = await fixture()
-		for (let attempt = 0; attempt < 29; attempt++) expect((await start('deploy:alpha', [RESOURCE], [], '203.0.113.7')).status).toBe(200)
-		expect((await start('deploy:alpha', [RESOURCE], [], '203.0.113.7')).status).toBe(429)
-		// Another address, and a composition that names none, are not held by that bucket.
+	test('limits starts per client address, and a start refused there does not count against the shared bucket', async () => {
+		const { f, start } = await fixture()
+		for (let attempt = 0; attempt < 30; attempt++) expect((await start('deploy:alpha', [RESOURCE], [], '203.0.113.7')).status).toBe(200)
+		const refused = await start('deploy:alpha', [RESOURCE], [], '203.0.113.7')
+		expect(refused.status).toBe(429)
+		expect(refused.headers.get('retry-after')).toBe('60')
+		for (let attempt = 0; attempt < 10; attempt++) await start('deploy:alpha', [RESOURCE], [], '203.0.113.7')
+		const shared = await f.repositories.passwords.getLoginThrottle(await hashToken(`oauth-device-start:client:${OAUTH_CLI_CLIENT_ID}`))
+		expect(shared?.attempt_count).toBe(30)
+		// Another address, and a composition that names none, are not held by that address's bucket.
 		expect((await start('deploy:alpha', [RESOURCE], [], '203.0.113.8')).status).toBe(200)
 		expect((await start('deploy:alpha', [RESOURCE], [], null)).status).toBe(200)
 	})
@@ -169,11 +175,11 @@ describe('the device page', () => {
 		expect(warned).toContain('<code>app.create</code> — everywhere')
 	})
 
-	test('refuses a cross-site submission and blocks code entry after ten wrong codes', async () => {
+	test('refuses a cross-site submission and blocks code entry after twenty entries', async () => {
 		const { started, page } = await fixture()
 		const codes = await started()
 		expect((await page({ user_code: codes.user_code }, { 'sec-fetch-site': 'cross-site' })).status).toBe(403)
-		for (let attempt = 0; attempt < 9; attempt++) expect((await page({ user_code: 'BBBB-BBBB' })).status).toBe(400)
+		for (let attempt = 0; attempt < 20; attempt++) expect((await page({ user_code: 'BBBB-BBBB' })).status).toBe(400)
 		expect((await page({ user_code: 'BBBB-BBBB' })).status).toBe(429)
 		// Blocked: even the right code is refused now.
 		expect((await page({ user_code: codes.user_code })).status).toBe(429)
@@ -214,6 +220,17 @@ describe('a device grant', () => {
 
 		expect(await errorOf(await poll(codes.device_code))).toBe('invalid_grant')
 		expect((await f.repositories.oauth.grant(grantId))?.revoked_at).not.toBeNull()
+	})
+
+	test('writes nothing when the approving sign-in ended before the device redeemed it', async () => {
+		const { f, harness, started, poll, page } = await fixture()
+		const codes = await started()
+		await page({ user_code: codes.user_code, decision: 'approve', lifetime: '3600' })
+		harness.sqlite.run('UPDATE sessions SET revoked_at = ? WHERE id = ?', [unixNow(), f.sessionId])
+		expect(await errorOf(await poll(codes.device_code))).toBe('invalid_grant')
+		expect(await f.repositories.oauth.listForPrincipal(f.principal.id, undefined, 10)).toEqual([])
+		const recorded = harness.sqlite.query<{ n: number }, []>("SELECT COUNT(*) AS n FROM audit_events WHERE action = 'iam.oauth.grant.create'").get()
+		expect(recorded?.n).toBe(0)
 	})
 
 	test('ends with the approving sign-in when that ends before the chosen lifetime', async () => {

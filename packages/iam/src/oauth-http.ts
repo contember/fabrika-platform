@@ -197,7 +197,10 @@ async function deviceAuthorization(request: Request, services: Services, config:
 	const input = parseOAuthDeviceAuthorizationRequest(fields)
 	if (input === null) return protocolError('invalid_request', 400)
 	const outcome = await startDeviceAuthorization(services, config, input, clientAddress)
-	if (!outcome.ok) return protocolError(outcome.error, outcome.error === 'temporarily_unavailable' ? 429 : 400)
+	if (!outcome.ok && outcome.error === 'temporarily_unavailable') {
+		return Response.json({ error: outcome.error }, { status: 429, headers: { 'retry-after': '60', 'cache-control': 'no-store', pragma: 'no-cache' } })
+	}
+	if (!outcome.ok) return protocolError(outcome.error, 400)
 	return Response.json(outcome.body, { headers: { 'cache-control': 'no-store', pragma: 'no-cache' } })
 }
 

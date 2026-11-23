@@ -508,7 +508,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   action token (an admin's or a public recovery's, the enrollment opt-in in the same batch), OAuth grant consent and
   revocation, and a workload's first key, whose principal is created in the key's batch. Out of scope, as transient
   single-use secrets or flow state that grants nothing by itself: delegation grants, handoff codes, OAuth codes and
-  refresh tokens, device-flow steps before the claim (the claim writes `iam.credential.create`), login throttles, and
+  refresh tokens, device-flow steps before the claim (a builder device's claim writes `iam.credential.create`, an OAuth device
+  redemption `iam.oauth.grant.create`), login throttles, and
   the retention prunes.
 - **A GUARDED CHANGE IS RECORDED FROM WHAT IT CHANGED, NEVER FROM AN EARLIER EXISTENCE CHECK** (`AuditWriter`). Its
   SQL is a `SqlChange` ending in `RETURNING`. On Postgres the change and its record are ONE statement,
@@ -775,14 +776,16 @@ fails if that stops being true — it is the guard, not documentation of one.
   `oauth-device.ts`, `oauth-device-page.ts`, `oauth_device_authorizations`). `POST /oauth/device_authorization` takes
   `fabrika-cli` only, at least one scope and one to eight resources of one app (`resource` is the one parameter that may
   repeat), each scope resolvable on every resource, and stores only the hashes of both codes; an attempt lives five
-  minutes. Its buckets are per client (600 starts per 10 minutes, installation-wide with one client, so blocking it takes a
-  flood) and per client address where the composition names one (30); never an installation-wide bucket a burst fills.
+  minutes. Starts are counted per client address first, where the composition names one (30 per 10 minutes), and only
+  an admitted start counts against the client's bucket (10 000 per 10 minutes, then one minute refused): with one client
+  that bucket is installation-wide and bounds a flood's rows, so it must never be small enough for a burst to fill.
   `/oauth/device` needs an IAM login: GET only renders the code form, so a link neither decides nor spends anything; the
-  same-origin POST looks the code up, at most ten wrong codes per person per 10 minutes (then even a right code is
-  refused), shows the scopes, the resulting actions narrowed by the person's live permissions, a warning for a scope bound
+  same-origin POST counts the entry before it looks the code up, at most twenty entries per person per 10 minutes (then
+  even a right code is refused), shows the scopes, the resulting actions narrowed by the person's live permissions, a warning for a scope bound
   to no value, and a lifetime of 1 h, 24 h or 7 days. Approval records the person, the IAM session and
-  `min(lifetime, sessionEndsAt)` on the attempt; the grant, its `iam.oauth.grant.create` record and its first refresh
-  token are written when the device redeems the approval, after a claim exactly one poll wins. Polls are admitted once per
+  `min(lifetime, sessionEndsAt)` on the attempt. A redemption checks the grant's authority first, then writes the
+  claim, the grant, its `iam.oauth.grant.create` record and its first refresh token in one batch guarded by the claim,
+  so exactly one poll gives a grant. Polls are admitted once per
   interval (`slow_down` adds five seconds, at most 60); a spent device code presented again revokes its grant.
 - **THE CLIENT'S DOCUMENT, NEVER THE REQUEST, PICKS HOW THE CLIENT AUTHENTICATES** (`oauth-client-auth.ts`).
   A `none` document is a public client and is refused if it sends an assertion; a `private_key_jwt` document
