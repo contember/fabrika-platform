@@ -44,6 +44,7 @@ import {
 	generateVaultKey,
 	IAM_OAUTH_CONFIG_VARIABLE,
 	type IamOAuthConfig,
+	OPERATIONS_OAUTH_RESOURCE_VARIABLE,
 	platformIamOAuthConfig,
 	platformOAuthResourceVerifiedBy,
 	platformOrigin,
@@ -104,6 +105,12 @@ import { type PlatformUploadFetch, uploadPlatformArchive } from './platform-uplo
  * `deploy-order.test.ts` in `@fabrika/platform-artifacts` pins both against the declarations that own them.
  */
 export const PLATFORM_DEPLOY_ORDER = ['iam', 'operations', 'proxy', 'control'] as const
+
+/** What an OAuth variable left on a service keeps doing after a plain-http deploy, which never clears it. */
+const OAUTH_LEFTOVERS: ReadonlyMap<PlatformDeployService, { readonly variable: string; readonly effect: string }> = new Map([
+	['iam', { variable: IAM_OAUTH_CONFIG_VARIABLE, effect: 'IAM keeps issuing OAuth tokens' }],
+	['operations', { variable: OPERATIONS_OAUTH_RESOURCE_VARIABLE, effect: "Operations keeps accepting the command-line client's tokens" }],
+])
 
 export type PlatformDeployService = (typeof PLATFORM_DEPLOY_ORDER)[number]
 
@@ -844,10 +851,10 @@ export const deployPreparedPlatform = async (
 		const service = serviceOf(services, hostname)
 		const live = liveEnv.get(hostname) ?? new Map<string, ZeropsServiceEnv>()
 		const keys = withGeneratedKeys(hostname, desired.get(hostname) ?? new Map<string, string>(), live)
-		const liveOAuthConfig = live.get(IAM_OAUTH_CONFIG_VARIABLE)
-		const oauthStillSet = liveOAuthConfig !== undefined && (liveOAuthConfig.sensitive || liveOAuthConfig.content.trim() !== '')
-		if (hostname === 'iam' && oauthConfig === undefined && oauthStillSet) {
-			log.warn(`iam: OAuth is off but ${IAM_OAUTH_CONFIG_VARIABLE} is still set; IAM keeps issuing OAuth tokens until it is removed`)
+		const leftover = oauthConfig === undefined ? OAUTH_LEFTOVERS.get(hostname) : undefined
+		const leftoverValue = leftover === undefined ? undefined : live.get(leftover.variable)
+		if (leftover !== undefined && leftoverValue !== undefined && (leftoverValue.sensitive || leftoverValue.content.trim() !== '')) {
+			log.warn(`${hostname}: OAuth is off but ${leftover.variable} is still set; ${leftover.effect} until it is removed`)
 		}
 		const written = await applyServiceEnv(service, keys, live, input, collaborators)
 		log.info(

@@ -18,7 +18,7 @@ import {
 	type PrincipalIdentity,
 	type Scope,
 } from '@fabrika/auth'
-import { parseJsonStringArray } from '@fabrika/auth-core'
+import { isOAuthResourceUri, parseJsonStringArray } from '@fabrika/auth-core'
 import { CONTROL_APP_ID, CONTROL_SCOPES } from '@fabrika/control-contract'
 import { error } from './http'
 
@@ -110,11 +110,16 @@ export function controlAuthenticator(env: IamEnv, oauthPath?: string): (request:
 	}
 }
 
-/** The OAuth resource URI of one of the console's paths, from its public origin; a console without one fails closed. */
-function controlOAuthResource(env: Pick<IamEnv, 'FABRIKA_CONTROL_DOMAIN'>, path: string): string {
+/**
+ * The OAuth resource URI of one of the console's paths, from its public origin. A console without one, or whose origin
+ * makes no valid resource URI (plain http off loopback), fails closed; the Bun root calls it at start.
+ */
+export function controlOAuthResource(env: Pick<IamEnv, 'FABRIKA_CONTROL_DOMAIN'>, path: string): string {
 	const origin = controlPublicOrigin(env)
 	if (origin === undefined) throw new Error('FABRIKA_CONTROL_DOMAIN names no public origin to derive an OAuth resource from')
-	return `${origin}${path}`
+	const resource = `${origin}${path}`
+	if (!isOAuthResourceUri(resource)) throw new Error('FABRIKA_CONTROL_DOMAIN makes no valid OAuth resource URI: it must be https, or http to loopback')
+	return resource
 }
 
 /**

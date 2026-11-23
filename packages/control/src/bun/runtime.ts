@@ -20,6 +20,7 @@
 import { HttpIamRpc } from '@fabrika/auth'
 import { readEnvironmentName } from '@fabrika/auth-core'
 import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
+import { CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import { type EmailProviderRegistry, emailSenderFromEnv, pickEmailEnvironment } from '@fabrika/email'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import type { GitHubAppFetch } from '@fabrika/github-app'
@@ -43,7 +44,7 @@ import { createSourceConnections, type SourceConnectionPort } from '../github/co
 import type { GitHubMetadataFetch, SourceDownloadFetch, SourceUploadFetch } from '../github/source'
 import type { CommitSource } from '../github/source/commit-files'
 import { githubWorkspaceSource, workspaceGitHubClientFactory } from '../github/workspace'
-import { controlPublicOrigin } from '../iam'
+import { controlOAuthResource, controlPublicOrigin } from '../iam'
 import { iamMailKeyHash, type MailDispatchMessage } from '../mail-relay/queue'
 import { readInstallationMail } from '../mail-transport'
 import type { ControlJobMessage } from '../run-lifecycle'
@@ -143,9 +144,8 @@ export function createRuntime(
 ): Runtime {
 	// Before anything opens: the table the proxy publishes decides whether this console serves MCP.
 	const { mcp, cli } = controlTableSwitch(source[FABRIKA_SERVICE_TABLE_DIGEST])
-	if (cli && controlPublicOrigin({ FABRIKA_CONTROL_DOMAIN: source['FABRIKA_CONTROL_DOMAIN'] }) === undefined) {
-		throw new Error('the console table admits OAuth tokens on its RPC, but FABRIKA_CONTROL_DOMAIN names no public origin to derive the resource from')
-	}
+	// The table admits the command-line client's tokens on the RPC: refuse to start without a valid resource to accept.
+	if (cli) controlOAuthResource({ FABRIKA_CONTROL_DOMAIN: source['FABRIKA_CONTROL_DOMAIN'] }, CONTROL_RPC_PATH)
 	const databaseUrl = required(source, 'FABRIKA_CONTROL_DATABASE_URL')
 	// The console's own public origin is the fact this root states about where it runs; `local` is
 	// refused against it. Control does not branch on the name today, and that is exactly why it must not

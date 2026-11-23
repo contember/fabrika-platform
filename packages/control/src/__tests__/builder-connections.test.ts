@@ -162,6 +162,11 @@ describe('builder receipt authorization and validation', () => {
 			await receipt(await rpcResult(rpcRequest('builderConnections.createReceipt', input), deps(h.repositories)))
 			const service = deps(h.repositories, { ...allowAllAuth(), principal: { id: 'service', type: 'service', label: 'service' } })
 			expect((await rpcResult(rpcRequest('builderConnections.createReceipt', input), service)).status).toBe(403)
+			const delegated = deps(h.repositories, {
+				...allowAllAuth(),
+				oauth: { app: 'vozka', clientId: 'fabrika-cli', scopes: ['operate:notes'], grantId: 'grant-1', tokenId: 'token-1' },
+			})
+			expect((await rpcResult(rpcRequest('builderConnections.createReceipt', input), delegated)).status).toBe(403)
 			const read = rpcRequest('builderConnections.getReceipt', { attemptId: input.attemptId })
 			expect((await rpcResult(read, deps(h.repositories, ownAppAuth('notes', true)))).status).toBe(200)
 			expect(

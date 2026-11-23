@@ -348,6 +348,22 @@ describe('Operations public/private HTTP isolation', () => {
 		expect((await handler()(rpcRequest('operations.internal', 'sources', null, token))).status).toBe(401)
 	})
 
+	test('a delegated token may not list people, which IAM answers only to a native token', async () => {
+		let listed = 0
+		const iam = createOperationsIam({
+			IAM: { ...sessionRpc('unused'), listPrincipals: () => (listed++, Promise.resolve({ ok: true, principals: [] })) },
+			FABRIKA_IAM_ISSUER: issuer,
+		}, OPERATIONS_RESOURCE)
+		const harness = createHarness()
+		await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
+		const fetch = handler(harness, iam)
+		const token = await cliToken(['operations.read', 'operations.triage'], OPERATIONS_RESOURCE)
+		const assignees = await fetch(rpcRequest('operations.internal', 'assignees', { sourceId: 'source-a' }, token))
+		expect(assignees.status).toBe(403)
+		expect(await assignees.json()).toEqual({ error: { type: 'request_error', message: 'a delegated token cannot list people; use the console' } })
+		expect(listed).toBe(0)
+	})
+
 	test('the private operator API enforces scoped IAM permissions while the public hostname stays closed', async () => {
 		const fetch = handler()
 		expect((await reconcileSource(fetch, '0198a000-0000-7000-8000-000000000001')).status).toBe(200)
