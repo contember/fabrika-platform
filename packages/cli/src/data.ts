@@ -66,9 +66,10 @@ The control origin takes either form:
 
   --url=<origin>                    FABRIKA_CONTROL_URL
 
-The credential is read from the ENVIRONMENT ONLY and has no flag:
+The credential is read from the ENVIRONMENT ONLY and has no flag; one of:
 
-  FABRIKA_CONTROL_KEY               required   a machine \`px_\` credential for the control app
+  FABRIKA_CONTROL_KEY               a machine \`px_\` credential for the control app
+  FABRIKA_CONTROL_CREDENTIAL_HELPER the helper a \`fabrika control auth device\` grant is stored through
 `
 
 type Environment = Readonly<Record<string, string | undefined>>

@@ -22,7 +22,8 @@ import type {
 } from '@fabrika/operations-contract/operator-api'
 import type { OperationsIssueQuery, OperationsReleaseQuery, OperationsRpcContract } from '@fabrika/operations-contract/rpc'
 import { z } from 'zod'
-import { controlTransport, withoutControlKey } from './control.js'
+import { CREDENTIAL_HELPER_VARIABLE } from './control-oauth.js'
+import { controlTransport, MISSING_CONTROL_CREDENTIAL, withoutControlKey } from './control.js'
 import { printable } from './data.js'
 
 const USAGE = `fabrika operations — read Operations (errors, releases, health) from the command line
@@ -71,16 +72,19 @@ Exit codes:
   1  the call failed: Control or Operations unreachable, a server error, an unreadable answer, or a procedure this
      installation's release does not offer
   2  usage: an unknown command or option, a bad value, or a selection that matches several sources
-  3  the key: FABRIKA_CONTROL_KEY is missing, was refused, or does not hold \`operations.read\`
+  3  the credential: neither FABRIKA_CONTROL_KEY nor FABRIKA_CONTROL_CREDENTIAL_HELPER is set, or it was refused,
+     or it does not hold \`operations.read\`
   4  not found: no such issue, event or source, or one the key may not read
 
 The console origin takes either form:
 
   --url=<origin>                    FABRIKA_CONTROL_URL
 
-The credential is read from the ENVIRONMENT ONLY and has no flag:
+The credential is read from the ENVIRONMENT ONLY and has no flag; one of:
 
-  FABRIKA_CONTROL_KEY               required   a \`px_\` key of the console app holding \`operations.read\`
+  FABRIKA_CONTROL_KEY               a \`px_\` key of the console app holding \`operations.read\`
+  FABRIKA_CONTROL_CREDENTIAL_HELPER the helper a \`fabrika control auth device\` grant is stored through
+                                    (any preset but \`create\` reads Operations)
 
 Mint a key narrowed to \`operations.read\` alone, with a short expiry: docs/reference/operations-errors.md,
 "Reading Operations from the command line".
@@ -516,9 +520,9 @@ interface Clients {
 }
 
 const connect = (args: Args, io: OperationsIo): Clients => {
-	const key = io.env['FABRIKA_CONTROL_KEY']
-	if (key === undefined || key.trim() === '') {
-		throw new OperationsCliError(OPERATIONS_EXIT.credential, 'FABRIKA_CONTROL_KEY is required (environment only — it has no flag).')
+	const given = (name: string): boolean => (io.env[name]?.trim() ?? '') !== ''
+	if (!given('FABRIKA_CONTROL_KEY') && !given(CREDENTIAL_HELPER_VARIABLE)) {
+		throw new OperationsCliError(OPERATIONS_EXIT.credential, MISSING_CONTROL_CREDENTIAL)
 	}
 	let transport: ReturnType<typeof controlTransport>
 	try {

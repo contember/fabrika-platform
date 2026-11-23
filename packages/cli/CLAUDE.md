@@ -24,6 +24,18 @@ label the envelope a registration carries.
   stays 0 and stderr names the command that follows up (`namespaces reconcile`, `runs log`).
 - Credentials come from the ENVIRONMENT ONLY and have no flag, so they cannot
   reach a CI log or a process listing. The origin is not a credential and takes both.
+- **Two credentials, one transport.** `controlTransport` sends `FABRIKA_CONTROL_KEY` when it is set. Otherwise it sends an
+  access token from the device grant that `FABRIKA_CONTROL_CREDENTIAL_HELPER` holds (`src/control-oauth.ts`,
+  [`cli-device-grant.md`](../../docs/reference/cli-device-grant.md)), for the one resource the request calls.
+  `control auth device` obtains that grant. Its invariants:
+  - the refresh token goes to the helper and never to stdout or a message;
+  - a refresh runs under the per-origin file lock (lock, `get`, refresh, `store`, unlock), because IAM rotates the
+    token and revokes the grant on a replay;
+  - neither a device code nor a refresh token is sent again after a lost answer;
+  - IAM is found from Control's origin through RFC 9728 and RFC 8414 metadata, with no redirect followed, and every
+    endpoint must sit on the issuer's https origin;
+  - a bearer never leaves Control's origin.
+    `connect` uses the same grant for Control's RPC.
 - `connectControl` is the one Control client, shared with the `env` area. It parses the origin before the key goes
   anywhere: `https:`, or `http:` to `localhost`, `*.localhost` (RFC 6761 loopback), 127.0.0.0/8 or `[::1]` only, and scheme, host and port alone (no
   userinfo, path, query or fragment). It follows no redirect. A JSON answer that carries `FABRIKA_CONTROL_KEY`, also

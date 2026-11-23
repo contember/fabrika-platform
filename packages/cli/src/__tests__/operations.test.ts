@@ -11,6 +11,7 @@ import type {
 } from '@fabrika/operations-contract/operator-api'
 import { describe, expect, test } from 'bun:test'
 import { runCli } from '..'
+import { MISSING_CONTROL_CREDENTIAL } from '../control.js'
 import { OPERATIONS_EXIT, OPERATIONS_USAGE, type OperationsIo, runOperationsCli } from '../operations.js'
 
 const KEY = 'px_support_key_0123456789'
@@ -367,10 +368,10 @@ describe('operations releases and health', () => {
 })
 
 describe('the key', () => {
-	test('a missing FABRIKA_CONTROL_KEY is exit 3 and nothing is called', async () => {
+	test('no Control credential at all is exit 3 and nothing is called', async () => {
 		const result = await run(['issues'], ACCESS, { FABRIKA_CONTROL_URL: 'https://console.example' })
 		expect(result.code).toBe(OPERATIONS_EXIT.credential)
-		expect(result.err).toBe('fabrika: FABRIKA_CONTROL_KEY is required (environment only — it has no flag).')
+		expect(result.err).toBe(`fabrika: ${MISSING_CONTROL_CREDENTIAL}`)
 		expect(result.calls).toEqual([])
 	})
 
