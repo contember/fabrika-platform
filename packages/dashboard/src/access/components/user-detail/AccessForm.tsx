@@ -5,18 +5,14 @@ import { Icon } from '../../../components/Icon'
 import { ApiError } from '../../../lib/api'
 import { grantTargets, useAdministration } from '../../lib/administration'
 import { api } from '../../lib/api'
-import { parseDateTimeLocal } from '../../lib/format'
+import { parseDateTimeLocal, toDateTimeLocal } from '../../lib/format'
 import { GrantComposer, useGrantComposerState } from '../GrantComposer'
 
 export function UserAccessForm({ principal, apps, grant }: { principal: PrincipalDetail; apps: AppDto[]; grant?: PrincipalGrantDto }) {
 	const navigate = useNavigate()
 	const composer = useGrantComposerState(grant)
 	const targets = grantTargets(apps, useAdministration())
-	const [expiry, setExpiry] = useState(() => {
-		if (grant?.expiresAt == null) return ''
-		const date = new Date(grant.expiresAt * 1000)
-		return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
-	})
+	const [expiry, setExpiry] = useState(() => grant?.expiresAt == null ? '' : toDateTimeLocal(grant.expiresAt))
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	function back() {
@@ -27,7 +23,8 @@ export function UserAccessForm({ principal, apps, grant }: { principal: Principa
 		setError(null)
 		try {
 			const authorization = composer.build()
-			const expiresAt = parseDateTimeLocal(expiry)
+			// The field shows minutes, so an untouched expiry keeps its stored seconds.
+			const expiresAt = grant?.expiresAt != null && expiry === toDateTimeLocal(grant.expiresAt) ? grant.expiresAt : parseDateTimeLocal(expiry)
 			if (expiry !== '' && (expiresAt === null || expiresAt <= Date.now() / 1000)) {
 				throw new Error('Choose an expiration in the future, or leave it empty.')
 			}

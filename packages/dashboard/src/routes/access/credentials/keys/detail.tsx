@@ -76,7 +76,7 @@ export default createPage()
 						}
 						head={<GrantTableHead />}
 					>
-						{apiKey.grants.map((grant) => <GrantRow key={grant.id} grant={grant} onDone={invalidate} />)}
+						{apiKey.grants.map((grant) => <GrantRow key={grant.id} grant={grant} editable={editable} onDone={invalidate} />)}
 					</Table>
 				</section>
 			</>
