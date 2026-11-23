@@ -95,7 +95,7 @@ What approval does not cover:
   list are not access changes: whoever holds the action writes them, without approval, at the application's scope
   (not per environment). A Zerops secret is written to the live service at once; the rest reaches the environment at
   its next deploy; on Zerops a domain or cross-origin change also republishes the namespace proxy at once. Of the built-in roles only `admin`
-  holds these actions ([`control-rpc.ts`](../../packages/control/src/control-rpc.ts),
+  holds these actions, and a builder key may hold `app.manage` ([`control-rpc.ts`](../../packages/control/src/control-rpc.ts),
   [`fabrika.schema.ts`](../../packages/control/fabrika.schema.ts)).
 - **Which commit.** A person's manual deploy of a protected environment may name any branch, tag or commit of the
   repository; Control does not check that it descends from the trigger ref. Approval judges the access the commit

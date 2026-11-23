@@ -89,8 +89,9 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   before any endpoint is planned. Assigning a pathname resolves `..` and `%2e%2e`, so checking after it
   would match `/admin` while the upstream receives `/a/../admin`.
 - **The token cache is best-effort and per-process.** Every entry is re-verified against the JWKS
-  before it is trusted, and `null` (no cache) is a supported configuration that changes only how many
-  times IAM is called — never which requests are allowed. ADR-0022 requires the proxy to stay
+  before it is trusted, and `null` (no cache) is a supported configuration that changes how many
+  times IAM is called, and for at most a cached token's remaining lifetime whether a revoked caller is still
+  admitted. ADR-0022 requires the proxy to stay
   stateless, so never make it shared or persistent.
 - **There is exactly one enforcement decision, and it is `src/authorize.ts`.** It composes
   `@fabrika/auth-core`'s planner (`planEndpoint`), `callerOf` and `satisfies`; it does not reimplement or
