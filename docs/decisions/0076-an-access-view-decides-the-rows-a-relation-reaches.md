@@ -201,23 +201,25 @@ the approver reads.
     through the view with the rows the source system's own SQL admits. Reads went through a `Within`. Writes read the
     existing rows through a `Ref` of the write action; no write ran.
   - Each of the 968 runnable rules agrees on every seed for a caller whose principal the rows name. 910 of them had a
-    seed where the rule both admits and refuses rows. With the remedy below, every rule bound to a principal also agrees
-    for a principal that no row names.
+    seed where the rule both admits and refuses rows. With one view per binding and the remedy below, every rule bound to
+    a principal also agrees for a principal that no row names.
   - The 20 exceptions, not replayed:
     - 12 rules read other principals' memberships from IAM, which an application's database does not hold;
     - 6 rules take their condition from the membership itself, not a value;
     - 2 rules require memberships at two dimensions at once, an AND that one term cannot express.
   - **A branch for every holder of a role joins a table of the application's principals.** A principal-bound view whose
     principals come from the application's rows reaches only the principals those rows name.
-    - 262 rules OR a branch bound to the principal with a branch that names no variable. Each comes from a role that
-      names no node, so it ports as a role held anywhere (`~rel`). As such a view, each reached fewer rows than the
-      source system for a principal no row names, never more.
+    - 280 rules OR a branch bound to the principal with a branch that names no variable. Each comes from a role that
+      names no node, so it ports as a role held anywhere (`~rel`). As such a view, 262 of them reached fewer rows than
+      the source system for a principal no row names, never more.
     - **The remedy:** the view takes its principals from a table that lists every principal of the application. The
-      rule stays one view, under one role held anywhere. The 262 rules then agree for such a principal on all 6 seeds,
+      rule stays one view, under one role held anywhere. All 280 rules then agree for such a principal on all 6 seeds,
       as they do for a named one.
     - The table must list the principal. One it does not list reaches nothing through the view, so a table that lags
-      behind IAM narrows access and never widens it. A control ran 22 of the rules with the table but without the
-      unmentioned principal in it; 14 of them differed again.
+      behind IAM narrows access. It never widens it: the hold still comes from IAM, and the term binds the caller.
+    - The table is a copy of IAM's principals that the application keeps in step. It is a base table the view reads,
+      so its writers delegate without a bound (section 5), but a write can only withhold what the rule admits a
+      holder, never add to it.
     - **The alternative, also replayed:** the branch with no variable as a second view, under a second relation bound
       by `member` to one node that the view maps to every row the branch admits. It agrees on the same rows and seeds,
       but the port needs two roles: the role held anywhere, and a membership in that node. One role inside the node
