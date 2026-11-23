@@ -44,3 +44,15 @@ export function parseDateTimeLocal(value: string): number | null {
 	const ms = new Date(trimmed).getTime()
 	return Number.isNaN(ms) ? null : Math.floor(ms / 1000)
 }
+
+/** Format epoch seconds as a `<datetime-local>` value in the browser's time zone, the inverse of `parseDateTimeLocal`. */
+export function toDateTimeLocal(seconds: number): string {
+	const date = new Date(seconds * 1000)
+	return new Date(date.getTime() - date.getTimezoneOffset() * 60_000).toISOString().slice(0, 16)
+}
+
+/** The expiry a grant form submits: an untouched field keeps the stored seconds, because the field shows only minutes. */
+export function submittedExpiry(value: string, stored: number | null | undefined): number | null {
+	if (stored != null && value === toDateTimeLocal(stored)) return stored
+	return parseDateTimeLocal(value)
+}

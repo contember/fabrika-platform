@@ -216,7 +216,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   mismatch is reported as `invalid_key`, never as a distinct reason.
 - **AN API KEY'S PERMISSIONS ARE ITS SERVICE PRINCIPAL'S GRANTS, RESOLVED AT EVERY EXCHANGE.** Both provisioning paths
   (`apiKeys.provision`, `issueKey`'s service mode) write the principal, one grant and a credential with no inline grants,
-  so `resolveCredential` reads the grants live. Editing a key is `grants.create`/`grants.delete` on its principal, an
+  so `resolveCredential` reads the grants live. Editing a key is `grants.create`/`grants.update`/`grants.delete` on its principal, an
   installation administrator's only (`requireGrantablePrincipal`), under the rules provisioning applies; the secret
   stays. A token minted before the change keeps its `perms` until it expires (`DEFAULT_TOKEN_TTL_SECONDS`, the
   proxy's cache included). A grant at an app other than the credential's binding never reaches the key's token.

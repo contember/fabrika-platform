@@ -487,10 +487,12 @@ of that id and nothing else, and neither does the bootstrap `admin`
 ([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md) rule 6).
 
 A service key's permissions are the grants of its service principal, and IAM reads them at every token exchange. To
-change what a key may do, an installation administrator adds or removes a grant on the key's page in the console
-(Access → Credentials → the key), or calls `grants.create` and `grants.delete` on its principal. The key keeps its
-secret, so nothing is redistributed. The same rules apply as at provisioning: a registered app, a known role or catalog
-actions, and no wildcard at a contract application. A user administrator cannot do this
+change what a key may do, an installation administrator adds, edits or removes a grant on the key's page in the console
+(Access → Credentials → the key), or calls `grants.create`, `grants.update` and `grants.delete` on its principal. An edit
+changes the grant's role or actions, scope and expiry in place, keeps its app, and is audited as `iam.grant.update` with
+the values before and after. The key keeps its secret, so nothing is redistributed. The same rules apply as at
+provisioning: a registered app, a known role or catalog actions, and no wildcard at a contract application. A user
+administrator cannot do this
 ([ADR-0058](../decisions/0058-user-administration-is-grantable-on-its-own.md) section 4). The change applies at the
 key's next exchange. A caller that already holds a token, the proxy's cached one included, keeps the old permissions
 until that token expires, at most five minutes. A grant at an app other than the one the key is bound to never reaches

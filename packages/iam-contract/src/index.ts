@@ -271,12 +271,23 @@ export interface ApiKeyDto {
 
 /**
  * One API key with its live credential, as `apiKeys.get` and each row of `apiKeys.list` answer it. Its permissions are
- * its grants, edited with `grants.create` and `grants.delete` by an installation administrator and read again at every
+ * its grants, edited with `grants.create`, `grants.update` and `grants.delete` by an installation administrator and read again at every
  * token exchange. An IAM older than the list's credential answers list rows without `credential`.
  */
 export interface ApiKeyDetail extends ApiKeyDto {
 	/** The key's live credential, or null when none is live (a revoked key). */
 	credential: ApiKeyCredentialDto | null
+}
+
+/** A grant of `apiKeys.get`'s key, naming who granted it. */
+export interface ApiKeyGrantDto extends GrantDto {
+	/** The granting principal's label, or its id when IAM no longer knows it; null when nobody granted it. */
+	grantedByLabel: string | null
+}
+
+/** `apiKeys.get`: one key whose grants name who granted them. */
+export interface GetApiKeyResponse extends ApiKeyDetail {
+	grants: ApiKeyGrantDto[]
 }
 
 export interface ApiKeyCredentialDto {
@@ -767,7 +778,7 @@ export interface IamAdminRpcContract {
 	}
 	apiKeys: {
 		list: RpcProcedure<ListApiKeysInput, CursorList<ApiKeyDetail>>
-		get: RpcProcedure<ApiKeyIdInput, ApiKeyDetail>
+		get: RpcProcedure<ApiKeyIdInput, GetApiKeyResponse>
 		provision: RpcProcedure<ProvisionApiKeyRequest, ProvisionApiKeyResponse>
 		rotate: RpcProcedure<RotateApiKeyInput, RotateApiKeyResponse>
 		revoke: RpcProcedure<ApiKeyIdInput, OkResponse>

@@ -70,6 +70,16 @@ export async function toGrantDtos(rows: GrantRow[], services: Services, cache: R
 	return out
 }
 
+/** The label of each principal who granted one of `rows`; an author no longer known reads as its id. */
+export async function grantAuthorLabels(rows: GrantRow[], services: Services): Promise<Map<string, string>> {
+	const authors = [...new Set(rows.flatMap((row) => row.granted_by === null ? [] : [row.granted_by]))]
+	return new Map(
+		await Promise.all(
+			authors.map(async (author) => [author, (await services.repositories.principals.getPrincipalById(author))?.label ?? author] as const),
+		),
+	)
+}
+
 /** The set of app ids IAM knows about — the live registry derived from the schema tables. */
 export function knownApps(c: AdminContext): Promise<string[]> {
 	return c.services.repositories.appSchema.listKnownApps()

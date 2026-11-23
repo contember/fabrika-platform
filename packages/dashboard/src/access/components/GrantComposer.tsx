@@ -117,6 +117,8 @@ export function GrantComposer(
 	const memberScope = selectedRole?.member?.scope
 	const custom = mode === 'inline'
 	const hasOptions = custom || (scope.kind === 'scoped' && !memberScope) || expiry !== ''
+	// An edited grant that already uses these options opens on them; later renders leave the reader's choice alone.
+	const [openOptions] = useState(hasOptions)
 
 	return (
 		<div className="grant-composer">
@@ -162,6 +164,7 @@ export function GrantComposer(
 				</label>
 			)}
 			<details
+				open={openOptions}
 				className="grant-options"
 				onInvalidCapture={(event) => {
 					// Reveal invalid controls synchronously so native validation can focus them.

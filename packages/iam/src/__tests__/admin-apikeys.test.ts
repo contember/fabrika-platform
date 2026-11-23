@@ -10,7 +10,7 @@ import { prop } from '../json'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
-import { createHarness, type Harness, seedAppAction, seedGrant, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
+import { createHarness, type Harness, seedAppAction, seedGrant, seedRole, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 // End-to-end tests for the admin api-keys flow minting an IAM-NATIVE key: provision creates a
 // native service principal + grant and returns a `px_` key that `mintFromKey` resolves to the service
@@ -241,6 +241,63 @@ describe("an issued key's grants are edited in place", () => {
 		const recorded = changes.map((event) => [event.action, event.resource_id, prop(JSON.parse(event.metadata ?? 'null'), 'principalId')])
 		expect(recorded).toContainEqual(['iam.grant.create', addedId, key.principalId])
 		expect(recorded).toContainEqual(['iam.grant.revoke', original.id, key.principalId])
+	})
+
+	test("a grant edited in place changes the SAME key's actions, scope and expiry at its next exchange, and records before and after", async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const key = await provision(h, token)
+		seedAppAction(h.sqlite, 'opice', 'secret.manage')
+		const [grant] = await h.repositories.grants.listGrants(key.principalId)
+		if (grant === undefined) throw new Error('provisioning wrote no grant')
+		const expiresAt = Math.floor(Date.now() / 1000) + 3600
+		const scope = { type: 'project', value: 'p1' }
+
+		const updated = await adminRpc(h, token, 'grants.update', {
+			id: grant.id,
+			permissions: ['secret.manage'],
+			scopeType: scope.type,
+			scopeValue: scope.value,
+			expiresAt,
+		})
+		expect(updated.status).toBe(200)
+		expect([prop(updated.result, 'id'), prop(updated.result, 'expiresAt'), prop(updated.result, 'scopeValue')]).toEqual([grant.id, expiresAt, 'p1'])
+
+		const perms = (await resolveKey(h, key.apiKey)).claims?.perms ?? []
+		expect(permits(perms, 'report.write', scope)).toBe(false)
+		expect(permits(perms, 'secret.manage')).toBe(false)
+		expect(permits(perms, 'secret.manage', scope)).toBe(true)
+
+		const [event] = await h.repositories.audit.listAuditEvents({ resourceType: 'grant', resourceId: grant.id, limit: 10 })
+		expect(event?.action).toBe('iam.grant.update')
+		expect(prop(JSON.parse(event?.metadata ?? 'null'), 'principalId')).toBe(key.principalId)
+		expect(JSON.parse(event?.diff ?? 'null')).toEqual({
+			before: { roleKey: null, permissions: ['report.write'], scopeType: null, scopeValue: null, expiresAt: null },
+			after: { roleKey: null, permissions: ['secret.manage'], scopeType: 'project', scopeValue: 'p1', expiresAt },
+		})
+	})
+
+	test('an edit into a role the key already holds there is refused, naming the key', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const key = await provision(h, token)
+		seedRole(h.sqlite, 'opice', 'reporter', ['report.write'])
+		seedGrant(h.sqlite, key.principalId, 'reporter', null, 'opice')
+		const [inline] = (await h.repositories.grants.listGrants(key.principalId)).filter((grant) => grant.role_key === null)
+		if (inline === undefined) throw new Error('provisioning wrote no inline grant')
+
+		const refused = await adminRpc(h, token, 'grants.update', { id: inline.id, roleKey: 'reporter' })
+		expect(refused.status).toBe(409)
+		expect(prop(refused.result, 'message')).toBe('This key already has that role in this scope. Edit the existing grant instead.')
+	})
+
+	test('apiKeys.get names the person who granted each grant', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const key = await provision(h, token)
+		const grants = prop((await adminRpc(h, token, 'apiKeys.get', { principalId: key.principalId })).result, 'grants')
+		if (!Array.isArray(grants)) throw new Error('expected the key grants')
+		expect(grants.map((grant: unknown) => prop(grant, 'grantedByLabel'))).toEqual(['admin@example.com'])
 	})
 
 	test('apiKeys.get answers 404 for a user and for an unknown id', async () => {

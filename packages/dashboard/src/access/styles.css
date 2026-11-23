@@ -90,12 +90,40 @@
 	min-width: 0;
 }
 
+/* One action per row: the name never breaks, and its description sits beside it in one shared column,
+   or under it when the picker is narrow. The selector outranks `.form label.checkbox`, which loads later. */
+.action-picker {
+	container-type: inline-size;
+}
+
 .action-list {
 	display: grid;
-	grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
-	max-height: 16rem;
+	grid-template-columns: auto max-content minmax(0, 1fr);
+	max-height: 20rem;
 	overflow-y: auto;
 	scrollbar-width: thin;
+}
+
+.action-picker .action-list > label.checkbox {
+	display: grid;
+	grid-column: 1 / -1;
+	grid-template-columns: subgrid;
+	row-gap: 0;
+}
+
+.action-list > label.checkbox > code {
+	white-space: nowrap;
+	overflow-wrap: normal;
+}
+
+@container (max-width: 30rem) {
+	.action-list {
+		grid-template-columns: auto minmax(0, 1fr);
+	}
+
+	.action-list > label.checkbox > span {
+		grid-column: 2;
+	}
 }
 
 .inline-actions {

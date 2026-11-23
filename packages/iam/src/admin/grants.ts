@@ -147,7 +147,10 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 			other.id !== grant.id && other.app === grant.app && other.role_key === authorization.roleKey
 			&& other.scope_type === scope.scopeType && other.scope_value === scope.scopeValue
 		)
-	if (await duplicate()) return fail(409, 'This user already has that role in this scope. Edit the existing access instead.')
+	const held = principal.type === 'user'
+		? 'This user already has that role in this scope. Edit the existing access instead.'
+		: 'This key already has that role in this scope. Edit the existing grant instead.'
+	if (await duplicate()) return fail(409, held)
 	let updated: GrantRow | null
 	try {
 		updated = await c.services.repositories.grants.updateGrant(
@@ -177,7 +180,7 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 			}),
 		)
 	} catch (cause) {
-		if (await duplicate()) return fail(409, 'This user already has that role in this scope. Edit the existing access instead.')
+		if (await duplicate()) return fail(409, held)
 		throw cause
 	}
 	if (updated === null) return fail(409, 'The access changed or is no longer allowed. Refresh and try again.')

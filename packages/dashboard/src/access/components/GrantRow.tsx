@@ -1,4 +1,5 @@
-import type { GrantDto } from '@fabrika/iam-contract'
+import { Link } from '@buzola/router'
+import type { ApiKeyGrantDto, GrantDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { fmtAgo, fmtDate } from '../../lib/format'
@@ -22,8 +23,8 @@ export function GrantTableHead() {
 	)
 }
 
-/** One grant of a person or an API key, with its revoke. IAM decides whether the caller may revoke it. */
-export function GrantRow({ grant, onDone }: { grant: GrantDto; onDone: () => void }) {
+/** One grant of an API key, with its edit and revoke. IAM decides whether the caller may change it. */
+export function GrantRow({ grant, editable, onDone }: { grant: ApiKeyGrantDto; editable: boolean; onDone: () => void }) {
 	const [confirming, setConfirming] = useState(false)
 	const scopeLabel = fmtScope(grant.scopeType === null ? null : { type: grant.scopeType, value: grant.scopeValue ?? '' })
 
@@ -40,9 +41,14 @@ export function GrantRow({ grant, onDone }: { grant: GrantDto; onDone: () => voi
 			<td>{grant.app ? <AppName app={grant.app} /> : <span className="muted">All apps</span>}</td>
 			<td>{scopeLabel}</td>
 			<td className="nowrap">{fmtExpiry(grant.expiresAt)}</td>
-			<td>{grant.grantedBy ?? <span className="muted">none</span>}</td>
+			<td>{grant.grantedByLabel ?? <span className="muted">none</span>}</td>
 			<td className="muted small nowrap" title={fmtDate(grant.createdAt)}>{fmtAgo(grant.createdAt)}</td>
 			<td className="row-actions">
+				{editable && (
+					<Link to="access/credentials/keys/edit-grant" params={{ id: grant.principalId, grantId: grant.id }} className="btn small">
+						Edit
+					</Link>
+				)}
 				<button type="button" className="danger small" onClick={() => setConfirming(true)}>Revoke</button>
 				{confirming && (
 					<ConfirmDialog
