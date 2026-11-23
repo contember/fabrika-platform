@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { Icon } from '../../components/Icon'
 import { ApiError } from '../../lib/api'
 import { api } from '../lib/api'
-import { parseDateTimeLocal, toDateTimeLocal } from '../lib/format'
+import { submittedExpiry, toDateTimeLocal } from '../lib/format'
 import { keyGrantTargets } from '../lib/key-grants'
 import { GrantComposer, useGrantComposerState } from './GrantComposer'
 
@@ -29,8 +29,7 @@ export function KeyGrantForm({ apiKey, apps, grant }: { apiKey: GetApiKeyRespons
 		setError(null)
 		try {
 			const authorization = composer.build()
-			// The field shows minutes, so an untouched expiry keeps its stored seconds.
-			const expiresAt = grant?.expiresAt != null && expiry === toDateTimeLocal(grant.expiresAt) ? grant.expiresAt : parseDateTimeLocal(expiry)
+			const expiresAt = submittedExpiry(expiry, grant?.expiresAt)
 			if (expiry !== '' && (expiresAt === null || expiresAt <= Date.now() / 1000)) {
 				throw new Error('Choose an expiration in the future, or leave it empty.')
 			}

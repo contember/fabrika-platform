@@ -180,9 +180,6 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 			}),
 		)
 	} catch (cause) {
-		const held = principal.type === 'user'
-			? 'This user already has that role in this scope. Edit the existing access instead.'
-			: 'This key already has that role in this scope. Edit the existing grant instead.'
 		if (await duplicate()) return fail(409, held)
 		throw cause
 	}

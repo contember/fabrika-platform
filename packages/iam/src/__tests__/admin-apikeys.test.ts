@@ -10,7 +10,7 @@ import { prop } from '../json'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { mintFromKey } from '../tokens'
-import { createHarness, type Harness, seedAppAction, seedGrant, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
+import { createHarness, type Harness, seedAppAction, seedGrant, seedRole, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 // End-to-end tests for the admin api-keys flow minting an IAM-NATIVE key: provision creates a
 // native service principal + grant and returns a `px_` key that `mintFromKey` resolves to the service
@@ -275,6 +275,20 @@ describe("an issued key's grants are edited in place", () => {
 			before: { roleKey: null, permissions: ['report.write'], scopeType: null, scopeValue: null, expiresAt: null },
 			after: { roleKey: null, permissions: ['secret.manage'], scopeType: 'project', scopeValue: 'p1', expiresAt },
 		})
+	})
+
+	test('an edit into a role the key already holds there is refused, naming the key', async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const key = await provision(h, token)
+		seedRole(h.sqlite, 'opice', 'reporter', ['report.write'])
+		seedGrant(h.sqlite, key.principalId, 'reporter', null, 'opice')
+		const [inline] = (await h.repositories.grants.listGrants(key.principalId)).filter((grant) => grant.role_key === null)
+		if (inline === undefined) throw new Error('provisioning wrote no inline grant')
+
+		const refused = await adminRpc(h, token, 'grants.update', { id: inline.id, roleKey: 'reporter' })
+		expect(refused.status).toBe(409)
+		expect(prop(refused.result, 'message')).toBe('This key already has that role in this scope. Edit the existing grant instead.')
 	})
 
 	test('apiKeys.get names the person who granted each grant', async () => {
