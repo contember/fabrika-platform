@@ -108,6 +108,7 @@ describe('platform scaffold', () => {
 			const iamStep = workflow.slice(workflow.indexOf('name: Deploy IAM'), workflow.indexOf('name: Deploy Operations'))
 			expect(iamStep).toContain('fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts')
 			expect(iamStep).toContain('FABRIKA_IAM_SIGNING_KEYS: ${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}')
+			expect(iamStep).toContain('FABRIKA_IAM_DATA_KEY: ${{ secrets.FABRIKA_IAM_DATA_KEY }}')
 			expect(iamStep).toContain('FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}')
 			// IAM's mail goes through Control's relay, at the console's public origin.
 			expect(iamStep).toContain('FABRIKA_CONTROL_URL: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}')

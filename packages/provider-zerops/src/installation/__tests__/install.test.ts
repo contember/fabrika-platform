@@ -757,7 +757,7 @@ describe('every outward step is confirmed', () => {
 	})
 
 	test('declining after pass one reports unsupported partial bootstrap and refuses to reroll on retry', async () => {
-		const fixture = harness({ confirms: { 'Write 42 variables across 4 services?': false } })
+		const fixture = harness({ confirms: { 'Write 43 variables across 4 services?': false } })
 		await expect(fixture.run()).rejects.toThrow('Neither `platform deploy` nor `platform init` completes a partial bootstrap')
 		const key = fixture.zerops.env('proxy').get('FABRIKA_IAM_KEY')
 		expect(key).toBeDefined()
@@ -789,6 +789,7 @@ describe('every outward step is confirmed', () => {
 			'env:iam:FABRIKA_IAM_RPC_KEY',
 			'env:iam:FABRIKA_IAM_PROXY_KEY',
 			'env:iam:FABRIKA_IAM_PROVISIONING_KEY',
+			'env:iam:FABRIKA_IAM_DATA_KEY',
 			'env:operations:FABRIKA_OPERATIONS_DATABASE_URL',
 			'env:operations:FABRIKA_OPERATIONS_BLOB_BUCKET',
 			'env:operations:FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID',

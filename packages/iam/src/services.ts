@@ -1,6 +1,7 @@
 import { LOCAL_ENVIRONMENT, parseJsonStringArray, readEnvironmentName } from '@fabrika/auth-core'
 import { type EmailSender, emailSenderFromEnv, readEmailTransportConfig } from '@fabrika/email'
 import { uuidv7 } from '@fabrika/platform'
+import { parseDataKey } from './data-key'
 import type { IamRepositories } from './db'
 import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
@@ -23,6 +24,8 @@ export interface Services {
 	readonly oidc: OidcClient | null
 	readonly passwordHasher: PasswordHasher
 	readonly email: EmailSender | null
+	/** `FABRIKA_IAM_DATA_KEY`, which seals TOTP secrets (`src/data-key.ts`); null when unset, and TOTP enrolment is unavailable. */
+	readonly dataKey: Uint8Array<ArrayBuffer> | null
 	readonly config: Config
 }
 
@@ -134,6 +137,7 @@ export function buildServices(env: Env): Services {
 		oidc,
 		passwordHasher: new WebCryptoPasswordHasher(passwordCost),
 		email: buildEmailSender(env, environment),
+		dataKey: parseDataKey(env.FABRIKA_IAM_DATA_KEY),
 		config: {
 			human: {
 				emailDomains: parseJsonStringArray(env.HUMAN_EMAIL_DOMAINS),

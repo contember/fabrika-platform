@@ -65,6 +65,8 @@ export interface InstallationSecrets {
 	readonly operationsSyncKey: string
 	/** The control plane's vault KEK: 32 raw bytes at base64. Its loss is unrecoverable by design. */
 	readonly vaultKey: string
+	/** IAM's key that seals TOTP secrets (`FABRIKA_IAM_DATA_KEY`): 32 raw bytes at base64. Its loss resets every authenticator. */
+	readonly dataKey: string
 }
 
 /** Roll one installation's secrets. Pure entropy in, no I/O, nothing persisted. */
@@ -75,4 +77,5 @@ export const generateInstallationSecrets = (): InstallationSecrets => ({
 	provisioningKey: randomPxKey(),
 	operationsSyncKey: randomSecret(),
 	vaultKey: generateVaultKey(),
+	dataKey: generateVaultKey(),
 })

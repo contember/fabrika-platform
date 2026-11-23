@@ -138,6 +138,8 @@ const INPUTS: Record<string, unknown> = {
 	'brand.clear': null,
 	'passwordPolicy.get': null,
 	'passwordPolicy.set': { minLength: 12 },
+	'secondFactor.get': { principalId: 'nobody' },
+	'secondFactor.reset': { principalId: 'nobody' },
 }
 
 /** The input `INPUTS` names for `method`, or `{}`. */

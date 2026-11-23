@@ -66,7 +66,7 @@ export async function handleLogin(
 	}
 
 	if (services.config.localDevLogin) {
-		return handleLocalLogin(request, services, ctx, requestId, redirect, handoff, presentation)
+		return handleLocalLogin(request, services, env, ctx, requestId, redirect, handoff, presentation)
 	}
 	if (services.config.authentication.password.enabled) {
 		return loginPage({
@@ -133,6 +133,7 @@ export async function handleAccountChoice(request: Request, services: Services, 
 async function handleLocalLogin(
 	request: Request,
 	services: Services,
+	env: AuthEnv,
 	ctx: RequestContext,
 	requestId: string,
 	redirect: string | null,
@@ -148,7 +149,7 @@ async function handleLocalLogin(
 			() => authFailurePage(presentation, { kind: 'login_refused', reason: `local ${resolved.reason}` }, 403),
 		)
 	}
-	return issueSession(request, services, ctx, {
+	return issueSession(request, services, env, ctx, {
 		principalId: resolved.principal.id,
 		idpSub: LOCAL_DEV_ADMIN_ID,
 		email: LOCAL_DEV_ADMIN_EMAIL,

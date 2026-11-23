@@ -114,6 +114,7 @@ export const installationServiceEnvironment = (input: InstallationServiceInput):
 			['FABRIKA_IAM_RPC_KEY', secrets.rpcKey],
 			['FABRIKA_IAM_PROXY_KEY', secrets.proxyKey],
 			['FABRIKA_IAM_PROVISIONING_KEY', secrets.provisioningKey],
+			['FABRIKA_IAM_DATA_KEY', secrets.dataKey],
 			...email,
 		]),
 		operations: new Map([
@@ -161,7 +162,7 @@ export const installationServiceEnvironment = (input: InstallationServiceInput):
  * are written as credentials. A provider adds the names of its own that carry a generated value.
  */
 export const INSTALLATION_SECRET_VARIABLES: Readonly<Record<PlatformService, readonly string[]>> = {
-	iam: ['FABRIKA_IAM_SIGNING_KEYS', 'FABRIKA_IAM_RPC_KEY', 'FABRIKA_IAM_PROXY_KEY', 'FABRIKA_IAM_PROVISIONING_KEY'],
+	iam: ['FABRIKA_IAM_SIGNING_KEYS', 'FABRIKA_IAM_RPC_KEY', 'FABRIKA_IAM_PROXY_KEY', 'FABRIKA_IAM_PROVISIONING_KEY', 'FABRIKA_IAM_DATA_KEY'],
 	operations: ['OPERATIONS_SYNC_KEY', 'FABRIKA_IAM_RPC_KEY'],
 	control: ['FABRIKA_IAM_RPC_KEY', 'OPERATIONS_SYNC_KEY', 'FABRIKA_CONTROL_VAULT_KEY', 'FABRIKA_IAM_PROVISIONING_KEY'],
 	proxy: ['FABRIKA_IAM_KEY'],

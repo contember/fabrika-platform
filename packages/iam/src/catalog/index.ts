@@ -75,6 +75,34 @@ export interface PageText {
 		readonly enrolledTitle: string
 		readonly enrolledText: (label: string) => string
 	}
+	/** The second factor (TOTP): the code a sign-in asks for, and enrolling an authenticator app. */
+	readonly secondFactor: {
+		readonly challengeTitle: string
+		readonly challengeText: string
+		readonly codeLabel: string
+		readonly submit: string
+		readonly invalidCode: string
+		/** Too many wrong codes for this account; the next attempt waits. */
+		readonly throttled: string
+		/** The data key is unset or does not open the secret: only a recovery code signs in. */
+		readonly appCodesUnavailable: string
+		readonly startOver: string
+		readonly enrolTitle: string
+		readonly enrolText: string
+		readonly start: string
+		readonly scanText: string
+		readonly secretLabel: string
+		readonly confirmLabel: string
+		readonly confirm: string
+		readonly enrolledTitle: string
+		/** `enrolledOn` is an ISO date; `left` the recovery codes not used yet. */
+		readonly enrolledText: (enrolledOn: string, left: number) => string
+		readonly recoveryTitle: string
+		readonly recoveryText: string
+		readonly continue: string
+		readonly unavailableTitle: string
+		readonly unavailableText: string
+	}
 	readonly invitation: {
 		readonly title: string
 		readonly text: string

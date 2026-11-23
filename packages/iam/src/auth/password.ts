@@ -15,7 +15,7 @@ import { type Config, type Services } from '../services'
 import type { AuthFailure } from './failure'
 import { handoffOf, handoffRedirectOr, loginDestinationFields, readHandoff } from './handoff'
 import { methodNotAllowed, readForm, sameOrigin, stringValue } from './http'
-import { knownDeviceCookie, readKnownDevice } from './known-device'
+import { readKnownDevice } from './known-device'
 import type { AuthEnv } from './oidc-flight'
 import { issueSession, type LoginRefusal, refuseLogin } from './sessions'
 
@@ -202,7 +202,8 @@ export async function handlePasswordLogin(
 			services.repositories.passwords.clearLoginFailures(accountKey),
 			deviceKey === null ? Promise.resolve() : services.repositories.passwords.clearLoginFailures(deviceKey),
 		])
-		const session = await issueSession(request, services, ctx, {
+		// Only a recorded login earns a device cookie: `issueSession` sets it on its 302, after the second factor if any.
+		return issueSession(request, services, env, ctx, {
 			principalId: lookup.principal.id,
 			email: lookup.principal.email,
 			authenticationMethod: 'password',
@@ -210,10 +211,8 @@ export async function handlePasswordLogin(
 			reason: 'password_login',
 			requestId,
 			handoff,
+			rememberDevice: true,
 		})
-		// Only a recorded login (the 302) earns a device cookie; a 503 issued no session.
-		if (session.status === 302) session.headers.append('Set-Cookie', await knownDeviceCookie(env, lookup.principal.id))
-		return session
 	}
 
 	// A known device's attempt is already counted in its own bucket.
@@ -335,6 +334,7 @@ async function safelyCreateBootstrapPrincipal(services: Services, email: string,
 export async function handlePasswordAction(
 	request: Request,
 	services: Services,
+	env: AuthEnv,
 	ctx: RequestContext,
 	purpose: PasswordActionPurpose,
 	requestId: string,
@@ -381,7 +381,7 @@ export async function handlePasswordAction(
 	// An action that keeps an application lands on its registered origin, any other on the installation's landing
 	// (`issueSession`); that application's proxy then signs the browser in through the normal handoff, which the
 	// session issued here makes silent.
-	return issueSession(request, services, ctx, {
+	return issueSession(request, services, env, ctx, {
 		principalId: completedPrincipal.id,
 		email: completedPrincipal.email,
 		authenticationMethod: 'password',

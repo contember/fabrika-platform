@@ -95,6 +95,7 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 	]
 	const existingFiles = requiredFiles.filter((file) => existsSync(resolve(directory, file)))
 	if (existingFiles.length === requiredFiles.length) {
+		await ensureIamDataKey(directory)
 		await ensureObjectStorageSecrets(directory)
 		await ensureAppsStorageIdentity(directory)
 		await ensureLocalGitHubApps(directory)
@@ -128,6 +129,7 @@ export const prepareLocalSecrets = async (directory: string = STATE_DIR): Promis
 			FABRIKA_IAM_RPC_KEY: rpcKey,
 			FABRIKA_IAM_PROXY_KEY: proxyKey,
 			FABRIKA_IAM_PROVISIONING_KEY: provisioningKey,
+			FABRIKA_IAM_DATA_KEY: randomBase64Key(),
 			[IAM_PROXY_SECRET_VARIABLE]: iamProxySecret,
 		}),
 		writeEnv(directory, 'operations.env', {
@@ -191,6 +193,13 @@ async function ensureAppsStorageIdentity(directory: string): Promise<void> {
 		}],
 	}
 	await Bun.write(resolve(directory, 'apps-storage-identities.json'), `${JSON.stringify(config, null, '\t')}\n`)
+}
+
+/** A stack from before TOTP gets IAM's data key added; an existing one is never rolled, or every enrolment stops opening. */
+async function ensureIamDataKey(directory: string): Promise<void> {
+	const iam = await readEnv(directory, 'iam.env')
+	if (envValue(iam, 'FABRIKA_IAM_DATA_KEY')) return
+	await writeEnv(directory, 'iam.env', { ...iam, FABRIKA_IAM_DATA_KEY: randomBase64Key() })
 }
 
 async function ensureObjectStorageSecrets(directory: string): Promise<void> {

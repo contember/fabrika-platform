@@ -82,6 +82,12 @@ describe('IAM resource graph', () => {
 		])
 	})
 
+	test('declares the data key only when the environment holds one, so an installation without it keeps deploying', () => {
+		expect(iamPipelineSecrets(REMOTE_SOURCE)).not.toContain('FABRIKA_IAM_DATA_KEY')
+		expect(iamPipelineSecrets({ ...REMOTE_SOURCE, FABRIKA_IAM_DATA_KEY: '' })).not.toContain('FABRIKA_IAM_DATA_KEY')
+		expect(iamPipelineSecrets({ ...REMOTE_SOURCE, FABRIKA_IAM_DATA_KEY: 'a2V5' })).toContain('FABRIKA_IAM_DATA_KEY')
+	})
+
 	test('local fabrika and Oblaka entries materialize the same Worker', () => {
 		const fromFabrika = config.resources({ env: 'local' })
 		const fromOblaka = requireWorker(oblakaDefinition({ env: 'local' }))

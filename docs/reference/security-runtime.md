@@ -163,8 +163,11 @@ not admit, in this order ([`dispatch.ts`](../../packages/app/src/implement/dispa
   token minted from it ends at the cap too. So a person disabled only at the OIDC provider keeps their sign-in until the
   cap, unless an administrator disables or signs out the principal first; a key they issued or approved (up to 30 days)
   lasts until it is revoked or the person is disabled in IAM.
-- **IAM has no second factor of its own.** A second factor exists only where an installation signs people in through
-  an OIDC provider that requires one; a password login is one factor. The minimum password length is an installation
+- **Only an enrolled administrator has a second factor in IAM.** An administrator may enrol an authenticator app
+  (TOTP); every later sign-in then asks for a code, an OIDC one included
+  ([`human-authentication.md`](human-authentication.md#two-step-sign-in-for-administrators)). Enrolment is optional,
+  and nobody else can enrol. Everyone else has a second factor only where an OIDC provider requires one; a password
+  login is one factor. The minimum password length is an installation
   administrator's setting, at least 4 on Bun and 15 on a Worker, and a Worker hashes with a lower PBKDF2 cost
   ([`human-authentication.md`](human-authentication.md),
   [backlog 201](../backlog/201-cloudflare-passwords-are-hashed-below-the-owasp-work-factor.md)). Approving an access

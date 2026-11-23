@@ -163,14 +163,14 @@ token, so correcting it costs nothing.
 
 ## Where each credential lives
 
-| Credential                        | Held by                                                                          |
-| --------------------------------- | -------------------------------------------------------------------------------- |
-| Zerops personal access token      | The operator only. Used by `install`, stored nowhere.                            |
-| Zerops integration token          | The secrets file, the `control` service, and the sidecar GitHub Environment.     |
-| Provisioning key                  | The secrets file, the `iam` and `control` services, and the sidecar Environment. |
-| Signing keys, vault key, RPC keys | The secrets file, and the services that use them.                                |
-| GitHub App id and private key     | Control's vault, next to the connection's webhook secret.                        |
-| Machine keys                      | Whoever they were issued to. `key issue` prints each one once.                   |
+| Credential                                        | Held by                                                                                                                                          |
+| ------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Zerops personal access token                      | The operator only. Used by `install`, stored nowhere.                                                                                            |
+| Zerops integration token                          | The secrets file, the `control` service, and the sidecar GitHub Environment.                                                                     |
+| Provisioning key                                  | The secrets file, the `iam` and `control` services, and the sidecar Environment.                                                                 |
+| Signing keys, vault key, IAM's data key, RPC keys | The secrets file, and the services that use them. An installation from before IAM's data key gets it from its next deploy, and no file holds it. |
+| GitHub App id and private key                     | Control's vault, next to the connection's webhook secret.                                                                                        |
+| Machine keys                                      | Whoever they were issued to. `key issue` prints each one once.                                                                                   |
 
 The services hold their copies as sensitive variables, which Zerops hands back only in sudo mode, so the
 secrets file is the operator's only readable copy. The vault key cannot be recovered or re-rolled: losing

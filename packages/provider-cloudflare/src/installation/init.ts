@@ -119,6 +119,7 @@ export async function runInit(input: InitInput, collaborators: InitCollaborators
 	const signingKeys = await ensureSigningKeys()
 	const oidcClientSecret = input.oidc === undefined ? undefined : await ensureOidcClientSecret(input.oidc.clientSecret)
 	const runnerKey = await ensureRunnerKey()
+	const dataKey = await ensureDataKey()
 
 	const { prompts, effects } = collaborators
 	const rerun = rerunCommand(input, collected.accountId)
@@ -149,6 +150,7 @@ export async function runInit(input: InitInput, collaborators: InitCollaborators
 			provisioning,
 			operationsSyncKey,
 			runnerKey,
+			dataKey,
 			signingKeys,
 			...(oidcClientSecret === undefined ? {} : { oidcClientSecret }),
 		}),
@@ -206,6 +208,7 @@ export interface GeneratedInstallation {
 	readonly provisioning: string
 	readonly operationsSyncKey: string
 	readonly runnerKey: string
+	readonly dataKey: string
 	readonly signingKeys: string
 	readonly oidcClientSecret?: string
 }
@@ -230,6 +233,8 @@ export function environmentPayload(
 			FABRIKA_RUNNER_KEY: generated.runnerKey,
 			// IAM Stage 1 native-auth secrets (pushed as IAM Worker secrets by the pipeline).
 			FABRIKA_IAM_SIGNING_KEYS: generated.signingKeys,
+			// IAM's at-rest key for the values it must read back (a TOTP secret).
+			FABRIKA_IAM_DATA_KEY: generated.dataKey,
 			...(generated.oidcClientSecret === undefined ? {} : { FABRIKA_IAM_OIDC_CLIENT_SECRET: generated.oidcClientSecret }),
 			...email.secrets,
 		},
@@ -472,6 +477,25 @@ export async function ensureRunnerKey(): Promise<string> {
 	await persistEnv('FABRIKA_RUNNER_KEY', key)
 	ok('Runner key generated + saved to the installer env file.')
 	detail('The pipeline pushes it to the control plane and the deploy runner as a Worker secret.')
+	return key
+}
+
+/**
+ * Generate IAM's data key: the 256-bit key that seals each administrator's TOTP secret at rest. Durable like the
+ * vault key — a new value cannot open what the old one sealed — so a resumed init reuses it.
+ */
+export async function ensureDataKey(): Promise<string> {
+	step('IAM data key (FABRIKA_IAM_DATA_KEY)')
+	const existing = readResumeValue(ENVIRONMENT_SOURCE, 'FABRIKA_IAM_DATA_KEY')
+	if (existing !== undefined) {
+		await persistEnv('FABRIKA_IAM_DATA_KEY', existing)
+		ok('Reusing FABRIKA_IAM_DATA_KEY from the installer env file (resume).')
+		return existing
+	}
+	const key = generateVaultKey()
+	await persistEnv('FABRIKA_IAM_DATA_KEY', key)
+	ok('IAM data key generated + saved to the installer env file.')
+	detail('The pipeline pushes it to IAM as a Worker secret.')
 	return key
 }
 

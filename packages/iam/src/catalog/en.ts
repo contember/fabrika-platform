@@ -90,6 +90,12 @@ export const en: Catalog = {
 						return 'Enrolment is unavailable. Try again later.'
 					case 'terminal_completion_refused':
 						return 'This sign-in has expired or was already used. Identify again.'
+					case 'second_factor_expired':
+						return 'Your sign-in expired before the code was entered. Sign in again.'
+					case 'second_factor_not_allowed':
+						return 'Sign in with an administrator account to set up two-step sign-in.'
+					case 'second_factor_unavailable':
+						return 'Two-step sign-in is unavailable. Try again later.'
 				}
 			},
 		},
@@ -112,6 +118,33 @@ export const en: Catalog = {
 			submit: 'Enrol and sign out',
 			enrolledTitle: 'Terminal enrolled',
 			enrolledText: (label) => `This browser is now the terminal ${label}. You are signed out. An administrator sets which applications it serves.`,
+		},
+		secondFactor: {
+			challengeTitle: 'Two-step sign-in',
+			challengeText: 'Enter the 6-digit code from your authenticator app, or one of your recovery codes.',
+			codeLabel: 'Code',
+			submit: 'Verify',
+			invalidCode: 'This code is not valid. Enter the current code, or a recovery code you have not used.',
+			throttled: 'Too many wrong codes. Wait 15 minutes, then try again.',
+			appCodesUnavailable: 'Codes from the authenticator app cannot be checked here right now. Use a recovery code, or ask an administrator.',
+			startOver: 'Sign in again',
+			enrolTitle: 'Set up two-step sign-in',
+			enrolText:
+				'After the password or single sign-on, every sign-in to this account will ask for a code from an authenticator app on your phone. You will also get recovery codes for when the phone is not at hand.',
+			start: 'Set up an authenticator app',
+			scanText: 'Scan the QR code with your authenticator app, or type the key into it. Then enter the 6-digit code it shows.',
+			secretLabel: 'Key',
+			confirmLabel: 'Code from the app',
+			confirm: 'Turn on two-step sign-in',
+			enrolledTitle: 'Two-step sign-in is on',
+			enrolledText: (enrolledOn, left) =>
+				`Since ${enrolledOn} every sign-in to this account asks for a code. Recovery codes left: ${left}. To move to a new phone, ask an administrator to reset your authenticator.`,
+			recoveryTitle: 'Save your recovery codes',
+			recoveryText:
+				'Each code signs you in once when your phone is not at hand. They are shown only now: store them somewhere safe, apart from your phone.',
+			continue: 'Continue',
+			unavailableTitle: 'Two-step sign-in is unavailable',
+			unavailableText: 'This installation cannot store authenticator keys yet. Ask its operator to set it up.',
 		},
 		invitation: {
 			title: 'Accept invitation',

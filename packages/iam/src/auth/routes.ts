@@ -10,6 +10,7 @@ import { INVITATION_ACCEPT_PATH } from '../membership'
 import { ACCOUNT_CHOICE_PATH, logoutPage, TERMINAL_ENROL_PATH } from '../password-pages'
 import { readerLocale } from '../person-locale'
 import { generateRequestId } from '../request-id'
+import { SECOND_FACTOR_ENROL_PATH, SECOND_FACTOR_PATH } from '../second-factor-pages'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
 import { methodNotAllowed, safeRedirect } from './http'
@@ -18,6 +19,7 @@ import { handleAccountChoice, handleLogin } from './login'
 import { handleCallback, handleOidcStart } from './oidc'
 import type { AuthEnv } from './oidc-flight'
 import { handleForgotPassword, handlePasswordAction, handlePasswordLogin } from './password'
+import { handleSecondFactor, handleSecondFactorEnrolment } from './second-factor'
 import { handleLogout } from './sessions'
 import { handleTerminalCompletion, handleTerminalEnrolment, handleTerminalRelease, TERMINAL_RELEASE_PATH } from './terminals'
 
@@ -62,13 +64,13 @@ export async function handleAuth(
 		return handleForgotPassword(request, services, ctx, clientAddress, requestId)
 	}
 	if (url.pathname === '/auth/password/enroll') {
-		return handlePasswordAction(request, services, ctx, 'enrollment', requestId)
+		return handlePasswordAction(request, services, env, ctx, 'enrollment', requestId)
 	}
 	if (url.pathname === '/auth/password/reset') {
-		return handlePasswordAction(request, services, ctx, 'reset', requestId)
+		return handlePasswordAction(request, services, env, ctx, 'reset', requestId)
 	}
 	if (url.pathname === INVITATION_ACCEPT_PATH) {
-		return handleInvitation(request, services, ctx, requestId)
+		return handleInvitation(request, services, env, ctx, requestId)
 	}
 	if (url.pathname === TERMINAL_ENROL_PATH) {
 		return request.method === 'GET' || request.method === 'POST' ? handleTerminalEnrolment(request, services, requestId) : methodNotAllowed()
@@ -78,6 +80,12 @@ export async function handleAuth(
 	}
 	if (url.pathname === TERMINAL_RELEASE_PATH) {
 		return request.method === 'GET' ? handleTerminalRelease(request, services, requestId) : methodNotAllowed()
+	}
+	if (url.pathname === SECOND_FACTOR_PATH) {
+		return request.method === 'POST' ? handleSecondFactor(request, services, env, ctx, requestId) : methodNotAllowed()
+	}
+	if (url.pathname === SECOND_FACTOR_ENROL_PATH) {
+		return request.method === 'GET' || request.method === 'POST' ? handleSecondFactorEnrolment(request, services, requestId) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/logout') {
 		// Logging out is a state change, so it needs a method that can carry an origin check. A GET

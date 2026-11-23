@@ -837,6 +837,28 @@ export interface IamAdminRpcContract {
 		get: RpcProcedure<void, PasswordPolicyDto>
 		set: RpcProcedure<SetPasswordPolicyRequest, PasswordPolicyDto>
 	}
+	/**
+	 * A person's second factor (TOTP), an installation administrator's (`iam.admin`) to read and to reset. The person
+	 * enrols at IAM's `SECOND_FACTOR_ENROL_PATH`, never here. A reset removes the authenticator and its recovery codes
+	 * and writes `iam.second_factor.reset`; the next sign-in asks for no code.
+	 */
+	secondFactor: {
+		get: RpcProcedure<PrincipalIdInput, SecondFactorDto>
+		reset: RpcProcedure<PrincipalIdInput, SecondFactorDto>
+	}
+}
+
+/** Where a signed-in administrator enrols an authenticator app, on IAM's own origin. */
+export const SECOND_FACTOR_ENROL_PATH = '/auth/second-factor/enrol'
+
+/** A person's second factor as an installation administrator sees it. */
+export interface SecondFactorDto {
+	/** When the person confirmed the authenticator, in epoch seconds; null when none is enrolled. */
+	enrolledAt: number | null
+	/** Recovery codes not used yet; 0 without an authenticator. */
+	recoveryCodesLeft: number
+	/** Whether this installation can enrol an authenticator at all: it holds the key that seals the secrets. */
+	available: boolean
 }
 
 export interface UserConnectionDto {

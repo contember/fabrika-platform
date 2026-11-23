@@ -253,6 +253,14 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.setPasswordPolicy(context(ctx), input)),
 	}),
+	// A person's authenticator: `iam.admin` only, to read and to reset. The reset is the operator's path for a lost phone.
+	secondFactor: t.router({
+		get: t.procedure.input(principalIdInput).require(ADMIN_ACTION).query(({ ctx, input }) => adminUseCases.getSecondFactor(context(ctx), input)),
+		reset: t.procedure
+			.input(principalIdInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.resetSecondFactor(context(ctx), input)),
+	}),
 })
 
 /** Resolve the admin behind an `/admin/rpc` request, then run `next` with it on `ctx`; anyone else is refused. */

@@ -169,6 +169,7 @@ describe('the variable names an installation carries', () => {
 		expect(names(env.iam)).toEqual([
 			'ENVIRONMENT',
 			'FABRIKA_IAM_DATABASE_URL',
+			'FABRIKA_IAM_DATA_KEY',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_IAM_PROVISIONING_KEY',

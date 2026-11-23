@@ -70,6 +70,74 @@ Cloudflare, a deploy variable of IAM's Worker (`pipeline.vars` in
 installer writes it. IAM reads it at boot, so a change takes effect when `iam` restarts
 or redeploys.
 
+## Two-step sign-in for administrators
+
+An administrator can add a second factor: a time-based code from an authenticator app (TOTP, RFC 6238: HMAC-SHA1,
+30-second steps, 6 digits). An administrator is anyone IAM lets administer people: `iam.admin`, or `iam.users.manage`
+in any scope. Enrolment is the person's own choice. IAM does not require it, so an administrator who has not enrolled
+still signs in with one factor.
+
+**Enrolment** is on IAM's `/auth/second-factor/enrol`, which the console's account menu links to as "Two-step sign-in".
+It needs a current IAM login. A person who administers nothing gets a refusal page. The page shows a QR code (an SVG
+`data:` image) and the same key as text. The authenticator is enrolled only when the person enters a first valid code.
+IAM then shows ten recovery codes, once, and records `iam.second_factor.enrol`. While a person has an authenticator,
+the page shows nothing to enrol. Setting up another one needs a reset first (below).
+
+**At sign-in**, IAM asks a person with an enrolled authenticator for a code before it opens the session. The check sits
+in `issueSession` (`auth/sessions.ts`), so it covers every way a person signs in:
+
+- a password;
+- an OIDC callback;
+- a completed password setup or reset link;
+- an invitation that creates the person.
+
+An OIDC sign-in is asked too. IAM cannot see whether the identity provider asked for a second factor of its own, and
+an administrator's account is the one worth the extra step. Two sign-ins are not asked: the local development bypass
+(`local_dev`), and a person a terminal's application asserts
+([Terminals](#terminals)). That assertion reaches only the asserting application, never IAM's administration.
+
+The pending sign-in rides in a signed cookie, `__Host-fabrika_second_factor` (audience `fabrika:iam:second-factor`),
+for 5 minutes. After that the person signs in again. The code form is `POST /auth/second-factor`. A code is accepted
+within one step either side of now, and only once: IAM keeps the last accepted step, and refuses that step and every
+earlier one.
+
+**Wrong codes** are counted per account. The sixth attempt within 15 minutes is refused, and so is every attempt for
+the next 15 minutes, a valid code included. A successful code clears the count. Each refusal writes `auth_log` with
+reason `second_factor_invalid`, `second_factor_throttled` or `second_factor_expired`. The attempt that starts a block
+also records `iam.second_factor.throttle`.
+
+**Recovery.** Without the phone, the person can enter any unused recovery code in place of a code. Each code works once
+and records `iam.second_factor.recovery_code.use`. For a lost phone with no recovery codes left, an installation
+administrator resets the person's two-step sign-in. In the console this is "Reset two-step sign-in" on the person's
+Sign-in tab; over `/admin/rpc` it is `secondFactor.reset`. The status is `secondFactor.get`. Both require `iam.admin`,
+so a user administrator can do neither. The reset removes the authenticator and every recovery code, and records
+`iam.second_factor.reset`. The person's next sign-in asks for no code until they enrol again. Confirm who is asking
+before you reset.
+
+**Storage.** IAM keeps the authenticator's secret sealed: AES-256-GCM under a fresh data key per value, with that data
+key wrapped by the installation's `FABRIKA_IAM_DATA_KEY`. This is Control's vault construction, with the person's
+principal id as associated data on both layers. A recovery code is stored only as a hash bound to its principal.
+
+**The data key** is base64 of 32 random bytes. Where it comes from:
+
+- **Zerops:** `platform install` writes it to the `iam` service as a sensitive variable. On an installation from
+  before it, the next `platform deploy` or `upgrade` writes one once, because `iam` lacks the name. After that, no
+  deploy writes it again.
+- **Cloudflare:** `platform init` generates it into the account's GitHub Environment, and the workflow passes it to IAM's
+  deploy. On an existing installation, re-run `fabrika platform init --provider=cloudflare <account>` with the same
+  flags. That run writes the key and the workflow line that passes it, as for any sidecar workflow change. Until
+  then, IAM's deploy declares no such secret.
+- **Local stack:** `local:up` writes it into `.state/iam.env`.
+
+Without the key, IAM boots and signs people in as before, and the enrolment page says two-step sign-in is unavailable.
+A person who enrolled while the key was set is still asked for a code at sign-in. Their app code is then refused as
+unavailable, but a recovery code still works, and so does an operator reset. Never replace the key: a new key opens
+nothing sealed under the old one. There is no rotation: reset each person, and let them enrol again.
+
+A stolen administrator session can enrol an authenticator of its own for an administrator who has none. The
+enrolment is audited, and a reset removes it. Asking for a fresh sign-in before approvals or before enrolment is not
+built.
+
 ## Per-user state
 
 Every user can have one password state:

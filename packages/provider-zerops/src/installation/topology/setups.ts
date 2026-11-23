@@ -196,7 +196,8 @@ const WORKSPACE_INSTALL = "bun install --frozen-lockfile --filter './packages/*'
  * `FABRIKA_IAM_PROVISIONING_KEY`. Both shared secrets must be at least 32 characters; a shorter one fails
  * the boot rather than standing in front of an internet-reachable surface while looking configured.
  * `FABRIKA_INSTALLATION_PROXY_SECRET_IAM`, which `platform deploy` derives and writes, lets IAM tell the proxy's
- * client-address and request-id headers from a private caller's.
+ * client-address and request-id headers from a private caller's. `FABRIKA_IAM_DATA_KEY` seals TOTP secrets; the
+ * install generates it, and `platform deploy` generates it once on an installation that has none.
  */
 const iam: ZeropsYamlSetupSpec = {
 	setup: 'iam',

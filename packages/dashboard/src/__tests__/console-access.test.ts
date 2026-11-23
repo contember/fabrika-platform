@@ -166,7 +166,12 @@ describe('an action at an application environment', () => {
 
 test('the no-access page names who is signed in and offers signing in as someone else', () => {
 	const markup = renderToStaticMarkup(createElement(NoAccess, {
-		session: { ...caller({}), principal: { id: 'user-1', label: 'ada@example.com' }, signOutUrl: signOutUrl('https://iam.example.com') },
+		session: {
+			...caller({}),
+			principal: { id: 'user-1', label: 'ada@example.com' },
+			signOutUrl: signOutUrl('https://iam.example.com'),
+			secondFactorUrl: null,
+		},
 	}))
 	expect(markup).toContain('You have no access to this console yet')
 	expect(markup).toContain('<strong title="user-1">ada@example.com</strong>')

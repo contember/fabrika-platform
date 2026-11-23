@@ -41,6 +41,7 @@ import { IAM_PROXY_SECRET_VARIABLE, readEnvironmentName } from '@fabrika/auth-co
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import {
 	deployedServiceEnvironment,
+	generateVaultKey,
 	IAM_OAUTH_CONFIG_VARIABLE,
 	type IamOAuthConfig,
 	platformIamOAuthConfig,
@@ -332,8 +333,21 @@ const resolvePlacement = (input: PlatformDeployInput, proxyEnv: LiveServiceEnv):
 	return { hosts: derivePlatformHosts(subdomains, listeners), scheme: input.scheme, zeropsSubdomain: true }
 }
 
-/** The credentials this command writes. Sensitive, so they cannot be compared and are rewritten on every deploy. */
-const SENSITIVE_DEPLOY_KEYS: ReadonlySet<string> = new Set([IAM_PROXY_SECRET_VARIABLE])
+/**
+ * IAM's key that seals TOTP secrets. The install generates it; an installation from before it gets one from its next
+ * deploy, and never another: a new value would open nothing the old one sealed.
+ */
+const IAM_DATA_KEY_VARIABLE = 'FABRIKA_IAM_DATA_KEY'
+
+/**
+ * The credentials this command writes, sensitive, so they cannot be compared: the derived proxy secret on every deploy,
+ * IAM's data key only while the service has none (`withGeneratedKeys`).
+ */
+const SENSITIVE_DEPLOY_KEYS: ReadonlySet<string> = new Set([IAM_PROXY_SECRET_VARIABLE, IAM_DATA_KEY_VARIABLE])
+
+/** `keys` plus a fresh IAM data key when `iam` holds none; a key it holds, sensitive and unreadable, is never replaced. */
+const withGeneratedKeys = (hostname: PlatformDeployService, keys: ReadonlyMap<string, string>, live: LiveServiceEnv): ReadonlyMap<string, string> =>
+	hostname === 'iam' && !live.has(IAM_DATA_KEY_VARIABLE) ? new Map([...keys, [IAM_DATA_KEY_VARIABLE, generateVaultKey()]]) : keys
 
 /**
  * The per-installation configuration each service needs, derived from the resolved hosts: fabrika's
@@ -822,7 +836,7 @@ export const deployPreparedPlatform = async (
 	for (const hostname of PLATFORM_DEPLOY_ORDER) {
 		const service = serviceOf(services, hostname)
 		const live = liveEnv.get(hostname) ?? new Map<string, ZeropsServiceEnv>()
-		const keys = desired.get(hostname) ?? new Map<string, string>()
+		const keys = withGeneratedKeys(hostname, desired.get(hostname) ?? new Map<string, string>(), live)
 		const liveOAuthConfig = live.get(IAM_OAUTH_CONFIG_VARIABLE)
 		const oauthStillSet = liveOAuthConfig !== undefined && (liveOAuthConfig.sensitive || liveOAuthConfig.content.trim() !== '')
 		if (hostname === 'iam' && oauthConfig === undefined && oauthStillSet) {

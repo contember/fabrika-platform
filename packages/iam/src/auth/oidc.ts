@@ -135,7 +135,7 @@ export async function handleCallback(
 		return refuse('handoff_refused', reading.failure, 400)
 	}
 
-	return issueSession(request, services, ctx, {
+	return issueSession(request, services, env, ctx, {
 		principalId: resolved.principal.id,
 		idpSub: identity.sub,
 		email: identity.email,

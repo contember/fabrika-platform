@@ -15,7 +15,7 @@ import { prop } from '../json'
 import { resolvePermissionsAt } from '../resolve'
 import { procedureInput, routerLeaves, USER_ADMINISTRATION } from './helpers/admin-router'
 import { bearerRpc, consoleRpc, errorType, result } from './helpers/app-people'
-import { adminTokenFor, CONSOLE_APP, createHarness } from './helpers/harness'
+import { adminTokenFor, CONSOLE_APP, createHarness, TEST_SIGNING_ENV } from './helpers/harness'
 import { APP, CapturingEmail, type MembershipFixture, membershipFixture, ORIGIN } from './helpers/membership'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
@@ -390,7 +390,7 @@ function userAdministrationSuite(label: string, repositories: () => IamRepositor
 			const i = await installation(repositories())
 			const admin = await i.userAdmin([CRM])
 			const requestId = unique('login')
-			await issueSession(new Request(`${ORIGIN}/auth/login`), i.f.services, i.f.ctx, {
+			await issueSession(new Request(`${ORIGIN}/auth/login`), i.f.services, TEST_SIGNING_ENV, i.f.ctx, {
 				principalId: admin.id,
 				authenticationMethod: 'password',
 				redirect: null,

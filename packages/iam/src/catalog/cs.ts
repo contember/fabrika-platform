@@ -90,6 +90,12 @@ export const cs: Catalog = {
 						return 'Registrace teď není k dispozici. Zkuste to později.'
 					case 'terminal_completion_refused':
 						return 'Toto přihlášení vypršelo nebo už bylo použito. Identifikujte se znovu.'
+					case 'second_factor_expired':
+						return 'Přihlášení vypršelo dřív, než jste zadali kód. Přihlaste se znovu.'
+					case 'second_factor_not_allowed':
+						return 'Dvoufázové přihlášení si nastavíte po přihlášení účtem administrátora.'
+					case 'second_factor_unavailable':
+						return 'Dvoufázové přihlášení teď není k dispozici. Zkuste to později.'
 				}
 			},
 		},
@@ -112,6 +118,32 @@ export const cs: Catalog = {
 			submit: 'Registrovat a odhlásit',
 			enrolledTitle: 'Terminál je zaregistrovaný',
 			enrolledText: (label) => `Tento prohlížeč je teď terminál ${label}. Jste odhlášeni. Které aplikace obsluhuje, nastaví administrátor.`,
+		},
+		secondFactor: {
+			challengeTitle: 'Dvoufázové přihlášení',
+			challengeText: 'Zadejte šestimístný kód z ověřovací aplikace, nebo jeden ze svých záložních kódů.',
+			codeLabel: 'Kód',
+			submit: 'Ověřit',
+			invalidCode: 'Tento kód neplatí. Zadejte aktuální kód, nebo záložní kód, který jste ještě nepoužili.',
+			throttled: 'Příliš mnoho chybných kódů. Počkejte 15 minut a zkuste to znovu.',
+			appCodesUnavailable: 'Kódy z ověřovací aplikace tu teď nejde ověřit. Použijte záložní kód, nebo se obraťte na administrátora.',
+			startOver: 'Přihlásit se znovu',
+			enrolTitle: 'Nastavit dvoufázové přihlášení',
+			enrolText:
+				'Po hesle nebo jednotném přihlášení si každé přihlášení k tomuto účtu vyžádá kód z ověřovací aplikace ve vašem telefonu. Dostanete také záložní kódy pro chvíle, kdy telefon nemáte po ruce.',
+			start: 'Nastavit ověřovací aplikaci',
+			scanText: 'Naskenujte QR kód ověřovací aplikací, nebo do ní opište klíč. Pak zadejte šestimístný kód, který zobrazí.',
+			secretLabel: 'Klíč',
+			confirmLabel: 'Kód z aplikace',
+			confirm: 'Zapnout dvoufázové přihlášení',
+			enrolledTitle: 'Dvoufázové přihlášení je zapnuté',
+			enrolledText: (enrolledOn, left) =>
+				`Od ${enrolledOn} si každé přihlášení k tomuto účtu vyžádá kód. Zbývající záložní kódy: ${left}. Při přechodu na nový telefon požádejte administrátora o zrušení ověřovací aplikace.`,
+			recoveryTitle: 'Uložte si záložní kódy',
+			recoveryText: 'Každý kód vás jednou přihlásí, když telefon nemáte po ruce. Zobrazují se jen teď: uložte je na bezpečné místo mimo telefon.',
+			continue: 'Pokračovat',
+			unavailableTitle: 'Dvoufázové přihlášení není k dispozici',
+			unavailableText: 'Tato instalace zatím neumí ukládat klíče ověřovacích aplikací. Požádejte jejího provozovatele o nastavení.',
 		},
 		invitation: {
 			title: 'Přijetí pozvánky',

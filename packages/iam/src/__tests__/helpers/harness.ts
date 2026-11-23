@@ -198,6 +198,8 @@ export interface MakeServicesOptions {
 	oauth?: OAuthConfig | null
 	/** `auth_log` and `audit_events` retention. Defaults to IAM's: 30 days, audit kept. */
 	retention?: Retention
+	/** `FABRIKA_IAM_DATA_KEY`, parsed. Defaults to none, which leaves TOTP enrolment unavailable. */
+	dataKey?: Uint8Array<ArrayBuffer> | null
 }
 
 /**
@@ -245,6 +247,7 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 		),
 		passwordHasher: options.passwordHasher ?? new WebCryptoPasswordHasher(),
 		email: options.email ?? null,
+		dataKey: options.dataKey ?? null,
 		config,
 	}
 }

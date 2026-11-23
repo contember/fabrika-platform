@@ -3,7 +3,7 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readConsoleSession, signOutUrl } from '../lib/session'
-import { SignedIn, SignOut } from '../routes/_layout'
+import { SecondFactor, SignedIn, SignOut } from '../routes/_layout'
 
 const DISCOVERY = { version: 1, controlOrigin: 'https://console.example.com', iamIssuer: 'https://iam.example.com', provider: 'zerops' }
 
@@ -98,6 +98,20 @@ describe('console session', () => {
 		expect(session.principal).toBeNull()
 	})
 
+	test("links an IAM administrator, and nobody else, to IAM's authenticator enrolment", async () => {
+		const admin = await readConsoleSession(consoleFetch({ me: meAnswer(), discovery: Response.json(DISCOVERY) }))
+		expect(admin.secondFactorUrl).toBe('https://iam.example.com/auth/second-factor/enrol')
+		expect(renderToStaticMarkup(createElement(SecondFactor, { session: admin }))).toContain(
+			'href="https://iam.example.com/auth/second-factor/enrol"',
+		)
+
+		const other = await readConsoleSession(consoleFetch({ me: forbidden(), discovery: Response.json(DISCOVERY) }))
+		expect(other.secondFactorUrl).toBeNull()
+		expect(renderToStaticMarkup(createElement(SecondFactor, { session: other }))).toBe('')
+		const unknown = await readConsoleSession(consoleFetch({ me: unavailable(), discovery: Response.json(DISCOVERY) }))
+		expect(unknown.secondFactorUrl).toBeNull()
+	})
+
 	test('offers no sign-out when the installation publishes no IAM origin', async () => {
 		const unavailable = new Response('builder connection unavailable', { status: 503 })
 		expect((await readConsoleSession(consoleFetch({ me: meAnswer(), discovery: unavailable }))).signOutUrl).toBeNull()
@@ -111,6 +125,7 @@ describe('console session', () => {
 			session: {
 				principal: { id: 'user-1', label: 'Ada@Example.com' },
 				signOutUrl: signOutUrl('https://iam.example.com'),
+				secondFactorUrl: null,
 				access: null,
 				iam: null,
 				administersPeople: null,
@@ -126,6 +141,7 @@ describe('console session', () => {
 			session: {
 				principal: { id: 'user-1', label: 'Ada@Example.com' },
 				signOutUrl: signOutUrl('https://iam.example.com'),
+				secondFactorUrl: null,
 				access: null,
 				iam: null,
 				administersPeople: null,
@@ -137,7 +153,7 @@ describe('console session', () => {
 	})
 
 	test('renders only what it knows', () => {
-		const session = { principal: null, signOutUrl: null, access: null, iam: null, administersPeople: null }
+		const session = { principal: null, signOutUrl: null, secondFactorUrl: null, access: null, iam: null, administersPeople: null }
 		expect(renderToStaticMarkup(createElement(SignedIn, { session }))).toBe('')
 		expect(renderToStaticMarkup(createElement(SignOut, { session }))).toBe('')
 	})
