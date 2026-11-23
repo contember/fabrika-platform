@@ -24,7 +24,7 @@
 
 import { numberField, prop, stringField } from './json'
 import { isNormalizedMailbox } from './membership'
-import { isCimdClientId, isOAuthResourceUri, parseOAuthScopes } from './oauth'
+import { isOAuthClientId, isOAuthResourceUri, parseOAuthScopes } from './oauth'
 import type { ResolvedPrincipal } from './rpc'
 import { isWorkloadKind, type PermissionEntry, type PermissionSource, type Scope, type TokenPrincipalType, type WorkloadKind } from './types'
 import { isOwnWorkloadName } from './workloads'
@@ -518,7 +518,7 @@ function parseOAuthClaims(payload: unknown): OAuthTokenClaims | null | undefined
 	}
 	const scopes = typeof scope === 'string' ? parseOAuthScopes(scope.split(' ')) : null
 	if (
-		typeof app !== 'string' || app === '' || !isCimdClientId(clientId) || scopes === null || typeof grantId !== 'string' || grantId === ''
+		typeof app !== 'string' || app === '' || !isOAuthClientId(clientId) || scopes === null || typeof grantId !== 'string' || grantId === ''
 		|| typeof tokenId !== 'string' || tokenId === ''
 	) {
 		return undefined

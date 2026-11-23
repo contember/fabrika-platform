@@ -7,7 +7,10 @@ export interface OAuthGrantRow {
 	session_id: string
 	client_id: string
 	app: string
+	/** The grant's first resource; `resources` lists them all when it was given for several. */
 	resource: string
+	/** JSON array of every resource of the grant, all of `app`; null when `resource` is the only one. */
+	resources: string | null
 	/** JSON array of the consented scope names. */
 	scopes: string
 	created_at: number
@@ -41,14 +44,15 @@ export class OAuthRepository {
 	/** Record a consent, its one authorization code and `audit` together. */
 	async createGrant(grant: OAuthGrantRow, code: Omit<OAuthCodeRow, 'grant_id' | 'used_at'>, audit?: AuditEventInput): Promise<void> {
 		await this.db.batch([
-			this.db.prepare(`INSERT INTO oauth_grants (id, principal_id, session_id, client_id, app, resource, scopes, created_at, expires_at, revoked_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).bind(
+			this.db.prepare(`INSERT INTO oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at,
+				revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).bind(
 				grant.id,
 				grant.principal_id,
 				grant.session_id,
 				grant.client_id,
 				grant.app,
 				grant.resource,
+				grant.resources,
 				grant.scopes,
 				grant.created_at,
 				grant.expires_at,

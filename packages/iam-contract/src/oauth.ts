@@ -1,4 +1,4 @@
-import { isCimdClientId, isOAuthResourceUri, parseOAuthScopes } from '@fabrika/auth-core'
+import { isCimdClientId, isOAuthClientId, isOAuthResourceUri, parseOAuthScopes } from '@fabrika/auth-core'
 import type { KeyGrant } from '@fabrika/auth-core'
 
 /**
@@ -47,11 +47,21 @@ export type OAuthClientMetadataDocument =
 /** How a token or revocation request authenticates its client: no credential, or a JWT assertion. */
 export type OAuthClientCredential = { method: 'none' } | { method: 'private_key_jwt'; assertion: string }
 
+export interface OAuthScopeGrant {
+	scope: string
+	permissions: KeyGrant[]
+	/**
+	 * A scope dimension type. Such a scope is requested only as `<scope>:<value>`, and each of its scope-less permissions
+	 * is narrowed to `{ type: parameter, value }`: `deploy:alpha` with parameter `app` holds its actions at app `alpha` only.
+	 */
+	parameter?: string
+}
+
 export interface OAuthResourceDto {
 	app: string
 	resource: string
 	/** IAM resolves these app-owned grants; OAuth scope text alone never authorizes an action. */
-	scopeGrants: { scope: string; permissions: KeyGrant[] }[]
+	scopeGrants: OAuthScopeGrant[]
 	/** Used only when scope is omitted. No configured default means invalid_scope, never all scopes. */
 	defaultScopes?: string[]
 }
@@ -219,19 +229,33 @@ export function parseOAuthResourceDto(value: unknown): OAuthResourceDto | null {
 		!isNonemptyText(app) || app.includes('*') || !isOAuthResourceUri(resource) || !Array.isArray(rawGrants) || rawGrants.length === 0
 		|| rawGrants.length > 64
 	) return null
-	const scopeGrants: OAuthResourceDto['scopeGrants'] = []
+	const scopeGrants: OAuthScopeGrant[] = []
 	for (const entry of rawGrants) {
 		const scope = field(entry, 'scope')
 		const permissions = parseResourcePermissions(field(entry, 'permissions'))
-		if (typeof scope !== 'string' || parseOAuthScopes([scope]) === null || permissions === null || scopeGrants.some((grant) => grant.scope === scope)) {
+		const parameter = field(entry, 'parameter')
+		if (
+			typeof scope !== 'string' || parseOAuthScopes([scope]) === null || scope.includes(SCOPE_PARAMETER_SEPARATOR) || permissions === null
+			|| scopeGrants.some((grant) => grant.scope === scope)
+		) {
 			return null
 		}
-		scopeGrants.push({ scope, permissions })
+		if (parameter === undefined) {
+			scopeGrants.push({ scope, permissions })
+			continue
+		}
+		// A parameter narrows scope-less permissions only; a permission that names its own scope would ignore it.
+		if (!isScopeParameterText(parameter) || permissions.some((permission) => permission.scope != null)) return null
+		scopeGrants.push({ scope, permissions, parameter })
 	}
 	const dto: OAuthResourceDto = { app, resource, scopeGrants }
 	if (rawDefaultScopes !== undefined) {
 		const defaultScopes = parseOAuthScopes(rawDefaultScopes)
-		if (defaultScopes === null || !defaultScopes.every((scope) => scopeGrants.some((grant) => grant.scope === scope))) return null
+		if (
+			defaultScopes === null || !defaultScopes.every((scope) => scopeGrants.some((grant) => grant.scope === scope && grant.parameter === undefined))
+		) {
+			return null
+		}
 		dto.defaultScopes = defaultScopes
 	}
 	return dto
@@ -256,10 +280,34 @@ function parseResourcePermissions(value: unknown): KeyGrant[] | null {
 	return permissions
 }
 
+/** Separates a parameterized scope from its value: `deploy:alpha`. */
+export const SCOPE_PARAMETER_SEPARATOR = ':'
+
+/** A scope dimension type, or a value of one, as a scope token may carry it. */
+function isScopeParameterText(value: unknown): value is string {
+	return typeof value === 'string' && value.length <= 100 && /^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(value)
+}
+
+/**
+ * The resource's grant a requested scope token selects and the narrowed permissions it holds, or null when the token
+ * selects none: an unknown scope, a parameterized scope without its value, a value on a scope that takes none.
+ */
+export function resolveOAuthScopeToken(token: string, resource: OAuthResourceDto): KeyGrant[] | null {
+	const separator = token.indexOf(SCOPE_PARAMETER_SEPARATOR)
+	const name = separator === -1 ? token : token.slice(0, separator)
+	const grant = resource.scopeGrants.find((entry) => entry.scope === name)
+	if (grant === undefined) return null
+	const type = grant.parameter
+	if (type === undefined) return separator === -1 ? grant.permissions : null
+	const value = separator === -1 ? null : token.slice(separator + 1)
+	if (value === null || !isScopeParameterText(value)) return null
+	return grant.permissions.map((permission) => ({ action: permission.action, scope: { type, value } }))
+}
+
 export function resolveOAuthAuthorizationScopes(scope: string | undefined, resource: OAuthResourceDto): string[] | null {
 	const scopes = scope === undefined ? resource.defaultScopes : parseOAuthScopes(scope.split(' '))
 	if (!scopes || scopes.length === 0) return null
-	return scopes.every((entry) => resource.scopeGrants.some((grant) => grant.scope === entry))
+	return scopes.every((entry) => resolveOAuthScopeToken(entry, resource) !== null)
 		? [...scopes]
 		: null
 }
@@ -302,7 +350,7 @@ export function parseOAuthTokenRequest(value: unknown): OAuthTokenRequest | null
 	const clientId = field(value, 'client_id')
 	const resource = field(value, 'resource')
 	const grantType = field(value, 'grant_type')
-	if (!isCimdClientId(clientId) || !isOAuthResourceUri(resource)) return null
+	if (!isOAuthClientId(clientId) || !isOAuthResourceUri(resource)) return null
 	if (grantType === 'authorization_code') {
 		const code = field(value, 'code')
 		const redirectUri = field(value, 'redirect_uri')
@@ -338,7 +386,7 @@ export function parseOAuthRevocationRequest(value: unknown): OAuthRevocationRequ
 	const token = field(value, 'token')
 	const hint = field(value, 'token_type_hint')
 	if (
-		!isCimdClientId(clientId) || typeof token !== 'string' || token.length === 0 || token.length > 32768
+		!isOAuthClientId(clientId) || typeof token !== 'string' || token.length === 0 || token.length > 32768
 		|| (hint !== undefined && (typeof hint !== 'string' || hint.length > 200))
 	) return null
 	const request: OAuthRevocationRequest = { client_id: clientId, token }

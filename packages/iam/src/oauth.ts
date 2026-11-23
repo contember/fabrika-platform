@@ -3,16 +3,18 @@ import {
 	DEFAULT_TOKEN_TTL_SECONDS,
 	type KeyGrant,
 	narrowPermissions,
+	OAUTH_CLI_CLIENT_ID,
 	parseOAuthScopes,
 	type PermissionEntry,
 } from '@fabrika/auth-core'
-import type {
-	OAuthAuthorizationRequest,
-	OAuthClientMetadataDocument,
-	OAuthResourceDto,
-	OAuthRevocationRequest,
-	OAuthTokenRequest,
-	OAuthTokenResponse,
+import {
+	type OAuthAuthorizationRequest,
+	type OAuthClientMetadataDocument,
+	type OAuthResourceDto,
+	type OAuthRevocationRequest,
+	type OAuthTokenRequest,
+	type OAuthTokenResponse,
+	resolveOAuthScopeToken,
 } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { sessionEndsAt, sessionUsable } from './auth'
@@ -34,21 +36,42 @@ export const OAUTH_CODE_TTL_SECONDS = 60
 
 type SigningEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
-export interface EstablishedClient {
-	registration: ManagedOAuthClient
-	metadata: OAuthClientMetadataDocument
+/**
+ * A client an authorization or token request comes from: an operator-registered CIMD client, or the installation's own
+ * command-line client, a public client IAM knows without a document. The CLI client has no redirect URI, so it never
+ * completes an authorization request; it redeems the grants IAM gives it otherwise and refreshes them.
+ */
+export type EstablishedClient =
+	| { kind: 'managed'; registration: ManagedOAuthClient; metadata: OAuthClientMetadataDocument }
+	| { kind: 'cli'; clientId: string }
+
+export type ManagedClient = Extract<EstablishedClient, { kind: 'managed' }>
+
+/** The grant types a client may use at the token endpoint: its document's, or the CLI client's fixed set. */
+function clientGrantTypes(client: EstablishedClient): readonly string[] {
+	return client.kind === 'cli' ? ['refresh_token'] : client.metadata.grant_types
+}
+
+/** The resources a grant was given for: every token it mints names one of them. */
+export function grantResources(grant: Pick<OAuthGrantRow, 'resource' | 'resources'>): string[] {
+	const stored = grant.resources === null ? null : parseOAuthResourceList(parseJsonOrNull(grant.resources))
+	return stored ?? [grant.resource]
+}
+
+function parseOAuthResourceList(value: unknown): string[] | null {
+	return Array.isArray(value) && value.length > 0 && value.every((entry): entry is string => typeof entry === 'string') ? value : null
 }
 
 /**
  * Resolve a client and its redirect URI. Until this succeeds nothing may be redirected to
  * `redirect_uri`. An unregistered client id is refused before any metadata fetch.
  */
-export async function establishClient(config: OAuthConfig, clientId: string, redirectUri: string): Promise<EstablishedClient | null> {
+export async function establishClient(config: OAuthConfig, clientId: string, redirectUri: string): Promise<ManagedClient | null> {
 	const registration = config.clients.find((client) => client.clientId === clientId)
 	if (registration === undefined || !registration.redirectUris.includes(redirectUri)) return null
 	const metadata = await clientMetadata(registration)
 	if (metadata === null || !metadata.redirect_uris.includes(redirectUri)) return null
-	return { registration, metadata }
+	return { kind: 'managed', registration, metadata }
 }
 
 /** Record the consent and return the plaintext authorization code — the only time it exists. */
@@ -67,6 +90,7 @@ export async function grantAuthorization(
 			client_id: input.request.client_id,
 			app: input.resource.app,
 			resource: input.resource.resource,
+			resources: null,
 			scopes: JSON.stringify(input.scopes),
 			created_at: now,
 			expires_at: input.session.expires_at,
@@ -102,9 +126,11 @@ export async function exchangeOAuthToken(
 	input: OAuthTokenRequest,
 	requestId: string,
 ): Promise<OAuthTokenOutcome> {
-	return input.grant_type === 'authorization_code'
-		? redeemCode(services, env, client.metadata, input, requestId)
-		: rotateRefreshToken(services, env, client.metadata, input, requestId)
+	const grantTypes = clientGrantTypes(client)
+	if (input.grant_type === 'authorization_code') {
+		return client.kind === 'managed' ? redeemCode(services, env, client.metadata, input, requestId) : { ok: false, error: 'invalid_grant' }
+	}
+	return rotateRefreshToken(services, env, grantTypes, input, requestId)
 }
 
 async function redeemCode(
@@ -128,12 +154,12 @@ async function redeemCode(
 	const grant = await repository.grant(code.grant_id)
 	const proof = timingSafeEqualHex(await hashToken(await pkceChallenge(input.code_verifier)), await hashToken(code.challenge))
 	if (
-		!proof || code.expires_at <= now || grant === null || grant.client_id !== input.client_id || grant.resource !== input.resource
+		!proof || code.expires_at <= now || grant === null || grant.client_id !== input.client_id || !grantResources(grant).includes(input.resource)
 		|| code.redirect_uri !== input.redirect_uri
 	) {
 		return { ok: false, error: 'invalid_grant' }
 	}
-	const access = await mintForGrant(services, env, grant, now)
+	const access = await mintForGrant(services, env, grant, input.resource, now)
 	if (access === null) return { ok: false, error: 'invalid_grant' }
 	if (!metadata.grant_types.includes('refresh_token')) return { ok: true, body: access }
 	const refreshToken = generateToken()
@@ -144,11 +170,11 @@ async function redeemCode(
 async function rotateRefreshToken(
 	services: Services,
 	env: SigningEnv,
-	metadata: OAuthClientMetadataDocument,
+	grantTypes: readonly string[],
 	input: Extract<OAuthTokenRequest, { grant_type: 'refresh_token' }>,
 	requestId: string,
 ): Promise<OAuthTokenOutcome> {
-	if (!metadata.grant_types.includes('refresh_token')) return { ok: false, error: 'invalid_grant' }
+	if (!grantTypes.includes('refresh_token')) return { ok: false, error: 'invalid_grant' }
 	const repository = services.repositories.oauth
 	const now = unixNow()
 	const hash = await hashToken(input.refresh_token)
@@ -160,10 +186,10 @@ async function rotateRefreshToken(
 		return { ok: false, error: 'invalid_grant' }
 	}
 	const grant = await repository.grant(presented.grant_id)
-	if (presented.expires_at <= now || grant === null || grant.client_id !== input.client_id || grant.resource !== input.resource) {
+	if (presented.expires_at <= now || grant === null || grant.client_id !== input.client_id || !grantResources(grant).includes(input.resource)) {
 		return { ok: false, error: 'invalid_grant' }
 	}
-	const access = await mintForGrant(services, env, grant, now)
+	const access = await mintForGrant(services, env, grant, input.resource, now)
 	if (access === null) return { ok: false, error: 'invalid_grant' }
 	const next = generateToken()
 	await repository.insertRefreshToken({ token_hash: await hashToken(next), grant_id: grant.id, expires_at: grant.expires_at })
@@ -190,8 +216,15 @@ export async function revokeOAuthToken(services: Services, env: SigningEnv, inpu
 	}
 }
 
-async function mintForGrant(services: Services, env: SigningEnv, grant: OAuthGrantRow, now: number): Promise<OAuthTokenResponse | null> {
-	const authority = await grantAuthority(services, grant, now)
+/** An access token for `resource`, one of the grant's resources, carrying the grant's live authority there. */
+async function mintForGrant(
+	services: Services,
+	env: SigningEnv,
+	grant: OAuthGrantRow,
+	resource: string,
+	now: number,
+): Promise<OAuthTokenResponse | null> {
+	const authority = await grantAuthority(services, grant, now, resource)
 	if (authority === null) return null
 	// A replay or a revocation may have landed while authority was resolved; read the grant once more.
 	const current = await services.repositories.oauth.grant(grant.id)
@@ -200,7 +233,7 @@ async function mintForGrant(services: Services, env: SigningEnv, grant: OAuthGra
 	const claims = buildResourceAccessClaims({
 		iss: services.config.issuer,
 		app: grant.app,
-		resource: grant.resource,
+		resource,
 		subject: authority.principal.id,
 		label: authority.principal.label,
 		permissions: authority.permissions,
@@ -230,11 +263,13 @@ export async function grantAuthority(
 	services: Services,
 	grant: OAuthGrantRow,
 	now: number,
+	resourceUri: string = grant.resource,
 ): Promise<{ principal: PrincipalRow; scopes: string[]; permissions: PermissionEntry[]; expiresAt: number | null } | null> {
 	const config = services.config.oauth
-	if (config === null || grant.revoked_at !== null || grant.expires_at <= now) return null
-	const resource = config.resources.find((entry) => entry.resource === grant.resource && entry.app === grant.app)
-	if (resource === undefined || !config.clients.some((client) => client.clientId === grant.client_id)) return null
+	if (config === null || grant.revoked_at !== null || grant.expires_at <= now || !grantResources(grant).includes(resourceUri)) return null
+	const resource = config.resources.find((entry) => entry.resource === resourceUri && entry.app === grant.app)
+	const clientKnown = grant.client_id === OAUTH_CLI_CLIENT_ID || config.clients.some((client) => client.clientId === grant.client_id)
+	if (resource === undefined || !clientKnown) return null
 	const scopes = parseOAuthScopes(parseJsonOrNull(grant.scopes))
 	const ceiling = scopes === null ? null : scopeCeiling(resource, scopes)
 	if (scopes === null || ceiling === null) return null
@@ -255,9 +290,9 @@ export async function grantAuthority(
 export function scopeCeiling(resource: OAuthResourceDto, scopes: readonly string[]): KeyGrant[] | null {
 	const ceiling: KeyGrant[] = []
 	for (const scope of scopes) {
-		const grant = resource.scopeGrants.find((entry) => entry.scope === scope)
-		if (grant === undefined) return null
-		ceiling.push(...grant.permissions)
+		const permissions = resolveOAuthScopeToken(scope, resource)
+		if (permissions === null) return null
+		ceiling.push(...permissions)
 	}
 	return ceiling
 }

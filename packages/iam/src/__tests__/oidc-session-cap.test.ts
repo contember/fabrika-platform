@@ -200,6 +200,7 @@ describe('the OIDC session cap — SQLite', () => {
 			client_id: CLIENT_ID,
 			app: 'control',
 			resource: RESOURCE,
+			resources: null,
 			scopes: JSON.stringify(['read']),
 			created_at: almost.signedIn,
 			expires_at: almost.signedIn + 30 * 24 * HOUR,
