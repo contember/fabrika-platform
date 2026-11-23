@@ -9,7 +9,8 @@ authorization server serving MCP clients.
 ## Where it is served
 
 Every Zerops installation deployed over https serves it, every Cloudflare installation does, and so does the local
-stack. The installation's IAM is the authorization server. It knows the command-line client as
+stack. An existing Cloudflare installation also needs its `platform.yml` regenerated before Operations accepts the
+grant ([release process](release-process.md)). The installation's IAM is the authorization server. It knows the command-line client as
 `fabrika-cli`, a public client without a metadata document, and serves it two resources:
 
 - `https://<console>/api/rpc`, Control's RPC;

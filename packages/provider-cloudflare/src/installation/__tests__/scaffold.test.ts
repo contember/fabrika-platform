@@ -132,6 +132,8 @@ describe('platform scaffold', () => {
 				workflow.indexOf('name: Deploy fabrika runner + control plane'),
 			)
 			expect(operationsStep).toContain('FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}')
+			// The command-line client's Operations resource is a path on the console's origin.
+			expect(operationsStep).toContain('FABRIKA_CONTROL_URL: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}')
 			expect(operationsStep).toContain('fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts')
 			const platformStep = workflow.slice(workflow.indexOf('name: Deploy fabrika runner + control plane'), workflow.indexOf('name: Summary'))
 			// One value, one step — the step deploys both Workers, so both get the same runner key.

@@ -61,12 +61,24 @@ function accessOf(app: ProxyApp | undefined): unknown {
 }
 
 const OPERATIONS_TABLE = serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false })
-// The Cloudflare console serves no OAuth client yet, so its proxy publishes the table without the OAuth rows.
+// A local console has no authorization server, so its proxy publishes the table without the OAuth rows.
 const CONTROL_TABLE = serviceProxyTable(controlServiceContract({ mcp: false, cli: false }), { oauth: false })
 
 describe('a deployed Cloudflare proxy Worker carries the declared service table', () => {
 	test('control, as an installation entry', () => {
 		expect(productionAccess(buildControlWorker({ env: 'local' }))).toEqual(CONTROL_TABLE)
+	})
+
+	test("control, deployed, with the command-line client's rows", () => {
+		const before = process.env['FABRIKA_IAM_ISSUER']
+		process.env['FABRIKA_IAM_ISSUER'] = 'https://iam.example.test'
+		try {
+			const deployed = productionAccess(buildControlWorker({ env: 'prod', domain: 'console.example.test' }))
+			expect(deployed).toEqual(serviceProxyTable(controlServiceContract({ mcp: false, cli: true }), { oauth: true }))
+		} finally {
+			if (before === undefined) delete process.env['FABRIKA_IAM_ISSUER']
+			else process.env['FABRIKA_IAM_ISSUER'] = before
+		}
 	})
 
 	test('Operations, as an installation entry', () => {

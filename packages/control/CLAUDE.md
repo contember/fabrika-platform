@@ -150,8 +150,9 @@ other environment, before the provider prepares anything, and the write maps a r
   `FABRIKA_SERVICE_TABLE_DIGEST` (`installationTableDigest`) beside the Zerops process from the same manifest
   the proxy gets; `createRuntime` reads it through `controlTableSwitch` and refuses to start when it is missing or
   names none of `CONTROL_SERVICE_VARIANTS` (no OAuth; the command-line client's RPC rows; those plus MCP). With MCP
-  on, `FABRIKA_CONTROL_DOMAIN` is required too. The Cloudflare Worker serves no OAuth client yet: it serves
-  `controlApp` (`mcp: false, cli: false`), and `fabrika.config.ts` builds its proxy from the same table.
+  on, `FABRIKA_CONTROL_DOMAIN` is required too. The Cloudflare Worker reads the same switch (`workerControlApp`) from
+  the digest `fabrika.config.ts` writes beside its proxy's table: the command-line client's table on a deployed
+  installation, none locally, never MCP's.
 - **With `cli` on, `/api/rpc` accepts the command-line client's resource token** for `<FABRIKA_CONTROL_DOMAIN>/api/rpc`
   beside native tokens (`controlAuthenticator` → `createIam(…, { oauthResource })`), so `FABRIKA_CONTROL_DOMAIN` is
   required. Its permissions are the grant's, never more than the person's. **`isPerson` (`src/iam.ts`) is the ONE

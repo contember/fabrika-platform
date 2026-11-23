@@ -169,7 +169,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		scheme: local ? 'http' : 'https',
 	} satisfies Pick<ProxyApp, 'id' | 'hosts' | 'upstream' | 'scheme'>
 	const manifest: ProxyManifest = { apps: [proxyApp(placement, options)] }
-	// The Worker parses the same document at its first request: a table it would refuse fails the deploy instead.
+	// The Worker parses the same document at its first request: one the parser refuses fails the deploy instead.
 	if (parseProxyManifest(manifest) === null) throw new Error(`cloudflare proxy \`${options.name}\` carries a manifest the proxy refuses`)
 	const domain = options.domain?.trim()
 

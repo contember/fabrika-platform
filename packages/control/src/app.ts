@@ -96,7 +96,7 @@ export function createControlApp(mcp: McpRoute | null, cli: boolean): FetchServi
 	})
 }
 
-/** The console without OAuth: the table a Worker serves locally, where its proxy has no authorization server. */
+/** The console without OAuth, for a caller that serves no authorization server's table. Workers use `workerControlApp`. */
 export const controlApp: FetchService<ControlAppEnv> = createControlApp(null, false)
 
 /** The console a Worker serves per table digest. A deployment's vars are fixed, so an isolate builds one. */

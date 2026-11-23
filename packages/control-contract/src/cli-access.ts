@@ -3,7 +3,7 @@
 // one application it holds its actions at (`deploy:<app>`); IAM narrows every action to that app, whatever wider
 // grant the person holds.
 
-import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract'
+import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { CONTROL_ACTIONS, CONTROL_SCOPES } from './access.js'
 
 /** The console's RPC paths, each its own OAuth resource: the proxy binds a resource to exactly one row's path. */

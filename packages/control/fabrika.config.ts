@@ -16,6 +16,7 @@
 import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
 import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
 import { EMAIL_PROVIDER_VARIABLE, NO_EMAIL_PROVIDER, pickEmailEnvironment } from '@fabrika/email'
+import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
 	type CloudflareInstallationProxyTable,
@@ -61,7 +62,9 @@ const controlProxyTable = (ctx: ResourceContext, iamUrl: string): CloudflareInst
 	const table = controlTable(ctx)
 	const published = serviceProxyTable(controlServiceContract(table), { oauth: table.cli })
 	if (!table.cli || ctx.domain === undefined) return published
-	if (!iamUrl.startsWith('https://')) throw new Error('FABRIKA_IAM_ISSUER must be the https origin of IAM, the authorization server')
+	if (!iamUrl.startsWith('https://') || !isHttpOrigin(iamUrl)) {
+		throw new Error('FABRIKA_IAM_ISSUER must be the https origin of IAM, the authorization server, with no path and no trailing slash')
+	}
 	const origin = `https://${ctx.domain}`
 	return {
 		...published,

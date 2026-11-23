@@ -19,6 +19,7 @@ import { platformIamOAuthConfig } from '@fabrika/installation-init'
 import { proxyManifestJson, Worker } from '@fabrika/provider-cloudflare'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
 import { HttpIamGateway } from '@fabrika/proxy-core'
+import { parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { afterEach, expect, test } from 'bun:test'
 import { controlTransport } from '../../cli/src/control'
 import { authorizeDevice, type ControlOAuthDependencies, type CredentialLock } from '../../cli/src/control-oauth'
@@ -33,6 +34,8 @@ import type { Env as ControlEnv } from '../../control/src/env'
 import { createHarness as createIamHarness, seedInlineGrant, seedUser } from '../../iam/src/__tests__/helpers/harness'
 import { createIamApp } from '../../iam/src/app'
 import type { Env as IamEnv } from '../../iam/src/env'
+import { parseOAuthConfig } from '../../iam/src/oauth-config'
+import { buildOperationsWorker } from '../../operations/fabrika.config'
 import { createCloudflareProxyHandler } from '../../provider-cloudflare/src/proxy-worker'
 
 const CONSOLE_HOST = 'console.example.test'
@@ -261,4 +264,25 @@ test('a Cloudflare IAM deploy serves the command-line client the very resources 
 		FABRIKA_CONTROL_URL: CONSOLE,
 	})
 	expect(JSON.parse(stringVar(cloudflare, 'OAUTH_CONFIG'))).toEqual(zerops)
+})
+
+test('Operations accepts the very resource IAM serves and the console proxy registers for its path', () => {
+	const iam = buildIamWorker({ env: 'prod', domain: IAM_HOST }, {
+		FABRIKA_IAM_OIDC_ENABLED: 'false',
+		FABRIKA_IAM_PASSWORD_ENABLED: 'true',
+		FABRIKA_IAM_SIGNING_KEYS: 'unused-by-this-test',
+		FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
+		FABRIKA_EMAIL_PROVIDER: 'none',
+		FABRIKA_CONTROL_URL: CONSOLE,
+	})
+	const iamResources = parseOAuthConfig(stringVar(iam, 'OAUTH_CONFIG'))?.resources.map((resource) => resource.resource)
+	const proxy = withEnvironment({ FABRIKA_IAM_ISSUER: ISSUER }, () => buildControlConfig.resources({ env: 'prod', domain: CONSOLE_HOST }))
+	const entry = parseProxyManifestJson(proxyManifestJson(proxy) ?? '')?.apps[0]
+	if (entry === undefined || !('installation' in entry)) throw new Error('expected the console installation entry')
+	const operations = buildOperationsWorker({ env: 'prod', domain: 'operations.example.test' }, { FABRIKA_CONTROL_URL: CONSOLE })
+
+	const accepted = stringVar(operations, 'FABRIKA_OPERATIONS_OAUTH_RESOURCE')
+	expect(accepted).toBe(`${CONSOLE}/operations/api/rpc`)
+	expect(entry.oauthResources?.map((resource) => resource.resource)).toContain(accepted)
+	expect(iamResources).toContain(accepted)
 })
