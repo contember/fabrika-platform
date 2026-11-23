@@ -247,6 +247,47 @@ describe('a break of platform integrity is a refusal', () => {
 		])
 	})
 
+	test('a group client loads the endpoints.ts of a group the contract mounts, and no other module of a slice', async () => {
+		expect(fileOf('web/group.ts')).toContain("import { deals } from '../src/deals/endpoints'")
+		const handler = ".handle(async ({ ctx }) => ctx.db.target.notes.insert({ body: 'x' }))"
+		const findings = await structureFindings({
+			...ARCHITECTURE_APP,
+			'src/deals/handlers.ts': 'export const reopen = async () => ({})\n',
+			'src/deals/views.ts': "export const pipelineView = 'deal_pipeline'\n",
+			// In the shell graph, but not a slice's own endpoints.ts.
+			'src/deals/stages/endpoints.ts': "export const stages = ['lead']\n",
+			'src/deals/endpoints.ts': withImport('src/deals/endpoints.ts', "import { stages } from './stages/endpoints'"),
+			// No group of the contract: a bundle would load it whole, its handlers included.
+			'src/notes/endpoints.ts': "import { app } from '../app-kit'\nimport { Saved } from '../schemas'\n\n"
+				+ "export const notes = app.group({ callers: ['human'] }, (r) => ({\n"
+				+ `\tadd: r.mutation({ output: Saved, access: { action: 'crm.read', on: 'company', from: 'id' } })${handler},\n`
+				+ '}))\n',
+			'web/main.ts': withImport(
+				'web/main.ts',
+				"import { companies } from '../src/companies/endpoints'\n"
+					+ "import { deals as alsoDeals } from '../src/deals/endpoints.ts'\n"
+					+ "import { reopen } from '../src/deals/handlers'\n"
+					+ "import { lockedStage } from '../src/deals/queries'\n"
+					+ "import { pipelineView } from '../src/deals/views'\n"
+					+ "import { canReopen } from '../src/deals/logic'\n"
+					+ "import { tables } from '../src/db/tables'\n"
+					+ "import { stages } from '../src/deals/stages/endpoints'\n"
+					+ "import { notes } from '../src/notes/endpoints'\n"
+					+ "export const loaded = () => import('../src/deals/queries')\n",
+			),
+		})
+		expect(findings).toEqual([
+			'web/main.ts:3:1 refusal spa-server-import',
+			'web/main.ts:4:1 refusal spa-server-import',
+			'web/main.ts:5:1 refusal spa-server-import',
+			'web/main.ts:6:1 refusal spa-server-import',
+			'web/main.ts:7:1 refusal spa-server-import',
+			'web/main.ts:8:1 refusal spa-server-import',
+			'web/main.ts:9:1 refusal spa-server-import',
+			'web/main.ts:10:29 refusal spa-server-import',
+		])
+	})
+
 	test('the SPA loads the paved road: the client, its React hooks, the component kit and React; nothing else of the framework', async () => {
 		const findings = await structureFindings({
 			...ARCHITECTURE_APP,

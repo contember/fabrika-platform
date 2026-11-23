@@ -1,0 +1,10 @@
+import { createGroupClient, groupMount } from '@fabrika/app/client'
+import type { contract } from '../fabrika.contract'
+import { deals } from '../src/deals/endpoints'
+import { DEAL_STAGES } from '../src/schemas'
+import { render } from './view'
+
+const mount = groupMount<typeof contract>()('api', { app: 'crm', prefix: '/api' }, { bounceOnAuth: true })
+const api = createGroupClient(mount, { deals })
+
+export const showPipeline = async (orgId: string): Promise<void> => render(DEAL_STAGES, await api.deals.pipeline({ orgId }))
