@@ -254,7 +254,9 @@ describe('a break of platform integrity is a refusal', () => {
 			...ARCHITECTURE_APP,
 			'src/deals/handlers.ts': 'export const reopen = async () => ({})\n',
 			'src/deals/views.ts': "export const pipelineView = 'deal_pipeline'\n",
+			// In the shell graph, but not a slice's own endpoints.ts.
 			'src/deals/stages/endpoints.ts': "export const stages = ['lead']\n",
+			'src/deals/endpoints.ts': withImport('src/deals/endpoints.ts', "import { stages } from './stages/endpoints'"),
 			// No group of the contract: a bundle would load it whole, its handlers included.
 			'src/notes/endpoints.ts': "import { app } from '../app-kit'\nimport { Saved } from '../schemas'\n\n"
 				+ "export const notes = app.group({ callers: ['human'] }, (r) => ({\n"
