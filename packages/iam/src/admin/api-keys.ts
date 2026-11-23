@@ -5,6 +5,7 @@ import {
 	type ApiKeyDto,
 	type ApiKeyIdInput,
 	type CursorList,
+	type GetApiKeyResponse,
 	type ListApiKeysInput,
 	type OkResponse,
 	type ProvisionApiKeyRequest,
@@ -18,7 +19,7 @@ import { contractGrantProblem } from '../contract-rules'
 import { type CredentialRow, type GrantRow, type PrincipalRow, principalStatus } from '../db'
 import { generateToken, hashToken } from '../secret'
 import { type AdminContext, adminEvent, fail } from './context'
-import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
+import { appField, grantAuthorLabels, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
 import { cursorOf, groupBy, normalizeLimit } from './pagination'
 
 /**
@@ -67,8 +68,8 @@ async function apiKeyPrincipal(c: AdminContext, principalId: string): Promise<Pr
 	return principal
 }
 
-/** One key with its grants and its live credential, for the console's key page. */
-export async function getApiKeyUseCase(c: AdminContext, input: ApiKeyIdInput): Promise<ApiKeyDetail> {
+/** One key with its grants, each naming who granted it, and its live credential, for the console's key page. */
+export async function getApiKeyUseCase(c: AdminContext, input: ApiKeyIdInput): Promise<GetApiKeyResponse> {
 	const { principalId } = input
 	const { grants, credentials } = c.services.repositories
 	const principal = await apiKeyPrincipal(c, principalId)
@@ -77,8 +78,17 @@ export async function getApiKeyUseCase(c: AdminContext, input: ApiKeyIdInput): P
 	}
 	// `listCredentialsForPrincipal` is newest-first and rotation revokes every older key, so this is the live one.
 	const live = (await credentials.listCredentialsForPrincipal(principalId)).find((row) => row.revoked_at === null)
-	const dto = await toApiKeyDto(c, principal, await grants.listGrants(principalId), new RoleKnownCache(c.services))
-	return { ...dto, credential: credentialDto(live) }
+	const rows = await grants.listGrants(principalId)
+	const dto = await toApiKeyDto(c, principal, rows, new RoleKnownCache(c.services))
+	const authors = await grantAuthorLabels(rows, c.services)
+	return {
+		...dto,
+		grants: dto.grants.map((grant) => ({
+			...grant,
+			grantedByLabel: grant.grantedBy === null ? null : authors.get(grant.grantedBy) ?? grant.grantedBy,
+		})),
+		credential: credentialDto(live),
+	}
 }
 
 function credentialDto(live: CredentialRow | undefined): ApiKeyDetail['credential'] {

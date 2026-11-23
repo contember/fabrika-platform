@@ -14,7 +14,7 @@ import { normalizeEmailIdentity } from '../email-identity'
 import { resolvePermissionsAt } from '../resolve'
 import { listRolesUseCase } from './app-schema'
 import { type AdminContext, adminEvent, fail } from './context'
-import { toGrantDtos } from './grant-support'
+import { grantAuthorLabels, toGrantDtos } from './grant-support'
 import { cursorOf, normalizeLimit } from './pagination'
 import { canManagePrincipal, managesApp, requireActableTarget, requireInvitableMailbox } from './user-admin'
 
@@ -79,10 +79,7 @@ export async function getPrincipalUseCase(c: AdminContext, input: PrincipalIdInp
 	const roles = new Map(
 		await Promise.all([...new Set(grants.map((grant) => grant.app))].map(async (app) => [app, (await listRolesUseCase(c, { app })).items] as const)),
 	)
-	const authors = new Map(
-		await Promise.all([...new Set(grants.flatMap((grant) => grant.granted_by === null ? [] : [grant.granted_by]))]
-			.map(async (author) => [author, (await c.services.repositories.principals.getPrincipalById(author))?.label ?? author] as const)),
-	)
+	const authors = await grantAuthorLabels(grants, c.services)
 	const grantDetails: PrincipalGrantDto[] = (await toGrantDtos(grants, c.services)).map((grant) => {
 		const role = roles.get(grant.app)?.find((role) => role.key === grant.roleKey)
 		return {
