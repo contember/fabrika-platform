@@ -159,6 +159,24 @@ describe('sessions.list', () => {
 		expect(second).toHaveLength(1)
 		expect(second[0]?.id).not.toBe(firstPage[0]?.id)
 	})
+
+	test('an OIDC login past the installation cap, and its app session, are reported expired; a password login is not', async () => {
+		const h = createHarness()
+		const bearer = await admin(h)
+		const user = seedUser(h.sqlite, { sub: 'sub-capped', email: 'capped@example.com' })
+		const login = await openSession(h, user, { token: 'capped-login' })
+		const child = await openSession(h, user, { token: 'capped-app', app: 'opice', parentSessionId: login })
+		const password = await openSession(h, user, { token: 'capped-password', method: 'password' })
+		// Signed in 13 hours ago, past the default 12-hour cap (`OIDC_SESSION_HOURS` unset).
+		h.sqlite.run('UPDATE sessions SET created_at = ? WHERE id IN (?, ?)', [Math.floor(Date.now() / 1000) - 13 * 3600, login, password])
+
+		const items = sessionItems(await ok(h, bearer, 'sessions.list', { principalId: user }))
+		const reason = (id: string) => items.find((item) => item.id === id)?.unavailableReason
+		expect(reason(login)).toBe('expired')
+		expect(reason(child)).toBe('expired')
+		// This installation is OIDC-only, so the password login is unavailable for its method, never for its age.
+		expect(reason(password)).toBe('method_disabled')
+	})
 })
 
 describe('sessions.revoke', () => {

@@ -6,6 +6,7 @@ import { normalizeEmailIdentity } from './email-identity'
 import type { Env } from './env'
 import { type OAuthConfig, parseOAuthConfig } from './oauth-config'
 import { OidcClient } from './oidc'
+import { parseOidcSessionSeconds } from './oidc-session'
 import { BUN_PBKDF2_COST, type PasswordHasher, WebCryptoPasswordHasher } from './password-crypto'
 import { passwordMinLengthFloor } from './password-minimum'
 import { relayFallbackEvent, relayWithFallback } from './relay-mail'
@@ -51,7 +52,11 @@ export interface Config {
 	/** Create a real local admin session without contacting an external OIDC provider. */
 	readonly localDevLogin: boolean
 	readonly authentication: {
-		readonly oidc: { readonly enabled: boolean }
+		readonly oidc: {
+			readonly enabled: boolean
+			/** How long after its sign-in an OIDC login is usable (`OIDC_SESSION_HOURS`); then the provider is asked again. */
+			readonly sessionCapSeconds: number
+		}
 		readonly password: {
 			readonly enabled: boolean
 			/** The lowest minimum length an administrator may set here (`passwordMinLengthFloor` of the hasher's cost). */
@@ -140,7 +145,7 @@ export function buildServices(env: Env): Services {
 			environment,
 			localDevLogin: environment === LOCAL_ENVIRONMENT && env.LOCAL_DEV_LOGIN === 'true',
 			authentication: {
-				oidc: { enabled: oidcEnabled },
+				oidc: { enabled: oidcEnabled, sessionCapSeconds: parseOidcSessionSeconds(env.OIDC_SESSION_HOURS) },
 				password: { enabled: passwordEnabled, minLengthFloor: passwordMinLengthFloor(passwordCost) },
 			},
 			oauth: parseOAuthConfig(env.OAUTH_CONFIG),

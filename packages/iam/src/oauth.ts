@@ -239,7 +239,9 @@ export async function grantAuthority(
 	const ceiling = scopes === null ? null : scopeCeiling(resource, scopes)
 	if (scopes === null || ceiling === null) return null
 	const session = await services.repositories.sessions.getActiveSessionById(grant.session_id)
-	if (session === null || session.app !== null || session.principal_id !== grant.principal_id || !sessionUsable(session, services.config)) return null
+	if (session === null || session.app !== null || session.principal_id !== grant.principal_id || !sessionUsable(session, services.config, now)) {
+		return null
+	}
 	const principal = await services.repositories.principals.getPrincipalById(grant.principal_id)
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') return null
 	const live = await resolveAuthorityAt(services, principal, grant.app)

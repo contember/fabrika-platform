@@ -18,6 +18,7 @@ import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
 import { createPostgresIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { parseOAuthConfig } from '../oauth-config'
+import { parseOidcSessionSeconds } from '../oidc-session'
 import { BUN_PBKDF2_COST } from '../password-crypto'
 import { parseRetention } from '../retention'
 
@@ -107,6 +108,8 @@ export async function createRuntime(source: Record<string, string | undefined> =
 		{ authLogDays: authLogRetentionDays, auditDays: auditRetentionDays },
 		{ authLogDays: 'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS', auditDays: 'FABRIKA_IAM_AUDIT_RETENTION_DAYS' },
 	)
+	const oidcSessionHours = source['FABRIKA_IAM_OIDC_SESSION_HOURS']
+	parseOidcSessionSeconds(oidcSessionHours, 'FABRIKA_IAM_OIDC_SESSION_HOURS')
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
@@ -132,6 +135,7 @@ export async function createRuntime(source: Record<string, string | undefined> =
 		OAUTH_CONFIG: source['FABRIKA_IAM_OAUTH_CONFIG'] ?? '',
 		AUTH_LOG_RETENTION_DAYS: authLogRetentionDays,
 		AUDIT_RETENTION_DAYS: auditRetentionDays,
+		OIDC_SESSION_HOURS: oidcSessionHours,
 		ENVIRONMENT: environment,
 		LOCAL_DEV_LOGIN: source['LOCAL_DEV_LOGIN'] ?? '',
 		ISSUER: issuer,

@@ -175,4 +175,20 @@ describe('the IAM Bun runtime environment', () => {
 			'FABRIKA_IAM_AUDIT_RETENTION_DAYS must be a whole number',
 		)
 	})
+
+	test('maps the OIDC session cap, and a value outside 1 to 720 hours refuses the boot', async () => {
+		const runtime = await createRuntime({ ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL, FABRIKA_IAM_OIDC_SESSION_HOURS: '8' })
+		try {
+			expect(runtime.env.OIDC_SESSION_HOURS).toBe('8')
+		} finally {
+			await runtime.shutdown()
+		}
+
+		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL }
+		for (const value of ['0', '721', '12h', '1.5']) {
+			await expect(createRuntime({ ...source, FABRIKA_IAM_OIDC_SESSION_HOURS: value })).rejects.toThrow(
+				'FABRIKA_IAM_OIDC_SESSION_HOURS must be a whole number of hours from 1 to 720',
+			)
+		}
+	})
 })

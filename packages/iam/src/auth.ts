@@ -1,5 +1,5 @@
 import { API_KEY_PREFIX, isWorkloadKind, type PermissionEntry, type PrincipalType, type TokenPrincipalType } from '@fabrika/auth-core'
-import type { SessionRow } from './db'
+import type { SignedInSessionRow } from './db'
 import type { Env } from './env'
 import { hashToken, timingSafeEqualHex } from './secret'
 import type { Config, Services } from './services'
@@ -11,23 +11,28 @@ export const LOCAL_DEV_ADMIN_ID = 'local-dev-admin'
 export const LOCAL_DEV_ADMIN_EMAIL = 'admin@local.test'
 
 /**
- * May this session still be used, given what the installation enables NOW?
+ * May this session still be used at `now` (unix seconds), given what the installation enables NOW?
  *
  * **Checked at USE, not at creation, and that is the point.** Turning a method off changes what the
  * next login may do and nothing about what was already issued. Sessions live 30 days, so an
  * installation that moved to password-only kept honouring every OIDC login for a month — and, for the
  * bypass, every one of those is a global admin.
  *
+ * An OIDC login is usable for `sessionCapSeconds` after it signed in; then the provider is asked again, so a person
+ * blocked there loses access within the cap. Measured here, from the login's sign-in, so it also ends logins issued
+ * before the cap was lowered, and the app sessions derived from them.
+ *
  * The bypass carries `local_dev` as its own method rather than an exemption
  * here, so this stays a total function over the enum: a method added later has to answer the question.
  */
 export function sessionUsable(
-	session: Pick<SessionRow, 'authentication_method'>,
+	session: Pick<SignedInSessionRow, 'authentication_method' | 'expires_at' | 'signed_in_at'>,
 	config: Pick<Config, 'authentication' | 'localDevLogin'>,
+	now: number,
 ): boolean {
 	switch (session.authentication_method) {
 		case 'oidc':
-			return config.authentication.oidc.enabled
+			return config.authentication.oidc.enabled && now < sessionEndsAt(session, config)
 		case 'password':
 			return config.authentication.password.enabled
 		case 'local_dev':
@@ -36,6 +41,16 @@ export function sessionUsable(
 		case 'terminal_assertion':
 			return true
 	}
+}
+
+/** When a session ends by its own clock: its expiry, or earlier for an OIDC login, its sign-in plus the installation's cap. */
+export function sessionEndsAt(
+	session: Pick<SignedInSessionRow, 'authentication_method' | 'expires_at' | 'signed_in_at'>,
+	config: Pick<Config, 'authentication'>,
+): number {
+	return session.authentication_method === 'oidc'
+		? Math.min(session.expires_at, session.signed_in_at + config.authentication.oidc.sessionCapSeconds)
+		: session.expires_at
 }
 
 /**

@@ -52,6 +52,11 @@ export interface Env {
 	 * `FABRIKA_IAM_AUDIT_RETENTION_DAYS`. A value that is not a whole number of days fails the boot.
 	 */
 	AUDIT_RETENTION_DAYS?: string
+	/**
+	 * Hours an OIDC login stays usable after its sign-in; unset means 12. Deploy var `FABRIKA_IAM_OIDC_SESSION_HOURS`.
+	 * Anything but a whole number of hours from 1 to 720 fails the boot.
+	 */
+	OIDC_SESSION_HOURS?: string
 	/** `local` / `stage` / `prod`. */
 	ENVIRONMENT: string
 	/** Explicit local-only human login bypass. Ignored unless `ENVIRONMENT=local`. */

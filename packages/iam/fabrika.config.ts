@@ -165,7 +165,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 		// Only when named: an empty ADMIN_AUDIENCES means "no JWT may administer", so a `?? ''`
 		// default would lock the console out of every install instead of falling back to its app id.
 		...(config.adminAudiences === undefined ? {} : { ADMIN_AUDIENCES: config.adminAudiences }),
-		...retentionVars(source),
+		...settingVars(source),
 		HUMAN_EMAILS: source['FABRIKA_IAM_HUMAN_EMAILS'] ?? '[]',
 		IAM_BOOTSTRAP_ADMINS: source['FABRIKA_IAM_BOOTSTRAP_ADMINS'] ?? '[]',
 		ISSUER: `https://${config.domain}`,
@@ -180,13 +180,18 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 	}
 }
 
-/** The operator's retention settings, only where set: unset keeps IAM's defaults (30 days, audit kept). */
-const retentionVars = (source: EnvironmentSource): Record<string, string> => {
+/**
+ * The operator's retention and OIDC session settings, only where set: unset keeps IAM's defaults (30 days, audit
+ * kept, a 12-hour OIDC login).
+ */
+const settingVars = (source: EnvironmentSource): Record<string, string> => {
 	const authLog = source['FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS']
 	const audit = source['FABRIKA_IAM_AUDIT_RETENTION_DAYS']
+	const oidcSession = source['FABRIKA_IAM_OIDC_SESSION_HOURS']
 	return {
 		...(authLog === undefined || authLog === '' ? {} : { AUTH_LOG_RETENTION_DAYS: authLog }),
 		...(audit === undefined || audit === '' ? {} : { AUDIT_RETENTION_DAYS: audit }),
+		...(oidcSession === undefined || oidcSession === '' ? {} : { OIDC_SESSION_HOURS: oidcSession }),
 	}
 }
 
@@ -198,6 +203,7 @@ export const iamPipelineVars = (source: EnvironmentSource): string[] => {
 		'FABRIKA_IAM_OAUTH_CONFIG',
 		'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
 		'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
+		'FABRIKA_IAM_OIDC_SESSION_HOURS',
 		'FABRIKA_IAM_OIDC_ENABLED',
 		'FABRIKA_IAM_PASSWORD_ENABLED',
 		'FABRIKA_EMAIL_PROVIDER',

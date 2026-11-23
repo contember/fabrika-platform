@@ -60,19 +60,24 @@ async function handoffStatus(services: Services, session: string): Promise<numbe
 
 describe('sessionUsable', () => {
 	const config = (oidc: boolean, password: boolean, localDevLogin: boolean) => ({
-		authentication: { oidc: { enabled: oidc }, password: { enabled: password, minLengthFloor: PASSWORD_MIN_LENGTH_FLOOR } },
+		authentication: {
+			oidc: { enabled: oidc, sessionCapSeconds: 12 * 3600 },
+			password: { enabled: password, minLengthFloor: PASSWORD_MIN_LENGTH_FLOOR },
+		},
 		localDevLogin,
 	})
+	const now = 1_000_000
 
 	test('answers for every method the column can hold, and answers only from configuration', () => {
-		const method = (authentication_method: AuthenticationMethod) => ({ authentication_method })
-		expect(sessionUsable(method('oidc'), config(true, false, false))).toBe(true)
-		expect(sessionUsable(method('oidc'), config(false, true, true))).toBe(false)
-		expect(sessionUsable(method('password'), config(false, true, false))).toBe(true)
-		expect(sessionUsable(method('password'), config(true, false, true))).toBe(false)
+		// Signed in a moment ago, so the OIDC cap (`oidc-session-cap.test.ts`) does not decide here.
+		const method = (authentication_method: AuthenticationMethod) => ({ authentication_method, signed_in_at: now, expires_at: now + 3600 })
+		expect(sessionUsable(method('oidc'), config(true, false, false), now)).toBe(true)
+		expect(sessionUsable(method('oidc'), config(false, true, true), now)).toBe(false)
+		expect(sessionUsable(method('password'), config(false, true, false), now)).toBe(true)
+		expect(sessionUsable(method('password'), config(true, false, true), now)).toBe(false)
 		// The bypass is the case the naive rule broke: a local installation runs with OIDC off.
-		expect(sessionUsable(method('local_dev'), config(false, true, true))).toBe(true)
-		expect(sessionUsable(method('local_dev'), config(true, true, false))).toBe(false)
+		expect(sessionUsable(method('local_dev'), config(false, true, true), now)).toBe(true)
+		expect(sessionUsable(method('local_dev'), config(true, true, false), now)).toBe(false)
 	})
 })
 

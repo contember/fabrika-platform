@@ -156,8 +156,11 @@ not admit, in this order ([`dispatch.ts`](../../packages/app/src/implement/dispa
 - **Sessions.** An IAM login lasts 30 days ([`sessions.ts`](../../packages/iam/src/auth/sessions.ts)); an application
   session is its child, and revoking the login ends every child at once. A disabled principal mints no token
   ([`tokens.ts`](../../packages/iam/src/tokens.ts)), but keeps its sessions, so enabling it again can restore an
-  unexpired one ([`human-authentication.md`](human-authentication.md)). Disabling a person only at the OIDC provider
-  ends nothing in IAM: the login stays valid until it expires or an administrator disables or signs out the principal.
+  unexpired one ([`human-authentication.md`](human-authentication.md)). An OIDC login, and every application session
+  derived from it, is usable only for the installation's cap after its sign-in (`FABRIKA_IAM_OIDC_SESSION_HOURS`,
+  12 h by default, [`auth.ts`](../../packages/iam/src/auth.ts)); then IAM sends the browser back to the provider. A
+  token minted from it ends at the cap too. So a person disabled only at the OIDC provider keeps fabrika access until
+  the cap, unless an administrator disables or signs out the principal first.
 - **IAM has no second factor of its own.** A second factor exists only where an installation signs people in through
   an OIDC provider that requires one; a password login is one factor. The minimum password length is an installation
   administrator's setting, at least 4 on Bun and 15 on a Worker, and a Worker hashes with a lower PBKDF2 cost

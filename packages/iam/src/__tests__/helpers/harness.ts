@@ -8,6 +8,7 @@ import { type AuthenticationMethod, createIamRepositories, type IamRepositories 
 import { normalizeEmailIdentity } from '../../email-identity'
 import type { OAuthConfig } from '../../oauth-config'
 import { OidcClient, type OidcMetadata } from '../../oidc'
+import { DEFAULT_OIDC_SESSION_HOURS } from '../../oidc-session'
 import { type PasswordHasher, WebCryptoPasswordHasher } from '../../password-crypto'
 import { DEFAULT_AUTH_LOG_RETENTION_DAYS, type Retention } from '../../retention'
 import { hashToken } from '../../secret'
@@ -185,6 +186,8 @@ export interface MakeServicesOptions {
 	oidc?: OidcClient
 	/** Independent auth method switches. Defaults to the legacy OIDC-only mode. */
 	authentication?: { oidc: boolean; password: boolean }
+	/** How long an OIDC login is usable after its sign-in, in seconds. Defaults to IAM's 12 hours. */
+	oidcSessionCapSeconds?: number
 	passwordHasher?: PasswordHasher
 	/** The lowest minimum password length an administrator may set. Defaults to the Bun runtime's. */
 	passwordMinLengthFloor?: number
@@ -217,7 +220,10 @@ export function makeServicesFor(repositories: IamRepositories, options: MakeServ
 		environment,
 		localDevLogin: environment === 'local' && options.localDevLogin === true,
 		authentication: {
-			oidc: { enabled: options.authentication?.oidc ?? true },
+			oidc: {
+				enabled: options.authentication?.oidc ?? true,
+				sessionCapSeconds: options.oidcSessionCapSeconds ?? DEFAULT_OIDC_SESSION_HOURS * 3600,
+			},
 			password: { enabled: options.authentication?.password ?? false, minLengthFloor: options.passwordMinLengthFloor ?? PASSWORD_MIN_LENGTH_FLOOR },
 		},
 		oauth: options.oauth ?? null,
