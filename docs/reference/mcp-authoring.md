@@ -256,7 +256,7 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
 
    `metadataUrl` is optional; IAM fetches the client id when it is absent. The deploy refuses a
    malformed list, more than 16 clients, or `--scheme=http`, before it writes anything. Register
-   [Claude and ChatGPT](#registering-claude-and-chatgpt) as below. With the list, the deploy:
+   [Claude and ChatGPT](#registering-claude-and-chatgpt), or [an external client](#registering-an-external-client), as below. With the list, the deploy:
    - publishes the console's MCP table, whose `/mcp` row admits OAuth bearers, and registers the
      resource in the proxy manifest;
    - writes `FABRIKA_SERVICE_TABLE_DIGEST` on `control`: the digest of that table. Control serves
@@ -397,6 +397,28 @@ IAM caches a key set for five minutes. An assertion with an unknown `kid` refetc
 A revocation without an assertion needs only a registered client id, as RFC 7009 allows a public client: it revokes
 only a token bound to that client, so it never waits on the document's host. It is refused when the document is
 known to declare `private_key_jwt`.
+
+## Registering an external client
+
+An application other than Claude or ChatGPT (an operations tool that signs people in through the installation's
+IAM, say) registers with `"provider": "external"`. The kind is a label: IAM treats it as any other client, so it gets
+what they get. That is an access token for a registered resource, and the only one an installation registers is the
+console's `/mcp` with the `authoring` scope: within the consenting person's grants, the client can write workspaces
+and deploy to stage. It gets no ID token and no resource of its own. Register only a client you would trust with that.
+
+```json
+{
+	"provider": "external",
+	"clientId": "https://<client host>/oauth/client.json",
+	"redirectUris": ["https://<client host>/oauth/callback"]
+}
+```
+
+The client serves a Client ID Metadata Document at `clientId` (or at `metadataUrl`) with `client_id` equal to that
+URL, `redirect_uris` within the registered ones, `response_types` absent or `["code"]`, and `token_endpoint_auth_method` `none`
+or `private_key_jwt` ([above](#registering-claude-and-chatgpt)). It authorizes with the authorization code flow, S256 PKCE and `resource` set to a
+registered resource (`https://<console>/mcp`); its scopes are bounded by that resource's `scopeGrants`, and the token
+carries only what the signed-in person holds within them. There is no implicit grant and no client secret.
 
 ## Locally
 

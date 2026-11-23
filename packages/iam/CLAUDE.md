@@ -752,7 +752,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   redirect. Refusing to boot beats booting misconfigured — so a local `wrangler dev` is password-only.
 - **IAM IS THE OAUTH 2.1 AUTHORIZATION SERVER FOR MCP CLIENTS, AND ONLY FOR REGISTERED ONES (ADR-0049).**
   `OAUTH_CONFIG` (deploy var `FABRIKA_IAM_OAUTH_CONFIG`; unset = every OAuth path 404s, malformed
-  fails the boot) lists the Claude/ChatGPT CIMD client ids with their exact redirect URIs, and the
+  fails the boot) lists the CIMD client ids (kind `claude`, `chatgpt` or `external`, a label only) with their exact redirect URIs, and the
   resources with their scope ceilings. An unregistered client id is refused before any fetch, and a
   fetched metadata document can never add a redirect URI. A scope grant is a CEILING: the token's
   `perms` are the user's LIVE permissions at the resource's app narrowed by it (`narrowPermissions`),

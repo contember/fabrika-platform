@@ -45,12 +45,20 @@ workspace its own running application, where one pinned service could show only 
    administrative transport is unchanged. Only the Bun/Zerops composition mounts it.
 2. **IAM is the OAuth 2.1 authorization server.** Authorization code with S256 PKCE, explicit RFC 8707
    resource, refresh rotation and revocation. Clients are operator-registered Client ID Metadata
-   Documents (Claude, ChatGPT); there is no open dynamic registration. A client authenticates at the token
+   Documents of kind `claude`, `chatgpt` or `external`; there is no open dynamic registration. A client authenticates at the token
    endpoint as its document declares: none (a public client with PKCE) or `private_key_jwt` against the
    document's own-origin key set; a request never chooses a weaker method. Every authorization response
    carries `iss` (RFC 9207). An access token is minted for
    one resource of one app. Its permissions are the user's live grants narrowed by the consented
    scope. No token delegation exists.
+   The kind is a label (`OAUTH_CLIENT_PROVIDERS` in `@fabrika/iam-contract` is the one list) and changes nothing
+   above. An `external` client, such as an operations tool that signs people in through the installation's IAM, gets
+   the same flow: authorization code with S256 PKCE, an explicit RFC 8707 resource of a registered app, scopes within
+   that resource's `scopeGrants` ceiling, and the redirect URIs the operator registered, which its document cannot
+   widen. It gets no implicit grant, no client secret, no token for an unregistered resource and no scope outside the
+   ceiling, and its token is refused where a resource token is: on every native IAM path and by `approvals.complete`
+   (rule 8). The only resource an installation registers is the console's `/mcp`, so an external client's token is an
+   authoring token like Claude's; registering one trusts it as much.
 3. **The proxy enforces it.** `/mcp` is a `service` row of the console's installation entry that
    admits the caller `oauth`, with `oauth: { scopes }` on the row and a registered `oauthResources`
    entry for its path ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Installation

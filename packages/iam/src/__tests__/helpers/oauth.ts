@@ -1,4 +1,5 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
+import type { OAuthClientProvider } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { spyOn } from 'bun:test'
 import type { IamRepositories } from '../../db'
@@ -27,6 +28,8 @@ export async function oauthFixture(
 		failFetch?: boolean
 		/** The first fetch never settles, even past its abort signal: a Workers fetch whose request was cancelled. */
 		stallFirstFetch?: boolean
+		/** The registered client's kind; `claude` when absent. */
+		provider?: OAuthClientProvider
 	} = {},
 ) {
 	const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
@@ -47,7 +50,7 @@ export async function oauthFixture(
 	const clientId = `https://claude.example.test/cimd/${uuidv7()}`
 	const jwksUri = `https://claude.example.test/jwks/${uuidv7()}.json`
 	const config: OAuthConfig = {
-		clients: [{ provider: 'claude', clientId, redirectUris: [REDIRECT_URI], metadataUrl: clientId }],
+		clients: [{ provider: options.provider ?? 'claude', clientId, redirectUris: [REDIRECT_URI], metadataUrl: clientId }],
 		resources: [{
 			app: 'control',
 			resource: RESOURCE,

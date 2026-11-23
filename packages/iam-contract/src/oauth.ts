@@ -1,9 +1,20 @@
 import { isCimdClientId, isOAuthResourceUri, parseOAuthScopes } from '@fabrika/auth-core'
 import type { KeyGrant } from '@fabrika/auth-core'
 
+/**
+ * The kinds of managed client an installation registers. A label only: every kind gets the same authorization code
+ * flow with S256 PKCE, the same RFC 8707 resources and the same scope ceilings (ADR-0049).
+ */
+export const OAUTH_CLIENT_PROVIDERS = ['claude', 'chatgpt', 'external'] as const
+export type OAuthClientProvider = (typeof OAUTH_CLIENT_PROVIDERS)[number]
+
+function isOAuthClientProvider(value: unknown): value is OAuthClientProvider {
+	return OAUTH_CLIENT_PROVIDERS.some((provider) => provider === value)
+}
+
 /** Managed CIMD registrations only; public dynamic registration is not part of this contract. */
 export interface OAuthManagedClient {
-	provider: 'chatgpt' | 'claude'
+	provider: OAuthClientProvider
 	clientId: string
 	redirectUris: string[]
 }
@@ -134,7 +145,7 @@ export function parseOAuthManagedClient(value: unknown): OAuthManagedClient | nu
 	const provider = field(value, 'provider')
 	const clientId = field(value, 'clientId')
 	const uris = redirectUris(field(value, 'redirectUris'))
-	return (provider === 'chatgpt' || provider === 'claude') && isCimdClientId(clientId) && uris !== null
+	return isOAuthClientProvider(provider) && isCimdClientId(clientId) && uris !== null
 		? { provider, clientId, redirectUris: uris }
 		: null
 }
