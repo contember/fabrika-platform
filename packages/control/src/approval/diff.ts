@@ -2099,11 +2099,10 @@ function fileKindChanges(name: string, from: FileKindArtifact, to: FileKindArtif
  */
 function fileColumnLines(name: string, table: TablePolicyArtifact): Line[] {
 	return Object.entries(table.files ?? {}).map(([column, kind]) => {
-		const ownWrite = table.columns[column]?.write
 		const writers = [
 			...(table.insert.includes(column) ? tableActions(table.actions.insert) : []),
 			...(table.update.includes(column) ? tableActions(table.actions.update) : []),
-			...(ownWrite === undefined ? [] : [ownWrite]),
+			...tableActions(table.columns[column]?.write ?? null),
 		]
 		const holder = `\`${name}.${column}\` (${kind})`
 		return neutral(
@@ -2227,13 +2226,27 @@ function tableChanges(name: string, from: TablePolicyArtifact, to: TablePolicyAr
 				...ruled('table.column-read', setChanges(subject, tableActions(before.read), tableActions(after.read), 'is read with', 'is no longer read with')),
 			)
 		}
-		// A column's own write action is one more action that updates the table; the update list's lines cover the rest.
+		// A column's own write actions update the table too; the update list's lines cover the rest.
 		if (before.write === undefined && after.write !== undefined) {
-			columns.push(...ruled('table.column-write', [widening(`${subject} is updated with its own write action \`${after.write}\``)]))
+			columns.push(...ruled('table.column-write', [widening(`${subject} is updated with its own write action ${actionsText(after.write)}`)]))
 		} else if (before.write !== undefined && after.write === undefined) {
-			columns.push(...ruled('table.column-write', [narrowing(`${subject} is no longer updated with its own write action \`${before.write}\``)]))
-		} else if (before.write !== undefined && after.write !== undefined) {
+			columns.push(...ruled('table.column-write', [narrowing(`${subject} is no longer updated with its own write action ${actionsText(before.write)}`)]))
+		} else if (typeof before.write === 'string' && typeof after.write === 'string') {
 			columns.push(...ruled('table.column-write', valueChange(`${subject} write action`, before.write, after.write)))
+		} else if (before.write !== undefined && after.write !== undefined) {
+			// A list: each action the column gains widens, each it loses narrows.
+			columns.push(
+				...ruled(
+					'table.column-write',
+					setChanges(
+						subject,
+						tableActions(before.write),
+						tableActions(after.write),
+						'is updated with its own write action',
+						'is no longer updated with its own write action',
+					),
+				),
+			)
 		}
 	}
 	return [

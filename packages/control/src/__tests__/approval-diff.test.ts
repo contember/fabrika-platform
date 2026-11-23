@@ -169,6 +169,24 @@ describe('classifyAccess', () => {
 		expect(classifyAccess(moved, snapshot()).outcome).toBe('widening')
 	})
 
+	test('a column written by a list: each action it gains widens, each it loses narrows', () => {
+		const withWrite = (write: string | readonly string[]) =>
+			snapshot(BASE, { notes: { ...NOTES_TABLE, columns: { ...NOTES_TABLE.columns, owner: { write } } } })
+		expect(classifyAccess(snapshot(), withWrite(['notes.delete', 'notes.write']))).toEqual({
+			outcome: 'widening',
+			changes: [{ effect: 'widens', line: 'Column `notes.owner` is updated with its own write action `notes.delete` or `notes.write`' }],
+		})
+		expect(classifyAccess(withWrite('notes.delete'), withWrite(['notes.delete', 'notes.write']))).toEqual({
+			outcome: 'widening',
+			changes: [{ effect: 'widens', line: 'Column `notes.owner` is updated with its own write action `notes.write`' }],
+		})
+		expect(classifyAccess(withWrite(['notes.delete', 'notes.write']), withWrite('notes.delete'))).toEqual({
+			outcome: 'no-widening',
+			changes: [{ effect: 'narrows', line: 'Column `notes.owner` is no longer updated with its own write action `notes.write`' }],
+		})
+		expect(lines(withWrite(['notes.delete', 'notes.write']), withWrite(['notes.write', 'notes.delete']))).toEqual([])
+	})
+
 	test('a new or changed migration widens; a removed one only removes', () => {
 		const one = { name: '20260101000000_init.sql', checksum: 'a'.repeat(64) }
 		const two = { name: '20260102000000_more.sql', checksum: 'b'.repeat(64) }

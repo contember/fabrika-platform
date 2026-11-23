@@ -118,6 +118,24 @@ describe('the access map', () => {
 		expect(operations('notes.read')).toEqual(['read'])
 	})
 
+	test('a column written by a list is written by each listed action and by no other', () => {
+		const orders: TablePolicyArtifact = {
+			scope: { mode: 'app', reason: 'every order', key: 'id' },
+			actions: { read: 'notes.read', insert: null, update: 'notes.write', delete: null },
+			insert: [],
+			update: ['note'],
+			version: null,
+			createdBy: null,
+			columns: { settled: { write: ['notes.admin', 'notes.share', 'notes.write'] } },
+		}
+		const map = accessMap({ ...notesArtifact, tables: { orders } })
+		const operations = (name: string) => map.actions.find((action) => action.action === name)?.tables[0]?.operations
+		expect(operations('notes.admin')).toEqual(['write settled'])
+		expect(operations('notes.share')).toEqual(['write settled'])
+		expect(operations('notes.write')).toEqual(['update', 'write settled'])
+		expect(operations('notes.read')).toEqual(['read'])
+	})
+
 	test('a path column, a reveal and a member reveal say where else a grant reaches the rows', () => {
 		const deals: TablePolicyArtifact = {
 			scope: { mode: 'dimension', dimension: 'note', key: 'id', container: { dimension: 'workspace', column: 'workspace_id' } },

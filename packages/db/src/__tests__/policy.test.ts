@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import { namesOf } from '../builtins'
 import { PolicyError } from '../errors'
-import { modelOf, readTables, tableModels } from '../policy'
+import { modelOf, readTables, tableModels, updatableBy } from '../policy'
 import { tablePolicies } from '../tables'
 import { tables } from './fixtures/tables'
 import { viewColumns, viewVocabulary } from './fixtures/view-layer'
@@ -510,11 +511,24 @@ describe('a list of actions per table action', () => {
 		expect(visible('notes.read', ['notes.admin'])).toEqual(visible('notes.read', 'notes.admin'))
 	})
 
-	test("a column's own write action is none of the update actions", () => {
+	test("a column's own write actions are not exactly the update actions, which update says", () => {
 		expect(() =>
-			withNotes({ read: 'notes.read', update: ['notes.write', 'notes.admin'] }, { update: [], columns: { title: { write: 'notes.admin' } } })
+			withNotes({ read: 'notes.read', update: ['notes.write', 'notes.admin'] }, {
+				update: [],
+				columns: { title: { write: ['notes.admin', 'notes.write'] } },
+			})
 		)
-			.toThrow("notes: columns.title.write names notes.admin, the table's update action; list title in update instead")
+			.toThrow("notes: columns.title.write names notes.admin, notes.write, the table's update action; list title in update instead")
+		// One of two update actions writes the column, the other does not: no update list says that.
+		const model = modelOf(
+			tableModels(
+				withNotes({ read: 'notes.read', update: ['notes.write', 'notes.admin'] }, { update: [], columns: { title: { write: 'notes.admin' } } }),
+			),
+			'notes',
+		)
+		if (model === undefined) throw new Error('notes has no model')
+		expect(namesOf(updatableBy(model, 'notes.admin'))).toEqual(['title'])
+		expect(namesOf(updatableBy(model, 'notes.write'))).toEqual([])
 	})
 })
 

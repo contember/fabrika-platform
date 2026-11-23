@@ -96,6 +96,20 @@ describe('table actions', () => {
 		expect(canonicalizeArtifact(withColumn('notes.admin')).tables['notes']?.columns['title']?.read).toBe('notes.admin')
 	})
 
+	test("a column's list of write actions is sorted, and one action stays its text", () => {
+		const notes = notesArtifact.tables['notes']
+		if (notes === undefined) throw new Error('the fixture has a notes table')
+		const withColumn = (write: readonly string[] | string): ContractArtifact => ({
+			...notesArtifact,
+			tables: { ...notesArtifact.tables, notes: { ...notes, columns: { ...notes.columns, title: { write } } } },
+		})
+		expect(canonicalizeArtifact(withColumn(['notes.write', 'notes.admin'])).tables['notes']?.columns['title']).toEqual({
+			write: ['notes.admin', 'notes.write'],
+		})
+		expect(canonicalArtifactJson(withColumn(['notes.write', 'notes.admin']))).toBe(canonicalArtifactJson(withColumn(['notes.admin', 'notes.write'])))
+		expect(canonicalizeArtifact(withColumn('notes.admin')).tables['notes']?.columns['title']).toEqual({ write: 'notes.admin' })
+	})
+
 	test('tableActions reads one action, a list, and none alike', () => {
 		expect(tableActions('notes.read')).toEqual(['notes.read'])
 		expect(tableActions(['notes.read', 'notes.admin'])).toEqual(['notes.read', 'notes.admin'])

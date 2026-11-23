@@ -1020,10 +1020,10 @@ export interface ColumnTestArtifact {
 	readonly gte?: ConditionLiteralArtifact | { readonly now: true }
 }
 
-/** A column's own read actions (one as its text, several as a list), its own write action, or both; an absent one is left out. */
+/** A column's own read actions, its own write actions (each one as its text, several as a list), or both; an absent one is left out. */
 export interface ColumnPolicyArtifact {
 	readonly read?: TableActionArtifact
-	readonly write?: string
+	readonly write?: TableActionArtifact
 }
 
 export type TableScope =

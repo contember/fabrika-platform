@@ -522,10 +522,12 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **A column with its own read actions** (`columns: { c: { read } }`, one action or a list) is read, filtered and
   sorted only by a capability of one of them; a read by a table read action it does not list never returns it. The
   artifact keeps one action as its text and several as a list (`columnReads` holds a list either way).
-- **A column with its own write action** (`columns: { assignee: { write: 'tasks.assign' } }`) is updated only by a
-  capability of that action, through a handle's `update` (`updatingRef` + `updatableBy`), and the table's update action
-  does not update it: such a column is not in `update`, its action is not the table's update action, and no stamped
-  column takes one (the parse refuses each). The action counts as one the table names, so its `Ref` reads its own row.
+- **A column with its own write actions** (`columns: { assignee: { write: 'tasks.assign' } }`, one action or a list) is
+  updated only by a capability of one of them, through a handle's `update` (`updatingRef` + `updatableBy`): such a
+  column is not in `update`, and no stamped column takes one (the parse refuses each). A table update action updates it
+  only when listed, beside its update list (`updatableBy` answers the union); a list of exactly the table's update
+  actions is refused, since `update` says that. `columnWrites` holds a list either way; the artifact keeps one action as
+  its text and several as a list. The action counts as one the table names, so its `Ref` reads its own row.
   It is in the artifact (`columns.<c>.write`), so the static reader reads it and a new one widens the approval diff.
 - **An update sets any subset of the columns its action updates, and never bumps the version alone.** One that sets
   none (`{}`, or only `undefined` values) is no UPDATE: `updateRow` selects its acknowledgement under the same scope,

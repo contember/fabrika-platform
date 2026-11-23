@@ -206,15 +206,15 @@ export type FilePolicies<Col extends string> = { readonly [C in Col]?: string }
 
 /**
  * A column's own actions. `read`: only a capability of one of those actions reads, filters or sorts by the column;
- * without one it falls back to the table's read action. `write`: only a capability of that action updates the column,
- * and the table's update action does not, so the column is not in `update`.
+ * without one it falls back to the table's read action. `write`: only a capability of one of those actions updates the
+ * column, so the column is not in `update`; a listed table update action writes it beside its update list.
  */
 export type ColumnPolicies<Col extends string, A extends string> = { readonly [C in Col]?: ColumnPolicy<A> }
 
-/** A column's own read actions (one, or a list as a table's read takes), its own write action, or both. */
+/** A column's own read actions and its own write actions (each one, or a list as a table operation takes), or both. */
 export interface ColumnPolicy<A extends string> {
 	readonly read?: TableAction<A>
-	readonly write?: A
+	readonly write?: TableAction<A>
 }
 
 /** A table no handler writes (a reference table) declares column read actions only. */
@@ -344,8 +344,8 @@ export interface TableModel {
 	readonly files: Readonly<Record<string, string>>
 	/** The columns that declare their own read actions, as declared (also those equal to the table's). */
 	readonly columnReads: Readonly<Record<string, readonly string[]>>
-	/** The columns that declare their own write action: only a capability of it updates them. */
-	readonly columnWrites: Readonly<Record<string, string>>
+	/** The columns that declare their own write actions, as declared: only a capability of one of them updates them. */
+	readonly columnWrites: Readonly<Record<string, readonly string[]>>
 	/** The columns of Postgres type `date`, read as `YYYY-MM-DD` text. */
 	readonly dates: NameSet
 	/** The `timestamp` and `timestamptz` columns: a write's text must be strict ISO 8601 with an offset. */
@@ -819,7 +819,7 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 	const byConvention = nameSet(unnamed)
 	const restricted: string[] = []
 	const columnReads: Record<string, readonly string[]> = {}
-	const columnWrites: Record<string, string> = {}
+	const columnWrites: Record<string, readonly string[]> = {}
 	const columnsInput = ownEntry(policy, 'columns')
 	const columnPolicies = columnsInput === undefined ? freeze({}) : plainRecord(columnsInput, `${table}: columns`)
 	const declared = ownKeys(columnPolicies)
@@ -846,7 +846,10 @@ function parseTable(table: string, columnList: unknown, policyInput: unknown, vo
 			throw new PolicyError(viewWrite(table))
 		}
 		if (writeInput !== undefined) {
-			setOwn(columnWrites, name, columnWrite(table, name, action(writeInput, `columns.${name}.write`), actions, update))
+			const writes = isArray(writeInput)
+				? distinctActions(table, writeInput, `columns.${name}.write`, action)
+				: freeze([action(writeInput, `columns.${name}.write`)])
+			setOwn(columnWrites, name, columnWrite(table, name, writes, actions, update))
 		}
 	}
 	const hidden = nameSet(restricted)
@@ -976,16 +979,24 @@ function parseFileColumns(
  * A column's own write action takes the column away from the table's update action: one action writes a column, so
  * the column is not in `update`, and the action is not the update action (that one lists the column in `update`).
  */
-function columnWrite(table: string, name: string, write: string, actions: ActionModel, update: NameSet): string {
+/**
+ * A column's own write actions. A table update action may be one of them: it then writes the column beside its update
+ * list. Naming exactly the table's update actions says what `update` says, so that form is refused.
+ */
+function columnWrite(table: string, name: string, writes: readonly string[], actions: ActionModel, update: NameSet): readonly string[] {
 	if (inSet(update, name)) {
 		throw new PolicyError(
-			`${table}: ${name} is in update, which the table's update action writes, and declares its own write action ${write}; remove it from update`,
+			`${table}: ${name} is in update, which the table's update action writes, and declares its own write action ${
+				writes.join(', ')
+			}; remove it from update`,
 		)
 	}
-	if (includes(actions.update, write)) {
-		throw new PolicyError(`${table}: columns.${name}.write names ${write}, the table's update action; list ${name} in update instead`)
+	if (everyIncluded(writes, actions.update) && everyIncluded(actions.update, writes)) {
+		throw new PolicyError(
+			`${table}: columns.${name}.write names ${writes.join(', ')}, the table's update action; list ${name} in update instead`,
+		)
 	}
-	return write
+	return writes
 }
 
 /**
@@ -1002,7 +1013,7 @@ function parseQueue(
 		readonly version: string | undefined
 		readonly actions: ActionModel
 		readonly update: NameSet
-		readonly columnWrites: Readonly<Record<string, string>>
+		readonly columnWrites: Readonly<Record<string, readonly string[]>>
 	},
 ): QueueModel {
 	const queue = plainRecord(input, `${table}: queue`)
@@ -1055,22 +1066,39 @@ function parseColumnSet(table: string, input: unknown, column: (name: unknown, f
 }
 
 /**
- * The columns a capability of `action` updates in `model`: the update list for the table's update action, the
- * columns that declare it as their own write action for any other; none for an action that writes nothing here.
+ * The columns a capability of `action` updates in `model`: the update list for a table update action, and every
+ * column that lists it among its own write actions; none for an action that writes nothing here.
  */
 export function updatableBy(model: TableModel, action: string): NameSet {
-	if (includes(model.actions.update, action)) {
+	const owned = columnsWrittenBy(model, action)
+	if (!includes(model.actions.update, action)) {
+		return nameSet(owned)
+	}
+	if (owned.length === 0) {
 		return model.update
 	}
+	const listed = namesOf(model.update)
+	const columns: string[] = []
+	for (let index = 0; index < listed.length; index++) {
+		columns[columns.length] = listed[index] ?? ''
+	}
+	for (let index = 0; index < owned.length; index++) {
+		columns[columns.length] = owned[index] ?? ''
+	}
+	return nameSet(columns)
+}
+
+/** The columns that list `action` among their own write actions. */
+function columnsWrittenBy(model: TableModel, action: string): readonly string[] {
 	const names = ownKeys(model.columnWrites)
 	const columns: string[] = []
 	for (let index = 0; index < names.length; index++) {
 		const name = names[index] ?? ''
-		if (model.columnWrites[name] === action) {
+		if (includes(ownEntry(model.columnWrites, name) ?? [], action)) {
 			columns[columns.length] = name
 		}
 	}
-	return nameSet(columns)
+	return columns
 }
 
 /**
@@ -1097,13 +1125,7 @@ export function namesAction(model: TableModel, action: string): boolean {
 	if (includes(read, action) || includes(insert, action) || includes(update, action) || includes(remove, action)) {
 		return true
 	}
-	const columns = ownKeys(model.columnWrites)
-	for (let index = 0; index < columns.length; index++) {
-		if (model.columnWrites[columns[index] ?? ''] === action) {
-			return true
-		}
-	}
-	return false
+	return columnsWrittenBy(model, action).length > 0
 }
 
 /**
@@ -1186,9 +1208,12 @@ export function updateActions(model: TableModel): readonly string[] {
 	}
 	const names = ownKeys(model.columnWrites)
 	for (let index = 0; index < names.length; index++) {
-		const write = model.columnWrites[names[index] ?? '']
-		if (write !== undefined && !includes(actions, write)) {
-			actions[actions.length] = write
+		const writes = ownEntry(model.columnWrites, names[index] ?? '') ?? []
+		for (let position = 0; position < writes.length; position++) {
+			const write = writes[position] ?? ''
+			if (!includes(actions, write)) {
+				actions[actions.length] = write
+			}
 		}
 	}
 	return actions
@@ -1755,7 +1780,10 @@ function tableActionNames(table: LinkedTable): NameSet {
 	}
 	const writes = ownKeys(table.columnWrites)
 	for (let index = 0; index < writes.length; index++) {
-		names[names.length] = ownEntry(table.columnWrites, writes[index] ?? '') ?? ''
+		const actions = ownEntry(table.columnWrites, writes[index] ?? '') ?? []
+		for (let position = 0; position < actions.length; position++) {
+			names[names.length] = actions[position] ?? ''
+		}
 	}
 	return nameSet(names)
 }
@@ -1772,7 +1800,10 @@ function writeActionNames(table: LinkedTable): NameSet {
 	}
 	const writes = ownKeys(table.columnWrites)
 	for (let index = 0; index < writes.length; index++) {
-		names[names.length] = ownEntry(table.columnWrites, writes[index] ?? '') ?? ''
+		const actions = ownEntry(table.columnWrites, writes[index] ?? '') ?? []
+		for (let position = 0; position < actions.length; position++) {
+			names[names.length] = actions[position] ?? ''
+		}
 	}
 	return nameSet(names)
 }

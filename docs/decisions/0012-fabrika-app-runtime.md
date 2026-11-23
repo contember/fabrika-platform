@@ -287,7 +287,10 @@ minted, the site's kind (query, mutation, job, webhook, export) and its declarat
   read by none, so nothing becomes readable by omission. A
   capability reads its own target, except a column whose own read actions leave its action out
   ([ADR-0050](0050-approved-access.md) §3). A column's read takes one action or a list, as a table operation does, so a
-  column many handlers read can still be hidden from one or two actions that read its table. Writes answer `{ id, version }`; `update` and `remove` take
+  column many handlers read can still be hidden from one or two actions that read its table. A column's `write` takes
+  one action or a list too, so several actions update one column without the table's whole update list; a listed table
+  update action updates it beside that list, and a list of exactly the table's update actions is refused, since the
+  update list says it. Writes answer `{ id, version }`; `update` and `remove` take
   `expectVersion`; `getForUpdate()` is the precondition read a concurrent write waits behind. `fromRow(Schema, row)`
   turns a row into an output.
 - **The transaction is the invocation's.** An endpoint request and a webhook delivery each run every statement in

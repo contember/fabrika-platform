@@ -378,10 +378,11 @@ whole table or a whole column stays a removal.
 - **A column read action** (`columns: { c: { read } }`, one action or a list) is the only action, or the listed
   actions, that read, filter and sort that column. A new one narrows; a removed one widens (above); each action a list
   gains widens and each it loses narrows.
-- **A column write action** (`columns: { c: { write } }`) lets a capability of that action update exactly its
-  columns through the target's `update`; the table's update action no longer updates them. A new or a changed
-  column write action widens. A removed one narrows. A column moved from the table's update list under its own write
-  action gives a removal line and a widening line.
+- **A column write action** (`columns: { c: { write } }`, one action or a list) lets a capability of that action, or of
+  any listed one, update exactly its columns through the target's `update`; a table update action updates them only
+  when it is listed, beside its update list. A new or a changed column write action widens. A removed one narrows;
+  each action a list gains widens and each it loses narrows. A column moved from the table's update list under its own
+  write action gives a removal line and a widening line.
 
 **Steps off the paved road widen with closer review.** A site is keyed by its identity — the endpoint id, or the
 job — and each effect of its declaration is compared on its own, so a handler body that moves with the same
