@@ -10,7 +10,8 @@ Every procedure handles key material in files, never on a command line, in a scr
 umask 077 && cd "$(mktemp -d)"
 ```
 
-Delete that directory when the procedure is done; keep the old value only where the procedure says.
+Delete that directory when the procedure is done; keep the old value only where the procedure says. Every `zops`
+command below acts on the installation's project: pass `-P <project id>` or set `ZEROPS_PROJECT`.
 
 ## The proxy secret of an application environment
 
@@ -38,8 +39,9 @@ writes it to both sides.
    `npx wrangler d1 execute prod-fabrika-control --remote --command "<the statement>"` (an installation created before
    the `fabrika` names, whose GitHub Environment has no `FABRIKA_CLOUDFLARE_NAMES`, uses `prod-vozka`).
 
-2. **Note the commit the environment runs:** `fabrika control runs list --app=<app> --env=<env> --limit=5` lists its
-   runs; take the commit of the newest `succeeded` one. Deploying that commit changes nothing but the secret.
+2. **Note the commit the environment runs:** `fabrika control runs list --app=<app> --env=<env> --limit=5 --json` lists
+   its runs; take the `commitSha` of the newest `succeeded` one, not its `ref`, which may have moved since. Deploying
+   that commit changes nothing but the secret.
 
 3. **Delete the record and the vault row**, in this order, with the same tool as step 1:
 
@@ -140,8 +142,9 @@ switch (at most 300 s old) is refused, once its verifier has refetched, until it
   zops env set FABRIKA_IAM_SIGNING_KEYS - iam --sensitive --restart < publish.json
   ```
 
-  Or edit the secret variable of `iam` in the Zerops GUI and restart the service. IAM refuses to start without a key,
-  so a restart between the two commands leaves sign-in down until the second one runs.
+  Or edit the secret variable of `iam` in the Zerops GUI and restart the service. Each restart interrupts sign-in and
+  token minting while IAM's containers are replaced. IAM refuses to start without a key, so a restart between the two
+  commands leaves sign-in down until the second one runs.
 - **Cloudflare:** write the GitHub Environment secret and run the platform workflow, which deploys IAM, Operations and
   Control at the pinned release:
 
@@ -177,16 +180,20 @@ Control's database is D1, which the script cannot reach, and Control's Worker ca
 
 Control is stopped for the whole procedure. Applications, IAM and the proxies keep serving; the console, deploys, the
 GitHub push webhooks (a push during the window is not deployed: redeliver it from the GitHub App's advanced settings,
-or deploy by hand afterwards), Control's maintenance pass and the mail relay (IAM's sign-in and invitation mail) stop
-with it.
+or deploy by hand afterwards), Control's maintenance pass and the mail relay stop with it. The relay carries IAM's
+sign-in and invitation mail and the installation mail of applications on framework 0.7 or newer
+([outbound-email.md](outbound-email.md)): a message sent during the window fails as the relay is unreachable.
 
 1. **Prepare** a checkout of the installation's release (the tag in the sidecar's `fabrika.ref`) with `bun install`,
    Control's database URL in a file `control-db-url`
    ([Reaching Control's database on Zerops](#reaching-controls-database-on-zerops)), and the current key from the
    secrets file:
    `( set -a && . <secrets file> && set +a && printf '%s' "$FABRIKA_CONTROL_VAULT_KEY" ) > vault-key.old`.
-2. **Generate the new key:** `head -c 32 /dev/urandom | base64 > vault-key.new`. It is base64, not base64url.
-3. **Back up the database:** `zops backup create db`. That backup opens only with the current key.
+2. **Generate the new key:** `head -c 32 /dev/urandom | base64 > vault-key.new`. It is base64, not base64url. Copy it
+   into the secrets file now, as a line `FABRIKA_CONTROL_VAULT_KEY_NEW='<the new key>'`: from step 5 on, the vault opens
+   only with it, and a scratch directory is no place for its one copy.
+3. **Back up the database:** `zops backup create db`, then `zops backup list db` until the new backup is listed:
+   the command returns while a long backup still runs. That backup opens only with the current key.
 4. **Stop Control:** `zops service stop control`.
 5. **Run the rotation:**
 
@@ -203,7 +210,8 @@ with it.
    zops env set FABRIKA_CONTROL_VAULT_KEY - control --sensitive < vault-key.new
    ```
 
-   Then replace the `FABRIKA_CONTROL_VAULT_KEY='…'` line of the secrets file with the new key.
+   Then, in the secrets file, put the new key on the `FABRIKA_CONTROL_VAULT_KEY='…'` line and delete the
+   `FABRIKA_CONTROL_VAULT_KEY_NEW` line.
 7. **Start Control:** `zops service start control`. Check: step 5's command with `--check` appended ends `complete`
    (it writes nothing), and a deploy of an environment that holds vault keys succeeds.
 8. **Keep the old key** in `vault-key.old` for as long as `db` keeps backups taken before step 5: they open only with
@@ -211,8 +219,10 @@ with it.
 
 ### An interrupted run
 
-- **The run stopped (lost connection, killed process, refused row):** the transaction did not commit, so every row is
-  still under the current key and Control has not been given the new one. `--check` shows it. Run step 5 again.
+- **The run stopped (lost connection, killed process, refused row):** run step 5 with `--check` first. The re-wrap is
+  one transaction, so it shows either every row under the current key (nothing committed) or every row under the new
+  one (the commit landed before the run stopped). Then run step 5 again, which re-wraps what is left or nothing, and
+  continue at step 6.
 - **A row neither key opens:** the run refuses before writing anything and names the row ids. When every row is
   counted so, `vault-key.old` is not the key Control runs with. Such a row was sealed
   under a third key or altered in the database. Find out which before you delete anything: a value Control cannot open

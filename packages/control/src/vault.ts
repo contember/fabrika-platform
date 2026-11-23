@@ -18,7 +18,7 @@
 //     decrypting with the wrong key — fails with an OperationError on decrypt (never silent garbage).
 //   * ROTATION: `rotate(ref, value)` re-encrypts a single value (new DEK + IVs). `reencryptAll(newKek)`
 //     rotates the MASTER key by unwrapping each DEK with the old KEK and re-wrapping with the new one —
-//     the value ciphertext is untouched, so no plaintext value is ever exposed during a master rotation.
+//     the value ciphertext is untouched. It opens each value in memory to tell which key seals it; no value leaves it.
 //
 // FABRIKA_CONTROL_VAULT_KEY provisioning (real CF): generate 32 random bytes, base64 them, and set the Worker
 // secret once per environment:
@@ -317,7 +317,8 @@ export class Vault {
 	 * MASTER-KEY rotation: re-wrap the DEK of every row this vault's key opens under `newBase64MasterKey`, leaving the
 	 * value ciphertext untouched, in ONE transaction, so an interrupted run changes nothing. A row the new key already
 	 * opens is skipped, so a re-run finishes what a write under the old key left behind; a row neither key opens refuses
-	 * the run before any write. Returns the count re-wrapped. Never exposes a plaintext value.
+	 * the run before any write. Returns the number of rows it sent a re-wrap for. Opens each value in memory only to tell
+	 * which key seals it; never returns or logs one.
 	 */
 	async reencryptAll(newBase64MasterKey: string): Promise<number> {
 		const newKey = await importMasterKey(newBase64MasterKey)

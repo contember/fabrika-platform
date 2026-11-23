@@ -112,12 +112,21 @@ async function main(): Promise<number> {
 	}
 }
 
+/** The driver's error code (`ERR_POSTGRES_…`, a SQLSTATE, `ECONNREFUSED`), when it is one: a bare token, no URL. */
+function errorCode(error: unknown): string {
+	if (!(error instanceof Error) || !('code' in error)) return ''
+	const code = error.code
+	return typeof code === 'string' && /^[A-Z0-9_]{1,64}$/.test(code) ? ` (${code})` : ''
+}
+
 if (import.meta.main) {
 	main().then(
 		(code) => process.exit(code),
 		(error: unknown) => {
-			// Only our own refusals are printed: a driver error may carry the database URL.
-			console.error(error instanceof VaultKeyRotationRefused ? `vault key rotation refused: ${error.message}` : 'vault key rotation failed')
+			// Only our own refusals are printed whole: a driver error may carry the database URL, its code does not.
+			console.error(
+				error instanceof VaultKeyRotationRefused ? `vault key rotation refused: ${error.message}` : `vault key rotation failed${errorCode(error)}`,
+			)
 			process.exit(1)
 		},
 	)
