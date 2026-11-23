@@ -415,7 +415,10 @@ describe('OAUTH_CONFIG', () => {
 		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, admission: {} }))).toThrow()
 		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, clients: [{ ...valid.clients[0], metadataUrl: 'http://x.test/cimd' }] }))).toThrow()
 		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, resources: [...valid.resources, ...valid.resources] }))).toThrow()
-		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, clients: [] }))).toThrow()
+	})
+
+	test("no MCP client is a valid config: the command-line client is IAM's own and never listed", () => {
+		expect(parseOAuthConfig(JSON.stringify({ ...valid, clients: [] }))?.clients).toEqual([])
 	})
 })
 

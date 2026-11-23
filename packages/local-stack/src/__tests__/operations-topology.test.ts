@@ -40,11 +40,12 @@ describe('local control topology', () => {
 		expect(selected('GET', '/healthz')).toBe('health:')
 		expect(selected('GET', '/api/health')).toBe('health:')
 		expect(selected('POST', '/webhooks/github/local-keyed-alpha')).toBe('protocol:')
-		// A machine key or a logged-in human on the three JSON mounts; humans only for the SPA and every
-		// path nobody declared, so no anonymous request ever reaches them.
-		for (const path of ['/api/rpc', '/iam/admin/rpc', '/operations/api/rpc']) {
-			expect(selected('POST', path)).toBe('service:human+machine')
+		// A machine key or a logged-in human on the three JSON mounts, and the command-line client's resource token on
+		// the two RPC ones; humans only for the SPA and every path nobody declared, so no anonymous request reaches them.
+		for (const path of ['/api/rpc', '/operations/api/rpc']) {
+			expect(selected('POST', path)).toBe('service:human+machine+oauth')
 		}
+		expect(selected('POST', '/iam/admin/rpc')).toBe('service:human+machine')
 		expect(selected('GET', '/')).toBe('service:human')
 		expect(selected('GET', '/assets/console.js')).toBe('service:human')
 		// MCP is off locally unless clients are named: `/mcp` is a session row the service answers 404.

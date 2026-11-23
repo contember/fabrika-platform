@@ -2081,7 +2081,7 @@ describe('namespace resource claims across a namespace job', () => {
 			FABRIKA_ZEROPS_PROXY_SOURCE_JSON: JSON.stringify(proxySource),
 			FABRIKA_ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
 			FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
-			FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
+			FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false, cli: false }),
 			FABRIKA_ZEROPS_ACCESS_TOKEN: 'zt-placeholder',
 		}, zeropsGitHubSources(env).port)
 		const claims = zerops.namespaces?.namespaceResourceClaims

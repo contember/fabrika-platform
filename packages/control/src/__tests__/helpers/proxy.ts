@@ -74,7 +74,11 @@ export function consoleBehindProxy(options: ConsoleProxyOptions): (request: Requ
  * forwarded unchanged, and the service answers it 404 itself.
  */
 export function proxiedRequest(request: Request, options: { readonly mcp: boolean } = { mcp: false }): Request {
-	const plan = planEndpoint(compileEndpointTable(controlServiceContract(options)), request.method, rawRequestTarget(request.url).pathname)
+	const plan = planEndpoint(
+		compileEndpointTable(controlServiceContract({ mcp: options.mcp, cli: options.mcp })),
+		request.method,
+		rawRequestTarget(request.url).pathname,
+	)
 	if (plan.outcome !== 'endpoint' || request.headers.has(ENDPOINT_HEADER)) return request
 	const headers = new Headers(request.headers)
 	headers.set(ENDPOINT_HEADER, formatEndpointHeader(plan.endpoint.id, requirementDigest({ ...plan.endpoint, delegation: null })))

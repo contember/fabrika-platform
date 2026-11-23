@@ -29,7 +29,14 @@ const TEMPLATE: PlatformProxyManifestTemplate = {
 			port: 8080,
 			upstream: 'control',
 			table: TABLE,
-			oauthResource: { path: '/mcp', scopes: ['authoring'], scopeGrants: [{ scope: 'authoring', actions: ['deploy.read'] }] },
+			oauth: {
+				resources: [{ path: '/api/rpc', scopes: ['deploy'], scopeGrants: [{ scope: 'deploy', parameter: 'app', actions: ['deploy.trigger'] }] }],
+				table: TABLE,
+				mcp: {
+					resource: { path: '/mcp', scopes: ['authoring'], defaultScopes: ['authoring'], scopeGrants: [{ scope: 'authoring', actions: ['deploy.read'] }] },
+					table: TABLE,
+				},
+			},
 		},
 		{ id: 'operations', service: 'operations', port: 8080, upstream: 'operations', table: TABLE },
 	],
@@ -42,6 +49,12 @@ const COMPOSITION: PlatformProxyComposition = {
 		operations: { hosts: ['operations.example.test'] },
 	},
 	authorizationServer: 'https://iam.example.test',
+	mcp: true,
+}
+const RPC_RESOURCE = {
+	app: 'vozka',
+	resource: 'https://console.example.test/api/rpc',
+	scopeGrants: [{ scope: 'deploy', parameter: 'app', permissions: [{ action: 'deploy.trigger' }] }],
 }
 
 describe('the MCP client list', () => {
@@ -64,12 +77,21 @@ describe("IAM's OAuth configuration", () => {
 	test('an external client gets the RFC 8707 resource with its scope ceiling, like any other client', () => {
 		expect(platformIamOAuthConfig(TEMPLATE, COMPOSITION, [EXTERNAL])).toEqual({
 			clients: [EXTERNAL],
-			resources: [{
+			resources: [RPC_RESOURCE, {
 				app: 'vozka',
 				resource: 'https://console.example.test/mcp',
 				defaultScopes: ['authoring'],
 				scopeGrants: [{ scope: 'authoring', permissions: [{ action: 'deploy.read' }] }],
 			}],
 		})
+	})
+
+	test('without MCP authoring, it names no client and only the command-line resources', () => {
+		expect(platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [])).toEqual({ clients: [], resources: [RPC_RESOURCE] })
+	})
+
+	test('without an authorization server there is nothing to configure', () => {
+		const { authorizationServer: _, ...plain } = COMPOSITION
+		expect(() => platformIamOAuthConfig(TEMPLATE, { ...plain, mcp: false }, [])).toThrow('no OAuth resource')
 	})
 })

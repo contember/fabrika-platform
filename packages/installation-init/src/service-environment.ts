@@ -22,7 +22,7 @@ export type PlatformService = 'iam' | 'operations' | 'control' | 'proxy'
 /** Each service's variables, in the order they are written. */
 export type PlatformServiceEnvironment = Readonly<Record<PlatformService, ReadonlyMap<string, string>>>
 
-/** IAM's OAuth configuration for MCP clients (ADR-0049): written only when the installation enables MCP authoring. */
+/** IAM's OAuth configuration (ADR-0049): written by every deploy of an installation that serves OAuth over https. */
 export const IAM_OAUTH_CONFIG_VARIABLE = 'FABRIKA_IAM_OAUTH_CONFIG'
 
 /** IAM's OIDC client secret, as IAM's Bun runtime reads it. The operator's credential: written sensitive, never generated. */
@@ -182,15 +182,16 @@ export interface DeployedServiceInput extends PlatformPlacementInput {
 	readonly provisioningKey: string
 	/** The digest of the console table the deploy's manifest publishes (`platformServiceTableDigest`). */
 	readonly controlTableDigest: string
-	/** Present only when the installation enables MCP authoring. */
+	/** Present when the installation serves OAuth: the command-line client's resources, and MCP's when it is on. */
 	readonly oauthConfig?: IamOAuthConfig
 }
 
 /**
  * The per-installation configuration a deploy writes, derived from where the installation answers.
  *
- * IAM's OAuth configuration is present only when MCP authoring is enabled; without it the variable is left
- * as it is, and the manifest — whose `/mcp` row then admits no OAuth token — is what turns MCP off.
+ * IAM's OAuth configuration is present when the installation serves OAuth, and then rewritten by every deploy, so
+ * turning MCP off removes its resource and clients. Without it the variable is left as it is, and the manifest, whose
+ * rows then admit no OAuth token, is what turns OAuth off.
  */
 export const deployedServiceEnvironment = (input: DeployedServiceInput): PlatformServiceEnvironment => {
 	const iamOrigin = platformOrigin(input.scheme, input.hosts.iam)

@@ -54,8 +54,10 @@ export {
 } from './protection'
 export {
 	type PlatformHosts,
+	type PlatformOAuthApp,
 	type PlatformOAuthResourceTemplate,
 	type PlatformOAuthScopeGrant,
+	platformOAuthServed,
 	platformOrigin,
 	type PlatformProxyApp,
 	platformProxyAppFor,

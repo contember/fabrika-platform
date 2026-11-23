@@ -312,6 +312,15 @@ const CONSOLE_MCP: OAuthProtectedResource = {
 	authorizationServers: [ISSUER],
 	scopesSupported: [CONTROL_MCP_SCOPE],
 }
+/** The command-line client's resources: the console's two RPC paths, each its own resource. */
+const consoleRpc = (path: string): OAuthProtectedResource => ({
+	resource: `${CONSOLE_ORIGIN}${path}`,
+	resourceMetadata: `${CONSOLE_ORIGIN}/.well-known/oauth-protected-resource${path}`,
+	authorizationServers: [ISSUER],
+	scopesSupported: ['read', 'deploy'],
+})
+const CONSOLE_RPC = consoleRpc('/api/rpc')
+const CONSOLE_OPERATIONS_RPC = consoleRpc('/operations/api/rpc')
 
 /** The entry a producer publishes for the table, parsed as the proxy loads it. */
 function entryOf(table: InstallationProxyTable, oauthResources?: OAuthProtectedResource[]): ProxyApp {
@@ -321,8 +330,12 @@ function entryOf(table: InstallationProxyTable, oauthResources?: OAuthProtectedR
 	return parsed
 }
 
-const CONTROL = entryOf(serviceProxyTable(controlServiceContract({ mcp: true }), { oauth: true }), [CONSOLE_MCP])
-const CONTROL_WITHOUT_MCP = entryOf(serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }))
+const CONTROL = entryOf(serviceProxyTable(controlServiceContract({ mcp: true, cli: true }), { oauth: true }), [
+	CONSOLE_RPC,
+	CONSOLE_OPERATIONS_RPC,
+	CONSOLE_MCP,
+])
+const CONTROL_WITHOUT_MCP = entryOf(serviceProxyTable(controlServiceContract({ mcp: false, cli: false }), { oauth: false }))
 const IAM = entryOf(serviceProxyTable(iamServiceContract(IAM_INSTALLATION_SERVICE_OPTIONS), { oauth: false }))
 const OPERATIONS = entryOf(serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false }))
 
@@ -423,12 +436,34 @@ describe('the real installation tables refuse what no service may receive', () =
 		)
 	}
 
-	test('Control: a bearer that is not a px_ key on the console RPC is a 401 invalid_key with no IAM call', async () => {
-		const { iam, response, reason } = await decide(CONTROL, {}, keyRpc('eyJhbGciOi.jwt'))
+	test('Control without OAuth: a bearer that is not a px_ key on the console RPC is a 401 invalid_key with no IAM call', async () => {
+		const { iam, response, reason } = await decide(CONTROL_WITHOUT_MCP, {}, keyRpc('eyJhbGciOi.jwt'))
 		expectDenied(response, 401)
 		expect(reason).toBe('invalid_key')
 		expect(iam.mintFromKeyCalls + iam.mintTokenCalls).toBe(0)
 		expect(challenge(response)).toBeNull()
+	})
+
+	test('Control with OAuth: such a bearer on the console RPC is a 401 invalid_token naming that RPC resource, with no IAM call', async () => {
+		const { iam, response, reason } = await decide(CONTROL, {}, keyRpc('eyJhbGciOi.jwt'))
+		expectDenied(response, 401)
+		expect(reason).toBe('invalid_token')
+		expect(iam.mintFromKeyCalls + iam.mintTokenCalls).toBe(0)
+		expect(challenge(response)).toBe(`Bearer resource_metadata="${CONSOLE_RPC.resourceMetadata}", error="invalid_token"`)
+	})
+
+	test('Control: a resource token for one RPC path, the MCP endpoint or another app is refused on the console RPC', async () => {
+		for (
+			const options of [{ resource: CONSOLE_OPERATIONS_RPC.resource }, { resource: CONSOLE_MCP.resource }, {
+				resource: CONSOLE_RPC.resource,
+				app: 'other',
+			}]
+		) {
+			const bearer = await signResourceToken({ ...options, scopes: ['deploy:alpha'] })
+			const { response, reason } = await decide(CONTROL, {}, keyRpc(bearer))
+			expectDenied(response, 401)
+			expect(reason).toBe('invalid_token')
+		}
 	})
 
 	test('Control: an OAuth token without the authoring scope on /mcp is a 403 insufficient_scope with the challenge', async () => {
@@ -439,5 +474,17 @@ describe('the real installation tables refuse what no service may receive', () =
 		expect(challenge(response)).toBe(
 			`Bearer resource_metadata="${CONSOLE_MCP.resourceMetadata}", error="insufficient_scope", scope="${CONTROL_MCP_SCOPE}"`,
 		)
+	})
+})
+
+describe("the command-line client's resource tokens on the console", () => {
+	test('a token for each RPC path reaches that path whatever its scopes, carried to the service as is', async () => {
+		for (const [resource, path] of [[CONSOLE_RPC.resource, '/api/rpc'], [CONSOLE_OPERATIONS_RPC.resource, '/operations/api/rpc']] as const) {
+			const bearer = await signResourceToken({ resource, scopes: ['deploy:alpha'] })
+			const { iam, response } = await decide(CONTROL, {}, { ...keyRpc(bearer), path })
+			expect(response.status).toBe(204)
+			expect(response.headers.get(PROXY_TOKEN_HEADER)).toBe(bearer)
+			expect(iam.mintFromKeyCalls + iam.mintTokenCalls).toBe(0)
+		}
 	})
 })

@@ -39,8 +39,9 @@ export function createFetchHandler(
 	provider: Runtime['provider'],
 	sourceConnection: SourceConnectionPort,
 	mcp: McpRoute | null = null,
+	cli = false,
 ): (request: Request) => Promise<Response> {
-	return createControlBunHandler(env, provider, sourceConnection, mcp).fetch
+	return createControlBunHandler(env, provider, sourceConnection, mcp, cli).fetch
 }
 
 function createControlBunHandler(
@@ -48,8 +49,9 @@ function createControlBunHandler(
 	provider: Runtime['provider'],
 	sourceConnection: SourceConnectionPort,
 	mcp: McpRoute | null,
+	cli: boolean,
 ): BunHandler {
-	return createBunHandler(createControlApp(mcp), { env, provider, sourceConnection }, {
+	return createBunHandler(createControlApp(mcp, cli), { env, provider, sourceConnection }, {
 		onBackgroundError() {
 			console.error('control background task failed')
 		},
@@ -154,7 +156,7 @@ export async function startControlServer(runtime: Runtime): Promise<void> {
 	)
 	deployConsumer.start()
 	mailConsumer.start()
-	const appHandler = createControlBunHandler(runtime.env, runtime.provider, runtime.sourceConnection, runtime.mcp)
+	const appHandler = createControlBunHandler(runtime.env, runtime.provider, runtime.sourceConnection, runtime.mcp, runtime.cli)
 
 	const server = Bun.serve({
 		port: runtime.config.port,

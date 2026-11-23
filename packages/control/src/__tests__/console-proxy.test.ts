@@ -2,6 +2,7 @@
 // what the proxy answers instead. The upstream is Control's own application, so an admitted request is served.
 
 import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { CONTROL_CLI_PRESETS, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { CONTROL_MCP_SCOPE, controlMcpResource, controlMcpResourceMetadata, controlServiceContract } from '../../fabrika.service'
@@ -35,12 +36,20 @@ function console_(options: { readonly mcp: boolean }): (request: Request) => Pro
 		FABRIKA_CONTROL_DOMAIN: CONSOLE_ORIGIN,
 		...testIamEnv,
 	}
-	const app = createControlApp(options.mcp ? () => Promise.resolve(new Response('mcp')) : null)
+	const app = createControlApp(options.mcp ? () => Promise.resolve(new Response('mcp')) : null, options.mcp)
 	return consoleBehindProxy({
-		table: serviceProxyTable(controlServiceContract(options), { oauth: options.mcp }),
+		table: serviceProxyTable(controlServiceContract({ mcp: options.mcp, cli: options.mcp }), { oauth: options.mcp }),
 		...(options.mcp
 			? {
-				oauthResources: [{ resource: RESOURCE, resourceMetadata: METADATA, authorizationServers: [TEST_ISSUER], scopesSupported: [CONTROL_MCP_SCOPE] }],
+				oauthResources: [
+					...[CONTROL_RPC_PATH, CONTROL_OPERATIONS_RPC_PATH].map((path) => ({
+						resource: `${CONSOLE_ORIGIN}${path}`,
+						resourceMetadata: `${CONSOLE_ORIGIN}/.well-known/oauth-protected-resource${path}`,
+						authorizationServers: [TEST_ISSUER],
+						scopesSupported: [...CONTROL_CLI_PRESETS],
+					})),
+					{ resource: RESOURCE, resourceMetadata: METADATA, authorizationServers: [TEST_ISSUER], scopesSupported: [CONTROL_MCP_SCOPE] },
+				],
 			}
 			: {}),
 		iam: { session: adminToken, keys },

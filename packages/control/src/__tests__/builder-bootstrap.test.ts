@@ -54,7 +54,9 @@ test('discovery returns only configured safe origins and provider; exact public 
 		expect(response('/.well-known/fabrika-builder', 'GET', { ...configured, FABRIKA_IAM_ISSUER: bad }).status).toBe(503)
 	}
 	expect(
-		controlServiceContract({ mcp: false }).endpoints.filter((row) => row.kind === 'protocol' && row.path.includes('builder')).map((row) => row.path),
+		controlServiceContract({ mcp: false, cli: false }).endpoints.filter((row) => row.kind === 'protocol' && row.path.includes('builder')).map((row) =>
+			row.path
+		),
 	).toEqual(['/.well-known/fabrika-builder', '/builder/connect'])
 })
 

@@ -14,7 +14,7 @@ import { createRuntime } from '../zerops/runtime'
 
 const base = {
 	FABRIKA_CONTROL_DATABASE_URL: 'postgres://user:pw@127.0.0.1:1/none',
-	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
+	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false, cli: false }),
 }
 
 describe('the control plane environment name', () => {

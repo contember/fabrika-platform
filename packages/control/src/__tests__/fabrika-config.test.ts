@@ -110,7 +110,7 @@ describe('defineApp(control config)', () => {
 		// SPA. Only the built bundles skip the Worker, and no row of the table may live under them.
 		expect(worker.options.assets?.run_worker_first).toEqual(['/*', '!/assets/*'])
 		for (const mcp of [false, true]) {
-			for (const endpoint of controlServiceContract({ mcp }).endpoints) expect(endpoint.path.startsWith('/assets/')).toBe(false)
+			for (const endpoint of controlServiceContract({ mcp, cli: mcp }).endpoints) expect(endpoint.path.startsWith('/assets/')).toBe(false)
 		}
 	})
 

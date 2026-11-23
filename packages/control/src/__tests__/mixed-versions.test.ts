@@ -66,7 +66,7 @@ function preTableControl(env: Env): (request: Request) => Promise<Response> {
 
 describe('the service from before the table, behind the proxy that publishes it (the proxy-first upgrade)', () => {
 	const fetch = consoleBehindProxy({
-		table: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }),
+		table: serviceProxyTable(controlServiceContract({ mcp: false, cli: false }), { oauth: false }),
 		iam: { session: adminToken, keys: { px_machine: machineToken } },
 		upstream: preTableControl(serviceEnv()),
 	})
@@ -96,7 +96,7 @@ describe('the service from before the table, behind the proxy that publishes it 
 describe('the service behind the proxy that publishes its table', () => {
 	const env = serviceEnv()
 	const fetch = consoleBehindProxy({
-		table: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }),
+		table: serviceProxyTable(controlServiceContract({ mcp: false, cli: false }), { oauth: false }),
 		iam: { session: adminToken, keys: { px_machine: machineToken } },
 		upstream: (request) =>
 			controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, { waitUntil() {} }),

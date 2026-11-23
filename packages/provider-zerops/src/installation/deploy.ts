@@ -795,17 +795,20 @@ export const deployPreparedPlatform = async (
 			control: { hosts: [placement.hosts.control] },
 			operations: { hosts: [placement.hosts.operations] },
 		},
-		...(input.mcpClients === undefined ? {} : { authorizationServer: platformOrigin(placement.scheme, placement.hosts.iam) }),
+		// Control reads a bare `FABRIKA_CONTROL_DOMAIN` as https, so on plain http no resource would match its own.
+		...(placement.scheme === 'https' ? { authorizationServer: platformOrigin(placement.scheme, placement.hosts.iam) } : {}),
+		mcp: input.mcpClients !== undefined,
 	}
 	const platformManifest = resolvePlatformProxyManifest(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition)
-	const oauthConfig = input.mcpClients === undefined
+	const oauthConfig = composition.authorizationServer === undefined
 		? undefined
-		: platformIamOAuthConfig(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition, input.mcpClients)
+		: platformIamOAuthConfig(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition, input.mcpClients ?? [])
 	log.info(
 		oauthConfig === undefined
-			? 'MCP authoring: off'
-			: `MCP authoring: on, ${oauthConfig.clients.length} client(s), resource(s) ${oauthConfig.resources.map((entry) => entry.resource).join(', ')}`,
+			? 'OAuth: off (plain http), so neither the command line nor MCP clients get tokens'
+			: `OAuth: resource(s) ${oauthConfig.resources.map((entry) => entry.resource).join(', ')}`,
 	)
+	log.info(input.mcpClients === undefined ? 'MCP authoring: off' : `MCP authoring: on, ${input.mcpClients.length} client(s)`)
 	log.info(`${platformManifest.apps.length} app(s): ${platformManifest.apps.map((app) => app.id).join(', ')}`)
 
 	log.step('Write the service environment')
@@ -840,7 +843,7 @@ export const deployPreparedPlatform = async (
 		const liveOAuthConfig = live.get(IAM_OAUTH_CONFIG_VARIABLE)
 		const oauthStillSet = liveOAuthConfig !== undefined && (liveOAuthConfig.sensitive || liveOAuthConfig.content.trim() !== '')
 		if (hostname === 'iam' && oauthConfig === undefined && oauthStillSet) {
-			log.warn(`iam: MCP authoring is off but ${IAM_OAUTH_CONFIG_VARIABLE} is still set; IAM keeps issuing MCP tokens until it is removed`)
+			log.warn(`iam: OAuth is off but ${IAM_OAUTH_CONFIG_VARIABLE} is still set; IAM keeps issuing OAuth tokens until it is removed`)
 		}
 		const written = await applyServiceEnv(service, keys, live, input, collaborators)
 		log.info(

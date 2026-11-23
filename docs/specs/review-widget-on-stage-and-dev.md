@@ -123,7 +123,7 @@ application before this change.
 
 **Control's console table** gains `review-sign-in` (`GET /review/sign-in`, `human`), `review-widget`
 (`GET /review/widget.js`, anonymous, cacheable) and `review-api` (`protocol`, `* /review/api/*`). The table's digest
-changes, so `controlMcpSwitch` (`packages/control/fabrika.service.ts:81`) at the new release refuses the old
+changes, so `controlTableSwitch` (`packages/control/fabrika.service.ts`) at the new release refuses the old
 `FABRIKA_SERVICE_TABLE_DIGEST`; see the rollout.
 
 **Review API** (all under the ticket, all scoped to the ticket's environment):
@@ -212,7 +212,7 @@ by the proxy to an answer the application already wrote. An application of any f
    Control does not send `review`, and the widget is simply absent there. The console's service table changes too:
    the platform proxy's manifest template is regenerated (`platform-artifacts` `gen`), and the
    `FABRIKA_SERVICE_TABLE_DIGEST` the composition writes changes with it. Control at the new release refuses the old
-   digest at boot (`controlMcpSwitch`), so Control and the platform proxy upgrade together. `platform upgrade` already
+   digest at boot (`controlTableSwitch`), so Control and the platform proxy upgrade together. `platform upgrade` already
    does: on Zerops `platform deploy` builds the proxy before Control and writes the digest from the same manifest; on
    Cloudflare the console's proxy is built from the same table in Control's own deploy.
 2. **Environment variables.** On Zerops, `FABRIKA_SERVICE_TABLE_DIGEST` is rewritten by every `platform deploy`. None

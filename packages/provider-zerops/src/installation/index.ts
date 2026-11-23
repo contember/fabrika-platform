@@ -246,11 +246,14 @@ Naming NO host derives all three from the proxy service's Zerops subdomains and 
 \`custom-domain\` installation: the domains are bound to the project balancer out of band and no
 subdomain is published.
 
-MCP authoring (ADR-0049) is opt-in. --mcp-clients takes a JSON array of the MCP clients this
-installation trusts: [{"provider":${MCP_CLIENT_PROVIDERS},"clientId":"<https CIMD URL>","redirectUris":[...],
-"metadataUrl":"<https URL>"?}]. With it, the console's /mcp admits OAuth bearers and IAM gets
-FABRIKA_IAM_OAUTH_CONFIG. Without it, /mcp admits only a signed-in person and FABRIKA_IAM_OAUTH_CONFIG on
-iam is left as it is.
+On --scheme=https, IAM gets FABRIKA_IAM_OAUTH_CONFIG and the console's RPC admits the command-line
+client's OAuth bearers (\`fabrika control auth device\`). On plain http neither happens and
+FABRIKA_IAM_OAUTH_CONFIG on iam is left as it is.
+
+MCP authoring (ADR-0049) is opt-in on top, and needs https. --mcp-clients takes a JSON array of the MCP
+clients this installation trusts: [{"provider":${MCP_CLIENT_PROVIDERS},"clientId":"<https CIMD URL>",
+"redirectUris":[...],"metadataUrl":"<https URL>"?}]. With it, the console's /mcp admits OAuth bearers too.
+Without it, /mcp admits only a signed-in person.
 
 Credentials are read from the ENVIRONMENT ONLY and have no flag, so they cannot reach a CI log or a
 process listing:

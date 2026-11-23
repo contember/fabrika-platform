@@ -7,10 +7,16 @@
 // in the repository passes, which is exactly how the hand-written live one was wrong for two days.
 
 import type { MintFromKeyResult } from '@fabrika/auth-core'
-import { CONTROL_APP_ID } from '@fabrika/control-contract'
-import { controlMcpResource, controlMcpResourceMetadata, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
+import { CONTROL_APP_ID, CONTROL_CLI_PRESETS, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
+import {
+	controlMcpResource,
+	controlMcpResourceMetadata,
+	controlServiceContract,
+	controlServiceDigest,
+	type ControlServiceOptions,
+} from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
-import { platformServiceTableDigest } from '@fabrika/installation-init'
+import { platformIamOAuthConfig, platformServiceTableDigest } from '@fabrika/installation-init'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
@@ -93,9 +99,11 @@ describe('the service tables come from the modules that own them', () => {
 	const byId = new Map(PLATFORM_PROXY_APPS.map((app) => [app.id, app]))
 	const rows = ({ endpoints, reservedPrefixes }: ReturnType<typeof controlServiceContract>) => ({ endpoints, reservedPrefixes })
 
-	test('the console carries both of its tables, and Operations its `OPERATIONS_PUBLIC_SERVICE` table', () => {
-		expect(byId.get(CONTROL_APP_ID)?.table).toEqual(rows(controlServiceContract({ mcp: true })))
-		expect(byId.get(CONTROL_APP_ID)?.tableWithoutOAuth).toEqual(rows(controlServiceContract({ mcp: false })))
+	test('the console carries its three tables, and Operations its `OPERATIONS_PUBLIC_SERVICE` table', () => {
+		const console_ = byId.get(CONTROL_APP_ID)
+		expect(console_?.table).toEqual(rows(controlServiceContract({ mcp: false, cli: false })))
+		expect(console_?.oauth?.table).toEqual(rows(controlServiceContract({ mcp: false, cli: true })))
+		expect(console_?.oauth?.mcp?.table).toEqual(rows(controlServiceContract({ mcp: true, cli: true })))
 		expect(byId.get(OPERATIONS_APP_ID)?.table).toEqual({
 			endpoints: OPERATIONS_PUBLIC_SERVICE.endpoints,
 			reservedPrefixes: OPERATIONS_PUBLIC_SERVICE.reservedPrefixes,
@@ -130,6 +138,7 @@ describe('resolving the template', () => {
 			control: { hosts: [subdomainHost(8082)] },
 			operations: { hosts: [subdomainHost(8083)] },
 		},
+		mcp: false,
 	})
 
 	test('names the three platform apps and nothing else', () => {
@@ -149,6 +158,7 @@ describe('resolving the template', () => {
 				control: { hosts: ['control.test'] },
 				operations: { hosts: ['operations.test'] },
 			},
+			mcp: false,
 		})
 		expect(overridden.apps.map((app) => app.upstream)).toEqual(['iam:18080', 'control:3000', 'operations:3000'])
 	})
@@ -162,6 +172,7 @@ describe('resolving the template', () => {
 					control: { hosts: ['one.test'] },
 					operations: { hosts: ['two.test'] },
 				},
+				mcp: false,
 			})
 		).toThrow()
 	})
@@ -171,6 +182,7 @@ describe('the Operations entry, resolved, at the proxy', () => {
 	const operations = resolvePlatformProxyManifest(platformProxyManifestTemplate(), {
 		scheme: 'https',
 		placement: { iam: { hosts: ['iam.test'] }, control: { hosts: ['console.test'] }, operations: { hosts: [HOST] } },
+		mcp: false,
 	}).apps.find((app) => app.id === OPERATIONS_APP_ID)
 	if (operations === undefined) throw new Error('the template fronts no Operations app')
 	const verifyWith = (mintFromKey?: MintFromKeyResult) =>
@@ -211,7 +223,7 @@ describe('the Operations entry, resolved, at the proxy', () => {
 	})
 })
 
-describe('MCP authoring, resolved', () => {
+describe('OAuth on the console, resolved', () => {
 	const composition: PlatformProxyComposition = {
 		scheme: 'https',
 		placement: {
@@ -219,45 +231,83 @@ describe('MCP authoring, resolved', () => {
 			control: { hosts: [subdomainHost(8082)] },
 			operations: { hosts: [subdomainHost(8083)] },
 		},
+		mcp: false,
 	}
+	const server = `https://${subdomainHost(8080)}`
+	const cli = { ...composition, authorizationServer: server }
+	const mcp = { ...cli, mcp: true }
 	const consoleOrigin = `https://${subdomainHost(8082)}`
 	const consoleOf = (manifest: ReturnType<typeof resolvePlatformProxyManifest>) => manifest.apps.find((app) => app.id === CONTROL_APP_ID)
-	const published = (mcp: boolean) => {
-		const { endpoints, reservedPrefixes } = serviceProxyTable(controlServiceContract({ mcp }), { oauth: mcp })
+	const published = (options: ControlServiceOptions) => {
+		const { endpoints, reservedPrefixes } = serviceProxyTable(controlServiceContract(options), { oauth: options.cli })
 		return { endpoints, reservedPrefixes }
 	}
+	const rpcResource = (path: string, scopes: string[]) => ({
+		resource: `${consoleOrigin}${path}`,
+		resourceMetadata: `${consoleOrigin}/.well-known/oauth-protected-resource${path}`,
+		authorizationServers: [server],
+		scopesSupported: scopes,
+	})
+	const CLI_RESOURCES = [
+		rpcResource(CONTROL_RPC_PATH, [...CONTROL_CLI_PRESETS]),
+		rpcResource(CONTROL_OPERATIONS_RPC_PATH, ['read', 'deploy', 'operate']),
+	]
 
-	test('enabled, the console publishes its MCP table and registers `controlMcpResource(origin)`', () => {
-		const manifest = resolvePlatformProxyManifest(platformProxyManifestTemplate(), {
-			...composition,
-			authorizationServer: `https://${subdomainHost(8080)}`,
-		})
+	test('with an authorization server, the console publishes its command-line table and registers both RPC paths', () => {
+		const manifest = resolvePlatformProxyManifest(platformProxyManifestTemplate(), cli)
 		const console_ = consoleOf(manifest)
-		expect({ endpoints: console_?.endpoints, reservedPrefixes: console_?.reservedPrefixes }).toEqual(published(true))
-		expect(console_?.oauthResources).toEqual([{
+		expect({ endpoints: console_?.endpoints, reservedPrefixes: console_?.reservedPrefixes }).toEqual(published({ mcp: false, cli: true }))
+		expect(console_?.oauthResources).toEqual(CLI_RESOURCES)
+		expect(parseProxyManifestJson(encodeProxyManifestJson(manifest))).toEqual(manifest)
+	})
+
+	test('with MCP authoring on top, it publishes its MCP table and registers `controlMcpResource(origin)` too', () => {
+		const manifest = resolvePlatformProxyManifest(platformProxyManifestTemplate(), mcp)
+		const console_ = consoleOf(manifest)
+		expect({ endpoints: console_?.endpoints, reservedPrefixes: console_?.reservedPrefixes }).toEqual(published({ mcp: true, cli: true }))
+		expect(console_?.oauthResources).toEqual([...CLI_RESOURCES, {
 			resource: controlMcpResource(consoleOrigin),
 			resourceMetadata: controlMcpResourceMetadata(consoleOrigin),
-			authorizationServers: [`https://${subdomainHost(8080)}`],
+			authorizationServers: [server],
 			scopesSupported: ['authoring'],
 		}])
 		expect(parseProxyManifestJson(encodeProxyManifestJson(manifest))).toEqual(manifest)
 	})
 
-	test('off, the console publishes its table without MCP and registers nothing', () => {
+	test('without one, the console publishes its table without OAuth and registers nothing', () => {
 		const console_ = consoleOf(resolvePlatformProxyManifest(platformProxyManifestTemplate(), composition))
-		expect({ endpoints: console_?.endpoints, reservedPrefixes: console_?.reservedPrefixes }).toEqual(published(false))
+		expect({ endpoints: console_?.endpoints, reservedPrefixes: console_?.reservedPrefixes }).toEqual(published({ mcp: false, cli: false }))
 		expect(console_?.oauthResources).toBeUndefined()
 	})
 
-	test('the digest the deploy writes beside the console names the very table the proxy publishes, on and off', () => {
-		const on = resolvePlatformProxyManifest(platformProxyManifestTemplate(), { ...composition, authorizationServer: `https://${subdomainHost(8080)}` })
-		const off = resolvePlatformProxyManifest(platformProxyManifestTemplate(), composition)
-		expect(platformServiceTableDigest(on, CONTROL_APP_ID)).toBe(controlServiceDigest({ mcp: true }))
-		expect(platformServiceTableDigest(off, CONTROL_APP_ID)).toBe(controlServiceDigest({ mcp: false }))
+	test('MCP authoring without an authorization server is refused', () => {
+		expect(() => resolvePlatformProxyManifest(platformProxyManifestTemplate(), { ...composition, mcp: true })).toThrow('authorization server')
+	})
+
+	test('the digest the deploy writes beside the console names the very table the proxy publishes, in each composition', () => {
+		const digest = (of: PlatformProxyComposition) =>
+			platformServiceTableDigest(resolvePlatformProxyManifest(platformProxyManifestTemplate(), of), CONTROL_APP_ID)
+		expect(digest(composition)).toBe(controlServiceDigest({ mcp: false, cli: false }))
+		expect(digest(cli)).toBe(controlServiceDigest({ mcp: false, cli: true }))
+		expect(digest(mcp)).toBe(controlServiceDigest({ mcp: true, cli: true }))
+	})
+
+	test("IAM's config names every registered resource, a preset's parameter, and MCP's default scope", () => {
+		const config = platformIamOAuthConfig(platformProxyManifestTemplate(), mcp, [])
+		expect(config.clients).toEqual([])
+		expect(config.resources.map((entry) => entry.resource)).toEqual([
+			...CLI_RESOURCES.map((entry) => entry.resource),
+			controlMcpResource(consoleOrigin),
+		])
+		const rpc = config.resources[0]
+		expect(rpc?.defaultScopes).toBeUndefined()
+		expect(rpc?.scopeGrants.find((grant) => grant.scope === 'deploy')?.parameter).toBe('app')
+		expect(rpc?.scopeGrants.find((grant) => grant.scope === 'create')?.parameter).toBeUndefined()
+		expect(config.resources[2]?.defaultScopes).toEqual(['authoring'])
 	})
 
 	test('only the console serves OAuth clients', () => {
-		expect(PLATFORM_PROXY_APPS.filter((app) => app.oauthResource !== undefined).map((app) => app.id)).toEqual([CONTROL_APP_ID])
+		expect(PLATFORM_PROXY_APPS.filter((app) => app.oauth !== undefined).map((app) => app.id)).toEqual([CONTROL_APP_ID])
 	})
 })
 

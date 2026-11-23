@@ -7,13 +7,14 @@
 
 import { HttpIamRpc } from '@fabrika/auth'
 import { ENDPOINT_HEADER, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import { CONTROL_CLI_PRESETS, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import {
 	CONTROL_MCP_SCOPE,
 	controlMcpResource,
 	controlMcpResourceMetadata,
-	controlMcpSwitch,
 	controlServiceContract,
 	controlServiceDigest,
+	controlTableSwitch,
 } from '@fabrika/control/service'
 import {
 	APP_QUERY_PARAM,
@@ -150,12 +151,13 @@ export async function createMcpStack(): Promise<McpStack> {
 		FABRIKA_CONTROL_VAULT_KEY: CONTROL_VAULT_KEY,
 	}
 	const workspaceSource = githubWorkspaceSource(controlEnv, () => Promise.resolve({ openRepository: (input) => repository.open(input) }))
-	const mcp = controlMcpSwitch(controlServiceDigest({ mcp: true }))
+	const { mcp, cli } = controlTableSwitch(controlServiceDigest({ mcp: true, cli: true }))
 	const control = createFetchHandler(
 		controlEnv,
 		zeropsProvider,
 		unusedSourceConnection('zerops'),
 		mcp ? controlMcpRoute(controlEnv, workspaceSource, zeropsProvider) : null,
+		cli,
 	)
 
 	const manifest = parseProxyManifest({
@@ -164,13 +166,22 @@ export async function createMcpStack(): Promise<McpStack> {
 			hosts: [new URL(CONSOLE).hostname],
 			upstream: 'control:3000',
 			scheme: 'https',
-			...serviceProxyTable(controlServiceContract({ mcp }), { oauth: mcp }),
-			oauthResources: [{
-				resource: RESOURCE,
-				resourceMetadata: controlMcpResourceMetadata(CONSOLE),
-				authorizationServers: [ISSUER],
-				scopesSupported: [CONTROL_MCP_SCOPE],
-			}],
+			...serviceProxyTable(controlServiceContract({ mcp, cli }), { oauth: mcp }),
+			oauthResources: [
+				{
+					resource: RESOURCE,
+					resourceMetadata: controlMcpResourceMetadata(CONSOLE),
+					authorizationServers: [ISSUER],
+					scopesSupported: [CONTROL_MCP_SCOPE],
+				},
+				// The command-line client's resources, which the table's RPC rows are bound to.
+				...[CONTROL_RPC_PATH, CONTROL_OPERATIONS_RPC_PATH].map((path) => ({
+					resource: `${CONSOLE}${path}`,
+					resourceMetadata: `${CONSOLE}/.well-known/oauth-protected-resource${path}`,
+					authorizationServers: [ISSUER],
+					scopesSupported: [...CONTROL_CLI_PRESETS],
+				})),
+			],
 		}],
 	})
 	if (manifest === null) throw new Error('the console proxy manifest does not parse')

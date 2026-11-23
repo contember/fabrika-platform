@@ -274,7 +274,9 @@ const localComposition = (mcpClients: readonly McpClient[] | undefined): Platfor
 		operations: { hosts: ['errors.fabrika.localhost'] },
 	},
 	publicPort: LOCAL_PUBLIC_PORT,
-	...(mcpClients === undefined ? {} : { authorizationServer: IAM_ISSUER }),
+	// Always an authorization server, like an https installation: the command-line client's device grant is served.
+	authorizationServer: IAM_ISSUER,
+	mcp: mcpClients !== undefined,
 })
 
 export const localPlatformProxyManifest = (mcpClients?: readonly McpClient[]): PlatformProxyManifest =>
@@ -290,9 +292,9 @@ export const readLocalMcpClients = (env: Record<string, string | undefined>): re
 	return raw === undefined || raw.trim() === '' ? undefined : parseMcpClientsJson(raw)
 }
 
-/** IAM's `FABRIKA_IAM_OAUTH_CONFIG` for the local composition; empty — OAuth off — without clients. */
+/** IAM's `FABRIKA_IAM_OAUTH_CONFIG` for the local composition: the command-line client's resources, and MCP's with clients. */
 export const localIamOAuthConfig = (mcpClients: readonly McpClient[] | undefined): string =>
-	mcpClients === undefined ? '' : JSON.stringify(platformIamOAuthConfig(platformProxyManifestTemplate(), localComposition(mcpClients), mcpClients))
+	JSON.stringify(platformIamOAuthConfig(platformProxyManifestTemplate(), localComposition(mcpClients), mcpClients ?? []))
 
 /** The local `notes` service plays the `prod` environment; IAM knows it as `notes@prod` (ADR-0022 rule 6). */
 export const LOCAL_NOTES_ENVIRONMENT = 'prod'

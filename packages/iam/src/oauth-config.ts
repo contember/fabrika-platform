@@ -19,9 +19,9 @@ const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl']
 const RESOURCE_KEYS = ['app', 'resource', 'defaultScopes', 'scopeGrants']
 
 /**
- * Parse `OAUTH_CONFIG`. Absent or empty disables OAuth; anything malformed THROWS, so a typo fails the
- * boot instead of quietly serving fewer clients or scopes than the operator wrote. Unknown keys are
- * refused for the same reason.
+ * Parse `OAUTH_CONFIG`. Absent or empty disables OAuth; anything malformed THROWS, so a typo fails the boot instead of
+ * quietly serving fewer clients or scopes than the operator wrote. Unknown keys are refused for the same reason.
+ * `clients` may be empty: the command-line client is IAM's own and never listed.
  */
 export function parseOAuthConfig(raw: string | undefined): OAuthConfig | null {
 	if (raw === undefined || raw.trim() === '') return null
@@ -29,7 +29,7 @@ export function parseOAuthConfig(raw: string | undefined): OAuthConfig | null {
 	const rawClients = prop(value, 'clients')
 	const rawResources = prop(value, 'resources')
 	if (
-		!hasOnlyKeys(value, CONFIG_KEYS) || !Array.isArray(rawClients) || rawClients.length === 0 || rawClients.length > MAX_CLIENTS
+		!hasOnlyKeys(value, CONFIG_KEYS) || !Array.isArray(rawClients) || rawClients.length > MAX_CLIENTS
 		|| !Array.isArray(rawResources)
 		|| rawResources.length === 0 || rawResources.length > MAX_RESOURCES
 	) {
