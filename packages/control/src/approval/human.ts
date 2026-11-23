@@ -143,3 +143,19 @@ export async function requirePersonToPointTriggerRef(
 	if (triggerRef === null || triggerRef === existing?.trigger_ref || isPerson(c.auth)) return
 	if (await startsProtected(c.repositories.registry, appId, env, existing)) requirePersonToRedirect(c.auth, env, 'its trigger ref')
 }
+
+/**
+ * Naming the domain of an environment that is protected, or of a new one that starts protected, takes a person
+ * (`apps.environments.put`): the domain receives its traffic and, once deployed there, Control's ops key. Clearing it
+ * stays open to a key.
+ */
+export async function requirePersonToPointDomain(
+	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly domain: string | null },
+): Promise<void> {
+	const { appId, env, existing, domain } = target
+	if (domain === null || domain === existing?.domain || isPerson(c.auth)) return
+	if (await startsProtected(c.repositories.registry, appId, env, existing)) {
+		fail(403, `environment \`${env}\` is protected: only a person changes its domain; an agent, a builder key or a service key cannot`)
+	}
+}

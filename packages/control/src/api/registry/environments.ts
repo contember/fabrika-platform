@@ -1,6 +1,6 @@
 import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest, RotateTokenKeyResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
-import { requireHumanForProtectedDelete, requirePersonToPointTriggerRef, startsProtected } from '../../approval/human'
+import { requireHumanForProtectedDelete, requirePersonToPointDomain, requirePersonToPointTriggerRef, startsProtected } from '../../approval/human'
 import {
 	AppEnvChangedError,
 	appEnvCrossOrigins,
@@ -41,6 +41,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		fail(409, `environment ${env} is ${existing.kind}; an environment's kind is set when it is created`)
 	}
 	await requirePersonToPointTriggerRef(c, { appId, env, existing, triggerRef })
+	await requirePersonToPointDomain(c, { appId, env, existing, domain: input.domain ?? null })
 	const kind = existing?.kind ?? input.kind ?? 'standard'
 	if (kind === 'dev') await assertDevEnvironment(c, app, env, existing, input.authoring === true, triggerRef, input.domain ?? null)
 	if (input.authoring === true) {
