@@ -233,11 +233,13 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		hosts: ['sandbox.example'],
 		upstreamHost: '3000-sbx',
 	}
+	// The same application taken offline (`apps.environments.suspend`): its own upstream, which must never be dialled.
+	const suspended: ContractProxyApp = { ...contract, id: 'off@prod', hosts: ['off.example'], suspended: true }
 	const dir = mkdtempSync(join(tmpdir(), 'fabrika-caddy-'))
 	let caddy: ReturnType<typeof Bun.spawn> | undefined
 
 	beforeAll(async () => {
-		const config = buildCaddyConfig({ apps: [contract, unreachable, plain, sandbox] }, {
+		const config = buildCaddyConfig({ apps: [contract, unreachable, plain, sandbox, suspended] }, {
 			authUpstream: `127.0.0.1:${auth.port}`,
 			listen: [`127.0.0.1:${port}`],
 			healthListen: [`127.0.0.1:${freePort()}`],
@@ -314,6 +316,18 @@ describe.skipIf(CADDY === '')('the generated chain in a running Caddy', () => {
 		expect(atApp?.get('Host')).toBe('127.0.0.1')
 		expect(atApp?.get('X-Forwarded-For')).toBe('127.0.0.1')
 		seenByAuth.length = 0
+	})
+
+	test("a suspended environment's host answers 503, the page to a navigation, and reaches neither service", async () => {
+		const answer = await rawRequest(port, { Connection: 'close' }, '/api/me', 'off.example')
+		expect(answer.status).toBe(503)
+		expect(answer.headers.get('Content-Type')).toBe('text/plain; charset=utf-8')
+		for (const [name, value] of appHeaderPolicy(suspended)) expect(answer.headers.get(name)).toBe(value)
+		const page = await rawRequest(port, { Connection: 'close', 'Sec-Fetch-Mode': 'navigate' }, '/', 'off.example')
+		expect(page.status).toBe(503)
+		expect(page.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+		expect(seenByAuth).toHaveLength(0)
+		expect(seenByApp).toHaveLength(0)
 	})
 
 	test('a Connection header naming an asserted header is a 400 that reaches neither service', async () => {

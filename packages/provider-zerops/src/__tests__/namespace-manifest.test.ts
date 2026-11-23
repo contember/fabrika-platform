@@ -315,3 +315,23 @@ describe('the hosts a member is routed on', () => {
 		expect(() => namespaceMemberHosts(member('alpha', undefined))).toThrow('requires a public domain')
 	})
 })
+
+describe('a suspended member', () => {
+	test('keeps its entry and its host, flagged, in a manifest the proxy accepts; a sibling is untouched', () => {
+		const manifest = compileNamespaceProxyManifest('apps-prod', [
+			{ ...member('alpha', 'alpha.example.com'), suspended: true },
+			member('beta', 'beta.example.com'),
+		])
+		expect(manifest.apps.map((entry) => [entry.id, entry.hosts, 'suspended' in entry])).toEqual([
+			['alpha@prod', ['alpha.example.com'], true],
+			['beta@prod', ['beta.example.com'], false],
+		])
+		expect(parseProxyManifest(manifest)).toEqual(manifest)
+	})
+
+	test('resumed, its entry is exactly the one it had before the suspension', () => {
+		const before = compileNamespaceProxyManifest('apps-prod', [member('alpha', 'alpha.example.com')])
+		const { suspended: _suspended, ...resumed } = { ...member('alpha', 'alpha.example.com'), suspended: true }
+		expect(compileNamespaceProxyManifest('apps-prod', [resumed])).toEqual(before)
+	})
+})

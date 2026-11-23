@@ -51,6 +51,10 @@ export interface AppEnvRow {
 	protection_revision: number
 	/** The contract digest IAM last received for the environment; NULL until Control writes its schema. */
 	iam_digest: string | null
+	/** When Control took the environment offline (`apps.environments.suspend`); NULL while it serves. */
+	suspended_at: number | null
+	/** On Cloudflare, the maintenance mode `resume` restores; NULL on a provider whose namespace proxy suspends. */
+	suspended_from_mode: 'open' | 'read-only' | null
 	created_at: number
 }
 

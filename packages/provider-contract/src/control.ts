@@ -375,6 +375,11 @@ export interface ProviderNamespaceMember {
 	 * its own `domain` and `access`.
 	 */
 	readonly devSandboxes?: readonly ProviderNamespaceDevSandbox[]
+	/**
+	 * Control took the environment offline: the entry point answers 503 on every host it routes the member on, its
+	 * sandboxes' included, and sends nothing to it. Absent while the environment serves.
+	 */
+	readonly suspended?: true
 }
 
 /** One workspace sandbox of a `dev` member, which the namespace proxy routes as its own entry. */
@@ -593,6 +598,11 @@ export interface ProviderNamespaceCapabilities {
 	 * a member it does not route. Throws for a member it cannot route. Absent means no member is routed by host.
 	 */
 	memberHosts?(member: ProviderNamespaceMemberRouting): readonly string[]
+	/**
+	 * Throws, naming the remedy, when the namespace's entry point cannot answer 503 for a suspended member: one pinned to a
+	 * release whose manifest parser does not read the flag. Absent means no member of the namespace can be suspended.
+	 */
+	assertSuspendable?(namespace: ProviderDeploymentNamespace): void
 	/**
 	 * Read-only: whether each claimed resource still exists, one answer per key. Throws when it cannot tell, so Control
 	 * releases a claim only over a resource the provider confirmed gone. Absent means no claim can be released.

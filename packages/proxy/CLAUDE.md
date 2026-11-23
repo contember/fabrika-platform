@@ -170,6 +170,10 @@ FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the
   `buildCaddyConfig`, which only sees the manifests it generates from. A pinned `?app=` is additionally
   cross-checked against that app's declared hosts, because `X-Forwarded-Host` is client-controllable
   and then builds URLs.
+- **A suspended entry's hosts answer 503 from Caddy itself** (`suspendedRoute`): one host-matched terminal route, the
+  503 page to a navigation and `unavailable` to anything else, under the entry's header policy. It has no
+  `forward_auth` and no upstream, so neither the auth service nor the application is dialled; the decision answers the
+  same 503 (`suspended`) if it is ever asked.
 - **If the auth service dies, Caddy answers 502 and every request is denied.** `start.sh` restarts it
   in a loop; that failure mode is by design, not a gap to paper over.
 

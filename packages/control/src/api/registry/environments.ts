@@ -58,6 +58,10 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	if (existing?.namespace_id !== nextNamespaceId) {
 		if (await c.repositories.registry.hasInFlightRun(appId, env)) fail(409, 'deployment namespace cannot change while a deploy is in progress')
 		if (await c.repositories.registry.hasSuccessfulRun(appId, env)) fail(409, 'deployment namespace cannot change after a successful deploy')
+		// The target namespace's proxy may not read the flag, and would then refuse every republish of its members.
+		if (existing !== null && existing.suspended_at !== null) {
+			fail(409, `environment ${env} is suspended; resume it before it changes deployment namespace`)
+		}
 	}
 	const requested: ProviderRegistration = {
 		app: toProviderApp(app),

@@ -23,6 +23,9 @@ export const ZEROPS_SOURCE_RATE_LIMITED = 'githubRateLimited'
 /** A dev sandbox entry would be published to a namespace whose pinned proxy cannot parse one. */
 export const ZEROPS_PROXY_SANDBOXES_UNSUPPORTED = 'proxySandboxesUnsupported'
 
+/** A suspended member would be published to a namespace whose pinned proxy cannot parse one. */
+export const ZEROPS_PROXY_SUSPENSION_UNSUPPORTED = 'proxySuspensionUnsupported'
+
 /** A sandbox host was asked of a namespace that serves no custom domain, which a dev environment's wildcard needs. */
 export const ZEROPS_SANDBOX_HOST_UNSUPPORTED = 'sandboxHostUnsupported'
 

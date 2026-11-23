@@ -293,7 +293,7 @@ async function namespaceHosts(
 	})
 }
 
-function toProviderNamespace(row: DeploymentNamespaceRow): ProviderDeploymentNamespace {
+export function toProviderNamespace(row: DeploymentNamespaceRow): ProviderDeploymentNamespace {
 	return {
 		id: row.id,
 		env: row.env,
@@ -451,6 +451,7 @@ async function namespaceMembers(
 			...crossOriginsField(row),
 			artifact: parseStoredEnvelope(row.provider_artifact_json, `artifact for ${row.app_id}/${row.env}`),
 			...(operationsOrigin === undefined ? {} : { operationsOrigin }),
+			...suspendedField(row),
 		}
 		if (row.kind === 'dev') {
 			if (sandboxes.length > 0) sandboxed = true
@@ -461,6 +462,11 @@ async function namespaceMembers(
 		members.push({ ...base, ...(proxySecret === undefined ? {} : { proxySecret }), ...approvedProviderAccess(row) })
 	}
 	return sandboxed ? { members, sandboxKey: await sandboxHostKey(deps, namespaceId) } : { members }
+}
+
+/** A suspended environment stays in the manifest, so its hosts stay claimed, and its entry answers 503. */
+function suspendedField(row: AppEnvRow): { readonly suspended?: true } {
+	return row.suspended_at === null ? {} : { suspended: true }
 }
 
 /**

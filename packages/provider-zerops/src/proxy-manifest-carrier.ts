@@ -37,6 +37,9 @@ export const FABRIKA_PROXY_MANIFEST_BRAND = 'FABRIKA_PROXY_MANIFEST_BRAND'
 /** The build variable that marks a proxy source whose manifest parser knows a dev sandbox entry's `audience` and `upstreamHost`. */
 export const FABRIKA_PROXY_MANIFEST_SANDBOXES = 'FABRIKA_PROXY_MANIFEST_SANDBOXES'
 
+/** The build variable that marks a proxy source whose manifest parser knows a suspended entry and answers it 503. */
+export const FABRIKA_PROXY_MANIFEST_SUSPEND = 'FABRIKA_PROXY_MANIFEST_SUSPEND'
+
 /**
  * The value a source that serves dev sandboxes declares. `2`: its sandbox hop also drops the `X-Forwarded-For` Caddy adds,
  * which the Box router refuses on a `project` port; a `1` source parses the entries but every request to them fails.
@@ -69,3 +72,10 @@ export const zeropsProxyAcceptsBrand = (descriptorContents: string, setup = 'pro
  */
 export const zeropsProxyAcceptsSandboxes = (descriptorContents: string, setup = 'proxy'): boolean =>
 	declaresMarker(descriptorContents, FABRIKA_PROXY_MANIFEST_SANDBOXES, setup, FABRIKA_PROXY_MANIFEST_SANDBOXES_VALUE)
+
+/**
+ * Whether a pinned descriptor's proxy reads a suspended entry. An older parser refuses the key and fails the build, so the
+ * previous manifest would keep serving the environment: an older pin suspends nothing until it is re-pinned.
+ */
+export const zeropsProxyAcceptsSuspension = (descriptorContents: string, setup = 'proxy'): boolean =>
+	declaresMarker(descriptorContents, FABRIKA_PROXY_MANIFEST_SUSPEND, setup)

@@ -117,6 +117,14 @@ manifest entry as `crossOrigins`, omitted when empty. A change republishes the
 namespace proxy at once, like a changed domain; on Cloudflare, where there is no
 namespace proxy, the next deploy of the environment builds the proxy Worker with it.
 
+A suspended environment (`apps.environments.suspend`, kept in `app_envs.suspended_at`) stays a member: Control hands
+it to the provider with `suspended: true`, and its manifest entry carries the flag. The proxy answers every request on
+its hosts 503 itself, under the entry's header policy and with the 503 page to a navigation, and dials neither the auth
+service nor the application. `resume` clears the row and republishes, so the entry is again exactly what it was. Only
+a proxy source whose generated setup declares `FABRIKA_PROXY_MANIFEST_SUSPEND` reads the flag; Control refuses a
+suspension in a namespace pinned to any other (`assertSuspendable`), naming the re-pin, and the provider refuses a
+republish that would carry one there.
+
 A namespace proxy parses its manifest strictly, and `fabrika platform upgrade` does
 not move a namespace's proxy source pin. A proxy built from a pin older than the
 release that added a row field or a row kind refuses a manifest that carries it: the rebuild would fail, the previous

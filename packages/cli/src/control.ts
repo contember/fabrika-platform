@@ -59,6 +59,8 @@ Usage:
   fabrika control apps environments put --provider=<name> --app=<id> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>] [--namespace=<id>]
                            [--cross-origin=<origin> ...] [--kind=standard|dev]
+  fabrika control apps environments suspend --app=<id> --env=<name>
+  fabrika control apps environments resume  --app=<id> --env=<name>
   fabrika control apps variables list --app=<id>
   fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>] [--not-secret]
   fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>]
@@ -91,6 +93,13 @@ REQUIRED for it — on \`register\` and on \`apps environments put\` alike — a
 refused before anything is created. \`namespaces get\` lists the hosts a \`zerops-subdomain\` namespace
 serves and which of them are still free; a custom-domain namespace serves the domain you bound to its
 proxy. A manifest with no proxy target needs no domain.
+
+\`apps environments suspend\` takes an environment offline in an incident, such as a compromised or leaked application.
+Behind a Zerops namespace proxy every request to it answers 503 once the republished proxy is live, which takes the
+minutes of a proxy build; \`namespaces get\` follows it. A namespace pinned to an older proxy source is refused with the
+re-pin to run first. On Cloudflare the environment's object goes into maintenance \`closed\`. \`resume\` restores the
+routing it had, or on Cloudflare the maintenance mode it was in. Neither stops the application's service, nor
+revokes a key. Repeating either is a retry.
 
 A variable's value is stored and printed in clear, so \`apps variables put\` refuses one that looks like a
 credential (by its name, such as \`*_TOKEN\` or \`*_PASSWORD\`, or by its value) and names \`apps secrets put\` instead.
@@ -681,6 +690,17 @@ const runEnvironments = async (
 		}
 		const result = await client.apps.environments.put({ appId: required(flags, 'app'), env: required(flags, 'env'), environment })
 		emit(flags, result, () => `${result.appId}\t${result.env}\t${result.provider}`)
+		return
+	}
+	if (verb === 'suspend' || verb === 'resume') {
+		const target = { appId: required(flags, 'app'), env: required(flags, 'env') }
+		const result = verb === 'suspend' ? await client.apps.environments.suspend(target) : await client.apps.environments.resume(target)
+		if (result.namespaceId !== null) {
+			console.warn(
+				`the proxy of namespace ${result.namespaceId} is rebuilding; follow it: fabrika control namespaces get --namespace=${result.namespaceId}`,
+			)
+		}
+		emit(flags, result, () => `${result.appId}\t${result.env}\t${result.suspendedAt === undefined ? 'serving' : 'suspended'}`)
 		return
 	}
 	throw new Error(`Unknown \`control apps environments\` verb: ${verb ?? '(missing)'}`)

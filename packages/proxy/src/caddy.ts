@@ -290,7 +290,7 @@ export function buildCaddyConfig(manifest: ProxyManifest, options: CaddyBuildOpt
 			&& app.hosts[0] === iamOwner.hostname
 			&& app.scheme === iamOwner.scheme
 			&& app.upstream === iamOwner.upstream
-		return appRoute(app, options.authUpstream, ownsIamSession)
+		return isApplicationEntry(app) && app.suspended === true ? suspendedRoute(app) : appRoute(app, options.authUpstream, ownsIamSession)
 	})
 	// Nothing falls off the end: an unmatched Host is a 404, never a pass-through to anything.
 	routes.push({ handle: [refusal(404, 'not found', BASE_HEADER_POLICY)] })
@@ -458,6 +458,14 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 	}
 }
 
+/**
+ * A suspended environment's hosts: every request is a 503 under the entry's policy, answered here, so neither the auth
+ * service nor the application is dialled. The decision answers the same if it is ever asked (`@fabrika/proxy-core`).
+ */
+function suspendedRoute(app: ContractProxyApp): CaddyRoute {
+	return { match: [{ host: app.hosts }], terminal: true, handle: [refusal(503, 'unavailable', appHeaderPolicy(app))] }
+}
+
 /** A top-level navigation, the one request that reads a page in place of the text (`isPageNavigation`). */
 const NAVIGATION: CaddyMatcherSet = { header: { [FETCH_MODE_HEADER]: ['navigate'] } }
 
@@ -492,9 +500,9 @@ function pageRoutes(brand: InstallationBrand | null): Record<string, CaddyRoute>
  * A refusal Caddy writes itself, under a policy: the status's page to a navigation, its fixed text to anything else.
  * One handler, so the refusal stays one route of the chain.
  */
-function refusal(status: 400 | 404, text: string, policy: HeaderPolicy): CaddySubrouteHandler {
+function refusal(status: 400 | 404 | 503, text: string, policy: HeaderPolicy): CaddySubrouteHandler {
 	return navigationChoice(
-		pageHandlers(status === 400 ? PAGE_ROUTE['400'] : PAGE_ROUTE['404'], policy),
+		pageHandlers(PAGE_ROUTE[status], policy),
 		{ handler: 'static_response', status_code: status, headers: headerValues(policy), body: text },
 	)
 }

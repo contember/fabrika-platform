@@ -114,6 +114,10 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   and mints no token. The allow carries `X-Fabrika-Endpoint: <id>@<digest>`. A `webhook` row with `authorization:
   'forward'` (a `basic` or `bearer` verifier) adds `X-Fabrika-Forward-Authorization: 1` when the request's
   `Authorization` goes on to the app, never when it carries `px_` (`carriesPlatformKey`, Basic credentials decoded).
+- **A suspended entry serves nothing** (`ContractProxyApp.suspended`, only ever `true`). `createVerifyService` answers
+  every request that selects it 503 (`suspended`), the callback and the sign-out included, before any credential is
+  read or IAM is called. Older proxies' strict parsers refuse the key; a producer sends it only to a proxy that declares
+  it reads it.
 - **A dev sandbox entry names its audience; nothing else does** (ADR-0022 "Dev sandbox entries"). `audience` is
   admitted only on an entry whose id parses as `dev:<app>:<workspace>` (`parseDevSandboxEntryId`; build one with
   `devSandboxEntryId`), and such an entry must carry it, an `<app>@<env>` of the same `<app>`. Every app id handed to

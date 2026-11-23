@@ -16,7 +16,7 @@ import { asNamespaceError, namespaceError } from './errors'
 import { compileNamespaceProxyManifest, namespaceMemberHosts } from './manifest'
 import { createZeropsNamespaceOperator } from './operator'
 import { republishProxy } from './proxy-attempt'
-import { assertNamespaceProxyAcceptsSandboxes } from './proxy-reads'
+import { assertNamespaceProxyAcceptsSandboxes, assertNamespaceProxyAcceptsSuspension } from './proxy-reads'
 import { namespaceProxySecrets } from './proxy-secrets'
 import { verifyZeropsNamespaceProxySource } from './proxy-source'
 import { assertSandboxHostAllowed, ensureSandboxHost } from './sandbox-host'
@@ -196,6 +196,8 @@ const deployProxy = async (
 	reuseActive: boolean,
 ): Promise<{ namespace: ProviderDeploymentNamespace; target: NormalizedZeropsNamespaceTarget }> => {
 	let currentNamespace = namespace
+	// Before any platform write: an older pin's parser would refuse the flag, and its previous manifest would keep serving.
+	if (input.members.some((member) => member.suspended === true)) assertNamespaceProxyAcceptsSuspension(namespace.id, target.proxySource)
 	const manifest = compileNamespaceProxyManifest(namespace.id, input.members)
 	const result = await republishProxy({
 		namespaceId: namespace.id,
@@ -446,6 +448,10 @@ export const createZeropsNamespaceCapabilities = (options: ZeropsNamespaceOption
 		reconcile: (input) => mutateNamespace(input, options, 'reconcile'),
 		republish: (input) => republishNamespace(input, options),
 		memberHosts: namespaceMemberHosts,
+		assertSuspendable: (namespace) => {
+			const normalized = normalizedNamespace(namespace, options)
+			assertNamespaceProxyAcceptsSuspension(normalized.id, normalizeTarget(normalized, options).proxySource)
+		},
 		claimedResources: (input) => claimedResources(options.api, input),
 		updates: createZeropsNamespaceUpdates(options),
 		operator: createZeropsNamespaceOperator({ proxySource: options.proxySource }),
