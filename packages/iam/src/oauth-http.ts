@@ -1,12 +1,14 @@
 import { DEFAULT_LOCALE } from '@fabrika/auth-core'
 import {
 	OAUTH_CLIENT_ASSERTION_ALGORITHMS,
+	OAUTH_DEVICE_CODE_GRANT_TYPE,
 	type OAuthAuthorizationRequest,
 	type OAuthAuthorizationServerMetadata,
 	type OAuthClientCredential,
 	type OAuthResourceDto,
 	parseOAuthAuthorizationAttempt,
 	parseOAuthClientCredential,
+	parseOAuthDeviceAuthorizationRequest,
 	parseOAuthRevocationRequest,
 	parseOAuthTokenRequest,
 	resolveOAuthAuthorizationScopes,
@@ -21,6 +23,8 @@ import { installationBrand } from './installation-brand'
 import { establishClient, exchangeOAuthToken, grantAuthorization, type ManagedClient, revokeOAuthToken, scopeCeiling } from './oauth'
 import { authenticateOAuthClient, authenticateRevokingClient } from './oauth-client-auth'
 import type { OAuthConfig } from './oauth-config'
+import { OAUTH_DEVICE_PATH, redeemDeviceCode, startDeviceAuthorization } from './oauth-device'
+import { handleDevicePage } from './oauth-device-page'
 import { normalizeOrigin } from './origin'
 import { htmlPage } from './password-pages'
 import type { Services } from './services'
@@ -29,11 +33,21 @@ export const OAUTH_METADATA_PATH = '/.well-known/oauth-authorization-server'
 const AUTHORIZE_PATH = '/oauth/authorize'
 const TOKEN_PATH = '/oauth/token'
 const REVOKE_PATH = '/oauth/revoke'
+const DEVICE_AUTHORIZATION_PATH = '/oauth/device_authorization'
 
 type SigningEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
-/** The OAuth authorization server's public surface. With `OAUTH_CONFIG` unset every path is 404. */
-export async function handleOAuth(request: Request, services: Services, env: SigningEnv, requestId: string): Promise<Response> {
+/**
+ * The OAuth authorization server's public surface. With `OAUTH_CONFIG` unset every path is 404. `clientAddress` is the
+ * composition's client coordinate (`client-address.ts`), null where it names none.
+ */
+export async function handleOAuth(
+	request: Request,
+	services: Services,
+	env: SigningEnv,
+	requestId: string,
+	clientAddress: string | null,
+): Promise<Response> {
 	const config = services.config.oauth
 	if (config === null) return new Response('not found', { status: 404 })
 	const pathname = new URL(request.url).pathname
@@ -48,6 +62,10 @@ export async function handleOAuth(request: Request, services: Services, env: Sig
 			return request.method === 'POST' ? token(request, services, env, config, requestId) : methodNotAllowed('POST')
 		case REVOKE_PATH:
 			return request.method === 'POST' ? revoke(request, services, env, config, requestId) : methodNotAllowed('POST')
+		case DEVICE_AUTHORIZATION_PATH:
+			return request.method === 'POST' ? deviceAuthorization(request, services, config, clientAddress) : methodNotAllowed('POST')
+		case OAUTH_DEVICE_PATH:
+			return handleDevicePage(request, services, config)
 		default:
 			return new Response('not found', { status: 404 })
 	}
@@ -59,9 +77,10 @@ function authorizationServerMetadata(issuer: string): Response {
 		authorization_endpoint: `${issuer}${AUTHORIZE_PATH}`,
 		token_endpoint: `${issuer}${TOKEN_PATH}`,
 		revocation_endpoint: `${issuer}${REVOKE_PATH}`,
+		device_authorization_endpoint: `${issuer}${DEVICE_AUTHORIZATION_PATH}`,
 		jwks_uri: `${issuer}/.well-known/jwks.json`,
 		response_types_supported: ['code'],
-		grant_types_supported: ['authorization_code', 'refresh_token'],
+		grant_types_supported: ['authorization_code', 'refresh_token', OAUTH_DEVICE_CODE_GRANT_TYPE],
 		code_challenge_methods_supported: ['S256'],
 		token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
 		token_endpoint_auth_signing_alg_values_supported: [...OAUTH_CLIENT_ASSERTION_ALGORITHMS],
@@ -144,7 +163,9 @@ async function token(request: Request, services: Services, env: SigningEnv, conf
 		audiences: [`${issuer}${TOKEN_PATH}`, issuer],
 	})
 	if (client === null) return protocolError('invalid_client', 401)
-	const outcome = await exchangeOAuthToken(services, env, client, input, requestId)
+	const outcome = input.grant_type === OAUTH_DEVICE_CODE_GRANT_TYPE
+		? await redeemDeviceCode(services, env, client, input, requestId)
+		: await exchangeOAuthToken(services, env, client, input, requestId)
 	if (!outcome.ok) return protocolError(outcome.error, 400)
 	return Response.json(outcome.body, { headers: { 'cache-control': 'no-store', pragma: 'no-cache' } })
 }
@@ -165,6 +186,27 @@ async function revoke(request: Request, services: Services, env: SigningEnv, con
 	if (!authenticated) return protocolError('invalid_client', 401)
 	await revokeOAuthToken(services, env, input, requestId)
 	return new Response(null, { status: 200, headers: { 'cache-control': 'no-store' } })
+}
+
+/** RFC 8628 §3.1: a public client starts a device authorization; a client that sends an assertion is refused. */
+async function deviceAuthorization(request: Request, services: Services, config: OAuthConfig, clientAddress: string | null): Promise<Response> {
+	const form = await readForm(request)
+	const fields = form === null ? null : withRepeatedResource(form)
+	if (fields === null) return protocolError('invalid_request', 400)
+	if (parseOAuthClientCredential(fields.fields)?.method !== 'none') return protocolError('invalid_client', 401)
+	const input = parseOAuthDeviceAuthorizationRequest(fields)
+	if (input === null) return protocolError('invalid_request', 400)
+	const outcome = await startDeviceAuthorization(services, config, input, clientAddress)
+	if (!outcome.ok) return protocolError(outcome.error, outcome.error === 'temporarily_unavailable' ? 429 : 400)
+	return Response.json(outcome.body, { headers: { 'cache-control': 'no-store', pragma: 'no-cache' } })
+}
+
+/** RFC 8707 §2: `resource` may repeat to name several resources; every other parameter still must not. */
+function withRepeatedResource(params: URLSearchParams): { fields: Record<string, string>; resources: string[] } | null {
+	const resources = params.getAll('resource')
+	const rest = new URLSearchParams([...params].filter(([name]) => name !== 'resource'))
+	const fields = singleValued(rest)
+	return fields === null ? null : { fields, resources }
 }
 
 /**

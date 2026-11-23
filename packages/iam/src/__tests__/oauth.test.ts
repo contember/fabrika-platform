@@ -41,9 +41,10 @@ describe('authorization server metadata', () => {
 			authorization_endpoint: `${ISSUER}/oauth/authorize`,
 			token_endpoint: `${ISSUER}/oauth/token`,
 			revocation_endpoint: `${ISSUER}/oauth/revoke`,
+			device_authorization_endpoint: `${ISSUER}/oauth/device_authorization`,
 			jwks_uri: `${ISSUER}/.well-known/jwks.json`,
 			response_types_supported: ['code'],
-			grant_types_supported: ['authorization_code', 'refresh_token'],
+			grant_types_supported: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:device_code'],
 			code_challenge_methods_supported: ['S256'],
 			token_endpoint_auth_methods_supported: ['none', 'private_key_jwt'],
 			token_endpoint_auth_signing_alg_values_supported: ['RS256'],
@@ -57,7 +58,7 @@ describe('authorization server metadata', () => {
 	test('every OAuth path is 404 when OAUTH_CONFIG is unset', async () => {
 		const f = await fixture()
 		const services = { ...f.services, config: { ...f.services.config, oauth: null } }
-		const response = await handleOAuth(new Request(`${ISSUER}/.well-known/oauth-authorization-server`), services, SIGNING_ENV, 'req-oauth')
+		const response = await handleOAuth(new Request(`${ISSUER}/.well-known/oauth-authorization-server`), services, SIGNING_ENV, 'req-oauth', null)
 		expect(response.status).toBe(404)
 	})
 })

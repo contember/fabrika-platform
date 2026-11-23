@@ -38,7 +38,7 @@ async function fixture() {
 		],
 	}
 	const services: Services = { ...f.services, config: { ...f.services.config, oauth: config } }
-	const call = (request: Request) => handleOAuth(request, services, SIGNING_ENV, 'req-oauth')
+	const call = (request: Request) => handleOAuth(request, services, SIGNING_ENV, 'req-oauth', null)
 	const post = (path: string, form: Record<string, string>) =>
 		call(
 			new Request(`${ISSUER}${path}`, {

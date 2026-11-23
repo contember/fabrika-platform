@@ -762,7 +762,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   token revokes it. Resource tokens are signed with `typ: at+jwt` (`Signer.signResourceToken`).
 - **ONE CLIENT IS NO DOCUMENT: `fabrika-cli` (`OAUTH_CLI_CLIENT_ID`, `@fabrika/auth-core`).** Every installation's
   command-line client is public, has no redirect URI and is never registered: it cannot complete `/oauth/authorize` or
-  redeem a code, it may only refresh and revoke the grants IAM gives it, and it is refused when it sends an assertion.
+  redeem a code; it obtains a grant through the device flow, below, refreshes and revokes it, and is refused when it sends
+  an assertion.
   It is the one client id that is not a CIMD URL (`isOAuthClientId`).
 - **A GRANT MAY COVER SEVERAL RESOURCES OF ITS ONE APP** (`oauth_grants.resources`, NULL = `resource` alone). Each token
   names one of them, the `resource` of the exchange or refresh, and carries the ceiling of that resource's scopes;
@@ -770,6 +771,19 @@ fails if that stops being true — it is the guard, not documentation of one.
   is requested only as `<scope>:<value>` and narrows each of its scope-less actions to that value
   (`resolveOAuthScopeToken`, `@fabrika/iam-contract`): `deploy:alpha` with parameter `app` holds its actions at app
   `alpha` only, whatever wider grant the person holds. A parameterized scope is never a default scope.
+- **A DEVICE GRANT IS THE CLI CLIENT'S ONLY WAY TO A GRANT, AND IT IS BOUND TO THE SESSION THAT APPROVED IT** (RFC 8628,
+  `oauth-device.ts`, `oauth-device-page.ts`, `oauth_device_authorizations`). `POST /oauth/device_authorization` takes
+  `fabrika-cli` only, at least one scope and one to eight resources of one app (`resource` is the one parameter that may
+  repeat), each scope resolvable on every resource, and stores only the hashes of both codes; an attempt lives five
+  minutes. Its buckets are per client (600 starts per 10 minutes, installation-wide with one client, so blocking it takes a
+  flood) and per client address where the composition names one (30); never an installation-wide bucket a burst fills.
+  `/oauth/device` needs an IAM login: GET only renders the code form, so a link neither decides nor spends anything; the
+  same-origin POST looks the code up, at most ten wrong codes per person per 10 minutes (then even a right code is
+  refused), shows the scopes, the resulting actions narrowed by the person's live permissions, a warning for a scope bound
+  to no value, and a lifetime of 1 h, 24 h or 7 days. Approval records the person, the IAM session and
+  `min(lifetime, sessionEndsAt)` on the attempt; the grant, its `iam.oauth.grant.create` record and its first refresh
+  token are written when the device redeems the approval, after a claim exactly one poll wins. Polls are admitted once per
+  interval (`slow_down` adds five seconds, at most 60); a spent device code presented again revokes its grant.
 - **THE CLIENT'S DOCUMENT, NEVER THE REQUEST, PICKS HOW THE CLIENT AUTHENTICATES** (`oauth-client-auth.ts`).
   A `none` document is a public client and is refused if it sends an assertion; a `private_key_jwt` document
   (ChatGPT) must send a JWT assertion at `/oauth/token` and `/oauth/revoke`, verified against the `jwks_uri`

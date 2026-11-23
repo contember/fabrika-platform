@@ -97,9 +97,37 @@ export type OAuthAuthorizationParseResult =
 	| { kind: 'invalid_scope'; coordinates: OAuthAuthorizationCoordinates; rawScope: string }
 	| { kind: 'invalid_request' }
 
+/** RFC 8628 §3.4: the grant type a device client polls the token endpoint with. */
+export const OAUTH_DEVICE_CODE_GRANT_TYPE = 'urn:ietf:params:oauth:grant-type:device_code'
+
 export type OAuthTokenRequest =
 	| { grant_type: 'authorization_code'; client_id: string; code: string; redirect_uri: string; code_verifier: string; resource: string }
 	| { grant_type: 'refresh_token'; client_id: string; refresh_token: string; resource: string }
+	| { grant_type: typeof OAUTH_DEVICE_CODE_GRANT_TYPE; client_id: string; device_code: string; resource: string }
+
+/** RFC 8628 §3.1, with every resource the grant is asked for (RFC 8707): each token names one of them. */
+export interface OAuthDeviceAuthorizationRequest {
+	client_id: string
+	scope: string[]
+	resources: string[]
+}
+
+/** RFC 8628 §3.2. */
+export interface OAuthDeviceAuthorizationResponse {
+	device_code: string
+	user_code: string
+	verification_uri: string
+	verification_uri_complete: string
+	expires_in: number
+	interval: number
+}
+
+/** The lifetimes a person picks between when approving a device: an hour, a day, a week. */
+export const OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS = [3600, 86_400, 604_800] as const
+export type OAuthDeviceGrantLifetime = (typeof OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS)[number]
+
+/** How many resources one device grant may name. */
+export const MAX_OAUTH_DEVICE_RESOURCES = 8
 
 export interface OAuthTokenResponse {
 	access_token: string
@@ -120,9 +148,10 @@ export interface OAuthAuthorizationServerMetadata {
 	authorization_endpoint: string
 	token_endpoint: string
 	revocation_endpoint: string
+	device_authorization_endpoint: string
 	jwks_uri: string
 	response_types_supported: ['code']
-	grant_types_supported: ['authorization_code', 'refresh_token']
+	grant_types_supported: ['authorization_code', 'refresh_token', typeof OAUTH_DEVICE_CODE_GRANT_TYPE]
 	code_challenge_methods_supported: ['S256']
 	token_endpoint_auth_methods_supported: ['none', 'private_key_jwt']
 	token_endpoint_auth_signing_alg_values_supported: OAuthClientAssertionAlgorithm[]
@@ -374,7 +403,36 @@ export function parseOAuthTokenRequest(value: unknown): OAuthTokenRequest | null
 		const refreshToken = field(value, 'refresh_token')
 		return isNonemptyText(refreshToken) ? { grant_type: grantType, client_id: clientId, refresh_token: refreshToken, resource } : null
 	}
+	if (grantType === OAUTH_DEVICE_CODE_GRANT_TYPE) {
+		const deviceCode = field(value, 'device_code')
+		return isNonemptyText(deviceCode) && deviceCode.length <= 256
+			? { grant_type: grantType, client_id: clientId, device_code: deviceCode, resource }
+			: null
+	}
 	return null
+}
+
+/**
+ * A device authorization request: its client, at least one scope and one to `MAX_OAUTH_DEVICE_RESOURCES` distinct
+ * resources. `resource` is the one parameter that may repeat (RFC 8707 §2), so the caller collects it into a list.
+ */
+export function parseOAuthDeviceAuthorizationRequest(
+	value: { fields: Record<string, string>; resources: string[] },
+): OAuthDeviceAuthorizationRequest | null {
+	const clientId = field(value.fields, 'client_id')
+	const scope = field(value.fields, 'scope')
+	if (!isOAuthClientId(clientId) || typeof scope !== 'string') return null
+	const scopes = parseOAuthScopes(scope.split(' '))
+	const resources = value.resources
+	if (
+		scopes === null || scopes.length === 0 || resources.length === 0 || resources.length > MAX_OAUTH_DEVICE_RESOURCES
+		|| !resources.every(isOAuthResourceUri) || new Set(resources).size !== resources.length
+	) return null
+	return { client_id: clientId, scope: scopes, resources: [...resources] }
+}
+
+export function isOAuthDeviceGrantLifetime(value: number): value is OAuthDeviceGrantLifetime {
+	return OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS.some((lifetime) => lifetime === value)
 }
 
 const MAX_CLIENT_ASSERTION_LENGTH = 16_384

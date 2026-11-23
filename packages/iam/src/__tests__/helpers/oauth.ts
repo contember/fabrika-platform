@@ -99,7 +99,7 @@ export async function oauthFixture(
 	}
 	const cookie = `${SESSION_COOKIE}=${sessionToken}`
 
-	const call = (request: Request) => handleOAuth(request, services, SIGNING_ENV, 'req-oauth')
+	const call = (request: Request) => handleOAuth(request, services, SIGNING_ENV, 'req-oauth', null)
 
 	function authorize(overrides: Record<string, string> = {}, withSession = true): Promise<Response> {
 		return call(
@@ -168,6 +168,7 @@ export async function oauthFixture(
 		config,
 		services,
 		fetched,
+		cookie,
 		restoreFetch: () => fetchSpy.mockRestore(),
 		call,
 		authorize,

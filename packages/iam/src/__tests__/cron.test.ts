@@ -37,6 +37,7 @@ const SWEPT_TABLES = [
 	'oauth_codes',
 	'oauth_refresh_tokens',
 	'oauth_client_assertions',
+	'oauth_device_authorizations',
 	'delegation_grants',
 	'membership_invitations',
 	'terminal_identifications',
@@ -212,6 +213,20 @@ async function seedBothSides(h: Harness): Promise<string> {
 	for (const [jti, expiresAt] of [['jti-old', NOW - 1], ['jti-live', NOW + 60]] as const) {
 		await h.repositories.oauth.recordClientAssertion('https://chatgpt.example.test/cimd', jti, expiresAt)
 	}
+	// oauth_device_authorizations — an attempt goes at its expiry, whatever its state.
+	for (const [code, expiresAt] of [['device-old', NOW - 1], ['device-live', NOW + 300]] as const) {
+		await h.repositories.oauth.startDeviceAuthorization({
+			device_code_hash: code,
+			user_code_hash: `user-${code}`,
+			client_id: 'fabrika-cli',
+			app: 'control',
+			resources: '["https://control.example.test/api/rpc"]',
+			scopes: '["deploy:alpha"]',
+			interval_seconds: 5,
+			created_at: NOW - 300,
+			expires_at: expiresAt,
+		})
+	}
 
 	// terminal_identifications — an expired or ended identification goes at once; an open one stays.
 	const terminalId = 'terminal-cron'
@@ -265,6 +280,7 @@ describe('runIamMaintenance', () => {
 			oauth_codes: 3,
 			oauth_refresh_tokens: 2,
 			oauth_client_assertions: 2,
+			oauth_device_authorizations: 2,
 			delegation_grants: 2,
 			membership_invitations: 2,
 			terminal_identifications: 2,
@@ -288,6 +304,7 @@ describe('runIamMaintenance', () => {
 			oauth_codes: 1,
 			oauth_refresh_tokens: 1,
 			oauth_client_assertions: 1,
+			oauth_device_authorizations: 1,
 			delegation_grants: 1,
 			membership_invitations: 1,
 			terminal_identifications: 1,
@@ -315,6 +332,7 @@ describe('runIamMaintenance', () => {
 			oauth_codes: 1,
 			oauth_refresh_tokens: 1,
 			oauth_client_assertions: 1,
+			oauth_device_authorizations: 1,
 			delegation_grants: 1,
 			membership_invitations: 1,
 			terminal_identifications: 1,
