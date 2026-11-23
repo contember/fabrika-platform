@@ -259,8 +259,9 @@ An import is judged by the file or package Bun loads for it:
 - **`src/app.ts`** composes and does nothing else: no route, no middleware, no handler.
 - **The SPA** builds its client with `createClient(contract, 'api')` from `@fabrika/app/client`. Its bundle is built
   through `@fabrika/check/bun-plugin`, or with Vite (on Bun) through `@fabrika/check/vite-plugin`; either loads
-  `fabrika.contract.ts` without its handlers. An SPA with many slices whose routes load separately calls each slice
-  through `createGroupClient(mount, { <group> })` instead, with the contract imported as a type only
+  `fabrika.contract.ts` without its handlers. An SPA with many slices whose routes load separately and call their
+  client directly (not through `@fabrika/app/react`'s hooks, whose provider holds one `createClient` client per mount)
+  calls each slice through `createGroupClient(mount, { <group> })` instead, with the contract imported as a type only
   (`groupMount<typeof contract>()('api', { app, prefix })`): a route's bundle then holds only the groups it calls. It imports
   `src/schemas.ts` for shared constants and schemas, `src/shared/` for shared functions, and never a slice.
 - **Shared code** (`src/shared/`) is what the SPA and the server must compute alike: one function, not two copies

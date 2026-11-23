@@ -233,7 +233,7 @@ const challengeUrls = new WeakMap<object, string>()
 export function challengeUrl(procedure: object): string {
 	const url = challengeUrls.get(procedure)
 	if (url === undefined) {
-		throw new Error("challengeUrl takes a procedure of a client createClient made whose admission.challenge is provider: 'altcha'")
+		throw new Error("challengeUrl takes a procedure of a client createClient or createGroupClient made whose admission.challenge is provider: 'altcha'")
 	}
 	return url
 }
@@ -404,7 +404,7 @@ export function download<I>(procedure: AttachmentProcedure<I> | FileProcedure<I>
 export async function downloadFile(procedure: object, input: unknown): Promise<DownloadedFile> {
 	const request = downloads.get(procedure)
 	if (request === undefined) {
-		throw new Error('download takes a procedure of a client createClient made that answers a file')
+		throw new Error('download takes a procedure of a client createClient or createGroupClient made that answers a file')
 	}
 	const doFetch = request.options.fetch ?? fetch
 	const { body, disposition } = request.method === 'GET'
@@ -521,7 +521,7 @@ declare const mountContract: unique symbol
 export interface GroupMount<C, M extends string> {
 	readonly app: string
 	readonly mount: M
-	readonly prefix: string
+	readonly prefix: `/${string}`
 	readonly options: ClientOptions
 	/** Carries the contract's type for `createGroupClient`; never present at runtime. */
 	readonly [mountContract]?: C
@@ -556,7 +556,7 @@ export type GroupClient<C, M, G> = MountOf<C, M> extends { readonly procedures: 
  */
 export function groupMount<C extends AnyContract>(): <const M extends RpcMountName<C>>(
 	mount: M,
-	declaration: { readonly app: string; readonly prefix: string },
+	declaration: { readonly app: string; readonly prefix: `/${string}` },
 	options?: ClientOptions,
 ) => GroupMount<C, M> {
 	return (mount, declaration, options = {}) => Object.freeze({ app: declaration.app, mount, prefix: declaration.prefix, options })

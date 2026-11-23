@@ -1035,8 +1035,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   a page bundles only the groups it calls: the contract is imported as a type only, and the types refuse a name the
   mount does not have and a group the contract mounts under another name. `prefix` and `app` are the mount's and the
   application's as written in the contract, which the client cannot read; the bounce scope is `<app>:<mount>`, as the
-  contract client's. `group-client.test.ts` holds it to `createClient`; `@fabrika/check`'s `vite.test.ts` holds a page's
-  bundle to its groups. `FabrikaProvider` still takes one client per mount.
+  contract client's. It takes groups by name, each one whole and a nested name with all its groups; a single-group mount
+  (`c.rpc(prefix, group)`) has no group client. A group in another group's place is refused only when their endpoint
+  types differ. `group-client.test.ts` holds it to `createClient`; `@fabrika/check`'s `vite.test.ts` holds a page's
+  bundle to its groups. `FabrikaProvider` takes one client per mount, so a page that uses the hooks keeps `createClient`.
 - **A file procedure's client answers a file handle** (`download(api.x, input)`, `api.x.url(input)` for a GET one);
   the client never imports `files/`, which the examples' SPA bundle test refuses.
 - **An answer is parsed with the procedure's output schema** before the caller sees

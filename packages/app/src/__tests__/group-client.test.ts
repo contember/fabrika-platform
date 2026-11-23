@@ -5,6 +5,7 @@ import { createClient, createGroupClient, download, groupMount, RpcError, type R
 import { describe, expect, test } from 'bun:test'
 import { attachmentAt, clientNodeOf } from '../client/contract'
 import { contract } from './kit-fixture/fabrika.contract'
+import { app } from './kit-fixture/src/app-kit'
 import { companies } from './kit-fixture/src/companies/endpoints'
 import { deals } from './kit-fixture/src/deals/endpoints'
 
@@ -72,5 +73,21 @@ describe('a group client', () => {
 		await download(clients(viaGroups.fetch).groups.deals.exportDeals, { orgId: 'o1' })
 		expect(viaGroups.sent).toEqual(viaFull.sent)
 		expect(viaGroups.sent.map((sent) => sent.url)).toEqual(['https://crm.test/api/deals.exportDeals'])
+	})
+
+	test('takes a nested name with its groups, as the contract mounts them', async () => {
+		const nested = app.contract((c) => ({ api: c.rpc('/api', { crm: { deals, companies } }) }))
+		const viaFull = answering(DEAL)
+		const viaGroups = answering(DEAL)
+		const full = createClient(nested, 'api', { fetch: viaFull.fetch })
+		const groups = createGroupClient(groupMount<typeof nested>()('api', { app: 'crm', prefix: '/api' }, { fetch: viaGroups.fetch }), {
+			crm: { deals, companies },
+		})
+		expect(clientNodeOf(groups.crm)).toEqual(clientNodeOf(full.crm))
+		expect(clientNodeOf(groups.crm.companies.create)).toEqual(clientNodeOf(full.crm.companies.create))
+		const input = { id: DEAL.id }
+		expect(await groups.crm.deals.get(input)).toEqual(await full.crm.deals.get(input))
+		expect(viaGroups.sent).toEqual(viaFull.sent)
+		expect(viaGroups.sent.map((sent) => sent.url)).toEqual(['https://crm.test/api/crm.deals.get'])
 	})
 })

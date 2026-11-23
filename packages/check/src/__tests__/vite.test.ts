@@ -153,6 +153,8 @@ describe('a Vite build of the SPA through the plugin', () => {
 		expect(result.ok).toBe(true)
 		expect(result.modules.some((id) => id.endsWith('src/deals/endpoints.ts'))).toBe(true)
 		expect(result.modules.filter((id) => /fabrika\.contract\.ts$|src\/companies\//.test(id))).toEqual([])
+		expect(result.modules.filter((id) => SERVER_MODULES.test(id))).toEqual([])
+		for (const text of HANDLER_TEXT) expect(scripts(root)).not.toContain(text)
 		const answer = { rows: [{ stage: 'won', deals: 3 }] }
 		expect(runPage(root, answer)).toEqual({
 			requests: [{ method: 'POST', url: 'https://crm.example.test/api/deals.pipeline', body: JSON.stringify({ orgId: 'org-1' }) }],

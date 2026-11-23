@@ -29,6 +29,7 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'23-group-in-another-groups-place.ts': "is missing the following properties from type '{ readonly get: Endpoint<",
 	'24-group-client-of-a-group-not-given.ts': "Property 'companies' does not exist on type 'ClientTree<{ readonly deals:",
 	'25-group-mount-of-no-rpc-mount.ts': `Argument of type '"shared"' is not assignable to parameter of type '"api"'.`,
+	'26-group-mount-prefix-without-slash.ts': `Type '"api"' is not assignable to type '\`/\${string}\`'.`,
 }
 
 describe('client and test kit mistakes are type errors', () => {
