@@ -13,6 +13,10 @@ behaviour.
 - [`overview.md`](overview.md) — what fabrika-platform is, why it exists, the
   three product planes, the services an installation actually runs, packages, and
   primary request flows. **Start here.**
+- [`security-runtime.md`](security-runtime.md) — the runtime security model: the proxy, the endpoint contract it
+  checks, identity in IAM, audit, isolation and secrets, each marked built or decided.
+- [`security-deployment.md`](security-deployment.md) — the gates a deploy passes before it serves traffic, who
+  approves an access change, and what is decided but not built.
 - [`installing-on-zerops.md`](installing-on-zerops.md) — the operator's procedure from an empty
   Zerops account to a serving application: prerequisites, the command order, and a check per step.
 - [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` serving
