@@ -32,7 +32,7 @@ show.
 | -- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1  | `POST /client/{id}/project/import` (`zops project import`)                                                                                      | 200; two `stack.create` processes `FINISHED`                                                                                                                                                   |
 | 2  | Build command: `zsc setSecretEnv PROBE_FROM_BUILD "<reference>"`                                                                                | zsc: `Command "set-secret-env" is deprecated, use "zsc set-env --sensitive" instead. Error: [serviceStackIsSystemNotSupported] ServiceStack should not be system`, exit 1                      |
-| 3  | `PUT /app-version/{id}/build-and-deploy` (`zops push`) of row 2                                                                                 | The build command itself passed, yet the version is `BUILD_FAILED`: process `stack.build` `FAILED`, error `serviceStackIsSystemNotSupported` naming the build container                        |
+| 3  | `PUT /app-version/{id}/build-and-deploy` (`zops push`) of row 2                                                                                 | The build command ignored zsc's exit code and passed, yet the version is `BUILD_FAILED`: process `stack.build` `FAILED`, error `serviceStackIsSystemNotSupported` naming the build container   |
 | 4  | Second push, without the build attempt; start command: `zsc set-env --sensitive PROBE_REF_SENSITIVE "<reference>"`                              | exit 0, no output                                                                                                                                                                              |
 | 5  | Same start command: `zsc set-env PROBE_REF_PLAIN "<reference>"`                                                                                 | exit 0, no output                                                                                                                                                                              |
 | 6  | Same start command: `zsc setSecretEnv PROBE_EXISTING "<reference>"` (a key the import created through `envSecrets`)                             | exit 0, the deprecation line only                                                                                                                                                              |
@@ -57,22 +57,29 @@ The platform facts are recorded in
   the source descriptor) bound what fabrika writes; nothing bounds what the container writes.
 - **`cheap`:** every application reaches the shared `postgres` superuser and with it every application's schema, and
   `COPY … PROGRAM` on the database server ([ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)).
-- **`cheap` and `mid`:** every application reaches the variables of the namespace proxy (every member's proxy secret,
-  `FABRIKA_IAM_KEY`), of the namespace's `zbox` host when it has one (`ZBOX_WORKSPACE_API_KEY`), and of every other
+- **`cheap` and `mid`:** every application reaches the variables of the namespace proxy (every member's proxy secret),
+  of the namespace's `zbox` host when it has one (`ZBOX_WORKSPACE_API_KEY`), and of every other
   member's services: its token keys, workload keys and, in `mid`, its own PostgreSQL superuser. The mechanism was
   measured for a managed service's generated credential and a runtime service's secret; this list applies it to the
   names fabrika writes.
 - **`full`:** the project holds one application. It reaches its own database superuser, which it shares a container
-  environment with anyway, and the namespace proxy's variables, which hold only its own secrets.
+  environment with anyway, and the namespace proxy's variables: its own proxy secret and the key below.
+- **Every preset:** the namespace proxy holds the installation-wide proxy key of IAM's mint surface
+  (`FABRIKA_IAM_KEY`; ADR-0022: every namespace proxy holds that one), so any application reaches it. It opens
+  `/auth/mint/*`, which mints only from a credential of the caller (a session cookie, a `px_` key, a handoff code and its
+  verifier); what that adds for a holder of no such credential is not assessed here.
 - **The installation's own project is not affected while no application shares it**
   ([ADR-0034](../decisions/0034-the-control-plane-creates-the-projects-it-owns.md)). A co-located installation
   ([`compact-installation.md`](../ideas/compact-installation.md)) would give every application the platform's keys.
 - **The build is closed:** a build container cannot write a variable (rows 2–3), and fabrika refuses the reference in
   descriptor text Zerops would resolve.
-- **Drift:** ADR-0017 says the launcher keeps the provisioning credential from application code. On Zerops the
-  application has passwordless `sudo`, which reads the non-dumpable launcher's environment (row 11), and with `zsc` it
-  does not need the launcher at all. [`deployment-namespaces.md`](../reference/deployment-namespaces.md) already calls a
-  `cheap` namespace one PostgreSQL trust domain, but not `mid`.
+- **Drift:** ADR-0017's Decision says the application's process never holds the provisioning credential. Its own
+  Consequences already concede that the launcher protects only where the application runs unprivileged, and that a
+  Zerops application has passwordless `sudo` (verified 2026-10-21). New here: `sudo` reads a non-dumpable process's
+  environment, on `alpine/bun@1.3` too (row 11), and with `zsc` the application does not need the launcher at all.
+  [ADR-0014](../decisions/0014-provider-owned-deployment-namespaces.md) and
+  [`deployment-namespaces.md`](../reference/deployment-namespaces.md) already call a `cheap` namespace one trust
+  boundary between its applications, but not `mid`.
 
 ## Options
 

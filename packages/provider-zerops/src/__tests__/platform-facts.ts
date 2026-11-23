@@ -1359,7 +1359,7 @@ export const PLATFORM_FACTS: readonly PlatformFact[] = [
 	{
 		id: 'build-container-env-write-fails-the-build',
 		section: SECTION_CONTAINER_ENV_WRITE,
-		// `zsc set-env` in a build command answers `serviceStackIsSystemNotSupported`, and the version goes BUILD_FAILED.
+		// `zsc setSecretEnv` in a build command answers `serviceStackIsSystemNotSupported`, and the version goes BUILD_FAILED.
 		request: { method: 'PUT', path: '/app-version/{appVersionId}/build-and-deploy' },
 		expect: { status: 200 },
 		live: 'not-probed',
