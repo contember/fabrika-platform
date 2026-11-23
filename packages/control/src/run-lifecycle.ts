@@ -812,6 +812,9 @@ async function deployUnder(
 					const environment = await providerEnvironment(deps.repositories, row, { requireReadyNamespace: true })
 					deps.provider.validateAccess({ environment, access })
 				},
+				...(deps.provider.lockfileRefusal === undefined ? {} : {
+					lockfileRefusal: (lockfile: string) => deps.provider.lockfileRefusal?.({ environment: registration.environment, lockfile }) ?? null,
+				}),
 				log: (line) => runLogs.log(line),
 			}
 			const publication = await publishRunSnapshot({ repositories: deps.repositories, commits }, {
