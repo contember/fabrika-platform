@@ -110,6 +110,13 @@ export interface Env {
 	 */
 	FABRIKA_IAM_PROVISIONING_KEY: string
 	/**
+	 * **Secret.** Base64 of 32 random bytes: the key that seals the one value IAM must read back, a person's TOTP secret
+	 * (`src/data-key.ts`). Unset makes TOTP enrolment unavailable; a value that is not 32 bytes fails the boot. Losing it
+	 * makes every enrolled authenticator unreadable, so those people sign in with a recovery code or an administrator's
+	 * reset. Never placed in `vars`.
+	 */
+	FABRIKA_IAM_DATA_KEY?: string
+	/**
 	 * OIDC provider issuer URL (e.g. `https://accounts.google.com`, an Auth0/Okta/Keycloak/Entra
 	 * tenant). IAM discovers the endpoints from `${OIDC_ISSUER}/.well-known/openid-configuration`
 	 * — so ANY OIDC provider works via config, no per-provider code.

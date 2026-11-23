@@ -12,6 +12,7 @@ import { MembershipTransportKeyRepository } from './repositories/membership-tran
 import { OAuthRepository } from './repositories/oauth'
 import { PasswordPolicyRepository } from './repositories/password-policy'
 import { PrincipalRepository } from './repositories/principals'
+import { SecondFactorRepository } from './repositories/second-factors'
 import { SessionRepository } from './repositories/sessions'
 import { TerminalRepository } from './repositories/terminals'
 import { WorkloadRepository } from './repositories/workloads'
@@ -60,6 +61,7 @@ export { MembershipTransportKeyRepository, type MembershipTransportKeyRow } from
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
 export { PasswordPolicyRepository, type PasswordPolicyRow } from './repositories/password-policy'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
+export { SecondFactorRepository, type SecondFactorRow, type SecondFactorStatus } from './repositories/second-factors'
 export {
 	type AuthenticationMethod,
 	SessionRepository,
@@ -97,6 +99,7 @@ export interface IamRepositories {
 	membershipTransport: MembershipTransportKeyRepository
 	brand: InstallationBrandRepository
 	passwordPolicy: PasswordPolicyRepository
+	secondFactors: SecondFactorRepository
 }
 
 /**
@@ -126,6 +129,7 @@ export function createIamRepositories(
 		membershipTransport: replacements.membershipTransport ?? new MembershipTransportKeyRepository(db),
 		brand: replacements.brand ?? new InstallationBrandRepository(db, writer),
 		passwordPolicy: replacements.passwordPolicy ?? new PasswordPolicyRepository(db, writer),
+		secondFactors: replacements.secondFactors ?? new SecondFactorRepository(db, writer),
 	}
 }
 

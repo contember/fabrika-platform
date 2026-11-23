@@ -15,6 +15,7 @@ import { type EmailProviderRegistry, type EmailSender, emailSenderFromEnv, pickE
 import { installationMailSender, isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { createBackgroundTasks, PostgresDatabase } from '@fabrika/platform-node'
+import { parseDataKey } from '../data-key'
 import { createPostgresIamRepositories } from '../db'
 import type { Env, RequestContext } from '../env'
 import { parseOAuthConfig } from '../oauth-config'
@@ -110,6 +111,7 @@ export async function createRuntime(source: Record<string, string | undefined> =
 	)
 	const oidcSessionHours = source['FABRIKA_IAM_OIDC_SESSION_HOURS']
 	parseOidcSessionSeconds(oidcSessionHours, 'FABRIKA_IAM_OIDC_SESSION_HOURS')
+	parseDataKey(source['FABRIKA_IAM_DATA_KEY'])
 
 	const config: ProcessConfig = {
 		port: parsePort(source['PORT']),
@@ -142,6 +144,7 @@ export async function createRuntime(source: Record<string, string | undefined> =
 		// Empty off-local is refused by `getSigner`, not here — one owner for that rule.
 		FABRIKA_IAM_SIGNING_KEYS: source['FABRIKA_IAM_SIGNING_KEYS'] ?? '',
 		FABRIKA_IAM_PROVISIONING_KEY: source['FABRIKA_IAM_PROVISIONING_KEY'] ?? '',
+		FABRIKA_IAM_DATA_KEY: source['FABRIKA_IAM_DATA_KEY'],
 		OIDC_ENABLED: String(oidcEnabled),
 		PASSWORD_ENABLED: String(passwordEnabled),
 		OIDC_ISSUER: oidcIssuer,
