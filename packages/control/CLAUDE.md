@@ -719,8 +719,10 @@ other environment, before the provider prepares anything, and the write maps a r
   and its entry answers 503; it asks `namespaces.assertSuspendable` first, and a refusal (a pin whose parser does not
   read the flag) is a 409 before anything is written. Any other provider goes through the environment's object: the
   row records the maintenance mode it was in (`suspended_from_mode`, `open` or `read-only`) BEFORE the `closed`
-  operation starts, so a `resume` after an interrupted close still restores it; a refused start clears the record. The
-  suspension changes no `generation`. Both verbs are retries: a repeated suspend republishes (or closes) again.
+  operation starts, so a `resume` after an interrupted close still restores it; a refused start clears the record. Every
+  record write is a compare-and-set on `suspended_at` (`setAppEnvSuspension`), so only the call that wrote a record
+  clears it. The suspension changes no `generation`. Both verbs are retries: a repeated suspend republishes (or closes)
+  again. A suspended environment cannot change namespace (`apps.environments.put`), whose pin may not read the flag.
 - **A Zerops namespace pinned to an older proxy source is judged by that release's own manifest parser
   (`src/zerops/older-proxies.ts`).** It holds the parsers of `@fabrika/proxy-core` 0.4.8, 0.5.5 and 0.6.0, and the
   Zerops provider refuses a deploy of a row none of them parses, or of a CSP none of them parses (the CSP field of each

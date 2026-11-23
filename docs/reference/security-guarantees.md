@@ -135,7 +135,11 @@ in [`signing.ts`](../../packages/iam/src/signing.ts) and the JWKS cache in
   [ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md)), and `resume` returns it to the
   mode it was in, `open` or `read-only`. `fabrika env maintenance <app> <env> closed` does the same without recording
   the mode to return to. An object already `closed` or in `inspect`, or one whose operation is still running, is
-  refused.
+  refused. A maintenance transition or a recovery that opens the object ends the suspension in fact, while Control
+  still shows it suspended until `resume`.
+
+A suspended environment cannot move to another deployment namespace until it is resumed. A Control rolled back below
+the release that added suspension ignores the record and republishes the environment as serving.
 
 A suspension stops traffic through the platform's entry point; it does not stop the application's service, which keeps
 running with its keys and can still call out. To stop the process too, or when Control is unreachable, the operator

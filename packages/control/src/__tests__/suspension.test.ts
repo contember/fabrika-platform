@@ -10,6 +10,7 @@ import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { republishNamespace } from '../api/namespaces'
 import { type OpsAnswer, type OpsDataAnswer, type OpsFencedAnswer, type OpsInspection, type OpsTransport, startMaintenance } from '../data-operations'
+import { runLeaseKey } from '../lease'
 import type { ControlRpcDeps } from '../services'
 import { createHarness } from './helpers/harness'
 import { authWithPermissions } from './helpers/iam'
@@ -93,7 +94,7 @@ function proxyProvider(recording: ProxyRecording): ControlProvider {
 		...fakeControlProvider,
 		namespaces: {
 			normalize: (namespace) => namespace,
-			namespaceResourceClaims: () => ['service:proxy'],
+			namespaceResourceClaims: (namespace) => [`service:proxy:${namespace.id}`],
 			registrationResourceClaims: () => [],
 			provision: (input) => Promise.resolve(input.namespace),
 			reconcile: (input) => Promise.resolve(input.namespace),
@@ -129,14 +130,16 @@ async function proxyHarness(recording: ProxyRecording) {
 		namespaceProxyChanged: (namespaceId) =>
 			republishNamespace({ repositories: db, provider, lock: makeFakeLock(db), queue }, namespaceId, { wait: 'started' }),
 	}
-	await db.registry.createDeploymentNamespaceWithResourceClaims({
-		id: 'apps-prod',
-		env: ENV,
-		provider: TEST_PROVIDER_ID,
-		exclusiveAppId: null,
-		providerTargetJson: JSON.stringify({ provider: TEST_PROVIDER_ID, version: 1, payload: {} }),
-		state: 'ready',
-	}, ['service:proxy'])
+	for (const id of ['apps-prod', 'apps-other']) {
+		await db.registry.createDeploymentNamespaceWithResourceClaims({
+			id,
+			env: ENV,
+			provider: TEST_PROVIDER_ID,
+			exclusiveAppId: null,
+			providerTargetJson: JSON.stringify({ provider: TEST_PROVIDER_ID, version: 1, payload: {} }),
+			state: 'ready',
+		}, [`service:proxy:${id}`])
+	}
 	await db.registry.createApp({ id: APP, repoUrl: 'github.com/acme/notes' })
 	await db.registry.upsertAppEnv({ ...providerEnvironment(APP, ENV, { domain: 'notes.example.com' }), namespaceId: 'apps-prod' })
 	return { deps, audits }
@@ -174,6 +177,8 @@ const call = async (deps: ControlRpcDeps, verb: 'suspend' | 'resume') => {
 	const response = await rpcResult(rpcRequest(`apps.environments.${verb}`, TARGET), deps)
 	return { status: response.status, body: answerSchema.parse(await response.json()) }
 }
+
+const parsedJson = (text: string): unknown => JSON.parse(text)
 
 const suspendedOf = (members: readonly ProviderNamespaceMember[] | undefined) =>
 	members?.map((member) => [`${member.appId}@${member.env}`, member.suspended])
@@ -222,6 +227,28 @@ describe('behind a namespace proxy', () => {
 		expect(audits).toEqual([])
 	})
 
+	test('a suspended environment cannot move to another namespace, whose pinned proxy may not read the flag', async () => {
+		const recording: ProxyRecording = { republished: [], pinReadsSuspension: true }
+		const { deps } = await proxyHarness(recording)
+		const stored = await deps.repositories.registry.getAppEnv(APP, ENV)
+		if (stored === null) throw new Error('the environment is missing')
+		const move = rpcRequest('apps.environments.put', {
+			...TARGET,
+			environment: {
+				namespaceId: 'apps-other',
+				domain: stored.domain,
+				target: parsedJson(stored.provider_target_json),
+				artifact: parsedJson(stored.provider_artifact_json),
+			},
+		})
+		expect((await call(deps, 'suspend')).status).toBe(200)
+
+		const refused = await rpcResult(move, deps)
+		expect(refused.status).toBe(409)
+		expect(answerSchema.parse(await refused.json()).error).toContain('is suspended; resume it before it changes deployment namespace')
+		expect(await deps.repositories.registry.getAppEnv(APP, ENV)).toMatchObject({ namespace_id: 'apps-prod' })
+	})
+
 	test('app.manage on another app cannot suspend this one', async () => {
 		const recording: ProxyRecording = { republished: [], pinReadsSuspension: true }
 		const { deps } = await proxyHarness(recording)
@@ -249,7 +276,7 @@ describe("through the environment's object", () => {
 
 		expect(audits.map((event) => [event.action, event.metadata])).toEqual([
 			['app.env.suspend', { mode: 'closed', operationId: expect.any(String), state: 'succeeded' }],
-			['app.env.resume', { mode: 'open', operationId: expect.any(String) }],
+			['app.env.resume', { mode: 'open', operationId: expect.any(String), state: 'succeeded' }],
 		])
 	})
 
@@ -273,9 +300,33 @@ describe("through the environment's object", () => {
 		expect(audits).toEqual([])
 	})
 
+	test('a suspend the deploy lease refuses leaves no record behind', async () => {
+		const { deps, object, lock } = await objectHarness()
+		expect(await lock.acquire(runLeaseKey(APP, ENV), 'a-running-deploy', 60_000)).toBe(true)
+
+		expect((await call(deps, 'suspend')).status).toBe(409)
+		expect(await deps.repositories.registry.getAppEnv(APP, ENV)).toMatchObject({ suspended_at: null, suspended_from_mode: null })
+		expect(object.modes).toEqual([])
+	})
+
 	test('resume of an environment that is not suspended is refused', async () => {
 		const { deps, object } = await objectHarness()
 		expect((await call(deps, 'resume')).status).toBe(409)
 		expect(object.modes).toEqual([])
+	})
+})
+
+describe('the suspension record', () => {
+	test('of two concurrent writers only the first records it, and a clear holding a stale record changes nothing', async () => {
+		const { db } = createHarness()
+		await db.registry.createApp({ id: APP, repoUrl: 'github.com/acme/notes' })
+		await db.registry.upsertAppEnv(providerEnvironment(APP, ENV, { domain: 'notes.example.com' }))
+
+		expect(await db.registry.setAppEnvSuspension(APP, ENV, { at: 100, fromMode: 'read-only' }, null)).toMatchObject({ suspended_at: 100 })
+		expect(await db.registry.setAppEnvSuspension(APP, ENV, { at: 100, fromMode: 'open' }, null)).toBeNull()
+		expect(await db.registry.setAppEnvSuspension(APP, ENV, null, 99)).toBeNull()
+		expect(await db.registry.getAppEnv(APP, ENV)).toMatchObject({ suspended_at: 100, suspended_from_mode: 'read-only' })
+
+		expect(await db.registry.setAppEnvSuspension(APP, ENV, null, 100)).toMatchObject({ suspended_at: null, suspended_from_mode: null })
 	})
 })

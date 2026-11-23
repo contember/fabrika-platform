@@ -49,7 +49,7 @@ async function requireAppEnv(c: SuspensionUseCaseContext, appId: string, env: st
  */
 async function suspendBehindProxy(c: SuspensionUseCaseContext, row: AppEnvRow, now: number): Promise<AppEnvRow> {
 	const namespaceId = await suspendableNamespace(c, row)
-	const updated = await recordSuspension(c, row, row.suspended_at === null ? { at: now, fromMode: null } : null)
+	const updated = row.suspended_at === null ? (await recordSuspension(c, row, { at: now, fromMode: null })).row : row
 	await c.auth.audit({ action: 'app.env.suspend', resourceType: 'app_env', resourceId: `${row.app_id}/${row.env}`, metadata: { namespaceId } })
 	// Waits until the rebuild starts, not until it is live: a proxy build takes minutes.
 	await syncChangedNamespaceProxies(c.namespaceProxyChanged, [namespaceId])
@@ -89,15 +89,18 @@ async function suspendObject(c: SuspensionUseCaseContext, row: AppEnvRow, now: n
 	const target = { appId: row.app_id, env: row.env }
 	const mode = await recordedMaintenance(deps, target)
 	let recorded = row
+	let owned = false
 	if (row.suspended_at === null) {
-		recorded = await recordSuspension(c, row, { at: now, fromMode: restorableMode(mode) })
+		const record = await recordSuspension(c, row, { at: now, fromMode: restorableMode(mode) })
+		recorded = record.row
+		owned = record.owned
 	} else if (mode === 'closed') {
 		return row
 	}
 	const outcome = await startMaintenance(deps, { ...target, mode: 'closed', actor: runActor(c.auth) })
 	if (outcome.kind === 'busy' || outcome.kind === 'refused') {
-		// Nothing changed the object: a first suspension leaves no record behind.
-		if (row.suspended_at === null) await clearSuspension(c, recorded)
+		// Nothing changed the object: the call that wrote the record removes it; a concurrent one's stays with its close.
+		if (owned) await clearSuspension(c, recorded)
 		dataOperationResult(outcome)
 	}
 	const operation = dataOperationResult(outcome)
@@ -116,20 +119,18 @@ async function resumeObject(c: SuspensionUseCaseContext, row: AppEnvRow): Promis
 	if (row.suspended_at === null) fail(409, `app env ${row.app_id}/${row.env} is not suspended`)
 	const target = { appId: row.app_id, env: row.env }
 	const restored: OpsMode = row.suspended_from_mode ?? 'open'
-	let operationId: string | null = null
-	if ((await recordedMaintenance(deps, target)) !== restored) {
-		const operation = dataOperationResult(await startMaintenance(deps, { ...target, mode: restored, actor: runActor(c.auth) }))
-		if (operation.state !== 'succeeded') fail(502, objectUnsettled(operation.id, operation.state, restored))
-		operationId = operation.id
-	}
-	const updated = await clearSuspension(c, row)
+	const operation = (await recordedMaintenance(deps, target)) === restored
+		? null
+		: dataOperationResult(await startMaintenance(deps, { ...target, mode: restored, actor: runActor(c.auth) }))
 	await c.auth.audit({
 		action: 'app.env.resume',
 		resourceType: 'app_env',
 		resourceId: `${row.app_id}/${row.env}`,
-		metadata: { mode: restored, operationId },
+		metadata: { mode: restored, operationId: operation?.id ?? null, ...(operation === null ? {} : { state: operation.state }) },
 	})
-	return updated
+	// The record stays until the object serves again, so a retry still knows the mode to restore.
+	if (operation !== null && operation.state !== 'succeeded') fail(502, objectUnsettled(operation.id, operation.state, restored))
+	return clearSuspension(c, row)
 }
 
 function maintenanceDeps(
@@ -150,20 +151,22 @@ function objectUnsettled(operationId: string, state: string, mode: OpsMode): str
 	return `the environment's object did not acknowledge \`${mode}\`: operation ${operationId} is ${state}; recover it, then try again`
 }
 
-/** `null` keeps the recorded suspension as it is: a retry neither moves its time nor the mode it restores. */
+/**
+ * Record a first suspension. `owned` is false when a concurrent call recorded one first; the answer is then the row it
+ * wrote, and this call proceeds as a retry of it.
+ */
 async function recordSuspension(
 	c: SuspensionUseCaseContext,
 	row: AppEnvRow,
-	suspension: { readonly at: number; readonly fromMode: 'open' | 'read-only' | null } | null,
-): Promise<AppEnvRow> {
-	if (suspension === null) return row
-	const updated = await c.repositories.registry.setAppEnvSuspension(row.app_id, row.env, suspension)
-	if (updated === null) fail(404, 'app env not found')
-	return updated
+	suspension: { readonly at: number; readonly fromMode: 'open' | 'read-only' | null },
+): Promise<{ readonly row: AppEnvRow; readonly owned: boolean }> {
+	const updated = await c.repositories.registry.setAppEnvSuspension(row.app_id, row.env, suspension, null)
+	if (updated !== null) return { row: updated, owned: true }
+	return { row: await requireAppEnv(c, row.app_id, row.env), owned: false }
 }
 
+/** Clear the suspension `row` holds; one a concurrent call already cleared or replaced is left as that call wrote it. */
 async function clearSuspension(c: SuspensionUseCaseContext, row: AppEnvRow): Promise<AppEnvRow> {
-	const updated = await c.repositories.registry.setAppEnvSuspension(row.app_id, row.env, null)
-	if (updated === null) fail(404, 'app env not found')
-	return updated
+	const updated = await c.repositories.registry.setAppEnvSuspension(row.app_id, row.env, null, row.suspended_at)
+	return updated ?? requireAppEnv(c, row.app_id, row.env)
 }
