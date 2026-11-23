@@ -12,6 +12,7 @@ import { z } from 'zod/v4'
 import { Database, type InvocationTransaction } from '../database'
 import { CapabilityError, ConflictError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataSite } from '../framework'
+import { FRAMEWORK_MIGRATIONS } from '../migrations'
 import type { DataKind } from '../orm-types'
 import { scoped } from '../store'
 import { TestAuthority } from './fixtures/authority'
@@ -45,7 +46,7 @@ beforeAll(async () => {
 	}
 	await admin(async (sql) => {
 		await sql.unsafe(`create schema ${schema}`)
-		await sql.unsafe(`set search_path to ${schema}; ${migration}`)
+		await sql.unsafe(`set search_path to ${schema}; ${FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')} ${migration}`)
 		await sql.unsafe(`insert into ${schema}.projects (id, org_id, title) values ('p1', 'o1', 'One'), ('p2', 'o1', 'Two'), ('p3', 'o2', 'Three')`)
 	})
 	database = openPostgres({ url: url ?? '', schema, max: 4 })

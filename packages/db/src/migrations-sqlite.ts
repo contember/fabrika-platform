@@ -18,6 +18,7 @@ import {
 	JOB_KICKS_TABLE,
 	JOB_LEASES_TABLE,
 	JOB_WAKES_TABLE,
+	LIST_CURSOR_KEY_TABLE,
 	REQUEST_RECEIPTS_TABLE,
 	WEBHOOK_BINDINGS_TABLE,
 	WEBHOOK_DELIVERIES_TABLE,
@@ -176,6 +177,17 @@ CREATE TABLE ${REQUEST_RECEIPTS_TABLE} (
 	PRIMARY KEY (principal, request_key)
 ) STRICT;
 CREATE INDEX ${REQUEST_RECEIPTS_TABLE}_created_at ON ${REQUEST_RECEIPTS_TABLE} (created_at);
+`,
+	}),
+	Object.freeze({
+		name: '0006_list_cursor_key.sql',
+		sql: `-- The key a list's cursor is signed with (list-cursor.ts), so a cursor a client edited is refused: one row, written
+-- here once and only read afterwards. 32 random bytes as hex.
+CREATE TABLE ${LIST_CURSOR_KEY_TABLE} (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	secret TEXT NOT NULL
+) STRICT;
+INSERT INTO ${LIST_CURSOR_KEY_TABLE} (id, secret) VALUES (1, hex(randomblob(32)));
 `,
 	}),
 ])

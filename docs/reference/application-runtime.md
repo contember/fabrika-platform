@@ -663,10 +663,12 @@ names the same fix at runtime.
   destination's `FOR SHARE` and a claim's `FOR UPDATE SKIP LOCKED` ([Queues and claims](#queues-and-claims)).
 - **A list is a keyset page**: at most `limit` rows (50 by default, 500 at most) in the order asked, the table's key
   last as the tiebreak, and `next`, the opaque cursor `after` takes, `null` on the last page. Filters and orderings
-  name only the columns the capability reads. The cursor holds its table, its order and each order column as the
-  database prints it, so a timestamp keeps its microseconds; one that does not decode, has another shape, or belongs to
-  another table or order is refused (`list_cursor`), which a request answers 400. Every capability reads the key and
-  the version; a column policy on either is refused.
+  name only the columns the capability reads. The cursor holds each order column as the database prints it, so a
+  timestamp keeps its microseconds, and an HMAC over them and its list (table and order), with a key the framework
+  migration writes into the application's own database (`fabrika_list_cursor_key`); it names no table or column. One
+  that does not decode, is unsigned or edited, has another shape, or belongs to another table or order is refused
+  (`list_cursor`), which a request answers 400. Every capability reads the key and the version; a column policy on
+  either is refused.
 - **`all({ where, orderBy })` reads every row a list would**, in one statement, as an array, wherever `list` is but in
   a public procedure, which pages. More than `MAX_ALL_ROWS` (10 000) is a `QueryRefusedError` `too_many_rows`, never a
   truncated answer. It bounds rows, not bytes: 10 000 rows of about 1 KB, held two or three times over (the driver's

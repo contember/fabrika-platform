@@ -17,6 +17,7 @@ export const FORM_BYTES_TABLE = 'fabrika_form_bytes'
 export const FILES_TABLE = 'fabrika_files'
 export const FILE_DELETIONS_TABLE = 'fabrika_file_deletions'
 export const REQUEST_RECEIPTS_TABLE = 'fabrika_request_receipts'
+export const LIST_CURSOR_KEY_TABLE = 'fabrika_list_cursor_key'
 /** The function an application's last adoption migration calls with the name of a file collection it adopted. */
 export const FILES_RELEASE_FUNCTION = 'fabrika_files_release'
 /**
@@ -297,6 +298,17 @@ CREATE TABLE ${REQUEST_RECEIPTS_TABLE} (
 	PRIMARY KEY (principal, request_key)
 );
 CREATE INDEX ${REQUEST_RECEIPTS_TABLE}_created_at ON ${REQUEST_RECEIPTS_TABLE} (created_at);
+`,
+	}),
+	Object.freeze({
+		name: '0012_list_cursor_key.sql',
+		sql: `-- The key a list's cursor is signed with (list-cursor.ts), so a cursor a client edited is refused: one row, written
+-- here once and only read afterwards. Two random UUIDs give it 244 random bits.
+CREATE TABLE ${LIST_CURSOR_KEY_TABLE} (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	secret TEXT NOT NULL
+);
+INSERT INTO ${LIST_CURSOR_KEY_TABLE} (id, secret) VALUES (1, gen_random_uuid()::text || gen_random_uuid()::text);
 `,
 	}),
 ])
