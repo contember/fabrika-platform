@@ -1,3 +1,4 @@
+import type { OAuthResourceDto } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from '../mcp'
 import type { PlatformProxyComposition, PlatformProxyManifestTemplate } from '../proxy-manifest'
@@ -51,7 +52,7 @@ const COMPOSITION: PlatformProxyComposition = {
 	authorizationServer: 'https://iam.example.test',
 	mcp: true,
 }
-const RPC_RESOURCE = {
+const RPC_RESOURCE: OAuthResourceDto = {
 	app: 'vozka',
 	resource: 'https://console.example.test/api/rpc',
 	scopeGrants: [{ scope: 'deploy', parameter: 'app', permissions: [{ action: 'deploy.trigger' }] }],
