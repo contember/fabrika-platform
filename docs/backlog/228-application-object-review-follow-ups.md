@@ -101,16 +101,14 @@ statement and a `PRAGMA` before anything runs, so these gaps are defence in dept
 
 **Merge review of the ops channel.**
 
-25. Control sends the ops key to the domain the registry holds now, not the one the key was handed to with
-    (`packages/control/src/data-operations.ts`, `httpOpsTransport`). Between a domain change and the next deploy, a
-    holder of an app-scoped `app.manage` can point the host at a server they run and receive the key. Record the
-    domain with the key, and call only that one.
+25. Shipped: each ops key records the domain its deploys deployed to, `httpOpsTransport` calls only that one, and a
+    deploy to another domain issues a new key (`ops-key.ts`, migration `0033_ops_key_domain`). A domain change on a
+    protected environment takes a person.
 26. The ops row forwards any `Authorization`, a person's `px_` platform key included
     (`packages/proxy-core/src/authorize.ts`); webhook rows exclude those. Refuse `px_` on the ops row.
 27. `app_env_data_operations` references only `apps` (`0018_data_operations.sql`), so a running record of a deleted
     environment refuses deploys of a recreated one with the same name. Cascade on `app_envs`.
-28. `data.view` on an environment with a domain but no issued key tries zero keys and answers 502 (`unreachable`),
-    not 409 (`no_channel`).
+28. Shipped with item 25: without a key bound to a domain the transport answers `no_channel`.
 29. Every `inspect` counts up to 100,000 rows per table synchronously, and a `data.read` holder can call it without a
     bound. Cache the view or rate-limit the call.
 30. Deleting an environment leaves its ops keys' vault rows behind, as it does for token keys.
