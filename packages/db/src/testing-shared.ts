@@ -789,11 +789,14 @@ export function testSeeding(backend: SeedingBackend): TestSeeding {
 		return stored
 	}
 
-	/** A value of `dimension` for the column that carries it: a uuid, or text that names the world it belongs to. */
+	/**
+	 * A value of `dimension` for the column that carries it: a uuid, or text that names the world it belongs to. Either
+	 * holds a random v4 uuid's 122 bits, so a large seed never collides on a key.
+	 */
 	function scopeValue(table: string, name: string, dimension: string, world: string): string {
 		const column = columnOf(table, name)
 		if (column.uuid) return crypto.randomUUID()
-		if (column.text) return `${dimension}-${world}-${randomHex()}`
+		if (column.text) return `${dimension}-${world}-${crypto.randomUUID()}`
 		throw new Error(`${table}.${name} holds a ${dimension} as ${column.type}; a key or containment column holds its scope value as text or uuid`)
 	}
 
