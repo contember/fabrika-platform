@@ -1,0 +1,755 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`platform scaffold GitHub secrets mode the default renders exactly the Environment scaffold 1`] = `
+"name: platform
+
+# Deploys the acme account's fabrika BASE: IAM (Stage 1, root authz) → Operations (Stage 2) →
+# runner + control plane (Stage 3). THIS repo is the per-account root of trust, so the control plane
+# never deploys itself.
+# Idempotent: re-run for a first bring-up OR a routine redeploy. Concrete apps deploy through fabrika.
+#
+# Generated + maintained by \`fabrika platform init --provider=cloudflare acme\`. Secrets + variables live in the \`acme\` GitHub
+# Environment (Settings → Environments → acme) and are written there by the CLI — don't hand-edit them.
+#
+# contember/fabrika-platform is public and checked out tokenless. The version this account runs is pinned
+# in \`fabrika.ref\` (bump it and push to roll out a new base).
+
+on:
+  workflow_dispatch:
+    inputs:
+      retire_legacy_propustka_worker:
+        description: >-
+          Name of a LEGACY propustka Worker to delete BEFORE Stage 1 (one-off migration off an old
+          deploy — e.g. a CF-Access-era \`<env>-propustka-worker\`). Deleting it releases its Custom
+          Domain so the new env-prod propustka can claim it. Empty = skip (the normal case).
+        type: string
+        default: ''
+  push:
+    branches: [main]
+    # Only a version bump (or a workflow edit) redeploys — not a README tweak.
+    paths: ['fabrika.ref', '.github/workflows/platform.yml']
+
+concurrency:
+  group: platform-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Secrets + variables resolve from this GitHub Environment (created + populated by \`fabrika platform init\`).
+    environment: acme
+    # Cloudflare creds at the JOB level so EVERY oblaka/wrangler step (provision, migrate, deploy, secret
+    # put) inherits them — wrangler errors in a non-interactive shell without CLOUDFLARE_API_TOKEN.
+    env:
+      CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # The resource names this installation was created with (\`fabrika\` from init; unset on an older installation,
+      # which keeps the legacy names). Every stage names its Workers, databases, buckets and queues by it.
+      FABRIKA_CLOUDFLARE_NAMES: \${{ vars.FABRIKA_CLOUDFLARE_NAMES }}
+    steps:
+      - name: Checkout this repo (base config + pinned refs)
+        uses: actions/checkout@v5
+
+      - name: Resolve pinned refs
+        id: ref
+        run: echo "fabrika=$(tr -d '[:space:]' < fabrika.ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout contember/fabrika-platform@\${{ steps.ref.outputs.fabrika }}
+        uses: actions/checkout@v5
+        with:
+          repository: contember/fabrika-platform
+          ref: \${{ steps.ref.outputs.fabrika }}
+          path: fabrika-platform
+
+      - name: Resolve the Bun release of the pinned tag
+        id: bun
+        working-directory: fabrika-platform
+        env:
+          PINNED_REF: \${{ steps.ref.outputs.fabrika }}
+        # Exactly the Bun the tag was built and released with, never \`latest\`: a newer Bun rewrites the
+        # lockfile. Tags up to v0.4.3 carry no \`.bun-version\` and were all released with Bun 1.3.14.
+        run: |
+          if [ -f .bun-version ]; then
+            version="$(tr -d '[:space:]' < .bun-version)"
+          else
+            version=1.3.14
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\\.[0-9]+\\.[0-9]+$'; then
+            echo "fabrika-platform@$PINNED_REF names no exact Bun release in .bun-version: '$version'." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: \${{ steps.bun.outputs.version }}
+      # wrangler launches under Node even via Bun and needs Node 22+.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Install fabrika
+        working-directory: fabrika-platform
+        run: bun install --frozen-lockfile
+
+      # The Cloudflare provider spawns a BARE \`wrangler\` (Bun.spawn), so the workspace bins must be on PATH.
+      - name: Put fabrika workspace bins on PATH
+        working-directory: fabrika-platform
+        # \`fabrika\` itself is asserted rather than assumed: \`bun install\` links a workspace package's bin
+        # only when the root package depends on it, so an older pinned tag can install cleanly and still
+        # have no \`fabrika\` at all — a bare \`command not found\` several steps later, naming nothing.
+        run: |
+          if [ ! -x node_modules/.bin/fabrika ]; then
+            echo "fabrika-platform@\${{ steps.ref.outputs.fabrika }} installed no \\\`fabrika\\\` binary." >&2
+            echo "Pin a tag whose root package.json depends on @fabrika/cli." >&2
+            exit 1
+          fi
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "$PWD/packages/control/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "$PWD/packages/runner-cloudflare/node_modules/.bin" >> "$GITHUB_PATH"
+
+      # ── Migration escape hatch — retire a legacy propustka Worker ─────────────────────────────────────
+      # Off by default. When \`retire_legacy_propustka_worker\` is set, delete that Worker so its Custom Domain
+      # is freed for the new env-prod propustka below. Its D1 database is NOT deleted (a Worker delete leaves
+      # databases) — orphaned, prune it by hand later. One-off: clear the input on subsequent runs.
+      - name: Retire legacy propustka Worker
+        if: \${{ inputs.retire_legacy_propustka_worker != '' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          LEGACY: \${{ inputs.retire_legacy_propustka_worker }}
+        # \`wrangler delete\` is non-interactive in CI (no TTY → no confirmation prompt). Removing the Worker
+        # detaches its Custom Domain. If the domain attach below races a just-freed hostname, re-run (idempotent).
+        run: bunx wrangler delete --name "$LEGACY"
+
+      # ── Stage 1 — IAM (root authz) ───────────────────────────────────────────────────────────────────
+      # IAM is a regular Cloudflare provider bundle. It declares no schema: its keys sync after its Worker deploys,
+      # so IAM cannot authenticate a reconcile in its own stage.
+      - name: Deploy IAM
+        working-directory: fabrika-platform/packages/iam
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          FABRIKA_CONTROL_DOMAIN: \${{ vars.FABRIKA_IAM_HOSTNAME }}
+          # Non-secret config (Environment Variables).
+          FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: \${{ vars.FABRIKA_IAM_HUMAN_EMAIL_DOMAINS }}
+          FABRIKA_IAM_HUMAN_EMAILS: \${{ vars.FABRIKA_IAM_HUMAN_EMAILS }}
+          FABRIKA_IAM_BOOTSTRAP_ADMINS: \${{ vars.FABRIKA_IAM_BOOTSTRAP_ADMINS }}
+          FABRIKA_IAM_OIDC_ENABLED: \${{ vars.FABRIKA_IAM_OIDC_ENABLED }}
+          FABRIKA_IAM_PASSWORD_ENABLED: \${{ vars.FABRIKA_IAM_PASSWORD_ENABLED }}
+          FABRIKA_IAM_OIDC_ISSUER: \${{ vars.FABRIKA_IAM_OIDC_ISSUER }}
+          FABRIKA_IAM_OIDC_CLIENT_ID: \${{ vars.FABRIKA_IAM_OIDC_CLIENT_ID }}
+          FABRIKA_IAM_OIDC_SCOPES: \${{ vars.FABRIKA_IAM_OIDC_SCOPES }}
+          FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL: \${{ vars.FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL }}
+          FABRIKA_EMAIL_PROVIDER: \${{ vars.FABRIKA_EMAIL_PROVIDER }}
+          FABRIKA_EMAIL_FROM: \${{ vars.FABRIKA_EMAIL_FROM }}
+          FABRIKA_EMAIL_FROM_NAME: \${{ vars.FABRIKA_EMAIL_FROM_NAME }}
+          FABRIKA_IAM_SIGNING_KEYS: \${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}
+          # Seals each administrator's TOTP secret; without it IAM offers no TOTP enrolment.
+          FABRIKA_IAM_DATA_KEY: \${{ secrets.FABRIKA_IAM_DATA_KEY }}
+          OIDC_CLIENT_SECRET: \${{ secrets.FABRIKA_IAM_OIDC_CLIENT_SECRET }}
+          FABRIKA_IAM_PROVISIONING_KEY: \${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
+          # Control's public origin: IAM hands its mail to Control's relay there, under a key derived from the
+          # provisioning key, and the relay sends it with Control's copy of the transport.
+          FABRIKA_CONTROL_URL: https://\${{ vars.FABRIKA_CONTROL_DOMAIN }}
+          # The operator's identity-bound external OAuth clients (ADR-0084), a JSON array; unset registers none.
+          FABRIKA_PLATFORM_MCP_CLIENTS_JSON: \${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
+          # Only so an identity resource on the Operations host is refused here, before IAM deploys.
+          OPERATIONS_HOSTNAME: \${{ vars.OPERATIONS_HOSTNAME }}
+          # Every built-in mail provider's variables, written by init from the provider registry: IAM reads only the
+          # selected provider's, and an unset one is ''.
+          FABRIKA_EMAIL_AHASEND_API_KEY: \${{ secrets.FABRIKA_EMAIL_AHASEND_API_KEY }}
+          FABRIKA_EMAIL_AHASEND_ACCOUNT_ID: \${{ vars.FABRIKA_EMAIL_AHASEND_ACCOUNT_ID }}
+          FABRIKA_EMAIL_AHASEND_BROADCAST_FROM: \${{ vars.FABRIKA_EMAIL_AHASEND_BROADCAST_FROM }}
+          FABRIKA_EMAIL_BREVO_API_KEY: \${{ secrets.FABRIKA_EMAIL_BREVO_API_KEY }}
+          FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN: \${{ secrets.FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN }}
+          FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: \${{ vars.FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID }}
+          FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN: \${{ secrets.FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN }}
+          FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE: \${{ vars.FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE }}
+          FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: \${{ secrets.FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN }}
+          FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM: \${{ vars.FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM }}
+          FABRIKA_EMAIL_RESEND_API_KEY: \${{ secrets.FABRIKA_EMAIL_RESEND_API_KEY }}
+          FABRIKA_EMAIL_SMARTEMAILING_USERNAME: \${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_USERNAME }}
+          FABRIKA_EMAIL_SMARTEMAILING_API_KEY: \${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_API_KEY }}
+          FABRIKA_EMAIL_SMARTEMAILING_TAG: \${{ vars.FABRIKA_EMAIL_SMARTEMAILING_TAG }}
+        # \`platform deploy\`, not \`app deploy\`: IAM's own Worker is a PLATFORM resource name, and only the
+        # platform verb may name one. The single-component form deploys just this config.
+        run: fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts
+
+      # ── Stage 2 — Operations ────────────────────────────────────────────────────────────────────────
+      # Operations must exist before control: control carries a private service binding to it.
+      - name: Deploy Operations
+        working-directory: fabrika-platform/packages/operations
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # The provider's app-deploy adapter reads FABRIKA_CONTROL_DOMAIN as the selected app domain.
+          FABRIKA_CONTROL_DOMAIN: \${{ vars.OPERATIONS_HOSTNAME }}
+          FABRIKA_IAM_ISSUER: \${{ vars.FABRIKA_IAM_ISSUER }}
+          # The console's origin: the command-line client's Operations resource is a path on it (ADR-0049).
+          FABRIKA_CONTROL_URL: https://\${{ vars.FABRIKA_CONTROL_DOMAIN }}
+          OPERATIONS_SYNC_KEY: \${{ secrets.OPERATIONS_SYNC_KEY }}
+        run: fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts
+
+      # ── Stage 3 — fabrika platform (executor + control plane) ────────────────────────────────────────
+      - name: Deploy fabrika runner + control plane
+        id: platform
+        working-directory: fabrika-platform
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          FABRIKA_CONTROL_VAULT_KEY: \${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}
+          # The seeded IAM provisioning key — this stage registers the console's schema, with the console's return
+          # origin, IAM's own vocabulary and the external applications' roles with it (Bearer px_), at FABRIKA_IAM_ISSUER.
+          FABRIKA_IAM_PROVISIONING_KEY: \${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
+          FABRIKA_IAM_RETURN_ORIGINS: https://\${{ vars.FABRIKA_CONTROL_DOMAIN }}
+          OPERATIONS_SYNC_KEY: \${{ secrets.OPERATIONS_SYNC_KEY }}
+          # \`wrangler secret put FABRIKA_RUNNER_KEY\` on BOTH Workers this step deploys: the control plane
+          # presents it to the deploy runner, and the runner rejects an RPC caller without it. One step,
+          # one value, because a mismatched pair breaks every deploy.
+          FABRIKA_RUNNER_KEY: \${{ secrets.FABRIKA_RUNNER_KEY }}
+          # Non-secret config (Environment Variables).
+          FABRIKA_CONTROL_DOMAIN: \${{ vars.FABRIKA_CONTROL_DOMAIN }}
+          FABRIKA_IAM_ISSUER: \${{ vars.FABRIKA_IAM_ISSUER }}
+          OPERATIONS_ARTIFACT_ORIGIN: https://\${{ vars.OPERATIONS_HOSTNAME }}
+          FABRIKA_CONTROL_BOOTSTRAP_ADMINS: \${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}
+          # The same client list IAM was deployed with: this stage reconciles each external application's roles into IAM.
+          FABRIKA_PLATFORM_MCP_CLIENTS_JSON: \${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
+          # The installation's mail transport, the same set as IAM's: the control plane hands it to every application
+          # whose job declares \`mailer: 'installation'\`. Its credentials become Worker secrets of the control plane only.
+          FABRIKA_EMAIL_PROVIDER: \${{ vars.FABRIKA_EMAIL_PROVIDER }}
+          FABRIKA_EMAIL_FROM: \${{ vars.FABRIKA_EMAIL_FROM }}
+          FABRIKA_EMAIL_FROM_NAME: \${{ vars.FABRIKA_EMAIL_FROM_NAME }}
+          FABRIKA_EMAIL_AHASEND_API_KEY: \${{ secrets.FABRIKA_EMAIL_AHASEND_API_KEY }}
+          FABRIKA_EMAIL_AHASEND_ACCOUNT_ID: \${{ vars.FABRIKA_EMAIL_AHASEND_ACCOUNT_ID }}
+          FABRIKA_EMAIL_AHASEND_BROADCAST_FROM: \${{ vars.FABRIKA_EMAIL_AHASEND_BROADCAST_FROM }}
+          FABRIKA_EMAIL_BREVO_API_KEY: \${{ secrets.FABRIKA_EMAIL_BREVO_API_KEY }}
+          FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN: \${{ secrets.FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN }}
+          FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: \${{ vars.FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID }}
+          FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN: \${{ secrets.FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN }}
+          FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE: \${{ vars.FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE }}
+          FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: \${{ secrets.FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN }}
+          FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM: \${{ vars.FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM }}
+          FABRIKA_EMAIL_RESEND_API_KEY: \${{ secrets.FABRIKA_EMAIL_RESEND_API_KEY }}
+          FABRIKA_EMAIL_SMARTEMAILING_USERNAME: \${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_USERNAME }}
+          FABRIKA_EMAIL_SMARTEMAILING_API_KEY: \${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_API_KEY }}
+          FABRIKA_EMAIL_SMARTEMAILING_TAG: \${{ vars.FABRIKA_EMAIL_SMARTEMAILING_TAG }}
+        run: |
+          fabrika platform deploy --provider=cloudflare \\
+            --runner-config=packages/runner-cloudflare/fabrika-runner.config.ts \\
+            --worker-config=packages/control/fabrika.config.ts
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### platform deploy → acme"
+            echo ""
+            echo "- fabrika ref: \\\`\${{ steps.ref.outputs.fabrika || '(unresolved)' }}\\\`"
+            echo "- platform deploy: \\\`\${{ steps.platform.outcome || 'not run' }}\\\`"
+            echo "- runner image source: account-local build from the pinned fabrika checkout"
+            echo "- retired legacy propustka: \\\`\${{ inputs.retire_legacy_propustka_worker || '(none)' }}\\\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+"
+`;
+
+exports[`platform scaffold GitHub secrets mode the default renders exactly the Environment scaffold 2`] = `
+"# fabrika-platform (acme)
+
+The **per-account root of trust** for the acme Cloudflare account. Its GitHub pipeline deploys the
+fabrika control-plane base so the control plane never deploys itself:
+
+\`\`\`
+Stage 1 — IAM (root authz)
+Stage 2 — Operations
+Stage 3 — fabrika runner + control plane
+apps (crm, notes, …)                    ← deployed through fabrika, not here
+\`\`\`
+
+Generated and maintained by **\`fabrika platform init --provider=cloudflare acme\`** (\`@fabrika/cli\`). Secrets and variables live in
+the **\`acme\` GitHub Environment** (Settings → Environments) and are written there by the CLI.
+Scaffold commits use \`[skip ci]\`; init explicitly dispatches the workflow only after that Environment is configured.
+
+Every credential this installation has is in that Environment — the Cloudflare API token, the vault KEK,
+IAM's signing and data keys, the provisioning key and \`FABRIKA_RUNNER_KEY\` (the shared key the
+control plane presents to the deploy runner; Stage 3 pushes it to both Workers). Init therefore protects
+\`main\` (no force pushes, no deletions) on a repository it creates, and restricts the Environment to
+protected branches. The two go together: the Environment policy admits any branch that carries no
+protection rule, so it is worth nothing on its own. GitHub Free offers neither on a private repository —
+if init warned that one was refused, run the command it printed once the plan allows it.
+
+Whatever the plan, add yourself as a **required reviewer** on the \`acme\` Environment
+(Settings → Environments → acme → Required reviewers). It is the only rule that stops a push to
+\`main\` from spending these credentials without a human first agreeing to it. Init deliberately does not
+set it: it turns every deploy into an approval click, which is the operator's call and not the CLI's.
+
+\`contember/fabrika-platform\` is public and pinned in [\`fabrika.ref\`](./fabrika.ref). The pipeline checks it
+out once, then runs \`fabrika platform deploy --provider=cloudflare\` three times: \`--component-config\` for
+IAM, \`--component-config\` for Operations, and the \`--runner-config\`/\`--worker-config\` pair for
+\`packages/runner-cloudflare\` and \`packages/control\`. Every stage is a PLATFORM deploy because each names a
+platform resource; \`fabrika app deploy\` is for applications and is refused one. The workflow builds the runner image from that same checkout into this account's
+registry. It never depends on an image published by upstream CI or another account. Re-running it is
+a safe redeploy.
+
+## First bring-up
+
+Run init with the Cloudflare API token in \`CLOUDFLARE_API_TOKEN\`:
+
+\`\`\`sh
+fabrika platform init --provider=cloudflare acme \\
+  --console-host=<host> --operations-host=<host> --iam-host=<host> \\
+  --auth-methods=<oidc|password|oidc,password> --email-provider=<none|ahasend|brevo|cloudflare|lettermint|postmark|resend|smartemailing>
+\`\`\`
+
+\`fabrika platform init --provider=cloudflare --help\` lists the optional flags. It creates this repo,
+the Environment with its secrets and variables, and triggers the workflow. The run builds and pushes the
+runner container image into the account.
+
+Public repositories deploy without a GitHub App. To deploy private repositories, connect GitHub from the
+control plane at **Settings → Source**: each connection is a GitHub App owned by an organization or a personal account, whose key
+Control keeps in its encrypted vault, never in this Environment.
+
+To close the escape hatch once IAM grants you admin, set the \`acme\` Environment variable
+\`FABRIKA_CONTROL_BOOTSTRAP_ADMINS\` to \`[]\` and re-run the workflow.
+
+IAM authentication methods are independent Environment switches: \`FABRIKA_IAM_OIDC_ENABLED\` and
+\`FABRIKA_IAM_PASSWORD_ENABLED\`. At least one must be \`true\`. Password enrollment is managed through
+IAM provisioning and its admin surface. Email delivery is optional; \`FABRIKA_EMAIL_PROVIDER=none\`
+keeps password enrollment and reset admin-driven. A provider also needs the sender variable
+\`FABRIKA_EMAIL_FROM\` (optionally \`FABRIKA_EMAIL_FROM_NAME\`) and its own Environment secrets and variables:
+
+- \`ahasend\`: \`FABRIKA_EMAIL_AHASEND_API_KEY\` (secret), \`FABRIKA_EMAIL_AHASEND_ACCOUNT_ID\` (variable), \`FABRIKA_EMAIL_AHASEND_BROADCAST_FROM\` (variable, optional)
+- \`brevo\`: \`FABRIKA_EMAIL_BREVO_API_KEY\` (secret)
+- \`cloudflare\`: \`FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN\` (secret), \`FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID\` (variable)
+- \`lettermint\`: \`FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN\` (secret), \`FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE\` (variable, optional)
+- \`postmark\`: \`FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN\` (secret), \`FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM\` (variable, optional)
+- \`resend\`: \`FABRIKA_EMAIL_RESEND_API_KEY\` (secret)
+- \`smartemailing\`: \`FABRIKA_EMAIL_SMARTEMAILING_USERNAME\` (secret), \`FABRIKA_EMAIL_SMARTEMAILING_API_KEY\` (secret), \`FABRIKA_EMAIL_SMARTEMAILING_TAG\` (variable, optional)
+
+The workflow hands the same set to IAM and to the control plane. The control plane hands it to every application
+whose job declares \`mailer: 'installation'\`, at that application's deploy.
+
+To change or rotate them, re-run \`fabrika platform init\` with the new values; it rewrites this Environment
+and triggers the workflow, which redeploys IAM and the control plane. An application gets the new set at its next
+deploy: redeploy each environment that sends installation mail with
+\`fabrika control deploy --app=<id> --env=<name>\`, or **Deploy** in the console.
+
+Switching provider leaves the old provider's values stored: init writes the new ones and deletes none. IAM and
+the control plane read only the selected provider's variables, but delete the old credentials so nothing holds them, for
+example after leaving SmartEmailing:
+
+\`\`\`sh
+gh secret delete FABRIKA_EMAIL_SMARTEMAILING_USERNAME --env acme
+gh secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --env acme
+gh variable delete FABRIKA_EMAIL_SMARTEMAILING_TAG --env acme
+\`\`\`
+
+Remove the same names from the installer env file (init prints its path when it starts), or a later run of
+init resumes them.
+IAM's and the control plane's Workers also keep the old provider's credentials as Worker secrets, which neither reads.
+Delete each of them from both Workers, with the account's id in \`CLOUDFLARE_ACCOUNT_ID\` and its API token in
+\`CLOUDFLARE_API_TOKEN\`:
+
+\`\`\`sh
+for worker in prod-propustka-worker prod-vozka; do
+  bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_USERNAME --name "$worker"
+  bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --name "$worker"
+done
+\`\`\`
+
+## Routine redeploy or version bump
+
+- Bump [\`fabrika.ref\`](./fabrika.ref) to a new \`contember/fabrika-platform\` commit or tag and push.
+- Or run _Actions → platform → Run workflow_ manually.
+
+Both paths rebuild the account-owned runner image from the exact checkout selected by \`fabrika.ref\`.
+
+\`fabrika.ref\` is operator-owned. \`fabrika platform init\` creates it once and does not overwrite later version pins.
+A bump does not rewrite this workflow. Re-run \`fabrika platform init --provider=cloudflare acme\` with the same
+flags, with the CLI of the release \`fabrika.ref\` names, to bring \`.github/workflows/platform.yml\` to the one that release
+generates. A change in what the workflow hands a stage (such as the mail transport the control plane holds) reaches
+the account only this way.
+"
+`;
+
+exports[`platform scaffold GitHub secrets mode repository secrets render a workflow without \`environment:\` that reads the same secrets and variables 1`] = `
+"name: platform
+
+# Deploys the acme account's fabrika BASE: IAM (Stage 1, root authz) → Operations (Stage 2) →
+# runner + control plane (Stage 3). THIS repo is the per-account root of trust, so the control plane
+# never deploys itself.
+# Idempotent: re-run for a first bring-up OR a routine redeploy. Concrete apps deploy through fabrika.
+#
+# Generated + maintained by \`fabrika platform init --provider=cloudflare acme --github-secrets=repository\`. Secrets + variables
+# are this repository's own (Settings → Secrets and variables → Actions) and are written there by the CLI — don't
+# hand-edit them. There is no GitHub Environment, so no deployment protection rule guards them: any workflow of this
+# repository, on any branch, can read them.
+#
+# contember/fabrika-platform is public and checked out tokenless. The version this account runs is pinned
+# in \`fabrika.ref\` (bump it and push to roll out a new base).
+
+on:
+  workflow_dispatch:
+    inputs:
+      retire_legacy_propustka_worker:
+        description: >-
+          Name of a LEGACY propustka Worker to delete BEFORE Stage 1 (one-off migration off an old
+          deploy — e.g. a CF-Access-era \`<env>-propustka-worker\`). Deleting it releases its Custom
+          Domain so the new env-prod propustka can claim it. Empty = skip (the normal case).
+        type: string
+        default: ''
+  push:
+    branches: [main]
+    # Only a version bump (or a workflow edit) redeploys — not a README tweak.
+    paths: ['fabrika.ref', '.github/workflows/platform.yml']
+
+concurrency:
+  group: platform-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    # Secrets + variables resolve from this repository's own (populated by \`fabrika platform init\`); no Environment.
+    # Cloudflare creds at the JOB level so EVERY oblaka/wrangler step (provision, migrate, deploy, secret
+    # put) inherits them — wrangler errors in a non-interactive shell without CLOUDFLARE_API_TOKEN.
+    env:
+      CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+      # The resource names this installation was created with (\`fabrika\` from init; unset on an older installation,
+      # which keeps the legacy names). Every stage names its Workers, databases, buckets and queues by it.
+      FABRIKA_CLOUDFLARE_NAMES: \${{ vars.FABRIKA_CLOUDFLARE_NAMES }}
+    steps:
+      - name: Checkout this repo (base config + pinned refs)
+        uses: actions/checkout@v5
+
+      - name: Resolve pinned refs
+        id: ref
+        run: echo "fabrika=$(tr -d '[:space:]' < fabrika.ref)" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout contember/fabrika-platform@\${{ steps.ref.outputs.fabrika }}
+        uses: actions/checkout@v5
+        with:
+          repository: contember/fabrika-platform
+          ref: \${{ steps.ref.outputs.fabrika }}
+          path: fabrika-platform
+
+      - name: Resolve the Bun release of the pinned tag
+        id: bun
+        working-directory: fabrika-platform
+        env:
+          PINNED_REF: \${{ steps.ref.outputs.fabrika }}
+        # Exactly the Bun the tag was built and released with, never \`latest\`: a newer Bun rewrites the
+        # lockfile. Tags up to v0.4.3 carry no \`.bun-version\` and were all released with Bun 1.3.14.
+        run: |
+          if [ -f .bun-version ]; then
+            version="$(tr -d '[:space:]' < .bun-version)"
+          else
+            version=1.3.14
+          fi
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\\.[0-9]+\\.[0-9]+$'; then
+            echo "fabrika-platform@$PINNED_REF names no exact Bun release in .bun-version: '$version'." >&2
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: \${{ steps.bun.outputs.version }}
+      # wrangler launches under Node even via Bun and needs Node 22+.
+      - uses: actions/setup-node@v5
+        with:
+          node-version: '24'
+
+      - name: Install fabrika
+        working-directory: fabrika-platform
+        run: bun install --frozen-lockfile
+
+      # The Cloudflare provider spawns a BARE \`wrangler\` (Bun.spawn), so the workspace bins must be on PATH.
+      - name: Put fabrika workspace bins on PATH
+        working-directory: fabrika-platform
+        # \`fabrika\` itself is asserted rather than assumed: \`bun install\` links a workspace package's bin
+        # only when the root package depends on it, so an older pinned tag can install cleanly and still
+        # have no \`fabrika\` at all — a bare \`command not found\` several steps later, naming nothing.
+        run: |
+          if [ ! -x node_modules/.bin/fabrika ]; then
+            echo "fabrika-platform@\${{ steps.ref.outputs.fabrika }} installed no \\\`fabrika\\\` binary." >&2
+            echo "Pin a tag whose root package.json depends on @fabrika/cli." >&2
+            exit 1
+          fi
+          echo "$PWD/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "$PWD/packages/control/node_modules/.bin" >> "$GITHUB_PATH"
+          echo "$PWD/packages/runner-cloudflare/node_modules/.bin" >> "$GITHUB_PATH"
+
+      # ── Migration escape hatch — retire a legacy propustka Worker ─────────────────────────────────────
+      # Off by default. When \`retire_legacy_propustka_worker\` is set, delete that Worker so its Custom Domain
+      # is freed for the new env-prod propustka below. Its D1 database is NOT deleted (a Worker delete leaves
+      # databases) — orphaned, prune it by hand later. One-off: clear the input on subsequent runs.
+      - name: Retire legacy propustka Worker
+        if: \${{ inputs.retire_legacy_propustka_worker != '' }}
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          LEGACY: \${{ inputs.retire_legacy_propustka_worker }}
+        # \`wrangler delete\` is non-interactive in CI (no TTY → no confirmation prompt). Removing the Worker
+        # detaches its Custom Domain. If the domain attach below races a just-freed hostname, re-run (idempotent).
+        run: bunx wrangler delete --name "$LEGACY"
+
+      # ── Stage 1 — IAM (root authz) ───────────────────────────────────────────────────────────────────
+      # IAM is a regular Cloudflare provider bundle. It declares no schema: its keys sync after its Worker deploys,
+      # so IAM cannot authenticate a reconcile in its own stage.
+      - name: Deploy IAM
+        working-directory: fabrika-platform/packages/iam
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          FABRIKA_CONTROL_DOMAIN: \${{ vars.FABRIKA_IAM_HOSTNAME }}
+          # Non-secret config (Environment Variables).
+          FABRIKA_IAM_HUMAN_EMAIL_DOMAINS: \${{ vars.FABRIKA_IAM_HUMAN_EMAIL_DOMAINS }}
+          FABRIKA_IAM_HUMAN_EMAILS: \${{ vars.FABRIKA_IAM_HUMAN_EMAILS }}
+          FABRIKA_IAM_BOOTSTRAP_ADMINS: \${{ vars.FABRIKA_IAM_BOOTSTRAP_ADMINS }}
+          FABRIKA_IAM_OIDC_ENABLED: \${{ vars.FABRIKA_IAM_OIDC_ENABLED }}
+          FABRIKA_IAM_PASSWORD_ENABLED: \${{ vars.FABRIKA_IAM_PASSWORD_ENABLED }}
+          FABRIKA_IAM_OIDC_ISSUER: \${{ vars.FABRIKA_IAM_OIDC_ISSUER }}
+          FABRIKA_IAM_OIDC_CLIENT_ID: \${{ vars.FABRIKA_IAM_OIDC_CLIENT_ID }}
+          FABRIKA_IAM_OIDC_SCOPES: \${{ vars.FABRIKA_IAM_OIDC_SCOPES }}
+          FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL: \${{ vars.FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL }}
+          FABRIKA_EMAIL_PROVIDER: \${{ vars.FABRIKA_EMAIL_PROVIDER }}
+          FABRIKA_EMAIL_FROM: \${{ vars.FABRIKA_EMAIL_FROM }}
+          FABRIKA_EMAIL_FROM_NAME: \${{ vars.FABRIKA_EMAIL_FROM_NAME }}
+          FABRIKA_IAM_SIGNING_KEYS: \${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}
+          # Seals each administrator's TOTP secret; without it IAM offers no TOTP enrolment.
+          FABRIKA_IAM_DATA_KEY: \${{ secrets.FABRIKA_IAM_DATA_KEY }}
+          OIDC_CLIENT_SECRET: \${{ secrets.FABRIKA_IAM_OIDC_CLIENT_SECRET }}
+          FABRIKA_IAM_PROVISIONING_KEY: \${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
+          # Control's public origin: IAM hands its mail to Control's relay there, under a key derived from the
+          # provisioning key, and the relay sends it with Control's copy of the transport.
+          FABRIKA_CONTROL_URL: https://\${{ vars.FABRIKA_CONTROL_DOMAIN }}
+          # The operator's identity-bound external OAuth clients (ADR-0084), a JSON array; unset registers none.
+          FABRIKA_PLATFORM_MCP_CLIENTS_JSON: \${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
+          # Only so an identity resource on the Operations host is refused here, before IAM deploys.
+          OPERATIONS_HOSTNAME: \${{ vars.OPERATIONS_HOSTNAME }}
+          # Every built-in mail provider's variables, written by init from the provider registry: IAM reads only the
+          # selected provider's, and an unset one is ''.
+          FABRIKA_EMAIL_AHASEND_API_KEY: \${{ secrets.FABRIKA_EMAIL_AHASEND_API_KEY }}
+          FABRIKA_EMAIL_AHASEND_ACCOUNT_ID: \${{ vars.FABRIKA_EMAIL_AHASEND_ACCOUNT_ID }}
+          FABRIKA_EMAIL_AHASEND_BROADCAST_FROM: \${{ vars.FABRIKA_EMAIL_AHASEND_BROADCAST_FROM }}
+          FABRIKA_EMAIL_BREVO_API_KEY: \${{ secrets.FABRIKA_EMAIL_BREVO_API_KEY }}
+          FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN: \${{ secrets.FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN }}
+          FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: \${{ vars.FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID }}
+          FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN: \${{ secrets.FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN }}
+          FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE: \${{ vars.FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE }}
+          FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: \${{ secrets.FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN }}
+          FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM: \${{ vars.FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM }}
+          FABRIKA_EMAIL_RESEND_API_KEY: \${{ secrets.FABRIKA_EMAIL_RESEND_API_KEY }}
+          FABRIKA_EMAIL_SMARTEMAILING_USERNAME: \${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_USERNAME }}
+          FABRIKA_EMAIL_SMARTEMAILING_API_KEY: \${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_API_KEY }}
+          FABRIKA_EMAIL_SMARTEMAILING_TAG: \${{ vars.FABRIKA_EMAIL_SMARTEMAILING_TAG }}
+        # \`platform deploy\`, not \`app deploy\`: IAM's own Worker is a PLATFORM resource name, and only the
+        # platform verb may name one. The single-component form deploys just this config.
+        run: fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts
+
+      # ── Stage 2 — Operations ────────────────────────────────────────────────────────────────────────
+      # Operations must exist before control: control carries a private service binding to it.
+      - name: Deploy Operations
+        working-directory: fabrika-platform/packages/operations
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # The provider's app-deploy adapter reads FABRIKA_CONTROL_DOMAIN as the selected app domain.
+          FABRIKA_CONTROL_DOMAIN: \${{ vars.OPERATIONS_HOSTNAME }}
+          FABRIKA_IAM_ISSUER: \${{ vars.FABRIKA_IAM_ISSUER }}
+          # The console's origin: the command-line client's Operations resource is a path on it (ADR-0049).
+          FABRIKA_CONTROL_URL: https://\${{ vars.FABRIKA_CONTROL_DOMAIN }}
+          OPERATIONS_SYNC_KEY: \${{ secrets.OPERATIONS_SYNC_KEY }}
+        run: fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts
+
+      # ── Stage 3 — fabrika platform (executor + control plane) ────────────────────────────────────────
+      - name: Deploy fabrika runner + control plane
+        id: platform
+        working-directory: fabrika-platform
+        env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+          FABRIKA_CONTROL_VAULT_KEY: \${{ secrets.FABRIKA_CONTROL_VAULT_KEY }}
+          # The seeded IAM provisioning key — this stage registers the console's schema, with the console's return
+          # origin, IAM's own vocabulary and the external applications' roles with it (Bearer px_), at FABRIKA_IAM_ISSUER.
+          FABRIKA_IAM_PROVISIONING_KEY: \${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
+          FABRIKA_IAM_RETURN_ORIGINS: https://\${{ vars.FABRIKA_CONTROL_DOMAIN }}
+          OPERATIONS_SYNC_KEY: \${{ secrets.OPERATIONS_SYNC_KEY }}
+          # \`wrangler secret put FABRIKA_RUNNER_KEY\` on BOTH Workers this step deploys: the control plane
+          # presents it to the deploy runner, and the runner rejects an RPC caller without it. One step,
+          # one value, because a mismatched pair breaks every deploy.
+          FABRIKA_RUNNER_KEY: \${{ secrets.FABRIKA_RUNNER_KEY }}
+          # Non-secret config (Environment Variables).
+          FABRIKA_CONTROL_DOMAIN: \${{ vars.FABRIKA_CONTROL_DOMAIN }}
+          FABRIKA_IAM_ISSUER: \${{ vars.FABRIKA_IAM_ISSUER }}
+          OPERATIONS_ARTIFACT_ORIGIN: https://\${{ vars.OPERATIONS_HOSTNAME }}
+          FABRIKA_CONTROL_BOOTSTRAP_ADMINS: \${{ vars.FABRIKA_CONTROL_BOOTSTRAP_ADMINS }}
+          # The same client list IAM was deployed with: this stage reconciles each external application's roles into IAM.
+          FABRIKA_PLATFORM_MCP_CLIENTS_JSON: \${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
+          # The installation's mail transport, the same set as IAM's: the control plane hands it to every application
+          # whose job declares \`mailer: 'installation'\`. Its credentials become Worker secrets of the control plane only.
+          FABRIKA_EMAIL_PROVIDER: \${{ vars.FABRIKA_EMAIL_PROVIDER }}
+          FABRIKA_EMAIL_FROM: \${{ vars.FABRIKA_EMAIL_FROM }}
+          FABRIKA_EMAIL_FROM_NAME: \${{ vars.FABRIKA_EMAIL_FROM_NAME }}
+          FABRIKA_EMAIL_AHASEND_API_KEY: \${{ secrets.FABRIKA_EMAIL_AHASEND_API_KEY }}
+          FABRIKA_EMAIL_AHASEND_ACCOUNT_ID: \${{ vars.FABRIKA_EMAIL_AHASEND_ACCOUNT_ID }}
+          FABRIKA_EMAIL_AHASEND_BROADCAST_FROM: \${{ vars.FABRIKA_EMAIL_AHASEND_BROADCAST_FROM }}
+          FABRIKA_EMAIL_BREVO_API_KEY: \${{ secrets.FABRIKA_EMAIL_BREVO_API_KEY }}
+          FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN: \${{ secrets.FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN }}
+          FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID: \${{ vars.FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID }}
+          FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN: \${{ secrets.FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN }}
+          FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE: \${{ vars.FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE }}
+          FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN: \${{ secrets.FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN }}
+          FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM: \${{ vars.FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM }}
+          FABRIKA_EMAIL_RESEND_API_KEY: \${{ secrets.FABRIKA_EMAIL_RESEND_API_KEY }}
+          FABRIKA_EMAIL_SMARTEMAILING_USERNAME: \${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_USERNAME }}
+          FABRIKA_EMAIL_SMARTEMAILING_API_KEY: \${{ secrets.FABRIKA_EMAIL_SMARTEMAILING_API_KEY }}
+          FABRIKA_EMAIL_SMARTEMAILING_TAG: \${{ vars.FABRIKA_EMAIL_SMARTEMAILING_TAG }}
+        run: |
+          fabrika platform deploy --provider=cloudflare \\
+            --runner-config=packages/runner-cloudflare/fabrika-runner.config.ts \\
+            --worker-config=packages/control/fabrika.config.ts
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### platform deploy → acme"
+            echo ""
+            echo "- fabrika ref: \\\`\${{ steps.ref.outputs.fabrika || '(unresolved)' }}\\\`"
+            echo "- platform deploy: \\\`\${{ steps.platform.outcome || 'not run' }}\\\`"
+            echo "- runner image source: account-local build from the pinned fabrika checkout"
+            echo "- retired legacy propustka: \\\`\${{ inputs.retire_legacy_propustka_worker || '(none)' }}\\\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+"
+`;
+
+exports[`platform scaffold GitHub secrets mode the repository README states the trade-off and names no Environment command 1`] = `
+"# fabrika-platform (acme)
+
+The **per-account root of trust** for the acme Cloudflare account. Its GitHub pipeline deploys the
+fabrika control-plane base so the control plane never deploys itself:
+
+\`\`\`
+Stage 1 — IAM (root authz)
+Stage 2 — Operations
+Stage 3 — fabrika runner + control plane
+apps (crm, notes, …)                    ← deployed through fabrika, not here
+\`\`\`
+
+Generated and maintained by **\`fabrika platform init --provider=cloudflare acme --github-secrets=repository\`** (\`@fabrika/cli\`).
+Secrets and variables are **this repository's own Actions secrets and variables** (Settings → Secrets and variables →
+Actions) and are written there by the CLI. There is no GitHub Environment: this installation was made for a plan whose
+private repositories have none (GitHub Free organizations).
+Scaffold commits use \`[skip ci]\`; init explicitly dispatches the workflow only after those secrets are written.
+
+Every credential this installation has is a secret of this repository — the Cloudflare API token, the vault KEK,
+IAM's signing key, the provisioning key and \`FABRIKA_RUNNER_KEY\` (the shared key the
+control plane presents to the deploy runner; Stage 3 pushes it to both Workers).
+
+**The trade-off.** Without an Environment there are no deployment protection rules: no deployment-branch policy, no
+required reviewer, no wait timer. Any workflow in this repository, on any branch, can read every one of these secrets,
+and anyone who can push a branch can add such a workflow. So nobody may have write access to this repository who is
+not trusted with every credential of the installation. Init protects \`main\` (no force pushes, no deletions) on
+a repository it creates where the plan allows it; that does not stop a workflow on another branch from reading the
+secrets. To get the protection rules, move the repository to a plan that offers Environments on private repositories
+and re-install with \`--github-secrets=environment\` (init refuses to keep both copies; it says what to delete first).
+
+\`contember/fabrika-platform\` is public and pinned in [\`fabrika.ref\`](./fabrika.ref). The pipeline checks it
+out once, then runs \`fabrika platform deploy --provider=cloudflare\` three times: \`--component-config\` for
+IAM, \`--component-config\` for Operations, and the \`--runner-config\`/\`--worker-config\` pair for
+\`packages/runner-cloudflare\` and \`packages/control\`. Every stage is a PLATFORM deploy because each names a
+platform resource; \`fabrika app deploy\` is for applications and is refused one. The workflow builds the runner image from that same checkout into this account's
+registry. It never depends on an image published by upstream CI or another account. Re-running it is
+a safe redeploy.
+
+## First bring-up
+
+Run init with the Cloudflare API token in \`CLOUDFLARE_API_TOKEN\`:
+
+\`\`\`sh
+fabrika platform init --provider=cloudflare acme \\
+  --console-host=<host> --operations-host=<host> --iam-host=<host> \\
+  --auth-methods=<oidc|password|oidc,password> --email-provider=<none|ahasend|brevo|cloudflare|lettermint|postmark|resend|smartemailing>
+\`\`\`
+
+Add \`--github-secrets=repository\` to keep the secrets at the repository level, as this installation does.
+\`fabrika platform init --provider=cloudflare --help\` lists the other optional flags. It creates this repo, writes its
+secrets and variables, and triggers the workflow. The run builds and pushes the runner container image into the account.
+
+Public repositories deploy without a GitHub App. To deploy private repositories, connect GitHub from the
+control plane at **Settings → Source**: each connection is a GitHub App owned by an organization or a personal account, whose key
+Control keeps in its encrypted vault, never in this repository's secrets.
+
+To close the escape hatch once IAM grants you admin, set the repository variable
+\`FABRIKA_CONTROL_BOOTSTRAP_ADMINS\` to \`[]\` and re-run the workflow.
+
+IAM authentication methods are independent repository variables: \`FABRIKA_IAM_OIDC_ENABLED\` and
+\`FABRIKA_IAM_PASSWORD_ENABLED\`. At least one must be \`true\`. Password enrollment is managed through
+IAM provisioning and its admin surface. Email delivery is optional; \`FABRIKA_EMAIL_PROVIDER=none\`
+keeps password enrollment and reset admin-driven. A provider also needs the sender variable
+\`FABRIKA_EMAIL_FROM\` (optionally \`FABRIKA_EMAIL_FROM_NAME\`) and its own repository secrets and variables:
+
+- \`ahasend\`: \`FABRIKA_EMAIL_AHASEND_API_KEY\` (secret), \`FABRIKA_EMAIL_AHASEND_ACCOUNT_ID\` (variable), \`FABRIKA_EMAIL_AHASEND_BROADCAST_FROM\` (variable, optional)
+- \`brevo\`: \`FABRIKA_EMAIL_BREVO_API_KEY\` (secret)
+- \`cloudflare\`: \`FABRIKA_EMAIL_CLOUDFLARE_API_TOKEN\` (secret), \`FABRIKA_EMAIL_CLOUDFLARE_ACCOUNT_ID\` (variable)
+- \`lettermint\`: \`FABRIKA_EMAIL_LETTERMINT_PROJECT_TOKEN\` (secret), \`FABRIKA_EMAIL_LETTERMINT_BROADCAST_ROUTE\` (variable, optional)
+- \`postmark\`: \`FABRIKA_EMAIL_POSTMARK_SERVER_TOKEN\` (secret), \`FABRIKA_EMAIL_POSTMARK_BROADCAST_STREAM\` (variable, optional)
+- \`resend\`: \`FABRIKA_EMAIL_RESEND_API_KEY\` (secret)
+- \`smartemailing\`: \`FABRIKA_EMAIL_SMARTEMAILING_USERNAME\` (secret), \`FABRIKA_EMAIL_SMARTEMAILING_API_KEY\` (secret), \`FABRIKA_EMAIL_SMARTEMAILING_TAG\` (variable, optional)
+
+The workflow hands the same set to IAM and to the control plane. The control plane hands it to every application
+whose job declares \`mailer: 'installation'\`, at that application's deploy.
+
+To change or rotate them, re-run \`fabrika platform init\` with the new values; it rewrites these repository secrets
+and triggers the workflow, which redeploys IAM and the control plane. An application gets the new set at its next
+deploy: redeploy each environment that sends installation mail with
+\`fabrika control deploy --app=<id> --env=<name>\`, or **Deploy** in the console.
+
+Switching provider leaves the old provider's values stored: init writes the new ones and deletes none. IAM and
+the control plane read only the selected provider's variables, but delete the old credentials so nothing holds them, for
+example after leaving SmartEmailing:
+
+\`\`\`sh
+gh secret delete FABRIKA_EMAIL_SMARTEMAILING_USERNAME
+gh secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY
+gh variable delete FABRIKA_EMAIL_SMARTEMAILING_TAG
+\`\`\`
+
+Remove the same names from the installer env file (init prints its path when it starts), or a later run of
+init resumes them.
+IAM's and the control plane's Workers also keep the old provider's credentials as Worker secrets, which neither reads.
+Delete each of them from both Workers, with the account's id in \`CLOUDFLARE_ACCOUNT_ID\` and its API token in
+\`CLOUDFLARE_API_TOKEN\`:
+
+\`\`\`sh
+for worker in prod-propustka-worker prod-vozka; do
+  bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_USERNAME --name "$worker"
+  bunx wrangler secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY --name "$worker"
+done
+\`\`\`
+
+## Routine redeploy or version bump
+
+- Bump [\`fabrika.ref\`](./fabrika.ref) to a new \`contember/fabrika-platform\` commit or tag and push.
+- Or run _Actions → platform → Run workflow_ manually.
+
+Both paths rebuild the account-owned runner image from the exact checkout selected by \`fabrika.ref\`.
+
+\`fabrika.ref\` is operator-owned. \`fabrika platform init\` creates it once and does not overwrite later version pins.
+A bump does not rewrite this workflow. Re-run \`fabrika platform init --provider=cloudflare acme\` with the same
+flags (\`--github-secrets=repository\` among them), with the CLI of the release \`fabrika.ref\` names, to bring \`.github/workflows/platform.yml\` to the one that release
+generates. A change in what the workflow hands a stage (such as the mail transport the control plane holds) reaches
+the account only this way.
+"
+`;
