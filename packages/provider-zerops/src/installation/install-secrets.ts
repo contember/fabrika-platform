@@ -40,6 +40,7 @@ export const renderInstallationSecretsFile = (record: InstallationSecretsRecord)
 			['OPERATIONS_SYNC_KEY', secrets.operationsSyncKey],
 			['FABRIKA_CONTROL_VAULT_KEY', secrets.vaultKey],
 			['FABRIKA_IAM_SIGNING_KEYS', secrets.signingKeys],
+			['FABRIKA_IAM_DATA_KEY', secrets.dataKey],
 		],
 	)
 }

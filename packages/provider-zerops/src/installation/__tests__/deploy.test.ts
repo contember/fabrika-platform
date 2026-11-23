@@ -426,6 +426,8 @@ describe('what it writes', () => {
 		}
 		const written = new Set(fixture.zerops.calls.filter((call) => call.startsWith('env:')).map((call) => call.split(':')[2]))
 		written.delete(IAM_PROXY_SECRET_VARIABLE)
+		// An installation from before the data key gets one generated once, below.
+		written.delete('FABRIKA_IAM_DATA_KEY')
 		for (const key of written) {
 			expect(key).not.toMatch(/KEY|TOKEN|SECRET|PASSWORD/)
 		}
@@ -538,6 +540,23 @@ describe('the IAM proxy secret', () => {
 		await fixture.run()
 		expect(fixture.log.lines.some((line) => line.includes(IAM_PROXY_SECRET_VARIABLE))).toBe(true)
 		expect(fixture.log.lines.some((line) => line.includes(expected))).toBe(false)
+	})
+})
+
+describe("IAM's data key", () => {
+	test('an installation without one gets one, SENSITIVE, from its next deploy, and never another', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		const key = fixture.zerops.env('iam').get('FABRIKA_IAM_DATA_KEY')
+		expect(key === undefined ? 0 : Buffer.from(key, 'base64').length).toBe(32)
+		expect(fixture.zerops.sensitive('iam').has('FABRIKA_IAM_DATA_KEY')).toBe(true)
+		expect(fixture.zerops.calls.indexOf('env:iam:FABRIKA_IAM_DATA_KEY')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
+		for (const service of ['operations', 'control', 'proxy']) expect(fixture.zerops.env(service).has('FABRIKA_IAM_DATA_KEY')).toBe(false)
+
+		await fixture.run()
+		expect(fixture.zerops.calls.filter((call) => call === 'env:iam:FABRIKA_IAM_DATA_KEY')).toHaveLength(1)
+		expect(fixture.zerops.env('iam').get('FABRIKA_IAM_DATA_KEY')).toBe(key)
+		expect(fixture.log.lines.some((line) => key !== undefined && line.includes(key))).toBe(false)
 	})
 })
 

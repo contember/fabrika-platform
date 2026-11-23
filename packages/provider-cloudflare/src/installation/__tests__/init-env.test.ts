@@ -4,7 +4,16 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { envPath, openEnvFile } from '../envfile'
-import { type Collected, ensurePlatformNames, ensureRunnerKey, ensureVaultKey, environmentPayload, finalNotes, readResumeValue } from '../init'
+import {
+	type Collected,
+	ensureDataKey,
+	ensurePlatformNames,
+	ensureRunnerKey,
+	ensureVaultKey,
+	environmentPayload,
+	finalNotes,
+	readResumeValue,
+} from '../init'
 
 const RESUMED_NAMES: readonly string[] = [
 	'FABRIKA_CONTROL_VAULT_KEY',
@@ -12,6 +21,7 @@ const RESUMED_NAMES: readonly string[] = [
 	'FABRIKA_IAM_SIGNING_KEYS',
 	'FABRIKA_IAM_OIDC_CLIENT_SECRET',
 	'FABRIKA_RUNNER_KEY',
+	'FABRIKA_IAM_DATA_KEY',
 ]
 
 const COLLECTED: Collected = {
@@ -128,6 +138,7 @@ describe('Cloudflare installer runner key', () => {
 			provisioning: 'px_key',
 			operationsSyncKey: 'ops',
 			runnerKey: 'runner-key-value',
+			dataKey: 'data-key-value',
 			signingKeys: '[]',
 		})
 
@@ -142,10 +153,44 @@ describe('Cloudflare installer runner key', () => {
 			provisioning: 'px_key',
 			operationsSyncKey: 'ops',
 			runnerKey: 'runner-key-value',
+			dataKey: 'data-key-value',
 			signingKeys: '[]',
 		})
 
 		expect([...Object.keys(payload.secrets), ...Object.keys(payload.vars)].filter((name) => /^(GH|GITHUB)_/.test(name))).toEqual([])
+	})
+})
+
+describe('Cloudflare installer IAM data key', () => {
+	test('generates one 32-byte key, persists it, reuses it on a resume, and pushes it only as a secret', async () => {
+		await withOpenEnvFile(async () => {
+			delete process.env['FABRIKA_IAM_DATA_KEY']
+			let key = ''
+			const printed = await captured(async () => {
+				key = await ensureDataKey()
+			})
+
+			expect(Buffer.from(key, 'base64')).toHaveLength(32)
+			expect(await Bun.file(envPath()).text()).toContain(`FABRIKA_IAM_DATA_KEY='${key}'`)
+			expect(printed).not.toContain(key)
+
+			let resumed = ''
+			await captured(async () => {
+				resumed = await ensureDataKey()
+			})
+			expect(resumed).toBe(key)
+			delete process.env['FABRIKA_IAM_DATA_KEY']
+		})
+		const payload = environmentPayload(COLLECTED, {
+			vaultKey: 'vault',
+			provisioning: 'px_key',
+			operationsSyncKey: 'ops',
+			runnerKey: 'runner-key-value',
+			dataKey: 'data-key-value',
+			signingKeys: '[]',
+		})
+		expect(payload.secrets['FABRIKA_IAM_DATA_KEY']).toBe('data-key-value')
+		expect(Object.values(payload.vars)).not.toContain('data-key-value')
 	})
 })
 
@@ -197,6 +242,7 @@ describe('Cloudflare installer resource names', () => {
 			provisioning: 'px_key',
 			operationsSyncKey: 'ops',
 			runnerKey: 'runner-key-value',
+			dataKey: 'data-key-value',
 			signingKeys: '[]',
 		})
 		expect(Object.entries(payload.vars)[0]).toEqual(['FABRIKA_CLOUDFLARE_NAMES', 'fabrika'])
@@ -206,6 +252,7 @@ describe('Cloudflare installer resource names', () => {
 				provisioning: 'px_key',
 				operationsSyncKey: 'ops',
 				runnerKey: 'runner-key-value',
+				dataKey: 'data-key-value',
 				signingKeys: '[]',
 			}).vars['FABRIKA_CLOUDFLARE_NAMES'],
 		).toBe('legacy')

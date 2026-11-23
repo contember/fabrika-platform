@@ -41,6 +41,18 @@ describe('the IAM Bun runtime environment', () => {
 		}
 	})
 
+	test('passes a data key through and fails the boot on one that is not 32 bytes', async () => {
+		const source = { ...base, FABRIKA_IAM_DATABASE_URL: DATABASE_URL, FABRIKA_IAM_SIGNING_KEYS: 'signing-key-material' }
+		const key = Buffer.alloc(32, 7).toString('base64')
+		const runtime = await createRuntime({ ...source, FABRIKA_IAM_DATA_KEY: key })
+		try {
+			expect(runtime.env.FABRIKA_IAM_DATA_KEY).toBe(key)
+		} finally {
+			await runtime.shutdown()
+		}
+		await expect(createRuntime({ ...source, FABRIKA_IAM_DATA_KEY: 'c2hvcnQ=' })).rejects.toThrow('FABRIKA_IAM_DATA_KEY must be 32 bytes')
+	})
+
 	test('names the variable it needs when the database URL is unset', async () => {
 		await expect(createRuntime(base)).rejects.toThrow('FABRIKA_IAM_DATABASE_URL is required')
 	})

@@ -221,6 +221,8 @@ export const iamPipelineSecrets = (source: EnvironmentSource): string[] => {
 	return [
 		'FABRIKA_IAM_SIGNING_KEYS',
 		'FABRIKA_IAM_PROVISIONING_KEY',
+		// Optional: an installation from before TOTP has none until its operator adds it, and must keep deploying.
+		...(source['FABRIKA_IAM_DATA_KEY'] ? ['FABRIKA_IAM_DATA_KEY'] : []),
 		...(authentication.oidcEnabled ? ['OIDC_CLIENT_SECRET'] : []),
 		...emailVariableNames(email, true),
 	]

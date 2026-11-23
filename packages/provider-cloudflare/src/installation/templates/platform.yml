@@ -146,6 +146,8 @@ jobs:
           FABRIKA_EMAIL_FROM: ${{ vars.FABRIKA_EMAIL_FROM }}
           FABRIKA_EMAIL_FROM_NAME: ${{ vars.FABRIKA_EMAIL_FROM_NAME }}
           FABRIKA_IAM_SIGNING_KEYS: ${{ secrets.FABRIKA_IAM_SIGNING_KEYS }}
+          # Seals each administrator's TOTP secret; without it IAM offers no TOTP enrolment.
+          FABRIKA_IAM_DATA_KEY: ${{ secrets.FABRIKA_IAM_DATA_KEY }}
           OIDC_CLIENT_SECRET: ${{ secrets.FABRIKA_IAM_OIDC_CLIENT_SECRET }}
           FABRIKA_IAM_PROVISIONING_KEY: ${{ secrets.FABRIKA_IAM_PROVISIONING_KEY }}
           # Control's public origin: IAM hands its mail to Control's relay there, under a key derived from the

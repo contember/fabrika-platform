@@ -43,6 +43,7 @@ async function seedExistingState(): Promise<void> {
 	) {
 		await Bun.write(resolve(directory, file), 'EXISTING_VALUE=must-not-rotate\n')
 	}
+	await Bun.write(resolve(directory, 'iam.env'), 'EXISTING_VALUE=must-not-rotate\nFABRIKA_IAM_DATA_KEY=existing-data-key\n')
 	await Bun.write(resolve(directory, 'notes.env'), notes)
 	await Bun.write(resolve(directory, 'control.env'), control)
 	await Bun.write(resolve(directory, 'operations.env'), operations)
@@ -115,6 +116,18 @@ describe('local storage preparation', () => {
 		expect(existsSync(resolve(directory, 'minio.env'))).toBe(false)
 		await prepareLocalSecrets(directory)
 		expect(await snapshotEnvironment()).toEqual(before)
+	})
+
+	test("adds IAM's data key to a stack from before it once, and keeps every other IAM value", async () => {
+		await seedExistingState()
+		await Bun.write(resolve(directory, 'iam.env'), 'EXISTING_VALUE=must-not-rotate\n')
+		await prepareLocalSecrets(directory)
+		const added = await Bun.file(resolve(directory, 'iam.env')).text()
+		expect(added).toStartWith('EXISTING_VALUE=must-not-rotate\nFABRIKA_IAM_DATA_KEY=')
+		const key = added.split('FABRIKA_IAM_DATA_KEY=')[1]?.trim() ?? ''
+		expect(Buffer.from(key, 'base64')).toHaveLength(32)
+		await prepareLocalSecrets(directory)
+		expect(await Bun.file(resolve(directory, 'iam.env')).text()).toBe(added)
 	})
 
 	test("gives IAM and the platform proxy's Caddy one IAM proxy secret, as a Zerops deploy does", async () => {

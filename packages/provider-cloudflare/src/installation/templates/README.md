@@ -15,7 +15,7 @@ the **`{{ACCOUNT}}` GitHub Environment** (Settings → Environments) and are wri
 Scaffold commits use `[skip ci]`; init explicitly dispatches the workflow only after that Environment is configured.
 
 Every credential this installation has is in that Environment — the Cloudflare API token, the vault KEK,
-IAM's signing key, the provisioning key and `FABRIKA_RUNNER_KEY` (the shared key the
+IAM's signing and data keys, the provisioning key and `FABRIKA_RUNNER_KEY` (the shared key the
 control plane presents to the deploy runner; Stage 3 pushes it to both Workers). Init therefore protects
 `main` (no force pushes, no deletions) on a repository it creates, and restricts the Environment to
 protected branches. The two go together: the Environment policy admits any branch that carries no

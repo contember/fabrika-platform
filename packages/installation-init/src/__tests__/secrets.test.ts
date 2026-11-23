@@ -24,6 +24,9 @@ describe('the generated secrets', () => {
 		// base64, NOT base64url: the vault imports these bytes as an AES key.
 		expect(secrets.vaultKey).toMatch(/^[A-Za-z0-9+/]{43}=$/)
 		expect(Buffer.from(secrets.vaultKey, 'base64')).toHaveLength(32)
+		// IAM's data key is a second AES key of the same shape, never the vault's.
+		expect(Buffer.from(secrets.dataKey, 'base64')).toHaveLength(32)
+		expect(secrets.dataKey).not.toBe(secrets.vaultKey)
 	})
 
 	test('no base64url value starts with `-` or `_`, which downstream would read as a flag', () => {
