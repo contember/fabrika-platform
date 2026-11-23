@@ -1,4 +1,14 @@
-import { buildAccessClaims, ENDPOINT_HEADER, type IamRpc, type Jwks, type PermissionEntry, PROXY_TOKEN_HEADER } from '@fabrika/auth-core'
+import {
+	buildAccessClaims,
+	buildResourceAccessClaims,
+	ENDPOINT_HEADER,
+	type IamRpc,
+	type Jwks,
+	OAUTH_CLI_CLIENT_ID,
+	type PermissionEntry,
+	PROXY_TOKEN_HEADER,
+	RESOURCE_ACCESS_TOKEN_TYP,
+} from '@fabrika/auth-core'
 import { operationsCatalogSnapshotHash, type OperationsCatalogSource } from '@fabrika/operations-contract/catalog'
 import {
 	OPERATIONS_RELEASE_RECONCILE_PATH,
@@ -95,6 +105,28 @@ async function operatorToken(actions: readonly string[], label = 'operator@examp
 	})
 	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'operations-test' }).sign(privateKey)
 }
+
+/** The command-line client's token for the console's Operations RPC, as IAM mints one after a device grant. */
+async function cliToken(actions: readonly string[], resource: string): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const claims = buildResourceAccessClaims({
+		iss: issuer,
+		app: 'vozka',
+		resource,
+		subject: 'operator-1',
+		label: 'operator@example.test',
+		permissions: actions.map((action) => ({ action, scope: null, source: 'grant' })),
+		issuedAt: now,
+		expiresAt: now + 300,
+		clientId: OAUTH_CLI_CLIENT_ID,
+		scopes: ['read:app'],
+		grantId: 'grant-1',
+		tokenId: 'token-1',
+	})
+	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'operations-test', typ: RESOURCE_ACCESS_TOKEN_TYP }).sign(privateKey)
+}
+
+const OPERATIONS_RESOURCE = 'https://console.example.test/operations/api/rpc'
 
 /** Read-only and full-operator callers, the two the authorization assertions below distinguish. */
 const VIEWER_TOKEN = await operatorToken(['operations.read'], 'viewer@example.test')
@@ -303,6 +335,33 @@ describe('Operations public/private HTTP isolation', () => {
 			phase: 'started',
 			projection_revision: 1,
 		})
+	})
+
+	test("the command-line client's token is accepted only for the resource Operations is told, beside native tokens", async () => {
+		const withResource = handler(createHarness(), createOperationsIam({ IAM: sessionRpc('unused'), FABRIKA_IAM_ISSUER: issuer }, OPERATIONS_RESOURCE))
+		const token = await cliToken(['operations.read'], OPERATIONS_RESOURCE)
+		expect((await withResource(rpcRequest('operations.internal', 'sources', null, token))).status).toBe(200)
+		expect((await withResource(rpcRequest('operations.internal', 'sources', null, VIEWER_TOKEN))).status).toBe(200)
+		const consoleRpc = await cliToken(['operations.read'], 'https://console.example.test/api/rpc')
+		expect((await withResource(rpcRequest('operations.internal', 'sources', null, consoleRpc))).status).toBe(401)
+		// Where the installation serves no OAuth, Operations is told no resource and refuses every such token.
+		expect((await handler()(rpcRequest('operations.internal', 'sources', null, token))).status).toBe(401)
+	})
+
+	test('a delegated token may not list people, which IAM answers only to a native token', async () => {
+		let listed = 0
+		const iam = createOperationsIam({
+			IAM: { ...sessionRpc('unused'), listPrincipals: () => (listed++, Promise.resolve({ ok: true, principals: [] })) },
+			FABRIKA_IAM_ISSUER: issuer,
+		}, OPERATIONS_RESOURCE)
+		const harness = createHarness()
+		await harness.repositories.sources.upsert({ id: 'source-a', appId: 'app', environment: 'prod', displayName: 'App', enabled: true })
+		const fetch = handler(harness, iam)
+		const token = await cliToken(['operations.read', 'operations.triage'], OPERATIONS_RESOURCE)
+		const assignees = await fetch(rpcRequest('operations.internal', 'assignees', { sourceId: 'source-a' }, token))
+		expect(assignees.status).toBe(403)
+		expect(await assignees.json()).toEqual({ error: { type: 'request_error', message: 'a delegated token cannot list people; use the console' } })
+		expect(listed).toBe(0)
 	})
 
 	test('the private operator API enforces scoped IAM permissions while the public hostname stays closed', async () => {

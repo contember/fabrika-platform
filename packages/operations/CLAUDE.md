@@ -43,6 +43,11 @@ against IAM's JWKS, and an unresolved caller never reaches a handler. Because th
 operator surface is fronted by the CONSOLE's proxy, `OPERATIONS_AUTH_APP_ID` is
 the console's app id, not `OPERATIONS_APP_ID` — see
 [`backlog 54`](../../docs/backlog/54-give-operations-its-own-proxy-app-identity.md).
+`FABRIKA_OPERATIONS_OAUTH_RESOURCE`, when the deploy writes it, names the ONE OAuth resource (the console's
+`/operations/api/rpc` for the command-line client) whose tokens are accepted beside native ones; a token for any
+other resource is refused. The deploy derives it from the template resource marked `verifiedBy: 'operations'`. IAM
+lists people only to a native token, so a delegated caller gets a 403 from `listPeople` (assignees, an assignment to a
+person) before IAM is asked.
 Operations makes no enforcement decision, writes no cookie, and never produces a login URL.
 
 Ingest redacts before it parses (`src/redact.ts`, called by `buildParsedEvent`): every URL fragment,

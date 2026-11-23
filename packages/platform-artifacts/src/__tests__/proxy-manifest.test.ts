@@ -16,7 +16,7 @@ import {
 	type ControlServiceOptions,
 } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
-import { platformIamOAuthConfig, platformServiceTableDigest } from '@fabrika/installation-init'
+import { platformIamOAuthConfig, platformOAuthResourceVerifiedBy, platformServiceTableDigest } from '@fabrika/installation-init'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import { PLATFORM_PROXY_MANIFEST_TEMPLATE } from '@fabrika/provider-zerops/installation'
@@ -306,6 +306,11 @@ describe('OAuth on the console, resolved', () => {
 		expect(config.resources[2]?.defaultScopes).toEqual(['authoring'])
 		// Each resource is served to one kind of client: the RPC ones to the command-line client only, MCP's to the managed ones.
 		expect(config.resources.map((entry) => entry.client)).toEqual(['cli', 'cli', undefined])
+	})
+
+	test("Operations verifies the console's Operations RPC tokens, and only on a composition that serves OAuth", () => {
+		expect(platformOAuthResourceVerifiedBy(platformProxyManifestTemplate(), cli, 'operations')).toBe(CLI_RESOURCES[1]?.resource)
+		expect(platformOAuthResourceVerifiedBy(platformProxyManifestTemplate(), composition, 'operations')).toBeUndefined()
 	})
 
 	test('only the console serves OAuth clients', () => {

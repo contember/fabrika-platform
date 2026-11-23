@@ -15,8 +15,8 @@ import { auditIssueMutation, canAccessOperationsSource, normalizeIssueAssignment
 import { parseEventDetail } from '../event-detail.js'
 import type { IdentifiedOperatorIssueRow, OperatorOccurrenceRow } from '../repositories.js'
 import { authorizedSources, sourceAccess, visibleIssue } from './access.js'
-import type { OperationsOperatorOptions } from './context.js'
-import { badRequest, notFoundError, OperatorRequestError } from './errors.js'
+import { listPeople, type OperationsOperatorOptions } from './context.js'
+import { badRequest, notFoundError } from './errors.js'
 import { boundedLimit, encodeIssueCursor, encodeOccurrenceCursor, issueCursor, occurrenceCursor } from './pagination.js'
 import { sourceDto } from './sources.js'
 import { now, nullableNumeric, numeric } from './values.js'
@@ -238,8 +238,7 @@ async function internalMutation(
 	const mutation = mutationInput
 	if (mutation.kind === 'assign') {
 		if (mutation.principalId === null) return { kind: 'assign', principalId: null, principalLabel: null }
-		const principals = await options.principals.listPrincipals(request)
-		if (!principals.ok) throw new OperatorRequestError(principals.status, principals.reason)
+		const principals = await listPeople(request, options)
 		return normalizeIssueAssignment(
 			{ kind: 'assign', principalId: mutation.principalId, principalLabel: null },
 			principals.principals,

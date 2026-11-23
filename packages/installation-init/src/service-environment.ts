@@ -24,6 +24,8 @@ export type PlatformServiceEnvironment = Readonly<Record<PlatformService, Readon
 
 /** IAM's OAuth configuration (ADR-0049): written by every deploy of an installation that serves OAuth over https. */
 export const IAM_OAUTH_CONFIG_VARIABLE = 'FABRIKA_IAM_OAUTH_CONFIG'
+/** The console's Operations RPC as an OAuth resource, whose tokens Operations verifies (`platformOAuthResourceVerifiedBy`). */
+export const OPERATIONS_OAUTH_RESOURCE_VARIABLE = 'FABRIKA_OPERATIONS_OAUTH_RESOURCE'
 
 /** IAM's OIDC client secret, as IAM's Bun runtime reads it. The operator's credential: written sensitive, never generated. */
 export const IAM_OIDC_CLIENT_SECRET_VARIABLE = 'OIDC_CLIENT_SECRET'
@@ -184,6 +186,8 @@ export interface DeployedServiceInput extends PlatformPlacementInput {
 	readonly controlTableDigest: string
 	/** Present when the installation serves OAuth: the command-line client's resources, and MCP's when it is on. */
 	readonly oauthConfig?: IamOAuthConfig
+	/** Present with `oauthConfig`: the resource URI Operations accepts tokens for. */
+	readonly operationsOAuthResource?: string
 }
 
 /**
@@ -206,13 +210,17 @@ export const deployedServiceEnvironment = (input: DeployedServiceInput): Platfor
 	if (input.oauthConfig !== undefined) {
 		iam.set(IAM_OAUTH_CONFIG_VARIABLE, JSON.stringify(input.oauthConfig))
 	}
+	const operations = new Map([
+		['ENVIRONMENT', input.environment],
+		['FABRIKA_IAM_ISSUER', iamOrigin],
+		['FABRIKA_OPERATIONS_PUBLIC_HOST', input.hosts.operations],
+	])
+	if (input.operationsOAuthResource !== undefined) {
+		operations.set(OPERATIONS_OAUTH_RESOURCE_VARIABLE, input.operationsOAuthResource)
+	}
 	return {
 		iam,
-		operations: new Map([
-			['ENVIRONMENT', input.environment],
-			['FABRIKA_IAM_ISSUER', iamOrigin],
-			['FABRIKA_OPERATIONS_PUBLIC_HOST', input.hosts.operations],
-		]),
+		operations,
 		proxy: new Map([
 			['ENVIRONMENT', input.environment],
 			['FABRIKA_IAM_ISSUER', iamOrigin],

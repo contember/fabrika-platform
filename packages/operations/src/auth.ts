@@ -22,6 +22,13 @@ import { createIam, type Iam, type IamEnv } from '@fabrika/auth'
  */
 export const OPERATIONS_AUTH_APP_ID = 'vozka'
 
-export function createOperationsIam(env: IamEnv): Iam {
-	return createIam(env, { appId: OPERATIONS_AUTH_APP_ID })
+/** The variable naming the console's Operations RPC as an OAuth resource; set only where the installation serves OAuth. */
+export const OPERATIONS_OAUTH_RESOURCE_VARIABLE = 'FABRIKA_OPERATIONS_OAUTH_RESOURCE'
+
+/**
+ * With `oauthResource`, the command-line client's token for the console's Operations RPC is accepted beside the console's
+ * native tokens. The console's proxy binds such a token to that one row, and its gateway forwards it here unchanged.
+ */
+export function createOperationsIam(env: IamEnv, oauthResource?: string): Iam {
+	return createIam(env, { appId: OPERATIONS_AUTH_APP_ID, ...(oauthResource === undefined ? {} : { oauthResource }) })
 }

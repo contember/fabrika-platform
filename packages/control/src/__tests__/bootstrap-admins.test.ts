@@ -1,4 +1,5 @@
 import { type AuthContext, type IamRpc, PROXY_TOKEN_HEADER } from '@fabrika/auth'
+import { buildResourceAccessClaims, OAUTH_CLI_CLIENT_ID, RESOURCE_ACCESS_TOKEN_TYP } from '@fabrika/auth-core'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { controlAuthenticator, parseBootstrapAdmins } from '../iam'
@@ -56,6 +57,29 @@ async function token(input: { label: string; ptype: 'user' | 'service'; actions?
 		serviceKeys.privateKey,
 		new TextEncoder().encode(signingInput),
 	)
+	return `${signingInput}.${base64Url(new Uint8Array(signature))}`
+}
+
+/** A command-line client's resource token for the console's RPC, as IAM mints one after a device grant. */
+async function resourceToken(input: { label: string; actions: readonly string[]; resource?: string }): Promise<string> {
+	const now = Math.floor(Date.now() / 1000)
+	const header = base64Url(JSON.stringify({ alg: 'ES256', kid: 'service-test', typ: RESOURCE_ACCESS_TOKEN_TYP }))
+	const payload = base64Url(JSON.stringify(buildResourceAccessClaims({
+		iss: ISSUER,
+		app: 'vozka',
+		resource: input.resource ?? 'https://control.test/api/rpc',
+		subject: 'user-one',
+		label: input.label,
+		permissions: input.actions.map((action) => ({ action, scope: null, source: 'grant' })),
+		issuedAt: now,
+		expiresAt: now + 300,
+		clientId: OAUTH_CLI_CLIENT_ID,
+		scopes: ['read:alpha'],
+		grantId: 'grant-1',
+		tokenId: crypto.randomUUID(),
+	})))
+	const signingInput = `${header}.${payload}`
+	const signature = await crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, serviceKeys.privateKey, new TextEncoder().encode(signingInput))
 	return `${signingInput}.${base64Url(new Uint8Array(signature))}`
 }
 
@@ -134,6 +158,30 @@ describe('controlAuthenticator bootstrap semantics', () => {
 		expect(notListed.nextCalled).toBe(true)
 		expect(notListed.auth?.can(CONTROL_ACTIONS.DEPLOY_READ)).toBe(true)
 		expect(notListed.auth?.can(CONTROL_ACTIONS.APP_MANAGE)).toBe(false)
+	})
+
+	test("the command-line client's token is accepted on the RPC beside native ones, and a listed person's token is not elevated", async () => {
+		const env = { ...ENV, FABRIKA_CONTROL_DOMAIN: 'https://control.test', FABRIKA_CONTROL_BOOTSTRAP_ADMINS: '["viewer@fabrika.test"]' }
+		const call = async (oauthPath: string | undefined, bearer: string) => {
+			const caller = await controlAuthenticator(env, oauthPath)(
+				new Request('https://control.test/api/rpc', { headers: { [PROXY_TOKEN_HEADER]: bearer } }),
+			)
+			return caller.ok ? caller.auth : caller.response.status
+		}
+		const delegated = await call('/api/rpc', await resourceToken({ label: 'viewer@fabrika.test', actions: [CONTROL_ACTIONS.DEPLOY_READ] }))
+		if (typeof delegated === 'number') throw new Error(`expected the token accepted, got ${delegated}`)
+		expect(delegated.oauth?.clientId).toBe(OAUTH_CLI_CLIENT_ID)
+		expect(delegated.can(CONTROL_ACTIONS.DEPLOY_READ)).toBe(true)
+		expect(delegated.can(CONTROL_ACTIONS.APP_MANAGE)).toBe(false)
+
+		// The person's own session token is still elevated on the same row.
+		const native = await call('/api/rpc', await token({ label: 'viewer@fabrika.test', ptype: 'user' }))
+		if (typeof native === 'number') throw new Error(`expected the token accepted, got ${native}`)
+		expect(native.can(CONTROL_ACTIONS.APP_MANAGE)).toBe(true)
+
+		// Without the row's resource, or for another resource, the token is refused.
+		expect(await call(undefined, await resourceToken({ label: 'viewer@fabrika.test', actions: ['*'] }))).toBe(401)
+		expect(await call('/api/rpc', await resourceToken({ label: 'x', actions: ['*'], resource: 'https://control.test/operations/api/rpc' }))).toBe(401)
 	})
 
 	test('bootstrap elevation does not apply to a service caller, however it is listed', async () => {

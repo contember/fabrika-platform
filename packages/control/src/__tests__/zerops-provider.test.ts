@@ -243,6 +243,14 @@ describe('the one MCP switch: the table the proxy publishes', () => {
 		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: `sha256:${'0'.repeat(64)}` }))).toThrow(ControlTableError)
 	})
 
+	test("the command-line client's table refuses to start unless its origin makes a valid OAuth resource", () => {
+		const cli = controlServiceDigest({ mcp: false, cli: true })
+		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: cli }))).toThrow('names no public origin')
+		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: cli, FABRIKA_CONTROL_DOMAIN: 'http://console.example.com' }))).toThrow(
+			'no valid OAuth resource URI',
+		)
+	})
+
 	test('a published table with the oauth row serves MCP, and refuses to start without the origin its resource needs', async () => {
 		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: true, cli: true }) }))).toThrow(
 			'FABRIKA_CONTROL_DOMAIN',

@@ -481,7 +481,7 @@ describe('the hand-off', () => {
 		await fixture.run()
 
 		// All pass 2 has left to write is what it derives from the manifest it composes (IAM's OAuth config for the
-		// resources the proxy registers, and the console table digest), and the IAM proxy secret, which no deploy reads
+		// resources the proxy registers, the resource Operations verifies, and the console table digest), and the IAM proxy secret, which no deploy reads
 		// back — every origin the deploy derives was written from the same hosts one step earlier, the last of them the
 		// platform project id.
 		const afterPassOne = fixture.zerops.calls.slice(fixture.zerops.calls.indexOf('deploy:proxy') + 1)
@@ -490,6 +490,7 @@ describe('the hand-off', () => {
 			'env:control:FABRIKA_ZEROPS_PLATFORM_PROJECT_ID',
 			`env:iam:${IAM_PROXY_SECRET_VARIABLE}`,
 			'env:iam:FABRIKA_IAM_OAUTH_CONFIG',
+			'env:operations:FABRIKA_OPERATIONS_OAUTH_RESOURCE',
 			`env:proxy:${IAM_PROXY_SECRET_VARIABLE}`,
 			`env:control:${FABRIKA_SERVICE_TABLE_DIGEST}`,
 		])

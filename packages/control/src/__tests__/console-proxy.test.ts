@@ -130,10 +130,14 @@ describe('the console behind its MCP table', () => {
 		expect(await response.text()).toBe('mcp')
 	})
 
-	test("the command-line client's token for the RPC passes the proxy, and Control does not accept one yet", async () => {
+	test("the command-line client's token for the RPC reaches it, and one for another path or the MCP endpoint does not", async () => {
 		const token = await testResourceToken({ resource: `${CONSOLE_ORIGIN}${CONTROL_RPC_PATH}`, label: 'agent', actions: ['*'] })
-		const response = await fetch(rpc({ authorization: `Bearer ${token}` }))
-		expect(response.status).toBe(401)
-		expect(response.headers.get('www-authenticate')).toBeNull()
+		expect((await fetch(rpc({ authorization: `Bearer ${token}` }))).status).toBe(200)
+		for (const resource of [`${CONSOLE_ORIGIN}${CONTROL_OPERATIONS_RPC_PATH}`, RESOURCE]) {
+			const other = await testResourceToken({ resource, label: 'agent', actions: ['*'] })
+			const refused = await fetch(rpc({ authorization: `Bearer ${other}` }))
+			expect(refused.status).toBe(401)
+			expect(refused.headers.get('www-authenticate')).toContain('error="invalid_token"')
+		}
 	})
 })

@@ -6,8 +6,7 @@ import type {
 } from '@fabrika/operations-contract/operator-api'
 import type { IdentifiedOperatorIssueRow, OperatorReleaseRow, SourceRow } from '../repositories.js'
 import { authorizedSources, visibleSource } from './access.js'
-import type { OperationsOperatorOptions } from './context.js'
-import { OperatorRequestError } from './errors.js'
+import { listPeople, type OperationsOperatorOptions } from './context.js'
 
 export async function listSources(options: OperationsOperatorOptions): Promise<OperationsSourceListResponseDto> {
 	const sources = await authorizedSources(options, 'operations.read')
@@ -25,8 +24,7 @@ export async function listAssignees(
 	options: OperationsOperatorOptions,
 ): Promise<OperationsAssigneeListResponseDto> {
 	await visibleSource(sourceId, 'operations.triage', options)
-	const result = await options.principals.listPrincipals(request)
-	if (!result.ok) throw new OperatorRequestError(result.status, result.reason)
+	const result = await listPeople(request, options)
 	return {
 		items: result.principals
 			.filter((principal) => principal.type === 'user' && !principal.disabled)

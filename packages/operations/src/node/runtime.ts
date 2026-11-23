@@ -2,7 +2,7 @@ import { HttpIamRpc } from '@fabrika/auth'
 import { PostgresDatabase, S3BlobStore } from '@fabrika/platform-node'
 import { z } from 'zod'
 import { OperationsAlertProducer } from '../alerts.js'
-import { createOperationsIam } from '../auth.js'
+import { createOperationsIam, OPERATIONS_OAUTH_RESOURCE_VARIABLE } from '../auth.js'
 import { PostgresHealthRepository } from '../health-repository.js'
 import { OperationsHealthExecution } from '../health-service.js'
 import type { OperationsHttpEnv } from '../http.js'
@@ -66,27 +66,34 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 function operationsIam(source: Record<string, string | undefined>) {
 	// One path everywhere: the process verifies IAM-issued tokens and has no local mode to fall back on.
 	const config = resolveOperationsIamProcessConfig(source)
-	return createOperationsIam({
-		IAM: new HttpIamRpc({
-			origin: config.rpcOrigin,
-			key: config.rpcKey,
-		}),
-		FABRIKA_IAM_ISSUER: config.issuer,
-	})
+	return createOperationsIam(
+		{
+			IAM: new HttpIamRpc({
+				origin: config.rpcOrigin,
+				key: config.rpcKey,
+			}),
+			FABRIKA_IAM_ISSUER: config.issuer,
+		},
+		config.oauthResource,
+	)
 }
 
 export interface OperationsIamProcessConfig {
 	issuer: string
 	rpcOrigin: string
 	rpcKey: string
+	/** The console's Operations RPC as an OAuth resource, when the installation serves OAuth. */
+	oauthResource?: string
 }
 
 /** Resolve public IAM identity separately from its private management transport. */
 export function resolveOperationsIamProcessConfig(source: Record<string, string | undefined>): OperationsIamProcessConfig {
+	const oauthResource = optional(source, OPERATIONS_OAUTH_RESOURCE_VARIABLE)
 	return {
 		issuer: required(source, 'FABRIKA_IAM_ISSUER'),
 		rpcOrigin: required(source, 'FABRIKA_IAM_RPC_URL'),
 		rpcKey: requiredSecret(source, 'FABRIKA_IAM_RPC_KEY'),
+		...(oauthResource === undefined ? {} : { oauthResource }),
 	}
 }
 

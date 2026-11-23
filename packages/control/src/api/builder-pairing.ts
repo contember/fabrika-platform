@@ -3,7 +3,7 @@ import type { DeviceAuthorizationCaller, DeviceAuthorizationFailure, DeviceAutho
 import type { BuilderPairingProofRequest, ListOwnBuilderPairingsRequest, RevokeBuilderPairingRequest } from '@fabrika/control-contract'
 import { CONTROL_ACTIONS, CONTROL_APP_ID } from '@fabrika/control-contract'
 import type { ControlRepositories } from '../db'
-import { appScope } from '../iam'
+import { appScope, isPerson } from '../iam'
 import { fail } from './domain'
 
 export type BuilderPairingIam = Pick<
@@ -19,7 +19,7 @@ export interface BuilderPairingContext {
 }
 
 export function builderPairingCaller(c: BuilderPairingContext): DeviceAuthorizationCaller {
-	if (c.auth.principal?.type !== 'user') fail(403, 'builder pairing requires a human')
+	if (!isPerson(c.auth)) fail(403, 'builder pairing requires a human')
 	// Forward the same credential Control verified, never a second bearer or a provisioning fallback.
 	const credential = c.request.headers.get(PROXY_TOKEN_HEADER)?.trim()
 	if (!credential) fail(401, 'authenticated human credential required')
@@ -35,8 +35,9 @@ export async function inspectBuilderPairing(c: BuilderPairingContext, input: Bui
 export async function requireBuilderPairingProof(c: BuilderPairingContext, input: BuilderPairingProofRequest): Promise<string> {
 	const result = await inspectBuilderPairing(c, input)
 	if (!result.ok) refuseDeviceAuthorization(result)
-	if (c.auth.principal?.type !== 'user') fail(403, 'builder pairing requires a human')
-	return c.auth.principal.id
+	const principal = c.auth.principal
+	if (principal === null || !isPerson(c.auth)) fail(403, 'builder pairing requires a human')
+	return principal.id
 }
 
 export async function approveBuilderPairing(c: BuilderPairingContext, input: BuilderPairingProofRequest) {

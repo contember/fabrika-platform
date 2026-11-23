@@ -2,7 +2,7 @@ import type { AuthContext } from '@fabrika/auth'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import type { exchangeGitHubAppManifestCode, GitHubAppFetch } from '@fabrika/github-app'
 import type { Env } from '../../env'
-import { controlPublicOrigin } from '../../iam'
+import { controlPublicOrigin, isPerson } from '../../iam'
 import { SourceConnectionWorkflowError } from './errors'
 import type { SourceConnectionPort } from './port'
 
@@ -23,8 +23,9 @@ export interface SourceConnectionWorkflowDeps extends SourceConnectionRequestDep
 
 export function requireHuman(auth: AuthContext): string {
 	if (!auth.can(CONTROL_ACTIONS.SOURCE_CONNECTION_MANAGE)) throw new SourceConnectionWorkflowError(403)
-	if (auth.principal === null || auth.principal.type !== 'user') throw new SourceConnectionWorkflowError(403)
-	return auth.principal.id
+	const principal = auth.principal
+	if (principal === null || !isPerson(auth)) throw new SourceConnectionWorkflowError(403)
+	return principal.id
 }
 
 export function requireControlOrigin(env: Env): string {

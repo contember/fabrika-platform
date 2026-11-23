@@ -205,6 +205,40 @@ describe('authenticate — a resource token audience', () => {
 	})
 })
 
+describe('authenticate — native tokens and one OAuth resource beside them', () => {
+	const both = (stub = new IamRpcStub({ jwks: JWKS })) => createIam(iamEnv(stub), { oauthResource: RESOURCE })
+
+	test('a native token and a resource token for exactly that resource both resolve, the latter with its OAuth claims', async () => {
+		const native = await both().authenticate(proxied(await sign()))
+		if (!native.ok) throw new Error('expected ok')
+		expect(native.context.oauth).toBeUndefined()
+		const resource = await both().authenticate(proxied(await signResource()))
+		if (!resource.ok) throw new Error('expected ok')
+		expect(resource.context.oauth?.scopes).toEqual(['authoring'])
+		expect(resource.context.can('demo.write')).toBe(false)
+	})
+
+	test('a resource token for another resource or another app is refused', async () => {
+		const invalid: AuthResult = { ok: false, reason: 'invalid_token', status: 401 }
+		expect(await both().authenticate(proxied(await signResource({ resource: 'https://app.test/other' })))).toEqual(invalid)
+		expect(await both().authenticate(proxied(await signResource({ app: 'other-app' })))).toEqual(invalid)
+	})
+
+	test('an unreachable key set is 503, not a second try', async () => {
+		const stub = new IamRpcStub({ jwks: JWKS })
+		stub.jwksError = new Error('connect ECONNREFUSED')
+		expect(await both(stub).authenticate(proxied(await signResource()))).toEqual({ ok: false, reason: 'unavailable', status: 503 })
+	})
+
+	test('it is refused at construction beside a resource audience, or for an invalid resource URI', () => {
+		const env = iamEnv(new IamRpcStub())
+		expect(() => createIam(env, { tokenAudience: { kind: 'resource', app: APP, resource: RESOURCE }, oauthResource: RESOURCE })).toThrow(
+			/oauthResource/,
+		)
+		expect(() => createIam(env, { oauthResource: 'http://app.test/api/rpc' })).toThrow(/oauthResource/)
+	})
+})
+
 // ── authenticate — the proxy-injected token ──────────────────────────────────────
 
 describe('authenticate', () => {

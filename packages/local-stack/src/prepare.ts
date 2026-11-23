@@ -11,8 +11,10 @@ import {
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import {
 	type McpClient,
+	OPERATIONS_OAUTH_RESOURCE_VARIABLE,
 	parseMcpClientsJson,
 	platformIamOAuthConfig,
+	platformOAuthResourceVerifiedBy,
 	type PlatformProxyComposition,
 	type PlatformProxyManifest,
 	platformServiceTableDigest,
@@ -296,6 +298,13 @@ export const readLocalMcpClients = (env: Record<string, string | undefined>): re
 export const localIamOAuthConfig = (mcpClients: readonly McpClient[] | undefined): string =>
 	JSON.stringify(platformIamOAuthConfig(platformProxyManifestTemplate(), localComposition(mcpClients), mcpClients ?? []))
 
+/** The console's Operations RPC as the resource Operations accepts the command-line client's tokens for. */
+export const localOperationsOAuthResource = (): string => {
+	const resource = platformOAuthResourceVerifiedBy(platformProxyManifestTemplate(), localComposition(undefined), 'operations')
+	if (resource === undefined) throw new Error('the platform template names no OAuth resource Operations verifies')
+	return resource
+}
+
 /** The local `notes` service plays the `prod` environment; IAM knows it as `notes@prod` (ADR-0022 rule 6). */
 export const LOCAL_NOTES_ENVIRONMENT = 'prod'
 export const LOCAL_NOTES_IAM_APP_ID = appEnvironmentId(NOTES_APP_ID, LOCAL_NOTES_ENVIRONMENT)
@@ -404,6 +413,7 @@ export const prepareLocalStack = async (): Promise<void> => {
 	await writeEnv(STATE_DIR, 'control-table.env', {
 		[FABRIKA_SERVICE_TABLE_DIGEST]: platformServiceTableDigest(localPlatformProxyManifest(mcpClients), CONTROL_APP_ID),
 	})
+	await writeEnv(STATE_DIR, 'operations-oauth.env', { [OPERATIONS_OAUTH_RESOURCE_VARIABLE]: localOperationsOAuthResource() })
 	await generateProxyConfigs(mcpClients)
 	await prepareNotesApplication()
 	console.info(`Local stack prepared for ${IAM_ISSUER}; MCP authoring ${mcpClients === undefined ? 'off' : 'on'}`)

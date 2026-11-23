@@ -853,6 +853,18 @@ describe('OAuth and MCP authoring', () => {
 		expect(fixture.zerops.calls.indexOf('env:iam:FABRIKA_IAM_OAUTH_CONFIG')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
 	})
 
+	test("https: Operations is told the console's Operations RPC resource before it deploys; plain http tells it nothing", async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_OAUTH_RESOURCE')).toBe(RPC_RESOURCES[1])
+		expect(fixture.zerops.calls.indexOf('env:operations:FABRIKA_OPERATIONS_OAUTH_RESOURCE')).toBeLessThan(
+			fixture.zerops.calls.indexOf('deploy:operations'),
+		)
+		const plain = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await plain.run({ scheme: 'http' })
+		expect(plain.zerops.calls).not.toContain('env:operations:FABRIKA_OPERATIONS_OAUTH_RESOURCE')
+	})
+
 	test('MCP enabled: the console admits OAuth bearers on `/mcp` too and registers the resource IAM issues for', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
@@ -921,12 +933,13 @@ describe('OAuth and MCP authoring', () => {
 		expect(fixture.zerops.calls).not.toContain('env:iam:FABRIKA_IAM_OAUTH_CONFIG')
 	})
 
-	test('plain http: an IAM OAuth config the operator set is left as it is, with a warning naming it', async () => {
+	test('plain http: the OAuth variables an earlier deploy or the operator set are left as they are, with a warning naming each', async () => {
 		const zerops = fakeZerops({
 			...PROJECT,
 			services: platformServices({
 				proxy: { zeropsSubdomain: SUBDOMAINS, [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest },
 				iam: { FABRIKA_IAM_OAUTH_CONFIG: 'operator-owned' },
+				operations: { FABRIKA_OPERATIONS_OAUTH_RESOURCE: 'https://console.example.test/operations/api/rpc' },
 			}),
 		})
 		const log = recordingDeployLog()
@@ -941,6 +954,11 @@ describe('OAuth and MCP authoring', () => {
 		expect(zerops.env('iam').get('FABRIKA_IAM_OAUTH_CONFIG')).toBe('operator-owned')
 		expect(log.lines.some((line) => line.startsWith('warn:') && line.includes('FABRIKA_IAM_OAUTH_CONFIG'))).toBe(true)
 		expect(log.lines.some((line) => line.includes('operator-owned'))).toBe(false)
+		// An https deploy wrote the resource Operations accepts; plain http leaves it too, and says so.
+		expect(zerops.env('operations').get('FABRIKA_OPERATIONS_OAUTH_RESOURCE')).toBe('https://console.example.test/operations/api/rpc')
+		expect(log.lines).toContain(
+			"warn: operations: OAuth is off but FABRIKA_OPERATIONS_OAUTH_RESOURCE is still set; Operations keeps accepting the command-line client's tokens until it is removed",
+		)
 	})
 
 	test('plain http and never set: no warning', async () => {

@@ -144,6 +144,15 @@ test('all pairing management is human-only; denial verifies the proof and IAM au
 		}
 		expect((await f.call('builderPairing.listOwn', {}, service)).status).toBe(403)
 		expect((await f.call('builderPairing.revoke', { credentialId: uuidv7() }, service)).status).toBe(403)
+		// A person's delegated (OAuth) token is not the person: it may not approve a pairing either.
+		const delegated = {
+			...allowAllAuth(),
+			oauth: { app: 'vozka', clientId: 'fabrika-cli', scopes: ['operate:notes'], grantId: 'grant-1', tokenId: 'token-1' },
+		} satisfies AuthContext
+		for (const method of ['inspect', 'approve', 'deny']) {
+			expect((await f.call(`builderPairing.${method}`, f.proof, delegated)).status).toBe(403)
+		}
+		expect((await f.call('builderPairing.listOwn', {}, delegated)).status).toBe(403)
 		expect((await f.call('builderPairing.deny', { ...f.proof, approvalVerifier: 'B'.repeat(43) })).status).toBe(404)
 		expect(f.stub.denied).toEqual([])
 		expect((await f.call('builderPairing.deny', f.proof)).status).toBe(200)

@@ -424,6 +424,25 @@ describe('Operations operator use cases', () => {
 		}])
 	})
 
+	test('refuses an assignment to a delegated caller before asking IAM, which lists people only to a native token', async () => {
+		const input = options({
+			...auth(),
+			oauth: { app: 'vozka', clientId: 'fabrika-cli', scopes: ['operate:app-a'], grantId: 'grant-1', tokenId: 'token-1' },
+		})
+		let listed = 0
+		const counted: OperationsOperatorOptions = {
+			...input,
+			principals: { listPrincipals: () => (listed++, input.principals.listPrincipals(new Request('https://operations.internal/'))) },
+		}
+		const issueId = await seedSource(counted, 'source-a', 'app-a', 'fingerprint-a', 1_000)
+		await expect(operations(counted).mutateIssue(issueId, issueMutationSchema.parse({ kind: 'assign', principalId: 'owner-id' }))).rejects
+			.toMatchObject({ httpStatus: 403, message: 'a delegated token cannot list people; use the console' })
+		expect(await operations(counted).mutateIssue(issueId, issueMutationSchema.parse({ kind: 'assign', principalId: null }))).toMatchObject({
+			issue: { assignedTo: null },
+		})
+		expect(listed).toBe(0)
+	})
+
 	test('preauthorizes every bulk target before one atomic status update', async () => {
 		const audits: DomainEvent[] = []
 		const input = options(auth({ apps: ['app-a'], audits }))
