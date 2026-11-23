@@ -5,7 +5,8 @@
 -- (AES-256-GCM), the installation's key wraps that data key, and the principal id is the associated data of both, so a
 -- sealed value moved into another principal's row does not open. `confirmed_at` is NULL while the enrolment waits for
 -- its first valid code; only a confirmed row asks a sign-in for a code. `last_step` is the TOTP time step of the last
--- accepted code, so a code is accepted once. A recovery code is stored as its SHA-256 hash only.
+-- accepted code, so a code is accepted once. `confirmation_id` names the one confirmation that wrote the
+-- recovery codes, so a repeated confirmation in the same second writes none. A recovery code is stored as its SHA-256 hash only.
 CREATE TABLE second_factors (
 	principal_id TEXT PRIMARY KEY REFERENCES principals(id) ON DELETE CASCADE,
 	ciphertext   TEXT NOT NULL,
@@ -14,7 +15,8 @@ CREATE TABLE second_factors (
 	dek_iv       TEXT NOT NULL,
 	created_at   INTEGER NOT NULL,
 	confirmed_at INTEGER,
-	last_step    INTEGER
+	last_step    INTEGER,
+	confirmation_id TEXT
 );
 
 CREATE TABLE second_factor_recovery_codes (

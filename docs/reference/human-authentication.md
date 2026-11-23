@@ -92,8 +92,9 @@ in `issueSession` (`auth/sessions.ts`), so it covers every way a person signs in
 - an invitation that creates the person.
 
 An OIDC sign-in is asked too. IAM cannot see whether the identity provider asked for a second factor of its own, and
-an administrator's account is the one worth the extra step. Only the local development bypass (`local_dev`) is not
-asked.
+an administrator's account is the one worth the extra step. Two sign-ins are not asked: the local development bypass
+(`local_dev`), and a person a terminal's application asserts
+([Terminals](#terminals)). That assertion reaches only the asserting application, never IAM's administration.
 
 The pending sign-in rides in a signed cookie, `__Host-fabrika_second_factor` (audience `fabrika:iam:second-factor`),
 for 5 minutes. After that the person signs in again. The code form is `POST /auth/second-factor`. A code is accepted

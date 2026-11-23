@@ -90,6 +90,17 @@ for (const engine of engines) {
 			)
 				.toBe(false)
 			expect((await repositories.secondFactors.status(id)).recoveryCodesLeft).toBe(2)
+			// A repeated confirmation in the same second leaves the codes the first one showed.
+			const repeated = await recoveryCodeHash(id, 'iiii-jjjj-kkkk-llll')
+			expect(
+				await repositories.secondFactors.confirm(
+					{ principalId: id, ciphertext: sealed.ciphertext, step: 100, recoveryCodeHashes: [repeated] },
+					event(id, 'iam.second_factor.enrol'),
+				),
+			)
+				.toBe(false)
+			expect((await repositories.secondFactors.status(id)).recoveryCodesLeft).toBe(2)
+			expect(await repositories.secondFactors.spendRecoveryCode(id, repeated, event(id, 'iam.second_factor.recovery_code.use'))).toBe(false)
 			// A confirmed factor is not replaced by a new start.
 			expect(await repositories.secondFactors.begin(id, await sealValue(DATA_KEY, id, generateTotpSecret()))).toBe(false)
 

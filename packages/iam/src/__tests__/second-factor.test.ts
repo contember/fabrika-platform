@@ -263,6 +263,19 @@ describe('sign-in with a second factor', () => {
 		expect(f.authLog()).toEqual([{ decision: 'allow', reason: 'password_login', principal_id: admin }])
 	})
 
+	test('a principal disabled while its code was pending gets no session', async () => {
+		const f = fixture()
+		const admin = await f.admin('admin@example.com')
+		const secret = await f.enrol(admin)
+		const challenge = challengeOf(await f.login('admin@example.com'))
+		expect(await f.h.repositories.principals.disablePrincipal(admin)).toBe(true)
+
+		const late = await f.submitCode(challenge, await currentCode(secret))
+		expect(late.status).toBe(400)
+		expect(setCookie(late, SESSION_COOKIE)).toBeNull()
+		expect(f.authLog()).toEqual([{ decision: 'deny', reason: 'second_factor_expired', principal_id: admin }])
+	})
+
 	test('a wrong code is refused and logged, and an accepted code is not accepted twice', async () => {
 		const f = fixture()
 		const admin = await f.admin('admin@example.com')

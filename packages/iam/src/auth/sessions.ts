@@ -85,7 +85,8 @@ export interface LoginInput {
  * A principal with a confirmed second factor gets no session here until its code is verified: the answer is the code
  * form and a challenge cookie holding this login (`second-factor-challenge.ts`). Every password, OIDC, password-action
  * and invitation login passes through here, so none skips the factor; only the local-dev bypass does, which no
- * installation outside `ENVIRONMENT=local` serves.
+ * installation outside `ENVIRONMENT=local` serves. A terminal's assertion (`identification.ts`) opens no session here
+ * and asks no factor: it reaches only the asserting application, never IAM's administration.
  */
 export async function issueSession(
 	request: Request,

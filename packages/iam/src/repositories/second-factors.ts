@@ -1,4 +1,4 @@
-import { type SqlDatabase } from '@fabrika/platform'
+import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import type { SealedValue } from '../data-key'
 import { type AuditEventInput, AuditWriter, guardedInsert } from './audit'
 import { principalLockStatements } from './principals'
@@ -16,6 +16,8 @@ export interface SecondFactorRow {
 	confirmed_at: number | null
 	/** The time step of the last accepted code; a code of that step or an earlier one is never accepted again. */
 	last_step: number | null
+	/** The confirmation that wrote the recovery codes; NULL until one did. */
+	confirmation_id: string | null
 }
 
 /** What an administrator sees of a principal's second factor. */
@@ -85,23 +87,26 @@ export class SecondFactorRepository {
 	/**
 	 * Confirm the waiting secret whose ciphertext the caller checked the code against, with its record, and replace the
 	 * principal's recovery codes with `recoveryCodeHashes`, in one transaction. The codes are written only when the
-	 * confirmation changed the row, so a secret replaced in between confirms nothing (false) and issues no code.
+	 * confirmation changed the row, so a secret replaced in between confirms nothing (false) and issues no code. The guard
+	 * reads this attempt's own `confirmation_id`, never the timestamp: a second confirmation in the same second must not
+	 * replace the codes the first one showed.
 	 */
 	async confirm(
 		input: { principalId: string; ciphertext: string; step: number; recoveryCodeHashes: readonly string[] },
 		audit: AuditEventInput,
 	): Promise<boolean> {
 		const now = unixNow()
+		const confirmationId = uuidv7()
 		const { principalId } = input
 		const lock = principalLockStatements(this.db, this.writer.dialect, { sql: '?', binds: [principalId] })
 		const confirmation = this.writer.changed([{
-			sql: `UPDATE second_factors SET confirmed_at = ?, last_step = ?
+			sql: `UPDATE second_factors SET confirmed_at = ?, last_step = ?, confirmation_id = ?
 				WHERE principal_id = ? AND confirmed_at IS NULL AND ciphertext = ? RETURNING principal_id`,
-			binds: [now, input.step, principalId, input.ciphertext],
+			binds: [now, input.step, confirmationId, principalId, input.ciphertext],
 		}], audit)
 		const guard = {
-			sql: 'SELECT 1 FROM second_factors WHERE principal_id = ? AND confirmed_at = ? AND ciphertext = ?',
-			binds: [principalId, now, input.ciphertext],
+			sql: 'SELECT 1 FROM second_factors WHERE principal_id = ? AND confirmation_id = ?',
+			binds: [principalId, confirmationId],
 		}
 		const replaced = this.db
 			.prepare(`DELETE FROM second_factor_recovery_codes WHERE principal_id = ? AND EXISTS (${guard.sql})`)

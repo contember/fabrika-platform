@@ -641,7 +641,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   an invitation enrollment. A principal with a confirmed authenticator gets `challengeSecondFactor` instead: a signed
   `__Host-fabrika_second_factor` cookie (audience `fabrika:iam:second-factor`, 300 s) holding the pending login. Only
   `POST /auth/second-factor` finishes it, through `issueSession` again with `secondFactor: 'verified'`. Only
-  `local_dev` is exempt. Never open a session past this check: a new login path goes through `issueSession`. A failed
+  `local_dev` is exempt, and a terminal's assertion (`terminal_assertion`, ADR-0067), which opens no session here:
+  it reaches only the asserting application, and `resolveAdmin` refuses its token. Never open a session past this check: a new login path goes through `issueSession`. A failed
   read of the enrolment is a 503, never a session. Wrong codes spend `second-factor:account:<id>` in the login
   throttle table (5 per 15 min, then a 15-minute block that refuses a valid code too). A success clears it, and the
   attempt that starts a block records `iam.second_factor.throttle`. A TOTP step is accepted once (`last_step`), and

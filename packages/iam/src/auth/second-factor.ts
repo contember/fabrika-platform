@@ -75,6 +75,19 @@ export async function handleSecondFactor(
 			() => authFailurePage(readerFailure(), { kind: 'second_factor_expired' }, 400),
 		)
 	}
+	// The held login is up to five minutes old: a principal disabled, or a method switched off, since then signs in no more.
+	const principal = await services.repositories.principals.getPrincipalById(pending.principalId)
+	const methodEnabled = pending.authenticationMethod === 'oidc'
+		? services.config.authentication.oidc.enabled
+		: services.config.authentication.password.enabled
+	if (principal === null || principal.disabled_at !== null || !methodEnabled) {
+		return refuseLogin(
+			services,
+			request,
+			{ requestId, principalId: principal === null ? null : pending.principalId, reason: 'second_factor_expired' },
+			() => authFailurePage(readerFailure(), { kind: 'second_factor_expired' }, 400),
+		)
+	}
 	const form = await readForm(request)
 	const submitted = stringValue(form?.get('code') ?? null) ?? ''
 	const refuse = (reason: 'second_factor_invalid' | 'second_factor_throttled', problem: 'invalid' | 'throttled' | 'app_codes_unavailable') =>
