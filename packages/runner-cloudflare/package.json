@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/runner-cloudflare",
-	"version": "0.9.0-dev.32",
+	"version": "0.9.0-dev.33",
 	"private": true,
 	"type": "module",
 	"exports": {
