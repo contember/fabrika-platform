@@ -8,7 +8,7 @@ import type { KeyGrant } from '@fabrika/auth-core'
 export const OAUTH_CLIENT_PROVIDERS = ['claude', 'chatgpt', 'external'] as const
 export type OAuthClientProvider = (typeof OAUTH_CLIENT_PROVIDERS)[number]
 
-export function isOAuthClientProvider(value: unknown): value is OAuthClientProvider {
+function isOAuthClientProvider(value: unknown): value is OAuthClientProvider {
 	return OAUTH_CLIENT_PROVIDERS.some((provider) => provider === value)
 }
 

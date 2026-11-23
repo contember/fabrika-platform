@@ -57,7 +57,8 @@ workspace its own running application, where one pinned service could show only 
    that resource's `scopeGrants` ceiling, and the redirect URIs the operator registered, which its document cannot
    widen. It gets no implicit grant, no client secret, no token for an unregistered resource and no scope outside the
    ceiling, and its token is refused where a resource token is: on every native IAM path and by `approvals.complete`
-   (rule 8).
+   (rule 8). The only resource an installation registers is the console's `/mcp`, so an external client's token is an
+   authoring token like Claude's; registering one trusts it as much.
 3. **The proxy enforces it.** `/mcp` is a `service` row of the console's installation entry that
    admits the caller `oauth`, with `oauth: { scopes }` on the row and a registered `oauthResources`
    entry for its path ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) "Installation

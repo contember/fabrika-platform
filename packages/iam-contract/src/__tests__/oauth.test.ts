@@ -18,10 +18,6 @@ const EXTERNAL: OAuthManagedClient = {
 const RESOURCE = 'https://console.example.test/mcp'
 
 describe('managed client kinds', () => {
-	test('claude, chatgpt and external are the registered kinds', () => {
-		expect([...OAUTH_CLIENT_PROVIDERS]).toEqual(['claude', 'chatgpt', 'external'])
-	})
-
 	test.each(OAUTH_CLIENT_PROVIDERS.map((provider) => [provider]))('a %s client is accepted', (provider) => {
 		expect(parseOAuthManagedClient({ ...EXTERNAL, provider })).toEqual({ ...EXTERNAL, provider })
 	})
@@ -51,8 +47,14 @@ describe("an external client's metadata document", () => {
 		expect(parseOAuthClientMetadata(document, EXTERNAL)?.token_endpoint_auth_method).toBe('none')
 	})
 
-	test('an implicit grant is refused', () => {
+	test('an implicit response type is refused, and an implicit grant is never served', () => {
 		expect(parseOAuthClientMetadata({ ...document, response_types: ['token'] }, EXTERNAL)).toBeNull()
+		expect(parseOAuthClientMetadata({ ...document, grant_types: ['authorization_code', 'implicit'] }, EXTERNAL)?.grant_types).toEqual([
+			'authorization_code',
+		])
+	})
+
+	test('a document without the authorization code grant is refused', () => {
 		expect(parseOAuthClientMetadata({ ...document, grant_types: ['implicit'] }, EXTERNAL)).toBeNull()
 	})
 
@@ -65,7 +67,8 @@ describe("an external client's metadata document", () => {
 	})
 })
 
-describe("an external client's authorization request", () => {
+// Nothing below reads the client's kind: an external client is held to the same request rules as every other.
+describe('an authorization request, whatever the client kind', () => {
 	const request = {
 		response_type: 'code',
 		client_id: EXTERNAL.clientId,

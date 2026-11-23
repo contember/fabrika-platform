@@ -22,7 +22,8 @@
 		}
 	},
 	"scripts": {
-		"typecheck": "tsrs --build tsconfig.lib.json"
+		"typecheck": "tsrs --build tsconfig.test.json",
+		"test": "bun test"
 	},
 	"dependencies": {
 		"@fabrika/app": "workspace:*",

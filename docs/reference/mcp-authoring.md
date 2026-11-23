@@ -401,7 +401,10 @@ known to declare `private_key_jwt`.
 ## Registering an external client
 
 An application other than Claude or ChatGPT (an operations tool that signs people in through the installation's
-IAM, say) registers with `"provider": "external"`. The kind is a label: IAM treats it as any other client.
+IAM, say) registers with `"provider": "external"`. The kind is a label: IAM treats it as any other client, so it gets
+what they get. That is an access token for a registered resource, and the only one an installation registers is the
+console's `/mcp` with the `authoring` scope: within the consenting person's grants, the client can write workspaces
+and deploy to stage. It gets no ID token and no resource of its own. Register only a client you would trust with that.
 
 ```json
 {
@@ -412,7 +415,7 @@ IAM, say) registers with `"provider": "external"`. The kind is a label: IAM trea
 ```
 
 The client serves a Client ID Metadata Document at `clientId` (or at `metadataUrl`) with `client_id` equal to that
-URL, `redirect_uris` within the registered ones, `response_types: ["code"]`, and `token_endpoint_auth_method` `none`
+URL, `redirect_uris` within the registered ones, `response_types` absent or `["code"]`, and `token_endpoint_auth_method` `none`
 or `private_key_jwt` ([above](#registering-claude-and-chatgpt)). It authorizes with the authorization code flow, S256 PKCE and `resource` set to a
 registered resource (`https://<console>/mcp`); its scopes are bounded by that resource's `scopeGrants`, and the token
 carries only what the signed-in person holds within them. There is no implicit grant and no client secret.
