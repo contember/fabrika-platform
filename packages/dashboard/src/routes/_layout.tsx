@@ -614,12 +614,24 @@ function AccountMenu({ session }: { session: ConsoleSession | null }) {
 					<Icon name="terminal" />
 					Your builder connections
 				</Link>
+				{session !== null && <SecondFactor session={session} />}
 				<ThemeToggle />
 				{session !== null && <SignOut session={session} />}
 				{/* Which release this installation runs: what a bug report or an upgrade needs first. */}
 				<p className="account-version">fabrika {fabrikaVersion}</p>
 			</div>
 		</div>
+	)
+}
+
+/** An administrator's way to IAM's page that enrols an authenticator app, or shows the one enrolled. */
+export function SecondFactor({ session }: { session: ConsoleSession }) {
+	if (session.secondFactorUrl === null) return null
+	return (
+		<a href={session.secondFactorUrl} className="account-item">
+			<Icon name="key" />
+			Two-step sign-in
+		</a>
 	)
 }
 

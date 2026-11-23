@@ -5,6 +5,7 @@ import {
 	type ControlRpcContract,
 	parseBuilderInstallationDiscovery,
 } from '@fabrika/control-contract'
+import { SECOND_FACTOR_ENROL_PATH } from '@fabrika/iam-contract'
 import type { ConsoleCaller } from './console-access'
 import { administersPeople, type IamAdministration, iamAdministration, type SignedInPrincipal } from './iam'
 
@@ -15,6 +16,8 @@ export interface ConsoleSession extends ConsoleCaller {
 	principal: SignedInPrincipal | null
 	/** Null when the installation publishes no IAM origin on the console's host. */
 	signOutUrl: string | null
+	/** IAM's page where an administrator enrols an authenticator app; null for anyone else or without IAM's origin. */
+	secondFactorUrl: string | null
 }
 
 /** The installation facts control publishes on the console's own origin, or null when it publishes none. */
@@ -64,6 +67,9 @@ export async function readConsoleSession(fetcher: RpcFetch = fetch): Promise<Con
 	return {
 		principal: signedInPrincipal(access, administration),
 		signOutUrl: discovery === null ? null : signOutUrl(discovery.iamIssuer),
+		secondFactorUrl: discovery === null || administration.status !== 'administrator'
+			? null
+			: new URL(SECOND_FACTOR_ENROL_PATH, discovery.iamIssuer).toString(),
 		access,
 		iam: administration.status === 'unknown' ? null : administration.status === 'administrator' ? administration.scope : false,
 		administersPeople: people,

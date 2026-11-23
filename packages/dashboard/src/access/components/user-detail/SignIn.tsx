@@ -1,5 +1,13 @@
 import { Link } from '@buzola/router'
-import type { CursorList, PasswordActionDelivery, PrincipalDetail, SessionDto, SessionList, UserConnectionDto } from '@fabrika/iam-contract'
+import type {
+	CursorList,
+	PasswordActionDelivery,
+	PrincipalDetail,
+	SecondFactorDto,
+	SessionDto,
+	SessionList,
+	UserConnectionDto,
+} from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 import { Status } from '../../../components/Status'
@@ -20,8 +28,10 @@ const sessionReasons = {
 	method_disabled: 'Sign-in method disabled',
 }
 
-export function UserSignIn({ principal, sessions, connections, before, connectionsBefore, onDone }: {
+export function UserSignIn({ principal, secondFactor, sessions, connections, before, connectionsBefore, onDone }: {
 	principal: PrincipalDetail
+	/** Null for a caller who is no installation administrator: only one reads or resets a second factor. */
+	secondFactor: SecondFactorDto | null
 	sessions: SessionList
 	connections: CursorList<UserConnectionDto> | null
 	before: string | undefined
@@ -38,6 +48,7 @@ export function UserSignIn({ principal, sessions, connections, before, connectio
 				</p>
 			)}
 			<Authentication principal={principal} onDone={onDone} />
+			{secondFactor && <SecondFactor principal={principal} secondFactor={secondFactor} onDone={onDone} />}
 			<section>
 				<div className="section-head">
 					<h2>Browser sign-ins</h2>
@@ -269,6 +280,64 @@ function Authentication({ principal, onDone }: { principal: PrincipalDetail; onD
 								? 'Password sign-in disabled. Organization sign-ins are unaffected.'
 								: 'Password sign-in disabled. Send a new setup link to restore it.',
 						)
+						onDone()
+					}}
+				/>
+			)}
+		</section>
+	)
+}
+
+function SecondFactor({ principal, secondFactor, onDone }: { principal: PrincipalDetail; secondFactor: SecondFactorDto; onDone: () => void }) {
+	const [confirmReset, setConfirmReset] = useState(false)
+	const [notice, setNotice] = useState<string | null>(null)
+	const enrolled = secondFactor.enrolledAt !== null
+	return (
+		<section>
+			<div className="section-head">
+				<h2>Two-step sign-in</h2>
+			</div>
+			<div className="authentication-grid">
+				<div className="authentication-method">
+					<div>
+						<strong>Authenticator app</strong>
+						<p>
+							{secondFactor.enrolledAt !== null
+								? `Enrolled ${
+									fmtDate(secondFactor.enrolledAt)
+								}. Every sign-in asks for a code from the app. ${secondFactor.recoveryCodesLeft} of 10 recovery codes left.`
+								: secondFactor.available
+								? 'Not enrolled. An administrator enrols from the account menu, under Two-step sign-in.'
+								: 'Not available: this installation has no key to protect authenticator secrets (FABRIKA_IAM_DATA_KEY).'}
+						</p>
+					</div>
+					<Status lamp={enrolled ? 'ok' : 'idle'}>{enrolled ? 'Enrolled' : secondFactor.available ? 'Not enrolled' : 'Not available'}</Status>
+				</div>
+			</div>
+			{enrolled && (
+				<div className="user-password-actions">
+					<div className="user-item-actions">
+						<button type="button" className="danger" onClick={() => setConfirmReset(true)}>Reset two-step sign-in</button>
+					</div>
+					<p className="hint">For a lost phone with no recovery codes left: the next sign-in asks for no code, and the person enrols again.</p>
+				</div>
+			)}
+			{notice && <p className="notice" role="status">{notice}</p>}
+			{confirmReset && (
+				<ConfirmDialog
+					title="Reset two-step sign-in"
+					confirmLabel="Reset"
+					body={
+						<p>
+							Remove{' '}
+							<strong>{principal.label}</strong>’s authenticator app and every recovery code? Until they enrol again, their sign-in asks for no code. Confirm
+							who is asking before you do this. The reset is recorded in the audit log.
+						</p>
+					}
+					onClose={() => setConfirmReset(false)}
+					onConfirm={async () => {
+						await api.secondFactor.reset({ principalId: principal.id })
+						setNotice('Two-step sign-in was reset. The person can enrol a new authenticator app.')
 						onDone()
 					}}
 				/>

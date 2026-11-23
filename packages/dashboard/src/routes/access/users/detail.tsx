@@ -22,8 +22,10 @@ export default createPage()
 		const principal = await api.principals.get({ principalId: params.id })
 		const tab = sections.find((section) => section.id === params.tab)?.id ?? 'access'
 		const activity = params.activity === 'sign-ins' ? 'sign-ins' : params.activity === 'by-user' ? 'by-user' : 'changes'
-		const [sessions, connections, audit, authLog] = await Promise.all([
+		const [sessions, secondFactor, connections, audit, authLog] = await Promise.all([
 			tab === 'sign-in' ? api.sessions.list({ principalId: params.id, signInsOnly: true, limit: 10, before: params.before }) : null,
+			// An installation administrator's alone: IAM refuses a user administrator.
+			tab === 'sign-in' && principal.management.audit ? api.secondFactor.get({ principalId: params.id }) : null,
 			tab === 'sign-in' && principal.management.audit
 				? api.connections.list({ principalId: params.id, limit: 10, before: params.connectionsBefore })
 				: null,
@@ -39,7 +41,7 @@ export default createPage()
 				: null,
 		])
 		const actors = await resolveActors(actorIdsToResolve(audit?.items ?? []), (principalId) => api.principals.get({ principalId }))
-		return { principal, tab, activity, sessions, connections, audit, authLog, actors }
+		return { principal, tab, activity, sessions, secondFactor, connections, audit, authLog, actors }
 	})
 	.route('/access/users/:id')
 	.render(({ data, params, invalidate }) => {
@@ -106,6 +108,7 @@ export default createPage()
 					<UserSignIn
 						key={principal.id}
 						principal={principal}
+						secondFactor={data.secondFactor}
 						sessions={data.sessions}
 						connections={data.connections}
 						before={params.before}
