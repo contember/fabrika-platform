@@ -8,7 +8,8 @@ that holds its evidence; those two pages are the detail, this page is the summar
 Three roles appear below. The **organization** owns an installation: its cloud account, its applications and its
 people. The **operator** installs and upgrades it, usually the organization's own IT or a contractor. The
 **developer** writes an application. fabrika is software the operator installs into the organization's own account;
-nobody else runs it for them, and this repository promises no support or uptime.
+nobody else runs it for them, and this repository promises no support or uptime. Support can be arranged by contract
+with the authors. How to report a vulnerability, and which releases get fixes, is in [`SECURITY.md`](../../SECURITY.md).
 
 ## What follows from the design
 
