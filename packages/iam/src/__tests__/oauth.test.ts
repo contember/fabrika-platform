@@ -151,6 +151,30 @@ describe('authorization code flow', () => {
 	})
 })
 
+describe('an external client', () => {
+	test('gets the code flow with PKCE, for a registered resource, within its scope ceiling', async () => {
+		const f = await fixture({ provider: 'external' })
+		expect(f.config.clients[0]?.provider).toBe('external')
+		const exchanged = await f.exchange(await f.approve())
+		expect(exchanged.status).toBe(200)
+		const claims = parseAccessClaims(decodeJwt((await tokenBody(exchanged)).access_token))
+		expect(claims).not.toBeNull()
+		if (claims === null) return
+		expect(matchesTokenAudience(claims, { kind: 'resource', app: 'control', resource: RESOURCE })).toBe(true)
+		// The ceiling `source.workspace.*` keeps the two workspace grants and drops `deploy.run`.
+		expect(claims.perms.map((entry) => entry.action).sort()).toEqual(['source.workspace.read', 'source.workspace.write'])
+	})
+
+	test('gets no implicit grant and no code without PKCE', async () => {
+		const f = await fixture({ provider: 'external' })
+		expect((await f.authorize({ response_type: 'token' })).status).toBe(400)
+		const withoutChallenge = new URLSearchParams({ response_type: 'code', client_id: f.clientId, redirect_uri: REDIRECT_URI, resource: RESOURCE })
+		expect((await f.call(new Request(`${ISSUER}/oauth/authorize?${withoutChallenge}`))).status).toBe(400)
+		const code = await f.approve()
+		expect((await f.exchange(code, { code_verifier: 'x'.repeat(43) })).status).toBe(400)
+	})
+})
+
 describe('authorization request validation', () => {
 	test('an unregistered client is refused with a page, before any metadata fetch', async () => {
 		const f = await fixture()

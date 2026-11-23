@@ -35,6 +35,7 @@
 		{ "path": "./packages/iam/tsconfig.lib.json" },
 		{ "path": "./packages/iam/tsconfig.test.json" },
 		{ "path": "./packages/iam-contract/tsconfig.lib.json" },
+		{ "path": "./packages/iam-contract/tsconfig.test.json" },
 		{ "path": "./packages/installation-init/tsconfig.lib.json" },
 		{ "path": "./packages/installation-init/tsconfig.test.json" },
 		{ "path": "./packages/jwks/tsconfig.lib.json" },

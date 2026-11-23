@@ -4,7 +4,7 @@
 // halves, so they cannot disagree: the console's `oauth` row with its registered resource in the proxy
 // manifest, and IAM's `FABRIKA_IAM_OAUTH_CONFIG`, which issues tokens for exactly that resource.
 
-import { type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'
+import { OAUTH_CLIENT_PROVIDERS, type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'
 import { platformOAuthResourceUris, type PlatformProxyComposition, type PlatformProxyManifestTemplate } from './proxy-manifest'
 
 /** One operator-registered MCP client: its CIMD identity, plus where IAM fetches it when that differs. */
@@ -22,6 +22,8 @@ const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl']
 /** IAM's own ceiling: it refuses to boot with more. */
 const MAX_CLIENTS = 16
 
+const PROVIDERS = OAUTH_CLIENT_PROVIDERS.map((provider) => `'${provider}'`).join(' | ')
+
 const isObject = (value: unknown): value is Record<string, unknown> => typeof value === 'object' && value !== null && !Array.isArray(value)
 
 const isHttpsUrl = (value: string): boolean => {
@@ -36,7 +38,7 @@ const isHttpsUrl = (value: string): boolean => {
 const parseClient = (value: unknown, index: number): McpClient => {
 	const client = parseOAuthManagedClient(value)
 	if (client === null || !isObject(value) || !Object.keys(value).every((key) => CLIENT_KEYS.includes(key))) {
-		throw new Error(`MCP client ${index} must be { provider: 'claude' | 'chatgpt', clientId: <https URL>, redirectUris: [...], metadataUrl? }`)
+		throw new Error(`MCP client ${index} must be { provider: ${PROVIDERS}, clientId: <https URL>, redirectUris: [...], metadataUrl? }`)
 	}
 	const metadataUrl = value['metadataUrl']
 	if (metadataUrl === undefined) {

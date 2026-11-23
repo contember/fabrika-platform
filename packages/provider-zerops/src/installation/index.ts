@@ -1,5 +1,6 @@
 import { reconcileSchema } from '@fabrika/auth'
 import { builtinEmailProviders } from '@fabrika/email/providers'
+import { OAUTH_CLIENT_PROVIDERS } from '@fabrika/iam-contract'
 import {
 	describeArgument,
 	info as consoleInfo,
@@ -33,6 +34,7 @@ export { PLATFORM_CONSOLE_APP_SCHEMA } from './generated/platform-console-schema
 export { PLATFORM_PROXY_MANIFEST_TEMPLATE } from './generated/platform-proxy-manifest'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
+const MCP_CLIENT_PROVIDERS = OAUTH_CLIENT_PROVIDERS.map((provider) => `"${provider}"`).join('|')
 /** One line per provider: its variables, each marked secret or optional where it is. */
 const EMAIL_PROVIDER_VARIABLES = Object.entries(builtinEmailProviders)
 	.map(([name, provider]) => {
@@ -245,7 +247,7 @@ Naming NO host derives all three from the proxy service's Zerops subdomains and 
 subdomain is published.
 
 MCP authoring (ADR-0049) is opt-in. --mcp-clients takes a JSON array of the MCP clients this
-installation trusts: [{"provider":"claude"|"chatgpt","clientId":"<https CIMD URL>","redirectUris":[...],
+installation trusts: [{"provider":${MCP_CLIENT_PROVIDERS},"clientId":"<https CIMD URL>","redirectUris":[...],
 "metadataUrl":"<https URL>"?}]. With it, the console's /mcp admits OAuth bearers and IAM gets
 FABRIKA_IAM_OAUTH_CONFIG. Without it, /mcp admits only a signed-in person and FABRIKA_IAM_OAUTH_CONFIG on
 iam is left as it is.
