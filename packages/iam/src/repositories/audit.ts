@@ -124,8 +124,10 @@ const AUDIT_PLACEHOLDERS = '?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?'
  * The INSERT of one audit row, for the batch of an unconditional change it records: the row and the change commit
  * together, and a failed insert rolls the change back. Diff and metadata are stored JSON-encoded.
  */
-export function auditEventStatement(db: SqlDatabase, event: AuditEventInput): SqlStatement {
-	return db.prepare(`INSERT INTO audit_events ${AUDIT_COLUMNS} VALUES (${AUDIT_PLACEHOLDERS})`).bind(...auditValues(uuidv7(), event))
+/** The INSERT of one audit row; with `guard`, written only when the guard finds its row (see `SqlGuard`). */
+export function auditEventStatement(db: SqlDatabase, event: AuditEventInput, guard?: SqlGuard): SqlStatement {
+	const insert = guardedInsert(`audit_events ${AUDIT_COLUMNS}`, AUDIT_PLACEHOLDERS, auditValues(uuidv7(), event), guard)
+	return db.prepare(insert.sql).bind(...insert.binds)
 }
 
 /**

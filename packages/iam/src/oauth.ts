@@ -8,6 +8,7 @@ import {
 	type PermissionEntry,
 } from '@fabrika/auth-core'
 import {
+	OAUTH_DEVICE_CODE_GRANT_TYPE,
 	type OAuthAuthorizationRequest,
 	type OAuthClientMetadataDocument,
 	type OAuthResourceDto,
@@ -54,11 +55,13 @@ function clientGrantTypes(client: EstablishedClient): readonly string[] {
 
 /** The resources a grant was given for: every token it mints names one of them. */
 export function grantResources(grant: Pick<OAuthGrantRow, 'resource' | 'resources'>): string[] {
-	const stored = grant.resources === null ? null : parseOAuthResourceList(parseJsonOrNull(grant.resources))
+	const stored = grant.resources === null ? null : storedResourceList(grant.resources)
 	return stored ?? [grant.resource]
 }
 
-function parseOAuthResourceList(value: unknown): string[] | null {
+/** A stored JSON list of resources, or null when it is not one. */
+export function storedResourceList(text: string): string[] | null {
+	const value = parseJsonOrNull(text)
 	return Array.isArray(value) && value.length > 0 && value.every((entry): entry is string => typeof entry === 'string') ? value : null
 }
 
@@ -116,14 +119,17 @@ export async function grantAuthorization(
 	return code
 }
 
-export type OAuthTokenOutcome = { ok: true; body: OAuthTokenResponse } | { ok: false; error: 'invalid_grant' | 'unauthorized_client' }
+/** RFC 6749 §5.2 and RFC 8628 §3.5: what a refused token request answers. */
+export type OAuthTokenError = 'invalid_grant' | 'unauthorized_client' | 'authorization_pending' | 'slow_down' | 'access_denied' | 'expired_token'
+
+export type OAuthTokenOutcome = { ok: true; body: OAuthTokenResponse } | { ok: false; error: OAuthTokenError }
 
 /** Redeem a code or rotate a refresh token for a client `authenticateOAuthClient` established. */
 export async function exchangeOAuthToken(
 	services: Services,
 	env: SigningEnv,
 	client: EstablishedClient,
-	input: OAuthTokenRequest,
+	input: Exclude<OAuthTokenRequest, { grant_type: typeof OAUTH_DEVICE_CODE_GRANT_TYPE }>,
 	requestId: string,
 ): Promise<OAuthTokenOutcome> {
 	const grantTypes = clientGrantTypes(client)
@@ -218,7 +224,7 @@ export async function revokeOAuthToken(services: Services, env: SigningEnv, inpu
 }
 
 /** An access token for `resource`, one of the grant's resources, carrying the grant's live authority there. */
-async function mintForGrant(
+export async function mintForGrant(
 	services: Services,
 	env: SigningEnv,
 	grant: OAuthGrantRow,
@@ -299,11 +305,11 @@ export function scopeCeiling(resource: OAuthResourceDto, scopes: readonly string
 }
 
 /** The record of a grant's revocation: by its client, or by IAM on a replayed code or refresh token. */
-function grantRevocation(
+export function grantRevocation(
 	requestId: string,
 	grantId: string,
 	clientId: string,
-	reason: 'code_replay' | 'refresh_replay' | 'client_revocation',
+	reason: 'code_replay' | 'refresh_replay' | 'device_code_replay' | 'client_revocation',
 ): AuditEventInput {
 	return {
 		requestId,

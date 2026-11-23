@@ -133,6 +133,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0031_person_locale.sql' },
 			{ bundle: 'iam', name: '0032_second_factor.sql' },
 			{ bundle: 'iam', name: '0033_oauth_grant_resources.sql' },
+			{ bundle: 'iam', name: '0034_oauth_device_authorizations.sql' },
 		])
 	})
 
@@ -172,6 +173,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'oauth_codes',
 				'oauth_refresh_tokens',
 				'oauth_client_assertions',
+				'oauth_device_authorizations',
 				'contract_apps',
 				'app_link_mounts',
 				'app_delegated_endpoints',
