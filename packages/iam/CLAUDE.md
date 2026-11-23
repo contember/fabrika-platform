@@ -636,6 +636,25 @@ fails if that stops being true — it is the guard, not documentation of one.
   and no accepted `?redirect=` (password, OIDC, local), a sign-out without one, and a password action or invitation
   enrollment without its own landing: `issueSession` lands a `redirect: null` there, and `handleLogout` a refused one.
   A same-origin `?redirect=` still wins; the landing is chosen by IAM from the registry, never by the request.
+- **AN ENROLLED SECOND FACTOR IS ASKED IN `issueSession`, AND NOWHERE ELSE** (`auth/sessions.ts`,
+  `auth/second-factor.ts`). Every login that opens a session ends there: password, OIDC, a completed password action,
+  an invitation enrollment. A principal with a confirmed authenticator gets `challengeSecondFactor` instead: a signed
+  `__Host-fabrika_second_factor` cookie (audience `fabrika:iam:second-factor`, 300 s) holding the pending login. Only
+  `POST /auth/second-factor` finishes it, through `issueSession` again with `secondFactor: 'verified'`. Only
+  `local_dev` is exempt. Never open a session past this check: a new login path goes through `issueSession`. A failed
+  read of the enrolment is a 503, never a session. Wrong codes spend `second-factor:account:<id>` in the login
+  throttle table (5 per 15 min, then a 15-minute block that refuses a valid code too). A success clears it, and the
+  attempt that starts a block records `iam.second_factor.throttle`. A TOTP step is accepted once (`last_step`), and
+  so is a recovery code (stored as a hash bound to its principal).
+- **ONLY AN ADMINISTRATOR ENROLS, AND THE SECRET IS SEALED UNDER `FABRIKA_IAM_DATA_KEY`** (`src/data-key.ts`,
+  `repositories/second-factors.ts`). Enrolment (`/auth/second-factor/enrol`) needs a current login whose principal
+  `administersIam`. The secret is sealed with Control's vault construction (AES-256-GCM envelope), with the principal
+  id as associated data on both layers. It is never stored in the clear, and a sealed value moved to another row
+  opens nothing. The key is optional: `parseDataKey` is null when it is unset, which makes enrolment unavailable and
+  TOTP refused, while recovery codes and the reset still work. A malformed key fails the boot. The confirmation
+  writes the authenticator, its ten recovery codes and `iam.second_factor.enrol` in one guarded change, a recovery
+  code's use records `iam.second_factor.recovery_code.use`, and `secondFactor.reset` (`iam.admin` only) records
+  `iam.second_factor.reset`, each in its change's own transaction.
 - **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no
   `SESSION_COOKIE_DOMAIN` and `CookieOptions` has no `domain` field, so a parent-domain cookie is not
   expressible. `SESSION_COOKIE` is `__Host-px_session`, and the prefix makes the BROWSER enforce the

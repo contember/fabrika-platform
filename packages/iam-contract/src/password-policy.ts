@@ -14,7 +14,7 @@ export const PASSWORD_MIN_LENGTH_FLOOR = 4
 /** The most code points a password may have, whatever the minimum. */
 export const PASSWORD_MAX_LENGTH = 256
 
-/** Below this NIST asks for a second factor, which IAM does not have; the console says so. */
+/** Below this NIST asks for a second factor, which IAM gives only an enrolled administrator; the console says so. */
 export const PASSWORD_SINGLE_FACTOR_FLOOR = 8
 
 /** The password policy as IAM applies it now. */

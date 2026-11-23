@@ -41,7 +41,7 @@ Public because both provider packages are, and
   enrollment. It returns the URL and never prints it. An installation without passwords but with single sign-on gets
   no enrollment (`single-sign-on`): the invited address signs in through the identity provider.
 - `pin.ts` — `assertPinnedTag`: a sidecar pins a published tag, never a branch (ADR-0025).
-- `secrets.ts` — the generators (`randomSecret`, `randomPxKey`, `generateSigningKeys`, `generateVaultKey`) and the six
+- `secrets.ts` — the generators (`randomSecret`, `randomPxKey`, `generateSigningKeys`, `generateVaultKey`) and the seven
   values a container installation is seeded with (`generateInstallationSecrets`). Both providers generate through it.
 - `secrets-file.ts` — `--secrets-file`: refused inside the checkout or when it exists, rendered as single-quoted
   shell assignments under the provider's header lines, created `0600` with `wx`.
