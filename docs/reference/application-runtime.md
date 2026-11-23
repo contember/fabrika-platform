@@ -1452,7 +1452,10 @@ refuses another scheme (`http` included), a second or inner wildcard, a wildcard
 guard compares the request's host as `new URL` normalizes it, a trailing dot aside ([ADR-0012](../decisions/0012-fabrika-app-runtime.md)
 §15). `boot` wraps the global `fetch` once; while a staged-kit
 site's handler runs, a call to an origin the site does not declare is refused (`capability_refused`,
-`undeclared_egress`). A site that declares none, a public, link or export procedure included, reaches no origin. The
+`undeclared_egress`). The guard sends every request with `redirect: 'manual'` and follows a redirect itself, as the
+request's mode asks (at most 20; `manual` hands it back, `error` refuses it), each hop refused like a first request
+unless the site declares its origin; a 307 or 308 sends the body again, a cross-origin hop drops `Authorization`,
+`Proxy-Authorization` and `Cookie`. A site that declares none, a public, link or export procedure included, reaches no origin. The
 framework's own requests (mail, connectors, IAM, workload tokens, the object store, the JWKS) run outside the site's
 scope. The guard stops mistakes and makes a bypass conspicuous; it is no sandbox: code that kept the `fetch` it found
 before boot, or opens its own sockets, escapes it ([ADR-0012](../decisions/0012-fabrika-app-runtime.md) §8). The

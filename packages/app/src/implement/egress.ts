@@ -1,8 +1,9 @@
 // `egress`: while a site's handler runs, the global `fetch` reaches only the HTTPS origins the site declares, exactly or
 // by a one-label pattern (`egressAdmits` of `@fabrika/auth-core`), or, for a cron job that declares `egress: 'public'`,
-// only public hosts (ADR-0075). It stops a mistake and makes a bypass conspicuous; it is not a sandbox (ADR-0012 §8):
-// code that kept the `fetch` it found before boot, or opens its own sockets, escapes it. The framework's own facilities
-// (mail, connectors, IAM, the object store) run outside the site's scope, under their own declarations.
+// only public hosts (ADR-0075). The guard follows every redirect itself, each hop checked again, so a partner's redirect
+// reaches no origin the site does not. It stops a mistake and makes a bypass conspicuous; it is not a sandbox (ADR-0012
+// §8): code that kept the `fetch` it found before boot, or opens its own sockets, escapes it. The framework's own
+// facilities (mail, connectors, IAM, the object store) run outside the site's scope, under their own declarations.
 
 import {
 	type DeclaredEgress,
@@ -173,7 +174,7 @@ export function installEgressGuard(): void {
 			const url = urlOf(input)
 			if (url !== null && egressAdmits(running.entries, url)) {
 				// Only the standard fields: a runtime's own (Bun's `unix`, `proxy`, `tls`) would send the request elsewhere.
-				return current(input, standardInit(init))
+				return declaredFetch(send, running.site, running.entries, input, standardInit(init))
 			}
 			return Promise.reject(
 				new CapabilityRefusedError(
@@ -282,6 +283,38 @@ function withoutForbiddenHeaders(headers: Headers): Headers {
 /** The credentials a redirect to another origin drops. */
 const CREDENTIAL_HEADERS = ['authorization', 'proxy-authorization', 'cookie']
 
+/** The redirects a declared call follows when its `redirect` mode is `follow`: the Fetch standard's limit. */
+const DECLARED_MAX_REDIRECTS = 20
+
+/**
+ * One request to a declared origin. Every hop is sent with `redirect: 'manual'`: the caller's `follow` is done here, and
+ * each hop must be a declared origin too, so a partner's redirect carries neither the body nor a header elsewhere.
+ */
+async function declaredFetch(
+	send: Fetch,
+	site: string,
+	entries: readonly EgressEntry[],
+	input: string | URL | Request,
+	init: RequestInit | undefined,
+): Promise<Response> {
+	const request = new Request(input, init)
+	// Read once, so that a 307 or a 308 sends it again.
+	const body = request.body === null ? null : await request.arrayBuffer()
+	return await follow(site, request, new Headers(request.headers), body, request.signal, DECLARED_MAX_REDIRECTS, {
+		send: async (hop) => {
+			if (!egressAdmits(entries, hop.url)) {
+				throw new CapabilityRefusedError(
+					'undeclared_egress',
+					`${site} is redirected to ${hop.url.origin}, which it does not declare (egress: ['${hop.url.origin}'])`,
+				)
+			}
+			// The caller's other standard fields stay; the hop's own replace the request's.
+			return await send(hop.url.href, { ...init, method: hop.method, headers: hop.headers, body: hop.body, redirect: 'manual', signal: hop.signal })
+		},
+		answer: (response, hop) => Promise.resolve(withRequestUrl(response, hop.url, hop.redirected)),
+	})
+}
+
 /**
  * One request under public egress. Every hop is sent with `redirect: 'manual'`, so the runtime follows no redirect the
  * guard has not checked: the caller's `follow` is done here, at most `maxRedirects` hops, each host checked again;
@@ -301,50 +334,85 @@ async function publicFetch(
 	const deadline = new AbortController()
 	const timer = setTimeout(() => deadline.abort(new DOMException('public egress request timed out', 'TimeoutError')), PUBLIC_EGRESS_LIMITS.timeoutMs)
 	try {
-		return await follow(send, site, rules, request, AbortSignal.any([request.signal, deadline.signal]))
+		const signal = AbortSignal.any([request.signal, deadline.signal])
+		// Read once, so that a 307 or a 308 sends it again.
+		const body = request.body === null ? null : await untilAborted(signal, request.arrayBuffer())
+		const headers = withoutForbiddenHeaders(new Headers(request.headers))
+		return await follow(site, request, headers, body, signal, PUBLIC_EGRESS_LIMITS.maxRedirects, {
+			send: async (hop) => {
+				const address = await admit(site, rules, hop.url, signal)
+				return await send(address === null ? hop.url.href : pinnedUrl(hop.url, address), {
+					method: hop.method,
+					headers: hopHeaders(hop.headers, hop.url, address),
+					body: hop.body,
+					redirect: 'manual',
+					signal: hop.signal,
+					// Bun decompresses natively and unbounded: the guard asks for `identity` and reads the bytes as they came.
+					decompress: false,
+					// Bun checks the certificate against `serverName`, not `Host`, and pools connections by address and port: a
+					// pooled one was checked against another name's certificate.
+					...(address === null ? {} : { keepalive: false, tls: { serverName: normalizedHost(hop.url.hostname) } }),
+				})
+			},
+			answer: (response, hop, drop) =>
+				bounded(site, response, hop.url, hop.redirected, signal).catch((error: unknown) => {
+					drop(error)
+					throw error
+				}),
+		})
 	} finally {
 		clearTimeout(timer)
 	}
 }
 
-/** The hops of one request, its last answer's body read whole. */
-async function follow(send: Fetch, site: string, rules: PublicEgressRules, request: Request, signal: AbortSignal): Promise<Response> {
+/** One hop of a request: where it goes and what it carries. */
+interface Hop {
+	readonly url: URL
+	readonly method: string
+	readonly headers: Headers
+	readonly body: ArrayBuffer | null
+	/** The request's signal, and the guard's own abort of a hop whose answer it drops. */
+	readonly signal: AbortSignal
+	/** Whether a redirect led here. */
+	readonly redirected: boolean
+}
+
+/** How one kind of egress sends a hop, after checking it, and hands the caller the last answer. */
+interface HopPolicy {
+	send(hop: Hop): Promise<Response>
+	answer(response: Response, hop: Hop, drop: (reason: unknown) => void): Promise<Response>
+}
+
+/** The hops of one request: a redirect is followed, handed back or refused by the request's mode, each hop sent by `policy`. */
+async function follow(
+	site: string,
+	request: Request,
+	headers: Headers,
+	initialBody: ArrayBuffer | null,
+	signal: AbortSignal,
+	maxRedirects: number,
+	policy: HopPolicy,
+): Promise<Response> {
 	const mode = request.redirect
 	let url = new URL(request.url)
 	let method = request.method
-	const headers = withoutForbiddenHeaders(new Headers(request.headers))
-	// Read once, so that a 307 or a 308 sends it again.
-	let body: ArrayBuffer | null = request.body === null ? null : await untilAborted(signal, request.arrayBuffer())
+	let body = initialBody
 	for (let hop = 0;; hop++) {
-		const address = await admit(site, rules, url, signal)
 		// Cancelling a body leaves Bun downloading it into memory; only aborting the request closes the connection.
 		const dropped = new AbortController()
-		const response = await send(address === null ? url.href : pinnedUrl(url, address), {
-			method,
-			headers: hopHeaders(headers, url, address),
-			body,
-			redirect: 'manual',
-			signal: AbortSignal.any([signal, dropped.signal]),
-			// Bun decompresses natively and unbounded: the guard asks for `identity` and reads the bytes as they came.
-			decompress: false,
-			// Bun checks the certificate against `serverName`, not `Host`, and pools connections by address and port: a
-			// pooled one was checked against another name's certificate.
-			...(address === null ? {} : { keepalive: false, tls: { serverName: normalizedHost(url.hostname) } }),
-		})
+		const current: Hop = { url, method, headers, body, signal: AbortSignal.any([signal, dropped.signal]), redirected: hop > 0 }
+		const response = await policy.send(current)
 		const location = REDIRECTS.has(response.status) ? response.headers.get('location') : null
 		if (location === null || mode === 'manual') {
-			return await bounded(site, response, url, hop > 0, signal).catch((error: unknown) => {
-				dropped.abort(error)
-				throw error
-			})
+			return await policy.answer(response, current, (reason) => dropped.abort(reason))
 		}
 		dropped.abort()
 		void response.body?.cancel().catch(() => undefined)
 		if (mode === 'error') {
 			throw new TypeError(`${site}: ${url.origin} redirects, and the request's redirect mode is 'error'`)
 		}
-		if (hop >= PUBLIC_EGRESS_LIMITS.maxRedirects) {
-			throw new TypeError(`${site}: more than ${PUBLIC_EGRESS_LIMITS.maxRedirects} redirects, the last from ${url.origin}`)
+		if (hop >= maxRedirects) {
+			throw new TypeError(`${site}: more than ${maxRedirects} redirects, the last from ${url.origin}`)
 		}
 		const next = new URL(location, url)
 		const toGet = (response.status === 303 && method !== 'GET' && method !== 'HEAD')

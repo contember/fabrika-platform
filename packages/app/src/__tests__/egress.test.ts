@@ -128,8 +128,99 @@ describe('the guard on fetch', () => {
 		expect(await ask('http://acme.tenants.example.com/')).toBe(500)
 		expect(fetchStub.mock.calls.map(([input]) => String(input))).toEqual([
 			'https://acme.tenants.example.com/v1',
-			'https://ACME.Tenants.Example.com./v1',
+			// The URL as the guard parsed and checked it.
+			'https://acme.tenants.example.com./v1',
 		])
+	})
+
+	/** A partner that answers each URL by `routes`, recording every hop the guard sent. */
+	function partner(routes: Record<string, () => Response>) {
+		const sent: { url: string; method: string; redirect: string | undefined; authorization: string | null; body: string | null }[] = []
+		fetchStub = spyOn(globalThis, 'fetch').mockImplementation(
+			Object.assign(async (input: string | URL | Request, init?: RequestInit) => {
+				const url = String(input)
+				const body = init?.body instanceof ArrayBuffer ? new TextDecoder().decode(init.body) : null
+				sent.push({ url, method: init?.method ?? 'GET', redirect: init?.redirect, authorization: new Headers(init?.headers).get('authorization'), body })
+				return routes[url]?.() ?? new Response('missing', { status: 404 })
+			}, { preconnect: fetch.preconnect }),
+		)
+		installEgressGuard()
+		return sent
+	}
+	const redirect = (status: number, location: string) => () => new Response(null, { status, headers: { location } })
+	const declared = ['https://api.example.com', 'https://hooks.example.com']
+
+	test('a redirect to an undeclared or internal origin is refused, and nothing is sent there', async () => {
+		for (const location of ['https://evil.example.com/steal', 'http://169.254.169.254/latest/meta-data', 'https://localhost/admin', '/../../x']) {
+			const sent = partner({
+				'https://api.example.com/v1/items': redirect(307, location),
+				'https://api.example.com/x': () => new Response('same origin', { status: 200 }),
+			})
+			const answer = await runAsSite(
+				"procedure 'sync'",
+				declared,
+				() => fetch('https://api.example.com/v1/items', { method: 'POST', headers: { authorization: 'Bearer partner' }, body: 'secret' }),
+			).catch((error: unknown) => error)
+			if (location === '/../../x') {
+				// A relative redirect stays on the declared origin.
+				expect(answer).toBeInstanceOf(Response)
+				expect(sent.map((hop) => hop.url)).toEqual(['https://api.example.com/v1/items', 'https://api.example.com/x'])
+			} else {
+				expect(answer).toBeInstanceOf(CapabilityRefusedError)
+				expect(answer).toMatchObject({
+					message: `procedure 'sync' is redirected to ${new URL(location).origin}, which it does not declare (egress: ['${new URL(location).origin}'])`,
+				})
+				expect(sent.map((hop) => hop.url)).toEqual(['https://api.example.com/v1/items'])
+			}
+			expect(sent.every((hop) => hop.redirect === 'manual')).toBe(true)
+			fetchStub?.mockRestore()
+		}
+	})
+
+	test('a redirect to a declared origin is followed: the body again on a 307, a GET after a 303, no credential across origins', async () => {
+		const sent = partner({
+			'https://api.example.com/v1/items': redirect(307, 'https://hooks.example.com/in'),
+			'https://hooks.example.com/in': redirect(303, 'https://hooks.example.com/done'),
+			'https://hooks.example.com/done': () => new Response('done', { status: 201 }),
+		})
+		const answer = await runAsSite(
+			"procedure 'sync'",
+			declared,
+			() => fetch('https://api.example.com/v1/items', { method: 'POST', headers: { authorization: 'Bearer partner' }, body: 'payload' }),
+		)
+		expect(answer.status).toBe(201)
+		expect(await answer.text()).toBe('done')
+		expect(answer.url).toBe('https://hooks.example.com/done')
+		expect(answer.redirected).toBe(true)
+		expect(sent).toEqual([
+			{ url: 'https://api.example.com/v1/items', method: 'POST', redirect: 'manual', authorization: 'Bearer partner', body: 'payload' },
+			{ url: 'https://hooks.example.com/in', method: 'POST', redirect: 'manual', authorization: null, body: 'payload' },
+			{ url: 'https://hooks.example.com/done', method: 'GET', redirect: 'manual', authorization: null, body: null },
+		])
+	})
+
+	test("a redirect the caller asked to see is handed back unfollowed, and its mode 'error' refuses one", async () => {
+		const sent = partner({ 'https://api.example.com/v1/items': redirect(302, 'https://evil.example.com/steal') })
+		const manual = await runAsSite("procedure 'sync'", declared, () => fetch('https://api.example.com/v1/items', { redirect: 'manual' }))
+		expect(manual.status).toBe(302)
+		expect(manual.headers.get('location')).toBe('https://evil.example.com/steal')
+		const refused = await runAsSite("procedure 'sync'", declared, () => fetch('https://api.example.com/v1/items', { redirect: 'error' }))
+			.catch((error: unknown) => error)
+		expect(refused).toBeInstanceOf(TypeError)
+		expect(sent.map((hop) => hop.url)).toEqual(['https://api.example.com/v1/items', 'https://api.example.com/v1/items'])
+	})
+
+	test('a handler whose partner redirects it elsewhere answers 500', async () => {
+		const sent = partner({ 'https://api.example.com/v1/items': redirect(302, 'https://evil.example.com/steal') })
+		const kit = testKit(serve(contract, { database: null }))
+		const call = kit.browser(kit.testCaller([{ action: 'projects.read' }]))
+		const answer = await call('/api/calls.ping', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ url: 'https://api.example.com/v1/items' }),
+		})
+		expect(answer.status).toBe(500)
+		expect(sent.map((hop) => hop.url)).toEqual(['https://api.example.com/v1/items'])
 	})
 
 	test("a framework call inside a handler, and any call outside one, is the platform's and passes", async () => {
