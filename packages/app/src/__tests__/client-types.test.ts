@@ -25,6 +25,11 @@ const EXPECTED: Readonly<Record<string, string>> = {
 	'19-infinite-query-of-no-page.ts': "is not assignable to parameter of type 'PagedProcedure<",
 	'20-query-without-input.ts': "Type 'Record<never, never> | undefined' is not assignable to type '{ id: string; }'.",
 	'21-mutation-result-field.ts': "Property 'data' does not exist on type 'MutationResult<{ id: string; title: string; }>'.",
+	'22-group-under-another-name.ts': `is not assignable to type 'Unavailable<"mount 'api' has no group 'deal'">'.`,
+	'23-group-in-another-groups-place.ts': "is missing the following properties from type '{ readonly get: Endpoint<",
+	'24-group-client-of-a-group-not-given.ts': "Property 'companies' does not exist on type 'ClientTree<{ readonly deals:",
+	'25-group-mount-of-no-rpc-mount.ts': `Argument of type '"shared"' is not assignable to parameter of type '"api"'.`,
+	'26-group-mount-prefix-without-slash.ts': `Type '"api"' is not assignable to type '\`/\${string}\`'.`,
 }
 
 describe('client and test kit mistakes are type errors', () => {

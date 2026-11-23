@@ -123,7 +123,7 @@ function fabrika(clients: readonly object[], spa: string, fetch: RpcFetch): Fabr
 		caller: new CallerSource(joinPath(spa, PAGE_CALLER_FILE), fetch),
 		attachment(procedure, hook) {
 			const at = attachmentAt(procedure)
-			if (at === null) throw new Error(`${hook} takes an attachment procedure of a client createClient made`)
+			if (at === null) throw new Error(`${hook} takes an attachment procedure of a client createClient or createGroupClient made`)
 			const own = procedureAt(clientOf(at.mount, hook), at.path)
 			if (attachmentAt(own) === null || typeof own !== 'object' || own === null) {
 				throw new Error(`${hook}: '${at.mount}.${at.path}' is not an attachment procedure of the provider's client`)
@@ -132,7 +132,7 @@ function fabrika(clients: readonly object[], spa: string, fetch: RpcFetch): Fabr
 		},
 		target(procedure, hook) {
 			const node = clientNodeOf(procedure)
-			if (node?.procedure == null) throw new Error(`${hook} takes a procedure of a client createClient made`)
+			if (node?.procedure == null) throw new Error(`${hook} takes a procedure of a client createClient or createGroupClient made`)
 			const call = procedureAt(clientOf(node.mount, hook), node.path)
 			if (typeof call !== 'function') throw new Error(`${hook}: '${idOf(node)}' is not a procedure of the provider's client`)
 			return {
@@ -199,6 +199,6 @@ export function parentOf(node: ClientNode): string {
 /** The prefix of a procedure or a group, for `invalidate`. */
 export function prefixOf(target: unknown): string {
 	const node = clientNodeOf(target)
-	if (node === null) throw new Error('invalidate takes a procedure or a group of a client createClient made')
+	if (node === null) throw new Error('invalidate takes a procedure or a group of a client createClient or createGroupClient made')
 	return idOf(node)
 }

@@ -1,5 +1,6 @@
 // A Vite build of an SPA that imports the typed client and the contract: through `@fabrika/check/vite-plugin` it holds
 // no handler code and calls its endpoint at the contract's path, its answer read through the contract's output schema.
+// A page over a group client bundles only the groups it calls.
 
 import { afterAll, describe, expect, test } from 'bun:test'
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs'
@@ -24,6 +25,23 @@ const SPA_FILES: ReadonlyMap<string, string> = new Map([
 ])
 
 const spaTree = (): Map<string, string> => new Map([...readTree(ARCHITECTURE_ROOT, ['.fixture']), ...SPA_FILES])
+
+/** The same page over a group client: the contract imported as a type, the `deals` group as the one value it calls. */
+const GROUP_PAGE = [
+	"import { createGroupClient, groupMount } from '@fabrika/app/client'",
+	"import type { contract } from '../fabrika.contract'",
+	"import { deals } from '../src/deals/endpoints'",
+	"import { DEAL_STAGES } from '../src/schemas'",
+	"import { render } from './view'",
+	'',
+	"const mount = groupMount<typeof contract>()('api', { app: 'crm', prefix: '/api' }, { bounceOnAuth: true })",
+	'const api = createGroupClient(mount, { deals })',
+	'',
+	'export const showPipeline = async (orgId: string): Promise<void> => render(DEAL_STAGES, await api.deals.pipeline({ orgId }))',
+	'',
+].join('\n')
+
+const groupPageTree = (): Map<string, string> => new Map([...spaTree(), ['web/main.ts', GROUP_PAGE]])
 
 /** Text of the fixture's handlers that minification keeps: an error message and a SQL template. */
 const HANDLER_TEXT = ['only a won or lost deal reopens', 'select d.stage']
@@ -127,6 +145,21 @@ describe('a Vite build of the SPA through the plugin', () => {
 		})
 		// An answer the contract's output schema refuses never reaches the page.
 		expect(runPage(root, { rows: [{ stage: 'archived', deals: 3 }] }).text).toBe('')
+	})
+
+	test('a page over a group client bundles the groups it calls, and neither the contract nor any other group', () => {
+		const root = materialize(groupPageTree())
+		const result = viteBuild(root)
+		expect(result.ok).toBe(true)
+		expect(result.modules.some((id) => id.endsWith('src/deals/endpoints.ts'))).toBe(true)
+		expect(result.modules.filter((id) => /fabrika\.contract\.ts$|src\/companies\//.test(id))).toEqual([])
+		expect(result.modules.filter((id) => SERVER_MODULES.test(id))).toEqual([])
+		for (const text of HANDLER_TEXT) expect(scripts(root)).not.toContain(text)
+		const answer = { rows: [{ stage: 'won', deals: 3 }] }
+		expect(runPage(root, answer)).toEqual({
+			requests: [{ method: 'POST', url: 'https://crm.example.test/api/deals.pipeline', body: JSON.stringify({ orgId: 'org-1' }) }],
+			text: `lead · proposal · won · lost: ${JSON.stringify(answer)}`,
+		})
 	})
 
 	test('a handler the reader refuses fails the build', () => {

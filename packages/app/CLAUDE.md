@@ -137,8 +137,9 @@ src/
   errors.ts           structural HTTP error mapping
   rpc/                procedure builder, types, and dispatcher
   client/             @fabrika/app/client — browser-safe
-    contract.ts       createClient: the typed client of a contract mount; download, the call of an attachment procedure;
-                      ResultOf, InputOf
+    contract.ts       createClient: the typed client of a contract mount; createGroupClient over groupMount: the same
+                      client of some groups of an RPC mount, from the group values alone; download, the call of an
+                      attachment procedure; ResultOf, InputOf
     share.ts          shareKey: the key the share SPA's bootstrap kept
     caller.ts         parsePageCaller: the caller document an SPA mount serves at <prefix>/__fabrika-me.json
     locale.ts         rememberSignInLocale: the language the next sign-in its proxy starts speaks (ADR-0077)
@@ -1028,6 +1029,16 @@ vocabulary (`packages/db/CLAUDE.md`).
   declared procedures exist, and each path comes from `joinPath` and
   `LINK_API_SEGMENT` in `contract/defaults.ts`, the code that gives the artifact its
   paths. Never compute a procedure path anywhere else.
+- **A group client is the contract client's subtree** (`createGroupClient(groupMount<typeof contract>()(mount, { app,
+  prefix }), { <name>: <group> })`): the tree comes from the group values under the names the contract mounts them,
+  through the same `clientTree`, so each procedure has the contract client's path, node and output schema. It exists so
+  a page bundles only the groups it calls: the contract is imported as a type only, and the types refuse a name the
+  mount does not have and a group the contract mounts under another name. `prefix` and `app` are the mount's and the
+  application's as written in the contract, which the client cannot read; the bounce scope is `<app>:<mount>`, as the
+  contract client's. It takes groups by name, each one whole and a nested name with all its groups; a single-group mount
+  (`c.rpc(prefix, group)`) has no group client. A group in another group's place is refused only when their endpoint
+  types differ. `group-client.test.ts` holds it to `createClient`; `@fabrika/check`'s `vite.test.ts` holds a page's
+  bundle to its groups. `FabrikaProvider` takes one client per mount, so a page that uses the hooks keeps `createClient`.
 - **A file procedure's client answers a file handle** (`download(api.x, input)`, `api.x.url(input)` for a GET one);
   the client never imports `files/`, which the examples' SPA bundle test refuses.
 - **An answer is parsed with the procedure's output schema** before the caller sees

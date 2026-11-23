@@ -5,13 +5,16 @@
 // each file. An attachment procedure and a procedure whose output is a file answer a file, which
 // `download(api.<procedure>, input)` fetches; a GET one also has `url`.
 
+import type { RpcCaller } from '@fabrika/auth-core'
 import { z } from 'zod/v4'
 import { type AttachmentBrand, attachmentOf } from '../contract/attachment'
+import type { Unavailable } from '../contract/context'
 import { isProcedure, type ProcedureTreeDeclaration, type ProcedureType, SURFACE_SECTIONS } from '../contract/declaration'
 import { FILE_INPUT_PART } from '../contract/defaults'
 import { challengePath, declaredChallengeAction, joinPath, LINK_API_SEGMENT, procedurePath } from '../contract/defaults'
 import type { AnyContract, InputSchema, Procedure, Schema, SchemaInput, SchemaOutput, Surface } from '../contract/define'
 import { type ClientInput, type FileBrand, fileOf } from '../contract/file'
+import type { Group, GroupInput } from '../contract/group'
 import { zodSchemaOf } from '../schema/data-schema'
 import { type BounceConfig, type BounceOption, exchange, exchangeFile, resolveBounce, RpcError, type RpcFetch } from './transport'
 
@@ -230,7 +233,7 @@ const challengeUrls = new WeakMap<object, string>()
 export function challengeUrl(procedure: object): string {
 	const url = challengeUrls.get(procedure)
 	if (url === undefined) {
-		throw new Error("challengeUrl takes a procedure of a client createClient made whose admission.challenge is provider: 'altcha'")
+		throw new Error("challengeUrl takes a procedure of a client createClient or createGroupClient made whose admission.challenge is provider: 'altcha'")
 	}
 	return url
 }
@@ -401,7 +404,7 @@ export function download<I>(procedure: AttachmentProcedure<I> | FileProcedure<I>
 export async function downloadFile(procedure: object, input: unknown): Promise<DownloadedFile> {
 	const request = downloads.get(procedure)
 	if (request === undefined) {
-		throw new Error('download takes a procedure of a client createClient made that answers a file')
+		throw new Error('download takes a procedure of a client createClient or createGroupClient made that answers a file')
 	}
 	const doFetch = request.options.fetch ?? fetch
 	const { body, disposition } = request.method === 'GET'
@@ -450,6 +453,31 @@ function pageOrigin(): string | null {
 	return typeof origin === 'string' ? origin : null
 }
 
+/** Where a client's procedures lie: its mount, the application it belongs to, and the base its paths join. */
+interface ClientAt {
+	readonly app: string
+	readonly mount: string
+	readonly base: string
+}
+
+/** The procedures of `tree` as a client: one function per procedure, built once per call. */
+function mountClient(at: ClientAt, tree: ProcedureTreeDeclaration<Schema, unknown>, options: ClientOptions): Record<string, unknown> {
+	const bounce = resolveBounce(`${at.app}:${at.mount}`, options.bounceOnAuth)
+	const origin = (options.baseUrl ?? '').replace(/\/+$/, '')
+	const page = pageOrigin()
+	// A page's key goes only to the page's own application; a script names the application it calls.
+	if (options.key !== undefined && page !== null && origin !== '' && new URL(origin, page).origin !== page) {
+		throw new Error(`a client with a key in a browser calls only ${page}; baseUrl '${origin}' is another origin`)
+	}
+	return clientTree(tree, { mount: at.mount, origin, base: at.base, path: '' }, (target, treeAt) => {
+		const mark = attachmentOf(target.output)
+		if (mark !== null) {
+			return attachmentProcedure(target, treeAt, mark.declaration.filename, options, bounce)
+		}
+		return fileOf(target.output) === null ? caller(target, treeAt, options, bounce) : fileProcedure(target, treeAt, options, bounce)
+	})
+}
+
 /**
  * The client of mount `mount` of `contract`: one function per declared procedure. A link mount's client sends its
  * share key as a bearer, so `options.key` is required there.
@@ -469,24 +497,96 @@ export function createClient<const C extends AnyContract, const M extends Client
 		throw new Error(`'${mount}' is a link mount; its client needs the share key`)
 	}
 	const base = node.kind === 'link' ? joinPath(node.prefix, LINK_API_SEGMENT) : node.prefix
-	const bounce = resolveBounce(`${contract.vocabulary.app}:${mount}`, options.bounceOnAuth)
-	const origin = (options.baseUrl ?? '').replace(/\/+$/, '')
-	const page = pageOrigin()
-	// A page's key goes only to the page's own application; a script names the application it calls.
-	if (options.key !== undefined && page !== null && origin !== '' && new URL(origin, page).origin !== page) {
-		throw new Error(`a client with a key in a browser calls only ${page}; baseUrl '${origin}' is another origin`)
-	}
-	const procedures = clientTree(node.procedures, { mount, origin, base, path: '' }, (target, at) => {
-		const mark = attachmentOf(target.output)
-		if (mark !== null) {
-			return attachmentProcedure(target, at, mark.declaration.filename, options, bounce)
-		}
-		return fileOf(target.output) === null ? caller(target, at, options, bounce) : fileProcedure(target, at, options, bounce)
-	})
+	const procedures = mountClient({ app: contract.vocabulary.app, mount, base }, node.procedures, options)
 	// The tree was built from this mount's declaration; the check ties the value to the type the contract derives.
 	const covers = (value: unknown): value is ContractClient<C, M> => coversTree(value, node.procedures)
 	if (!covers(procedures)) {
 		throw new Error(`the client of '${mount}' does not cover its procedures`)
+	}
+	return procedures
+}
+
+/** The RPC mounts of a contract: the mounts whose groups a group client calls. */
+export type RpcMountName<C> =
+	& { [M in keyof SurfaceOf<C>]: SurfaceOf<C>[M] extends { readonly kind: 'rpc' } ? M : never }[keyof SurfaceOf<C>]
+	& string
+
+declare const mountContract: unique symbol
+
+/**
+ * An RPC mount of contract `C` as its group clients call it (`groupMount`): its name, its prefix, the application's id
+ * and the options every client of it shares. It holds no value of the contract, so a page that imports the contract's
+ * type only bundles none of its groups.
+ */
+export interface GroupMount<C, M extends string> {
+	readonly app: string
+	readonly mount: M
+	readonly prefix: `/${string}`
+	readonly options: ClientOptions
+	/** Carries the contract's type for `createGroupClient`; never present at runtime. */
+	readonly [mountContract]?: C
+}
+
+/** What a mount's procedure tree takes in a group client: the group that declares each subtree, or groups by name. */
+type MountedGroup<T> = T extends GroupInput ? Group<readonly RpcCaller[], T> : { readonly [K in keyof T]: MountedGroup<T[K]> }
+
+/**
+ * The groups `G` as mount `M` of contract `C` holds them: each one under the name the contract mounts it, and whole. A
+ * name the mount does not have is `Unavailable`, so the call fails there.
+ */
+export type GroupsOf<C, M, G> = MountOf<C, M> extends { readonly procedures: infer T } ? {
+		readonly [K in keyof G]: K extends keyof T ? MountedGroup<T[K]>
+			: Unavailable<`mount '${M & string}' has no group '${K & string}'`>
+	}
+	: never
+
+/** A group as the client reads it at runtime, or groups by name. */
+type ClientGroups =
+	| { readonly '~kind': 'group'; readonly endpoints: ProcedureTreeDeclaration<Schema, unknown> }
+	| { readonly [name: string]: ClientGroups }
+
+/** The client of the groups `G` of mount `M`: what `createClient(contract, M)` answers for them. */
+export type GroupClient<C, M, G> = MountOf<C, M> extends { readonly procedures: infer T } ? ClientTree<{ readonly [K in keyof G & keyof T]: T[K] }>
+	: never
+
+/**
+ * Mount `mount` of the contract whose type is `C`, for `createGroupClient`. `prefix` and `app` are the mount's prefix
+ * and the application's id as the contract declares them: `groupMount<typeof contract>()('api', { app: 'crm', prefix:
+ * '/api' })` beside `import type { contract } from '../fabrika.contract'`.
+ */
+export function groupMount<C extends AnyContract>(): <const M extends RpcMountName<C>>(
+	mount: M,
+	declaration: { readonly app: string; readonly prefix: `/${string}` },
+	options?: ClientOptions,
+) => GroupMount<C, M> {
+	return (mount, declaration, options = {}) => Object.freeze({ app: declaration.app, mount, prefix: declaration.prefix, options })
+}
+
+/** The procedure tree of the groups as the contract mounts them: each group's endpoints under its name. */
+function groupsTree(groups: ClientGroups): ProcedureTreeDeclaration<Schema, unknown> {
+	return Object.fromEntries(
+		Object.entries(groups).map(([name, value]: [string, ClientGroups]) => [name, isClientGroup(value) ? value.endpoints : groupsTree(value)]),
+	)
+}
+
+function isClientGroup(value: ClientGroups): value is Extract<ClientGroups, { readonly '~kind': 'group' }> {
+	return value['~kind'] === 'group'
+}
+
+/**
+ * The client of some groups of an RPC mount: the procedures `createClient(contract, mount)` has under their names, built
+ * from the group values alone. A page imports only the groups it calls, so its bundle holds only their schemas:
+ * `createGroupClient(api, { deals })` calls `POST /api/deals.<procedure>`.
+ */
+export function createGroupClient<C, const M extends string, const G extends ClientGroups>(
+	mount: GroupMount<C, M>,
+	groups: G & GroupsOf<C, M, G>,
+): GroupClient<C, M, G> {
+	const tree = groupsTree(groups)
+	const procedures = mountClient({ app: mount.app, mount: mount.mount, base: mount.prefix }, tree, mount.options)
+	const covers = (value: unknown): value is GroupClient<C, M, G> => coversTree(value, tree)
+	if (!covers(procedures)) {
+		throw new Error(`the client of '${mount.mount}' does not cover the groups' procedures`)
 	}
 	return procedures
 }

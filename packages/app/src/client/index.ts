@@ -11,14 +11,20 @@ export {
 	type ClientTree,
 	type ContractClient,
 	createClient,
+	createGroupClient,
 	download,
 	DownloadedFile,
 	type DownloadInput,
 	type FileProcedure,
+	type GroupClient,
+	type GroupMount,
+	groupMount,
+	type GroupsOf,
 	type InputOf,
 	type LinkClientOptions,
 	type ProcedureCall,
 	type ResultOf,
+	type RpcMountName,
 } from './contract'
 export { rememberSignInLocale } from './locale'
 export { shareKey } from './share'

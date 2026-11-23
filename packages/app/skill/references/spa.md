@@ -9,6 +9,7 @@ dependencies, `tsconfig.json` (`"jsx": "react-jsx"`) and `build-web.ts`.
 | Module                       | Holds                                                                                                                                                     |
 | ---------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@fabrika/app/client`        | `createClient(contract, 'api')`: one function per procedure, its answer parsed by the output schema                                                       |
+| `@fabrika/app/client`        | `createGroupClient(groupMount<typeof contract>()('api', { app, prefix }), { tasks })`: some groups; not for the hooks                                     |
 | `@fabrika/app/react`         | `FabrikaProvider`, `useQuery`, `useInfiniteQuery`, `useMutation`, `useAction`, `useDownload`, `useInvalidate`, `skip`, `useCaller`, `Can`, `FabrikaError` |
 | `@fabrika/app/react/testing` | `installDom`, `type`, `controlByLabel`, `waitForText`: a screen test's DOM and typing                                                                     |
 | `@fabrika/ui`                | the components below, `createRouter`, and `@fabrika/ui/styles.css`                                                                                        |
