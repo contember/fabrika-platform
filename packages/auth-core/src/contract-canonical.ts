@@ -172,9 +172,13 @@ function canonicalTable(table: TablePolicyArtifact): TablePolicyArtifact {
 	}
 }
 
-/** A column's list of read actions sorted; one action, and a column without its own read, as they are. */
+/** A column's lists of read and write actions sorted; one action, and an absent one, as they are. */
 function canonicalColumn(column: ColumnPolicyArtifact): ColumnPolicyArtifact {
-	return column.read === undefined || typeof column.read === 'string' ? column : { ...column, read: sorted(column.read) }
+	return {
+		...column,
+		...(column.read === undefined || typeof column.read === 'string' ? {} : { read: sorted(column.read) }),
+		...(column.write === undefined || typeof column.write === 'string' ? {} : { write: sorted(column.write) }),
+	}
 }
 
 function canonicalConfers(confers: ConfersArtifact): ConfersArtifact {

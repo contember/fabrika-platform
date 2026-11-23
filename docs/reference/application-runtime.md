@@ -651,8 +651,12 @@ names the same fix at runtime.
   row's current `{ id, version }`, with the same 404 and 409.
 - **A column write action** (`columns: { assignee: { write: 'tasks.assign' } }` in `src/db/tables.ts`) lets a capability
   of that action update exactly those columns through `ctx.db.target.update` (or a child table's `update`); the
-  table's update action keeps the rest and does not update them. The action reads its own target like any action the
-  table names. It is part of the access snapshot, so a new one, or a column moved under one, widens.
+  table's update action keeps the rest and does not update them. `write` takes a list too
+  (`columns: { settled_on: { write: ['orders.settle', 'orders.writeoff', 'orders.write'] } }`): each listed action
+  updates the column and no other column it is not granted, and a listed table update action updates it beside its
+  update list. A list of exactly the table's update actions is refused: put the column in `update`. The action reads its
+  own target like any action the table names. It is part of the access snapshot, so a new one, a column moved under
+  one, or an action a list gains widens. The artifact keeps one action as its text and several as a sorted list.
 - **A `date` column is `YYYY-MM-DD` text** in the generated types, every handle's rows, filters and writes; `fromRow`
   and `ctx.sql` read a `Date` as its day for a `z.iso.date()` field. A timestamp reads as a `Date` and a write takes a
   `Date` or strict ISO 8601 text with `Z` or an offset; `now`, a locale form or an impossible day is refused. `RowOf<typeof tables, 'tasks', 'tasks.read'>` (`@fabrika/db/tables`) is the row an action

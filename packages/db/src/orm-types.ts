@@ -61,12 +61,16 @@ type ConditionedOf<P, T> = PolicyOf<P, T> extends { readonly when?: infer W } ? 
 
 type ColumnPoliciesOf<P, T> = PolicyOf<P, T> extends { readonly columns: infer C } ? C : never
 
-/** The columns that declare `A` as their own write action. */
-type ColumnsWrittenBy<C, A> = { [K in keyof C]: C[K] extends { readonly write: A } ? K : never }[keyof C]
+/** The actions a column's own `write` names: one action, or each of a list. */
+type WriteActionsOf<P> = P extends { readonly write: infer W } ? W extends readonly (infer L extends string)[] ? L : W extends string ? W : never
+	: never
+
+/** The columns that list `A` among their own write actions. */
+type ColumnsWrittenBy<C, A> = { [K in keyof C]: [A] extends [WriteActionsOf<C[K]>] ? K : never }[keyof C]
 
 /**
  * Each action that updates the table, with the values a capability of it updates: the update action its update list,
- * a column's own write action the columns that declare it, and no other.
+ * a column's own write action the columns that list it (an update action both), and no other.
  */
 type UpdatesOf<DB, P, T extends keyof DB> =
 	& { readonly [A in ActionOf<P, T, 'update'>]: UpdateValues<DB, P, T> }
@@ -76,7 +80,7 @@ type UpdatesOf<DB, P, T extends keyof DB> =
 		>
 	}
 
-type ColumnWriteAction<C> = { [K in keyof C]: C[K] extends { readonly write: infer A extends string } ? A : never }[keyof C]
+type ColumnWriteAction<C> = { [K in keyof C]: WriteActionsOf<C[K]> }[keyof C]
 
 /** One table, as every handle reads it. */
 export interface IndexedTable {

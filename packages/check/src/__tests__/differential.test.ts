@@ -643,6 +643,34 @@ describe('the staged kit: read from source and evaluated agree', () => {
 			expect(listed.runtime).toBe(listed.reader)
 		})
 
+		test('a column written by a list of actions reads the same from source as at runtime, and its refusals agree', () => {
+			const tasksPolicy = (columns: string, update = "['title', 'due_on']") =>
+				fixtureTables
+					.replace("columns: { assignee: { write: 'tasks.assign' } }", `columns: { ${columns} }`)
+					.replace("update: ['title', 'due_on'],\n\t\tcolumns", `update: ${update},\n\t\tcolumns`)
+			const tasksWith = (columns: Readonly<Record<string, unknown>>, update: readonly string[] = ['title', 'due_on']) =>
+				policiesOf((all) => {
+					all['tasks'] = { ...all['tasks'], update, columns }
+				})
+			const listed = { assignee: { write: ['tasks.assign', 'tasks.write'] }, due_on: { write: ['tasks.assign', 'tasks.read'] } }
+			const source = tasksPolicy("assignee: { write: ['tasks.assign', 'tasks.write'] }, due_on: { write: ['tasks.assign', 'tasks.read'] }", "['title']")
+			const files = new Map([...derivedFiles, ['src/db/tables.ts', source]])
+			const runtime = tablePolicies(
+				readTables(JSON.parse(JSON.stringify(derivedColumns)), tasksWith(listed, ['title']), JSON.parse(JSON.stringify(derivedVocabulary))),
+			)
+			expect(readTablesSource(files)['tasks']?.columns).toEqual(listed)
+			expect(readTablesSource(files)['tasks']).toEqual(runtime['tasks'])
+			expect(refusals(source, tasksWith(listed, ['title']))).toEqual({ reader: 'accepted', runtime: 'accepted' })
+
+			const message = "tasks: columns.assignee.write names tasks.write, the table's update action; list assignee in update instead"
+			expect(refusals(tasksPolicy("assignee: { write: ['tasks.write'] }"), tasksWith({ assignee: { write: ['tasks.write'] } }))).toEqual({
+				reader: message,
+				runtime: message,
+			})
+			const empty = refusals(tasksPolicy('assignee: { write: [] }'), tasksWith({ assignee: { write: [] } }))
+			expect(empty).toEqual({ reader: 'tasks: columns.assignee.write lists no action; leave it out', runtime: empty.reader })
+		})
+
 		test('a dimension no table owns keeps the vocabulary ancestry from source, as at runtime', () => {
 			const schema = `import type { TypedColumnList } from '@fabrika/db'
 

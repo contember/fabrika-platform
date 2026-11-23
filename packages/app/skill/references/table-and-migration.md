@@ -313,7 +313,11 @@ export const tables = defineTables(vocabulary, columns)({
 - `columns: { <column>: { read: '<action>' } }` hides a column from every capability of another action, in the data
   and in the types; `read: ['<action>', '<action>']` lets each listed action read, filter and sort by it, so a column
   most handlers read is hidden from just the actions the list leaves out. `columns: { <column>: { write: '<action>' } }` lets only that action update the column (and that
-  action updates nothing else); the column is then not in `update`.
+  action updates nothing else, unless it is a table update action, which keeps its update list too); the column is then
+  not in `update`. `write: ['<action>', '<action>']` lets each listed
+  action update the column: several actions write one column (a settlement flag set by checkout, a write-off and the
+  order editor) without each getting the table's whole update list. A listed table update action writes the column
+  beside its update list; a list of exactly the update actions is refused, since `update` says that.
 - `files: { <column>: '<kind>' }` makes a column a file column of a kind the contract declares (`c.files`):
   `task_attachments.file` holds the files of a task (`references/files.md`). Its migration writes
   `<column> UUID REFERENCES fabrika_files (id)` and an index the column leads; the checker's `file-column-migration`
