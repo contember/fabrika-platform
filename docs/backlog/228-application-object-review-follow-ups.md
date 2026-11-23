@@ -122,6 +122,24 @@ statement and a `PRAGMA` before anything runs, so these gaps are defence in dept
     served). [Backlog 240](240-channel-prereleases-sort-below-the-release-floors.md) is the same ordering problem for
     the release floors.
 
+**Review of the redirect and ops-key domain fix.**
+
+32. An ops key binds to its deploy's domain when a provider accepts the deploy (`events.externalId`, before the
+    runner starts on Cloudflare), not when it succeeds (`packages/control/src/run-lifecycle.ts`). After a domain move
+    whose deploy was accepted and then failed, the pending key goes to the new domain first, and the next deploy there
+    hands it again, so a key sent to a domain nothing was deployed to can become valid. Bind once the provider answers
+    `succeeded` (also in `settleUnfinishedRun` and a reconcile), or issue a new key instead of handing a bound pending
+    key of a moved domain again, without leaving the migration phase unable to reach a version that did activate.
+33. A declared egress call buffers its whole request body (`packages/app/src/implement/egress.ts`, `declaredFetch`),
+    unbounded and outside its signal, so a large streamed upload to a declared partner can exhaust a Worker's memory.
+    Stream the first hop and refuse a 307/308 resend of a streamed body, as Fetch does, or bound the read.
+34. `httpOpsTransport` stops at the first answer that is not the uniform refusal, so an `unreachable` newest key at a
+    new domain hides an older key that still works at the running version's domain. Now that each key has its own
+    domain, try the next key after `unreachable` too.
+35. Migration `0033_ops_key_domain` binds existing keys to the registry domain at the upgrade. An environment whose
+    domain changed and was not deployed before the upgrade is bound to the undeployed domain. Runs record no domain,
+    so a tighter backfill needs one recorded first.
+
 ## Approach / acceptance
 
 Each item lands with a witness that fails before it. Items 12 and 13 need a decision first. Item 14 follows D0 in
