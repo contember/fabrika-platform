@@ -84,7 +84,8 @@
 		"seed": "bun run scripts/seed.ts",
 		"serve": "bun src/zerops/server.ts",
 		"migrate:postgres": "bun src/zerops/migrate.ts",
-		"maintenance": "bun src/zerops/cron.ts"
+		"maintenance": "bun src/zerops/cron.ts",
+		"rotate-vault-key": "bun src/bun/rotate-vault-key.ts"
 	},
 	"dependencies": {
 		"@fabrika/app": "workspace:*",

@@ -446,6 +446,7 @@ describe('a vault ref is owned by the app secret that created it', () => {
 			prepare: () => {
 				throw new Error('vault database is unavailable')
 			},
+			batch: () => Promise.reject(new Error('vault database is unavailable')),
 		}, testKey())
 		deps.vault = () => Promise.resolve(broken)
 

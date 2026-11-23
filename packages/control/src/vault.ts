@@ -23,11 +23,10 @@
 // FABRIKA_CONTROL_VAULT_KEY provisioning (real CF): generate 32 random bytes, base64 them, and set the Worker
 // secret once per environment:
 //   `head -c 32 /dev/urandom | base64 | wrangler secret put FABRIKA_CONTROL_VAULT_KEY`
-// Locally it goes in `.dev.vars`. Rotating it means: set the NEW key, call reencryptAll with
-// it, then swap the binding (or run reencryptAll as a one-shot maintenance task) — see the management
-// API. Losing it makes every vault value unrecoverable (by design).
+// Locally it goes in `.dev.vars`. Rotating it is `src/bun/rotate-vault-key.ts`, run with Control stopped
+// (docs/reference/key-rotation.md). Losing it makes every vault value unrecoverable (by design).
 
-import { type SqlStatement, uuidv7 } from '@fabrika/platform'
+import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
 export type SecretScope = 'app' | 'app-env' | 'platform'
 
@@ -64,8 +63,23 @@ export interface VaultRow {
 }
 
 /** The database surface the vault needs — a `SqlDatabase` (so a real `D1Database`) satisfies it. */
-export interface VaultD1 {
-	prepare(query: string): SqlStatement
+export type VaultD1 = Pick<SqlDatabase, 'prepare' | 'batch'>
+
+/** Rows the vault's key cannot open: tampered, or sealed under another master key. Ids only, never material. */
+export class VaultUnreadableRowsError extends Error {
+	constructor(readonly ids: readonly string[]) {
+		super(`${ids.length} vault row(s) open with neither master key: ${ids.join(', ')}`)
+		this.name = 'VaultUnreadableRowsError'
+	}
+}
+
+/** Which master key opens each vault row, by opening its value. */
+export interface VaultKeyCensus {
+	readonly rows: number
+	readonly openWithCurrent: number
+	readonly openWithNew: number
+	/** Ids of the rows neither key opens. */
+	readonly unreadable: readonly string[]
 }
 
 // ── byte/base64 helpers (no Buffer; Worker + Bun both have atob/btoa) ──────────
@@ -182,6 +196,16 @@ async function open(masterKey: CryptoKey, env: Envelope): Promise<string> {
 	return new TextDecoder().decode(plaintext)
 }
 
+/** Whether `masterKey` opens the row's value. The plaintext is discarded, never returned or logged. */
+async function opensWith(masterKey: CryptoKey, row: VaultRow): Promise<boolean> {
+	try {
+		await open(masterKey, { ciphertext: row.ciphertext, valueIv: row.value_iv, wrappedDek: row.wrapped_dek, dekIv: row.dek_iv })
+		return true
+	} catch {
+		return false
+	}
+}
+
 /** Unwrap a DEK, then re-wrap it under a NEW master key (used by reencryptAll). No value plaintext seen. */
 async function rewrapDek(
 	oldKey: CryptoKey,
@@ -290,24 +314,33 @@ export class Vault {
 	}
 
 	/**
-	 * MASTER-KEY rotation: re-wrap every row's DEK with `newBase64MasterKey`, leaving the value
-	 * ciphertext untouched. Returns the count re-wrapped. A failure mid-way leaves already-rewrapped
-	 * rows readable only by the NEW key and the rest only by the OLD key — so run it as a maintenance
-	 * task and only swap the binding to the new key once it completes. Never exposes a plaintext value.
+	 * MASTER-KEY rotation: re-wrap the DEK of every row this vault's key opens under `newBase64MasterKey`, leaving the
+	 * value ciphertext untouched, in ONE transaction, so an interrupted run changes nothing. A row the new key already
+	 * opens is skipped, so a re-run finishes what a write under the old key left behind; a row neither key opens refuses
+	 * the run before any write. Returns the count re-wrapped. Never exposes a plaintext value.
 	 */
 	async reencryptAll(newBase64MasterKey: string): Promise<number> {
 		const newKey = await importMasterKey(newBase64MasterKey)
 		const { results } = await this.d1.prepare('SELECT * FROM vault').all<VaultRow>()
-		let count = 0
+		const updates: SqlStatement[] = []
+		const unreadable: string[] = []
 		for (const row of results) {
+			if (await opensWith(newKey, row)) continue
+			if (!(await opensWith(this.masterKey, row))) {
+				unreadable.push(row.id)
+				continue
+			}
 			const rewrapped = await rewrapDek(this.masterKey, newKey, { wrappedDek: row.wrapped_dek, dekIv: row.dek_iv })
-			await this.d1
-				.prepare('UPDATE vault SET wrapped_dek = ?, dek_iv = ?, rotated_at = ? WHERE id = ?')
-				.bind(rewrapped.wrappedDek, rewrapped.dekIv, this.now(), row.id)
-				.run()
-			count++
+			// Guarded on the DEK it read: a concurrent `rotate` keeps its new value instead of getting a DEK that cannot open it.
+			updates.push(
+				this.d1
+					.prepare('UPDATE vault SET wrapped_dek = ?, dek_iv = ?, rotated_at = ? WHERE id = ? AND wrapped_dek = ? AND dek_iv = ?')
+					.bind(rewrapped.wrappedDek, rewrapped.dekIv, this.now(), row.id, row.wrapped_dek, row.dek_iv),
+			)
 		}
-		return count
+		if (unreadable.length > 0) throw new VaultUnreadableRowsError(unreadable)
+		if (updates.length > 0) await this.d1.batch(updates)
+		return updates.length
 	}
 
 	private idOrThrow(ref: string): string {
@@ -327,4 +360,22 @@ export class Vault {
 		}
 		return row
 	}
+}
+
+/** Open every vault row with both master keys and count which one does. Reads only; keeps no plaintext. */
+export async function vaultKeyCensus(d1: VaultD1, currentBase64MasterKey: string, newBase64MasterKey: string): Promise<VaultKeyCensus> {
+	const current = await importMasterKey(currentBase64MasterKey)
+	const next = await importMasterKey(newBase64MasterKey)
+	const { results } = await d1.prepare('SELECT * FROM vault').all<VaultRow>()
+	let openWithCurrent = 0
+	let openWithNew = 0
+	const unreadable: string[] = []
+	for (const row of results) {
+		const byCurrent = await opensWith(current, row)
+		const byNew = await opensWith(next, row)
+		if (byCurrent) openWithCurrent++
+		if (byNew) openWithNew++
+		if (!byCurrent && !byNew) unreadable.push(row.id)
+	}
+	return { rows: results.length, openWithCurrent, openWithNew, unreadable }
 }

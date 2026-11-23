@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { importMasterKey, parseVaultRef, Vault, vaultRef } from '../vault'
+import { importMasterKey, parseVaultRef, Vault, vaultKeyCensus, vaultRef, VaultUnreadableRowsError } from '../vault'
 import { createHarness, queryRows } from './helpers/harness'
 
 // The encrypted D1 vault (M4): AES-256-GCM envelope encryption over a real in-memory D1 (the harness
@@ -157,6 +157,56 @@ describe('Vault rotation', () => {
 
 		// Value ciphertext is unchanged — a master rotation never re-encrypts (or exposes) the value.
 		expect(col(sqlite, parseVaultRef(refA), 'ciphertext')).toBe(ctBefore)
+		expect(await vaultKeyCensus(d1, testKey(1), testKey(2))).toEqual({ rows: 2, openWithCurrent: 0, openWithNew: 2, unreadable: [] })
+	})
+
+	test('reencryptAll writes in one transaction: a failed commit leaves every row under the old key', async () => {
+		const { d1 } = createHarness()
+		const vault = await Vault.create(d1, testKey(1))
+		await vault.putSecret('app', 'a', 'alpha')
+		await vault.putSecret('app', 'b', 'beta')
+		// The commit fails, as an interrupted run's would; nothing may have been written row by row before it.
+		const interrupted = await Vault.create({
+			prepare: (query) => d1.prepare(query),
+			batch: () => Promise.reject(new Error('connection lost')),
+		}, testKey(1))
+
+		await expect(interrupted.reencryptAll(testKey(2))).rejects.toThrow('connection lost')
+
+		expect(await vaultKeyCensus(d1, testKey(1), testKey(2))).toEqual({ rows: 2, openWithCurrent: 2, openWithNew: 0, unreadable: [] })
+	})
+
+	test('reencryptAll resumes: a re-run re-wraps only the rows written under the old key since', async () => {
+		const { d1 } = createHarness()
+		const vault = await Vault.create(d1, testKey(1))
+		await vault.putSecret('app', 'a', 'alpha')
+		expect(await vault.reencryptAll(testKey(2))).toBe(1)
+		// A Control still running on the old key wrote one more row after the rotation committed.
+		const late = await vault.putSecret('app', 'late', 'written-late')
+		expect(await vaultKeyCensus(d1, testKey(1), testKey(2))).toEqual({ rows: 2, openWithCurrent: 1, openWithNew: 1, unreadable: [] })
+
+		expect(await vault.reencryptAll(testKey(2))).toBe(1)
+
+		expect(await vaultKeyCensus(d1, testKey(1), testKey(2))).toEqual({ rows: 2, openWithCurrent: 0, openWithNew: 2, unreadable: [] })
+		expect(await (await Vault.create(d1, testKey(2))).getSecret(late)).toBe('written-late')
+	})
+
+	test('reencryptAll refuses a row neither key opens and writes nothing', async () => {
+		const { d1 } = createHarness()
+		const vault = await Vault.create(d1, testKey(1))
+		await vault.putSecret('app', 'a', 'alpha')
+		const foreign = await (await Vault.create(d1, testKey(3))).putSecret('app', 'b', 'sealed-under-a-third-key')
+
+		const refusal = vault.reencryptAll(testKey(2))
+
+		await expect(refusal).rejects.toBeInstanceOf(VaultUnreadableRowsError)
+		await expect(refusal).rejects.toThrow(parseVaultRef(foreign) ?? 'no id')
+		expect(await vaultKeyCensus(d1, testKey(1), testKey(2))).toEqual({
+			rows: 2,
+			openWithCurrent: 1,
+			openWithNew: 0,
+			unreadable: [parseVaultRef(foreign) ?? ''],
+		})
 	})
 })
 
