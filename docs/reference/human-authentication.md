@@ -59,7 +59,10 @@ from 1 to 720 (the 30 days every IAM login lasts); anything else fails the boot.
 
 The cap is measured at use from the sign-in, so lowering it, or upgrading to a release
 that has it, also ends older logins on their next use. A new OIDC login stores the cap
-as its expiry and cookie lifetime. Password logins are not capped: they keep 30 days.
+as its expiry and cookie lifetime, so raising the cap later does not lengthen a login
+already issued. Password logins are not capped: they keep 30 days. A key the person
+issued or approved is not a login and is not capped by this; revoke it, or disable the
+person in IAM, to end it.
 
 Where it is set: on Zerops, a variable of the `iam` service under that name; on
 Cloudflare, a deploy variable of IAM's Worker (`pipeline.vars` in

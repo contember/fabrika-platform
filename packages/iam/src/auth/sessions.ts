@@ -240,7 +240,7 @@ export function signedOutRedirect(location: string): Response {
  * TLS-TERMINATING BALANCER (the socket is plain HTTP, the browser spoke HTTPS) and over plain HTTP on
  * `localhost` / `*.localhost`, which browsers treat as potentially trustworthy. An installation
  * served over cleartext HTTP on a public hostname can hold no session at all — which is the correct
- * outcome for a 30-day credential, not a regression to work around.
+ * outcome for a credential that lasts up to 30 days, not a regression to work around.
  */
 function sessionCookie(value: string, maxAge: number): string {
 	return serializeCookie(SESSION_COOKIE, value, {

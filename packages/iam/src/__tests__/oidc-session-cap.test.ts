@@ -13,6 +13,7 @@ import { sessionUsable } from '../auth'
 import { handleAuth } from '../auth/routes'
 import { issueSession } from '../auth/sessions'
 import { type AuthenticationMethod, createPostgresIamRepositories, type IamRepositories } from '../db'
+import { grantAuthority } from '../oauth'
 import { pkceChallenge } from '../oidc'
 import { parseOidcSessionSeconds } from '../oidc-session'
 import { hashToken } from '../secret'
@@ -26,6 +27,8 @@ const CONSOLE_ORIGIN = 'https://console.test'
 const AUTH_ENV = { FABRIKA_IAM_SIGNING_KEYS: '', ENVIRONMENT: 'local' }
 const HANDOFF_CHALLENGE = await pkceChallenge('oidc-session-cap-verifier')
 const HOUR = 3600
+const CLIENT_ID = 'https://client.test/cimd'
+const RESOURCE = 'https://control.test/mcp'
 const CAP = 12 * HOUR
 
 if (!hasPostgres) {
@@ -172,6 +175,39 @@ describe('the OIDC session cap — SQLite', () => {
 		const outcome = await mintToken(services, AUTH_ENV, { app: CONSOLE_APP, session: almost.consoleSession, requestId: 'r1' })
 		if (!outcome.result.ok) throw new Error(`mint refused: ${outcome.result.reason}`)
 		expect(outcome.result.expiresAt).toBe(almost.signedIn + CAP)
+	})
+
+	test("an MCP client's refreshed token ends at the cap of the login its grant was given under", async () => {
+		const harness = createHarness()
+		const services = harness.makeServices({
+			issuer: ISSUER,
+			environment: 'stage',
+			oidcSessionCapSeconds: CAP,
+			oauth: {
+				clients: [{ provider: 'claude', clientId: CLIENT_ID, redirectUris: [`${ISSUER}/cb`], metadataUrl: CLIENT_ID }],
+				resources: [{ app: 'control', resource: RESOURCE, defaultScopes: ['read'], scopeGrants: [{ scope: 'read', permissions: [{ action: '*' }] }] }],
+			},
+		})
+		const almost = await login(new TestSqlDatabase(harness.sqlite), harness.repositories, 'oidc', CAP - 60)
+		const principalId = harness.sqlite.query<{ principal_id: string }, [string]>('SELECT principal_id FROM sessions WHERE id = ?').get(almost.loginId)
+			?.principal_id
+		if (principalId === undefined) throw new Error('no login row')
+		// A grant given before the cap stores the login's old 30-day expiry.
+		const grant = {
+			id: 'cap-grant',
+			principal_id: principalId,
+			session_id: almost.loginId,
+			client_id: CLIENT_ID,
+			app: 'control',
+			resource: RESOURCE,
+			scopes: JSON.stringify(['read']),
+			created_at: almost.signedIn,
+			expires_at: almost.signedIn + 30 * 24 * HOUR,
+			revoked_at: null,
+		}
+
+		expect((await grantAuthority(services, grant, now()))?.expiresAt).toBe(almost.signedIn + CAP)
+		expect(await grantAuthority(services, grant, almost.signedIn + CAP)).toBeNull()
 	})
 
 	test('a new OIDC login stores the cap as its expiry and cookie lifetime; a password login keeps 30 days', async () => {

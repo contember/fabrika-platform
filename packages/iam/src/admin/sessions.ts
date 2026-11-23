@@ -35,7 +35,7 @@ function toSessionDto(c: AdminContext, row: ListedSessionRow, now: number, disab
 		parentSessionId: row.parent_session_id,
 		status: row.revoked_at !== null ? 'revoked' : row.expires_at <= now ? 'expired' : 'active',
 		createdAt: row.created_at,
-		expiresAt: row.expires_at,
+		expiresAt: sessionEndsAt(row, c.services.config),
 		revokedAt: row.revoked_at,
 		unavailableReason,
 	}

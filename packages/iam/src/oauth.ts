@@ -15,7 +15,7 @@ import type {
 	OAuthTokenResponse,
 } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
-import { sessionUsable } from './auth'
+import { sessionEndsAt, sessionUsable } from './auth'
 import { type AuditEventInput, type OAuthGrantRow, type PrincipalRow, principalStatus, type SessionRow } from './db'
 import type { Env } from './env'
 import { parseJsonOrNull } from './json'
@@ -246,7 +246,9 @@ export async function grantAuthority(
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') return null
 	const live = await resolveAuthorityAt(services, principal, grant.app)
 	const permissions = narrowPermissions(live.permissions, ceiling)
-	return { principal, scopes, permissions, expiresAt: authorityDeadline(live, permissions, now) }
+	// A refreshed token ends with its login too: an OIDC login issued before the cap stores a later expiry than its end.
+	const expiresAt = Math.min(authorityDeadline(live, permissions, now) ?? Number.POSITIVE_INFINITY, sessionEndsAt(session, services.config))
+	return { principal, scopes, permissions, expiresAt }
 }
 
 /** The union of the scopes' grants, or null when a scope is no longer configured. */
