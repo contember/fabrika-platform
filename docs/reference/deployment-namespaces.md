@@ -375,7 +375,8 @@ environment to its namespace, seals it in the vault, and records only the vault 
 (`app_env_proxy_secrets`). Caddy sends it as `X-Fabrika-Proxy-Secret` through an
 `{env.…}` placeholder, so it is in no generated file. Without a vault Control refuses a
 non-dry deploy behind a namespace proxy rather than deploy an application that would
-refuse every request. There is no rotation verb yet.
+refuse every request. There is no rotation verb; [`key-rotation.md`](key-rotation.md#the-proxy-secret-of-an-application-environment)
+is the procedure by hand.
 
 Custom domains are bound to the namespace's `proxy` service manually in Zerops.
 App services do not receive public domains. Zerops subdomain access is available

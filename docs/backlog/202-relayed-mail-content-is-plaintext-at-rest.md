@@ -7,7 +7,7 @@ blocked-by: []
 # 202 — Relayed mail content is plaintext at rest
 
 **Summary.** Control stores the whole request body of every relayed message, IAM's sign-in links included, as plain
-text until the row is final. Encrypt it under the vault's key. P3, size M.
+text until the row is final. Encrypt it under the vault's key. P3, size M. Deferred by decision 2026-11-23.
 
 ## Problem
 
