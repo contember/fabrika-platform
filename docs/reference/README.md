@@ -17,6 +17,8 @@ behaviour.
   checks, identity in IAM, audit, isolation and secrets, each marked built or decided.
 - [`security-deployment.md`](security-deployment.md) — the gates a deploy passes before it serves traffic, who
   approves an access change, and what is decided but not built.
+- [`security-guarantees.md`](security-guarantees.md) — for whoever chooses or audits an installation: what the design
+  guarantees, what can go wrong scenario by scenario, and what stays with the organization.
 - [`installing-on-zerops.md`](installing-on-zerops.md) — the operator's procedure from an empty
   Zerops account to a serving application: prerequisites, the command order, and a check per step.
 - [`application-runtime.md`](application-runtime.md) — the `@fabrika/app` serving
