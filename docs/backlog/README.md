@@ -173,4 +173,5 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [292](292-boot-every-platform-worker-in-workerd.md): Only Control's Worker is booted in workerd by a test; a module-load error only workerd refuses in IAM's, Operations' or the runner's Worker reaches a live deploy.
 - [295](295-any-of-refuses-more-than-the-union.md): An `anyOf` endpoint refuses some work one of its held actions alone may do (several insert path conditions, `ctx.sql.scope`, own-read columns); nothing widens.
 - [297](297-control-accepts-any-default-branch.md): Control stores any string as an application's default branch, so a workspace branch or a name git refuses becomes what Deploy runs.
+- [298](298-a-list-cursor-with-edited-values-answers-500.md): A list cursor a client edited is not refused as the caller's 400: on Postgres a value the order column's type cannot parse answers 500, on SQLite it pages from the edited position.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.
