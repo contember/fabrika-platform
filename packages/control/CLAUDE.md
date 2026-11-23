@@ -343,7 +343,11 @@ other environment, before the provider prepares anything, and the write maps a r
   its record first, under the lease, and then its vault row; a ref not sealed under the key's own purpose is never
   deleted and its record stays. `opsKeysFor` answers the keys Control may present, the newest first and at most two (a
   pending key, then the accepted one), because a version can run although its run failed later; a caller tries each in
-  turn. Without a vault a gated deploy fails.
+  turn. Each key is bound to a domain (`app_env_ops_keys.domain`): a new key has none, and the provider's acceptance of
+  the deploy that handed it (`events.externalId`) binds it to that deploy's domain, never changed afterwards. `opsKeysFor`
+  answers only bound keys, so a domain the registry names but no provider deployed to receives no key; a deploy to
+  another domain than the accepted key's issues a new key, and replaces a pending key bound elsewhere. Without a vault a
+  gated deploy fails.
 - **No authored value may copy a framework-only variable, and no run log keeps a secret Control handed out.**
   `assertNoFrameworkReference` refuses an app variable or secret VALUE that references a
   `FRAMEWORK_VARIABLE_NAMES` name in any Zerops form (`${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, a
@@ -418,8 +422,9 @@ other environment, before the provider prepares anything, and the write maps a r
   reconcile the run start (`startedAtMs`, from `started_at ?? created_at`) so a provider can bound its polling.
 - **A data operation drives an environment's object under its `<app>:<env>` deploy lease (`src/data-operations.ts`,
   ADR-0069).** Control allocates every generation, records each step fenced on the lease, and calls the object only
-  through the injected `OpsTransport` (`httpOpsTransport`: the environment's domain, each ops key the running version
-  accepts as a bearer, newest first, the next one only after the uniform refusal; no redirect followed). A lost answer
+  through the injected `OpsTransport` (`httpOpsTransport`: each ops key the running version accepts as a bearer, at the
+  domain that key is bound to, never the registry's, newest first, the next one only after the uniform refusal; no key
+  bound to a domain is `no_channel`; no redirect followed). A lost answer
   repeats the same generation and mode. A successor (`advanceDataOperation`, or a recovery's resumed operation) first
   publishes a generation above every reserved one in the recorded mode. `advanceDataOperation` drives only the
   environment's newest running operation, and a succeeding recovery retires every operation still running in the chain
@@ -764,7 +769,8 @@ other environment, before the provider prepares anything, and the write maps a r
   and fails the run into its log. A restore's own deploy is exempt: it redeploys the running commit, and the restore's
   record names the run (`RestoreRepository.namesRun`), so an approved restore deploy queued again stays exempt.
   `requirePersonToPointTriggerRef` keeps a key from naming a protected environment's trigger ref (also on a new one that
-  starts protected, through `put` or `register`), and `requirePersonToRedirect` from changing any field of `apps.update`
+  starts protected, through `put` or `register`), `requirePersonToPointDomain` from naming its domain (`put`; clearing
+  it stays open), and `requirePersonToRedirect` from changing any field of `apps.update`
   on its app (ADR-0050 §4). `apps.update` writes only the fields that change, and a key's write is conditional in SQL
   on no protected environment (`updateApp` with `unlessProtected`). The flag and the counters outlive the row in `app_env_protection`; a
   change of the flag bumps `protection_revision` and `generation`, and a registry write bumps `generation`, so an

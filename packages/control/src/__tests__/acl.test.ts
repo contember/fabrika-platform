@@ -262,6 +262,52 @@ describe('ACL enforcement (resolved auth context)', () => {
 		expect((await person.repositories.registry.getAppEnv('app', 'prod'))?.trigger_ref).toBe('refs/heads/main')
 	})
 
+	test('only a person changes the domain of a protected environment', async () => {
+		const manager = authWithActions(['app.manage'], 'op@fabrika.test')
+		const service: AuthContext = { ...manager, principal: { id: 'svc', type: 'service', label: 'builder' } }
+		const agent: AuthContext = {
+			...manager,
+			oauth: { app: 'vozka', clientId: 'https://claude.ai/oauth/client.json', scopes: ['authoring'], grantId: 'g', tokenId: 't' },
+		}
+		const envelopes = {
+			target: { provider: 'harbor', version: 1, payload: { kind: 'target' } },
+			artifact: { provider: 'harbor', version: 1, payload: { kind: 'artifact' } },
+		}
+		const put = (env: string, domain?: string | null) =>
+			rpcRequest('apps.environments.put', { appId: 'app', env, environment: { ...envelopes, ...(domain === undefined ? {} : { domain }) } })
+		const seeded = async (auth: AuthContext) => {
+			const { deps } = makeDeps(auth)
+			await deps.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app' })
+			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod', { domain: 'app.example.com' }))
+			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'stage', { domain: 'stage.example.com' }))
+			return deps
+		}
+		const refusal = 'environment `prod` is protected: only a person changes its domain; an agent, a builder key or a service key cannot'
+
+		for (const caller of [service, agent]) {
+			const deps = await seeded(caller)
+			const moved = await rpcResult(put('prod', 'app.attacker.example'), deps)
+			expect(moved.status).toBe(403)
+			expect(await moved.text()).toContain(refusal)
+			expect((await deps.repositories.registry.getAppEnv('app', 'prod'))?.domain).toBe('app.example.com')
+			// A new environment that starts protected takes a person for its first domain too.
+			await deps.repositories.registry.deleteAppEnv('app', 'prod')
+			const created = await rpcResult(put('prod', 'app.attacker.example'), deps)
+			expect(created.status).toBe(403)
+			expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
+			// The same domain is no change, an unprotected environment takes a key, and clearing a domain stays open.
+			expect((await rpcResult(put('prod', 'app.example.com'), await seeded(caller))).status).toBe(200)
+			const other = await seeded(caller)
+			expect((await rpcResult(put('stage', 'next.example.com'), other)).status).toBe(200)
+			expect((await rpcResult(put('prod', null), other)).status).toBe(200)
+			expect((await other.repositories.registry.getAppEnv('app', 'prod'))?.domain).toBeNull()
+		}
+
+		const person = await seeded(manager)
+		expect((await rpcResult(put('prod', 'app.next.example'), person)).status).toBe(200)
+		expect((await person.repositories.registry.getAppEnv('app', 'prod'))?.domain).toBe('app.next.example')
+	})
+
 	test('a caller without deploy.trigger learns nothing of a protected environment', async () => {
 		const reader = authWithActions(['deploy.read'], 'r@fabrika.test')
 		const { deps } = makeDeps({ ...reader, principal: { id: 'svc', type: 'service', label: 'reader' } })

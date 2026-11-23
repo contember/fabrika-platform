@@ -12,6 +12,11 @@ export interface OpsKeyRow {
 	/** The newest run that handed the key while no running version accepted it. */
 	handed_by: string
 	created_at: number
+	/**
+	 * The domain of the first deploy that handed the key and that a provider accepted, the only one Control presents it to;
+	 * null until a provider accepted one.
+	 */
+	domain: string | null
 }
 
 /** A key with the status of the run that handed it: `succeeded` means the running version accepts the key. */
@@ -29,7 +34,7 @@ export class OpsKeyRepository {
 	async list(appId: string, env: string): Promise<OpsKeyRecord[]> {
 		const { results } = await this.d1
 			.prepare(
-				`SELECT k.app_id, k.env, k.key_id, k.value_ref, k.digest, k.handed_by, k.created_at, r.status AS handed_by_status
+				`SELECT k.app_id, k.env, k.key_id, k.value_ref, k.digest, k.handed_by, k.created_at, k.domain, r.status AS handed_by_status
 				FROM app_env_ops_keys k LEFT JOIN runs r ON r.id = k.handed_by
 				WHERE k.app_id = ? AND k.env = ?
 				ORDER BY k.created_at DESC, k.key_id DESC`,
@@ -44,9 +49,9 @@ export class OpsKeyRepository {
 		return this.#fenced(
 			row.app_id,
 			row.env,
-			`INSERT INTO app_env_ops_keys (app_id, env, key_id, value_ref, digest, handed_by, created_at)
-			SELECT ?, ?, ?, ?, ?, ?, ? WHERE ${leaseHeld} RETURNING key_id`,
-			[row.app_id, row.env, row.key_id, row.value_ref, row.digest, row.handed_by, row.created_at],
+			`INSERT INTO app_env_ops_keys (app_id, env, key_id, value_ref, digest, handed_by, created_at, domain)
+			SELECT ?, ?, ?, ?, ?, ?, ?, ? WHERE ${leaseHeld} RETURNING key_id`,
+			[row.app_id, row.env, row.key_id, row.value_ref, row.digest, row.handed_by, row.created_at, row.domain],
 			fence,
 		)
 	}
@@ -62,6 +67,25 @@ export class OpsKeyRepository {
 		)
 	}
 
+	/**
+	 * Binds the keys `runId` handed and no provider deploy bound yet to `domain`, the one a provider accepted that run's
+	 * deploy to; `false` when `fence` does not hold the environment's lease.
+	 */
+	async recordDeployed(appId: string, env: string, runId: string, domain: string, fence: LeaseFence): Promise<boolean> {
+		const key = runLeaseKey(appId, env)
+		const results = await this.d1.batch<{ lock_key: string }>([
+			this.d1.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ? RETURNING lock_key').bind(
+				key,
+				fence.holder,
+				fence.nowMs,
+			),
+			this.d1.prepare(
+				`UPDATE app_env_ops_keys SET domain = ? WHERE app_id = ? AND env = ? AND handed_by = ? AND domain IS NULL AND ${leaseHeld}`,
+			).bind(domain, appId, env, runId, key, fence.holder, fence.nowMs),
+		])
+		return (results[0]?.results.length ?? 0) > 0
+	}
+
 	async delete(appId: string, env: string, keyId: string, fence: LeaseFence): Promise<boolean> {
 		return this.#fenced(
 			appId,
@@ -72,7 +96,7 @@ export class OpsKeyRepository {
 		)
 	}
 
-	async #fenced(appId: string, env: string, sql: string, values: (string | number)[], fence: LeaseFence): Promise<boolean> {
+	async #fenced(appId: string, env: string, sql: string, values: (string | number | null)[], fence: LeaseFence): Promise<boolean> {
 		const key = runLeaseKey(appId, env)
 		// The lease row must stay locked through the write: an EXISTS alone races a takeover on Postgres.
 		const results = await this.d1.batch<{ key_id: string }>([

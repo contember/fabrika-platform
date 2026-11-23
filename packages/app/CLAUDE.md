@@ -823,6 +823,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   guard, the checker and the approval diff apply. A framework facility a handler calls (mail, a
   connector, IAM, the object store, the JWKS) runs through `platformCall`/`platformFacility`, outside the site's scope;
   a new facility that makes its own requests must too, or every site that uses it needs an egress it never declared.
+  A declared call goes out with `redirect: 'manual'` and the guard follows its redirects itself (`declaredFetch`, the
+  same `follow` loop public egress uses): each hop must be a declared origin (`undeclared_egress` otherwise), a 307 or
+  308 sends the buffered body again, a cross-origin hop drops the credential headers. Never hand a site's request to the
+  runtime with `follow`: a partner's redirect would carry its body and headers to any host.
   It is no sandbox: code that kept the `fetch` it found before boot, or opens sockets, escapes it.
 - **A cron job's `egress: 'public'` reaches public hosts only** (ADR-0075): `runAsSite` takes the job runner's
   `PublicEgressRules` (`publicEgressRules`: the hosts the framework variables and `FABRIKA_EGRESS_REFUSED_HOSTS` name,

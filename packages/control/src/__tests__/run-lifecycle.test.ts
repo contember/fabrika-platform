@@ -29,6 +29,7 @@ import { controlServiceDigest } from '../../fabrika.service'
 import { republishNamespace, runNamespaceJob } from '../api/namespaces'
 import { readProviderEnvelope } from '../api/provider-envelope'
 import { getRunLogUseCase } from '../api/runs'
+import { httpOpsTransport } from '../data-operations'
 import type { ControlRepositories, RunRow } from '../db'
 import { OperationsReleaseRepository } from '../db'
 import type { Env } from '../env'
@@ -1236,10 +1237,11 @@ describe('provider-neutral run lifecycle', () => {
 		const digests = await deploy(gatedRun, true)
 		const [issued] = await db.opsKeys.list('app', 'prod')
 		expect(issued?.handed_by).toBe(gatedRun)
+		expect(issued?.domain).toBe('app.example.com')
 		expect(digests).toBe(issued?.digest)
 		expect(parseOpsKeyDigests(digests ?? '')).toEqual([issued?.digest ?? ''])
 		// The issuing deploy succeeded, so Control calls with the key whose digest it handed; a digest is no credential.
-		expect((await opsKeys.opsKeysFor('app', 'prod')).map(opsKeyDigest)).toEqual([issued?.digest])
+		expect((await opsKeys.opsKeysFor('app', 'prod')).map(({ key }) => opsKeyDigest(key))).toEqual([issued?.digest])
 		expect(handedInput?.managedEnvironment[FABRIKA_OPS_KEY_DIGESTS]?.credential).toBe(false)
 
 		// A dry run issues nothing and hands nothing.
@@ -1300,6 +1302,42 @@ describe('provider-neutral run lifecycle', () => {
 		}
 		expect(sent.map(({ url }) => url)).toEqual(['https://app.example.com/__fabrika/ops/inspect'])
 		expect(opsKeyDigest((sent[0]?.authorization ?? '').replace(/^Bearer /, ''))).toBe(issued?.digest ?? '')
+	})
+
+	test('after the domain changes, Control sends the ops key to the new domain only once a provider deployed it there', async () => {
+		const { db, sqlite } = createHarness()
+		const opsKeys = new VaultOpsKeys(db.opsKeys, () => Promise.resolve(vault))
+		const inputs: ProviderDeployInput[] = []
+		const accepting = { ...makeProvider(inputs, { state: 'succeeded' }), opsChannel: () => true }
+		const sent: { url: string; digest: string }[] = []
+		const transport = httpOpsTransport({
+			opsKeysFor: (appId, env) => opsKeys.opsKeysFor(appId, env),
+			fetch: (url, init) => {
+				sent.push({ url, digest: opsKeyDigest((new Headers(init.headers).get('authorization') ?? '').replace(/^Bearer /, '')) })
+				return Promise.resolve(new Response(null, { status: 404 }))
+			},
+		})
+		const inspect = async () => {
+			sent.length = 0
+			await transport.inspect({ appId: 'app', env: 'prod' }, { object: 'application', content: false }, new AbortController().signal)
+			return sent.map(({ url, digest }) => [new URL(url).host, digest])
+		}
+		expect((await executeDeploy({ ...makeDeps(db, accepting), opsKeys }, { runId: await seedRun(db) })).status).toBe('succeeded')
+		const [first] = await db.opsKeys.list('app', 'prod')
+		expect(await inspect()).toEqual([['app.example.com', first?.digest]])
+
+		// Whoever changes the registry's domain receives nothing: the key goes to the domain it was deployed to.
+		sqlite.query(`UPDATE app_envs SET domain = 'moved.example.com' WHERE app_id = 'app' AND env = 'prod'`).run()
+		expect(await inspect()).toEqual([['app.example.com', first?.digest]])
+		// A deploy there that no provider accepted hands a new key, which still goes nowhere.
+		const refusing = { ...accepting, deploy: () => Promise.reject(new Error('the provider refused the deploy')) }
+		expect((await executeDeploy({ ...makeDeps(db, refusing), opsKeys }, { runId: await createNextRun(db) })).status).toBe('failed')
+		const [pending] = await db.opsKeys.list('app', 'prod')
+		expect(pending?.digest).not.toBe(first?.digest)
+		expect(await inspect()).toEqual([['app.example.com', first?.digest]])
+		// Once a provider deployed it to the new domain, the key goes there.
+		expect((await executeDeploy({ ...makeDeps(db, accepting), opsKeys }, { runId: await createNextRun(db) })).status).toBe('succeeded')
+		expect(await inspect()).toEqual([['moved.example.com', pending?.digest]])
 	})
 
 	test('refuses a gated deploy when Control can keep no ops key, and a dry run needs none', async () => {

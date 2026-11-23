@@ -261,7 +261,9 @@ describe('the guard under public egress', () => {
 			.toMatchObject({ reason: 'undeclared_egress' })
 		const bunOnly = JSON.parse('{"unix":"/var/run/docker.sock","proxy":"http://10.0.0.1:3128","method":"POST","body":"x"}')
 		await runAsSite(site, ['https://api.example.com'], () => fetch('https://api.example.com/v1', bunOnly))
-		expect(calls.map((call) => call.init)).toEqual([{ method: 'POST', body: 'x' }])
+		const [sent] = calls
+		expect(Object.keys(sent?.init ?? {}).sort()).toEqual(['body', 'headers', 'method', 'redirect', 'signal'])
+		expect(sent?.init).toMatchObject({ method: 'POST', redirect: 'manual' })
 	})
 
 	test('a 303 turns a POST into a GET without its body; a 307 sends the body again', async () => {
