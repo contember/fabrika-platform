@@ -117,7 +117,7 @@ async function setup() {
 		ENV,
 	).run()
 	const env = await object()
-	const ops = httpOpsTransport({ registry: harness.repositories.registry, opsKeysFor: () => Promise.resolve([OPS_KEY]), fetch: env.fetch })
+	const ops = httpOpsTransport({ opsKeysFor: () => Promise.resolve([{ key: OPS_KEY, domain: 'prod.crm.example.com' }]), fetch: env.fetch })
 	const deps = (passSpent?: () => boolean): DataOperationDeps => ({
 		repositories: harness.repositories,
 		lock: new SqlDeployLocks(harness.d1),

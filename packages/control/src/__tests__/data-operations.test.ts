@@ -31,6 +31,7 @@ import {
 } from '../data-operations'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import { acquireLease, LEASE_TTL_MS, runLeaseKey } from '../lease'
+import type { OpsKey } from '../ops-key'
 import { executeDeploy, executeDeployUnderLease, type RunDeps } from '../run-lifecycle'
 import { VaultSecretResolver } from '../secret-resolver'
 import type { ControlRpcDeps } from '../services'
@@ -530,16 +531,13 @@ describe('the HTTP ops transport', () => {
 	}
 
 	/** `answer` builds each response afresh, from the key the request carried. */
-	async function transport(answer: (key: string) => Response, options: { domain?: string | null; keys?: readonly string[] } = {}) {
-		const repositories = createHarness().repositories
-		await repositories.registry.createApp({ id: APP, repoUrl: 'github.com/acme/crm' })
-		await repositories.registry.upsertAppEnv(
-			providerEnvironment(APP, ENV, { domain: options.domain === undefined ? 'crm.example.com' : options.domain }),
-		)
+	/** Each key is bound to `domain` unless it names its own. */
+	async function transport(answer: (key: string) => Response, options: { domain?: string; keys?: readonly (string | OpsKey)[] } = {}) {
+		const domain = options.domain ?? 'crm.example.com'
+		const keys = (options.keys ?? ['ops-key']).map((key) => typeof key === 'string' ? { key, domain } : key)
 		const sent: Sent[] = []
 		const ops = httpOpsTransport({
-			registry: repositories.registry,
-			opsKeysFor: () => Promise.resolve(options.keys ?? ['ops-key']),
+			opsKeysFor: () => Promise.resolve(keys),
 			fetch: (url, init) => {
 				const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
 				const authorization = new Headers(init.headers).get('authorization')
@@ -572,13 +570,21 @@ describe('the HTTP ops transport', () => {
 		expect(sent.map((request) => request.authorization)).toEqual(['Bearer newest-key', 'Bearer previous-key'])
 	})
 
-	test('every candidate refused, or none at all, fails as an unreachable object would', async () => {
+	test('every candidate refused fails as an unreachable object would', async () => {
 		const refused = await transport(refusal, { keys: ['newest-key', 'previous-key'] })
 		expect(await refused.ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'unreachable' })
 		expect(refused.sent).toHaveLength(2)
-		const none = await transport(ack, { keys: [] })
-		expect(await none.ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'unreachable' })
-		expect(none.sent).toEqual([])
+	})
+
+	test('each key goes only to the domain it was deployed to, whatever the registry names now', async () => {
+		const { ops, sent } = await transport(refusal, {
+			keys: [{ key: 'newest-key', domain: 'next.example.com' }, { key: 'previous-key', domain: 'crm.example.com' }],
+		})
+		expect(await ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'unreachable' })
+		expect(sent.map((request) => [request.url, request.authorization])).toEqual([
+			['https://next.example.com/__fabrika/ops/state', 'Bearer newest-key'],
+			['https://crm.example.com/__fabrika/ops/state', 'Bearer previous-key'],
+		])
 	})
 
 	test('any answer but the uniform refusal is final: no other key is tried', async () => {
@@ -606,10 +612,12 @@ describe('the HTTP ops transport', () => {
 		expect(await ops.inspect(TARGET, { object: 'application', content: false }, signal)).toEqual({ kind: 'unavailable', reason: 'invalid_answer' })
 	})
 
-	test('an environment without a domain has no channel, and nothing is sent', async () => {
-		const { ops, sent } = await transport(ack, { domain: null })
-		expect(await ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'no_channel' })
-		expect(sent).toEqual([])
+	test('without a key deployed to a domain there is no channel, and nothing is sent', async () => {
+		for (const keys of [[], [{ key: 'ops-key', domain: 'crm.example.com/path' }]]) {
+			const { ops, sent } = await transport(ack, { keys })
+			expect(await ops.state(TARGET, transition, signal)).toEqual({ kind: 'unavailable', reason: 'no_channel' })
+			expect(sent).toEqual([])
+		}
 	})
 })
 

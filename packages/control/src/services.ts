@@ -140,7 +140,7 @@ export function opsKeyDeps(env: Env): { opsKeys?: OpsKeysPort } {
 export function opsTransportDeps(env: Env): { opsTransport?: OpsTransport } {
 	const { opsKeys } = opsKeyDeps(env)
 	if (opsKeys === undefined) return {}
-	return { opsTransport: httpOpsTransport({ registry: repositories(env).registry, opsKeysFor: (appId, name) => opsKeys.opsKeysFor(appId, name) }) }
+	return { opsTransport: httpOpsTransport({ opsKeysFor: (appId, name) => opsKeys.opsKeysFor(appId, name) }) }
 }
 
 /**

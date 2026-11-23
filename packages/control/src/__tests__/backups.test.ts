@@ -596,8 +596,7 @@ describe('the HTTP ops transport for dumps', () => {
 		await repositories.registry.upsertAppEnv(providerEnvironment(APP, ENV, { domain: 'crm.example.com' }))
 		const urls: string[] = []
 		const ops = httpOpsTransport({
-			registry: repositories.registry,
-			opsKeysFor: () => Promise.resolve(['ops-key']),
+			opsKeysFor: () => Promise.resolve([{ key: 'ops-key', domain: 'crm.example.com' }]),
 			fetch: (url) => {
 				urls.push(url)
 				return Promise.resolve(answer())

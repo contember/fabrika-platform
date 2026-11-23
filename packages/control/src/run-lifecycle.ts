@@ -955,7 +955,12 @@ async function deployUnder(
 		const approvedAccess = registration.environment.access
 		const hasDomain = appEnv.domain !== null && appEnv.domain !== ''
 		const opsChannel = !dryRun && hasDomain && approvedAccess !== undefined && deps.provider.opsChannel?.(approvedAccess) === true
-		managedEnvironment[FABRIKA_OPS_KEY_DIGESTS] = opsChannel ? await reconcileOpsKey(deps, app.id, appEnv.env, runId, invocation) : null
+		// Once a provider accepts this deploy, the keys it hands are bound to its domain, and Control presents them nowhere else.
+		const deployedDomain = registration.environment.domain ?? null
+		const opsKeyDomain = opsChannel ? deployedDomain : null
+		managedEnvironment[FABRIKA_OPS_KEY_DIGESTS] = opsKeyDomain === null
+			? null
+			: await reconcileOpsKey(deps, app.id, appEnv.env, runId, opsKeyDomain, invocation)
 		// A release can serve the channel (`inspect`) without the barrier, whose `state` and `migrate` the phase needs.
 		const barrier = opsChannel && deps.provider.dataOperations?.(approvedAccess) === true
 		// Once the run succeeds, this is what the next deploy reads to know whether the running version holds the barrier.
@@ -1057,6 +1062,7 @@ async function deployUnder(
 							if (providerState !== undefined) serializeProviderJson(providerState)
 							await invocation.write((fence) => runs.recordInitialRunExternalId(runId, externalId, providerState, fence))
 							accepted = true
+							if (opsKeyDomain !== null) await deps.opsKeys?.recordDeployed(app.id, appEnv.env, runId, opsKeyDomain, invocation)
 							const acceptedRun = await invocation.boundary()
 							if (deps.operations !== undefined) {
 								await projectOperationsRun(deps.operations, acceptedRun, { dryRun, phase: 'provider_accepted', artifactState: 'pending' })

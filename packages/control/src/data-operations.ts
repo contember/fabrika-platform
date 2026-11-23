@@ -72,7 +72,6 @@ import type {
 	BackupCheckpoint,
 	BackupPartRow,
 	BackupRow,
-	ControlRegistryRepository,
 	ControlRepositories,
 	DataOperationAdvance,
 	DataOperationInput,
@@ -84,6 +83,7 @@ import type {
 	RunRow,
 } from './db'
 import { acquireLease, type Lease, type LeaseClock, runLeaseKey } from './lease'
+import type { OpsKey } from './ops-key'
 
 /** The environment an ops request goes to. */
 export interface OpsTarget {
@@ -1811,13 +1811,18 @@ function parseRecorded(text: string): unknown {
 }
 
 export interface HttpOpsTransportDeps {
-	registry: Pick<ControlRegistryRepository, 'getAppEnv'>
-	/** The plaintext ops keys to try, newest first, at most two; empty while none is issued. Never logged. */
-	opsKeysFor(appId: string, env: string): Promise<readonly string[]>
+	/**
+	 * The plaintext ops keys to try, newest first, at most two, each with the domain a deploy handed it to; empty while
+	 * none is issued. Never logged.
+	 */
+	opsKeysFor(appId: string, env: string): Promise<readonly OpsKey[]>
 	fetch?: (input: string, init: RequestInit) => Promise<Response>
 }
 
-/** The ops channel over HTTPS: `POST https://<environment domain>/__fabrika/ops/<operation>` with the ops key. */
+/**
+ * The ops channel over HTTPS: `POST https://<domain>/__fabrika/ops/<operation>` with an ops key, at the domain that key
+ * was deployed to, never the one the registry names now (a domain changed since the last deploy receives no key).
+ */
 export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 	const send = deps.fetch ?? ((input: string, init: RequestInit) => fetch(input, init))
 
@@ -1827,11 +1832,13 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 		body: OpsRequest,
 		signal: AbortSignal,
 	): Promise<{ readonly status: number; readonly body: unknown } | OpsUnavailable> {
-		const row = await deps.registry.getAppEnv(target.appId, target.env)
-		const origin = row === null ? null : channelOrigin(row.domain)
-		if (origin === null) return 'no_channel'
+		const keys = (await deps.opsKeysFor(target.appId, target.env)).flatMap(({ key, domain }) => {
+			const origin = channelOrigin(domain)
+			return origin === null ? [] : [{ key, origin }]
+		})
+		if (keys.length === 0) return 'no_channel'
 		// While a rotation reconciles the running version accepts either key; its uniform refusal moves on to the next.
-		for (const key of await deps.opsKeysFor(target.appId, target.env)) {
+		for (const { key, origin } of keys) {
 			const answer = await attempt(origin, operation, body, key, signal)
 			if (answer !== 'refused') return answer
 		}

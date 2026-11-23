@@ -4,7 +4,9 @@
 // `FABRIKA_OPS_KEY_DIGESTS`. A digest has no clock expiry: a gated deploy rotates a key once it is 15 days old and hands
 // the old digest beside the new one, and the old key goes only once a deploy that carried the new one succeeded, so a
 // failed deploy leaves the running version and the key Control holds for it usable. Every record write is fenced on the
-// deploy's lease. The key is never logged and never returned over the API.
+// deploy's lease. A key is bound to the domain of the first deploy a provider accepted that handed it, and Control
+// presents it there only: a deploy to another domain issues a new key, so a domain the registry names but no provider
+// deployed to never receives one. The key is never logged and never returned over the API.
 
 import { appEnvironmentId, formatOpsKeyDigests, opsKeyDigest } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
@@ -23,19 +25,28 @@ export interface OpsKeyWrites {
 	write(mutation: (fence: LeaseFence) => Promise<boolean>): Promise<void>
 }
 
+/** An ops key and the domain a provider deployed it to, the only one Control presents it to. Never logged. */
+export interface OpsKey {
+	readonly key: string
+	readonly domain: string
+}
+
 export interface OpsKeysPort {
 	/**
-	 * The value of `FABRIKA_OPS_KEY_DIGESTS` for deploy `runId` at a release that serves the channel: the key the running
-	 * version accepts, and a newer one while a rotation waits for a deploy that carries it to succeed. Issues the first
-	 * key, rotates one 15 days old, and drops the previous key once a deploy that carried the newer one succeeded.
+	 * The value of `FABRIKA_OPS_KEY_DIGESTS` for deploy `runId` to `domain` at a release that serves the channel: the key
+	 * the running version accepts, and a newer one while a rotation waits for a deploy that carries it to succeed. Issues
+	 * the first key, rotates one 15 days old or bound to another domain, and drops the previous key once a deploy that
+	 * carried the newer one succeeded.
 	 */
-	reconcile(appId: string, env: string, runId: string, invocation: OpsKeyWrites): Promise<string>
+	reconcile(appId: string, env: string, runId: string, domain: string, invocation: OpsKeyWrites): Promise<string>
+	/** Binds the keys deploy `runId` handed to `domain`, once a provider accepted that deploy; a bound key keeps its domain. */
+	recordDeployed(appId: string, env: string, runId: string, domain: string, invocation: OpsKeyWrites): Promise<void>
 	/**
 	 * The keys Control may present to the environment's object, the newest first and at most two: a key a deploy handed
 	 * that has not succeeded yet, then the one the last succeeded deploy carried. A version can be active although its
-	 * run failed later (an IAM reconcile), so a caller tries each in turn until one is not refused.
+	 * run failed later (an IAM reconcile), so a caller tries each in turn, at its own domain, until one is not refused.
 	 */
-	opsKeysFor(appId: string, env: string): Promise<string[]>
+	opsKeysFor(appId: string, env: string): Promise<OpsKey[]>
 }
 
 /** The `{ scope, label }` an ops key is sealed under — the only record of which environment owns its vault row. */
@@ -62,26 +73,33 @@ export async function reconcileOpsKey(
 	appId: string,
 	env: string,
 	runId: string,
+	domain: string,
 	invocation: OpsKeyWrites,
 ): Promise<string> {
 	if (deps.opsKeys === undefined) {
 		throw new Error("the application's release serves the ops channel, and this installation cannot keep its key (it needs FABRIKA_CONTROL_VAULT_KEY)")
 	}
-	return deps.opsKeys.reconcile(appId, env, runId, invocation)
+	return deps.opsKeys.reconcile(appId, env, runId, domain, invocation)
 }
 
 export class VaultOpsKeys implements OpsKeysPort {
 	constructor(
-		private readonly records: Pick<OpsKeyRepository, 'list' | 'insert' | 'handTo' | 'delete'>,
+		private readonly records: Pick<OpsKeyRepository, 'list' | 'insert' | 'handTo' | 'recordDeployed' | 'delete'>,
 		private readonly vault: () => Promise<Vault>,
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
 	) {}
 
-	async reconcile(appId: string, env: string, runId: string, invocation: OpsKeyWrites): Promise<string> {
+	async reconcile(appId: string, env: string, runId: string, domain: string, invocation: OpsKeyWrites): Promise<string> {
 		const rows = await this.records.list(appId, env)
 		const vault = await this.vault()
-		const kept = current(rows)
+		let kept = current(rows)
 		for (const row of rows.slice(kept.length)) await this.#drop(vault, row, invocation)
+		const pending = kept[0]
+		if (pending !== undefined && !accepted(pending) && pending.domain !== null && pending.domain !== domain) {
+			// A pending key a provider deployed elsewhere stays bound there; this deploy's domain gets a key of its own.
+			if (!(await this.#drop(vault, pending, invocation))) throw new Error(`the pending ops key of ${appId}/${env} cannot be dropped`)
+			kept = kept.slice(1)
+		}
 		const newest = kept[0]
 		if (newest === undefined) {
 			return formatOpsKeyDigests([await this.#issue(vault, appId, env, runId, invocation)])
@@ -89,7 +107,7 @@ export class VaultOpsKeys implements OpsKeysPort {
 		if (!accepted(newest)) {
 			// The run that handed it did not succeed; this one hands it again, and a pending key never rotates.
 			await invocation.write((fence) => this.records.handTo(appId, env, newest.key_id, runId, fence))
-		} else if (this.now() - newest.created_at >= OPS_KEY_ROTATE_AFTER_SECONDS) {
+		} else if (newest.domain !== domain || this.now() - newest.created_at >= OPS_KEY_ROTATE_AFTER_SECONDS) {
 			return formatOpsKeyDigests([newest.digest, await this.#issue(vault, appId, env, runId, invocation)])
 		}
 		const [first, second, ...rest] = [...kept].reverse().map((row) => row.digest)
@@ -97,36 +115,48 @@ export class VaultOpsKeys implements OpsKeysPort {
 		return formatOpsKeyDigests(second === undefined ? [first] : [first, second])
 	}
 
-	async opsKeysFor(appId: string, env: string): Promise<string[]> {
+	async recordDeployed(appId: string, env: string, runId: string, domain: string, invocation: OpsKeyWrites): Promise<void> {
+		await invocation.write((fence) => this.records.recordDeployed(appId, env, runId, domain, fence))
+	}
+
+	async opsKeysFor(appId: string, env: string): Promise<OpsKey[]> {
 		const candidates = current(await this.records.list(appId, env)).slice(0, 2)
 		if (candidates.length === 0) return []
 		const vault = await this.vault()
-		const keys: string[] = []
-		for (const row of candidates) keys.push(await vault.getSecretForPurpose(row.value_ref, opsKeyPurpose(appId, env, row.key_id)))
+		const keys: OpsKey[] = []
+		for (const row of candidates) {
+			// A key no provider deployed yet is held by no version, so it goes nowhere.
+			if (row.domain === null) continue
+			keys.push({ key: await vault.getSecretForPurpose(row.value_ref, opsKeyPurpose(appId, env, row.key_id)), domain: row.domain })
+		}
 		return keys
 	}
 
-	/** Deletes a key no running version holds: its record under the lease, then its vault row, only if the row is the key's. */
-	async #drop(vault: Vault, row: OpsKeyRecord, invocation: OpsKeyWrites): Promise<void> {
+	/**
+	 * Deletes a key no running version holds: its record under the lease, then its vault row, only if the row is the
+	 * key's. False when the record is kept.
+	 */
+	async #drop(vault: Vault, row: OpsKeyRecord, invocation: OpsKeyWrites): Promise<boolean> {
 		try {
 			await vault.getSecretForPurpose(row.value_ref, opsKeyPurpose(row.app_id, row.env, row.key_id))
 		} catch {
 			// A ref that is not this key's points at another credential, or at none: keep the record and touch no vault row.
 			console.error(`ops key ${row.key_id} of ${row.app_id}/${row.env} is not sealed under its own purpose; its record is kept`)
-			return
+			return false
 		}
 		await invocation.write((fence) => this.records.delete(row.app_id, row.env, row.key_id, fence))
 		await vault.delete(row.value_ref)
+		return true
 	}
 
-	/** A new key handed by `runId`, sealed and recorded under the lease; its digest. */
+	/** A new key handed by `runId`, sealed and recorded under the lease, bound to no domain yet; its digest. */
 	async #issue(vault: Vault, appId: string, env: string, runId: string, invocation: OpsKeyWrites): Promise<string> {
 		const keyId = uuidv7()
 		const key = generateOpsKey()
 		const purpose = opsKeyPurpose(appId, env, keyId)
 		const ref = await vault.putSecret(purpose.scope, purpose.label, key)
 		const digest = opsKeyDigest(key)
-		const row = { app_id: appId, env, key_id: keyId, value_ref: ref, digest, handed_by: runId, created_at: this.now() }
+		const row = { app_id: appId, env, key_id: keyId, value_ref: ref, digest, handed_by: runId, created_at: this.now(), domain: null }
 		try {
 			await invocation.write((fence) => this.records.insert(row, fence))
 		} catch (error) {

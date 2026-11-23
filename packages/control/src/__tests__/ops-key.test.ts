@@ -15,6 +15,7 @@ const KEY = btoa(String.fromCharCode(...new Uint8Array(32).fill(9)))
 const T0 = 1_800_000_000
 const DAY = 86_400
 const LEASE = 'notes:prod'
+const DOMAIN = 'notes.example.com'
 
 /** The ops keys of `notes/prod` over `db`, and gated deploys that reconcile them under the environment's lease. */
 async function environment(db: SqlDatabase, repositories: ControlRepositories) {
@@ -51,9 +52,12 @@ async function environment(db: SqlDatabase, repositories: ControlRepositories) {
 		}
 	}
 	/** One gated deploy: reconcile under a new run and its lease, then settle it. */
-	const deploy = async (status: 'succeeded' | 'failed', using: VaultOpsKeys = keys): Promise<readonly string[]> => {
+	const deploy = async (status: 'succeeded' | 'failed', using: VaultOpsKeys = keys, domain = DOMAIN, accepted = true): Promise<readonly string[]> => {
 		const id = await run()
-		const digests = parseOpsKeyDigests(await using.reconcile('notes', 'prod', id, await holding(id)))
+		const writes = await holding(id)
+		const digests = parseOpsKeyDigests(await using.reconcile('notes', 'prod', id, domain, writes))
+		// A provider accepted the deploy, so the keys it handed are bound to its domain.
+		if (accepted) await using.recordDeployed('notes', 'prod', id, domain, writes)
 		await locks.release(LEASE, id)
 		if (digests === null) throw new Error('reconcile handed an invalid digest list')
 		await settle(id, status)
@@ -71,9 +75,12 @@ describe('VaultOpsKeys', () => {
 	test('the first gated deploy issues one key, sealed in the vault, and hands only its digest', async () => {
 		const { harness, keys, run, holding } = await setup()
 		const runId = await run()
-		const handed = await keys.reconcile('notes', 'prod', runId, await holding(runId))
+		const handed = await keys.reconcile('notes', 'prod', runId, DOMAIN, await holding(runId))
 		const [row] = queryRows(harness.sqlite, 'SELECT * FROM app_env_ops_keys')
 		expect(row?.['handed_by']).toBe(runId)
+		// No provider accepted the deploy yet, so the key goes nowhere.
+		expect(row?.['domain']).toBeNull()
+		expect(await keys.opsKeysFor('notes', 'prod')).toEqual([])
 		expect(handed).toBe(String(row?.['digest']))
 		expect(queryRows(harness.sqlite, 'SELECT label FROM vault').map((entry) => entry['label'])).toEqual([
 			opsKeyPurpose('notes', 'prod', String(row?.['key_id'])).label,
@@ -84,11 +91,12 @@ describe('VaultOpsKeys', () => {
 		const { harness, keys, deploy } = await setup()
 		const [digest] = await deploy('failed')
 		const candidates = await keys.opsKeysFor('notes', 'prod')
-		expect(candidates.map(opsKeyDigest)).toEqual([digest])
-		expect(candidates[0]).toMatch(/^ok_[A-Za-z0-9_-]{43}$/)
+		expect(candidates.map(({ key }) => opsKeyDigest(key))).toEqual([digest])
+		expect(candidates[0]?.key).toMatch(/^ok_[A-Za-z0-9_-]{43}$/)
+		expect(candidates[0]?.domain).toBe(DOMAIN)
 		// The plaintext is sealed: no table holds a copy of it.
 		const tables = [...queryRows(harness.sqlite, 'SELECT * FROM vault'), ...queryRows(harness.sqlite, 'SELECT * FROM app_env_ops_keys')]
-		expect(JSON.stringify(tables)).not.toContain((candidates[0] ?? '').slice(3))
+		expect(JSON.stringify(tables)).not.toContain((candidates[0]?.key ?? '').slice(3))
 	})
 
 	test('later gated deploys hand the same key until it is 15 days old', async () => {
@@ -110,7 +118,7 @@ describe('VaultOpsKeys', () => {
 		expect(fresh).not.toBe(old)
 		clock.now = T0 + 16 * DAY
 		expect(await deploy('succeeded')).toEqual([fresh ?? ''])
-		expect((await keys.opsKeysFor('notes', 'prod')).map(opsKeyDigest)).toEqual([fresh])
+		expect((await keys.opsKeysFor('notes', 'prod')).map(({ key }) => opsKeyDigest(key))).toEqual([fresh])
 	})
 
 	test('a rotation yields the candidates [new, old]', async () => {
@@ -118,7 +126,7 @@ describe('VaultOpsKeys', () => {
 		const [old] = await deploy('succeeded')
 		clock.now = T0 + 20 * DAY
 		const [, fresh] = await deploy('failed')
-		expect((await keys.opsKeysFor('notes', 'prod')).map(opsKeyDigest)).toEqual([fresh, old])
+		expect((await keys.opsKeysFor('notes', 'prod')).map(({ key }) => opsKeyDigest(key))).toEqual([fresh, old])
 	})
 
 	test('a failed rotating deploy keeps the old key, and the next deploy hands both again without rotating further', async () => {
@@ -128,9 +136,43 @@ describe('VaultOpsKeys', () => {
 		const rotated = await deploy('failed')
 		expect(rotated[0]).toBe(old)
 		expect(await deploy('failed')).toEqual(rotated)
-		expect((await keys.opsKeysFor('notes', 'prod')).map(opsKeyDigest)).toEqual([rotated[1], old])
+		expect((await keys.opsKeysFor('notes', 'prod')).map(({ key }) => opsKeyDigest(key))).toEqual([rotated[1], old])
 		expect(await deploy('succeeded')).toEqual(rotated)
 		expect(await deploy('succeeded')).toEqual([rotated[1] ?? ''])
+	})
+
+	test('a key goes only to the domain a provider deployed it to, and a deploy to another domain issues a new key', async () => {
+		const { keys, deploy } = await setup()
+		const [first] = await deploy('succeeded')
+		const candidates = async () => (await keys.opsKeysFor('notes', 'prod')).map(({ key, domain }) => [opsKeyDigest(key), domain])
+		expect(await candidates()).toEqual([[first, DOMAIN]])
+		// The registry moved to a new domain: its deploy hands the running key and a new one, which goes nowhere until a
+		// provider accepted a deploy there.
+		const moved = await deploy('failed', keys, 'moved.example.com', false)
+		expect(moved).toEqual([first ?? '', moved[1] ?? ''])
+		expect(moved[1]).not.toBe(first)
+		expect(await candidates()).toEqual([[first, DOMAIN]])
+		expect(await deploy('failed', keys, 'moved.example.com')).toEqual(moved)
+		expect(await candidates()).toEqual([[moved[1], 'moved.example.com'], [first, DOMAIN]])
+		// A deploy to a third domain replaces that pending key with one of its own; the first key stays where it runs.
+		const again = await deploy('failed', keys, 'third.example.com')
+		expect(again[0]).toBe(first)
+		expect(again[1]).not.toBe(moved[1])
+		expect(await candidates()).toEqual([[again[1], 'third.example.com'], [first, DOMAIN]])
+		// Once it succeeded there, the new key is the only candidate, and only at its domain.
+		expect(await deploy('succeeded', keys, 'third.example.com')).toEqual(again)
+		expect(await candidates()).toEqual([[again[1], 'third.example.com']])
+		expect(await deploy('succeeded', keys, 'third.example.com')).toEqual([again[1] ?? ''])
+	})
+
+	test('a key no provider deployed reaches no channel until a deploy that a provider accepted binds a new one', async () => {
+		const { harness, keys, deploy } = await setup()
+		const [first] = await deploy('succeeded')
+		harness.sqlite.query('UPDATE app_env_ops_keys SET domain = NULL').run()
+		expect(await keys.opsKeysFor('notes', 'prod')).toEqual([])
+		const handed = await deploy('succeeded')
+		expect(handed).toEqual([first ?? '', handed[1] ?? ''])
+		expect((await keys.opsKeysFor('notes', 'prod')).map(({ key, domain }) => [opsKeyDigest(key), domain])).toEqual([[handed[1], DOMAIN]])
 	})
 
 	test("a dropped key's vault row goes with its record", async () => {
@@ -162,7 +204,7 @@ describe('VaultOpsKeys', () => {
 		const [, fresh] = await deploy('failed')
 		// A dry run issues nothing, so its success says nothing about the keys.
 		await settle(await run(), 'succeeded')
-		expect((await keys.opsKeysFor('notes', 'prod')).map(opsKeyDigest)).toEqual([fresh, old])
+		expect((await keys.opsKeysFor('notes', 'prod')).map(({ key }) => opsKeyDigest(key))).toEqual([fresh, old])
 		expect(await deploy('failed')).toEqual([old ?? '', fresh ?? ''])
 	})
 
@@ -186,7 +228,7 @@ describe('VaultOpsKeys', () => {
 		// Holder A reads the pending rotation, then pauses before it hands the pending key again.
 		const read = Promise.withResolvers<void>()
 		const resume = Promise.withResolvers<void>()
-		const pausing: Pick<OpsKeyRepository, 'list' | 'insert' | 'handTo' | 'delete'> = {
+		const pausing: Pick<OpsKeyRepository, 'list' | 'insert' | 'handTo' | 'recordDeployed' | 'delete'> = {
 			list: async (appId, env) => {
 				const rows = await opsKeys.list(appId, env)
 				read.resolve()
@@ -195,10 +237,17 @@ describe('VaultOpsKeys', () => {
 			},
 			insert: (row, fence) => opsKeys.insert(row, fence),
 			handTo: (appId, env, keyId, runId, fence) => opsKeys.handTo(appId, env, keyId, runId, fence),
+			recordDeployed: (appId, env, runId, domain, fence) => opsKeys.recordDeployed(appId, env, runId, domain, fence),
 			delete: (appId, env, keyId, fence) => opsKeys.delete(appId, env, keyId, fence),
 		}
 		const runA = await run()
-		const reconcileA = new VaultOpsKeys(pausing, () => Promise.resolve(vault), () => clock.now).reconcile('notes', 'prod', runA, await holding(runA))
+		const reconcileA = new VaultOpsKeys(pausing, () => Promise.resolve(vault), () => clock.now).reconcile(
+			'notes',
+			'prod',
+			runA,
+			DOMAIN,
+			await holding(runA),
+		)
 		await read.promise
 		// A loses its lease and is failed; B hands the pending key and succeeds; C drops the old key.
 		harness.sqlite.query('UPDATE deploy_locks SET expires_at = 0 WHERE lock_key = ?').run(LEASE)
@@ -210,14 +259,14 @@ describe('VaultOpsKeys', () => {
 		await expect(reconcileA).rejects.toThrow('lease_lost')
 		// The key the running version accepts still names the run that succeeded with it, not failed A.
 		expect(queryRows(harness.sqlite, 'SELECT handed_by FROM app_env_ops_keys')).toEqual([handedByB ?? {}])
-		expect((await keys.opsKeysFor('notes', 'prod')).map(opsKeyDigest)).toEqual([fresh])
+		expect((await keys.opsKeysFor('notes', 'prod')).map(({ key }) => opsKeyDigest(key))).toEqual([fresh])
 	})
 })
 
 describe('reconcileOpsKey', () => {
 	test('an installation without a vault cannot keep an ops key, so a gated deploy fails', async () => {
 		const writes: OpsKeyWrites = { write: () => Promise.reject(new Error('no write expected')) }
-		await expect(reconcileOpsKey({}, 'notes', 'prod', uuidv7(), writes)).rejects.toThrow('FABRIKA_CONTROL_VAULT_KEY')
+		await expect(reconcileOpsKey({}, 'notes', 'prod', uuidv7(), DOMAIN, writes)).rejects.toThrow('FABRIKA_CONTROL_VAULT_KEY')
 	})
 })
 
@@ -237,7 +286,7 @@ describe.skipIf(!hasPostgres)('VaultOpsKeys on Postgres', () => {
 		clock.now = T0 + 15 * DAY
 		const rotated = await deploy('failed')
 		expect(rotated[0]).toBe(old)
-		expect((await keys.opsKeysFor('notes', 'prod')).map(opsKeyDigest)).toEqual([rotated[1], old])
+		expect((await keys.opsKeysFor('notes', 'prod')).map(({ key }) => opsKeyDigest(key))).toEqual([rotated[1], old])
 		expect(await deploy('succeeded')).toEqual(rotated)
 		expect(await deploy('succeeded')).toEqual([rotated[1] ?? ''])
 	})
