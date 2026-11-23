@@ -681,7 +681,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   the result. No accepting branch, or a refused value, is a 500.
 - **One error envelope**, `{ error: { type, message, issues? } }`. A client error
   (4xx) keeps its message and issues; `@fabrika/db`'s `NotFoundError` and
-  `ConflictError` are read by `name` (404, 409). Every 5xx and every refused
+  `ConflictError` are read by `name` (404, 409), and so is its `QueryRefusedError`
+  `list_cursor`, a list cursor the caller sent that is not this list's (400 `list_cursor`).
+  Every other refusal of the data layer stays a 500. Every 5xx and every refused
   capability answers the fixed `Internal error` (or `Service unavailable` for 503)
   with no metadata, because a message may quote a connection string.
 - **A 5xx is reported as a fixed code** (`implement/failures.ts`): `framework_fault`, `unavailable`,

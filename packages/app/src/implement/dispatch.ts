@@ -2375,6 +2375,12 @@ export function errorResponse(error: unknown, where: string): Response {
 	if (name === 'ConflictError') {
 		return toErrorResponse(new HttpError(409, 'conflict', 'The object changed since it was read'))
 	}
+	// The cursor came from the caller, so a bad one is the caller's 400; every other refusal stays the code's 500.
+	if (error instanceof Error && name === 'QueryRefusedError' && Reflect.get(error, 'reason') === 'list_cursor') {
+		return toErrorResponse(
+			new HttpError(400, 'list_cursor', 'The cursor is not the next cursor of a page of this list; list from the first page again'),
+		)
+	}
 	if (error instanceof ServerFault) {
 		return serverError(error.status)
 	}

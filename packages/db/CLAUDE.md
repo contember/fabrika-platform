@@ -547,7 +547,9 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **Every capability reads the key and the version.** A column policy on either is refused: a page is ordered by the
   key and a write answers both. A list's every order column, the synthesized tiebreak included, is held to the
   capability's columns, and its cursor is the database's text of each (`cast(… as text)`, the one cast the guard
-  admits, as a selected own column), so a timestamp keeps its microseconds.
+  admits, as a selected own column), so a timestamp keeps its microseconds. The cursor also carries its table and its
+  whole order; `decodeCursor` refuses one that does not decode, has another shape, or names another table or order
+  with `list_cursor`, the one refusal the framework answers as the caller's 400.
 - **Every handle checks its site first** (`DataSite.check`, the framework's binding to its invocation), then refuses
   what the site's kind or declaration does not allow with the message its type gives, then runs the store's own
   checks. A handle is built per invocation; never cache one across invocations or skip the check for a read.
