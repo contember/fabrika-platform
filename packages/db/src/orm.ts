@@ -24,7 +24,7 @@ import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } 
 import { answerFiles, type FileBinding } from './file-columns'
 import { databaseNow } from './job-leases'
 import { rearmClaim } from './job-wakes'
-import { type CursorValue, openCursor, signCursor } from './list-cursor'
+import { cursorKey, type CursorValue, openCursor, signCursor } from './list-cursor'
 import {
 	aggregateNode,
 	allOf,
@@ -1308,7 +1308,12 @@ function cursorList(table: string, order: readonly OrderColumn[]): string {
 }
 
 /** A page's position: the text of its last row's order columns (`keyset.c<n>`), signed for its list. */
-async function encodeCursor(session: Session, table: string, row: Readonly<Record<string, unknown>>, order: readonly OrderColumn[]): Promise<string> {
+async function encodeCursor(
+	key: () => Promise<CryptoKey>,
+	table: string,
+	row: Readonly<Record<string, unknown>>,
+	order: readonly OrderColumn[],
+): Promise<string> {
 	const values: CursorValue[] = order.map(({ column: name }, index) => {
 		const value = hasOwn(row, cursorAlias(index)) ? row[cursorAlias(index)] : null
 		if (typeof value === 'string' || value === null) {
@@ -1316,7 +1321,7 @@ async function encodeCursor(session: Session, table: string, row: Readonly<Recor
 		}
 		throw new QueryRefusedError('list_page', `${name} came back as ${typeof value} text, which a list cannot page by`)
 	})
-	return await signCursor(session, cursorList(table, order), values)
+	return await signCursor(key, cursorList(table, order), values)
 }
 
 /** A row as the caller sees it: the position columns stay the layer's. */
@@ -1386,9 +1391,12 @@ async function listRows(
 	const order = orderOf(shape, options['orderBy'], tiebreak)
 	const limit = limitOf(options['limit'])
 	const session = await run.read()
+	// Read once per page, whether the page verifies `after`, signs `next` or both.
+	let read: Promise<CryptoKey> | undefined
+	const key = (): Promise<CryptoKey> => (read ??= cursorKey(session))
 	const position = options['after'] === undefined
 		? undefined
-		: keysetAfter(table, order, await openCursor(session, cursorList(table, order), options['after'], order.length))
+		: keysetAfter(table, order, await openCursor(key, cursorList(table, order), options['after'], order.length))
 	if (scope === undefined) {
 		return { items: [], next: null }
 	}
@@ -1411,7 +1419,7 @@ async function listRows(
 	const items = page.map((row) => withoutCursor(row, order))
 	return {
 		items: reach === undefined ? items : await answerFiles(context.model, run.files, session, items, reach),
-		next: rows.length > limit && last !== undefined ? await encodeCursor(session, table, last, order) : null,
+		next: rows.length > limit && last !== undefined ? await encodeCursor(key, table, last, order) : null,
 	}
 }
 

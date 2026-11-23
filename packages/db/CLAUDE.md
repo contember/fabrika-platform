@@ -358,7 +358,7 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **The lease and admission statements are fixed SQL** (`runFixedStatement` in `database.ts`, which no subpath
   exports), one text per dialect: they need `now()`, `set_config`, `pg_backend_pid()`, `on conflict` and `skip locked`
   (on SQLite `strftime`, `on conflict` and `json_each`), which the guard refuses on purpose. Only `job-leases.ts`, `admissions.ts`, `framework-tables.ts`, `stored-files.ts`,
-  `file-columns.ts`, `request-receipts.ts` and `list-cursor.ts` call it, with constant texts and scalar parameters;
+  `file-columns.ts`, `request-receipts.ts`, `job-wakes.ts` and `list-cursor.ts` call it, with constant texts and scalar parameters;
   never build a text from a value. `databaseNow` (`job-leases.ts`) is the database's clock a queue claim and a requeue
   bind as a value.
 - **An admission bucket is taken in one statement** (`take`: an upsert whose update only runs below the limit), so

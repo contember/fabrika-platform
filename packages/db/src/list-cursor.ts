@@ -21,7 +21,7 @@ const SQL_KEY: DialectTexts = {
 const BASE64URL = /^[A-Za-z0-9_-]+$/
 
 /** The database's cursor key, read in `session`; the framework migration wrote it, so its absence is no caller's fault. */
-async function cursorKey(session: Session): Promise<CryptoKey> {
+export async function cursorKey(session: Session): Promise<CryptoKey> {
 	const [row] = await runFixedStatement(session, SQL_KEY[session.dialect], [])
 	const secret: unknown = typeof row === 'object' && row !== null ? Reflect.get(row, 'secret') : undefined
 	if (typeof secret !== 'string' || secret.length === 0) {
@@ -35,9 +35,9 @@ function signed(list: string, payload: string): Uint8Array<ArrayBuffer> {
 }
 
 /** The cursor of the page after the row whose order values are `values`, in the list `list` names. */
-export async function signCursor(session: Session, list: string, values: readonly CursorValue[]): Promise<string> {
+export async function signCursor(key: () => Promise<CryptoKey>, list: string, values: readonly CursorValue[]): Promise<string> {
 	const payload = Buffer.from(JSON.stringify(values)).toString('base64url')
-	const signature = await crypto.subtle.sign('HMAC', await cursorKey(session), signed(list, payload))
+	const signature = await crypto.subtle.sign('HMAC', await key(), signed(list, payload))
 	return `${payload}.${Buffer.from(signature).toString('base64url')}`
 }
 
@@ -46,7 +46,7 @@ export async function signCursor(session: Session, list: string, values: readonl
  * per order column (`count`). Anything else is the caller's `list_cursor`: undecodable, unsigned, edited, of another
  * list or order, or of another shape.
  */
-export async function openCursor(session: Session, list: string, after: unknown, count: number): Promise<readonly CursorValue[]> {
+export async function openCursor(key: () => Promise<CryptoKey>, list: string, after: unknown, count: number): Promise<readonly CursorValue[]> {
 	const refused = () => new QueryRefusedError('list_cursor', 'after takes the next cursor of a page of this same list')
 	if (typeof after !== 'string') {
 		throw refused()
@@ -60,7 +60,7 @@ export async function openCursor(session: Session, list: string, after: unknown,
 	if (signature.toString('base64url') !== given) {
 		throw refused()
 	}
-	if (!(await crypto.subtle.verify('HMAC', await cursorKey(session), new Uint8Array(signature), signed(list, payload)))) {
+	if (!(await crypto.subtle.verify('HMAC', await key(), new Uint8Array(signature), signed(list, payload)))) {
 		throw refused()
 	}
 	let parsed: unknown
