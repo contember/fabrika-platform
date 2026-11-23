@@ -75,6 +75,8 @@ export interface StructureGraph {
 	readonly files: ReadonlyMap<string, string>
 	readonly mappings: ImportMappings
 	readonly referencesOf: (path: string) => readonly ModuleReference[]
+	/** The shell graph: the modules the SPA build plugins load as their slices, without handlers. */
+	readonly shellModules: ReadonlySet<string>
 }
 
 interface Targets {
@@ -146,18 +148,20 @@ const SPA_PACKAGES: ReadonlySet<string> = new Set([
 ])
 
 const SPA_ALLOWED =
-	'@fabrika/app/client, @fabrika/app/react, @fabrika/app/schema, @fabrika/ui, @fabrika/ui/challenge, fabrika.contract.ts, src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
+	'@fabrika/app/client, @fabrika/app/react, @fabrika/app/schema, @fabrika/ui, @fabrika/ui/challenge, fabrika.contract.ts, the src/<slice>/endpoints.ts of a group fabrika.contract.ts mounts (for createGroupClient), src/schemas.ts, modules under src/shared/ and modules under web/; a type-only import of anything else'
 
 const isSchemaModule = (path: string): boolean => path === SCHEMAS_FILE || path.startsWith(SCHEMAS_DIR)
 
 const isSharedModule = (path: string): boolean => path.startsWith(SHARED_DIR)
 
 /**
- * The application modules a bundle of the SPA may load; `fabrika.contract.ts` is loaded without its handlers. A shared
- * module is checked on its own (`checkSharedReference`), so it is not followed.
+ * The application modules a bundle of the SPA may load. `fabrika.contract.ts` and a slice's `endpoints.ts` in the shell
+ * graph (a group client's group) are loaded without their handlers; an `endpoints.ts` outside it would load whole. A
+ * shared module is checked on its own (`checkSharedReference`), so it is not followed.
  */
-const isSpaModule = (path: string): boolean =>
+const isSpaModule = (graph: StructureGraph, path: string): boolean =>
 	path.startsWith(SPA_DIR) || path === CONTRACT_FILE || isSchemaModule(path) || isSharedModule(path) || !isSourceFile(path)
+	|| (slicePart(path) === 'endpoints' && graph.shellModules.has(path))
 
 /** A runtime package the browser has not: the framework's server side, Bun, and Node's builtins in either spelling. */
 const isServerPackage = (specifier: string): boolean => specifier.startsWith('@fabrika/') ? !SPA_PACKAGES.has(specifier) : isBuiltin(specifier)
@@ -169,7 +173,7 @@ const viaMessage = (reference: ModuleReference, loaded: string, what: string, in
 /** The SPA's own modules are checked one by one; a schema module it loads is followed, since nothing else checks it. */
 const checkSpaReference = (graph: StructureGraph, reference: ModuleReference, targets: Targets, report: Report): void => {
 	const reached = runtimeClosure(graph, targets, isSchemaModule)
-	const server = reached.packages.find(isServerPackage) ?? reached.files.find((path) => !isSpaModule(path))
+	const server = reached.packages.find(isServerPackage) ?? reached.files.find((path) => !isSpaModule(graph, path))
 	if (server !== undefined) report(reference.node, 'spa-server-import', viaMessage(reference, server, 'server code', 'the SPA'), SPA_ALLOWED)
 }
 

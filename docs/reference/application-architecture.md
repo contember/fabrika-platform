@@ -262,8 +262,9 @@ An import is judged by the file or package Bun loads for it:
   `fabrika.contract.ts` without its handlers. An SPA with many slices whose routes load separately and call their
   client directly (not through `@fabrika/app/react`'s hooks, whose provider holds one `createClient` client per mount)
   calls each slice through `createGroupClient(mount, { <group> })` instead, with the contract imported as a type only
-  (`groupMount<typeof contract>()('api', { app, prefix })`): a route's bundle then holds only the groups it calls. It imports
-  `src/schemas.ts` for shared constants and schemas, `src/shared/` for shared functions, and never a slice.
+  (`groupMount<typeof contract>()('api', { app, prefix })`) and each group from its slice's `endpoints.ts`, which the
+  build plugin loads without its handlers: a route's bundle then holds only the groups it calls. It imports
+  `src/schemas.ts` for shared constants and schemas, `src/shared/` for shared functions, and no other module of a slice.
 - **Shared code** (`src/shared/`) is what the SPA and the server must compute alike: one function, not two copies
   that drift. It loads `zod/v4` and other shared modules only, so it holds no data access, no framework call and no
   slice. It runs under the server-module rules (no global object, no environment read), so it is pure in both places.

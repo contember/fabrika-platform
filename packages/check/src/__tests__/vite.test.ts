@@ -26,22 +26,9 @@ const SPA_FILES: ReadonlyMap<string, string> = new Map([
 
 const spaTree = (): Map<string, string> => new Map([...readTree(ARCHITECTURE_ROOT, ['.fixture']), ...SPA_FILES])
 
-/** The same page over a group client: the contract imported as a type, the `deals` group as the one value it calls. */
-const GROUP_PAGE = [
-	"import { createGroupClient, groupMount } from '@fabrika/app/client'",
-	"import type { contract } from '../fabrika.contract'",
-	"import { deals } from '../src/deals/endpoints'",
-	"import { DEAL_STAGES } from '../src/schemas'",
-	"import { render } from './view'",
-	'',
-	"const mount = groupMount<typeof contract>()('api', { app: 'crm', prefix: '/api' }, { bounceOnAuth: true })",
-	'const api = createGroupClient(mount, { deals })',
-	'',
-	'export const showPipeline = async (orgId: string): Promise<void> => render(DEAL_STAGES, await api.deals.pipeline({ orgId }))',
-	'',
-].join('\n')
-
-const groupPageTree = (): Map<string, string> => new Map([...spaTree(), ['web/main.ts', GROUP_PAGE]])
+/** The same page over a group client (`web/group.ts` of the fixture): the contract imported as a type, `deals` the one group it calls. */
+const groupPageTree = (): Map<string, string> =>
+	new Map([...spaTree(), ['web/start.ts', "import { showPipeline } from './group'\n\nvoid showPipeline('org-1')\n"]])
 
 /** Text of the fixture's handlers that minification keeps: an error message and a SQL template. */
 const HANDLER_TEXT = ['only a won or lost deal reopens', 'select d.stage']

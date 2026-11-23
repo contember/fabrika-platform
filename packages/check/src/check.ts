@@ -330,14 +330,8 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 		if (isToolModule(path)) checkToolModule(parsed.module, isGenerated, findings)
 		else checkSourceModule(parsed.module, isGenerated, referencesOfModule, mappings, tree.files, findings, dependent)
 	}
-	const structure = { files: tree.files, mappings, referencesOf: (path: string) => references.get(path) ?? [] }
-	for (const path of modules.keys()) {
-		checkStructureReferences(structure, structurePlace(path, path === GENERATED_ENTRY_FILE, generated.has(path)), reporter(path, findings))
-	}
-	findings.push(...checkSingleSliceQueries(structure, new Map([...modules].map(([path, module]) => [path, module.program]))))
-
 	// The contract rules read each module's shell slice: a colocated handler, and what only it uses, is application
-	// code, which the rules above checked in full.
+	// code, which the other rules check in full.
 	const shell = new Map([...modules].map(([path, module]) => [path, shellModule(module, tree.files.get(path) ?? '')]))
 	const graph = new ModuleGraph(new Map([...shell].map(([path, slice]) => [path, slice.module])))
 	const contract = graph.module(CONTRACT_FILE)
@@ -345,6 +339,13 @@ export const checkApplication = async (input: CheckInput): Promise<Finding[]> =>
 	const shellGraph = new Set(
 		[contract, tables].flatMap((entry) => (entry === undefined ? [] : contractModules(graph, entry))).map((module) => module.file),
 	)
+
+	const structure = { files: tree.files, mappings, referencesOf: (path: string) => references.get(path) ?? [], shellModules: shellGraph }
+	for (const path of modules.keys()) {
+		checkStructureReferences(structure, structurePlace(path, path === GENERATED_ENTRY_FILE, generated.has(path)), reporter(path, findings))
+	}
+	findings.push(...checkSingleSliceQueries(structure, new Map([...modules].map(([path, module]) => [path, module.program]))))
+
 	const literal = [
 		...[...shellGraph].flatMap((path) => shell.get(path)?.refusals ?? []),
 		...checkLiteralGraph([CONTRACT_FILE, TABLES_FILE], graph),
