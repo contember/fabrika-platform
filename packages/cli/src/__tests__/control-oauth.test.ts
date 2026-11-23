@@ -1,6 +1,7 @@
-import type { RpcFetch } from '@fabrika/app'
+import { RpcError, type RpcFetch } from '@fabrika/app'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { createHash } from 'node:crypto'
+import { mkdtemp, readFile, rm, unlink, utimes, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -12,7 +13,7 @@ import {
 	type CredentialLock,
 	fileCredentialLock,
 } from '../control-oauth.js'
-import { controlTransport, MISSING_CONTROL_CREDENTIAL } from '../control.js'
+import { connectControl, controlTransport, MISSING_CONTROL_CREDENTIAL } from '../control.js'
 
 const CONSOLE = 'https://console.example.test'
 const IAM = 'https://iam.example.test'
@@ -29,7 +30,16 @@ interface TokenCall {
  * Control's resource metadata and IAM's OAuth endpoints. Refresh tokens rotate, and a spent one revokes the grant, as
  * IAM does. `pollAnswers` are the device-code answers in order.
  */
-function fakeInstallation(options: { pollAnswers?: readonly (Response | 'lost')[]; metadata?: () => Response } = {}) {
+function fakeInstallation(
+	options: {
+		pollAnswers?: readonly (Response | 'lost')[]
+		metadata?: () => Response
+		/** The resources the grant covers; a refresh for another is refused unspent, as IAM does. */
+		covers?: readonly string[]
+		/** Replaces the device start's answer. */
+		start?: () => Response
+	} = {},
+) {
 	const calls: string[] = []
 	const tokenCalls: TokenCall[] = []
 	const starts: URLSearchParams[] = []
@@ -56,6 +66,7 @@ function fakeInstallation(options: { pollAnswers?: readonly (Response | 'lost')[
 		const form = new URLSearchParams(typeof init?.body === 'string' ? init.body : '')
 		if (url === `${IAM}/oauth/device_authorization`) {
 			starts.push(form)
+			if (options.start !== undefined) return options.start()
 			return Response.json({
 				device_code: 'device-code-1',
 				user_code: 'BCDF-GHJK',
@@ -74,6 +85,9 @@ function fakeInstallation(options: { pollAnswers?: readonly (Response | 'lost')[
 				return answer
 			}
 			const token = call.refreshToken ?? ''
+			if (options.covers !== undefined && !options.covers.includes(call.resource ?? '') && live.has(token)) {
+				return Response.json({ error: 'invalid_target' }, { status: 400 })
+			}
 			if (revoked || spent.has(token) || !live.has(token)) {
 				// A spent refresh token is a replay: IAM revokes the whole grant.
 				if (spent.has(token)) revoked = true
@@ -208,6 +222,21 @@ describe('fabrika control auth device', () => {
 		expect(store.stored).toBeNull()
 	})
 
+	test('a refused start and an expired code end it without storing anything', async () => {
+		const busy = fakeInstallation({ start: () => Response.json({ error: 'temporarily_unavailable' }, { status: 429 }) })
+		await expect(authorizeDevice({ origin: CONSOLE, preset: 'read', app: 'alpha' }, dependencies(busy, memoryHelper().helper))).rejects.toThrow(
+			'IAM refuses new device grants for a minute (HTTP 429)',
+		)
+		expect(busy.tokenCalls).toHaveLength(0)
+		const store = memoryHelper()
+		const expired = fakeInstallation({ pollAnswers: [Response.json({ error: 'expired_token' }, { status: 400 })] })
+		await expect(authorizeDevice({ origin: CONSOLE, preset: 'read', app: 'alpha' }, dependencies(expired, store.helper))).rejects.toThrow(
+			'The code expired before anyone approved it',
+		)
+		expect(expired.tokenCalls).toHaveLength(1)
+		expect(store.stored).toBeNull()
+	})
+
 	test('a denial and an unreadable answer end it without storing anything', async () => {
 		for (
 			const [answer, message] of [
@@ -284,6 +313,28 @@ describe('the access token of a Control call', () => {
 		await expect(next(RPC)).rejects.toThrow('expired, was revoked, or its refresh token was used twice; run `fabrika control auth device` again')
 	})
 
+	test('a resource the grant does not cover is refused with what to do, and the grant still works', async () => {
+		const installation = fakeInstallation({ covers: [RPC] })
+		const store = memoryHelper(installation.grant())
+		const bearer = controlOAuthBearer(CONSOLE, dependencies(installation, store.helper))
+		await expect(bearer(OPERATIONS_RPC)).rejects.toThrow(`does not cover ${OPERATIONS_RPC}; approve a preset that does`)
+		expect(await bearer(RPC)).toContain(RPC)
+		expect(installation.revoked).toBe(false)
+	})
+
+	test('an answer it cannot read still has its rotated refresh token stored', async () => {
+		const installation = fakeInstallation()
+		const store = memoryHelper('rt-old')
+		const odd: RpcFetch = (input, init) =>
+			String(input) === `${IAM}/oauth/token`
+				? Promise.resolve(Response.json({ access_token: 'at', token_type: 'mac', expires_in: 300, refresh_token: 'rt-rotated' }))
+				: installation.fetch(input, init)
+		await expect(controlOAuthBearer(CONSOLE, dependencies(installation, store.helper, { fetch: odd }))(RPC)).rejects.toThrow(
+			'in a shape this CLI cannot read',
+		)
+		expect(store.stored).toBe('rt-rotated')
+	})
+
 	test('a refresh whose answer is lost is not sent again', async () => {
 		const installation = fakeInstallation()
 		const store = memoryHelper(installation.grant())
@@ -315,12 +366,24 @@ describe('the Control transport', () => {
 		await transport.fetch(RPC, { method: 'POST' })
 		await transport.fetch(OPERATIONS_RPC, { method: 'POST' })
 		expect(sent).toEqual([`${RPC} Bearer at-2:${RPC}`, `${OPERATIONS_RPC} Bearer at-3:${OPERATIONS_RPC}`])
-		await expect(transport.fetch('https://elsewhere.test/api/rpc', { method: 'POST' })).rejects.toThrow(`sent to ${CONSOLE} only`)
+		const elsewhere = await transport.fetch('https://elsewhere.test/api/rpc', { method: 'POST' })
+		expect(elsewhere.status).toBe(401)
+		expect(await elsewhere.text()).toContain(`sent to ${CONSOLE} only`)
+		expect(sent).toHaveLength(2)
 
 		const keyed = controlTransport(undefined, { ...env, FABRIKA_CONTROL_KEY: 'px_key' }, send, deps)
 		await keyed.fetch(RPC, { method: 'POST' })
 		expect(sent.at(-1)).toBe(`${RPC} Bearer px_key`)
 		expect(installation.tokenCalls).toHaveLength(2)
+	})
+
+	test("a grant's failure reaches the caller of the RPC client with its reason, not as a network error", async () => {
+		const installation = fakeInstallation()
+		const client = connectControl(undefined, env, dependencies(installation, memoryHelper(null).helper))
+		const failure = await client.consoleAccess().then(() => null, (error: unknown) => error)
+		if (!(failure instanceof RpcError)) throw new Error('expected an RpcError')
+		expect([failure.type, failure.httpStatus]).toEqual(['credential', 401])
+		expect(failure.message).toBe(`FABRIKA_CONTROL_CREDENTIAL_HELPER holds no grant for ${CONSOLE}; run \`fabrika control auth device\` first`)
 	})
 
 	test('needs one of the two credentials', () => {
@@ -360,6 +423,58 @@ describe('the credential helper and the lock', () => {
 		await expect(commandCredentialHelper(`${script} unknown`).get(CONSOLE)).rejects.toThrow('FABRIKA_CONTROL_CREDENTIAL_HELPER get exited with 7')
 	})
 
+	test("waiters that find a crashed holder's lock at once let exactly one of them hold it at a time", async () => {
+		const directory = await scratch()
+		const crashed = Bun.spawn(['true'])
+		await crashed.exited
+		const lock = fileCredentialLock(directory, 5_000)
+		let holding = 0
+		let most = 0
+		for (let round = 0; round < 20; round++) {
+			const release = await lock(CONSOLE)
+			const [file] = await Array.fromAsync(new Bun.Glob('*.lock').scan(directory))
+			if (file === undefined) throw new Error('expected a lock file')
+			await writeFile(join(directory, file), `${crashed.pid} left-behind\n`)
+			await release()
+			await Promise.all(
+				Array.from({ length: 3 }, async () => {
+					const held = await lock(CONSOLE)
+					holding++
+					most = Math.max(most, holding)
+					await Bun.sleep(2)
+					holding--
+					await held()
+				}),
+			)
+		}
+		expect(most).toBe(1)
+	}, 20_000)
+
+	test("leaves a crashed holder's lock to the process taking it over, and clears a guard its crash left behind", async () => {
+		const directory = await scratch()
+		const lock = fileCredentialLock(directory, 5_000)
+		await (await lock(CONSOLE))()
+		const crashed = Bun.spawn(['true'])
+		await crashed.exited
+		const file = join(directory, `${createHash('sha256').update(CONSOLE).digest('hex').slice(0, 32)}.lock`)
+		const guard = `${file}.takeover`
+		await writeFile(file, `${crashed.pid} left-behind\n`)
+		await writeFile(guard, '')
+		const waiting = lock(CONSOLE)
+		await Bun.sleep(200)
+		expect(await readFile(file, 'utf8')).toBe(`${crashed.pid} left-behind\n`)
+		await unlink(guard)
+		await (await waiting)()
+
+		await writeFile(file, `${crashed.pid} left-behind\n`)
+		await writeFile(guard, '')
+		const abandoned = new Date(Date.now() - 60_000)
+		await utimes(guard, abandoned, abandoned)
+		const taken = await lock(CONSOLE)
+		expect((await readFile(file, 'utf8')).split(' ')[0]).toBe(String(process.pid))
+		await taken()
+	})
+
 	test("takes over a crashed holder's lock and waits for a live one", async () => {
 		const directory = await scratch()
 		const lock = fileCredentialLock(directory, 200)
@@ -372,9 +487,9 @@ describe('the credential helper and the lock', () => {
 		const [file] = (await Array.fromAsync(new Bun.Glob('*.lock').scan(directory))).map((name) => join(directory, name))
 		await held()
 		if (file === undefined) throw new Error('expected a lock file')
-		await writeFile(file, `${crashed.pid}\n`)
+		await writeFile(file, `${crashed.pid} left-behind\n`)
 		const taken = await lock(CONSOLE)
-		expect((await readFile(file, 'utf8')).trim()).toBe(String(process.pid))
+		expect((await readFile(file, 'utf8')).split(' ')[0]).toBe(String(process.pid))
 		await taken()
 	})
 })

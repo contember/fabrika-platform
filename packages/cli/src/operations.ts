@@ -22,7 +22,7 @@ import type {
 } from '@fabrika/operations-contract/operator-api'
 import type { OperationsIssueQuery, OperationsReleaseQuery, OperationsRpcContract } from '@fabrika/operations-contract/rpc'
 import { z } from 'zod'
-import { CREDENTIAL_HELPER_VARIABLE } from './control-oauth.js'
+import { type ControlOAuthDependencies, CREDENTIAL_HELPER_VARIABLE } from './control-oauth.js'
 import { controlTransport, MISSING_CONTROL_CREDENTIAL, withoutControlKey } from './control.js'
 import { printable } from './data.js'
 
@@ -84,7 +84,8 @@ The credential is read from the ENVIRONMENT ONLY and has no flag; one of:
 
   FABRIKA_CONTROL_KEY               a \`px_\` key of the console app holding \`operations.read\`
   FABRIKA_CONTROL_CREDENTIAL_HELPER the helper a \`fabrika control auth device\` grant is stored through
-                                    (any preset but \`create\` reads Operations)
+                                    (any preset but \`create\` reads Operations; a list is empty where the
+                                    person who approved it holds no \`operations.read\`)
 
 Mint a key narrowed to \`operations.read\` alone, with a short expiry: docs/reference/operations-errors.md,
 "Reading Operations from the command line".
@@ -106,6 +107,8 @@ type Environment = Readonly<Record<string, string | undefined>>
 export interface OperationsIo {
 	readonly env: Environment
 	readonly fetch: RpcFetch
+	/** Replaces the credential helper, its lock and the clock; only a test passes it. */
+	readonly oauth?: ControlOAuthDependencies
 	readonly out: (text: string) => void
 	readonly err: (text: string) => void
 }
@@ -517,6 +520,8 @@ const issueLines = (detail: OperationsIssueDetailResponseDto, event: OperationsE
 interface Clients {
 	readonly operations: InferRpcClient<OperationsRpcContract>
 	readonly control: InferRpcClient<ControlRpcContract>
+	/** The credential is a person's device grant, whose Operations token is its own. */
+	readonly grant: boolean
 }
 
 const connect = (args: Args, io: OperationsIo): Clients => {
@@ -526,13 +531,14 @@ const connect = (args: Args, io: OperationsIo): Clients => {
 	}
 	let transport: ReturnType<typeof controlTransport>
 	try {
-		transport = controlTransport(args.url, io.env, io.fetch)
+		transport = controlTransport(args.url, io.env, io.fetch, io.oauth)
 	} catch (error) {
 		throw usageError(error instanceof Error ? error.message : String(error))
 	}
 	return {
 		operations: createRpcClient<OperationsRpcContract>({ baseUrl: `${transport.origin}/operations/api/rpc`, fetch: transport.fetch }),
 		control: createRpcClient<ControlRpcContract>({ baseUrl: `${transport.origin}/api/rpc`, fetch: transport.fetch }),
+		grant: transport.grant,
 	}
 }
 
@@ -541,6 +547,9 @@ const connect = (args: Args, io: OperationsIo): Clients => {
  * console's own navigation asks Control which actions the caller holds; so does this, to tell the two apart.
  */
 const requireRead = async (clients: Clients): Promise<void> => {
+	// A grant's token for Control holds no Operations action, so Control's answer cannot tell. Its Operations token holds
+	// `operations.read` where the person does; elsewhere a list is empty, as the help says.
+	if (clients.grant) return
 	const access = parse(consoleAccessSchema, await clients.control.consoleAccess(), 'console access')
 	const read = OPERATIONS_ACTIONS.READ
 	if (access.global.includes(read) || access.scopes.some((scope) => scope.actions.includes(read))) return
@@ -690,6 +699,8 @@ const rpcFailure = (error: RpcError): OperationsCliError => {
 			`This installation's release does not offer the call; retrying will not change that — ${said}`,
 		)
 	}
+	// The device grant's own refusal (no grant stored, expired, not covering Operations): its message says what to do.
+	if (error.type === 'credential') return new OperationsCliError(OPERATIONS_EXIT.credential, error.message)
 	if (error.httpStatus === 401) {
 		return new OperationsCliError(OPERATIONS_EXIT.credential, `The console refused FABRIKA_CONTROL_KEY (unknown, expired or revoked) — ${said}`)
 	}

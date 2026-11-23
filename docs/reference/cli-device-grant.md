@@ -60,9 +60,10 @@ wins when both variables are set, so an existing setup does not change.
 process trades the refresh token for an access token for the resource it calls, and keeps that token in memory only.
 
 IAM rotates the refresh token on every refresh, and treats a second use of a spent one as a replay that revokes the
-grant. So the CLI refreshes under a lock file per console in `~/.cache/fabrika/control-credentials`. It takes the
-lock, runs `get`, refreshes, runs `store`, and releases the lock. Two processes on one machine therefore rotate in
-turn. The lock does not span machines: two machines that share one stored token revoke their grant.
+grant. So the CLI refreshes under a lock file per console in `fabrika/control-credentials` under `$XDG_CACHE_HOME`
+(`~/.cache` when it is unset). It takes the lock, runs `get`, refreshes, runs `store`, and releases the lock. Two
+processes on one machine therefore rotate in turn; a lock whose process has died is taken over. The lock does not span
+machines: two machines that share one stored token revoke their grant.
 
 Some failures cannot be retried, and the CLI says so:
 

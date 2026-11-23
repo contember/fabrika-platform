@@ -15,8 +15,8 @@ import {
 	type ControlCliPreset,
 	controlCliPresetPaths,
 } from '@fabrika/control-contract'
-import { createHash } from 'node:crypto'
-import { mkdir, open, readFile, unlink } from 'node:fs/promises'
+import { createHash, randomUUID } from 'node:crypto'
+import { link, mkdir, open, readFile, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join } from 'node:path'
 import { z } from 'zod'
@@ -82,51 +82,86 @@ export function commandCredentialHelper(command: string): CredentialHelper {
 	}
 }
 
-type LockState = 'absent' | 'held' | 'stale'
+/** A lock file's text (its holder's pid and a nonce that tells this holding from a later one) and whether that pid lives. */
+interface LockHolder {
+	readonly text: string
+	readonly stale: boolean
+}
 
-/** A lock file's holder: a live process, one that is gone, or none because the file went away meanwhile. */
-async function lockState(path: string): Promise<LockState> {
+async function lockHolder(path: string): Promise<LockHolder | null> {
 	const text = await readFile(path, 'utf8').catch(() => null)
-	if (text === null) return 'absent'
-	const pid = Number(text.trim())
-	// An empty file is a holder between creating and writing it.
-	if (!Number.isSafeInteger(pid) || pid <= 0) return 'held'
+	if (text === null) return null
+	const pid = Number(text.split(' ')[0])
+	if (!Number.isSafeInteger(pid) || pid <= 0) return { text, stale: false }
 	try {
 		process.kill(pid, 0)
-		return 'held'
+		return { text, stale: false }
 	} catch (error) {
-		return errorCode(error) === 'ESRCH' ? 'stale' : 'held'
+		return { text, stale: errorCode(error) === 'ESRCH' }
 	}
 }
 
+/** A takeover guard older than this was left by a process that died while it took a lock over, which takes milliseconds. */
+const TAKEOVER_GUARD_MS = 10_000
+
 /**
- * An exclusive lock file per origin under `directory`, holding the holder's pid. A crashed holder's file is taken
- * over; two processes taking it over at once cost at worst one replayed refresh, which IAM answers by revoking the grant.
+ * Removes a dead holder's lock file. Only the holder of the `.takeover` guard may, and only while the file still holds
+ * the text it judged dead: that text names a dead process and a nonce, so no live holder's file matches it. Answers
+ * whether this caller took the guard, so it retries at once instead of waiting.
+ */
+async function removeStale(path: string, judged: string): Promise<boolean> {
+	const guard = `${path}.takeover`
+	try {
+		await (await open(guard, 'wx', 0o600)).close()
+	} catch (error) {
+		if (errorCode(error) !== 'EEXIST') throw error
+		const since = await stat(guard).then((file) => Date.now() - file.mtimeMs, () => 0)
+		if (since > TAKEOVER_GUARD_MS) await unlink(guard).catch(() => undefined)
+		return false
+	}
+	try {
+		if ((await readFile(path, 'utf8').catch(() => null)) === judged) await unlink(path).catch(() => undefined)
+	} finally {
+		await unlink(guard).catch(() => undefined)
+	}
+	return true
+}
+
+/**
+ * An exclusive lock file per origin under `directory`, created whole by `link` so it never exists empty, and naming its
+ * holder. A dead holder's file is taken over; release removes only this holding's own file.
  */
 export function fileCredentialLock(directory: string, waitMs = 30_000): CredentialLock {
 	return async (origin) => {
 		await mkdir(directory, { recursive: true, mode: 0o700 })
 		const path = join(directory, `${createHash('sha256').update(origin).digest('hex').slice(0, 32)}.lock`)
+		const mine = `${process.pid} ${randomUUID()}\n`
+		const prepared = `${path}.${randomUUID()}.new`
+		await writeFile(prepared, mine, { mode: 0o600 })
 		const deadline = Date.now() + waitMs
-		for (;;) {
-			try {
-				const handle = await open(path, 'wx', 0o600)
+		try {
+			for (;;) {
 				try {
-					await handle.writeFile(`${process.pid}\n`)
-				} finally {
-					await handle.close()
+					await link(prepared, path)
+					return async () => {
+						if ((await readFile(path, 'utf8').catch(() => null)) === mine) await unlink(path).catch(() => undefined)
+					}
+				} catch (error) {
+					if (errorCode(error) !== 'EEXIST') throw error
 				}
-				return async () => {
-					await unlink(path).catch(() => undefined)
+				const holder = await lockHolder(path)
+				if (holder === null) continue
+				if (holder.stale) {
+					if (await removeStale(path, holder.text)) continue
+				} else if (Date.now() >= deadline) {
+					throw new Error(
+						`Another fabrika process holds ${path}; its refresh may be waiting on IAM. Remove the file only when no fabrika process runs`,
+					)
 				}
-			} catch (error) {
-				if (errorCode(error) !== 'EEXIST') throw error
+				await Bun.sleep(50)
 			}
-			const state = await lockState(path)
-			if (state === 'stale') await unlink(path).catch(() => undefined)
-			if (state !== 'held') continue
-			if (Date.now() >= deadline) throw new Error(`Another fabrika process holds ${path}; remove the file if none is running`)
-			await Bun.sleep(50)
+		} finally {
+			await unlink(prepared).catch(() => undefined)
 		}
 	}
 }
@@ -168,9 +203,11 @@ const deviceStartSchema = z.object({
 const tokensSchema = z.object({
 	access_token: z.string().min(1),
 	token_type: z.string().regex(/^bearer$/i),
-	expires_in: z.number().int().positive(),
+	expires_in: z.number().int().nonnegative(),
 	refresh_token: z.string().min(1).optional(),
 })
+/** What is left to keep of a 200 answer the CLI cannot otherwise read: IAM may have rotated the refresh token in it. */
+const rotatedSchema = z.object({ refresh_token: z.string().min(1) })
 type Tokens = z.infer<typeof tokensSchema>
 /** Only an error code is ever repeated from IAM's answer. */
 const errorSchema = z.object({ error: z.string().regex(/^[a-z_]{1,64}$/) })
@@ -237,20 +274,25 @@ async function postForm(url: string, form: URLSearchParams, deps: ControlOAuthDe
 	}
 }
 
-type TokenAnswer = { readonly kind: 'tokens'; readonly tokens: Tokens } | { readonly kind: 'error'; readonly error: string }
+type TokenAnswer =
+	| { readonly kind: 'tokens'; readonly tokens: Tokens }
+	| { readonly kind: 'error'; readonly error: string }
+	| { readonly kind: 'unreadable'; readonly refreshToken?: string }
 
-/** The token endpoint's answer, or null when it is neither tokens nor an OAuth error this CLI can read. */
-async function tokenAnswer(response: Response): Promise<TokenAnswer | null> {
+/** The token endpoint's answer: tokens, an OAuth error this CLI can read, or neither (with a rotated token it held). */
+async function tokenAnswer(response: Response): Promise<TokenAnswer> {
 	const body: unknown = await response.json().catch(() => null)
 	if (response.status === 200) {
 		const tokens = tokensSchema.safeParse(body)
-		return tokens.success ? { kind: 'tokens', tokens: tokens.data } : null
+		if (tokens.success) return { kind: 'tokens', tokens: tokens.data }
+		const rotated = rotatedSchema.safeParse(body)
+		return rotated.success ? { kind: 'unreadable', refreshToken: rotated.data.refresh_token } : { kind: 'unreadable' }
 	}
 	if (response.status === 400 || response.status === 401) {
 		const error = errorSchema.safeParse(body)
-		return error.success ? { kind: 'error', error: error.data.error } : null
+		if (error.success) return { kind: 'error', error: error.data.error }
 	}
-	return null
+	return { kind: 'unreadable' }
 }
 
 export interface DeviceGrantRequest {
@@ -295,11 +337,10 @@ export async function authorizeDevice(request: DeviceGrantRequest, deps: Control
 		: started.data.verification_uri
 	deps.note(`Open ${page} and confirm the code ${started.data.user_code}.`)
 	deps.note(`The person who approves picks how long the grant lasts. The code expires in ${Math.ceil(started.data.expires_in / 60)} minutes.`)
-	const tokens = await pollDevice(server, started.data, resources[0] ?? `${request.origin}${CONTROL_RPC_PATH}`, deps)
-	if (tokens.refresh_token === undefined) throw new Error('IAM approved the grant but issued no refresh token')
+	const refreshToken = await pollDevice(server, started.data, resources[0] ?? `${request.origin}${CONTROL_RPC_PATH}`, deps)
 	const release = await deps.lock(request.origin)
 	try {
-		await deps.helper.store(request.origin, tokens.refresh_token)
+		await deps.helper.store(request.origin, refreshToken)
 	} finally {
 		await release()
 	}
@@ -311,7 +352,7 @@ async function pollDevice(
 	started: z.infer<typeof deviceStartSchema>,
 	resource: string,
 	deps: ControlOAuthDependencies,
-): Promise<Tokens> {
+): Promise<string> {
 	const form = new URLSearchParams({ grant_type: DEVICE_CODE_GRANT_TYPE, client_id: OAUTH_CLI_CLIENT_ID, device_code: started.device_code, resource })
 	let interval = started.interval ?? 5
 	const deadline = deps.now() + started.expires_in * 1000
@@ -324,8 +365,13 @@ async function pollDevice(
 			`${server.issuer} did not answer the device code. It is not sent again, because IAM may have redeemed it; ${RESTART}`,
 		)
 		const answer = await tokenAnswer(response)
-		if (answer === null) throw new Error(`IAM answered the device code with HTTP ${response.status}. It is not sent again; ${RESTART}`)
-		if (answer.kind === 'tokens') return answer.tokens
+		// An answer this CLI cannot read still keeps the grant when it carries the refresh token.
+		if (answer.kind === 'unreadable' && answer.refreshToken !== undefined) return answer.refreshToken
+		if (answer.kind === 'unreadable') throw new Error(`IAM answered the device code with HTTP ${response.status}. It is not sent again; ${RESTART}`)
+		if (answer.kind === 'tokens') {
+			if (answer.tokens.refresh_token === undefined) throw new Error('IAM approved the grant but issued no refresh token')
+			return answer.tokens.refresh_token
+		}
 		if (answer.error === 'authorization_pending') continue
 		if (answer.error === 'slow_down') {
 			interval += 5
@@ -336,6 +382,25 @@ async function pollDevice(
 		throw new Error(`IAM refused the device code: ${answer.error}`)
 	}
 	throw new Error(`The code expired before anyone approved it; ${RESTART}`)
+}
+
+/** Why IAM refused a refresh, as the person can act on it. */
+function refreshRefusal(origin: string, resource: string, error: string): string {
+	if (error === 'invalid_grant') return `The grant for ${origin} expired, was revoked, or its refresh token was used twice; ${RESTART}`
+	if (error === 'invalid_target') {
+		return `The grant for ${origin} does not cover ${resource}; approve a preset that does with \`fabrika control auth device\``
+	}
+	return `IAM refused the refresh: ${error}`
+}
+
+/** Stores the token IAM rotated; once it is lost, the stored one is spent. */
+async function storeRotated(origin: string, refreshToken: string, deps: ControlOAuthDependencies): Promise<void> {
+	try {
+		await deps.helper.store(origin, refreshToken)
+	} catch (error) {
+		const reason = error instanceof Error ? error.message : 'it failed'
+		throw new Error(`IAM rotated the refresh token, but storing the new one failed (${reason}); the stored one is spent: ${RESTART}`)
+	}
 }
 
 /** A current access token for one of the console's resources. */
@@ -364,23 +429,12 @@ export function controlOAuthBearer(origin: string, deps: ControlOAuthDependencie
 				`${issuer} did not answer the refresh. If it arrived there, the stored refresh token is spent and the next call fails; then ${RESTART}`,
 			)
 			const answer = await tokenAnswer(response)
-			if (answer === null) throw new Error(`IAM answered the refresh with HTTP ${response.status}`)
-			if (answer.kind === 'error') {
-				throw new Error(
-					answer.error === 'invalid_grant'
-						? `The grant for ${origin} expired, was revoked, or its refresh token was used twice; ${RESTART}`
-						: `IAM refused the refresh: ${answer.error}`,
-				)
+			if (answer.kind === 'unreadable') {
+				if (answer.refreshToken !== undefined) await storeRotated(origin, answer.refreshToken, deps)
+				throw new Error(`IAM answered the refresh with HTTP ${response.status}, in a shape this CLI cannot read`)
 			}
-			const rotated = answer.tokens.refresh_token
-			if (rotated !== undefined) {
-				try {
-					await deps.helper.store(origin, rotated)
-				} catch (error) {
-					const reason = error instanceof Error ? error.message : 'it failed'
-					throw new Error(`IAM rotated the refresh token, but storing the new one failed (${reason}); the stored one is spent: ${RESTART}`)
-				}
-			}
+			if (answer.kind === 'error') throw new Error(refreshRefusal(origin, resource, answer.error))
+			if (answer.tokens.refresh_token !== undefined) await storeRotated(origin, answer.tokens.refresh_token, deps)
 			// Refreshed 30 seconds early, so a token does not expire between this check and Control's.
 			held.set(resource, { token: answer.tokens.access_token, refreshAt: deps.now() + Math.max(0, answer.tokens.expires_in - 30) * 1000 })
 			return answer.tokens.access_token

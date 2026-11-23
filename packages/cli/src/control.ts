@@ -198,8 +198,9 @@ day or a week). The grant holds the preset's actions at one application, never m
 The refresh token goes to the helper and nowhere else: the helper runs as \`sh -c '<helper> get|store'\`,
 reads \`origin=<console origin>\` (and, for \`store\`, \`refresh_token=<token>\`) on stdin, and \`get\` prints
 \`refresh_token=<token>\`, or nothing. Every call then trades it for a short-lived access token, and IAM
-rotates it each time; a lock under ~/.cache/fabrika serializes that between processes on this machine. If a
-refresh's answer is lost, the stored token is spent and the next call says to run \`auth device\` again.
+rotates it each time; a lock under $XDG_CACHE_HOME/fabrika (~/.cache/fabrika when unset) serializes that
+between processes on this machine. If a refresh's answer is lost, the stored token is spent and the next
+call says to run \`auth device\` again.
 
 \`key issue\` mints that credential and therefore authenticates differently — it presents the
 installation's IAM RPC key as transport authentication and its provisioning key as the ISSUING
@@ -351,6 +352,8 @@ const withoutEchoedKey = async (response: Response, key: string): Promise<Respon
 export interface ControlTransport {
 	readonly origin: string
 	readonly fetch: RpcFetch
+	/** The credential is a person's device grant, not FABRIKA_CONTROL_KEY. */
+	readonly grant: boolean
 }
 
 /** Neither credential is set; both are read from the environment only. */
@@ -389,8 +392,16 @@ export const controlTransport = (
 	const bearer = controlBearer(origin, env, send, oauth)
 	return {
 		origin,
+		grant: (env['FABRIKA_CONTROL_KEY']?.trim() ?? '') === '',
 		fetch: async (input, init) => {
-			const token = await bearer(input)
+			let token: string
+			try {
+				token = await bearer(input)
+			} catch (error) {
+				// The RPC client reads a rejected fetch as "Network request failed"; this answer keeps the reason.
+				const message = error instanceof Error ? error.message : 'the Control credential could not be obtained'
+				return Response.json({ error: { type: 'credential', message } }, { status: 401 })
+			}
 			const headers = new Headers(init?.headers)
 			headers.set('authorization', `Bearer ${token}`)
 			// A redirect would carry the bearer to wherever it points.

@@ -29,8 +29,9 @@ label the envelope a registration carries.
   [`cli-device-grant.md`](../../docs/reference/cli-device-grant.md)), for the one resource the request calls.
   `control auth device` obtains that grant. Its invariants:
   - the refresh token goes to the helper and never to stdout or a message;
-  - a refresh runs under the per-origin file lock (lock, `get`, refresh, `store`, unlock), because IAM rotates the
-    token and revokes the grant on a replay;
+  - a refresh runs under the per-origin file lock in `$XDG_CACHE_HOME/fabrika/control-credentials` (lock, `get`,
+    refresh, `store`, unlock), because IAM rotates the token and revokes the grant on a replay; a dead holder's lock is
+    taken over only under the `.takeover` guard;
   - neither a device code nor a refresh token is sent again after a lost answer;
   - IAM is found from Control's origin through RFC 9728 and RFC 8414 metadata, with no redirect followed, and every
     endpoint must sit on the issuer's https origin;
