@@ -7,6 +7,7 @@ import { z } from 'zod/v4'
 import { runApplicationStatement } from '../database'
 import { QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataHandles, type DataSite } from '../framework'
+import { SQLITE_FRAMEWORK_MIGRATIONS } from '../migrations-sqlite'
 import { MAX_ALL_ROWS } from '../orm'
 import type { DataKind } from '../orm-types'
 import { openSqlite } from '../sqlite'
@@ -22,6 +23,7 @@ let data: DataAccess
 
 beforeEach(() => {
 	storage = bunSqliteStorage()
+	storage.sql.exec(SQLITE_FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n'))
 	storage.sql.exec(sqliteMigration)
 	storage.sql.exec("insert into organizations (id, name) values ('o1', 'One'), ('o2', 'Two')")
 	const layer = scoped(sqliteTables)

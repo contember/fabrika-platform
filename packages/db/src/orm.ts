@@ -24,6 +24,7 @@ import { CapabilityError, NotFoundError, type QueryRefusal, QueryRefusedError } 
 import { answerFiles, type FileBinding } from './file-columns'
 import { databaseNow } from './job-leases'
 import { rearmClaim } from './job-wakes'
+import { cursorKey, type CursorValue, openCursor, signCursor } from './list-cursor'
 import {
 	aggregateNode,
 	allOf,
@@ -1301,16 +1302,18 @@ function rowState(table: string, conditions: readonly (Compare | Contains)[], or
 	return { origin: freeze({}), table, columns: undefined, conditions, orderBy: order, limit, offset: undefined, joins: [] }
 }
 
-/** An order column's value as the database prints it: exact, where a `Date` would drop microseconds. */
-type CursorValue = string | null
-
-/** The list a cursor belongs to: its table and its whole order, the tiebreak included. */
-function cursorList(table: string, order: readonly OrderColumn[]): readonly [string, readonly (readonly [string, string])[]] {
-	return [table, order.map((term) => [term.column, term.direction])]
+/** The list a cursor belongs to, as its signature covers it: its table and its whole order, the tiebreak included. */
+function cursorList(table: string, order: readonly OrderColumn[]): string {
+	return JSON.stringify([table, order.map((term) => [term.column, term.direction])])
 }
 
-/** A page's position: its list, then the text of its last row's order columns (`keyset.c<n>`), as opaque text. */
-function encodeCursor(table: string, row: Readonly<Record<string, unknown>>, order: readonly OrderColumn[]): string {
+/** A page's position: the text of its last row's order columns (`keyset.c<n>`), signed for its list. */
+async function encodeCursor(
+	key: () => Promise<CryptoKey>,
+	table: string,
+	row: Readonly<Record<string, unknown>>,
+	order: readonly OrderColumn[],
+): Promise<string> {
 	const values: CursorValue[] = order.map(({ column: name }, index) => {
 		const value = hasOwn(row, cursorAlias(index)) ? row[cursorAlias(index)] : null
 		if (typeof value === 'string' || value === null) {
@@ -1318,7 +1321,7 @@ function encodeCursor(table: string, row: Readonly<Record<string, unknown>>, ord
 		}
 		throw new QueryRefusedError('list_page', `${name} came back as ${typeof value} text, which a list cannot page by`)
 	})
-	return Buffer.from(JSON.stringify([...cursorList(table, order), values])).toString('base64url')
+	return await signCursor(key, cursorList(table, order), values)
 }
 
 /** A row as the caller sees it: the position columns stay the layer's. */
@@ -1333,37 +1336,6 @@ function withoutCursor(row: Readonly<Record<string, unknown>>, order: readonly O
 		}
 	}
 	return item
-}
-
-/**
- * The cursor `after` names, parsed at the boundary: a cursor of this table and this order, with one plain value per
- * order column. Anything else is the caller's `list_cursor`: undecodable, of another shape, list or order.
- */
-function decodeCursor(after: unknown, table: string, order: readonly OrderColumn[]): readonly CursorValue[] {
-	const refused = () => new QueryRefusedError('list_cursor', 'after takes the next cursor of a page of this same list')
-	if (typeof after !== 'string' || after.length === 0) {
-		throw refused()
-	}
-	let parsed: unknown
-	try {
-		parsed = JSON.parse(Buffer.from(after, 'base64url').toString('utf8'))
-	} catch {
-		throw refused()
-	}
-	const parts = parseList(parsed, (part) => part)
-	if (parts === undefined || parts.length !== 3 || JSON.stringify([parts[0], parts[1]]) !== JSON.stringify(cursorList(table, order))) {
-		throw refused()
-	}
-	const values = parseList(parts[2], (value): CursorValue => {
-		if (typeof value === 'string' || value === null) {
-			return value
-		}
-		throw refused()
-	})
-	if (values === undefined || values.length !== order.length) {
-		throw refused()
-	}
-	return values
 }
 
 function compare(table: string, name: string, operator: '>' | '<' | '=', value: Primitive): OperationNode {
@@ -1418,7 +1390,13 @@ async function listRows(
 	const conditions = conditionsOf(context, shape, options['where'])
 	const order = orderOf(shape, options['orderBy'], tiebreak)
 	const limit = limitOf(options['limit'])
-	const position = options['after'] === undefined ? undefined : keysetAfter(table, order, decodeCursor(options['after'], table, order))
+	const session = await run.read()
+	// Read once per page, whether the page verifies `after`, signs `next` or both.
+	let read: Promise<CryptoKey> | undefined
+	const key = (): Promise<CryptoKey> => (read ??= cursorKey(session))
+	const position = options['after'] === undefined
+		? undefined
+		: keysetAfter(table, order, await openCursor(key, cursorList(table, order), options['after'], order.length))
 	if (scope === undefined) {
 		return { items: [], next: null }
 	}
@@ -1428,7 +1406,6 @@ async function listRows(
 		table,
 		order.map((term) => term.column),
 	)
-	const session = await run.read()
 	const rows = await session.run<Readonly<Record<string, unknown>>>(node, {
 		root: 'SelectQueryNode',
 		table,
@@ -1442,7 +1419,7 @@ async function listRows(
 	const items = page.map((row) => withoutCursor(row, order))
 	return {
 		items: reach === undefined ? items : await answerFiles(context.model, run.files, session, items, reach),
-		next: rows.length > limit && last !== undefined ? encodeCursor(table, last, order) : null,
+		next: rows.length > limit && last !== undefined ? await encodeCursor(key, table, last, order) : null,
 	}
 }
 

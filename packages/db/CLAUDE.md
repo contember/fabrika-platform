@@ -50,6 +50,7 @@ bun test    # policy · derived-tables · tables · store · guard · hardening 
 | `job-leases.ts`        | `fabrika_job_leases` and `fabrika_job_kicks`: a job run's lease, its generations and deadlines, a kick's pending run, the last run; `fencedTransaction`; `DialectTexts`, `SQLITE_NOW`, `sqliteNowPlus`.                                                                                                                                                                                                                      |
 | `job-wakes.ts`         | `fabrika_wakes`: a job's durable pending work, deduplicated. A run owns the wakes due when it took its lease (`owned`; a later write or merge, bar a cron re-schedule, stays unowned); only its fenced finish consumes or retries them, and a finish or a reap disowns. `next`; `untilNext` and `now` (DB clock); `reconcile`; `expiredHolders`. Every change runs `projectWakes` in its transaction.                        |
 | `admissions.ts`        | `fabrika_form_admissions`, `fabrika_form_challenges`, `fabrika_form_bytes`: a procedure's per-minute buckets, accepted challenge tokens, hourly byte budget.                                                                                                                                                                                                                                                                 |
+| `list-cursor.ts`       | A list's cursor: its order values signed with `fabrika_list_cursor_key` for its list (`signCursor`), and verified and parsed at the boundary (`openCursor`, `list_cursor`).                                                                                                                                                                                                                                                  |
 | `request-receipts.ts`  | `fabrika_request_receipts`: a keyed mutation's answer by principal and key, read and written in the invocation's transaction; each write prunes a batch past the retention.                                                                                                                                                                                                                                                  |
 | `migrations.ts`        | `@fabrika/db/migrations`: the framework's own tables (`fabrika_*`), the bundle `fabrika`; plain data.                                                                                                                                                                                                                                                                                                                        |
 | `codegen.ts`           | `@fabrika/db/codegen`: `src/db/schema.generated.ts` (types, `DB`, each table's columns and foreign keys as `TypedColumnList<DB>`) from a Postgres catalog; `renderTables`, the renderer both dialects share.                                                                                                                                                                                                                 |
@@ -356,8 +357,8 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   and `takePending` clears it for one caller. Never read a lease and then write it.
 - **The lease and admission statements are fixed SQL** (`runFixedStatement` in `database.ts`, which no subpath
   exports), one text per dialect: they need `now()`, `set_config`, `pg_backend_pid()`, `on conflict` and `skip locked`
-  (on SQLite `strftime`, `on conflict` and `json_each`), which the guard refuses on purpose. Only `job-leases.ts`, `admissions.ts`, `framework-tables.ts`, `stored-files.ts` and
-  `file-columns.ts` call it, with constant texts and scalar parameters;
+  (on SQLite `strftime`, `on conflict` and `json_each`), which the guard refuses on purpose. Only `job-leases.ts`, `admissions.ts`, `framework-tables.ts`, `stored-files.ts`,
+  `file-columns.ts`, `request-receipts.ts`, `job-wakes.ts` and `list-cursor.ts` call it, with constant texts and scalar parameters;
   never build a text from a value. `databaseNow` (`job-leases.ts`) is the database's clock a queue claim and a requeue
   bind as a value.
 - **An admission bucket is taken in one statement** (`take`: an upsert whose update only runs below the limit), so
@@ -547,9 +548,12 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
 - **Every capability reads the key and the version.** A column policy on either is refused: a page is ordered by the
   key and a write answers both. A list's every order column, the synthesized tiebreak included, is held to the
   capability's columns, and its cursor is the database's text of each (`cast(… as text)`, the one cast the guard
-  admits, as a selected own column), so a timestamp keeps its microseconds. The cursor also carries its table and its
-  whole order; `decodeCursor` refuses one that does not decode, has another shape, or names another table or order
-  with `list_cursor`, the one refusal the framework answers as the caller's 400.
+  admits, as a selected own column), so a timestamp keeps its microseconds. The cursor is signed (`list-cursor.ts`): an
+  HMAC-SHA256 over its list (table and whole order, which it does not carry) and its values, keyed by the one row of
+  `fabrika_list_cursor_key`, which the framework migration writes with a random secret and nothing writes again.
+  `openCursor` refuses one that does not decode, is unsigned or edited, has another shape, or belongs to another table
+  or order with `list_cursor`, the one refusal the framework answers as the caller's 400, so an edited value never
+  reaches a statement. A list therefore needs the framework migrations applied, as the job and admission tables do.
 - **Every handle checks its site first** (`DataSite.check`, the framework's binding to its invocation), then refuses
   what the site's kind or declaration does not allow with the message its type gives, then runs the store's own
   checks. A handle is built per invocation; never cache one across invocations or skip the check for a read.

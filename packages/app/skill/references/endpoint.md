@@ -234,8 +234,9 @@ picker of the org a new project goes into; an `'all'` caller types the org inste
 ## Lists
 
 - `list({ where, orderBy, limit, after })` answers `{ items, next }`: a keyset page of at most `limit` rows (50 by
-  default, 500 at most). Pass `next` back as `after`; it is `null` on the last page. A cursor belongs to its table
-  and its order: one that does not decode, or that another `orderBy` issued, answers 400 `list_cursor`.
+  default, 500 at most). Pass `next` back as `after`; it is `null` on the last page. A cursor is signed and belongs
+  to its table and its order: one that does not decode, was edited, or that another `orderBy` issued, answers 400
+  `list_cursor`.
 - `all({ where, orderBy })`, wherever `list` is but in a public procedure, answers every matching row as an array, in
   one statement, never a page. Past 10 000 rows it throws (`too_many_rows`) instead of truncating: use it for a set
   that stays bounded (a container's children, a code list), and `list` pages for one that grows without bound.

@@ -13,6 +13,7 @@ import { join } from 'node:path'
 import { Database, type InvocationTransaction, runFixedStatement } from '../database'
 import { CapabilityError, ConflictError, DatabaseError, NotFoundError, QueryRefusedError } from '../errors'
 import { bindScopedDatabase, type DataAccess, dataAccessOf, type DataSite } from '../framework'
+import { FRAMEWORK_MIGRATIONS } from '../migrations'
 import type { DataKind, UnscopedMode } from '../orm-types'
 import { readTables } from '../policy'
 import { scoped } from '../store'
@@ -49,7 +50,7 @@ beforeAll(async () => {
 	}
 	await admin(async (sql) => {
 		await sql.unsafe(`create schema ${schema}`)
-		await sql.unsafe(`set search_path to ${schema}; ${migration}`)
+		await sql.unsafe(`set search_path to ${schema}; ${FRAMEWORK_MIGRATIONS.map((file) => file.sql).join('\n')} ${migration}`)
 		await sql.unsafe(`insert into ${schema}.organizations (id, name) values ('o1', 'One'), ('o2', 'Two')`)
 		await sql.unsafe(
 			`insert into ${schema}.workspaces (id, organization_id, name, created_by) values ('w1', 'o1', 'W1', 'u'), ('w2', 'o1', 'W2', 'u'), ('w3', 'o2', 'W3', 'u')`,
