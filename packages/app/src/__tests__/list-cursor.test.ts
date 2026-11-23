@@ -6,7 +6,7 @@ import { serve } from '@fabrika/app/implement'
 import { testKit } from '@fabrika/app/testing'
 import { scoped } from '@fabrika/db'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
@@ -66,8 +66,13 @@ function pageOf(body: unknown): z.infer<typeof Page> {
 	return Answer.parse(body).result
 }
 
+/** The next cursor of a page that has one: a case that asks for it must not pass on an empty `after`. */
 function nextOf(body: unknown): string {
-	return pageOf(body).next ?? ''
+	const next = pageOf(body).next
+	if (next === null) {
+		throw new Error('the page has no next cursor')
+	}
+	return next
 }
 
 const refused = {
@@ -77,11 +82,14 @@ const refused = {
 
 const base64url = (value: unknown): string => Buffer.from(JSON.stringify(value)).toString('base64url')
 
+beforeAll(async () => {
+	for (const title of ['a', 'b', 'c']) {
+		expect((await post('create', { workspaceId: 'w1', title })).status).toBe(200)
+	}
+})
+
 describe('a list cursor from the caller', () => {
 	test('pages the list it came from', async () => {
-		for (const title of ['a', 'b', 'c']) {
-			expect((await post('create', { workspaceId: 'w1', title })).status).toBe(200)
-		}
 		const titles: string[] = []
 		let after: string | undefined
 		do {
