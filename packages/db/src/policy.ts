@@ -976,10 +976,6 @@ function parseFileColumns(
 }
 
 /**
- * A column's own write action takes the column away from the table's update action: one action writes a column, so
- * the column is not in `update`, and the action is not the update action (that one lists the column in `update`).
- */
-/**
  * A column's own write actions. A table update action may be one of them: it then writes the column beside its update
  * list. Naming exactly the table's update actions says what `update` says, so that form is refused.
  */
