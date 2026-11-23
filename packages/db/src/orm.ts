@@ -1304,8 +1304,13 @@ function rowState(table: string, conditions: readonly (Compare | Contains)[], or
 /** An order column's value as the database prints it: exact, where a `Date` would drop microseconds. */
 type CursorValue = string | null
 
-/** A page's position: the text of its last row's order columns (`keyset.c<n>`), as opaque text. */
-function encodeCursor(row: Readonly<Record<string, unknown>>, order: readonly OrderColumn[]): string {
+/** The list a cursor belongs to: its table and its whole order, the tiebreak included. */
+function cursorList(table: string, order: readonly OrderColumn[]): readonly [string, readonly (readonly [string, string])[]] {
+	return [table, order.map((term) => [term.column, term.direction])]
+}
+
+/** A page's position: its list, then the text of its last row's order columns (`keyset.c<n>`), as opaque text. */
+function encodeCursor(table: string, row: Readonly<Record<string, unknown>>, order: readonly OrderColumn[]): string {
 	const values: CursorValue[] = order.map(({ column: name }, index) => {
 		const value = hasOwn(row, cursorAlias(index)) ? row[cursorAlias(index)] : null
 		if (typeof value === 'string' || value === null) {
@@ -1313,7 +1318,7 @@ function encodeCursor(row: Readonly<Record<string, unknown>>, order: readonly Or
 		}
 		throw new QueryRefusedError('list_page', `${name} came back as ${typeof value} text, which a list cannot page by`)
 	})
-	return Buffer.from(JSON.stringify(values)).toString('base64url')
+	return Buffer.from(JSON.stringify([...cursorList(table, order), values])).toString('base64url')
 }
 
 /** A row as the caller sees it: the position columns stay the layer's. */
@@ -1330,9 +1335,12 @@ function withoutCursor(row: Readonly<Record<string, unknown>>, order: readonly O
 	return item
 }
 
-/** The cursor `after` names, parsed at the boundary: one plain value per order column. */
-function decodeCursor(after: unknown, order: readonly OrderColumn[]): readonly CursorValue[] {
-	const refused = () => new QueryRefusedError('list_page', 'after takes the next cursor of a page of this same list')
+/**
+ * The cursor `after` names, parsed at the boundary: a cursor of this table and this order, with one plain value per
+ * order column. Anything else is the caller's `list_cursor`: undecodable, of another shape, list or order.
+ */
+function decodeCursor(after: unknown, table: string, order: readonly OrderColumn[]): readonly CursorValue[] {
+	const refused = () => new QueryRefusedError('list_cursor', 'after takes the next cursor of a page of this same list')
 	if (typeof after !== 'string' || after.length === 0) {
 		throw refused()
 	}
@@ -1342,7 +1350,11 @@ function decodeCursor(after: unknown, order: readonly OrderColumn[]): readonly C
 	} catch {
 		throw refused()
 	}
-	const values = parseList(parsed, (value): CursorValue => {
+	const parts = parseList(parsed, (part) => part)
+	if (parts === undefined || parts.length !== 3 || JSON.stringify([parts[0], parts[1]]) !== JSON.stringify(cursorList(table, order))) {
+		throw refused()
+	}
+	const values = parseList(parts[2], (value): CursorValue => {
 		if (typeof value === 'string' || value === null) {
 			return value
 		}
@@ -1406,7 +1418,7 @@ async function listRows(
 	const conditions = conditionsOf(context, shape, options['where'])
 	const order = orderOf(shape, options['orderBy'], tiebreak)
 	const limit = limitOf(options['limit'])
-	const position = options['after'] === undefined ? undefined : keysetAfter(table, order, decodeCursor(options['after'], order))
+	const position = options['after'] === undefined ? undefined : keysetAfter(table, order, decodeCursor(options['after'], table, order))
 	if (scope === undefined) {
 		return { items: [], next: null }
 	}
@@ -1430,7 +1442,7 @@ async function listRows(
 	const items = page.map((row) => withoutCursor(row, order))
 	return {
 		items: reach === undefined ? items : await answerFiles(context.model, run.files, session, items, reach),
-		next: rows.length > limit && last !== undefined ? encodeCursor(last, order) : null,
+		next: rows.length > limit && last !== undefined ? encodeCursor(table, last, order) : null,
 	}
 }
 
