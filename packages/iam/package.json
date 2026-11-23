@@ -58,6 +58,7 @@
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
+		"@fabrika/control-contract": "workspace:*",
 		"@fabrika/email": "workspace:*",
 		"@fabrika/iam-contract": "workspace:*",
 		"@fabrika/platform": "workspace:*",

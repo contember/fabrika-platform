@@ -2,7 +2,9 @@ import {
 	contractProxyEntry,
 	type ContractProxyTable,
 	encodeProxyManifestJson,
+	type InstallationProxyApp,
 	type InstallationProxyTable,
+	parseProxyManifest,
 	type ProxyApp,
 	type ProxyManifest,
 } from '@fabrika/proxy-core/manifest'
@@ -50,7 +52,10 @@ interface CloudflareContractProxyOptions {
  */
 export type CloudflareProxyWorkerOptions =
 	| (CloudflareProxyWorkerBase & CloudflareContractProxyOptions)
-	| (CloudflareProxyWorkerBase & { readonly installation: InstallationProxyTable; readonly endpoints?: never })
+	| (CloudflareProxyWorkerBase & { readonly installation: CloudflareInstallationProxyTable; readonly endpoints?: never })
+
+/** An installation service's table, and the OAuth resources its `oauth` rows are bound to when it has any. */
+export type CloudflareInstallationProxyTable = InstallationProxyTable & Pick<InstallationProxyApp, 'oauthResources'>
 
 /** Where `createCloudflareProxyWorker` points its Worker: the deployer builds every application's proxy from here. */
 export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
@@ -164,6 +169,8 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		scheme: local ? 'http' : 'https',
 	} satisfies Pick<ProxyApp, 'id' | 'hosts' | 'upstream' | 'scheme'>
 	const manifest: ProxyManifest = { apps: [proxyApp(placement, options)] }
+	// The Worker parses the same document at its first request: a table it would refuse fails the deploy instead.
+	if (parseProxyManifest(manifest) === null) throw new Error(`cloudflare proxy \`${options.name}\` carries a manifest the proxy refuses`)
 	const domain = options.domain?.trim()
 
 	const iam = new ServiceReference(options.iamService ?? IAM_SERVICE, IAM_APPLICATION_ENTRYPOINT)
@@ -191,8 +198,8 @@ function proxyApp(placement: Pick<ProxyApp, 'id' | 'hosts' | 'upstream' | 'schem
 	if ('gates' in options) throw new Error('cloudflare proxy: `gates` is gone; an application is protected by its endpoint table')
 	if (options.installation !== undefined) {
 		if (options.endpoints !== undefined) throw new Error('cloudflare proxy carries exactly one of an endpoint table or an installation table')
-		const { installation, endpoints, reservedPrefixes } = options.installation
-		return { ...placement, installation, endpoints, reservedPrefixes }
+		const { installation, endpoints, reservedPrefixes, oauthResources } = options.installation
+		return { ...placement, installation, endpoints, reservedPrefixes, ...(oauthResources === undefined ? {} : { oauthResources }) }
 	}
 	return contractProxyEntry({
 		...placement,

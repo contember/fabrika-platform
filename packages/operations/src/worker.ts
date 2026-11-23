@@ -22,6 +22,8 @@ interface OperationsWorkerBindings {
 	OPERATIONS_SYNC_KEY: string
 	ENVIRONMENT: string
 	FABRIKA_IAM_ISSUER?: string
+	/** The command-line client's resource this service verifies tokens for (`fabrika.config.ts`); absent, none. */
+	FABRIKA_OPERATIONS_OAUTH_RESOURCE?: string
 	IAM?: IamRpc
 }
 
@@ -35,7 +37,7 @@ export class OperationsWorker extends WorkerEntrypoint<OperationsWorkerBindings>
 			publicHost: this.env.OPERATIONS_PUBLIC_HOST,
 			syncKey: this.env.OPERATIONS_SYNC_KEY,
 			health,
-			iam: createOperationsIam(this.env),
+			iam: createOperationsIam(this.env, this.env.FABRIKA_OPERATIONS_OAUTH_RESOURCE || undefined),
 		}
 	}
 

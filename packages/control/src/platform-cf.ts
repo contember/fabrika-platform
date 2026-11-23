@@ -66,6 +66,8 @@ export interface WorkerBindings
 	CLOUDFLARE_API_TOKEN?: string
 	/** IAM's Worker by its remote name, which every application deploy binds (`fabrika.config.ts` writes it). */
 	FABRIKA_IAM_SERVICE?: string
+	/** The digest of the console table the proxy in front publishes (`fabrika.config.ts` writes it beside the proxy's table). */
+	FABRIKA_SERVICE_TABLE_DIGEST?: string
 	/**
 	 * The runner Worker — the deploy EXECUTOR, over a service binding. Split into its own worker so a deploy
 	 * of fabrika never resets the container running that deploy. OPTIONAL because it is declared

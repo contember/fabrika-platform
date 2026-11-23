@@ -131,8 +131,17 @@ workspace its own running application, where one pinned service could show only 
    environment.
 8. **No MCP token approves.** An OAuth or MCP token is refused by `approvals.complete`, whatever its
    scope (ADR-0050). Every run records its actor, including runs created through MCP.
-9. **Zerops only** for this version. MCP authoring is opt-in, on an https installation and on the local stack. The
-   command-line client's grant is served by every https deploy and by the local stack. A Cloudflare installation serves neither yet.
+9. **MCP authoring is Zerops only** for this version, opt-in on an https installation and on the local stack: a Worker
+   console serves no `/mcp`. The command-line client's grant is served by every https Zerops deploy, by every
+   Cloudflare deploy and by the local stack.
+   - Both providers register the same resources, `CONTROL_CLI_RESOURCES` in `@fabrika/control-contract`'s
+     `cli-access.ts`, and both recompute IAM's config from them on every deploy, so a release that changes a preset
+     converges with no other step. On Zerops the installation's deploy computes it. On Cloudflare IAM's own
+     `fabrika.config.ts` does, from the console's origin its stage is handed, and so imports Control's contract: the
+     resources are the console's, and IAM's deploy is the only step that writes IAM's variables. That contract depends
+     on `@fabrika/operations-contract` for the Operations actions, one way.
+   - On Cloudflare the console Worker serves the table its proxy publishes, by the digest the same config writes beside
+     it, as the Bun process does.
 10. **An application may have one `dev` environment, and each MCP workspace gets its own sandbox in it.** A commit to
     a workspace reaches that workspace's running sandbox through the dev launcher, without a run. `deploy_stage` stays
     the only path to a checked build.
@@ -244,8 +253,9 @@ was built can be; `deploy_stage` to such a target is refused until an operator c
   the person has left.
 - A grant on the command line is fragile by design. A lost refresh answer, or a crash before the helper stores the
   rotated token, spends the grant. The CLI says so, and the person approves a new one.
-- Every https deploy writes `FABRIKA_IAM_OAUTH_CONFIG` on `iam` and `FABRIKA_OPERATIONS_OAUTH_RESOURCE` on
-  `operations`. A plain-http deploy leaves both as they are and warns about each one still set.
+- Every https Zerops deploy writes `FABRIKA_IAM_OAUTH_CONFIG` on `iam` and `FABRIKA_OPERATIONS_OAUTH_RESOURCE` on
+  `operations`. A plain-http deploy leaves both as they are and warns about each one still set. A Cloudflare deploy
+  writes the same values as Worker vars of IAM and Operations, from the console's origin.
 - Control gains the MCP SDK dependency and a second user protocol.
 - MCP cannot scale separately from Control.
 - Concurrent edits are serialized by the expected head; there is no automatic rebase.

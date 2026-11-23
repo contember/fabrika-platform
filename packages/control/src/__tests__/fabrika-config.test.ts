@@ -5,11 +5,14 @@ import {
 	D1Database,
 	NO_IMPORTABLE_ENV_FLAG,
 	NO_PROCESS_ENV_FLAG,
+	proxyManifestJson,
 	Queue,
 	R2Bucket,
+	type ResourceContext,
 	ServiceReference,
 	Worker,
 } from '@fabrika/provider-cloudflare'
+import { parseProxyManifestJson } from '@fabrika/proxy-core/manifest'
 import { beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -19,7 +22,7 @@ import type {
 	controlEmailVars as ControlEmailVars,
 	controlPipelineSecrets as ControlPipelineSecrets,
 } from '../../fabrika.config'
-import { controlServiceContract } from '../../fabrika.service'
+import { controlServiceContract, controlServiceDigest } from '../../fabrika.service'
 
 // fabrika's OWN deploy surface (packages/control/fabrika.config.ts). These
 // tests prove: defineApp accepts fabrika's config, the resource graph materializes with fabrika's full
@@ -46,17 +49,24 @@ beforeAll(async () => {
 })
 
 /** Run `body` with `values` in process.env, then put back what was there before, set or not. */
-function withEnvironment(values: Readonly<Record<string, string>>, body: () => void): void {
+function withEnvironment<T>(values: Readonly<Record<string, string>>, body: () => T): T {
 	const before = Object.keys(values).map((name): [string, string | undefined] => [name, process.env[name]])
 	Object.assign(process.env, values)
 	try {
-		body()
+		return body()
 	} finally {
 		for (const [name, value] of before) {
 			if (value === undefined) delete process.env[name]
 			else process.env[name] = value
 		}
 	}
+}
+
+const ISSUER = 'https://iam.test.example.com'
+
+/** A deployed stage's resource graph: its workflow always names IAM's issuer, the console's authorization server. */
+function deployed(ctx: ResourceContext): Worker {
+	return withEnvironment({ FABRIKA_IAM_ISSUER: ISSUER }, () => config.resources(ctx))
 }
 
 /** Resolve a Worker binding by name (oblaka exposes the materialized graph on `worker.options`). */
@@ -78,7 +88,7 @@ describe('defineApp(control config)', () => {
 	})
 
 	test('the resource graph puts a public proxy in front of the full control app Worker', () => {
-		const worker: Worker = config.resources({ env: 'stage', domain: 'control.test.example.com' })
+		const worker: Worker = deployed({ env: 'stage', domain: 'control.test.example.com' })
 		expect(worker.options.name).toBe('vozka-proxy')
 		expect(worker.options.main).toBe('./proxy-worker.ts')
 		expect(worker.options.routes).toEqual([{ pattern: 'control.test.example.com', custom_domain: true }])
@@ -166,7 +176,7 @@ describe('defineApp(control config)', () => {
 		'FABRIKA_CLOUDFLARE_NAMES=%p names every resource of the installation',
 		(scheme, proxyName, controlName, logs, queue, mail, iam, operations, runner) => {
 			withEnvironment({ FABRIKA_CLOUDFLARE_NAMES: scheme }, () => {
-				const proxy = config.resources({ env: 'prod', domain: 'control.test.example.com' })
+				const proxy = deployed({ env: 'prod', domain: 'control.test.example.com' })
 				expect(proxy.options.name).toBe(proxyName)
 				expect(remoteService(binding(proxy, 'IAM'), 'prod')).toBe(`prod-${iam}`)
 				const app = application(proxy)
@@ -203,8 +213,44 @@ describe('defineApp(control config)', () => {
 		})
 	})
 
+	test("a deployed console publishes the command-line client's table and resources, and its Worker serves the same table", () => {
+		const proxy = deployed({ env: 'prod', domain: 'control.test.example.com' })
+		const manifest = parseProxyManifestJson(proxyManifestJson(proxy) ?? '')
+		const entry = manifest?.apps[0]
+		if (entry === undefined || !('installation' in entry)) throw new Error('expected the console installation entry')
+		expect(entry.endpoints.filter((row) => row.oauth !== null).map((row) => row.id)).toEqual(['rpc', 'operations-rpc'])
+		expect(entry.oauthResources).toEqual([
+			{
+				resource: 'https://control.test.example.com/api/rpc',
+				resourceMetadata: 'https://control.test.example.com/.well-known/oauth-protected-resource/api/rpc',
+				authorizationServers: [ISSUER],
+				scopesSupported: ['read', 'deploy', 'operate', 'create'],
+			},
+			{
+				resource: 'https://control.test.example.com/operations/api/rpc',
+				resourceMetadata: 'https://control.test.example.com/.well-known/oauth-protected-resource/operations/api/rpc',
+				authorizationServers: [ISSUER],
+				scopesSupported: ['read', 'deploy', 'operate'],
+			},
+		])
+		expect(application(proxy).options.vars?.['FABRIKA_SERVICE_TABLE_DIGEST']).toBe(controlServiceDigest({ mcp: false, cli: true }))
+
+		const local = buildControlWorker({ env: 'local' })
+		const localEntry = parseProxyManifestJson(proxyManifestJson(local) ?? '')?.apps[0]
+		if (localEntry === undefined || !('installation' in localEntry)) throw new Error('expected the console installation entry')
+		expect(localEntry.oauthResources).toBeUndefined()
+		expect(localEntry.endpoints.some((row) => row.oauth !== null)).toBe(false)
+		expect(application(local).options.vars?.['FABRIKA_SERVICE_TABLE_DIGEST']).toBe(controlServiceDigest({ mcp: false, cli: false }))
+	})
+
+	test('a deployed console without an https IAM issuer refuses the deploy', () => {
+		withEnvironment({ FABRIKA_IAM_ISSUER: 'http://iam.test.example.com' }, () => {
+			expect(() => config.resources({ env: 'prod', domain: 'control.test.example.com' })).toThrow('FABRIKA_IAM_ISSUER must be the https origin of IAM')
+		})
+	})
+
 	test('domain from ctx flows into the FABRIKA_CONTROL_DOMAIN var', () => {
-		const worker = application(config.resources({ env: 'stage', domain: 'control.test.example.com' }))
+		const worker = application(deployed({ env: 'stage', domain: 'control.test.example.com' }))
 		expect(worker.options.vars?.['FABRIKA_CONTROL_DOMAIN']).toBe('control.test.example.com')
 		expect(worker.options.vars?.['ENVIRONMENT']).toBe('stage')
 	})

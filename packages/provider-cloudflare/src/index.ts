@@ -62,5 +62,5 @@ export {
 	POPULATE_PROCESS_ENV_FLAG,
 	proxyManifestJson,
 } from './proxy'
-export type { CloudflareProxyWorkerOptions } from './proxy'
+export type { CloudflareInstallationProxyTable, CloudflareProxyWorkerOptions } from './proxy'
 export { type AppSchemaParse, parseAppSchema } from './schema'
