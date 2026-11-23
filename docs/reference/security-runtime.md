@@ -180,15 +180,15 @@ not admit, in this order ([`dispatch.ts`](../../packages/app/src/implement/dispa
 An application never receives a person's password, session cookie or `px_` key. It does hold these machine
 credentials, as environment variables of its own service or Worker, so code running in it can use them:
 
-| Credential                                       | What it allows                                                                         | Lifetime and rotation                                   | Where                                                                           |
-| ------------------------------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| Proxy secret (`FABRIKA_PROXY_SECRET`)            | Proves a request came from the proxy, to this environment only                         | No rotation verb                                        | [`proxy-secret.ts`](../../packages/control/src/proxy-secret.ts)                 |
-| Workload keys (`FABRIKA_<KIND>_<NAME>_KEY`)      | A token with the declared actions of one job, webhook or public procedure              | 30 days, reissued by a deploy past half-life            | [`workload-credentials.ts`](../../packages/control/src/workload-credentials.ts) |
-| Connector keys (`FABRIKA_CONNECT_<IMPORT>_KEY`)  | Calls to the procedures another application exports to it                              | As workload keys; revoked when the last import goes     | [`connectors.ts`](../../packages/control/src/connectors.ts)                     |
-| Membership transport key (`FABRIKA_IAM_RPC_KEY`) | Pins IAM's membership calls to this application; adds no authority, mints nothing      | As workload keys                                        | [`membership-transport.ts`](../../packages/control/src/membership-transport.ts) |
-| Signed-token keys (`FABRIKA_TOKEN_KEYS`)         | Sign and verify the application's own signed tokens (`ctx.tokens.sign`, a token input) | Rotated on request (`apps.environments.rotateTokenKey`) | [`tokens.ts`](../../packages/app/src/implement/tokens.ts)                       |
-| Its own database credentials (Zerops)            | Its own role family and schema                                                         | Provisioned per application                             | [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)              |
-| Its declared secrets                             | Whatever the secret is for                                                             | Set by a person with `secret.manage`                    | [§6](#6-secrets)                                                                |
+| Credential                                       | What it allows                                                                         | Lifetime and rotation                                                                                 | Where                                                                           |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Proxy secret (`FABRIKA_PROXY_SECRET`)            | Proves a request came from the proxy, to this environment only                         | No rotation verb; by hand ([runbook](key-rotation.md#the-proxy-secret-of-an-application-environment)) | [`proxy-secret.ts`](../../packages/control/src/proxy-secret.ts)                 |
+| Workload keys (`FABRIKA_<KIND>_<NAME>_KEY`)      | A token with the declared actions of one job, webhook or public procedure              | 30 days, reissued by a deploy past half-life                                                          | [`workload-credentials.ts`](../../packages/control/src/workload-credentials.ts) |
+| Connector keys (`FABRIKA_CONNECT_<IMPORT>_KEY`)  | Calls to the procedures another application exports to it                              | As workload keys; revoked when the last import goes                                                   | [`connectors.ts`](../../packages/control/src/connectors.ts)                     |
+| Membership transport key (`FABRIKA_IAM_RPC_KEY`) | Pins IAM's membership calls to this application; adds no authority, mints nothing      | As workload keys                                                                                      | [`membership-transport.ts`](../../packages/control/src/membership-transport.ts) |
+| Signed-token keys (`FABRIKA_TOKEN_KEYS`)         | Sign and verify the application's own signed tokens (`ctx.tokens.sign`, a token input) | Rotated on request (`apps.environments.rotateTokenKey`)                                               | [`tokens.ts`](../../packages/app/src/implement/tokens.ts)                       |
+| Its own database credentials (Zerops)            | Its own role family and schema                                                         | Provisioned per application                                                                           | [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)              |
+| Its declared secrets                             | Whatever the secret is for                                                             | Set by a person with `secret.manage`                                                                  | [§6](#6-secrets)                                                                |
 
 The ops key, which drives backups and data operations on Cloudflare, is not among them: the application holds only its
 SHA-256 digests ([`ops-key.ts`](../../packages/control/src/ops-key.ts),
@@ -299,9 +299,11 @@ Known gaps:
   ([`managed-secrets.ts`](../../packages/provider-cloudflare/src/managed-secrets.ts)). Losing the KEK is unrecoverable.
   The envelope carries no associated data: what ties a value to its application and name is the row's scope and label,
   checked on every read (`getSecretForPurpose`), so a writer of Control's database who moves a sealed value into
-  another row moves the secret with it. Rotating the KEK is not an operator procedure: the vault has a re-wrap routine
-  (`reencryptAll`), but no command runs it, and it goes row by row with no key version, so an interrupted run leaves
-  rows under both keys ([`packages/control/src/vault.ts`](../../packages/control/src/vault.ts)).
+  another row moves the secret with it; binding the value to its row is deferred
+  ([backlog 300](../backlog/300-a-vault-value-is-not-bound-to-its-row.md)). The KEK is rotated with Control stopped by
+  `rotate-vault-key`, which re-wraps every row in one transaction and succeeds only when every row opens with the new
+  key and none with the old one ([runbook](key-rotation.md#the-vault-key-kek)). It runs on Zerops only: on Cloudflare
+  no command rotates the KEK.
 - **Not every credential is in the vault.** Queued IAM mail (reset, enrollment and invitation links) is stored in
   plain text in Control's database until it is sent
   ([backlog 202](../backlog/202-relayed-mail-content-is-plaintext-at-rest.md)).

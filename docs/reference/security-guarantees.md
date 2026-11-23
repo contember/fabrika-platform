@@ -92,15 +92,17 @@ Each row: what the platform prevents by design, what it only limits, and what st
 
 ### Revoking and rotating
 
-| What                                                        | How                                                                                       | Takes effect                                          |
-| ----------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------- |
-| A person's sessions                                         | `sessions.revoke` / `sessions.revokeAll`, or disable the principal (console, Access)      | At once; minted tokens last at most 300 s             |
-| An API key, a share link                                    | `apiKeys.revoke`, `apiKeys.rotate`, `shareLinks.revoke`                                   | At once; minted tokens last at most 300 s             |
-| An application's secret                                     | `vault.rotate`                                                                            | Next deploy; on Zerops written to the service at once |
-| An application's signed-token key                           | `apps.environments.rotateTokenKey`                                                        | Next deploy; the old key verifies until it ages out   |
-| Workload, connector, ops keys                               | Automatic at a deploy (workload keys past half of 30 days, ops keys at 15 days)           | At that deploy                                        |
-| IAM's signing keys                                          | By hand: add a key to `FABRIKA_IAM_SIGNING_KEYS`, move it first, remove the old one later | A verifier caches the key set for up to 600 s         |
-| Proxy secret, vault key, IAM transport keys, GitHub App key | No command                                                                                | —                                                     |
+| What                                      | How                                                                                                                                      | Takes effect                                                                    |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| A person's sessions                       | `sessions.revoke` / `sessions.revokeAll`, or disable the principal (console, Access)                                                     | At once; minted tokens last at most 300 s                                       |
+| An API key, a share link                  | `apiKeys.revoke`, `apiKeys.rotate`, `shareLinks.revoke`                                                                                  | At once; minted tokens last at most 300 s                                       |
+| An application's secret                   | `vault.rotate`                                                                                                                           | Next deploy; on Zerops written to the service at once                           |
+| An application's signed-token key         | `apps.environments.rotateTokenKey`                                                                                                       | Next deploy; the old key verifies until it ages out                             |
+| Workload, connector, ops keys             | Automatic at a deploy (workload keys past half of 30 days, ops keys at 15 days)                                                          | At that deploy                                                                  |
+| IAM's signing keys                        | By hand: add a key to `FABRIKA_IAM_SIGNING_KEYS`, move it first, remove the old one later ([runbook](key-rotation.md#iams-signing-keys)) | A verifier caches the key set for up to 600 s                                   |
+| An application environment's proxy secret | By hand: delete Control's record of it and deploy ([runbook](key-rotation.md#the-proxy-secret-of-an-application-environment))            | That deploy; on Zerops the application refuses proxied requests while it builds |
+| The vault key                             | `rotate-vault-key` with Control stopped, on Zerops only ([runbook](key-rotation.md#the-vault-key-kek))                                   | When Control starts with the new key                                            |
+| IAM transport keys, GitHub App key        | No command                                                                                                                               | —                                                                               |
 
 The IAM verbs are in [`packages/iam/src/admin/rpc.ts`](../../packages/iam/src/admin/rpc.ts), Control's (`vault.rotate`,
 `apps.environments.rotateTokenKey`) in [`control-rpc.ts`](../../packages/control/src/control-rpc.ts), the signing keys

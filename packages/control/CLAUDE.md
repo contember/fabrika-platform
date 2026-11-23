@@ -175,6 +175,9 @@ other environment, before the provider prepares anything, and the write maps a r
   a full origin mean the same thing; stating no origin is supported and means no claim.
 - **Vault (`src/vault.ts`): envelope AES-256-GCM**, KEK from `FABRIKA_CONTROL_VAULT_KEY` (never in D1, never logged).
   Secret VALUES are write-only over the API; D1 stores only ciphertext + wrapped DEK. Losing the KEK is unrecoverable by design.
+  `reencryptAll` re-wraps every row in ONE `batch` (a transaction on both dialects) and skips a row the new key already
+  opens, so an interrupted rotation changes nothing and a re-run finishes one; never return it to row-by-row writes.
+  `src/bun/rotate-vault-key.ts` runs it on Postgres with Control stopped (`docs/reference/key-rotation.md`).
 - **GitHub sources are one model on both clouds (`src/github/`, ADR-0029).** `connections/` holds the connection store,
   the management workflow and the vault-held credentials; `source/` the archive, transport and metadata; `triggers/`
   the push webhook and the public-repo poll. Each connection's App id and key
@@ -264,7 +267,9 @@ other environment, before the provider prepares anything, and the write maps a r
   `proxySecretPurpose(app, env)`, and records only the ref in `app_env_proxy_secrets`; a lost insert race
   deletes its own vault row and answers the recorded one. Every follow goes through
   `getSecretForPurpose`, like an app secret. Without a vault no secret is handed out, and `executeDeploy` refuses a
-  non-dry deploy behind a namespace proxy or on a provider that declares `applicationHopSecret`. There is no rotation verb; `FABRIKA_PROXY_SECRET` is a reserved name.
+  non-dry deploy behind a namespace proxy or on a provider that declares `applicationHopSecret`. There is no rotation
+  verb: an operator deletes the record and its vault row and deploys (`docs/reference/key-rotation.md`);
+  `FABRIKA_PROXY_SECRET` is a reserved name.
 - **A namespace member and a deploy's environment carry `operationsOrigin`, the origin of the active ingest DSN**
   (`ingestOrigin`, `src/operations-catalog.ts`; `namespaceMembers` and `executeDeploy`), so a proxy's header policy
   admits the same Operations origin the framework does. The DSN carries the ingest key; only its origin leaves Control this way.
