@@ -702,6 +702,12 @@ export interface ControlProvider {
 	 * snapshot, under the namespace lease, on every publication attempt. The candidate is not yet approved access.
 	 */
 	validateAccess?(input: { readonly environment: ProviderEnvironment; readonly access: ProviderApprovedAccess }): void
+	/**
+	 * Why the environment's build cannot install from the deployed commit's `bun.lock` (its text), or null when it can or
+	 * when that cannot be known. Pure. Control calls it when it reads the run's snapshot, before any provider effect, and
+	 * fails the run with the answer. Absent means the provider checks nothing.
+	 */
+	lockfileRefusal?(input: { readonly environment: ProviderEnvironment; readonly lockfile: string }): string | null
 	deploy(input: ProviderDeployInput): Promise<ProviderDeployOutcome>
 	cancel?(input: ProviderCancelInput): Promise<ProviderCancelOutcome>
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>

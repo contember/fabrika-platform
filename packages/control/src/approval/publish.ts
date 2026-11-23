@@ -22,7 +22,7 @@ import type { LeaseFence } from '../lease'
 import { mailCustodyRefusal } from '../mail-transport'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { relationGrantsRefusal } from './enforcement'
-import { AppliedMigrationsChanged, ContractMissing, readAccessSnapshot, snapshotReads, SnapshotRefused } from './read'
+import { AppliedMigrationsChanged, ContractMissing, readAccessSnapshot, readLockfile, snapshotReads, SnapshotRefused } from './read'
 import { FrameworkReleaseRefused } from './readers'
 import {
 	type AccessSnapshot,
@@ -152,6 +152,8 @@ export interface PublicationInput {
 	readonly workspaceBaseline?: { readonly runId: string; readonly snapshot: AccessSnapshot } | null
 	/** Refuse a candidate the placement cannot serve before it becomes any publisher's source of truth. */
 	validateAccess?(access: ProviderApprovedAccess, environment: AppEnvRow): Promise<void>
+	/** Why the build cannot install from the commit's `bun.lock` (`ControlProvider.lockfileRefusal`), or null. */
+	lockfileRefusal?(lockfile: string): string | null
 	log(line: string): void
 }
 
@@ -242,7 +244,7 @@ async function readCandidate(
 ): Promise<AccessSnapshot> {
 	// A dev bootstrap migrates its workspace's sandbox, which the environment's succeeded runs do not describe.
 	const applied = input.workspaceBaseline === undefined ? await appliedMigrations(deps.repositories.runs, input.run) : []
-	const snapshot = await readAtCommit(deps, invocation.signal, input, applied)
+	const snapshot = await readAtCommit(deps, invocation.signal, input, applied, input.lockfileRefusal)
 	await invocation.write((fence) => deps.repositories.runs.recordRunSnapshot(input.run.id, serializeSnapshot(snapshot), fence))
 	return snapshot
 }
@@ -285,6 +287,7 @@ async function readAtCommit(
 	signal: AbortSignal,
 	input: PublicationInput,
 	applied: readonly MigrationEntry[],
+	lockfileRefusal?: (lockfile: string) => string | null,
 ): Promise<AccessSnapshot> {
 	try {
 		const root = input.root
@@ -299,7 +302,11 @@ async function readAtCommit(
 			signal,
 		})
 		const settled = approvedSnapshot(await requireAppEnv(deps.repositories, input.run)).snapshot.migrations
-		return await readAccessSnapshot(commit, root, input.app.id, { settled, applied, dialect: input.dialect })
+		const snapshot = await readAccessSnapshot(commit, root, input.app.id, { settled, applied, dialect: input.dialect })
+		// Before the build, which would fail the frozen install with the installer's own error and no hint at the base.
+		const refusal = lockfileRefusal === undefined ? null : lockfileRefusal(await readLockfile(commit, root))
+		if (refusal !== null) throw new Error(refusal)
+		return snapshot
 	} catch (error) {
 		signal.throwIfAborted()
 		if (error instanceof ContractMissing) input.log(`access: ${error.message}`)

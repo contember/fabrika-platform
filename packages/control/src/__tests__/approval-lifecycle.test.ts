@@ -347,6 +347,44 @@ describe('approved access through the run lifecycle', () => {
 		expect(w.deploys).toHaveLength(2)
 	})
 
+	test("a commit whose bun.lock the registered build cannot install from fails with the provider's reason before publication or a deploy", async () => {
+		const w = world()
+		await seed(w)
+		const reason = 'bun.lock has lockfileVersion 2, which Bun 1.3 cannot read; set build.base: alpine/bun@1.4'
+		const lockfile = frameworkLockfile()
+		w.files = { 'bun.lock': lockfile }
+		const d = deps(w)
+		const seen: Array<{ readonly artifact: unknown; readonly lockfile: string }> = []
+		let readable = false
+		const checked: RunDeps = {
+			...d,
+			provider: {
+				...d.provider,
+				lockfileRefusal: ({ environment, lockfile: text }) => {
+					seen.push({ artifact: environment.artifact, lockfile: text })
+					return readable ? null : reason
+				},
+			},
+		}
+		const attempt = async () => {
+			const runId = uuidv7()
+			await w.db.runs.createRun({ id: runId, appId: 'notes', env: 'stage', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+			return executeDeploy(checked, { runId })
+		}
+		const refused = await attempt()
+		expect(refused.status).toBe('failed')
+		expect(seen).toEqual([{ artifact: JSON.parse(HARBOR_ARTIFACT), lockfile }])
+		expect(await published(w, 'stage')).toEqual({ runId: null, generation: 0 })
+		expect(w.republished).toEqual([])
+		expect(w.deploys).toEqual([])
+		expect(w.logs.get(`runs/${refused.runId}/logs.ndjson`)).toContain(`deploy failed: ${reason}`)
+
+		readable = true
+		expect((await attempt()).status).toBe('succeeded')
+		expect(seen).toHaveLength(2)
+		expect(w.deploys).toHaveLength(1)
+	})
+
 	test('a lost publication validates the candidate again against the updated environment', async () => {
 		const w = world()
 		await seed(w)

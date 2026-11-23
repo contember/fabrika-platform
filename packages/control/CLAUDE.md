@@ -664,7 +664,8 @@ other environment, before the provider prepares anything, and the write maps a r
   `namespaceMembers` attach `approvedProviderAccess`, so every deploy, cancel, reconcile, registry hook and
   namespace job hands the provider the approved access and nothing else: `access`, the approved contract. A commit
   without `fabrika.contract.ts` fails its run with `ContractMissing` before the provider is called, and publishes
-  nothing. A stored snapshot's legacy `artifact` field is dropped when it parses, and a publication without a contract
+  nothing. A fresh snapshot read also hands the commit's `bun.lock` to the provider's optional, pure `lockfileRefusal`
+  (Zerops: can the build base install from it); an answer fails the run with it, before anything publishes. A stored snapshot's legacy `artifact` field is dropped when it parses, and a publication without a contract
   reads as the empty baseline (`approvedSnapshot`). `runs.pending_access_json` is no longer read or written. The
   published snapshot lives in `app_envs.published_snapshot_json`. A snapshot whose plain JSON exceeds
   `STORED_SNAPSHOT_BYTES` (a D1 row holds 2,000,000 bytes) stores its contract in the shared encoding (`encodeArtifact`),

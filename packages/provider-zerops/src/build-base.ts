@@ -2,7 +2,7 @@
 // `bun install --frozen-lockfile` on the base the selected setup names in `build.base` (ADR-0043), and a Bun older than
 // the one that wrote the lockfile fails that install late, in a started build container, with `Unknown lockfile
 // version`. `fabrika app build`, `app register` and the builder's deploy refuse such a base before anything deploys,
-// from the lockfile they compile beside; a commit after registration is not checked. PURE: no filesystem.
+// from the lockfile they compile beside, and a run from its commit's (`lockfileRefusal`). PURE: no filesystem.
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { parseZeropsDescriptor, selectZeropsDescriptorSetup } from './descriptor'

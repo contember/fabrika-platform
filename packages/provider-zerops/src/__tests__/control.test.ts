@@ -1494,6 +1494,49 @@ describe('Zerops ControlProvider lifecycle', () => {
 		})
 	})
 
+	describe("a deploy's commit with a bun.lock its registered build base cannot read", () => {
+		const contractConfig: ZeropsAppConfig = {
+			id: 'notes',
+			target: {
+				platform: 'zerops',
+				services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }],
+				contract: notesArtifact,
+				proxy: { upstream: 'notes:3000', ...contractProxyTable(notesArtifact) },
+			},
+		}
+		const ON_BUN_13 = 'zerops:\n  - setup: notes\n    build:\n      base: alpine/bun@1.3\n      buildCommands: [bun run build]\n'
+		const lockfile = (version: number): string => `{\n  "lockfileVersion": ${version},\n  "workspaces": {},\n  "packages": {},\n}\n`
+		const registeredFor = async (target: ZeropsAppConfig, overrides: Partial<ProviderEnvironment> = {}) =>
+			environment({
+				...overrides,
+				artifact: {
+					provider: 'zerops',
+					version: zeropsArtifactCodec.version,
+					payload: zeropsArtifactCodec.encode(compileFabrikaManifest(target, 'prod', await createZeropsArtifactSourceDescriptor(ON_BUN_13))),
+				},
+			})
+		const lockfileRefusal = () => {
+			const hook = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) }).lockfileRefusal
+			if (hook === undefined) throw new Error('the Zerops provider checks the commit bun.lock')
+			return hook
+		}
+
+		test('is refused with the message `fabrika app build` prints, without a platform call', async () => {
+			const registered = await registeredFor(contractConfig)
+			expect(lockfileRefusal()({ environment: registered, lockfile: lockfile(2) })).toBe(
+				'bun.lock has lockfileVersion 2, which Bun 1.3 cannot read, and the platform build runs `bun install --frozen-lockfile` on build.base `alpine/bun@1.3` of zerops.yaml setup `notes`; set build.base: alpine/bun@1.4, or regenerate bun.lock with Bun 1.3, which resolves every dependency afresh',
+			)
+			expect(recorded.calls).toEqual([])
+		})
+
+		test('a lockfile the base reads, an application without a contract and a dev sandbox are not refused', async () => {
+			expect(lockfileRefusal()({ environment: await registeredFor(contractConfig), lockfile: lockfile(1) })).toBeNull()
+			expect(lockfileRefusal()({ environment: await registeredFor(config), lockfile: lockfile(2) })).toBeNull()
+			// A dev sandbox builds on its own image, whatever `build.base` names.
+			expect(lockfileRefusal()({ environment: await registeredFor(contractConfig, { kind: 'dev' }), lockfile: lockfile(2) })).toBeNull()
+		})
+	})
+
 	test('routes two keyed connections through their exact resolve and upload bindings', async () => {
 		const calls: string[] = []
 		const source: ZeropsSourcePort = {

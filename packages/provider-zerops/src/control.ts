@@ -28,6 +28,7 @@ import {
 	type ZeropsAppVersion,
 	ZeropsServiceEnvValueTooLargeError,
 } from './api'
+import { lockfileBuildBaseRefusal } from './build-base'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
 import { assertApplicationSecretName, assertAuthoredManagedInputs, assertAuthoredManagedName, assertNoFrameworkReference } from './managed-env'
@@ -427,6 +428,8 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 			const placement = resolvedEnvironment(environment, { requireReady: true })
 			assertNamespaceProxyReads(placement.namespace.id, access, placement.namespaceTarget.proxySource, options.namespaces)
 		},
+		// The check `fabrika app build` runs, on the commit a run deploys. A dev sandbox builds on its own image, not `build.base`.
+		lockfileRefusal: ({ environment, lockfile }) => environment.kind === 'dev' ? null : lockfileBuildBaseRefusal(artifactFor(environment), lockfile),
 		deploy: async (input: ProviderDeployInput): Promise<ProviderDeployOutcome> => {
 			input.signal.throwIfAborted()
 			assertAuthoredManagedInputs({ variableNames: Object.keys(input.vars), secretNames: Object.keys(input.secrets) })

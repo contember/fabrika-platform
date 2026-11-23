@@ -312,8 +312,10 @@ bun test
   `ZEROPS_APPLICATION_RUNTIME`), and an older Bun fails it late with `Unknown lockfile version`. Only a base named
   `[alpine/|ubuntu/]bun@<major>.<minor>` is checked; an alias or another runtime is not. `LOCKFILE_READERS` maps each
   `lockfileVersion` to the oldest Bun that reads it: add a row when a Bun release writes a new one. Like the
-  plain-credential check, it never runs on decode, and Control does not run it on a later commit: refusing a commit
-  there would be a platform protocol change (ADR-0062).
+  plain-credential check, it never runs on decode. A deploy runs it too, through `lockfileRefusal` (`src/control.ts`):
+  Control hands it the deployed commit's `bun.lock` when it reads the run's snapshot, before anything publishes or
+  builds, and fails the run with the same message. It refuses only a commit whose build would fail, so it is no protocol
+  change (ADR-0043, ADR-0062). A `dev` environment is not checked: its sandbox builds on its own image.
 - **No authored variable may copy a framework-only one.** `assertAuthoredManagedDocument` refuses, in every
   `envVariables`/`envSecrets` mapping at any depth, a framework-only name as a key and a reference to one in
   a key or a value (`frameworkVariableReference`: `${NAME}`, `${RUNTIME_NAME}`, `${<host>_NAME}`, nested).

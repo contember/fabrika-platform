@@ -84,6 +84,11 @@ async function readFrameworkRelease(commit: CommitFiles, inRepository: (path: st
 	return release
 }
 
+/** The text of the application's `bun.lock` at `root`, which a snapshot read of the same commit found. */
+export function readLockfile(commit: CommitFiles, root: string): Promise<string> {
+	return commit.read(root === '' ? LOCKFILE : `${root}/${LOCKFILE}`, SNAPSHOT_LIMITS.lockfileBytes)
+}
+
 /** Why a commit cannot be read as an access snapshot. A fixed code, never text from the checkout. */
 export type SnapshotRefusalCode =
 	| 'root-invalid'
