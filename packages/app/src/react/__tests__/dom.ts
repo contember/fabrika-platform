@@ -4,6 +4,7 @@
 import { afterAll } from 'bun:test'
 import { act, type ReactNode } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
+import type { RpcFetch } from '../../client/transport'
 import { installDom } from '../testing'
 
 const dom = installDom()
@@ -40,6 +41,36 @@ export async function settle(): Promise<void> {
 		await act(async () => {
 			await new Promise((resolve) => setTimeout(resolve, 0))
 		})
+	}
+}
+
+/**
+ * A fetch that counts its requests in flight, and `settled`, which lets turns pass until none is and then `settle`s the
+ * re-renders. A request through the test kit's proxy verifies a token with WebCrypto, which answers after any fixed
+ * number of turns on a loaded machine.
+ */
+export function trackedFetch(fetch: RpcFetch): { readonly fetch: RpcFetch; settled(): Promise<void> } {
+	let inFlight = 0
+	const tracked: RpcFetch = async (input, init) => {
+		inFlight++
+		try {
+			return await fetch(input, init)
+		} finally {
+			inFlight--
+		}
+	}
+	return {
+		fetch: tracked,
+		async settled() {
+			const deadline = Date.now() + 10_000
+			while (inFlight > 0) {
+				if (Date.now() > deadline) throw new Error(`${inFlight} request(s) still in flight after 10 s`)
+				await act(async () => {
+					await new Promise((resolve) => setTimeout(resolve, 0))
+				})
+			}
+			await settle()
+		},
 	}
 }
 

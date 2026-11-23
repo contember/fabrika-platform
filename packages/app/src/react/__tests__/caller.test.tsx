@@ -1,7 +1,7 @@
 // The hooks behind the production proxy decision of the test kit: the proxy's own 401 reaches a view with its login
 // URL, and `useCaller` and `<Can>` read the SPA mount's caller document for the kit's callers.
 
-import { mount, settle } from './dom'
+import { mount, trackedFetch } from './dom'
 
 import { createClient } from '@fabrika/app/client'
 import { defineContract } from '@fabrika/app/contract'
@@ -64,13 +64,14 @@ function Greeting(): ReactNode {
 	)
 }
 
-const view = async (fetch: ReturnType<typeof kit.browser>, node: ReactNode) => {
+const view = async (browser: ReturnType<typeof kit.browser>, node: ReactNode) => {
+	const { fetch, settled } = trackedFetch(browser)
 	const mounted = await mount(
 		<FabrikaProvider clients={[createClient(contract, 'api', { fetch })]} fetch={fetch}>
 			{node}
 		</FabrikaProvider>,
 	)
-	await settle()
+	await settled()
 	return mounted
 }
 
