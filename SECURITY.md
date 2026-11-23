@@ -15,7 +15,8 @@ you do not own.
 
 ## Which versions get fixes
 
-fabrika is before 1.0, and only the newest release is maintained:
+fabrika is before 1.0. The maintainers fix vulnerabilities in the newest release only. The release process provides
+the means ([`release-process.md`](docs/reference/release-process.md)):
 
 - **The newest release on npm's `latest` dist-tag** gets a fix as a patch release cut from its tag
   ([cutting a hotfix](docs/reference/release-process.md#cutting-a-hotfix)).
@@ -23,13 +24,19 @@ fabrika is before 1.0, and only the newest release is maintained:
   ([release channels](docs/reference/release-process.md#release-channels)).
 - **Older releases** get no back-port: upgrade the installation to the fixed release. A fix in a framework package an
   application pins (`@fabrika/app`, `@fabrika/auth`, `@fabrika/db`, …) reaches that application when it raises its own
-  pin to the fixed release.
+  pin to the fixed release and the installation runs a release whose
+  [framework window](docs/reference/release-process.md#the-framework-window) includes it.
+
+## Dependencies
+
+The repository has Dependabot alerts enabled; CI runs no separate dependency audit. Report a vulnerable dependency
+that fabrika exposes the same way as any other vulnerability.
 
 ## What to expect after a report
 
 1. A maintainer acknowledges the report and confirms or disputes the vulnerability, asking for detail when needed.
-2. A confirmed vulnerability is fixed in the advisory's temporary private fork and released as above. We agree the disclosure
-   date with you; until then, please keep the details private.
+2. A confirmed vulnerability is fixed in the advisory's temporary private fork and released as above. The maintainers set the
+   disclosure date and agree it with you where they can; until then, please keep the details private.
 3. The fix is published as a GitHub security advisory, with a CVE where it applies, crediting you unless you prefer
    otherwise.
 
