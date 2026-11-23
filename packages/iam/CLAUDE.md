@@ -760,6 +760,16 @@ fails if that stops being true — it is the guard, not documentation of one.
   principal. A grant expires with the session it was given under and cascades with its row. One code
   per grant, so the grant IS the refresh-token family: a replayed code or a reused rotated refresh
   token revokes it. Resource tokens are signed with `typ: at+jwt` (`Signer.signResourceToken`).
+- **ONE CLIENT IS NO DOCUMENT: `fabrika-cli` (`OAUTH_CLI_CLIENT_ID`, `@fabrika/auth-core`).** Every installation's
+  command-line client is public, has no redirect URI and is never registered: it cannot complete `/oauth/authorize` or
+  redeem a code, it may only refresh and revoke the grants IAM gives it, and it is refused when it sends an assertion.
+  It is the one client id that is not a CIMD URL (`isOAuthClientId`).
+- **A GRANT MAY COVER SEVERAL RESOURCES OF ITS ONE APP** (`oauth_grants.resources`, NULL = `resource` alone). Each token
+  names one of them, the `resource` of the exchange or refresh, and carries the ceiling of that resource's scopes;
+  a resource the grant does not list is `invalid_grant`. A scope declared with a `parameter` (a scope dimension type)
+  is requested only as `<scope>:<value>` and narrows each of its scope-less actions to that value
+  (`resolveOAuthScopeToken`, `@fabrika/iam-contract`): `deploy:alpha` with parameter `app` holds its actions at app
+  `alpha` only, whatever wider grant the person holds. A parameterized scope is never a default scope.
 - **THE CLIENT'S DOCUMENT, NEVER THE REQUEST, PICKS HOW THE CLIENT AUTHENTICATES** (`oauth-client-auth.ts`).
   A `none` document is a public client and is refused if it sends an assertion; a `private_key_jwt` document
   (ChatGPT) must send a JWT assertion at `/oauth/token` and `/oauth/revoke`, verified against the `jwks_uri`

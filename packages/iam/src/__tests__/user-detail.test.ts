@@ -219,6 +219,7 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 				client_id: clientId,
 				app: APP,
 				resource,
+				resources: null,
 				scopes: '["read"]',
 				created_at: future() - 3600,
 				expires_at: future(),

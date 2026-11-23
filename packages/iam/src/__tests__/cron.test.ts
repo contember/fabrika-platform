@@ -190,6 +190,7 @@ async function seedBothSides(h: Harness): Promise<string> {
 				client_id: 'https://claude.example.test/cimd',
 				app: 'control',
 				resource: 'https://control.example.test/mcp',
+				resources: null,
 				scopes: '["authoring"]',
 				created_at: NOW - DAY,
 				expires_at: NOW + DAY,

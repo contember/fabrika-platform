@@ -18,7 +18,7 @@ import { principalStatus } from './db'
 import type { Env } from './env'
 import { escapeHtml } from './html'
 import { installationBrand } from './installation-brand'
-import { establishClient, type EstablishedClient, exchangeOAuthToken, grantAuthorization, revokeOAuthToken, scopeCeiling } from './oauth'
+import { establishClient, exchangeOAuthToken, grantAuthorization, type ManagedClient, revokeOAuthToken, scopeCeiling } from './oauth'
 import { authenticateOAuthClient, authenticateRevokingClient } from './oauth-client-auth'
 import type { OAuthConfig } from './oauth-config'
 import { normalizeOrigin } from './origin'
@@ -76,7 +76,7 @@ function authorizationServerMetadata(issuer: string): Response {
 type AuthorizationCheck =
 	| { kind: 'refused'; message: string }
 	| { kind: 'redirect'; response: Response }
-	| { kind: 'valid'; request: OAuthAuthorizationRequest; client: EstablishedClient; resource: OAuthResourceDto; scopes: string[] }
+	| { kind: 'valid'; request: OAuthAuthorizationRequest; client: ManagedClient; resource: OAuthResourceDto; scopes: string[] }
 
 /**
  * Validate an authorization request in the order RFC 6749 §4.1.2.1 requires: until the client and its

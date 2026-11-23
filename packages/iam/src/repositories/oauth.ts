@@ -1,4 +1,5 @@
 import type { SqlDatabase } from '@fabrika/platform'
+import { parseJsonOrNull } from '../json'
 import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
 
 export interface OAuthGrantRow {
@@ -7,7 +8,10 @@ export interface OAuthGrantRow {
 	session_id: string
 	client_id: string
 	app: string
+	/** The grant's first resource; `resources` lists them all when it was given for several. */
 	resource: string
+	/** JSON array of every resource of the grant, all of `app`; null when `resource` is the only one. */
+	resources: string | null
 	/** JSON array of the consented scope names. */
 	scopes: string
 	created_at: number
@@ -40,15 +44,20 @@ export class OAuthRepository {
 
 	/** Record a consent, its one authorization code and `audit` together. */
 	async createGrant(grant: OAuthGrantRow, code: Omit<OAuthCodeRow, 'grant_id' | 'used_at'>, audit?: AuditEventInput): Promise<void> {
+		const listed = grant.resources === null ? null : parseJsonOrNull(grant.resources)
+		if (listed !== null && (!Array.isArray(listed) || listed[0] !== grant.resource)) {
+			throw new Error('an OAuth grant names its first resource as `resource`')
+		}
 		await this.db.batch([
-			this.db.prepare(`INSERT INTO oauth_grants (id, principal_id, session_id, client_id, app, resource, scopes, created_at, expires_at, revoked_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).bind(
+			this.db.prepare(`INSERT INTO oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at,
+				revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).bind(
 				grant.id,
 				grant.principal_id,
 				grant.session_id,
 				grant.client_id,
 				grant.app,
 				grant.resource,
+				grant.resources,
 				grant.scopes,
 				grant.created_at,
 				grant.expires_at,

@@ -1,3 +1,4 @@
+import { OAUTH_CLI_CLIENT_ID } from '@fabrika/auth-core'
 import type { OAuthClientCredential, OAuthClientMetadataDocument } from '@fabrika/iam-contract'
 import { createLocalJWKSet, errors, type JSONWebKeySet, type JWTPayload, jwtVerify } from 'jose'
 import type { EstablishedClient } from './oauth'
@@ -24,14 +25,16 @@ export async function authenticateOAuthClient(
 	config: OAuthConfig,
 	input: { clientId: string; credential: OAuthClientCredential; audiences: string[] },
 ): Promise<EstablishedClient | null> {
+	// The CLI client is public: it holds no key, so it sends no assertion.
+	if (input.clientId === OAUTH_CLI_CLIENT_ID) return input.credential.method === 'none' ? { kind: 'cli', clientId: input.clientId } : null
 	const registration = config.clients.find((client) => client.clientId === input.clientId)
 	if (registration === undefined) return null
 	const metadata = await clientMetadata(registration)
 	if (metadata === null) return null
-	if (metadata.token_endpoint_auth_method === 'none') return input.credential.method === 'none' ? { registration, metadata } : null
+	if (metadata.token_endpoint_auth_method === 'none') return input.credential.method === 'none' ? { kind: 'managed', registration, metadata } : null
 	if (input.credential.method !== 'private_key_jwt') return null
 	const accepted = await verifyClientAssertion(services, metadata, input.credential.assertion, input.audiences)
-	return accepted ? { registration, metadata } : null
+	return accepted ? { kind: 'managed', registration, metadata } : null
 }
 
 /**
@@ -46,6 +49,7 @@ export async function authenticateRevokingClient(
 	input: { clientId: string; credential: OAuthClientCredential; audiences: string[] },
 ): Promise<boolean> {
 	if (input.credential.method !== 'none') return await authenticateOAuthClient(services, config, input) !== null
+	if (input.clientId === OAUTH_CLI_CLIENT_ID) return true
 	const registration = config.clients.find((client) => client.clientId === input.clientId)
 	if (registration === undefined) return false
 	const metadata = await clientMetadata(registration)

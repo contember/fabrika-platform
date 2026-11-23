@@ -27,6 +27,17 @@ export function isCimdClientId(value: unknown): value is string {
 	}
 }
 
+/**
+ * The client id of every installation's own command-line client: a public client IAM knows without a metadata document.
+ * It is the one client id that is not a CIMD URL.
+ */
+export const OAUTH_CLI_CLIENT_ID = 'fabrika-cli'
+
+/** A client id a token or revocation request may name: a CIMD document's URL, or the command-line client. */
+export function isOAuthClientId(value: unknown): value is string {
+	return value === OAUTH_CLI_CLIENT_ID || isCimdClientId(value)
+}
+
 /** RFC 6749 scope-token syntax; duplicates and empty sets are refused. */
 export function parseOAuthScopes(value: unknown): string[] | null {
 	if (!Array.isArray(value) || value.length === 0 || value.length > 64) return null
