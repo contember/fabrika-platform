@@ -197,28 +197,33 @@ the approver reads.
   - A replay measured the access-view part. It took the 976 rules that the declarations leave out and that read no IAM
     data, and generated an access view from each rule's own predicate: the source system's compiled condition, with
     each variable a column of a cross-joined domain. A rule whose OR mixes bindings became one view per binding, except
-    the split described below. On Postgres with random rows, the replay compared the rows the data layer reaches
+    the rules described below. On Postgres with random rows, the replay compared the rows the data layer reaches
     through the view with the rows the source system's own SQL admits. Reads went through a `Within`. Writes read the
     existing rows through a `Ref` of the write action; no write ran.
   - Each of the 968 runnable rules agrees on every seed for a caller whose principal the rows name. 910 of them had a
-    seed where the rule both admits and refuses rows. With the split below, every rule bound to a principal also agrees
-    for a principal that no row names.
+    seed where the rule both admits and refuses rows. With one view per binding and the remedy below, every rule bound to
+    a principal also agrees for a principal that no row names.
   - The 20 exceptions, not replayed:
     - 12 rules read other principals' memberships from IAM, which an application's database does not hold;
     - 6 rules take their condition from the membership itself, not a value;
     - 2 rules require memberships at two dimensions at once, an AND that one term cannot express.
-  - **A branch for every holder of a role needs a second hold.** A principal-bound view reaches only the principals that
-    the application's rows name.
-    - 262 rules OR a branch bound to the principal with a branch that names no variable. Each comes from a role that
-      names no node, so it ports as a role held anywhere (`~rel`). As one principal-bound view, each reached fewer rows
-      than the source system for a principal no row names, never more.
-    - The replay kept the rule as one principal-bound view, held anywhere. It added the branch with no variable as a
-      second view under a second relation, bound by `member` to one node the view maps to every row the branch admits.
-      With both holds, the 262 rules agree for such a principal on all 6 seeds, as they do for a named one.
-    - So the port needs two roles: the role held anywhere, and a membership in that one node. One role inside the node
-      would not do: a hold inside a node narrows the principal-bound term to that node (section 2).
-    - A role held anywhere alone still reaches fewer rows. It needs a table of the application's principals that the
-      view joins. The replay did not run that remedy.
+  - **A branch for every holder of a role joins a table of the application's principals.** A principal-bound view whose
+    principals come from the application's rows reaches only the principals those rows name.
+    - 280 rules OR a branch bound to the principal with a branch that names no variable. Each comes from a role that
+      names no node, so it ports as a role held anywhere (`~rel`). As such a view, 262 of them reached fewer rows than
+      the source system for a principal no row names, never more.
+    - **The remedy:** the view takes its principals from a table that lists every principal of the application. The
+      rule stays one view, under one role held anywhere. All 280 rules then agree for such a principal on all 6 seeds,
+      as they do for a named one.
+    - The table must list the principal. One it does not list reaches nothing through the view, so a table that lags
+      behind IAM narrows access. It never widens it: the hold still comes from IAM, and the term binds the caller.
+    - The table is a copy of IAM's principals that the application keeps in step. It is a base table the view reads,
+      so its writers delegate without a bound (section 5), but a write can only withhold what the rule admits a
+      holder, never add to it.
+    - **The alternative, also replayed:** the branch with no variable as a second view, under a second relation bound
+      by `member` to one node that the view maps to every row the branch admits. It agrees on the same rows and seeds,
+      but the port needs two roles: the role held anywhere, and a membership in that node. One role inside the node
+      would not do, because a hold inside a node narrows the principal-bound term to that node (section 2).
   - The replay does not measure a view's cost, hand-written views, SQLite, or the SQL of the source system's own view
     entities, which it seeded as tables. The data layer's own access-view tests run on SQLite.
 - **A wrong view widens access, across tenants too**: for example a `cross join` without a filter, or a missing tenant
