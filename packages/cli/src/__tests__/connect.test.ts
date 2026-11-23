@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { type ConnectCommandDependencies, runConnectCommand } from '../connect'
+import type { ControlOAuthDependencies } from '../control-oauth'
 
 const KEY = 'px_control_key_for_the_shop'
 const ORIGIN = 'https://control.example.com'
@@ -115,6 +116,56 @@ describe('fabrika connect add', () => {
 		expect(body).toEqual({ method: 'connectors.describe', input: { consumer: 'shop', env: 'prod', app: 'catalog', export: 'products', version: 1 } })
 		const findings = await checkApplication({ root, files: new Map([[file, readFileSync(join(root, file), 'utf8')]]) })
 		expect(findings.map(formatFinding)).toEqual([])
+	})
+
+	test('without a key, uses an access token for the console RPC from the grant the credential helper holds', async () => {
+		const root = appRoot()
+		const iam = 'https://iam.example.com'
+		const resource = `${ORIGIN}/api/rpc`
+		let stored = 'rt-1'
+		const oauth: ControlOAuthDependencies = {
+			fetch: (input, init) => {
+				const url = String(input)
+				if (url === `${ORIGIN}/.well-known/oauth-protected-resource/api/rpc`) {
+					return Promise.resolve(Response.json({ resource, authorization_servers: [iam] }))
+				}
+				if (url === `${iam}/.well-known/oauth-authorization-server`) {
+					return Promise.resolve(
+						Response.json({ issuer: iam, token_endpoint: `${iam}/oauth/token`, device_authorization_endpoint: `${iam}/oauth/device_authorization` }),
+					)
+				}
+				const form = new URLSearchParams(typeof init?.body === 'string' ? init.body : '')
+				expect(url).toBe(`${iam}/oauth/token`)
+				expect([form.get('refresh_token'), form.get('resource')]).toEqual(['rt-1', resource])
+				return Promise.resolve(Response.json({ access_token: 'at-connect', token_type: 'Bearer', expires_in: 300, refresh_token: 'rt-2' }))
+			},
+			helper: {
+				get: () => Promise.resolve(stored),
+				store: (_origin, token) => {
+					stored = token
+					return Promise.resolve()
+				},
+			},
+			lock: () => Promise.resolve(() => Promise.resolve()),
+			now: () => 0,
+			sleep: () => Promise.resolve(),
+			note: () => undefined,
+		}
+		const requests: Request[] = []
+		const fetchOwner: ConnectCommandDependencies['fetch'] = (request) => {
+			requests.push(request)
+			return Promise.resolve(Response.json({ result: catalog(z.int()) }))
+		}
+		await runConnectCommand('add', target, {
+			cwd: root,
+			source: { FABRIKA_CONTROL_CREDENTIAL_HELPER: 'unused', FABRIKA_CONTROL_URL: ORIGIN },
+			fetch: fetchOwner,
+			write: () => undefined,
+			note: () => undefined,
+			oauth,
+		})
+		expect(requests.map((request) => request.headers.get('Authorization'))).toEqual(['Bearer at-connect'])
+		expect(stored).toBe('rt-2')
 	})
 
 	test('refuses an existing snapshot', async () => {

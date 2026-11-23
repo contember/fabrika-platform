@@ -11,6 +11,8 @@ import type {
 } from '@fabrika/operations-contract/operator-api'
 import { describe, expect, test } from 'bun:test'
 import { runCli } from '..'
+import type { ControlOAuthDependencies } from '../control-oauth.js'
+import { MISSING_CONTROL_CREDENTIAL } from '../control.js'
 import { OPERATIONS_EXIT, OPERATIONS_USAGE, type OperationsIo, runOperationsCli } from '../operations.js'
 
 const KEY = 'px_support_key_0123456789'
@@ -366,11 +368,77 @@ describe('operations releases and health', () => {
 	})
 })
 
+/** IAM for a device grant at the fake console: each refresh answers `answer(resource)`. */
+const grantIam = (answer: (resource: string) => Response): ControlOAuthDependencies => {
+	const iam = 'https://iam.console.example'
+	let stored = 'rt-0'
+	return {
+		fetch: (input, init) => {
+			const url = String(input)
+			if (url === 'https://console.example/.well-known/oauth-protected-resource/api/rpc') {
+				return Promise.resolve(Response.json({ resource: 'https://console.example/api/rpc', authorization_servers: [iam] }))
+			}
+			if (url === `${iam}/.well-known/oauth-authorization-server`) {
+				return Promise.resolve(
+					Response.json({ issuer: iam, token_endpoint: `${iam}/oauth/token`, device_authorization_endpoint: `${iam}/oauth/device_authorization` }),
+				)
+			}
+			const form = new URLSearchParams(typeof init?.body === 'string' ? init.body : '')
+			return Promise.resolve(answer(form.get('resource') ?? ''))
+		},
+		helper: {
+			get: () => Promise.resolve(stored),
+			store: (_origin, token) => {
+				stored = token
+				return Promise.resolve()
+			},
+		},
+		lock: () => Promise.resolve(() => Promise.resolve()),
+		now: () => 0,
+		sleep: () => Promise.resolve(),
+		note: () => undefined,
+	}
+}
+
+const GRANT_ENV = { FABRIKA_CONTROL_URL: 'https://console.example', FABRIKA_CONTROL_CREDENTIAL_HELPER: 'unused' } as const
+
+describe('the device grant', () => {
+	const runWithGrant = async (argv: readonly string[], answers: Readonly<Record<string, Answer>>, oauth: ControlOAuthDependencies) => {
+		const fake = fakeConsole(answers)
+		const err: string[] = []
+		const out: string[] = []
+		const io: OperationsIo = { env: GRANT_ENV, fetch: fake.fetch, out: (text) => out.push(text), err: (text) => err.push(text), oauth }
+		const [command, ...rest] = argv
+		return { code: await runOperationsCli(command, rest, io), err: err.join('\n'), calls: fake.calls }
+	}
+
+	test("reads Operations with the grant's own Operations token, without asking Control what the grant holds", async () => {
+		const oauth = grantIam((resource) =>
+			Response.json({ access_token: `at:${resource}`, token_type: 'Bearer', expires_in: 300, refresh_token: 'rt-1' })
+		)
+		const result = await runWithGrant(['issues'], { '/operations/api/rpc issues': ok(ISSUE_LIST) }, oauth)
+		expect(result.code).toBe(OPERATIONS_EXIT.ok)
+		expect(result.calls.map((call) => [call.method, call.authorization])).toEqual([
+			['issues', 'Bearer at:https://console.example/operations/api/rpc'],
+		])
+	})
+
+	test('a grant that does not cover Operations is exit 3 and says what to do', async () => {
+		const oauth = grantIam(() => Response.json({ error: 'invalid_target' }, { status: 400 }))
+		const result = await runWithGrant(['issues'], {}, oauth)
+		expect(result.code).toBe(OPERATIONS_EXIT.credential)
+		expect(result.err).toBe(
+			'fabrika: The grant for https://console.example does not cover https://console.example/operations/api/rpc; approve a preset that does with `fabrika control auth device`',
+		)
+		expect(result.calls).toEqual([])
+	})
+})
+
 describe('the key', () => {
-	test('a missing FABRIKA_CONTROL_KEY is exit 3 and nothing is called', async () => {
+	test('no Control credential at all is exit 3 and nothing is called', async () => {
 		const result = await run(['issues'], ACCESS, { FABRIKA_CONTROL_URL: 'https://console.example' })
 		expect(result.code).toBe(OPERATIONS_EXIT.credential)
-		expect(result.err).toBe('fabrika: FABRIKA_CONTROL_KEY is required (environment only — it has no flag).')
+		expect(result.err).toBe(`fabrika: ${MISSING_CONTROL_CREDENTIAL}`)
 		expect(result.calls).toEqual([])
 	})
 

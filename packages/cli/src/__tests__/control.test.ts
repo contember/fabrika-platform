@@ -87,6 +87,22 @@ describe('control credential handling', () => {
 			.rejects.toThrow('FABRIKA_CONTROL_KEY is required')
 	})
 
+	test('`auth device` checks its preset, its app and the helper before it calls anything', async () => {
+		const env = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_CREDENTIAL_HELPER: 'unused' }
+		await expect(runControlCli('auth', ['device', '--preset=admin', '--app=alpha'], undefined, env)).rejects.toThrow(
+			'--preset must be one of read, deploy, operate, create',
+		)
+		await expect(runControlCli('auth', ['device', '--preset=deploy'], undefined, env)).rejects.toThrow('--preset=deploy needs --app=<application id>')
+		await expect(runControlCli('auth', ['device', '--preset=create', '--app=alpha'], undefined, env)).rejects.toThrow('takes no --app')
+		await expect(runControlCli('auth', ['device', '--preset=read', '--app=alpha'], undefined, { FABRIKA_CONTROL_URL: 'https://control.example' }))
+			.rejects.toThrow('FABRIKA_CONTROL_CREDENTIAL_HELPER is required: the refresh token is stored through it and never printed')
+		await expect(
+			runControlCli('auth', ['device', '--preset=read', '--app=alpha'], undefined, { ...env, FABRIKA_CONTROL_URL: 'http://control.example' }),
+		)
+			.rejects.toThrow('must be https')
+		await expect(runControlCli('auth', ['token'], undefined, env)).rejects.toThrow('Unknown `control auth` verb: token')
+	})
+
 	test('requires an origin and names both ways to give one', async () => {
 		await expect(runControlCli('apps', ['list'], undefined, { FABRIKA_CONTROL_KEY: 'px_test' }))
 			.rejects.toThrow('FABRIKA_CONTROL_URL')

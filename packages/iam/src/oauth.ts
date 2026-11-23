@@ -125,7 +125,14 @@ export async function grantAuthorization(
 }
 
 /** RFC 6749 §5.2 and RFC 8628 §3.5: what a refused token request answers. */
-export type OAuthTokenError = 'invalid_grant' | 'unauthorized_client' | 'authorization_pending' | 'slow_down' | 'access_denied' | 'expired_token'
+export type OAuthTokenError =
+	| 'invalid_grant'
+	| 'invalid_target'
+	| 'unauthorized_client'
+	| 'authorization_pending'
+	| 'slow_down'
+	| 'access_denied'
+	| 'expired_token'
 
 export type OAuthTokenOutcome = { ok: true; body: OAuthTokenResponse } | { ok: false; error: OAuthTokenError }
 
@@ -190,6 +197,14 @@ async function rotateRefreshToken(
 	const repository = services.repositories.oauth
 	const now = unixNow()
 	const hash = await hashToken(input.refresh_token)
+	// RFC 8707: a live token asking for a resource its grant does not cover is refused unspent, so the client keeps it.
+	const unspent = await repository.refreshToken(hash)
+	if (unspent !== null && unspent.used_at === null) {
+		const covering = await repository.grant(unspent.grant_id)
+		if (covering !== null && covering.client_id === input.client_id && !grantResources(covering).includes(input.resource)) {
+			return { ok: false, error: 'invalid_target' }
+		}
+	}
 	const presented = await repository.consumeRefreshToken(hash, now)
 	if (presented === null) {
 		const spent = await repository.refreshToken(hash)

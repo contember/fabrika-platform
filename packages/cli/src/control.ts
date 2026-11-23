@@ -11,7 +11,7 @@
 
 import { createRpcClient, type InferRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
-import { APP_ENV_KINDS } from '@fabrika/control-contract'
+import { APP_ENV_KINDS, CONTROL_CLI_PRESETS } from '@fabrika/control-contract'
 import type {
 	AppDto,
 	AppEnvDto,
@@ -31,6 +31,16 @@ import type {
 	RunDto,
 } from '@fabrika/control-contract'
 import { z } from 'zod'
+import {
+	authorizeDevice,
+	controlOAuthBearer,
+	type ControlOAuthDependencies,
+	controlResourceFor,
+	CREDENTIAL_HELPER_VARIABLE,
+	defaultControlOAuthDependencies,
+	parseControlCliPreset,
+} from './control-oauth.js'
+import { credentialOrigin, type OriginSource } from './credential-origin.js'
 
 const jsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
 	z.union([z.null(), z.string(), z.number(), z.boolean(), z.array(jsonValueSchema), z.record(jsonValueSchema)])
@@ -52,6 +62,7 @@ const issueKeyResultSchema = z.union([
 const USAGE = `fabrika control — operate the Delivery control plane
 
 Usage:
+  fabrika control auth device --preset=<read|deploy|operate|create> [--app=<id>]
   fabrika control key issue --label=<name> --permissions=<a,b,c> --expires-in=<seconds> [--iam-url=<origin>]
   fabrika control apps list
   fabrika control apps get --app=<id>
@@ -169,9 +180,27 @@ The control origin is not a credential and takes either form:
   --url=<origin>                    FABRIKA_CONTROL_URL
 
 Credentials are read from the ENVIRONMENT ONLY and have no flag, so they cannot reach a CI log or a
-process listing:
+process listing. One of:
 
-  FABRIKA_CONTROL_KEY               required   a machine \`px_\` credential for the control app
+  FABRIKA_CONTROL_KEY               a machine \`px_\` credential for the control app; it wins when both are set
+  FABRIKA_CONTROL_CREDENTIAL_HELPER a command with \`get\` and \`store\` that holds the refresh token of a
+                                    \`control auth device\` grant (below)
+
+\`auth device\` asks IAM for a grant a person approves in the browser (RFC 8628). It prints the page and the
+code on stderr and waits; the person signs in, checks the code, and picks how long the grant lasts (an hour, a
+day or a week). The grant holds the preset's actions at one application, never more than that person may:
+
+  read      deploy.read, data.read, operations.read
+  deploy    read, and deploy.trigger
+  operate   deploy, secret.manage, app.manage and operations.triage
+  create    app.manage wherever the person holds it, with no --app: it also changes and deletes apps
+
+The refresh token goes to the helper and nowhere else: the helper runs as \`sh -c '<helper> get|store'\`,
+reads \`origin=<console origin>\` (and, for \`store\`, \`refresh_token=<token>\`) on stdin, and \`get\` prints
+\`refresh_token=<token>\`, or nothing. Every call then trades it for a short-lived access token, and IAM
+rotates it each time; a lock under $XDG_CACHE_HOME/fabrika (~/.cache/fabrika when unset) serializes that
+between processes on this machine. If a refresh's answer is lost, the stored token is spent and the next
+call says to run \`auth device\` again.
 
 \`key issue\` mints that credential and therefore authenticates differently — it presents the
 installation's IAM RPC key as transport authentication and its provisioning key as the ISSUING
@@ -278,17 +307,6 @@ const secret = (variable: string, env: Readonly<Record<string, string | undefine
 /** The console's client with a bearer instead of a cookie, and no SSO bounce: there is no browser to send. */
 export type ControlClient = InferRpcClient<ControlRpcContract>
 
-/** Plain http may carry the key to loopback only: 127.0.0.0/8, [::1], and the names RFC 6761 reserves for it, `localhost` and `*.localhost`. */
-const LOOPBACK_HOST = /^(?:localhost|.+\.localhost|127\.\d{1,3}\.\d{1,3}\.\d{1,3}|\[::1\])$/
-
-/** Which origin a check reads, so its refusals name the right flag and variable. `hint` follows a refusal of the value. */
-interface OriginSource {
-	readonly label: string
-	readonly flag: string
-	readonly variable: string
-	readonly hint?: string
-}
-
 const CONTROL_ORIGIN: OriginSource = { label: 'Control', flag: 'url', variable: 'FABRIKA_CONTROL_URL' }
 
 const IAM_ORIGIN: OriginSource = {
@@ -297,31 +315,6 @@ const IAM_ORIGIN: OriginSource = {
 	variable: 'FABRIKA_IAM_RPC_URL',
 	hint: "It is IAM's PUBLIC https origin (control's FABRIKA_IAM_ISSUER): a private hostname such as `http://iam:3000` answers only "
 		+ "inside the provider's project, never from this machine.",
-}
-
-/**
- * An origin a credential is sent to, checked before the credential goes anywhere: https, or http to a loopback host for
- * local development, and nothing but scheme, host and port. A refusal never repeats the value, which may hold userinfo.
- */
-export const credentialOrigin = (raw: string | undefined, source: OriginSource): string => {
-	const { label, flag, variable } = source
-	if (raw === undefined || raw.trim() === '') {
-		throw new Error(`${label} origin is required. Pass --${flag}=<origin> or set ${variable}.`)
-	}
-	const refuse = (reason: string): Error => new Error(source.hint === undefined ? reason : `${reason}. ${source.hint}`)
-	let url: URL
-	try {
-		url = new URL(raw.trim())
-	} catch {
-		throw refuse(`--${flag} or ${variable} is not a URL`)
-	}
-	if (url.protocol !== 'https:' && !(url.protocol === 'http:' && LOOPBACK_HOST.test(url.hostname))) {
-		throw refuse(`--${flag} or ${variable} must be https; plain http only to localhost, *.localhost, 127.0.0.0/8 or [::1]`)
-	}
-	if (url.username !== '' || url.password !== '' || url.pathname !== '/' || url.search !== '' || url.hash !== '' || /[?#]/.test(raw)) {
-		throw refuse(`--${flag} or ${variable} must be an origin only: no credentials, path, query or fragment`)
-	}
-	return url.origin
 }
 
 const KEY_LABEL = '[FABRIKA_CONTROL_KEY]'
@@ -355,37 +348,75 @@ const withoutEchoedKey = async (response: Response, key: string): Promise<Respon
 	return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers })
 }
 
-/** Control's origin and the fetch that carries FABRIKA_CONTROL_KEY to it. */
+/** Control's origin and the fetch that carries the Control credential to it. */
 export interface ControlTransport {
 	readonly origin: string
 	readonly fetch: RpcFetch
+	/** The credential is a person's device grant, not FABRIKA_CONTROL_KEY. */
+	readonly grant: boolean
+}
+
+/** Neither credential is set; both are read from the environment only. */
+export const MISSING_CONTROL_CREDENTIAL = `FABRIKA_CONTROL_KEY is required (environment only — it has no flag), or ${CREDENTIAL_HELPER_VARIABLE} `
+	+ 'after `fabrika control auth device`.'
+
+/**
+ * The bearer for one request: FABRIKA_CONTROL_KEY when it is set, else an access token for the resource the request
+ * calls, refreshed through the grant the credential helper holds.
+ */
+const controlBearer = (
+	origin: string,
+	env: Readonly<Record<string, string | undefined>>,
+	send: RpcFetch,
+	oauth: ControlOAuthDependencies | undefined,
+): (input: RequestInfo | URL) => Promise<string> => {
+	const key = env['FABRIKA_CONTROL_KEY']?.trim()
+	if (key !== undefined && key !== '') return () => Promise.resolve(key)
+	const helper = env[CREDENTIAL_HELPER_VARIABLE]?.trim()
+	if (helper === undefined || helper === '') throw new Error(MISSING_CONTROL_CREDENTIAL)
+	const bearer = controlOAuthBearer(origin, oauth ?? defaultControlOAuthDependencies(helper, env, send))
+	return (input) => bearer(controlResourceFor(origin, input))
 }
 
 /**
- * The origin from `url` or FABRIKA_CONTROL_URL, the key from FABRIKA_CONTROL_KEY in the environment only, no redirect
- * followed. Every client of the console's origin is built on it.
+ * The origin from `url` or FABRIKA_CONTROL_URL, the credential from the environment only, no redirect followed. Every
+ * client of the console's origin is built on it.
  */
 export const controlTransport = (
 	url: string | undefined,
 	env: Readonly<Record<string, string | undefined>>,
 	send: RpcFetch = fetch,
+	oauth?: ControlOAuthDependencies,
 ): ControlTransport => {
 	const origin = credentialOrigin(url ?? env['FABRIKA_CONTROL_URL'], CONTROL_ORIGIN)
-	const key = secret('FABRIKA_CONTROL_KEY', env)
+	const bearer = controlBearer(origin, env, send, oauth)
 	return {
 		origin,
+		grant: (env['FABRIKA_CONTROL_KEY']?.trim() ?? '') === '',
 		fetch: async (input, init) => {
+			let token: string
+			try {
+				token = await bearer(input)
+			} catch (error) {
+				// The RPC client reads a rejected fetch as "Network request failed"; this answer keeps the reason.
+				const message = error instanceof Error ? error.message : 'the Control credential could not be obtained'
+				return Response.json({ error: { type: 'credential', message } }, { status: 401 })
+			}
 			const headers = new Headers(init?.headers)
-			headers.set('authorization', `Bearer ${key}`)
+			headers.set('authorization', `Bearer ${token}`)
 			// A redirect would carry the bearer to wherever it points.
-			return await withoutEchoedKey(await send(input, { ...init, headers, redirect: 'manual' }), key)
+			return await withoutEchoedKey(await send(input, { ...init, headers, redirect: 'manual' }), token)
 		},
 	}
 }
 
 /** The one client of Control that `fabrika control`, `fabrika env` and `fabrika operations` share. */
-export const connectControl = (url: string | undefined, env: Readonly<Record<string, string | undefined>>): ControlClient => {
-	const transport = controlTransport(url, env)
+export const connectControl = (
+	url: string | undefined,
+	env: Readonly<Record<string, string | undefined>>,
+	oauth?: ControlOAuthDependencies,
+): ControlClient => {
+	const transport = controlTransport(url, env, fetch, oauth)
 	return createRpcClient<ControlRpcContract>({ baseUrl: `${transport.origin}/api/rpc`, fetch: transport.fetch })
 }
 
@@ -492,6 +523,24 @@ const runKeyIssue = async (flags: Flags, env: Readonly<Record<string, string | u
 	// revoke it later go to stderr, so `--quiet`-style capture gets the credential and nothing else.
 	console.error(`credential ${outcome.id}${outcome.principalId === undefined ? '' : `, principal ${outcome.principalId}`}`)
 	console.info(flags.json ? JSON.stringify(outcome, null, 2) : outcome.token)
+}
+
+const APP_ID = /^[a-z0-9][a-z0-9-]*$/
+
+/** `auth device`: the device grant for one preset, stored through the credential helper; nothing goes to stdout. */
+const runAuthDevice = async (flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	const origin = credentialOrigin(flags.values.get('url') ?? env['FABRIKA_CONTROL_URL'], CONTROL_ORIGIN)
+	const raw = required(flags, 'preset')
+	const preset = parseControlCliPreset(raw)
+	if (preset === null) throw new Error(`--preset must be one of ${CONTROL_CLI_PRESETS.join(', ')}`)
+	const app = optional(flags, 'app')
+	if (preset === 'create' && app !== undefined) throw new Error('--preset=create holds its action wherever you may, and takes no --app')
+	if (preset !== 'create' && (app === undefined || !APP_ID.test(app))) throw new Error(`--preset=${preset} needs --app=<application id>`)
+	const helper = env[CREDENTIAL_HELPER_VARIABLE]?.trim()
+	if (helper === undefined || helper === '') {
+		throw new Error(`${CREDENTIAL_HELPER_VARIABLE} is required: the refresh token is stored through it and never printed`)
+	}
+	await authorizeDevice({ origin, preset, ...(app === undefined ? {} : { app }) }, defaultControlOAuthDependencies(helper, env, fetch))
 }
 
 const decodeIssueKeyResult = (value: unknown): IssueKeyResult => {
@@ -1067,6 +1116,10 @@ export const runControlCli = async (
 		switch (command) {
 			case undefined:
 				console.info(USAGE)
+				return
+			case 'auth':
+				if (verb !== 'device') throw new Error(`Unknown \`control auth\` verb: ${verb ?? '(missing)'}`)
+				await runAuthDevice(flags, env)
 				return
 			case 'key':
 				if (verb !== 'issue') throw new Error(`Unknown \`control key\` verb: ${verb ?? '(missing)'}`)

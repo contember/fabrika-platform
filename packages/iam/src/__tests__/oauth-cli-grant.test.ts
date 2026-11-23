@@ -165,14 +165,19 @@ describe('a grant for several resources', () => {
 
 		const elsewhere = await refresh(second.refresh_token ?? '', 'https://control.example.test/other')
 		expect(elsewhere.status).toBe(400)
-		expect(await elsewhere.json()).toEqual({ error: 'invalid_grant' })
+		expect(await elsewhere.json()).toEqual({ error: 'invalid_target' })
 	})
 
-	test('a single-resource grant still refuses a token for another resource the server knows', async () => {
+	test('a single-resource grant refuses another resource the server knows, and keeps its refresh token unspent', async () => {
 		const { cliGrant, refresh } = await fixture()
 		const grant = await cliGrant(['deploy:alpha'], [CLI_RESOURCE])
 		const refused = await refresh(grant.refreshToken, SECOND_RESOURCE)
-		expect(await refused.json()).toEqual({ error: 'invalid_grant' })
+		expect(await refused.json()).toEqual({ error: 'invalid_target' })
+		const kept = await refresh(grant.refreshToken, CLI_RESOURCE)
+		expect(kept.status).toBe(200)
+		// A spent token stays a replay, whatever resource it names.
+		const replay = await refresh(grant.refreshToken, SECOND_RESOURCE)
+		expect(await replay.json()).toEqual({ error: 'invalid_grant' })
 	})
 })
 

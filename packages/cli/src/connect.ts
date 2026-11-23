@@ -1,8 +1,10 @@
 import { CONNECT_LIMITS, ContractError, parseExportDescription, snapshotNames, snapshotSource } from '@fabrika/app/contract'
 import { isJsonMediaType, readBoundedBytes } from '@fabrika/app/implement'
 import { API_KEY_PREFIX, type ExportDescription } from '@fabrika/auth-core'
+import { CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { controlOAuthBearer, type ControlOAuthDependencies, CREDENTIAL_HELPER_VARIABLE, defaultControlOAuthDependencies } from './control-oauth.js'
 
 const KEY_VARIABLE = 'FABRIKA_CONTROL_KEY'
 const URL_VARIABLE = 'FABRIKA_CONTROL_URL'
@@ -21,7 +23,8 @@ Usage:
 
 Run from the application root. Both read the export the owner's environment <env> approved for the consumer from
 Control (${URL_VARIABLE} or --url), with a machine key that holds deploy.read on the consumer, read from
-${KEY_VARIABLE} in the environment only. The origin is https; plain http only for localhost. \`add\` refuses an
+${KEY_VARIABLE} in the environment only, or with the grant \`fabrika control auth device\` stored through
+${CREDENTIAL_HELPER_VARIABLE}. The origin is https; plain http only for localhost. \`add\` refuses an
 existing snapshot and prints what to add to src/app-kit.ts and to the endpoints that call it; \`pull\` refuses a missing one
 and says whether the digest changed. The platform writes each import's address and key when it deploys the consumer.
 `
@@ -35,6 +38,8 @@ export interface ConnectCommandDependencies {
 	readonly write: (line: string) => void
 	/** Guidance for the person running it. */
 	readonly note: (line: string) => void
+	/** Replaces the credential helper, its lock and the clock; only a test passes it. */
+	readonly oauth?: ControlOAuthDependencies
 }
 
 interface Target {
@@ -85,12 +90,23 @@ function parseTarget(command: string, argv: readonly string[], source: ConnectCo
 	return { app, export: name, version: Number(version), consumer, env, control: url.origin }
 }
 
-function controlKey(source: ConnectCommandDependencies['source']): string {
-	const key = source[KEY_VARIABLE]?.trim() ?? ''
-	if (!key.startsWith(API_KEY_PREFIX)) {
-		throw new Error(`${KEY_VARIABLE} must hold a ${API_KEY_PREFIX} machine key that holds deploy.read on the consumer`)
+/** The key when it is set, else an access token for Control's RPC from the grant the credential helper holds. */
+async function controlBearer(target: Target, deps: ConnectCommandDependencies): Promise<string> {
+	const key = deps.source[KEY_VARIABLE]?.trim() ?? ''
+	if (key !== '') {
+		if (!key.startsWith(API_KEY_PREFIX)) {
+			throw new Error(`${KEY_VARIABLE} must hold a ${API_KEY_PREFIX} machine key that holds deploy.read on the consumer`)
+		}
+		return key
 	}
-	return key
+	const helper = deps.source[CREDENTIAL_HELPER_VARIABLE]?.trim() ?? ''
+	if (helper === '') {
+		throw new Error(
+			`${KEY_VARIABLE} must hold a ${API_KEY_PREFIX} machine key that holds deploy.read on the consumer, or ${CREDENTIAL_HELPER_VARIABLE} the helper a \`fabrika control auth device\` grant is stored through`,
+		)
+	}
+	const oauth = deps.oauth ?? defaultControlOAuthDependencies(helper, deps.source, (input, init) => deps.fetch(new Request(input, init)))
+	return await controlOAuthBearer(target.control, oauth)(`${target.control}${CONTROL_RPC_PATH}`)
 }
 
 /**
@@ -188,7 +204,7 @@ function contractHint(description: ExportDescription): string[] {
 
 async function add(argv: readonly string[], deps: ConnectCommandDependencies): Promise<void> {
 	const target = parseTarget('add', argv, deps.source)
-	const description = await fetchDescription(target, controlKey(deps.source), deps)
+	const description = await fetchDescription(target, await controlBearer(target, deps), deps)
 	const { file } = snapshotNames(target.app, target.export, target.version)
 	const path = join(deps.cwd, file)
 	await mkdir(dirname(path), { recursive: true })
@@ -211,7 +227,7 @@ async function pull(argv: readonly string[], deps: ConnectCommandDependencies): 
 	if (previous === null) {
 		throw new Error(`connect pull: ${file} does not exist; run fabrika connect add first`)
 	}
-	const description = await fetchDescription(target, controlKey(deps.source), deps)
+	const description = await fetchDescription(target, await controlBearer(target, deps), deps)
 	const source = snapshotSource(description)
 	await writeFile(path, source)
 	deps.write(`${file}\n`)
