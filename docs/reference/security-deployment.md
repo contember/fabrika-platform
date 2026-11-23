@@ -2,7 +2,8 @@
 
 What a deploy of an application must pass before it serves traffic, and who or what approves it. Each gate says what it
 checks, where, and what happens on failure. The runtime side is in [`security-runtime.md`](security-runtime.md); the
-deploy flow itself is in [`overview.md`](overview.md#how-a-deploy-works).
+deploy flow itself is in [`overview.md`](overview.md#how-a-deploy-works). What follows from both for an organization
+that runs its applications on fabrika is in [`security-guarantees.md`](security-guarantees.md).
 
 Markers: **Built**: the code does it at this commit. **Decided, not built**: an ADR, spec or backlog item decides it,
 and the code does not do it yet. **Known gap**: a backlog item names a hole in what is built.
@@ -23,8 +24,9 @@ flowchart TD
     C2 --> P
     C -->|no| P[Publish the snapshot: compare-and-swap]
     P --> D[Provider deploy: exposure check, backup before a data-changing migration,<br/>build with tests, tsc, fabrika-check]
-    D -->|any step fails| F
+    D -->|a step fails| G[Run fails; what earlier steps changed stays, nothing rolls back]
     D --> H[Zerops readiness check] --> I[IAM schema written from the approved snapshot] --> OK[succeeded]
+    I -->|IAM refuses or fails| G
 ```
 
 ## Gates, in order
@@ -33,7 +35,7 @@ flowchart TD
 | -- | ----------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ | ----------------------------------- |
 | 1  | Push webhook                              | HMAC `X-Hub-Signature-256` with that GitHub connection's own secret, constant time; installation and repository owner match; only `push`, never a deletion                                                                                                                                  | [`push-event.ts`](../../packages/control/src/github/triggers/push-event.ts), [`webhook.ts`](../../packages/control/src/github/triggers/webhook.ts)                                                                                                                                                    | 401, no run                                                                    | Built                               |
 | 2  | Trigger ref                               | Exact full ref or a `*` glob; a ref under `refs/heads/fabrika/` (MCP workspaces) is refused and never matched                                                                                                                                                                               | [`ref-match.ts`](../../packages/control/src/ref-match.ts)                                                                                                                                                                                                                                             | 400 on write; no run                                                           | Built                               |
-| 3  | Manual deploy                             | `deploy.trigger` at the coordinates (roles `deployer`, `operator`, `admin`). On a protected environment also a person (not a key, OAuth/MCP token or share link) naming a full ref or a 40-hex commit                                                                                       | [`api/runs.ts`](../../packages/control/src/api/runs.ts), [`approval/human.ts`](../../packages/control/src/approval/human.ts), [`fabrika.schema.ts`](../../packages/control/fabrika.schema.ts)                                                                                                         | 404 without the action; 403/400; re-checked at start, run fails                | Built                               |
+| 3  | Manual deploy                             | `deploy.trigger` at the coordinates (roles `deployer`, `operator`, `admin`). On a protected environment also a person (a user principal: a service key, an OAuth/MCP token or a share link is refused; a key bound to a user counts as that user) naming a full ref or a 40-hex commit      | [`api/runs.ts`](../../packages/control/src/api/runs.ts), [`approval/human.ts`](../../packages/control/src/approval/human.ts), [`fabrika.schema.ts`](../../packages/control/fabrika.schema.ts)                                                                                                         | 404 without the action; 403/400; re-checked at start, run fails                | Built                               |
 | 4  | Registry edits of a protected environment | A key cannot repoint its trigger ref or change the app's repository, source, build command or config path                                                                                                                                                                                   | [`approval/human.ts`](../../packages/control/src/approval/human.ts) (`requirePersonToRedirect`)                                                                                                                                                                                                       | 403                                                                            | Built                               |
 | 5  | Lease and supersede                       | One run per app environment at a time; a run older than one that already succeeded never starts                                                                                                                                                                                             | [`lease.ts`](../../packages/control/src/lease.ts), [`run-lifecycle.ts`](../../packages/control/src/run-lifecycle.ts)                                                                                                                                                                                  | Deferred and re-queued; superseded runs fail                                   | Built                               |
 | 6  | Preconditions                             | Environment open (no data operation running), namespace resource claims held, every declared secret has a value                                                                                                                                                                             | [`run-lifecycle.ts`](../../packages/control/src/run-lifecycle.ts) (`assertDeclaredSecretsSet`)                                                                                                                                                                                                        | Run fails                                                                      | Built                               |
@@ -46,7 +48,7 @@ flowchart TD
 | 13 | Access approval                           | See [below](#who-approves)                                                                                                                                                                                                                                                                  | [`approval/`](../../packages/control/src/approval/)                                                                                                                                                                                                                                                   | `awaiting_approval`, nothing published                                         | Built                               |
 | 14 | Publication                               | Compare-and-swap on the environment's generation and protection revision, under the lease; a lost swap classifies again (3 attempts)                                                                                                                                                        | [`approval/publish.ts`](../../packages/control/src/approval/publish.ts)                                                                                                                                                                                                                               | Run fails                                                                      | Built                               |
 | 15 | Reserved names                            | An authored variable or secret under, or referencing, a framework variable name                                                                                                                                                                                                             | [`run-lifecycle.ts`](../../packages/control/src/run-lifecycle.ts), [`managed-env.ts`](../../packages/provider-zerops/src/managed-env.ts)                                                                                                                                                              | Run fails                                                                      | Built                               |
-| 16 | Exposure (Zerops)                         | Every service reads back without subdomain access; every bucket is one the platform created                                                                                                                                                                                                 | [`provider-zerops/src/provider.ts`](../../packages/provider-zerops/src/provider.ts) (`verifyExposure`)                                                                                                                                                                                                | Operations alert, run fails                                                    | Built                               |
+| 16 | Exposure (Zerops)                         | Every service reads back without subdomain access; every bucket is one the platform created. Checked at deploy only                                                                                                                                                                         | [`provider-zerops/src/provider.ts`](../../packages/provider-zerops/src/provider.ts) (`verifyExposure`)                                                                                                                                                                                                | Operations alert, run fails                                                    | Built                               |
 | 17 | Backup before data-changing migrations    | A migration that deletes, overwrites or may change stored data runs only after a backup is stored. Zerops: a `backup-database` step. Cloudflare: a `migrate` data operation (restrict, backup, verify, deploy, migrate, open); without the barrier the run is refused                       | [`provider-zerops/src/plan.ts`](../../packages/provider-zerops/src/plan.ts), [`run-lifecycle.ts`](../../packages/control/src/run-lifecycle.ts), [ADR-0050](../decisions/0050-approved-access.md), [ADR-0070](../decisions/0070-data-protection-of-an-application-environment-on-cloudflare.md)        | Run fails, nothing deployed                                                    | Built (not for `dev`)               |
 | 18 | Build checks                              | The application's own tests, then a clean reinstall, `tsc`, `fabrika-check` at the approved checker release, and the schema check                                                                                                                                                           | [`build-recipe.ts`](../../packages/app/src/build-recipe.ts), [`provider-zerops/src/execution.ts`](../../packages/provider-zerops/src/execution.ts), [`provider-cloudflare/src/plan.ts`](../../packages/provider-cloudflare/src/plan.ts)                                                               | Build fails, run fails                                                         | Built                               |
 | 19 | Readiness (Zerops)                        | The contract's health endpoint answers within 180 s before Zerops activates the version                                                                                                                                                                                                     | [`provider-zerops/src/execution.ts`](../../packages/provider-zerops/src/execution.ts)                                                                                                                                                                                                                 | Version not activated, run fails                                               | Built; Cloudflare has no equivalent |
@@ -83,6 +85,22 @@ in a migration, or a migration statement not known to keep every stored value.
 - **A rollback is a new deploy** of an older commit, classified like any other
   ([ADR-0050 §6](../decisions/0050-approved-access.md#6-a-rollback-is-a-new-deploy)).
 
+What approval does not cover:
+
+- **A widening on the paved road.** A role that gains a declared action, a role opened to external people, a CSP
+  that allows another origin, or a signed-in SPA that becomes public is a widening without closer review, and publishes
+  at once even on a protected environment ([`approval/diff.ts`](../../packages/control/src/approval/diff.ts)). A
+  procedure that becomes public does need closer review.
+- **Configuration.** Variables (`app.manage`), secrets (`secret.manage`), an environment's domain and its cross-origin
+  list are not access changes: whoever holds the action writes them, without approval, at the application's scope
+  (not per environment). A Zerops secret is written to the live service at once; the rest reaches the environment at
+  its next deploy; on Zerops a domain or cross-origin change also republishes the namespace proxy at once. Of the built-in roles only `admin`
+  holds these actions ([`control-rpc.ts`](../../packages/control/src/control-rpc.ts),
+  [`fabrika.schema.ts`](../../packages/control/fabrika.schema.ts)).
+- **Which commit.** A person's manual deploy of a protected environment may name any branch, tag or commit of the
+  repository; Control does not check that it descends from the trigger ref. Approval judges the access the commit
+  declares, not how the commit was reviewed.
+
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval
 ([backlog 239](../backlog/239-a-changed-sql-statement-shows-no-closer-review-line.md)).
@@ -92,7 +110,10 @@ a protected environment without approval
 - **The repository host's checks.** Control reads no CI status, check run or branch protection before it deploys. A
   team that relies on reviewed merges sets that up on GitHub, outside fabrika.
 - **Anything after activation.** No health verdict follows a deploy, and nothing rolls back by itself; a cancellation
-  never rolls back ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md)).
+  never rolls back ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md)). When the IAM schema write
+  fails after the version went live, IAM keeps the previous roles, so a narrowing the new version declared is not in
+  force and fresh tokens keep the old authority until a later deploy writes it
+  ([backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)).
 
 ## The platform's own releases
 
@@ -103,6 +124,14 @@ npm trusted publishing with provenance is bound to that workflow
 ([`release-process.md`](release-process.md)). An installation upgrades by moving the `fabrika.ref` of its own platform
 repository, whose workflow deploys IAM and Operations, then the proxy, then Control; whoever may push that repository
 approves an upgrade.
+
+The release workflow's assurance covers the npm packages. An installation runs the git checkout its `fabrika.ref`
+names, not those tarballs, so it relies on that ref (a tag of this repository) and on whoever may push the sidecar
+repository, not on npm provenance. On Cloudflare the installation builds its runner image itself; no CI job builds it
+([backlog 99](../backlog/99-no-check-builds-the-runner-image.md)). A platform upgrade does not upgrade applications:
+each keeps the `@fabrika/*` release it pins until it raises the pin and deploys
+([ADR-0062](../decisions/0062-a-platform-release-serves-older-framework-releases.md),
+[backlog 266](../backlog/266-fleet-wide-framework-upgrades.md)).
 
 ## Decided, not built
 

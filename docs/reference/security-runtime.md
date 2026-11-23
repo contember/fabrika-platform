@@ -2,7 +2,8 @@
 
 What stops an application from doing something it should not while it serves requests. Each section says what is
 checked, where, and what happens on failure, and points to the code or ADR. The deploy side is in
-[`security-deployment.md`](security-deployment.md).
+[`security-deployment.md`](security-deployment.md). What follows from both for an organization that runs its
+applications on fabrika, scenario by scenario, is in [`security-guarantees.md`](security-guarantees.md).
 
 Markers: **Built**: the code does it at this commit. **Decided, not built**: an ADR, spec or backlog item decides it,
 and the code does not do it yet. **Known gap**: a backlog item names a hole in what is built.
@@ -39,8 +40,15 @@ flowchart LR
   Zerops proxy from starting; a Cloudflare proxy without a manifest, an IAM binding or an issuer answers a fixed 503
   ([`proxy-worker.ts`](../../packages/provider-cloudflare/src/proxy-worker.ts)). Endpoint rows are never compiled into
   Caddy route matchers ([ADR-0022 rule 2](../decisions/0022-the-proxy-is-the-only-enforcement-point.md#2-caddy-owns-http-correctness-and-gets-no-vote-on-authorization)).
-- **The proxy holds no state a decision depends on.** Its token cache is in memory, per process
+- **The proxy holds no durable state.** Its token cache is in memory, per process
   ([ADR-0022 rule 1](../decisions/0022-the-proxy-is-the-only-enforcement-point.md#1-only-the-proxy-is-publicly-routed)).
+  The cache does decide: a process that holds a token minted from a session or a key reuses it until 30 s before it
+  expires, so after a revocation a warm process may still admit that caller for up to the token's 300 s lifetime while
+  a cold one already refuses ([`authorize.ts`](../../packages/proxy-core/src/authorize.ts),
+  `TOKEN_REFRESH_SKEW_SECONDS` in [`token.ts`](../../packages/auth-core/src/token.ts)).
+- **Exposure is checked at each deploy, not continuously.** `verify-exposure` runs only as a deploy step; a subdomain
+  or a bucket made public in the Zerops GUI between deploys is not noticed until the next deploy of that environment
+  ([`plan.ts`](../../packages/provider-zerops/src/plan.ts)).
 - **A caller cannot forge what the proxy asserts.** Before the decision, the proxy deletes every `X-Fabrika-*` hop
   header (`FABRIKA_HOP_HEADERS`: token, client address, endpoint, delegation grant, proxy secret), `X-Request-Id` and
   the forwarding headers ([`wire.ts`](../../packages/auth-core/src/wire.ts),
@@ -98,7 +106,7 @@ not admit, in this order ([`dispatch.ts`](../../packages/app/src/implement/dispa
    data layer is a guard against mistakes, not a boundary against hostile code in the same process
    ([`packages/db/CLAUDE.md`](../../packages/db/CLAUDE.md)).
 
-## 3. Identity lives in IAM; the application never holds a credential
+## 3. Identity lives in IAM; the application never sees a person's credential
 
 **Built.**
 
@@ -121,12 +129,52 @@ not admit, in this order ([`dispatch.ts`](../../packages/app/src/implement/dispa
   ([`token.ts`](../../packages/auth-core/src/token.ts),
   [ADR-0022 rule 6](../decisions/0022-the-proxy-is-the-only-enforcement-point.md#6-an-application-token-is-minted-for-one-application-in-one-environment)).
   A removed member or revoked link keeps access until its cached token expires.
-- **Logs do not carry credentials.** Caddy's access log drops the token, delegation, proxy secret, `Cookie` and
-  `Authorization` headers and redacts the handoff code; Cloudflare proxy invocation logs are off
+- **The proxy's logs do not carry credentials.** Caddy's access log drops the token, delegation, proxy secret,
+  `Cookie` and `Authorization` headers and redacts the handoff code; Cloudflare proxy invocation logs are off
   ([`caddy.ts`](../../packages/proxy/src/caddy.ts), [`proxy.ts`](../../packages/provider-cloudflare/src/proxy.ts)).
-- **Jobs and webhooks hold no standing authority.** Each gets a key from the approved contract and exchanges it for a
-  token carrying only its declared actions ([`packages/control/src/workload-credentials.ts`](../../packages/control/src/workload-credentials.ts),
+  This is the proxy's guarantee, not every service's: three service log lines print a provider's error text without
+  redaction ([backlog 207](../backlog/207-three-service-log-lines-skip-redaction.md)).
+- **Jobs, webhooks, public procedures and connectors hold only declared authority, for at most 30 days.** Each gets a
+  key from the approved contract and exchanges it for a token carrying only its declared actions. A deploy reissues a
+  key with less than half of its 30 days left, so an environment not deployed for 30 days loses its workloads' keys
+  ([`packages/control/src/workload-credentials.ts`](../../packages/control/src/workload-credentials.ts),
   [ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)).
+- **Sessions.** An IAM login lasts 30 days ([`sessions.ts`](../../packages/iam/src/auth/sessions.ts)); an application
+  session is its child, and revoking the login ends every child at once. A disabled principal mints no token
+  ([`tokens.ts`](../../packages/iam/src/tokens.ts)), but keeps its sessions, so enabling it again can restore an
+  unexpired one ([`human-authentication.md`](human-authentication.md)). Disabling a person only at the OIDC provider
+  ends nothing in IAM: the login stays valid until it expires or an administrator disables or signs out the principal.
+- **IAM has no second factor of its own.** A second factor exists only where an installation signs people in through
+  an OIDC provider that requires one; a password login is one factor. The minimum password length is an installation
+  administrator's setting, at least 4 on Bun and 15 on a Worker, and a Worker hashes with a lower PBKDF2 cost
+  ([`human-authentication.md`](human-authentication.md),
+  [backlog 201](../backlog/201-cloudflare-passwords-are-hashed-below-the-owasp-work-factor.md)). Approving an access
+  change needs a console session, not a fresh sign-in ([`approval/human.ts`](../../packages/control/src/approval/human.ts)).
+- **A terminal signs a person in on an application's word.** On an enrolled shared computer, an application that
+  declares an identification page asserts who stands there, and IAM signs that person in under the terminal's ceiling
+  ([ADR-0067](../decisions/0067-a-terminal-signs-a-person-in-on-an-application-s-word.md)). Such an application is
+  trusted to identify people; a membership change made from a terminal outlives the terminal session
+  ([backlog 223](../backlog/223-terminal-authority-outlives-the-terminal-in-a-membership-change.md)).
+
+### What an application environment holds
+
+An application never receives a person's password, session cookie or `px_` key. It does hold these machine
+credentials, as environment variables of its own service or Worker, so code running in it can use them:
+
+| Credential                                       | What it allows                                                                         | Lifetime and rotation                                   | Where                                                                           |
+| ------------------------------------------------ | -------------------------------------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Proxy secret (`FABRIKA_PROXY_SECRET`)            | Proves a request came from the proxy, to this environment only                         | No rotation verb                                        | [`proxy-secret.ts`](../../packages/control/src/proxy-secret.ts)                 |
+| Workload keys (`FABRIKA_<KIND>_<NAME>_KEY`)      | A token with the declared actions of one job, webhook or public procedure              | 30 days, reissued by a deploy past half-life            | [`workload-credentials.ts`](../../packages/control/src/workload-credentials.ts) |
+| Connector keys (`FABRIKA_CONNECT_<IMPORT>_KEY`)  | Calls to the procedures another application exports to it                              | As workload keys; revoked when the last import goes     | [`connectors.ts`](../../packages/control/src/connectors.ts)                     |
+| Membership transport key (`FABRIKA_IAM_RPC_KEY`) | Pins IAM's membership calls to this application; adds no authority, mints nothing      | As workload keys                                        | [`membership-transport.ts`](../../packages/control/src/membership-transport.ts) |
+| Signed-token keys (`FABRIKA_TOKEN_KEYS`)         | Sign and verify the application's own signed tokens (`ctx.tokens.sign`, a token input) | Rotated on request (`apps.environments.rotateTokenKey`) | [`tokens.ts`](../../packages/app/src/implement/tokens.ts)                       |
+| Its own database credentials (Zerops)            | Its own role family and schema                                                         | Provisioned per application                             | [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md)              |
+| Its declared secrets                             | Whatever the secret is for                                                             | Set by a person with `secret.manage`                    | [§6](#6-secrets)                                                                |
+
+The ops key, which drives backups and data operations on Cloudflare, is not among them: the application holds only its
+SHA-256 digests ([`ops-key.ts`](../../packages/control/src/ops-key.ts), [ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md)).
+Code that takes over an application process therefore acts as that application: with its data, its secrets and its
+declared machine authority, and no more.
 
 ## 4. Audit
 
@@ -138,6 +186,20 @@ not admit, in this order ([`dispatch.ts`](../../packages/app/src/implement/dispa
 | Control's and Operations' own mutations (registry, secrets, deploys) through `IamRpc.audit`, filed under the caller's verified application                                                                                                                                                                                                                   | Built, best effort         | [`packages/auth-core/src/rpc.ts`](../../packages/auth-core/src/rpc.ts), [`packages/control/src/api/vault.ts`](../../packages/control/src/api/vault.ts)   |
 | An application's own audit: opt-in. The application writes its audit rows into its own table in the invocation's transaction, so a row commits only with the change (an audited export keeps its row only when its file goes out). There is no framework audit API, and the rows live in the application's own database, which its own code can also change. | Built (as ordinary tables) | [`table-and-migration.md`](../../packages/app/skill/references/table-and-migration.md), [`endpoint.md`](../../packages/app/skill/references/endpoint.md) |
 | Durable, idempotent delivery of Control's and Operations' events (an outbox)                                                                                                                                                                                                                                                                                 | Decided, not built         | [backlog 71](../backlog/71-deliver-domain-audit-events-durably.md)                                                                                       |
+
+What the audit records prove, and what they do not:
+
+- **A domain event's application is verified; its actor is the caller's word.** `IamRpc.audit` files an event under
+  the application of the caller's verified token, but takes the principal, credential and action fields as sent, so
+  code running in an application (or in Control or Operations) can write a misleading actor into its own stream. IAM's
+  own `audit_events` and `auth_log` rows are written by IAM from what it changed
+  ([`packages/iam/src/rpc.ts`](../../packages/iam/src/rpc.ts), [`packages/iam/CLAUDE.md`](../../packages/iam/CLAUDE.md)).
+- **Audit rows live in IAM's own database.** Whoever administers that database, or controls the IAM service, can
+  change or delete them; fabrika keeps no independent append-only copy. An organization that needs one exports the
+  rows (`audit.list`) to storage it controls.
+- **"Always on" has one known exception:** an OIDC discovery or token request that throws skips the refusal path, so
+  that failed sign-in may answer 500 without an `auth_log` row
+  ([backlog 206](../backlog/206-iam-token-and-oidc-hardening.md)).
 
 Known gaps: on Zerops a caller-supplied `cf-ray` can become an SDK audit event's request id
 ([backlog 92](../backlog/92-an-app-audit-event-takes-its-correlation-id-from-a-caller-cf-ray-on-zerops.md)), and a
@@ -162,7 +224,7 @@ service.
 | Zerops Postgres: a role family per application; the serving process drops the provisioning credential before application code loads                                                                                                                                                          | Built                                             | [`application-postgres-migrations.ts`](../../packages/platform-node/src/application-postgres-migrations.ts), [`packages/app/src/bun.ts`](../../packages/app/src/bun.ts), [ADR-0017](../decisions/0017-service-owned-postgres-migrations.md) |
 | Cloudflare: one Durable Object with its own SQLite per environment; another application's resource names are refused at deploy                                                                                                                                                               | Built (names are a rule, not an ownership record) | [ADR-0065](../decisions/0065-an-application-on-cloudflare-runs-in-one-durable-object-per-environment.md), [`bounds.ts`](../../packages/provider-cloudflare/src/bounds.ts)                                                                   |
 | Deployment namespaces: `cheap` and `mid` share one project and its proxy between applications; `cheap` also shares one Postgres service, where a contract application's SQL runs as its own role family and reaches only its `app_<id>` schema; only `full` is one application's own project | Built, by preset                                  | [`deployment-namespaces.md`](deployment-namespaces.md#presets), [ADR-0014](../decisions/0014-provider-owned-deployment-namespaces.md)                                                                                                       |
-| Outbound calls: a handler reaches only its declared `egress` origins; a cron job's `egress: 'public'` reaches only public hosts                                                                                                                                                              | Built, not a sandbox                              | [`egress.ts`](../../packages/app/src/implement/egress.ts), [`public-egress.ts`](../../packages/auth-core/src/public-egress.ts), [ADR-0075](../decisions/0075-a-cron-job-may-reach-the-public-web.md)                                        |
+| Outbound calls: a handler's request starts only at a declared `egress` origin; a cron job's `egress: 'public'` reaches only public hosts, each redirect hop checked again. A declared origin's redirect is followed unchecked unless the handler sets `redirect: 'manual'`                   | Built, not a sandbox                              | [`egress.ts`](../../packages/app/src/implement/egress.ts), [`public-egress.ts`](../../packages/auth-core/src/public-egress.ts), [ADR-0075](../decisions/0075-a-cron-job-may-reach-the-public-web.md)                                        |
 
 Known gaps:
 
@@ -173,6 +235,19 @@ Known gaps:
 - A `dev` sandbox's launcher runs authored commands as root with the application's secrets
   ([backlog 251](../backlog/251-the-launcher-runs-authored-commands-as-root.md)).
 - On Cloudflare, repository code holds the account token at deploy (backlog 86, above).
+- Between a change of an environment's domain and its next deploy, Control sends the ops key to the new domain
+  ([backlog 228](../backlog/228-application-object-review-follow-ups.md), item 25).
+- A user administrator scoped to some applications reads every principal and session of the installation
+  ([backlog 175](../backlog/175-a-scoped-user-administrator-lists-every-principal.md)).
+- A public procedure accepts any ID a verified token carries for any table it reaches
+  ([backlog 209](../backlog/209-a-public-procedure-binds-a-token-id-to-its-purpose.md)).
+- Operations' webhooks and health checks resolve DNS without refusing private addresses
+  ([backlog 38](../backlog/38-add-dns-safe-operations-egress.md)).
+- A Worker on the same Cloudflare account can start its own runner containers
+  ([backlog 89](../backlog/89-another-worker-can-still-start-its-own-runner-containers.md)).
+- IAM's and Control's hosts send no HSTS, and a cross-origin list admits `http://` for any host
+  ([backlog 163](../backlog/163-the-installation-hosts-send-no-hsts.md),
+  [backlog 189](../backlog/189-cross-origin-endpoints-review-follow-ups.md), item 1).
 
 ## 6. Secrets
 
@@ -190,6 +265,14 @@ Known gaps:
   by the installation's KEK ([`packages/control/src/vault.ts`](../../packages/control/src/vault.ts)). A deploy hands
   declared secrets to the Worker as Worker secrets
   ([`managed-secrets.ts`](../../packages/provider-cloudflare/src/managed-secrets.ts)). Losing the KEK is unrecoverable.
+  The envelope carries no associated data: what ties a value to its application and name is the row's scope and label,
+  checked on every read (`getSecretForPurpose`), so a writer of Control's database who moves a sealed value into
+  another row moves the secret with it. Rotating the KEK is not an operator procedure: the vault has a re-wrap routine
+  (`reencryptAll`), but no command runs it, and it goes row by row with no key version, so an interrupted run leaves
+  rows under both keys ([`packages/control/src/vault.ts`](../../packages/control/src/vault.ts)).
+- **Not every credential is in the vault.** Queued IAM mail (reset, enrollment and invitation links) is stored in
+  plain text in Control's database until it is sent
+  ([backlog 202](../backlog/202-relayed-mail-content-is-plaintext-at-rest.md)).
 - **A deploy whose declared secrets lack a value fails before any provider step** (Zerops: Control,
   `assertDeclaredSecretsSet` in [`run-lifecycle.ts`](../../packages/control/src/run-lifecycle.ts); Cloudflare: the
   runner, before its first step, `assertDeclaredSecrets` in
