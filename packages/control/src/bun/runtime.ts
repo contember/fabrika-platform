@@ -143,6 +143,9 @@ export function createRuntime(
 ): Runtime {
 	// Before anything opens: the table the proxy publishes decides whether this console serves MCP.
 	const { mcp, cli } = controlTableSwitch(source[FABRIKA_SERVICE_TABLE_DIGEST])
+	if (cli && controlPublicOrigin({ FABRIKA_CONTROL_DOMAIN: source['FABRIKA_CONTROL_DOMAIN'] }) === undefined) {
+		throw new Error('the console table admits OAuth tokens on its RPC, but FABRIKA_CONTROL_DOMAIN names no public origin to derive the resource from')
+	}
 	const databaseUrl = required(source, 'FABRIKA_CONTROL_DATABASE_URL')
 	// The console's own public origin is the fact this root states about where it runs; `local` is
 	// refused against it. Control does not branch on the name today, and that is exactly why it must not

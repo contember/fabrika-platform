@@ -478,6 +478,7 @@ export const PLATFORM_PROXY_MANIFEST_TEMPLATE: PlatformProxyManifestTemplate = {
 								actions: ['operations.read', 'operations.triage'],
 							},
 						],
+						verifiedBy: 'operations',
 					},
 				],
 				table: {

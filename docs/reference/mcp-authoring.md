@@ -268,7 +268,8 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
    Without the list, the console's table makes `/mcp` a session-only row that Control answers `404`,
    so no MCP client reaches it. An https deploy still writes `FABRIKA_IAM_OAUTH_CONFIG`, with no client and
    only the command-line client's resources (`https://<console>/api/rpc` and `/operations/api/rpc`, served to that
-   client alone through its device grant). A plain-http deploy writes none, leaves the variable on `iam` as it is, and
+   client alone through its device grant), and writes `FABRIKA_OPERATIONS_OAUTH_RESOURCE` on `operations`, the one
+   OAuth resource it accepts (`https://<console>/operations/api/rpc`). A plain-http deploy writes none, leaves the variable on `iam` as it is, and
    warns that it is still set; delete it there to stop IAM issuing tokens.
 
    **Rolling `iam` back** to a release from before the command-line client's resources: that IAM refuses a

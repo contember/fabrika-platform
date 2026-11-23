@@ -100,10 +100,12 @@ const OPERATIONS_CLI_GRANTS: readonly PlatformOAuthScopeGrant[] = [
 	{ scope: 'operate', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ, OPERATIONS_ACTIONS.TRIAGE] },
 ]
 
+/** The console's gateway forwards this path to Operations unchanged, and Operations verifies the token. */
 const CONTROL_CLI_OPERATIONS_RESOURCE: PlatformOAuthResourceTemplate = {
 	path: CONTROL_OPERATIONS_RPC_PATH,
 	scopes: OPERATIONS_CLI_GRANTS.map((grant) => grant.scope),
 	scopeGrants: OPERATIONS_CLI_GRANTS,
+	verifiedBy: 'operations',
 }
 
 /** A service contract as template data: its rows and reserved prefixes, without the service's id. */
@@ -201,6 +203,7 @@ const renderOAuthResource = (indent: number, open: string, resource: PlatformOAu
 		at(indent + 2, '},'),
 	]),
 	at(indent + 1, '],'),
+	...(resource.verifiedBy === undefined ? [] : [at(indent + 1, `verifiedBy: ${quote(resource.verifiedBy)},`)]),
 	at(indent, '},'),
 ]
 

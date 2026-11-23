@@ -1,5 +1,6 @@
 import type { AuthContext, FetchService, RequestExecutionContext } from '@fabrika/app'
 import { dispatchRpcRequest, serveService, type ServiceHandler } from '@fabrika/app/service'
+import { CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { type ControlEndpointId, controlServiceContract } from '../fabrika.service'
 import { builderPublicResponse } from './builder-bootstrap'
@@ -48,9 +49,9 @@ export function createControlApp(mcp: McpRoute | null, cli: boolean): FetchServi
 	const serve = (handle: Handle): ServiceHandler<ControlAppEnv> => ({ request, params, env: { env, provider, sourceConnection }, exec }) =>
 		handle({ env: withRequestExecution(env, exec), provider, sourceConnection, request }, params)
 	/** A credentialed row: the caller from the injected token. The proxy admitted a session's state change already. */
-	const authenticated = (handle: Handle): ServiceHandler<ControlAppEnv> =>
+	const authenticated = (handle: Handle, oauthPath?: string): ServiceHandler<ControlAppEnv> =>
 		serve(async (ctx, params) => {
-			const caller = await controlAuthenticator(ctx.env)(ctx.request)
+			const caller = await controlAuthenticator(ctx.env, oauthPath)(ctx.request)
 			if (!caller.ok) return caller.response
 			return handle({ ...ctx, auth: caller.auth }, params)
 		})
@@ -74,7 +75,8 @@ export function createControlApp(mcp: McpRoute | null, cli: boolean): FetchServi
 		'github-handoff-setup': serve((ctx, params) =>
 			sourceConnectionHandoffCall(ctx, (deps) => handedOffInstallationSetup(deps, params['connectionId'] ?? ''))
 		),
-		'rpc': authenticated((ctx) => dispatchRpcRequest({ router: controlRpcRouter, ctx, request: ctx.request })),
+		// With `cli`, the RPC also takes a resource token minted for exactly this path (the proxy binds it to this row).
+		'rpc': authenticated((ctx) => dispatchRpcRequest({ router: controlRpcRouter, ctx, request: ctx.request }), cli ? CONTROL_RPC_PATH : undefined),
 		'api-root': notFound,
 		'iam-admin-rpc': serve(iamAdmin),
 		'iam-admin-root': notFound,

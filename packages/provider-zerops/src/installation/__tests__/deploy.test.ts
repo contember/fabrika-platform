@@ -853,6 +853,18 @@ describe('OAuth and MCP authoring', () => {
 		expect(fixture.zerops.calls.indexOf('env:iam:FABRIKA_IAM_OAUTH_CONFIG')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
 	})
 
+	test("https: Operations is told the console's Operations RPC resource before it deploys; plain http tells it nothing", async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		expect(fixture.zerops.env('operations').get('FABRIKA_OPERATIONS_OAUTH_RESOURCE')).toBe(RPC_RESOURCES[1])
+		expect(fixture.zerops.calls.indexOf('env:operations:FABRIKA_OPERATIONS_OAUTH_RESOURCE')).toBeLessThan(
+			fixture.zerops.calls.indexOf('deploy:operations'),
+		)
+		const plain = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await plain.run({ scheme: 'http' })
+		expect(plain.zerops.calls).not.toContain('env:operations:FABRIKA_OPERATIONS_OAUTH_RESOURCE')
+	})
+
 	test('MCP enabled: the console admits OAuth bearers on `/mcp` too and registers the resource IAM issues for', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })

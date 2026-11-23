@@ -1,7 +1,7 @@
 import type { BuilderConnectionEnvironmentDto, BuilderConnectionReceiptDto, CreateBuilderConnectionReceiptRequest } from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import type { StoredBuilderConnectionReceipt } from '../db/builder-connections'
-import { appScope } from '../iam'
+import { appScope, isPerson } from '../iam'
 import { type BuilderPairingContext, requireBuilderPairingProof } from './builder-pairing'
 import { fail } from './domain'
 import { requireApp, toAppDto } from './registry/apps'
@@ -20,7 +20,7 @@ export async function createBuilderConnectionReceipt(
 	pairing: BuilderPairingContext,
 	input: CreateBuilderConnectionReceiptRequest,
 ): Promise<BuilderConnectionReceiptDto> {
-	if (c.auth.principal?.type !== 'user') fail(403, 'builder connection approval requires a human')
+	if (!isPerson(c.auth)) fail(403, 'builder connection approval requires a human')
 	if (!c.auth.can(CONTROL_ACTIONS.APP_MANAGE, appScope(input.appId))) fail(403, 'not authorized: app.manage')
 	const creatorId = await requireBuilderPairingProof(pairing, { attemptId: input.attemptId, approvalVerifier: input.approvalVerifier })
 	const requestKey = receiptRequestKey(input)

@@ -462,7 +462,9 @@ Invariants:
   [`mcp-authoring.md`](../../docs/reference/mcp-authoring.md)). On `--scheme=https` the composition names IAM as its
   authorization server: `resolvePlatformProxyManifest` publishes the console's `oauth.table` (the two RPC rows admit
   the command-line client's resource token) and registers `oauth.resources`, and `deployedServiceEnvironment` writes
-  `FABRIKA_IAM_OAUTH_CONFIG` for the SAME resource URIs (`platformIamOAuthConfig`, no MCP client). With
+  `FABRIKA_IAM_OAUTH_CONFIG` for the SAME resource URIs (`platformIamOAuthConfig`, no MCP client), and
+  `FABRIKA_OPERATIONS_OAUTH_RESOURCE` on `operations` for the resource marked `verifiedBy: 'operations'`
+  (`platformOAuthResourceVerifiedBy`), the only OAuth resource Operations accepts. With
   `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` / `--mcp-clients` it publishes `oauth.mcp.table` and registers the MCP resource
   too, and the config lists those clients. On plain http the manifest carries the plain `table` and the IAM variable
   is left untouched — never cleared, because an empty write on Zerops is unverified. Control's half is

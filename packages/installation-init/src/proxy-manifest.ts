@@ -63,6 +63,11 @@ export interface PlatformOAuthResourceTemplate {
 	/** IAM's default scopes for a client that names none; never a parameterized one. */
 	readonly defaultScopes?: readonly string[]
 	readonly scopeGrants: readonly PlatformOAuthScopeGrant[]
+	/**
+	 * The service the app forwards this path to, which verifies the token itself and so must be told the resource URI
+	 * (`FABRIKA_OPERATIONS_OAUTH_RESOURCE`). Absent: the app's own service verifies it.
+	 */
+	readonly verifiedBy?: 'operations'
 }
 
 /** An app's OAuth half: what a composition with an authorization server publishes, and MCP authoring on top. */
@@ -201,6 +206,19 @@ export const platformOAuthServed = (
 	return mcp === undefined
 		? { table: app.oauth.table, resources: cli }
 		: { table: mcp.table, resources: [...cli, { template: mcp.resource, cli: false }] }
+}
+
+/** The URI of the served resource `service` verifies the tokens of, or undefined when the composition serves none. */
+export const platformOAuthResourceVerifiedBy = (
+	template: PlatformProxyManifestTemplate,
+	composition: PlatformProxyComposition,
+	service: 'operations',
+): string | undefined => {
+	for (const app of template.apps) {
+		const entry = platformOAuthServed(app, composition)?.resources.find(({ template }) => template.verifiedBy === service)
+		if (entry !== undefined) return platformOAuthResourceUris(composition, composition.placement[app.service].hosts, entry.template).resource
+	}
+	return undefined
 }
 
 /** Only a composition that names an authorization server registers an app's resources and serves its OAuth rows. */

@@ -20,7 +20,7 @@ import { isOAuthResourceUri, isWorkloadKind, PROXY_TOKEN_HEADER, type TokenAudie
 import { buildAuthContext, IamClient } from './client'
 import { readRequestId } from './request'
 import type { AuthContext, IamBinding, ListPrincipalsFailure, PrincipalList } from './types'
-import { TokenVerifier } from './verify'
+import { TokenVerifier, type VerifyResult } from './verify'
 
 // ── Public config surfaces ──────────────────────────────────────────────────────
 
@@ -43,6 +43,11 @@ export interface CreateIamOptions {
 	 * passes `{ kind: 'resource', app, resource }` to accept OAuth tokens minted for that resource.
 	 */
 	tokenAudience?: TokenAudienceProfile
+	/**
+	 * An OAuth resource of this app whose tokens `authenticate` accepts BESIDE the native ones: a mount a person reaches
+	 * with a session or a key, and an OAuth client with a token minted for exactly this resource URI.
+	 */
+	oauthResource?: string
 }
 
 // ── Authentication result ────────────────────────────────────────────────────────
@@ -96,7 +101,8 @@ interface IamConfig {
 	binding: IamBinding
 	verifier: TokenVerifier
 	appId: string
-	tokenAudience: TokenAudienceProfile
+	/** Tried in order; the first that verifies decides. */
+	tokenAudiences: readonly [TokenAudienceProfile, ...TokenAudienceProfile[]]
 }
 
 /**
@@ -109,7 +115,7 @@ export class Iam {
 	private readonly binding: IamBinding
 	private readonly verifier: TokenVerifier
 	private readonly appId: string
-	private readonly tokenAudience: TokenAudienceProfile
+	private readonly tokenAudiences: readonly [TokenAudienceProfile, ...TokenAudienceProfile[]]
 
 	/** @internal — use `createIam`. */
 	constructor(config: IamConfig) {
@@ -117,7 +123,7 @@ export class Iam {
 		this.binding = config.binding
 		this.verifier = config.verifier
 		this.appId = config.appId
-		this.tokenAudience = config.tokenAudience
+		this.tokenAudiences = config.tokenAudiences
 	}
 
 	// ── Management surface (delegated to the real client) ─────────────────────────
@@ -145,7 +151,7 @@ export class Iam {
 
 	/** Verify one token and wrap its claims in the `permits`-backed `AuthContext`. */
 	private async contextFor(token: string, requestId: string): Promise<AuthResult> {
-		const verified = await this.verifier.verify(token, this.tokenAudience)
+		const verified = await this.verifyAny(token)
 		if (!verified.ok) {
 			return verified.reason === 'unavailable'
 				? { ok: false, reason: 'unavailable', status: 503 }
@@ -156,6 +162,17 @@ export class Iam {
 			return { ok: false, reason: 'invalid_token', status: 401 }
 		}
 		return { ok: true, context: buildAuthContext(this.binding, token, verified.claims, requestId) }
+	}
+
+	/** The first audience the token verifies for; an unreachable key set ends the search, since no other would verify either. */
+	private async verifyAny(token: string): Promise<VerifyResult> {
+		const [first, ...rest] = this.tokenAudiences
+		let verified = await this.verifier.verify(token, first)
+		for (const audience of rest) {
+			if (verified.ok || verified.reason === 'unavailable') break
+			verified = await this.verifier.verify(token, audience)
+		}
+		return verified
 	}
 }
 
@@ -181,12 +198,17 @@ export function createIam(env: IamEnv, opts: CreateIamOptions = {}): Iam {
 	if (tokenAudience.app !== appId || (tokenAudience.kind === 'resource' && !isOAuthResourceUri(tokenAudience.resource))) {
 		throw new Error('createIam: tokenAudience must name this app and, for a resource, a valid OAuth resource URI.')
 	}
+	if (opts.oauthResource !== undefined && (tokenAudience.kind !== 'app' || !isOAuthResourceUri(opts.oauthResource))) {
+		throw new Error('createIam: oauthResource is accepted beside native tokens only, and must be a valid OAuth resource URI.')
+	}
 	return new Iam({
 		management: new IamClient(binding, appId),
 		binding,
 		verifier: new TokenVerifier(binding, issuer, appId),
 		appId,
-		tokenAudience,
+		tokenAudiences: opts.oauthResource === undefined
+			? [tokenAudience]
+			: [tokenAudience, { kind: 'resource', app: appId, resource: opts.oauthResource }],
 	})
 }
 

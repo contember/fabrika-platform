@@ -18,7 +18,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseOAuthConfig } from '../../../iam/src/oauth-config'
 import { localApps } from '../app-registration'
-import { localIamOAuthConfig, localPlatformProxyManifest, readLocalMcpClients } from '../prepare'
+import { localIamOAuthConfig, localOperationsOAuthResource, localPlatformProxyManifest, readLocalMcpClients } from '../prepare'
 
 /** What protects an entry: its service table's rows and reserved prefixes. */
 const accessOf = (app: InstallationProxyApp) => ({ endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes })
@@ -124,6 +124,12 @@ describe('OAuth and MCP authoring in the local composition', () => {
 		expect(config?.resources.map((resource) => [resource.app, resource.resource])).toEqual(
 			[...cliResources(origin), controlMcpResource(origin)].map((resource) => ['vozka', resource]),
 		)
+	})
+
+	test("Operations is told the console's Operations RPC resource, by a file compose reads", () => {
+		expect(localOperationsOAuthResource()).toBe(`${controlDomain()}${CONTROL_OPERATIONS_RPC_PATH}`)
+		const compose = readFileSync(resolve(import.meta.dir, '..', '..', 'compose.yaml'), 'utf8')
+		expect(compose).toContain('- path: .state/operations-oauth.env')
 	})
 
 	test('the opt-in variable is parsed at the boundary', () => {

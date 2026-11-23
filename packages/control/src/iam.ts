@@ -91,8 +91,8 @@ export function parseBootstrapAdmins(raw: string | undefined): ReadonlySet<strin
  * and which an operator obtains with the provisioning key over IAM's admin surface. See
  * `docs/reference/human-authentication.md`.
  */
-export function controlAuthenticator(env: IamEnv): (request: Request) => Promise<ControlAuthentication> {
-	const iam = createAppIam(env, { appId: CONTROL_APP_ID })
+export function controlAuthenticator(env: IamEnv, oauthPath?: string): (request: Request) => Promise<ControlAuthentication> {
+	const iam = createAppIam(env, { appId: CONTROL_APP_ID, ...(oauthPath === undefined ? {} : { oauthResource: controlOAuthResource(env, oauthPath) }) })
 	const bootstrapAdmins = parseBootstrapAdmins(env.FABRIKA_CONTROL_BOOTSTRAP_ADMINS)
 
 	return async (request) => {
@@ -102,11 +102,29 @@ export function controlAuthenticator(env: IamEnv): (request: Request) => Promise
 			return { ok: false, response: authFailureResponse(path, result) }
 		}
 		const principal = result.context.principal
-		const auth = principal !== null && principal.type === 'user' && bootstrapAdmins.has(principal.label)
+		// The hatch is for the person, never for a token they delegated: an OAuth token keeps the permissions it carries.
+		const auth = principal !== null && isPerson(result.context) && bootstrapAdmins.has(principal.label)
 			? new BootstrapAdminAuthContext(result.context)
 			: result.context
 		return { ok: true, auth }
 	}
+}
+
+/** The OAuth resource URI of one of the console's paths, from its public origin; a console without one fails closed. */
+function controlOAuthResource(env: Pick<IamEnv, 'FABRIKA_CONTROL_DOMAIN'>, path: string): string {
+	const origin = controlPublicOrigin(env)
+	if (origin === undefined) throw new Error('FABRIKA_CONTROL_DOMAIN names no public origin to derive an OAuth resource from')
+	return `${origin}${path}`
+}
+
+/**
+ * The caller is a person: a user principal, not an OAuth token (an MCP client's or the command-line client's) or a
+ * share link. A service principal, the builder key and any agent credential are not, whatever they carry. A user
+ * principal's bearer counts too.
+ */
+export function isPerson(auth: AuthContext): boolean {
+	const principal = auth.principal
+	return principal !== null && principal.type === 'user' && auth.oauth === undefined && auth.link === undefined
 }
 
 /** The caller of a credentialed console row, or the flat refusal its handler answers instead. */

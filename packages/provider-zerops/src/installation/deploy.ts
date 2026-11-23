@@ -45,6 +45,7 @@ import {
 	IAM_OAUTH_CONFIG_VARIABLE,
 	type IamOAuthConfig,
 	platformIamOAuthConfig,
+	platformOAuthResourceVerifiedBy,
 	platformOrigin,
 	platformProxyAppFor,
 	type PlatformProxyComposition,
@@ -360,7 +361,7 @@ const desiredServiceEnv = (
 	projectId: string,
 	placement: PlatformPlacement,
 	proxySource: ZeropsNamespaceProxySource,
-	oauthConfig: IamOAuthConfig | undefined,
+	oauth: { readonly config: IamOAuthConfig; readonly operationsResource: string | undefined } | undefined,
 	controlTableDigest: string,
 	iamAdminKey: string,
 ): ReadonlyMap<PlatformDeployService, ReadonlyMap<string, string>> => {
@@ -371,7 +372,8 @@ const desiredServiceEnv = (
 		iamUpstream: PRIVATE_IAM_UPSTREAM,
 		provisioningKey: iamAdminKey,
 		controlTableDigest,
-		...(oauthConfig === undefined ? {} : { oauthConfig }),
+		...(oauth === undefined ? {} : { oauthConfig: oauth.config }),
+		...(oauth?.operationsResource === undefined ? {} : { operationsOAuthResource: oauth.operationsResource }),
 	})
 	const control = new Map([
 		...fabrika.control,
@@ -818,7 +820,9 @@ export const deployPreparedPlatform = async (
 		project.id,
 		placement,
 		proxySource,
-		oauthConfig,
+		oauthConfig === undefined
+			? undefined
+			: { config: oauthConfig, operationsResource: platformOAuthResourceVerifiedBy(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition, 'operations') },
 		controlTableDigest,
 		input.iamAdminKey,
 	)

@@ -152,6 +152,13 @@ other environment, before the provider prepares anything, and the write maps a r
   names none of `CONTROL_SERVICE_VARIANTS` (no OAuth; the command-line client's RPC rows; those plus MCP). With MCP
   on, `FABRIKA_CONTROL_DOMAIN` is required too. The Cloudflare Worker serves no OAuth client yet: it serves
   `controlApp` (`mcp: false, cli: false`), and `fabrika.config.ts` builds its proxy from the same table.
+- **With `cli` on, `/api/rpc` accepts the command-line client's resource token** for `<FABRIKA_CONTROL_DOMAIN>/api/rpc`
+  beside native tokens (`controlAuthenticator` → `createIam(…, { oauthResource })`), so `FABRIKA_CONTROL_DOMAIN` is
+  required. Its permissions are the grant's, never more than the person's. **`isPerson` (`src/iam.ts`) is the ONE
+  "a person acting directly" predicate**: a user, no `oauth` claims, no delegation link. Every human-only flow
+  (approval and protected-environment changes, source connections, builder pairing and connections, an app's source
+  change without a key's approval) and the
+  `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` elevation check it; a delegated token is never elevated.
 - **ONE auth path, locally included — there is no `DEV` var any more.** `env.IAM` and
   `FABRIKA_IAM_ISSUER` are required in every environment; `createIam` refuses to build without them, and
   `fabrika.config.ts` binds IAM locally for the same reason (the proxy Worker in front already did).

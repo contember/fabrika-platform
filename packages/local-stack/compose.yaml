@@ -89,7 +89,8 @@ services:
     <<: *bun
     # The production server with the `directory` provider registered (`src/iam-server.ts`); its mail goes through Control.
     command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/local-stack/src/iam-server.ts"]
-    # `iam-oauth.env` is rewritten by every prepare: empty unless FABRIKA_LOCAL_MCP_CLIENTS_JSON is set.
+    # `iam-oauth.env` is rewritten by every prepare: the command-line client's resources, and MCP's with
+    # FABRIKA_LOCAL_MCP_CLIENTS_JSON set.
     env_file:
       - path: .state/iam.env
       - path: .state/iam-oauth.env
@@ -167,7 +168,10 @@ services:
   operations:
     <<: *bun
     command: [sh, -c, "bun packages/operations/src/node/migrate.ts && exec bun packages/operations/src/node/server.ts"]
-    env_file: .state/operations.env
+    # `operations-oauth.env` is rewritten by every prepare: the console's Operations RPC as an OAuth resource.
+    env_file:
+      - path: .state/operations.env
+      - path: .state/operations-oauth.env
     environment:
       PORT: "3000"
       ENVIRONMENT: local

@@ -1376,6 +1376,9 @@ describe('a handoff link for an organization owner', () => {
 		await expect(mint(env, source, connectionId, 9, other)).rejects.toMatchObject({ httpStatus: 404 })
 		await expect(mint(env, source, connectionId, 9, auth('service'))).rejects.toMatchObject({ httpStatus: 403 })
 		await expect(mint(env, source, connectionId, 9, auth('user', false))).rejects.toMatchObject({ httpStatus: 403 })
+		// The same person through a token they delegated to an OAuth client is not the person.
+		const delegated = { ...auth(), oauth: { app: 'vozka', clientId: 'fabrika-cli', scopes: ['operate:alpha'], grantId: 'grant-1', tokenId: 'token-1' } }
+		await expect(mint(env, source, connectionId, 9, delegated)).rejects.toMatchObject({ httpStatus: 403 })
 		await manifestCallback({
 			...deps(env, source, new Request(`${ORIGIN}/api/source/github/callback?code=created&state=${token(32)}`)),
 			exchangeManifest: () => Promise.resolve(createdApp()),

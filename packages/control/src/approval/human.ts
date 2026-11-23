@@ -7,20 +7,12 @@ import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { fail } from '../api/domain'
 import { canAtCoordinates } from '../api/runs'
 import { type AppEnvRow, type ControlRepositories, defaultProtected } from '../db'
+import { isPerson } from '../iam'
 import { isWorkspaceRef } from '../ref-match'
 
 /** The request a console call arrived on. */
 export interface ConsoleAdmission {
 	readonly request: Request
-}
-
-/**
- * The caller is a person: a user principal, not an OAuth (MCP) token or a share link. A service principal, the builder
- * key and any agent credential are not, whatever they carry. A user principal's bearer counts too.
- */
-export function isPerson(auth: AuthContext): boolean {
-	const principal = auth.principal
-	return principal !== null && principal.type === 'user' && auth.oauth === undefined && auth.link === undefined
 }
 
 /**
