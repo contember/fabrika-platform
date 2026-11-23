@@ -36,7 +36,12 @@ export interface SessionRow {
 	terminal_generation: number | null
 }
 
-export interface ListedSessionRow extends SessionRow {
+/** A session as a lookup returns it: with the time its login signed in, the parent's for a child session. */
+export interface SignedInSessionRow extends SessionRow {
+	signed_in_at: number
+}
+
+export interface ListedSessionRow extends SignedInSessionRow {
 	parent_expires_at: number | null
 	parent_revoked_at: number | null
 }
@@ -79,6 +84,9 @@ const SUBJECTLESS_METHODS: readonly AuthenticationMethod[] = ['password', 'termi
  */
 const TERMINAL_ENROLLED = `AND (COALESCE(s.terminal_id, p.terminal_id) IS NULL
 	OR (t.principal_id IS NOT NULL AND t.revoked_at IS NULL AND t.generation = COALESCE(s.terminal_generation, p.terminal_generation)))`
+
+/** When the login of `s` signed in: its parent's creation for a child session (`p`), its own for a login. */
+const SIGNED_IN_AT = 'COALESCE(p.created_at, s.created_at) AS signed_in_at'
 
 export class SessionRepository {
 	constructor(
@@ -162,34 +170,34 @@ export class SessionRepository {
 	 * A session on a terminal is valid only while that terminal is enrolled, and so is a child whose parent is on one: a
 	 * revoked terminal ends them at once, with no sweep (ADR-0067).
 	 */
-	async getActiveSessionByHash(tokenHash: string): Promise<SessionRow | null> {
+	async getActiveSessionByHash(tokenHash: string): Promise<SignedInSessionRow | null> {
 		const now = unixNow()
 		return this.db
-			.prepare(`SELECT s.* FROM sessions s
+			.prepare(`SELECT s.*, ${SIGNED_IN_AT} FROM sessions s
 				LEFT JOIN sessions p ON p.id = s.parent_session_id
 				LEFT JOIN terminals t ON t.principal_id = COALESCE(s.terminal_id, p.terminal_id)
 				WHERE s.token_hash = ? AND s.revoked_at IS NULL AND s.expires_at > ?
 					AND (s.parent_session_id IS NULL OR (p.revoked_at IS NULL AND p.expires_at > ?))
 					${TERMINAL_ENROLLED}`)
 			.bind(tokenHash, now, now)
-			.first<SessionRow>()
+			.first<SignedInSessionRow>()
 	}
 
 	/**
 	 * The same validity rule as `getActiveSessionByHash`, addressed by id — how a handoff code reaches
 	 * the login it was issued against, which it holds by id rather than by a hash it must not store.
 	 */
-	async getActiveSessionById(id: string): Promise<SessionRow | null> {
+	async getActiveSessionById(id: string): Promise<SignedInSessionRow | null> {
 		const now = unixNow()
 		return this.db
-			.prepare(`SELECT s.* FROM sessions s
+			.prepare(`SELECT s.*, ${SIGNED_IN_AT} FROM sessions s
 				LEFT JOIN sessions p ON p.id = s.parent_session_id
 				LEFT JOIN terminals t ON t.principal_id = COALESCE(s.terminal_id, p.terminal_id)
 				WHERE s.id = ? AND s.revoked_at IS NULL AND s.expires_at > ?
 					AND (s.parent_session_id IS NULL OR (p.revoked_at IS NULL AND p.expires_at > ?))
 					${TERMINAL_ENROLLED}`)
 			.bind(id, now, now)
-			.first<SessionRow>()
+			.first<SignedInSessionRow>()
 	}
 
 	/**
@@ -268,7 +276,7 @@ export class SessionRepository {
 		const where = options.before === undefined ? '' : ' AND s.id < ?'
 		const bindings = options.before === undefined ? [principalId, options.limit] : [principalId, options.before, options.limit]
 		const { results } = await this.db
-			.prepare(`SELECT s.*, p.expires_at AS parent_expires_at, p.revoked_at AS parent_revoked_at FROM sessions s
+			.prepare(`SELECT s.*, ${SIGNED_IN_AT}, p.expires_at AS parent_expires_at, p.revoked_at AS parent_revoked_at FROM sessions s
 				LEFT JOIN sessions p ON p.id = s.parent_session_id
 				WHERE s.principal_id = ?${where}${options.signInsOnly ? ' AND s.parent_session_id IS NULL' : ''} ORDER BY s.id DESC LIMIT ?`)
 			.bind(...bindings)
@@ -278,7 +286,7 @@ export class SessionRepository {
 
 	async listChildren(parentIds: string[]): Promise<ListedSessionRow[]> {
 		if (parentIds.length === 0) return []
-		const { results } = await this.db.prepare(`SELECT s.*, p.expires_at AS parent_expires_at, p.revoked_at AS parent_revoked_at
+		const { results } = await this.db.prepare(`SELECT s.*, ${SIGNED_IN_AT}, p.expires_at AS parent_expires_at, p.revoked_at AS parent_revoked_at
 			FROM sessions s JOIN sessions p ON p.id = s.parent_session_id
 			WHERE s.parent_session_id IN (${parentIds.map(() => '?').join(', ')}) ORDER BY s.id DESC`).bind(...parentIds).all<ListedSessionRow>()
 		return results

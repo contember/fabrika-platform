@@ -37,7 +37,7 @@ export async function currentSession(request: Request, services: Services) {
 		return null
 	}
 	// And a session whose method is no longer enabled must not silently father a handoff.
-	return sessionUsable(session, services.config) ? session : null
+	return sessionUsable(session, services.config, Math.floor(Date.now() / 1000)) ? session : null
 }
 
 /** A login a handoff may continue: the browser's IAM session and its principal, an active user. */
@@ -80,7 +80,11 @@ export async function issueSession(
 	},
 ): Promise<Response> {
 	const sessionToken = randomToken(32)
-	const expiresAt = Math.floor(Date.now() / 1000) + SESSION_TTL_SECONDS
+	// An OIDC login stores the installation's cap as its expiry, so its app sessions, OAuth grants and cookie end with it.
+	const lifetime = (input.authenticationMethod ?? 'oidc') === 'oidc'
+		? Math.min(SESSION_TTL_SECONDS, services.config.authentication.oidc.sessionCapSeconds)
+		: SESSION_TTL_SECONDS
+	const expiresAt = Math.floor(Date.now() / 1000) + lifetime
 	let sessionId: string
 	try {
 		sessionId = await services.repositories.sessions.createSession({
@@ -110,7 +114,7 @@ export async function issueSession(
 		? input.redirect ?? await installationLanding(services)
 		: await handoffLocation(services, input.handoff, sessionId)
 	const headers = redirectHeaders(location)
-	headers.append('Set-Cookie', sessionCookie(sessionToken))
+	headers.append('Set-Cookie', sessionCookie(sessionToken, lifetime))
 	// A person with a language of their own keeps it on this browser's next sign-in page here (`LOCALE_COOKIE`); one
 	// without clears the language a previous person left on a shared browser.
 	// The session has committed and the cookie picks words only: a failed read leaves the remembered language as it is.
@@ -236,14 +240,14 @@ export function signedOutRedirect(location: string): Response {
  * TLS-TERMINATING BALANCER (the socket is plain HTTP, the browser spoke HTTPS) and over plain HTTP on
  * `localhost` / `*.localhost`, which browsers treat as potentially trustworthy. An installation
  * served over cleartext HTTP on a public hostname can hold no session at all — which is the correct
- * outcome for a 30-day credential, not a regression to work around.
+ * outcome for a credential that lasts up to 30 days, not a regression to work around.
  */
-function sessionCookie(value: string): string {
+function sessionCookie(value: string, maxAge: number): string {
 	return serializeCookie(SESSION_COOKIE, value, {
 		httpOnly: true,
 		secure: true,
 		sameSite: 'Lax',
-		maxAge: SESSION_TTL_SECONDS,
+		maxAge,
 		path: '/',
 	})
 }

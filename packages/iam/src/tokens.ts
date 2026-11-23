@@ -31,7 +31,7 @@ import {
 	signAccessClaims,
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
-import { sessionUsable } from './auth'
+import { sessionEndsAt, sessionUsable } from './auth'
 import type { CredentialGrantRow, CredentialRow, PrincipalRow, SessionTerminal } from './db'
 import { principalStatus, sessionTerminal } from './db'
 import { issuerAuthority, issuerCoverage } from './delegation'
@@ -87,7 +87,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 		return refused('invalid_session', session.principal_id)
 	}
 	// A session outlives the configuration that issued it; refuse it once its method is off.
-	if (!sessionUsable(session, services.config)) {
+	if (!sessionUsable(session, services.config, Math.floor(Date.now() / 1000))) {
 		return refused('invalid_session', session.principal_id)
 	}
 
@@ -115,7 +115,7 @@ export async function mintToken(services: Services, env: MintEnv, input: MintTok
 	// In a grant's last 30 s (the proxy's TOKEN_REFRESH_SKEW_SECONDS) the proxy re-mints per request; cache.test.ts pins it.
 	const expiresAt = Math.min(
 		now + DEFAULT_TOKEN_TTL_SECONDS,
-		session.expires_at,
+		sessionEndsAt(session, services.config),
 		authorityDeadline(authority, onTerminal === null ? permissions : narrowPermissions(authority.permissions, onTerminal.ceiling), now)
 			?? Number.POSITIVE_INFINITY,
 		// A terminal's own entries are its principal's grants, and end with them.

@@ -75,7 +75,7 @@ export function methodNotAllowed(): Response {
 
 /**
  * Headers for a 302 out of this surface. `no-store` belongs on every one of them, not just the
- * password pages: these are the responses that carry the 30-day session cookie and, on the handoff
+ * password pages: these are the responses that carry the session cookie and, on the handoff
  * path, the single-use code in the `Location` itself.
  */
 export function redirectHeaders(location: string): Headers {

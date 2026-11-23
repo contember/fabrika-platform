@@ -160,6 +160,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   "refuse an `oidc` session when OIDC is off" would have disabled the bypass itself. Anything that
   seeds a session must therefore name a method that composition enables — `src/node/browser-identity.ts`
   seeds `password` for exactly that reason.
+- **AN OIDC LOGIN IS USABLE FOR THE INSTALLATION'S CAP AFTER ITS SIGN-IN, AND THE CAP IS MEASURED AT USE**
+  (`sessionUsable`/`sessionEndsAt`, `src/oidc-session.ts`, `Config.authentication.oidc.sessionCapSeconds`):
+  `OIDC_SESSION_HOURS` (deploy var `FABRIKA_IAM_OIDC_SESSION_HOURS`, default 12, whole hours 1–720, anything else fails
+  the boot in `buildServices` and `node/runtime.ts`). The sign-in is `signed_in_at`, which the session lookups and lists
+  select as the PARENT's `created_at` for a child, so a console session opened an hour ago from a 13-hour-old login is
+  refused; never measure it from the child's own row. Measuring at use ends logins issued before the cap was lowered; a
+  new OIDC login also stores the cap as its `expires_at` and cookie `Max-Age`, a mint and an OAuth refresh clamp
+  their token to `sessionEndsAt`, and `sessions.list` reports a capped login `expired`. Password logins are not capped.
 - **A SESSION ASSERTED AT A TERMINAL MINTS `(person ∩ ceiling) ∪ terminal`, ONLY FOR ITS ASSERTER** (ADR-0067 §4,
   `mintToken`). Each person entry is narrowed by the asserter's ceiling patterns it overlaps (`narrowPermissions`, as an
   OAuth scope narrows: a `*` under `a.read` keeps `a.read` with the entry's scope), then the terminal principal's own

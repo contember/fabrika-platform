@@ -45,6 +45,31 @@ fail-closed. Password login never self-provisions, so it does not consult the li
 Enabling an email sender does not enable password login, and enabling password
 login does not provision a credential for any user.
 
+## How long an OIDC login lasts
+
+An organization blocks a person at its identity provider, so IAM asks the provider
+again on a fixed cap: an OIDC login, and every application session derived from it
+(the console's included), is usable for `FABRIKA_IAM_OIDC_SESSION_HOURS` after its
+sign-in, 12 hours when unset. Then the proxy's next token renewal is refused and IAM's
+sign-in no longer honours the login, so the browser goes back to the provider (straight
+there when OIDC is the only method). A provider that still holds its own session for
+the person signs them in again without a prompt; one that blocked them refuses. A
+token minted from the login ends at the cap too. The value is a whole number of hours
+from 1 to 720 (the 30 days every IAM login lasts); anything else fails the boot.
+
+The cap is measured at use from the sign-in, so lowering it, or upgrading to a release
+that has it, also ends older logins on their next use. A new OIDC login stores the cap
+as its expiry and cookie lifetime, so raising the cap later does not lengthen a login
+already issued. Password logins are not capped: they keep 30 days. A key the person
+issued or approved is not a login and is not capped by this; revoke it, or disable the
+person in IAM, to end it.
+
+Where it is set: on Zerops, a variable of the `iam` service under that name; on
+Cloudflare, a deploy variable of IAM's Worker (`pipeline.vars` in
+`packages/iam/fabrika.config.ts`), which the deploy passes as `OIDC_SESSION_HOURS`. No
+installer writes it. IAM reads it at boot, so a change takes effect when `iam` restarts
+or redeploys.
+
 ## Per-user state
 
 Every user can have one password state:

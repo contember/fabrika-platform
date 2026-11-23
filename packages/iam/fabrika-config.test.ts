@@ -22,6 +22,7 @@ const ENV_NAMES = [
 	'FABRIKA_IAM_OAUTH_CONFIG',
 	'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
 	'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
+	'FABRIKA_IAM_OIDC_SESSION_HOURS',
 	'FABRIKA_IAM_OIDC_REQUIRE_VERIFIED_EMAIL',
 	'FABRIKA_EMAIL_FROM',
 	'FABRIKA_EMAIL_FROM_NAME',
@@ -65,6 +66,7 @@ describe('IAM resource graph', () => {
 			'FABRIKA_IAM_OAUTH_CONFIG',
 			'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
 			'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
+			'FABRIKA_IAM_OIDC_SESSION_HOURS',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',
@@ -158,18 +160,21 @@ describe('IAM resource graph', () => {
 		expect(named.options.vars?.['ADMIN_AUDIENCES']).toBe('vozka,second-gateway')
 	})
 
-	test('passes the retention settings only where the deploy names them', () => {
+	test('passes the retention and OIDC session settings only where the deploy names them', () => {
 		const unset = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, REMOTE_SOURCE)
 		expect(unset.options.vars?.['AUTH_LOG_RETENTION_DAYS']).toBeUndefined()
 		expect(unset.options.vars?.['AUDIT_RETENTION_DAYS']).toBeUndefined()
+		expect(unset.options.vars?.['OIDC_SESSION_HOURS']).toBeUndefined()
 
 		const named = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, {
 			...REMOTE_SOURCE,
 			FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS: '14',
 			FABRIKA_IAM_AUDIT_RETENTION_DAYS: '365',
+			FABRIKA_IAM_OIDC_SESSION_HOURS: '8',
 		})
 		expect(named.options.vars?.['AUTH_LOG_RETENTION_DAYS']).toBe('14')
 		expect(named.options.vars?.['AUDIT_RETENTION_DAYS']).toBe('365')
+		expect(named.options.vars?.['OIDC_SESSION_HOURS']).toBe('8')
 	})
 
 	test('supports password-only authentication without OIDC configuration', () => {
@@ -189,6 +194,7 @@ describe('IAM resource graph', () => {
 			'FABRIKA_IAM_OAUTH_CONFIG',
 			'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
 			'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
+			'FABRIKA_IAM_OIDC_SESSION_HOURS',
 			'FABRIKA_IAM_OIDC_ENABLED',
 			'FABRIKA_IAM_PASSWORD_ENABLED',
 			'FABRIKA_EMAIL_PROVIDER',

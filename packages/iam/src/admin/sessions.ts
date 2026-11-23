@@ -6,7 +6,7 @@ import {
 	type SessionIdInput,
 	type SessionList,
 } from '@fabrika/iam-contract'
-import { sessionUsable } from '../auth'
+import { sessionEndsAt, sessionUsable } from '../auth'
 import type { ListedSessionRow } from '../repositories/sessions'
 
 import { type AdminContext, adminEvent, fail } from './context'
@@ -18,13 +18,13 @@ import { requireActableTarget } from './user-admin'
 function toSessionDto(c: AdminContext, row: ListedSessionRow, now: number, disabled: boolean): SessionDto {
 	const unavailableReason = row.revoked_at !== null
 		? 'revoked'
-		: row.expires_at <= now
+		: sessionEndsAt(row, c.services.config) <= now
 		? 'expired'
 		: row.parent_session_id !== null && (row.parent_expires_at === null || row.parent_expires_at <= now || row.parent_revoked_at !== null)
 		? 'parent_ended'
 		: disabled
 		? 'account_disabled'
-		: !sessionUsable(row, c.services.config)
+		: !sessionUsable(row, c.services.config, now)
 		? 'method_disabled'
 		: null
 	return {
@@ -35,7 +35,7 @@ function toSessionDto(c: AdminContext, row: ListedSessionRow, now: number, disab
 		parentSessionId: row.parent_session_id,
 		status: row.revoked_at !== null ? 'revoked' : row.expires_at <= now ? 'expired' : 'active',
 		createdAt: row.created_at,
-		expiresAt: row.expires_at,
+		expiresAt: sessionEndsAt(row, c.services.config),
 		revokedAt: row.revoked_at,
 		unavailableReason,
 	}
