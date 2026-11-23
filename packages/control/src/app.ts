@@ -40,9 +40,10 @@ export type McpRoute = (request: Request) => Promise<Response>
 /**
  * Delivery as a first-party service: `serveService` over the console's service contract, which its proxy decides
  * from on both providers. With an MCP route the table carries the `oauth` row for `/mcp`; without one, `/mcp` is a
- * session-only row that answers 404. Provider and runtime ports are supplied by the composition root.
+ * session-only row that answers 404. With `cli` the two RPC rows also admit the command-line client's OAuth token.
+ * Provider and runtime ports are supplied by the composition root.
  */
-export function createControlApp(mcp: McpRoute | null): FetchService<ControlAppEnv> {
+export function createControlApp(mcp: McpRoute | null, cli: boolean): FetchService<ControlAppEnv> {
 	type Handle = (ctx: ControlAppContext, params: Readonly<Record<string, string>>) => Response | Promise<Response>
 	const serve = (handle: Handle): ServiceHandler<ControlAppEnv> => ({ request, params, env: { env, provider, sourceConnection }, exec }) =>
 		handle({ env: withRequestExecution(env, exec), provider, sourceConnection, request }, params)
@@ -82,7 +83,7 @@ export function createControlApp(mcp: McpRoute | null): FetchService<ControlAppE
 		'console': serve((ctx) => ctx.env.ASSETS.fetch(ctx.request)),
 		'mcp': mcp === null ? notFound : serve((ctx) => mcpRequest(mcp, ctx.request)),
 	}
-	return serveService(controlServiceContract({ mcp: mcp !== null }), handlers, {
+	return serveService(controlServiceContract({ mcp: mcp !== null, cli }), handlers, {
 		onError(cause) {
 			console.error('control request failed:', cause instanceof Error ? cause.message : 'unknown error')
 			return new Response('internal error', {
@@ -93,8 +94,8 @@ export function createControlApp(mcp: McpRoute | null): FetchService<ControlAppE
 	})
 }
 
-/** The console without MCP: what the Cloudflare Worker serves. */
-export const controlApp: FetchService<ControlAppEnv> = createControlApp(null)
+/** The console without OAuth: what the Cloudflare Worker serves. */
+export const controlApp: FetchService<ControlAppEnv> = createControlApp(null, false)
 
 async function mcpRequest(mcp: McpRoute, request: Request): Promise<Response> {
 	try {

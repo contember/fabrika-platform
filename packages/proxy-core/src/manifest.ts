@@ -31,7 +31,7 @@ import {
 import { z } from 'zod'
 import { type InstallationBrand, installationBrandSchema } from './brand'
 import { type CspOrigins, cspOrigins, isCrossOrigin, isPolicyOrigin, MAX_CROSS_ORIGINS, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from './headers'
-import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthScopesSchema } from './oauth-resource'
+import { type OAuthProtectedResource, oauthProtectedResourceSchema, oauthRowScopesSchema } from './oauth-resource'
 
 export * from './oauth-resource'
 
@@ -448,7 +448,7 @@ export const installationProxyEndpointRowSchema = z.union([
 		kind: z.literal('service'),
 		callers: z.array(z.enum(['human', 'machine', 'oauth'])).nonempty(),
 		requirement: z.object({ kind: z.literal('authenticated') }).strict(),
-		oauth: z.object({ scopes: oauthScopesSchema }).strict().nullable(),
+		oauth: z.object({ scopes: oauthRowScopesSchema }).strict().nullable(),
 	}).strict().refine((row) => row.callers.includes('oauth') === (row.oauth !== null), 'oauth scopes belong to a row that admits oauth'),
 	z.object({
 		...installationRuleFields,

@@ -27,7 +27,10 @@ export interface ServiceEndpointOptions {
 	readonly callers: readonly [InstallationCaller, ...InstallationCaller[]]
 	/** The request body the row admits; omitted admits none. */
 	readonly admission?: BodyAdmission
-	/** The scopes an OAuth resource token must carry; required exactly when `callers` holds `oauth`. */
+	/**
+	 * The scopes an OAuth resource token must carry; required exactly when `callers` holds `oauth`. Empty requires none:
+	 * the token is still bound to this row's resource, and its permissions are what the service authorizes.
+	 */
 	readonly scopes?: readonly string[]
 }
 
@@ -93,9 +96,6 @@ export function defineServiceContract<const Id extends string>(
 		const admitsOAuth = row.callers.some((caller) => caller === OAUTH_CALLER)
 		if (admitsOAuth !== (row.oauth !== null)) {
 			problems.push(`'${row.id}' must declare scopes exactly when it admits the caller '${OAUTH_CALLER}'`)
-		}
-		if (row.oauth !== null && row.oauth.scopes.length === 0) {
-			problems.push(`'${row.id}' admits '${OAUTH_CALLER}' with no scope`)
 		}
 	}
 	const table = { endpoints, reservedPrefixes: [...declaration.reservedPrefixes] }

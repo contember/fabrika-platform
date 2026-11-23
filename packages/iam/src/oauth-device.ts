@@ -10,7 +10,15 @@ import {
 import { uuidv7 } from '@fabrika/platform'
 import type { Env } from './env'
 import { parseJsonOrNull } from './json'
-import { type EstablishedClient, grantAuthority, grantRevocation, mintForGrant, type OAuthTokenOutcome, storedResourceList } from './oauth'
+import {
+	type EstablishedClient,
+	grantAuthority,
+	grantRevocation,
+	mintForGrant,
+	type OAuthTokenOutcome,
+	servesClient,
+	storedResourceList,
+} from './oauth'
 import type { OAuthConfig } from './oauth-config'
 import type { OAuthDeviceAuthorizationRow, OAuthGrantRow } from './repositories/oauth'
 import { unixNow } from './repositories/sql'
@@ -95,7 +103,7 @@ async function spentBucket(services: Services, key: string, allowed: number, blo
 function requestedResources(config: OAuthConfig, uris: readonly string[]): OAuthResourceDto[] | null {
 	const resources: OAuthResourceDto[] = []
 	for (const uri of uris) {
-		const resource = config.resources.find((entry) => entry.resource === uri)
+		const resource = config.resources.find((entry) => entry.resource === uri && servesClient(entry, true))
 		const first = resources[0]
 		if (resource === undefined || (first !== undefined && resource.app !== first.app)) return null
 		resources.push(resource)

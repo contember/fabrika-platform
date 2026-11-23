@@ -61,8 +61,8 @@ function accessOf(app: ProxyApp | undefined): unknown {
 }
 
 const OPERATIONS_TABLE = serviceProxyTable(OPERATIONS_PUBLIC_SERVICE, { oauth: false })
-// The Cloudflare console has no MCP route, so its proxy publishes the table without the OAuth row.
-const CONTROL_TABLE = serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false })
+// The Cloudflare console serves no OAuth client yet, so its proxy publishes the table without the OAuth rows.
+const CONTROL_TABLE = serviceProxyTable(controlServiceContract({ mcp: false, cli: false }), { oauth: false })
 
 describe('a deployed Cloudflare proxy Worker carries the declared service table', () => {
 	test('control, as an installation entry', () => {
@@ -73,9 +73,9 @@ describe('a deployed Cloudflare proxy Worker carries the declared service table'
 		expect(productionAccess(buildOperationsProxy({ env: 'local' }))).toEqual(OPERATIONS_TABLE)
 	})
 
-	test('and the local manifest fronts the same services with them', () => {
+	test('and the local manifest fronts the same services, the console with its command-line rows on top', () => {
 		const apps = new Map(localPlatformProxyManifest().apps.map((app) => [app.id, app]))
-		expect(accessOf(apps.get('vozka'))).toEqual(CONTROL_TABLE)
+		expect(accessOf(apps.get('vozka'))).toEqual(serviceProxyTable(controlServiceContract({ mcp: false, cli: true }), { oauth: true }))
 		expect(accessOf(apps.get(OPERATIONS_APP_ID))).toEqual(OPERATIONS_TABLE)
 	})
 })
@@ -113,11 +113,14 @@ describe("the installation's proxy manifest has no gates", () => {
 			control: { hosts: ['control.example.test'] },
 			operations: { hosts: ['errors.example.test'] },
 		},
+		mcp: false,
 	}
 
-	test('the resolved platform manifest, with MCP authoring off and on', () => {
+	test('the resolved platform manifest, without OAuth, with the command-line client, and with MCP authoring', () => {
+		const server = { ...composition, authorizationServer: 'https://iam.example.test' }
 		expectNoGates(resolvePlatformProxyManifest(platformProxyManifestTemplate(), composition))
-		expectNoGates(resolvePlatformProxyManifest(platformProxyManifestTemplate(), { ...composition, authorizationServer: 'https://iam.example.test' }))
+		expectNoGates(resolvePlatformProxyManifest(platformProxyManifestTemplate(), server))
+		expectNoGates(resolvePlatformProxyManifest(platformProxyManifestTemplate(), { ...server, mcp: true }))
 	})
 
 	test('the local platform manifest, with MCP authoring off and on', () => {

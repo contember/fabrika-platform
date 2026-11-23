@@ -56,7 +56,7 @@ async function fixture(
 		...(sandboxes ? { FABRIKA_CONTROL_VAULT_KEY: testVaultKey() } : {}),
 	}
 	const mcp = controlMcpRoute(env, world.source, provider)
-	const served = createFetchHandler(env, provider, unusedSourceConnection('zerops'), mcp)
+	const served = createFetchHandler(env, provider, unusedSourceConnection('zerops'), mcp, true)
 	return { world, fetch: (request) => served(proxiedRequest(request, { mcp: true })) }
 }
 

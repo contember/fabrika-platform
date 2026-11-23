@@ -1,11 +1,12 @@
-// MCP authoring, opt-in per installation (ADR-0049).
+// IAM's OAuth configuration for an installation (ADR-0049): the command-line client's resources on every composition
+// with an authorization server, and MCP authoring, opt-in, on top.
 //
-// The operator names the MCP clients it trusts; everything else is derived. One input turns on BOTH
-// halves, so they cannot disagree: the console's `oauth` row with its registered resource in the proxy
-// manifest, and IAM's `FABRIKA_IAM_OAUTH_CONFIG`, which issues tokens for exactly that resource.
+// The operator names the MCP clients it trusts; everything else is derived from the same template the proxy manifest
+// is resolved from, so the two cannot disagree: each `oauth` row's registered resource in the manifest, and IAM's
+// `FABRIKA_IAM_OAUTH_CONFIG`, which issues tokens for exactly those resources.
 
 import { OAUTH_CLIENT_PROVIDERS, type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'
-import { platformOAuthResourceUris, type PlatformProxyComposition, type PlatformProxyManifestTemplate } from './proxy-manifest'
+import { platformOAuthResourceUris, platformOAuthServed, type PlatformProxyComposition, type PlatformProxyManifestTemplate } from './proxy-manifest'
 
 /** One operator-registered MCP client: its CIMD identity, plus where IAM fetches it when that differs. */
 export interface McpClient extends OAuthManagedClient {
@@ -75,7 +76,11 @@ export const parseMcpClientsJson = (raw: string): readonly McpClient[] => {
 	return clients
 }
 
-/** IAM's OAuth configuration for one placed installation: the clients, and one resource per app that serves one. */
+/**
+ * IAM's OAuth configuration for one placed installation: the MCP clients (none when MCP authoring is off; the
+ * command-line client is IAM's own and is never listed), and every resource the composition registers, each marked
+ * for the one kind of client it is served to.
+ */
 export const platformIamOAuthConfig = (
 	template: PlatformProxyManifestTemplate,
 	composition: PlatformProxyComposition,
@@ -83,22 +88,25 @@ export const platformIamOAuthConfig = (
 ): IamOAuthConfig => {
 	const resources: OAuthResourceDto[] = []
 	for (const app of template.apps) {
-		if (app.oauthResource === undefined) {
-			continue
+		const served = platformOAuthServed(app, composition)
+		for (const { template: entry, cli } of served?.resources ?? []) {
+			const { resource } = platformOAuthResourceUris(composition, composition.placement[app.service].hosts, entry)
+			resources.push({
+				app: app.id,
+				resource,
+				...(entry.defaultScopes === undefined ? {} : { defaultScopes: [...entry.defaultScopes] }),
+				scopeGrants: entry.scopeGrants.map((grant) => ({
+					scope: grant.scope,
+					...(grant.parameter === undefined ? {} : { parameter: grant.parameter }),
+					permissions: grant.actions.map((action) => ({ action })),
+				})),
+				// IAM serves a resource to one kind of client: the command-line client's never reach an MCP client, nor MCP's it.
+				...(cli ? { client: 'cli' } : {}),
+			})
 		}
-		const { resource } = platformOAuthResourceUris(composition, composition.placement[app.service].hosts, app.oauthResource)
-		resources.push({
-			app: app.id,
-			resource,
-			defaultScopes: [...app.oauthResource.scopes],
-			scopeGrants: app.oauthResource.scopeGrants.map((grant) => ({
-				scope: grant.scope,
-				permissions: grant.actions.map((action) => ({ action })),
-			})),
-		})
 	}
 	if (resources.length === 0) {
-		throw new Error('the platform proxy manifest template declares no OAuth resource for MCP clients to reach')
+		throw new Error('the platform proxy manifest template declares no OAuth resource on this composition')
 	}
 	return { clients, resources }
 }

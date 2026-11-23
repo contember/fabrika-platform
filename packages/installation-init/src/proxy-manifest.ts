@@ -40,22 +40,39 @@ export type PlatformHosts = Readonly<Record<PlatformProxyService, string>>
 /** `https://<host>` — the origin a browser, a token's `iss` and a return-origin registry all use. */
 export const platformOrigin = (scheme: 'http' | 'https', host: string): string => `${scheme}://${host}`
 
-/** What one OAuth scope lets a token do: the owning app's actions, resolved by IAM at the token endpoint. */
+/**
+ * What one OAuth scope lets a token do: the owning app's actions, resolved by IAM at the token endpoint. With a
+ * `parameter` (a scope dimension), the scope is requested as `<scope>:<value>` and holds its actions at that value only.
+ */
 export interface PlatformOAuthScopeGrant {
 	readonly scope: string
+	readonly parameter?: string
 	readonly actions: readonly string[]
 }
 
 /**
- * A path an app serves to OAuth clients, protected only on an installation that enables it.
+ * A path an app serves to OAuth clients, protected only on a composition with an authorization server.
  *
  * The resource URI is the app's public origin plus `path`, so the template holds the path and a deploy
  * binds the origin. Copied from the owning service module by the generator, like `table`.
  */
 export interface PlatformOAuthResourceTemplate {
 	readonly path: string
+	/** The scopes the resource advertises (RFC 9728 `scopes_supported`). */
 	readonly scopes: readonly string[]
+	/** IAM's default scopes for a client that names none; never a parameterized one. */
+	readonly defaultScopes?: readonly string[]
 	readonly scopeGrants: readonly PlatformOAuthScopeGrant[]
+}
+
+/** An app's OAuth half: what a composition with an authorization server publishes, and MCP authoring on top. */
+export interface PlatformOAuthApp {
+	/** The command-line client's resources, registered on every composition with an authorization server. */
+	readonly resources: readonly PlatformOAuthResourceTemplate[]
+	/** The service's table then, without MCP. */
+	readonly table: InstallationEndpointTable
+	/** MCP authoring (ADR-0049), on a composition that enables it: its resource, and the service's table then. */
+	readonly mcp?: { readonly resource: PlatformOAuthResourceTemplate; readonly table: InstallationEndpointTable }
 }
 
 /**
@@ -77,15 +94,13 @@ export interface PlatformProxyApp {
 	readonly port: number
 	/** Where the proxy dials it over the project's private network. */
 	readonly upstream: string
-	/** The service's rows; with an `oauthResource`, the table served when the composition names an authorization server. */
-	readonly table: InstallationEndpointTable
-	/** Present only on an app that can serve OAuth clients; off unless the composition names an authorization server. */
-	readonly oauthResource?: PlatformOAuthResourceTemplate
 	/**
-	 * Present exactly with `oauthResource`: the service's table when it serves no OAuth client. The service picks the
-	 * same one, by the digest the deploy writes beside it (`platformServiceTableDigest`).
+	 * The service's rows on a composition without an authorization server. Whichever table a composition publishes, the
+	 * service picks the same one, by the digest the deploy writes beside it (`platformServiceTableDigest`).
 	 */
-	readonly tableWithoutOAuth?: InstallationEndpointTable
+	readonly table: InstallationEndpointTable
+	/** Present only on an app that can serve OAuth clients. */
+	readonly oauth?: PlatformOAuthApp
 }
 
 /** Everything about an installation's manifest that does not depend on WHICH installation it is. */
@@ -125,10 +140,12 @@ export interface PlatformProxyComposition {
 	readonly scheme: 'http' | 'https'
 	readonly placement: Readonly<Record<PlatformProxyService, PlatformProxyPlacement>>
 	/**
-	 * The public IAM origin that issues OAuth tokens. Present only when the installation enables MCP
-	 * authoring; absent leaves every `oauthResource` unregistered and serves each service's table without OAuth.
+	 * The public IAM origin that issues OAuth tokens. Absent leaves every OAuth resource unregistered and serves each
+	 * service's table without OAuth.
 	 */
 	readonly authorizationServer?: string
+	/** Whether MCP authoring is on (ADR-0049); it needs an authorization server. */
+	readonly mcp: boolean
 	/** The port browsers reach every app on, when it is not the scheme's default. The local composition's is 18080. */
 	readonly publicPort?: number
 }
@@ -166,21 +183,38 @@ const registeredResource = (
 	scopesSupported: [...template.scopes],
 })
 
-/** Only an installation that names an authorization server registers the resource and serves its OAuth rows. */
+/** One resource an app serves on a composition, and whether only the command-line client is served it. */
+export interface PlatformOAuthServedResource {
+	readonly template: PlatformOAuthResourceTemplate
+	/** True for the command-line client's resources, false for MCP's, which only the managed clients are served. */
+	readonly cli: boolean
+}
+
+/** An app's OAuth table and resources on this composition, or null when it serves no OAuth client. */
+export const platformOAuthServed = (
+	app: PlatformProxyApp,
+	composition: Pick<PlatformProxyComposition, 'authorizationServer' | 'mcp'>,
+): { readonly table: InstallationEndpointTable; readonly resources: readonly PlatformOAuthServedResource[] } | null => {
+	if (app.oauth === undefined || composition.authorizationServer === undefined) return null
+	const cli = app.oauth.resources.map((template) => ({ template, cli: true }))
+	const mcp = composition.mcp ? app.oauth.mcp : undefined
+	return mcp === undefined
+		? { table: app.oauth.table, resources: cli }
+		: { table: mcp.table, resources: [...cli, { template: mcp.resource, cli: false }] }
+}
+
+/** Only a composition that names an authorization server registers an app's resources and serves its OAuth rows. */
 const resolvedApp = (app: PlatformProxyApp, composition: PlatformProxyComposition): InstallationProxyApp => {
 	const placement = composition.placement[app.service]
 	const hosts = [...placement.hosts]
-	const registered = app.oauthResource === undefined || composition.authorizationServer === undefined
-		? undefined
-		: registeredResource(hosts, app.oauthResource, composition, composition.authorizationServer)
-	const table = registered === undefined ? (app.tableWithoutOAuth ?? app.table) : app.table
+	const served = platformOAuthServed(app, composition)
+	const base = { id: app.id, hosts, upstream: placement.upstream ?? app.upstream, scheme: composition.scheme }
+	if (served === null || composition.authorizationServer === undefined) return { ...base, ...serviceProxyTable(app.table, { oauth: false }) }
+	const server = composition.authorizationServer
 	return {
-		id: app.id,
-		hosts,
-		upstream: placement.upstream ?? app.upstream,
-		scheme: composition.scheme,
-		...serviceProxyTable(table, { oauth: registered !== undefined }),
-		...(registered === undefined ? {} : { oauthResources: [registered] }),
+		...base,
+		...serviceProxyTable(served.table, { oauth: true }),
+		oauthResources: served.resources.map(({ template }) => registeredResource(hosts, template, composition, server)),
 	}
 }
 
@@ -194,6 +228,9 @@ export const resolvePlatformProxyManifest = (
 	template: PlatformProxyManifestTemplate,
 	composition: PlatformProxyComposition,
 ): PlatformProxyManifest => {
+	if (composition.mcp && composition.authorizationServer === undefined) {
+		throw new Error('MCP authoring needs an authorization server')
+	}
 	const manifest = parseProxyManifest({ apps: template.apps.map((app) => resolvedApp(app, composition)) })
 	// Every platform service is an installation entry, never an application.
 	const services = manifest?.apps.flatMap((app) => isApplicationEntry(app) ? [] : [app]) ?? []

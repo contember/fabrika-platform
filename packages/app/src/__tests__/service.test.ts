@@ -74,16 +74,23 @@ describe('defineServiceContract refuses', () => {
 		}
 	})
 
-	test('an oauth caller without scopes, scopes without it, and empty scopes', () => {
+	test('an oauth caller without scopes, and scopes without it', () => {
 		const cases: ServiceEndpointOptions[] = [
 			{ callers: ['oauth'] },
 			{ callers: ['human'], scopes: ['authoring'] },
-			{ callers: ['oauth'], scopes: [] },
 		]
 		for (const options of cases) {
 			expect(() => defineServiceContract('console', (s) => ({ endpoints: { mcp: s.service('*', '/mcp', options) }, reservedPrefixes: [] })))
 				.toThrow(ServiceContractError)
 		}
+	})
+
+	test('an oauth caller with empty scopes: the token is bound to the resource and requires no scope', () => {
+		const contract = defineServiceContract('console', (s) => ({
+			endpoints: { rpc: s.service('POST', '/api/rpc', { callers: ['human', 'oauth'], scopes: [] }) },
+			reservedPrefixes: [],
+		}))
+		expect(contract.endpoints[0]?.oauth).toEqual({ scopes: [] })
 	})
 
 	test('a table the matcher refuses: * beside a method on one shape, an invalid path, an invalid reserved prefix', () => {

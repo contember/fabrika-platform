@@ -53,6 +53,11 @@ function clientGrantTypes(client: EstablishedClient): readonly string[] {
 	return client.kind === 'cli' ? ['refresh_token'] : client.metadata.grant_types
 }
 
+/** Whether `resource` is served to the command-line client (`cli`) or to the managed clients; never to both. */
+export function servesClient(resource: OAuthResourceDto, cli: boolean): boolean {
+	return (resource.client === 'cli') === cli
+}
+
 /** The resources a grant was given for: every token it mints names one of them. */
 export function grantResources(grant: Pick<OAuthGrantRow, 'resource' | 'resources'>): string[] {
 	const stored = grant.resources === null ? null : storedResourceList(grant.resources)
@@ -274,7 +279,9 @@ export async function grantAuthority(
 ): Promise<{ principal: PrincipalRow; scopes: string[]; permissions: PermissionEntry[]; expiresAt: number | null } | null> {
 	const config = services.config.oauth
 	if (config === null || grant.revoked_at !== null || grant.expires_at <= now || !grantResources(grant).includes(resourceUri)) return null
-	const resource = config.resources.find((entry) => entry.resource === resourceUri && entry.app === grant.app)
+	const resource = config.resources.find((entry) =>
+		entry.resource === resourceUri && entry.app === grant.app && servesClient(entry, grant.client_id === OAUTH_CLI_CLIENT_ID)
+	)
 	const clientKnown = grant.client_id === OAUTH_CLI_CLIENT_ID || config.clients.some((client) => client.clientId === grant.client_id)
 	if (resource === undefined || !clientKnown) return null
 	const scopes = parseOAuthScopes(parseJsonOrNull(grant.scopes))

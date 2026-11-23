@@ -47,7 +47,7 @@ const ORIGIN_OVERRIDES = {
 const runtimeEnvironment = (databaseUrl: string, vaultKey?: string): Record<string, string> => ({
 	...ORIGIN_OVERRIDES,
 	FABRIKA_CONTROL_DATABASE_URL: databaseUrl,
-	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
+	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false, cli: false }),
 	...(vaultKey === undefined ? {} : { FABRIKA_CONTROL_VAULT_KEY: vaultKey }),
 	FABRIKA_CONTROL_RUN_LOGS_BUCKET: 'run-logs',
 	FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID: 'access-key',

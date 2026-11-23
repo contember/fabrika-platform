@@ -260,15 +260,20 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
    - publishes the console's MCP table, whose `/mcp` row admits OAuth bearers, and registers the
      resource in the proxy manifest;
    - writes `FABRIKA_SERVICE_TABLE_DIGEST` on `control`: the digest of that table. Control serves
-     `/mcp` exactly when it names the MCP table, and refuses to start when it names neither table;
+     `/mcp` exactly when it names the MCP table, and refuses to start when it names none of its tables;
    - writes `FABRIKA_IAM_OAUTH_CONFIG` on `iam`: the clients, and the resource `https://<console>/mcp`
      whose `authoring` scope grants `source.workspace.read`, `source.workspace.write`,
-     `source.pull-request.create`, `deploy.trigger` and `deploy.read`.
+     `source.pull-request.create`, `deploy.trigger` and `deploy.read`, beside the command-line client's resources.
 
    Without the list, the console's table makes `/mcp` a session-only row that Control answers `404`,
-   so no OAuth client reaches it. The
-   deploy then leaves `FABRIKA_IAM_OAUTH_CONFIG` on `iam` as it is and warns that it is still set;
-   delete it there to stop IAM issuing tokens.
+   so no MCP client reaches it. An https deploy still writes `FABRIKA_IAM_OAUTH_CONFIG`, with no client and
+   only the command-line client's resources (`https://<console>/api/rpc` and `/operations/api/rpc`, served to that
+   client alone through its device grant). A plain-http deploy writes none, leaves the variable on `iam` as it is, and
+   warns that it is still set; delete it there to stop IAM issuing tokens.
+
+   **Rolling `iam` back** to a release from before the command-line client's resources: that IAM refuses a
+   `FABRIKA_IAM_OAUTH_CONFIG` with no client and stops at boot, and its deploy does not clear the variable. On an
+   installation without MCP clients, delete the variable on `iam` before the rollback.
 
    **A sidecar generated before this variable existed does not forward it** until its workflow is
    regenerated: `platform upgrade` and `platform init` both rewrite `.github/workflows/platform.yml`
@@ -422,8 +427,9 @@ carries only what the signed-in person holds within them. There is no implicit g
 
 ## Locally
 
-The local stack runs MCP off. Set `FABRIKA_LOCAL_MCP_CLIENTS_JSON` (same shape) before
-`bun run local:up` to turn it on; the resource is then `http://control.fabrika.localhost:18080/mcp`.
+The local stack runs MCP off, and serves the command-line client's device grant always. Set
+`FABRIKA_LOCAL_MCP_CLIENTS_JSON` (same shape) before `bun run local:up` to turn MCP on; the resource is then
+`http://control.fabrika.localhost:18080/mcp`.
 Every prepare rewrites `.state/control-table.env` with the matching table digest, so Control follows.
 IAM still fetches each client's CIMD document over HTTPS, and a hosted client cannot reach a
 `localhost` resource, so this checks configuration rather than a full client session.

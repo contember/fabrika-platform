@@ -140,18 +140,18 @@ other environment, before the provider prepares anything, and the write maps a r
   `FABRIKA_IAM_RPC_URL`) in a process. `FABRIKA_IAM_ISSUER` remains the public issuer. ONE `HttpIamRpc` per
   process, never per request: the SDK caches the JWKS in a WeakMap keyed by that object.
 - **`fabrika.service.ts` is the service contract** (ADR-0022 "Installation entries"):
-  `controlServiceContract({ mcp })`, exported as `@fabrika/control/service` with the MCP constants. The proxy
+  `controlServiceContract({ mcp, cli })`, exported as `@fabrika/control/service` with the MCP constants. The proxy
   publishes it through `serviceProxyTable`, and `createControlApp` (`src/app.ts`) serves every row by id with
   `serveService`: a `service` row the proxy did not name in `X-Fabrika-Endpoint` answers 503. Its `*-root` rows
   and the reserved `/webhooks` and `/mcp` keep every path the service answers 404 away from the SPA; with
   `mcp: false`, `/mcp` is a session-only 404 row. The module stays free of the provider and of `src/`, so
   `@fabrika/local-stack` imports it into a strict program.
-- **ONE MCP switch: the digest of the table the proxy publishes.** The composition writes
+- **ONE OAuth switch: the digest of the table the proxy publishes.** The composition writes
   `FABRIKA_SERVICE_TABLE_DIGEST` (`installationTableDigest`) beside the Zerops process from the same manifest
-  the proxy gets; `createRuntime` reads it through `controlMcpSwitch` and refuses to start when it is missing or
-  names neither console table. With MCP on, `FABRIKA_CONTROL_DOMAIN` is required too. The Cloudflare Worker has
-  no MCP route: it serves `controlApp` (`mcp: false`), and `fabrika.config.ts` builds its proxy from the same
-  table.
+  the proxy gets; `createRuntime` reads it through `controlTableSwitch` and refuses to start when it is missing or
+  names none of `CONTROL_SERVICE_VARIANTS` (no OAuth; the command-line client's RPC rows; those plus MCP). With MCP
+  on, `FABRIKA_CONTROL_DOMAIN` is required too. The Cloudflare Worker serves no OAuth client yet: it serves
+  `controlApp` (`mcp: false, cli: false`), and `fabrika.config.ts` builds its proxy from the same table.
 - **ONE auth path, locally included — there is no `DEV` var any more.** `env.IAM` and
   `FABRIKA_IAM_ISSUER` are required in every environment; `createIam` refuses to build without them, and
   `fabrika.config.ts` binds IAM locally for the same reason (the proxy Worker in front already did).

@@ -214,7 +214,7 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 		appId: CONTROL_APP_ID,
 		appHost: ctx.domain ?? 'localhost',
 		// A Worker serves no MCP: the console's table without its `oauth` row.
-		installation: serviceProxyTable(controlServiceContract({ mcp: false }), { oauth: false }),
+		installation: serviceProxyTable(controlServiceContract({ mcp: false, cli: false }), { oauth: false }),
 		domain: ctx.domain,
 		iamService: names.iamWorker,
 		iamUrl,

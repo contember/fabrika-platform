@@ -8,7 +8,7 @@
  * port is identical on both sides, so a table change cannot reach one and miss the other.
  */
 
-import { CONTROL_APP_ID } from '@fabrika/control-contract'
+import { CONTROL_APP_ID, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import { controlMcpResource, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
 import { type McpClient, platformServiceTableDigest } from '@fabrika/installation-init'
 import { PLATFORM_PROXY_APPS, type PlatformProxyApp, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
@@ -23,9 +23,10 @@ import { localIamOAuthConfig, localPlatformProxyManifest, readLocalMcpClients } 
 /** What protects an entry: its service table's rows and reserved prefixes. */
 const accessOf = (app: InstallationProxyApp) => ({ endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes })
 
-/** The table a template entry publishes with no authorization server, which is the local default. */
+/** The table a template entry publishes with an authorization server and no MCP authoring, which is the local default. */
 const templateAccessOf = (app: PlatformProxyApp) => {
-	const { endpoints, reservedPrefixes } = serviceProxyTable(app.tableWithoutOAuth ?? app.table, { oauth: false })
+	const oauth = app.oauth?.table
+	const { endpoints, reservedPrefixes } = serviceProxyTable(oauth ?? app.table, { oauth: oauth !== undefined })
 	return { endpoints, reservedPrefixes }
 }
 
@@ -69,7 +70,7 @@ describe('what the local composition registers with IAM', () => {
 	})
 })
 
-describe('MCP authoring in the local composition', () => {
+describe('OAuth and MCP authoring in the local composition', () => {
 	const CLIENT: McpClient = {
 		provider: 'claude',
 		clientId: 'https://claude.ai/oauth/mcp-oauth-client-metadata',
@@ -83,20 +84,26 @@ describe('MCP authoring in the local composition', () => {
 		return match[1]
 	}
 	const consoleOf = (clients?: readonly McpClient[]) => localPlatformProxyManifest(clients).apps.find((app) => app.id === CONTROL_APP_ID)
-	const tableOf = (mcp: boolean) => serviceProxyTable(controlServiceContract({ mcp }), { oauth: mcp }).endpoints
+	const tableOf = (mcp: boolean) => serviceProxyTable(controlServiceContract({ mcp, cli: true }), { oauth: true }).endpoints
+	const cliResources = (origin: string) => [`${origin}${CONTROL_RPC_PATH}`, `${origin}${CONTROL_OPERATIONS_RPC_PATH}`]
 
-	test('is off by default: no OAuth row, no registered resource, and IAM OAuth disabled', () => {
+	test('MCP is off by default, while the command-line client is served: its RPC resources are registered with IAM', () => {
+		const origin = controlDomain()
 		expect(readLocalMcpClients({})).toBeUndefined()
 		expect(consoleOf()?.endpoints).toEqual(tableOf(false))
-		expect(consoleOf()?.oauthResources).toBeUndefined()
-		expect(localIamOAuthConfig(undefined)).toBe('')
+		expect(consoleOf()?.oauthResources?.map((entry) => entry.resource)).toEqual(cliResources(origin))
+		const config = parseOAuthConfig(localIamOAuthConfig(undefined))
+		expect(config?.clients).toEqual([])
+		expect(config?.resources.map((resource) => resource.resource)).toEqual(cliResources(origin))
 	})
 
-	test('turned on, the console publishes its OAuth row for the resource control derives from its own domain', () => {
+	test('MCP turned on, the console publishes its MCP row for the resource control derives from its own domain', () => {
 		const origin = controlDomain()
 		expect(consoleOf([CLIENT])?.endpoints).toEqual(tableOf(true))
-		expect(consoleOf([CLIENT])?.oauthResources?.map((entry) => entry.resource)).toEqual([controlMcpResource(origin)])
-		expect(consoleOf([CLIENT])?.oauthResources?.[0]?.authorizationServers).toEqual(['http://iam.fabrika.localhost:18080'])
+		expect(consoleOf([CLIENT])?.oauthResources?.map((entry) => entry.resource)).toEqual([...cliResources(origin), controlMcpResource(origin)])
+		for (const entry of consoleOf([CLIENT])?.oauthResources ?? []) {
+			expect(entry.authorizationServers).toEqual(['http://iam.fabrika.localhost:18080'])
+		}
 		const manifest = localPlatformProxyManifest([CLIENT])
 		expect(parseProxyManifestJson(encodeProxyManifestJson(manifest))).toEqual(manifest)
 	})
@@ -104,16 +111,19 @@ describe('MCP authoring in the local composition', () => {
 	test('control reads the switch from the same composition: the digest of the table the proxy publishes', () => {
 		for (const clients of [undefined, [CLIENT]]) {
 			const digest = platformServiceTableDigest(localPlatformProxyManifest(clients), CONTROL_APP_ID)
-			expect(digest).toBe(controlServiceDigest({ mcp: clients !== undefined }))
+			expect(digest).toBe(controlServiceDigest({ mcp: clients !== undefined, cli: true }))
 		}
 		const compose = readFileSync(resolve(import.meta.dir, '..', '..', 'compose.yaml'), 'utf8')
 		expect(compose).toContain('- path: .state/control-table.env')
 	})
 
-	test('turned on, IAM gets a config its own parser accepts, for that same resource', () => {
+	test('MCP turned on, IAM gets a config its own parser accepts, for those same resources', () => {
+		const origin = controlDomain()
 		const config = parseOAuthConfig(localIamOAuthConfig([CLIENT]))
 		expect(config?.clients.map((client) => client.clientId)).toEqual([CLIENT.clientId])
-		expect(config?.resources.map((resource) => [resource.app, resource.resource])).toEqual([['vozka', controlMcpResource(controlDomain())]])
+		expect(config?.resources.map((resource) => [resource.app, resource.resource])).toEqual(
+			[...cliResources(origin), controlMcpResource(origin)].map((resource) => ['vozka', resource]),
+		)
 	})
 
 	test('the opt-in variable is parsed at the boundary', () => {

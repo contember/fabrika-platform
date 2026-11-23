@@ -6,7 +6,7 @@ import { currentSession } from './auth/sessions'
 import { type PrincipalRow, principalStatus } from './db'
 import { escapeHtml } from './html'
 import { installationBrand } from './installation-brand'
-import { scopeCeiling } from './oauth'
+import { scopeCeiling, servesClient } from './oauth'
 import type { OAuthConfig } from './oauth-config'
 import { attemptRequest, enterUserCode, formatUserCode, normalizeUserCode, OAUTH_DEVICE_PATH, userCodeHash } from './oauth-device'
 import { htmlPage } from './password-pages'
@@ -106,7 +106,9 @@ async function consentPage(
 	userCode: string,
 ): Promise<Response> {
 	const request = attemptRequest(attempt)
-	const resources = request?.resources.map((uri) => config.resources.find((entry) => entry.resource === uri && entry.app === attempt.app))
+	const resources = request?.resources.map((uri) =>
+		config.resources.find((entry) => entry.resource === uri && entry.app === attempt.app && servesClient(entry, true))
+	)
 	if (request === null || resources === undefined || !resources.every((resource): resource is OAuthResourceDto => resource !== undefined)) {
 		return page(services, 'Not available', '<p>This request asks for something the server no longer offers.</p>', 409)
 	}

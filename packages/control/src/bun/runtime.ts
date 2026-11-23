@@ -33,7 +33,7 @@ import {
 } from '@fabrika/platform-node'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { z } from 'zod'
-import { controlMcpSwitch } from '../../fabrika.service'
+import { controlTableSwitch } from '../../fabrika.service'
 import type { McpRoute } from '../app'
 import { createControlRepositories } from '../db'
 import { DevSignals } from '../dev/signals'
@@ -87,6 +87,8 @@ export interface Runtime {
 	sourceConnection: SourceConnectionPort
 	/** The `/mcp` endpoint (ADR-0049); null when the table the proxy publishes has no `oauth` row for it. */
 	mcp: McpRoute | null
+	/** Whether the table the proxy publishes admits the command-line client's OAuth token on the RPC rows. */
+	cli: boolean
 	config: ProcessConfig
 	/** The control queue (deploys + namespace jobs), as the concrete producer the consumer is built from. */
 	queue: PostgresJobQueue<ControlJobMessage>
@@ -140,7 +142,7 @@ export function createRuntime(
 	overrides: RuntimeOverrides = {},
 ): Runtime {
 	// Before anything opens: the table the proxy publishes decides whether this console serves MCP.
-	const mcp = controlMcpSwitch(source[FABRIKA_SERVICE_TABLE_DIGEST])
+	const { mcp, cli } = controlTableSwitch(source[FABRIKA_SERVICE_TABLE_DIGEST])
 	const databaseUrl = required(source, 'FABRIKA_CONTROL_DATABASE_URL')
 	// The console's own public origin is the fact this root states about where it runs; `local` is
 	// refused against it. Control does not branch on the name today, and that is exactly why it must not
@@ -227,6 +229,7 @@ export function createRuntime(
 			createClient: gitHubAppClientFactory(sourceSeams.githubAppFetch),
 		}),
 		mcp: mcp ? controlMcpRoute(env, workspaceSource, composed.provider) : null,
+		cli,
 		config,
 		queue,
 		mailQueue,

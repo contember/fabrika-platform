@@ -825,33 +825,54 @@ describe('the platform database backup schedule', () => {
 	})
 })
 
-describe('MCP authoring', () => {
+describe('OAuth and MCP authoring', () => {
 	const CLAUDE: McpClient = {
 		provider: 'claude',
 		clientId: 'https://claude.ai/oauth/mcp-oauth-client-metadata',
 		redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
 	}
 	const MCP_RESOURCE = `https://${CONSOLE_HOST}/mcp`
+	const RPC_RESOURCES = [`https://${CONSOLE_HOST}/api/rpc`, `https://${CONSOLE_HOST}/operations/api/rpc`]
+	const consoleOf = async (fixture: Harness) => tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
+	const iamConfigOf = (fixture: Harness): unknown => JSON.parse(fixture.zerops.env('iam').get('FABRIKA_IAM_OAUTH_CONFIG') ?? '')
 
-	test('enabled: the console admits OAuth bearers on `/mcp` and registers the resource IAM issues for', async () => {
+	test('https: the console admits the command-line client on both RPC paths and registers them, with no scope on the row', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		const console_ = await consoleOf(fixture)
+		expect(oauthRows(console_).map((row) => [row.path, row.oauth?.scopes])).toEqual([['/api/rpc', []], ['/operations/api/rpc', []]])
+		expect(console_?.oauthResources?.map((entry) => [entry.resource, entry.authorizationServers])).toEqual(
+			RPC_RESOURCES.map((resource) => [resource, [`https://${IAM_HOST}`]]),
+		)
+	})
+
+	test('https: IAM gets an OAuth config with no MCP client and both RPC resources, before it deploys', async () => {
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run()
+		expect(iamConfigOf(fixture)).toMatchObject({ clients: [], resources: RPC_RESOURCES.map((resource) => ({ app: 'vozka', resource })) })
+		expect(fixture.zerops.calls.indexOf('env:iam:FABRIKA_IAM_OAUTH_CONFIG')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
+	})
+
+	test('MCP enabled: the console admits OAuth bearers on `/mcp` too and registers the resource IAM issues for', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
-		const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
-		expect(oauthRows(console_).map((row) => [row.path, row.oauth?.scopes])).toEqual([['/mcp', ['authoring']]])
-		expect(console_?.oauthResources).toEqual([{
+		const console_ = await consoleOf(fixture)
+		expect(oauthRows(console_).map((row) => [row.path, row.oauth?.scopes])).toContainEqual(['/mcp', ['authoring']])
+		expect(console_?.oauthResources?.at(-1)).toEqual({
 			resource: MCP_RESOURCE,
 			resourceMetadata: `https://${CONSOLE_HOST}/.well-known/oauth-protected-resource/mcp`,
 			authorizationServers: [`https://${IAM_HOST}`],
 			scopesSupported: ['authoring'],
-		}])
+		})
 	})
 
-	test('enabled: IAM gets an OAuth config for exactly that resource, before it deploys', async () => {
+	test('MCP enabled: IAM gets its clients and the MCP resource beside the RPC ones', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
-		expect(JSON.parse(fixture.zerops.env('iam').get('FABRIKA_IAM_OAUTH_CONFIG') ?? '')).toEqual({
-			clients: [CLAUDE],
-			resources: [{
+		const config = iamConfigOf(fixture)
+		expect(config).toMatchObject({ clients: [CLAUDE], resources: [...RPC_RESOURCES, MCP_RESOURCE].map((resource) => ({ resource })) })
+		expect(config).toMatchObject({
+			resources: [{}, {}, {
 				app: 'vozka',
 				resource: MCP_RESOURCE,
 				defaultScopes: ['authoring'],
@@ -867,41 +888,40 @@ describe('MCP authoring', () => {
 				}],
 			}],
 		})
-		expect(fixture.zerops.calls.indexOf('env:iam:FABRIKA_IAM_OAUTH_CONFIG')).toBeLessThan(fixture.zerops.calls.indexOf('deploy:iam'))
 	})
 
-	test('enabled: the value is never logged', async () => {
+	test('MCP enabled: the value is never logged', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })
 		expect(fixture.log.lines.some((line) => line.includes('redirectUris') || line.includes(CLAUDE.redirectUris[0] ?? '-'))).toBe(false)
 	})
 
-	test('enabled or off: Control gets the digest of the table the proxy publishes, before it deploys', async () => {
+	test('in each composition, Control gets the digest of the table the proxy publishes, before it deploys', async () => {
 		const digests: string[] = []
-		for (const overrides of [{ mcpClients: [CLAUDE] }, {}]) {
+		for (const overrides of [{ mcpClients: [CLAUDE] }, {}, { scheme: 'http' as const }]) {
 			const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 			await fixture.run(overrides)
-			const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
+			const console_ = await consoleOf(fixture)
 			if (console_ === undefined) throw new Error('the console has no table')
 			const digest = fixture.zerops.env('control').get(FABRIKA_SERVICE_TABLE_DIGEST)
 			expect(digest).toBe(installationTableDigest(console_))
 			expect(fixture.zerops.calls.indexOf(`env:control:${FABRIKA_SERVICE_TABLE_DIGEST}`)).toBeLessThan(fixture.zerops.calls.indexOf('deploy:control'))
 			digests.push(digest ?? '')
 		}
-		expect(new Set(digests).size).toBe(2)
+		expect(new Set(digests).size).toBe(3)
 	})
 
-	test('off: no OAuth row, no registered resource, and no IAM OAuth config written', async () => {
+	test('plain http: no OAuth row, no registered resource, and no IAM OAuth config written', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
-		await fixture.run()
-		const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(fixture.zerops)), 'vozka')
+		await fixture.run({ scheme: 'http' })
+		const console_ = await consoleOf(fixture)
 		expect(console_).toBeDefined()
 		expect(oauthRows(console_)).toEqual([])
 		expect(console_?.oauthResources).toBeUndefined()
 		expect(fixture.zerops.calls).not.toContain('env:iam:FABRIKA_IAM_OAUTH_CONFIG')
 	})
 
-	test('off: an IAM OAuth config the operator set is left as it is, with a warning naming it', async () => {
+	test('plain http: an IAM OAuth config the operator set is left as it is, with a warning naming it', async () => {
 		const zerops = fakeZerops({
 			...PROJECT,
 			services: platformServices({
@@ -910,7 +930,7 @@ describe('MCP authoring', () => {
 			}),
 		})
 		const log = recordingDeployLog()
-		await deployPlatform(input(), {
+		await deployPlatform(input({ scheme: 'http' }), {
 			...fakeSourceCollaborators,
 			api: zerops.api,
 			reconcileSchema: async () => {},
@@ -923,9 +943,9 @@ describe('MCP authoring', () => {
 		expect(log.lines.some((line) => line.includes('operator-owned'))).toBe(false)
 	})
 
-	test('off and never set: no warning', async () => {
+	test('plain http and never set: no warning', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
-		await fixture.run()
+		await fixture.run({ scheme: 'http' })
 		expect(fixture.log.lines.some((line) => line.includes('FABRIKA_IAM_OAUTH_CONFIG'))).toBe(false)
 	})
 
@@ -963,8 +983,14 @@ describe('MCP authoring', () => {
 		const expected = `${controlOrigin}/mcp`
 		expect(expected).toBe('https://console.example.com/mcp')
 		const console_ = tableAppOf(parseProxyManifestJson(await manifestOf(zerops)), 'vozka')
-		expect(console_?.oauthResources?.map((entry) => entry.resource)).toEqual([expected])
-		expect(console_?.oauthResources?.[0]?.authorizationServers).toEqual(['https://iam.example.com'])
-		expect(JSON.parse(zerops.env('iam').get('FABRIKA_IAM_OAUTH_CONFIG') ?? '')).toMatchObject({ resources: [{ resource: expected }] })
+		expect(console_?.oauthResources?.map((entry) => entry.resource)).toEqual([
+			`${controlOrigin}/api/rpc`,
+			`${controlOrigin}/operations/api/rpc`,
+			expected,
+		])
+		for (const entry of console_?.oauthResources ?? []) {
+			expect(entry.authorizationServers).toEqual(['https://iam.example.com'])
+		}
+		expect(JSON.parse(zerops.env('iam').get('FABRIKA_IAM_OAUTH_CONFIG') ?? '')).toMatchObject({ resources: [{}, {}, { resource: expected }] })
 	})
 })

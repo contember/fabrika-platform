@@ -167,7 +167,7 @@ async function resolveNotes(
 		FABRIKA_ZEROPS_PROXY_IAM_URL: 'http://iam.fabrika.localhost:18080',
 		FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
 		ENVIRONMENT: 'stage',
-		[FABRIKA_SERVICE_TABLE_DIGEST]: controlServiceDigest({ mcp: false }),
+		[FABRIKA_SERVICE_TABLE_DIGEST]: controlServiceDigest({ mcp: false, cli: false }),
 	}, {
 		sourceSeams: {
 			...seams,

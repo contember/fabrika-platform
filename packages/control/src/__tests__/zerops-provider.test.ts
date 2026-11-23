@@ -1,6 +1,6 @@
 import { createZeropsArtifactSourceDescriptor, type ZeropsSourceUploadInput } from '@fabrika/provider-zerops'
 import { describe, expect, spyOn, test } from 'bun:test'
-import { controlMcpSwitch, controlServiceDigest, ControlTableError } from '../../fabrika.service'
+import { CONTROL_SERVICE_VARIANTS, controlServiceDigest, ControlTableError, controlTableSwitch } from '../../fabrika.service'
 import type { Env } from '../env'
 import { ZEROPS_MAIL_REMEDY } from '../mail-transport'
 import { buildControlRpcDeps, buildRunDeps } from '../services'
@@ -19,7 +19,7 @@ const namespaceEnvironment = (): Record<string, string | undefined> => ({
 	FABRIKA_ZEROPS_PROXY_SOURCE_JSON: JSON.stringify(PIN),
 	FABRIKA_ZEROPS_PROXY_IAM_URL: 'https://iam.example.test',
 	FABRIKA_ZEROPS_PROXY_IAM_KEY: 'px_proxy_placeholder',
-	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false }),
+	FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: false, cli: false }),
 })
 
 /** What Control's process needs to boot, without the mail transport. */
@@ -244,9 +244,11 @@ describe('the one MCP switch: the table the proxy publishes', () => {
 	})
 
 	test('a published table with the oauth row serves MCP, and refuses to start without the origin its resource needs', async () => {
-		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: true }) }))).toThrow('FABRIKA_CONTROL_DOMAIN')
+		expect(() => createRuntime(process({ FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: true, cli: true }) }))).toThrow(
+			'FABRIKA_CONTROL_DOMAIN',
+		)
 		const on = createRuntime(
-			process({ FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: true }), FABRIKA_CONTROL_DOMAIN: 'console.example.com' }),
+			process({ FABRIKA_SERVICE_TABLE_DIGEST: controlServiceDigest({ mcp: true, cli: true }), FABRIKA_CONTROL_DOMAIN: 'console.example.com' }),
 		)
 		expect(on.mcp).not.toBeNull()
 		// The workspace refuses the files the composed provider names, so Zerops' deploy files are never editable.
@@ -257,9 +259,12 @@ describe('the one MCP switch: the table the proxy publishes', () => {
 		await off.shutdown()
 	})
 
-	test('the two tables have two digests', () => {
-		expect(controlMcpSwitch(controlServiceDigest({ mcp: true }))).toBe(true)
-		expect(controlMcpSwitch(controlServiceDigest({ mcp: false }))).toBe(false)
+	test('each table a composition publishes has its own digest, and the switch reads it back', () => {
+		const digests = CONTROL_SERVICE_VARIANTS.map((options) => controlServiceDigest(options))
+		expect(new Set(digests).size).toBe(CONTROL_SERVICE_VARIANTS.length)
+		for (const options of CONTROL_SERVICE_VARIANTS) expect(controlTableSwitch(controlServiceDigest(options))).toEqual(options)
+		// MCP without the CLI is a table no composition publishes.
+		expect(() => controlTableSwitch(controlServiceDigest({ mcp: true, cli: false }))).toThrow(ControlTableError)
 	})
 })
 

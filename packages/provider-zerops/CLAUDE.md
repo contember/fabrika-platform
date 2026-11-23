@@ -458,16 +458,18 @@ Invariants:
   it is sent with the retention it read (its own, else the default) WHOLE. It is skipped when the project has no
   `operationsdb` (an older light installation, whose Operations still lives in `db`). The API shapes are the
   OpenAPI's; the period's format, tagging and the retention reset are UNVERIFIED (`docs/reference/zerops-platform.md`).
-- **MCP authoring is opt-in, and ONE input turns on both halves** (ADR-0049,
-  [`mcp-authoring.md`](../../docs/reference/mcp-authoring.md)). `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` /
-  `--mcp-clients` makes `resolvePlatformProxyManifest` publish the console's MCP table with its `oauth` row
-  and register its `oauthResource`, and `deployedServiceEnvironment` write `FABRIKA_IAM_OAUTH_CONFIG` for the SAME
-  resource URI. Without it the manifest carries the console's `tableWithoutOAuth` and the IAM variable is left
-  untouched — never cleared, because an empty write on Zerops is unverified. Control's half is
+- **OAuth is on with https, MCP authoring is opt-in on top, and ONE composition turns on every half** (ADR-0049,
+  [`mcp-authoring.md`](../../docs/reference/mcp-authoring.md)). On `--scheme=https` the composition names IAM as its
+  authorization server: `resolvePlatformProxyManifest` publishes the console's `oauth.table` (the two RPC rows admit
+  the command-line client's resource token) and registers `oauth.resources`, and `deployedServiceEnvironment` writes
+  `FABRIKA_IAM_OAUTH_CONFIG` for the SAME resource URIs (`platformIamOAuthConfig`, no MCP client). With
+  `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` / `--mcp-clients` it publishes `oauth.mcp.table` and registers the MCP resource
+  too, and the config lists those clients. On plain http the manifest carries the plain `table` and the IAM variable
+  is left untouched — never cleared, because an empty write on Zerops is unverified. Control's half is
   `FABRIKA_SERVICE_TABLE_DIGEST`, which `deployedServiceEnvironment` writes from the resolved manifest
-  (`platformServiceTableDigest`); Control refuses to start when it names neither table. The template's
-  `oauthResource` is generated from `CONTROL_MCP_PATH` / `CONTROL_MCP_SCOPE`; `platform-artifacts`'
-  `proxy-manifest.test.ts` pins the resolved tables to `controlServiceContract({ mcp })`.
+  (`platformServiceTableDigest`); Control refuses to start when it names none of its tables. The template's resources
+  are generated from `@fabrika/control-contract`'s `cli-access.ts` and `CONTROL_MCP_PATH` / `CONTROL_MCP_SCOPE`;
+  `platform-artifacts`' `proxy-manifest.test.ts` pins the resolved tables to `controlServiceContract({ mcp, cli })`.
 - **The sign-in methods are the bring-up's alone.** `install` writes `FABRIKA_IAM_OIDC_ENABLED`,
   `FABRIKA_IAM_PASSWORD_ENABLED` and, with `--auth-methods` naming `oidc`, `OIDC_ISSUER`, `OIDC_CLIENT_ID` and
   `OIDC_CLIENT_SECRET` (sensitive, the operator's own, so neither a generated key nor in the secrets file) on `iam`,
@@ -525,7 +527,7 @@ Invariants:
   installation-independent and `gen:check` proves it matches the service contracts; hosts
   and scheme are arguments. `parseProxyManifest` refuses an app with no hosts, hence a separate template type.
   Each app carries its service `table` (rows without digests); `resolvePlatformProxyManifest` turns the
-  table into an installation entry with `serviceProxyTable`, registering its `oauthResource` and keeping its
-  `oauth` rows only when the composition names an authorization server.
+  table into an installation entry with `serviceProxyTable`, registering its OAuth resources and publishing its
+  `oauth` table only when the composition names an authorization server (`platformOAuthServed`).
 - `enableSubdomainAccess` in a generated artifact is a DECLARATION, never a mechanism; the artifact's
   header says so. Do not remove that note without removing the field.

@@ -6,7 +6,7 @@
 
 import { defineServiceContract } from '@fabrika/app/service'
 import { type BodyAdmission, FABRIKA_SERVICE_TABLE_DIGEST, installationTableDigest } from '@fabrika/auth-core'
-import { CONTROL_APP_ID } from '@fabrika/control-contract'
+import { CONTROL_APP_ID, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
 
 /** The MCP endpoint path on the console origin, and the one OAuth scope a client asks for. */
 export const CONTROL_MCP_PATH = '/mcp'
@@ -27,7 +27,19 @@ const JSON_BODY: BodyAdmission = { contentTypes: ['application/json'], maxBytes:
 export interface ControlServiceOptions {
 	/** Whether MCP authoring is served: the proxy has an authorization server and the service an MCP route. */
 	readonly mcp: boolean
+	/**
+	 * Whether the command-line client reaches the two RPC rows with an OAuth resource token (RFC 8628 device grant): the
+	 * proxy has an authorization server. Its presets are IAM's scope ceilings, so the rows require no scope of their own.
+	 */
+	readonly cli: boolean
 }
+
+/** The console tables a composition publishes: none without an authorization server, MCP only beside the CLI. */
+export const CONTROL_SERVICE_VARIANTS: readonly ControlServiceOptions[] = [
+	{ mcp: false, cli: false },
+	{ mcp: false, cli: true },
+	{ mcp: true, cli: true },
+]
 
 export type ControlEndpointId = ReturnType<typeof controlServiceContract>['endpoints'][number]['id']
 
@@ -56,11 +68,11 @@ export function controlServiceContract(options: ControlServiceOptions) {
 			'github-handoff-open': s.protocol('POST', '/api/source/github/handoff/:connectionId'),
 			'github-handoff-callback': s.protocol('GET', '/api/source/github/handoff-callback'),
 			'github-handoff-setup': s.protocol('GET', '/api/source/github/handoff-setup/:connectionId'),
-			'rpc': s.service('POST', '/api/rpc', { callers: ['human', 'machine'], admission: JSON_BODY }),
+			'rpc': s.service('POST', CONTROL_RPC_PATH, { ...rpcCallers(options), admission: JSON_BODY }),
 			'api-root': s.service('*', '/api', { callers: ['human'] }),
 			'iam-admin-rpc': s.service('POST', '/iam/admin/rpc', { callers: ['human', 'machine'], admission: JSON_BODY }),
 			'iam-admin-root': s.service('*', '/iam/admin', { callers: ['human', 'machine'] }),
-			'operations-rpc': s.service('POST', '/operations/api/rpc', { callers: ['human', 'machine'], admission: JSON_BODY }),
+			'operations-rpc': s.service('POST', CONTROL_OPERATIONS_RPC_PATH, { ...rpcCallers(options), admission: JSON_BODY }),
 			'operations-api-root': s.service('*', '/operations/api', { callers: ['human', 'machine'] }),
 			'console': s.service('GET', '/*', { callers: ['human'] }),
 			'mcp': options.mcp
@@ -69,6 +81,10 @@ export function controlServiceContract(options: ControlServiceOptions) {
 		},
 		reservedPrefixes: ['/api', '/iam/admin', '/operations/api', '/webhooks', CONTROL_MCP_PATH],
 	}))
+}
+
+function rpcCallers(options: ControlServiceOptions) {
+	return options.cli ? { callers: ['human', 'machine', 'oauth'] as const, scopes: [] } : { callers: ['human', 'machine'] as const }
 }
 
 /** `installationTableDigest` of one console table: what a composition writes as `FABRIKA_SERVICE_TABLE_DIGEST`. */
@@ -81,17 +97,19 @@ export class ControlTableError extends Error {
 }
 
 /**
- * Whether this console serves MCP, read from the digest of the table its proxy publishes: the one switch, so the
- * service cannot serve one table while its proxy decides from the other. A missing digest or one that names neither
+ * Which table this console serves, read from the digest of the table its proxy publishes: the one switch, so the
+ * service cannot serve one table while its proxy decides from the other. A missing digest or one that names no
  * table refuses to start rather than answering 503 at runtime.
  */
-export function controlMcpSwitch(digest: string | undefined): boolean {
+export function controlTableSwitch(digest: string | undefined): ControlServiceOptions {
 	if (digest === undefined || digest.trim() === '') {
 		throw new ControlTableError(
 			`${FABRIKA_SERVICE_TABLE_DIGEST} is not set; the composition writes the digest of the table the console's proxy publishes`,
 		)
 	}
-	if (digest === controlServiceDigest({ mcp: true })) return true
-	if (digest === controlServiceDigest({ mcp: false })) return false
-	throw new ControlTableError(`${FABRIKA_SERVICE_TABLE_DIGEST} names no console table this version serves; its proxy publishes another`)
+	const variant = CONTROL_SERVICE_VARIANTS.find((options) => controlServiceDigest(options) === digest)
+	if (variant === undefined) {
+		throw new ControlTableError(`${FABRIKA_SERVICE_TABLE_DIGEST} names no console table this version serves; its proxy publishes another`)
+	}
+	return variant
 }

@@ -772,6 +772,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   is requested only as `<scope>:<value>` and narrows each of its scope-less actions to that value
   (`resolveOAuthScopeToken`, `@fabrika/iam-contract`): `deploy:alpha` with parameter `app` holds its actions at app
   `alpha` only, whatever wider grant the person holds. A parameterized scope is never a default scope.
+- **A RESOURCE IS SERVED TO ONE KIND OF CLIENT** (`servesClient`, `oauth.ts`). `client: 'cli'` serves it to `fabrika-cli`
+  alone, through the device grant; without it only the managed clients get it, through an authorization code. Every
+  lookup (the authorization request, the device start, its consent page and each mint) filters by it, so an MCP client
+  never holds a token for the console's RPC, nor the CLI one for `/mcp`.
 - **A DEVICE GRANT IS THE CLI CLIENT'S ONLY WAY TO A GRANT, AND IT IS BOUND TO THE SESSION THAT APPROVED IT** (RFC 8628,
   `oauth-device.ts`, `oauth-device-page.ts`, `oauth_device_authorizations`). `POST /oauth/device_authorization` takes
   `fabrika-cli` only, at least one scope and one to eight resources of one app (`resource` is the one parameter that may

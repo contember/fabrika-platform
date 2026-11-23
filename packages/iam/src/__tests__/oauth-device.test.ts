@@ -11,6 +11,7 @@ import { ISSUER, oauthFixture, RESOURCE, SIGNING_ENV, tokenBody } from './helper
 
 const SECOND_RESOURCE = 'https://control.example.test/api/rpc'
 const OTHER_APP_RESOURCE = 'https://other.example.test/api/rpc'
+const MANAGED_RESOURCE = 'https://control.example.test/managed'
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 const USER_CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/
 
@@ -35,9 +36,16 @@ async function fixture() {
 	const config: OAuthConfig = {
 		clients: f.config.clients,
 		resources: [
-			{ app: 'control', resource: RESOURCE, scopeGrants: [...scopeGrants, { scope: 'first-only', permissions: [{ action: 'deploy.run' }] }] },
-			{ app: 'control', resource: SECOND_RESOURCE, scopeGrants },
-			{ app: 'other', resource: OTHER_APP_RESOURCE, scopeGrants },
+			{
+				app: 'control',
+				resource: RESOURCE,
+				scopeGrants: [...scopeGrants, { scope: 'first-only', permissions: [{ action: 'deploy.run' }] }],
+				client: 'cli',
+			},
+			{ app: 'control', resource: SECOND_RESOURCE, scopeGrants, client: 'cli' },
+			{ app: 'other', resource: OTHER_APP_RESOURCE, scopeGrants, client: 'cli' },
+			// Served to the managed clients only, so never through the device grant.
+			{ app: 'control', resource: MANAGED_RESOURCE, scopeGrants },
 		],
 	}
 	const services: Services = { ...f.services, config: { ...f.services.config, oauth: config } }
@@ -129,6 +137,7 @@ describe('the device authorization endpoint', () => {
 		expect(asserted.status).toBe(401)
 		expect(await errorOf(await start('deploy:alpha', ['https://control.example.test/unknown']))).toBe('invalid_target')
 		expect(await errorOf(await start('deploy:alpha', [RESOURCE, OTHER_APP_RESOURCE]))).toBe('invalid_target')
+		expect(await errorOf(await start('deploy:alpha', [MANAGED_RESOURCE]))).toBe('invalid_target')
 		expect(await errorOf(await start('first-only'))).toBe('invalid_scope')
 		expect(await errorOf(await start('deploy'))).toBe('invalid_scope')
 		expect(await errorOf(await start('deploy:alpha', [RESOURCE, RESOURCE]))).toBe('invalid_request')

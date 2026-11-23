@@ -33,6 +33,15 @@ export const oauthScopesSchema = z.unknown().transform((value, ctx) => {
 	return z.NEVER
 })
 
+/** The scopes a row requires of a token: none (the token is bound to the row's resource all the same), or valid ones. */
+export const oauthRowScopesSchema = z.unknown().transform((value, ctx) => {
+	if (Array.isArray(value) && value.length === 0) return []
+	const scopes = parseOAuthScopes(value)
+	if (scopes !== null) return scopes
+	ctx.addIssue({ code: 'custom', message: 'invalid OAuth scopes', fatal: true })
+	return z.NEVER
+})
+
 const resourceUriSchema = z.string().refine(isOAuthResourceUri)
 const authorizationServerSchema = z.string().refine((server) => isOAuthResourceUri(`${server}/`) && new URL(server).origin === server)
 

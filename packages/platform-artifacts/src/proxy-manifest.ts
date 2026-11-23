@@ -14,21 +14,32 @@
 // `src/installation/generated/platform-proxy-manifest.ts` (the tables, as data) — it never reaches this file.
 
 import type { BodyAdmission, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
-import { CONTROL_ACTIONS, CONTROL_APP_ID } from '@fabrika/control-contract'
+import {
+	CONTROL_ACTIONS,
+	CONTROL_APP_ID,
+	CONTROL_CLI_PRESET_PARAMETER,
+	CONTROL_CLI_PRESETS,
+	CONTROL_CLI_RPC_GRANTS,
+	CONTROL_OPERATIONS_RPC_PATH,
+	CONTROL_RPC_PATH,
+} from '@fabrika/control-contract'
 import { controlSchema } from '@fabrika/control/schema'
 import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, controlServiceContract } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
 import {
+	type PlatformOAuthApp,
 	type PlatformOAuthResourceTemplate,
+	type PlatformOAuthScopeGrant,
 	type PlatformProxyApp,
 	type PlatformProxyManifestTemplate,
 	resolvePlatformProxyManifest,
 } from '@fabrika/installation-init'
-import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
+import { OPERATIONS_ACTIONS, OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import type { Artifact } from '@fabrika/provider-zerops/installation/topology'
 
 export {
+	type PlatformOAuthApp,
 	type PlatformProxyApp,
 	type PlatformProxyComposition,
 	type PlatformProxyManifestTemplate,
@@ -59,6 +70,7 @@ export const PLATFORM_IAM_APP_ID = 'iam'
 const CONTROL_MCP_RESOURCE: PlatformOAuthResourceTemplate = {
 	path: CONTROL_MCP_PATH,
 	scopes: [CONTROL_MCP_SCOPE],
+	defaultScopes: [CONTROL_MCP_SCOPE],
 	scopeGrants: [{
 		scope: CONTROL_MCP_SCOPE,
 		actions: [
@@ -69,6 +81,29 @@ const CONTROL_MCP_RESOURCE: PlatformOAuthResourceTemplate = {
 			CONTROL_ACTIONS.DEPLOY_READ,
 		],
 	}],
+}
+
+/** The console's RPC, for the command-line client's device grant: one preset per scope (`@fabrika/control-contract`). */
+const CONTROL_CLI_RPC_RESOURCE: PlatformOAuthResourceTemplate = {
+	path: CONTROL_RPC_PATH,
+	scopes: [...CONTROL_CLI_PRESETS],
+	scopeGrants: CONTROL_CLI_RPC_GRANTS,
+}
+
+/**
+ * Operations through the console, under the same presets: reading on `read` and `deploy`, triage on `operate`, nothing
+ * on `create`. Managing sources, alerts and retention stays with a person in the console.
+ */
+const OPERATIONS_CLI_GRANTS: readonly PlatformOAuthScopeGrant[] = [
+	{ scope: 'read', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ] },
+	{ scope: 'deploy', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ] },
+	{ scope: 'operate', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ, OPERATIONS_ACTIONS.TRIAGE] },
+]
+
+const CONTROL_CLI_OPERATIONS_RESOURCE: PlatformOAuthResourceTemplate = {
+	path: CONTROL_OPERATIONS_RPC_PATH,
+	scopes: OPERATIONS_CLI_GRANTS.map((grant) => grant.scope),
+	scopeGrants: OPERATIONS_CLI_GRANTS,
 }
 
 /** A service contract as template data: its rows and reserved prefixes, without the service's id. */
@@ -97,9 +132,12 @@ export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
 		service: 'control',
 		port: 8082,
 		upstream: 'control:3000',
-		table: serviceTable(controlServiceContract({ mcp: true })),
-		oauthResource: CONTROL_MCP_RESOURCE,
-		tableWithoutOAuth: serviceTable(controlServiceContract({ mcp: false })),
+		table: serviceTable(controlServiceContract({ mcp: false, cli: false })),
+		oauth: {
+			resources: [CONTROL_CLI_RPC_RESOURCE, CONTROL_CLI_OPERATIONS_RESOURCE],
+			table: serviceTable(controlServiceContract({ mcp: false, cli: true })),
+			mcp: { resource: CONTROL_MCP_RESOURCE, table: serviceTable(controlServiceContract({ mcp: true, cli: true })) },
+		},
 	},
 	{ id: OPERATIONS_APP_ID, service: 'operations', port: 8083, upstream: 'operations:3000', table: serviceTable(OPERATIONS_PUBLIC_SERVICE) },
 ]
@@ -135,55 +173,75 @@ const HEADER = [
 	'// purpose: a PUBLISHED deploy command may not import the private packages that own them. `gen:check` in',
 	'// CI is what makes the copy a fact rather than a hope.',
 	'//',
-	"// The console's `oauthResource` is its MCP endpoint, copied the same way. A deploy publishes the console's",
-	'// `table` and registers the resource only on an installation that enables MCP authoring, and its',
-	'// `tableWithoutOAuth` otherwise.',
+	"// The console's `oauth` half is copied the same way: the command-line client's resources and the table an",
+	'// installation with an authorization server publishes, and MCP authoring on top. A deploy without one',
+	'// publishes the plain `table`.',
 	'',
 ].join('\n')
 
 /** Single-quoted for dprint, with the two characters that could end the literal escaped. */
 const quote = (value: string): string => `'${value.replaceAll('\\', '\\\\').replaceAll("'", "\\'")}'`
 
-const renderOAuthResource = (resource: PlatformOAuthResourceTemplate): string[] => [
-	'\t\t\toauthResource: {',
-	`\t\t\t\tpath: ${quote(resource.path)},`,
-	`\t\t\t\tscopes: [${resource.scopes.map(quote).join(', ')}],`,
-	'\t\t\t\tscopeGrants: [',
-	...resource.scopeGrants.flatMap((grant) => [
-		'\t\t\t\t\t{',
-		`\t\t\t\t\t\tscope: ${quote(grant.scope)},`,
-		`\t\t\t\t\t\tactions: [${grant.actions.map(quote).join(', ')}],`,
-		'\t\t\t\t\t},',
-	]),
-	'\t\t\t\t],',
-	'\t\t\t},',
-]
-
 const list = (values: readonly string[]): string => `[${values.map(quote).join(', ')}]`
+
+/** `indent` tabs, then the line. */
+const at = (indent: number, line: string): string => `${'\t'.repeat(indent)}${line}`
+
+const renderOAuthResource = (indent: number, open: string, resource: PlatformOAuthResourceTemplate): string[] => [
+	at(indent, `${open}{`),
+	at(indent + 1, `path: ${quote(resource.path)},`),
+	at(indent + 1, `scopes: ${list(resource.scopes)},`),
+	...(resource.defaultScopes === undefined ? [] : [at(indent + 1, `defaultScopes: ${list(resource.defaultScopes)},`)]),
+	at(indent + 1, 'scopeGrants: ['),
+	...resource.scopeGrants.flatMap((grant) => [
+		at(indent + 2, '{'),
+		at(indent + 3, `scope: ${quote(grant.scope)},`),
+		...(grant.parameter === undefined ? [] : [at(indent + 3, `parameter: ${quote(grant.parameter)},`)]),
+		at(indent + 3, `actions: ${list(grant.actions)},`),
+		at(indent + 2, '},'),
+	]),
+	at(indent + 1, '],'),
+	at(indent, '},'),
+]
 
 const renderAdmission = (admission: BodyAdmission | null): string =>
 	admission === null ? 'null' : `{ contentTypes: ${list(admission.contentTypes)}, maxBytes: ${admission.maxBytes ?? 'null'} }`
 
-const renderRow = (row: InstallationEndpointRow): string[] => [
-	'\t\t\t\t\t{',
-	`\t\t\t\t\t\tid: ${quote(row.id)},`,
-	`\t\t\t\t\t\tkind: ${quote(row.kind)},`,
-	`\t\t\t\t\t\tmethod: ${quote(row.method)},`,
-	`\t\t\t\t\t\tpath: ${quote(row.path)},`,
-	`\t\t\t\t\t\tcallers: ${list(row.callers)},`,
-	`\t\t\t\t\t\trequirement: ${row.requirement === null ? 'null' : `{ kind: ${quote(row.requirement.kind)} }`},`,
-	`\t\t\t\t\t\tadmission: ${renderAdmission(row.admission)},`,
-	`\t\t\t\t\t\toauth: ${row.oauth === null ? 'null' : `{ scopes: ${list(row.oauth.scopes)} }`},`,
-	'\t\t\t\t\t},',
+const renderRow = (indent: number, row: InstallationEndpointRow): string[] => [
+	at(indent, '{'),
+	at(indent + 1, `id: ${quote(row.id)},`),
+	at(indent + 1, `kind: ${quote(row.kind)},`),
+	at(indent + 1, `method: ${quote(row.method)},`),
+	at(indent + 1, `path: ${quote(row.path)},`),
+	at(indent + 1, `callers: ${list(row.callers)},`),
+	at(indent + 1, `requirement: ${row.requirement === null ? 'null' : `{ kind: ${quote(row.requirement.kind)} }`},`),
+	at(indent + 1, `admission: ${renderAdmission(row.admission)},`),
+	at(indent + 1, `oauth: ${row.oauth === null ? 'null' : `{ scopes: ${list(row.oauth.scopes)} }`},`),
+	at(indent, '},'),
 ]
 
-const renderTable = (key: 'table' | 'tableWithoutOAuth', table: InstallationEndpointTable): string[] => [
-	`\t\t\t${key}: {`,
-	'\t\t\t\tendpoints: [',
-	...table.endpoints.flatMap(renderRow),
-	'\t\t\t\t],',
-	`\t\t\t\treservedPrefixes: ${list(table.reservedPrefixes)},`,
-	'\t\t\t},',
+const renderTable = (indent: number, table: InstallationEndpointTable): string[] => [
+	at(indent, 'table: {'),
+	at(indent + 1, 'endpoints: ['),
+	...table.endpoints.flatMap((row) => renderRow(indent + 2, row)),
+	at(indent + 1, '],'),
+	at(indent + 1, `reservedPrefixes: ${list(table.reservedPrefixes)},`),
+	at(indent, '},'),
+]
+
+const renderOAuth = (oauth: PlatformOAuthApp): string[] => [
+	at(3, 'oauth: {'),
+	at(4, 'resources: ['),
+	...oauth.resources.flatMap((resource) => renderOAuthResource(5, '', resource)),
+	at(4, '],'),
+	...renderTable(4, oauth.table),
+	...(oauth.mcp === undefined ? [] : [
+		at(4, 'mcp: {'),
+		...renderOAuthResource(5, 'resource: ', oauth.mcp.resource),
+		...renderTable(5, oauth.mcp.table),
+		at(4, '},'),
+	]),
+	at(3, '},'),
 ]
 
 const renderApp = (app: PlatformProxyApp): string =>
@@ -193,9 +251,8 @@ const renderApp = (app: PlatformProxyApp): string =>
 		`\t\t\tservice: ${quote(app.service)},`,
 		`\t\t\tport: ${app.port},`,
 		`\t\t\tupstream: ${quote(app.upstream)},`,
-		...renderTable('table', app.table),
-		...(app.oauthResource === undefined ? [] : renderOAuthResource(app.oauthResource)),
-		...(app.tableWithoutOAuth === undefined ? [] : renderTable('tableWithoutOAuth', app.tableWithoutOAuth)),
+		...renderTable(3, app.table),
+		...(app.oauth === undefined ? [] : renderOAuth(app.oauth)),
 		'\t\t},',
 	].join('\n')
 
@@ -203,7 +260,8 @@ const renderApp = (app: PlatformProxyApp): string =>
 const assertDeclaredActions = (template: PlatformProxyManifestTemplate): void => {
 	const declared = new Set(controlSchema.actions.map((entry) => entry.action))
 	for (const app of template.apps) {
-		for (const grant of app.oauthResource?.scopeGrants ?? []) {
+		const resources = app.oauth === undefined ? [] : [...app.oauth.resources, ...(app.oauth.mcp === undefined ? [] : [app.oauth.mcp.resource])]
+		for (const grant of resources.flatMap((resource) => resource.scopeGrants)) {
 			const unknown = grant.actions.filter((action) => !declared.has(action))
 			if (unknown.length > 0) {
 				throw new Error(`\`${app.id}\` grants undeclared action(s) under \`${grant.scope}\`: ${unknown.join(', ')}`)
@@ -216,8 +274,10 @@ const assertDeclaredActions = (template: PlatformProxyManifestTemplate): void =>
 export const platformProxyManifestArtifact = (): Artifact => {
 	const template = platformProxyManifestTemplate()
 	// Refuse to commit a template the proxy's own parser would reject.
-	resolvePlatformProxyManifest(template, { scheme: 'https', placement: CHECK_PLACEMENT })
-	resolvePlatformProxyManifest(template, { scheme: 'https', placement: CHECK_PLACEMENT, authorizationServer: 'https://iam.invalid' })
+	resolvePlatformProxyManifest(template, { scheme: 'https', placement: CHECK_PLACEMENT, mcp: false })
+	for (const mcp of [false, true]) {
+		resolvePlatformProxyManifest(template, { scheme: 'https', placement: CHECK_PLACEMENT, authorizationServer: 'https://iam.invalid', mcp })
+	}
 	assertDeclaredActions(template)
 	const content = [
 		HEADER,
