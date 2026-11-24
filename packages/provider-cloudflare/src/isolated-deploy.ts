@@ -126,8 +126,31 @@ export class RecordedBinding {
 	}
 }
 
+const isPlainObject = (value: unknown): value is Readonly<Record<string, unknown>> =>
+	typeof value === 'object' && value !== null && !Array.isArray(value)
+
+/**
+ * What a recorded binding may write: its own entry in \`services\` (a service, IAM) or its own \`ai\` binding, and nothing
+ * else. A recorded entry is merged after oblaka wrote the Worker, so any other key would replace what the deploy built:
+ * \`main\` outside the copy makes wrangler read the checkout as root and upload what its links point at (the token in
+ * \`/proc/self/environ\`, the values file), another \`name\` makes the deploy bundle the Worker, and a D1 entry names
+ * migrations of its own.
+ */
+const recordedConfig = (name: string, config: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> => {
+	const keys = Object.keys(config)
+	const services: unknown = config['services']
+	const ai: unknown = config['ai']
+	const ownService = keys.length === 1 && Array.isArray(services) && services.length === 1 && isPlainObject(services[0])
+		&& services[0]['binding'] === name
+	const ownAi = keys.length === 1 && isPlainObject(ai) && ai['binding'] === name
+	if (!ownService && !ownAi) throw refused(`describes binding \`${name}\` with config entries other than its own service or AI binding`)
+	return config
+}
+
 const rebuildBinding = (name: string, binding: BuildBinding): Binding =>
-	binding.type === 'resource' ? rebuildResource(name, binding.kind, binding.options) : new RecordedBinding(binding.config)
+	binding.type === 'resource'
+		? rebuildResource(name, binding.kind, binding.options)
+		: new RecordedBinding(recordedConfig(name, binding.config))
 
 const compatibilityFlags = z.array(z.string().max(128)).max(64)
 

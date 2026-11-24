@@ -409,6 +409,72 @@ describe('the deploy of a build', () => {
 		expect(rebuilt.options.dir).toBe('/w')
 	})
 
+	test('a recorded binding writes only its own service or AI entry, never a key that steers what wrangler reads or deploys', async () => {
+		// Each would replace what oblaka wrote for the Worker: \`main\` outside the copy makes wrangler read the checkout as
+		// root and upload what its links point at; another \`name\` would bundle the Worker; a D1 entry names its own migrations.
+		const steering: Array<Record<string, unknown>> = [
+			{ main: '/workspace/run/evil/index.mjs' },
+			{ name: 'stage-demo-shadow' },
+			{ migrations: [] },
+			{ d1_databases: [{ binding: 'X', database_name: 'stage-demo-db', database_id: 'id', migrations_dir: '/workspace/run/sql' }] },
+			{ services: [{ binding: 'OTHER', service: 'stage-demo-x' }] },
+			{ services: [{ binding: 'X', service: 'stage-demo-x' }], main: '/elsewhere.mjs' },
+		]
+		for (const config of steering) {
+			const fx = await fixture()
+			await runBuild(fx, { approved })
+			const manifest = JSON.parse(await readFile(join(fx.out, BUILD_MANIFEST_FILE), 'utf8'))
+			manifest.worker.bindings = { ...manifest.worker.bindings, X: { type: 'config', config } }
+			await rm(join(fx.out, BUILD_MANIFEST_FILE))
+			await writeFile(join(fx.out, BUILD_MANIFEST_FILE), JSON.stringify(manifest))
+			await expect(runDeploy(fx)).rejects.toThrow('describes binding `X` with config entries other than its own service or AI binding')
+		}
+	})
+
+	test('the deploy itself uploads only the bundle unbundled and only its proxy bundled, whatever rebuilt the config', async () => {
+		const cases: Array<[Record<string, unknown>, string]> = [
+			[{ main: '/workspace/run/evil/index.mjs' }, 'runs something other than the bundle the build produced'],
+			[{ name: 'stage-demo-shadow' }, 'is neither the application the build described nor its proxy'],
+		]
+		for (const [recorded, message] of cases) {
+			const fx = await fixture()
+			await runBuild(fx, { approved })
+			const prebuilt = await openPrebuiltApplication(fx.out, 'stage')
+			// Past the manifest's check, as a regression there would be.
+			const steered = {
+				...prebuilt.config,
+				resources: () => {
+					const worker = rebuildApplicationWorker(prebuilt.manifest, prebuilt.appDir)
+					worker.options.bindings['X'] = new RecordedBinding(recorded)
+					return worker
+				},
+			}
+			const rec: DeployRecord = { commands: [], provisions: [] }
+			const result = await createCloudflareDeployer({
+				accountId: 'acc-1',
+				apiToken: 'tok-deploy',
+				collaborators: { ...deployCollaborators(rec, prebuilt), loadConfig: async () => ({ config: steered, cwd: prebuilt.appDir }) },
+				prebuilt: { main: prebuilt.main },
+			})({
+				appId: prebuilt.config.id,
+				env: 'stage',
+				domain: 'stage.example.com',
+				cwd: prebuilt.appDir,
+				configPath: join(prebuilt.appDir, prebuilt.manifest.configFile),
+				secrets: { API_KEY: 'api-key-value' },
+				vars: { PUBLIC_URL: 'https://stage.example.com' },
+				managedEnvironment: parseManagedEnvironment({ FABRIKA_IAM_ISSUER: 'https://iam.example.com' }),
+				approved,
+				dryRun: false,
+				signal: new AbortController().signal,
+				log: () => {},
+			})
+			expect(result.status).toBe('failed')
+			expect(JSON.stringify(result.steps)).toContain(message)
+			expect(rec.commands.some((spec) => spec.args[0] === 'deploy')).toBe(false)
+		}
+	})
+
 	test('refuses a build that describes another application than the one Control approved', async () => {
 		const fx = await fixture()
 		await runBuild(fx, { approved })

@@ -66,7 +66,14 @@ import { deployOrder } from './deploy-order'
 import { localWorkloadKeyVariables } from './local-workload-keys'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
-import { CLOSED_ENVIRONMENT_FLAGS, createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE, proxyManifestJson } from './proxy'
+import {
+	CLOSED_ENVIRONMENT_FLAGS,
+	CLOUDFLARE_PROXY_WORKER_DIR,
+	createCloudflareProxyWorker,
+	IamApplicationReference,
+	PROXY_MANIFEST_DEFINE,
+	proxyManifestJson,
+} from './proxy'
 import { CHECKOUT_INSTALL_ARGS, type RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 import { type AssetMount, assetMounts, SPA_ASSETS, SPA_ASSETS_DIRECTORY, stageSpaAssets } from './spa-assets'
@@ -654,9 +661,29 @@ interface StepEnv {
 	 * when the Worker declares its own `assets` or no mount serves files.
 	 */
 	readonly spaAssets: { readonly mounts: readonly AssetMount[]; readonly root: string } | null
-	/** The application was built in the build sandbox (ADR-0086): its bundle is uploaded as it is, and its files are staged. */
-	readonly prebuilt: boolean
+	/**
+	 * The application was built in the build sandbox (ADR-0086): its bundle, at \`main\` (absolute), is uploaded as it is, and
+	 * its files are staged. Null for a deploy that builds its Worker itself.
+	 */
+	readonly prebuilt: { readonly main: string } | null
 	generatedConfigs: readonly GeneratedConfig[]
+}
+
+/**
+ * A prebuilt deploy uploads two Workers: the application, whose \`main\` is the copied bundle and which wrangler does not
+ * bundle, and the platform's proxy, bundled from this package. A config that is neither (a renamed application) would
+ * be bundled by wrangler as root, beside the token, so it fails the deploy whatever wrote it.
+ */
+const assertPrebuiltConfig = (generated: GeneratedConfig, generatedDir: string, isApplication: boolean, main: string): void => {
+	const worker = generated.config.name ?? generated.path
+	if (!isApplication) {
+		if (generatedDir === CLOUDFLARE_PROXY_WORKER_DIR) return
+		throw new Error(`cloudflare: Worker \`${worker}\` is neither the application the build described nor its proxy`)
+	}
+	const declared: unknown = generated.config.main
+	if (typeof declared !== 'string' || resolve(generatedDir, declared) !== main) {
+		throw new Error(`cloudflare: application Worker \`${worker}\` runs something other than the bundle the build produced`)
+	}
 }
 
 /**
@@ -806,20 +833,27 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			// The configs oblaka wrote, not the generation checked before the run: a stateful binding can emit differently twice.
 			assertGeneratedConfigs(configs, env.bounds)
 			if (configs.length === 0) {
-				await wranglerDeploy(env, dir, env.managedSecrets, env.prebuilt)
+				await wranglerDeploy(env, dir, env.managedSecrets, env.prebuilt !== null)
 				return
 			}
 			const application = `${run.env}-${applicationWorker(worker).options.name}`
+			// Every config before the first upload, so a refused one leaves nothing half deployed.
+			const prebuilt = env.prebuilt
+			if (prebuilt !== null) {
+				for (const generated of configs) {
+					assertPrebuiltConfig(generated, dirname(resolve(dir, generated.path)), generated.config.name === application, prebuilt.main)
+				}
+			}
 			let applicationDir: string | undefined
 			for (const generated of deployOrder(configs)) {
 				const generatedDir = dirname(resolve(dir, generated.path))
 				const isApplication = generated.config.name === application
 				// The checkout's build has written the mounts' directories; the walk below checks the staged copy. A prebuilt
 				// application's build staged them in the sandbox, and the runner copied them file by file.
-				if (isApplication && env.spaAssets !== null && !env.prebuilt) await stageAssets(env, env.spaAssets, generatedDir)
+				if (isApplication && env.spaAssets !== null && env.prebuilt === null) await stageAssets(env, env.spaAssets, generatedDir)
 				// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
 				if (env.platformResources === 'refuse') await assertLiteralAssets(generated, generatedDir)
-				await wranglerDeploy(env, generatedDir, isApplication ? env.managedSecrets : {}, isApplication && env.prebuilt)
+				await wranglerDeploy(env, generatedDir, isApplication ? env.managedSecrets : {}, isApplication && env.prebuilt !== null)
 				if (isApplication) applicationDir = generatedDir
 			}
 			// Swept only once every Worker is deployed: a failed sweep must not leave the new application behind the old proxy.
@@ -1068,7 +1102,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 			}
 			: null,
 		spaAssets,
-		prebuilt: options.prebuilt !== undefined,
+		prebuilt: options.prebuilt ?? null,
 		generatedConfigs: [],
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker, env.checks), run, (step) => runStep(step, env))
