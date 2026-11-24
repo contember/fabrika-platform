@@ -380,7 +380,7 @@ input[type='checkbox'] {
 	height: 1rem;
 	min-height: 0;
 	padding: 0;
-	accent-color: var(--brand);
+	accent-color: var(--blueprint);
 	box-shadow: none;
 }
 
