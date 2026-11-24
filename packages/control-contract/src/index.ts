@@ -8,6 +8,7 @@ export * from './builder-connections.js'
 export * from './builder-pairing.js'
 export * from './cli-access.js'
 export * from './mail.js'
+export * from './mcp-access.js'
 
 export type { JsonValue }
 
