@@ -55,7 +55,7 @@ class FakeCloud {
 
 const attemptOver = (cloud: FakeCloud): RunAttempt<Checkpoint> => ({
 	parse: (state) => {
-		if (state === null || typeof state !== 'object' || Array.isArray(state) || typeof state.buildToken !== 'string') return null
+		if (state === null || typeof state !== 'object' || Array.isArray(state) || typeof state['buildToken'] !== 'string') return null
 		const { buildToken, buildId, taskDefinitionArn, serviceUpdateRequested, deploymentArn } = state
 		return {
 			buildToken,
@@ -297,7 +297,7 @@ describe('runDeploy', () => {
 		const events = setup.events
 		const checkpoint = events.checkpoint.bind(events)
 		events.checkpoint = async (state) => {
-			if (typeof state === 'object' && state !== null && !Array.isArray(state) && state.serviceUpdateRequested === true) {
+			if (typeof state === 'object' && state !== null && !Array.isArray(state) && state['serviceUpdateRequested'] === true) {
 				throw new Error('the run row is fenced')
 			}
 			await checkpoint(state)
