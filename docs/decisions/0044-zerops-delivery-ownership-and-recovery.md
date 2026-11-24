@@ -67,6 +67,12 @@ not replay steps. It settles the run in one of two ways:
 **Invariant:** a version whose build may have been submitted is settled only by polling it, never by
 deletion.
 
+Every cloud's provider applies these rules through one shared deploy run in `@fabrika/provider-contract`
+(`src/deploy-run.ts`): it records each checkpoint, waits for the candidate, discards an unsubmitted one when the
+run fails, and implements `cancel` and `reconcile`. A provider supplies its checkpoint and its few calls on the
+candidate: whether the activating call may have been sent, discard, read, stop. On a cloud whose build activates
+nothing, the activating call is the service update, and discarding stops the build.
+
 A cancelled source upload is best-effort cleanup. Deleting the version, not stopping the transfer, is
 what excludes the candidate from activation.
 
