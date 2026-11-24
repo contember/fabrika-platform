@@ -250,16 +250,19 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 
 ### B. The AWS package, in order
 
-1. **`packages/provider-aws/`**: `package.json` (public, `@fabrika/provider-aws`), `CLAUDE.md`, the three
-   `tsconfig` files and the root `tsconfig.json` reference; subpaths `.`, `/cli`, `/installation`.
+1. **`packages/provider-aws/`**: `package.json` (`@fabrika/provider-aws`, private until it can deploy, then public),
+   `CLAUDE.md`, the three `tsconfig` files and the root `tsconfig.json` reference; the subpath `.` first, `/cli` and
+   `/installation` once they do something.
 2. **`src/codecs.ts`**: the target envelope (account, region, cluster, service), the artifact (the contract only; no
-   manifest file), the namespace target, and the run checkpoint `{ buildId?, taskDefinitionArn?, deploymentArn? }`,
-   each parsed with a schema and under Control's 16 KiB.
+   manifest file), the namespace target, and the run checkpoint `{ buildToken?, buildId?, taskDefinitionArn?,
+   serviceUpdateRequested?, deploymentArn? }`: a caller-chosen value before each submitting call (ADR-0044), each
+   parsed with a schema and under Control's 16 KiB.
 3. **`src/authoring.ts`**: `defineApp({ id })` returning a config `authoredAppProvider` reads as `aws`.
 4. **`src/aws/`**: the clients for ECS, CodeBuild, ECR, SSM, CloudFormation, RDS, CloudWatch Logs and S3, with fakes
-   for tests. Decide once: the modular AWS SDK v3 clients inside this package only, or a SigV4 signer of its own over
-   the JSON protocols (ECS, CodeBuild, ECR, SSM and Logs are JSON; CloudFormation and RDS are XML query APIs, which
-   tips it to the SDK).
+   for tests, without the AWS SDK
+   ([ADR-0081](../decisions/0081-the-aws-provider-calls-aws-without-the-sdk.md)): a SigV4 signer of its own pinned with
+   known-answer tests, JSON clients for ECS, CodeBuild, ECR, SSM and Logs, `Bun.S3Client` for S3, and a strict
+   minimal XML reader for CloudFormation and RDS.
 5. **`src/source.ts`**: the S3 multipart part writer for N2 and the presigned GET the build reads.
 6. **`src/build.ts`**: `StartBuild` with `NO_SOURCE` and the inline buildspec (fetch, unpack, write the rendered
    `Dockerfile`, build, push, print the digest), the build log relay, `StopBuild` on cancel before activation.

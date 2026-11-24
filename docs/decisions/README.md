@@ -103,3 +103,4 @@ a commit message suffices.
 | [0078](0078-a-repeated-request-is-answered-from-its-receipt.md)                         | A repeated request is answered from its receipt                                                           |
 | [0079](0079-the-framework-reads-the-caller-s-row-before-the-handler.md)                 | The framework reads the caller's row before the handler                                                   |
 | [0080](0080-the-serving-process-keeps-the-job-schedule-where-no-crontab-runs.md)        | The serving process keeps the job schedule where no crontab runs                                          |
+| [0081](0081-the-aws-provider-calls-aws-without-the-sdk.md)                              | The AWS provider calls AWS without the SDK                                                                |
