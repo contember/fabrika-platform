@@ -3,6 +3,8 @@ import { z } from 'zod/v4'
 
 export const Me = z.strictObject({ id: z.string(), label: z.string() })
 export const Readable = z.strictObject({ all: z.boolean(), values: z.array(z.string()) })
+/** The values of a dimension, as the console offers them (ADR-0085 §4). */
+export const DimensionValues = z.strictObject({ values: z.array(z.strictObject({ value: z.string(), label: z.string().optional() })).max(500) })
 
 export const NewNote = z.strictObject({
 	projectId: z.string().min(1),

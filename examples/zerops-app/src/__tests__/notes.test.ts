@@ -49,6 +49,17 @@ if (postgres !== null) {
 			expect(await statusOf(editor.notes.get({ id }))).toBe(404)
 		})
 
+		test('the workspaces the console offers: those holding notes the caller reads, and only those', async () => {
+			await authorApi.notes.create({ workspaceId: 'w1', title: 'Listed' })
+			const w3 = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'author', scope: { type: 'workspace', value: 'w3' } }])) })
+			await w3.notes.create({ workspaceId: 'w3', title: 'Elsewhere' })
+			expect(await authorApi.notes.workspaces()).toEqual({ values: [{ value: 'w1' }] })
+			const everywhere = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'reader' }])) })
+			expect((await everywhere.notes.workspaces()).values.map((entry) => entry.value)).toEqual(expect.arrayContaining(['w1', 'w3']))
+			const stranger = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ action: 'notes.write' }])) })
+			expect(await statusOf(stranger.notes.workspaces())).toBe(403)
+		})
+
 		test('only a note in the trash is restored', async () => {
 			const { id } = await authorApi.notes.create({ workspaceId: 'w1', title: 'Kept' })
 			expect(await statusOf(authorApi.notes.restore({ id, expectVersion: 1 }))).toBe(409)

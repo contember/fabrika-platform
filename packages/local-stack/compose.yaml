@@ -89,6 +89,9 @@ services:
 
   iam:
     <<: *bun
+    # IAM serves :18080 itself; it calls an application's public origin for a dimension's values (ADR-0085 §4), as an
+    # installation's IAM reaches it over the internet, so `:18081` goes to the apps proxy on `edge`.
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18081=apps-proxy-auth:18081, --]
     # The production server with the `directory` provider registered (`src/iam-server.ts`); its mail goes through Control.
     command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/local-stack/src/iam-server.ts"]
     # `iam-oauth.env` is rewritten by every prepare: the command-line client's resources, and MCP's with
@@ -115,6 +118,7 @@ services:
     networks:
       platform:
         aliases: [iam.fabrika.localhost]
+      edge: {}
     depends_on:
       platform-db:
         condition: service_healthy
