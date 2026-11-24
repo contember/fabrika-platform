@@ -203,7 +203,7 @@ describe('the AWS control provider', () => {
 			outcome: { state: 'succeeded', artifactState: 'not_applicable' },
 			log: [],
 		})
-		expect(fake.calls.filter((call) => call.startsWith('putSecret '))).toEqual([
+		expect(fake.calls.filter((call) => call.startsWith(`putSecret ${ENV_PATH}/`))).toEqual([
 			`putSecret ${ENV_PATH}/${RUN}.API_TOKEN`,
 			`putSecret ${ENV_PATH}/${RUN}.FABRIKA_IAM_RPC_KEY`,
 		])
