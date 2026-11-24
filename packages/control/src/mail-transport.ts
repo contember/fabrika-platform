@@ -40,6 +40,9 @@ const SENDER_VARIABLES = [EMAIL_PROVIDER_VARIABLE, 'FABRIKA_EMAIL_FROM', 'FABRIK
 export const ZEROPS_MAIL_REMEDY =
 	"set FABRIKA_EMAIL_* on both iam and control: see `fabrika platform guide --provider=zerops`, 'Set or rotate the mail transport', then restart control and deploy again"
 
+/** The operator step on AWS, whose installation guide is not written yet: Control's task reads the set at start. */
+export const AWS_MAIL_REMEDY = "set FABRIKA_EMAIL_* in Control's task definition on AWS, then restart Control and deploy again"
+
 /** The operator step on Cloudflare, where the installation's GitHub Environment holds the set and its workflow deploys Control. */
 export const CLOUDFLARE_MAIL_REMEDY =
 	"correct FABRIKA_EMAIL_* in the installation's GitHub Environment (re-run `fabrika platform init --provider=cloudflare` with the transport), re-run its platform workflow so Control's Worker holds the set, then deploy again"

@@ -92,7 +92,7 @@ const CLOUDFLARE_ONLY = (specifier: string): boolean => specifier.startsWith('cl
 const PROCESS_ONLY = (specifier: string): boolean =>
 	specifier.startsWith('node:') || specifier.startsWith('bun:') || specifier === '@fabrika/platform-node'
 
-const PROVIDERS = new Set(['@fabrika/provider-cloudflare', '@fabrika/provider-zerops'])
+const PROVIDERS = new Set(['@fabrika/provider-aws', '@fabrika/provider-cloudflare', '@fabrika/provider-zerops'])
 
 /** The package a specifier names, so a subpath import (`@fabrika/provider-cloudflare/runner`) still counts. */
 const packageOf = (specifier: string): string => specifier.split('/').slice(0, specifier.startsWith('@') ? 2 : 1).join('/')
@@ -129,12 +129,14 @@ describe('entrypoint isolation', () => {
 		expect([...graph.externals]).toContain('@fabrika/platform-node/sql')
 		expect(packagesOf(graph)).toContain('@fabrika/provider-cloudflare')
 		expect(packagesOf(graph)).not.toContain('@fabrika/provider-zerops')
+		expect(packagesOf(graph)).not.toContain('@fabrika/provider-aws')
 	})
 
 	test('the Bun host names no provider: the composition root passes it in', () => {
 		for (const entry of ['bun/server.ts', 'bun/cron.ts', 'bun/migrate.ts']) {
 			const graph = walk(entry)
 			expect({ entry, zerops: graph.files.filter((file) => file.startsWith('zerops/')) }).toEqual({ entry, zerops: [] })
+			expect({ entry, aws: graph.files.filter((file) => file.startsWith('aws/')) }).toEqual({ entry, aws: [] })
 			expect({ entry, providers: packagesOf(graph).filter((name) => name.startsWith('@fabrika/provider-') && name !== '@fabrika/provider-contract') })
 				.toEqual({ entry, providers: [] })
 		}
@@ -157,6 +159,24 @@ describe('entrypoint isolation', () => {
 		expect([...graph.externals]).toContain('@fabrika/platform-node')
 		expect(packagesOf(graph)).toContain('@fabrika/provider-zerops')
 		expect(packagesOf(graph)).not.toContain('@fabrika/provider-cloudflare')
+		expect(packagesOf(graph)).not.toContain('@fabrika/provider-aws')
+	})
+
+	test('the AWS entrypoints reach neither the Worker nor another provider', () => {
+		for (const entry of ['aws/server.ts', 'aws/cron.ts', 'aws/migrate.ts']) {
+			const graph = walk(entry)
+			expect([...graph.externals].filter(CLOUDFLARE_ONLY)).toEqual([])
+			expect(graph.files).not.toContain('index.ts')
+			expect(graph.files).not.toContain('platform-cf.ts')
+			expect({ entry, zerops: graph.files.filter((file) => file.startsWith('zerops/')) }).toEqual({ entry, zerops: [] })
+			expect({ entry, providers: packagesOf(graph).filter((name) => PROVIDERS.has(name) && name !== '@fabrika/provider-aws') })
+				.toEqual({ entry, providers: [] })
+		}
+		// Not vacuous: the server and the maintenance pass compose the AWS provider over the shared layer.
+		const server = walk('aws/server.ts')
+		expect(server.files).toEqual(expect.arrayContaining(['aws/server.ts', 'aws/runtime.ts', 'aws/provider.ts', 'app.ts', 'services.ts']))
+		expect(packagesOf(server)).toContain('@fabrika/provider-aws')
+		expect(walk('aws/cron.ts').files).toContain('cron.ts')
 	})
 
 	test('the cron command and the migration runner stay on the process side too', () => {

@@ -349,6 +349,7 @@
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
+        "@fabrika/provider-aws": "workspace:*",
         "@fabrika/provider-cloudflare": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "@fabrika/provider-zerops": "workspace:*",
