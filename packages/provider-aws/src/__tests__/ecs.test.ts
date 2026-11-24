@@ -201,7 +201,8 @@ describe('ecsClient', () => {
 
 		const missing = fakeAws(ECS, {
 			DescribeServiceDeployments: () => ({ serviceDeployments: [], failures: [{ arn: DEPLOYMENT, reason: 'MISSING' }] }),
-			DescribeServiceRevisions: () => ({ serviceRevisions: [], failures: [{ arn: REVISION, reason: 'MISSING' }] }),
+			// An answer that leaves the empty list out still reaches the MISSING.
+			DescribeServiceRevisions: () => ({ failures: [{ arn: REVISION, reason: 'MISSING' }] }),
 		})
 		expect(await ecsClient(missing.options).describeServiceDeployment(DEPLOYMENT)).toBeNull()
 		expect(await ecsClient(missing.options).describeServiceRevision(REVISION)).toBeNull()

@@ -221,11 +221,12 @@ const serviceDeploymentsSchema = z.object({
 			statusReason: z.string().optional(),
 			targetServiceRevision: z.object({ arn: z.string().regex(SERVICE_REVISION_ARN).optional() }).optional(),
 		}),
-	),
+	).optional(),
 	failures: failuresSchema,
 })
+// Both lists are optional: an answer where every ARN is MISSING may leave the empty list out (UNVERIFIED either way).
 const serviceRevisionsSchema = z.object({
-	serviceRevisions: z.array(z.object({ serviceRevisionArn: z.string(), taskDefinition: z.string().regex(TASK_DEFINITION_ARN) })),
+	serviceRevisions: z.array(z.object({ serviceRevisionArn: z.string(), taskDefinition: z.string().regex(TASK_DEFINITION_ARN) })).optional(),
 	failures: failuresSchema,
 })
 const registeredSchema = z.object({
@@ -424,7 +425,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (!SERVICE_DEPLOYMENT_ARN.test(arn)) refuse('the service deployment')
 			const operation = 'DescribeServiceDeployments'
 			const described = await json.call(operation, { serviceDeploymentArns: [arn] }, serviceDeploymentsSchema, signal)
-			const found = described.serviceDeployments.find((candidate) => candidate.serviceDeploymentArn === arn)
+			const found = (described.serviceDeployments ?? []).find((candidate) => candidate.serviceDeploymentArn === arn)
 			if (found === undefined) {
 				// Only an explicit MISSING for this ARN says there is no such deployment; anything else is no answer.
 				if ((described.failures ?? []).some((failure) => failure.arn === arn && failure.reason === 'MISSING')) return null
@@ -446,7 +447,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (!SERVICE_REVISION_ARN.test(arn)) refuse('the service revision')
 			const operation = 'DescribeServiceRevisions'
 			const described = await json.call(operation, { serviceRevisionArns: [arn] }, serviceRevisionsSchema, signal)
-			const found = described.serviceRevisions.find((candidate) => candidate.serviceRevisionArn === arn)
+			const found = (described.serviceRevisions ?? []).find((candidate) => candidate.serviceRevisionArn === arn)
 			if (found !== undefined) return { arn: found.serviceRevisionArn, taskDefinitionArn: found.taskDefinition }
 			if ((described.failures ?? []).some((failure) => failure.arn === arn && failure.reason === 'MISSING')) return null
 			throw new AwsError(operation, 'invalid_answer', 200, null, false)

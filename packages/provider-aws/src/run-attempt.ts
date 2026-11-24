@@ -19,11 +19,20 @@ import type { CodeBuildClient } from './aws/codebuild'
 import type { EcsClient, EcsServiceAddress, EcsServiceDeployment } from './aws/ecs'
 import { type AwsRunCheckpoint, awsRunCheckpointCodec } from './codecs'
 
+/** The build's timeout once it started, which the build step sends as `startBuild`'s `timeoutMinutes`. */
+export const AWS_BUILD_TIMEOUT_MINUTES = 60
+/** How long the build may wait in CodeBuild's queue, which the build step sends as `queuedTimeoutMinutes`. */
+export const AWS_BUILD_QUEUED_TIMEOUT_MINUTES = 15
 /**
- * A run stops waiting for its candidate this long after it started: a build of up to an hour (the build project's
- * timeout) and the rollout behind it.
+ * The time the rollout has after the build: registering, the update, and the circuit breaker settling it. The service's
+ * deployment settings (its failure threshold, the health check's start period and retries) must let ECS decide within it,
+ * or a rollout still running at the deadline is abandoned as failed and may succeed later.
  */
-export const AWS_RUN_DEADLINE_MS = 90 * 60 * 1000
+export const AWS_ROLLOUT_MARGIN_MINUTES = 30
+/** A run stops waiting for its candidate this long after it started: the queue, the build and the rollout. */
+export const AWS_RUN_DEADLINE_MS = (AWS_BUILD_QUEUED_TIMEOUT_MINUTES + AWS_BUILD_TIMEOUT_MINUTES + AWS_ROLLOUT_MARGIN_MINUTES) * 60 * 1000
+/** The run log's word for a submitted run whose deployment ECS does not show yet. */
+const UNCONFIRMED = 'update_unconfirmed'
 /** The longest reason a failed deployment reports in the run log. */
 const MAX_REASON_LENGTH = 300
 
@@ -88,16 +97,23 @@ export function awsRunAttempt(input: AwsRunAttemptInput): RunAttempt<RecordedChe
 		if (id !== undefined) await codeBuild.stopBuild(id, signal)
 	}
 
-	/** The run's service deployment: the recorded one, or the service's current one when it is this run's revision. */
-	const deploymentOf = async (checkpoint: RecordedCheckpoint, signal: AbortSignal): Promise<EcsServiceDeployment | null> => {
-		if (checkpoint.deploymentArn !== undefined) return ecs.describeServiceDeployment(checkpoint.deploymentArn, signal)
-		// The update's answer was lost: the service's current deployment is this run's only if it deploys this revision.
+	/**
+	 * The run's service deployment: the recorded one, or the service's current one when it deploys this run's revision.
+	 * `unconfirmed` when ECS does not show it (yet). Only a service ECS answers `MISSING` is `absent`: an update whose
+	 * answer was lost can still land, and ECS's reads may lag the update, so everything else waits for the deadline, as
+	 * the shared run's `cancelRun` and `reconcileRun` plan for a submission that never landed.
+	 */
+	const deploymentOf = async (checkpoint: RecordedCheckpoint, signal: AbortSignal): Promise<EcsServiceDeployment | 'unconfirmed' | 'absent'> => {
+		if (checkpoint.deploymentArn !== undefined) {
+			return (await ecs.describeServiceDeployment(checkpoint.deploymentArn, signal)) ?? 'unconfirmed'
+		}
 		const current = await ecs.describeService(service, signal)
-		if (current?.currentDeploymentArn == null) return null
+		if (current === null) return 'absent'
+		if (current.currentDeploymentArn === null) return 'unconfirmed'
 		const deployment = await ecs.describeServiceDeployment(current.currentDeploymentArn, signal)
-		if (deployment?.targetRevisionArn == null) return null
+		if (deployment === null || deployment.targetRevisionArn === null) return 'unconfirmed'
 		const revision = await ecs.describeServiceRevision(deployment.targetRevisionArn, signal)
-		return revision?.taskDefinitionArn === checkpoint.taskDefinitionArn ? deployment : null
+		return revision !== null && revision.taskDefinitionArn === checkpoint.taskDefinitionArn ? deployment : 'unconfirmed'
 	}
 
 	return {
@@ -108,14 +124,15 @@ export function awsRunAttempt(input: AwsRunAttemptInput): RunAttempt<RecordedChe
 		// Before the update nothing of the run can activate; stopping its build ends the work it started.
 		discard: (checkpoint, signal) => stopBuild(checkpoint, signal),
 		observe: async (checkpoint, signal) => {
-			let deployment: EcsServiceDeployment | null
+			let deployment: EcsServiceDeployment | 'unconfirmed' | 'absent'
 			try {
 				signal.throwIfAborted()
 				deployment = await deploymentOf(checkpoint, signal)
 			} catch (error) {
 				return { state: 'unobservable', cause: signal.aborted ? signal.reason : error }
 			}
-			if (deployment === null) return { state: 'absent' }
+			if (deployment === 'absent') return { state: 'absent' }
+			if (deployment === 'unconfirmed') return { state: 'pending', status: UNCONFIRMED }
 			// An answer about another service is no answer about this run.
 			if (!deployment.serviceArn.endsWith(`:service/${service.cluster}/${service.service}`)) {
 				return { state: 'unobservable', cause: new Error('aws: a service deployment of another service') }

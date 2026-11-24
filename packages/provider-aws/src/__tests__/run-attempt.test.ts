@@ -164,16 +164,33 @@ describe('awsRunAttempt', () => {
 		expect(await ours.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual({ state: 'active' })
 		expect(ours.calls).toEqual(['describeService', `describeServiceDeployment ${DEPLOYMENT}`, `describeServiceRevision ${REVISION}`])
 
-		// The service's current deployment deploys another revision: this run's update never landed.
+		// ECS does not show this run's deployment (yet): the lost update may still land, so the run waits for the deadline.
+		const unconfirmed: RunObservation = { state: 'pending', status: 'update_unconfirmed' }
 		const other = new FakeAws()
 		other.service = service(DEPLOYMENT)
 		other.deployment = deployment('successful')
 		other.revision = { arn: REVISION, taskDefinitionArn: TASK_DEFINITION.replace(':42', ':41') }
-		expect(await other.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual({ state: 'absent' })
-
+		expect(await other.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual(unconfirmed)
 		const none = new FakeAws()
 		none.service = service(null)
-		expect(await none.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual({ state: 'absent' })
+		expect(await none.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual(unconfirmed)
+		const noDeployment = new FakeAws()
+		noDeployment.service = service(DEPLOYMENT)
+		expect(await noDeployment.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual(unconfirmed)
+		const noTarget = new FakeAws()
+		noTarget.service = service(DEPLOYMENT)
+		noTarget.deployment = { ...deployment('in_progress'), targetRevisionArn: null }
+		expect(await noTarget.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual(unconfirmed)
+		const noRevision = new FakeAws()
+		noRevision.service = service(DEPLOYMENT)
+		noRevision.deployment = deployment('in_progress')
+		noRevision.revision = null
+		expect(await noRevision.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual(unconfirmed)
+		// A recorded deployment ECS answers MISSING may be a read that lags the update: it waits too.
+		const lagging = new FakeAws()
+		expect(await lagging.attempt.observe({ ...answered, serviceUpdateRequested: true }, signal)).toEqual(unconfirmed)
+
+		// Only a service ECS answers MISSING is gone.
 		const gone = new FakeAws()
 		expect(await gone.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual({ state: 'absent' })
 	})
@@ -204,13 +221,27 @@ describe('the shared deploy run over the AWS candidate', () => {
 		target: { provider: 'aws', version: 1, payload: {} },
 		artifact: { provider: 'aws', version: 1, payload: {} },
 	}
-	const reference = (providerState: JsonValue) => ({
+	const reference = (providerState: JsonValue, startedAtMs = Date.now()) => ({
 		runId: 'run-1',
 		externalId: TOKEN,
 		environment,
 		providerState,
-		startedAtMs: Date.now(),
+		startedAtMs,
 		signal,
+	})
+
+	test('a lost update answer whose deployment ECS does not show stays pending until the deadline, then fails', async () => {
+		const aws = new FakeAws()
+		aws.service = service(DEPLOYMENT)
+		aws.deployment = deployment('successful')
+		aws.revision = { arn: REVISION, taskDefinitionArn: TASK_DEFINITION.replace(':42', ':41') }
+		expect(await cancelRun(aws.attempt, reference(requested))).toEqual({ state: 'pending' })
+		expect(await reconcileRun(aws.attempt, reference(requested))).toEqual({ state: 'running' })
+		const past = Date.now() - AWS_RUN_DEADLINE_MS - 1000
+		expect(await cancelRun(aws.attempt, reference(requested, past))).toEqual({ state: 'settled', outcome: 'failed' })
+		expect(await reconcileRun(aws.attempt, reference(requested, past))).toEqual({ state: 'failed' })
+		// Nothing stops a rollout: no build call, no update.
+		expect(aws.calls.some((call) => call.startsWith('stopBuild') || call.startsWith('findBuild'))).toBe(false)
 	})
 
 	test('a cancel before the update stops the build and fails the run', async () => {

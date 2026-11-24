@@ -19,6 +19,7 @@ const start: CodeBuildStart = {
 		SOURCE_MAPS_KEY: { parameter: '/fabrika/main/source-maps' },
 	},
 	timeoutMinutes: 30,
+	queuedTimeoutMinutes: 15,
 }
 const running = {
 	id: ID,
@@ -51,6 +52,7 @@ describe('codeBuildClient', () => {
 						{ name: BUILD_TOKEN_VARIABLE, value: TOKEN, type: 'PLAINTEXT' },
 					],
 					timeoutInMinutesOverride: 30,
+					queuedTimeoutInMinutesOverride: 15,
 					privilegedModeOverride: true,
 				},
 			},
@@ -130,6 +132,8 @@ describe('codeBuildClient', () => {
 			[{ buildspec: 'arn:aws:s3:::bucket/buildspec.yml' }, 'the buildspec'],
 			[{ timeoutMinutes: 4 }, 'the timeout'],
 			[{ timeoutMinutes: 2161 }, 'the timeout'],
+			[{ queuedTimeoutMinutes: 4 }, 'the queue timeout'],
+			[{ queuedTimeoutMinutes: 481 }, 'the queue timeout'],
 			[{ variables: { 'BAD-NAME': { value: 'x' } } }, 'a variable name'],
 			[{ variables: { CODEBUILD_BUILD_ID: { value: 'x' } } }, 'a variable name'],
 			[{ variables: { AWS_ACCESS_KEY_ID: { value: 'x' } } }, 'a variable name'],
