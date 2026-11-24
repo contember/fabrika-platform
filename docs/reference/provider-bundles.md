@@ -277,6 +277,14 @@ The transport accepts only the measured `prg1` upload destination: HTTPS host
 port or fragment, and a non-empty signed query. It refuses redirects. The credential-bearing upload URL
 exists only in memory for the live PUT; it is never persisted or logged.
 
+The PUT carries no `Content-Length`, which a destination that needs the length up front refuses (an S3 object, an
+Azure blob). An upload may therefore name a provider's part writer (`SourcePartWriter`, `types.ts`) instead of a URL:
+the transport cuts the gzip archive into the writer's parts (256 KiB to 64 MiB each, one in memory at a time), hands
+them over in order, and asks the writer to complete them only after the archive's validation verdict passed, so a
+rejected repository never becomes an object. A failure after the first part asks the writer to drop what it stored. The
+writer holds its own credentials and makes its own requests; its errors are reported as `upload_failed` and their words
+are never forwarded. No composition hands one yet: Zerops and the dev sandboxes upload with one PUT.
+
 Resolve is bounded to four minutes and upload to 15 minutes; the PUT itself is bounded to ten minutes,
 and that bound covers the whole download-rewrite-upload pipe
 (`packages/control/src/github/source/transport.ts`). Caller cancellation is propagated through GitHub REST,

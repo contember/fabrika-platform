@@ -2,8 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import type { ArchiveSummary, SourceBytes } from '../archive'
 import { SourceFailure } from '../failure'
 import type { RepositoryArchive } from '../repository'
-import { type SourceRepositoryReader, SourceTransport, type SourceTransportOptions } from '../transport'
-import type { SourceUploadInput } from '../types'
+import { MAX_SOURCE_PART_BYTES, MIN_SOURCE_PART_BYTES, type SourceRepositoryReader, SourceTransport, type SourceTransportOptions } from '../transport'
+import type { SourcePartWriter, SourceUploadInput } from '../types'
 import {
 	descriptor,
 	descriptorSha256,
@@ -31,7 +31,10 @@ function transport(options: Partial<SourceTransportOptions> & { readonly reposit
 	return new SourceTransport({ isUploadDestination, ...options })
 }
 
-function uploadInput(overrides: Partial<SourceUploadInput> = {}): SourceUploadInput {
+/** An upload to a URL: one streamed PUT. */
+type UrlUpload = Extract<SourceUploadInput, { readonly uploadUrl: string }>
+
+function uploadInput(overrides: Partial<UrlUpload> = {}): UrlUpload {
 	return {
 		repository,
 		commitSha,
@@ -644,5 +647,193 @@ describe('source upload to a dev sandbox host', () => {
 				},
 			}).upload(uploadInput({ uploadUrl: sandboxUrl, uploadBearer: bearer })),
 		).rejects.toBe(failure)
+	})
+})
+
+/** A part writer that records what it was handed; `failAt` makes that part's write reject with a secret-bearing error. */
+function recordingWriter(options: { readonly partBytes?: number; readonly failAt?: number; readonly failComplete?: boolean } = {}) {
+	const parts: Uint8Array[] = []
+	const calls: string[] = []
+	const writer: SourcePartWriter = {
+		partBytes: options.partBytes ?? MIN_SOURCE_PART_BYTES,
+		writePart: async (index, bytes, signal) => {
+			calls.push(`part:${index}:${bytes.byteLength}`)
+			signal.throwIfAborted()
+			if (index === options.failAt) throw new Error('PUT https://bucket.test/upload?signature=secret answered 500')
+			parts.push(bytes)
+		},
+		complete: async (upload) => {
+			calls.push(`complete:${upload.parts}:${upload.bytes}`)
+			if (options.failComplete === true) throw new Error('complete with signature=secret failed')
+		},
+		abort: async () => {
+			calls.push('abort')
+		},
+	}
+	const joined = (): Uint8Array<ArrayBuffer> => {
+		const all = new Uint8Array(parts.reduce((size, part) => size + part.byteLength, 0))
+		let offset = 0
+		for (const part of parts) {
+			all.set(part, offset)
+			offset += part.byteLength
+		}
+		return all
+	}
+	return { writer, calls, parts, joined }
+}
+
+/** Text gzip cannot shrink much: a base64 of random bytes. */
+function noise(bytes: number): string {
+	const raw = new Uint8Array(bytes)
+	for (let offset = 0; offset < bytes; offset += 65_536) crypto.getRandomValues(raw.subarray(offset, Math.min(bytes, offset + 65_536)))
+	return Buffer.from(raw).toString('base64')
+}
+
+function partsInput(writer: SourcePartWriter, overrides: { readonly commitSha?: string; readonly signal?: AbortSignal } = {}): SourceUploadInput {
+	return {
+		repository,
+		commitSha: overrides.commitSha ?? commitSha,
+		descriptorSha256,
+		archive: { kind: 'application' },
+		parts: writer,
+		signal: overrides.signal ?? new AbortController().signal,
+	}
+}
+
+const noUploadFetch = (): Promise<Response> => Promise.reject(new Error('a part upload sends no PUT of its own'))
+
+describe('source upload in parts', () => {
+	test("cuts gzip(tar) into the writer's parts, in order, and completes them once", async () => {
+		const payload = noise(900_000)
+		const prepared = preparedArchive(payload)
+		const recorded = recordingWriter()
+		const result = await transport({ repository: { resolve: noResolve, archive: async () => prepared.archive }, uploadFetch: noUploadFetch })
+			.upload(partsInput(recorded.writer))
+
+		expect(result).toMatchObject({ commitSha, descriptorSha256, entryCount: 1 })
+		const sizes = recorded.parts.map((part) => part.byteLength)
+		expect(sizes.length).toBeGreaterThan(2)
+		expect(sizes.slice(0, -1).every((size) => size === MIN_SOURCE_PART_BYTES)).toBe(true)
+		expect(sizes.at(-1)).toBeLessThanOrEqual(MIN_SOURCE_PART_BYTES)
+		const total = sizes.reduce((sum, size) => sum + size, 0)
+		expect(recorded.calls).toEqual([...sizes.map((size, index) => `part:${index}:${size}`), `complete:${sizes.length}:${total}`])
+		expect(new TextDecoder().decode(Bun.gunzipSync(recorded.joined()))).toBe(payload)
+	})
+
+	test.each([MIN_SOURCE_PART_BYTES - 1, MAX_SOURCE_PART_BYTES + 1, 1.5 * MIN_SOURCE_PART_BYTES + 0.5, Number.NaN])(
+		'refuses a part size of %p before preparing the archive',
+		async (partBytes) => {
+			let prepares = 0
+			const recorded = recordingWriter({ partBytes })
+			const raised = await transport({
+				repository: {
+					resolve: noResolve,
+					archive: async () => {
+						prepares++
+						return preparedArchive().archive
+					},
+				},
+				uploadFetch: noUploadFetch,
+			}).upload(partsInput(recorded.writer)).then(() => undefined, (error: unknown) => error)
+			expect(raised).toMatchObject({ code: 'upload_rejected', stage: 'upload' })
+			expect(prepares).toBe(0)
+			expect(recorded.calls).toEqual([])
+		},
+	)
+
+	test("a verdict that fails after the last part never completes the upload, and the archive's verdict is the reason", async () => {
+		const payload = new TextEncoder().encode('a whole archive whose descriptor turned out to be missing')
+		const rejection = new SourceFailure('descriptor_missing', 'archive')
+		let sent = false
+		const archive: RepositoryArchive = {
+			body: new ReadableStream<SourceBytes>({
+				pull(controller) {
+					if (sent) return controller.close()
+					sent = true
+					controller.enqueue(payload)
+				},
+			}),
+			completed: Promise.reject(rejection),
+			dispose: () => {},
+		}
+		archive.completed.catch(() => {})
+		const recorded = recordingWriter()
+
+		await expect(
+			transport({ repository: { resolve: noResolve, archive: async () => archive }, uploadFetch: noUploadFetch }).upload(partsInput(recorded.writer)),
+		).rejects.toBe(rejection)
+		expect(recorded.calls).toEqual([`part:0:${recorded.parts[0]?.byteLength}`, 'abort'])
+	})
+
+	test("a writer's failure is upload_failed, drops what was stored, and forwards none of its words", async () => {
+		const prepared = preparedArchive(noise(700_000))
+		const recorded = recordingWriter({ failAt: 1 })
+		const raised = await transport({ repository: { resolve: noResolve, archive: async () => prepared.archive }, uploadFetch: noUploadFetch })
+			.upload(partsInput(recorded.writer))
+			.then(() => undefined, (error: unknown) => error)
+
+		expect(raised).toMatchObject({ code: 'upload_failed', stage: 'upload' })
+		expect(`${String(raised)} ${JSON.stringify(raised)}`).not.toContain('secret')
+		expect(recorded.calls.at(-1)).toBe('abort')
+		expect(recorded.calls.some((call) => call.startsWith('complete'))).toBe(false)
+	})
+
+	test('a failed completion is upload_failed and drops the parts', async () => {
+		const prepared = preparedArchive('a small archive')
+		const recorded = recordingWriter({ failComplete: true })
+		const raised = await transport({ repository: { resolve: noResolve, archive: async () => prepared.archive }, uploadFetch: noUploadFetch })
+			.upload(partsInput(recorded.writer))
+			.then(() => undefined, (error: unknown) => error)
+
+		expect(raised).toMatchObject({ code: 'upload_failed', stage: 'upload' })
+		expect(`${String(raised)}`).not.toContain('secret')
+		expect(recorded.calls.slice(-2)).toEqual([expect.stringMatching(/^complete:1:/), 'abort'])
+	})
+
+	test('caller cancellation during the parts is cancelled, and drops what was stored', async () => {
+		const prepared = preparedArchive(noise(700_000))
+		const caller = new AbortController()
+		const recorded = recordingWriter()
+		const writer: SourcePartWriter = {
+			...recorded.writer,
+			writePart: async (index, bytes, signal) => {
+				await recorded.writer.writePart(index, bytes, signal)
+				if (index === 0) caller.abort()
+			},
+		}
+		await expect(
+			transport({ repository: { resolve: noResolve, archive: async () => prepared.archive }, uploadFetch: noUploadFetch })
+				.upload(partsInput(writer, { signal: caller.signal })),
+		).rejects.toMatchObject({ code: 'cancelled' })
+		expect(recorded.calls.at(-1)).toBe('abort')
+		expect(recorded.calls.some((call) => call.startsWith('complete'))).toBe(false)
+	})
+
+	test('an empty archive is one empty part', async () => {
+		const archive: RepositoryArchive = {
+			body: new ReadableStream<SourceBytes>({ start: (controller) => controller.close() }),
+			completed: Promise.resolve({ commitSha, descriptorSha256, entryCount: 0, expandedBytes: 0 }),
+			dispose: () => {},
+		}
+		const recorded = recordingWriter()
+		await transport({ repository: { resolve: noResolve, archive: async () => archive }, uploadFetch: noUploadFetch }).upload(
+			partsInput(recorded.writer),
+		)
+		// gzip of nothing is a header and a trailer, still one part.
+		expect(recorded.parts).toHaveLength(1)
+		expect(Bun.gunzipSync(recorded.joined()).byteLength).toBe(0)
+		expect(recorded.calls.at(-1)).toBe(`complete:1:${recorded.parts[0]?.byteLength}`)
+	})
+
+	test('hands the writer gzip(tar) of exactly the rewritten archive', async () => {
+		const fixture = await gitFixture({ longPath: 'deeply/nested/but/quite/short.txt' })
+		const recorded = recordingWriter()
+		const result = await transport({ repository: sourceFor(fixture), uploadFetch: noUploadFetch })
+			.upload(partsInput(recorded.writer, { commitSha: fixture.commitSha }))
+		const delivered = parseTar(new Uint8Array(Bun.gunzipSync(recorded.joined())))
+
+		expect(result).toMatchObject({ commitSha: fixture.commitSha, descriptorSha256, entryCount: 4 })
+		expect(delivered.map((part) => part.path)).toContain('deeply/nested/but/quite/short.txt')
+		expect(new TextDecoder().decode(delivered.find((part) => part.path === 'zerops.yaml')?.content)).toBe(descriptor)
 	})
 })
