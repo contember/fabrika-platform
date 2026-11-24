@@ -175,3 +175,43 @@ token, so correcting it costs nothing.
 The services hold their copies as sensitive variables, which Zerops hands back only in sudo mode, so the
 secrets file is the operator's only readable copy. The vault key cannot be recovered or re-rolled: losing
 both the file and the Zerops project loses every secret the control plane holds.
+
+## The maintainers' test installation
+
+Checks of a running installation that only Zerops can show (suspending an environment, an upgrade, a restore) run on
+one installation the maintainers own, never on one that serves someone else. The platform-facts table
+(`FABRIKA_LIVE_ZEROPS_PROJECT_ID`) still runs in a throwaway project of its own, because it creates and deletes
+services there. The installation was brought up with the guide's steps 0 to 5 and nothing else.
+
+| What               | Where                                                                                              |
+| ------------------ | -------------------------------------------------------------------------------------------------- |
+| Zerops project     | `fabrika-zerops-test`, light tier, in the Contember client (region `prg1`)                         |
+| Namespace          | `apps`: preset `cheap`, `zerops-subdomain`, env `stage`, Zerops project `fabrika-zerops-test-apps` |
+| Application        | the example's `notes` on `fabrika.cheap.config.ts`, environment `stage`                            |
+| Administrator      | no standing one: whoever needs the console admits their own address with the guide's step 2        |
+| Release            | the sidecar's `fabrika.ref`                                                                        |
+| Idle cost          | about 12 USD per 30 days at list prices, every service at its minimum floor with one application   |
+| Credentials        | the secrets file `install` wrote, kept with the maintainers' credentials, never in a repository    |
+| Sidecar repository | private, in the `contember` organization; created by `platform init`                               |
+
+**Reach it.** The three public hosts are the platform proxy's subdomains, one per port, each host's first label ending
+in `-<port>`: 8080 is IAM, 8082 the console and 8083 Operations.
+
+```bash
+zops env get zeropsSubdomain -S proxy -P fabrika-zerops-test
+```
+
+A machine key for `fabrika control` comes from the guide's step 4 with that secrets file, at most 30 days long. The
+namespace's hosts are `fabrika control namespaces get --namespace=apps`.
+
+**Upgrade it** with the guide's step 6, from a clone at the newer tag (step 0) and a `gh` login that can push to the
+sidecar. The re-pin runs only once the upgrade's run succeeded:
+
+```bash
+fabrika platform upgrade --provider=zerops --to=<tag> --sidecar=<sidecar checkout or owner/name> \
+  && fabrika control namespaces update --namespace=apps --proxy-source=current
+```
+
+Then poll `namespaces get --namespace=apps` until it is `ready`, and check that the console redirects to sign-in and
+`notes` answers `/healthz` 200 on its namespace host. A check that changes state (a suspension, a restore) is undone
+before the session that ran it ends.
