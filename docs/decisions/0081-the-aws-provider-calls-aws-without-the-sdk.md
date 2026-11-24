@@ -33,7 +33,8 @@ We will call AWS with code of our own, inside `@fabrika/provider-aws`:
    written). The JSON clients sign with the same source.
 4. **A strict, minimal XML reader** for the few CloudFormation and RDS answers the provider reads: elements and text
    only, no DTD, no entities beyond the five XML predefines, bounded in size and depth, each answer read against the
-   fields it expects.
+   fields it expects. Character references (`&#xD;`) are read, because AWS's serializers write a line break in a value
+   that way; they declare nothing and expand to one allowed character (`src/aws/xml.ts`).
 
 Every client follows the repository's rules for a credentialed request: `redirect: 'manual'`, a 3xx is not ok, and no
 error carries a request, a signature or a body. The fakes the tests run against sit at the HTTP level.
