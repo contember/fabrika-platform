@@ -1,7 +1,9 @@
 // The approval surface (ADR-0050 §4–§5): parked runs behind `access.approve`, completed only by a human user
-// principal from the console (`./human`), and the `protected` flag changed by the same rule.
+// principal from the console (`./human`), and the `protected` flag and the approval categories (ADR-0083) changed by
+// the same rule.
 
 import type { AuthContext } from '@fabrika/auth'
+import { appEnvironmentId } from '@fabrika/auth-core'
 import type {
 	AccessChangeDto,
 	AppEnvDto,
@@ -18,16 +20,28 @@ import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
 import { appEnvCrossOrigins, type AppEnvRow, type ControlRepositories, type RunRow } from '../db'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { snapshotAccessMap } from './access-map'
+import { appEnvCategories, grantsWait, storedCategories } from './categories'
 import { type ConsoleAdmission, requireHumanApprover } from './human'
-import { parseApproval, parseClassification, type StoredApproval } from './publish'
+import { classificationCategories, parseApproval, parseClassification, type StoredApproval } from './publish'
 import { type AccessSnapshot, parseSnapshot } from './snapshot'
 import { snapshotSurface } from './surface'
+
+/**
+ * IAM's switch for whether an application's console grants wait for a second administrator (ADR-0083 §4), set with the
+ * provisioning key on the IAM application id `<app>@<env>`. Control is its only writer; `revision` is the environment's
+ * protection revision, and IAM ignores one older than it holds.
+ */
+export interface GrantApprovalPort {
+	set(app: string, required: boolean, revision: number): Promise<void>
+}
 
 export interface ApprovalUseCaseContext extends ConsoleAdmission {
 	readonly repositories: ControlRepositories
 	readonly auth: AuthContext
 	readonly queue: DeployQueue
 	readonly lock: DeployLocks
+	/** Absent on an installation without IAM's issuer or provisioning key: choosing `grants` there is refused. */
+	readonly grantApproval?: GrantApprovalPort
 	readonly leaseClock?: LeaseClock
 	readonly now?: () => number
 }
@@ -98,7 +112,12 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 	return await toApprovalDto(c.repositories.runs, await requireClassifiedRun(c, run.id))
 }
 
-/** Set an environment's `protected` flag: the same human rule as approving, and audited (ADR-0050 §4). */
+/**
+ * Set an environment's `protected` flag and, when given, its approval categories: the same human rule as approving, and
+ * audited (ADR-0050 §4, ADR-0083 §2). IAM's grant gate follows every change, the stricter side first: IAM holds grants
+ * before Control says so and releases them only after, so a failure between the two writes leaves grants waiting rather
+ * than not, and the next change repairs it (ADR-0083 §4).
+ */
 export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
 	requireHumanApprover(c.auth, c)
 	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
@@ -107,12 +126,41 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	// ADR-0050: a dev environment runs unreviewed workspace heads, and approval never applies to it.
 	if (before.kind === 'dev' && input.protected) fail(409, 'a dev environment is never protected')
 	if (before.authoring === 1 && input.protected) fail(409, authoringNeverProtected(input.env))
-	// A job started under the old flag would still apply what it allowed, so the change waits for the deployment.
+	const categories = input.categories === undefined ? undefined : storedCategories(input.categories)
+	const iamApp = appEnvironmentId(input.appId, input.env)
+	// A job started under the old setting would still apply what it allowed, so the change waits for the deployment. The
+	// lease also serializes the two stores of the `grants` choice, so IAM's is written against what Control holds.
 	const lease = await acquireLease(c.lock, runLeaseKey(input.appId, input.env), c.leaseClock)
 	if (lease === null) fail(409, 'a deployment is running; retry')
-	let row: AppEnvRow | null
+	let row: AppEnvRow | null = null
 	try {
-		row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected, lease.fence())
+		const held = await c.repositories.registry.getAppEnv(input.appId, input.env) ?? fail(404, 'app env not found')
+		const grantsAfter = grantsWait({
+			protected: input.protected ? 1 : 0,
+			approval_categories: categories === undefined ? held.approval_categories : categories,
+		})
+		const grantApproval = c.grantApproval
+			?? (grantsAfter && !grantsWait(held) ? fail(503, 'IAM is not reachable with the provisioning key; console grants cannot wait here') : null)
+		// The write below bumps the revision by one. Nothing reverts IAM when it fails: this call may have lost the lease,
+		// and releasing then could undo its successor's gate.
+		if (grantApproval !== null && grantsAfter) await setGrantApproval(grantApproval, iamApp, true, held.protection_revision + 1)
+		row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected, categories, lease.fence())
+		if (row !== null) {
+			await c.auth.audit({
+				action: 'access.protect',
+				resourceType: 'app_env',
+				resourceId: `${input.appId}/${input.env}`,
+				metadata: {
+					appId: input.appId,
+					env: input.env,
+					from: held.protected === 1,
+					to: input.protected,
+					categoriesFrom: appEnvCategories(held),
+					categoriesTo: appEnvCategories(row),
+				},
+			})
+			if (grantApproval !== null && !grantsAfter) await setGrantApproval(grantApproval, iamApp, false, row.protection_revision)
+		}
 	} finally {
 		await lease.release()
 	}
@@ -122,13 +170,20 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 		if (now.authoring === 1 && input.protected) fail(409, authoringNeverProtected(input.env))
 		fail(409, 'a deployment is running; retry')
 	}
-	await c.auth.audit({
-		action: 'access.protect',
-		resourceType: 'app_env',
-		resourceId: `${input.appId}/${input.env}`,
-		metadata: { appId: input.appId, env: input.env, from: before.protected === 1, to: input.protected },
-	})
 	return toAppEnvDto(row)
+}
+
+async function setGrantApproval(port: GrantApprovalPort, app: string, required: boolean, revision: number): Promise<void> {
+	try {
+		await port.set(app, required, revision)
+	} catch {
+		fail(
+			502,
+			required
+				? 'IAM did not take the change, so nothing changed; try again'
+				: 'approvals are saved, but IAM may still hold console grants for approval; save again to release them',
+		)
+	}
 }
 
 /** ADR-0049 rule 7: an agent deploys unreviewed workspace heads to the authoring target, and a protected one takes a person. */
@@ -185,6 +240,7 @@ async function toApprovalDto(runs: ControlRepositories['runs'], run: RunRow, vie
 		baselineDigest: classification.baselineDigest,
 		baselineRunId: classification.baselineRunId,
 		protected: classification.protected,
+		categories: [...classificationCategories(classification)],
 		approval: approval === null ? null : {
 			principalId: approval.principalId,
 			label: approval.label,

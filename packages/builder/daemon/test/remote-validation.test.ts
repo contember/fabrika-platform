@@ -1,4 +1,4 @@
-import type { SurfaceEndpointDto } from '@fabrika/control-contract'
+import { DEFAULT_APPROVAL_CATEGORIES, type SurfaceEndpointDto } from '@fabrika/control-contract'
 import { expect, test } from 'bun:test'
 import { parseEnvironments, parseRun, PlatformRemote } from '../src/platform-remote'
 import { PlatformError } from '../src/platform-storage'
@@ -25,6 +25,7 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		kind: 'standard' as const,
 		authoring: false,
 		protected: false,
+		approvalCategories: ['off-road' as const, 'grants' as const],
 		publishedRunId: null,
 		deviationSubjects: [{ subject: 'Endpoint `api.notes.summary`', steps: ['declares raw SQL (`read`)'] }],
 		surface: [health],
@@ -37,9 +38,15 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 	expect(() => parseEnvironments({ items: [environment] })).toThrow(PlatformError)
 	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, ignored: true }], cursor: 'next' }))
 		.toEqual([{ ...environment, triggerRef: null }])
-	const { deviationSubjects: _, crossOrigins: __, surface: ___, kind: ____, ...fromOlderControl } = { ...environment, triggerRef: null }
+	const { deviationSubjects: _, crossOrigins: __, surface: ___, kind: ____, approvalCategories: _____, ...fromOlderControl } = {
+		...environment,
+		triggerRef: null,
+	}
 	expect(parseEnvironments({ items: [fromOlderControl] })).toEqual([
-		{ ...environment, triggerRef: null, deviationSubjects: [], crossOrigins: [], surface: [] },
+		{ ...environment, triggerRef: null, deviationSubjects: [], crossOrigins: [], surface: [], approvalCategories: [...DEFAULT_APPROVAL_CATEGORIES] },
+	])
+	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, approvalCategories: ['grants', 'from-a-newer-control'] }] })).toEqual([
+		{ ...environment, triggerRef: null, approvalCategories: ['grants'] },
 	])
 	expect(() => parseEnvironments({ items: [{ ...environment, triggerRef: null, target: { ...envelope, payload: { secret: Infinity } } }] }))
 		.toThrow('Invalid stored or upstream data')

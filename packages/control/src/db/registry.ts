@@ -44,10 +44,10 @@ export function isUnconfirmedNamespaceUpdate(row: Pick<DeploymentNamespaceRow, '
  */
 const APP_ENV_INSERT_SQL = `INSERT INTO app_envs (
 		app_id, env, domain, public_origin, cross_origins_json, trigger_ref, namespace_id, provider,
-		provider_target_json, provider_artifact_json, authoring, kind, protected, generation, protection_revision
+		provider_target_json, provider_artifact_json, authoring, kind, protected, generation, protection_revision, approval_categories
 	)
 	SELECT ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?, ?, ?, COALESCE(?, 0), ?,
-		COALESCE(kept.protected, ?), COALESCE(kept.generation, 0), COALESCE(kept.protection_revision, 0)
+		COALESCE(kept.protected, ?), COALESCE(kept.generation, 0), COALESCE(kept.protection_revision, 0), kept.approval_categories
 	FROM (SELECT 1 AS one) AS fresh
 	LEFT JOIN app_env_protection AS kept ON kept.app_id = ? AND kept.env = ?
 	WHERE true`
@@ -74,11 +74,12 @@ const appEnvInsertValues = (input: AppEnvInput): (string | number | null)[] => [
  * Keep a deleted environment's `protected` flag and counters, `generation` advanced past every value a run could have
  * read: a run that classified against it then loses its compare-and-swap against a recreated one.
  */
-const appEnvTombstoneSql = `INSERT INTO app_env_protection (app_id, env, protected, generation, protection_revision)
-	SELECT app_id, env, protected, generation + 1, protection_revision FROM app_envs`
+const appEnvTombstoneSql = `INSERT INTO app_env_protection (app_id, env, protected, generation, protection_revision, approval_categories)
+	SELECT app_id, env, protected, generation + 1, protection_revision, approval_categories FROM app_envs`
 
 const APP_ENV_TOMBSTONE_CONFLICT = `ON CONFLICT (app_id, env) DO UPDATE SET
-	protected = excluded.protected, generation = excluded.generation, protection_revision = excluded.protection_revision`
+	protected = excluded.protected, generation = excluded.generation, protection_revision = excluded.protection_revision,
+	approval_categories = excluded.approval_categories`
 
 const claimRows = (
 	results: readonly { readonly results: readonly (AppRow | AppEnvRow | NamespaceResourceClaimRow)[] }[],
@@ -924,13 +925,21 @@ export class ControlRegistryRepository {
 	}
 
 	/**
-	 * Change an environment's `protected` flag (ADR-0050); the caller has authorized a human with `access.approve`. The
-	 * change advances `generation`, so a run that classified under the old flag loses its publication, and the flag is
-	 * kept for these coordinates beyond the environment's deletion. It is fenced on the environment's deployment lease
-	 * and refused while a run is `running`: that run's job applies what the old flag allowed. Null when the environment is
-	 * missing, the lease is lost, a run is running, or protecting an environment that became an authoring target.
+	 * Change an environment's `protected` flag (ADR-0050) and, unless `categories` is undefined, its approval categories
+	 * (ADR-0083, the stored difference from the defaults, null for the defaults); the caller has authorized a human with
+	 * `access.approve`. The change advances `generation`, so a run that classified under the old setting loses its
+	 * publication, and the setting is kept for these coordinates beyond the environment's deletion. It is fenced on the
+	 * environment's deployment lease and refused while a run is `running`: that run's job applies what the old setting
+	 * allowed. Null when the environment is missing, the lease is lost, a run is running, or protecting an environment
+	 * that became an authoring target.
 	 */
-	async setAppEnvProtected(appId: string, env: string, value: boolean, fence: LeaseFence): Promise<AppEnvRow | null> {
+	async setAppEnvProtected(
+		appId: string,
+		env: string,
+		value: boolean,
+		categories: string | null | undefined,
+		fence: LeaseFence,
+	): Promise<AppEnvRow | null> {
 		const key = runLeaseKey(appId, env)
 		const leading = [
 			this.d1.prepare('UPDATE deploy_locks SET holder = holder WHERE lock_key = ? AND holder = ? AND expires_at > ?').bind(
@@ -942,12 +951,23 @@ export class ControlRegistryRepository {
 		]
 		const results = await this.d1.batch<AppEnvRow>([
 			...leading,
-			this.d1.prepare(`UPDATE app_envs SET protected = ?, protection_revision = protection_revision + 1, generation = generation + 1
+			this.d1.prepare(`UPDATE app_envs SET protected = ?, protection_revision = protection_revision + 1, generation = generation + 1,
+					approval_categories = CASE WHEN ? = 1 THEN ? ELSE approval_categories END
 				WHERE app_id = ? AND env = ?
 					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 					AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.app_id = app_envs.app_id AND runs.env = app_envs.env AND runs.status = 'running')
 					AND (? = 0 OR authoring = 0)
-				RETURNING *`).bind(value ? 1 : 0, appId, env, key, fence.holder, fence.nowMs, value ? 1 : 0),
+				RETURNING *`).bind(
+				value ? 1 : 0,
+				categories === undefined ? 0 : 1,
+				categories ?? null,
+				appId,
+				env,
+				key,
+				fence.holder,
+				fence.nowMs,
+				value ? 1 : 0,
+			),
 		])
 		return results[leading.length]?.results[0] ?? null
 	}

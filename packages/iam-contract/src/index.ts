@@ -181,6 +181,76 @@ export interface UpdateGrantInput extends Omit<CreateGrantRequest, 'principalId'
 	id: string
 }
 
+// ── Grant requests: a console grant that waits for a second administrator (ADR-0083) ───────
+
+/** How long a grant request stays open for a decision. */
+export const GRANT_REQUEST_TTL_SECONDS = 7 * 24 * 60 * 60
+
+export const GRANT_REQUEST_KINDS = ['create', 'update', 'revoke'] as const
+export type GrantRequestKind = (typeof GRANT_REQUEST_KINDS)[number]
+
+/** `failed`: approved, but the change no longer applied when the approval wrote it. `expired`: no decision in time. */
+export const GRANT_REQUEST_STATUSES = ['pending', 'approved', 'rejected', 'failed', 'expired'] as const
+export type GrantRequestStatus = (typeof GRANT_REQUEST_STATUSES)[number]
+
+/**
+ * A grant, grant edit or revocation at an application whose console grants wait for approval: it has no effect until
+ * another administrator of the application approves it (ADR-0083 §4). The grant fields are the change's: the new grant
+ * for `create` and `update`, the revoked one for `revoke`.
+ */
+export interface GrantRequestDto {
+	id: string
+	app: string
+	kind: GrantRequestKind
+	principalId: string
+	/** The principal's label as an administrator sees it; null when the principal is gone. */
+	principalLabel: string | null
+	/** The grant an `update` edits or a `revoke` removes; null for `create`. */
+	grantId: string | null
+	roleKey: string | null
+	permissions: string[] | null
+	scopeType: string | null
+	scopeValue: string | null
+	/** The grant's own expiry; null for none. */
+	grantExpiresAt: number | null
+	requestedBy: string
+	requestedByLabel: string | null
+	requestedAt: number
+	/** When the request lapses without a decision. */
+	expiresAt: number
+	status: GrantRequestStatus
+	decidedBy: string | null
+	decidedAt: number | null
+}
+
+/** What a grant change answers at an application whose grants wait: the request, and nothing changed. */
+export interface PendingGrantChange {
+	pending: GrantRequestDto
+}
+
+/** `grants.create` and `grants.update`: the grant, or the request when the application's grants wait. */
+export type GrantChangeResponse = GrantDto | PendingGrantChange
+
+export interface ListGrantRequestsInput {
+	/** One application's requests; omitted, every application the caller administers. */
+	app?: string
+}
+
+export interface DecideGrantRequestInput {
+	id: string
+	decision: 'approve' | 'reject'
+}
+
+/**
+ * Whether an application's console grants wait for approval; Control's to set with the provisioning key (ADR-0083).
+ * `revision` is the environment's protection revision: IAM ignores one older than it holds, and answers what it holds.
+ */
+export interface SetGrantApprovalRequest {
+	app: string
+	required: boolean
+	revision: number
+}
+
 // ── Apps (read-only; the live registry derived from the schema tables) ────────
 
 /** The set of app ids IAM knows about — the choices for a grant's `app`. */
@@ -694,8 +764,10 @@ export interface GrantAppRoleRequest {
 export interface GrantAppRoleResponse {
 	principalId: string
 	role: string
-	/** False when the person held the role already. */
+	/** False when the person held the role already, or the grant waits for approval (`pending`). */
 	granted: boolean
+	/** The grant request, when the application's grants wait for approval (ADR-0083). */
+	pending?: GrantRequestDto
 }
 
 /** Remove the global grant of `role` from a person. Repeating it answers the same. */
@@ -706,8 +778,10 @@ export interface RevokeAppRoleRequest {
 }
 
 export interface RevokeAppRoleResponse {
-	/** False when the person held no such grant. */
+	/** False when the person held no such grant, or the revocation waits for approval (`pending`). */
 	revoked: boolean
+	/** The grant request, when the application's grants wait for approval (ADR-0083). */
+	pending?: GrantRequestDto
 }
 
 /**
@@ -752,11 +826,28 @@ export interface IamAdminRpcContract {
 		issueReset: RpcProcedure<PrincipalIdInput, PasswordActionDelivery>
 		disable: RpcProcedure<PrincipalIdInput, OkResponse>
 	}
+	/**
+	 * At an application whose grants wait for approval (ADR-0083), each change runs its checks and answers `pending`
+	 * with a grant request instead of changing anything.
+	 */
 	grants: {
 		/** A role grant the principal already holds — same role, scope and app — answers 409 naming it. */
-		create: RpcProcedure<CreateGrantRequest, GrantDto>
-		update: RpcProcedure<UpdateGrantInput, GrantDto>
-		delete: RpcProcedure<GrantIdInput, OkResponse>
+		create: RpcProcedure<CreateGrantRequest, GrantChangeResponse>
+		update: RpcProcedure<UpdateGrantInput, GrantChangeResponse>
+		delete: RpcProcedure<GrantIdInput, OkResponse & Partial<PendingGrantChange>>
+	}
+	/**
+	 * The open grant requests at the applications the caller administers, and their decision: an administrator of the
+	 * application, a person in a signed-in session, approves another's request, and approving makes the change with the
+	 * approver's own checks. The requester may reject (withdraw) their own.
+	 */
+	grantRequests: {
+		list: RpcProcedure<ListGrantRequestsInput, ListResponse<GrantRequestDto>>
+		decide: RpcProcedure<DecideGrantRequestInput, GrantRequestDto>
+	}
+	/** Whether an application's console grants wait: an installation administrator's (`iam.admin`), which Control holds. */
+	grantApproval: {
+		set: RpcProcedure<SetGrantApprovalRequest, SetGrantApprovalRequest>
 	}
 	connections: {
 		list: RpcProcedure<ListSessionsInput, CursorList<UserConnectionDto>>

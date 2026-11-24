@@ -665,8 +665,8 @@ other environment, before the provider prepares anything, and the write maps a r
   `contractReaderInputs` names the files: on Zerops one archive pass keeps the files `snapshotReads(root)` wants,
   `archiveCommitSource`; on Cloudflare the commit's tree and files through the GitHub metadata client), stores it
   on the run, classifies it against the active snapshot (`classifyAccess`, pure, conservative) and either parks
-  the run in `awaiting_approval` (a closer-review line, `waitsForApproval`, on a `protected` environment without a
-  matching approval) or
+  the run in `awaiting_approval` (a line in one of the environment's chosen approval categories, `waitsForApproval`,
+  on a `protected` environment without a matching approval; ADR-0083) or
   publishes it with `publishRunSnapshot`, a compare-and-swap on `app_envs.generation` and `protection_revision`
   fenced on the run lease and taken under the namespace lease; a lost swap classifies again. Before each attempt,
   the provider's optional, mutation-free `validateAccess` checks the candidate against the current placement, so an
@@ -777,6 +777,14 @@ other environment, before the provider prepares anything, and the write maps a r
   any well-formed value, as `boot` derives it from the same `tables`. The diff shows one becoming opaque as a widening
   and one gaining its table as a narrowing; the surface notes it on every endpoint that takes its value (`in`, or `on` an
   input field). Every reader's artifact already states it, so no digest moves and an unchanged deploy shows nothing.
+- **An environment's approval categories are stored as their difference from the defaults** (ADR-0083,
+  `src/approval/categories.ts`): `app_envs.approval_categories` (and `app_env_protection`), null = the defaults, set
+  only through `apps.environments.protect`. A classification stores its categories only when they are not the defaults,
+  so an older Control still reads a default one. Every protection change sets IAM's gate for `<app>@<env>` with the
+  provisioning key when Control can reach IAM (choosing `grants` without it is a 503), under the environment's
+  deployment lease, at the environment's `protection_revision`, the stricter side first: IAM before Control while
+  grants wait, Control before IAM when they stop. A failed Control write never reverts IAM (the caller may have lost
+  the lease); the next protection change repairs it, and IAM ignores an older revision.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the

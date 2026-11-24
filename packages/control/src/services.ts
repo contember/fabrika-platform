@@ -4,6 +4,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import type { BuilderPairingIam } from './api/builder-pairing'
 import { type NamespaceProxyChanged, republishNamespace } from './api/namespaces'
 import type { DeployQueue, LogReader } from './api/runs'
+import type { GrantApprovalPort } from './approval/api'
 import { httpOpsTransport, type OpsTransport } from './data-operations'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
@@ -11,6 +12,7 @@ import { GitHubConnectionWebhookSecretProvider } from './github/connections/webh
 import type { CommitSource } from './github/source/commit-files'
 import { ConnectionWebhookVerifier, type PushWebhookVerifier } from './github/triggers/push-event'
 import { controlPublicOrigin } from './iam'
+import { iamProvisioningClient } from './iam-provisioning'
 import { iamAdminSchema, type IamSchemaPort } from './iam-schema'
 import { iamBrandSource, type InstallationBrandSource } from './installation-brand'
 import type { MailRelay } from './mail-relay/queue'
@@ -188,6 +190,24 @@ export function workloadCredentialDeps(env: Env): { workloadCredentials?: Worklo
 }
 
 /**
+ * Whether an application's console grants wait is IAM's row, which Control writes with the provisioning key (ADR-0083
+ * §4); an installation without the issuer or the key cannot make them wait.
+ */
+export function grantApprovalDeps(env: Env): { grantApproval?: GrantApprovalPort } {
+	const origin = env.FABRIKA_IAM_ISSUER?.trim() ?? ''
+	const provisioningKey = env.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
+	if (origin === '' || provisioningKey === '') return {}
+	const client = iamProvisioningClient({ origin, provisioningKey })
+	return {
+		grantApproval: {
+			async set(app, required, revision) {
+				await client.grantApproval.set({ app, required, revision })
+			},
+		},
+	}
+}
+
+/**
  * The installation's client logo is read from IAM with the provisioning key (ADR-0066); an installation without the
  * issuer or the key publishes its proxies with the fabrika mark.
  */
@@ -228,6 +248,8 @@ export interface ControlRpcDeps {
 	namespaceProxyChanged?: NamespaceProxyChanged
 	/** The installation's client logo, which IAM keeps (ADR-0066). */
 	brand?: InstallationBrandSource
+	/** IAM's switch for whether an application's console grants wait (ADR-0083). */
+	grantApproval?: GrantApprovalPort
 	/** GitHub as a deploy reads it; `register` probes an anonymous source with it. */
 	commits?: CommitSource
 	/**
@@ -256,6 +278,7 @@ export function buildControlRpcDeps(env: Env, provider: ControlProvider, auth: A
 		...(env.COMMITS === undefined ? {} : { commits: env.COMMITS }),
 		...(env.MAIL_RELAY === undefined ? {} : { mailRelay: env.MAIL_RELAY }),
 		...installationBrandDeps(env),
+		...grantApprovalDeps(env),
 		...opsTransportDeps(env),
 		runDeps: () => buildRunDeps(env, provider),
 		...(provider.namespaces?.republish === undefined

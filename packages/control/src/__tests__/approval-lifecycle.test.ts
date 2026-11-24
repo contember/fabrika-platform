@@ -9,6 +9,7 @@ import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
 import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/contract'
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
 import { CHECKER_VERSION, readContractSource } from '@fabrika/check/contract'
+import { type ApprovalCategory, DEFAULT_APPROVAL_CATEGORIES } from '@fabrika/control-contract'
 import { hashPlatformKey } from '@fabrika/email/platform'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
@@ -28,13 +29,14 @@ import {
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from '../approval/api'
+import { appEnvCategories, storedCategories } from '../approval/categories'
 import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot } from '../approval/snapshot'
 import { LIST_FAILED_CODE } from '../data-operations'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import { SourceDescriptorMismatch } from '../github/source/failure'
-import { acquireLease, type LeaseFence, runLeaseKey } from '../lease'
+import { acquireLease, LEASE_TTL_MS, type LeaseFence, runLeaseKey } from '../lease'
 import { type InstallationMail, NO_INSTALLATION_MAIL } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import { VaultPlatformTransport } from '../platform-transport'
@@ -2405,5 +2407,221 @@ describe('a large application on D1', () => {
 		const reference = (await run(w, parked.runId)).classification_json ?? ''
 		await documents.put(`access/${reference.slice('sha256:'.length)}.json`, '{}')
 		expect(await status(getApprovalUseCase(approvals(w, auth()), parked.runId))).toBe(500)
+	})
+})
+
+// ADR-0083: a protected environment chooses which categories of change wait; the defaults are ADR-0050's reasons.
+describe('approval categories', () => {
+	/** `BASE` where `editor` also deletes notes: a role that gains an action, which no closer-review reason covers. */
+	const EDITOR_DELETES = edited(
+		"editor: { grants: ['notes.read', 'notes.write']",
+		"editor: { grants: ['notes.read', 'notes.write', 'notes.delete']",
+	)
+	/** `BASE` with a new role `reader`. */
+	const WITH_READER = edited(
+		'\t},\n}, (c)',
+		"\t\treader: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] } },\n\t},\n}, (c)",
+	)
+
+	/** IAM's gate as IAM keeps it: a revision older than the stored one changes nothing. */
+	interface GrantGate {
+		readonly calls: Array<[string, boolean, number]>
+		state: { required: boolean; revision: number } | null
+		fail: boolean
+		afterSet?: () => void
+		set(app: string, required: boolean, revision: number): Promise<void>
+	}
+
+	function grantGate(): GrantGate {
+		const gate: GrantGate = {
+			calls: [],
+			state: null,
+			fail: false,
+			set: (app, required, revision) => {
+				if (gate.fail) return Promise.reject(new Error('IAM is down'))
+				gate.calls.push([app, required, revision])
+				if (gate.state === null || gate.state.revision <= revision) gate.state = { required, revision }
+				gate.afterSet?.()
+				return Promise.resolve()
+			},
+		}
+		return gate
+	}
+
+	function choose(w: World, env: string, categories: ApprovalCategory[], gate: GrantGate = grantGate(), caller = auth()) {
+		return setEnvironmentProtectionUseCase({ ...approvals(w, caller), grantApproval: gate }, { appId: 'notes', env, protected: true, categories })
+	}
+
+	/** `prod` published at `BASE`, so the next deploy classifies against it. */
+	async function publishedBase(w: World): Promise<void> {
+		await seed(w)
+		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+	}
+
+	test('an environment nobody configured reads the defaults, stored as null', async () => {
+		const w = world()
+		await seed(w)
+		const row = await w.db.registry.getAppEnv('notes', 'prod')
+		expect(row?.approval_categories).toBeNull()
+		expect(row === null ? null : appEnvCategories(row)).toEqual([...DEFAULT_APPROVAL_CATEGORIES])
+	})
+
+	test('a role that gains an action publishes at once by default, and waits once `role-actions` is chosen', async () => {
+		const byDefault = world()
+		await publishedBase(byDefault)
+		byDefault.contract = EDITOR_DELETES
+		expect((await deploy(byDefault, 'prod')).status).toBe('succeeded')
+
+		const chosen = world()
+		await publishedBase(chosen)
+		await choose(chosen, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'role-actions'])
+		chosen.contract = EDITOR_DELETES
+		const parked = await deploy(chosen, 'prod')
+		expect(parked.status).toBe('awaiting_approval')
+		const classification = parseClassification((await run(chosen, parked.runId)).classification_json ?? '')
+		expect(classification.categories).toEqual([...DEFAULT_APPROVAL_CATEGORIES, 'role-actions'])
+		expect((await getApprovalUseCase(approvals(chosen, auth()), parked.runId)).categories).toContain('role-actions')
+		expect((await approve(chosen, parked.runId)).run.status).toBe('pending')
+	})
+
+	test('a new role waits only where `role-added` is chosen, and never on an unprotected environment', async () => {
+		const chosen = world()
+		await publishedBase(chosen)
+		await choose(chosen, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'role-added'])
+		chosen.contract = WITH_READER
+		expect((await deploy(chosen, 'prod')).status).toBe('awaiting_approval')
+
+		const other = world()
+		await publishedBase(other)
+		await choose(other, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'role-actions'])
+		other.contract = WITH_READER
+		expect((await deploy(other, 'prod')).status).toBe('succeeded')
+
+		const stage = world()
+		await seed(stage)
+		await choose(stage, 'stage', ['role-added'])
+		await setEnvironmentProtectionUseCase(approvals(stage, auth()), { appId: 'notes', env: 'stage', protected: false })
+		stage.contract = WITH_READER
+		expect((await deploy(stage, 'stage')).status).toBe('succeeded')
+	})
+
+	test('a default category removed lets its change publish at once', async () => {
+		const w = world()
+		await publishedBase(w)
+		await choose(w, 'prod', DEFAULT_APPROVAL_CATEGORIES.filter((category) => category !== 'deletes-data'))
+		w.files = DELETES_NOTES
+		const result = await deploy(w, 'prod')
+		expect(result.status).toBe('succeeded')
+		const classification = parseClassification((await run(w, result.runId)).classification_json ?? '')
+		expect(classification.categories).not.toContain('deletes-data')
+	})
+
+	test('the choice is stored as its difference from the defaults, audited, and the defaults store null again', async () => {
+		const w = world()
+		await seed(w)
+		const caller = auth()
+		const dto = await choose(w, 'prod', ['people', 'role-added', 'off-road'], grantGate(), caller)
+		expect(dto.approvalCategories).toEqual(['off-road', 'people', 'role-added'])
+		const stored = (await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories ?? ''
+		expect(JSON.parse(stored)).toEqual({
+			added: ['role-added'],
+			removed: ['anyone-calls', 'get-mutation', 'adoption', 'terminal', 'deletes-data'],
+		})
+		expect(caller.audited).toEqual(['access.protect'])
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES])
+		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories).toBeNull()
+		expect(storedCategories([...DEFAULT_APPROVAL_CATEGORIES])).toBeNull()
+	})
+
+	test('omitting the categories keeps the stored choice', async () => {
+		const w = world()
+		await seed(w)
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'csp'])
+		await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false })
+		const dto = await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: true })
+		expect(dto.approvalCategories).toContain('csp')
+	})
+
+	test('a category added to the defaults later applies to an environment that removed another one', () => {
+		const stored = JSON.stringify({ added: [], removed: ['people'] })
+		expect(appEnvCategories({ approval_categories: stored })).toEqual(DEFAULT_APPROVAL_CATEGORIES.filter((category) => category !== 'people'))
+	})
+
+	test("choosing `grants` makes IAM hold the environment's grants first; dropping it releases them after Control", async () => {
+		const w = world()
+		await seed(w)
+		const revision = async () => (await w.db.registry.getAppEnv('notes', 'prod'))?.protection_revision ?? -1
+		const gate = grantGate()
+		const start = await revision()
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants'], gate)
+		expect(gate.calls).toEqual([['notes@prod', true, start + 1]])
+		expect(await revision()).toBe(start + 1)
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants', 'csp'], gate)
+		await setEnvironmentProtectionUseCase({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env: 'prod', protected: false })
+		expect(gate.calls).toEqual([['notes@prod', true, start + 1], ['notes@prod', true, start + 2], ['notes@prod', false, start + 3]])
+		expect(gate.state).toEqual({ required: false, revision: await revision() })
+	})
+
+	test('IAM that does not take the gate leaves Control unchanged; a release IAM missed is made by the next change', async () => {
+		const w = world()
+		await seed(w)
+		const gate = grantGate()
+		gate.fail = true
+		expect(await status(choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants'], gate))).toBe(502)
+		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories).toBeNull()
+
+		gate.fail = false
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants'], gate)
+		gate.fail = true
+		expect(await status(choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate))).toBe(502)
+		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories).toBeNull()
+		expect(gate.state?.required).toBe(true)
+
+		gate.fail = false
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate)
+		expect(gate.state?.required).toBe(false)
+	})
+
+	test('a change that loses its lease after IAM took the gate leaves IAM holding it, and only a later change releases it', async () => {
+		const w = world()
+		await seed(w)
+		let now = Date.now()
+		const clock = { now: () => now, wait: () => Promise.resolve() }
+		const gate = grantGate()
+		gate.afterSet = () => {
+			now += LEASE_TTL_MS
+		}
+		const lost = setEnvironmentProtectionUseCase(
+			{ ...approvals(w, auth()), grantApproval: gate, leaseClock: clock },
+			{ appId: 'notes', env: 'prod', protected: true, categories: [...DEFAULT_APPROVAL_CATEGORIES, 'grants'] },
+		)
+		await expect(lost).rejects.toThrow()
+		expect(gate.calls.map(([, required]) => required)).toEqual([true])
+		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories).toBeNull()
+
+		gate.afterSet = undefined
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate)
+		expect(gate.state?.required).toBe(false)
+	})
+
+	test('without a way to reach IAM, `grants` cannot be chosen, and every other category still can', async () => {
+		const w = world()
+		await seed(w)
+		const caller = auth()
+		const withoutIam = (categories: ApprovalCategory[]) =>
+			setEnvironmentProtectionUseCase(approvals(w, caller), { appId: 'notes', env: 'prod', protected: true, categories })
+		expect(await status(withoutIam([...DEFAULT_APPROVAL_CATEGORIES, 'grants']))).toBe(503)
+		expect((await withoutIam([...DEFAULT_APPROVAL_CATEGORIES, 'public'])).approvalCategories).toContain('public')
+	})
+
+	test('a change refused while a deployment holds the environment reaches IAM not at all', async () => {
+		const w = world()
+		await seed(w)
+		const gate = grantGate()
+		const lease = await acquireLease(makeFakeLock(w.db), runLeaseKey('notes', 'prod'))
+		expect(lease).not.toBeNull()
+		expect(await status(choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants'], gate))).toBe(409)
+		expect(gate.calls).toEqual([])
+		await lease?.release()
 	})
 })

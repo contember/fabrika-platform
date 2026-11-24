@@ -60,12 +60,13 @@ export async function fixtureProtect(
 	coordinates: { readonly appId: string; readonly env: string },
 	value: boolean,
 	now: () => number = Date.now,
+	categories?: string | null,
 ): Promise<AppEnvRow | null> {
 	const key = runLeaseKey(coordinates.appId, coordinates.env)
 	const holder = `fixture-protect-${key}`
 	if (!(await locks.acquire(key, holder, LEASE_TTL_MS))) throw new Error(`fixture lease ${key} is held`)
 	try {
-		return await registry.setAppEnvProtected(coordinates.appId, coordinates.env, value, { holder, nowMs: now() })
+		return await registry.setAppEnvProtected(coordinates.appId, coordinates.env, value, categories, { holder, nowMs: now() })
 	} finally {
 		await locks.release(key, holder)
 	}

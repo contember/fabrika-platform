@@ -243,14 +243,14 @@ function endpointSentence({ added, changed, removed }: ApprovalView['summary']):
  * whatever its lines need now: an earlier release parked every widening on a protected environment.
  */
 function outcomeSentence(approval: ApprovalDto): string {
-	const waits = waitsForApproval(approval.changes)
+	const waits = waitsForApproval(approval.changes, approval.categories)
 	const what = approval.outcome === 'widening' ? 'It widens access' : 'It only narrows access or leaves it unchanged'
-	const closer = waits ? ', and a line needs closer review' : ''
+	const closer = waits ? ', and a line needs approval on this environment' : ''
 	if (approval.run.status === 'awaiting_approval') return `${what}${closer}, so it waits for your approval.`
 	if (approval.approval !== null) return `${what}${closer}, so it waited for approval.`
-	if (!waits) return `${what}, and nothing in it needs closer review, so it publishes without waiting.`
+	if (!waits) return `${what}, and nothing in it needs approval on this environment, so it publishes without waiting.`
 	if (!approval.protected) return `${what}; this environment is not protected, so it publishes without waiting.`
-	return `${what}, and a line needs closer review.`
+	return `${what}, and a line needs approval on this environment.`
 }
 
 function andList(items: readonly string[]): string {

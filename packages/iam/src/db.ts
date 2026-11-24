@@ -5,6 +5,7 @@ import { AuditRepository, AuditWriter, type SqlDialect } from './repositories/au
 import { InstallationBrandRepository } from './repositories/brand'
 import { CredentialRepository } from './repositories/credentials'
 import { DeviceAuthorizationRepository } from './repositories/device'
+import { GrantRequestRepository } from './repositories/grant-requests'
 import { GrantRepository } from './repositories/grants'
 import { HandoffRepository } from './repositories/handoff'
 import { MembershipRepository } from './repositories/membership'
@@ -44,6 +45,7 @@ export {
 export { type InstallationBrandImages, InstallationBrandRepository, type InstallationBrandRow } from './repositories/brand'
 export { type CredentialGrantRow, CredentialRepository, type CredentialRow } from './repositories/credentials'
 export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
+export { type CreateGrantRequestInput, GrantRequestRepository, type GrantRequestRow } from './repositories/grant-requests'
 export { type DelegatedAuthority, ExternalGrantError, GrantRepository, type GrantRow } from './repositories/grants'
 export { type AuthCodeRow, HandoffRepository } from './repositories/handoff'
 export {
@@ -86,6 +88,7 @@ export interface IamRepositories {
 	device: DeviceAuthorizationRepository
 	principals: PrincipalRepository
 	grants: GrantRepository
+	grantRequests: GrantRequestRepository
 	appSchema: AppSchemaRepository
 	credentials: CredentialRepository
 	sessions: SessionRepository
@@ -116,6 +119,7 @@ export function createIamRepositories(
 		device: replacements.device ?? new DeviceAuthorizationRepository(db),
 		principals: replacements.principals ?? new PrincipalRepository(db, writer),
 		grants: replacements.grants ?? new GrantRepository(db, writer),
+		grantRequests: replacements.grantRequests ?? new GrantRequestRepository(db, writer),
 		appSchema: replacements.appSchema ?? new AppSchemaRepository(db, writer),
 		credentials: replacements.credentials ?? new CredentialRepository(db, writer),
 		sessions: replacements.sessions ?? new SessionRepository(db, writer),

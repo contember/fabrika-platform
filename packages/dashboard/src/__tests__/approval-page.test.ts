@@ -1,7 +1,7 @@
 // The approval page (ADR-0050 §7): who gains access first, a group that only narrows starts closed, a closer review says
 // why, quiet endpoints that changed alike fold into one row, and a run says where it stands.
 
-import { approvalView } from '@fabrika/control-contract'
+import { approvalView, DEFAULT_APPROVAL_CATEGORIES } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -69,6 +69,7 @@ const APPROVAL: ApprovalDto = {
 	baselineDigest: `sha256:${'b'.repeat(64)}`,
 	baselineRunId: null,
 	protected: true,
+	categories: [...DEFAULT_APPROVAL_CATEGORIES],
 	endpoints: [
 		{
 			id: 'register',
@@ -109,7 +110,7 @@ describe('the approval page', () => {
 		const summary = markup.slice(markup.indexOf('change-summary'), markup.indexOf('Who gains access'))
 		expect(summary).toContain('This change adds 1 endpoint and changes 4.')
 		expect(summary).toContain('anyone without signing in (1), signed-in people (4)')
-		expect(summary).toContain('It widens access, and a line needs closer review, so it waits for your approval.')
+		expect(summary).toContain('It widens access, and a line needs approval on this environment, so it waits for your approval.')
 		expect(summary).toContain('Check first')
 		expect(summary).toContain('Anyone on the internet decides when job <code>intake</code> runs.')
 	})
@@ -126,7 +127,7 @@ describe('the approval page', () => {
 			'It widens access, so it waited for approval.',
 		)
 		expect(summary({ ...APPROVAL, changes: quiet, run: { ...RUN, status: 'succeeded' } })).toContain(
-			'It widens access, and nothing in it needs closer review, so it publishes without waiting.',
+			'It widens access, and nothing in it needs approval on this environment, so it publishes without waiting.',
 		)
 	})
 

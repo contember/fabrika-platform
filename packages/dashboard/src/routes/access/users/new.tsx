@@ -1,11 +1,12 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
-import type { CreateGrantRequest, InviteRequest } from '@fabrika/iam-contract'
+import type { CreateGrantRequest, GrantRequestDto, InviteRequest } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../../access/components/GrantComposer'
 import { grantTargets, useAdministration } from '../../../access/lib/administration'
 import { api } from '../../../access/lib/api'
 import { parseDateTimeLocal } from '../../../access/lib/format'
 import { Icon } from '../../../components/Icon'
+import { PendingGrantNotice, pendingOf } from '../../../components/PendingGrant'
 import { ApiError } from '../../../lib/api'
 
 /**
@@ -29,6 +30,7 @@ export default createPage()
 		const [expiry, setExpiry] = useState('')
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
+		const [pending, setPending] = useState<{ userId: string; request: GrantRequestDto } | null>(null)
 
 		async function submit(e: React.FormEvent) {
 			e.preventDefault()
@@ -53,7 +55,12 @@ export default createPage()
 						...authorization,
 						expiresAt: parseDateTimeLocal(expiry),
 					}
-					await api.grants.create(body)
+					const request = pendingOf(await api.grants.create(body))
+					if (request !== null) {
+						setPending({ userId: invited.id, request })
+						setBusy(false)
+						return
+					}
 				}
 				navigate('access/users/detail', { params: { id: invited.id } })
 			} catch (cause) {
@@ -108,6 +115,12 @@ export default createPage()
 						</div>
 					)}
 					{error && <p className="error-text" role="alert">{error}</p>}
+					{pending && (
+						<>
+							<PendingGrantNotice request={pending.request} />
+							<Link to="access/users/detail" params={{ id: pending.userId }}>Open the invited user</Link>
+						</>
+					)}
 					<div className="form-actions">
 						<button type="submit" className="primary" disabled={busy}>{busy ? 'Inviting…' : 'Invite user'}</button>
 						<button type="button" onClick={() => navigate('access/users')} disabled={busy}>Cancel</button>

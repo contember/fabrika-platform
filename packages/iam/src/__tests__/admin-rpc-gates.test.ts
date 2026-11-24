@@ -16,7 +16,8 @@
  * Two exceptions are named here. `appPeople.*`, which an application's own administrator calls, authorizes the
  * application's `members.manage` held globally there in its use case, and answers a stranger nothing. The user
  * administration procedures (ADR-0058) carry no `.require`: `context` admits only a caller with an administration,
- * `iam.admin` or `iam.users.manage`, and `user-admin.test.ts` proves a user administrator reaches nothing else.
+ * `iam.admin` or `iam.users.manage`, and `user-admin.test.ts` proves a user administrator reaches nothing else. Among
+ * them, `grantRequests.*` answer a caller without an administration its own grant requests only (ADR-0083 §4).
  */
 
 import { unusedDatabase } from '@fabrika/platform/testing'
@@ -53,6 +54,8 @@ const ROUTER_METHODS = routerLeaves(adminRpcRouter)
 
 /** The procedures an application's administrator calls without `iam.admin` (`admin/app-people.ts`). */
 const DELEGATED = ['appPeople.apps', 'appPeople.grant', 'appPeople.list', 'appPeople.revoke']
+/** The procedures that answer a requester its own grant requests (`admin/grant-requests.ts`). */
+const OWN_REQUESTS = ['grantRequests.decide', 'grantRequests.list']
 
 describe('every admin RPC procedure is gated', () => {
 	test('the shipped router declares at least one authz requirement on every leaf', () => {
@@ -83,7 +86,7 @@ describe('every admin RPC procedure is gated', () => {
 			)
 		const admitted: string[] = []
 		for (const { method } of ROUTER_METHODS) {
-			if (DELEGATED.includes(method)) continue
+			if (DELEGATED.includes(method) || OWN_REQUESTS.includes(method)) continue
 			const response = await call(method)
 			const type = prop(prop(await response.json(), 'error'), 'type')
 			if (response.status !== 403 || type !== 'forbidden') {
@@ -99,5 +102,9 @@ describe('every admin RPC procedure is gated', () => {
 			const response = await call(method)
 			expect([method, response.status, prop(prop(await response.json(), 'error'), 'type')]).toEqual([method, 404, 'not_found'])
 		}
+		// It made no grant request, so it sees none and decides none.
+		expect(await (await call('grantRequests.list')).json()).toEqual({ result: { items: [] } })
+		const decide = await call('grantRequests.decide')
+		expect([decide.status, prop(prop(await decide.json(), 'error'), 'type')]).toEqual([404, 'not_found'])
 	})
 })

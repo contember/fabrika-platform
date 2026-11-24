@@ -263,6 +263,11 @@ export interface AppEnvDto {
 	authoring: boolean
 	/** A widening of access waits for a human's approval here (ADR-0050); `prod` is protected by default. */
 	protected: boolean
+	/**
+	 * The kinds of change that wait for a person while the environment is protected (ADR-0083), in `APPROVAL_CATEGORIES`
+	 * order; `DEFAULT_APPROVAL_CATEGORIES` unless someone chose otherwise.
+	 */
+	approvalCategories: ApprovalCategory[]
 	/** The run whose snapshot is this environment's active access; null until a run publishes one. */
 	publishedRunId: string | null
 	/**
@@ -702,6 +707,18 @@ export const REVIEW_REASONS = ['off-road', 'anyone-calls', 'get-mutation', 'peop
 
 export type ReviewReason = (typeof REVIEW_REASONS)[number]
 
+/**
+ * The kinds of change an environment may make wait for a person (ADR-0083): each closer-review reason, the permission
+ * changes in the contract (`role-actions`, `role-external`, `role-added`), an endpoint anyone opens (`public`), a CSP
+ * origin (`csp`), and a console grant, grant edit or revocation in IAM (`grants`). `changeCategories` places a line.
+ */
+export const APPROVAL_CATEGORIES = [...REVIEW_REASONS, 'role-actions', 'role-external', 'role-added', 'public', 'csp', 'grants'] as const
+
+export type ApprovalCategory = (typeof APPROVAL_CATEGORIES)[number]
+
+/** What a protected environment waits for when nobody chose otherwise: ADR-0050's closer-review reasons, nothing more. */
+export const DEFAULT_APPROVAL_CATEGORIES: readonly ApprovalCategory[] = REVIEW_REASONS
+
 /** What a call sets off, when the line says so. */
 export interface ChangeConsequenceDto {
 	kind: 'starts-job'
@@ -741,7 +758,7 @@ export interface ApprovalDto {
 	run: RunDto
 	/**
 	 * `none`: no line. `no-widening`: lines that narrow or leave access unchanged. `widening`: a line widens. On a
-	 * protected environment only a change with a closer-review line waits (`waitsForApproval`); any other publishes at once.
+	 * protected environment only a change with a line of a chosen category waits (`waitsForApproval`); any other publishes at once.
 	 */
 	outcome: 'none' | 'no-widening' | 'widening'
 	changes: AccessChangeDto[]
@@ -751,6 +768,8 @@ export interface ApprovalDto {
 	/** The published run the change was compared with; null when nothing was published. */
 	baselineRunId: string | null
 	protected: boolean
+	/** The categories the run was classified under (ADR-0083); the defaults for a run classified before they existed. */
+	categories: ApprovalCategory[]
 	/**
 	 * The environment's cross-origin list as it stands now: the pages an endpoint the contract opens to the environment's
 	 * list answers. It is set on the environment, takes effect at once, and no approval covers it (ADR-0050). Only on one
@@ -791,11 +810,13 @@ export interface CompleteApprovalRequest {
 	baselineDigest: string
 }
 
-/** Change whether a widening waits for approval on one environment (ADR-0050 §4). */
+/** Change whether, and for which kinds of change, a deploy or a grant waits for approval on one environment (ADR-0050 §4, ADR-0083). */
 export interface SetEnvironmentProtectionRequest {
 	appId: string
 	env: string
 	protected: boolean
+	/** The categories that wait while protected; omitted keeps the stored choice. */
+	categories?: ApprovalCategory[]
 }
 
 export interface TriggerDeployRequest {

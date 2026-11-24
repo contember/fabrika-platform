@@ -49,6 +49,8 @@ export interface AppEnvRow {
 	protected: number
 	/** Advanced by every change of `protected`; a publication names the revision it classified under. */
 	protection_revision: number
+	/** The categories that wait while protected, as their difference from the defaults (ADR-0083); read through `appEnvCategories`. */
+	approval_categories: string | null
 	/** The contract digest IAM last received for the environment; NULL until Control writes its schema. */
 	iam_digest: string | null
 	/** When Control took the environment offline (`apps.environments.suspend`); NULL while it serves. */

@@ -39,7 +39,7 @@ export class RepoPollingRepository {
 						e.cross_origins_json AS e_cross_origins_json, e.trigger_ref AS e_trigger_ref,
 						e.authoring AS e_authoring, e.kind AS e_kind,
 						e.published_run_id AS e_published_run_id, e.generation AS e_generation, e.protected AS e_protected,
-						e.protection_revision AS e_protection_revision, e.published_snapshot_json AS e_published_snapshot_json,
+						e.protection_revision AS e_protection_revision, e.approval_categories AS e_approval_categories, e.published_snapshot_json AS e_published_snapshot_json,
 						e.namespace_id AS e_namespace_id,
 						e.provider AS e_provider, e.provider_target_json AS e_provider_target_json,
 						e.provider_artifact_json AS e_provider_artifact_json,
@@ -75,6 +75,7 @@ export class RepoPollingRepository {
 				generation: r.e_generation,
 				protected: r.e_protected,
 				protection_revision: r.e_protection_revision,
+				approval_categories: r.e_approval_categories,
 				published_snapshot_json: r.e_published_snapshot_json,
 				namespace_id: r.e_namespace_id,
 				provider: r.e_provider,
@@ -146,6 +147,7 @@ interface PollEligibleJoinRow {
 	e_generation: number
 	e_protected: number
 	e_protection_revision: number
+	e_approval_categories: string | null
 	e_published_snapshot_json: string | null
 	e_namespace_id: string | null
 	e_provider: string

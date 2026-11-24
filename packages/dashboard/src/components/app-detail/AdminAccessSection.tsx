@@ -1,4 +1,5 @@
 import { RpcError } from '@fabrika/app'
+import type { GrantRequestDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { api } from '../../access/lib/api'
 import { fmtDate } from '../../lib/format'
@@ -11,6 +12,7 @@ import {
 	type SelfAdminTarget,
 } from '../../lib/self-admin'
 import { Icon } from '../Icon'
+import { PendingGrantNotice, pendingOf } from '../PendingGrant'
 import { Chip } from '../Status'
 import { Table } from '../Table'
 
@@ -48,14 +50,18 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 	const [expiry, setExpiry] = useState<SelfAdminExpiry>('none')
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+	const [pending, setPending] = useState<GrantRequestDto | null>(null)
 
 	async function grant() {
 		setBusy(true)
 		setError(null)
 		try {
 			const expiresAt = selfAdminExpiresAt(expiry, Math.floor(Date.now() / 1000))
-			await api.grants.create({ principalId, app: target.app, roleKey: ADMIN_ROLE, ...(expiresAt === null ? {} : { expiresAt }) })
-			onDone()
+			const request = pendingOf(
+				await api.grants.create({ principalId, app: target.app, roleKey: ADMIN_ROLE, ...(expiresAt === null ? {} : { expiresAt }) }),
+			)
+			setPending(request)
+			if (request === null) onDone()
 		} catch (cause) {
 			setError(cause instanceof RpcError ? cause.message : 'Granting Admin failed.')
 		} finally {
@@ -69,7 +75,9 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 				<Chip>{target.env}</Chip>
 			</td>
 			<td>
-				{target.held !== null
+				{pending !== null
+					? <PendingGrantNotice request={pending} />
+					: target.held !== null
 					? <span>You hold Admin{target.held.until === null ? '' : ` until ${fmtDate(target.held.until)}`}.</span>
 					: (
 						<div className="toolbar">

@@ -14,6 +14,7 @@ const NON_PRINCIPAL_ID: Record<string, string> = {
 	'sessions.revoke': 'session',
 	'grants.delete': 'grant',
 	'grants.update': 'grant',
+	'grantRequests.decide': 'grant request',
 	'connections.revoke': 'OAuth grant',
 	'shareLinks.revoke': 'share link',
 }

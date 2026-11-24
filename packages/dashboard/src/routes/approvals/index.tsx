@@ -1,22 +1,35 @@
 import { createPage, Link } from '@buzola/router'
+import { GrantRequests } from '../../components/GrantRequests'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { effectCounts } from '../../lib/access-changes'
 import { api } from '../../lib/api'
 import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
+import { quietIamClient } from '../../lib/iam'
+import { consoleSession } from '../../lib/session'
 
-// Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050). Only runs at
-// coordinates where the viewer holds `access.approve` are listed.
+// Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050), and console
+// grants that wait for another administrator (ADR-0083). Only runs at coordinates where the viewer holds
+// `access.approve` are listed, and only grant requests at applications the viewer administers in IAM, or the viewer's
+// own; a viewer IAM does not answer sees no grant section.
 
 export default createPage()
-	.loader(async () => ({ approvals: (await api.approvals.list()).items }))
+	.loader(async () => {
+		const [approvals, grantRequests, session] = await Promise.all([
+			api.approvals.list().then((list) => list.items),
+			quietIamClient(fetch).grantRequests.list({}).then((list) => list.items, () => null),
+			consoleSession(),
+		])
+		return { approvals, grantRequests, me: session.principal?.id ?? null }
+	})
 	.route('/approvals')
 	.render(({ data }) => (
 		<>
 			<div className="page-head">
 				<h1>Approvals</h1>
 				<p className="hint">
-					Deploys to a protected environment with a change that needs closer review. Each waits until a person reads the change and decides.
+					Deploys to a protected environment with a change of a kind it approves, and console grants that wait for another administrator. Each waits until
+					a person reads the change and decides.
 				</p>
 			</div>
 
@@ -62,5 +75,7 @@ export default createPage()
 					</tr>
 				))}
 			</Table>
+
+			{data.grantRequests !== null && <GrantRequests initial={data.grantRequests} viewerId={data.me} />}
 		</>
 	))

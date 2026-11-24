@@ -4,7 +4,7 @@
 
 import { canonicalArtifactJson, canonicalJson, sha256Hex } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
-import { waitsForApproval } from '@fabrika/control-contract'
+import { DEFAULT_APPROVAL_CATEGORIES, waitsForApproval } from '@fabrika/control-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { migrationChecksum, readPostgresMigrationBundle } from '@fabrika/platform-node'
@@ -699,7 +699,7 @@ describe('a migration that deletes data', () => {
 				subject: { kind: 'migration', name: DATA_LOSS_MIGRATION.name },
 			},
 		])
-		expect(waitsForApproval(changes)).toBe(true)
+		expect(waitsForApproval(changes, DEFAULT_APPROVAL_CATEGORIES)).toBe(true)
 		expect(classifyWithFacts(after, after).changes).toEqual([])
 		const edited = await snapshotOf(commitOf({}, [NOTES_MIGRATION, { ...DATA_LOSS_MIGRATION, sql: `${DATA_LOSS_MIGRATION.sql}\n` }]))
 		expect(classifyWithFacts(after, edited).changes.filter((change) => change.rule === 'migration.deletes-data')).toHaveLength(3)
@@ -711,7 +711,7 @@ describe('a migration that deletes data', () => {
 		const { outcome, changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, added])))
 		expect(outcome).toBe('widening')
 		expect(changes.map((change) => change.rule)).toEqual(['migration.added'])
-		expect(waitsForApproval(changes)).toBe(false)
+		expect(waitsForApproval(changes, DEFAULT_APPROVAL_CATEGORIES)).toBe(false)
 	})
 })
 
@@ -748,7 +748,7 @@ describe('a migration that overwrites data or calls database code', () => {
 				reason: 'deletes-data',
 				line,
 			}])
-			expect(waitsForApproval(changes)).toBe(true)
+			expect(waitsForApproval(changes, DEFAULT_APPROVAL_CATEGORIES)).toBe(true)
 		}
 	})
 
@@ -764,7 +764,7 @@ describe('a migration that overwrites data or calls database code', () => {
 		) {
 			const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, { name: NAME, sql }])))
 			expect(changes.map((change) => change.rule)).toEqual(['migration.added'])
-			expect(waitsForApproval(changes)).toBe(false)
+			expect(waitsForApproval(changes, DEFAULT_APPROVAL_CATEGORIES)).toBe(false)
 		}
 	})
 
@@ -772,7 +772,10 @@ describe('a migration that overwrites data or calls database code', () => {
 		const before = await snapshotOf(commitOf())
 		const waits = async (sql: string) => {
 			const { changes } = classifyWithFacts(before, await snapshotOf(commitOf({}, [NOTES_MIGRATION, { name: NAME, sql }])))
-			return { waits: waitsForApproval(changes), lines: changes.filter((change) => change.reason === 'deletes-data').map((change) => change.line) }
+			return {
+				waits: waitsForApproval(changes, DEFAULT_APPROVAL_CATEGORIES),
+				lines: changes.filter((change) => change.reason === 'deletes-data').map((change) => change.line),
+			}
 		}
 		expect(
 			await waits(

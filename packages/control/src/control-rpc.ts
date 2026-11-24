@@ -3,6 +3,7 @@ import type { AuthContext } from '@fabrika/auth'
 import { type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabrika/auth-core'
 import {
 	APP_ENV_KINDS,
+	APPROVAL_CATEGORIES,
 	BUILDER_APPROVAL_VERIFIER,
 	BUILDER_CONNECTION_ATTEMPT_ID,
 	BUILDER_CONNECTION_IDENTIFIER,
@@ -178,7 +179,12 @@ const appEnvironmentBody = z.object({
 	artifact: providerEnvelopeSchema,
 })
 const putEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, environment: appEnvironmentBody })
-const protectEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, protected: z.boolean() }).strict()
+const protectEnvironmentInput = z.object({
+	appId: nonEmpty,
+	env: nonEmpty,
+	protected: z.boolean(),
+	categories: z.array(z.enum(APPROVAL_CATEGORIES)).optional(),
+}).strict()
 const accessDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
 const completeApprovalInput = z.object({
 	runId: nonEmpty,
@@ -586,6 +592,7 @@ export function createControlRpcRouter(
 			queue: deps.queue,
 			lock: deps.lock,
 			request: ctx.request,
+			...(deps.grantApproval === undefined ? {} : { grantApproval: deps.grantApproval }),
 		}
 	}
 

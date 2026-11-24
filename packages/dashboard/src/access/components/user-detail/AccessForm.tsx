@@ -1,7 +1,8 @@
 import { Link, useNavigate } from '@buzola/router'
-import type { AppDto, PrincipalDetail, PrincipalGrantDto } from '@fabrika/iam-contract'
+import type { AppDto, GrantRequestDto, PrincipalDetail, PrincipalGrantDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { Icon } from '../../../components/Icon'
+import { PendingGrantNotice, pendingOf } from '../../../components/PendingGrant'
 import { ApiError } from '../../../lib/api'
 import { grantTargets, useAdministration } from '../../lib/administration'
 import { api } from '../../lib/api'
@@ -15,6 +16,7 @@ export function UserAccessForm({ principal, apps, grant }: { principal: Principa
 	const [expiry, setExpiry] = useState(() => grant?.expiresAt == null ? '' : toDateTimeLocal(grant.expiresAt))
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
+	const [pending, setPending] = useState<GrantRequestDto | null>(null)
 	function back() {
 		navigate('access/users/detail', { params: { id: principal.id, tab: 'access' } })
 	}
@@ -28,10 +30,17 @@ export function UserAccessForm({ principal, apps, grant }: { principal: Principa
 				throw new Error('Choose an expiration in the future, or leave it empty.')
 			}
 			setBusy(true)
+			let result
 			if (grant) {
 				const { app, ...changes } = authorization
-				await api.grants.update({ id: grant.id, ...changes, expiresAt })
-			} else await api.grants.create({ principalId: principal.id, ...authorization, expiresAt })
+				result = await api.grants.update({ id: grant.id, ...changes, expiresAt })
+			} else result = await api.grants.create({ principalId: principal.id, ...authorization, expiresAt })
+			const waiting = pendingOf(result)
+			if (waiting !== null) {
+				setPending(waiting)
+				setBusy(false)
+				return
+			}
 			back()
 		} catch (cause) {
 			setError(cause instanceof ApiError || cause instanceof Error ? cause.message : 'Could not save access.')
@@ -67,6 +76,7 @@ export function UserAccessForm({ principal, apps, grant }: { principal: Principa
 							<p className="hint">This account is disabled. Saved access becomes usable only after the account is enabled.</p>
 						)}
 						{error && <p className="error-text" role="alert">{error}</p>}
+						{pending && <PendingGrantNotice request={pending} />}
 						<div className="form-actions">
 							<button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : grant ? 'Save access' : 'Add access'}</button>
 							<button type="button" disabled={busy} onClick={back}>Cancel</button>

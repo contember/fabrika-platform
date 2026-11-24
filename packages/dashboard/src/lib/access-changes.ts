@@ -163,8 +163,8 @@ export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; rea
  * A run without an approval: one that waited and was refused (a refusal is the only way out of waiting without an
  * approval or a cancellation), or one that never waited, because its change narrows or its environment is unprotected.
  */
-function unapproved({ run, changes, protected: guarded }: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
-	if (waitsForApproval(changes) && guarded && run.status === 'failed') return { lamp: 'stop', text: 'Refused' }
+function unapproved({ run, changes, protected: guarded, categories }: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
+	if (waitsForApproval(changes, categories) && guarded && run.status === 'failed') return { lamp: 'stop', text: 'Refused' }
 	switch (run.status) {
 		case 'pending':
 		case 'running':
