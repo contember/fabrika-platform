@@ -1,7 +1,9 @@
 import { CONTROL_ACTIONS, CONTROL_APP_ID, CONTROL_SCOPES } from '@fabrika/control-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
-import { type CloudflareAppConfig, D1Database, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
+import { type CloudflareAppConfig, D1Database, NO_PROCESS_ENV_FLAG, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 import { beforeAll, describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import type {
 	buildControlWorker as BuildControlWorker,
 	controlEmailSecrets as ControlEmailSecrets,
@@ -173,6 +175,12 @@ describe('defineApp(control config)', () => {
 			})
 		},
 	)
+
+	test('the Worker keeps `process.env` empty, in the built config and in the committed wrangler.jsonc', () => {
+		expect(application(buildControlWorker({ env: 'stage' })).options.compatibility_flags).toContain(NO_PROCESS_ENV_FLAG)
+		const committed = readFileSync(join(import.meta.dir, '..', '..', 'wrangler.jsonc'), 'utf8').match(/"compatibility_flags":\s*\[([^\]]*)\]/)
+		expect(committed?.[1]).toContain(`"${NO_PROCESS_ENV_FLAG}"`)
+	})
 
 	test('a local Worker names no IAM service for application deploys', () => {
 		expect(application(buildControlWorker({ env: 'local' })).options.vars?.['FABRIKA_IAM_SERVICE']).toBeUndefined()

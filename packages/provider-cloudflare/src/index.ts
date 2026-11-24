@@ -52,6 +52,13 @@ export {
 	type StagedLocalAssets,
 	stageLocalAssets,
 } from './provider'
-export { createCloudflareProxyWorker, IAM_APPLICATION_ENTRYPOINT, iamServiceReference, proxyManifestJson } from './proxy'
+export {
+	createCloudflareProxyWorker,
+	IAM_APPLICATION_ENTRYPOINT,
+	iamServiceReference,
+	NO_PROCESS_ENV_FLAG,
+	POPULATE_PROCESS_ENV_FLAG,
+	proxyManifestJson,
+} from './proxy'
 export type { CloudflareProxyWorkerOptions } from './proxy'
 export { type AppSchemaParse, parseAppSchema } from './schema'

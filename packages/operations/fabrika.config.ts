@@ -3,6 +3,7 @@ import {
 	createCloudflareProxyWorker,
 	D1Database,
 	defineApp,
+	NO_PROCESS_ENV_FLAG,
 	platformNames,
 	Queue,
 	R2Bucket,
@@ -32,7 +33,8 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 		dir: '.',
 		name: names.operationsWorker,
 		main: './src/worker.ts',
-		compatibility_flags: ['nodejs_compat_v2'],
+		// `nodejs_compat_v2` alone leaves `process.env` empty; the opt-out keeps it so if the flags change.
+		compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG],
 		compatibility_date: '2025-10-01',
 		workers_dev: false,
 		// Public routing belongs to the proxy Worker. Operations is reached through its APP service binding.

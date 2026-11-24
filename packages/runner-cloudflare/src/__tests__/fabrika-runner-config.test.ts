@@ -1,5 +1,7 @@
-import { Container, R2Bucket, type Worker } from '@fabrika/provider-cloudflare'
+import { Container, NO_PROCESS_ENV_FLAG, R2Bucket, type Worker } from '@fabrika/provider-cloudflare'
 import { describe, expect, test } from 'bun:test'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import config, { buildRunnerWorker } from '../../fabrika-runner.config'
 
 // The runner Worker's own deploy surface uses the Cloudflare provider authoring API.
@@ -18,6 +20,12 @@ describe('defineApp(runner config)', () => {
 		const worker = config.resources({ env: 'stage' })
 		expect(worker.options.name).toBe('vozka-runner')
 		expect(worker.options.main).toBe('./src/worker.ts')
+	})
+
+	test('the Worker keeps `process.env` empty, in the built config and in the committed wrangler.jsonc', () => {
+		expect(buildRunnerWorker({ env: 'stage' }).options.compatibility_flags).toContain(NO_PROCESS_ENV_FLAG)
+		const committed = readFileSync(join(import.meta.dir, '..', '..', 'wrangler.jsonc'), 'utf8').match(/"compatibility_flags":\s*\[([^\]]*)\]/)
+		expect(committed?.[1]).toContain(`"${NO_PROCESS_ENV_FLAG}"`)
 	})
 
 	test('binds the RunnerContainer DO + the shared (adopted) R2, and no database', () => {

@@ -9,7 +9,7 @@
 import { type EmailTransportConfig, readEmailTransportConfig } from '@fabrika/email'
 import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
-import { D1Database, defineApp, platformNames, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
+import { D1Database, defineApp, NO_PROCESS_ENV_FLAG, platformNames, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const IAM_APP_ID = 'propustka'
@@ -246,7 +246,8 @@ export const buildIamWorker = (ctx: ResourceContext, source: EnvironmentSource =
 		dir: '.',
 		name: names.iamWorker,
 		main: './src/index.ts',
-		compatibility_flags: ['nodejs_compat_v2'],
+		// `nodejs_compat_v2` alone leaves `process.env` empty; the opt-out keeps it so if the flags change.
+		compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG],
 		compatibility_date: '2025-10-01',
 		// This is the public auth surface. Control reaches admin APIs over a service binding.
 		routes: domain === undefined ? [] : [{ pattern: domain, custom_domain: true }],

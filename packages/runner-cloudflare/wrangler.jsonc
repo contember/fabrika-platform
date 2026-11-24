@@ -5,7 +5,8 @@
 	"name": "vozka-runner",
 	"main": "./src/worker.ts",
 	"compatibility_flags": [
-		"nodejs_compat"
+		"nodejs_compat",
+		"nodejs_compat_do_not_populate_process_env"
 	],
 	"compatibility_date": "2025-05-25",
 	"routes": [],

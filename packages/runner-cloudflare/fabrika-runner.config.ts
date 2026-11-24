@@ -14,7 +14,7 @@
 //
 // Local dev still uses oblaka directly via the `oblaka.ts` shim, which calls `buildRunnerWorker` below.
 
-import { Container, defineApp, platformNames, R2Bucket, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
+import { Container, defineApp, NO_PROCESS_ENV_FLAG, platformNames, R2Bucket, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
 
 /** Container instance type per stage — dev locally, larger off-local; any other env → basic. */
 const instanceTypeFor = (env: string): 'dev' | 'basic' | 'standard' => {
@@ -41,7 +41,9 @@ export const buildRunnerWorker = (ctx: ResourceContext): Worker => {
 		dir: '.',
 		name: names.runnerWorker,
 		main: './src/worker.ts',
-		compatibility_flags: ['nodejs_compat'],
+		// `process.env` stays empty: plain `nodejs_compat` at this date would fill it with every secret, the runner key
+		// included, for any bundled module to read. The Worker reads its configuration from its `env` only.
+		compatibility_flags: ['nodejs_compat', NO_PROCESS_ENV_FLAG],
 		compatibility_date: '2025-05-25',
 		// No public route — the runner Worker is reachable ONLY via fabrika's RUNNER_SVC service binding.
 		// `routes: []` alone still publishes a workers.dev hostname and version preview URLs, so both are
