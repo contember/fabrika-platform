@@ -53,13 +53,24 @@ describe('openFileStorage', () => {
 		expect(openFileStorage({})).toBeUndefined()
 	})
 
-	test("opens a store over the task's own credentials, read from the application's environment, without asking for them yet", () => {
+	test("opens a store over the task's own credentials, their path read from the captured variables, without asking for them yet", () => {
 		const container = {
 			FABRIKA_APP_STORAGE_BUCKET: 'notes-files',
 			FABRIKA_APP_STORAGE_REGION: 'eu-central-1',
 			FABRIKA_APP_STORAGE_CREDENTIALS: 'container',
+			AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/credentials/task',
 		}
-		expect(openFileStorage(container, { AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/credentials/task' })).toBeDefined()
+		expect(openFileStorage(container)).toBeDefined()
+	})
+
+	test('an endpoint in container mode is taken: an S3 VPC endpoint is one', () => {
+		const viaEndpoint = {
+			FABRIKA_APP_STORAGE_ENDPOINT: 'https://bucket.vpce-0a1b2c3d.s3.eu-central-1.vpce.amazonaws.com',
+			FABRIKA_APP_STORAGE_BUCKET: 'notes-files',
+			FABRIKA_APP_STORAGE_CREDENTIALS: 'container',
+			AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/credentials/task',
+		}
+		expect(openFileStorage(viaEndpoint)).toBeDefined()
 	})
 
 	test.each([

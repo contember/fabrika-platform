@@ -87,7 +87,7 @@ export function parseStorageConnection(
 	}
 	const endpoint = value('ENDPOINT')
 	if (endpoint !== '' && !isEndpoint(endpoint)) {
-		problems.push(`${name('ENDPOINT')} is not an http(s) origin`)
+		problems.push(`${name('ENDPOINT')} is not an http(s) URL without credentials, a query or a fragment`)
 	}
 	let credentials: StorageCredentialSource | undefined
 	if (mode === 'container') {
@@ -123,10 +123,16 @@ export function parseStorageConnection(
 	}
 }
 
+/**
+ * An endpoint the store may be handed as written: `http://` or `https://` spelled out (a URL parser would repair
+ * `https:host`, and the client would get the original), no credentials, no query, no fragment. A path stays allowed:
+ * the form of Zerops' `apiUrl`, which an application's variable references, is not recorded.
+ */
 function isEndpoint(value: string): boolean {
+	if (!/^https?:\/\/[^/]/.test(value)) return false
 	try {
 		const url = new URL(value)
-		return (url.protocol === 'https:' || url.protocol === 'http:') && url.username === '' && url.password === ''
+		return url.username === '' && url.password === '' && url.search === '' && url.hash === '' && !value.includes('#') && !value.includes('?')
 	} catch {
 		return false
 	}
@@ -156,22 +162,31 @@ export interface ContainerCredentialOptions {
 export const CONTAINER_CREDENTIALS_ORIGIN = 'http://169.254.170.2'
 /** How long before their expiry a set of credentials is replaced; ECS rotates them well before. */
 export const CREDENTIAL_REFRESH_BEFORE_MS = 5 * 60_000
+/** How long after a failed or fruitless refresh the next one waits. */
+export const CREDENTIAL_RETRY_MS = 30_000
 const CREDENTIAL_FETCH_TIMEOUT_MS = 5_000
 const MAX_CREDENTIAL_BYTES = 16 * 1024
 
 /**
- * Short-lived credentials from the ECS container credentials endpoint, fetched on first use and again within
- * `CREDENTIAL_REFRESH_BEFORE_MS` of their expiry, one fetch at a time. A refresh that fails while the held set is still
- * valid keeps it; once it expired, the store's next request fails. The answer decides what a request is signed with,
- * so no redirect is followed. Nothing logs a key, the token or the endpoint's path.
+ * Short-lived credentials from the ECS container credentials endpoint. The first request waits for the first set; while
+ * the held set is valid every request gets it at once, and within `CREDENTIAL_REFRESH_BEFORE_MS` of its expiry one
+ * refresh runs in the background. A refresh that fails, or answers a set that expires no later than the held one, waits
+ * `CREDENTIAL_RETRY_MS` before the next; an answer already expired is a failure. Only a request without a valid set
+ * waits for a fetch, and within the retry wait it fails at once instead. A failure is logged once until a refresh
+ * succeeds. The answer decides what a request is signed with, so no redirect is followed. Nothing logs a key, the token
+ * or the endpoint's path.
  */
 export function containerCredentials(relativeUri: string, options: ContainerCredentialOptions = {}): CredentialProvider {
 	const fetcher = options.fetch ?? ((input, init) => fetch(input, init))
 	const now = options.now ?? Date.now
 	const url = `${options.origin ?? CONTAINER_CREDENTIALS_ORIGIN}${relativeUri}`
 	let held: StorageCredentials | undefined
-	let refreshing: Promise<StorageCredentials> | undefined
-	const refresh = async (): Promise<StorageCredentials> => {
+	let refreshing: Promise<void> | undefined
+	let retryAt = 0
+	let failing = false
+	const valid = (set: StorageCredentials | undefined, time: number): set is StorageCredentials =>
+		set !== undefined && (set.expiresAt === undefined || time < set.expiresAt)
+	const fetchSet = async (): Promise<StorageCredentials> => {
 		const response = await fetcher(url, { redirect: 'manual', signal: AbortSignal.timeout(CREDENTIAL_FETCH_TIMEOUT_MS) })
 		if (!response.ok) {
 			await response.body?.cancel()
@@ -184,33 +199,76 @@ export function containerCredentials(relativeUri: string, options: ContainerCred
 		}
 		return parsed
 	}
+	const refresh = (): Promise<void> => {
+		refreshing ??= fetchSet()
+			.then((fresh) => {
+				const time = now()
+				if (!valid(fresh, time)) throw new Error('the container credentials endpoint answered an expired set')
+				if (held?.expiresAt !== undefined && fresh.expiresAt !== undefined && fresh.expiresAt <= held.expiresAt) {
+					// No longer than the held set: keep it, and do not ask again at once.
+					retryAt = time + CREDENTIAL_RETRY_MS
+					return
+				}
+				held = fresh
+				failing = false
+				// A set that is already near its end is used, and the next refresh still waits.
+				retryAt = fresh.expiresAt !== undefined && time >= fresh.expiresAt - CREDENTIAL_REFRESH_BEFORE_MS ? time + CREDENTIAL_RETRY_MS : 0
+			})
+			.catch(() => {
+				// A driver or parse error is not forwarded: nothing of the endpoint's answer reaches a log.
+				if (!failing) console.error('fabrika: the container credentials could not be refreshed')
+				failing = true
+				retryAt = now() + CREDENTIAL_RETRY_MS
+			})
+			.finally(() => {
+				refreshing = undefined
+			})
+		return refreshing
+	}
 	return {
 		async current(): Promise<StorageCredentials> {
 			const time = now()
-			if (held !== undefined && (held.expiresAt === undefined || time < held.expiresAt - CREDENTIAL_REFRESH_BEFORE_MS)) {
+			if (valid(held, time)) {
+				if (held.expiresAt !== undefined && time >= held.expiresAt - CREDENTIAL_REFRESH_BEFORE_MS && time >= retryAt) void refresh()
 				return held
 			}
-			refreshing ??= refresh().finally(() => {
-				refreshing = undefined
-			})
-			try {
-				held = await refreshing
-				return held
-			} catch {
-				if (held?.expiresAt !== undefined && now() < held.expiresAt) {
-					console.error('fabrika: the container credentials could not be refreshed; the held ones are still valid')
-					return held
-				}
-				// A driver or parse error is not forwarded: nothing of the endpoint's answer reaches a log.
+			if (refreshing === undefined && time < retryAt) {
 				throw new Error('the container credentials could not be read')
 			}
+			await refresh()
+			if (valid(held, now())) return held
+			throw new Error('the container credentials could not be read')
 		},
 	}
 }
 
+/** The answer's text, read until `MAX_CREDENTIAL_BYTES` and no further: `null` past it. */
 async function boundedText(response: Response): Promise<string | null> {
-	const bytes = await response.arrayBuffer()
-	return bytes.byteLength > MAX_CREDENTIAL_BYTES ? null : new TextDecoder().decode(bytes)
+	const declared = Number(response.headers.get('Content-Length') ?? '0')
+	if (declared > MAX_CREDENTIAL_BYTES || response.body === null) {
+		await response.body?.cancel()
+		return response.body === null ? '' : null
+	}
+	const reader = response.body.getReader()
+	const chunks: Uint8Array[] = []
+	let size = 0
+	for (;;) {
+		const { done, value } = await reader.read()
+		if (done) break
+		size += value.byteLength
+		if (size > MAX_CREDENTIAL_BYTES) {
+			await reader.cancel()
+			return null
+		}
+		chunks.push(value)
+	}
+	const bytes = new Uint8Array(size)
+	let offset = 0
+	for (const chunk of chunks) {
+		bytes.set(chunk, offset)
+		offset += chunk.byteLength
+	}
+	return new TextDecoder().decode(bytes)
 }
 
 /** The endpoint's answer, strictly: `AccessKeyId`, `SecretAccessKey`, `Token` and an ISO `Expiration`. */

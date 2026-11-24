@@ -89,6 +89,7 @@ export {
 	type ContainerCredentialOptions,
 	containerCredentials,
 	CREDENTIAL_REFRESH_BEFORE_MS,
+	CREDENTIAL_RETRY_MS,
 	type CredentialProvider,
 	credentialProvider,
 	parseStorageConnection,

@@ -2,11 +2,12 @@
 // mean, the container credentials a container cloud's task signs with, and the client that follows their rotation.
 // No backend: the container credentials endpoint is a fake fetch, and the clients are recorded, not built.
 
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { type S3ClientOptions, storageClients } from '../blob-s3'
 import {
 	containerCredentials,
 	CREDENTIAL_REFRESH_BEFORE_MS,
+	CREDENTIAL_RETRY_MS,
 	credentialProvider,
 	parseStorageConnection,
 	type StorageConnection,
@@ -83,9 +84,23 @@ describe('parseStorageConnection', () => {
 		])
 		expect(problems(staticSet({ FABRIKA_APP_STORAGE_ADDRESSING: 'subdomain' }))).toEqual(["FABRIKA_APP_STORAGE_ADDRESSING is 'path' or 'virtual'"])
 		expect(problems(staticSet({ FABRIKA_APP_STORAGE_CREDENTIALS: 'instance' }))).toContain("FABRIKA_APP_STORAGE_CREDENTIALS is 'static' or 'container'")
-		expect(problems(staticSet({ FABRIKA_APP_STORAGE_ENDPOINT: `https://user:${SECRET}@storage.example.test` }))).toEqual([
-			'FABRIKA_APP_STORAGE_ENDPOINT is not an http(s) origin',
-		])
+		for (
+			const endpoint of [
+				`https://user:${SECRET}@storage.example.test`,
+				'https://storage.example.test/?x=1',
+				'https://storage.example.test/#f',
+				'https:storage.example.test',
+				'ftp://storage.example.test',
+			]
+		) {
+			expect(problems(staticSet({ FABRIKA_APP_STORAGE_ENDPOINT: endpoint }))).toEqual([
+				'FABRIKA_APP_STORAGE_ENDPOINT is not an http(s) URL without credentials, a query or a fragment',
+			])
+		}
+		// A path is kept: the form of Zerops' `apiUrl` is not recorded.
+		expect(parseStorageConnection(staticSet({ FABRIKA_APP_STORAGE_ENDPOINT: 'https://storage.example.test/s3' }), PREFIX, options)?.endpoint).toBe(
+			'https://storage.example.test/s3',
+		)
 		expect(problems({ FABRIKA_APP_STORAGE_REGION: 'eu-central-1' })).toContain('FABRIKA_APP_STORAGE_BUCKET is not set')
 		expect(problems({ FABRIKA_APP_STORAGE_BUCKET: 'notes-files', FABRIKA_APP_STORAGE_ACCESS_KEY_ID: 'access-key-id' })).toEqual([
 			'FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY is not set; the platform writes every FABRIKA_APP_STORAGE_* variable together',
@@ -127,8 +142,25 @@ function endpoint(answers: readonly (() => Response)[]) {
 const credentials = (id: string, expiresAt: number): Response =>
 	Response.json({ AccessKeyId: id, SecretAccessKey: `${id}-secret`, Token: `${id}-token`, Expiration: new Date(expiresAt).toISOString() })
 
+/** Lets a refresh the provider started in the background settle. */
+const settled = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0))
+
+/** The error lines `work` logged. */
+async function logged(work: () => Promise<void>): Promise<string[]> {
+	const lines: string[] = []
+	const log = spyOn(console, 'error').mockImplementation((line: unknown) => {
+		lines.push(String(line))
+	})
+	try {
+		await work()
+	} finally {
+		log.mockRestore()
+	}
+	return lines
+}
+
 describe('containerCredentials', () => {
-	test('fetches once at the link-local origin with no redirect followed, and keeps the set until near its expiry', async () => {
+	test('fetches at the link-local origin with no redirect followed; near the expiry the held set answers while a refresh runs', async () => {
 		let now = 1_000_000
 		const fake = endpoint([() => credentials('first', 1_000_000 + HOUR), () => credentials('second', 1_000_000 + 2 * HOUR)])
 		const provider = containerCredentials(URI, { fetch: fake.fetch, now: () => now })
@@ -140,12 +172,97 @@ describe('containerCredentials', () => {
 		})
 		now += HOUR - CREDENTIAL_REFRESH_BEFORE_MS - 1
 		expect((await provider.current()).accessKeyId).toBe('first')
+		expect(fake.requests).toHaveLength(1)
 		now += 1
+		expect((await provider.current()).accessKeyId).toBe('first')
+		await settled()
 		expect((await provider.current()).accessKeyId).toBe('second')
 		expect(fake.requests).toEqual([
 			{ url: `http://169.254.170.2${URI}`, redirect: 'manual' },
 			{ url: `http://169.254.170.2${URI}`, redirect: 'manual' },
 		])
+	})
+
+	test('a failing refresh is retried only after its wait, keeps the valid set, and logs once per failing streak', async () => {
+		let now = 0
+		const fake = endpoint([
+			() => credentials('held', HOUR),
+			() => new Response(null, { status: 500 }),
+			() => new Response(null, { status: 500 }),
+			() => credentials('next', 2 * HOUR),
+		])
+		const provider = containerCredentials(URI, { fetch: fake.fetch, now: () => now })
+		const lines = await logged(async () => {
+			expect((await provider.current()).accessKeyId).toBe('held')
+			now = HOUR - CREDENTIAL_REFRESH_BEFORE_MS
+			for (let call = 0; call < 5; call++) {
+				expect((await provider.current()).accessKeyId).toBe('held')
+				await settled()
+			}
+			expect(fake.requests).toHaveLength(2)
+			now += CREDENTIAL_RETRY_MS
+			expect((await provider.current()).accessKeyId).toBe('held')
+			await settled()
+			expect(fake.requests).toHaveLength(3)
+			now += CREDENTIAL_RETRY_MS
+			await provider.current()
+			await settled()
+			expect((await provider.current()).accessKeyId).toBe('next')
+		})
+		expect(lines).toEqual(['fabrika: the container credentials could not be refreshed'])
+	})
+
+	test('a set that is already expired, or no longer than the held one, never replaces it', async () => {
+		let now = 0
+		const fake = endpoint([() => credentials('held', HOUR), () => credentials('stale', 10), () => credentials('shorter', HOUR - 1)])
+		const provider = containerCredentials(URI, { fetch: fake.fetch, now: () => now })
+		await logged(async () => {
+			expect((await provider.current()).accessKeyId).toBe('held')
+			now = HOUR - CREDENTIAL_REFRESH_BEFORE_MS
+			await provider.current()
+			await settled()
+			now += CREDENTIAL_RETRY_MS
+			await provider.current()
+			await settled()
+			expect((await provider.current()).accessKeyId).toBe('held')
+			// The shorter set started a wait: the next call within it asks nothing.
+			await provider.current()
+			await settled()
+			expect(fake.requests).toHaveLength(3)
+		})
+	})
+
+	test('a first set that arrives expired is no credentials, and a call within the wait fails without asking', async () => {
+		let now = HOUR
+		const fake = endpoint([() => credentials('stale', 10)])
+		const provider = containerCredentials(URI, { fetch: fake.fetch, now: () => now })
+		await logged(async () => {
+			await expect(provider.current()).rejects.toThrow('the container credentials could not be read')
+			now += 1_000
+			await expect(provider.current()).rejects.toThrow('the container credentials could not be read')
+		})
+		expect(fake.requests).toHaveLength(1)
+	})
+
+	test('an answer is read until the limit and no further', async () => {
+		let pulled = 0
+		let cancelled = false
+		const endless = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				pulled++
+				controller.enqueue(new Uint8Array(4096))
+			},
+			cancel() {
+				cancelled = true
+			},
+		})
+		await logged(async () => {
+			await expect(containerCredentials(URI, { fetch: endpoint([() => new Response(endless)]).fetch }).current()).rejects.toThrow()
+			const declared = () => new Response('{}', { headers: { 'Content-Length': String(64 * 1024) } })
+			await expect(containerCredentials(URI, { fetch: endpoint([declared]).fetch }).current()).rejects.toThrow()
+		})
+		expect(cancelled).toBe(true)
+		expect(pulled).toBeLessThan(8)
 	})
 
 	test('callers that ask together share one fetch', async () => {
@@ -160,12 +277,15 @@ describe('containerCredentials', () => {
 		let now = 0
 		const fake = endpoint([() => credentials('held', HOUR), () => new Response('internal detail', { status: 500 })])
 		const provider = containerCredentials(URI, { fetch: fake.fetch, now: () => now })
-		expect((await provider.current()).accessKeyId).toBe('held')
-		now = HOUR - 1_000
-		expect((await provider.current()).accessKeyId).toBe('held')
-		now = HOUR
-		const raised = await provider.current().then(() => null, (error: unknown) => error)
-		expect(String(raised)).toBe('Error: the container credentials could not be read')
+		await logged(async () => {
+			expect((await provider.current()).accessKeyId).toBe('held')
+			now = HOUR - 1_000
+			expect((await provider.current()).accessKeyId).toBe('held')
+			await settled()
+			now = HOUR
+			const raised = await provider.current().then(() => null, (error: unknown) => error)
+			expect(String(raised)).toBe('Error: the container credentials could not be read')
+		})
 	})
 
 	test('a redirect, a malformed answer and an oversized one are no credentials', async () => {
@@ -179,7 +299,9 @@ describe('containerCredentials', () => {
 			]
 		) {
 			const provider = containerCredentials(URI, { fetch: endpoint([answer]).fetch })
-			await expect(provider.current()).rejects.toThrow('the container credentials could not be read')
+			await logged(async () => {
+				await expect(provider.current()).rejects.toThrow('the container credentials could not be read')
+			})
 		}
 	})
 

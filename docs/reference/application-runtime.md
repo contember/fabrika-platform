@@ -909,9 +909,14 @@ deal_attachments: {
   refuses a signature for another region), else for `us-east-1`; a region without the storage, or one that is not
   lowercase letters, digits and hyphens, stops the boot. Two more are optional, for a container cloud:
   `FABRIKA_APP_STORAGE_ADDRESSING` (`path`, the default, or `virtual`) and `FABRIKA_APP_STORAGE_CREDENTIALS` (`static`,
-  the key pair, or `container`, which takes no key pair and no endpoint: the store signs with the task's own
-  short-lived credentials from the ECS container credentials endpoint at `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`,
-  refreshed five minutes before they expire, no redirect followed). The parser is `@fabrika/platform-node`'s
+  the key pair, or `container`, which takes no key pair: the store signs with the task's own short-lived credentials
+  from the ECS container credentials endpoint at `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, no redirect followed; an
+  endpoint stays optional there, an S3 VPC endpoint being one). While the held set is valid every request gets it at
+  once; within five minutes of its expiry one refresh runs in the background, a failed or fruitless one waits 30 s
+  before the next, and a set that arrives expired, or lasts no longer than the held one, never replaces it. The
+  endpoint's variables (`AWS_CONTAINER_CREDENTIALS_*`, `AWS_CONTAINER_AUTHORIZATION_TOKEN*`) are captured with the
+  `FABRIKA_*` ones and leave the process before the application loads, so no application code reads the task's path.
+  An endpoint is an `http(s)://` URL without credentials, a query or a fragment. The parser is `@fabrika/platform-node`'s
   `parseStorageConnection`, which Control's run logs (`FABRIKA_CONTROL_RUN_LOGS_*`) and Operations' payloads
   (`FABRIKA_OPERATIONS_BLOB_*`) read too, each with its own default region (`auto`). An older framework ignores the two
   application variables, so a provider that writes them refuses an application pinned below the first release that

@@ -440,19 +440,17 @@ export function jobScheduleOf(framework: Readonly<Record<string, string>>): Proc
 /**
  * The stored files' object storage, when the platform wrote its variables (`parseStorageConnection`): path-style unless
  * `FABRIKA_APP_STORAGE_ADDRESSING=virtual`, with the key pair, or with `FABRIKA_APP_STORAGE_CREDENTIALS=container` the
- * task's own short-lived credentials, whose endpoint path `container` (the application's variables) names. A partial set,
- * or a value of a form no store takes, stops the boot. The credentials are never quoted in a message.
+ * task's own short-lived credentials. Their endpoint's path is among the captured framework variables
+ * (`CONTAINER_CREDENTIAL_VARIABLES`), out of application code's reach. A partial set, or a value of a form no store
+ * takes, stops the boot. The credentials are never quoted in a message.
  */
-export function openFileStorage(
-	framework: Readonly<Record<string, string>>,
-	container: Readonly<Record<string, string | undefined>> = {},
-): FileObjectStore | undefined {
+export function openFileStorage(framework: Readonly<Record<string, string>>): FileObjectStore | undefined {
 	let connection: StorageConnection | undefined
 	try {
 		connection = parseStorageConnection(framework, STORAGE_PREFIX, {
 			defaultRegion: DEFAULT_STORAGE_REGION,
 			endpoint: 'required',
-			environment: container,
+			environment: framework,
 		})
 	} catch (error) {
 		const problems = storageConnectionProblems(error)
@@ -460,11 +458,6 @@ export function openFileStorage(
 		throw error
 	}
 	return connection === undefined ? undefined : S3BlobStore.open(connection)
-}
-
-/** The application's plain variables, the ones the container credentials endpoint's path is among. */
-function stringVariables(application: Readonly<Record<string, unknown>>): Record<string, string> {
-	return Object.fromEntries(Object.entries(application).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }
 
 /**
@@ -586,7 +579,7 @@ async function startContractServer(
 	const membership = httpMembership(environment.framework)
 	const terminals = httpTerminals(environment.framework)
 	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
-	const files = openFileStorage(environment.framework, stringVariables(environment.application))
+	const files = openFileStorage(environment.framework)
 	const workloadTokens = workloadTokensOf(environment.framework)
 	const jobSchedule = jobScheduleOf(environment.framework)
 	const timerKicks = new Set<Promise<void>>()
@@ -685,7 +678,7 @@ export async function runContractJob(
 		const workloadTokens = workloadTokensOf(environment.framework)
 		const membership = httpMembership(environment.framework)
 		const terminals = httpTerminals(environment.framework)
-		const files = openFileStorage(environment.framework, stringVariables(environment.application))
+		const files = openFileStorage(environment.framework)
 		return await boot(app, {
 			environment,
 			iam,

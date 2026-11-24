@@ -165,8 +165,10 @@ Read this before moving a service onto this driver.
 - **One parser of a storage connection** (`storage-connection.ts`): `parseStorageConnection(variables, prefix, …)`
   reads `<prefix>_BUCKET`, `_ENDPOINT`, `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_ADDRESSING` and
   `_CREDENTIALS` for the application's files, Control's run logs and Operations' payloads; `S3BlobStore.open` builds
-  the store. `container` credentials come from the ECS container credentials endpoint, one fetch at a time, refreshed
-  before expiry, with `redirect: 'manual'`, and the store builds a new client only when the set changes
+  the store. `container` credentials come from the ECS container credentials endpoint, one fetch at a time, with
+  `redirect: 'manual'` and the answer read only up to 16 KiB: a valid held set answers at once while one refresh runs
+  in the background near its expiry, a failed or fruitless refresh waits `CREDENTIAL_RETRY_MS`, and a set that is
+  expired or no longer than the held one never replaces it. The store builds a new client only when the set changes
   (`storageClients`). Its messages name variables, never values; callers in another package read its error through
   `storageConnectionProblems`, not `instanceof`.
 - Real Postgres and S3 tests skip unless `FABRIKA_TEST_POSTGRES_URL` / `FABRIKA_TEST_S3_*` are set.
