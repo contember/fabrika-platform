@@ -12,7 +12,7 @@ import type { ProviderAuthoring } from '@fabrika/provider-contract'
  * Until then Control refuses `deploy_stage` on Cloudflare with `CLOUDFLARE_STAGE_DEPLOY_REFUSAL`; every other
  * authoring tool, `apply_changes` and `create_pull_request` among them, is served.
  */
-export const CLOUDFLARE_ISOLATED_BUILD: boolean = false
+export const CLOUDFLARE_ISOLATED_BUILD: boolean = true
 
 /** The repository files that configure a Cloudflare deploy beside `fabrika.config.ts`, protected at any depth (ADR-0049 rule 6). */
 export const CLOUDFLARE_PROTECTED_FILES: readonly string[] = ['wrangler.json', 'wrangler.jsonc', 'wrangler.toml']
