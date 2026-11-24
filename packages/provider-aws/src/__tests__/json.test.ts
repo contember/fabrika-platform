@@ -198,6 +198,16 @@ describe('awsJsonClient', () => {
 		expect(sent[0]?.init.body).toBe(JSON.stringify({ cluster: 'fabrika-apps-1' }))
 	})
 
+	test('an input JSON cannot write is invalid_request, and nothing is sent', async () => {
+		const { ecs, sent, credentialReads } = client(() => json({ services: [] }))
+		const cyclic: Record<string, unknown> = {}
+		cyclic['self'] = cyclic
+		expect(await failure(ecs.call('DescribeServices', cyclic, services))).toMatchObject({ code: 'invalid_request', retryable: false })
+		expect(await failure(ecs.call('DescribeServices', { count: 1n }, services))).toMatchObject({ code: 'invalid_request' })
+		expect(sent).toHaveLength(0)
+		expect(credentialReads()).toBe(0)
+	})
+
 	test('a 200 that is no JSON is refused even by a schema that would take anything; an empty one is an empty object', async () => {
 		const garbled = client(() => new Response('<html>maintenance</html>', { status: 200 }))
 		expect(await failure(garbled.ecs.call('DescribeServices', {}, z.unknown()))).toMatchObject({ code: 'invalid_answer' })

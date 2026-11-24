@@ -213,8 +213,14 @@ export function awsJsonClient(service: AwsJsonService, options: AwsJsonClientOpt
 				if (deadline.aborted) return fail('timeout', status, requestId, true)
 				return otherwise
 			}
-			// Serialized once: the body sent is the body signed, whatever the caller changes meanwhile.
-			const body = JSON.stringify(input)
+			// Serialized once: the body sent is the body signed, whatever the caller changes meanwhile. An input JSON cannot
+			// write (a BigInt, a cycle) is the caller's mistake, refused like any other request that cannot be signed.
+			let body: string
+			try {
+				body = JSON.stringify(input)
+			} catch {
+				throw fail('invalid_request', 0, null, false)
+			}
 			let credentials: SigningCredentials
 			try {
 				credentials = await untilAborted(options.credentials.current(), aborted)

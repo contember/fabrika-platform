@@ -271,7 +271,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    and execution roles.
 8. **`src/deploy.ts`**: the run's steps (resolve, upload, build, register, update the service, wait for the
    deployment), each external id recorded in the checkpoint before the call that needs it; `succeeded` only when the
-   deployment is `SUCCESSFUL`, `failed` when the circuit breaker rolled back.
+   deployment is `SUCCESSFUL`, `failed` when the circuit breaker rolled back. ECR's lifecycle rule
+   (`keepNewestImages`) counts pushes, not deployments, so builds pushed after the running image can expire it, and ECS
+   can then neither replace a task nor roll back to it: size `keep` against that, or give the deployed digest an extra
+   tag a separate rule keeps.
 9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`
    (stop the build; once the service is updated, cancellation never implies rollback), `secrets` (`PutParameter`,
    `DeleteParameter`), `declaredVariables`, `normalizeRegistration`, `lockfileRefusal`, the `backupBeforeMigrations`
