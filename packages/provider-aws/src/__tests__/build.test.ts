@@ -13,13 +13,14 @@ import { fakeAws } from './helpers/fake-aws'
 
 const TOKEN = '0f1e2d3c-4b5a-4968-8776-655443322110'
 const REGISTRY = '123456789012.dkr.ecr.eu-central-1.amazonaws.com'
-const SOURCE_URL = `/fabrika/main/builds/${'0f1e2d3c-4b5a-4968-8776-655443322110'}/source-url`
+/** The name of the SecureString that holds the presigned URL: a function of the run. */
+const SOURCE_URL_PARAMETER = `/fabrika/main/builds/${TOKEN}/source-url`
 const DOCKERFILE = '# Generated\nFROM oven/bun@sha256:aa AS build\nRUN echo "$HOME" && printf \'%s\' x\n'
 
 const input: AwsBuildInput = {
 	project: 'fabrika-apps-build',
 	buildToken: TOKEN,
-	sourceUrlParameter: SOURCE_URL,
+	sourceUrlParameter: SOURCE_URL_PARAMETER,
 	dockerfile: DOCKERFILE,
 	repositoryUri: `${REGISTRY}/fabrika/notes-prod`,
 	sourceMapKeyParameter: null,
@@ -44,8 +45,8 @@ describe('the build', () => {
 			'unset FABRIKA_SOURCE_URL',
 			'tar --extract --gzip --file /tmp/fabrika-source.tar.gz --directory /tmp/fabrika-source --strip-components=1 --no-same-owner',
 			`printf '%s' "$FABRIKA_DOCKERFILE" | base64 --decode > /tmp/fabrika-Dockerfile`,
-			// The Dockerfile's own empty ignore file: the application's `.dockerignore` filters nothing.
-			"printf '' > /tmp/fabrika-Dockerfile.dockerignore",
+			// The Dockerfile's own ignore file, which ignores nothing: the application's `.dockerignore` filters nothing.
+			"printf '%s\\n' '# The platform builds the whole archive, so nothing is ignored.' > /tmp/fabrika-Dockerfile.dockerignore",
 		])
 		expect(spec.phases.build.commands).toEqual([
 			'set -euo pipefail',
@@ -62,7 +63,7 @@ describe('the build', () => {
 			buildspec: AWS_BUILDSPEC,
 			variables: {
 				// The presigned URL by its parameter's name: the start records no credential.
-				[BUILD_VARIABLES.sourceUrl]: { parameter: SOURCE_URL },
+				[BUILD_VARIABLES.sourceUrl]: { parameter: SOURCE_URL_PARAMETER },
 				[BUILD_VARIABLES.dockerfile]: { value: new TextEncoder().encode(DOCKERFILE).toBase64() },
 				[BUILD_VARIABLES.image]: { value: `${REGISTRY}/fabrika/notes-prod:run-${TOKEN}` },
 				[BUILD_VARIABLES.registry]: { value: REGISTRY },
@@ -73,7 +74,7 @@ describe('the build', () => {
 		})
 		expect(awsImageTag(TOKEN)).toBe(`run-${TOKEN}`)
 		// Nothing of a run is in the buildspec.
-		for (const value of [SOURCE_URL, REGISTRY, TOKEN, 'notes-prod']) expect(AWS_BUILDSPEC).not.toContain(value)
+		for (const value of [SOURCE_URL_PARAMETER, REGISTRY, TOKEN, 'notes-prod']) expect(AWS_BUILDSPEC).not.toContain(value)
 	})
 
 	test('the source-map bearer travels by its parameter, and the CodeBuild client takes the start', async () => {

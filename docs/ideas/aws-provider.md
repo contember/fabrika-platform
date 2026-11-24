@@ -294,9 +294,12 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    absent, not failed (unverified against an account). `describeService` stays for the events the run log relays. ECR's lifecycle rule
    (`keepNewestImages`) counts pushes, not deployments, so builds pushed after the running image can expire it, and ECS
    can then neither replace a task nor roll back to it: size `keep` against that, or give the deployed digest an extra
-   tag a separate rule keeps. `StartBuild`'s idempotency token holds five minutes, and a repeat must send the identical
-   body (the same presigned URL included): a start whose answer was lost is settled by `findBuild` (the token travels as
-   `FABRIKA_BUILD_TOKEN`), never by a blind repeat; a `findBuild` that answers `null` for a lost start fails the run.
+   tag a separate rule keeps. The presigned URL reaches the build as a SecureString the deploy writes before the start
+   and deletes once the build ended, under a name that is a function of the run (its build token), so the build role
+   needs `ssm:GetParameters` on the runs' path only and a start records the name alone. `StartBuild`'s idempotency
+   token holds five minutes, and a repeat must send the identical body: a start whose answer was lost is settled by
+   `findBuild` (the token travels as `FABRIKA_BUILD_TOKEN`), never by a blind repeat; a `findBuild` that answers `null`
+   for a lost start fails the run.
    The candidate half is built (`src/run-attempt.ts`, the shared run's `RunAttempt`). N1 to N3 are in `main`; the steps
    wait for step 5 (the part writer Control's source client takes, `SourcePartWriter`) and step 6.
 9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`

@@ -31,7 +31,8 @@ export const BUILD_VARIABLES = {
 /**
  * The buildspec of every application build. The archive has one top-level directory (Control refuses any other), which
  * `--strip-components=1` drops, so the build context is the commit's tree; the `Dockerfile` sits outside it, beside an
- * empty ignore file of its own (`<Dockerfile>.dockerignore`, which BuildKit reads before the context's), so the
+ * ignore file of its own that ignores nothing (`<Dockerfile>.dockerignore`, which BuildKit reads before the context's; one
+ * comment line, so it cannot read as absent), so the
  * application's own `.dockerignore` filters nothing. The presigned URL is dropped from the shell once the archive is
  * fetched. The login names the registry's own region.
  */
@@ -49,7 +50,8 @@ export const AWS_BUILDSPEC = [
 	`      - unset ${BUILD_VARIABLES.sourceUrl}`,
 	'      - tar --extract --gzip --file /tmp/fabrika-source.tar.gz --directory /tmp/fabrika-source --strip-components=1 --no-same-owner',
 	`      - printf '%s' "$${BUILD_VARIABLES.dockerfile}" | base64 --decode > /tmp/fabrika-Dockerfile`,
-	"      - printf '' > /tmp/fabrika-Dockerfile.dockerignore",
+	// One comment line, so the file cannot read as absent and the context's own ignore file never applies.
+	"      - printf '%s\\n' '# The platform builds the whole archive, so nothing is ignored.' > /tmp/fabrika-Dockerfile.dockerignore",
 	'  build:',
 	'    commands:',
 	'      - set -euo pipefail',
