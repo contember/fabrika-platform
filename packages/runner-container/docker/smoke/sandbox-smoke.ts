@@ -1,14 +1,15 @@
 #!/usr/bin/env bun
 // The build sandbox, for real, in the runner image (ADR-0086): run as root with a Cloudflare token in this process's
 // environment, as the runner holds its job. Checks that a sandboxed step runs as the build user with nothing of that
-// environment, cannot read this process's `/proc/<pid>/environ` or a root file beside the checkout, has no network
-// when the container allows a namespace, leaves nothing running after `reap`, and builds the smoke application into
-// an output the runner copies and the deploy opens without importing anything of it.
+// environment and no descriptor of this process, cannot read this process's `/proc/<pid>/environ` or a root file beside
+// the checkout, has no network when the container allows a namespace, leaves nothing running after `reap` (not even a
+// process that keeps forking), and builds the smoke application into an output the runner copies and the deploy opens
+// without importing anything of it, and without letting a recorded binding replace the Worker's `main`.
 //
 // `SMOKE_REQUIRE_NETNS=1` fails unless the network is isolated (run with `--cap-add SYS_ADMIN --cap-add NET_ADMIN`).
 
-import { cp, mkdir, rm, symlink, writeFile } from 'node:fs/promises'
-import { openPrebuiltApplication } from '../../../provider-cloudflare/src/isolated-deploy'
+import { cp, mkdir, rm, stat, symlink, writeFile } from 'node:fs/promises'
+import { openPrebuiltApplication, rebuildApplicationWorker } from '../../../provider-cloudflare/src/isolated-deploy'
 import { BuildOutputRefused, copyBuildOutput } from '../../src/output'
 import { linuxBuildSandbox, processesOf } from '../../src/sandbox'
 import { bunSpawner } from '../../src/spawn'
@@ -75,10 +76,22 @@ if (report.environ === 'allowed') fail("the step read the runner's /proc/1/envir
 if (report.values === 'allowed') fail("the step read the runner's values file")
 if (report.workspace === 'allowed') fail('the step wrote into the workspace')
 if (sandbox.isolatesNetwork && report.network === 'allowed') fail('the step reached the network inside its namespace')
+// Only stdin, stdout, stderr and the listing's own: no descriptor of the runner reaches the step.
+const fds = await run('/bin/sh', ['-c', 'ls /proc/self/fd'], `${work}/build/tmp`, false)
+if (fds.output.trim().split(/\s+/).join(' ') !== '0 1 2 3') fail(`the step inherited a descriptor of the runner: ${fds.output.trim()}`)
 
 // Nothing a step starts outlives it.
 await run('/bin/sh', ['-c', 'sleep 300 >/dev/null 2>&1 &'], `${work}/build/tmp`, false)
 if ((await processesOf(UID)).length > 0) fail('a process of the build user outlived reap')
+// Nor one that keeps replacing itself with a new pid, which a walk of /proc alone can miss.
+const hop = `printf '#!/bin/sh\\n: > ${work}/build/tmp/hop\\n"$0" </dev/null >/dev/null 2>&1 &\\n' > ${work}/build/tmp/hop.sh
+chmod +x ${work}/build/tmp/hop.sh; ${work}/build/tmp/hop.sh </dev/null >/dev/null 2>&1 &`
+for (let round = 0; round < 5; round++) {
+	await run('/bin/sh', ['-c', hop], `${work}/build/tmp`, false)
+	const before = (await stat(`${work}/build/tmp/hop`)).mtimeMs
+	await Bun.sleep(500)
+	if ((await stat(`${work}/build/tmp/hop`)).mtimeMs !== before) fail('a process that keeps forking outlived reap')
+}
 
 // The build of the smoke application, offline when the container allows it.
 const built = await run('fabrika-cloudflare-executor', ['build', '--env=smoke', `--out=${work}/build/out`], `${work}/src`, false)
@@ -87,6 +100,16 @@ await copyBuildOutput(`${work}/build/out`, `${work}/bundle`)
 const prebuilt = await openPrebuiltApplication(`${work}/bundle`, 'smoke')
 if (!(await Bun.file(prebuilt.main).exists())) fail('the bundle has no entry')
 console.info(`sandbox smoke: built ${prebuilt.manifest.appId} into ${prebuilt.manifest.worker.main}`)
+
+// A recorded binding cannot replace the Worker's \`main\`: wrangler would read the checkout as root and upload its links.
+const steered = { ...prebuilt.manifest, worker: { ...prebuilt.manifest.worker, bindings: { ...prebuilt.manifest.worker.bindings } } }
+steered.worker.bindings['X'] = { type: 'config', config: { main: `${work}/src/evil.mjs` } }
+try {
+	rebuildApplicationWorker(steered, prebuilt.appDir)
+	fail('the deploy rebuilt a Worker whose main a recorded binding replaced')
+} catch (error) {
+	if (!String(error).includes('other than its own service or AI binding')) throw error
+}
 
 // The copier refuses a link the build could leave.
 await mkdir(`${work}/linked/app`, { recursive: true })

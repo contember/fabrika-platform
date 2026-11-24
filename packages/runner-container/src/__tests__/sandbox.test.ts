@@ -107,12 +107,18 @@ describe('linuxBuildSandbox', () => {
 	test('reap kills every process of the build user until none is left, and fails when one survives', async () => {
 		let alive = [11, 12]
 		const killed: number[] = []
+		const killAll: string[][] = []
 		const sandbox = await linuxBuildSandbox({
 			uid: 10001,
 			gid: 10001,
 			network: 'auto',
 			runnerUid: 0,
 			exec: probes(true),
+			// As the build user, one `kill(-1)` first: a process that keeps forking outruns a walk of /proc, not this.
+			killAll: async (argv) => {
+				killAll.push([...argv])
+				return { exitCode: 0, stdout: '' }
+			},
 			processes: async () => alive,
 			kill: (pid) => {
 				killed.push(pid)
@@ -121,12 +127,14 @@ describe('linuxBuildSandbox', () => {
 		})
 		await sandbox.reap()
 		expect(killed).toEqual([11, 12])
+		expect(killAll[0]).toEqual([...DROP, '/usr/bin/kill', '-KILL', '--', '-1'])
 		const stubborn = await linuxBuildSandbox({
 			uid: 10001,
 			gid: 10001,
 			network: 'auto',
 			runnerUid: 0,
 			exec: probes(true),
+			killAll: async () => ({ exitCode: 1, stdout: '' }),
 			processes: async () => [13],
 			kill: () => {},
 		})

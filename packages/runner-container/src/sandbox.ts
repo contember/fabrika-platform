@@ -37,6 +37,7 @@ const SETPRIV = '/usr/bin/setpriv'
 const UNSHARE = '/usr/bin/unshare'
 const CHOWN = '/usr/bin/chown'
 const IP = '/usr/sbin/ip'
+const KILL = '/usr/bin/kill'
 const SH = '/bin/sh'
 
 /**
@@ -100,6 +101,8 @@ export interface LinuxSandboxOptions {
 	readonly runnerUid?: number
 	readonly exec?: SandboxExec
 	readonly kill?: (pid: number) => void
+	/** Runs the build user's \`kill -KILL -1\`; production runs it with \`exec\`. */
+	readonly killAll?: SandboxExec
 	readonly processes?: (uid: number) => Promise<readonly number[]>
 }
 
@@ -136,6 +139,7 @@ export const linuxBuildSandbox = async (options: LinuxSandboxOptions): Promise<B
 		return unavailableSandbox('the container refuses a network namespace, and FABRIKA_RUNNER_BUILD_NETWORK=isolated requires one')
 	}
 	const kill = options.kill ?? ((pid: number) => process.kill(pid, 'SIGKILL'))
+	const killAll = options.killAll ?? exec
 	const processes = options.processes ?? ((owner: number) => processesOf(owner))
 	return {
 		unavailable: null,
@@ -151,6 +155,9 @@ export const linuxBuildSandbox = async (options: LinuxSandboxOptions): Promise<B
 		},
 		reap: async () => {
 			for (let attempt = 0; attempt < 100; attempt++) {
+				// First as the build user itself: \`kill(-1)\` signals every process of the user in one pass of the kernel, which
+				// a process that keeps forking and exiting cannot outrun, as it can a walk of \`/proc\` (ADR-0086).
+				await killAll(sandboxArgv(uid, gid, { command: KILL, args: ['-KILL', '--', '-1'], network: true }, false)).catch(() => null)
 				const pids = await processes(uid)
 				if (pids.length === 0) return
 				for (const pid of pids) {
