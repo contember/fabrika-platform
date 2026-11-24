@@ -9,7 +9,10 @@ export interface FormDialogProps<Input, Output> {
 	readonly title: ReactNode
 	readonly description?: ReactNode
 	readonly form: FormState<Input, Output>
-	/** Runs with the schema's output once the values pass it; the dialog is pending until it settles. */
+	/**
+	 * Runs with the schema's output once the values pass it; the dialog is pending until it settles. It answers a refusal
+	 * through `error` and does not throw: a rejection is the page's unhandled error.
+	 */
 	readonly onSubmit: (value: Output) => Promise<unknown> | void
 	readonly onClose: () => void
 	/** The server's refusal: its message in the summary, its `fields` under the fields of those names. */
@@ -47,8 +50,10 @@ export function FormDialog<Input, Output>({
 	children,
 }: FormDialogProps<Input, Output> & { readonly children: ReactNode }) {
 	const [pending, setPending] = useState(false)
+	// Grows once per submit that ended: the first refused field takes the focus then, never on a later render.
+	const [submits, setSubmits] = useState(0)
 	const element = useRef<HTMLFormElement | null>(null)
-	const { reset, refusals } = form
+	const { reset } = form
 
 	// Before paint, so a reopened dialog never shows the values it was closed with.
 	useLayoutEffect(() => {
@@ -56,10 +61,10 @@ export function FormDialog<Input, Output>({
 	}, [open, reset])
 
 	useEffect(() => {
-		if (refusals === 0 && error === null) return
+		if (submits === 0) return
 		const invalid = element.current?.querySelector('[aria-invalid="true"]')
 		if (invalid instanceof HTMLElement) invalid.focus()
-	}, [refusals, error])
+	}, [submits])
 
 	const close = () => {
 		if (!pending) onClose()
@@ -73,6 +78,7 @@ export function FormDialog<Input, Output>({
 			if (checked.ok) await onSubmit(checked.value)
 		} finally {
 			setPending(false)
+			setSubmits((count) => count + 1)
 		}
 	}
 	const formError = error ?? schemaError(form.errors)

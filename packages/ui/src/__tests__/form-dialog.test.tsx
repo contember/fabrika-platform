@@ -118,6 +118,27 @@ describe('useForm with a Field', () => {
 		await mounted.render(<Harness onSubmit={() => {}} initial={{ title: 'Printers, third floor', value: '1', stage: 'lead' }} />)
 		expect(input('title').value).toBe('Printers, third floor')
 	})
+
+	test('initial values built on every render, a list and a day among them, keep what was typed', async () => {
+		interface Tagged {
+			readonly title: string
+			readonly tags: readonly string[]
+			readonly since: Date
+		}
+		const tagged: StandardSchema<Tagged, Tagged> = { '~standard': { validate: () => ({ issues: [] }) } }
+		function Tags() {
+			const form = useForm(tagged, { title: '', tags: ['a'], since: new Date('2026-11-01T00:00:00Z') })
+			return (
+				<Field label="Title" {...form.field('title')}>
+					<Input />
+				</Field>
+			)
+		}
+		mounted = await mount(<Tags />)
+		await type(input('title'), 'Kept')
+		await mounted.render(<Tags />)
+		expect(input('title').value).toBe('Kept')
+	})
 })
 
 describe('FormDialog', () => {
@@ -175,15 +196,36 @@ describe('FormDialog', () => {
 		expect(create.disabled).toBe(false)
 	})
 
-	test("the server's field errors show at their fields and take the focus; its message alone is the summary", async () => {
-		const initial = { title: 'Printers', value: '1', stage: 'lead' }
-		mounted = await mount(<Harness onSubmit={() => {}} initial={initial} />)
+	/** A dialog whose submit is refused by the server, as `useMutation` answers: the error is state, rebuilt each render. */
+	function Refused({ answer }: { readonly answer: FormErrorLike }) {
+		const [error, setError] = useState<FormErrorLike | null>(null)
+		return (
+			<Harness
+				initial={{ title: 'Printers', value: '1', stage: 'lead' }}
+				error={error === null ? null : { ...error }}
+				onSubmit={async () => setError(answer)}
+			/>
+		)
+	}
+
+	test("the server's field errors show at their fields and the first takes the focus; its message alone is the summary", async () => {
+		mounted = await mount(<Refused answer={{ message: 'Invalid input', fields: { value: 'Too large' } }} />)
 		await submit(document)
-		await mounted.render(<Harness onSubmit={() => {}} initial={initial} error={{ message: 'Invalid input', fields: { value: 'Too large' } }} />)
 		expect(describedBy(input('value'))).toEqual(['Too large'])
 		expect(document.activeElement).toBe(input('value'))
-		await mounted.render(<Harness onSubmit={() => {}} initial={initial} error={{ message: 'Your role in this org does not allow this.' }} />)
+		await mounted.unmount()
+		mounted = await mount(<Refused answer={{ message: 'Your role in this org does not allow this.' }} />)
+		await submit(document)
 		expect(query(document, '[role="alert"]', HTMLElement).textContent).toBe('Your role in this org does not allow this.')
+	})
+
+	test('after the focus moved to the first refused field, the person can edit another one', async () => {
+		mounted = await mount(<Refused answer={{ message: 'Invalid input', fields: { title: 'Taken', value: 'Too large' } }} />)
+		await submit(document)
+		expect(document.activeElement).toBe(input('title'))
+		await type(input('value'), '2')
+		expect(document.activeElement).toBe(input('value'))
+		expect(input('value').value).toBe('2')
 	})
 
 	test('a reopened dialog starts from the initial values, without the errors it was closed with', async () => {

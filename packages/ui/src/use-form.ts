@@ -37,8 +37,6 @@ export interface FormState<Input, Output> {
 	readonly values: Input
 	/** The first message for each refused path (`title`, `lines.0.amount`); `''` holds what concerns no field. */
 	readonly errors: Readonly<Record<string, string>>
-	/** How many checks found a problem; `FormDialog` moves focus to the first refused field when it grows. */
-	readonly refusals: number
 	set<K extends keyof Input>(name: K, value: Input[K]): void
 	field(name: TextField<Input>): FormFieldProps
 	/** Validates the values with the schema: the output, or `{ ok: false }` with `errors` shown. */
@@ -59,11 +57,23 @@ function errorsOf(issues: readonly StandardIssue[]): Readonly<Record<string, str
 
 const NO_ERRORS: Readonly<Record<string, string>> = Object.freeze({})
 
-/** Whether two value objects hold the same values under the same keys. */
-function sameValues(left: object, right: object): boolean {
+function isPlainObject(value: unknown): value is object {
+	if (typeof value !== 'object' || value === null) return false
+	const prototype: unknown = Object.getPrototypeOf(value)
+	return prototype === Object.prototype || prototype === null
+}
+
+/** Whether two values hold the same data: an array, a plain object and a `Date` by content, anything else by identity. */
+function sameValue(left: unknown, right: unknown): boolean {
+	if (Object.is(left, right)) return true
+	if (left instanceof Date && right instanceof Date) return Object.is(left.getTime(), right.getTime())
+	if (Array.isArray(left) && Array.isArray(right)) {
+		return left.length === right.length && left.every((item, index) => sameValue(item, right[index]))
+	}
+	if (!isPlainObject(left) || !isPlainObject(right)) return false
 	const keys = Object.keys(left)
 	return keys.length === Object.keys(right).length
-		&& keys.every((key) => Object.hasOwn(right, key) && Object.is(Reflect.get(left, key), Reflect.get(right, key)))
+		&& keys.every((key) => Object.hasOwn(right, key) && sameValue(Reflect.get(left, key), Reflect.get(right, key)))
 }
 
 /**
@@ -75,7 +85,6 @@ function sameValues(left: object, right: object): boolean {
 export function useForm<Input extends object, Output>(schema: StandardSchema<Input, Output>, initial: NoInfer<Input>): FormState<Input, Output> {
 	const [values, setValues] = useState(initial)
 	const [errors, setErrors] = useState(NO_ERRORS)
-	const [refusals, setRefusals] = useState(0)
 	const [seed, setSeed] = useState(initial)
 	const latest = useRef(values)
 	const latestInitial = useRef(initial)
@@ -99,7 +108,8 @@ export function useForm<Input extends object, Output>(schema: StandardSchema<Inp
 		setErrors(NO_ERRORS)
 	}, [])
 
-	if (!sameValues(seed, initial)) {
+	// `initial` is usually built on every render: only other data, not a new object, starts the form over.
+	if (!sameValue(seed, initial)) {
 		setSeed(initial)
 		startOver(initial)
 	}
@@ -116,9 +126,7 @@ export function useForm<Input extends object, Output>(schema: StandardSchema<Inp
 	const check = useCallback(async (): Promise<FormCheck<Output>> => {
 		checked.current = true
 		const result = await validate(latest.current)
-		if (result.issues === undefined) return { ok: true, value: result.value }
-		setRefusals((count) => count + 1)
-		return { ok: false }
+		return result.issues === undefined ? { ok: true, value: result.value } : { ok: false }
 	}, [validate])
 
 	const reset = useCallback(() => startOver(latestInitial.current), [startOver])
@@ -132,5 +140,5 @@ export function useForm<Input extends object, Output>(schema: StandardSchema<Inp
 		}
 	}
 
-	return { values, errors, refusals, set, field, check, reset }
+	return { values, errors, set, field, check, reset }
 }

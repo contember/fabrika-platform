@@ -14,7 +14,7 @@ export function describe(error: FabrikaError): FormErrorLike {
 		case 'not-found':
 			return { message: 'It is gone, or it is not in an org of yours.' }
 		case 'conflict':
-			return { message: `Someone changed it meanwhile (${error.message}). Close this and try again on the current version.` }
+			return { message: `Someone changed it meanwhile (${error.message}). Check the current version and try again.` }
 		case 'unauthenticated':
 			return { message: 'Your session ended. Sign in again.' }
 		case 'validation':

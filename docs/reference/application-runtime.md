@@ -699,7 +699,7 @@ names the same fix at runtime.
   either is refused.
 - **An `in` with an empty list matches no row**: `list`, `all`, `count` and `claim` answer an empty page, `[]` or `0`
   and send no statement, once every other condition and option has been checked (the column is still one the
-  capability reads). `not in` still needs at least one value.
+  capability reads). `not in` still needs at least one value, and so does an `in` in `aggregate`'s `where` callback.
 - **`all({ where, orderBy })` reads every row a list would**, in one statement, as an array, wherever `list` is but in
   a public procedure, which pages. More than `MAX_ALL_ROWS` (10 000) is a `QueryRefusedError` `too_many_rows`, never a
   truncated answer. It bounds rows, not bytes: 10 000 rows of about 1 KB, held two or three times over (the driver's
