@@ -25,6 +25,8 @@ describe('the credential rule', () => {
 				'FABRIKA_PLATFORM_MAIL_URL',
 				// A digest of a random key forges no key.
 				'FABRIKA_OPS_KEY_DIGESTS',
+				// A region name.
+				'FABRIKA_APP_STORAGE_REGION',
 			]
 		) {
 			expect(isManagedCredential(name)).toBe(false)
