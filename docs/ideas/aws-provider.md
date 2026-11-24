@@ -248,8 +248,8 @@ the resource types it cannot check as `NOT_CHECKED`, so it is a report, not a ga
 
 ### A. Shared prerequisites
 
-All of [the shared list](cloud-providers.md#the-shared-prerequisites) except N6 (the Azure blob store). For AWS in
-particular: N2's part writer is an S3 multipart upload (parts of 5 MiB to 5 GiB, at most 10,000,
+All of [the shared list](cloud-providers.md#the-shared-prerequisites) except N6 (the Azure blob store); N1 to N5 and N7
+are in `main`. For AWS in particular: N2's part writer is an S3 multipart upload (parts of 5 MiB to 5 GiB, at most 10,000,
 [quick facts](https://docs.aws.amazon.com/AmazonS3/latest/userguide/qfacts.html)); N3's image is `linux/arm64` with
 the RDS bundle; N5's credential source reads the container credentials endpoint
 (`AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`).
@@ -293,8 +293,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    tag a separate rule keeps. `StartBuild`'s idempotency token holds five minutes, and a repeat must send the identical
    body (the same presigned URL included): a start whose answer was lost is settled by `findBuild` (the token travels as
    `FABRIKA_BUILD_TOKEN`), never by a blind repeat; a `findBuild` that answers `null` for a lost start fails the run.
-   The candidate half is built (`src/run-attempt.ts`, the shared run's `RunAttempt`); the steps wait for the upload in
-   parts (N2), the image renderer (N3) and steps 5 to 7.
+   The candidate half is built (`src/run-attempt.ts`, the shared run's `RunAttempt`). N1 to N3 are in `main`; the steps
+   wait for step 5 (the part writer Control's source client takes, `SourcePartWriter`) and step 6.
 9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`
    (stop the build; once the service is updated, cancellation never implies rollback), `secrets` (`PutParameter`,
    `DeleteParameter`), `declaredVariables`, `normalizeRegistration`, `lockfileRefusal`, the `backupBeforeMigrations`
