@@ -18,8 +18,8 @@ const REGION_SOURCE = '[a-z]{2,4}(?:-[a-z]{1,10}){1,3}-\\d{1,2}'
 const REGION = new RegExp(`^${REGION_SOURCE}$`)
 /** An ECS cluster's or service's name: letters, digits, hyphens and underscores, at most 255. */
 const ECS_NAME = /^[A-Za-z0-9_-]{1,255}$/
-/** An AWS partition in an ARN: `aws`, `aws-cn`, `aws-us-gov`, `aws-eusc`, and any later one of that form. */
-const PARTITION = 'aws(?:-[a-z]{2,10}){0,2}'
+/** An AWS partition in an ARN: `aws`, `aws-cn`, `aws-us-gov`, `aws-iso-b`, `aws-eusc`, and any later one of that form. */
+const PARTITION = 'aws(?:-[a-z]{1,10}){0,2}'
 /** A task definition revision's ARN: `arn:aws:ecs:<region>:<account>:task-definition/<family>:<revision>`. */
 const TASK_DEFINITION_ARN = new RegExp(`^arn:${PARTITION}:ecs:${REGION_SOURCE}:\\d{12}:task-definition/[A-Za-z0-9_-]{1,255}:\\d{1,10}$`)
 /**
@@ -70,8 +70,9 @@ export interface AwsNamespaceTarget {
  * lost lease between the answer and the write would leave a successor unable to tell "never submitted" from
  * "submitted, id lost". Each submitting call therefore has a caller-chosen value recorded before it:
  *
- * - `buildToken`, written before `StartBuild` and sent as its idempotency token, so a successor finds the build it
- *   started (or repeats the call, which starts none beside it while the token holds); `buildId` once AWS answered.
+ * - `buildToken`, written before `StartBuild` and sent as its idempotency token; `buildId` once AWS answered. A
+ *   successor may repeat the call only while the token holds (the reference gives five minutes); past that it must
+ *   find the build the token started instead, because a repeat would start a second one.
  * - `taskDefinitionArn`, the revision `RegisterTaskDefinition` answered; a lost answer only leaves an unused revision.
  * - `serviceUpdateRequested`, written before `UpdateService`: a successor that finds it without a `deploymentArn`
  *   reads the service's deployment of this run's task definition instead of updating again; `deploymentArn` once AWS
