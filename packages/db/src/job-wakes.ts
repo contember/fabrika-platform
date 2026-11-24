@@ -72,18 +72,23 @@ export interface JobWakes {
 	/** How many milliseconds from the database's now `next` is (0 or less when due), read in `using` when given. */
 	untilNext(using?: Session, jobs?: readonly string[]): Promise<number | null>
 	/**
-	 * Where no crontab runs (ADR-0080): raises the stored schedule generation to `generation` when that one is higher, in
-	 * byte order, and answers whether `generation` is the stored one, so this process keeps the cron wakes. A lowercase
-	 * UUID; a UUIDv7 of a later deploy sorts later.
+	 * Where no crontab runs (ADR-0080), in one transaction: raises the stored schedule generation to `generation` when that
+	 * one is higher in byte order, and when `generation` is then the stored one, reconciles the wakes against `fires` (as
+	 * `reconcile`) and schedules each fire under its job's cron key (as `schedule`, so an overdue wake keeps its time).
+	 * Answers whether `generation` is the stored one; a process of an older one writes nothing. The generation's row stays
+	 * locked until the transaction commits, so on Postgres a newer generation waits for an older one's seed and reconciles
+	 * after it, and an older one queued behind a newer one reads the newer and writes nothing. A UUIDv7, lowercase: a
+	 * later deploy's sorts later.
 	 */
-	holdsSchedule(generation: string): Promise<boolean>
+	keepSchedule(generation: string, fires: readonly ScheduledFire[]): Promise<boolean>
 	/** The database's clock, read in `using` when given: a wake due now is due by it. */
 	now(using?: Session): Promise<Date>
 	/**
 	 * Deletes the wakes of every job not in `declared`, the jobs the contract declares with their cron expressions, and
-	 * each declared job's cron wake whose key names another expression; answers how many it deleted.
+	 * each declared job's cron wake whose key names another expression; answers how many it deleted. In `using` when
+	 * given.
 	 */
-	reconcile(declared: readonly DeclaredJob[]): Promise<number>
+	reconcile(declared: readonly DeclaredJob[], using?: Session): Promise<number>
 	/**
 	 * The test kit's: moves each wake `ids` names that is not yet due to the database's now, so the scheduler takes it
 	 * now; an overdue one stays. Answers how many it moved. Refused in a process that serves an application.
@@ -94,6 +99,11 @@ export interface JobWakes {
 	 * alarm through `next` until someone reaps it.
 	 */
 	expiredHolders(): Promise<readonly string[]>
+}
+
+/** A declared job and its next fire, which `keepSchedule` seeds; `null` when its expression has none in the window. */
+export interface ScheduledFire extends DeclaredJob {
+	readonly dueAt: Date | null
 }
 
 /** A job the contract declares, and the cron expression its schedule is: its cron wake's key is `cron:<job>:<expression>`. */
@@ -176,8 +186,43 @@ const SQL_HOLD_SCHEDULE: DialectTexts = {
 		on conflict (id) do update set generation = max(${S}.generation, excluded.generation) returning generation`,
 }
 
-/** A schedule generation: a lowercase UUID, whose text order is a UUIDv7's time order. */
-const SCHEDULE_GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+/**
+ * A schedule generation: a lowercase UUIDv7 (version 7, the RFC variant), whose text order is its time order. Any other
+ * UUID would order deploys at random, and a later deploy that sorted lower would never take the schedule.
+ */
+const SCHEDULE_GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+/** The declared jobs `reconcile` keeps, checked: a list of jobs with their expressions. */
+function declaredJobs(declared: readonly DeclaredJob[]): DeclaredJob[] {
+	if (!Array.isArray(declared)) {
+		throw new QueryRefusedError('invalid_argument', 'the declared jobs are a list of jobs with their expressions')
+	}
+	return declared.map((entry: unknown) => {
+		const job: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'job') : undefined
+		const expression: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'expression') : undefined
+		return { job: nonEmpty(job, 'a declared job'), expression: nonEmpty(expression, "a declared job's expression") }
+	})
+}
+
+/** Each fire `keepSchedule` seeds, checked before its transaction: the declared job and the cron wake of its next fire. */
+function scheduledFires(fires: readonly ScheduledFire[]): {
+	readonly declared: DeclaredJob[]
+	readonly wakes: { readonly job: string; readonly parameters: readonly FixedParameter[] }[]
+} {
+	const declared = declaredJobs(fires)
+	const wakes = fires.flatMap((fire, index) => {
+		const dueAt: unknown = Reflect.get(fire, 'dueAt')
+		const job = declared[index]
+		if (dueAt === null || job === undefined) {
+			return []
+		}
+		if (!(dueAt instanceof Date)) {
+			throw new QueryRefusedError('invalid_argument', "a fire's due time is a valid time or null")
+		}
+		return [{ job: job.job, parameters: newWake({ job: job.job, reason: 'cron', dueAt, dedupe: `cron:${job.job}:${job.expression}` }) }]
+	})
+	return { declared, wakes }
+}
 
 const SQL_CLOCK: DialectTexts = {
 	postgres: `select ${PG_EPOCH_MS('clock_timestamp()')} as now`,
@@ -442,15 +487,27 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 			return next === null ? null : next - now()
 		},
 
-		async holdsSchedule(generation: string): Promise<boolean> {
+		async keepSchedule(generation: string, fires: readonly ScheduledFire[]): Promise<boolean> {
 			if (typeof generation !== 'string' || !SCHEDULE_GENERATION.test(generation)) {
-				throw new QueryRefusedError('invalid_argument', 'a schedule generation is a lowercase UUID')
+				throw new QueryRefusedError('invalid_argument', 'a schedule generation is a lowercase UUIDv7')
 			}
-			const [{ generation: stored } = {}] = await rows(session(), SQL_HOLD_SCHEDULE, [generation])
-			if (typeof stored !== 'string') {
-				throw new QueryRefusedError('unexpected_row', `${S} came back in another shape than its migration declares`)
-			}
-			return stored === generation
+			const { declared, wakes } = scheduledFires(fires)
+			return await session().transaction(async (transaction) => {
+				// The upsert locks the row until this transaction commits: the reconcile and the seed below happen under it.
+				const [{ generation: stored } = {}] = await rows(transaction, SQL_HOLD_SCHEDULE, [generation])
+				if (typeof stored !== 'string') {
+					throw new QueryRefusedError('unexpected_row', `${S} came back in another shape than its migration declares`)
+				}
+				if (stored !== generation) {
+					return false
+				}
+				await rows(transaction, SQL_RECONCILE, [JSON.stringify(declared)])
+				for (const wake of wakes) {
+					await insert(transaction, wake.parameters, wake.job)
+				}
+				await project(transaction)
+				return true
+			})
 		},
 
 		async now(using?: Session): Promise<Date> {
@@ -469,16 +526,9 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 			)
 		},
 
-		async reconcile(declared: readonly DeclaredJob[]): Promise<number> {
-			if (!Array.isArray(declared)) {
-				throw new QueryRefusedError('invalid_argument', 'the declared jobs are a list of jobs with their expressions')
-			}
-			const jobs = declared.map((entry: unknown) => {
-				const job: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'job') : undefined
-				const expression: unknown = typeof entry === 'object' && entry !== null ? Reflect.get(entry, 'expression') : undefined
-				return { job: nonEmpty(job, 'a declared job'), expression: nonEmpty(expression, "a declared job's expression") }
-			})
-			return await session().transaction(async (transaction) => {
+		async reconcile(declared: readonly DeclaredJob[], using?: Session): Promise<number> {
+			const jobs = declaredJobs(declared)
+			return await (using ?? session()).transaction(async (transaction) => {
 				const removed = await rows(transaction, SQL_RECONCILE, [JSON.stringify(jobs)])
 				await project(transaction)
 				return removed.length

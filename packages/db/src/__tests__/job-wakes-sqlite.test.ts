@@ -408,18 +408,48 @@ describe('the schedule generation', () => {
 	const second = '019a0000-0000-7000-8000-000000000002'
 
 	test('the first generation holds it, a later one takes it over, and an earlier one never takes it back', async () => {
-		expect(await wakes.holdsSchedule(first)).toBe(true)
-		expect(await wakes.holdsSchedule(first)).toBe(true)
-		expect(await wakes.holdsSchedule(second)).toBe(true)
-		expect(await wakes.holdsSchedule(first)).toBe(false)
-		expect(await wakes.holdsSchedule(second)).toBe(true)
+		expect(await wakes.keepSchedule(first, [])).toBe(true)
+		expect(await wakes.keepSchedule(first, [])).toBe(true)
+		expect(await wakes.keepSchedule(second, [])).toBe(true)
+		expect(await wakes.keepSchedule(first, [])).toBe(false)
+		expect(await wakes.keepSchedule(second, [])).toBe(true)
 		expect(db.exec('select id, generation from fabrika_job_schedule')).toEqual([{ id: 1, generation: second }])
 	})
 
-	test('a generation that is not a lowercase UUID is refused and stores nothing', async () => {
-		for (const refused of ['', 'later', first.toUpperCase(), `${first} `, `{${first}}`]) {
-			await expect(wakes.holdsSchedule(refused)).rejects.toThrow(QueryRefusedError)
+	test('the holder reconciles and seeds; an older generation writes nothing', async () => {
+		const overdue = at(-MINUTE)
+		const next = at(MINUTE)
+		await wakes.schedule({ job: 'digest', reason: 'cron', dueAt: overdue, dedupe: 'cron:digest:0 * * * *' })
+		await wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(HOUR), dedupe: 'cron:digest:0 3 * * *' })
+		await wakes.schedule({ job: 'removed', reason: 'cron', dueAt: overdue, dedupe: 'cron:removed:* * * * *' })
+		const fires = [
+			{ job: 'digest', expression: '0 * * * *', dueAt: next },
+			{ job: 'sweep', expression: '*/5 * * * *', dueAt: next },
+			{ job: 'never', expression: '0 0 31 2 *', dueAt: null },
+		]
+		expect(await wakes.keepSchedule(second, fires)).toBe(true)
+		// The overdue fire keeps its earlier time; the old expression and the removed job are gone; a job with no fire gets none.
+		expect(await shapes('digest')).toEqual([{ reason: 'cron', due: overdue.getTime(), attempt: 0, dedupe: 'cron:digest:0 * * * *' }])
+		expect(await shapes('sweep')).toEqual([{ reason: 'cron', due: next.getTime(), attempt: 0, dedupe: 'cron:sweep:*/5 * * * *' }])
+		expect(await wakes.pending('removed')).toEqual([])
+		expect(await wakes.pending('never')).toEqual([])
+
+		await wakes.schedule({ job: 'removed', reason: 'cron', dueAt: overdue, dedupe: 'cron:removed:* * * * *' })
+		expect(await wakes.keepSchedule(first, [{ job: 'removed', expression: '* * * * *', dueAt: next }])).toBe(false)
+		expect(await shapes('removed')).toEqual([{ reason: 'cron', due: overdue.getTime(), attempt: 0, dedupe: 'cron:removed:* * * * *' }])
+		expect(await shapes('sweep')).toHaveLength(1)
+	})
+
+	test('a generation that is not a lowercase UUIDv7, or a fire of another shape, is refused and writes nothing', async () => {
+		const v4 = '019a0000-0000-4000-8000-000000000001'
+		const otherVariant = '019a0000-0000-7000-c000-000000000001'
+		for (const refused of ['', 'later', first.toUpperCase(), `${first} `, `{${first}}`, v4, otherVariant]) {
+			await expect(wakes.keepSchedule(refused, [])).rejects.toThrow(QueryRefusedError)
 		}
+		await expect(wakes.keepSchedule(first, [{ job: '', expression: '* * * * *', dueAt: null }])).rejects.toThrow(QueryRefusedError)
+		await expect(wakes.keepSchedule(first, [{ job: 'digest', expression: '* * * * *', dueAt: new Date(Number.NaN) }])).rejects.toThrow(
+			QueryRefusedError,
+		)
 		expect(db.exec('select generation from fabrika_job_schedule')).toEqual([])
 	})
 })

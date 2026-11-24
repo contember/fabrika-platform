@@ -149,6 +149,8 @@ describe.skipIf(!hasPostgres)('the wakes of a job on Postgres', () => {
 })
 
 interface Fresh {
+	/** The schema's name, for a connection of a test's own past the data layer. */
+	readonly schema: string
 	readonly database: Database
 	readonly leases: JobLeases
 	readonly wakes: JobWakes
@@ -179,6 +181,7 @@ async function fresh(): Promise<Fresh> {
 			return [...(await sql.unsafe(statement))]
 		})
 	return {
+		schema: own,
 		database: ownDatabase,
 		leases: framework.jobs,
 		wakes: framework.wakes,
@@ -561,7 +564,7 @@ describe.skipIf(!hasPostgres)("hasten, the test kit's, on Postgres", () => {
 	})
 })
 
-describe.skipIf(!hasPostgres)('the next wake of some jobs, and the schedule generation, on Postgres', () => {
+describe.skipIf(!hasPostgres)('the next wake of some jobs, on Postgres', () => {
 	test('only the named jobs count: a wake or a held lease of another job does not', async () => {
 		const overdue = at(-MINUTE)
 		const later = at(2 * MINUTE)
@@ -577,29 +580,83 @@ describe.skipIf(!hasPostgres)('the next wake of some jobs, and the schedule gene
 		expect(until).toBeLessThanOrEqual(2 * MINUTE)
 		await expect(wakes.next(undefined, [''])).rejects.toThrow(QueryRefusedError)
 	})
+})
 
-	test('the first generation holds it, a later one takes it over, an earlier one never takes it back', async () => {
-		const first = '019a0000-0000-7000-8000-00000000000a'
-		const second = '019a0000-0000-7000-8000-00000000000b'
-		for (const refused of ['', first.toUpperCase(), `${first} `]) {
-			await expect(wakes.holdsSchedule(refused)).rejects.toThrow(QueryRefusedError)
-		}
-		expect(await wakes.holdsSchedule(first)).toBe(true)
-		expect(await wakes.holdsSchedule(second)).toBe(true)
-		expect(await wakes.holdsSchedule(first)).toBe(false)
-		expect(await wakes.holdsSchedule(second)).toBe(true)
-		const stored = await admin((sql) => sql.unsafe(`select id, generation from ${schema}.fabrika_job_schedule`))
-		expect([...stored]).toEqual([{ id: 1, generation: second }])
+describe.skipIf(!hasPostgres)('keeping the schedule, on Postgres', () => {
+	const older = '019a0000-0000-7000-8000-0000000000f0'
+	const newer = '019a0000-0000-7000-8000-0000000000f1'
+	let on: Fresh
+
+	beforeEach(async () => {
+		on = await fresh()
 	})
 
-	test('concurrent holders of two generations leave the later one stored', async () => {
-		const older = '019a0000-0000-7000-8000-0000000000f0'
-		const newer = '019a0000-0000-7000-8000-0000000000f1'
-		await admin((sql) => sql.unsafe(`delete from ${schema}.fabrika_job_schedule`))
-		const answers = await Promise.all([older, newer, older, newer, older].map((generation) => wakes.holdsSchedule(generation)))
+	afterEach(async () => {
+		await on.close()
+	})
+
+	const dedupes = async (): Promise<string[]> => (await on.query('select dedupe from fabrika_wakes')).map((row) => String(row['dedupe'])).sort()
+
+	test('the first generation holds it, a later one takes it over, an earlier one never takes it back', async () => {
+		for (const refused of ['', older.toUpperCase(), `${older} `, '019a0000-0000-4000-8000-0000000000f0']) {
+			await expect(on.wakes.keepSchedule(refused, [])).rejects.toThrow(QueryRefusedError)
+		}
+		expect(await on.wakes.keepSchedule(older, [])).toBe(true)
+		expect(await on.wakes.keepSchedule(newer, [])).toBe(true)
+		expect(await on.wakes.keepSchedule(older, [])).toBe(false)
+		expect(await on.wakes.keepSchedule(newer, [])).toBe(true)
+		expect(await on.query('select id, generation from fabrika_job_schedule')).toEqual([{ id: 1, generation: newer }])
+	})
+
+	test('the holder reconciles and seeds in one statement order; an older generation writes nothing', async () => {
+		const next = at(MINUTE)
+		await on.wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(HOUR), dedupe: 'cron:digest:0 3 * * *' })
+		await on.wakes.schedule({ job: 'removed', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:removed:* * * * *' })
+		expect(await on.wakes.keepSchedule(newer, [{ job: 'digest', expression: '0 * * * *', dueAt: next }])).toBe(true)
+		expect(await dedupes()).toEqual(['cron:digest:0 * * * *'])
+		expect(await on.wakes.keepSchedule(older, [{ job: 'removed', expression: '* * * * *', dueAt: next }])).toBe(false)
+		expect(await dedupes()).toEqual(['cron:digest:0 * * * *'])
+	})
+
+	test('concurrent holders of two generations leave the later one stored, and only its fires', async () => {
+		const fires = (generation: string) => [{ job: generation === newer ? 'fresh' : 'stale', expression: '* * * * *', dueAt: at(MINUTE) }]
+		const answers = await Promise.all([older, newer, older, newer, older].map((generation) => on.wakes.keepSchedule(generation, fires(generation))))
 		expect(answers.filter((held, index) => held && index % 2 === 1)).toEqual([true, true])
-		expect(await wakes.holdsSchedule(older)).toBe(false)
-		expect(await wakes.holdsSchedule(newer)).toBe(true)
+		expect(await on.wakes.keepSchedule(older, fires(older))).toBe(false)
+		expect(await on.wakes.keepSchedule(newer, fires(newer))).toBe(true)
+		expect(await dedupes()).toEqual(['cron:fresh:* * * * *'])
+	})
+
+	test("a newer generation waits for an older one's open seed and reconciles after it; an older one behind a newer writes nothing", async () => {
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		const seeding = await sql.reserve()
+		const settled = (promise: Promise<unknown>): Promise<boolean> => Promise.race([promise.then(() => true), Bun.sleep(300).then(() => false)])
+		try {
+			// An older deploy's seed, still open: it holds the row it raised.
+			await seeding.unsafe(`set search_path to ${on.schema}`)
+			await seeding.unsafe('begin')
+			await seeding.unsafe(`insert into fabrika_job_schedule (id, generation) values (1, '${older}')
+				on conflict (id) do update set generation = greatest(fabrika_job_schedule.generation, excluded.generation)`)
+			await seeding.unsafe(`insert into fabrika_wakes (id, job, due_at, reason, dedupe)
+				values (gen_random_uuid(), 'stale', ${Date.now() + MINUTE}, 'cron', 'cron:stale:* * * * *')`)
+			const taking = on.wakes.keepSchedule(newer, [{ job: 'fresh', expression: '* * * * *', dueAt: at(MINUTE) }])
+			expect(await settled(taking)).toBe(false)
+			await seeding.unsafe('commit')
+			expect(await taking).toBe(true)
+			expect(await dedupes()).toEqual(['cron:fresh:* * * * *'])
+
+			// The newer deploy's seed, still open: an older one queued behind it reads the newer and writes nothing.
+			await seeding.unsafe('begin')
+			await seeding.unsafe(`update fabrika_job_schedule set generation = '${newer}'`)
+			const behind = on.wakes.keepSchedule(older, [{ job: 'stale', expression: '* * * * *', dueAt: at(MINUTE) }])
+			expect(await settled(behind)).toBe(false)
+			await seeding.unsafe('commit')
+			expect(await behind).toBe(false)
+			expect(await dedupes()).toEqual(['cron:fresh:* * * * *'])
+		} finally {
+			seeding.release()
+			await sql.close()
+		}
 	})
 })
 
@@ -618,7 +675,9 @@ describe.skipIf(!hasPostgres)('the schedule migration', () => {
 			const runtime = openPostgres({ url: applicationRuntimeUrl(url, appId), schema: after.schema, max: 1 })
 			try {
 				const migrated = frameworkTablesOf(connected(tables, { database: runtime, capabilities: authority }).database).wakes
-				expect(await migrated.holdsSchedule('019a0000-0000-7000-8000-000000000001')).toBe(true)
+				const fires = [{ job: 'kept', expression: '* * * * *', dueAt: at(MINUTE) }]
+				expect(await migrated.keepSchedule('019a0000-0000-7000-8000-000000000001', fires)).toBe(true)
+				expect((await migrated.pending('kept')).map((wake) => wake.dedupe)).toEqual(['cron:kept:* * * * *'])
 			} finally {
 				await runtime.close()
 			}
