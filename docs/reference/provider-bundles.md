@@ -27,6 +27,16 @@ status and logs, stops at the first failure, and observes cancellation between
 steps. It does not interpret the target, the artifact, or a step's kind. There
 is no shared plan type, no runtime session, and no engine package.
 
+A provider that drives its cloud's calls in-process (Zerops) runs its steps
+through `runDeploy` (`packages/provider-contract/src/deploy-run.ts`) instead,
+which wraps `runSteps` with the run checkpoint of
+[ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md): a step
+records the checkpoint before the call that needs it, `awaitSettlement` polls the
+submitted candidate, a failed run discards an unsubmitted one, and `cancelRun` and
+`reconcileRun` settle a run from what it recorded. The provider supplies a
+`RunAttempt`: its checkpoint's parse and encoding, the external id, whether the
+activating call may have been sent, and discard, read and stop of the candidate.
+
 ## Control contract
 
 The control plane receives one `ControlProvider`. Every provider implements

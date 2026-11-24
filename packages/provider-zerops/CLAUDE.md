@@ -234,7 +234,10 @@ bun test
   build request. `triggered: false` → delete the exact version (`deleteVersion`, `src/version-attempt.ts`;
   `appVersionNotFound` counts as deleted). `triggered: true` → settle ONLY by polling, never by deletion;
   past run start + 75 min a non-terminal version is abandoned with a best-effort `cancelBuild`. A lost lease
-  deletes and cancels nothing. Any other checkpoint shape fails the run without a platform call.
+  deletes and cancels nothing. Any other checkpoint shape fails the run without a platform call. The rule itself
+  is `@fabrika/provider-contract`'s deploy run (`runDeploy`, `awaitSettlement`, `cancelRun`, `reconcileRun`); this
+  package supplies only `zeropsRunAttempt` (`src/run-attempt.ts`): the checkpoint, `deleteVersion`, the version
+  read and `cancelBuild`.
 - **An application's proxy target carries its endpoint table, and nothing else.** `target.proxy` is
   `{ upstream, ...contractProxyTable(artifact) }`; the artifact parser refuses `proxy.gates` with a message that
   names it, and refuses a row whose digest does not describe its rules. The artifact's table is the build's

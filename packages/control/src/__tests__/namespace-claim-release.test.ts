@@ -14,6 +14,9 @@ import { rpcRequest, rpcResult } from './helpers/rpc'
 
 if (!hasPostgres) console.warn(`namespace-claim-release.test.ts Postgres half ${skipReason}`)
 
+// Each test migrates a fresh Postgres schema inside its own budget; bun's 5 s default fails on a busy machine.
+const WORLD_TEST_TIMEOUT_MS = 15_000
+
 const target = (projectId: string): ProviderEnvelope => ({ provider: 'harbor', version: 1, payload: { projectId } })
 
 interface AuditRecord {
@@ -155,7 +158,7 @@ for (const backend of backends) {
 			expect(w.resources.checked).toEqual([['service:notesapi', 'service:notesfiles']])
 			expect(await w.claims()).toEqual(['service:notesapi', 'service:notesfiles', 'service:proxy'])
 			expect(w.audits.filter((audit) => audit.action === 'namespace.claims.release')).toEqual([])
-		})
+		}, WORLD_TEST_TIMEOUT_MS)
 
 		test('once the provider confirms every resource gone, releases the claims, audits it, and the env and namespace delete', async () => {
 			const w = await world()
@@ -177,7 +180,7 @@ for (const backend of backends) {
 			expect((await w.call('apps.environments.delete', { appId: 'notes', env: 'dev' })).status).toBe(200)
 			expect((await w.call('namespaces.remove', { namespaceId: 'dev' })).status).toBe(200)
 			expect(await w.db.registry.getDeploymentNamespace('dev')).toBeNull()
-		})
+		}, WORLD_TEST_TIMEOUT_MS)
 
 		test('a read-back that fails releases nothing and says why', async () => {
 			const w = await world()
@@ -191,7 +194,7 @@ for (const backend of backends) {
 			expect(body.error).toContain('could not confirm that the claimed resources are gone')
 			expect(body.error).toContain('get project failed (403)')
 			expect(await w.claims()).toEqual(['service:notesapi', 'service:notesfiles', 'service:proxy'])
-		})
+		}, WORLD_TEST_TIMEOUT_MS)
 
 		test('refuses while another operation holds the namespace lease, such as a deploy into it', async () => {
 			const w = await world()
@@ -205,7 +208,7 @@ for (const backend of backends) {
 			expect(w.resources.checked).toEqual([])
 			expect(await w.claims()).toEqual(['service:notesapi', 'service:notesfiles', 'service:proxy'])
 			await held?.release()
-		})
+		}, WORLD_TEST_TIMEOUT_MS)
 
 		test('requires namespace.manage, answers 404 for an owner with no claim, and 409 for a provider that cannot check', async () => {
 			const w = await world()
@@ -215,13 +218,13 @@ for (const backend of backends) {
 			expect((await w.call('namespaces.releaseClaims', { namespaceId: 'dev', appId: 'notes', env: 'prod' })).status).toBe(404)
 			expect((await w.call('namespaces.releaseClaims', { namespaceId: 'missing', appId: 'notes', env: 'dev' })).status).toBe(404)
 			expect(await w.claims()).toEqual(['service:notesapi', 'service:notesfiles', 'service:proxy'])
-		})
+		}, WORLD_TEST_TIMEOUT_MS)
 
 		test('a provider without a read-back releases no claim', async () => {
 			const w = await world(false)
 			const refused = await w.release()
 			expect(refused.status).toBe(409)
 			expect(await refused.json()).toEqual({ error: 'provider harbor cannot confirm that a claimed resource is gone, so it releases no claim' })
-		})
+		}, WORLD_TEST_TIMEOUT_MS)
 	})
 }
