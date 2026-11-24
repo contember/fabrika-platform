@@ -265,15 +265,14 @@ export function MyTasks() {
 ```tsx web/edit-task.tsx
 import { type FabrikaError, useMutation } from '@fabrika/app/react'
 import {
-	Button,
 	DateInput,
-	Dialog,
 	Field,
-	Form,
-	FormActions,
+	FormDialog,
 	type FormErrorLike,
 	Input,
+	useForm,
 } from '@fabrika/ui'
+import { z } from 'zod/v4'
 import type { Task } from './api'
 import { api } from './api'
 
@@ -282,7 +281,7 @@ export function shown(error: FabrikaError | null): FormErrorLike | null {
 	if (error === null) return null
 	if (error.kind === 'conflict') {
 		return {
-			message: 'Someone changed this task meanwhile. Close and open it again.',
+			message: 'Someone changed this task meanwhile. Check it and save again.',
 		}
 	}
 	if (error.kind === 'forbidden') {
@@ -291,10 +290,11 @@ export function shown(error: FabrikaError | null): FormErrorLike | null {
 	return error
 }
 
-const text = (form: FormData, name: string): string => {
-	const value = form.get(name)
-	return typeof value === 'string' ? value.trim() : ''
-}
+// What the person types, checked and turned into the input `tasks.edit` takes: an empty day clears it.
+const TaskForm = z.object({
+	title: z.string().trim().min(1, 'Enter a title').max(200),
+	dueOn: z.string().transform((day) => (day === '' ? null : day)),
+})
 
 export function EditTask(
 	{ task, open, onClose }: {
@@ -304,41 +304,38 @@ export function EditTask(
 	},
 ) {
 	const edit = useMutation(api.tasks.edit)
+	const form = useForm(TaskForm, { title: task.title, dueOn: task.dueOn ?? '' })
 	const close = () => {
 		edit.reset()
 		onClose()
 	}
-	const submit = async (form: FormData) => {
-		const due = text(form, 'dueOn')
-		const outcome = await edit.mutate({
-			id: task.id,
-			expectVersion: task.version,
-			title: text(form, 'title'),
-			dueOn: due === '' ? null : due,
-		})
-		if (outcome.ok) close()
-	}
 	return (
-		<Dialog open={open} title="Edit task" onClose={close}>
-			<Form
-				onSubmit={(form) => void submit(form)}
-				error={shown(edit.error)}
-				aria-label="Edit task"
+		<FormDialog
+			open={open}
+			title="Edit task"
+			form={form}
+			error={shown(edit.error)}
+			onClose={close}
+			onSubmit={async (values) => {
+				const outcome = await edit.mutate({
+					id: task.id,
+					expectVersion: task.version,
+					...values,
+				})
+				if (outcome.ok) close()
+			}}
+		>
+			<Field label="Title" required {...form.field('title')}>
+				<Input />
+			</Field>
+			<Field
+				label="Due on"
+				hint="Leave empty for no due date."
+				{...form.field('dueOn')}
 			>
-				<Field label="Title" name="title" required>
-					<Input defaultValue={task.title} />
-				</Field>
-				<Field label="Due on" name="dueOn" hint="Leave empty for no due date.">
-					<DateInput defaultValue={task.dueOn ?? ''} />
-				</Field>
-				<FormActions>
-					<Button variant="ghost" onClick={close}>Cancel</Button>
-					<Button type="submit" variant="primary" loading={edit.pending}>
-						Save
-					</Button>
-				</FormActions>
-			</Form>
-		</Dialog>
+				<DateInput />
+			</Field>
+		</FormDialog>
 	)
 }
 ```
@@ -346,18 +343,29 @@ export function EditTask(
 - `mutate(input)` never throws: it answers `{ ok: true, data }` or `{ ok: false, error }`, and the hook keeps
   `status`, `pending`, `data` and `error`. It first checks the input with the procedure's own schema: a refused input
   is a `validation` error with its field paths, and nothing is sent.
-- After a success, and after a `conflict`, it refetches what its group shows (`api.tasks` for `api.tasks.edit`). Key
-  a form that edits a versioned row by its version (`key={task.version}`): after a conflict it reseeds from the
-  current row, and the next save sends the current `expectVersion`.
+- After a success, and after a `conflict`, it refetches what its group shows (`api.tasks` for `api.tasks.edit`). A
+  `useForm` whose initial values change starts over from them, so after a conflict the dialog shows the current row,
+  and the next save sends the current `expectVersion`. A plain `Form` that edits a versioned row is keyed by its
+  version (`key={task.version}`) for the same reason.
   `useMutation(api.comments.add, { invalidates: [api.comments, api.tasks.get] })` names other procedures or groups;
   `invalidates: []` refetches nothing. `useInvalidate()(api.tasks)` refetches on demand.
 - `FabrikaError` is one union for every refusal: `unauthenticated` (`loginUrl`: the client made with `bounceOnAuth`
   sends the person there itself), `forbidden` (the role lacks the action: tell the person, never loosen the contract),
   `conflict` (a stale `expectVersion`, or a `ConflictError` of the handler), `validation` (`fields`: input path →
   message, also a handler's `BadRequestError` without fields), `not-found`, `other` (`status`; `0` when no answer came).
-- `Form` shows its `error`: a summary on top, and each `fields[name]` under the `Field` of that `name`. `Field` gives
-  its control the `name`, an `id`, its label and `aria-describedby`; the control needs nothing else. `Form` hands
-  `onSubmit` the `FormData`: read the fields by name, and leave the checking to the procedure's schema.
+- `useForm(schema, initial)` holds what a dialog's fields show. The schema is the form's own zod schema (any Standard
+  Schema): it reads the text the person typed and turns it into the procedure's input (`transform` an empty text into
+  `null`, a number's text into a number), with messages a person reads. `<Field label="Title" {...form.field('title')}>`
+  binds one text field (an `Input`, `DateInput`, `Textarea` or `Select`) and shows its message; `form.set(name, value)`
+  sets any other value.
+- `FormDialog` is the dialog of one form: its title, the fields, Cancel and the submit button (`submitLabel`, `Save` by
+  default). Submitting checks the values with the schema and calls `onSubmit` with its output only when they pass; the
+  first refused field takes the focus. While `onSubmit` runs the button spins and the dialog stays open; each time it
+  opens it starts from the initial values. `error` is the server's refusal: a summary on top, and each `fields[name]`
+  under the `Field` of that `name`, which also takes the focus. `onSubmit` closes the dialog itself after a success.
+- `Form` without the dialog shows its `error` the same way. `Field` gives its control the `name`, an `id`, its label and
+  `aria-describedby`; the control needs nothing else. `Form` hands `onSubmit` the `FormData`: read the fields by name,
+  and leave the checking to the procedure's schema.
 - A call that is no procedure of a client runs through `useAction(async (input) => …)`, with the same state and error union; it refetches only what
   `invalidates` names.
 - An attachment procedure (`output: attachment(…)`) or a file procedure (`output: file('<kind>')`) downloads through
@@ -618,7 +626,7 @@ themselves ("Load more", "Clear selection", "Close", "Retry") is a prop with an 
 | `PageHeader({ title, lead, back, actions, meta })`                                           | the screen's `h1`, a line of purpose, a back link, its buttons; one `primary` button per screen                                                                                                            |
 | `Tabs({ label, items, active, onChange, variant })`                                          | tabs with counts; arrow keys, Home and End; `variant="boxed"` frames each tab, its count after a dot                                                                                                       |
 | `FilterBar({ onReset })` + `Field`                                                           | a row of filters with a reset                                                                                                                                                                              |
-| `Field({ label, name, hint, error, required })`                                              | label, hint and error around one control; the error comes from the `Form` by `name`                                                                                                                        |
+| `Field({ label, name, hint, error, required, bind })`                                        | label, hint and error around one control; the error comes from the `Form` by `name`; `bind` (from `form.field`) its value                                                                                  |
 | `Input`, `Textarea`, `Select({ options, placeholder })`                                      | the controls; native props pass through                                                                                                                                                                    |
 | `DateInput`, `DateRange({ from, to, onChange })`                                             | a day, and a from–to pair of days                                                                                                                                                                          |
 | `Checkbox({ label, checked, onChange, indeterminate })`                                      | one checkbox                                                                                                                                                                                               |
@@ -636,6 +644,7 @@ themselves ("Load more", "Clear selection", "Close", "Retry") is a prop with an 
 | `EmptyState`, `ErrorState({ text, onRetry })`, `LoadingState`, `Spinner`, `CountBadge`       | the states of a region                                                                                                                                                                                     |
 | `Stack({ gap })`, `Inline({ gap, align, justify, wrap })`                                    | layout with the spacing scale                                                                                                                                                                              |
 | `Form({ onSubmit, error })`, `FormActions`                                                   | a form that shows a hook's error: the summary and each field's message                                                                                                                                     |
+| `useForm(schema, initial)`, `FormDialog({ open, title, form, onSubmit, onClose, error })`    | a form's values checked by its schema, and the dialog around it: fields, Cancel, a pending submit, the server's refusal                                                                                    |
 | `createRouter(routes, { base })`                                                             | `Router`, `Link`, `useRoute`, `href`, `navigate`, typed by the patterns                                                                                                                                    |
 
 ## Theming
