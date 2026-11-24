@@ -19,8 +19,11 @@ const ROLE_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:iam::\d{12}:role\/[\w+=,.@/-]{1,
 const TASK_DEFINITION_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:task-definition\/[A-Za-z0-9_-]{1,255}:\d{1,10}$/
 /** An image by digest: `<registry>/<repository>@sha256:<64 hex>`; a tag would let the image change under the revision. */
 const IMAGE_BY_DIGEST = /^[a-z0-9.-]{1,255}\/[a-z0-9._/-]{1,256}@sha256:[0-9a-f]{64}$/
-/** A Parameter Store parameter's ARN, which a container's secret references. */
-const PARAMETER_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ssm:[a-z0-9-]{1,32}:\d{12}:parameter\/[A-Za-z0-9_.\-/]{1,1011}$/
+/**
+ * A Parameter Store parameter's ARN, which a container's secret references: `parameter` and the hierarchical name, at
+ * most 15 segments of `[A-Za-z0-9_.-]` with no empty one, at most 950 characters (as `ssm.ts` writes them).
+ */
+const PARAMETER_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ssm:[a-z0-9-]{1,32}:\d{12}:parameter(?=[A-Za-z0-9_./-]{2,950}$)(?:\/[A-Za-z0-9_.-]+){1,15}$/
 /** An environment variable's name. */
 const VARIABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,254}$/
 /** A log group's name. */
@@ -65,7 +68,15 @@ export interface EcsContainer {
 /** A Fargate task definition on ARM64 with `awsvpc` networking. */
 export interface EcsTaskDefinition {
 	readonly family: string
+	/** The role the application's own code runs as. Never the execution role. */
 	readonly taskRoleArn: string
+	/**
+	 * The role ECS uses to start the task: it pulls the image, reads the secrets and writes the log. It is the application
+	 * environment's own, scoped to its repository, its parameter path and its log group, never one shared by applications:
+	 * with the AWS-managed `aws/ssm` key, that scope is the only boundary between two applications' secrets
+	 * ([ADR-0004](../../../../docs/decisions/0004-secrets-live-in-the-platform.md)). This client cannot see other
+	 * applications' roles; the step that provisions the roles holds that rule.
+	 */
 	readonly executionRoleArn: string
 	readonly cpu: number
 	readonly memory: number
@@ -86,7 +97,11 @@ export type EcsRolloutState = 'in_progress' | 'completed' | 'failed'
 /** One deployment of a service. */
 export interface EcsDeployment {
 	readonly id: string
-	/** `primary` is the deployment the service moves to; `active` an older one still running tasks. */
+	/**
+	 * `primary` is the deployment the service moves to; `active` an older one still running tasks; `inactive` one whose
+	 * tasks are all stopped. ECS drops a replaced deployment from the list once it is done, so a deployment missing here
+	 * is not a verdict on it (B8 reads the verdict from the service deployment instead).
+	 */
 	readonly status: 'primary' | 'active' | 'inactive'
 	readonly taskDefinitionArn: string
 	readonly rolloutState: EcsRolloutState | null
@@ -186,7 +201,10 @@ function containerOf(container: EcsContainer, names: ReadonlySet<string>): Recor
 	}
 	if (!LOG_GROUP.test(container.log.group) || !REGION.test(container.log.region) || !ECS_NAME.test(container.log.streamPrefix)) refuse('the log')
 	const health = container.healthCheck
-	if (health !== undefined && health.command.length === 0) refuse('the health check')
+	// ECS runs `CMD` with arguments as given and `CMD-SHELL` through the image's shell; nothing else is a health check.
+	if (health !== undefined && (health.command.length < 2 || (health.command[0] !== 'CMD' && health.command[0] !== 'CMD-SHELL'))) {
+		refuse('the health check')
+	}
 	return {
 		name: container.name,
 		image: container.image,
@@ -239,6 +257,15 @@ function serviceOf(operation: string, raw: z.infer<typeof serviceSchema>): EcsSe
 	}
 }
 
+/**
+ * A role as IAM tells two apart: its account and its name, without the path, in lower case. A role's name is unique in
+ * its account whatever its path, and IAM compares names without regard to case.
+ */
+function roleIdentity(arn: string): string {
+	const [, , , , account = '', resource = ''] = arn.split(':')
+	return `${account}/${resource.slice(resource.lastIndexOf('/') + 1).toLowerCase()}`
+}
+
 function address(where: EcsServiceAddress): EcsServiceAddress {
 	if (!ECS_NAME.test(where.cluster)) refuse('the cluster name')
 	if (!ECS_NAME.test(where.service)) refuse('the service name')
@@ -252,16 +279,20 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 		async registerTaskDefinition(definition, signal) {
 			if (!ECS_NAME.test(definition.family)) refuse('the family')
 			if (!ROLE_ARN.test(definition.taskRoleArn) || !ROLE_ARN.test(definition.executionRoleArn)) refuse('a role')
+			// The application's code must never hold the role that reads its secrets and pulls its image.
+			if (roleIdentity(definition.taskRoleArn) === roleIdentity(definition.executionRoleArn)) refuse('the task role (it is the execution role)')
 			if (!FARGATE_CPU.has(definition.cpu)) refuse('the CPU')
 			if (!Number.isInteger(definition.memory) || definition.memory < MIN_TASK_MEMORY || definition.memory > MAX_TASK_MEMORY) refuse('the memory')
 			const names = new Set(definition.containers.map((container) => container.name))
 			if (definition.containers.length === 0 || names.size !== definition.containers.length) refuse('the containers')
 			if (!definition.containers.some((container) => container.essential)) refuse('the containers')
-			// A container another waits on for SUCCESS or COMPLETE must be allowed to exit: it is not essential.
+			// A container another waits on for SUCCESS or COMPLETE must be allowed to exit: it is not essential. One waited on
+			// for HEALTHY must have a health check.
 			for (const container of definition.containers) {
 				for (const dependency of container.dependsOn ?? []) {
 					const target = definition.containers.find((candidate) => candidate.name === dependency.container)
 					if (target?.essential === true && (dependency.condition === 'SUCCESS' || dependency.condition === 'COMPLETE')) refuse('a dependency')
+					if (target !== undefined && dependency.condition === 'HEALTHY' && target.healthCheck === undefined) refuse('a dependency')
 				}
 			}
 			const registered = await json.call(
@@ -300,7 +331,10 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 				updatedSchema,
 				signal,
 			)
-			if (updated.service.serviceName !== service) throw new AwsError('UpdateService', 'invalid_answer', 200, null, false)
+			// An answer for another service, or one that points the service elsewhere, is no answer to this call.
+			if (updated.service.serviceName !== service || updated.service.taskDefinition !== taskDefinitionArn) {
+				throw new AwsError('UpdateService', 'invalid_answer', 200, null, false)
+			}
 			return serviceOf('UpdateService', updated.service)
 		},
 

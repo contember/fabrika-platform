@@ -52,6 +52,18 @@ Project-level variables are injected into _every_ service in the project
 holds many apps — a project-level write would hand app A's credentials to app B.
 **Service-level only.** No exceptions, no "just this one shared value".
 
+On AWS (the provider under construction, [ADR-0081](0081-the-aws-provider-calls-aws-without-the-sdk.md)) the platform
+holds the values too: standard `SecureString` parameters in Parameter Store under one path per application environment,
+which ECS reads at a task's start through the task definition's execution role. They are encrypted with the
+AWS-managed `aws/ssm` key, so KMS separates no application from another; the role's resource scope is the only
+boundary.
+
+**Invariant: on AWS every application environment has its own execution role, scoped to its own parameter path, its
+own log group and its own image repository, and its own task role, which is never the execution role.** One execution
+role shared by the applications would hand any application's secrets to a mistake in any other's task definition, the
+AWS form of the project-level write above. The provider's ECS client refuses a task role that is the execution role
+(`packages/provider-aws/src/aws/ecs.ts`); the step that provisions the roles holds the rest.
+
 ## Consequences
 
 Benefits:

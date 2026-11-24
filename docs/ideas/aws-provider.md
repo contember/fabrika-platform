@@ -268,10 +268,17 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    `Dockerfile`, build, push, print the digest), the build log relay, `StopBuild` on cancel before activation.
 7. **`src/task-definition.ts`**: the server container (image by digest, port, health check on the contract's health
    endpoint, log configuration), the init container, the managed environment and `secrets` by parameter ARN, the task
-   and execution roles.
+   and execution roles. Both roles are the application environment's own and never the same role (ADR-0004's AWS
+   invariant): the execution role may read only its parameter path (`ssm:GetParameters`), write only its log group
+   and pull only its repository, because with the `aws/ssm` key that scope is the only boundary between two
+   applications' secrets. Whoever provisions the roles (the namespace stack, step 10) creates them per application
+   environment, never one shared execution role.
 8. **`src/deploy.ts`**: the run's steps (resolve, upload, build, register, update the service, wait for the
    deployment), each external id recorded in the checkpoint before the call that needs it; `succeeded` only when the
-   deployment is `SUCCESSFUL`, `failed` when the circuit breaker rolled back. ECR's lifecycle rule
+   deployment is `SUCCESSFUL`, `failed` when the circuit breaker rolled back. Read that verdict from the service
+   deployment (`DescribeServiceDeployments` by the checkpoint's `deploymentArn`), not from `DescribeServices`: once a
+   rollback finishes, ECS drops the replaced deployment from the service's `deployments`, so a run read there would look
+   absent, not failed (unverified against an account). `describeService` stays for the events the run log relays. ECR's lifecycle rule
    (`keepNewestImages`) counts pushes, not deployments, so builds pushed after the running image can expire it, and ECS
    can then neither replace a task nor roll back to it: size `keep` against that, or give the deployed digest an extra
    tag a separate rule keeps. `StartBuild`'s idempotency token holds five minutes, and a repeat must send the identical

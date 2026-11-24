@@ -10,6 +10,7 @@ import { awsError, fakeAws } from './helpers/fake-aws'
 const IMAGE = `123456789012.dkr.ecr.eu-central-1.amazonaws.com/fabrika/notes-prod@sha256:${'a'.repeat(64)}`
 const TASK_DEFINITION = 'arn:aws:ecs:eu-central-1:123456789012:task-definition/notes-prod:42'
 const log = { group: '/fabrika/apps/notes-prod', region: 'eu-central-1', streamPrefix: 'notes' }
+const health = { command: ['CMD', 'bun', 'fabrika/health.ts'], intervalSeconds: 10, timeoutSeconds: 5, retries: 3, startPeriodSeconds: 30 }
 const server: EcsContainer = {
 	name: 'server',
 	image: IMAGE,
@@ -17,7 +18,7 @@ const server: EcsContainer = {
 	port: 3000,
 	environment: { FABRIKA_APP_ID: 'notes' },
 	secrets: { FABRIKA_TOKEN_KEYS: 'arn:aws:ssm:eu-central-1:123456789012:parameter/fabrika/main/apps/notes/prod/FABRIKA_TOKEN_KEYS' },
-	healthCheck: { command: ['CMD', 'bun', 'fabrika/health.ts'], intervalSeconds: 10, timeoutSeconds: 5, retries: 3, startPeriodSeconds: 30 },
+	healthCheck: health,
 	dependsOn: [{ container: 'migrate', condition: 'SUCCESS' }],
 	log,
 }
@@ -25,7 +26,8 @@ const migrate: EcsContainer = { name: 'migrate', image: IMAGE, essential: false,
 const definition: EcsTaskDefinition = {
 	family: 'notes-prod',
 	taskRoleArn: 'arn:aws:iam::123456789012:role/fabrika-apps-notes-prod',
-	executionRoleArn: 'arn:aws:iam::123456789012:role/fabrika-apps-execution',
+	// The application environment's own execution role, never one shared by applications.
+	executionRoleArn: 'arn:aws:iam::123456789012:role/fabrika-apps-notes-prod-execution',
 	cpu: 512,
 	memory: 1024,
 	containers: [migrate, server],
@@ -150,6 +152,13 @@ describe('ecsClient', () => {
 		})
 	})
 
+	test('an update answered for another service or another revision is an invalid answer', async () => {
+		for (const change of [{ serviceName: 'other' }, { taskDefinition: 'arn:aws:ecs:eu-central-1:123456789012:task-definition/notes-prod:41' }]) {
+			const { options } = fakeAws(ECS, { UpdateService: () => ({ service: { ...service, ...change } }) })
+			await expect(ecsClient(options).updateService(address, TASK_DEFINITION)).rejects.toMatchObject({ code: 'invalid_answer' })
+		}
+	})
+
 	test('describes a service, answers null only for MISSING, and refuses any other empty answer', async () => {
 		const found = fakeAws(ECS, { DescribeServices: () => ({ services: [service], failures: [] }) })
 		expect(await ecsClient(found.options).describeService(address)).toEqual(read)
@@ -175,6 +184,15 @@ describe('ecsClient', () => {
 		const refusals: readonly [Partial<EcsTaskDefinition>, string][] = [
 			[{ family: 'notes prod' }, 'the family'],
 			[{ taskRoleArn: 'arn:aws:iam::123:role/x' }, 'a role'],
+			// The task role is the execution role, also under another path or letter case.
+			[{ taskRoleArn: definition.executionRoleArn }, 'the task role'],
+			[{ taskRoleArn: 'arn:aws:iam::123456789012:role/apps/Fabrika-Apps-Notes-Prod-Execution' }, 'the task role'],
+			[{ containers: [{ ...server, secrets: { KEY: 'arn:aws:ssm:eu-central-1:123456789012:parameter//fabrika/KEY' } }, migrate] }, 'a secret reference'],
+			[{ containers: [{ ...server, secrets: { KEY: 'arn:aws:ssm:eu-central-1:123456789012:parameter/fabrika/KEY/' } }, migrate] }, 'a secret reference'],
+			[{ containers: [{ ...server, healthCheck: { ...health, command: ['bun', 'fabrika/health.ts'] } }, migrate] }, 'the health check'],
+			[{ containers: [{ ...server, healthCheck: { ...health, command: ['CMD'] } }, migrate] }, 'the health check'],
+			// A container waited on for HEALTHY must have a health check.
+			[{ containers: [server, migrate, { ...migrate, name: 'worker', dependsOn: [{ container: 'migrate', condition: 'HEALTHY' }] }] }, 'a dependency'],
 			[{ cpu: 300 }, 'the CPU'],
 			[{ memory: 256 }, 'the memory'],
 			[{ containers: [] }, 'the containers'],
