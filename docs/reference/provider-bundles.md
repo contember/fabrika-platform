@@ -243,7 +243,10 @@ the first file beneath it, because the platform's unpacker creates no directory 
 root `.gitmodules`, paths outside the prefix or containing `.`/`..`, duplicate paths, a pax `linkpath`
 record, a pax record over 64 KiB, and a truncated stream. It admits at most 50,000 files and 512 MiB of
 file content, counted incrementally. It hashes the root `zerops.yaml` as it passes: a missing or
-drifted descriptor fails the operation. Because the tarball is `git archive` output, `.gitattributes`
+drifted descriptor fails the operation. A composition whose provider renders its whole build from the contract
+(`contractRecipe`) binds no such file: `createUnboundGitHubSource` hashes nothing, takes no digest (one handed to it
+is `descriptor_mismatch`) and answers none, and a `zerops.yaml` in such a commit is an ordinary file. Because the
+tarball is `git archive` output, `.gitattributes`
 `export-ignore` and `export-subst` apply. Archives are not byte-deterministic across runs and nothing
 depends on that.
 

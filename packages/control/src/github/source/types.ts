@@ -112,3 +112,26 @@ export interface SourceUploadResult {
 	readonly entryCount: number
 	readonly expandedBytes: number
 }
+
+/** `T` without the descriptor's digest, over each member of a union. */
+type WithoutDescriptor<T> = T extends unknown ? Omit<T, 'descriptorSha256'> : never
+
+/**
+ * The inputs and answers of a source that binds no repository descriptor: a provider that renders its whole build from
+ * the contract (`contractRecipe`) has no root file to bind a deploy to, so it names no digest and gets none back.
+ */
+export type UnboundSourceResolveInput = WithoutDescriptor<SourceResolveInput>
+export type UnboundSourceResolution = WithoutDescriptor<SourceResolution>
+export type UnboundSourceUploadInput = WithoutDescriptor<SourceUploadInput>
+export type UnboundSourceUploadResult = WithoutDescriptor<SourceUploadResult>
+
+/** What the repository and the transport take: a bound source names the digest, an unbound one names none. */
+export type SourceResolveRequest = UnboundSourceResolveInput & { readonly descriptorSha256?: string }
+export type SourceUploadRequest = UnboundSourceUploadInput & { readonly descriptorSha256?: string }
+
+/** What they answer: the descriptor's digest, or `null` from a source that binds none. */
+export interface ResolvedSource {
+	readonly commitSha: string
+	readonly descriptorSha256: string | null
+}
+export type UploadedSource = UnboundSourceUploadResult & { readonly descriptorSha256: string | null }

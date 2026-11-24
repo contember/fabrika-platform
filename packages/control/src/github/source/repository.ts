@@ -3,7 +3,7 @@ import { type ArchiveSummary, createTarRewrite, type FileCollection, type Source
 import { atStage, cancelled, rateLimitFailure, SourceFailure, throwIfAborted } from './failure'
 import type { GitHubMetadataClient } from './metadata'
 import { pullThrough } from './streams'
-import type { SourceArchiveKind, SourceDescriptorRule, SourcePrivateBinding, SourceRepository, SourceResolution, SourceResolveInput } from './types'
+import type { ResolvedSource, SourceArchiveKind, SourceDescriptorRule, SourcePrivateBinding, SourceRepository, SourceResolveRequest } from './types'
 
 /** Production origins are fixed; only the transport itself is injectable. */
 const GITHUB_API_ORIGIN = 'https://api.github.com'
@@ -32,7 +32,8 @@ export interface RepositoryReadInput {
 export interface RepositoryArchiveInput {
 	readonly repository: SourceRepository
 	readonly commitSha: string
-	readonly descriptorSha256: string
+	/** Required with a descriptor rule, refused without one. */
+	readonly descriptorSha256?: string
 	readonly archive: SourceArchiveKind
 	readonly signal: AbortSignal
 }
@@ -58,7 +59,8 @@ export type SourceDownloadFetch = (
 export interface TarballRepositorySourceOptions {
 	readonly credentials: GitHubSourceCredentials
 	readonly metadata: GitHubMetadataClient
-	readonly descriptor: SourceDescriptorRule
+	/** The root file every archive binds, or `null` for a composition whose provider binds none (its build is rendered). */
+	readonly descriptor: SourceDescriptorRule | null
 	/** Tests and the local stack inject the tarball transport; the origins stay fixed. */
 	readonly downloadFetch?: SourceDownloadFetch
 }
@@ -81,20 +83,18 @@ export class TarballRepositorySource {
 	 * The tarball request resolves the ref, and GitHub's REST rate limit does not count it (ADR-0029). A ref that is
 	 * already an exact commit is checked once per process.
 	 */
-	async resolve(input: SourceResolveInput): Promise<SourceResolution> {
+	async resolve(input: SourceResolveRequest): Promise<ResolvedSource> {
 		throwIfAborted(input.signal, 'resolve')
-		if (!SHA256_PATTERN.test(input.descriptorSha256)) {
-			throw new SourceFailure('descriptor_mismatch', 'resolve')
-		}
+		this.checkDigest(input.descriptorSha256, 'resolve')
 		const exact = OBJECT_ID_PATTERN.test(input.requestedRef) ? input.requestedRef : undefined
 		if (exact !== undefined && input.expectedCommitSha !== undefined && exact !== input.expectedCommitSha) {
 			throw new SourceFailure('commit_mismatch', 'resolve')
 		}
 		const verified = exact === undefined
 			? undefined
-			: `${input.repository.owner.toLowerCase()}/${input.repository.name.toLowerCase()}@${exact}#${input.descriptorSha256}`
+			: `${input.repository.owner.toLowerCase()}/${input.repository.name.toLowerCase()}@${exact}#${input.descriptorSha256 ?? ''}`
 		if (exact !== undefined && verified !== undefined && this.verifiedResolutions.has(verified)) {
-			return { commitSha: exact, descriptorSha256: input.descriptorSha256 }
+			return { commitSha: exact, descriptorSha256: input.descriptorSha256 ?? null }
 		}
 		let summary: ArchiveSummary
 		try {
@@ -102,7 +102,7 @@ export class TarballRepositorySource {
 				repository: input.repository,
 				ref: input.requestedRef,
 				...(input.expectedCommitSha === undefined ? {} : { expectedCommitSha: input.expectedCommitSha }),
-				descriptorSha256: input.descriptorSha256,
+				...(input.descriptorSha256 === undefined ? {} : { descriptorSha256: input.descriptorSha256 }),
 				...(input.privateBinding === undefined ? {} : { privateBinding: input.privateBinding }),
 				signal: input.signal,
 			})
@@ -167,9 +167,7 @@ export class TarballRepositorySource {
 		if (!OBJECT_ID_PATTERN.test(input.commitSha)) {
 			throw new SourceFailure('commit_mismatch', 'archive')
 		}
-		if (!SHA256_PATTERN.test(input.descriptorSha256)) {
-			throw new SourceFailure('descriptor_mismatch', 'archive')
-		}
+		this.checkDigest(input.descriptorSha256, 'archive')
 		const platform = input.archive.kind === 'platform'
 		const dataFile = input.archive.kind === 'platform' ? input.archive.dataFile : undefined
 		const binding = input.archive.kind === 'application' ? input.archive.privateBinding : undefined
@@ -188,7 +186,7 @@ export class TarballRepositorySource {
 				...(platform ? { archiveKind: 'platform' } : {}),
 				commitSha: input.commitSha,
 				descriptor: this.options.descriptor,
-				descriptorSha256: input.descriptorSha256,
+				...(input.descriptorSha256 === undefined ? {} : { descriptorSha256: input.descriptorSha256 }),
 				...(dataFile === undefined ? {} : { dataFile }),
 			})
 			const inflated: ReadableStream<SourceBytes> = pullThrough(tarball, new DecompressionStream('gzip'))
@@ -252,6 +250,14 @@ export class TarballRepositorySource {
 		const body = archive.body
 		if (body === null) throw new SourceFailure('archive_rejected', 'archive')
 		return body
+	}
+
+	/** A source that binds a descriptor takes its digest; one that binds none takes no digest at all. */
+	private checkDigest(descriptorSha256: string | undefined, stage: RepositoryStage): void {
+		const fits = this.options.descriptor === null
+			? descriptorSha256 === undefined
+			: descriptorSha256 !== undefined && SHA256_PATTERN.test(descriptorSha256)
+		if (!fits) throw new SourceFailure('descriptor_mismatch', stage)
 	}
 
 	private async request(
