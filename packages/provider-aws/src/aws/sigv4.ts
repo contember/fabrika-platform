@@ -2,7 +2,8 @@
 // regional service endpoint, over Web Crypto so it runs on Bun and on Workers alike. It signs only what those clients
 // need and refuses the rest: a path of unreserved characters (the JSON and query protocols post to `/`), no duplicate
 // header, no line break in a value, no header the signer owns, and `http:` only where the caller allows it (a local
-// emulator). Presigned URLs (query signing) are not here; S3's go through `Bun.S3Client`.
+// emulator). `presignGet` signs S3's presigned read in the query, on the same path rules (`Bun.S3Client`'s presign is
+// not used: on Bun 1.4.4 a virtual-hosted client with a bucketless endpoint drops the bucket from the URL).
 //
 // Pinned by the known-answer tests in `__tests__/sigv4.test.ts`, from AWS's published Signature Version 4 test suite.
 // This is security-critical code: a change to it is reviewed as one. No error here quotes a header value, a body, a
@@ -212,6 +213,53 @@ function endpointUrl(origin: string, insecure: boolean): URL {
 	return url
 }
 
+/** Refuses a scope or a set of credentials the signer does not sign with, naming the part, never its value. */
+function checkScopeAndCredentials(scope: SigningScope, credentials: SigningCredentials): void {
+	if (!SCOPE_PART.test(scope.region) || !SCOPE_PART.test(scope.service)) refuse('the region or service is not a scope name')
+	if (!ACCESS_KEY_ID.test(credentials.accessKeyId)) refuse('the access key id is not one')
+	if (credentials.secretAccessKey === '') refuse('the secret access key is empty')
+	if (credentials.sessionToken === '') refuse('the session token is empty')
+	if (credentials.sessionToken !== undefined && !HEADER_VALUE.test(credentials.sessionToken)) refuse('the session token has a control character')
+}
+
+/** The longest validity of a presigned URL SigV4 allows: seven days. */
+export const MAX_PRESIGNED_SECONDS = 7 * 24 * 60 * 60
+
+/**
+ * A presigned `GET` of `path` at `origin`: the URL whose query carries the signature (`X-Amz-*`), valid
+ * `expiresInSeconds` from `at`, signing the `host` header only and an unsigned payload, as S3 takes it. A session token
+ * travels in the signed query. The URL is a credential: it opens that one object until it expires.
+ */
+export async function presignGet(
+	request: { readonly origin: string; readonly path: string },
+	credentials: SigningCredentials,
+	scope: SigningScope,
+	at: Date,
+	expiresInSeconds: number,
+	options: { readonly allowInsecureOrigin?: boolean } = {},
+): Promise<string> {
+	checkScopeAndCredentials(scope, credentials)
+	if (!Number.isInteger(expiresInSeconds) || expiresInSeconds < 1 || expiresInSeconds > MAX_PRESIGNED_SECONDS) refuse('the expiry is out of bounds')
+	const { accessKeyId, secretAccessKey, sessionToken } = credentials
+	const signedScope: SigningScope = { region: scope.region, service: scope.service }
+	const url = endpointUrl(request.origin, options.allowInsecureOrigin === true)
+	const path = canonicalPath(request.path)
+	const stamp = amzDate(at)
+	const date = stamp.slice(0, 8)
+	const query: (readonly [string, string])[] = [
+		['X-Amz-Algorithm', SIGV4_ALGORITHM],
+		['X-Amz-Credential', `${accessKeyId}/${credentialScope(date, signedScope)}`],
+		['X-Amz-Date', stamp],
+		['X-Amz-Expires', String(expiresInSeconds)],
+		['X-Amz-SignedHeaders', 'host'],
+	]
+	if (sessionToken !== undefined) query.push(['X-Amz-Security-Token', sessionToken])
+	const search = canonicalQuery(query)
+	const canonical = canonicalText('GET', path, search, { host: url.host }, 'UNSIGNED-PAYLOAD')
+	const signed = await signature(secretAccessKey, date, signedScope, await stringToSign(stamp, signedScope, canonical.text))
+	return `${url.origin}${path}?${search}&X-Amz-Signature=${signed}`
+}
+
 /** The caller's headers under lower-case names, refused when one repeats, is the signer's own, or has a line break. */
 function callerHeaders(headers: Readonly<Record<string, string>>): Record<string, string> {
 	// A map, so a name such as `constructor` or `__proto__` is a header like any other, not an object's own machinery.
@@ -238,11 +286,7 @@ export async function signRequest(
 	at: Date,
 	options: SigningOptions = {},
 ): Promise<SignedRequest> {
-	if (!SCOPE_PART.test(scope.region) || !SCOPE_PART.test(scope.service)) refuse('the region or service is not a scope name')
-	if (!ACCESS_KEY_ID.test(credentials.accessKeyId)) refuse('the access key id is not one')
-	if (credentials.secretAccessKey === '') refuse('the secret access key is empty')
-	if (credentials.sessionToken === '') refuse('the session token is empty')
-	if (credentials.sessionToken !== undefined && !HEADER_VALUE.test(credentials.sessionToken)) refuse('the session token has a control character')
+	checkScopeAndCredentials(scope, credentials)
 	// Everything the request and the credentials say is read here, before the first await, and used as read: the URL
 	// sent carries the very path and query that were signed, whatever the caller changes meanwhile.
 	const { accessKeyId, secretAccessKey, sessionToken } = credentials

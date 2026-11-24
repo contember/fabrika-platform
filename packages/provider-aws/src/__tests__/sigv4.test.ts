@@ -7,7 +7,15 @@
 // this signer refuses such a path instead (see the refusals below).
 
 import { describe, expect, test } from 'bun:test'
-import { canonicalRequest, type SignableRequest, type SigningCredentials, type SigningScope, signRequest, stringToSign } from '../aws/sigv4'
+import {
+	canonicalRequest,
+	presignGet,
+	type SignableRequest,
+	type SigningCredentials,
+	type SigningScope,
+	signRequest,
+	stringToSign,
+} from '../aws/sigv4'
 
 const credentials: SigningCredentials = { accessKeyId: 'AKIDEXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY' }
 const scope: SigningScope = { region: 'us-east-1', service: 'service' }
@@ -320,5 +328,50 @@ describe('signRequest', () => {
 		expect(await refusal({ method: 'GET', origin, path: '/' }, credentials, { region: 'US-EAST-1', service: 'service' })).toContain('region')
 		const query = await refusal({ method: 'GET', origin, path: '/', query: [['\ud800', 'x']] })
 		expect(query).toContain('query')
+	})
+})
+
+describe('presignGet', () => {
+	// AWS's published example of a presigned GET ("Authenticating Requests: Using Query Parameters", S3's API reference).
+	const example = { accessKeyId: 'AKIAIOSFODNN7EXAMPLE', secretAccessKey: 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' }
+	const s3 = { region: 'us-east-1', service: 's3' }
+	const day = new Date('2013-05-24T00:00:00Z')
+
+	test("signs AWS's published example to its known answer", async () => {
+		expect(await presignGet({ origin: 'https://examplebucket.s3.amazonaws.com', path: '/test.txt' }, example, s3, day, 86400)).toBe(
+			'https://examplebucket.s3.amazonaws.com/test.txt?X-Amz-Algorithm=AWS4-HMAC-SHA256'
+				+ '&X-Amz-Credential=AKIAIOSFODNN7EXAMPLE%2F20130524%2Fus-east-1%2Fs3%2Faws4_request'
+				+ '&X-Amz-Date=20130524T000000Z&X-Amz-Expires=86400&X-Amz-SignedHeaders=host'
+				+ '&X-Amz-Signature=aeeed9bbccd4d02ee5c0109b86d86835f995330da4c265957d157751f604d404',
+		)
+	})
+
+	test('carries a session token in the signed query, and keeps the bucket in the host', async () => {
+		const url = new URL(
+			await presignGet(
+				{ origin: 'https://fabrika-apps-sources.s3.eu-central-1.amazonaws.com', path: '/sources/run-1/source.tar.gz' },
+				{ ...example, sessionToken: 'token/with+chars' },
+				{ region: 'eu-central-1', service: 's3' },
+				day,
+				900,
+			),
+		)
+		expect(url.origin).toBe('https://fabrika-apps-sources.s3.eu-central-1.amazonaws.com')
+		expect(url.pathname).toBe('/sources/run-1/source.tar.gz')
+		expect(url.searchParams.get('X-Amz-Security-Token')).toBe('token/with+chars')
+		expect(url.searchParams.get('X-Amz-Expires')).toBe('900')
+		expect(url.searchParams.get('X-Amz-Signature')).toMatch(/^[0-9a-f]{64}$/)
+		// The signature is the last parameter, after the signed query.
+		expect(url.search.endsWith(`&X-Amz-Signature=${url.searchParams.get('X-Amz-Signature') ?? ''}`)).toBe(true)
+	})
+
+	test('refuses an expiry, a path or an origin it does not sign', async () => {
+		const origin = 'https://examplebucket.s3.amazonaws.com'
+		const refused = (request: { origin: string; path: string }, expires: number) =>
+			presignGet(request, example, s3, day, expires).then(() => '', (error: unknown) => String(error))
+		expect(await refused({ origin, path: '/test.txt' }, 0)).toContain('expiry')
+		expect(await refused({ origin, path: '/test.txt' }, 604801)).toContain('expiry')
+		expect(await refused({ origin, path: '/a/../b' }, 60)).toContain('path')
+		expect(await refused({ origin: 'http://examplebucket.s3.amazonaws.com', path: '/test.txt' }, 60)).toContain('origin')
 	})
 })
