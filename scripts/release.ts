@@ -330,15 +330,18 @@ const COMMANDS: readonly string[] = ['validate', 'pack', 'smoke', 'publish', 're
 const LOCAL_BASE_PACKAGE = '@fabrika/app'
 
 /**
- * The version of a local pack: a prerelease of the source version, named after the commit. It names the minor the
- * checkout's code is, so the checker and the platform see the release it belongs to. npm never has it, so nothing
- * resolves it from the registry by accident. The `g` keeps an all-digit abbreviation such as `0123456` from being a
- * numeric identifier, which SemVer refuses with a leading zero.
+ * The version of a local pack, named after the commit. It names the minor the checkout's code is, so the checker and the
+ * platform see the release it belongs to. npm never has it, so nothing resolves it from the registry by accident. A
+ * release source gets a prerelease of itself; a prerelease source (`0.9.0-dev.33`) keeps its identifiers and gains the
+ * local ones, so the pack sorts right after its source (before `0.9.0-dev.34`). The `g` keeps an all-digit abbreviation
+ * such as `0123456` from being a numeric identifier, which SemVer refuses with a leading zero.
  */
 export const localVersion = (source: string, commit: string): string => {
-	if (!/^\d+\.\d+\.\d+$/.test(source)) throw new Error(`the source version ${JSON.stringify(source)} is not a release`)
+	if (!TAG_PATTERN.test(`v${source}`) || source.includes('+')) {
+		throw new Error(`the source version ${JSON.stringify(source)} is not a release or a prerelease`)
+	}
 	if (!/^[0-9a-f]{7,40}$/.test(commit)) throw new Error(`the commit ${JSON.stringify(commit)} is not a git object name`)
-	return `${source}-local.g${commit}`
+	return `${source}${source.includes('-') ? '.' : '-'}local.g${commit}`
 }
 
 /** `pack --local`'s version and the published version the skill's example pins keep naming, which npm has. */

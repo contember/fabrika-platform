@@ -30,7 +30,9 @@ machine API key described below.
 
 1. creates or reuses the cheap `apps-prod` namespace with shared PostgreSQL;
 2. registers the notes app from its compiled Zerops manifest, bound to the keyed
-   source connection `local-keyed-alpha` that owns its private repository;
+   source connection `local-keyed-alpha` that owns its private repository. It
+   registers as the person signed in to the console: `prod` starts protected, and
+   only a person registers it with a trigger ref, so the machine key would be refused;
 3. signs a push with that connection's webhook secret, requires its scoped route
    `/webhooks/github/local-keyed-alpha` to answer 200 with exactly one triggered
    run, and waits for that run's external app-version id. Notes is a contract
@@ -75,8 +77,25 @@ credentials, use:
 bun run local:reset
 ```
 
-This command removes only the `fabrika-local` Compose volumes and
+This command removes only this checkout's Compose volumes and
 `packages/local-stack/.state/`. It then creates and starts a fresh stack.
+
+Each checkout is its own Compose project, `fabrika-local-<directory>-<hash of the
+checkout's path>` (`COMPOSE_PROJECT` in `src/compose.ts`), so a worktree's
+volumes, networks and containers never meet another worktree's credentials. The
+host ports are fixed, so one stack runs at a time: run `local:down` in the
+worktree that runs one before `local:up` in another; `docker ps` names the
+project in each container's name.
+
+A stack started before this naming is the project `fabrika-local`, which
+`local:down` no longer reaches: stop it, and once no checkout needs its data
+remove its containers, networks and volumes, with
+`docker compose --project-name fabrika-local down --volumes --remove-orphans`.
+A worktree's volumes outlive the worktree, because nothing derives its name
+again: run `local:down` and remove its volumes before removing the worktree,
+or list the projects with
+`docker volume ls --format '{{.Label "com.docker.compose.project"}}' | sort -u`
+and remove one with `docker compose --project-name <name> down --volumes`.
 
 ## Local object storage
 

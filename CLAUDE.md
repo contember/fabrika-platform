@@ -89,8 +89,10 @@ Per-package dev/build commands live in each package's own CLAUDE.md.
 - **Never switch the branch of a checkout that another agent uses.** A hotfix is cut with `release:hotfix`, which
   works in a temporary worktree of its own ([`release-process.md`](./docs/reference/release-process.md#cutting-a-hotfix)).
 - Run `bun install` in each new worktree; `node_modules` is not shared.
-- The local Docker stack has a fixed compose project name, `fabrika-local`: one worktree at a time runs `local:*` or
-  `browser:*`.
+- Each worktree's local Docker stack is its own compose project, `fabrika-local-<directory>-<path hash>`, with its own
+  volumes and `.state/`. The host ports are fixed, so one stack runs at a time: `local:down` (or `browser:down`) in one
+  worktree before `local:up` in another, and never take down a stack another session runs. A stack started before this
+  naming is the project `fabrika-local` ([`local-development.md`](./docs/reference/local-development.md) removes it).
 
 ## Project Structure
 

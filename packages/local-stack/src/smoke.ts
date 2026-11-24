@@ -33,6 +33,7 @@ import { NOTES_FILES_SERVICE, notesContract } from 'fabrika-example-zerops/fabri
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { COMPOSE_PROJECT } from './compose'
 import { approveInConsole, signInToConsole } from './console-approval'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY, type LocalSourceManifest } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
@@ -85,7 +86,7 @@ const STORAGE_PROVENANCE_VARIABLE = 'FABRIKA_STORAGE_PROVENANCE'
 
 const compose = async (args: string[], expectSuccess = true, showOutput = true): Promise<number> => {
 	const process = Bun.spawn(
-		['docker', 'compose', '--project-name', 'fabrika-local', '--file', COMPOSE_FILE, ...args],
+		['docker', 'compose', '--project-name', COMPOSE_PROJECT, '--file', COMPOSE_FILE, ...args],
 		{ cwd: REPO_ROOT, stdout: showOutput ? 'inherit' : 'ignore', stderr: showOutput ? 'inherit' : 'ignore', stdin: 'ignore' },
 	)
 	const exitCode = await process.exited
@@ -97,7 +98,7 @@ const compose = async (args: string[], expectSuccess = true, showOutput = true):
 
 const composeOutput = async (args: string[]): Promise<string> => {
 	const process = Bun.spawn(
-		['docker', 'compose', '--project-name', 'fabrika-local', '--file', COMPOSE_FILE, ...args],
+		['docker', 'compose', '--project-name', COMPOSE_PROJECT, '--file', COMPOSE_FILE, ...args],
 		{ cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' },
 	)
 	const [output, failure, exitCode] = await Promise.all([
