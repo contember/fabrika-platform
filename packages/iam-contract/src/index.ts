@@ -16,6 +16,7 @@ import type {
 	AppMemberItem,
 	AppSchema,
 	AppScopeDef,
+	DimensionValue,
 	Locale,
 	PermissionEntry,
 	PermissionSource,
@@ -558,6 +559,28 @@ export interface AppInput {
 	app: string
 }
 
+// ── Live scope values (ADR-0085 §4) ────────────────────────────────────────────
+
+export interface ListScopeValuesInput {
+	/** The application id, `<app>@<env>`. */
+	app: string
+	/** The dimension whose values the console offers. */
+	scopeType: string
+}
+
+/**
+ * Why the application's own list is not there, so the console falls back to the listed values or free text:
+ * `no_source` (the dimension names no procedure), `not_held` (the administrator holds the procedure's action nowhere at
+ * the application), `no_origin` (IAM knows no address of it), `refused` (its proxy or the application answered
+ * 401/403/404), `timeout`, `unreachable` (any other failure to answer) or `malformed` (an answer that is no list).
+ */
+export type ScopeValuesUnavailable = 'no_source' | 'not_held' | 'no_origin' | 'refused' | 'timeout' | 'unreachable' | 'malformed'
+
+/** What the application answered as the administrator, or why it could not be asked. Information, never a check. */
+export type ScopeValuesResult =
+	| { source: 'application'; values: DimensionValue[] }
+	| { source: 'unavailable'; reason: ScopeValuesUnavailable }
+
 /**
  * The public origins IAM will hand this app a session at (ADR-0022). Declarative: the whole set is
  * stated, so removing one is the same call as adding one and a stale entry cannot survive a deploy.
@@ -865,6 +888,10 @@ export interface IamAdminRpcContract {
 		list: RpcProcedure<ListSessionsInput, CursorList<UserConnectionDto>>
 		revoke: RpcProcedure<GrantIdInput, OkResponse>
 	}
+	/** A dimension's values, asked of the application as the signed-in administrator (ADR-0085 §4). */
+	scopeValues: {
+		list: RpcProcedure<ListScopeValuesInput, ScopeValuesResult>
+	}
 	apps: {
 		list: RpcProcedure<void, ListResponse<AppDto>>
 		getSchema: RpcProcedure<AppInput, AppSchemaDto>
@@ -975,7 +1002,18 @@ export interface UserConnectionDto {
 	status: 'active' | 'revoked' | 'expired' | 'unavailable'
 }
 
-export type { AppActionDef, AppMemberItem, AppSchema, AppScopeDef, PermissionEntry, PermissionSource, PrincipalAffiliation, PrincipalType, RoleDef }
+export type {
+	AppActionDef,
+	AppMemberItem,
+	AppSchema,
+	AppScopeDef,
+	DimensionValue,
+	PermissionEntry,
+	PermissionSource,
+	PrincipalAffiliation,
+	PrincipalType,
+	RoleDef,
+}
 export * from './access'
 export * from './oauth'
 export * from './password-policy'

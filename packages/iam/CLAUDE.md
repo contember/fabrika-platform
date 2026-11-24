@@ -349,6 +349,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   or nothing. A membership revoke of one value removes that row only, so the set shrinks. A
   dimension's listed values (`app_scopes.value_list`) are what the console offers; IAM never refuses a value outside
   them.
+- **IAM ASKS AN APPLICATION FOR A DIMENSION'S VALUES WITH A 60-SECOND KEY THAT NEVER LEAVES IAM** (ADR-0085 §4,
+  `src/admin/scope-values.ts`). `scopeValues.list` of `/admin/rpc` (one of `USER_ADMINISTRATION`) admits a user in a
+  session whose administration covers the app (`requireManagedApp`), never a key. It reads the dimension's
+  `app_scopes.value_source`, issues a self-bound key of that person bound to the app for
+  `SCOPE_VALUE_KEY_TTL_SECONDS` whose inline grants are the person's entries of the source's action only, writes it
+  with `iam.scope_values.read` in one transaction, and POSTs the procedure on the app's one registered return origin,
+  https only (http in a local IAM), else `no_origin` (`sourceUrl`; `redirect: 'manual'`, 3 s, 256 KiB), so the application's proxy exchanges the key. Every failure of the application
+  is `{ source: 'unavailable', reason }`, never an error. Never send the key anywhere else, log it, or widen its grants.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
   Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it
   more than that credential carries: a `px_` key is resolved live and downscoped by its own grants, and

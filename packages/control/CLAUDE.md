@@ -800,7 +800,8 @@ other environment, before the provider prepares anything, and the write maps a r
   record names the run (`RestoreRepository.namesRun`), so an approved restore deploy queued again stays exempt.
   `requirePersonToPointTriggerRef` keeps a key from naming a protected environment's trigger ref (also on a new one that
   starts protected, through `put` or `register`), `requirePersonToPointDomain` from naming its domain (`put`; clearing
-  it stays open), and `requirePersonToRedirect` from changing any field of `apps.update`
+  it stays open), `requirePersonToPointPublicOrigin` from changing its public origin (`put` and `register`; IAM sends a
+  scope-value key there, ADR-0085 §4), and `requirePersonToRedirect` from changing any field of `apps.update`
   on its app (ADR-0050 §4). `apps.update` writes only the fields that change, and a key's write is conditional in SQL
   on no protected environment (`updateApp` with `unlessProtected`). The flag and the counters outlive the row in `app_env_protection`; a
   change of the flag bumps `protection_revision` and `generation`, and a registry write bumps `generation`, so an

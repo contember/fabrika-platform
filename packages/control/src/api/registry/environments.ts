@@ -1,6 +1,12 @@
 import type { AppEnvDto, ListResponse, OkResponse, PutAppEnvRequest, RotateTokenKeyResponse } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderRegistration } from '@fabrika/provider-contract'
-import { requireHumanForProtectedDelete, requirePersonToPointDomain, requirePersonToPointTriggerRef, startsProtected } from '../../approval/human'
+import {
+	requireHumanForProtectedDelete,
+	requirePersonToPointDomain,
+	requirePersonToPointPublicOrigin,
+	requirePersonToPointTriggerRef,
+	startsProtected,
+} from '../../approval/human'
 import {
 	AppEnvChangedError,
 	appEnvCrossOrigins,
@@ -53,6 +59,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	}
 	await assertTriggerRefFree(c, appId, env, triggerRef)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, existing?.public_origin ?? null)
+	await requirePersonToPointPublicOrigin(c, { appId, env, existing, publicOrigin })
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, appId, env, existing)
 	const nextNamespaceId = namespace?.id ?? null
 	if (existing?.namespace_id !== nextNamespaceId) {

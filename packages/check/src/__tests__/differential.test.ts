@@ -241,6 +241,7 @@ describe('the static reader and the evaluated contract agree', () => {
 		expect(Object.keys(artifact.exports)).toEqual(['tasks'])
 		expect(Object.keys(artifact.imports)).toEqual(['billing'])
 		expect(artifact.dimensions['project']?.directory).toBe('labels')
+		expect(artifact.dimensions['project']?.valuesFrom).toBe('api.projectValues')
 		expect(artifact.dimensions['task']?.values).toEqual([{ value: 'backlog' }, { value: 'triage', label: 'Triage' }])
 		expect([artifact.locale, artifact.displayName]).toEqual(['cs', 'Úkoly'])
 		expect(artifact.roles['contributor']?.external).toBe(true)

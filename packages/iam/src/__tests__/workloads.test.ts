@@ -223,7 +223,8 @@ describe("a public procedure's key", () => {
 
 describe('an installation upgraded to the public workload kind', () => {
 	test('keeps every job, webhook and connector workload, and each key still mints what it minted', async () => {
-		// The reconcile of this release also writes `app_terminals` and a dimension's `value_list`, later and independent.
+		// The reconcile of this release also writes `app_terminals` and a dimension's `value_list` and `value_source`, later
+		// and independent.
 		const h = createHarness(
 			[
 				migrationsBefore('0020_public_workloads.sql'),
@@ -231,6 +232,7 @@ describe('an installation upgraded to the public workload kind', () => {
 				migrationFile('0029_role_via.sql'),
 				migrationFile('0035_grant_requests.sql'),
 				migrationFile('0036_grant_scope_sets.sql'),
+				migrationFile('0037_scope_value_sources.sql'),
 			].join('\n'),
 		)
 		const workloads: AppSchema['workloads'] = [

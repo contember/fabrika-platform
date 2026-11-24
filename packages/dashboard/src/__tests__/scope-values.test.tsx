@@ -4,8 +4,9 @@
 import { MAX_GRANT_SCOPE_VALUES } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { resolveScope, scopedValue, ScopeValuesField, valuesFromText } from '../access/components/ScopePicker'
+import { resolveScope, scopedValue, ScopeValuesChoice, ScopeValuesField, valuesFromText } from '../access/components/ScopePicker'
 import { fmtGrantScope } from '../access/lib/format'
+import { type LiveScopeValues, unavailableReason } from '../access/lib/useLiveScopeValues'
 
 const organization = {
 	type: 'organization',
@@ -17,6 +18,19 @@ function render(dimension: Parameters<typeof ScopeValuesField>[0]['dimension'], 
 	const value = scopedValue(dimension.type, values)
 	if (value.kind !== 'scoped') throw new Error('scoped')
 	return renderToStaticMarkup(<ScopeValuesField dimension={dimension} value={value} onChange={() => {}} idPrefix="t" />)
+}
+
+/** A render of a dimension whose values come from the application, in the state `live` of its answer. */
+function renderLive(live: LiveScopeValues, values: string[], declared: { value: string; label?: string }[] = []): string {
+	const value = scopedValue('organization', values)
+	if (value.kind !== 'scoped') throw new Error('scoped')
+	const dimension = {
+		type: 'organization',
+		label: 'Organization',
+		values: declared,
+		valueSource: { endpoint: 'api.organizationValues', path: '/api/organizationValues', action: 'orgs.read' },
+	}
+	return renderToStaticMarkup(<ScopeValuesChoice dimension={dimension} live={live} value={value} onChange={() => {}} idPrefix="t" />)
 }
 
 /** The checkboxes a render shows, as `[id, checked]`. */
@@ -59,5 +73,48 @@ describe('the values of a grant', () => {
 	test('a grant reads as its dimension and every value it holds', () => {
 		expect(fmtGrantScope({ scopeType: 'organization', scopeValue: 'acme', scopeValues: ['acme', 'globex'] })).toBe('organization = acme, globex')
 		expect(fmtGrantScope({ scopeType: null, scopeValue: null, scopeValues: null })).toBe('Global')
+	})
+
+	test("the application's own values: checkboxes from its answer, a held value it no longer lists flagged, never dropped", () => {
+		const html = renderLive({ status: 'live', values: [{ value: 'acme', label: 'Acme Corporation' }, { value: 'umbrella' }] }, ['initech'], [{
+			value: 'globex',
+		}])
+		expect(checkboxes(html)).toEqual([['t-value-acme', false], ['t-value-umbrella', false], ['t-value-initech', true]])
+		expect(html).toContain('Acme Corporation')
+		expect(html).not.toContain('globex')
+		expect(html).toContain('not listed')
+		expect(html).not.toContain('Could not load')
+	})
+
+	test('while the application is asked, a status line; no checkbox and no free text yet', () => {
+		const html = renderLive({ status: 'loading' }, ['acme'])
+		expect(html).toContain('role="status"')
+		expect(html).toContain('Loading the values of Organization')
+		expect(checkboxes(html)).toEqual([])
+		expect(html).not.toContain('<textarea')
+	})
+
+	test('an application that does not answer falls back to the declared list, under a warning naming why', () => {
+		const html = renderLive({ status: 'unavailable', reason: 'timeout' }, ['acme', 'initech'], [{ value: 'acme' }, { value: 'globex' }])
+		expect(checkboxes(html)).toEqual([['t-value-acme', true], ['t-value-globex', false], ['t-value-initech', true]])
+		expect(html).toContain('Could not load the values of Organization from the application: the application did not answer in time.')
+		expect(html).toContain('Showing the values the application declares instead.')
+		expect(html).toContain('not listed')
+	})
+
+	test('with no declared list either, it falls back to free text, keeping every held value', () => {
+		const html = renderLive({ status: 'unavailable', reason: 'not_held' }, ['acme', 'initech'])
+		expect(checkboxes(html)).toEqual([])
+		expect(html).toContain('<textarea')
+		expect(html).toContain('acme\ninitech')
+		expect(html).toContain('you do not hold the permission the application asks for to list them')
+		expect(html).toContain('Enter the IDs by hand.')
+	})
+
+	test('every reason reads as a sentence', () => {
+		const reasons = ['no_source', 'not_held', 'no_origin', 'refused', 'timeout', 'unreachable', 'malformed', 'failed'] as const
+		const sentences = reasons.map(unavailableReason)
+		expect(new Set(sentences).size).toBe(reasons.length)
+		for (const sentence of sentences) expect(sentence).toMatch(/^[a-z].*[a-z]$/)
 	})
 })

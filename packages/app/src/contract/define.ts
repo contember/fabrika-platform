@@ -98,6 +98,14 @@ export interface DimensionDef<A extends string, D extends string, R extends stri
 	 * Absent, the console takes free text.
 	 */
 	readonly values?: readonly DimensionValue[]
+	/**
+	 * The query procedure, by its endpoint id (`'<mount>.<name>'`), that answers this dimension's values for the
+	 * administrator who grants (ADR-0085 §4). IAM calls it through the proxy as that person, so it answers the values
+	 * the person may see: declare it `access: { action, over: '<dimension>' }`, with no input, answering
+	 * `{ values: [{ value, label? }] }`. Information for the console, never a check; `values`, when declared, is the
+	 * list the console falls back to.
+	 */
+	readonly valuesFrom?: string
 }
 
 export interface RoleDef<A extends string, D extends string, R extends string> {

@@ -17,6 +17,7 @@ import {
 	describeContract,
 	type MountDeclaration,
 	parseContractArtifact,
+	type ProcedureDeclaration,
 	schemaFromContract,
 } from '../contract'
 import { contract as notes } from './fixtures/notes-app/fabrika.contract'
@@ -528,6 +529,67 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(build(listed([{ value: 'acme' }, { value: 'acme' }]))).toEqual(["dimension 'workspace' values: lists the value 'acme' twice"])
 		expect(build(listed([{ value: 'acme', label: ' ' }]))).toEqual([
 			"dimension 'workspace' values: labels the value 'acme' with ' ' (allowed: 1 to 120 characters)",
+		])
+	})
+
+	test("a dimension's value source: a person's query over it answering { values }, carried to the IAM schema with its path and action", () => {
+		const text: SchemaShape = {
+			type: 'string',
+			format: null,
+			minLength: null,
+			maxLength: null,
+			pattern: null,
+			startsWith: null,
+			endsWith: null,
+			includes: null,
+		}
+		const valuesShape: SchemaShape = {
+			type: 'object',
+			fields: {
+				values: {
+					type: 'array',
+					items: { type: 'object', fields: { value: text, label: { type: 'optional', inner: text } } },
+					minItems: null,
+					maxItems: 500,
+				},
+			},
+		}
+		const sourced = (valuesFrom: string, procedure: ProcedureDeclaration<SchemaShape>) => ({
+			...withMounts({ ...base.mounts, api: { ...api, procedures: { ...api.procedures, workspaceValues: procedure } } }),
+			dimensions: { ...base.dimensions, workspace: { ...base.dimensions['workspace'], valuesFrom } },
+		})
+		const good: ProcedureDeclaration<SchemaShape> = {
+			'~kind': 'procedure',
+			type: 'query',
+			input: null,
+			output: valuesShape,
+			access: { action: 'notes.read', over: 'workspace' },
+		}
+		const artifact = buildArtifact(sourced('api.workspaceValues', good), noteTables)
+		expect(artifact.dimensions['workspace']?.valuesFrom).toBe('api.workspaceValues')
+		const scope = schemaFromContract(artifact).scopes.find((entry) => entry.type === 'workspace')
+		expect(scope?.valueSource).toEqual({ endpoint: 'api.workspaceValues', path: '/api/workspaceValues', action: 'notes.read' })
+		expect(appSchemaSchema.safeParse(schemaFromContract(artifact)).success).toBe(true)
+		expect(schemaFromContract(buildArtifact(base, noteTables)).scopes.some((entry) => 'valueSource' in entry)).toBe(false)
+
+		const where = "dimension 'workspace' valuesFrom"
+		expect(build(sourced('api.nothing', good))).toEqual([`${where}: 'api.nothing' is not a procedure of the contract`])
+		expect(build(sourced('api.workspaceValues', { ...good, type: 'mutation' }))).toContain(
+			`${where}: 'api.workspaceValues' is not a query procedure (allowed: r.query(…) of an rpc mount)`,
+		)
+		expect(build(sourced('api.workspaceValues', { ...good, access: { action: 'notes.read', app: true } }))).toEqual([
+			`${where}: 'api.workspaceValues' does not require an action over 'workspace' (allowed: access: { action: '<action>', over: 'workspace' })`,
+		])
+		const managed = sourced('api.workspaceValues', good)
+		const managedWorkspace = { ...managed.dimensions['workspace'], members: { manage: 'notes.read', list: 'notes.read' } }
+		expect(build({ ...managed, dimensions: { ...managed.dimensions, workspace: managedWorkspace } })).toContain(
+			`${where}: 'api.workspaceValues' requires 'notes.read', which manages the members of 'workspace' (allowed: an action that reads, not members.manage)`,
+		)
+		expect(build(sourced('api.workspaceValues', { ...good, input: { type: 'object', fields: {} } }))).toEqual([
+			`${where}: 'api.workspaceValues' takes an input (allowed: no input)`,
+		])
+		expect(build(sourced('api.workspaceValues', { ...good, output: { type: 'array', items: text, minItems: null, maxItems: null } }))).toEqual([
+			`${where}: 'api.workspaceValues' does not answer { values: [{ value: string, label?: string }] }`,
 		])
 	})
 

@@ -9,7 +9,8 @@ export const vocabulary = defineVocabulary({
 	// IAM's sign-in and password pages speak Czech for Notes, which the browser onboarding suite relies on.
 	locale: 'cs',
 	dimensions: {
-		workspace: { members: { manage: 'members.manage', list: 'notes.read' } },
+		// The console lists a grant's workspaces from the application, as the administrator who grants (ADR-0085 §4).
+		workspace: { members: { manage: 'members.manage', list: 'notes.read' }, valuesFrom: 'api.notes.workspaces' },
 		note: { in: 'workspace' },
 	},
 	actions: {

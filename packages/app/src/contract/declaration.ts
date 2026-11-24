@@ -139,6 +139,8 @@ export interface DimensionDeclaration {
 	readonly directory?: string
 	/** The values the console offers for a grant here (ADR-0085); `buildArtifact` checks the list. */
 	readonly values?: readonly DimensionValue[]
+	/** The query procedure, by endpoint id, IAM asks for the values (ADR-0085 §4); `buildArtifact` checks its row. */
+	readonly valuesFrom?: string
 }
 
 export interface RoleDeclaration {

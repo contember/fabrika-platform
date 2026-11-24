@@ -159,6 +159,7 @@ export function GrantComposer(
 			{memberScope && (
 				<>
 					<ScopeValuesField
+						app={app}
 						dimension={catalog?.scopes.find((dimension) => dimension.type === memberScope) ?? { type: memberScope }}
 						value={scope.kind === 'scoped' && scope.type === memberScope ? scope : { kind: 'scoped', type: memberScope, values: [], text: '' }}
 						onChange={setScope}
@@ -189,7 +190,7 @@ export function GrantComposer(
 							Role permissions: <code>{selectedRole.permissions.join(', ') || 'None'}</code>
 						</p>
 					)}
-					{!memberScope && <ScopePicker scopes={catalog?.scopes ?? []} value={scope} onChange={setScope} idPrefix={`${idPrefix}-scope`} />}
+					{!memberScope && <ScopePicker app={app} scopes={catalog?.scopes ?? []} value={scope} onChange={setScope} idPrefix={`${idPrefix}-scope`} />}
 					<label>
 						Expires (optional)
 						<input type="datetime-local" value={expiry} onChange={(event) => onExpiryChange(event.target.value)} />

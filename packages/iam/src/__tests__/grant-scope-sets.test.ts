@@ -26,7 +26,7 @@ async function fixture({ repositories, db }: Backend) {
 	const services = makeServicesFor(repositories, { authentication: { oidc: true, password: true } })
 	const context: AdminContext = {
 		services,
-		admin: { id: admin.id, label: admin.label, type: 'user', permissions: [{ action: '*', scope: null, source: 'grant' }] },
+		admin: { id: admin.id, label: admin.label, type: 'user', permissions: [{ action: '*', scope: null, source: 'grant' }], session: true },
 		administration: { kind: 'installation' },
 		app: 'propustka',
 		requestId: crypto.randomUUID(),

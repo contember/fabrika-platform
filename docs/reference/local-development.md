@@ -272,7 +272,9 @@ expects it. It leaves the Notes database holding the suite's rows; `local:up` ke
 
 Containers call the same URLs. Since Bun 1.4.1, a Bun `fetch` sends every `*.localhost` name to the container's own
 loopback, so each container that calls one starts through `packages/local-stack/src/loopback-forward.ts`, which
-forwards loopback `:18080` to the platform proxy and `:18081` to the apps proxy (`entrypoint` in `compose.yaml`).
+forwards loopback `:18080` to the platform proxy and `:18081` to the apps proxy (`entrypoint` in `compose.yaml`). IAM
+serves `:18080` itself and forwards only `:18081`, over `edge`: it asks Notes for a workspace's values as the granting
+administrator ([ADR-0085](../decisions/0085-a-grant-holds-a-set-of-scope-values.md) §4).
 
 ## Signing in
 

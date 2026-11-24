@@ -55,6 +55,15 @@ describe('the example application', () => {
 		expect(await api.organizations()).toEqual({ all: false, values: ['acme'] })
 	})
 
+	test('the organizations the console offers: every one to a global reader, the held ones otherwise, none without the action', async () => {
+		const everyone = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ action: 'example.read' }])) })
+		expect((await everyone.organizationValues()).values.map((entry) => entry.value)).toEqual(['acme', 'globex', 'hooli', 'initech', 'umbrella'])
+		const one = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ action: 'example.read', scope: ACME }])) })
+		expect(await one.organizationValues()).toEqual({ values: [{ value: 'acme', label: 'Acme Corporation' }] })
+		const viewer = createClient(contract, 'api', { fetch: kit.browser(kit.testCaller([{ role: 'viewer', scope: DEMO }])) })
+		expect((await failure(viewer.organizationValues())).httpStatus).toBe(403)
+	})
+
 	test('a caller without a session is sent to sign in, and one without any permission is refused', async () => {
 		const anonymous = await kit.browser()('/api/me', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })
 		expect(anonymous.status).toBe(401)

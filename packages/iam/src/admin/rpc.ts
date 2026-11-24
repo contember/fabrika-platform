@@ -19,6 +19,7 @@ import {
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
 import { ADMIN_ACTION, extractCredentials, IAM_APP, resolveAdmin } from './router'
+import { listScopeValuesUseCase } from './scope-values'
 import { administrationOf } from './user-admin'
 
 const t = initRpc<IamAppContext>()
@@ -127,6 +128,13 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.input(z.object({ app: nonEmpty, required: z.boolean(), revision: z.number().int().nonnegative() }).strict())
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => setGrantApprovalUseCase(context(ctx), input)),
+	}),
+	// A person who grants at the application asks it for a dimension's values (ADR-0085 §4); a mutation, because it
+	// issues a short-lived key and records it.
+	scopeValues: t.router({
+		list: t.procedure
+			.input(z.object({ app: nonEmpty, scopeType: nonEmpty }))
+			.mutation(({ ctx, input }) => listScopeValuesUseCase(context(ctx), input)),
 	}),
 	apps: t.router({
 		list: t.procedure.query(({ ctx }) => adminUseCases.listApps(context(ctx))),

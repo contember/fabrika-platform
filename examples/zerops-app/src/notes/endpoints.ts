@@ -3,13 +3,19 @@
 
 import { ConflictError, fromRow } from '@fabrika/app'
 import { app } from '../app-kit'
-import { ById, Done, NewNote, Note, NoteList, Saved, Versioned } from '../schemas'
+import { ById, Done, NewNote, Note, NoteList, Saved, Versioned, WorkspaceValues } from '../schemas'
 
 export const notes = app.group({ callers: ['human', 'machine'] }, (r) => ({
 	list: r.query({ output: NoteList, access: { action: 'notes.read', over: 'workspace' } })
 		.handle(async ({ ctx }) => {
 			const page = await ctx.db.within.notes.list({ orderBy: [['title', 'asc']], limit: 200 })
 			return { items: page.items.map((row) => fromRow(Note, row)) }
+		}),
+	// The workspaces holding notes the caller reads: what the console offers when an administrator grants in a workspace.
+	workspaces: r.query({ output: WorkspaceValues, access: { action: 'notes.read', over: 'workspace' } })
+		.handle(async ({ ctx }) => {
+			const page = await ctx.db.within.notes.list({ orderBy: [['workspace_id', 'asc']], limit: 500 })
+			return { values: [...new Set(page.items.map((row) => row.workspace_id))].map((value) => ({ value })) }
 		}),
 	get: r.query({ input: ById, output: Note, access: { action: 'notes.read', on: 'note', from: 'id' } })
 		.handle(async ({ ctx }) => fromRow(Note, await ctx.db.target.get())),

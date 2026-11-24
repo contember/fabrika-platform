@@ -736,6 +736,13 @@ still refuses any `Authorization` header, as authorization.
   declares `directory: 'labels'` or to `manage`, addresses and last sign-ins only to `manage`. This is authorization of
   IAM's own operations, never a second enforcement decision; the alternative, one organisation value per
   single-tenant application, made every endpoint carry a scope with one value.
+- **IAM asks an application for a dimension's values as the granting administrator**
+  ([ADR-0085](0085-a-grant-holds-a-set-of-scope-values.md) §4). For a dimension that names a value source, IAM issues
+  a self-bound `px_` key of a person signed in to the console who administers the application: bound to that
+  application id, 60 s, carrying only the procedure's action where the person holds it, recorded with the key in one
+  transaction. IAM calls the procedure on the application's public origin with it, without following a redirect, so
+  the application's proxy exchanges it with `mintFromKey` and decides the request like any other. The key never
+  leaves IAM; it adds no credential form, no row mode and no enforcement path.
 - **A member's last sign-in is personal data.** IAM records a person's last sign-in to each application when the
   application's proxy redeems the handoff code (`app_sign_ins`), and answers it as `lastSignInAt` beside the address,
   to a holder of `members.manage` only: the dimension's for a value's directory, the application's for its own.

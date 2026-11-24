@@ -279,11 +279,12 @@ class SurfaceReader {
 	}
 
 	#dimension(name: string, value: LiteralValue): DimensionDef<string, string, string> {
-		const fields = strictFields(value, `dimension '${name}'`, [], ['in', 'creator', 'members', 'directory', 'values'])
+		const fields = strictFields(value, `dimension '${name}'`, [], ['in', 'creator', 'members', 'directory', 'values', 'valuesFrom'])
 		const members = fields.get('members')
 		const memberFields = members === undefined ? undefined : strictFields(members, `dimension '${name}' members`, ['manage', 'list'], [])
 		const directory = fields.get('directory')
 		const values = fields.get('values')
+		const valuesFrom = fields.get('valuesFrom')
 		return {
 			in: optionalText(fields.get('in'), 'in'),
 			creator: optionalText(fields.get('creator'), 'creator'),
@@ -292,6 +293,7 @@ class SurfaceReader {
 				: { manage: text(memberFields.get('manage'), value, 'manage'), list: text(memberFields.get('list'), value, 'list') },
 			...(directory === undefined ? {} : { directory: directoryOf(directory, value) }),
 			...(values === undefined ? {} : { values: dimensionValuesOf(name, values) }),
+			...(valuesFrom === undefined ? {} : { valuesFrom: text(valuesFrom, value, 'valuesFrom') }),
 		}
 	}
 

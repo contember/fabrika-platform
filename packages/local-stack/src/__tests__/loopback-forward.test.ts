@@ -73,7 +73,7 @@ describe('the composition', () => {
 			return new Set(declared === undefined ? [] : Array.isArray(declared) ? declared : Object.keys(declared))
 		}
 		const forwarding = Object.entries(services).filter(([, service]) => service.entrypoint?.[1] === FORWARDER)
-		expect(forwarding.map(([name]) => name).sort()).toEqual(['apps-proxy-auth', 'control', 'notes', 'operations'])
+		expect(forwarding.map(([name]) => name).sort()).toEqual(['apps-proxy-auth', 'control', 'iam', 'notes', 'operations'])
 		for (const [name, service] of forwarding) {
 			const { forwards } = parseLoopbackArgs([...(service.entrypoint ?? []).slice(2), 'true'])
 			for (const forward of forwards) {

@@ -4,7 +4,7 @@ import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, Provide
 import { snapshotAccessMap } from '../../approval/access-map'
 import { appEnvCategories } from '../../approval/categories'
 import { snapshotDeviations } from '../../approval/diff'
-import { requirePersonToPointTriggerRef } from '../../approval/human'
+import { requirePersonToPointPublicOrigin, requirePersonToPointTriggerRef } from '../../approval/human'
 import { approvedSnapshot } from '../../approval/snapshot'
 import { snapshotSurface } from '../../approval/surface'
 import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
@@ -29,6 +29,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	const sourceBinding = await sourceBindingFields(c, input, normalized)
 	if ((sourceBinding.githubConnectionId ?? null) === null) await assertAnonymouslyReadable(c, normalized)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, null)
+	await requirePersonToPointPublicOrigin(c, { appId: id, env, existing: null, publicOrigin })
 	const providerApp: ProviderApp = {
 		id,
 		source: {

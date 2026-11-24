@@ -1,4 +1,4 @@
-import { type DimensionValue, parseJsonStringArray, terminalIdentifyProblem, type WorkloadKind } from '@fabrika/auth-core'
+import { type DimensionValue, type DimensionValueSource, parseJsonStringArray, terminalIdentifyProblem, type WorkloadKind } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
 
 import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
@@ -42,6 +42,8 @@ export interface AppScopeRow {
 	members_lookup: string | null
 	/** A JSON array of the `{ value, label? }` the console offers for a grant here (ADR-0085), or null for none. */
 	value_list: string | null
+	/** A JSON object `{ endpoint, path, action }`: the procedure IAM asks for the values (ADR-0085 §4), or null for none. */
+	value_source: string | null
 }
 
 /** A share-link mount (the `app_link_mounts` table). `grants` is a JSON array of exact actions. */
@@ -353,6 +355,7 @@ export class AppSchemaRepository {
 			members?: { manage: string; list: string } | null
 			directory?: 'labels' | null
 			values?: readonly DimensionValue[] | null
+			valueSource?: DimensionValueSource | null
 			lookups?: string[] | null
 		}[]
 		actions: { action: string; description?: string | null }[]
@@ -439,8 +442,8 @@ export class AppSchemaRepository {
 			statements.push(
 				this.db
 					.prepare(
-						`INSERT INTO app_scopes (app, scope_type, label, parent_scope, creator_role, members_manage, members_list, members_directory, members_lookup, value_list)
-						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+						`INSERT INTO app_scopes (app, scope_type, label, parent_scope, creator_role, members_manage, members_list, members_directory, members_lookup, value_list, value_source)
+						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 						ON CONFLICT (app, scope_type) DO UPDATE SET
 							label = excluded.label,
 							parent_scope = excluded.parent_scope,
@@ -449,7 +452,8 @@ export class AppSchemaRepository {
 							members_list = excluded.members_list,
 							members_directory = excluded.members_directory,
 							members_lookup = excluded.members_lookup,
-							value_list = excluded.value_list`,
+							value_list = excluded.value_list,
+							value_source = excluded.value_source`,
 					)
 					.bind(
 						app,
@@ -462,6 +466,9 @@ export class AppSchemaRepository {
 						scope.directory ?? null,
 						scope.lookups == null || scope.lookups.length === 0 ? null : JSON.stringify(scope.lookups),
 						scope.values == null ? null : JSON.stringify(scope.values),
+						scope.valueSource == null
+							? null
+							: JSON.stringify({ endpoint: scope.valueSource.endpoint, path: scope.valueSource.path, action: scope.valueSource.action }),
 					),
 			)
 		}

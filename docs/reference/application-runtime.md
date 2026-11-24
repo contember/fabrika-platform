@@ -100,6 +100,13 @@ export default serve(contract, { database: scoped(tables) })
   ([ADR-0085](../decisions/0085-a-grant-holds-a-set-of-scope-values.md)). It is information, not authorization: IAM
   grants a value the list does not name, the approval shows a change of it as a neutral line, and a dimension without
   a list takes free text in the console.
+- A dimension whose values are created at run time names a procedure instead, or beside the list:
+  `organization: { valuesFrom: 'api.organizationValues' }`. The procedure is a query that admits `human`, requires an
+  action `over` that dimension other than its `members.manage`, takes no input and answers `{ values: [{ value, label? }] }`; the build refuses any
+  other. When an administrator grants in the dimension, IAM calls it through the application's proxy as that person,
+  with a 60-second key carrying only that action, and the handler answers what `ctx.within.values` allows. When the
+  application does not answer within 3 s, the console falls back to the declared list or free text
+  ([ADR-0085](../decisions/0085-a-grant-holds-a-set-of-scope-values.md) §4).
 
 ## Serving surfaces
 

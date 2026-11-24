@@ -1,5 +1,6 @@
 import type { AppScopeDef } from '@fabrika/iam-contract'
 import { MAX_GRANT_SCOPE_VALUES } from '@fabrika/iam-contract'
+import { type LiveScopeValues, unavailableReason, useLiveScopeValues } from '../lib/useLiveScopeValues'
 import { Badge } from './Badge'
 
 /**
@@ -33,6 +34,8 @@ export function resolveScope(value: ScopeValue): { scopeType: string | null; sco
 }
 
 interface ScopePickerProps {
+	/** The application the grant is at, whose values a dimension with a source lists; null or omitted for none. */
+	app?: string | null
 	/** Scope dimensions for the chosen app (from GET schema); empty when no app picked. */
 	scopes: AppScopeDef[]
 	value: ScopeValue
@@ -44,7 +47,7 @@ interface ScopePickerProps {
  * Generic scope picker: Global, or one dimension (`type`, from the app's `app_scopes`) and the values the grant holds.
  * Defaults to Global.
  */
-export function ScopePicker({ scopes, value, onChange, idPrefix = 'scope' }: ScopePickerProps) {
+export function ScopePicker({ app, scopes, value, onChange, idPrefix = 'scope' }: ScopePickerProps) {
 	const scopedId = `${idPrefix}-scoped`
 	const firstType = scopes[0]?.type ?? ''
 	if (scopes.length === 0) return null
@@ -69,7 +72,7 @@ export function ScopePicker({ scopes, value, onChange, idPrefix = 'scope' }: Sco
 							{scopes.map((s) => <option key={s.type} value={s.type}>{s.label ? `${s.label} (${s.type})` : s.type}</option>)}
 						</select>
 					</label>
-					<ScopeValuesField dimension={dimension ?? { type: value.type }} value={value} onChange={onChange} idPrefix={idPrefix} />
+					<ScopeValuesField app={app} dimension={dimension ?? { type: value.type }} value={value} onChange={onChange} idPrefix={idPrefix} />
 				</>
 			)}
 			{value.kind === 'global' && <p className="hint">Applies to all scopes within the selected application.</p>}
@@ -78,21 +81,45 @@ export function ScopePicker({ scopes, value, onChange, idPrefix = 'scope' }: Sco
 }
 
 interface ScopeValuesFieldProps {
-	/** The dimension the values belong to; its `values` are what the application lists. */
-	dimension: Pick<AppScopeDef, 'type' | 'label' | 'values'>
+	/** The application the grant is at; a dimension with a source lists its values from it (ADR-0085 §4). */
+	app?: string | null
+	/** The dimension the values belong to; its `values` are what the application declares. */
+	dimension: Pick<AppScopeDef, 'type' | 'label' | 'values' | 'valueSource'>
 	value: Extract<ScopeValue, { kind: 'scoped' }>
 	onChange: (value: ScopeValue) => void
 	idPrefix?: string
 }
 
+/** The values of one dimension a grant holds, from the application itself when the dimension names a source. */
+export function ScopeValuesField({ app, dimension, ...rest }: ScopeValuesFieldProps) {
+	const live = useLiveScopeValues(app, dimension)
+	return <ScopeValuesChoice dimension={dimension} live={live} {...rest} />
+}
+
+interface ScopeValuesChoiceProps extends Omit<ScopeValuesFieldProps, 'app'> {
+	live: LiveScopeValues
+}
+
 /**
- * The values of one dimension a grant holds. A dimension that lists its values offers one checkbox each; a value the
- * grant holds that the application no longer lists stays checked and flagged until it is unchecked. A dimension that
- * lists none takes free text, one value per line, under a warning that nothing checks it.
+ * A dimension that lists its values offers one checkbox each: the application's answer when it gave one, else the
+ * declared list. A value the grant holds that the list does not have stays checked and flagged until it is unchecked.
+ * With no list at all it takes free text, one value per line, under a warning that nothing checks it. When the
+ * application was asked and did not answer, a warning says why and what is shown instead.
  */
-export function ScopeValuesField({ dimension, value, onChange, idPrefix = 'scope' }: ScopeValuesFieldProps) {
+export function ScopeValuesChoice({ dimension, live, value, onChange, idPrefix = 'scope' }: ScopeValuesChoiceProps) {
 	const name = dimension.label ?? dimension.type
-	const listed = dimension.values ?? []
+	const listed = live.status === 'live' ? live.values : dimension.values ?? []
+	const fallback = live.status === 'unavailable'
+		? (
+			<p className="warn-text" role="note">
+				Could not load the values of {name} from the application: {unavailableReason(live.reason)}.{' '}
+				{listed.length > 0 ? 'Showing the values the application declares instead.' : 'Enter the IDs by hand.'}
+			</p>
+		)
+		: null
+	if (live.status === 'loading') {
+		return <p className="hint" role="status">Loading the values of {name} from the application…</p>
+	}
 	if (listed.length === 0) {
 		const id = `${idPrefix}-values`
 		return (
@@ -105,8 +132,11 @@ export function ScopeValuesField({ dimension, value, onChange, idPrefix = 'scope
 					onChange={(event) => onChange({ ...value, text: event.target.value, values: valuesFromText(event.target.value) })}
 					placeholder={`One ${name} ID per line`}
 				/>
+				{fallback}
 				<span className="warn-text" role="note">
-					The application lists no values of {name}, so nothing checks these. Use the exact IDs from the application.
+					{live.status === 'live'
+						? `The application lists no values of ${name} for you, so nothing checks these. Use the exact IDs from the application.`
+						: `The application lists no values of ${name}, so nothing checks these. Use the exact IDs from the application.`}
 				</span>
 			</label>
 		)
@@ -121,6 +151,7 @@ export function ScopeValuesField({ dimension, value, onChange, idPrefix = 'scope
 	return (
 		<fieldset className="scope-picker">
 			<legend>{name} values</legend>
+			{fallback}
 			<div className="action-list">
 				{listed.map((entry) => {
 					const id = `${idPrefix}-value-${entry.value}`

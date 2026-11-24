@@ -102,19 +102,19 @@ index 7f226dd..4d4e7fd 100644
  		scope: { child: 'notes' },
  		actions: { read: 'notes.read', insert: 'notes.write', delete: 'notes.delete' },
 diff --git a/src/notes/endpoints.ts b/src/notes/endpoints.ts
-index 01d305b..4d0bfac 100644
+index 4f92943..f60a734 100644
 --- a/src/notes/endpoints.ts
 +++ b/src/notes/endpoints.ts
 @@ -3,7 +3,7 @@
  
  import { ConflictError, fromRow } from '@fabrika/app'
  import { app } from '../app-kit'
--import { ById, Done, NewNote, Note, NoteList, Saved, Versioned } from '../schemas'
-+import { ById, Done, NewNote, Note, NoteList, Rename, Saved, Versioned } from '../schemas'
+-import { ById, Done, NewNote, Note, NoteList, Saved, Versioned, WorkspaceValues } from '../schemas'
++import { ById, Done, NewNote, Note, NoteList, Rename, Saved, Versioned, WorkspaceValues } from '../schemas'
  
  export const notes = app.group({ callers: ['human', 'machine'] }, (r) => ({
  	list: r.query({ output: NoteList, access: { action: 'notes.read', over: 'workspace' } })
-@@ -17,6 +17,8 @@ export const notes = app.group({ callers: ['human', 'machine'] }, (r) => ({
+@@ -23,6 +23,8 @@ export const notes = app.group({ callers: ['human', 'machine'] }, (r) => ({
  		.handle(({ input, ctx }) => ctx.db.target.notes.insert({ title: input.title, trashed: false })),
  	trash: r.mutation({ input: Versioned, output: Saved, access: { action: 'notes.write', on: 'note', from: 'id' } })
  		.handle(({ input, ctx }) => ctx.db.target.update({ trashed: true }, { expectVersion: input.expectVersion })),
@@ -124,7 +124,7 @@ index 01d305b..4d0bfac 100644
  		.handle(async ({ input, ctx }) => {
  			if (!(await ctx.db.target.getForUpdate()).trashed) throw new ConflictError('only a note in the trash is restored')
 diff --git a/src/schemas.ts b/src/schemas.ts
-index 63ba223..35ee755 100644
+index 5fb4576..da78f6b 100644
 --- a/src/schemas.ts
 +++ b/src/schemas.ts
 @@ -9,6 +9,7 @@ export const Note = z.strictObject({ id: z.uuid(), title: z.string(), trashed: z

@@ -19,7 +19,7 @@ async function fixture(repositories: IamRepositories) {
 	const url = new URL('https://iam.example.test/admin/rpc')
 	const context: AdminContext = {
 		services: makeServicesFor(repositories, { authentication: { oidc: true, password: true } }),
-		admin: { id: admin.id, label: admin.label, type: 'user', permissions: [{ action: '*', scope: null, source: 'grant' }] },
+		admin: { id: admin.id, label: admin.label, type: 'user', permissions: [{ action: '*', scope: null, source: 'grant' }], session: true },
 		administration: { kind: 'installation' },
 		app: 'propustka',
 		requestId: crypto.randomUUID(),

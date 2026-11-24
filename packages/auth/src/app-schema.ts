@@ -4,6 +4,7 @@ import {
 	dimensionValuesProblem,
 	displayNameProblem,
 	isActionAllowed,
+	isCanonicalPath,
 	isOwnWorkloadName,
 	isReservedScopeType,
 	LOCALES,
@@ -32,6 +33,11 @@ const scopeSchema = z.object({
 		const problem = dimensionValuesProblem(values)
 		if (problem !== null) ctx.addIssue({ code: 'custom', message: `the scope ${problem}` })
 	}).optional(),
+	valueSource: z.object({
+		endpoint: z.string().min(1),
+		path: z.string().startsWith('/').refine(isCanonicalPath, { message: 'is not a canonical path' }),
+		action: z.string().min(1),
+	}).strict().optional(),
 })
 const actionSchema = z.object({ action: z.string().min(1), description: z.string().min(1).optional() })
 const roleSchema = z.object({
@@ -314,6 +320,24 @@ export const appSchemaSchema = appSchemaShape.superRefine((schema, ctx) => {
 				code: 'custom',
 				path: ['roles', key, 'member', 'scope'],
 				message: `membership role ${quote(key)} names an undeclared scope: ${quote(role.member.scope)}`,
+			})
+		}
+	}
+	for (const [index, scope] of schema.scopes.entries()) {
+		const sourceAction = scope.valueSource?.action
+		if (sourceAction !== undefined && (sourceAction.includes('*') || !catalog.includes(sourceAction))) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['scopes', index, 'valueSource', 'action'],
+				message: `scope ${quote(scope.type)} names a value source of ${quote(sourceAction)}, which is not an exact action of the catalog`,
+			})
+		}
+		// The key IAM issues for the call carries this action; the members' action would carry a membership delegation.
+		if (sourceAction !== undefined && sourceAction === scope.members?.manage) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['scopes', index, 'valueSource', 'action'],
+				message: `scope ${quote(scope.type)} names a value source of ${quote(sourceAction)}, which manages its members`,
 			})
 		}
 	}

@@ -20,3 +20,6 @@ export const InviteGuest = z.strictObject({
 	resend: z.boolean().optional(),
 })
 export const Invited = z.strictObject({ invitationId: z.string() })
+
+/** A dimension's values as the console offers them to an administrator who grants (ADR-0085 §4). */
+export const WorkspaceValues = z.strictObject({ values: z.array(z.strictObject({ value: z.string(), label: z.string().optional() })).max(500) })
