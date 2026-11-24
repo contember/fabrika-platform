@@ -301,9 +301,12 @@ caller (`snapshotSurface`), and its access by role (`snapshotAccessMap`), which 
 line that needs closer review: worded when it deletes data (`DROP TABLE`, `DROP COLUMN`, any `DROP … CASCADE`,
 `TRUNCATE`, `DELETE`), overwrites it (`UPDATE`, an upsert, `ALTER COLUMN … TYPE`) or calls a function the migrations
 declare, "may change data" otherwise (ADR-0050 lists what keeps every value). The platform backs the database up before
-any such migration runs, or refuses the run where it cannot (ADR-0050). A change with a closer-review line on an
-environment with `protected` set (`prod` by default) parks the run in `awaiting_approval`; it publishes nothing until
-a person approves it in the console. Any other change, a plain widening included, publishes at once. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
+any such migration runs, or refuses the run where it cannot (ADR-0050). On an environment with `protected` set (`prod` by
+default), a change with a line in one of the environment's chosen approval categories parks the run in
+`awaiting_approval`; it publishes nothing until a person approves it in the console. The default categories are the
+closer-review reasons; an environment may add permission categories (a role gains an action, a role opened to
+externals, a new role), a page anyone opens, a new CSP origin, or console grants, and may drop a default one
+([ADR-0083](../decisions/0083-an-environment-chooses-what-waits-for-approval.md)). Any other change publishes at once. Otherwise the run publishes its snapshot with a compare-and-swap on `app_envs.generation` and
 `protection_revision`, under the namespace lease. Every provider environment and namespace member then carries
 `approvedSnapshot`'s access: the providers publish a contract application's endpoint table from it, and Control
 writes its IAM schema from it once the run succeeds, never from the artifact. A commit without `fabrika.contract.ts` fails its run before the
@@ -311,7 +314,10 @@ provider is called: Fabrika deploys an application only with a contract. Approvi
 console request from Control's own origin (admission).
 The same person turns an environment's approvals off or on in the console, under "Access approvals" on the
 application's page (`apps.environments.protect`; no CLI verb). A team whose merges to the trigger branch are
-already reviewed on GitHub may turn them off. Turning them off approves no parked run.
+already reviewed on GitHub may turn them off. Turning them off approves no parked run. The same section lists each
+protected environment's categories. With `grants` chosen, IAM holds a console grant, grant edit or revocation at that
+application environment as a grant request, which grants nothing until another IAM administrator of the application
+approves it on the Approvals page (7 days, then it expires).
 
 For non-dry Cloudflare deployments, Control verifies the recorded GitHub commit or resolves a concrete
 ref, then persists the selected commit before freezing its release context.
