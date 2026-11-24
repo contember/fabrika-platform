@@ -442,10 +442,13 @@ export function leaseProjection(runtime: () => DataLayerRuntime): LeaseProjectio
 			if (change.wakes.kind === 'retry') {
 				await rows(transaction, SQL_RETRY, [job, String(change.wakes.at.getTime())])
 			} else {
-				await rows(transaction, SQL_CONSUME, [job])
 				const next = change.wakes.nextCron
 				const key = next === undefined ? null : `cron:${job}:${next.expression}`
-				if (next !== undefined && key !== null && (next.scheduled !== true || (await scheduleDeclares(transaction, key)))) {
+				// The schedule row before the wakes, the order `keepSchedule` takes them in: a seed that holds the row waits
+				// for no delete of this finish, so the two never wait on each other.
+				const declared = next?.scheduled === true && key !== null ? await scheduleDeclares(transaction, key) : true
+				await rows(transaction, SQL_CONSUME, [job])
+				if (next !== undefined && key !== null && declared) {
 					await insert(transaction, newWake({ job, reason: 'cron', dueAt: next.dueAt, dedupe: key }), job)
 				}
 			}

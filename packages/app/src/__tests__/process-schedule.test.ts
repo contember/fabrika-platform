@@ -60,14 +60,16 @@ beforeEach(async () => {
 	)
 })
 
+// Each test's pools close once its runs settled: six replicas of four connections each, kept until `afterAll`, would
+// pass Postgres's default 100 within the file, sooner beside the other files CI runs against the same server.
 afterEach(async () => {
 	for (const held of gates.splice(0)) held.open()
 	await Promise.race([Promise.all(instances.splice(0).map((instance) => instance.settled())), Bun.sleep(3_000)])
+	await Promise.race([Promise.all(opened.splice(0).map((connection) => connection.close())), Bun.sleep(3_000)])
 })
 
 afterAll(async () => {
 	if (!hasPostgres) return
-	for (const connection of opened) await connection.close()
 	await admin((sql) => sql.unsafe(`drop schema ${schema} cascade`))
 })
 
@@ -401,5 +403,13 @@ describe.skipIf(!hasPostgres)('the serving process keeps the job schedule (FABRI
 		await next.settled()
 		expect(runsOf(next)).toBe(1)
 		expect((await wakes())[0]?.due).toBeGreaterThan(await databaseNow())
+	})
+
+	test("every earlier test's pools are closed before the next test opens its own", async () => {
+		expect(opened).toEqual([])
+		const replica = start(NEWER)
+		await replica.wake()
+		await replica.settled()
+		expect(opened).toHaveLength(1)
 	})
 })

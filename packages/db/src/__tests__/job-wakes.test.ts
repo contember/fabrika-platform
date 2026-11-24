@@ -678,6 +678,45 @@ describe.skipIf(!hasPostgres)('keeping the schedule, on Postgres', () => {
 		}
 	})
 
+	test("a guarded finish and the owner's seed take the schedule row before the wakes, so neither waits on the other in a cycle", async () => {
+		const key = 'cron:digest:* * * * *'
+		expect(await on.wakes.keepSchedule(newer, [{ job: 'digest', expression: '* * * * *', dueAt: null }])).toBe(true)
+		await on.wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(-MINUTE), dedupe: key })
+		await on.leases.register('digest')
+		const run = await on.leases.tryAcquire('digest', 'replica', HOUR, HOUR)
+		if (run === null) throw new Error('no lease')
+		expect((await on.wakes.pending('digest')).map((wake) => wake.owned)).toEqual([true])
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		const seeding = await sql.reserve()
+		const settled = (promise: Promise<unknown>, ms: number): Promise<boolean> =>
+			Promise.race([promise.then(() => true), Bun.sleep(ms).then(() => false)])
+		try {
+			// The owner's seed, as keepSchedule runs it: the schedule row first.
+			await seeding.unsafe(`set search_path to ${on.schema}`)
+			await seeding.unsafe('begin')
+			await seeding.unsafe(`insert into fabrika_job_schedule (id, generation, declared) values (1, '${newer}', '["${key}"]')
+				on conflict (id) do update set generation = greatest(fabrika_job_schedule.generation, excluded.generation),
+					declared = case when excluded.generation >= fabrika_job_schedule.generation then excluded.declared else fabrika_job_schedule.declared end`)
+			// A guarded finish of the run that owns the due cron wake: it waits for the row before it deletes the wake.
+			const finishing = on.leases.finish(run, 'succeeded', {
+				kind: 'completed',
+				nextCron: { expression: '* * * * *', dueAt: at(MINUTE), scheduled: true },
+			})
+			expect(await settled(finishing, 300)).toBe(false)
+			// The seed's insert of the same key: had the finish deleted the wake first, this would wait on it (40P01 follows).
+			const seeded = seeding.unsafe(`insert into fabrika_wakes (id, job, due_at, reason, attempt, dedupe)
+				values (gen_random_uuid(), 'digest', ${Date.now() + MINUTE}, 'cron', 0, '${key}') on conflict (dedupe) where dedupe is not null do nothing`)
+			expect(await settled(seeded, 2_000)).toBe(true)
+			await seeding.unsafe('commit')
+			expect(await finishing).toBe(true)
+			expect((await on.wakes.pending('digest')).map((wake) => ({ dedupe: wake.dedupe, owned: wake.owned }))).toEqual([{ dedupe: key, owned: false }])
+			expect((await on.wakes.pending('digest'))[0]?.dueAt.getTime()).toBeGreaterThan(Date.now())
+		} finally {
+			seeding.release()
+			await sql.close()
+		}
+	})
+
 	test('a released lease frees the job, disowns its wakes and records no run', async () => {
 		await on.wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:digest:* * * * *' })
 		await on.leases.register('digest')
