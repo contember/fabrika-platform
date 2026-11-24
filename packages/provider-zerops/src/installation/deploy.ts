@@ -44,7 +44,6 @@ import {
 	generateVaultKey,
 	IAM_OAUTH_CONFIG_VARIABLE,
 	type IamOAuthConfig,
-	identityAppSchemas,
 	mcpAuthoringOn,
 	OPERATIONS_OAUTH_RESOURCE_VARIABLE,
 	platformIamOAuthConfig,
@@ -53,6 +52,7 @@ import {
 	platformProxyAppFor,
 	type PlatformProxyComposition,
 	platformServiceTableDigest,
+	reconcileIdentityApps,
 	resolvePlatformProxyManifest,
 } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
@@ -899,13 +899,11 @@ export const deployPreparedPlatform = async (
 	}
 
 	log.step('Register the console and IAM with IAM')
-	const identityApps = identityAppSchemas(input.mcpClients ?? [])
 	const consoleApp = platformProxyAppFor(PLATFORM_PROXY_MANIFEST_TEMPLATE, 'control')
 	const consoleOrigin = platformOrigin(placement.scheme, placement.hosts.control)
 	if (input.dryRun) {
 		log.info(`would reconcile \`${consoleApp.id}\` and register its return origin ${consoleOrigin}`)
 		log.info(`would reconcile \`${IAM_APP_ID}\`'s own vocabulary`)
-		for (const { app } of identityApps) log.info(`would reconcile the roles of the external application \`${app}\``)
 	} else {
 		// The schema PUT is what REGISTERS the app, and `apps.setReturnOrigins` 404s for an app IAM has
 		// never heard of — so both travel in this one call, in that order (ADR-0022/ADR-0023).
@@ -927,18 +925,17 @@ export const deployPreparedPlatform = async (
 			signal,
 		})
 		log.info(`\`${IAM_APP_ID}\` reconciled`)
-		// An external application's roles, declared in the client list; it has no return origin, IAM never hands it off.
-		for (const { app, schema } of identityApps) {
-			await collaborators.reconcileSchema({
-				url: platformOrigin(placement.scheme, placement.hosts.iam),
-				app,
-				schema,
-				adminKey: input.iamAdminKey,
-				signal,
-			})
-			log.info(`\`${app}\` reconciled: ${Object.keys(schema.roles).join(', ')}`)
-		}
 	}
+	// An external application's roles, declared in the client list.
+	await reconcileIdentityApps({
+		clients: input.mcpClients ?? [],
+		url: platformOrigin(placement.scheme, placement.hosts.iam),
+		adminKey: input.iamAdminKey,
+		dryRun: input.dryRun,
+		signal,
+		reconcile: collaborators.reconcileSchema,
+		info: (message) => log.info(message),
+	})
 
 	// Last, and a warning rather than a failure: the backup API's behaviour is not yet measured on a live account
 	// (docs/reference/zerops-platform.md), and every service is already deployed, published and registered.

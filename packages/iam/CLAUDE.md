@@ -784,7 +784,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   redirect. Refusing to boot beats booting misconfigured — so a local `wrangler dev` is password-only.
 - **IAM IS THE OAUTH 2.1 AUTHORIZATION SERVER FOR MCP CLIENTS, AND ONLY FOR REGISTERED ONES (ADR-0049).**
   `OAUTH_CONFIG` (on Bun the deploy var `FABRIKA_IAM_OAUTH_CONFIG`; on Cloudflare computed by `fabrika.config.ts` from
-  the console's origin; unset = every OAuth path 404s, malformed
+  the console's origin and the identity-bound clients of `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`, checked with
+  `parseOAuthConfig` at deploy; unset = every OAuth path 404s, malformed
   fails the boot) lists the CIMD client ids (kind `claude`, `chatgpt` or `external`, a label only) with their exact redirect URIs, and the
   resources with their scope ceilings. An unregistered client id is refused before any fetch, and a
   fetched metadata document can never add a redirect URI. A scope grant is a CEILING: the token's
@@ -812,7 +813,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   `roles`, `heldIdentityRoles` reads the person's GLOBAL grants of the declared role keys at the app (an internal
   principal only), the token names them in `roles` and ends with the earliest of their grants, and a person holding
   none is refused at the consent (`access_denied`), the exchange and every refresh. The deploy reconciles the roles
-  as the app's vocabulary (`identityAppSchemas`, `@fabrika/installation-init`), each granting no action.
+  as the app's vocabulary (`reconcileIdentityApps`, `@fabrika/installation-init`, on both clouds), each granting no action.
 - **A RESOURCE IS SERVED TO ONE KIND OF CLIENT** (`servesClient`, `oauth.ts`). `client: 'cli'` serves it to `fabrika-cli`
   alone, through the device grant; without it only the managed clients get it, through an authorization code. Every
   lookup (the authorization request, the device start, its consent page and each mint) filters by it, so an MCP client

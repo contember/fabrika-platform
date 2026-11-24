@@ -7,6 +7,7 @@ import { deployCloudflareConfig } from '../command'
 import { platformNames } from '../platform-names'
 import type { PlatformIamTarget } from '../provider'
 import { defaultReconcileSchema } from '../schema'
+import { MCP_CLIENTS_VARIABLE, parseCloudflareIdentityClients, registerIdentityApps } from './identity-clients'
 import { initCommand } from './init'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
@@ -67,6 +68,8 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 	// Read once, before any component's config runs: every component of one deploy takes the same scheme.
 	const names = platformNames(process.env)
 	const iam = platformIam()
+	// Parsed before any component deploys, so a refused entry stops the stage with nothing written.
+	const identityClients = parseCloudflareIdentityClients(process.env[MCP_CLIENTS_VARIABLE], platformHosts())
 	const rootCwd = process.cwd()
 	for (const component of platformComponents(args)) {
 		const absolute = resolve(rootCwd, component.configPath)
@@ -97,7 +100,19 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 	// IAM's own vocabulary registers beside the console's (ADR-0058): its own stage cannot, its keys sync after it deploys.
 	if (args.componentConfig === undefined || args.componentConfig === '') {
 		await registerIamVocabulary(iam, args.dryRun)
+		await registerIdentityApps({ iam, clients: identityClients, dryRun: args.dryRun, reconcile: defaultReconcileSchema })
 	}
+}
+
+/** The hostnames of the console, IAM and Operations this stage names; an identity resource may be on none of them. */
+const platformHosts = (): string[] => {
+	const hosts: string[] = []
+	const control = process.env['FABRIKA_CONTROL_DOMAIN']
+	if (control !== undefined && control !== '') hosts.push(control)
+	for (const origin of [process.env['FABRIKA_IAM_ISSUER'], process.env['OPERATIONS_ARTIFACT_ORIGIN']]) {
+		if (origin !== undefined && URL.canParse(origin)) hosts.push(new URL(origin).hostname)
+	}
+	return hosts
 }
 
 const registerIamVocabulary = async (iam: PlatformIamTarget | undefined, dryRun: boolean): Promise<void> => {
