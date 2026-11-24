@@ -76,8 +76,8 @@ describe('logsClient', () => {
 	})
 
 	test('a page over the JSON client default bound, as escaped control characters make it, is read whatever the options say', async () => {
-		// 500 events of 400 ANSI escape bytes each: under 1 MB of events, about 1.2 MB of JSON.
-		const message = '\u001b[0m'.repeat(100)
+		// 500 events of 400 escape characters each: 200 KB of events, which the JSON writes as six bytes each, about 1.2 MB.
+		const message = '\u001b'.repeat(400)
 		const events = Array.from(
 			{ length: READ_PAGE_EVENTS },
 			(_, index) => ({ timestamp: 1_768_478_400_000 + index, message, ingestionTime: 1_768_478_401_000 }),
