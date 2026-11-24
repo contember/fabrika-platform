@@ -15,6 +15,16 @@ export interface MigrationEntry {
 	readonly checksum: string
 }
 
+/**
+ * A tagged template of a server module that may run SQL (`readSqlStatements`), by the SHA-256 of its text. `line` 0
+ * stands for a module the parser refuses, and `digest` then covers the whole file.
+ */
+export interface SqlStatementEntry {
+	readonly file: string
+	readonly line: number
+	readonly digest: string
+}
+
 /** A file the build bundles and the runners apply: a `.sql` file directly in `db/migrations`. A name is relative to it. */
 export function isBundledMigration(name: string): boolean {
 	return name.endsWith('.sql') && !name.includes('/')
@@ -49,6 +59,12 @@ export interface AccessSnapshot {
 	 * candidate.
 	 */
 	readonly dataLoss?: readonly MigrationDataLoss[]
+	/**
+	 * The SQL statements of the application's server modules, when a site declares `sql`: its handlers' text, which the
+	 * declaration alone does not show the approver (ADR-0050 §1). Present, even empty, whenever some site declares `sql`,
+	 * so a baseline that ran no statement still compares; absent otherwise and in a snapshot read before it existed.
+	 */
+	readonly sqlStatements?: readonly SqlStatementEntry[]
 	/** The `@fabrika/check` release of the reader that read it; empty for the empty snapshot. */
 	readonly checker: string
 	/** The `@fabrika/app` release the application's `bun.lock` pins. Absent in a snapshot read before Control recorded it. */
@@ -105,6 +121,9 @@ const snapshotSchema = z.object({
 	databaseCode: z.array(deviationSchema).optional(),
 	fileAdoptions: z.array(fileAdoptionSchema).optional(),
 	dataLoss: z.array(dataLossSchema).optional(),
+	sqlStatements: z.array(
+		z.object({ file: z.string().min(1), line: z.number().int().nonnegative(), digest: z.string().regex(/^[0-9a-f]{64}$/) }).strict(),
+	).optional(),
 	checker: z.string(),
 	framework: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
 	// The gates and IAM schema of an application without a contract, in a snapshot stored before those were refused.
@@ -124,6 +143,7 @@ export function parseSnapshot(raw: string): AccessSnapshot {
 		...(parsed.databaseCode === undefined || parsed.databaseCode.length === 0 ? {} : { databaseCode: parsed.databaseCode }),
 		...(parsed.fileAdoptions === undefined || parsed.fileAdoptions.length === 0 ? {} : { fileAdoptions: parsed.fileAdoptions }),
 		...(parsed.dataLoss === undefined || parsed.dataLoss.length === 0 ? {} : { dataLoss: parsed.dataLoss }),
+		...(parsed.sqlStatements === undefined ? {} : { sqlStatements: parsed.sqlStatements }),
 		checker: parsed.checker,
 		...(parsed.framework === undefined ? {} : { framework: parsed.framework }),
 	}
@@ -182,17 +202,21 @@ export function serializePublished(snapshot: AccessSnapshot): string {
 }
 
 /**
- * The digest of the access a snapshot grants: the canonical contract, the migration list and the database code. The
- * checker version is not part of it, so reading the same commit with a newer checker approves nothing new. The
- * trailing `null` stood for artifact access; it stays, and the database code follows only when there is some, so that
- * the digests stored approvals name do not change.
+ * The digest of the access a snapshot grants: the canonical contract, the migration list, the database code and the SQL
+ * statements. The checker version is not part of it, so reading the same commit with a newer checker approves nothing
+ * new. The trailing `null` stood for artifact access; it stays, and the database code and the statements follow only
+ * when there are some, so that the digests stored approvals name do not change. A statement's line is left out: moving
+ * one approves nothing new.
  */
 export function snapshotDigest(snapshot: AccessSnapshot): string {
 	const migrations = [...snapshot.migrations].sort((a, b) => compareText(a.name, b.name))
 	const contract = snapshot.contract === null ? 'null' : readArtifactJson(snapshot.contract, snapshot.older)
 	const deviations = [...snapshot.databaseCode ?? []].sort((a, b) => compareText(deviationKey(a), deviationKey(b)))
 	const databaseCode = deviations.length === 0 ? '' : `\n${canonicalJson(deviations)}`
-	return `sha256:${sha256Hex(`${contract}\n${canonicalJson(migrations)}\nnull${databaseCode}`)}`
+	const statements = (snapshot.sqlStatements ?? []).map(({ file, digest }) => ({ file, digest }))
+		.sort((a, b) => compareText(a.file, b.file) || compareText(a.digest, b.digest))
+	const sql = statements.length === 0 ? '' : `\nsql:${canonicalJson(statements)}`
+	return `sha256:${sha256Hex(`${contract}\n${canonicalJson(migrations)}\nnull${databaseCode}${sql}`)}`
 }
 
 /** A deviation's identity across snapshots: its file, kind and object. Its line moves only with an edit of the file. */

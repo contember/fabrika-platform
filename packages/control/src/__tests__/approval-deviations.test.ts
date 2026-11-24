@@ -268,6 +268,106 @@ describe('declared reach in the reviewed snapshot', () => {
 	})
 })
 
+/** `notes.summary`'s handler running one `ctx.sql` statement. */
+const statementBody = (statement: string): string => `async ({ ctx }) => ({ title: (await ctx.sql(Summary)\`${statement}\`)[0]?.title ?? '' })`
+
+const SCOPED = "select title from notes where ${ctx.sql.scope(ctx.target, 'notes')}"
+const sqlCommit = (statement: string, extra: Record<string, string> = {}): Record<string, string> => ({
+	...commitOf({ summary: "sql: 'read'", summaryBody: statementBody(statement) }),
+	...extra,
+})
+/** Where the statement of `notes.summary` stands in the generated endpoints module. */
+const summaryStatement = (): string => {
+	const line = kitFiles({ summaryBody: statementBody(SCOPED) })['src/notes/endpoints.ts']?.split('\n').findIndex((text) => text.includes('ctx.sql('))
+		?? -1
+	return `src/notes/endpoints.ts:${line + 1}`
+}
+const QUERIES = 'src/notes/queries.ts'
+const queries = (statement: string) => ({ [QUERIES]: `export const count = (sql) => sql(Count)\`${statement}\`\n` })
+
+describe('SQL statements in the reviewed snapshot', () => {
+	test('a statement edited under an unchanged `sql` declaration parks on a protected environment, as an off-road line', async () => {
+		const w = await world()
+		w.files = sqlCommit(SCOPED)
+		await publish(w, 'prod')
+		await publish(w, 'stage')
+
+		// The scope fragment is dropped: the declaration is the same, the statement now reads every note.
+		w.files = sqlCommit('select title from notes')
+		const line = `The SQL statement at \`${summaryStatement()}\` changes`
+		const prod = await deploy(w, 'prod')
+		expect(prod.status).toBe('awaiting_approval')
+		expect(classified(prod).changes).toEqual([
+			{
+				effect: 'widens',
+				line,
+				review: 'closer',
+				reason: 'off-road',
+				rule: 'application.sql-statement',
+				subject: { kind: 'application', name: 'notes' },
+			},
+		])
+		expect(waitsForApproval(classified(prod).changes, DEFAULT_APPROVAL_CATEGORIES)).toBe(true)
+		expect(waitsForApproval(classified(prod).changes, DEFAULT_APPROVAL_CATEGORIES.filter((category) => category !== 'off-road'))).toBe(false)
+
+		const stage = await deploy(w, 'stage')
+		expect(stage.status).toBe('succeeded')
+		expect(closer(classified(stage))).toEqual([line])
+	})
+
+	test('re-indenting or moving a statement is no change, and its digest stays', async () => {
+		const before = await snapshotOf(sqlCommit(SCOPED))
+		const moved = await snapshotOf(sqlCommit(`\n\t\t\t${SCOPED.replace(' where ', '\n\t\t\twhere ')}\n\t\t`, { 'src/notes/padding.ts': 'export {}\n' }))
+		expect(classifyAccess(before, moved)).toEqual({ outcome: 'none', changes: [] })
+		expect(snapshotDigest(moved)).toBe(snapshotDigest(before))
+		expect(snapshotDigest(await snapshotOf(sqlCommit('select title from notes')))).not.toBe(snapshotDigest(before))
+	})
+
+	test('a statement in another server module of any tag name is new, and its removal needs closer review too', async () => {
+		const before = await snapshotOf(sqlCommit(SCOPED))
+		const added = await snapshotOf(sqlCommit(SCOPED, queries('select count(*) from notes')))
+		expect(closer(classifyAccess(before, added))).toEqual([`The SQL statement at \`${QUERIES}:1\` is new`])
+		expect(closer(classifyAccess(added, before))).toEqual([`The SQL statement at \`${QUERIES}:1\` is removed`])
+		// A test module and the SPA run no statement against the application's database.
+		const elsewhere = await snapshotOf(
+			sqlCommit(SCOPED, { 'src/notes/queries.test.ts': queries('select 1')[QUERIES] ?? '', 'web/app.ts': 'x`select 1`' }),
+		)
+		expect(classifyAccess(before, elsewhere)).toEqual({ outcome: 'none', changes: [] })
+	})
+
+	test('a module the parser refuses is compared as a whole', async () => {
+		const before = await snapshotOf(sqlCommit(SCOPED, { [QUERIES]: 'export const = 1\n' }))
+		expect(before.sqlStatements?.filter((entry) => entry.file === QUERIES)).toEqual([
+			{ file: QUERIES, line: 0, digest: sha256Hex('export const = 1\n') },
+		])
+		const after = await snapshotOf(sqlCommit(SCOPED, { [QUERIES]: 'export const = 2\n' }))
+		expect(closer(classifyAccess(before, after))).toEqual([`\`${QUERIES}\`, which Control cannot parse for its SQL statements, changes`])
+	})
+
+	test('a baseline read before statements were recorded shows none, and a site without `sql` records none', async () => {
+		const { sqlStatements: _, ...older } = await snapshotOf(sqlCommit(SCOPED))
+		expect(classifyAccess(older, await snapshotOf(sqlCommit('select title from notes')))).toEqual({ outcome: 'none', changes: [] })
+		expect((await snapshotOf(commitOf({}, [NOTES_MIGRATION]))).sqlStatements).toBeUndefined()
+		// A declaring site that runs no statement yet records an empty list, so its first statement compares.
+		const empty = await snapshotOf(commitOf({ summary: "sql: 'read'" }))
+		expect(empty.sqlStatements).toEqual([])
+		expect(closer(classifyAccess(empty, await snapshotOf(sqlCommit(SCOPED))))).toEqual([`The SQL statement at \`${summaryStatement()}\` is new`])
+	})
+
+	test('the statements survive the publication, an empty list included', async () => {
+		for (const snapshot of [await snapshotOf(sqlCommit(SCOPED)), await snapshotOf(commitOf({ summary: "sql: 'read'" }))]) {
+			const published = parseSnapshot(serializePublished(snapshot))
+			expect(published.sqlStatements).toEqual(snapshot.sqlStatements)
+			expect(snapshotDigest(published)).toBe(snapshotDigest(snapshot))
+		}
+	})
+
+	test('too many server modules refuse the read', async () => {
+		const many = Object.fromEntries(Array.from({ length: SNAPSHOT_LIMITS.sqlSources }, (_, index) => [`src/many/m${index}.ts`, 'export {}\n']))
+		await expect(snapshotOf(sqlCommit(SCOPED, many))).rejects.toEqual(new SnapshotRefused('sources-too-large'))
+	})
+})
+
 describe('database code in the reviewed snapshot', () => {
 	test('a declared trigger widens with closer review, by its object, and the environment lists it once published', async () => {
 		const w = await world()

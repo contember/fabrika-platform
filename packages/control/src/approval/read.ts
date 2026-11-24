@@ -5,7 +5,15 @@
 // build, by the checksum rule the runners refuse it with.
 
 import { sha256Hex } from '@fabrika/auth-core'
-import { CONTRACT_FILE, CONTRACT_LIMITS, lockedRegistryVersion, LOCKFILE, MIGRATIONS_DIR } from '@fabrika/check/contract'
+import {
+	CONTRACT_FILE,
+	CONTRACT_LIMITS,
+	isSqlStatementSource,
+	lockedRegistryVersion,
+	LOCKFILE,
+	MIGRATIONS_DIR,
+	readSqlStatements,
+} from '@fabrika/check/contract'
 import {
 	applicationDatabaseSchema,
 	classifyMigrations,
@@ -18,7 +26,7 @@ import {
 import type { CommitFiles } from '../github/source/commit-files'
 import type { SnapshotContract } from './formats'
 import { type ContractReader, FRAMEWORK_PACKAGE, FrameworkReleaseRefused, readerFor, type ReaderOutcome } from './readers'
-import { type AccessSnapshot, isBundledMigration, type MigrationEntry, storedSnapshotFits } from './snapshot'
+import { type AccessSnapshot, isBundledMigration, type MigrationEntry, type SqlStatementEntry, storedSnapshotFits } from './snapshot'
 
 /** What one snapshot read may cost: files, rounds of import discovery, bytes per file and in all. */
 export const SNAPSHOT_LIMITS = {
@@ -40,9 +48,13 @@ export const SNAPSHOT_LIMITS = {
 	migrationBytes: 1024 * 1024,
 	/** The classifier reads the whole set at once, so its text is held in memory together. */
 	migrationsTotalChars: 16 * 1024 * 1024,
+	/** The server modules read for SQL statements when a site declares `sql`, and their text in all. */
+	sqlSources: 1000,
+	sqlSourceChars: 16 * 1024 * 1024,
 } as const
 
 const MIGRATION_READS_AT_ONCE = 8
+const SOURCE_READS_AT_ONCE = 8
 
 /** What the contract reader may ask for: modules, the JSON configurations beside them, `bunfig.toml`. */
 const READER_INPUT = /\.(?:[cm]?[jt]s|[jt]sx|json|toml)$/
@@ -100,6 +112,7 @@ export type SnapshotRefusalCode =
 	| 'migrations-too-large'
 	| 'migrations-refused'
 	| 'migrations-unreadable'
+	| 'sources-too-large'
 
 /**
  * The commit cannot be read as an access snapshot. The run log gets only the code and the number of problems: the
@@ -195,6 +208,8 @@ export async function readAccessSnapshot(
 		throw new SnapshotRefused('contract-app-mismatch')
 	}
 	const { databaseCode, fileAdoptions, dataLoss } = readDatabaseCode(migrations, appId, settled, accessTables, dialect)
+	const declaresSql = Object.values(read.contract.declared ?? {}).some((reach) => reach.sql !== null)
+	const sqlStatements = declaresSql ? await readSqlStatementEntries(commit, root, files) : undefined
 	const snapshot: AccessSnapshot = {
 		version: 1,
 		...read,
@@ -202,6 +217,7 @@ export async function readAccessSnapshot(
 		...(databaseCode.length === 0 ? {} : { databaseCode }),
 		...(fileAdoptions.length === 0 ? {} : { fileAdoptions }),
 		...(dataLoss.length === 0 ? {} : { dataLoss }),
+		...(sqlStatements === undefined ? {} : { sqlStatements }),
 		checker: reader.checker,
 		framework,
 	}
@@ -223,6 +239,34 @@ function readContract(
 	}
 	if (!outcome.ok) throw new SnapshotRefused('contract-invalid', outcome.problems)
 	return { contract: outcome.contract, accessTables: outcome.accessTables }
+}
+
+/**
+ * The SQL statements of every server module of the application at `root`, in file and line order. A module the contract
+ * reader read is not read again. A module the parser refuses is one entry over its whole text, so any edit of it shows.
+ */
+async function readSqlStatementEntries(commit: CommitFiles, root: string, read: ReadonlyMap<string, string>): Promise<SqlStatementEntry[]> {
+	const prefix = root === '' ? '' : `${root}/`
+	const files = [...commit.paths].filter((path) => path.startsWith(prefix)).map((path) => path.slice(prefix.length)).filter(isSqlStatementSource)
+		.sort()
+	if (files.length > SNAPSHOT_LIMITS.sqlSources) throw new SnapshotRefused('sources-too-large')
+	const entries: SqlStatementEntry[] = []
+	let chars = 0
+	for (let start = 0; start < files.length; start += SOURCE_READS_AT_ONCE) {
+		const batch = files.slice(start, start + SOURCE_READS_AT_ONCE)
+		const texts = await Promise.all(
+			batch.map((file) => read.get(file) ?? commit.read(`${prefix}${file}`, SNAPSHOT_LIMITS.readerFileBytes)),
+		)
+		for (const [index, file] of batch.entries()) {
+			const text = texts[index] ?? ''
+			chars += text.length
+			if (chars > SNAPSHOT_LIMITS.sqlSourceChars) throw new SnapshotRefused('sources-too-large')
+			const statements = readSqlStatements(file, text)
+			if (statements === null) entries.push({ file, line: 0, digest: sha256Hex(text) })
+			else entries.push(...statements.map(({ line, text }) => ({ file, line, digest: sha256Hex(text) })))
+		}
+	}
+	return entries
 }
 
 /**
