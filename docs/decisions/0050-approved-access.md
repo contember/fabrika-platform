@@ -110,7 +110,7 @@ the result as its **snapshot**:
   policy, `DO` block and expression that calls database code, by file, kind and object;
 - the **SQL statements** (`sqlStatements`), once a site declares `sql`: each tagged template of a server module under
   `src/` whose tag may be `ctx.sql` (any tag, called or not, but a member other than `.sql`, such as `String.raw`), by
-  file, line and the SHA-256 of its text with indentation dropped; a line break stays, since it ends a `--` comment. A
+  file, line and the SHA-256 of its text as written, since whitespace may stand in a quoted literal or end a comment. A
   declaration says only that a site runs raw SQL, and since `ctx.sql` does not check where a scope fragment stands
   ([ADR-0012](0012-fabrika-app-runtime.md)), the statement is the only record of what it reads. Control reads these
   modules as text and parses them; it never runs them. The reading is syntactic, so it errs towards a template too
@@ -133,7 +133,7 @@ the environment's last succeeded run deployed fails the read when its checksum c
 runner refuses an applied file that changed ([ADR-0017](0017-service-owned-postgres-migrations.md)); it is compared
 with that run's stored snapshot, not the published one, because a publication precedes the provider. The read is
 bounded: 512 shell files, 16 Mi characters of migration text, which the classifier reads at once, and 1000 server
-modules with 16 Mi characters of text and 4000 SQL statements.
+modules with 16 Mi characters of text and 512 KiB of recorded SQL statements.
 
 Uploads carry no proxy table and no IAM schema. A snapshot comes only from the commit.
 
@@ -243,8 +243,8 @@ covers:
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare;
 - **SQL statements**, matched by file and text: a new, changed or removed one needs closer review (`off-road`), since a
-  removed one may have been the check that kept a row out. Re-indenting a statement or moving it within its file is no
-  change. A baseline published before Control read statements shows none, and the deploy that publishes over it
+  removed one may have been the check that kept a row out. Moving a statement within its file is no change;
+  re-indenting it is one. A baseline published before Control read statements shows none, and the deploy that publishes over it
   records them;
 - **file adoptions** in a new or changed migration file: an adoption widens with closer review, because whoever the
   table's policy lets read a row now reads its file, and a release narrows with closer review, because it drops the

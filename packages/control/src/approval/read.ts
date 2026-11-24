@@ -26,7 +26,7 @@ import {
 import type { CommitFiles } from '../github/source/commit-files'
 import type { SnapshotContract } from './formats'
 import { type ContractReader, FRAMEWORK_PACKAGE, FrameworkReleaseRefused, readerFor, type ReaderOutcome } from './readers'
-import { type AccessSnapshot, isBundledMigration, type MigrationEntry, type SqlStatementEntry, storedSnapshotFits } from './snapshot'
+import { type AccessSnapshot, isBundledMigration, type MigrationEntry, type SqlStatementEntry, storedSnapshotFits, utf8Length } from './snapshot'
 
 /** What one snapshot read may cost: files, rounds of import discovery, bytes per file and in all. */
 export const SNAPSHOT_LIMITS = {
@@ -52,10 +52,10 @@ export const SNAPSHOT_LIMITS = {
 	sqlSources: 1000,
 	sqlSourceChars: 16 * 1024 * 1024,
 	/**
-	 * The statements recorded, a hundred-odd bytes each: `storedSnapshotFits` does not measure a snapshot an older reader
-	 * read, so this bound keeps it within `STORED_SNAPSHOT_BYTES` beside that reader's own.
+	 * The stored size of the statements recorded: `storedSnapshotFits` does not measure a snapshot an older reader read,
+	 * so this bound keeps it within `STORED_SNAPSHOT_BYTES` beside that reader's own.
 	 */
-	sqlStatements: 4000,
+	sqlStatementBytes: 512 * 1024,
 } as const
 
 const MIGRATION_READS_AT_ONCE = 8
@@ -269,9 +269,9 @@ async function readSqlStatementEntries(commit: CommitFiles, root: string, read: 
 			const statements = readSqlStatements(file, text)
 			if (statements === null) entries.push({ file, line: 0, digest: sha256Hex(text) })
 			else entries.push(...statements.map(({ line, text }) => ({ file, line, digest: sha256Hex(text) })))
-			if (entries.length > SNAPSHOT_LIMITS.sqlStatements) throw new SnapshotRefused('sources-too-large')
 		}
 	}
+	if (utf8Length(JSON.stringify(entries)) > SNAPSHOT_LIMITS.sqlStatementBytes) throw new SnapshotRefused('sources-too-large')
 	return entries
 }
 

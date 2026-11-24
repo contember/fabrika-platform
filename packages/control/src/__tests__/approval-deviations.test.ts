@@ -315,12 +315,11 @@ describe('SQL statements in the reviewed snapshot', () => {
 		expect(closer(classified(stage))).toEqual([line])
 	})
 
-	test('re-indenting or moving a statement is no change, and its digest stays', async () => {
+	test('moving a statement within its file is no change, and its digest stays', async () => {
 		const before = await snapshotOf(sqlCommit(SCOPED))
 		const moved = await snapshotOf(commitOf({
 			summary: "sql: 'read'",
-			summaryBody:
-				`async ({ ctx }) => {\n\n\t\tconst rows = await ctx.sql(Summary)\`\n\t\t\t${SCOPED}\n\t\t\`\n\t\treturn { title: rows[0]?.title ?? '' }\n\t}`,
+			summaryBody: `async ({ ctx }) => {\n\n\t\tconst rows = await ctx.sql(Summary)\`${SCOPED}\`\n\t\treturn { title: rows[0]?.title ?? '' }\n\t}`,
 		}))
 		expect(moved.sqlStatements?.[0]?.line).not.toBe(before.sqlStatements?.[0]?.line)
 		expect(classifyAccess(before, moved)).toEqual({ outcome: 'none', changes: [] })
@@ -367,11 +366,11 @@ describe('SQL statements in the reviewed snapshot', () => {
 		}
 	})
 
-	test('too many server modules, or too many statements, refuse the read', async () => {
+	test('too many server modules, or statements too large to store, refuse the read', async () => {
 		const many = Object.fromEntries(Array.from({ length: SNAPSHOT_LIMITS.sqlSources }, (_, index) => [`src/many/m${index}.ts`, 'export {}\n']))
 		await expect(snapshotOf(sqlCommit(SCOPED, many))).rejects.toEqual(new SnapshotRefused('sources-too-large'))
 		// Bounded on its own: the stored size of a snapshot an older reader read is not checked.
-		const statements = Array.from({ length: SNAPSHOT_LIMITS.sqlStatements }, (_, index) => `q\`select ${index}\``).join('\n')
+		const statements = Array.from({ length: SNAPSHOT_LIMITS.sqlStatementBytes / 100 }, (_, index) => `q\`select ${index}\``).join('\n')
 		await expect(snapshotOf(sqlCommit(SCOPED, { [QUERIES]: statements }))).rejects.toEqual(new SnapshotRefused('sources-too-large'))
 	})
 })

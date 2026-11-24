@@ -758,7 +758,7 @@ other environment, before the provider prepares anything, and the write maps a r
   exposed caller, in `diff.ts`'s words.
   `sqlStatements` holds every tagged template of `src/` (tests excluded) whose tag may be `ctx.sql`
   (`readSqlStatements` of `@fabrika/check/contract`, this release's, whatever the application pins), by file, line and
-  the SHA-256 of its text with indentation dropped (a line break stays: it ends a `--` comment); a module the parser
+  the SHA-256 of its text as written (whitespace may stand in a quoted literal or end a `--` comment); a module the parser
   refuses is one entry, line 0, over its whole text. It is present, even empty, whenever a site declares `sql`, and
   absent otherwise. A new, changed or removed statement, matched by file and text, is an `off-road` closer-review line
   (`application.sql-statement`); a side without the field (read before this release, or no `sql` site) shows none. The

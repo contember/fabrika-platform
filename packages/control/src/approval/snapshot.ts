@@ -176,7 +176,7 @@ export function storedSnapshotFits(snapshot: AccessSnapshot): boolean {
 }
 
 /** The UTF-8 length of `text`, counted without encoding it. */
-function utf8Length(text: string): number {
+export function utf8Length(text: string): number {
 	let bytes = 0
 	for (let index = 0; index < text.length; index++) {
 		const unit = text.charCodeAt(index)

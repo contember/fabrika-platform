@@ -9,7 +9,10 @@ import { isServerModule, isSkippedPath, isSourceFile } from './layout'
 export interface SqlStatement {
 	/** The line of the template's tag, from 1. */
 	readonly line: number
-	/** The template between its backticks, `${…}` as written, with the whitespace around each line break and blank lines dropped. */
+	/**
+	 * The template between its backticks, exactly as written, `${…}` included: whitespace may stand in a quoted literal
+	 * or end a `--` comment, so re-indenting a statement is a change too.
+	 */
 	readonly text: string
 }
 
@@ -36,7 +39,7 @@ export function readSqlStatements(file: string, text: string): SqlStatementsResu
 		const start = quasi['start']
 		const end = quasi['end']
 		if (typeof start !== 'number' || typeof end !== 'number') return
-		statements.push({ line: positionOf(node).line, text: statementText(text.slice(start + 1, end - 1)) })
+		statements.push({ line: positionOf(node).line, text: text.slice(start + 1, end - 1) })
 	})
 	return statements
 }
@@ -68,12 +71,4 @@ function transparent(node: AstNode): AstNode {
 		current = inner
 	}
 	return current
-}
-
-/**
- * Re-indenting a statement changes nothing it runs. A line break stays: it ends a `--` comment, so joining two lines
- * may comment out a condition.
- */
-function statementText(source: string): string {
-	return source.replace(/[ \t]*(?:\r\n|\n|\r)\s*/g, '\n').trim()
 }

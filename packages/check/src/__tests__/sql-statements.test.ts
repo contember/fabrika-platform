@@ -41,11 +41,11 @@ describe('readSqlStatements', () => {
 		expect(texts(source)).toEqual(['select 1', 'select 2', 'select 3', 'select 4', 'select 5'])
 	})
 
-	test('indentation and blank lines are no change; a line break and whitespace inside a line are', () => {
-		const indented = 'const q = (ctx) => ctx.sql(Row)`\n\t\tselect id\n\n\t\tfrom notes   \n`'
-		const flat = 'const q = (ctx) =>\n\tctx.sql(Row)`select id\nfrom notes`'
-		expect(texts(indented)).toEqual(texts(flat))
-		expect(texts('const q = (ctx) => ctx.sql(Row)`select  id from notes`')).not.toEqual(texts('const q = (ctx) => ctx.sql(Row)`select id from notes`'))
+	test('the text is kept as written: whitespace may stand in a literal or end a comment', () => {
+		expect(texts('const q = (ctx) => ctx.sql(Row)`select id\n\t\tfrom notes`')).toEqual(['select id\n\t\tfrom notes'])
+		// Indentation inside a quoted literal is part of the value the statement compares with.
+		const literal = (indent: string) => texts(`const q = (ctx) => ctx.sql(Row)\`select title from notes where title <> 'private\n${indent}note'\``)
+		expect(literal('  ')).not.toEqual(literal(''))
 		// Joining the lines comments the condition out.
 		const commented = (separator: string) =>
 			texts(`const q = (ctx) => ctx.sql(Row)\`select title from notes where true -- filter${separator}and is_public\``)
