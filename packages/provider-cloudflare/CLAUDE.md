@@ -10,6 +10,24 @@ this one import.
 
 ## Invariants
 
+- **A runner deploys an application in two halves (ADR-0086).** `fabrika-cloudflare-executor build` runs in the
+  runner's build sandbox (its own user, no credential, no secret): the config, `pipeline.build`, the checks, wrangler's
+  bundle (`deploy --dry-run --outdir`), and copies of the assets, the D1 migrations and the source maps, described by
+  `fabrika-build.json` (`src/isolated-build.ts`, `src/build-manifest.ts`). `fabrika-cloudflare-executor deploy
+  --bundle=<the runner's copy>` holds the credential and runs NO checkout code (`src/isolated-deploy.ts`): it checks the
+  layout (`assertBuildLayout`: nothing in the application directory that wrangler or a runtime reads on its own), parses
+  the manifest as JSON against `buildManifestSchema` (a `__proto__` key anywhere is refused), and rebuilds the config
+  out of this package's classes: a resource from its kind and exactly its class's options, a D1 database's migrations
+  only from `migrations/<binding>`, any other binding as the config entries its `configureBinding` wrote
+  (`RecordedBinding`), and the bundle as `main`. The deployer then runs as for any deploy with `prebuilt`: no build or
+  check step, no SPA staging (the build staged the files), `wrangler deploy --no-bundle` for the application Worker,
+  the platform proxy bundled from this package. The application id must be the approved contract's `app`. Never import,
+  evaluate or bundle a file of the build's output in the deploy, and never let the deploy run with its working
+  directory inside that output. `build` refuses a container binding, a second Worker and an option that is not plain
+  data. `deploy --config` (a local deploy, the installation's own components) keeps the single process.
+- **Every job's approved access carries `isolatedBuild: true`.** The approved access is strict, so a runner older than
+  ADR-0086 refuses the job instead of importing the config beside the token. The job's top level is not strict; never
+  move the marker there.
 - **This package OWNS `CloudflareRunnerJob` and its validator.** The Worker↔container transport
   schemas, types and endpoint constants live in `src/runner-protocol.ts`, re-exported from the oblaka-free
   `./runner` entry; `@fabrika/runner-container` owns the Bun process and
@@ -19,8 +37,8 @@ this one import.
   and never into a `CloudflareDeployRun`.
 - **The container gets the Cloudflare account credential and NOTHING else.** `job.credentials` is
   exactly `CLOUDFLARE_ACCOUNT_ID` + `CLOUDFLARE_API_TOKEN`, `cloudflareRunnerJobSchema` refuses any other
-  key, and the checkout's own `pipeline.build` child runs with those names removed from its
-  environment (`CommandSpec.omitEnv`). IAM's provisioning key never leaves the control plane.
+  key, and only the deploy half ever holds them: the build sandbox never does, and its `pipeline.build` child also has
+  those names removed (`CommandSpec.omitEnv`). IAM's provisioning key never leaves the control plane.
 - **Neither the executor nor this provider calls IAM for an application (ADR-0011).** The executor writes
   `RunnerOutcomeFile` (`$FABRIKA_RUNNER_OUTCOME_FILE`); the control-side `deploy` and `reconcile` only validate its
   report: a report without Control's approved access, or from a dry run, fails the run. Control writes the approved
@@ -49,9 +67,10 @@ this one import.
   and managed values to `<workspace>/<runId>.values.json` and names it in `FABRIKA_DEPLOY_VALUES_FILE`; the executor
   then reads every declared secret, var and `--managed-var` from that file alone (`readDeployValues`), never from
   `process.env`, so a name such as `BUN_OPTIONS`, `PATH` or `CLOUDFLARE_API_TOKEN` is only ever the deployed Worker's
-  own value. Outside a runner they come from the environment. The checkout's `pipeline.build` gets the declared
-  secrets and vars and the managed values in its own environment (`buildEnvironment`), never under a platform
-  credential name, and no undeclared job secret.
+  own value. Outside a runner they come from the environment. In a runner the checkout's `pipeline.build` runs in the
+  build and gets the declared vars and the managed values that are not credentials (`buildValuesOf`), never a secret,
+  never a managed credential, never an undeclared var. A local deploy's `pipeline.build` still gets the declared secrets
+  and vars and the managed values (`buildEnvironment`), never under a platform credential name.
 - **A contract application from framework 0.9 runs in its Durable Object; an older one keeps its stateless Worker**
   (ADR-0065, ADR-0062). The release gate is `runsInObject` (`src/contract-support.ts`), read from the release the
   application pins: `applicationRelease(ProviderEnvironment.access)` in `control.ts`, which also fills
@@ -269,8 +288,10 @@ this one import.
   the contract declares a table). An older release keeps its authored `main`, and runs only
   the tests and the checker, which reads no generated entry.
   This guards against accidental leftovers, not a hostile test: Bun hardlinks installed files to its cache, so a test
-  that edits an installed dependency in place edits the cache, and the frozen reinstall brings the edit back. A
-  tamper-proof build needs a sandboxed runner, which is deferred.
+  that edits an installed dependency in place edits the cache, and the frozen reinstall brings the edit back. In a
+  runner the step runs in the build sandbox (ADR-0086), so a hostile test can defeat a check but reaches no credential.
+  The sandbox may have no network: `build --fetch-tools` fetches TypeScript and the checker at their pinned releases
+  into the build user's `bun x` cache while it still has network.
   The error names the check (`tests`, `tsc`, `fabrika-check`, `schema types are stale`) and keeps
   the last 2,000 characters of its output. The checker release is `approvedAccess.checker`: a Control older than the
   runner sends none, and the step then fails saying to upgrade Control; it never skips the checker. A release before

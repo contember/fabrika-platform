@@ -8,6 +8,18 @@ export interface ParsedCloudflareArgs {
 	/** The single-component form of `platform deploy|plan`: deploy exactly this one platform config. */
 	readonly componentConfig: string | undefined
 	readonly managedVarNames: readonly string[]
+	/** `build`: the directory the build writes its output into. */
+	readonly out: string | undefined
+	/** `deploy`: the runner's copy of a build's output; the config is then the build's manifest, never imported. */
+	readonly bundle: string | undefined
+	/** `build`: the environment's domain, which the config's `resources` reads. */
+	readonly domain: string | undefined
+	/** `build`: the runner's copy of the approved access. */
+	readonly access: string | undefined
+	/** `build`: the build values the runner wrote. */
+	readonly values: string | undefined
+	/** `build`: only fetch the tools the checks run, while the sandbox has network. */
+	readonly fetchTools: boolean
 	readonly dryRun: boolean
 	readonly help: boolean
 }
@@ -21,12 +33,20 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 	let workerConfig: string | undefined
 	let componentConfig: string | undefined
 	const managedVarNames: string[] = []
+	let out: string | undefined
+	let bundle: string | undefined
+	let domain: string | undefined
+	let access: string | undefined
+	let values: string | undefined
+	let fetchTools = false
 	let dryRun = false
 	let help = false
 
 	for (const arg of argv) {
 		if (arg === '-h' || arg === '--help') {
 			help = true
+		} else if (arg === '--fetch-tools') {
+			fetchTools = true
 		} else if (arg === '--dry-run') {
 			dryRun = true
 		} else if (arg.startsWith('--env=')) {
@@ -39,6 +59,16 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 			workerConfig = arg.slice('--worker-config='.length)
 		} else if (arg.startsWith('--component-config=')) {
 			componentConfig = arg.slice('--component-config='.length)
+		} else if (arg.startsWith('--out=')) {
+			out = arg.slice('--out='.length)
+		} else if (arg.startsWith('--bundle=')) {
+			bundle = arg.slice('--bundle='.length)
+		} else if (arg.startsWith('--domain=')) {
+			domain = arg.slice('--domain='.length)
+		} else if (arg.startsWith('--access=')) {
+			access = arg.slice('--access='.length)
+		} else if (arg.startsWith('--values=')) {
+			values = arg.slice('--values='.length)
 		} else if (arg.startsWith('--managed-var=')) {
 			const name = arg.slice('--managed-var='.length)
 			if (!/^[A-Z][A-Z0-9_]*$/.test(name)) {
@@ -54,7 +84,24 @@ export const parseCloudflareArgs = (argv: readonly string[]): ParsedCloudflareAr
 		}
 	}
 
-	return { command, subcommand, env, config, runnerConfig, workerConfig, componentConfig, managedVarNames, dryRun, help }
+	return {
+		command,
+		subcommand,
+		env,
+		config,
+		runnerConfig,
+		workerConfig,
+		componentConfig,
+		managedVarNames,
+		out,
+		bundle,
+		domain,
+		access,
+		values,
+		fetchTools,
+		dryRun,
+		help,
+	}
 }
 
 export interface PlatformComponent {
