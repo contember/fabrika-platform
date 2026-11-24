@@ -82,12 +82,12 @@ describe('the console shows what its caller may use', () => {
 		])
 	})
 
-	test('an IAM administrator with no console role sees Access, Approvals (its grant requests), Branding and Passwords, and an application administrator sees People', () => {
+	test('an IAM administrator with no console role sees Access, Approvals (its grant requests), Branding and Passwords, and an application administrator sees People and Approvals (its own requests)', () => {
 		expect(rail(caller({}, { iam: { kind: 'installation' } }))).toEqual([
 			'Delivery: Approvals, Branding, Passwords',
 			'Access: Overview, Users, Credentials, Permissions, Audit',
 		])
-		expect(rail(caller({}, { administersPeople: true }))).toEqual(['Your applications: People'])
+		expect(rail(caller({}, { administersPeople: true }))).toEqual(['Delivery: Approvals', 'Your applications: People'])
 	})
 
 	test('a user administrator sees the Users of Access, no other Access page, and Approvals for grant requests (ADR-0058, ADR-0083)', () => {

@@ -6,21 +6,21 @@ import { effectCounts } from '../../lib/access-changes'
 import { api } from '../../lib/api'
 import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
 import { quietIamClient } from '../../lib/iam'
+import { consoleSession } from '../../lib/session'
 
 // Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050), and console
 // grants that wait for another administrator (ADR-0083). Only runs at coordinates where the viewer holds
-// `access.approve` are listed, and only grant requests at applications the viewer administers in IAM; a viewer IAM
-// does not answer as an administrator sees no grant section.
+// `access.approve` are listed, and only grant requests at applications the viewer administers in IAM, or the viewer's
+// own; a viewer IAM does not answer sees no grant section.
 
 export default createPage()
 	.loader(async () => {
-		const iam = quietIamClient(fetch)
-		const [approvals, grantRequests, me] = await Promise.all([
+		const [approvals, grantRequests, session] = await Promise.all([
 			api.approvals.list().then((list) => list.items),
-			iam.grantRequests.list({}).then((list) => list.items, () => null),
-			iam.me().then((me) => me.id, () => null),
+			quietIamClient(fetch).grantRequests.list({}).then((list) => list.items, () => null),
+			consoleSession(),
 		])
-		return { approvals, grantRequests, me }
+		return { approvals, grantRequests, me: session.principal?.id ?? null }
 	})
 	.route('/approvals')
 	.render(({ data }) => (

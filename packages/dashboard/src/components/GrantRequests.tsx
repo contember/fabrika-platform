@@ -8,11 +8,13 @@ import { EmptyState, Table } from './Table'
 
 const KIND_WORDS: Record<GrantRequestDto['kind'], string> = { create: 'Grant', update: 'Change grant to', revoke: 'Revoke' }
 
-/** What the request changes, in one line: the role or the actions, and where. */
+/** What the request changes, in one line: the role or the actions, where, and until when the grant it writes holds. */
 export function grantRequestChange(request: GrantRequestDto): string {
 	const what = request.roleKey !== null ? `role ${request.roleKey}` : `actions ${(request.permissions ?? []).join(', ')}`
 	const where = request.scopeType === null ? 'app-wide' : `in ${request.scopeType} ${request.scopeValue ?? ''}`
-	return `${KIND_WORDS[request.kind]} ${what} ${where}`
+	if (request.kind === 'revoke') return `${KIND_WORDS[request.kind]} ${what} ${where}`
+	const until = request.grantExpiresAt === null ? 'no expiration' : `until ${fmtDate(request.grantExpiresAt)}`
+	return `${KIND_WORDS[request.kind]} ${what} ${where}, ${until}`
 }
 
 /**
@@ -56,7 +58,7 @@ export function GrantRequests({ initial, viewerId }: { initial: readonly GrantRe
 						<th>App</th>
 						<th className="grow">Change</th>
 						<th>Requested by</th>
-						<th>Expires</th>
+						<th>Request expires</th>
 						<th />
 					</tr>
 				}
