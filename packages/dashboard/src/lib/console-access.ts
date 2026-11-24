@@ -95,8 +95,9 @@ export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
 			return control(caller, (access) => holdsGlobally(access, NAMESPACE_MANAGE))
 		case 'runs':
 			return control(caller, (access) => holdsAnywhere(access, DEPLOY_READ))
+		// Parked deploys need `access.approve`; grant requests an IAM administration (ADR-0083).
 		case 'approvals':
-			return control(caller, (access) => holdsAnywhere(access, ACCESS_APPROVE))
+			return control(caller, (access) => holdsAnywhere(access, ACCESS_APPROVE)) || (caller.iam !== null && caller.iam !== false)
 		case 'mail':
 			return control(caller, (access) => holdsAnywhere(access, MAIL_READ))
 		case 'settings/source':

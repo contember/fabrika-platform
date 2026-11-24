@@ -1,12 +1,21 @@
 import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
 import { BuzolaProvider } from '@buzola/router/react'
+import { APPROVAL_CATEGORIES, DEFAULT_APPROVAL_CATEGORIES } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { ProtectionRow, UnprotectConsequences } from '../components/app-detail/ApprovalsSection'
+import { CategoryEditor, ProtectionRow, UnprotectConsequences } from '../components/app-detail/ApprovalsSection'
 import { type AppEnvDto, type ApprovalDto, type ConsoleAccessDto, type ControlFetch, createControlClient } from '../lib/api'
 import { ConsoleAccessContext } from '../lib/console-caller'
-import { parkedRunsAt, protectionFailure, protectionToggle, setEnvironmentProtection } from '../lib/environment-protection'
+import {
+	APPROVAL_CATEGORY_GROUPS,
+	categoryChange,
+	isDefaultCategory,
+	parkedRunsAt,
+	protectionFailure,
+	protectionToggle,
+	setEnvironmentProtection,
+} from '../lib/environment-protection'
 
 const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	appId: 'notes',
@@ -16,6 +25,7 @@ const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	triggerRef: 'refs/heads/main',
 	authoring: false,
 	protected: isProtected,
+	approvalCategories: ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'],
 	publishedRunId: null,
 	deviationSubjects: [],
 	surface: [],
@@ -50,6 +60,7 @@ const parkedRun = (id: string, appId: string, env: string): ApprovalDto => ({
 	baselineDigest: 'baseline',
 	baselineRunId: null,
 	protected: true,
+	categories: ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'],
 	approval: null,
 })
 
@@ -171,5 +182,41 @@ describe('turning approvals on and off for an environment', () => {
 			'Only a person signed in to the console changes approvals, never a key or an agent.',
 		)
 		expect(await refused(400, 'invalid input')).toBe('invalid input')
+	})
+})
+
+// ADR-0083 §5: the categories under a protected environment's switch, editable for a holder of `access.approve`.
+describe('approval categories', () => {
+	const editor = (env: AppEnvDto): string => renderToStaticMarkup(createElement(CategoryEditor, { appId: 'notes', env, onDone: () => undefined }))
+
+	test('every category is offered once, the defaults marked, the chosen ones checked', () => {
+		const markup = editor({ ...environment('prod', true), approvalCategories: [...DEFAULT_APPROVAL_CATEGORIES, 'grants'] })
+		const offered = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options.map((option) => option.category))
+		expect([...offered].sort()).toEqual([...APPROVAL_CATEGORIES].sort())
+		expect(markup.match(/type="checkbox"/g)).toHaveLength(APPROVAL_CATEGORIES.length)
+		expect(markup.match(/checked=""/g)).toHaveLength(DEFAULT_APPROVAL_CATEGORIES.length + 1)
+		expect(markup).toContain('Console grants and revocations')
+	})
+
+	test('saving fewer categories asks first; adding one does not', () => {
+		expect(categoryChange(['people', 'csp'], ['people'])).toBe('confirm')
+		expect(categoryChange(['people'], ['people', 'role-added'])).toBe('apply')
+		expect(isDefaultCategory('deletes-data')).toBe(true)
+		expect(isDefaultCategory('grants')).toBe(false)
+	})
+
+	test('the protection call sends the categories only when given', async () => {
+		const sent: unknown[] = []
+		const fetch: ControlFetch = (_input, init) => {
+			sent.push(JSON.parse(String(init?.body)))
+			return Promise.resolve(Response.json({ result: environment('prod', true) }))
+		}
+		const client = createControlClient(fetch)
+		await setEnvironmentProtection(client, 'notes', 'prod', true, ['grants'])
+		await setEnvironmentProtection(client, 'notes', 'prod', true)
+		expect(sent).toEqual([
+			{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true, categories: ['grants'] } },
+			{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true } },
+		])
 	})
 })

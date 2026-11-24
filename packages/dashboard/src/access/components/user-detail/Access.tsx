@@ -1,7 +1,8 @@
 import { Link } from '@buzola/router'
-import type { PrincipalDetail, PrincipalGrantDto } from '@fabrika/iam-contract'
+import type { GrantRequestDto, PrincipalDetail, PrincipalGrantDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
+import { PendingGrantNotice, pendingOf } from '../../../components/PendingGrant'
 import { SearchField } from '../../../components/SearchField'
 import { Status } from '../../../components/Status'
 import { EmptyState } from '../../../components/Table'
@@ -126,6 +127,7 @@ export function UserAccess({ principal, onDone }: { principal: PrincipalDetail; 
 
 function AccessAssignment({ grant, disabled, onDone }: { grant: PrincipalGrantDto; disabled: boolean; onDone: () => void }) {
 	const [confirm, setConfirm] = useState(false)
+	const [pending, setPending] = useState<GrantRequestDto | null>(null)
 	const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now() / 1000
 	const label = grant.roleName ?? grant.roleKey ?? 'Custom actions'
 	const scope = fmtScope(grant.scopeType === null ? null : { type: grant.scopeType, value: grant.scopeValue ?? '' })
@@ -152,6 +154,7 @@ function AccessAssignment({ grant, disabled, onDone }: { grant: PrincipalGrantDt
 						: <span className="muted small">Outside your administration</span>}
 				</div>
 			</div>
+			{pending && <PendingGrantNotice request={pending} />}
 			<details className="user-access-explanation">
 				<summary>
 					Permissions and origin<span className="muted small">{grant.expiresAt === null ? 'No expiration' : `Expires ${fmtDate(grant.expiresAt)}`}</span>
@@ -181,7 +184,7 @@ function AccessAssignment({ grant, disabled, onDone }: { grant: PrincipalGrantDt
 					}
 					onClose={() => setConfirm(false)}
 					onConfirm={async () => {
-						await api.grants.delete({ id: grant.id })
+						setPending(pendingOf(await api.grants.delete({ id: grant.id })))
 						onDone()
 					}}
 				/>

@@ -82,17 +82,17 @@ describe('the console shows what its caller may use', () => {
 		])
 	})
 
-	test('an IAM administrator with no console role sees Access, Branding and Passwords, and an application administrator sees People', () => {
+	test('an IAM administrator with no console role sees Access, Approvals (its grant requests), Branding and Passwords, and an application administrator sees People', () => {
 		expect(rail(caller({}, { iam: { kind: 'installation' } }))).toEqual([
-			'Delivery: Branding, Passwords',
+			'Delivery: Approvals, Branding, Passwords',
 			'Access: Overview, Users, Credentials, Permissions, Audit',
 		])
 		expect(rail(caller({}, { administersPeople: true }))).toEqual(['Your applications: People'])
 	})
 
-	test('a user administrator sees the Users of Access and no other Access page (ADR-0058)', () => {
+	test('a user administrator sees the Users of Access, no other Access page, and Approvals for grant requests (ADR-0058, ADR-0083)', () => {
 		for (const scope of [{ kind: 'users', apps: null }, { kind: 'users', apps: ['crm@prod'] }] as const) {
-			expect(rail(caller({}, { iam: scope }))).toEqual(['Access: Users'])
+			expect(rail(caller({}, { iam: scope }))).toEqual(['Delivery: Approvals', 'Access: Users'])
 			expect(mayOpen(caller({}, { iam: scope }), 'access/credentials')).toBe(false)
 		}
 	})

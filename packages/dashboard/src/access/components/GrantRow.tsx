@@ -1,7 +1,8 @@
 import { Link } from '@buzola/router'
-import type { ApiKeyGrantDto, GrantDto } from '@fabrika/iam-contract'
+import type { ApiKeyGrantDto, GrantDto, GrantRequestDto } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { pendingOf } from '../../components/PendingGrant'
 import { fmtAgo, fmtDate } from '../../lib/format'
 import { api } from '../lib/api'
 import { AppName } from '../lib/app-names'
@@ -26,11 +27,13 @@ export function GrantTableHead() {
 /** One grant of an API key, with its edit and revoke. IAM decides whether the caller may change it. */
 export function GrantRow({ grant, editable, onDone }: { grant: ApiKeyGrantDto; editable: boolean; onDone: () => void }) {
 	const [confirming, setConfirming] = useState(false)
+	const [pending, setPending] = useState<GrantRequestDto | null>(null)
 	const scopeLabel = fmtScope(grant.scopeType === null ? null : { type: grant.scopeType, value: grant.scopeValue ?? '' })
 
 	async function revoke() {
-		await api.grants.delete({ id: grant.id })
-		onDone()
+		const request = pendingOf(await api.grants.delete({ id: grant.id }))
+		setPending(request)
+		if (request === null) onDone()
 	}
 
 	return (
@@ -49,7 +52,9 @@ export function GrantRow({ grant, editable, onDone }: { grant: ApiKeyGrantDto; e
 						Edit
 					</Link>
 				)}
-				<button type="button" className="danger small" onClick={() => setConfirming(true)}>Revoke</button>
+				{pending
+					? <span className="muted small">Revocation waits for approval</span>
+					: <button type="button" className="danger small" onClick={() => setConfirming(true)}>Revoke</button>}
 				{confirming && (
 					<ConfirmDialog
 						title="Revoke grant"

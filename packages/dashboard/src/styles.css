@@ -2796,6 +2796,22 @@ td {
 	padding-right: 0;
 }
 
+/* The kinds of change an environment approves (ADR-0083): one column of grouped checkboxes under the switch. */
+.approval-categories {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+	margin: var(--s-2) 0 0;
+	padding: 0;
+	border: 0;
+}
+
+.approval-category-group {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+
 /* Two related values in one cell, the second under the first. */
 .cell-stack {
 	display: flex;

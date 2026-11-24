@@ -82,7 +82,13 @@ function GrantForm({ app, onDone }: { app: AdministeredAppDto; onDone: () => voi
 		setMessage(null)
 		try {
 			const granted = await api.appPeople.grant({ app: app.app, role, email: email.trim() })
-			setMessage(granted.granted ? 'Granted.' : 'This person already holds the role.')
+			setMessage(
+				granted.pending !== undefined
+					? "Waits for another administrator's approval: nothing changes until then."
+					: granted.granted
+					? 'Granted.'
+					: 'This person already holds the role.',
+			)
 			setEmail('')
 			onDone()
 		} catch (cause) {
@@ -118,9 +124,11 @@ function GrantForm({ app, onDone }: { app: AdministeredAppDto; onDone: () => voi
 
 function PeopleTable({ app, members, onDone }: { app: AdministeredAppDto; members: AppMemberItem[]; onDone: () => void }) {
 	const [revoking, setRevoking] = useState<{ principalId: string; label: string; role: string } | null>(null)
+	const [waiting, setWaiting] = useState<string | null>(null)
 	const grantable = new Set(app.roles.map((role) => role.key))
 	return (
 		<>
+			{waiting && <p className="notice" role="status">{waiting}</p>}
 			<Table
 				colSpan={3}
 				isEmpty={members.length === 0}
@@ -170,7 +178,12 @@ function PeopleTable({ app, members, onDone }: { app: AdministeredAppDto; member
 					confirmLabel="Revoke"
 					body={<p>Take {revoking.role} from {revoking.label}? Their next sign-in no longer carries it.</p>}
 					onConfirm={async () => {
-						await api.appPeople.revoke({ app: app.app, role: revoking.role, principalId: revoking.principalId })
+						const revoked = await api.appPeople.revoke({ app: app.app, role: revoking.role, principalId: revoking.principalId })
+						setWaiting(
+							revoked.pending === undefined
+								? null
+								: `Taking ${revoking.role} from ${revoking.label} waits for another administrator's approval: nothing changes until then.`,
+						)
 						onDone()
 					}}
 					onClose={() => setRevoking(null)}
