@@ -6,8 +6,25 @@ import type { ApplicationEnvironment } from './implement'
 /** Every variable under this prefix is the framework's; no application code sees one. */
 export const FRAMEWORK_PREFIX = 'FABRIKA_'
 
+/**
+ * The container credentials endpoint's variables, which ECS writes into every container: the path holds the task's id,
+ * and whoever reads it fetches the task role's credentials, which sign for the application's stored files. They are the
+ * framework's too, so a dependency that copies `process.env` never copies them (`FABRIKA_APP_STORAGE_CREDENTIALS`).
+ * Like every captured variable they stay in the process's initial environment, `/proc/self/environ` on Linux, which
+ * code in the same process can still read (backlog 301).
+ */
+export const CONTAINER_CREDENTIAL_VARIABLES: readonly string[] = Object.freeze([
+	'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',
+	'AWS_CONTAINER_CREDENTIALS_FULL_URI',
+	'AWS_CONTAINER_AUTHORIZATION_TOKEN',
+	'AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE',
+])
+
+/** Whether `name` is one the framework captures and takes out of the process. */
+const isFrameworkOwned = (name: string): boolean => name.startsWith(FRAMEWORK_PREFIX) || CONTAINER_CREDENTIAL_VARIABLES.includes(name)
+
 export interface CapturedEnvironment {
-	/** The `FABRIKA_*` variables, for `boot` only. */
+	/** The `FABRIKA_*` variables and the container credentials endpoint's, for `boot` only. */
 	readonly framework: Readonly<Record<string, string>>
 	/** Every other variable or binding, for the application's `deps`. */
 	readonly application: ApplicationEnvironment
@@ -21,7 +38,7 @@ function scrubProcessEnvironment(): void {
 			continue
 		}
 		for (const name of Object.keys(environment)) {
-			if (name.startsWith(FRAMEWORK_PREFIX)) {
+			if (isFrameworkOwned(name)) {
 				delete environment[name]
 			}
 		}
@@ -36,7 +53,7 @@ export function captureEnvironment(source: Readonly<Record<string, unknown>>): C
 	const framework: Record<string, string> = {}
 	const application: Record<string, unknown> = {}
 	for (const [name, value] of Object.entries(source)) {
-		if (!name.startsWith(FRAMEWORK_PREFIX)) {
+		if (!isFrameworkOwned(name)) {
 			Object.defineProperty(application, name, { value, enumerable: true })
 		} else if (typeof value === 'string') {
 			Object.defineProperty(framework, name, { value, enumerable: true })

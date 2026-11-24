@@ -4,6 +4,7 @@
 
 import { afterAll, describe, expect, test } from 'bun:test'
 import { S3BlobStore } from '../blob-s3'
+import { parseStorageConnection } from '../storage-connection'
 import { hasS3, s3Options, skipReason } from './helpers/s3'
 
 if (!hasS3) {
@@ -27,6 +28,27 @@ afterAll(async () => {
 })
 
 describe.skipIf(!hasS3)('S3BlobStore', () => {
+	test('a store opened from a parsed connection round-trips through the same bucket', async () => {
+		if (s3Options === null) return
+		const connection = parseStorageConnection(
+			{
+				TEST_STORAGE_BUCKET: s3Options.bucket,
+				TEST_STORAGE_ACCESS_KEY_ID: s3Options.accessKeyId,
+				TEST_STORAGE_SECRET_ACCESS_KEY: s3Options.secretAccessKey,
+				...(s3Options.endpoint === undefined ? {} : { TEST_STORAGE_ENDPOINT: s3Options.endpoint }),
+				...(s3Options.region === undefined ? {} : { TEST_STORAGE_REGION: s3Options.region }),
+			},
+			'TEST_STORAGE',
+			{ defaultRegion: 'auto', endpoint: 'optional' },
+		)
+		if (connection === undefined) throw new Error('no connection')
+		const opened = S3BlobStore.open(connection)
+		const path = key('opened.txt')
+		await opened.put(path, 'through the parsed connection')
+		expect(await (await store?.get(path))?.text()).toBe('through the parsed connection')
+		expect(await (await opened.get(path))?.text()).toBe('through the parsed connection')
+	})
+
 	test('round-trips a string', async () => {
 		const path = key('logs.ndjson')
 		await store?.put(path, '{"line":1}\n{"line":2}\n')

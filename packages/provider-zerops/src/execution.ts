@@ -326,8 +326,14 @@ export function generatedBuildCommands(execution: ZeropsLockedExecution, schemaC
 
 const sortedUnique = (values: readonly string[]): string[] => [...new Set(values)].sort()
 
-/** Zerops' object storage signs with the framework's default region, so a deploy here writes no region. */
-type StorageVariable = Exclude<Extract<FrameworkVariableName, `FABRIKA_APP_STORAGE_${string}`>, 'FABRIKA_APP_STORAGE_REGION'>
+/**
+ * Zerops' object storage signs with the framework's default region, takes path-style requests and the service's key
+ * pair, so a deploy here writes no region, addressing or credential source.
+ */
+type StorageVariable = Exclude<
+	Extract<FrameworkVariableName, `FABRIKA_APP_STORAGE_${string}`>,
+	'FABRIKA_APP_STORAGE_REGION' | 'FABRIKA_APP_STORAGE_ADDRESSING' | 'FABRIKA_APP_STORAGE_CREDENTIALS'
+>
 
 /** The file collections' object storage, as references Zerops resolves at runtime: no credential passes through Fabrika. */
 const storageVariables = (hostname: string): Record<StorageVariable, string> => ({

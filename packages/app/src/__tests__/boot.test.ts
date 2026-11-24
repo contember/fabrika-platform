@@ -171,6 +171,17 @@ describe('captureEnvironment', () => {
 			expect(Object.isFrozen(captured.framework)).toBe(true)
 		})
 	})
+
+	test("takes the container credentials endpoint's variables too, so application code never reads the task's path", async () => {
+		await keepingProcessEnvironment(async () => {
+			process.env['AWS_CONTAINER_CREDENTIALS_RELATIVE_URI'] = '/v2/credentials/task-id'
+			const captured = captureEnvironment({ AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/credentials/task-id', AWS_REGION: 'eu-central-1' })
+			expect(captured.framework).toEqual({ AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/credentials/task-id' })
+			expect(captured.application).toEqual({ AWS_REGION: 'eu-central-1' })
+			expect(process.env['AWS_CONTAINER_CREDENTIALS_RELATIVE_URI']).toBeUndefined()
+			expect(Bun.env['AWS_CONTAINER_CREDENTIALS_RELATIVE_URI']).toBeUndefined()
+		})
+	})
 })
 
 describe('what this version does not serve yet stops the boot', () => {

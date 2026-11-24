@@ -34,7 +34,14 @@ export {
 export type { ApplicationDatabaseRoles } from './application-postgres-roles'
 export { applicationDatabaseSchema } from './application-schema'
 export { FileSystemAssetServer, type FileSystemAssetServerOptions } from './asset-server-fs'
-export { S3BlobStore, type S3BlobStoreOptions } from './blob-s3'
+export {
+	S3BlobStore,
+	type S3BlobStoreOpenOptions,
+	type S3BlobStoreOptions,
+	type S3ClientOptions,
+	type S3ClientSource,
+	storageClients,
+} from './blob-s3'
 export {
 	CONNECTION_CAPACITY_MESSAGE,
 	ConnectionCapacityError,
@@ -77,4 +84,20 @@ export {
 	type PostgresServiceMigrationsConfig,
 } from './service-postgres-migrations'
 export { PostgresDatabase, PostgresStatement, type SqlBindValue } from './sql-postgres'
+export {
+	CONTAINER_CREDENTIALS_ORIGIN,
+	type ContainerCredentialOptions,
+	containerCredentials,
+	CREDENTIAL_REFRESH_BEFORE_MS,
+	CREDENTIAL_RETRY_MS,
+	type CredentialProvider,
+	credentialProvider,
+	parseStorageConnection,
+	type StorageConnection,
+	StorageConnectionError,
+	type StorageConnectionOptions,
+	storageConnectionProblems,
+	type StorageCredentials,
+	type StorageCredentialSource,
+} from './storage-connection'
 export { type BackgroundTasks, type BackgroundTasksOptions, createBackgroundTasks } from './wait-until'

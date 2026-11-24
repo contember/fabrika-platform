@@ -889,11 +889,14 @@ vocabulary (`packages/db/CLAUDE.md`).
   job's `ctx.sql` outside `ctx.transaction` is `jobSqlOutsideTransaction` (`sql_outside_transaction`), so an untyped
   call is no `TypeError`.
 - **The framework's variables are every `FABRIKA_*` name, and they leave the process
-  before any application module loads.** The runtime adapter calls
+  before any application module loads.** So do ECS's container credentials variables (`CONTAINER_CREDENTIAL_VARIABLES`):
+  whoever reads the path fetches the task role's credentials, which sign for the stored files. The runtime adapter calls
   `captureEnvironment`, which keeps them in a frozen record and deletes them from
   `process.env` and `Bun.env`; only then does the generated entrypoint's `import()`
   load `src/app.ts`, so a dependency that copies the environment at module load
-  copies none of them. Never import the application statically from the entrypoint.
+  copies none of them. They stay in the initial environment block (`/proc/self/environ` on Linux), which code in the
+  process can still read: the capture stops a copy, not hostile code (backlog 301). Never import the application
+  statically from the entrypoint.
   `boot` reads `FABRIKA_IAM_APP_ID` — the token audience `<app>@<env>`, whose
   application part must equal `contract.app` — `FABRIKA_CONTRACT_DIGEST`, which must
   equal `contractDigest` of the compiled contract (a missing or different one stops

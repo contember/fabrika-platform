@@ -907,7 +907,23 @@ deal_attachments: {
   `S3BlobStore`) from `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a partial
   set stops the boot. Requests are signed for `FABRIKA_APP_STORAGE_REGION` when the platform writes it (an S3 bucket
   refuses a signature for another region), else for `us-east-1`; a region without the storage, or one that is not
-  lowercase letters, digits and hyphens, stops the boot. On Zerops the platform writes the four into the generated run section as `${<host>_…}`
+  lowercase letters, digits and hyphens, stops the boot. Two more are optional, for a container cloud:
+  `FABRIKA_APP_STORAGE_ADDRESSING` (`path`, the default, or `virtual`) and `FABRIKA_APP_STORAGE_CREDENTIALS` (`static`,
+  the key pair, or `container`, which takes no key pair: the store signs with the task's own short-lived credentials
+  from the ECS container credentials endpoint at `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`, no redirect followed; an
+  endpoint stays optional there, an S3 VPC endpoint being one). While the held set is valid every request gets it at
+  once; within five minutes of its expiry one refresh runs in the background, a failed or fruitless one waits 30 s
+  before the next, and a set that arrives expired, or lasts no longer than the held one, never replaces it. The
+  endpoint's variables (`AWS_CONTAINER_CREDENTIALS_*`, `AWS_CONTAINER_AUTHORIZATION_TOKEN*`) are captured with the
+  `FABRIKA_*` ones and leave `process.env` before the application loads, so a dependency that copies the environment
+  copies no task path. Like every captured variable (the static key pair included) they stay in the process's initial
+  environment, `/proc/self/environ` on Linux, which code in the same process can still read (measured, backlog 301):
+  the capture stops a copy, not hostile code, so the task role is given the application's own bucket and nothing more.
+  An endpoint is an `http(s)://` URL without credentials, a query or a fragment. The parser is `@fabrika/platform-node`'s
+  `parseStorageConnection`, which Control's run logs (`FABRIKA_CONTROL_RUN_LOGS_*`) and Operations' payloads
+  (`FABRIKA_OPERATIONS_BLOB_*`) read too, each with its own default region (`auto`). An older framework ignores the two
+  application variables, so a provider that writes them refuses an application pinned below the first release that
+  reads them. On Zerops the platform writes the four into the generated run section as `${<host>_…}`
   references to the application's one `object-storage` service, which must be a bucket the platform created for it. A
   job run (`fabrika job run`) gets ClamAV's `clamscan` from `PATH` as its scanner; on Zerops the build installs it for
   a contract with a `scan: true` kind (see [Zerops platform](zerops-platform.md)). On Cloudflare the store is the
