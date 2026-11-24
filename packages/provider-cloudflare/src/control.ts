@@ -45,8 +45,10 @@ import {
 	runnerApprovedAccessSchema,
 	type RunnerIamReconcile,
 } from './runner-protocol'
+import { cloudflareAuthoring } from './workspace-authoring'
 
 export * from './runner-protocol'
+export { CLOUDFLARE_ISOLATED_BUILD, CLOUDFLARE_PROTECTED_FILES, CLOUDFLARE_STAGE_DEPLOY_REFUSAL, cloudflareAuthoring } from './workspace-authoring'
 
 /** Persisted Cloudflare target data. Installation credentials never enter this envelope. */
 export interface CloudflareStoredTarget {
@@ -234,6 +236,8 @@ export interface CloudflareControlOptions {
 	recoverRun?(runId: string): Promise<CloudflareRunRecovery>
 	/** Overridable for tests; the wait between two reads of Control's step boundary. */
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+	/** Overridable for tests; whether the runner builds a workspace commit apart from the account token (`CLOUDFLARE_ISOLATED_BUILD`). */
+	readonly isolatedBuild?: boolean
 }
 
 const BOUNDARY_INTERVAL_MS = 10_000
@@ -408,6 +412,9 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 	applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 	applicationDialect: 'sqlite',
 	source: { binding: 'connection' },
+	// MCP authoring (ADR-0049): a second, unprotected environment of the app is its stage. `deploy_stage` waits for the
+	// runner to build a workspace commit apart from the account token.
+	authoring: cloudflareAuthoring(options.isolatedBuild),
 	resolveSource: async (input) => {
 		input.signal.throwIfAborted()
 		const registration = normalizeRegistration(input)
