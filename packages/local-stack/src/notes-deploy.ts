@@ -167,9 +167,9 @@ export const ensureNamespace = async (machineKey: string): Promise<void> => {
 }
 
 /**
- * Register Notes, or bring its `prod` back to the local domain. `prod` starts protected, and only a person names its
- * trigger ref or domain (ADR-0050 §4), so both writes go through the console as the signed-in person; `login` is the
- * browser stack's seeded sign-in, absent where `LOCAL_DEV_LOGIN` signs in.
+ * Register Notes, or bring its `prod` back to the local domain. `prod` starts protected: only a person registers it with
+ * a trigger ref, or changes its domain (ADR-0050 §4), so both writes go through the console as the signed-in person;
+ * `login` is the browser stack's seeded sign-in, absent where `LOCAL_DEV_LOGIN` signs in.
  */
 export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest, login?: IamLogin): Promise<void> => {
 	const apps = await controlRequest('apps.list', machineKey)
