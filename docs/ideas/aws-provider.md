@@ -274,7 +274,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    deployment is `SUCCESSFUL`, `failed` when the circuit breaker rolled back. ECR's lifecycle rule
    (`keepNewestImages`) counts pushes, not deployments, so builds pushed after the running image can expire it, and ECS
    can then neither replace a task nor roll back to it: size `keep` against that, or give the deployed digest an extra
-   tag a separate rule keeps.
+   tag a separate rule keeps. `StartBuild`'s idempotency token holds five minutes, and a repeat must send the identical
+   body (the same presigned URL included): a start whose answer was lost is settled by `findBuild` (the token travels as
+   `FABRIKA_BUILD_TOKEN`), never by a blind repeat.
 9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`
    (stop the build; once the service is updated, cancellation never implies rollback), `secrets` (`PutParameter`,
    `DeleteParameter`), `declaredVariables`, `normalizeRegistration`, `lockfileRefusal`, the `backupBeforeMigrations`
