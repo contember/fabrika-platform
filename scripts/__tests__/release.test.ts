@@ -313,10 +313,23 @@ describe('the source version', () => {
 })
 
 describe('a local pack', () => {
-	test('is a prerelease of the source version, named after the commit', () => {
+	test('of a release source is a prerelease of it, named after the commit', () => {
 		expect(localVersion('0.3.3', 'abc1234')).toBe('0.3.3-local.gabc1234')
-		expect(() => localVersion('0.3.3-next.1', 'abc1234')).toThrow('is not a release')
+	})
+
+	test('refuses a commit that is no object name, and a source with build metadata or a malformed identifier', () => {
 		expect(() => localVersion('0.3.3', 'HEAD')).toThrow('is not a git object name')
+		expect(() => localVersion('0.3.3+build.1', 'abc1234')).toThrow('is not a release or a prerelease')
+		expect(() => localVersion('0.3.3-dev.01', 'abc1234')).toThrow('is not a release or a prerelease')
+	})
+
+	test('of a prerelease source keeps its identifiers and sorts between it and the next prerelease', async () => {
+		const version = localVersion('0.9.0-dev.33', 'abc1234')
+		expect(version).toBe('0.9.0-dev.33.local.gabc1234')
+		expect(Bun.semver.order(version, '0.9.0-dev.33')).toBe(1)
+		expect(Bun.semver.order(version, '0.9.0-dev.34')).toBe(-1)
+		expect(Bun.semver.satisfies(version, '>=0.9.0-dev.33 <0.9.0')).toBe(true)
+		expect((await parseOptions(['validate', `--tag=v${version}`])).version).toBe(version)
 	})
 
 	test('is a version the release tag parser accepts, an all-digit commit with a leading zero included', async () => {
@@ -377,7 +390,7 @@ describe.skipIf(!runPackWitness)('an application outside the repository on a loc
 			// The source's minor, not the last one npm has: the checker and the platform read the pack as that release.
 			const { sourceVersion } = packageGraph(await readPackages())
 			const commit = (await exec(['git', 'rev-parse', '--short', 'HEAD'], ROOT)).stdout.trim()
-			expect(manifest.version).toBe(`${sourceVersion}-local.g${commit}`)
+			expect(manifest.version).toBe(localVersion(sourceVersion, commit))
 			const block = z.object({ dependencies: z.record(z.string()), overrides: z.record(z.string()) })
 				.parse(JSON.parse(await readFile(join(artifacts, LOCAL_INSTALL_FILE), 'utf8')))
 			expect(block).toEqual(localInstallBlock(manifest.packages))
