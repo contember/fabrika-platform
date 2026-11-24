@@ -612,6 +612,18 @@
         "@types/bun": "^1.4.3",
       },
     },
+    "packages/provider-aws": {
+      "name": "@fabrika/provider-aws",
+      "version": "0.9.0-dev.33",
+      "dependencies": {
+        "@fabrika/app": "workspace:*",
+        "@fabrika/provider-contract": "workspace:*",
+        "zod": "^3.25.76",
+      },
+      "devDependencies": {
+        "@types/bun": "^1.4.3",
+      },
+    },
     "packages/provider-cloudflare": {
       "name": "@fabrika/provider-cloudflare",
       "version": "0.9.0-dev.33",
@@ -968,6 +980,8 @@
     "@fabrika/platform-artifacts": ["@fabrika/platform-artifacts@workspace:packages/platform-artifacts"],
 
     "@fabrika/platform-node": ["@fabrika/platform-node@workspace:packages/platform-node"],
+
+    "@fabrika/provider-aws": ["@fabrika/provider-aws@workspace:packages/provider-aws"],
 
     "@fabrika/provider-cloudflare": ["@fabrika/provider-cloudflare@workspace:packages/provider-cloudflare"],
 

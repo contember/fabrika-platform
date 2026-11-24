@@ -54,6 +54,8 @@
 		{ "path": "./packages/platform-node/tsconfig.test.json" },
 		{ "path": "./packages/provider-cloudflare/tsconfig.lib.json" },
 		{ "path": "./packages/provider-cloudflare/tsconfig.test.json" },
+		{ "path": "./packages/provider-aws/tsconfig.lib.json" },
+		{ "path": "./packages/provider-aws/tsconfig.test.json" },
 		{ "path": "./packages/provider-contract/tsconfig.lib.json" },
 		{ "path": "./packages/provider-contract/tsconfig.test.json" },
 		{ "path": "./packages/provider-zerops/tsconfig.lib.json" },

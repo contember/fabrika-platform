@@ -1,0 +1,27 @@
+# @fabrika/provider-aws
+
+The AWS provider bundle, on ECS with Fargate, under construction ([the AWS idea](../../docs/ideas/aws-provider.md),
+"The checklist"). Assumes the root CLAUDE.md. **Private until it can deploy**: no release publishes it, and nothing an
+installation runs imports it.
+
+```bash
+bun run typecheck
+bun test
+```
+
+| Module         | What it owns                                                                                                                                                                                                                                                           |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `codecs.ts`    | `AWS_PROVIDER` and what Control persists: the app target (account, region, cluster, service), the artifact (the contract's digest and health path), the namespace target (its stack and sizing), the run checkpoint (`buildId`, `taskDefinitionArn`, `deploymentArn`). |
+| `authoring.ts` | `defineApp({ id })` and `isAwsAppConfig`: the config `authoredAppProvider` reads as `aws`, under the contract's app id rule.                                                                                                                                           |
+
+## Invariants
+
+- **No AWS SDK** ([ADR-0081](../../docs/decisions/0081-the-aws-provider-calls-aws-without-the-sdk.md)). The clients are
+  this package's own: a SigV4 signer pinned with known-answer tests, small JSON clients, `Bun.S3Client` for S3, a strict
+  minimal XML reader for CloudFormation and RDS. Never add an `@aws-sdk/*` dependency.
+- **Every codec is strict and bounded.** A payload with a field this release does not know is refused, not dropped; a
+  refusal names fields, never a value; every identifier has a bounded form, so no state nears Control's 16 KiB
+  (`MAX_PROVIDER_STATE_BYTES`). Persisted state holds coordinates only, never a credential.
+- **Unverified facts stay marked `UNVERIFIED:`.** The identifier forms follow AWS's published references; none was
+  checked against an account. Promote one only after a live check.
+- **No real account, resource or spend in tests**: fakes at the HTTP level, and local emulators where one exists.

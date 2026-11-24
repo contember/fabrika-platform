@@ -109,6 +109,7 @@ packages/
   dashboard                       # the unified console SPA (all three planes)
   platform platform-node          # runtime PORTS · the Postgres/S3/Bun implementation set
   provider-{contract,cloudflare,zerops}       # authoring, deploy, control, and `fabrika platform …` per cloud
+  provider-aws                    # the AWS provider (ECS on Fargate), under construction and private
   installation-init               # the operator-side `init` mechanics both installations share
   platform-artifacts              # private Zerops installation codegen: zerops.yaml, import YAMLs, schemas
   runner-{container,cloudflare}               # the Cloudflare out-of-band deploy executor
