@@ -12,8 +12,11 @@ export interface AdminContext {
 	services: Services
 	request: Request
 	url: URL
-	/** The resolved admin caller (already gated on its administration). `label` is null for a label-less key. */
-	admin: { id: string; type: PrincipalType; label: string | null; permissions: PermissionEntry[] }
+	/**
+	 * The resolved admin caller (already gated on its administration). `label` is null for a label-less key; `session`
+	 * is true only for a signed-in session's console token, never for a `px_` key.
+	 */
+	admin: { id: string; type: PrincipalType; label: string | null; permissions: PermissionEntry[]; session: boolean }
 	/** The installation, or the people of some applications (ADR-0058); every user-admin rule reads it. */
 	administration: Administration
 	/** IAM's own app id — the audience the admin was resolved against; used for audit labeling. */

@@ -1,5 +1,12 @@
 import { appSchemaSchema } from '@fabrika/auth'
-import { type AppDelegationDef, type AppLinkMountDef, type DimensionValue, LOCALES, type RoleDef } from '@fabrika/auth-core'
+import {
+	type AppDelegationDef,
+	type AppLinkMountDef,
+	type DimensionValue,
+	type DimensionValueSource,
+	LOCALES,
+	type RoleDef,
+} from '@fabrika/auth-core'
 
 import {
 	type AppDto,
@@ -14,7 +21,7 @@ import type { z } from 'zod'
 import { parsePresentation } from '../app-presentation'
 import { normalizeOrigin } from '../handoff'
 import { BUILTIN_ROLES } from '../roles'
-import { parseStoredPermissions, parseStoredValueList } from '../stored-permissions'
+import { parseStoredPermissions, parseStoredValueList, parseStoredValueSource } from '../stored-permissions'
 import { type AdminContext, adminEvent, fail } from './context'
 import { dbRoleToDef, knownApps } from './grant-support'
 import { error, json, readJson } from './http'
@@ -177,6 +184,7 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 				directory: s.directory ?? null,
 				lookups: s.lookups ?? null,
 				values: s.values ?? null,
+				valueSource: s.valueSource ?? null,
 			})),
 			actions: schema.actions.map((a) => ({ action: a.action, description: a.description ?? null })),
 			roles: Object.entries(schema.roles).map(([roleKey, def]) => ({
@@ -254,6 +262,7 @@ async function readAppSchemaDto(c: AdminContext, app: string): Promise<AppSchema
 			...(r.members_directory === 'labels' ? { directory: 'labels' } : {}),
 			...(r.members_lookup === null ? {} : { lookups: parseStoredPermissions(r.members_lookup) }),
 			...valueListOf(r.value_list),
+			...valueSourceOf(r.value_source),
 		})),
 		actions: actionRows.map((r) => ({ action: r.action, ...(r.description !== null ? { description: r.description } : {}) })),
 		roles,
@@ -307,6 +316,12 @@ export async function getAppSchemaUseCase(c: AdminContext, input: AppInput): Pro
 		return fail(404, 'unknown app')
 	}
 	return readAppSchemaDto(c, app)
+}
+
+/** A scope's value source as the schema answers it: present only when the stored source parses. */
+function valueSourceOf(stored: string | null): { valueSource?: DimensionValueSource } {
+	const valueSource = parseStoredValueSource(stored)
+	return valueSource === null ? {} : { valueSource }
 }
 
 /** A scope's listed values as the schema answers them: present only when the stored list parses. */

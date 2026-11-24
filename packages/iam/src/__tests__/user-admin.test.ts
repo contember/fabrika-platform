@@ -87,8 +87,8 @@ async function installation(repositories: IamRepositories, email: CapturingEmail
 		},
 		async direct(principal) {
 			const permissions = await resolvePermissionsAt(f.services, principal, IAM_APP_ID)
-			const admin = { id: principal.id, type: principal.type, label: principal.label, permissions }
-			const administration = administrationOf({ ...admin, audience: CONSOLE_APP, session: true })
+			const admin = { id: principal.id, type: principal.type, label: principal.label, permissions, session: true }
+			const administration = administrationOf({ ...admin, audience: CONSOLE_APP })
 			if (administration === null) throw new Error('not an administrator')
 			const url = new URL(`${ORIGIN}/admin/rpc`)
 			return { services: f.services, request: new Request(url), url, admin, administration, app: IAM_APP_ID, requestId: unique('req'), ctx: f.ctx }
