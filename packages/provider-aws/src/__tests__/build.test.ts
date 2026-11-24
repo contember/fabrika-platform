@@ -13,13 +13,13 @@ import { fakeAws } from './helpers/fake-aws'
 
 const TOKEN = '0f1e2d3c-4b5a-4968-8776-655443322110'
 const REGISTRY = '123456789012.dkr.ecr.eu-central-1.amazonaws.com'
-const SOURCE_URL = 'https://fabrika-apps-sources.s3.eu-central-1.amazonaws.com/sources/run-1/source.tar.gz?X-Amz-Signature=abc'
+const SOURCE_URL = `/fabrika/main/builds/${'0f1e2d3c-4b5a-4968-8776-655443322110'}/source-url`
 const DOCKERFILE = '# Generated\nFROM oven/bun@sha256:aa AS build\nRUN echo "$HOME" && printf \'%s\' x\n'
 
 const input: AwsBuildInput = {
 	project: 'fabrika-apps-build',
 	buildToken: TOKEN,
-	sourceUrl: SOURCE_URL,
+	sourceUrlParameter: SOURCE_URL,
 	dockerfile: DOCKERFILE,
 	repositoryUri: `${REGISTRY}/fabrika/notes-prod`,
 	sourceMapKeyParameter: null,
@@ -38,12 +38,14 @@ describe('the build', () => {
 		expect(spec.version).toBe(0.2)
 		expect(spec.phases.pre_build.commands).toEqual([
 			'set -euo pipefail',
-			'aws ecr get-login-password --region "$AWS_REGION" | docker login --username AWS --password-stdin "$FABRIKA_REGISTRY"',
+			'aws ecr get-login-password --region "$FABRIKA_REGISTRY_REGION" | docker login --username AWS --password-stdin "$FABRIKA_REGISTRY"',
 			'mkdir /tmp/fabrika-source',
 			'curl --fail --silent --show-error --proto =https --output /tmp/fabrika-source.tar.gz "$FABRIKA_SOURCE_URL"',
 			'unset FABRIKA_SOURCE_URL',
 			'tar --extract --gzip --file /tmp/fabrika-source.tar.gz --directory /tmp/fabrika-source --strip-components=1 --no-same-owner',
 			`printf '%s' "$FABRIKA_DOCKERFILE" | base64 --decode > /tmp/fabrika-Dockerfile`,
+			// The Dockerfile's own empty ignore file: the application's `.dockerignore` filters nothing.
+			"printf '' > /tmp/fabrika-Dockerfile.dockerignore",
 		])
 		expect(spec.phases.build.commands).toEqual([
 			'set -euo pipefail',
@@ -59,10 +61,12 @@ describe('the build', () => {
 			token: TOKEN,
 			buildspec: AWS_BUILDSPEC,
 			variables: {
-				[BUILD_VARIABLES.sourceUrl]: { value: SOURCE_URL },
+				// The presigned URL by its parameter's name: the start records no credential.
+				[BUILD_VARIABLES.sourceUrl]: { parameter: SOURCE_URL },
 				[BUILD_VARIABLES.dockerfile]: { value: new TextEncoder().encode(DOCKERFILE).toBase64() },
 				[BUILD_VARIABLES.image]: { value: `${REGISTRY}/fabrika/notes-prod:run-${TOKEN}` },
 				[BUILD_VARIABLES.registry]: { value: REGISTRY },
+				[BUILD_VARIABLES.registryRegion]: { value: 'eu-central-1' },
 			},
 			timeoutMinutes: AWS_BUILD_TIMEOUT_MINUTES,
 			queuedTimeoutMinutes: AWS_BUILD_QUEUED_TIMEOUT_MINUTES,
@@ -95,9 +99,13 @@ describe('the build', () => {
 		const refusals: readonly [Partial<AwsBuildInput>, string][] = [
 			[{ repositoryUri: 'docker.io/library/bun' }, 'the repository'],
 			[{ repositoryUri: `${REGISTRY}/Notes` }, 'the repository'],
-			[{ sourceUrl: 'http://bucket.example/source.tar.gz' }, 'the source URL'],
-			[{ sourceUrl: 'https://user:pass@bucket.example/source.tar.gz' }, 'the source URL'],
-			[{ sourceUrl: 'not a url' }, 'the source URL'],
+			// Names ECR refuses are refused at the start, not at the build.
+			[{ repositoryUri: `${REGISTRY}/a//b` }, 'the repository'],
+			[{ repositoryUri: `${REGISTRY}/a.-b` }, 'the repository'],
+			[{ repositoryUri: `${REGISTRY}/a/-b` }, 'the repository'],
+			[{ repositoryUri: `${REGISTRY}/a` }, 'the repository'],
+			[{ sourceUrlParameter: 'https://bucket.example/source.tar.gz' }, 'the source URL parameter'],
+			[{ sourceUrlParameter: 'no-slash' }, 'the source URL parameter'],
 			[{ dockerfile: '' }, 'the Dockerfile'],
 			[{ dockerfile: 'x'.repeat(MAX_DOCKERFILE_BYTES + 1) }, 'the Dockerfile'],
 			[{ sourceMapKeyParameter: 'no-slash' }, 'the source-map key parameter'],
