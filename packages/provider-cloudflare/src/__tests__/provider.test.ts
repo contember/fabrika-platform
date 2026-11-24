@@ -38,7 +38,7 @@ import {
 import { SCHEMA_CHECK_CONFIG_SINCE } from '../contract-support'
 import { deployOrder } from '../deploy-order'
 import type { PlatformIamTarget } from '../provider'
-import { CLOUDFLARE_PROXY_WORKER_DIR, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
+import { CLOUDFLARE_PROXY_WORKER_DIR, NO_PROCESS_ENV_FLAG, POPULATE_PROCESS_ENV_FLAG, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
@@ -2482,6 +2482,7 @@ describe('the application Worker `defineApp` builds for a config without `resour
 			expect(minimal.steps.map((step) => step.id)).not.toContain('reconcile-schema')
 			expect(configs.find((config) => config.name === 'stage-demo')).toMatchObject({
 				main: './fabrika/entry.generated.ts',
+				compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG],
 				routes: [],
 				workers_dev: false,
 				preview_urls: false,
@@ -2496,6 +2497,26 @@ describe('the application Worker `defineApp` builds for a config without `resour
 			})
 		}
 		expect(rec.outcomes).toEqual([])
+	})
+
+	test('keeps `process.env` empty: the application Worker and its proxy carry the opt-out, and an authored opt-in is refused', async () => {
+		// Plain `nodejs_compat` at this date is what workerd fills `process.env` under; the deployer adds the opt-out to it.
+		const authored = defineApp({ id: 'demo', worker: { compatibility_flags: ['nodejs_compat'] } })
+		for (const app of [defineApp({ id: 'demo' }), authored]) {
+			const run = await deploy(rec, app, { contract: notesArtifact, framework: '0.9.0', declaresSchema: false })
+			expect(run.status).toBe('succeeded')
+			const configs = await generated()
+			rec.provisions.shift()
+			for (const name of ['stage-demo', 'stage-demo-proxy']) {
+				const flags = configs.find((config) => config.name === name)?.compatibility_flags
+				expect(flags).toContain(NO_PROCESS_ENV_FLAG)
+				expect(flags).not.toContain(POPULATE_PROCESS_ENV_FLAG)
+			}
+		}
+		const optedIn = defineApp({ id: 'demo', worker: { compatibility_flags: ['nodejs_compat_v2', POPULATE_PROCESS_ENV_FLAG] } })
+		await expect(deploy(rec, optedIn, { contract: notesArtifact, framework: '0.9.0', declaresSchema: false })).rejects.toThrow(
+			`sets \`${POPULATE_PROCESS_ENV_FLAG}\`, which would put the platform's secrets in \`process.env\``,
+		)
 	})
 
 	test('a local deploy of a contract application without a schema reports none', async () => {

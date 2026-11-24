@@ -12,6 +12,8 @@ import {
 	IAM_SERVICE,
 	type IamBindingHolder,
 	iamBindingProps,
+	NO_PROCESS_ENV_FLAG,
+	POPULATE_PROCESS_ENV_FLAG,
 	PROXY_MANIFEST_DEFINE,
 } from './proxy'
 
@@ -376,6 +378,19 @@ const assertUnexposed = (worker: string, config: WranglerConfig): void => {
 	}
 }
 
+/**
+ * The Worker keeps `process.env` empty: its flags carry `NO_PROCESS_ENV_FLAG` and not `POPULATE_PROCESS_ENV_FLAG`, so no
+ * module of its bundle finds the platform's secrets there. The deployer adds the first; this checks what wrangler reads.
+ */
+const assertProcessEnvironmentClosed = (worker: string, flags: unknown): void => {
+	const listed: readonly unknown[] = Array.isArray(flags) ? flags : []
+	if (listed.includes(POPULATE_PROCESS_ENV_FLAG) || !listed.includes(NO_PROCESS_ENV_FLAG)) {
+		throw new Error(
+			`cloudflare: Worker \`${worker}\` would fill \`process.env\` with the platform's secrets; its \`compatibility_flags\` must carry \`${NO_PROCESS_ENV_FLAG}\` and not \`${POPULATE_PROCESS_ENV_FLAG}\``,
+		)
+	}
+}
+
 const routeHostname = (route: unknown): string | null => {
 	const pattern = typeof route === 'string' ? route : field(route, 'pattern')
 	if (typeof pattern !== 'string') return null
@@ -534,6 +549,7 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		else assertServices(worker, config, names, 'application', bounds.connectors)
 		assertResourceBindings(worker, config, names)
 		assertBoundedAssets(worker, config.assets)
+		assertProcessEnvironmentClosed(worker, config.compatibility_flags)
 		if (isPlatformProxy(generated, bounds)) {
 			assertRoutedHere(worker, config, bounds)
 			assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.proxy ?? {})

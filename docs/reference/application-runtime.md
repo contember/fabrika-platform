@@ -498,6 +498,15 @@ request under `/__fabrika/ops/` goes to the object its body names
 ([ADR-0069](../decisions/0069-control-reaches-an-application-environments-object.md)); the Worker authenticates it
 first and the object again, and it never boots the application.
 
+- **`process.env` stays empty.** Under `nodejs_compat` from compatibility date 2025-04-01, workerd fills `process.env`
+  at module evaluation with every text variable and secret of the Worker, the framework's included, before the object
+  captures anything; `nodejs_compat_v2` alone does not. The deployer therefore adds
+  `nodejs_compat_do_not_populate_process_env` to every application Worker and to the proxy Worker, the bounds check
+  refuses a generated config without it, and an application Worker that sets `nodejs_compat_populate_process_env` is
+  refused. For an application that reads `process.env`: there is nothing in it on Cloudflare, so a dependency that
+  configures itself from `process.env` sees its defaults. The checker already refuses `process.env` in application code
+  (`env-read`); the application's own values reach it through the framework's environment. Measured in workerd
+  1.20260312.1.
 - **The object** (`FabrikaApplication`, `packages/app/src/cloudflare/application.ts`) answers an empty 404 to a request
   without the secret or with another, before anything else. On the first request or tick that needs the application,
   under `blockConcurrencyWhile`, it captures the environment,

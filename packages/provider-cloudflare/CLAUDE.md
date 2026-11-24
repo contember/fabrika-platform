@@ -116,6 +116,11 @@ this one import.
   inherits nothing of the executor's environment or the run's values: it gets `PATH`, `HOME` and `TMPDIR` only. An
   older release and a Control that names no release keep their authored `main` (ADR-0062); a local deploy keeps it
   too, and has no `check` step.
+- **No secret reaches `process.env`.** workerd fills it at module evaluation under `nodejs_compat` from compatibility
+  date 2025-04-01 (or with `POPULATE_PROCESS_ENV_FLAG`), with every text variable and secret. `withoutProcessEnvironment`
+  (`src/provider.ts`) adds `NO_PROCESS_ENV_FLAG` to every application Worker it deploys and refuses an authored
+  `POPULATE_PROCESS_ENV_FLAG`; the proxy Worker carries it from `createCloudflareProxyWorker`; and
+  `assertProcessEnvironmentClosed` (`src/bounds.ts`) refuses a generated config of either without it.
 - **Every managed credential is a Worker secret, uploaded with the version** (`src/managed-secrets.ts`): token keys,
   workload keys, mail, the platform transport, the Operations DSN, the IAM RPC key and the proxy secret. The executor
   parses what its job carries with `parseManagedEnvironment` (`@fabrika/auth-core`, in `command.ts`), and an entry is a
