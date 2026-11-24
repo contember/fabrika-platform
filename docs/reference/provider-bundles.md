@@ -279,11 +279,13 @@ exists only in memory for the live PUT; it is never persisted or logged.
 
 The PUT carries no `Content-Length`, which a destination that needs the length up front refuses (an S3 object, an
 Azure blob). An upload may therefore name a provider's part writer (`SourcePartWriter`, `types.ts`) instead of a URL:
-the transport cuts the gzip archive into the writer's parts (256 KiB to 64 MiB each, one in memory at a time), hands
-them over in order, and asks the writer to complete them only after the archive's validation verdict passed, so a
-rejected repository never becomes an object. A failure after the first part asks the writer to drop what it stored. The
-writer holds its own credentials and makes its own requests; its errors are reported as `upload_failed` and their words
-are never forwarded. No composition hands one yet: Zerops and the dev sandboxes upload with one PUT.
+the transport cuts the gzip archive into the writer's parts (a multiple of 256 KiB up to 64 MiB each; it fills one at a
+time and the writer keeps what it was handed), hands every part but the last over in order, and hands the last part to
+the writer's completion only after the archive's validation verdict passed. So a rejected repository never becomes an
+object, also on a destination whose last chunk finalizes it (a Cloud Storage resumable session). A failure after the
+writer was first called asks it to drop what may be stored, an object a failed completion may have made included. The
+writer holds its own credentials and makes its own requests; its errors, and the pipe's bound, are reported as
+`upload_failed`, and their words are never forwarded. No composition hands one yet: Zerops and the dev sandboxes upload with one PUT.
 
 Resolve is bounded to four minutes and upload to 15 minutes; the PUT itself is bounded to ten minutes,
 and that bound covers the whole download-rewrite-upload pipe

@@ -23,9 +23,9 @@ export const SOURCE_TIMEOUTS_MS = {
 const DEFAULT_MAX_CONCURRENT_UPLOADS = 2
 
 /**
- * The bounds of a part writer's part size. Cloud Storage takes multiples of 256 KiB, S3 at least 5 MiB but for the last
- * part, an Azure block at most 4 MiB at an old service version; the writer picks within these. The transport holds one
- * part in memory per upload.
+ * The bounds of a part writer's part size, which must be a multiple of the minimum. Cloud Storage takes multiples of
+ * 256 KiB, S3 at least 5 MiB but for the last part, an Azure block at most 4 MiB at an old service version; the writer
+ * picks within these. The transport fills one part per upload; a part it handed over is the writer's to keep or drop.
  */
 export const MIN_SOURCE_PART_BYTES = 256 * 1024
 export const MAX_SOURCE_PART_BYTES = 64 * 1024 * 1024
@@ -116,7 +116,7 @@ export class SourceTransport {
 	private acceptsDestination(input: SourceUploadInput): boolean {
 		if (input.parts !== undefined) {
 			const size = input.parts.partBytes
-			return Number.isSafeInteger(size) && size >= MIN_SOURCE_PART_BYTES && size <= MAX_SOURCE_PART_BYTES
+			return Number.isSafeInteger(size) && size >= MIN_SOURCE_PART_BYTES && size <= MAX_SOURCE_PART_BYTES && size % MIN_SOURCE_PART_BYTES === 0
 		}
 		if (input.uploadBearer === undefined) return this.isUploadDestination(input.uploadUrl)
 		return input.uploadBearer !== '' && this.isSandboxUploadDestination !== undefined && this.isSandboxUploadDestination(input.uploadUrl)
@@ -220,47 +220,55 @@ export class SourceTransport {
 }
 
 /**
- * The gzip archive cut into the writer's parts, one part in memory at a time, then completed only once the archive's
- * verdict passed: a rejected repository never becomes an object, which one streamed PUT cannot promise. A failure after
- * the first part asks the writer to drop what it stored, then rethrows, so the caller reads the archive's verdict first
- * as it does for a PUT. The pipe's own bound covers the parts and the completion.
+ * The gzip archive cut into the writer's parts. A full part is handed over only once a further byte shows it is not the
+ * last, so the last part always goes to `complete`, which runs only after the archive's verdict passed: a rejected
+ * repository never becomes an object, which one streamed PUT cannot promise, and a writer that finalizes with its last
+ * part (Cloud Storage's chunk with the total size) cannot finalize early. The part handed over is the writer's, and the
+ * transport fills a fresh buffer: one part and one read chunk in memory per upload, besides what the writer keeps.
+ *
+ * A failure after the writer was first called asks it to drop what may be stored. The pipe's own bound covers the parts
+ * and the completion; a failure the caller's signal did not cause is `upload_failed`, as for a PUT, and the archive's
+ * own verdict passes through, so the caller still reads it first.
  */
 async function writeParts(writer: SourcePartWriter, archive: RepositoryArchive, signal: AbortSignal, pipeMs: number): Promise<void> {
 	const combined = linkedController(signal, AbortSignal.timeout(pipeMs))
 	const reader = gzipStream(archive.body).getReader()
-	const part = new Uint8Array(writer.partBytes)
+	let part = new Uint8Array(writer.partBytes)
 	let filled = 0
-	let index = 0
+	let written = 0
 	let bytes = 0
-	const flush = async (): Promise<void> => {
-		const stored = part.slice(0, filled)
-		const at = index
-		index += 1
-		bytes += filled
-		filled = 0
-		await writer.writePart(at, stored, combined.signal)
-	}
+	let called = false
 	try {
 		for (;;) {
 			const read = await reader.read()
 			if (read.done) break
 			let offset = 0
 			while (offset < read.value.byteLength) {
+				if (filled === part.byteLength) {
+					// More bytes follow, so this full part is not the last.
+					called = true
+					await writer.writePart(written, part, combined.signal)
+					written += 1
+					bytes += filled
+					part = new Uint8Array(writer.partBytes)
+					filled = 0
+				}
 				const take = Math.min(read.value.byteLength - offset, part.byteLength - filled)
 				part.set(read.value.subarray(offset, offset + take), filled)
 				filled += take
 				offset += take
-				if (filled === part.byteLength) await flush()
 			}
 		}
-		if (filled > 0 || index === 0) await flush()
 		await archive.completed
-		await writer.complete({ parts: index, bytes }, combined.signal)
+		called = true
+		await writer.complete({ last: part.subarray(0, filled), parts: written + 1, bytes: bytes + filled }, combined.signal)
 	} catch (error) {
 		await reader.cancel().catch(() => {})
 		// Its own short bound: the upload's signal may be the reason it is dropped.
-		if (index > 0) await writer.abort(AbortSignal.timeout(PART_ABORT_MS)).catch(() => {})
-		throw error
+		if (called) await writer.abort(AbortSignal.timeout(PART_ABORT_MS)).catch(() => {})
+		if (error instanceof SourceFailure || signal.aborted) throw error
+		// The pipe's bound or the writer's own failure: never the caller's cancellation, and never the writer's words.
+		throw new SourceFailure('upload_failed', 'upload')
 	} finally {
 		combined.abort()
 	}

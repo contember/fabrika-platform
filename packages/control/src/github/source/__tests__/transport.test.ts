@@ -650,7 +650,10 @@ describe('source upload to a dev sandbox host', () => {
 	})
 })
 
-/** A part writer that records what it was handed; `failAt` makes that part's write reject with a secret-bearing error. */
+/**
+ * A part writer that records what it was handed, the last part (handed to `complete`) included; `failAt` makes that
+ * part's write reject with a secret-bearing error, `failComplete` the completion.
+ */
 function recordingWriter(options: { readonly partBytes?: number; readonly failAt?: number; readonly failComplete?: boolean } = {}) {
 	const parts: Uint8Array[] = []
 	const calls: string[] = []
@@ -663,8 +666,9 @@ function recordingWriter(options: { readonly partBytes?: number; readonly failAt
 			parts.push(bytes)
 		},
 		complete: async (upload) => {
-			calls.push(`complete:${upload.parts}:${upload.bytes}`)
+			calls.push(`complete:${upload.parts}:${upload.bytes}:${upload.last.byteLength}`)
 			if (options.failComplete === true) throw new Error('complete with signature=secret failed')
+			parts.push(upload.last)
 		},
 		abort: async () => {
 			calls.push('abort')
@@ -703,7 +707,7 @@ function partsInput(writer: SourcePartWriter, overrides: { readonly commitSha?: 
 const noUploadFetch = (): Promise<Response> => Promise.reject(new Error('a part upload sends no PUT of its own'))
 
 describe('source upload in parts', () => {
-	test("cuts gzip(tar) into the writer's parts, in order, and completes them once", async () => {
+	test("cuts gzip(tar) into the writer's parts, in order, and completes them once with the last part", async () => {
 		const payload = noise(900_000)
 		const prepared = preparedArchive(payload)
 		const recorded = recordingWriter()
@@ -714,13 +718,24 @@ describe('source upload in parts', () => {
 		const sizes = recorded.parts.map((part) => part.byteLength)
 		expect(sizes.length).toBeGreaterThan(2)
 		expect(sizes.slice(0, -1).every((size) => size === MIN_SOURCE_PART_BYTES)).toBe(true)
-		expect(sizes.at(-1)).toBeLessThanOrEqual(MIN_SOURCE_PART_BYTES)
+		const last = sizes.at(-1) ?? 0
+		expect(last).toBeGreaterThan(0)
+		expect(last).toBeLessThanOrEqual(MIN_SOURCE_PART_BYTES)
 		const total = sizes.reduce((sum, size) => sum + size, 0)
-		expect(recorded.calls).toEqual([...sizes.map((size, index) => `part:${index}:${size}`), `complete:${sizes.length}:${total}`])
+		expect(recorded.calls).toEqual([
+			...sizes.slice(0, -1).map((size, index) => `part:${index}:${size}`),
+			`complete:${sizes.length}:${total}:${last}`,
+		])
 		expect(new TextDecoder().decode(Bun.gunzipSync(recorded.joined()))).toBe(payload)
 	})
 
-	test.each([MIN_SOURCE_PART_BYTES - 1, MAX_SOURCE_PART_BYTES + 1, 1.5 * MIN_SOURCE_PART_BYTES + 0.5, Number.NaN])(
+	test.each([
+		MIN_SOURCE_PART_BYTES - 1,
+		MAX_SOURCE_PART_BYTES + 1,
+		MIN_SOURCE_PART_BYTES + 1024,
+		1.5 * MIN_SOURCE_PART_BYTES + 0.5,
+		Number.NaN,
+	])(
 		'refuses a part size of %p before preparing the archive',
 		async (partBytes) => {
 			let prepares = 0
@@ -741,28 +756,87 @@ describe('source upload in parts', () => {
 		},
 	)
 
-	test("a verdict that fails after the last part never completes the upload, and the archive's verdict is the reason", async () => {
-		const payload = new TextEncoder().encode('a whole archive whose descriptor turned out to be missing')
-		const rejection = new SourceFailure('descriptor_missing', 'archive')
+	/** An archive whose body ends cleanly but whose verdict, settled at the end, refuses it. */
+	const lateRejectedArchive = (payload: string, rejection: SourceFailure): RepositoryArchive => {
 		let sent = false
-		const archive: RepositoryArchive = {
+		const completed = Promise.reject(rejection)
+		completed.catch(() => {})
+		return {
 			body: new ReadableStream<SourceBytes>({
 				pull(controller) {
 					if (sent) return controller.close()
 					sent = true
-					controller.enqueue(payload)
+					controller.enqueue(new TextEncoder().encode(payload))
 				},
 			}),
-			completed: Promise.reject(rejection),
+			completed,
 			dispose: () => {},
 		}
-		archive.completed.catch(() => {})
+	}
+
+	test("a verdict that fails after the last byte never completes the upload, and the archive's verdict is the reason", async () => {
+		const rejection = new SourceFailure('descriptor_missing', 'archive')
+		const recorded = recordingWriter()
+		const archive = lateRejectedArchive(noise(700_000), rejection)
+
+		await expect(
+			transport({ repository: { resolve: noResolve, archive: async () => archive }, uploadFetch: noUploadFetch }).upload(partsInput(recorded.writer)),
+		).rejects.toBe(rejection)
+		// The full parts went over and are dropped; the last part, which a Cloud Storage writer would finalize with, never did.
+		expect(recorded.calls.filter((call) => call.startsWith('part:')).length).toBeGreaterThan(0)
+		expect(recorded.calls.some((call) => call.startsWith('complete'))).toBe(false)
+		expect(recorded.calls.at(-1)).toBe('abort')
+	})
+
+	test('an archive smaller than one part that its verdict refuses reaches the writer not at all', async () => {
+		const rejection = new SourceFailure('descriptor_missing', 'archive')
+		const recorded = recordingWriter()
+		const archive = lateRejectedArchive('a small archive whose descriptor turned out to be missing', rejection)
+
+		await expect(
+			transport({ repository: { resolve: noResolve, archive: async () => archive }, uploadFetch: noUploadFetch }).upload(partsInput(recorded.writer)),
+		).rejects.toBe(rejection)
+		// Nothing was handed over, so there is nothing to drop.
+		expect(recorded.calls).toEqual([])
+	})
+
+	test('an archive refused before its first byte is its own reason, and the writer is never called', async () => {
+		const rejection = new SourceFailure('archive_rejected', 'archive')
+		const completed = Promise.reject(rejection)
+		completed.catch(() => {})
+		const archive: RepositoryArchive = {
+			body: new ReadableStream<SourceBytes>({ start: (controller) => controller.error(rejection) }),
+			completed,
+			dispose: () => {},
+		}
 		const recorded = recordingWriter()
 
 		await expect(
 			transport({ repository: { resolve: noResolve, archive: async () => archive }, uploadFetch: noUploadFetch }).upload(partsInput(recorded.writer)),
 		).rejects.toBe(rejection)
-		expect(recorded.calls).toEqual([`part:0:${recorded.parts[0]?.byteLength}`, 'abort'])
+		expect(recorded.calls).toEqual([])
+	})
+
+	test("a writer stalled past the pipe's bound is upload_failed, not cancelled, and drops what was stored", async () => {
+		const prepared = preparedArchive(noise(700_000))
+		const recorded = recordingWriter()
+		const writer: SourcePartWriter = {
+			...recorded.writer,
+			writePart: async (index, bytes, signal) => {
+				if (index === 0) return recorded.writer.writePart(index, bytes, signal)
+				// The second part hangs until the pipe's bound aborts it, as a stalled request would.
+				recorded.calls.push(`part:${index}:stalled`)
+				await new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(signal.reason), { once: true }))
+			},
+		}
+		const raised = await transport({
+			repository: { resolve: noResolve, archive: async () => prepared.archive },
+			uploadFetch: noUploadFetch,
+			timeoutsMs: { pipe: 200 },
+		}).upload(partsInput(writer)).then(() => undefined, (error: unknown) => error)
+
+		expect(raised).toMatchObject({ code: 'upload_failed', stage: 'upload' })
+		expect(recorded.calls.at(-1)).toBe('abort')
 	})
 
 	test("a writer's failure is upload_failed, drops what was stored, and forwards none of its words", async () => {
@@ -778,7 +852,7 @@ describe('source upload in parts', () => {
 		expect(recorded.calls.some((call) => call.startsWith('complete'))).toBe(false)
 	})
 
-	test('a failed completion is upload_failed and drops the parts', async () => {
+	test('a failed completion is upload_failed and drops what it may have made', async () => {
 		const prepared = preparedArchive('a small archive')
 		const recorded = recordingWriter({ failComplete: true })
 		const raised = await transport({ repository: { resolve: noResolve, archive: async () => prepared.archive }, uploadFetch: noUploadFetch })
@@ -809,7 +883,7 @@ describe('source upload in parts', () => {
 		expect(recorded.calls.some((call) => call.startsWith('complete'))).toBe(false)
 	})
 
-	test('an empty archive is one empty part', async () => {
+	test('an empty archive is one last part', async () => {
 		const archive: RepositoryArchive = {
 			body: new ReadableStream<SourceBytes>({ start: (controller) => controller.close() }),
 			completed: Promise.resolve({ commitSha, descriptorSha256, entryCount: 0, expandedBytes: 0 }),
@@ -819,10 +893,11 @@ describe('source upload in parts', () => {
 		await transport({ repository: { resolve: noResolve, archive: async () => archive }, uploadFetch: noUploadFetch }).upload(
 			partsInput(recorded.writer),
 		)
-		// gzip of nothing is a header and a trailer, still one part.
+		// gzip of nothing is a header and a trailer: one last part, handed to the completion.
+		const size = recorded.parts[0]?.byteLength
 		expect(recorded.parts).toHaveLength(1)
 		expect(Bun.gunzipSync(recorded.joined()).byteLength).toBe(0)
-		expect(recorded.calls.at(-1)).toBe(`complete:1:${recorded.parts[0]?.byteLength}`)
+		expect(recorded.calls).toEqual([`complete:1:${size}:${size}`])
 	})
 
 	test('hands the writer gzip(tar) of exactly the rewritten archive', async () => {

@@ -50,13 +50,28 @@ export interface SourceResolution {
  * `upload_failed`.
  */
 export interface SourcePartWriter {
-	/** Every part but the last has this many bytes: from `MIN_SOURCE_PART_BYTES` to `MAX_SOURCE_PART_BYTES`. */
+	/**
+	 * The size of every part but the last: a multiple of `MIN_SOURCE_PART_BYTES` (256 KiB, Cloud Storage's chunk unit)
+	 * up to `MAX_SOURCE_PART_BYTES`. An S3 writer picks at least 5 MiB, an Azure writer at most its service version's block.
+	 */
 	readonly partBytes: number
-	/** Stores part `index`, counted from 0. Called in order, one call at a time; only an empty archive has an empty part. */
+	/**
+	 * Stores part `index`, counted from 0: every part but the last, each exactly `partBytes`. Called in order, one call at
+	 * a time. The writer may keep `bytes`; the transport never touches them again. It must not make the object exist: a
+	 * Cloud Storage writer sends each as a chunk without the total size.
+	 */
 	writePart(index: number, bytes: Uint8Array, signal: AbortSignal): Promise<void>
-	/** Makes the parts one object. Called once, after the last part and only once the archive's verdict passed. */
-	complete(upload: { readonly parts: number; readonly bytes: number }, signal: AbortSignal): Promise<void>
-	/** Drops what was stored, after a part was written and the upload then failed or was cancelled. Best effort. */
+	/**
+	 * Stores the last part (`last`: 1 to `partBytes` bytes, empty only for an empty archive) and makes all `parts` one
+	 * object of `bytes` bytes. Called once, and only after the archive's verdict passed, so a rejected repository never
+	 * becomes an object. Read the whole answer: S3's `CompleteMultipartUpload` can answer 200 with an error in its body.
+	 */
+	complete(upload: { readonly last: Uint8Array; readonly parts: number; readonly bytes: number }, signal: AbortSignal): Promise<void>
+	/**
+	 * Drops what may be stored, after `writePart` or `complete` was called and the upload then failed or was cancelled:
+	 * the parts, and an object a failed `complete` may have made anyway (its answer can be lost after the commit). Best
+	 * effort, within its signal; the archive that object would hold passed its verdict.
+	 */
 	abort(signal: AbortSignal): Promise<void>
 }
 
