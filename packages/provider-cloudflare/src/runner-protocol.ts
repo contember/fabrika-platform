@@ -1,5 +1,5 @@
 import { contractArtifactSchema } from '@fabrika/app/contract'
-import { type ContractArtifact, isDigest, parseApplicationObjects } from '@fabrika/auth-core'
+import { type ContractArtifact, isDigest, isManagedCredential, parseApplicationObjects } from '@fabrika/auth-core'
 import { FRAMEWORK_RELEASE_PATTERN } from '@fabrika/provider-contract'
 import { z } from 'zod'
 
@@ -76,6 +76,13 @@ export interface RunnerApprovedAccess {
 	 * deploy's `check` step runs. Absent from a Control older than the runner; that step then fails until Control is upgraded.
 	 */
 	readonly checker?: string
+	/**
+	 * Control requires the isolated build (ADR-0086): the build runs in the sandbox, the deploy runs no checkout code. Every
+	 * job of a Control that knows it carries it; a runner older than the isolated build does not know the field, and since
+	 * this object is strict it refuses the job ("Control runs a newer release than the runner") rather than run the
+	 * checkout's code beside the account token. A runner that knows it always builds isolated, with or without it.
+	 */
+	readonly isolatedBuild?: true
 }
 
 export const runnerApprovedAccessSchema = z.object({
@@ -84,6 +91,7 @@ export const runnerApprovedAccessSchema = z.object({
 	contractDigest: z.string().refine(isDigest),
 	framework: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
 	checker: z.string().regex(FRAMEWORK_RELEASE_PATTERN).optional(),
+	isolatedBuild: z.literal(true).optional(),
 })
 	.strict()
 	.transform((access, context): RunnerApprovedAccess => {
@@ -98,6 +106,7 @@ export const runnerApprovedAccessSchema = z.object({
 			contractDigest: access.contractDigest,
 			...(access.framework === undefined ? {} : { framework: access.framework }),
 			...(access.checker === undefined ? {} : { checker: access.checker }),
+			...(access.isolatedBuild === undefined ? {} : { isolatedBuild: access.isolatedBuild }),
 		}
 	})
 
@@ -119,6 +128,28 @@ export const APPROVED_ACCESS_FILE_ENV = 'FABRIKA_APPROVED_ACCESS_FILE'
  * environment: there a name could steer the runtime that holds the account credential, or replace the credential.
  */
 export const DEPLOY_VALUES_FILE_ENV = 'FABRIKA_DEPLOY_VALUES_FILE'
+
+/**
+ * What the build sandbox gets of a run's values (ADR-0086): the operator's vars and the public managed values, which the
+ * checkout's `pipeline.build` reads by name. Never a secret and never a managed credential: the sandbox runs the checkout's
+ * code, and nothing it holds is meant to be secret.
+ */
+export interface BuildValues {
+	readonly vars: Readonly<Record<string, string>>
+	readonly managed: Readonly<Record<string, string>>
+}
+
+/** A Map first, so a name such as `__proto__` stays a name; `Object.fromEntries` defines it as an own property. */
+const publicEntries = (values: Readonly<Record<string, string>> | undefined, keep: (name: string) => boolean): Record<string, string> =>
+	Object.fromEntries(new Map(Object.entries(values ?? {}).filter(([name]) => keep(name))))
+
+/** The build values of a job: its vars, and the managed values that are not credentials (`isManagedCredential`, fail closed). */
+export const buildValuesOf = (
+	job: { readonly vars?: Readonly<Record<string, string>>; readonly managedEnvironment?: Readonly<Record<string, string>> },
+): BuildValues => ({
+	vars: publicEntries(job.vars, () => true),
+	managed: publicEntries(job.managedEnvironment, (name) => !isManagedCredential(name)),
+})
 
 /** The terminal and in-progress status polled from the container, and persisted by the runner Worker once terminal. */
 export const runnerStatusSchema = z.object({

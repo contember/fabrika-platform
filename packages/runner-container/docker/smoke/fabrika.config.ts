@@ -1,3 +1,6 @@
+// The smoke application. The image smoke builds it in the build sandbox (ADR-0086); `cli.test.ts` deploys it with the
+// local executor (`deploy --config`), whose oblaka state reads this stub answers for account `smoke-account`.
+
 import { defineApp, Worker } from '@fabrika/provider-cloudflare'
 
 const stateNamespaceUrl = 'https://api.cloudflare.com/client/v4/accounts/smoke-account/storage/kv/namespaces'
@@ -33,6 +36,7 @@ export default defineApp({
 			dir: '.',
 			name: 'smoke-app',
 			main: 'src/index.ts',
+			compatibility_date: '2025-10-01',
 			compatibility_flags: ['nodejs_compat'],
 			workers_dev: false,
 			preview_urls: false,

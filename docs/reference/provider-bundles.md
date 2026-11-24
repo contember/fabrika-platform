@@ -495,8 +495,10 @@ configs oblaka wrote before the first `wrangler deploy`. An application config h
 no routes and sets `workers_dev` and `preview_urls` to `false`; only the platform
 proxy is routed, on the run's own domain. Config keys are an allowlist. No name a
 config binds, and no name a resource adopts, may be a platform resource or a name
-of another application of the installation — the deployment in Control's registry
-whose `<env>-<app>` is the longest prefix of the remote name. A D1 or KV binding
+of another deployment of the installation — the deployment in Control's registry
+whose `<env>-<app>` is the longest prefix of the remote name. Another environment
+of the same application is another deployment: a stage Worker bound to production's
+application Worker would be production's authenticated proxy hop. A D1 or KV binding
 must carry an id the generation run handed out. Every Worker in the graph, the
 proxy included, binds IAM at its `PropustkaApplication` entrypoint
 (`iamServiceReference()`); a binding to IAM's default entrypoint, which also issues
@@ -543,7 +545,11 @@ fabrika app deploy --env=<env> [--config=<path>] [--dry-run]
 
 The provider is inferred from the provider-authored config. The
 `fabrika-cloudflare-executor` binary is internal to the runner container; it is
-not an operator surface.
+not an operator surface. In the runner it runs twice: `build` in the build sandbox, as a user of its own with no
+credential, no secret and no network after the install, and `deploy --bundle` on the runner's copy of that build's
+output, which holds the account token and runs none of the repository's code
+([ADR-0086](../decisions/0086-a-cloudflare-deploy-builds-without-credentials-and-deploys-without-repository-code.md)).
+`fabrika app deploy` on a laptop keeps the single process.
 
 Zerops apps import their config surface from `@fabrika/provider-zerops`:
 

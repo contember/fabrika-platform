@@ -22,7 +22,7 @@ import {
 } from '..'
 import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
 import { splitManagedEnvironment } from '../managed-secrets'
-import type { RunnerIamReconcile } from '../runner-protocol'
+import { runnerApprovedAccessSchema, type RunnerIamReconcile } from '../runner-protocol'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 const normalizeRegistration = (provider: ControlProvider, input: ProviderRegistrationInput): ProviderRegistration => {
@@ -628,6 +628,7 @@ describe('Cloudflare control provider', () => {
 				contractDigest: APPROVED.contractDigest,
 				framework: APPROVED.framework,
 				checker: APPROVED.checker,
+				isolatedBuild: true,
 			},
 			dryRun: true,
 			runnerKey: 'test-runner-key',
@@ -1027,8 +1028,12 @@ describe('Cloudflare control provider', () => {
 			contractDigest: access.contractDigest,
 			framework: access.framework,
 			checker: access.checker,
+			isolatedBuild: true,
 		})
 		expect(cloudflareRunnerJobSchema.safeParse(jobs[0]).success).toBe(true)
+		// A runner older than the isolated build does not know the marker, and the access is strict: it refuses the run.
+		const olderRunner = runnerApprovedAccessSchema.innerType().omit({ isolatedBuild: true }).strict()
+		expect(olderRunner.safeParse(jobs[0]?.approvedAccess).success).toBe(false)
 	})
 
 	test('the runner boundary refuses a non-dry job without approved access, without a contract, or without a digest', () => {

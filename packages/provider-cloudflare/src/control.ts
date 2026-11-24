@@ -46,6 +46,7 @@ import {
 	type RunnerIamReconcile,
 } from './runner-protocol'
 
+export * from './build-manifest'
 export * from './runner-protocol'
 
 /** Persisted Cloudflare target data. Installation credentials never enter this envelope. */
@@ -302,6 +303,9 @@ const runnerApprovedAccess = (environment: ProviderEnvironment): RunnerApprovedA
 			contractDigest: environment.access.contractDigest,
 			framework: applicationRelease(environment.access),
 			checker: environment.access.checker,
+			// Only a runner that builds in the sandbox knows this field, and the access is strict: an older runner, which
+			// imports the config beside the account token, refuses the run instead of running it (ADR-0086).
+			isolatedBuild: true,
 		}
 
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {

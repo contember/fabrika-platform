@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import type { RunnerEnv, SpawnHandlers, SpawnResult, SpawnSpec } from '../runner'
 import { createServer } from '../server'
 import { createSpawner } from '../spawn'
+import { passthroughSandbox } from './helpers/sandbox'
 
 // Drive the job protocol through the server's request handler — no real socket. Proves POST /run,
 // GET /logs (NDJSON), GET /status, and the 409-on-double-run guard.
@@ -26,9 +27,10 @@ const job: CloudflareRunnerJob = {
 	dryRun: true,
 }
 
-/** Env whose spawner emits one stdout line per step, all succeeding. */
+/** Env whose spawner emits one stdout line per step, all succeeding; a workspace of its own, as each container has. */
 const makeEnv = (): RunnerEnv => ({
-	workspace: WORKSPACE,
+	workspace: mkdtempSync(join(WORKSPACE, 'run-')),
+	sandbox: passthroughSandbox(),
 	spawn: async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
 		handlers.onStdout(`output from ${spec.command} with tok-abcdef\n`)
 		return { exitCode: 0 }
@@ -53,7 +55,7 @@ const waitTerminal = async (server: ReturnType<typeof createServer>): Promise<vo
 describe('runner server protocol', () => {
 	test('the active run owns the parsed job rather than the mutable request object', async () => {
 		const gate = Promise.withResolvers<SpawnResult>()
-		const server = createServer({ workspace: WORKSPACE, spawn: () => gate.promise })
+		const server = createServer({ workspace: WORKSPACE, sandbox: passthroughSandbox(), spawn: () => gate.promise })
 		const input = { ...job }
 		const request = Object.assign(post(job), { json: async () => input })
 		expect((await server.handle(request)).status).toBe(202)
@@ -81,6 +83,7 @@ describe('runner server protocol', () => {
 		const commands: string[] = []
 		const server = createServer({
 			workspace: WORKSPACE,
+			sandbox: passthroughSandbox(),
 			spawn: async (spec) => {
 				commands.push(spec.command)
 				return { exitCode: 0 }
@@ -94,6 +97,7 @@ describe('runner server protocol', () => {
 	test('a second concurrent /run → 409', async () => {
 		const server = createServer({
 			workspace: WORKSPACE,
+			sandbox: passthroughSandbox(),
 			// A spawner that never resolves the first step keeps the run in-flight.
 			spawn: () => new Promise<SpawnResult>(() => {}),
 		})
@@ -103,7 +107,7 @@ describe('runner server protocol', () => {
 
 	test('a rejected spawn closes live /logs even when the error observer throws', async () => {
 		const failure = Promise.withResolvers<SpawnResult>()
-		const server = createServer({ workspace: WORKSPACE, spawn: () => failure.promise })
+		const server = createServer({ workspace: WORKSPACE, sandbox: passthroughSandbox(), spawn: () => failure.promise })
 		await server.handle(post(job))
 		let observedTerminal = false
 		server.current()?.subscribe((line) => {
@@ -160,7 +164,7 @@ describe('runner server protocol', () => {
 				},
 			}
 		})
-		const server = createServer({ workspace: WORKSPACE, spawn })
+		const server = createServer({ workspace: WORKSPACE, sandbox: passthroughSandbox(), spawn })
 		await server.handle(post(job))
 		const text = (await server.handle(new Request('http://container/logs'))).text()
 		if (failPipe === undefined) throw new Error('child pipe not initialized')

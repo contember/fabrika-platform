@@ -180,6 +180,7 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 		const jobs: CloudflareRunnerJob[] = []
 		const gitCommands: SpawnSpec[] = []
 		const checkouts: CheckoutObservation[] = []
+		const deploys: { readonly env: Record<string, string>; readonly values: unknown }[] = []
 		const runnerLines: RunLogLine[] = []
 		let phasesAtRunnerStart: string[] = []
 		let persistedCommitAtRunnerStart: string | null | undefined
@@ -215,6 +216,14 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 				const runner = new Runner(job, {
 					workspace,
 					fetch: artifactFetch,
+					// The build user's switch runs in the image; here each sandboxed step runs as the test's user.
+					sandbox: {
+						unavailable: null,
+						isolatesNetwork: true,
+						command: (step) => ({ command: step.command, args: [...step.args], cwd: step.cwd, env: { ...step.env }, replaceEnv: true }),
+						own: async () => {},
+						reap: async () => {},
+					},
 					spawn: async (spec, handlers) => {
 						if (spec.command === 'git') {
 							gitCommands.push(spec)
@@ -229,6 +238,14 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 						if (spec.command !== 'bun' && spec.command !== 'fabrika-cloudflare-executor') throw new Error('unexpected repository child')
 						if (spec.command === 'bun' && spec.args.join(' ') !== 'install --frozen-lockfile') throw new Error('unexpected Bun child')
 						const valuesFile = spec.env?.[DEPLOY_VALUES_FILE_ENV]
+						// The check tools are fetched outside the checkout; nothing of it runs there.
+						if (spec.args[1] === '--fetch-tools') return { exitCode: 0 }
+						// The deploy reads the runner's copy of the build's output, never the checkout.
+						if (spec.args[0] === 'deploy') {
+							deploys.push({ env: spec.env ?? {}, values: valuesFile === undefined ? undefined : JSON.parse(await readFile(valuesFile, 'utf8')) })
+							await writeFile(runner.outcomeFilePath, '{}')
+							return { exitCode: 0 }
+						}
 						checkouts.push({
 							command: spec.command,
 							head: await requireGit(runner.checkoutDir, ['log', '-1', '--format=%H', '--']),
@@ -240,7 +257,12 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 							values: valuesFile === undefined ? undefined : JSON.parse(await readFile(valuesFile, 'utf8')),
 							linesBeforeChild: [...runner.lines()],
 						})
-						if (spec.command === 'fabrika-cloudflare-executor') await writeFile(runner.outcomeFilePath, '{}')
+						// The build copies the checkout's source maps into its output, where the runner uploads them from.
+						const out = spec.args.find((arg) => arg.startsWith('--out='))?.slice('--out='.length)
+						if (spec.args[0] === 'build' && out !== undefined) {
+							await mkdir(join(out, 'sourcemaps', 'build'), { recursive: true })
+							await writeFile(join(out, 'sourcemaps', 'build', 'app.js.map'), await readFile(join(spec.cwd, 'build', 'app.js.map')))
+						}
 						return { exitCode: 0 }
 					},
 				})
@@ -343,10 +365,14 @@ async function joinedSourceWitness(trigger: RunTrigger, selectedObjectUnavailabl
 			expect(witness).toBeGreaterThanOrEqual(0)
 			expect(install).toBeGreaterThan(witness)
 		}
-		// The executor receives the release through its values file, never through its process environment.
-		expect(checkouts[1]?.values).toMatchObject({ [FABRIKA_RELEASE]: releaseName })
-		expect(checkouts[1]?.env[FABRIKA_RELEASE]).toBeUndefined()
-		expect(checkouts[0]?.env[DEPLOY_VALUES_FILE_ENV]).toBeUndefined()
+		// The executor receives the release through its values file, never through its process environment; the build gets neither.
+		expect(deploys).toHaveLength(1)
+		expect(deploys[0]?.values).toMatchObject({ [FABRIKA_RELEASE]: releaseName })
+		expect(deploys[0]?.env[FABRIKA_RELEASE]).toBeUndefined()
+		for (const checkout of checkouts) {
+			expect(checkout.env[DEPLOY_VALUES_FILE_ENV]).toBeUndefined()
+			expect(checkout.values).toBeUndefined()
+		}
 		expect(uploads).toHaveLength(1)
 		const upload = uploads[0]
 		if (upload === undefined) throw new Error('missing source-map HTTP upload')

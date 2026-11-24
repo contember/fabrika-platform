@@ -6,19 +6,25 @@ import {
 	RUNNER_OUTCOME_FILE_ENV,
 } from '@fabrika/provider-cloudflare/runner'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { contractDigest } from '../../../auth-core/src/endpoint-digest'
 import { Runner, type RunnerEnv, type SpawnHandlers, type SpawnResult, type SpawnSpec } from '../runner'
+import type { SandboxCommand } from '../sandbox'
 import { bunSpawner, createSpawner } from '../spawn'
+import { passthroughSandbox } from './helpers/sandbox'
 
 // The Runner routes every child process through an injected `Spawner`, so these tests drive a full
 // checkout → install → fabrika-deploy pipeline with a fake. Real Git evidence lives in exact-source-git.test.ts.
 
 const COMMIT = '0123456789abcdef0123456789abcdef01234567'
+
+/** The deploy executor, as distinct from the build the same binary runs in the sandbox. */
+const isDeploy = (spec: SpawnSpec): boolean => spec.command === 'fabrika-cloudflare-executor' && spec.args[0] === 'deploy'
+const isBuild = (spec: SpawnSpec): boolean => spec.command === 'fabrika-cloudflare-executor' && spec.args[0] === 'build'
 
 interface RecordedSpawn {
 	spec: SpawnSpec
@@ -49,6 +55,16 @@ const baseJob = (overrides: Partial<CloudflareRunnerJob> = {}): CloudflareRunner
 
 const workspaces = new Set<string>()
 
+/** A spawner whose build leaves a source map in its output, as the build copies the checkout's. */
+const leavingSourceMaps = makeSpawner([], (spec) => {
+	const out = spec.args.find((arg) => arg.startsWith('--out='))?.slice('--out='.length)
+	if (isBuild(spec) && out !== undefined) {
+		mkdirSync(join(out, 'sourcemaps'), { recursive: true })
+		writeFileSync(join(out, 'sourcemaps', 'app.js.map'), '{}')
+	}
+	return { exitCode: 0 }
+})
+
 afterEach(async () => {
 	await Promise.all([...workspaces].map((workspace) => rm(workspace, { recursive: true, force: true })))
 	workspaces.clear()
@@ -57,7 +73,7 @@ afterEach(async () => {
 const makeEnv = (spawn: RunnerEnv['spawn']): RunnerEnv => {
 	const workspace = mkdtempSync(join(tmpdir(), 'fabrika-runner-unit-'))
 	workspaces.add(workspace)
-	return { spawn, workspace }
+	return { spawn, workspace, sandbox: passthroughSandbox() }
 }
 
 describe('Runner pipeline', () => {
@@ -280,7 +296,7 @@ describe('Runner pipeline', () => {
 		const runner = new Runner(
 			baseJob({ secrets: { LONG_SECRET: token } }),
 			makeEnv(makeSpawner([], (spec, handlers) => {
-				if (spec.command === 'fabrika-cloudflare-executor') {
+				if (isDeploy(spec)) {
 					handlers.onStdout(token.slice(0, 64 * 1024 + 1))
 					handlers.onStdout(token.slice(64 * 1024 + 1) + '\nnext line\n')
 				}
@@ -307,7 +323,7 @@ describe('Runner pipeline', () => {
 			job,
 			makeEnv(async (spec, handlers) => {
 				if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
-				if (spec.command !== 'fabrika-cloudflare-executor') return { exitCode: 0 }
+				if (!isDeploy(spec)) return { exitCode: 0 }
 				children++
 				return bunSpawner({
 					command: process.execPath,
@@ -339,7 +355,7 @@ describe('Runner pipeline', () => {
 		const runner = new Runner(
 			baseJob({ secrets: { LONG: 'abcde', SHORT: 'abcd', SHIFTED: 'bcdefg' } }),
 			makeEnv(makeSpawner([], (spec, handlers) => {
-				if (spec.command === 'fabrika-cloudflare-executor') handlers.onStdout('abcde abcd bcdefg abcdefg\n')
+				if (isDeploy(spec)) handlers.onStdout('abcde abcd bcdefg abcdefg\n')
 				return { exitCode: 0 }
 			})),
 		)
@@ -360,7 +376,7 @@ describe('Runner pipeline', () => {
 			job,
 			makeEnv(async (spec, handlers) => {
 				if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
-				if (spec.command !== 'fabrika-cloudflare-executor') return { exitCode: 0 }
+				if (!isDeploy(spec)) return { exitCode: 0 }
 				return bunSpawner({
 					command: process.execPath,
 					args: ['-e', "process.stdout.write('q'.repeat(128 * 1024) + '\\n'); process.stderr.write('q'.repeat(128 * 1024))"],
@@ -384,17 +400,37 @@ describe('Runner pipeline', () => {
 		const runner = new Runner(baseJob({ ref: 'main', workerDir: 'worker', configPath: 'fabrika.config.ts', dryRun: true }), makeEnv(spawn))
 		const status = await runner.run()
 
-		expect(rec.map((r) => r.spec.command)).toEqual(['git', 'bun', 'fabrika-cloudflare-executor'])
+		expect(rec.map((r) => r.spec.command)).toEqual(['git', 'bun', 'fabrika-cloudflare-executor', 'fabrika-cloudflare-executor'])
 		// clone into the run-keyed checkout dir
 		expect(rec[0]?.spec.args).toEqual(['clone', '--depth', '1', '--branch', 'main', '--', 'https://github.com/acme/app.git', runner.checkoutDir])
-		// install + deploy run in workerDir
-		expect(rec[1]?.spec).toMatchObject({ command: 'bun', args: ['install', '--frozen-lockfile'], cwd: `${runner.checkoutDir}/worker` })
-		// deploy is faithful to M1's CLI contract
+		// install + build run in workerDir, in the sandbox, with an environment of their own
+		expect(rec[1]?.spec).toMatchObject({
+			command: 'bun',
+			args: ['install', '--frozen-lockfile'],
+			cwd: `${runner.checkoutDir}/worker`,
+			replaceEnv: true,
+		})
 		expect(rec[2]?.spec).toMatchObject({
 			command: 'fabrika-cloudflare-executor',
-			args: ['deploy', '--env=stage', '--config=fabrika.config.ts', '--dry-run'],
+			args: [
+				'build',
+				'--env=stage',
+				`--out=${runner.buildOutDir}`,
+				`--values=${runner.buildDir}/values.json`,
+				`--access=${runner.buildDir}/access.json`,
+				'--config=fabrika.config.ts',
+				'--dry-run',
+			],
 			cwd: `${runner.checkoutDir}/worker`,
+			replaceEnv: true,
 		})
+		// the deploy reads the runner's copy of the output, from a directory of its own, and names no config
+		expect(rec[3]?.spec).toMatchObject({
+			command: 'fabrika-cloudflare-executor',
+			args: ['deploy', '--env=stage', `--bundle=${runner.bundleDir}`, '--dry-run'],
+			cwd: runner.deployDir,
+		})
+		expect(rec[3]?.spec.replaceEnv).toBeUndefined()
 
 		expect(status.state).toBe('succeeded')
 		expect(status.exitCode).toBe(0)
@@ -438,7 +474,7 @@ describe('Runner pipeline', () => {
 		const spawn = async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
 			rec.push({ spec })
 			if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
-			const path = spec.command === 'fabrika-cloudflare-executor' ? spec.env?.[DEPLOY_VALUES_FILE_ENV] : undefined
+			const path = isDeploy(spec) ? spec.env?.[DEPLOY_VALUES_FILE_ENV] : undefined
 			if (path !== undefined) {
 				values = JSON.parse(await readFile(path, 'utf8'))
 				mode = (await stat(path)).mode & 0o777
@@ -447,7 +483,7 @@ describe('Runner pipeline', () => {
 		}
 		const env = makeEnv(spawn)
 		const status = await new Runner(job, env).run()
-		const deploy = rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec
+		const deploy = rec.find((r) => isDeploy(r.spec))?.spec
 		return { status, rec, deploy, values, mode, workspace: env.workspace }
 	}
 
@@ -474,6 +510,7 @@ describe('Runner pipeline', () => {
 			[DEPLOY_VALUES_FILE_ENV]: join(workspace, 'run-1.values.json'),
 			[RUNNER_OUTCOME_FILE_ENV]: join(workspace, 'run-1.outcome.json'),
 			[APPROVED_ACCESS_FILE_ENV]: join(workspace, 'run-1.access.json'),
+			TMPDIR: join(workspace, 'run-1.deploy', 'tmp'),
 		})
 		expect(values).toEqual({
 			SAMPLE_API_KEY: 'super-secret-value',
@@ -531,7 +568,7 @@ describe('Runner pipeline', () => {
 		const executorEnv = async (job: CloudflareRunnerJob) => {
 			rec.length = 0
 			await new Runner(job, makeEnv(spawn)).run()
-			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+			return rec.find((r) => isDeploy(r.spec))?.spec.env
 		}
 
 		const sent = await executorEnv(baseJob({ installationApps: ['app@stage', 'notes@prod'], secrets: { FABRIKA_INSTALLATION_APPS: '[]' } }))
@@ -547,7 +584,7 @@ describe('Runner pipeline', () => {
 		const executorEnv = async (job: CloudflareRunnerJob) => {
 			rec.length = 0
 			await new Runner(job, makeEnv(spawn)).run()
-			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+			return rec.find((r) => isDeploy(r.spec))?.spec.env
 		}
 
 		const sent = await executorEnv(baseJob({ iamService: 'prod-fabrika-iam', secrets: { FABRIKA_IAM_SERVICE: 'prod-other' } }))
@@ -563,7 +600,7 @@ describe('Runner pipeline', () => {
 		const executorEnv = async (job: CloudflareRunnerJob) => {
 			rec.length = 0
 			await new Runner(job, makeEnv(spawn)).run()
-			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+			return rec.find((r) => isDeploy(r.spec))?.spec.env
 		}
 
 		const sent = await executorEnv(
@@ -581,7 +618,7 @@ describe('Runner pipeline', () => {
 		const executorEnv = async (job: CloudflareRunnerJob) => {
 			rec.length = 0
 			await new Runner(job, makeEnv(spawn)).run()
-			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+			return rec.find((r) => isDeploy(r.spec))?.spec.env
 		}
 		const objects = { object: 'application-op1', objects: ['application', 'rehearsal', 'application-op1'] }
 
@@ -600,7 +637,7 @@ describe('Runner pipeline', () => {
 		const executorEnv = async (job: CloudflareRunnerJob) => {
 			rec.length = 0
 			await new Runner(job, makeEnv(spawn)).run()
-			return rec.find((r) => r.spec.command === 'fabrika-cloudflare-executor')?.spec.env
+			return rec.find((r) => isDeploy(r.spec))?.spec.env
 		}
 
 		const sent = await executorEnv(
@@ -614,7 +651,7 @@ describe('Runner pipeline', () => {
 
 	test('credential, secret, var and managed environment values are redacted from log lines', async () => {
 		const spawn = makeSpawner([], (spec, handlers) => {
-			if (spec.command === 'fabrika-cloudflare-executor') {
+			if (isDeploy(spec)) {
 				handlers.onStdout(
 					'deploying with token tok-abcdef, key super-secret-value, var public-value and dsn https://operations-public-key@errors.test/1\n',
 				)
@@ -640,7 +677,7 @@ describe('Runner pipeline', () => {
 	test('a credential split across two stream chunks is redacted once the line is assembled', async () => {
 		const token = 'tok-abcdefghijklmnop'
 		const spawn = makeSpawner([], (spec, handlers) => {
-			if (spec.command === 'fabrika-cloudflare-executor') {
+			if (isDeploy(spec)) {
 				// One logical line delivered as two pipe reads, cut INSIDE the credential.
 				handlers.onStdout('error: token tok-abcdefgh')
 				handlers.onStdout('ijklmnop rejected\n')
@@ -659,7 +696,7 @@ describe('Runner pipeline', () => {
 
 	test('a final line without a trailing newline is emitted once, redacted', async () => {
 		const spawn = makeSpawner([], (spec, handlers) => {
-			if (spec.command === 'fabrika-cloudflare-executor') {
+			if (isDeploy(spec)) {
 				handlers.onStdout('last line with tok-abcdef')
 			}
 			return { exitCode: 0 }
@@ -674,7 +711,7 @@ describe('Runner pipeline', () => {
 	test('a residual past the cap is emitted instead of growing without bound', async () => {
 		const overCap = 'y'.repeat(64 * 1024 + 1)
 		const spawn = makeSpawner([], (spec, handlers) => {
-			if (spec.command === 'fabrika-cloudflare-executor') {
+			if (isDeploy(spec)) {
 				handlers.onStdout(overCap)
 				handlers.onStdout('tail\n')
 			}
@@ -786,7 +823,7 @@ describe('Runner pipeline', () => {
 	})
 
 	test('non-zero provider deploy exit fails the run and carries the exit code', async () => {
-		const spawn = makeSpawner([], (spec) => ({ exitCode: spec.command === 'fabrika-cloudflare-executor' ? 1 : 0 }))
+		const spawn = makeSpawner([], (spec) => ({ exitCode: isDeploy(spec) ? 1 : 0 }))
 		const status = await new Runner(baseJob(), makeEnv(spawn)).run()
 		expect(status.state).toBe('failed')
 		expect(status.exitCode).toBe(1)
@@ -795,7 +832,7 @@ describe('Runner pipeline', () => {
 	test('subscribers receive streamed lines live', async () => {
 		const seen: string[] = []
 		const spawn = makeSpawner([], (spec, handlers) => {
-			if (spec.command === 'fabrika-cloudflare-executor') {
+			if (isDeploy(spec)) {
 				handlers.onStdout('line-a\nline-b\n')
 			}
 			return { exitCode: 0 }
@@ -828,7 +865,7 @@ describe('Runner pipeline', () => {
 			},
 		})
 		const runner = new Runner(job, {
-			...makeEnv(makeSpawner([], () => ({ exitCode: 0 }))),
+			...makeEnv(leavingSourceMaps),
 			collectSourceMaps: () =>
 				Promise.resolve({
 					artifacts: [{ logicalPath: 'assets/app.js', digest: 'c'.repeat(64), body }],
@@ -861,7 +898,7 @@ describe('Runner pipeline', () => {
 			},
 		})
 		const status = await new Runner(job, {
-			...makeEnv(makeSpawner([], () => ({ exitCode: 0 }))),
+			...makeEnv(leavingSourceMaps),
 			collectSourceMaps: () => Promise.reject(new Error('scan unavailable')),
 		}).run()
 		expect(status.state).toBe('succeeded')
@@ -909,14 +946,14 @@ describe('executor outcome file', () => {
 		const spawn = async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
 			if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
 			const path = spec.env?.[RUNNER_OUTCOME_FILE_ENV]
-			if (spec.command !== 'fabrika-cloudflare-executor') return { exitCode: 0 }
+			if (!isDeploy(spec)) return { exitCode: 0 }
 			if (path !== undefined) {
 				outcomePath = path
 				await write(path)
 			}
 			return { exitCode: deployExitCode }
 		}
-		const status = await new Runner(baseJob(dryRun ? { dryRun: true } : {}), { spawn, workspace }).run()
+		const status = await new Runner(baseJob(dryRun ? { dryRun: true } : {}), { spawn, workspace, sandbox: passthroughSandbox() }).run()
 		return { status, outcomePath }
 	}
 
@@ -1032,9 +1069,10 @@ describe('executor outcome file', () => {
 		await withWorkspace(async (workspace) => {
 			const runner = new Runner(baseJob(), {
 				workspace,
+				sandbox: passthroughSandbox(),
 				spawn: async (spec, handlers) => {
 					if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
-					if (spec.command === 'fabrika-cloudflare-executor') {
+					if (isDeploy(spec)) {
 						await writeFile(join(workspace, 'run-1.outcome.json'), '{"iamReconcile":{"app":"shop","schemaJson":"{}"}}')
 						throw new Error('pipe failed with tok-abcdef')
 					}
@@ -1068,13 +1106,13 @@ describe('approved access file', () => {
 		let contents: string | undefined
 		const spawn = async (spec: SpawnSpec, handlers: SpawnHandlers): Promise<SpawnResult> => {
 			if (spec.command === 'git' && spec.args[0] === 'log') handlers.onStdout(`${COMMIT}\n`)
-			if (spec.command === 'fabrika-cloudflare-executor') {
+			if (isDeploy(spec)) {
 				path = spec.env?.[APPROVED_ACCESS_FILE_ENV]
 				if (path !== undefined) contents = await readFile(path, 'utf8')
 			}
 			return { exitCode: 0 }
 		}
-		expect((await new Runner(job, { spawn, workspace }).run()).state).toBe('succeeded')
+		expect((await new Runner(job, { spawn, workspace, sandbox: passthroughSandbox() }).run()).state).toBe('succeeded')
 		return { path, contents, workspace }
 	}
 
@@ -1092,5 +1130,146 @@ describe('approved access file', () => {
 	test('a dry run without approved access names no file, so the executor reads the checkout', async () => {
 		const { approvedAccess: _none, ...job } = baseJob({ dryRun: true, secrets: { [APPROVED_ACCESS_FILE_ENV]: '/tmp/forged.json' } })
 		expect((await runSeeing(job)).path).toBeUndefined()
+	})
+})
+
+describe('build sandbox', () => {
+	const withSandbox = (
+		spawn: RunnerEnv['spawn'],
+		calls: SandboxCommand[] = [],
+		events: string[] = [],
+	): RunnerEnv => ({ ...makeEnv(spawn), sandbox: passthroughSandbox(calls, events) })
+
+	test('a runner whose sandbox is unavailable refuses the run before Git', async () => {
+		const rec: RecordedSpawn[] = []
+		const env = makeEnv(makeSpawner(rec, () => ({ exitCode: 0 })))
+		const reason = 'the runner does not run as root, so it cannot run the build as a user of its own'
+		const status = await new Runner(baseJob(), { ...env, sandbox: { ...passthroughSandbox(), unavailable: reason } }).run()
+		expect(status.state).toBe('failed')
+		expect(status.error).toBe(`the runner cannot isolate the build: ${reason}`)
+		expect(rec).toEqual([])
+	})
+
+	test('install and build run as the build user with an environment of their own, no credential, no secret', async () => {
+		const calls: SandboxCommand[] = []
+		const events: string[] = []
+		let valuesFileDuringBuild: boolean | undefined
+		let buildValues: unknown
+		let buildAccess: unknown
+		const job = baseJob({
+			secrets: { API_KEY: 'secret-value-1' },
+			vars: { PUBLIC_URL: 'https://stage.example.com' },
+			managedEnvironment: { FABRIKA_IAM_ISSUER: 'https://iam.example.com', FABRIKA_PROXY_SECRET: 'proxy-secret-value' },
+		})
+		const runner: Runner = new Runner(
+			job,
+			withSandbox(
+				makeSpawner([], (spec) => {
+					events.push(`spawn ${spec.command} ${spec.args[0] ?? ''}`)
+					if (isBuild(spec)) {
+						valuesFileDuringBuild = existsSync(runner.deployValuesFilePath)
+						buildValues = JSON.parse(readFileSync(`${runner.buildDir}/values.json`, 'utf8'))
+						buildAccess = JSON.parse(readFileSync(`${runner.buildDir}/access.json`, 'utf8'))
+					}
+					return { exitCode: 0 }
+				}),
+				calls,
+				events,
+			),
+		)
+		expect((await runner.run()).state).toBe('succeeded')
+		expect(calls.map((call) => [call.command, call.args[0], call.network, call.cwd])).toEqual([
+			['bun', 'install', true, runner.checkoutDir],
+			['fabrika-cloudflare-executor', 'build', false, runner.checkoutDir],
+		])
+		for (const call of calls) {
+			expect(call.env).toEqual({
+				PATH: '/opt/bun/bin:/usr/local/bin:/usr/bin:/bin',
+				HOME: `${runner.buildDir}/home`,
+				TMPDIR: `${runner.buildDir}/tmp`,
+				WRANGLER_SEND_METRICS: 'false',
+			})
+		}
+		// The checkout and the build directory are the build user's before anything of it runs, and each step is reaped.
+		expect(events.slice(events.indexOf('spawn git log'))).toEqual([
+			'spawn git log',
+			`own ${runner.checkoutDir} ${runner.buildDir}`,
+			'spawn bun install',
+			'reap',
+			'spawn fabrika-cloudflare-executor build',
+			'reap',
+			'spawn fabrika-cloudflare-executor deploy',
+		])
+		// The build reads the vars and the public managed values; the deploy's values file does not exist yet.
+		expect(valuesFileDuringBuild).toBe(false)
+		expect(buildValues).toEqual({ vars: { PUBLIC_URL: 'https://stage.example.com' }, managed: { FABRIKA_IAM_ISSUER: 'https://iam.example.com' } })
+		expect(buildAccess).toEqual(JSON.parse(JSON.stringify(job.approvedAccess)))
+		const sandboxed = JSON.stringify(calls)
+		for (const value of ['tok-abcdef', 'acc-123456', 'secret-value-1', 'proxy-secret-value']) expect(sandboxed).not.toContain(value)
+	})
+
+	test('the check tools are fetched with network, outside the checkout, before the build loses it', async () => {
+		const calls: SandboxCommand[] = []
+		const job = baseJob({
+			approvedAccess: { kind: 'contract', contract: notesArtifact, contractDigest: contractDigest(notesArtifact), checker: '0.9.1' },
+		})
+		const runner = new Runner(job, withSandbox(makeSpawner([], () => ({ exitCode: 0 })), calls))
+		expect((await runner.run()).state).toBe('succeeded')
+		expect(calls.map((call) => [call.args[0], call.args[1], call.network, call.cwd])).toEqual([
+			['install', '--frozen-lockfile', true, runner.checkoutDir],
+			['build', '--fetch-tools', true, `${runner.buildDir}/tmp`],
+			['build', '--env=stage', false, runner.checkoutDir],
+		])
+		const failing = new Runner(
+			job,
+			withSandbox(makeSpawner([], (spec) => ({ exitCode: spec.args[1] === '--fetch-tools' ? 3 : 0 }))),
+		)
+		expect((await failing.run()).error).toBe('fetching the check tools failed (exit 3)')
+	})
+
+	test('a failed build stops the run before the deploy', async () => {
+		const rec: RecordedSpawn[] = []
+		const status = await new Runner(baseJob(), withSandbox(makeSpawner(rec, (spec) => ({ exitCode: isBuild(spec) ? 2 : 0 })))).run()
+		expect(status).toMatchObject({ state: 'failed', exitCode: 2, error: 'the build failed (exit 2)' })
+		expect(rec.some(({ spec }) => isDeploy(spec))).toBe(false)
+	})
+
+	test('an output the copier refuses fails the run with its one line, and the deploy never runs', async () => {
+		const rec: RecordedSpawn[] = []
+		const runner: Runner = new Runner(
+			baseJob(),
+			withSandbox(makeSpawner(rec, (spec) => {
+				if (isBuild(spec)) {
+					mkdirSync(`${runner.buildOutDir}/app`, { recursive: true })
+					symlinkSync('/etc/passwd', `${runner.buildOutDir}/app/passwd`)
+				}
+				return { exitCode: 0 }
+			})),
+		)
+		const status = await runner.run()
+		expect(status).toMatchObject({ state: 'failed', error: "the build's output is refused: `app/passwd` is a symbolic link" })
+		expect(rec.some(({ spec }) => isDeploy(spec))).toBe(false)
+	})
+
+	test('the deploy runs in an empty directory of the runner, with its own temporary directory, on the copy of the output', async () => {
+		const rec: RecordedSpawn[] = []
+		let deployCwdEntries: string[] | undefined
+		const runner: Runner = new Runner(
+			baseJob(),
+			withSandbox(makeSpawner(rec, (spec) => {
+				if (isBuild(spec)) {
+					mkdirSync(`${runner.buildOutDir}/app/bundle`, { recursive: true })
+					writeFileSync(`${runner.buildOutDir}/app/bundle/entry.js`, 'export default {}\n')
+				}
+				if (isDeploy(spec)) deployCwdEntries = readdirSync(spec.cwd)
+				return { exitCode: 0 }
+			})),
+		)
+		expect((await runner.run()).state).toBe('succeeded')
+		const deploy = rec.find(({ spec }) => isDeploy(spec))?.spec
+		expect(deploy?.cwd).toBe(runner.deployDir)
+		expect(deployCwdEntries).toEqual(['tmp'])
+		expect(deploy?.env?.['TMPDIR']).toBe(`${runner.deployDir}/tmp`)
+		expect(readFileSync(`${runner.bundleDir}/app/bundle/entry.js`, 'utf8')).toBe('export default {}\n')
 	})
 })
