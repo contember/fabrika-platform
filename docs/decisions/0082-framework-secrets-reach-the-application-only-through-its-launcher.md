@@ -54,7 +54,7 @@ holder of `CAP_SYS_PTRACE`.
   documentation). Under plain `nodejs_compat` with a compatibility date from 2025-04-01, workerd also fills
   `process.env` with the text variables and secrets at module evaluation, before the object's boot captures anything
   (measured in workerd 1.20260312.1). The provider's default, `nodejs_compat_v2`, leaves it empty; an author's own
-  flags and the proxy Worker's did not, which the provider now closes for both.
+  flags and the proxy Worker's did not, which #370 closes for both (item 4).
 
 ## Decision
 
@@ -91,9 +91,10 @@ Proposed, in this order:
    which receives the same secrets anyway, so the window is accepted. A marker without a readable, well-formed handover
    is a `BootError`. So is any framework variable in its own environment other than the marker.
 4. **Cloudflare:** measured in workerd 1.20260312.1, `nodejs_compat_v2` (the provider's default) leaves `process.env`
-   empty, while plain `nodejs_compat` from 2025-04-01 fills it. The provider now always sets
-   `nodejs_compat_do_not_populate_process_env` on every application Worker and its proxy, and refuses an authored
-   opt-in (a separate change). `cloudflare:workers` joins the checker's `env-read` rule for application code.
+   empty, while plain `nodejs_compat` from 2025-04-01 fills it. #370 makes the provider always set
+   `nodejs_compat_do_not_populate_process_env` on every application Worker and its proxy, and refuse an authored
+   opt-in; #371 sets it on Control's Worker and the runner Worker (both open when this was written).
+   `cloudflare:workers` joins the checker's `env-read` rule for application code.
 
 **What this buys, and what it does not.** A careless dependency or a diagnostic dump that reads the environment no
 longer sees a framework secret, and a process of the same uid reads none of them. It is no defence against a hostile
@@ -135,7 +136,10 @@ dependency, on any runtime:
     the launcher) still work;
   - on Zerops: the serving process's ancestry (`ps -o pid,ppid,user,args`) and whether an ancestor keeps the service
     environment, and the non-framework variables the serving process holds;
-  - Fargate's capability set, and that Zerops' sudoers lets `zerops` keep the variables across `sudo -u`;
+  - Fargate's capability set;
+  - that Zerops' sudoers lets `zerops` keep the variables across `sudo -u`, with a list the start script builds per
+    deploy (the `FABRIKA_JOB_*`, `FABRIKA_WEBHOOK_*`, `FABRIKA_PROCEDURE_*` and `FABRIKA_CONNECT_*` names vary with the
+    contract), and what `sudo`'s `secure_path` and its reset of `HOME` change for the launcher's `PATH` and Bun's cache;
   - the acceptance probe: no framework secret in the runtime's `process.env` or `/proc/self/environ`; `sudo -n true`
     fails in it; no other process of its uid reads its environment or that of an ancestor.
 - **Docs on shipping:** the capture's comments, `packages/app/CLAUDE.md` and `docs/reference/application-runtime.md`;
