@@ -193,11 +193,14 @@ const applicationNames = ({ env, iamAppId, installation, iamService }: Deploymen
 }
 
 /**
- * The other application whose names `remote` falls under, or null. oblaka adopts `${env}-${name}`, and an application's
+ * The other deployment whose names `remote` falls under, or null. oblaka adopts `${env}-${name}`, and a deployment's
  * names are `${env}-${app}` and `${env}-${app}-…`. The longest prefix decides, so `notes-admin` keeps its own names
- * from `notes`; a prefix that two applications share is refused.
+ * from `notes`; a prefix that two deployments share is refused. Another environment of the same application is another
+ * deployment: a stage Worker bound to production's application Worker would be its proxy's authenticated hop, and a stage
+ * queue that dead-letters into production's would feed it messages, so only the deployment's own environment is its own.
  */
 const foreignApplication = (remote: string, { self, installation }: ApplicationNames): AppEnvironment | null => {
+	const isSelf = (deployment: AppEnvironment): boolean => deployment.app === self.app && deployment.env === self.env
 	let longest = 0
 	let owner: AppEnvironment | null = null
 	for (const deployment of [self, ...installation]) {
@@ -206,11 +209,11 @@ const foreignApplication = (remote: string, { self, installation }: ApplicationN
 		if (prefix.length > longest) {
 			longest = prefix.length
 			owner = deployment
-		} else if (prefix.length === longest && deployment.app !== self.app) {
+		} else if (prefix.length === longest && !isSelf(deployment)) {
 			owner = deployment
 		}
 	}
-	return owner === null || owner.app === self.app ? null : owner
+	return owner === null || isSelf(owner) ? null : owner
 }
 
 /**
@@ -236,7 +239,11 @@ const assertOwnRemote = (subject: string, remote: unknown, names: ApplicationNam
 	const owner = foreignApplication(remote, names)
 	if (owner !== null) {
 		throw new Error(
-			`cloudflare: ${subject} \`${remote}\`, a name of application \`${owner.app}\` (environment \`${owner.env}\`); an application binds only its own resources`,
+			`cloudflare: ${subject} \`${remote}\`, a name of application \`${owner.app}\` (environment \`${owner.env}\`); ${
+				owner.app === names.self.app
+					? 'a deployment binds only the resources of its own environment'
+					: 'an application binds only its own resources'
+			}`,
 		)
 	}
 }

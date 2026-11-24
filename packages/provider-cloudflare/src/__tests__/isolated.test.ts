@@ -1,4 +1,4 @@
-import { contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
+import { type AppEnvironment, contractDigest, parseManagedEnvironment } from '@fabrika/auth-core'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { existsSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
@@ -171,7 +171,7 @@ const deployCollaborators = (rec: DeployRecord, prebuilt: Awaited<ReturnType<typ
 	writeOutcome: async () => {},
 })
 
-const runDeploy = async (fx: Fixture, access: RunnerApprovedAccess = approved) => {
+const runDeploy = async (fx: Fixture, access: RunnerApprovedAccess = approved, installationApps?: readonly AppEnvironment[]) => {
 	const prebuilt = await openPrebuiltApplication(fx.out, 'stage')
 	const rec: DeployRecord = { commands: [], provisions: [] }
 	const result = await createCloudflareDeployer({
@@ -189,6 +189,7 @@ const runDeploy = async (fx: Fixture, access: RunnerApprovedAccess = approved) =
 		vars: { PUBLIC_URL: 'https://stage.example.com' },
 		managedEnvironment: parseManagedEnvironment({ FABRIKA_IAM_ISSUER: 'https://iam.example.com' }),
 		approved: access,
+		...(installationApps === undefined ? {} : { installationApps }),
 		dryRun: false,
 		signal: new AbortController().signal,
 		log: () => {},
@@ -499,6 +500,53 @@ describe('the deploy of a build', () => {
 			await writeFile(join(fx.out, BUILD_MANIFEST_FILE), JSON.stringify(manifest))
 			await expect(runDeploy(fx)).rejects.toThrow('describes binding `X` with config entries other than its own service or AI binding')
 		}
+	})
+
+	test("a stage build binds nothing of the same application's other environments: not its Worker, its queue or its objects", async () => {
+		// Production's application Worker trusts whatever reaches it over a service binding as its proxy's authenticated hop
+		// and forwards it with the proxy secret, so a stage Worker bound to it would act as any person in production.
+		const registry: readonly AppEnvironment[] = [{ app: 'demo', env: 'stage' }, { app: 'demo', env: 'prod' }, { app: 'other', env: 'stage' }]
+		const probes: Array<[Record<string, unknown>, string]> = [
+			[
+				{ type: 'config', config: { services: [{ binding: 'X', service: 'prod-demo' }] } },
+				'binds service `prod-demo`, a name of application `demo` (environment `prod`)',
+			],
+			[
+				{ type: 'resource', kind: 'queue', options: { name: 'demo-jobs', consumer: { deadLetterQueue: 'prod-demo-jobs' } } },
+				'binds dead-letter queue `prod-demo-jobs`, a name of application `demo` (environment `prod`)',
+			],
+		]
+		for (const [binding, message] of probes) {
+			const fx = await fixture()
+			await runBuild(fx, { approved })
+			const manifest = JSON.parse(await readFile(join(fx.out, BUILD_MANIFEST_FILE), 'utf8'))
+			manifest.worker.bindings = { ...manifest.worker.bindings, X: binding }
+			await rm(join(fx.out, BUILD_MANIFEST_FILE))
+			await writeFile(join(fx.out, BUILD_MANIFEST_FILE), JSON.stringify(manifest))
+			await expect(runDeploy(fx, approved, registry)).rejects.toThrow(message)
+		}
+		// Nor may its committed Durable Object history move production's objects, with their storage, into stage.
+		const moved = await fixture()
+		await runBuild(moved, { approved })
+		const history = JSON.parse(await readFile(join(moved.out, BUILD_MANIFEST_FILE), 'utf8'))
+		history.worker.migrations = [{ tag: 'v1', transferred_classes: [{ from: 'Room', from_script: 'prod-demo', to: 'Room' }] }]
+		await rm(join(moved.out, BUILD_MANIFEST_FILE))
+		await writeFile(join(moved.out, BUILD_MANIFEST_FILE), JSON.stringify(history))
+		await expect(runDeploy(moved, approved, registry)).rejects.toThrow(
+			'binds the Durable Object classes of script `prod-demo`, a name of application `demo`',
+		)
+		// Its own environment's names stay its own.
+		const fx = await fixture()
+		await runBuild(fx, { approved })
+		const manifest = JSON.parse(await readFile(join(fx.out, BUILD_MANIFEST_FILE), 'utf8'))
+		manifest.worker.bindings = {
+			...manifest.worker.bindings,
+			X: { type: 'config', config: { services: [{ binding: 'X', service: 'stage-demo-helper' }] } },
+		}
+		await rm(join(fx.out, BUILD_MANIFEST_FILE))
+		await writeFile(join(fx.out, BUILD_MANIFEST_FILE), JSON.stringify(manifest))
+		const own = await runDeploy(fx, approved, registry)
+		expect(own.result.status).toBe('succeeded')
 	})
 
 	test('the deploy itself uploads only the bundle unbundled and only its proxy bundled, whatever rebuilt the config', async () => {
