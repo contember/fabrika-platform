@@ -7,7 +7,9 @@
 // its depth and its element count are bounded. A refusal names the problem and its offset, never the content.
 //
 // Character references (`&#13;`, `&#xA;`) are read: AWS's serializers write a line break in a value that way. They
-// declare nothing and expand to one character, which must be one XML allows.
+// declare nothing and expand to one character, which must be one XML allows. Literal line ends are normalized as XML
+// 1.0 says (§2.11: CRLF and CR become LF; §3.3.3: a literal tab, CR or LF in an attribute value becomes a space); a
+// reference keeps the character it names.
 
 /** One element: its name, its attributes, its child elements, and its text (empty when it has children). */
 export interface XmlElement {
@@ -17,6 +19,7 @@ export interface XmlElement {
 	readonly text: string
 }
 
+/** Bounds lower than the defaults; a higher one is held to its default (a deeper document would exhaust the stack). */
 export interface XmlLimits {
 	/** The longest document read, in characters. */
 	readonly maxLength?: number
@@ -42,10 +45,16 @@ export class XmlError extends Error {
 const ELEMENT_NAME = /[A-Za-z_][A-Za-z0-9_.-]*/y
 const ATTRIBUTE_NAME = /[A-Za-z_][A-Za-z0-9_.:-]*/y
 const WHITESPACE = /[ \t\r\n]*/y
-/** The leading declaration: version 1.0, an optional UTF-8 encoding, an optional standalone. */
+/** XML's layout whitespace: space, tab, CR and LF, nothing else Unicode calls a space. */
+const LAYOUT = /^[ \t\r\n]*$/
+/**
+ * The leading declaration: version 1.0, an optional UTF-8 encoding, an optional standalone. The keywords and `yes`/`no`
+ * are lower case; only the encoding's name is read in any case.
+ */
 const DECLARATION =
-	/<\?xml[ \t\r\n]+version=(["'])1\.0\1(?:[ \t\r\n]+encoding=(["'])UTF-8\2)?(?:[ \t\r\n]+standalone=(["'])(?:yes|no)\3)?[ \t\r\n]*\?>/iy
-const PREDEFINED: Readonly<Record<string, string>> = { lt: '<', gt: '>', amp: '&', quot: '"', apos: "'" }
+	/<\?xml[ \t\r\n]+version=(["'])1\.0\1(?:[ \t\r\n]+encoding=(["'])[Uu][Tt][Ff]-8\2)?(?:[ \t\r\n]+standalone=(["'])(?:yes|no)\3)?[ \t\r\n]*\?>/y
+/** The five predefined entities, in a `Map`, so no name finds a member of `Object.prototype`. */
+const PREDEFINED: ReadonlyMap<string, string> = new Map([['lt', '<'], ['gt', '>'], ['amp', '&'], ['quot', '"'], ['apos', "'"]])
 
 /** Whether `code` is a character XML 1.0 allows. */
 function allowedCharacter(code: number): boolean {
@@ -55,9 +64,9 @@ function allowedCharacter(code: number): boolean {
 
 /** Reads `text` as one XML document and answers its root element. */
 export function parseXml(text: string, limits: XmlLimits = {}): XmlElement {
-	const maxLength = limits.maxLength ?? XML_MAX_LENGTH
-	const maxDepth = limits.maxDepth ?? XML_MAX_DEPTH
-	const maxElements = limits.maxElements ?? XML_MAX_ELEMENTS
+	const maxLength = Math.min(limits.maxLength ?? XML_MAX_LENGTH, XML_MAX_LENGTH)
+	const maxDepth = Math.min(limits.maxDepth ?? XML_MAX_DEPTH, XML_MAX_DEPTH)
+	const maxElements = Math.min(limits.maxElements ?? XML_MAX_ELEMENTS, XML_MAX_ELEMENTS)
 	if (text.length > maxLength) throw new XmlError('the document is too long', maxLength)
 	let at = 0
 	let elements = 0
@@ -80,8 +89,11 @@ export function parseXml(text: string, limits: XmlLimits = {}): XmlElement {
 		at += literal.length
 	}
 
-	/** Text up to `end` (exclusive), its references expanded; a raw `<` is refused. */
-	function decode(end: number): string {
+	/**
+	 * Text up to `end` (exclusive), its references expanded and its literal line ends normalized; in an attribute value a
+	 * literal tab or line end is a space. A raw `<` is refused.
+	 */
+	function decode(end: number, inAttribute: boolean): string {
 		let out = ''
 		while (at < end) {
 			const code = text.codePointAt(at) ?? 0
@@ -89,8 +101,10 @@ export function parseXml(text: string, limits: XmlLimits = {}): XmlElement {
 			const character = String.fromCodePoint(code)
 			if (character === '<') fail('a raw "<" in text')
 			if (character !== '&') {
-				out += character
 				at += character.length
+				// CRLF and CR are one LF (§2.11): a CR followed by LF leaves the LF to the next turn.
+				const normalized = character === '\r' ? (text[at] === '\n' && at < end ? '' : '\n') : character
+				out += inAttribute && (normalized === '\t' || normalized === '\n') ? ' ' : normalized
 				continue
 			}
 			const close = text.indexOf(';', at)
@@ -102,7 +116,7 @@ export function parseXml(text: string, limits: XmlLimits = {}): XmlElement {
 				if (!allowedCharacter(value)) fail('a reference to a character XML does not allow')
 				out += String.fromCodePoint(value)
 			} else {
-				const predefined = PREDEFINED[name]
+				const predefined = PREDEFINED.get(name)
 				if (predefined === undefined) fail('an entity other than the five predefined')
 				out += predefined
 			}
@@ -117,13 +131,15 @@ export function parseXml(text: string, limits: XmlLimits = {}): XmlElement {
 		if (elements > maxElements) fail('the document has too many elements')
 		expect('<', 'an element was expected')
 		const name = sticky(ELEMENT_NAME) ?? fail('an element name was expected')
-		const attributes: Record<string, string> = {}
+		if (text[at] === ':') fail('a namespace prefix on an element')
+		// A `Map`, so an attribute named `__proto__` is one like any other, and its duplicate is found.
+		const read = new Map<string, string>()
 		for (;;) {
 			const before = at
 			skipWhitespace()
 			if (text.startsWith('/>', at)) {
 				at += 2
-				return { name, attributes, children: [], text: '' }
+				return { name, attributes: Object.fromEntries(read), children: [], text: '' }
 			}
 			if (text.startsWith('>', at)) {
 				at += 1
@@ -131,7 +147,7 @@ export function parseXml(text: string, limits: XmlLimits = {}): XmlElement {
 			}
 			if (at === before) fail('whitespace before an attribute was expected')
 			const attribute = sticky(ATTRIBUTE_NAME) ?? fail('an attribute name was expected')
-			if (Object.hasOwn(attributes, attribute)) fail('a duplicate attribute')
+			if (read.has(attribute)) fail('a duplicate attribute')
 			skipWhitespace()
 			expect('=', 'an attribute value was expected')
 			skipWhitespace()
@@ -140,17 +156,19 @@ export function parseXml(text: string, limits: XmlLimits = {}): XmlElement {
 			at += 1
 			const end = text.indexOf(quote, at)
 			if (end === -1) fail('an unterminated attribute value')
-			attributes[attribute] = decode(end)
+			read.set(attribute, decode(end, true))
 			at = end + 1
 		}
 
 		const children: XmlElement[] = []
 		let content = ''
+		let layout = true
 		for (;;) {
 			if (at >= text.length) fail('the document ends inside an element')
 			if (text.startsWith('</', at)) {
 				at += 2
 				const closing = sticky(ELEMENT_NAME)
+				if (text[at] === ':') fail('a namespace prefix on an element')
 				if (closing !== name) fail('a close that does not match its element')
 				skipWhitespace()
 				expect('>', 'the end of a close was expected')
@@ -162,14 +180,20 @@ export function parseXml(text: string, limits: XmlLimits = {}): XmlElement {
 				continue
 			}
 			const next = text.indexOf('<', at)
-			content += decode(next === -1 ? text.length : next)
+			const end = next === -1 ? text.length : next
+			const raw = text.slice(at, end)
+			// XML's character data never holds `]]>` (`]]&gt;` is the way to write it).
+			if (raw.includes(']]>')) fail('"]]>" in text')
+			// Layout is judged on the raw text: a reference, even to a space, is content.
+			if (!LAYOUT.test(raw)) layout = false
+			content += decode(end, false)
 		}
 		// Whitespace between child elements is layout; any other text beside them is mixed content.
 		if (children.length > 0) {
-			if (content.trim() !== '') fail('text beside child elements')
+			if (!layout) fail('text beside child elements')
 			content = ''
 		}
-		return { name, attributes, children, text: content }
+		return { name, attributes: Object.fromEntries(read), children, text: content }
 	}
 
 	if (text.startsWith('﻿')) at = 1
@@ -187,17 +211,19 @@ export function xmlChildren(parent: XmlElement, name: string): readonly XmlEleme
 	return parent.children.filter((child) => child.name === name)
 }
 
+// The lookups' reasons quote only `name`, the caller's constant, never a name the document wrote.
+
 /** The one child of `parent` named `name`, `null` when there is none; more than one is an `XmlError`. */
 export function xmlOptional(parent: XmlElement, name: string): XmlElement | null {
 	const found = xmlChildren(parent, name)
-	if (found.length > 1) throw new XmlError(`more than one "${name}" in "${parent.name}"`, 0)
+	if (found.length > 1) throw new XmlError(`more than one "${name}"`, 0)
 	return found[0] ?? null
 }
 
 /** The one child of `parent` named `name`; none or more than one is an `XmlError`. */
 export function xmlOne(parent: XmlElement, name: string): XmlElement {
 	const found = xmlOptional(parent, name)
-	if (found === null) throw new XmlError(`no "${name}" in "${parent.name}"`, 0)
+	if (found === null) throw new XmlError(`no "${name}"`, 0)
 	return found
 }
 
@@ -205,6 +231,6 @@ export function xmlOne(parent: XmlElement, name: string): XmlElement {
 export function xmlText(parent: XmlElement, name: string): string | null {
 	const found = xmlOptional(parent, name)
 	if (found === null) return null
-	if (found.children.length > 0) throw new XmlError(`"${name}" in "${parent.name}" holds elements, not text`, 0)
+	if (found.children.length > 0) throw new XmlError(`"${name}" holds elements, not text`, 0)
 	return found.text
 }

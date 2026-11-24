@@ -61,6 +61,34 @@ describe('parseXml', () => {
 		expect(() => xmlOne(root, 'E')).toThrow(XmlError)
 		expect(xmlOptional(root, 'E')).toBeNull()
 		expect(() => xmlText(root, 'C')).toThrow(XmlError)
+		// A lookup's reason quotes the caller's name only, never one the document wrote.
+		expect(() => xmlOne(root, 'E')).toThrow('no "E"')
+		expect(String((() => {
+			try {
+				return xmlOne(root, 'E')
+			} catch (error) {
+				return error
+			}
+		})())).not.toContain('"A"')
+	})
+
+	test('normalizes literal line ends, and tabs and line ends in an attribute, but not what a reference names', () => {
+		const root = parseXml('<a x="1\r\n2\t3&#xA;4">l1\r\nl2\rl3&#xD;</a>')
+		expect(root.attributes).toEqual({ x: '1 2 3\n4' })
+		expect(root.text).toBe('l1\nl2\nl3\r')
+	})
+
+	test('an attribute named __proto__ is one like any other', () => {
+		const root = parseXml('<a __proto__="x"/>')
+		expect(Object.hasOwn(root.attributes, '__proto__')).toBe(true)
+		expect(Object.entries(root.attributes)).toEqual([['__proto__', 'x']])
+		expect(refusal('<a __proto__="x" __proto__="y"/>')).toBe('a duplicate attribute')
+	})
+
+	test('takes "]]&gt;" in text, the declaration with any case of UTF-8, and layout between children', () => {
+		expect(parseXml('<a>]]&gt;</a>').text).toBe(']]>')
+		expect(parseXml('<?xml version="1.0" encoding="utf-8"?><a/>').name).toBe('a')
+		expect(parseXml('<a>\r\n\t <b/> </a>').children.length).toBe(1)
 	})
 
 	test('refuses every construct beyond elements, attributes and text', () => {
@@ -83,7 +111,19 @@ describe('parseXml', () => {
 			['<a/><b/>', 'content after the root element'],
 			['<a>', 'the document ends inside an element'],
 			// A namespace prefix on an element: AWS writes none.
-			['<ns:a/>', 'whitespace before an attribute was expected'],
+			['<ns:a/>', 'a namespace prefix on an element'],
+			['<a></ns:a>', 'a namespace prefix on an element'],
+			// The predefined entities are five names, never a member of Object.prototype.
+			['<a>&constructor;</a>', 'an entity other than the five predefined'],
+			['<a>&toString;</a>', 'an entity other than the five predefined'],
+			['<a>&valueOf;</a>', 'an entity other than the five predefined'],
+			['<a>&__proto__;</a>', 'an entity other than the five predefined'],
+			// Only space, tab, CR and LF are layout between children; a no-break space, raw or by reference, is text.
+			['<a> <b/></a>', 'text beside child elements'],
+			['<a>&#xA0;<b/></a>', 'text beside child elements'],
+			['<a>x]]>y</a>', '"]]>" in text'],
+			['<?xml VERSION="1.0"?><a/>', 'an XML declaration this reader does not take'],
+			['<?xml version="1.0" standalone="YES"?><a/>', 'an XML declaration this reader does not take'],
 			['<a>&#0;</a>', 'a reference to a character XML does not allow'],
 			['<a>&#xD800;</a>', 'a reference to a character XML does not allow'],
 			['<a>\u0001</a>', 'a character XML does not allow'],
@@ -96,8 +136,11 @@ describe('parseXml', () => {
 		expect(refusal('<a/>', { maxLength: 3 })).toBe('the document is too long')
 		expect(refusal('<a><b><c/></b></a>', { maxDepth: 2 })).toBe('the document is nested too deep')
 		expect(refusal('<a><b/><b/></a>', { maxElements: 2 })).toBe('the document has too many elements')
-		// The defaults stop a deep document before the stack does.
-		expect(refusal(`${'<a>'.repeat(10_000)}${'</a>'.repeat(10_000)}`)).toBe('the document is nested too deep')
+		// The defaults stop a deep document before the stack does, and a limit asked higher is held to its default.
+		const deep = `${'<a>'.repeat(10_000)}${'</a>'.repeat(10_000)}`
+		expect(refusal(deep)).toBe('the document is nested too deep')
+		expect(refusal(deep, { maxDepth: 1_000_000 })).toBe('the document is nested too deep')
+		expect(refusal(`<a>${'x'.repeat(2 * 1024 * 1024)}</a>`, { maxLength: 10 * 1024 * 1024 })).toBe('the document is too long')
 	})
 
 	test('a refusal names the problem and the offset, never the content', () => {
