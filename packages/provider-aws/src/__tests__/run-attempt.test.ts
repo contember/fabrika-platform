@@ -77,6 +77,7 @@ const service = (currentDeploymentArn: string | null): EcsService => ({
 	taskDefinitionArn: TASK_DEFINITION,
 	deployments: [],
 	currentDeploymentArn,
+	network: null,
 	events: [],
 })
 
