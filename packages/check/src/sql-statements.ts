@@ -2,14 +2,14 @@
 // file and the digest of its text, so a statement that changes in a site already declared `sql` waits for review
 // (ADR-0050 §3). Statements are found by syntax only, so the reading errs towards a tagged template too many.
 
-import { type AstNode, child, memberSuffix, parseModule, positionOf, unwrap, walk } from './ast'
+import { type AstNode, child, parseModule, positionOf, staticKey, walk } from './ast'
 import { isServerModule, isSkippedPath, isSourceFile } from './layout'
 
 /** One tagged template that may run SQL. */
 export interface SqlStatement {
 	/** The line of the template's tag, from 1. */
 	readonly line: number
-	/** The template between its backticks, `${…}` as written, with each line break and the whitespace around it one space. */
+	/** The template between its backticks, `${…}` as written, with the whitespace around each line break and blank lines dropped. */
 	readonly text: string
 }
 
@@ -20,9 +20,9 @@ export type SqlStatementsResult = readonly SqlStatement[] | null
 export const isSqlStatementSource = (path: string): boolean => isSourceFile(path) && isServerModule(path) && !isSkippedPath(path)
 
 /**
- * Every tagged template of the module whose tag may be `ctx.sql`: `ctx.sql(Row)` and `tx.sql(Row)`, a function parameter
- * or variable that holds the tag under any name, called or not. A tag reached through a member other than `.sql`
- * (`String.raw`, `styled.div`) is a template of something else.
+ * Every tagged template of the module whose tag may be `ctx.sql`: `ctx.sql(Row)` and `tx.sql(Row)`, a parameter or
+ * variable that holds the tag under any name, and any other expression, called or not. Only a tag that is a member
+ * other than `.sql` (`String.raw`, `styled.div`) is a template of something else.
  */
 export function readSqlStatements(file: string, text: string): SqlStatementsResult {
 	const parsed = parseModule(file, text)
@@ -41,18 +41,39 @@ export function readSqlStatements(file: string, text: string): SqlStatementsResu
 	return statements
 }
 
-/** A tag, or the callee of a called tag, that is an identifier or a member chain ending in `.sql`. */
+/** Whether a tag, or the callee of a called tag, is anything but a member whose static name is not `sql`. */
 function maySql(tag: AstNode): boolean {
-	const bare = unwrap(tag)
+	const bare = transparent(tag)
 	const callee = bare.type === 'CallExpression' ? child(bare, 'callee') : bare
-	if (callee === undefined) return false
-	const target = unwrap(callee)
-	if (target.type === 'Identifier') return true
-	const suffix = memberSuffix(target)
-	return suffix.length > 0 && suffix[suffix.length - 1] === 'sql'
+	const target = callee === undefined ? undefined : transparent(callee)
+	if (target?.type !== 'MemberExpression') return true
+	const name = staticKey(target, 'property')
+	return name === undefined || name === 'sql'
 }
 
-/** Re-indenting a statement or breaking its lines elsewhere changes nothing it runs; whitespace inside a line is kept. */
+const TRANSPARENT = new Set([
+	'ChainExpression',
+	'ParenthesizedExpression',
+	'TSNonNullExpression',
+	'TSAsExpression',
+	'TSSatisfiesExpression',
+	'TSTypeAssertion',
+	'TSInstantiationExpression',
+])
+
+/** Strips the wrappers that leave the value an expression denotes as it is, type assertions included. */
+function transparent(node: AstNode): AstNode {
+	let current = node
+	for (let inner = child(current, 'expression'); TRANSPARENT.has(current.type) && inner !== undefined; inner = child(current, 'expression')) {
+		current = inner
+	}
+	return current
+}
+
+/**
+ * Re-indenting a statement changes nothing it runs. A line break stays: it ends a `--` comment, so joining two lines
+ * may comment out a condition.
+ */
 function statementText(source: string): string {
-	return source.replace(/[ \t]*(?:\r\n|\n|\r)\s*/g, ' ').trim()
+	return source.replace(/[ \t]*(?:\r\n|\n|\r)\s*/g, '\n').trim()
 }

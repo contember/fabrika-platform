@@ -51,6 +51,11 @@ export const SNAPSHOT_LIMITS = {
 	/** The server modules read for SQL statements when a site declares `sql`, and their text in all. */
 	sqlSources: 1000,
 	sqlSourceChars: 16 * 1024 * 1024,
+	/**
+	 * The statements recorded, a hundred-odd bytes each: `storedSnapshotFits` does not measure a snapshot an older reader
+	 * read, so this bound keeps it within `STORED_SNAPSHOT_BYTES` beside that reader's own.
+	 */
+	sqlStatements: 4000,
 } as const
 
 const MIGRATION_READS_AT_ONCE = 8
@@ -264,6 +269,7 @@ async function readSqlStatementEntries(commit: CommitFiles, root: string, read: 
 			const statements = readSqlStatements(file, text)
 			if (statements === null) entries.push({ file, line: 0, digest: sha256Hex(text) })
 			else entries.push(...statements.map(({ line, text }) => ({ file, line, digest: sha256Hex(text) })))
+			if (entries.length > SNAPSHOT_LIMITS.sqlStatements) throw new SnapshotRefused('sources-too-large')
 		}
 	}
 	return entries

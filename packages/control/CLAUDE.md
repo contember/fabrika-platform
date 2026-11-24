@@ -753,19 +753,19 @@ other environment, before the provider prepares anything, and the write maps a r
   that leaves the staged kit widen with `review: 'closer'`; removals narrow. `databaseCode` is absent when empty and
   the digest appends it only when present, so stored digests stay valid. A refused statement in a file the environment
   has not published unchanged fails the read (`migrations-refused`, a count, never the statement), as the runner
-  refuses it. Checker structure hints never enter the snapshot.
-  `sqlStatements` holds every tagged template of `src/` (tests excluded) whose tag may be `ctx.sql`
-  (`readSqlStatements` of `@fabrika/check/contract`, this release's, whatever the application pins), by file, line and
-  the SHA-256 of its text with line breaks made one space; a module the parser refuses is one entry, line 0, over its
-  whole text. It is present, even empty, whenever a site declares `sql`, and absent otherwise. A new, changed or removed
-  statement, matched by file and text, is an `off-road` closer-review line (`application.sql-statement`); a side
-  without the field (read before this release, or no `sql` site) shows none. The digest appends the statements, without
-  their lines, only when there are some, so a stored snapshot keeps its digest; a fresh read of a commit that runs
-  statements digests apart from what an older release read (`framework-compat.test.ts`). It stays in the publication:
-  it is the next deploy's baseline, so a Control rolled back below this release cannot parse a publication that
-  records it. `AppEnvDto.deviationSubjects` lists the published
+  refuses it. Checker structure hints never enter the snapshot. `AppEnvDto.deviationSubjects` lists the published
   snapshot's, grouped by site and migration, and `AppEnvDto.surface` (`surface.ts`) its endpoints under their most
   exposed caller, in `diff.ts`'s words.
+  `sqlStatements` holds every tagged template of `src/` (tests excluded) whose tag may be `ctx.sql`
+  (`readSqlStatements` of `@fabrika/check/contract`, this release's, whatever the application pins), by file, line and
+  the SHA-256 of its text with indentation dropped (a line break stays: it ends a `--` comment); a module the parser
+  refuses is one entry, line 0, over its whole text. It is present, even empty, whenever a site declares `sql`, and
+  absent otherwise. A new, changed or removed statement, matched by file and text, is an `off-road` closer-review line
+  (`application.sql-statement`); a side without the field (read before this release, or no `sql` site) shows none. The
+  digest appends the statements, without their lines, only when there are some, so a stored snapshot keeps its digest;
+  a fresh read of a commit that runs statements digests apart from what an older release read
+  (`framework-compat.test.ts`). It stays in the publication: it is the next deploy's baseline, so a Control rolled
+  back below this release cannot parse a publication that records it.
   `AppEnvDto.accessMap` and the approval detail's `ApprovalDto.accessMap` (`access-map.ts`) read the same snapshot by
   role: each role's actions, and once per action its endpoints, tables and member or link reach. They are additive
   fields; a console reads their absence as an older Control.

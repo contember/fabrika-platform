@@ -109,11 +109,12 @@ the result as its **snapshot**:
 - the **database code** the migrations declare (`databaseCode`): each function, procedure, trigger, view, rule,
   policy, `DO` block and expression that calls database code, by file, kind and object;
 - the **SQL statements** (`sqlStatements`), once a site declares `sql`: each tagged template of a server module under
-  `src/` whose tag may be `ctx.sql` (a member ending in `.sql`, or an identifier, called or not), by file, line and
-  the SHA-256 of its text. A declaration says only that a site runs raw SQL, and since `ctx.sql` does not check where a
-  scope fragment stands ([ADR-0012](0012-fabrika-app-runtime.md)), the statement is the only record of what it reads.
-  Control reads these modules as text and parses them; it never runs them. The reading is syntactic, so it errs
-  towards a template too many: a statement through a tag held in an object member other than `.sql` is not seen;
+  `src/` whose tag may be `ctx.sql` (any tag, called or not, but a member other than `.sql`, such as `String.raw`), by
+  file, line and the SHA-256 of its text with indentation dropped; a line break stays, since it ends a `--` comment. A
+  declaration says only that a site runs raw SQL, and since `ctx.sql` does not check where a scope fragment stands
+  ([ADR-0012](0012-fabrika-app-runtime.md)), the statement is the only record of what it reads. Control reads these
+  modules as text and parses them; it never runs them. The reading is syntactic, so it errs towards a template too
+  many: a statement through a tag held in an object member other than `.sql` is not seen;
 - the **file adoptions** the migrations make (`fileAdoptions`, [ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)):
   each `INSERT … SELECT` that copies a file collection's files into a table, and each release of a collection. They
   follow from the migration files, so the digest does not cover them beyond the files' checksums. The diff compares
@@ -132,7 +133,7 @@ the environment's last succeeded run deployed fails the read when its checksum c
 runner refuses an applied file that changed ([ADR-0017](0017-service-owned-postgres-migrations.md)); it is compared
 with that run's stored snapshot, not the published one, because a publication precedes the provider. The read is
 bounded: 512 shell files, 16 Mi characters of migration text, which the classifier reads at once, and 1000 server
-modules with 16 Mi characters of text for the SQL statements.
+modules with 16 Mi characters of text and 4000 SQL statements.
 
 Uploads carry no proxy table and no IAM schema. A snapshot comes only from the commit.
 

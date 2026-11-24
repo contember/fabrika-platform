@@ -30,11 +30,26 @@ describe('readSqlStatements', () => {
 		expect(texts('export const a = String.raw`x`; export const b = styled.div`color: red`; export const c = `plain ${1}`')).toEqual([])
 	})
 
-	test('indentation, blank lines and where a line breaks are no change; whitespace inside a line is', () => {
+	test('a tag behind a type assertion, a non-null assertion or a choice is still read', () => {
+		const source = [
+			'export const a = (ctx) => (ctx.sql satisfies typeof ctx.sql)(Row)`select 1`',
+			'export const b = (ctx) => (ctx.sql as Tag)(Row)`select 2`',
+			'export const c = (ctx) => ctx.sql!(Row)`select 3`',
+			'export const d = (ctx, other) => (flag ? ctx.sql : other)(Row)`select 4`',
+			"export const e = (ctx) => ctx['sql'](Row)`select 5`",
+		].join('\n')
+		expect(texts(source)).toEqual(['select 1', 'select 2', 'select 3', 'select 4', 'select 5'])
+	})
+
+	test('indentation and blank lines are no change; a line break and whitespace inside a line are', () => {
 		const indented = 'const q = (ctx) => ctx.sql(Row)`\n\t\tselect id\n\n\t\tfrom notes   \n`'
-		const flat = 'const q = (ctx) =>\n\tctx.sql(Row)`select id from notes`'
+		const flat = 'const q = (ctx) =>\n\tctx.sql(Row)`select id\nfrom notes`'
 		expect(texts(indented)).toEqual(texts(flat))
 		expect(texts('const q = (ctx) => ctx.sql(Row)`select  id from notes`')).not.toEqual(texts('const q = (ctx) => ctx.sql(Row)`select id from notes`'))
+		// Joining the lines comments the condition out.
+		const commented = (separator: string) =>
+			texts(`const q = (ctx) => ctx.sql(Row)\`select title from notes where true -- filter${separator}and is_public\``)
+		expect(commented(' ')).not.toEqual(commented('\n'))
 	})
 
 	test('a module the parser refuses reads as null', () => {
