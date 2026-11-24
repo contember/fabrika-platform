@@ -45,10 +45,19 @@ export const RETENTION_DAYS: ReadonlySet<number> = new Set([
 /** The most tags a log group takes. */
 const MAX_TAGS = 50
 /**
- * The most events one read asks for. CloudWatch Logs itself stops a page at 1 MB, which is the JSON client's answer
- * bound's order; a page of 500 keeps a relay step short.
+ * The most events one read asks for: a page of 500 keeps a relay step short. CloudWatch Logs stops a page at 1 MB of
+ * events on its own as well.
  */
 export const READ_PAGE_EVENTS = 500
+/**
+ * The largest answer a read takes. CloudWatch Logs bounds a page at 1 MB of events, not of its JSON: the JSON escapes a
+ * control character (an ANSI colour code in a build's output) as six bytes and wraps every event in its fields. Six
+ * times the page bound and the wrappers of a full page stay under 7 MiB. A smaller bound would answer
+ * `answer_too_large` for a page CloudWatch Logs sends again on the same cursor, and the relay would stop there for good.
+ */
+export const LOGS_MAX_ANSWER_BYTES = 7 * 1024 * 1024
+/** The latest time a `Date` holds, in milliseconds since the epoch. */
+const MAX_DATE_MS = 8_640_000_000_000_000
 
 /** One event of a stream: when it happened and its message. */
 export interface LogEvent {
@@ -60,21 +69,39 @@ export interface LogEvent {
 export interface LogPage {
 	readonly events: readonly LogEvent[]
 	readonly cursor: string
+	/**
+	 * The stream has nothing more for now: the token did not move. Wait before reading `cursor` again. When it is false,
+	 * read on at once, even after a page with no events: CloudWatch Logs may answer an empty or partial page in the middle
+	 * of a stream. The first read (without a cursor) is never at the end.
+	 */
+	readonly atEnd: boolean
 }
 
 export interface LogsClient {
-	/** The log group `name`, created with `tags` when it does not exist; its retention is set to `retentionDays` either way. */
+	/**
+	 * The log group `name`, created with `tags` when it does not exist; its retention is set to `retentionDays` either
+	 * way. Tags apply only on create: an existing group keeps its own. At least one tag is required, because the
+	 * provider's roles act only on resources tagged as theirs, and an untagged group could not be managed later.
+	 */
 	ensureLogGroup(name: string, retentionDays: number, tags: Readonly<Record<string, string>>, signal?: AbortSignal): Promise<void>
 	/**
-	 * The events of `stream` after `cursor` (from the start without one), at most `READ_PAGE_EVENTS`. `null` when the stream
-	 * does not exist yet (a build that has not written). A page with no events answers the same cursor again.
+	 * The events of `stream` after `cursor` (from the start without one), at most `READ_PAGE_EVENTS`.
+	 *
+	 * `null` for `ResourceNotFoundException`. That is a stream not written yet (a build that has not started writing),
+	 * and also a group that does not exist: the caller bounds how long it waits on `null`.
+	 *
+	 * `group` and `stream` come from the run's own checkpoint (`buildId`) and the application's target, never from a
+	 * request: the build group is one per installation, so the stream's name is what keeps one application from reading
+	 * another's build log. The role that reads is scoped to the installation's groups.
+	 *
+	 * A cursor expires after 24 hours (UNVERIFIED); a relay that resumes a cursor stored for longer starts over.
 	 */
 	readForward(group: string, stream: string, cursor?: string, signal?: AbortSignal): Promise<LogPage | null>
 }
 
 const emptySchema = z.object({})
 const eventsSchema = z.object({
-	events: z.array(z.object({ timestamp: z.number(), message: z.string() })),
+	events: z.array(z.object({ timestamp: z.number().int().nonnegative().max(MAX_DATE_MS), message: z.string() })),
 	nextForwardToken: z.string().regex(TOKEN),
 })
 
@@ -85,20 +112,20 @@ function refuse(what: string): never {
 
 /** CloudWatch Logs at `options.origin`; the client is of the `LOGS` service by construction. */
 export function logsClient(options: AwsJsonClientOptions): LogsClient {
-	const json = awsJsonClient(LOGS, options)
+	// The answer bound is the logs client's own, whatever the options say: see `LOGS_MAX_ANSWER_BYTES`.
+	const json = awsJsonClient(LOGS, { ...options, maxAnswerBytes: LOGS_MAX_ANSWER_BYTES })
 	return {
 		async ensureLogGroup(name, retentionDays, tags, signal) {
 			if (!LOG_GROUP.test(name)) refuse('the log group')
 			if (!RETENTION_DAYS.has(retentionDays)) refuse('the retention')
 			const entries = Object.entries(tags)
-			if (entries.length > MAX_TAGS) refuse('the tags')
+			if (entries.length === 0 || entries.length > MAX_TAGS) refuse('the tags')
 			for (const [key, value] of entries) {
 				// AWS reserves the `aws:` prefix in any letter case.
 				if (!TAG_KEY.test(key) || !TAG_VALUE.test(value) || key.toLowerCase().startsWith('aws:')) refuse('a tag')
 			}
 			try {
-				// An empty tag map is left out: CloudWatch Logs takes `tags` with at least one entry.
-				await json.call('CreateLogGroup', { logGroupName: name, ...(entries.length === 0 ? {} : { tags }) }, emptySchema, signal)
+				await json.call('CreateLogGroup', { logGroupName: name, tags }, emptySchema, signal)
 			} catch (error) {
 				if (!(error instanceof AwsError) || error.code !== 'ResourceAlreadyExistsException') throw error
 			}
@@ -127,8 +154,13 @@ export function logsClient(options: AwsJsonClientOptions): LogsClient {
 				if (error instanceof AwsError && error.code === 'ResourceNotFoundException') return null
 				throw error
 			}
-			// CloudWatch Logs writes an event's time in milliseconds since the epoch.
-			return { events: page.events.map((event) => ({ at: new Date(event.timestamp), message: event.message })), cursor: page.nextForwardToken }
+			return {
+				// CloudWatch Logs writes an event's time in milliseconds since the epoch.
+				events: page.events.map((event) => ({ at: new Date(event.timestamp), message: event.message })),
+				cursor: page.nextForwardToken,
+				// The end of the stream for now is a token that did not move, never an empty page.
+				atEnd: cursor !== undefined && page.nextForwardToken === cursor,
+			}
 		},
 	}
 }
