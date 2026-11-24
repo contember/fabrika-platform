@@ -27,11 +27,14 @@ export { type Confirmations, confirmations, UNATTENDED_FLAG } from './confirmati
 export { EMAIL_FLAGS, type InstallationEmail, readInstallationEmail } from './email'
 export {
 	configureEnvironment,
+	configureRepositorySecrets,
 	type EnvironmentConfig,
 	type EnvironmentEffects,
 	environmentVariables,
 	type ExistingEnvironmentProtection,
 	existingEnvironmentProtection,
+	type RepositorySecretsConfig,
+	repositoryVariables,
 	triggerPlatformWorkflow,
 } from './environment'
 export { ghRepoExists, hasGhCli } from './gh'

@@ -195,16 +195,30 @@ describe('Cloudflare installer IAM data key', () => {
 })
 
 describe('Cloudflare installer resource names', () => {
-	const INPUT = { account: 'acme', repo: 'acme/fabrika-platform-acme' }
-	/** The Environment the installation already has, as `gh` answers it; null when there is none. */
-	const effects = (existing: Readonly<Record<string, string>> | null) => ({ environmentVariables: () => Promise.resolve(existing) })
+	const INPUT = { account: 'acme', repo: 'acme/fabrika-platform-acme', githubSecrets: 'environment' } as const
+	/**
+	 * The Environment the installation already has, as `gh` answers it; null when there is none. The repository's own
+	 * variables answer `repository`.
+	 */
+	const effects = (existing: Readonly<Record<string, string>> | null, repository: Readonly<Record<string, string>> | null = null) => ({
+		environmentVariables: () => Promise.resolve(existing),
+		repositoryVariables: () => Promise.resolve(repository),
+	})
 
-	const decided = async (source: Readonly<Record<string, string>>, existing: Readonly<Record<string, string>> | null) => {
+	const decided = async (
+		source: Readonly<Record<string, string>>,
+		existing: Readonly<Record<string, string>> | null,
+		options: { readonly mode?: 'environment' | 'repository'; readonly repository?: Readonly<Record<string, string>> | null } = {},
+	) => {
 		let scheme: unknown
 		let saved: string | undefined
 		await withOpenEnvFile(async () => {
 			await captured(async () => {
-				scheme = await ensurePlatformNames(INPUT, source, effects(existing))
+				scheme = await ensurePlatformNames(
+					{ ...INPUT, githubSecrets: options.mode ?? 'environment' },
+					source,
+					effects(existing, options.repository ?? null),
+				)
 			})
 			saved = process.env['FABRIKA_CLOUDFLARE_NAMES']
 			delete process.env['FABRIKA_CLOUDFLARE_NAMES']
@@ -234,6 +248,20 @@ describe('Cloudflare installer resource names', () => {
 		await expect(decided({ FABRIKA_CLOUDFLARE_NAMES: 'fabrika' }, { FABRIKA_CONTROL_DOMAIN: 'x' })).rejects.toThrow(
 			'The installer env file names the resources `fabrika`, but the acme Environment on acme/fabrika-platform-acme `legacy`',
 		)
+	})
+
+	test('with repository secrets the repository variables decide, and only the switch marks an installation', async () => {
+		const repository = { mode: 'repository' } as const
+		// An Environment never counts in repository mode: it is refused earlier, by the location check.
+		expect(await decided({}, { FABRIKA_CONTROL_DOMAIN: 'x' }, repository)).toEqual({ scheme: 'fabrika', saved: 'fabrika' })
+		// A repository's unrelated variables are no installation, so no legacy names.
+		expect(await decided({}, null, { ...repository, repository: { SOMETHING_ELSE: 'x' } })).toEqual({ scheme: 'fabrika', saved: 'fabrika' })
+		expect(await decided({}, null, { ...repository, repository: { FABRIKA_CLOUDFLARE_NAMES: 'legacy' } })).toEqual({
+			scheme: 'legacy',
+			saved: 'legacy',
+		})
+		await expect(decided({ FABRIKA_CLOUDFLARE_NAMES: 'legacy' }, null, { ...repository, repository: { FABRIKA_CLOUDFLARE_NAMES: 'fabrika' } }))
+			.rejects.toThrow('The installer env file names the resources `legacy`, but the repository acme/fabrika-platform-acme `fabrika`')
 	})
 
 	test('the GitHub Environment carries the scheme as its first variable, written before any secret', () => {
@@ -282,6 +310,31 @@ describe('Cloudflare installer closing summary', () => {
 			expect(printed).toContain('Environment deployment-branch policy: NOT applied (HTTP 403')
 			expect(printed).toContain('gh api …later…')
 			expect(printed).toContain('https://fabrika.example.com/settings/source')
+		})
+	})
+})
+
+describe('Cloudflare installer closing summary with repository secrets', () => {
+	test('states the missing protection rules instead of the Environment policy, and closes the hatch without --env', async () => {
+		await withOpenEnvFile(async () => {
+			const printed = await captured(() =>
+				finalNotes({
+					repo: 'acme/fabrika-platform',
+					account: 'acme',
+					controlPlaneDomain: 'fabrika.example.com',
+					dir: '/tmp/checkout',
+					ref: 'v0.1.0',
+					passwordEnabled: false,
+					githubSecrets: 'repository',
+					branchProtection: { applied: false, reason: 'HTTP 403 — not offered on this plan', command: 'gh api …protect main…' },
+				})
+			)
+
+			expect(printed).toContain('Repository secrets: no GitHub Environment, so no deployment protection rule')
+			expect(printed).toContain('any workflow of this repository, on any branch, can read every credential')
+			expect(printed).not.toContain('Environment deployment-branch policy')
+			expect(printed).toContain("gh variable set FABRIKA_CONTROL_BOOTSTRAP_ADMINS --repo acme/fabrika-platform --body '[]'")
+			expect(printed).not.toContain('--env acme')
 		})
 	})
 })

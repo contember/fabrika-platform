@@ -8,7 +8,8 @@
  * is one confirmation before each step that cannot be taken back, answered by `--yes` when nobody watches.
  *
  * Order: CF token → account + zones → IAM and email config → vault key → provisioning key → runner key →
- * scaffold the base repo → write the GitHub Environment → trigger. Secret VALUES flow only into the env
+ * scaffold the base repo → write the GitHub Environment (or, with `--github-secrets=repository`, the repository's own
+ * secrets and variables) → trigger. Secret VALUES flow only into the env
  * file, `gh` over stdin, and child env — never through `log.ts`. GitHub source connections are made later
  * from the console (ADR-0029); init creates no GitHub App.
  */
@@ -17,6 +18,7 @@ import {
 	action,
 	branchProtectionCommand,
 	configureEnvironment,
+	configureRepositorySecrets,
 	type Confirmations,
 	confirmations,
 	detail,
@@ -31,6 +33,8 @@ import {
 	type ProtectionOutcome,
 	randomPxKey,
 	randomSecret,
+	type RepositorySecretsConfig,
+	repositoryVariables,
 	step,
 	triggerPlatformWorkflow,
 	url,
@@ -39,7 +43,16 @@ import {
 import { PLATFORM_NAMES_ENV, type PlatformNameScheme, platformNameScheme } from '../platform-names'
 import { type CfAccount, type CfZone, findZone, listAccounts, selectAccount, verifyToken } from './cloudflare'
 import { envPath, fromEnv, openEnvFile, persistEnv } from './envfile'
-import { type InitInput, parseInitAccount, parseInitArgs, PLACEHOLDER_OIDC_CLIENT_ID, rerunCommand } from './init-options'
+import {
+	GITHUB_SECRETS_FLAG,
+	GITHUB_SECRETS_VARIABLE,
+	type GitHubSecretsMode,
+	type InitInput,
+	parseInitAccount,
+	parseInitArgs,
+	PLACEHOLDER_OIDC_CLIENT_ID,
+	rerunCommand,
+} from './init-options'
 import { readFabrikaRef, type ScaffoldInput, scaffoldPlatformRepo, type ScaffoldResult } from './scaffold'
 
 /** Everything collected before the scaffold + environment write. */
@@ -82,12 +95,16 @@ export interface InitEffects {
 	repositoryExists(repo: string): Promise<boolean>
 	/** The variables the installation's GitHub Environment holds, or null when it does not exist yet. */
 	environmentVariables(repo: string, environment: string): Promise<Readonly<Record<string, string>> | null>
+	/** The repository's own Actions variables, or null when the repository does not exist yet. */
+	repositoryVariables(repo: string): Promise<Readonly<Record<string, string>> | null>
 	listAccounts(token: string): Promise<CfAccount[]>
 	/** Best effort: `false` means "could not confirm", never "invalid". */
 	verifyToken(token: string, accountId: string): Promise<boolean>
 	findZone(token: string, hostname: string): Promise<CfZone | null>
 	scaffold(input: ScaffoldInput): Promise<ScaffoldResult>
 	configureEnvironment(config: EnvironmentConfig): Promise<void>
+	/** `--github-secrets=repository`: the same values as repository-level secrets and variables, no Environment. */
+	configureRepository(config: RepositorySecretsConfig): Promise<void>
 	triggerWorkflow(repo: string): Promise<void>
 }
 
@@ -136,35 +153,43 @@ export async function runInit(input: InitInput, collaborators: InitCollaborators
 		repo: collected.platformRepo,
 		account: collected.account,
 		dir: input.checkout,
+		githubSecrets: input.githubSecrets,
 	})
 
+	const payload = environmentPayload(collected, {
+		vaultKey,
+		provisioning,
+		operationsSyncKey,
+		runnerKey,
+		dataKey,
+		signingKeys,
+		...(oidcClientSecret === undefined ? {} : { oidcClientSecret }),
+	})
+	const store = input.githubSecrets === 'repository' ? `repository ${collected.platformRepo}` : `${collected.account} Environment`
+	info(`${Object.keys(payload.secrets).length} secret(s) and ${Object.keys(payload.vars).length} variable(s) for the ${store}.`)
 	let environmentPolicy: ProtectionOutcome | undefined
-	const environment: EnvironmentConfig = {
-		repo: collected.platformRepo,
-		environment: collected.account,
-		onProtection: (outcome) => {
-			environmentPolicy = outcome
-		},
-		...environmentPayload(collected, {
-			vaultKey,
-			provisioning,
-			operationsSyncKey,
-			runnerKey,
-			dataKey,
-			signingKeys,
-			...(oidcClientSecret === undefined ? {} : { oidcClientSecret }),
-		}),
+	if (input.githubSecrets === 'repository') {
+		const question = `Write them as repository secrets and variables of ${collected.platformRepo} now (secret VALUES go to GitHub over \`gh\` stdin)?`
+		if (!(await prompts.confirm(question, true))) {
+			action('OPERATOR ACTION — the pipeline cannot run until the repository holds these; run init again when ready', [rerun])
+			return
+		}
+		await effects.configureRepository({ repo: collected.platformRepo, ...payload })
+	} else {
+		const environment: EnvironmentConfig = {
+			repo: collected.platformRepo,
+			environment: collected.account,
+			onProtection: (outcome) => {
+				environmentPolicy = outcome
+			},
+			...payload,
+		}
+		if (!(await prompts.confirm(`Write them to the ${collected.account} Environment now (secret VALUES go to GitHub over \`gh\` stdin)?`, true))) {
+			action('OPERATOR ACTION — the pipeline cannot run until the Environment holds these; run init again when ready', [rerun])
+			return
+		}
+		await effects.configureEnvironment(environment)
 	}
-	info(
-		`${Object.keys(environment.secrets).length} secret(s) and ${
-			Object.keys(environment.vars).length
-		} variable(s) for the ${collected.account} Environment.`,
-	)
-	if (!(await prompts.confirm(`Write them to the ${collected.account} Environment now (secret VALUES go to GitHub over \`gh\` stdin)?`, true))) {
-		action('OPERATOR ACTION — the pipeline cannot run until the Environment holds these; run init again when ready', [rerun])
-		return
-	}
-	await effects.configureEnvironment(environment)
 
 	await triggerDeploy(collected.platformRepo, collaborators)
 	finalNotes({
@@ -174,6 +199,7 @@ export async function runInit(input: InitInput, collaborators: InitCollaborators
 		dir,
 		ref: await readFabrikaRef(dir),
 		passwordEnabled: collected.passwordEnabled,
+		githubSecrets: input.githubSecrets,
 		...(branchProtection === undefined ? {} : { branchProtection }),
 		...(environmentPolicy === undefined ? {} : { environmentPolicy }),
 	})
@@ -187,16 +213,20 @@ export function consoleInitCollaborators(input: InitInput): InitCollaborators {
 			input.unattended,
 			process.stdin,
 			(line) => info(line),
-			'creates or pushes the platform repository, writes its GitHub Environment secrets and triggers the platform workflow',
+			`creates or pushes the platform repository, writes its ${
+				input.githubSecrets === 'repository' ? 'repository' : 'GitHub Environment'
+			} secrets and triggers the platform workflow`,
 		),
 		effects: {
 			repositoryExists: (repo) => ghRepoExists(repo),
 			environmentVariables: (repo, environment) => environmentVariables(repo, environment),
+			repositoryVariables: (repo) => repositoryVariables(repo),
 			listAccounts: (token) => listAccounts(token),
 			verifyToken: (token, accountId) => verifyToken(token, accountId),
 			findZone: (token, hostname) => findZone(token, hostname),
 			scaffold: (scaffoldInput) => scaffoldPlatformRepo(scaffoldInput),
 			configureEnvironment: (config) => configureEnvironment(config),
+			configureRepository: (config) => configureRepositorySecrets(config),
 			triggerWorkflow: (repo) => triggerPlatformWorkflow(repo),
 		},
 	}
@@ -339,6 +369,7 @@ async function collect(input: InitInput, cfAccount: CfAccount, effects: InitEffe
 		await persistEnv('FABRIKA_IAM_OIDC_CLIENT_ID', oidc.clientId)
 	}
 	await ensureEmailSettings(input.email)
+	await ensureGitHubSecretsLocation(input, effects)
 	const platformNames = await ensurePlatformNames(input, ENVIRONMENT_SOURCE, effects)
 
 	return {
@@ -367,26 +398,86 @@ async function collect(input: InitInput, cfAccount: CfAccount, effects: InitEffe
  * leave its live database, buckets and queues behind under the old names.
  */
 export async function ensurePlatformNames(
-	input: Pick<InitInput, 'account' | 'repo'>,
+	input: Pick<InitInput, 'account' | 'repo' | 'githubSecrets'>,
 	source: Readonly<Record<string, string | undefined>>,
-	effects: Pick<InitEffects, 'environmentVariables'>,
+	effects: Pick<InitEffects, 'environmentVariables' | 'repositoryVariables'>,
 ): Promise<PlatformNameScheme> {
 	step('Resource names')
 	const saved = readResumeValue(source, PLATFORM_NAMES_ENV)
 	const fromFile = saved === undefined ? undefined : platformNameScheme({ [PLATFORM_NAMES_ENV]: saved })
-	const existing = await effects.environmentVariables(input.repo, input.account)
-	// An Environment that holds anything belongs to an installation; without the switch it predates it.
-	const fromEnvironment = existing === null || Object.keys(existing).length === 0 ? undefined : platformNameScheme(existing)
+	const fromEnvironment = await recordedPlatformNames(input, effects)
 	if (fromFile !== undefined && fromEnvironment !== undefined && fromFile !== fromEnvironment) {
+		const repository = input.githubSecrets === 'repository'
 		throw new Error(
-			`The installer env file names the resources \`${fromFile}\`, but the ${input.account} Environment on ${input.repo} \`${fromEnvironment}\`. `
-				+ `Set ${PLATFORM_NAMES_ENV} in the env file to the Environment's value: the deployed resources carry those names.`,
+			`The installer env file names the resources \`${fromFile}\`, but the ${
+				repository ? `repository ${input.repo}` : `${input.account} Environment on ${input.repo}`
+			} \`${fromEnvironment}\`. `
+				+ `Set ${PLATFORM_NAMES_ENV} in the env file to the ${
+					repository ? "repository's" : "Environment's"
+				} value: the deployed resources carry those names.`,
 		)
 	}
 	const scheme = fromFile ?? fromEnvironment ?? 'fabrika'
 	await persistEnv(PLATFORM_NAMES_ENV, scheme)
 	ok(scheme === 'fabrika' ? 'Resource names: fabrika-*.' : 'Resource names: legacy (vozka-*, propustka-*), as this installation was created.')
 	return scheme
+}
+
+/** The scheme the installation's GitHub store records, or undefined for a new installation. */
+async function recordedPlatformNames(
+	input: Pick<InitInput, 'account' | 'repo' | 'githubSecrets'>,
+	effects: Pick<InitEffects, 'environmentVariables' | 'repositoryVariables'>,
+): Promise<PlatformNameScheme | undefined> {
+	if (input.githubSecrets === 'repository') {
+		// A repository holds other variables too; only the switch init writes first marks an installation. Repository
+		// mode is newer than the switch, so no repository-level installation predates it.
+		const existing = await effects.repositoryVariables(input.repo)
+		return existing?.[PLATFORM_NAMES_ENV] === undefined ? undefined : platformNameScheme(existing)
+	}
+	const existing = await effects.environmentVariables(input.repo, input.account)
+	// An Environment that holds anything belongs to an installation; without the switch it predates it.
+	return existing === null || Object.keys(existing).length === 0 ? undefined : platformNameScheme(existing)
+}
+
+/**
+ * Refuse to write the installation into one GitHub store while the other already holds it. A second copy is not
+ * harmless: Environment values shadow repository ones in a job that names the Environment, so the two drift apart
+ * silently, and repository-level credentials left behind stay readable by every workflow of the repository.
+ * Moving an installation between the two is a deliberate operator step, done before init runs again.
+ */
+export async function ensureGitHubSecretsLocation(
+	input: Pick<InitInput, 'account' | 'repo' | 'githubSecrets'>,
+	effects: Pick<InitEffects, 'environmentVariables' | 'repositoryVariables'>,
+): Promise<void> {
+	step('GitHub secrets location')
+	if (input.githubSecrets === 'repository') {
+		// A plan without Environments may refuse the read outright; then there is no Environment to collide with.
+		const environment = await effects.environmentVariables(input.repo, input.account).catch(() => null)
+		if (environment !== null && Object.keys(environment).length > 0) {
+			throw new Error(
+				`The ${input.account} Environment on ${input.repo} already holds this installation's variables, so it is installed with `
+					+ `${GITHUB_SECRETS_FLAG}=environment. Run init with ${GITHUB_SECRETS_FLAG}=environment, or move it deliberately: `
+					+ `delete the Environment (\`gh api -X DELETE repos/${input.repo}/environments/${input.account}\`) and run init again `
+					+ 'with the same installer env file, which still holds every value.',
+			)
+		}
+		// Saved only once the store is known to be free, so a refused switch leaves the env file naming the store in use.
+		await persistEnv(GITHUB_SECRETS_VARIABLE, input.githubSecrets)
+		ok(`Repository secrets and variables of ${input.repo}: no GitHub Environment, no deployment protection rule.`)
+		return
+	}
+	// Best effort: an Environment installation never needed this read, so a refusal must not stop it.
+	const repository = await effects.repositoryVariables(input.repo).catch(() => null)
+	if (repository?.[PLATFORM_NAMES_ENV] !== undefined) {
+		throw new Error(
+			`${input.repo} already holds this installation's variables at the repository level, so it is installed with `
+				+ `${GITHUB_SECRETS_FLAG}=repository. Run init with ${GITHUB_SECRETS_FLAG}=repository, or move it deliberately: delete the `
+				+ `installation's repository secrets and variables (\`gh secret list --repo ${input.repo}\`, \`gh variable list --repo ${input.repo}\`, `
+				+ 'then `gh secret delete` / `gh variable delete` each) and run init again with the same installer env file.',
+		)
+	}
+	await persistEnv(GITHUB_SECRETS_VARIABLE, input.githubSecrets)
+	ok(`GitHub Environment ${input.account} on ${input.repo}.`)
 }
 
 /**
@@ -565,6 +656,8 @@ export interface FinalNotes {
 	readonly dir: string
 	readonly ref: string
 	readonly passwordEnabled: boolean
+	/** Absent: `environment`, as before the switch existed. */
+	readonly githubSecrets?: GitHubSecretsMode
 	/** Absent when the repository already existed, so this run did not touch its protection. */
 	readonly branchProtection?: ProtectionOutcome
 	readonly environmentPolicy?: ProtectionOutcome
@@ -578,10 +671,18 @@ export function finalNotes(notes: FinalNotes): void {
 	ok(`Local checkout: ${dir}`)
 	ok(`Installer env file (0600): ${envPath()}`)
 	reportProtection('Branch protection on main', notes.branchProtection, 'not checked')
-	reportEnvironmentPolicy(repo, notes.environmentPolicy, notes.branchProtection)
+	const repository = notes.githubSecrets === 'repository'
+	if (repository) {
+		warn(
+			'Repository secrets: no GitHub Environment, so no deployment protection rule — any workflow of this repository, on any branch, can read every credential.',
+		)
+		detail('Only people who may hold those credentials should have write access to the repository.')
+	} else {
+		reportEnvironmentPolicy(repo, notes.environmentPolicy, notes.branchProtection)
+	}
 	info('The fabrika control plane came up with the bootstrap-admin escape hatch OPEN (FABRIKA_CONTROL_BOOTSTRAP_ADMINS set).')
 	action('OPERATOR ACTION — close the hatch after IAM grants you the fabrika admin role', [
-		`1. gh variable set FABRIKA_CONTROL_BOOTSTRAP_ADMINS --repo ${repo} --env ${account} --body '[]'`,
+		`1. gh variable set FABRIKA_CONTROL_BOOTSTRAP_ADMINS --repo ${repo}${repository ? '' : ` --env ${account}`} --body '[]'`,
 		`2. gh workflow run platform.yml --repo ${repo}`,
 		'3. Authorization is then fully IAM-owned.',
 	])

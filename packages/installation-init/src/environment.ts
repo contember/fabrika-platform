@@ -5,6 +5,9 @@
  * `gh variable set --env --body`. The environment itself is created (idempotent PUT) first, carrying the
  * deployment-branch policy that is the only thing an Environment buys over a repository secret — a policy
  * that restricts nothing until `main` itself carries a branch-protection rule.
+ *
+ * A plan without Environments on private repositories (GitHub Free organizations) gets the same values as
+ * repository-level secrets and variables instead (`configureRepositorySecrets`), with no protection rule at all.
  */
 
 import { z } from 'zod'
@@ -59,10 +62,48 @@ export async function configureEnvironment(
 	const protection = await createEnvironment(repo, environment, effects.attempt)
 	config.onProtection?.(protection)
 
+	await writeValues(repo, ['--env', environment], vars, secrets, effects.run)
+	detail(`Recommended hardening — require your own approval before a deploy: ${environmentReviewerCommand(repo, environment)}`)
+}
+
+/** Repository-level Actions secrets and variables: what an Environment holds, without the Environment. */
+export interface RepositorySecretsConfig {
+	repo: string
+	/** Secret name → value (written via `gh secret set`). */
+	secrets: Record<string, string>
+	/** Variable name → value (written via `gh variable set`). */
+	vars: Record<string, string>
+}
+
+/**
+ * Populate the repository's own Actions secrets + variables, for a plan whose private repositories have no
+ * Environments (GitHub Free organizations). The same `gh secret set` over stdin as `configureEnvironment`, without
+ * `--env`: gh encrypts each value with the repository's public key. No Environment means no deployment protection
+ * rule: every workflow of the repository, on any branch, can read these secrets.
+ */
+export async function configureRepositorySecrets(
+	config: RepositorySecretsConfig,
+	effects: Pick<EnvironmentEffects, 'run'> = defaultEnvironmentEffects,
+): Promise<void> {
+	const { repo, secrets, vars } = config
+	step(`Configure the repository secrets and variables of ${repo}`)
+	await writeValues(repo, [], vars, secrets, effects.run)
+	warn('No GitHub Environment: no deployment protection rule guards these secrets — any workflow of this repository, on any branch, can read them.')
+	detail('Grant write access to this repository only to people who may hold every credential of the installation.')
+}
+
+/** Write `vars` then `secrets` into `scope` (`--env <name>`, or nothing for the repository itself). */
+async function writeValues(
+	repo: string,
+	scope: readonly string[],
+	vars: Record<string, string>,
+	secrets: Record<string, string>,
+	run: EnvironmentEffects['run'],
+): Promise<void> {
 	// Variables first, in the caller's order: a workflow run that starts before init finishes, or a run of init that
-	// stops halfway, never sees an Environment whose credentials are set and whose configuration is not.
+	// stops halfway, never sees a store whose credentials are set and whose configuration is not.
 	for (const [name, value] of Object.entries(vars)) {
-		await effects.run({ command: 'gh', args: ['variable', 'set', name, '--repo', repo, '--env', environment, '--body', value], cwd: ANCHOR })
+		await run({ command: 'gh', args: ['variable', 'set', name, '--repo', repo, ...scope, '--body', value], cwd: ANCHOR })
 		ok(`variable ${name} set`)
 	}
 	for (const [name, value] of Object.entries(secrets)) {
@@ -70,10 +111,9 @@ export async function configureEnvironment(
 			warn(`Skipping secret ${name} — no value (the workflow will fail without it; set it manually).`)
 			continue
 		}
-		await effects.run({ command: 'gh', args: ['secret', 'set', name, '--repo', repo, '--env', environment], cwd: ANCHOR, stdin: value })
+		await run({ command: 'gh', args: ['secret', 'set', name, '--repo', repo, ...scope], cwd: ANCHOR, stdin: value })
 		ok(`secret ${name} set`)
 	}
-	detail(`Recommended hardening — require your own approval before a deploy: ${environmentReviewerCommand(repo, environment)}`)
 }
 
 const variableLineSchema = z.object({ name: z.string(), value: z.string() })
@@ -87,7 +127,15 @@ export async function environmentVariables(
 	environment: string,
 	gh: GhAttempt = attempt,
 ): Promise<Readonly<Record<string, string>> | null> {
-	const path = `repos/${repo}/environments/${environment}/variables`
+	return readVariables(`repos/${repo}/environments/${environment}/variables`, gh)
+}
+
+/** The repository's own Actions variables, or null when the repository does not exist. Any other failure throws. */
+export async function repositoryVariables(repo: string, gh: GhAttempt = attempt): Promise<Readonly<Record<string, string>> | null> {
+	return readVariables(`repos/${repo}/actions/variables`, gh)
+}
+
+async function readVariables(path: string, gh: GhAttempt): Promise<Readonly<Record<string, string>> | null> {
 	const result = await gh({ command: 'gh', args: ['api', '--paginate', path, '--jq', '.variables[] | {name, value}'], cwd: ANCHOR })
 	if (result.exitCode !== 0) {
 		if (ghHttpStatus(result) === 404) return null

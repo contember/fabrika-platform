@@ -2,7 +2,7 @@
 //
 // Every CREDENTIAL comes from the environment and only from the environment; everything else may come
 // from a flag OR the environment variable beside it, flag first. The variables are the names the
-// account's GitHub Environment carries, and the installer env file resumes into them. Nothing here
+// account's GitHub Environment (or, with `--github-secrets=repository`, the repository) carries, and the installer env file resumes into them. Nothing here
 // prompts — a missing required value is an error naming both the flag and the variable — so a
 // pipeline or an agent drives init end to end. Its confirmations stay, answered by `--yes`.
 
@@ -51,6 +51,17 @@ export interface OidcInput {
 	readonly humanEmailDomains: readonly string[]
 }
 
+/**
+ * Where the installation's secrets and variables live on GitHub. `environment` (the default): a GitHub Environment
+ * named after the account, guarded by its deployment-branch policy. `repository`: the repository's own Actions
+ * secrets and variables, for a plan with no Environments on a private repository (GitHub Free organizations); no
+ * protection rule guards them, so any workflow of the repository can read them.
+ */
+export const GITHUB_SECRETS_MODES = ['environment', 'repository'] as const
+export type GitHubSecretsMode = (typeof GITHUB_SECRETS_MODES)[number]
+export const GITHUB_SECRETS_FLAG = '--github-secrets'
+export const GITHUB_SECRETS_VARIABLE = 'FABRIKA_GITHUB_SECRETS'
+
 /** Every input `runInit` takes from the operator. */
 export interface InitInput {
 	/** Names the GitHub Environment, the installer env file, the default repository and checkout. */
@@ -70,6 +81,8 @@ export interface InitInput {
 	readonly email: InstallationEmail
 	/** First-admin emails for the escape hatch, admitted to both control and IAM. */
 	readonly bootstrapAdmins: readonly string[]
+	/** Where the secrets and variables go on GitHub. */
+	readonly githubSecrets: GitHubSecretsMode
 	/** `--yes`: answer every confirmation yes. */
 	readonly unattended: boolean
 }
@@ -85,6 +98,7 @@ const FLAGS = [
 	'--oidc-issuer',
 	'--oidc-client-id',
 	'--human-email-domains',
+	GITHUB_SECRETS_FLAG,
 	...EMAIL_FLAGS,
 	CHECKOUT_FLAG,
 ] as const
@@ -205,6 +219,15 @@ const readRepo = (argv: readonly string[], account: string): string => {
 	return repo
 }
 
+const readGitHubSecrets = (argv: readonly string[], env: CommandEnv): GitHubSecretsMode => {
+	const value = setting(argv, env, GITHUB_SECRETS_FLAG, GITHUB_SECRETS_VARIABLE) ?? 'environment'
+	const mode = GITHUB_SECRETS_MODES.find((candidate) => candidate === value)
+	if (mode === undefined) {
+		throw new Error(`${GITHUB_SECRETS_FLAG} / ${GITHUB_SECRETS_VARIABLE} takes ${GITHUB_SECRETS_MODES.join(' or ')}, not \`${value}\``)
+	}
+	return mode
+}
+
 /**
  * Parse the command's arguments and environment into the one input `runInit` takes.
  *
@@ -234,6 +257,7 @@ export const parseInitArgs = (argv: readonly string[], env: CommandEnv, cwd: str
 			'--admins',
 			'FABRIKA_CONTROL_BOOTSTRAP_ADMINS',
 		),
+		githubSecrets: readGitHubSecrets(argv, env),
 		unattended: argv.includes(UNATTENDED_FLAG),
 		...(methods.oidcEnabled ? { oidc: readOidc(argv, env) } : {}),
 		...(accountId === undefined ? {} : { accountId }),
@@ -274,6 +298,8 @@ export const rerunCommand = (input: InitInput, accountId: string): string =>
 			]),
 			...emailFlags(input.email),
 			...(input.bootstrapAdmins.length === 0 ? [] : [`--admins=${input.bootstrapAdmins.join(',')}`]),
+			// The default stays implicit, so an Environment installation's command reads as it always did.
+			...(input.githubSecrets === 'environment' ? [] : [`${GITHUB_SECRETS_FLAG}=${input.githubSecrets}`]),
 			`${CHECKOUT_FLAG}=${input.checkout}`,
 		].map(shellWord),
 	].join(' ')

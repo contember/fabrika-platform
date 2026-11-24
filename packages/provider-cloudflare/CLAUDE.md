@@ -386,7 +386,7 @@ the two forms are mutually exclusive. Each component deploys through `deployClou
 - `init-options.ts` — `parseInitArgs`: every init input is a flag or the variable beside it (flag first; the
   variables are the Environment's own names), credentials from the environment only, `--yes` for unattended.
 - `init.ts` — the orchestrator: CF token → account/zones → IAM and email config → vault key → provisioning
-  key → runner key → scaffold repo → GitHub Environment → trigger. It creates no GitHub App: the operator
+  key → runner key → scaffold repo → GitHub Environment (or repository secrets) → trigger. It creates no GitHub App: the operator
   connects GitHub from the console at **Settings → Source** after install (ADR-0029), as on Zerops.
 - `scaffold.ts` — which files `<org>/fabrika-platform` carries (`templates/`: `platform.yml`, `fabrika.ref`,
   `README.md`, `gitignore`) and the legacy two-ref migration that must stop a refresh.
@@ -411,8 +411,18 @@ Invariants:
   the arguments are parsed, so a resumed run reads its earlier answers as environment variables. It saves
   `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, the two `FABRIKA_IAM_*_ENABLED` switches,
   `FABRIKA_IAM_OIDC_ISSUER`/`_CLIENT_ID`/`_CLIENT_SECRET`, every `FABRIKA_EMAIL_*` the mail transport collected
-  (`readInstallationEmail`: the provider, the sender and the provider's own variables) and the generated keys. The hosts, the repository, the checkout and the admins are NOT saved; a re-run
+  (`readInstallationEmail`: the provider, the sender and the provider's own variables), `FABRIKA_GITHUB_SECRETS` and the generated keys. The hosts, the repository, the checkout and the admins are NOT saved; a re-run
   names them again (the rerun command init prints on a declined step carries them).
+- **Where the secrets live is one choice per installation** (`--github-secrets` / `FABRIKA_GITHUB_SECRETS`, saved in
+  the env file). `environment` (the default) writes a GitHub Environment named after the account and the workflow names
+  it (`environment: <account>`); `repository` writes the same names as the repository's own Actions secrets and
+  variables (`configureRepositorySecrets`, the same `gh secret set` over stdin without `--env`) and the workflow names
+  no Environment, for plans without Environments on private repositories. The templates carry both as
+  `{{#environment}}`/`{{#repository}}` sections; the `environment` render must stay byte-identical to what it was.
+  Repository mode has NO deployment protection rule: any workflow of the repository can read every credential, which
+  init, the workflow header and the README say. `ensureGitHubSecretsLocation` refuses to write one store while the
+  other holds the installation (`FABRIKA_CLOUDFLARE_NAMES` marks it in repository variables, anything at all in an
+  Environment), before anything is written.
 - **Idempotent + resumable.** Every captured value persists to that file; a re-run reuses generated
   values (vault key, provisioning, runner and signing keys) instead of rolling them.
 - **No GitHub credential in the Environment.** Every GitHub App key lives in Control's vault; the

@@ -244,4 +244,55 @@ describe('platform scaffold', () => {
 			expect(await Bun.file(join(dir, 'fabrika.ref')).exists()).toBe(false)
 		})
 	})
+
+	describe('GitHub secrets mode', () => {
+		const render = async (mode: 'environment' | 'repository'): Promise<Record<string, string>> => {
+			let files: Record<string, string> = {}
+			await withTempDir(async (dir) => {
+				await materializePlatformScaffold(dir, 'acme', mode)
+				files = await snapshot(dir)
+			})
+			return files
+		}
+		const jobSchema = z.object({ jobs: z.object({ deploy: z.record(z.unknown()) }) })
+		const references = (workflow: string): string[] => [...new Set(workflow.match(/\$\{\{ (?:secrets|vars)\.\w+ \}\}/g) ?? [])].sort()
+
+		test('the default renders exactly the Environment scaffold', async () => {
+			const files = await render('environment')
+			expect(files['.github/workflows/platform.yml']).toMatchSnapshot()
+			expect(files['README.md']).toMatchSnapshot()
+		})
+
+		test('repository secrets render a workflow without `environment:` that reads the same secrets and variables', async () => {
+			const environment = await render('environment')
+			const repository = await render('repository')
+			const before = environment['.github/workflows/platform.yml'] ?? ''
+			const workflow = repository['.github/workflows/platform.yml'] ?? ''
+			expect(workflow).toMatchSnapshot()
+
+			const { environment: named, ...job } = jobSchema.parse(Bun.YAML.parse(before)).jobs.deploy
+			expect(named).toBe('acme')
+			// Apart from the Environment, the two jobs are the same YAML.
+			expect(jobSchema.parse(Bun.YAML.parse(workflow)).jobs.deploy).toEqual(job)
+			expect(workflow).not.toMatch(/^\s*environment:/m)
+			expect(references(workflow)).toEqual(references(before))
+			expect(references(workflow).length).toBeGreaterThan(20)
+			// Variables the operator sets by hand reach the stages from the repository too, such as the external OAuth clients.
+			expect(references(workflow)).toContain('${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}')
+			expect(workflow).toContain('no deployment protection rule guards them')
+			expect(workflow).not.toMatch(/\{\{[#/A-Z]/)
+		})
+
+		test('the repository README states the trade-off and names no Environment command', async () => {
+			const readme = (await render('repository'))['README.md'] ?? ''
+			expect(readme).toMatchSnapshot()
+			expect(readme).toContain('--github-secrets=repository')
+			expect(readme).toContain('there are no deployment protection rules')
+			expect(readme).toContain('Any workflow in this repository, on any branch, can read every one of these secrets')
+			expect(readme).toContain('gh secret delete FABRIKA_EMAIL_SMARTEMAILING_API_KEY\n')
+			expect(readme).not.toContain('--env acme')
+			expect(readme).not.toContain('Required reviewers')
+			expect(readme).not.toMatch(/\{\{[#/A-Z]/)
+		})
+	})
 })

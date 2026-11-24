@@ -16,6 +16,7 @@ import {
 } from '@fabrika/installation-init'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
+import type { GitHubSecretsMode } from './init-options'
 
 const TEMPLATES = resolve(import.meta.dir, 'templates')
 
@@ -34,6 +35,8 @@ export interface ScaffoldInput {
 	account: string
 	/** Local directory to check the repo out into. */
 	dir: string
+	/** Where the workflow's secrets and variables live: the account's Environment, or the repository itself. */
+	githubSecrets: GitHubSecretsMode
 }
 
 /** Result of scaffolding: the local checkout dir + whether the repo was freshly created. */
@@ -45,12 +48,23 @@ export interface ScaffoldResult {
 }
 
 /**
- * Render a template: replace every `{{ACCOUNT}}` token, and the mail placeholders with the built-in providers, so a
- * provider added to the registry reaches the workflow and the README without a template edit.
+ * A section only one GitHub secrets mode renders: everything between a `{{#environment}}` (or `{{#repository}}`) line
+ * and its closing `{{/environment}}` line. A marker line may be a YAML comment (`# {{#environment}}`), so the
+ * workflow template stays valid YAML. The marker lines themselves never reach the output.
  */
-async function renderTemplate(name: string, account: string): Promise<string> {
+const MODE_SECTION = /^ *(?:# )?\{\{#(environment|repository)\}\}\n([\s\S]*?)^ *(?:# )?\{\{\/\1\}\}\n/gm
+
+/**
+ * Render a template: keep the sections of `mode`, replace every `{{ACCOUNT}}` token and `{{GH_SCOPE}}` (the `gh`
+ * flag that names where a secret lives: ` --env <account>`, or nothing for the repository), and the mail
+ * placeholders with the built-in providers, so a provider added to the registry reaches the workflow and the README
+ * without a template edit.
+ */
+async function renderTemplate(name: string, account: string, mode: GitHubSecretsMode): Promise<string> {
 	const raw = await Bun.file(resolve(TEMPLATES, name)).text()
 	return raw
+		.replaceAll(MODE_SECTION, (_section, sectionMode: string, body: string) => sectionMode === mode ? body : '')
+		.replaceAll('{{GH_SCOPE}}', () => mode === 'environment' ? ` --env ${account}` : '')
 		.replaceAll('{{ACCOUNT}}', () => account)
 		.replaceAll('{{EMAIL_PROVIDER_NAMES}}', () => Object.keys(builtinEmailProviders).join('|'))
 		.replaceAll(/^\{\{EMAIL_PROVIDER_VARIABLES\}\}$/gm, () => emailProviderVariablesList())
@@ -87,7 +101,7 @@ async function writeFile(dir: string, rel: string, content: string): Promise<voi
  * Legacy two-repository pins need an operator-chosen merged-repository ref. Stop before writing anything
  * so a refresh cannot hide the migration requirement or delete operator-owned files.
  */
-export async function materializePlatformScaffold(dir: string, account: string): Promise<void> {
+export async function materializePlatformScaffold(dir: string, account: string, mode: GitHubSecretsMode = 'environment'): Promise<void> {
 	const legacyRefs = LEGACY_REF_FILES.filter((name) => existsSync(resolve(dir, name)))
 	if (legacyRefs.length > 0) {
 		throw new Error(
@@ -98,8 +112,8 @@ export async function materializePlatformScaffold(dir: string, account: string):
 		)
 	}
 	await writeFile(dir, '.gitignore', await Bun.file(resolve(TEMPLATES, 'gitignore')).text())
-	await writeFile(dir, 'README.md', await renderTemplate('README.md', account))
-	await writeFile(dir, '.github/workflows/platform.yml', await renderTemplate('platform.yml', account))
+	await writeFile(dir, 'README.md', await renderTemplate('README.md', account, mode))
+	await writeFile(dir, '.github/workflows/platform.yml', await renderTemplate('platform.yml', account, mode))
 	if (!existsSync(resolve(dir, 'fabrika.ref'))) {
 		await writeFile(dir, 'fabrika.ref', await Bun.file(resolve(TEMPLATES, 'fabrika.ref')).text())
 	}
@@ -114,7 +128,7 @@ export async function scaffoldPlatformRepo(input: ScaffoldInput): Promise<Scaffo
 		repo: input.repo,
 		dir: input.dir,
 		files: ALL_FILES,
-		materialize: (dir) => materializePlatformScaffold(dir, input.account),
+		materialize: (dir) => materializePlatformScaffold(dir, input.account, input.githubSecrets),
 	})
 }
 

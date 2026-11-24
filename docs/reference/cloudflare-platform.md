@@ -98,3 +98,25 @@ it to fact without a probe.
   1.08 MB gzip without the MCP handler; 5.79 MB raw, 1.23 MB gzip with it; 6.21 MB raw, 1.35 MB gzip with the
   `@fabrika/app` skill (404 KB of JSON) embedded through `define`, as an installation with MCP authoring deploys it.
   Cloudflare's limit is 10 MB gzip on a paid plan and 3 MB on the free plan (documentation).
+
+## The installation's GitHub repository
+
+`fabrika platform init --provider=cloudflare` creates the private repository `<owner>/fabrika-platform`, whose
+workflow deploys the installation, and stores every credential the workflow needs on GitHub. Where it stores them is
+`--github-secrets` (`FABRIKA_GITHUB_SECRETS`):
+
+- **`environment`** (the default): a GitHub Environment named after the account, restricted to protected branches;
+  the workflow's job names it (`environment: <account>`).
+- **`repository`**: the repository's own Actions secrets and variables, under the same names; the job names no
+  Environment and reads the same `secrets.*` and `vars.*`.
+
+Environments, and so environment secrets, are not available in private repositories of an organization on GitHub
+Free ([GitHub: deployments and environments](https://docs.github.com/en/actions/reference/workflows-and-actions/deployments-and-environments)),
+so such an organization installs with `repository`. _Not verified live_ by this repository's tests; the tests cover
+what init writes and the workflow it generates in both modes.
+
+The trade-off of `repository`: there is no deployment protection rule (no deployment-branch policy, no required
+reviewer, no wait timer). Any workflow of the repository, on any branch, can read every secret, and anyone with write
+access can push a branch that adds one. Only collaborators trusted with every credential of the installation may have
+write access. Init refuses to write one store while the other already holds the installation, so the two never hold
+diverging copies; moving between them is deleting the old store first and running init again with the same env file.

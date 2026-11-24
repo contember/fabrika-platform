@@ -5,8 +5,16 @@ name: platform
 # never deploys itself.
 # Idempotent: re-run for a first bring-up OR a routine redeploy. Concrete apps deploy through fabrika.
 #
+# {{#environment}}
 # Generated + maintained by `fabrika platform init --provider=cloudflare {{ACCOUNT}}`. Secrets + variables live in the `{{ACCOUNT}}` GitHub
 # Environment (Settings → Environments → {{ACCOUNT}}) and are written there by the CLI — don't hand-edit them.
+# {{/environment}}
+# {{#repository}}
+# Generated + maintained by `fabrika platform init --provider=cloudflare {{ACCOUNT}} --github-secrets=repository`. Secrets + variables
+# are this repository's own (Settings → Secrets and variables → Actions) and are written there by the CLI — don't
+# hand-edit them. There is no GitHub Environment, so no deployment protection rule guards them: any workflow of this
+# repository, on any branch, can read them.
+# {{/repository}}
 #
 # contember/fabrika-platform is public and checked out tokenless. The version this account runs is pinned
 # in `fabrika.ref` (bump it and push to roll out a new base).
@@ -37,8 +45,13 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # {{#environment}}
     # Secrets + variables resolve from this GitHub Environment (created + populated by `fabrika platform init`).
     environment: {{ACCOUNT}}
+    # {{/environment}}
+    # {{#repository}}
+    # Secrets + variables resolve from this repository's own (populated by `fabrika platform init`); no Environment.
+    # {{/repository}}
     # Cloudflare creds at the JOB level so EVERY oblaka/wrangler step (provision, migrate, deploy, secret
     # put) inherits them — wrangler errors in a non-interactive shell without CLOUDFLARE_API_TOKEN.
     env:

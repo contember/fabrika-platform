@@ -39,16 +39,23 @@ init prompts for nothing. Every value is a flag or the environment variable besi
   --email-provider=<name>       FABRIKA_EMAIL_PROVIDER            none, or one of: ${EMAIL_PROVIDERS}
   --email-from=<sender>         FABRIKA_EMAIL_FROM                required with a provider
   --email-from-name=<name>      FABRIKA_EMAIL_FROM_NAME           the sender's display name, optional
+  --github-secrets=<store>      FABRIKA_GITHUB_SECRETS            environment (default) or repository, see below
 Credentials come from the environment only: CLOUDFLARE_API_TOKEN, FABRIKA_IAM_OIDC_CLIENT_SECRET (a real
 OIDC client). So does every variable of the mail provider, under its own name:
 ${EMAIL_PROVIDER_VARIABLES}. The account's installer env file resumes all of them.
 The env file resumes the account id, the auth methods, the OIDC issuer and client id, every mail
-setting, and every credential; the hosts, repository, checkout and admins are not saved. An empty flag
+setting, the GitHub secrets store, and every credential; the hosts, repository, checkout and admins are not saved. An empty flag
 (such as --oidc-client-id=) counts as absent and falls back to that saved value; to return to the
 placeholder client, remove FABRIKA_IAM_OIDC_CLIENT_ID and FABRIKA_IAM_OIDC_CLIENT_SECRET from the env file.
 init confirms before it goes on with a token it could not verify ("Proceed anyway?"), creates or pushes the repository,
 writes the Environment and triggers the workflow. --yes answers all of them yes; without it, init needs a
 terminal.
+--github-secrets=repository writes every secret and variable to the repository's own Actions secrets and variables
+instead of a GitHub Environment named after the account, and scaffolds a workflow without \`environment:\`. It is for
+plans with no Environments on private repositories (GitHub Free organizations). There is then no deployment protection
+rule: any workflow of the repository, on any branch, can read every credential, so give write access only to people
+trusted with all of them. The env file keeps the choice; init refuses to switch an installation that already lives in
+the other store and says what to delete first.
 
 The pair form deploys the executor then the control plane. The single-component form deploys exactly
 one platform config (IAM, Operations) — the stages a pipeline runs before that pair exists. Both may

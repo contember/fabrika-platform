@@ -600,7 +600,7 @@ checkpointed lifecycle.
 `InstallationCli` from `@fabrika/provider-contract/installation`:
 
 ```text
-fabrika platform init --provider=cloudflare <account> --console-host=<host> --operations-host=<host> --iam-host=<host> --auth-methods=<oidc|password|oidc,password> --email-provider=<none|ahasend|brevo|cloudflare|lettermint|postmark|resend|smartemailing> [--email-from=<address>] [--email-from-name=<name>] [--yes]
+fabrika platform init --provider=cloudflare <account> --console-host=<host> --operations-host=<host> --iam-host=<host> --auth-methods=<oidc|password|oidc,password> --email-provider=<none|ahasend|brevo|cloudflare|lettermint|postmark|resend|smartemailing> [--email-from=<address>] [--email-from-name=<name>] [--github-secrets=<environment|repository>] [--yes]
 fabrika platform plan --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
 fabrika platform deploy --provider=cloudflare (--runner-config=<path> --worker-config=<path> | --component-config=<path>)
 fabrika platform init --provider=zerops <installation> --tag=<tag> --project-id=<id> [--repo=<owner>/<name>] [--checkout=<dir>] [--yes]
@@ -630,6 +630,15 @@ re-run of `init` keeps the scheme an existing Environment already uses and refus
 another, because oblaka adopts resources by name and a renamed resource starts empty. Control passes IAM's Worker name to every application deploy, so an application binds
 the IAM of its own installation whatever the scheme
 ([ADR-0024](../decisions/0024-canonical-environment-names.md); moving an existing installation is backlog 291).
+
+A Cloudflare installation keeps its secrets and variables in a GitHub Environment named after the account, unless
+`init` runs with `--github-secrets=repository` (or `FABRIKA_GITHUB_SECRETS=repository`): then they are the platform
+repository's own Actions secrets and variables, under the same names, and the scaffolded workflow names no
+Environment. That is for organizations on GitHub Free, whose private repositories have no Environments. It costs every
+deployment protection rule: any workflow of the repository, on any branch, can read every credential, so only people
+trusted with all of them may have write access. The env file keeps the choice, and `init` refuses to write one store
+while the other already holds the installation
+([cloudflare-platform.md](cloudflare-platform.md#the-installations-github-repository)).
 
 The CLI maps the official `cloudflare` and `zerops` ids to
 `@fabrika/provider-<cloud>/installation` and treats any other provider value as an importable package

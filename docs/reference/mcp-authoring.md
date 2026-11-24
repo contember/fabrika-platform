@@ -460,9 +460,9 @@ against IAM's JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). 
 Registering only identity-only clients leaves MCP authoring off: no `/mcp` row is published and no authoring resource
 is served. It needs `https`, like every client.
 
-**On Cloudflare** the same variable in the installation's GitHub Environment registers the clients; a client that is
-not identity-only is meant to turn MCP authoring on, but the platform stage still refuses one as not supported yet
-([On Cloudflare](#on-cloudflare)).
+**On Cloudflare** the same variable in the installation's GitHub Environment (a repository variable for an installation
+made with `--github-secrets=repository`) registers the clients; a client that is not identity-only turns MCP authoring
+on ([On Cloudflare](#on-cloudflare)).
 The scaffolded `platform.yml` passes it to the IAM stage, which writes it into IAM's `OAUTH_CONFIG`, and to the
 control-plane stage, which reconciles the roles after IAM's own vocabulary. A workflow generated before this release
 does not pass it: bump `fabrika.ref`, regenerate the workflow, then set the variable and run `platform`. Locally, `FABRIKA_LOCAL_MCP_CLIENTS_JSON` takes the same entries and
@@ -494,16 +494,10 @@ Before rolling `iam` back, remove every `identity` entry from the client list an
 
 A Cloudflare installation serves the same `/mcp` from the console Worker, with the same tools, OAuth flow and rules.
 
-**Not yet switchable.** Control's side is in place, but two IAM-side steps are still missing, so an installation cannot
-turn MCP authoring on today: `parseCloudflareIdentityClients`
-(`packages/provider-cloudflare/src/installation/identity-clients.ts`) refuses every client that is not identity-only,
-and stops the platform stage before it deploys anything, and IAM's `fabrika.config.ts` writes no `/mcp` resource into
-`OAUTH_CONFIG`. The rest of this section describes the state once both land.
-
 What differs:
 
 - **Turning it on.** Register Claude, ChatGPT or a non-identity external client in
-  `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` in the installation's GitHub Environment and run `platform`. IAM's stage writes
+  `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` in the installation's GitHub Environment (or repository variables) and run `platform`. IAM's stage writes
   the clients and the `/mcp` resource into IAM's `OAUTH_CONFIG`. Control's stage derives the console's table from the
   same list: its proxy Worker publishes the `/mcp` row and resource metadata, and the console Worker is told the
   matching table digest and gets the `@fabrika/app` skill `get_app_rules` answers in its bundle (a Worker reads no
