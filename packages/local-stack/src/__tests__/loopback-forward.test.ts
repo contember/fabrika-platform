@@ -1,6 +1,18 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createServer, type Server } from 'node:net'
+import { z } from 'zod'
 import { parseLoopbackArgs, startLoopbackForwards } from '../loopback-forward'
+import { COMPOSE_FILE } from '../prepare'
+
+const composeSchema = z.object({
+	services: z.record(
+		z.object({
+			entrypoint: z.array(z.string()).optional(),
+			networks: z.union([z.array(z.string()), z.record(z.unknown())]).optional(),
+			network_mode: z.string().optional(),
+		}),
+	),
+})
 
 const freePort = async (): Promise<number> => {
 	const server = createServer()
@@ -47,6 +59,28 @@ describe('a loopback forward', () => {
 			expect(await response.text()).toBe(`upstream saw iam.fabrika.localhost:${port}`)
 		} finally {
 			await upstream.stop(true)
+		}
+	})
+})
+
+describe('the composition', () => {
+	const FORWARDER = '/workspace/packages/local-stack/src/loopback-forward.ts'
+
+	test('starts every container that calls a public host through the forwarder, aimed at a proxy it already reaches', async () => {
+		const { services } = composeSchema.parse(Bun.YAML.parse(await Bun.file(COMPOSE_FILE).text()))
+		const networks = (name: string): ReadonlySet<string> => {
+			const declared = services[name]?.networks
+			return new Set(declared === undefined ? [] : Array.isArray(declared) ? declared : Object.keys(declared))
+		}
+		const forwarding = Object.entries(services).filter(([, service]) => service.entrypoint?.[1] === FORWARDER)
+		expect(forwarding.map(([name]) => name).sort()).toEqual(['apps-proxy-auth', 'control', 'notes', 'operations'])
+		for (const [name, service] of forwarding) {
+			const { forwards } = parseLoopbackArgs([...(service.entrypoint ?? []).slice(2), 'true'])
+			for (const forward of forwards) {
+				// Each public port is served by the proxy pair whose auth container holds its network namespace.
+				expect(`${forward.port}=${forward.host}:${forward.targetPort}`).toBeOneOf(['18080=platform-proxy-auth:18080', '18081=apps-proxy-auth:18081'])
+				expect([...networks(name)].some((network) => networks(forward.host).has(network)), `${name} → ${forward.host}`).toBe(true)
+			}
 		}
 	})
 })

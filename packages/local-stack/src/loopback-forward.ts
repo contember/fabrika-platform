@@ -36,11 +36,15 @@ export function parseLoopbackArgs(args: readonly string[]): { readonly forwards:
 	return { forwards, command }
 }
 
+const errorCode = (error: Error): string | undefined => ('code' in error && typeof error.code === 'string' ? error.code : undefined)
+
+// A container without IPv6 has no ::1 (or no IPv6 at all); IPv4 loopback alone still serves the forward.
+const NO_IPV6 = new Set(['EADDRNOTAVAIL', 'EAFNOSUPPORT'])
+
 const listen = (server: Server, host: string, port: number): Promise<boolean> =>
 	new Promise((resolve, reject) => {
-		server.once('error', (error: NodeJS.ErrnoException) => {
-			// A container without IPv6 has no ::1; IPv4 loopback alone still serves the forward.
-			if (host === '::1' && error.code === 'EADDRNOTAVAIL') resolve(false)
+		server.once('error', (error) => {
+			if (host === '::1' && NO_IPV6.has(errorCode(error) ?? '')) resolve(false)
 			else reject(error)
 		})
 		server.listen({ host, port }, () => resolve(true))
@@ -54,7 +58,10 @@ export async function startLoopbackForwards(forwards: readonly LoopbackForward[]
 			const server = createServer((client) => {
 				const upstream = connect({ host: forward.host, port: forward.targetPort })
 				client.on('error', () => upstream.destroy())
-				upstream.on('error', () => client.destroy())
+				upstream.on('error', (error) => {
+					console.warn(`loopback :${forward.port} cannot reach ${forward.host}:${forward.targetPort} (${errorCode(error) ?? 'error'})`)
+					client.destroy()
+				})
 				client.pipe(upstream).pipe(client)
 			})
 			if (await listen(server, host, forward.port)) servers.push(server)
