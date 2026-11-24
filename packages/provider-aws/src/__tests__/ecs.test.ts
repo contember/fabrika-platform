@@ -9,6 +9,7 @@ import { awsError, fakeAws } from './helpers/fake-aws'
 
 const IMAGE = `123456789012.dkr.ecr.eu-central-1.amazonaws.com/fabrika/notes-prod@sha256:${'a'.repeat(64)}`
 const TASK_DEFINITION = 'arn:aws:ecs:eu-central-1:123456789012:task-definition/notes-prod:42'
+const DEPLOYMENT = 'arn:aws:ecs:eu-central-1:123456789012:service-deployment/fabrika-apps/notes-prod/r2ZTbPmlNM0uqVbg2nTT4'
 const log = { group: '/fabrika/apps/notes-prod', region: 'eu-central-1', streamPrefix: 'notes' }
 const health = { command: ['CMD', 'bun', 'fabrika/health.ts'], intervalSeconds: 10, timeoutSeconds: 5, retries: 3, startPeriodSeconds: 30 }
 const server: EcsContainer = {
@@ -51,6 +52,7 @@ const service = {
 		},
 	],
 	events: [{ id: 'e-1', createdAt: 1_768_478_400.25, message: '(service notes-prod) has started 1 tasks.' }],
+	currentServiceDeployment: DEPLOYMENT,
 }
 const read: EcsService = {
 	name: 'notes-prod',
@@ -77,9 +79,11 @@ const read: EcsService = {
 			failedTasks: 2,
 		},
 	],
+	currentDeploymentArn: DEPLOYMENT,
 	events: [{ id: 'e-1', at: new Date(1_768_478_400_250), message: '(service notes-prod) has started 1 tasks.' }],
 }
 const address = { cluster: 'fabrika-apps', service: 'notes-prod' }
+const REVISION = 'arn:aws:ecs:eu-central-1:123456789012:service-revision/fabrika-apps/notes-prod/4980306466373577095'
 
 describe('ecsClient', () => {
 	test('registers a Fargate ARM64 task definition with the image by digest and secrets by reference', async () => {
@@ -169,6 +173,53 @@ describe('ecsClient', () => {
 		await expect(ecsClient(empty.options).describeService(address)).rejects.toMatchObject({ code: 'invalid_answer' })
 		const cluster = fakeAws(ECS, { DescribeServices: () => awsError('ClusterNotFoundException') })
 		await expect(ecsClient(cluster.options).describeService(address)).rejects.toMatchObject({ code: 'ClusterNotFoundException' })
+	})
+
+	test('describes a service deployment and its revision, and answers null only for an explicit MISSING', async () => {
+		const deployment = {
+			serviceDeploymentArn: DEPLOYMENT,
+			serviceArn: service.serviceArn,
+			status: 'ROLLBACK_SUCCESSFUL',
+			statusReason: 'ECS deployment circuit breaker: tasks failed to start.',
+			targetServiceRevision: { arn: REVISION, runningTaskCount: 0 },
+			createdAt: 1_768_478_400.5,
+		}
+		const { options, calls } = fakeAws(ECS, {
+			DescribeServiceDeployments: () => ({ serviceDeployments: [deployment], failures: [] }),
+			DescribeServiceRevisions: () => ({ serviceRevisions: [{ serviceRevisionArn: REVISION, taskDefinition: TASK_DEFINITION }], failures: [] }),
+		})
+		const ecs = ecsClient(options)
+		expect(await ecs.describeServiceDeployment(DEPLOYMENT)).toEqual({
+			arn: DEPLOYMENT,
+			serviceArn: service.serviceArn,
+			status: 'rollback_successful',
+			statusReason: 'ECS deployment circuit breaker: tasks failed to start.',
+			targetRevisionArn: REVISION,
+		})
+		expect(await ecs.describeServiceRevision(REVISION)).toEqual({ arn: REVISION, taskDefinitionArn: TASK_DEFINITION })
+		expect(calls.map((call) => call.body)).toEqual([{ serviceDeploymentArns: [DEPLOYMENT] }, { serviceRevisionArns: [REVISION] }])
+
+		const missing = fakeAws(ECS, {
+			DescribeServiceDeployments: () => ({ serviceDeployments: [], failures: [{ arn: DEPLOYMENT, reason: 'MISSING' }] }),
+			// An answer that leaves the empty list out still reaches the MISSING.
+			DescribeServiceRevisions: () => ({ failures: [{ arn: REVISION, reason: 'MISSING' }] }),
+		})
+		expect(await ecsClient(missing.options).describeServiceDeployment(DEPLOYMENT)).toBeNull()
+		expect(await ecsClient(missing.options).describeServiceRevision(REVISION)).toBeNull()
+
+		// A MISSING for another ARN, an empty answer and a state ECS may add later are no answer.
+		for (
+			const answer of [
+				{ serviceDeployments: [], failures: [{ arn: 'other', reason: 'MISSING' }] },
+				{ serviceDeployments: [] },
+				{ serviceDeployments: [{ ...deployment, status: 'PAUSED' }] },
+			]
+		) {
+			const odd = fakeAws(ECS, { DescribeServiceDeployments: () => answer })
+			await expect(ecsClient(odd.options).describeServiceDeployment(DEPLOYMENT)).rejects.toMatchObject({ code: 'invalid_answer' })
+		}
+		await expect(ecs.describeServiceDeployment('ecs-svc/1')).rejects.toThrow('the service deployment')
+		await expect(ecs.describeServiceRevision(DEPLOYMENT)).rejects.toThrow('the service revision')
 	})
 
 	test('a state ECS may add later is an invalid answer, never a guess', async () => {

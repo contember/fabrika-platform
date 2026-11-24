@@ -34,6 +34,9 @@ export const BUILD_TOKEN_VARIABLE = 'FABRIKA_BUILD_TOKEN'
 /** The bounds of a build's timeout, in minutes. */
 export const MIN_BUILD_MINUTES = 5
 export const MAX_BUILD_MINUTES = 2160
+/** The bounds of how long a build may wait in the queue, in minutes. */
+export const MIN_QUEUED_MINUTES = 5
+export const MAX_QUEUED_MINUTES = 480
 /** How many of a project's newest builds `findBuild` reads: one page of `ListBuildsForProject`. */
 export const FIND_BUILD_DEPTH = 100
 
@@ -62,7 +65,10 @@ export interface CodeBuildStart {
 	/** The inline buildspec (YAML opening with `version:`): the build has no source of its own. */
 	readonly buildspec: string
 	readonly variables: Readonly<Record<string, CodeBuildVariable>>
+	/** How long the build may run once it started. */
 	readonly timeoutMinutes: number
+	/** How long it may wait in the queue before it starts; past that CodeBuild ends it. */
+	readonly queuedTimeoutMinutes: number
 }
 
 export interface CodeBuildClient {
@@ -141,6 +147,8 @@ export function codeBuildClient(options: AwsJsonClientOptions): CodeBuildClient 
 			if (!Number.isInteger(start.timeoutMinutes) || start.timeoutMinutes < MIN_BUILD_MINUTES || start.timeoutMinutes > MAX_BUILD_MINUTES) {
 				refuse('the timeout')
 			}
+			const queued = start.queuedTimeoutMinutes
+			if (!Number.isInteger(queued) || queued < MIN_QUEUED_MINUTES || queued > MAX_QUEUED_MINUTES) refuse('the queue timeout')
 			const environment = Object.entries(start.variables).map(([name, variable]) => {
 				if (!VARIABLE_NAME.test(name) || name.startsWith('CODEBUILD_') || name.startsWith('AWS_') || name === BUILD_TOKEN_VARIABLE) {
 					refuse('a variable name')
@@ -160,6 +168,7 @@ export function codeBuildClient(options: AwsJsonClientOptions): CodeBuildClient 
 					buildspecOverride: start.buildspec,
 					environmentVariablesOverride: [...environment, { name: BUILD_TOKEN_VARIABLE, value: start.token, type: 'PLAINTEXT' }],
 					timeoutInMinutesOverride: start.timeoutMinutes,
+					queuedTimeoutInMinutesOverride: queued,
 					// The build runs Docker to build the image.
 					privilegedModeOverride: true,
 				},
