@@ -7,7 +7,7 @@ import type { BrandImage, InstallationBrand } from './brand'
  * one panel in the middle of the window, the page's own words at the left, the fabrika mark drawn large on the
  * blueprint grid at the right, and fabrika named once, quietly, in a footer under it. Unlike the console's welcome the
  * panel follows the scheme: a plate on the floor in light, the welcome's dark panel in dark. Buttons are the console's:
- * outlined, and the brand blue fills only the page's one constructive step, the first button of a form.
+ * outlined, and the brand blue fills only the page's one constructive step, the first button of a form or of its `.actions` row.
  * `pageBody` writes the frame, so every page has the same one. `page-style.test.ts` fails when a token here drifts from
  * the console's.
  *
@@ -204,6 +204,14 @@ h1 {
 	text-wrap: balance;
 }
 
+h2 {
+	margin: 1.25rem 0 0.125rem;
+	color: var(--ink);
+	font-size: 0.9375rem;
+	font-weight: 600;
+	line-height: 1.4;
+}
+
 p {
 	max-width: 34rem;
 	margin: 0 0 0.75rem;
@@ -244,6 +252,15 @@ code {
 	border-radius: var(--r-1);
 }
 
+/* An address under a heading: secondary, small, and broken anywhere rather than overflowing. */
+.uri {
+	margin: 0 0 0.5rem;
+	color: var(--ink-3);
+	font-family: var(--font-mono);
+	font-size: 0.75rem;
+	overflow-wrap: anywhere;
+}
+
 ul {
 	margin: 0 0 0.75rem;
 	padding: 0;
@@ -260,6 +277,18 @@ li {
 
 li + li {
 	border-top: 1px solid var(--rule);
+}
+
+/* A row of a name and its qualifier, the qualifier at the right and under the name when the row is narrow. */
+.rows li {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	gap: 0.25rem 1rem;
+}
+
+.rows li > span {
+	color: var(--ink-3);
 }
 
 hr {
@@ -284,6 +313,34 @@ label {
 	color: var(--ink-2);
 	font-size: 0.8125rem;
 	font-weight: 600;
+}
+
+fieldset {
+	display: grid;
+	gap: 0.5rem;
+	min-width: 0;
+	margin: 0;
+	padding: 0;
+	border: 0;
+}
+
+legend {
+	margin: 0 0 0.5rem;
+	padding: 0;
+	color: var(--ink-2);
+	font-size: 0.8125rem;
+	font-weight: 600;
+}
+
+/* A radio or a checkbox with its words at its right. */
+.choice {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+	color: var(--ink);
+	font-size: 0.875rem;
+	font-weight: 400;
+	cursor: pointer;
 }
 
 input {
@@ -314,6 +371,23 @@ input:focus {
 	outline: none;
 	border-color: var(--blueprint);
 	box-shadow: 0 0 0 3px var(--rule-focus);
+}
+
+input[type='radio'],
+input[type='checkbox'] {
+	flex: none;
+	width: 1rem;
+	height: 1rem;
+	min-height: 0;
+	padding: 0;
+	accent-color: var(--blueprint);
+	box-shadow: none;
+}
+
+input[type='radio']:focus-visible,
+input[type='checkbox']:focus-visible {
+	outline: 2px solid var(--blueprint);
+	outline-offset: 2px;
 }
 
 button,
@@ -347,17 +421,30 @@ button:hover,
 	border-color: var(--rule-strong);
 }
 
-form > button:first-of-type {
+form > button:first-of-type,
+.actions > button:first-of-type {
 	color: var(--brand-on);
 	background: var(--brand);
 	border-color: var(--brand);
 	font-weight: 600;
 }
 
-form > button:first-of-type:hover {
+form > button:first-of-type:hover,
+.actions > button:first-of-type:hover {
 	color: var(--brand-on);
 	background: var(--brand-hover);
 	border-color: var(--brand-hover);
+}
+
+/* A form's decisions in one row, the constructive one first. */
+.actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 0.5rem;
+}
+
+.actions > button {
+	min-width: 6.5rem;
 }
 
 .password {

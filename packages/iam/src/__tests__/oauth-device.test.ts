@@ -1,4 +1,5 @@
 import { OAUTH_CLI_CLIENT_ID, parseAccessClaims } from '@fabrika/auth-core'
+import { CONTROL_APP_ID, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
 import type { OAuthConfig } from '../oauth-config'
@@ -12,6 +13,8 @@ import { ISSUER, oauthFixture, RESOURCE, SIGNING_ENV, tokenBody } from './helper
 const SECOND_RESOURCE = 'https://control.example.test/api/rpc'
 const OTHER_APP_RESOURCE = 'https://other.example.test/api/rpc'
 const MANAGED_RESOURCE = 'https://control.example.test/managed'
+const CONSOLE_RESOURCE = `https://console.example.test${CONTROL_RPC_PATH}`
+const OPERATIONS_RESOURCE = `https://console.example.test${CONTROL_OPERATIONS_RPC_PATH}`
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 const USER_CODE = /^[BCDFGHJKLMNPQRSTVWXZ]{4}-[BCDFGHJKLMNPQRSTVWXZ]{4}$/
 
@@ -46,6 +49,9 @@ async function fixture() {
 			{ app: 'other', resource: OTHER_APP_RESOURCE, scopeGrants, client: 'cli' },
 			// Served to the managed clients only, so never through the device grant.
 			{ app: 'control', resource: MANAGED_RESOURCE, scopeGrants },
+			// The console's own resources, which the consent page names as the console declares them.
+			{ app: CONTROL_APP_ID, resource: CONSOLE_RESOURCE, scopeGrants, client: 'cli' },
+			{ app: CONTROL_APP_ID, resource: OPERATIONS_RESOURCE, scopeGrants, client: 'cli' },
 		],
 	}
 	const services: Services = { ...f.services, config: { ...f.services.config, oauth: config } }
@@ -99,6 +105,12 @@ async function fixture() {
 		form('/oauth/token', new URLSearchParams({ grant_type: 'refresh_token', client_id: OAUTH_CLI_CLIENT_ID, refresh_token: refreshToken, resource }))
 
 	return { f, harness, services, call, start, started, poll, page, refresh }
+}
+
+async function userCode(started: Promise<Response>): Promise<string> {
+	const code = Reflect.get(Object(await (await started).json()), 'user_code')
+	if (typeof code !== 'string') throw new Error('no user code')
+	return code
 }
 
 async function errorOf(response: Response): Promise<unknown> {
@@ -174,14 +186,33 @@ describe('the device page', () => {
 		const { started, page } = await fixture()
 		const narrow = await started('deploy:alpha')
 		const consent = await (await page({ user_code: narrow.user_code.toLowerCase() })).text()
-		expect(consent).toContain('<code>deploy.run</code> — app alpha')
-		expect(consent).toContain('<code>source.workspace.read</code> — app alpha')
+		expect(consent).toContain('<li><code>deploy.run</code> <span>app alpha</span></li>')
+		expect(consent).toContain('<li><code>source.workspace.read</code> <span>app alpha</span></li>')
 		expect(consent).not.toContain('Warning')
 
 		const wide = await started('create')
 		const warned = await (await page({ user_code: wide.user_code })).text()
 		expect(warned).toContain('<strong>Warning:</strong> <code>create</code>')
-		expect(warned).toContain('<code>app.create</code> — everywhere')
+		expect(warned).toContain('<li><code>app.create</code> <span>everywhere</span></li>')
+	})
+
+	test('names each resource above its address, sets each lifetime beside its radio, and puts both decisions in one row', async () => {
+		const { start, page } = await fixture()
+		const ownApp = await (await page({ user_code: await userCode(start('deploy:alpha', [RESOURCE, SECOND_RESOURCE])) })).text()
+		// A resource the console does not declare is named by its path, which tells two resources of one app apart.
+		expect(ownApp).toContain(`<h2>/mcp</h2><p class="uri">${RESOURCE}</p>`)
+		expect(ownApp).toContain(`<h2>/api/rpc</h2><p class="uri">${SECOND_RESOURCE}</p>`)
+		expect(ownApp).toContain(
+			'<fieldset><legend>Access lasts</legend><label class="choice"><input type="radio" name="lifetime" value="3600" checked> 1 hour</label>',
+		)
+		expect(ownApp.match(/<label class="choice"><input type="radio" name="lifetime"/g)?.length).toBe(3)
+		expect(ownApp).toMatch(
+			/<div class="actions"><button name="decision" value="approve">Allow<\/button>\s*<button name="decision" value="deny">Deny<\/button><\/div>/,
+		)
+
+		const consoleRpc = await (await page({ user_code: await userCode(start('deploy:alpha', [CONSOLE_RESOURCE, OPERATIONS_RESOURCE])) })).text()
+		expect(consoleRpc).toContain(`<h2>Console</h2><p class="uri">${CONSOLE_RESOURCE}</p>`)
+		expect(consoleRpc).toContain(`<h2>Operations</h2><p class="uri">${OPERATIONS_RESOURCE}</p>`)
 	})
 
 	test('refuses a cross-site submission and blocks code entry after twenty entries', async () => {

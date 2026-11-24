@@ -53,6 +53,8 @@ export const CONTROL_CLI_OPERATIONS_GRANTS: readonly ControlCliScopeGrant[] = [
 /** One OAuth resource of the console the command-line client is served, by its path on the console's origin. */
 export interface ControlCliResource {
 	readonly path: string
+	/** What IAM's device-consent page names the resource, above its URL. */
+	readonly label: string
 	readonly grants: readonly ControlCliScopeGrant[]
 	/** The service that verifies the resource's tokens itself: Control's gateway forwards Operations' path unchanged. */
 	readonly verifiedBy?: 'operations'
@@ -60,8 +62,8 @@ export interface ControlCliResource {
 
 /** Every installation that serves the device grant registers exactly these, whichever provider composes it. */
 export const CONTROL_CLI_RESOURCES: readonly ControlCliResource[] = [
-	{ path: CONTROL_RPC_PATH, grants: CONTROL_CLI_RPC_GRANTS },
-	{ path: CONTROL_OPERATIONS_RPC_PATH, grants: CONTROL_CLI_OPERATIONS_GRANTS, verifiedBy: 'operations' },
+	{ path: CONTROL_RPC_PATH, label: 'Console', grants: CONTROL_CLI_RPC_GRANTS },
+	{ path: CONTROL_OPERATIONS_RPC_PATH, label: 'Operations', grants: CONTROL_CLI_OPERATIONS_GRANTS, verifiedBy: 'operations' },
 ]
 
 /** The resources a preset's grant covers: those with a grant for it, so `create` concerns the console's RPC alone. */
