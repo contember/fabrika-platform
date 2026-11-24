@@ -36,12 +36,24 @@ const hooks: {
 } = { steady: null, hourly: null }
 let runs: { readonly job: string; readonly attempt: number }[] = []
 
-const steady = app.cron('0 3 * * *', { actions: ['notes.read'], retries: 2 }).handle(async ({ ctx }) => {
+// The jobs' schedules are taken half a period away from the time this file loads, so neither comes due on its own while
+// the file runs (it takes seconds): every run a test sees is one it made due. With fixed expressions a test failed
+// whenever it straddled the wall clock's :30: a restart's repair schedules each job's next fire keeping the earlier due
+// time, which brought a wake the test had moved a day ahead back to that :30, then due.
+const LOADED = new Date()
+/** The hour, in UTC, `steady` fires at daily: twelve hours from now. */
+const STEADY_HOUR = (LOADED.getUTCHours() + 12) % 24
+/** The minute `hourly` fires at every hour: thirty minutes from now. */
+const HOURLY_MINUTE = (LOADED.getUTCMinutes() + 30) % 60
+const STEADY_CRON = `0 ${STEADY_HOUR} * * *`
+const HOURLY_CRON = `${HOURLY_MINUTE} * * * *`
+
+const steady = app.cron(STEADY_CRON, { actions: ['notes.read'], retries: 2 }).handle(async ({ ctx }) => {
 	runs.push({ job: 'steady', attempt: ctx.attempt })
 	await hooks.steady?.(ctx.signal)
 })
 
-const hourly = app.cron('30 * * * *', { actions: ['notes.read'] }).handle(async ({ ctx }) => {
+const hourly = app.cron(HOURLY_CRON, { actions: ['notes.read'] }).handle(async ({ ctx }) => {
 	runs.push({ job: 'hourly', attempt: ctx.attempt })
 	await hooks.hourly?.()
 })
@@ -306,16 +318,17 @@ describe('the repair tick', () => {
 			const before = Date.now()
 			expect((await instance.tick()).status).toBe(204)
 			expect(wakesOf(database, 'steady')).toEqual([
-				{ job: 'steady', reason: 'cron', due_at: expect.any(Number), attempt: 0, dedupe: 'cron:steady:0 3 * * *' },
+				{ job: 'steady', reason: 'cron', due_at: expect.any(Number), attempt: 0, dedupe: `cron:steady:${STEADY_CRON}` },
 			])
 			expect(wakesOf(database, 'hourly')).toEqual([
-				{ job: 'hourly', reason: 'cron', due_at: expect.any(Number), attempt: 0, dedupe: 'cron:hourly:30 * * * *' },
+				{ job: 'hourly', reason: 'cron', due_at: expect.any(Number), attempt: 0, dedupe: `cron:hourly:${HOURLY_CRON}` },
 			])
 			for (const job of ['steady', 'hourly']) {
 				const [wake] = wakesOf(database, job)
 				expect(wake?.due_at).toBeGreaterThan(before)
-				expect(new Date(wake?.due_at ?? 0).getUTCMinutes()).toBe(job === 'steady' ? 0 : 30)
+				expect(new Date(wake?.due_at ?? 0).getUTCMinutes()).toBe(job === 'steady' ? 0 : HOURLY_MINUTE)
 			}
+			expect(new Date(wakesOf(database, 'steady')[0]?.due_at ?? 0).getUTCHours()).toBe(STEADY_HOUR)
 			expect(alarm.scheduled).toBe(earliestWake(database))
 
 			makeDue(database, 'steady')
@@ -413,7 +426,7 @@ describe('the alarm', () => {
 				await instance.fire()
 				await settle(started)
 				const [wake] = wakesOf(database, 'steady')
-				expect(wake).toMatchObject({ reason: 'cron', attempt, dedupe: 'cron:steady:0 3 * * *' })
+				expect(wake).toMatchObject({ reason: 'cron', attempt, dedupe: `cron:steady:${STEADY_CRON}` })
 				// Backoff from one second, jittered: due within its ceiling, and the alarm armed for it.
 				expect(wake?.due_at).toBeGreaterThanOrEqual(before)
 				expect(wake?.due_at).toBeLessThanOrEqual(Date.now() + 1_000 * 2 ** (attempt - 1))
@@ -427,7 +440,7 @@ describe('the alarm', () => {
 			expect(reported('JobFailed')).toEqual(["fabrika: JobFailed: job 'steady' failed after 3 attempts: handler_failed"])
 			const [next] = wakesOf(database, 'steady')
 			expect(next).toMatchObject({ reason: 'cron', attempt: 0 })
-			expect(new Date(next?.due_at ?? 0).getUTCHours()).toBe(3)
+			expect(new Date(next?.due_at ?? 0).getUTCHours()).toBe(STEADY_HOUR)
 			expect(next?.due_at).toBeGreaterThan(Date.now())
 			expect(leaseOf(database, 'steady')).toMatchObject({ holder: null, last_status: 'failed' })
 		})
