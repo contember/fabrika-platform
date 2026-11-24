@@ -27,10 +27,29 @@ describe('parseCloudflareArgs', () => {
 			workerConfig: undefined,
 			componentConfig: undefined,
 			managedVarNames: ['FABRIKA_RELEASE'],
+			out: undefined,
+			bundle: undefined,
+			domain: undefined,
+			access: undefined,
+			values: undefined,
+			fetchTools: false,
 			dryRun: true,
 			help: false,
 		})
 		expect(() => parseCloudflareArgs(['deploy', '--managed-var=not-valid'])).toThrow('Invalid --managed-var name')
+	})
+
+	test('parses the isolated build and the deploy of its bundle', () => {
+		const build = parseCloudflareArgs(['build', '--env=stage', '--out=/w/out', '--domain=app.example.com', '--access=/w/a.json', '--values=/w/v.json'])
+		expect([build.command, build.out, build.domain, build.access, build.values]).toEqual([
+			'build',
+			'/w/out',
+			'app.example.com',
+			'/w/a.json',
+			'/w/v.json',
+		])
+		const deploy = parseCloudflareArgs(['deploy', '--env=stage', '--bundle=/w/bundle'])
+		expect([deploy.command, deploy.bundle]).toEqual(['deploy', '/w/bundle'])
 	})
 
 	test('reads the single-component platform form', () => {

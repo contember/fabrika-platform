@@ -66,7 +66,14 @@ import { deployOrder } from './deploy-order'
 import { localWorkloadKeyVariables } from './local-workload-keys'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
-import { CLOSED_ENVIRONMENT_FLAGS, createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE, proxyManifestJson } from './proxy'
+import {
+	CLOSED_ENVIRONMENT_FLAGS,
+	CLOUDFLARE_PROXY_WORKER_DIR,
+	createCloudflareProxyWorker,
+	IamApplicationReference,
+	PROXY_MANIFEST_DEFINE,
+	proxyManifestJson,
+} from './proxy'
 import { CHECKOUT_INSTALL_ARGS, type RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 import { type AssetMount, assetMounts, SPA_ASSETS, SPA_ASSETS_DIRECTORY, stageSpaAssets } from './spa-assets'
@@ -74,7 +81,7 @@ import { type AssetMount, assetMounts, SPA_ASSETS, SPA_ASSETS_DIRECTORY, stageSp
 const CANCELLED = 'deploy cancelled'
 
 /** Every credential the platform hands the executor. The checkout's own build step must inherit none of them. */
-const PLATFORM_CREDENTIAL_NAMES: readonly string[] = ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'FABRIKA_IAM_PROVISIONING_KEY']
+export const PLATFORM_CREDENTIAL_NAMES: readonly string[] = ['CLOUDFLARE_API_TOKEN', 'CLOUDFLARE_ACCOUNT_ID', 'FABRIKA_IAM_PROVISIONING_KEY']
 
 /**
  * What the checkout's build step gets of the run's values, over what it inherits: the secrets and vars the checkout's
@@ -93,7 +100,7 @@ const buildEnvironment = (run: CloudflareDeployRun): Record<string, string> => {
 	return env
 }
 
-const workerDir = (config: CloudflareAppConfig, cwd: string): string => resolve(cwd, config.pipeline?.workerDir ?? '.')
+export const workerDir = (config: CloudflareAppConfig, cwd: string): string => resolve(cwd, config.pipeline?.workerDir ?? '.')
 
 /** The KV namespace oblaka keeps deploy state in. One definition, so the check and the call cannot drift. */
 // An empty CLOUDFLARE_STATE_NAMESPACE means unset, never an empty oblaka state namespace.
@@ -214,7 +221,7 @@ const applicationRuntime = (run: ApplicationTarget, contract: ContractArtifact, 
 })
 
 /** Where the check step works: the application directory, beside its config and contract, and the config it reads. */
-interface CheckTarget {
+export interface CheckTarget {
 	readonly cwd: string
 	readonly config: string
 	/** The directory the runner installed the checkout's dependencies in; the CLI is looked for no higher. */
@@ -276,8 +283,10 @@ const isWithin = (root: string, dir: string): boolean => {
  * memory, and every check runs checkout code whose failed output reaches the log: it inherits nothing and gets only
  * `ENTRY_BUILD_VARIABLES`.
  */
-const entryBuildEnvironment = (): { readonly env: Record<string, string>; readonly omitEnv: readonly string[] } => {
-	const env: Record<string, string> = {}
+export const entryBuildEnvironment = (
+	extra: Readonly<Record<string, string>> = {},
+): { readonly env: Record<string, string>; readonly omitEnv: readonly string[] } => {
+	const env: Record<string, string> = { ...extra }
 	for (const name of ENTRY_BUILD_VARIABLES) {
 		const value = process.env[name]
 		if (value !== undefined) env[name] = value
@@ -294,10 +303,13 @@ const checkError = (subject: CheckSubject, result: { exitCode: number; stdout: s
 	return new Error(`check failed: ${subject} (exit ${result.exitCode}): ${detail}`)
 }
 
+/** What the check step reads of a run: the build half of an isolated deploy has no other part of one. */
+export type CheckRun = Pick<CloudflareDeployRun, 'approved' | 'dryRun' | 'log' | 'signal'>
+
 /** One checkout command in `cwd`, with only what `entryBuildEnvironment` passes on. */
 const runCheckoutCommand = async (
-	cf: CloudflareCollaborators,
-	run: CloudflareDeployRun,
+	cf: Pick<CloudflareCollaborators, 'runCommand'>,
+	run: CheckRun,
 	cwd: string,
 	command: string,
 	args: readonly string[],
@@ -324,7 +336,7 @@ const schemaCheckGap = (release: string | undefined, config: string): string | n
  * `main`, and only the checker follows, which reads no entry. The checker is the release Control approved the access
  * with; without one the step fails rather than deploy unchecked code.
  */
-const runChecks = async (target: CheckTarget, run: CloudflareDeployRun, cf: CloudflareCollaborators): Promise<void> => {
+export const runChecks = async (target: CheckTarget, run: CheckRun, cf: Pick<CloudflareCollaborators, 'runCommand'>): Promise<void> => {
 	const checker = run.approved?.checker
 	if (checker === undefined) {
 		throw new Error(
@@ -649,23 +661,47 @@ interface StepEnv {
 	 * when the Worker declares its own `assets` or no mount serves files.
 	 */
 	readonly spaAssets: { readonly mounts: readonly AssetMount[]; readonly root: string } | null
+	/**
+	 * The application was built in the build sandbox (ADR-0086): its bundle, at \`main\` (absolute), is uploaded as it is, and
+	 * its files are staged. Null for a deploy that builds its Worker itself.
+	 */
+	readonly prebuilt: { readonly main: string } | null
 	generatedConfigs: readonly GeneratedConfig[]
+}
+
+/**
+ * A prebuilt deploy uploads two Workers: the application, whose \`main\` is the copied bundle and which wrangler does not
+ * bundle, and the platform's proxy, bundled from this package. A config that is neither (a renamed application) would
+ * be bundled by wrangler as root, beside the token, so it fails the deploy whatever wrote it.
+ */
+const assertPrebuiltConfig = (generated: GeneratedConfig, generatedDir: string, isApplication: boolean, main: string): void => {
+	const worker = generated.config.name ?? generated.path
+	if (!isApplication) {
+		if (generatedDir === CLOUDFLARE_PROXY_WORKER_DIR) return
+		throw new Error(`cloudflare: Worker \`${worker}\` is neither the application the build described nor its proxy`)
+	}
+	const declared: unknown = generated.config.main
+	if (typeof declared !== 'string' || resolve(generatedDir, declared) !== main) {
+		throw new Error(`cloudflare: application Worker \`${worker}\` runs something other than the bundle the build produced`)
+	}
 }
 
 /**
  * `wrangler deploy`, with the managed secrets uploaded in the same version when there are any, so the version never
  * serves without them, and a plain var of the same name an older release wrote goes with the old version.
  */
-const wranglerDeploy = async (env: StepEnv, cwd: string, secrets: Readonly<Record<string, string>>): Promise<void> => {
+const wranglerDeploy = async (env: StepEnv, cwd: string, secrets: Readonly<Record<string, string>>, noBundle: boolean): Promise<void> => {
 	const { run, credentials, cf } = env
 	const names = Object.keys(secrets)
+	// A prebuilt bundle is uploaded as the build left it: wrangler bundles nothing, so it reads no source of the checkout.
+	const deploy = noBundle ? ['deploy', '--no-bundle'] : ['deploy']
 	if (run.dryRun) {
-		run.log(`  [dry-run] would run: wrangler deploy${names.length === 0 ? '' : ` with the secrets ${names.join(', ')}`} in ${cwd}`)
+		run.log(`  [dry-run] would run: wrangler ${deploy.join(' ')}${names.length === 0 ? '' : ` with the secrets ${names.join(', ')}`} in ${cwd}`)
 		return
 	}
 	assertRunning(run.signal)
 	await withSecretsFile(secrets, async (path) => {
-		const args = path === null ? ['deploy'] : ['deploy', '--secrets-file', path]
+		const args = path === null ? deploy : [...deploy, '--secrets-file', path]
 		const result = await cf.runCommand({ command: 'wrangler', args, cwd, env: wranglerEnv(credentials), signal: run.signal })
 		if (result.exitCode !== 0) throw commandError('wrangler deploy', result)
 	})
@@ -797,19 +833,27 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 			// The configs oblaka wrote, not the generation checked before the run: a stateful binding can emit differently twice.
 			assertGeneratedConfigs(configs, env.bounds)
 			if (configs.length === 0) {
-				await wranglerDeploy(env, dir, env.managedSecrets)
+				await wranglerDeploy(env, dir, env.managedSecrets, env.prebuilt !== null)
 				return
 			}
 			const application = `${run.env}-${applicationWorker(worker).options.name}`
+			// Every config before the first upload, so a refused one leaves nothing half deployed.
+			const prebuilt = env.prebuilt
+			if (prebuilt !== null) {
+				for (const generated of configs) {
+					assertPrebuiltConfig(generated, dirname(resolve(dir, generated.path)), generated.config.name === application, prebuilt.main)
+				}
+			}
 			let applicationDir: string | undefined
 			for (const generated of deployOrder(configs)) {
 				const generatedDir = dirname(resolve(dir, generated.path))
 				const isApplication = generated.config.name === application
-				// The checkout's build has written the mounts' directories; the walk below checks the staged copy.
-				if (isApplication && env.spaAssets !== null) await stageAssets(env, env.spaAssets, generatedDir)
+				// The checkout's build has written the mounts' directories; the walk below checks the staged copy. A prebuilt
+				// application's build staged them in the sandbox, and the runner copied them file by file.
+				if (isApplication && env.spaAssets !== null && env.prebuilt === null) await stageAssets(env, env.spaAssets, generatedDir)
 				// The checkout's own build step has run by now, so this is the last moment the tree is still ours to check.
 				if (env.platformResources === 'refuse') await assertLiteralAssets(generated, generatedDir)
-				await wranglerDeploy(env, generatedDir, isApplication ? env.managedSecrets : {})
+				await wranglerDeploy(env, generatedDir, isApplication ? env.managedSecrets : {}, isApplication && env.prebuilt !== null)
 				if (isApplication) applicationDir = generatedDir
 			}
 			// Swept only once every Worker is deployed: a failed sweep must not leave the new application behind the old proxy.
@@ -894,6 +938,12 @@ export interface CloudflareDeployerOptions {
 	readonly platformIam?: PlatformIamTarget
 	/** Replaces the HTTP reconcile with IAM (tests). */
 	readonly reconcileSchema?: SchemaReconciler
+	/**
+	 * The application was built in the build sandbox (ADR-0086), and the config is the one its manifest describes: the
+	 * Worker's `main` is the bundle at `main` (absolute), which the deploy uploads with `wrangler deploy --no-bundle`. There
+	 * is no build or check step, and the SPA files are already staged. Only an application deploy (`refuse`) takes it.
+	 */
+	readonly prebuilt?: { readonly main: string }
 }
 
 /** IAM's origin and the installation's provisioning key, as the installation's own deploy holds them. */
@@ -991,7 +1041,10 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const connectors = platformResources === 'refuse' ? connectorBindings(contract) : {}
 	// An older release's entry exports no object, and a Control older than the runner names no release (ADR-0062).
 	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
-	const entry = release !== undefined && pinsGeneratedEntry(release) ? resolve(loaded.cwd, GENERATED_ENTRY_FILE) : null
+	if (options.prebuilt !== undefined && platformResources !== 'refuse') throw new Error('cloudflare: only an application deploy is prebuilt')
+	// A prebuilt Worker runs its bundle, whose source the build regenerated from the generated entry in the sandbox.
+	const pinnedEntry = options.prebuilt === undefined ? resolve(loaded.cwd, GENERATED_ENTRY_FILE) : options.prebuilt.main
+	const entry = release !== undefined && pinsGeneratedEntry(release) ? pinnedEntry : null
 	const alarms = release !== undefined && servesAlarms(release)
 	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry, alarms) : null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
@@ -1037,8 +1090,9 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 		reconcileSchema: options.reconcileSchema ?? defaultReconcileSchema,
 		bounds,
 		managedSecrets: managed.secrets,
-		// A local deploy and fabrika's own components are not checked: only a run Control approved names a checker.
-		checks: platformResources === 'refuse' && run.approved !== undefined
+		// A local deploy and fabrika's own components are not checked: only a run Control approved names a checker. A
+		// prebuilt application was checked in the build sandbox, which ran the same checks.
+		checks: platformResources === 'refuse' && run.approved !== undefined && options.prebuilt === undefined
 			? {
 				cwd: loaded.cwd,
 				config: basename(resolve(run.cwd, run.configPath)),
@@ -1048,6 +1102,7 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 			}
 			: null,
 		spaAssets,
+		prebuilt: options.prebuilt ?? null,
 		generatedConfigs: [],
 	}
 	const result = await runSteps(buildPlan(loaded.config, worker, env.checks), run, (step) => runStep(step, env))

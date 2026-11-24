@@ -9,6 +9,7 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import { contractDigest } from '../../../auth-core/src/endpoint-digest'
 import { Runner, type RunnerEnv, type SpawnSpec } from '../runner'
 import { bunSpawner } from '../spawn'
+import { passthroughSandbox } from './helpers/sandbox'
 
 const CLEAN_URL = 'https://github.com/acme/exact-source.git'
 const TOKEN = 'private-git/%:@+value'
@@ -148,6 +149,7 @@ const runCheckout = async (fixture: OriginFixture, dryRun = false, ref = fixture
 	}
 	expect(cloudflareRunnerJobSchema.safeParse(job).success).toBe(true)
 	const specs: SpawnSpec[] = []
+	const deploys: SpawnSpec[] = []
 	const observed: { command: string; head: string; sentinel: string; map: string; detached: boolean; config: string; witnessed: boolean }[] = []
 	const originalEnv = { ...process.env }
 	let uploads = 0
@@ -155,6 +157,7 @@ const runCheckout = async (fixture: OriginFixture, dryRun = false, ref = fixture
 	const witness = `Git checkout verified: expected=${expected} actual=${expected}`
 	const runner = new Runner(job, {
 		workspace: fixture.workspace,
+		sandbox: passthroughSandbox(),
 		fetch: async () => {
 			uploads++
 			return new Response(null, { status: 201 })
@@ -164,6 +167,11 @@ const runCheckout = async (fixture: OriginFixture, dryRun = false, ref = fixture
 			if (spec.command === 'git') return bunSpawner(localGitSpec(spec, fixture.origin), handlers)
 			if (spec.command !== 'bun' && spec.command !== 'fabrika-cloudflare-executor') throw new Error('unexpected repository command')
 			assertNoGitAuthority(spec)
+			// The deploy reads the runner's copy of the build's output, never the checkout.
+			if (spec.args[0] === 'deploy') {
+				deploys.push(spec)
+				return { exitCode: 0 }
+			}
 			observed.push({
 				command: spec.command,
 				head: await git(spec.cwd, ['log', '-1', '--format=%H', '--']),
@@ -185,6 +193,8 @@ const runCheckout = async (fixture: OriginFixture, dryRun = false, ref = fixture
 	expect(uploads).toBe(0)
 	expect(status.artifactState).toBe(dryRun ? 'not_applicable' : undefined)
 	expect(observed.map((value) => value.command)).toEqual(['bun', 'fabrika-cloudflare-executor'])
+	expect(deploys.map((spec) => spec.cwd)).toEqual([runner.deployDir])
+	expect(deploys[0]?.args).toContain(`--bundle=${runner.bundleDir}`)
 	for (const value of observed) {
 		expect(value.head).toBe(expected)
 		expect(value.sentinel).toBe(ref === 'main' ? 'source-B' : 'source-A')
@@ -227,10 +237,11 @@ describe('real exact-source Git checkout', () => {
 			const commands: SpawnSpec[] = []
 			const env: RunnerEnv = {
 				workspace: fixture.workspace,
+				sandbox: passthroughSandbox(),
 				spawn: async (spec, handlers) => {
 					commands.push(spec)
 					if (spec.command === 'git') return bunSpawner(localGitSpec(spec, fixture.origin), handlers)
-					if (spec.command === 'fabrika-cloudflare-executor') {
+					if (spec.command === 'fabrika-cloudflare-executor' && spec.args[0] === 'build') {
 						expect(await git(spec.cwd, ['log', '-1', '--format=%H', '--'])).toBe(fixture.commitA)
 						expect(await readFile(join(spec.cwd, 'fabrika.config.ts'), 'utf8')).toBe("export default { source: 'source-A' }\n")
 						await writeFile(join(spec.cwd, 'fabrika.config.ts'), 'modified tracked config')
@@ -311,6 +322,7 @@ describe('real exact-source Git checkout', () => {
 			const gitSpecs: SpawnSpec[] = []
 			const runner = new Runner(job, {
 				workspace: fixture.workspace,
+				sandbox: passthroughSandbox(),
 				spawn: async (spec, handlers) => {
 					if (spec.command !== 'git') {
 						repositoryWork = true

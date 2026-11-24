@@ -6,12 +6,11 @@ blocked-by: []
 
 # 86 — A Cloudflare deploy holds the account token beside the repository's code
 
-**Summary.** The Cloudflare path imports the checkout's `fabrika.config.ts` inside the runner
-container and then provisions and deploys the resulting graph with the installation's single
-account-wide `CLOUDFLARE_API_TOKEN`. That is the design [ADR-0005](../decisions/0005-compile-app-config-to-static-manifest.md)
-refused, including its explicitly rejected alternative "execute it in the deploy runner". The
-security review mitigated it structurally; the boundary itself is still owed, and so is an ADR that
-reconciles the shipped path with ADR-0005. Effort L.
+**Summary.** Part 1 is done: [ADR-0086](../decisions/0086-a-cloudflare-deploy-builds-without-credentials-and-deploys-without-repository-code.md)
+splits a Cloudflare deploy into a build in the runner's sandbox (its own user, no credential, no secret, no network
+after the install where the container allows) and a deploy that reads the build's manifest and uploads its bundle
+without running any of the checkout's code; ADR-0005 stands. What remains is part 2: the deploy still holds the
+installation's account-wide `CLOUDFLARE_API_TOKEN`, and no Cloudflare app owns its resource names. Effort M.
 
 ## Problem
 
@@ -33,11 +32,12 @@ or ends with a platform name. Those close the cheapest routes — a build line t
 with the inherited token, a config that adopts or binds `vozka` or `propustka-worker` under any
 env/name split, a route in front of another app's proxy.
 
+Closed by ADR-0086: the config module, `pipeline.build`, the checks and the bundler no longer run in the
+credential-bearing process; they run as the build user, which cannot read the executor's environment, and the deploy
+rebuilds the graph from validated data.
+
 What is still open:
 
-- The config module runs in the credential-bearing process. Code at import time can read
-  `process.env.CLOUDFLARE_API_TOKEN`, reassign `globalThis.fetch`, or drive the Cloudflare API
-  itself; the graph checks bound what the config _declares_, not what it _does_.
 - The token is account-wide. A Cloudflare API token can be limited to an account and to zones, not
   to one Worker or one D1 database, so token scoping alone cannot express a per-app boundary.
 - A non-platform name that belongs to another app is refused only by a naming rule: Control sends its
@@ -52,28 +52,25 @@ What is still open:
 
 Two parts, in this order.
 
-1. **Decide, in an ADR, how the Cloudflare path relates to ADR-0005.** Either the Cloudflare deploy
-   moves config evaluation into the app's own build (`fabrika build` → `fabrika.manifest.json`,
-   consumed by the runner with no `import` of app code) and ADR-0005 stands as written, or the runner
-   execution is accepted with a stated boundary and the ADR supersedes the part of ADR-0005 that
-   rejected it. The ADR names which of the three open points each choice closes.
+1. **Decided and built: ADR-0086.** The config is evaluated in the build sandbox and the deploy consumes its
+   manifest; ADR-0005 stands. Still to verify on a live Cloudflare container: that it allows a network namespace (the
+   run log says `Build network: none` or `open`) and that a deploy of a real application succeeds end to end.
 2. **Give a Cloudflare app an ownership record before provisioning.** Add the `namespaces`
    capability to the Cloudflare control provider so ADR-0014's claims run there: a provider-owned
    name prefix per app plus a route and zone allowlist, validated against the authored graph in
-   `open()` before `provision-resources`. If the ADR keeps runner execution, also mint the run's
-   credential per app where the Cloudflare API allows it (zone-limited, minimal permission set) and
-   pass that in `job.credentials` instead of the installation token.
+   `open()` before `provision-resources`. Mint the run's credential per app where the Cloudflare API allows it
+   (zone-limited, minimal permission set) and pass that in `job.credentials` instead of the installation token; ADR-0086
+   records why a separate account per environment needs an IAM reachable across accounts first.
 
 Acceptance: a provider test in which a config from app A names a resource claimed by app B fails
 `open()` before any command runs; a live run on a throwaway account shows the container's environment
-holds no credential the run's app does not own; ADR-0005's status line points at the new ADR.
+holds no credential the run's app does not own.
 
 ## Touch points
 
 - `packages/provider-cloudflare/src/{provider,plan,control,command}.ts` — claims in `open()`, the
   `namespaces` capability, per-run credentials.
 - `packages/control/src/platform-cf.ts` — where the installation token is composed into the job.
-- `packages/runner-container/src/runner.ts` — the process that imports the config.
-- `docs/decisions/` — the reconciling ADR; `docs/decisions/0005-*.md` status line.
+- `packages/runner-container/src/runner.ts` — the build sandbox and the deploy (ADR-0086).
 
 <!-- Origin: security review 2026-09-02, finding C3 (A6-2); the user chose "mitigate now, design later". -->

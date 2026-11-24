@@ -138,6 +138,8 @@ workspace its own running application, where one pinned service could show only 
 9. **MCP authoring is served by Zerops and Cloudflare installations**, opt-in on an https installation and on the
    local stack. It is on when the operator registers a client that is not identity-only. The command-line client's
    grant is served by every https Zerops deploy, by every Cloudflare deploy and by the local stack.
+   - The Cloudflare runner boundary that MCP authoring there needs exists: a Cloudflare deploy builds the commit in a
+     sandbox without credentials and deploys without running its code ([ADR-0086](0086-a-cloudflare-deploy-builds-without-credentials-and-deploys-without-repository-code.md)).
    - Both providers register the same resources, `CONTROL_CLI_RESOURCES` in `@fabrika/control-contract`'s
      `cli-access.ts`, and both recompute IAM's config from them on every deploy, so a release that changes a preset
      converges with no other step. On Zerops the installation's deploy computes it. On Cloudflare IAM's own

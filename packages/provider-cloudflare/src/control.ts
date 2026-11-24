@@ -47,6 +47,7 @@ import {
 } from './runner-protocol'
 import { cloudflareAuthoring } from './workspace-authoring'
 
+export * from './build-manifest'
 export * from './runner-protocol'
 export { CLOUDFLARE_ISOLATED_BUILD, CLOUDFLARE_PROTECTED_FILES, CLOUDFLARE_STAGE_DEPLOY_REFUSAL, cloudflareAuthoring } from './workspace-authoring'
 
@@ -306,6 +307,9 @@ const runnerApprovedAccess = (environment: ProviderEnvironment): RunnerApprovedA
 			contractDigest: environment.access.contractDigest,
 			framework: applicationRelease(environment.access),
 			checker: environment.access.checker,
+			// Only a runner that builds in the sandbox knows this field, and the access is strict: an older runner, which
+			// imports the config beside the account token, refuses the run instead of running it (ADR-0086).
+			isolatedBuild: true,
 		}
 
 const buildJob = async (options: CloudflareControlOptions, input: ProviderDeployInput): Promise<CloudflareRunnerJob> => {

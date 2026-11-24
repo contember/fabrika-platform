@@ -1,5 +1,7 @@
+export { BuildOutputRefused, copyBuildOutput, type CopyLimits, DEFAULT_COPY_LIMITS } from './output'
 export { Runner } from './runner'
 export type { RunnerEnv, Spawner, SpawnHandlers, SpawnResult, SpawnSpec } from './runner'
+export { type BuildNetworkPolicy, type BuildSandbox, linuxBuildSandbox, sandboxArgv, type SandboxCommand } from './sandbox'
 export { createServer } from './server'
 export type { RunnerServer } from './server'
 export { bunSpawner } from './spawn'
