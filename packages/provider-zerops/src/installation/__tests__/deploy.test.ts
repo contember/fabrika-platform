@@ -902,6 +902,26 @@ describe('OAuth and MCP authoring', () => {
 		})
 	})
 
+	test("an external application's identity client: no MCP table, IAM gets the binding, and the deploy reconciles its roles", async () => {
+		const opsTool = {
+			provider: 'external' as const,
+			clientId: 'https://ops.example.test/oauth/client.json',
+			redirectUris: ['https://ops.example.test/oauth/callback'],
+			identity: { app: 'ops-tool', resource: 'https://ops.example.test', roles: [{ key: 'admin-ops', name: 'Administrator' }] },
+		}
+		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
+		await fixture.run({ mcpClients: [opsTool] })
+		expect(oauthRows(await consoleOf(fixture)).map((row) => row.path)).not.toContain('/mcp')
+		expect(iamConfigOf(fixture)).toMatchObject({ clients: [opsTool], resources: RPC_RESOURCES.map((resource) => ({ resource })) })
+		expect(fixture.reconciled.map((call) => call.app)).toEqual(['vozka', IAM_APP_ID, 'ops-tool'])
+		expect(fixture.reconciled[2]).toMatchObject({
+			url: `https://${IAM_HOST}`,
+			adminKey: 'px_admin',
+			schema: { scopes: [], actions: [], roles: { 'admin-ops': { name: 'Administrator', permissions: [] } } },
+		})
+		expect(fixture.reconciled[2]?.returnOrigins).toBeUndefined()
+	})
+
 	test('MCP enabled: the value is never logged', async () => {
 		const fixture = harness({ [FABRIKA_PROXY_MANIFEST_JSON]: legacyManifest })
 		await fixture.run({ mcpClients: [CLAUDE] })

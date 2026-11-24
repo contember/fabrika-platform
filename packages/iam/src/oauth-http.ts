@@ -17,7 +17,7 @@ import {
 import { decodeJwt } from 'jose'
 import { readForm, redirectHeaders, sameOrigin } from './auth/http'
 import { currentSession } from './auth/sessions'
-import { principalStatus } from './db'
+import { type PrincipalRow, principalStatus } from './db'
 import type { Env } from './env'
 import { escapeHtml } from './html'
 import { installationBrand } from './installation-brand'
@@ -26,6 +26,7 @@ import {
 	establishClient,
 	exchangeOAuthToken,
 	grantAuthorization,
+	heldIdentityRoles,
 	type ManagedClient,
 	revokeOAuthToken,
 	scopeCeiling,
@@ -142,6 +143,16 @@ function checkIdentityAuthorization(
 	return { kind: 'valid', request, client, resource: identity, scopes, ceiling: [] }
 }
 
+/** An external application that declares roles admits only a person holding one of them there. */
+async function refusedByIdentityRoles(
+	services: Services,
+	check: Extract<AuthorizationCheck, { kind: 'valid' }>,
+	principal: PrincipalRow,
+): Promise<boolean> {
+	const roles = check.client.registration.identity?.roles
+	return roles !== undefined && await heldIdentityRoles(services, principal, check.resource.app, roles) === null
+}
+
 async function showConsent(request: Request, services: Services, config: OAuthConfig): Promise<Response> {
 	const url = new URL(request.url)
 	const check = await checkAuthorization(services.config.issuer, config, singleValued(url.searchParams))
@@ -155,6 +166,9 @@ async function showConsent(request: Request, services: Services, config: OAuthCo
 	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') {
 		return errorPage(services, 'This account cannot authorize applications.', 403)
+	}
+	if (await refusedByIdentityRoles(services, check, principal)) {
+		return clientRedirect(services.config.issuer, check.request, { error: 'access_denied' })
 	}
 	return consentPage(services, check, principal.label)
 }
@@ -172,6 +186,10 @@ async function decideConsent(request: Request, services: Services, config: OAuth
 	if (decision !== 'approve') return errorPage(services, 'The consent decision is missing.', 400)
 	const session = await currentSession(request, services)
 	if (session === null) return errorPage(services, 'Your sign-in has ended. Start the authorization again.', 401)
+	const principal = await services.repositories.principals.getPrincipalById(session.principal_id)
+	if (principal === null || await refusedByIdentityRoles(services, check, principal)) {
+		return clientRedirect(issuer, check.request, { error: 'access_denied' })
+	}
 	const code = await grantAuthorization(services, { request: check.request, resource: check.resource, scopes: check.scopes, session, requestId })
 	return clientRedirect(issuer, check.request, { code })
 }
@@ -262,7 +280,9 @@ async function consentPage(services: Services, check: Extract<AuthorizationCheck
 	})
 	const asks = client.registration.identity === undefined
 		? `<p><strong>${escapeHtml(clientName)}</strong> asks to act as you in <strong>${escapeHtml(resource.app)}</strong>.</p>`
-		: `<p><strong>${escapeHtml(clientName)}</strong> asks to know who you are. It receives your account and name, and no permission.</p>`
+		: `<p><strong>${escapeHtml(clientName)}</strong> asks to know who you are. It receives your account, name and e-mail${
+			client.registration.identity.roles === undefined ? '' : ` and the roles you hold in <strong>${escapeHtml(resource.app)}</strong>`
+		}, and no permission.</p>`
 	const grants = client.registration.identity === undefined
 		? `<p>At most these permissions, and only those you hold yourself:</p>
 		<ul>${permissions.join('')}</ul>`

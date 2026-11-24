@@ -56,6 +56,26 @@ describe('buildResourceAccessClaims', () => {
 	})
 })
 
+describe('an identity resource token', () => {
+	test('round-trips the mailbox and the role keys', () => {
+		const claims = parseAccessClaims(buildResourceAccessClaims({ ...PARAMS, permissions: [], email: 'a@b.cz', roles: ['admin-ops', 'viewer'] }))
+		expect(claims?.email).toBe('a@b.cz')
+		expect(claims?.oauth?.roles).toEqual(['admin-ops', 'viewer'])
+		expect(claims?.perms).toEqual([])
+	})
+
+	test('a token without roles names none', () => {
+		expect(parsedResourceClaims().oauth?.roles).toBeUndefined()
+	})
+
+	test('a malformed role list refuses the whole token', () => {
+		const payload = buildResourceAccessClaims(PARAMS)
+		for (const roles of ['admin', [''], ['Admin'], ['a', 'a'], [1], Array.from({ length: 33 }, (_, index) => `r${index}`)]) {
+			expect(parseAccessClaims({ ...payload, roles })).toBeNull()
+		}
+	})
+})
+
 describe('parseAccessClaims — OAuth claims', () => {
 	test('partial OAuth claims are refused, never read as a native token', () => {
 		const payload = buildResourceAccessClaims(PARAMS)

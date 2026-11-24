@@ -66,15 +66,8 @@ workspace its own running application, where one pinned service could show only 
    (rule 8). The only resource an installation serves the managed clients is the console's `/mcp`, so an external
    client's token is an authoring token like Claude's; registering one trusts it as much.
 
-   **An identity-only resource.** An application outside the installation that only signs people in must not hold an
-   authoring token. The operator binds such an `external` client to an identity resource of its own: an `https`
-   resource URI of the client and an app id that no installation service holds. The client is served that resource
-   alone, with the one scope `identity`; its token names the person (`sub`) and carries no permission, at the exchange
-   and at every refresh, and IAM reads no grant for it. No installation service or application accepts it, because
-   none has its audience, and IAM, the deploy and the reference refuse a binding that would name a platform service's app
-   or resource. The binding lives on the client, not in the resources list, so a client is never served a registered
-   resource beside it, and a grant it held before it was bound mints nothing. The app id is where a later step puts
-   the application's own roles; until then the token carries none.
+   **An external application that only signs people in** is bound to an identity resource of its own instead, and its
+   token carries no permission ([ADR-0084](0084-an-external-application-signs-people-in-through-iam.md)).
 
    **The installation's own command-line client** is a built-in public client, `fabrika-cli`, with no document and no
    redirect URI. It obtains a grant only through the RFC 8628 device grant

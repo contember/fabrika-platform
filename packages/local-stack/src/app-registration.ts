@@ -22,10 +22,11 @@ import type { AppSchema } from '@fabrika/auth-core'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import { controlSchema } from '@fabrika/control/schema'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
+import { identityAppSchemas } from '@fabrika/installation-init'
 import notesConfig from 'fabrika-example-zerops/fabrika.config'
 import { resolve } from 'node:path'
 import { readStateEnv } from './machine-key'
-import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR } from './prepare'
+import { LOCAL_NOTES_IAM_APP_ID, readLocalMcpClients, STATE_DIR } from './prepare'
 
 const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 
@@ -67,5 +68,8 @@ export const registerLocalApps = async (): Promise<void> => {
 		await reconcileSchema({ url: IAM_ORIGIN, app: app.id, schema: app.schema, returnOrigins: app.returnOrigins, adminKey })
 	}
 	await reconcileSchema({ url: IAM_ORIGIN, app: IAM_APP_ID, schema: IAM_APP_SCHEMA, adminKey })
-	console.info(`Local apps registered with IAM: ${[...localApps.map((app) => app.id), IAM_APP_ID].join(', ')}`)
+	// The roles of an external application in `FABRIKA_LOCAL_MCP_CLIENTS_JSON`, as a deploy reconciles them.
+	const identityApps = identityAppSchemas(readLocalMcpClients(process.env) ?? [])
+	for (const { app, schema } of identityApps) await reconcileSchema({ url: IAM_ORIGIN, app, schema, adminKey })
+	console.info(`Local apps registered with IAM: ${[...localApps.map((app) => app.id), IAM_APP_ID, ...identityApps.map(({ app }) => app)].join(', ')}`)
 }

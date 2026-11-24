@@ -1,4 +1,4 @@
-import { isCimdClientId, isOAuthClientId, isOAuthResourceUri, parseOAuthScopes } from '@fabrika/auth-core'
+import { BUILTIN_ROLE_KEYS, isCimdClientId, isOAuthClientId, isOAuthResourceUri, parseOAuthScopes } from '@fabrika/auth-core'
 import type { KeyGrant } from '@fabrika/auth-core'
 
 /**
@@ -14,12 +14,24 @@ function isOAuthClientProvider(value: unknown): value is OAuthClientProvider {
 
 /**
  * The one resource an identity-only client is served: its own, outside the installation. A token for it carries the
- * person's identity and no permission, under `app`, an id no installation service or application holds.
+ * person's identity and no permission, under `app`, an id no installation service or application holds. With `roles`,
+ * the application's roles are IAM's to grant: the token names those the person holds there, and a person holding none
+ * is refused.
  */
 export interface OAuthIdentityResource {
 	app: string
 	resource: string
+	roles?: OAuthIdentityRole[]
 }
+
+/** A role of an external application: IAM grants it and names it in the token; the application decides what it allows. */
+export interface OAuthIdentityRole {
+	key: string
+	name: string
+}
+
+/** How many roles one external application declares. */
+export const MAX_OAUTH_IDENTITY_ROLES = 32
 
 /** The one scope of an identity resource: it names the person and grants nothing. */
 export const OAUTH_IDENTITY_SCOPE = 'identity'
@@ -211,16 +223,37 @@ export function parseOAuthManagedClient(value: unknown): OAuthManagedClient | nu
 	return identity === null || provider !== 'external' ? null : { provider, clientId, redirectUris: uris, identity }
 }
 
-const IDENTITY_KEYS = ['app', 'resource']
+const IDENTITY_KEYS = ['app', 'resource', 'roles']
+const ROLE_KEYS = ['key', 'name']
 /** An app id as every fabrika config writes one; no `@`, so never an application environment's id. */
 const IDENTITY_APP = /^[a-z0-9][a-z0-9-]{0,62}$/
+/** A role key; never a built-in one (`admin` means every action of an application). */
+const IDENTITY_ROLE_KEY = /^[a-z0-9][a-z0-9-]{0,62}$/
 
 function parseOAuthIdentityResource(value: unknown): OAuthIdentityResource | null {
 	const app = field(value, 'app')
 	const resource = field(value, 'resource')
-	return hasOnlyKeys(value, IDENTITY_KEYS) && typeof app === 'string' && IDENTITY_APP.test(app) && isOAuthResourceUri(resource)
-		? { app, resource }
-		: null
+	const rawRoles = field(value, 'roles')
+	if (!hasOnlyKeys(value, IDENTITY_KEYS) || typeof app !== 'string' || !IDENTITY_APP.test(app) || !isOAuthResourceUri(resource)) return null
+	if (rawRoles === undefined) return { app, resource }
+	const roles = parseOAuthIdentityRoles(rawRoles)
+	return roles === null ? null : { app, resource, roles }
+}
+
+function parseOAuthIdentityRoles(value: unknown): OAuthIdentityRole[] | null {
+	if (!Array.isArray(value) || value.length === 0 || value.length > MAX_OAUTH_IDENTITY_ROLES) return null
+	const roles: OAuthIdentityRole[] = []
+	for (const entry of value) {
+		const key = field(entry, 'key')
+		const name = field(entry, 'name')
+		if (
+			!hasOnlyKeys(entry, ROLE_KEYS) || typeof key !== 'string' || !IDENTITY_ROLE_KEY.test(key) || BUILTIN_ROLE_KEYS.includes(key)
+			|| !isNonemptyText(name)
+			|| name.length > 100 || roles.some((role) => role.key === key)
+		) return null
+		roles.push({ key, name })
+	}
+	return roles
 }
 
 /** The scopes an identity resource's authorization asks for: none, or exactly `identity`. */

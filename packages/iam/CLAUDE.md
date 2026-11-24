@@ -773,11 +773,15 @@ fails if that stops being true — it is the guard, not documentation of one.
   is requested only as `<scope>:<value>` and narrows each of its scope-less actions to that value
   (`resolveOAuthScopeToken`, `@fabrika/iam-contract`): `deploy:alpha` with parameter `app` holds its actions at app
   `alpha` only, whatever wider grant the person holds. A parameterized scope is never a default scope.
-- **AN IDENTITY-ONLY CLIENT IS SERVED ITS OWN RESOURCE ALONE, AND ITS TOKEN CARRIES NO PERMISSION** (ADR-0049,
-  `OAuthManagedClient.identity`). An `external` client may be bound to `{ app, resource }`; `parseOAuthConfig` refuses
-  a binding whose app is a platform audience or a registered resource's app, or whose resource is a registered one.
-  `checkAuthorization` serves such a client that resource with the scope `identity` and nothing else, and
-  `grantCeiling` mints its grant with `perms: []` without reading a grant, and refuses any other grant it holds.
+- **AN IDENTITY-ONLY CLIENT IS SERVED ITS OWN RESOURCE ALONE, AND ITS TOKEN CARRIES NO PERMISSION** (ADR-0084,
+  `OAuthManagedClient.identity`). An `external` client may be bound to `{ app, resource, roles? }`; `parseOAuthConfig`
+  refuses a binding whose app is a platform audience or a registered resource's app, or whose resource is a registered
+  one. `checkAuthorization` serves such a client that resource with the scope `identity` and nothing else, and
+  `grantCeiling` mints its grant with `perms: []` and the person's `email`, and refuses any other grant it holds. With
+  `roles`, `heldIdentityRoles` reads the person's GLOBAL grants of the declared role keys at the app (an internal
+  principal only), the token names them in `roles` and ends with the earliest of their grants, and a person holding
+  none is refused at the consent (`access_denied`), the exchange and every refresh. The deploy reconciles the roles
+  as the app's vocabulary (`identityAppSchemas`, `@fabrika/installation-init`), each granting no action.
 - **A RESOURCE IS SERVED TO ONE KIND OF CLIENT** (`servesClient`, `oauth.ts`). `client: 'cli'` serves it to `fabrika-cli`
   alone, through the device grant; without it only the managed clients get it, through an authorization code. Every
   lookup (the authorization request, the device start, its consent page and each mint) filters by it, so an MCP client

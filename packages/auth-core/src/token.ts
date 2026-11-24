@@ -183,6 +183,11 @@ export interface OAuthTokenClaims {
 	grantId: string
 	/** Unique token id, fresh on every mint. */
 	tokenId: string
+	/**
+	 * The keys of the roles the person holds at an external application that declares roles; absent on every other
+	 * token. The application decides what each role allows; IAM grants it and names it here.
+	 */
+	roles?: string[]
 }
 
 /** Which tokens a verifier accepts: native app tokens, or OAuth tokens minted for one resource of one app. */
@@ -252,6 +257,10 @@ export interface ResourceAccessTokenParams {
 	scopes: string[]
 	grantId: string
 	tokenId: string
+	/** The person's normalized mailbox; an identity resource's token carries it. */
+	email?: string
+	/** The roles the person holds at an external application that declares roles (`OAuthTokenClaims.roles`). */
+	roles?: string[]
 }
 
 /**
@@ -274,6 +283,8 @@ export function buildResourceAccessClaims(params: ResourceAccessTokenParams): Re
 		scope: params.scopes.join(' '),
 		grant: params.grantId,
 		jti: params.tokenId,
+		...(params.email === undefined ? {} : { email: params.email }),
+		...(params.roles === undefined ? {} : { roles: params.roles }),
 	}
 	if (parseAccessClaims(payload)?.oauth === undefined) throw new Error('Invalid resource access token claims')
 	return payload
@@ -523,7 +534,23 @@ function parseOAuthClaims(payload: unknown): OAuthTokenClaims | null | undefined
 	) {
 		return undefined
 	}
-	return { app, clientId, scopes, grantId, tokenId }
+	const roles = parseTokenRoles(prop(payload, 'roles'))
+	if (roles === undefined) return undefined
+	return roles === null ? { app, clientId, scopes, grantId, tokenId } : { app, clientId, scopes, grantId, tokenId, roles }
+}
+
+const TOKEN_ROLE = /^[a-z0-9][a-z0-9-]{0,62}$/
+
+/** Absent → null; distinct role keys → them; anything else → undefined. */
+function parseTokenRoles(value: unknown): string[] | null | undefined {
+	if (value === undefined) return null
+	if (!Array.isArray(value) || value.length > 32) return undefined
+	const roles: string[] = []
+	for (const role of value) {
+		if (typeof role !== 'string' || !TOKEN_ROLE.test(role) || roles.includes(role)) return undefined
+		roles.push(role)
+	}
+	return roles
 }
 
 /**

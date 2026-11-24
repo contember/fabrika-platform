@@ -408,30 +408,54 @@ known to declare `private_key_jwt`.
 
 An application other than Claude or ChatGPT registers with `"provider": "external"`. It is registered one of two ways.
 
-**Identity only** (an operations tool that signs people in through the installation's IAM, say). The entry names the
-client's own resource and an app id for it:
+**Identity only** (an operations tool that signs people in through the installation's IAM, say;
+[ADR-0084](../decisions/0084-an-external-application-signs-people-in-through-iam.md)). The entry names the client's
+own resource, an app id for it and, optionally, the application's roles:
 
 ```json
 {
 	"provider": "external",
 	"clientId": "https://<client host>/oauth/client.json",
 	"redirectUris": ["https://<client host>/oauth/callback"],
-	"identity": { "app": "<app id>", "resource": "https://<client host>" }
+	"identity": {
+		"app": "<app id>",
+		"resource": "https://<client host>",
+		"roles": [
+			{ "key": "admin", "name": "Administrator" },
+			{ "key": "viewer", "name": "Viewer" }
+		]
+	}
 }
 ```
 
 The client is then served that resource alone, with the one scope `identity` (the default when `scope` is omitted).
-Its access token names the signed-in person (`sub`, `label`, `ptype: user`) for `aud` = that resource and `app` = that
-id, and carries no permission: IAM reads no grant for it, at the code exchange and at every refresh. Every installation
-service and every application refuses it, because its audience is none of theirs. The client verifies it against IAM's
-JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). A request for any other resource is `invalid_target`,
-any other scope `invalid_scope`, and a grant the client held before it was bound mints nothing after.
-`app` is a lowercase id without `@`, at most 63 characters (`^[a-z0-9][a-z0-9-]{0,62}$`); the deploy refuses a platform service's app id and a resource on a
-platform host, and IAM refuses a platform audience and a registered resource at boot. Registering only identity-only
-clients leaves MCP authoring off: no `/mcp` row is published and no authoring resource is served. It needs `https`,
-like every client.
-Every active user of the installation can sign in to such a client, an external principal included: the token
-proves who the person is, not that they belong to the application, so the application decides whom it admits.
+Its access token names the signed-in person (`sub`, `label`, `email`, `ptype: user`) for `aud` = that resource and
+`app` = that id, and carries no permission (`perms` is empty), at the code exchange and at every refresh. Every
+installation service and every application refuses it, because its audience is none of theirs. The client verifies it
+against IAM's JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). A request for any other resource is
+`invalid_target`, any other scope `invalid_scope`, and a grant the client held before it was bound mints nothing after.
+
+- **`app`** is a lowercase id without `@`, at most 63 characters (`^[a-z0-9][a-z0-9-]{0,62}$`). The deploy refuses a
+  platform service's app id and a resource on a platform host; IAM refuses a platform audience and a registered
+  resource at boot.
+- **`roles`** (1 to 32): each `key` lowercase like `app` and not a built-in role key (`admin` is IAM's own, so name the
+  application's administrator role otherwise, `admin-ops` say), each `name` what the console shows. Every deploy
+  reconciles them into IAM as the application's vocabulary, each role granting no action, with the provisioning key
+  it already holds; the application holds no IAM credential. Two clients of one app declare the same roles. An
+  installation administrator, or a user administrator in its scope, grants a role in the console's user access form (Add access: app `<app id>`, the role, no scope),
+  globally: a role granted in a scope value is not named.
+- **With `roles`,** the token carries `roles`: the keys the person holds, in declared order. A person holding none is
+  refused at the consent (`access_denied` to the redirect URI) and at the code exchange. Each refresh resolves the
+  roles again (an access token lives 300 s), so a removed role ends the sign-in at the next refresh, and a token never
+  outlives the grant of a role it names. An external principal holds no such role. The application decides what each
+  role allows.
+- **Without `roles`,** every active user of the installation can sign in, an external principal included, and the token
+  names no role: it proves who the person is, not that they belong to the application, so the application decides whom
+  it admits.
+
+Registering only identity-only clients leaves MCP authoring off: no `/mcp` row is published and no authoring resource
+is served. It needs `https`, like every client. Locally, `FABRIKA_LOCAL_MCP_CLIENTS_JSON` takes the same entries and
+`local:up` reconciles their roles.
 
 **Authoring.** Without `identity`, the kind is a label: IAM treats the client as any other, so it gets what they get.
 That is an access token for a registered resource, and the only one an installation serves managed clients is the
