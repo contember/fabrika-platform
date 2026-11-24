@@ -374,10 +374,6 @@ describe('IAM resource graph', () => {
 
 		const refused = (clients: unknown[]) => () =>
 			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify(clients) })
-		// MCP authoring is not supported on Cloudflare yet.
-		const claude = { provider: 'claude', clientId: 'https://claude.ai/oauth/client', redirectUris: ['https://claude.ai/api/mcp/auth_callback'] }
-		expect(refused([sonda, claude])).toThrow('is not supported on Cloudflare yet')
-		expect(refused([{ ...sonda, identity: undefined }])).toThrow('is not supported on Cloudflare yet')
 		expect(refused([{ ...sonda, identity: { ...sonda.identity, app: 'operations' } }])).toThrow("is a platform service's")
 		// What IAM would refuse to boot with is refused at the deploy: here an admin audience the installation names.
 		expect(() =>
@@ -407,6 +403,45 @@ describe('IAM resource graph', () => {
 			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...REMOTE_SOURCE, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([sonda]) })
 		)
 			.toThrow('FABRIKA_PLATFORM_MCP_CLIENTS_JSON needs FABRIKA_CONTROL_URL')
+	})
+
+	test("an MCP client turns MCP authoring on: IAM registers the console's /mcp for it (ADR-0049)", () => {
+		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
+		const claude = { provider: 'claude', clientId: 'https://claude.ai/oauth/client', redirectUris: ['https://claude.ai/api/mcp/auth_callback'] }
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([claude]) })
+		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)
+		expect(parsed?.clients.map(({ provider, clientId }) => ({ provider, clientId }))).toEqual([{ provider: 'claude', clientId: claude.clientId }])
+		expect(parsed?.resources.find(({ resource }) => resource === 'https://console.example.com/mcp')).toEqual({
+			app: 'vozka',
+			resource: 'https://console.example.com/mcp',
+			defaultScopes: ['authoring'],
+			scopeGrants: [{
+				scope: 'authoring',
+				permissions: [
+					{ action: 'source.workspace.read' },
+					{ action: 'source.workspace.write' },
+					{ action: 'source.pull-request.create' },
+					{ action: 'deploy.trigger' },
+					{ action: 'deploy.read' },
+				],
+			}],
+		})
+
+		// Identity-bound clients alone leave MCP authoring off: no /mcp resource for them.
+		const identityOnly = {
+			provider: 'external',
+			clientId: 'https://ops.example.org/oauth/client.json',
+			redirectUris: ['https://ops.example.org/callback'],
+			identity: { app: 'ops-tool', resource: 'https://ops.example.org' },
+		}
+		const off = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
+			...relayed,
+			FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([identityOnly]),
+		})
+		expect(parseOAuthConfig(off.options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)?.resources.map(({ resource }) => resource)).toEqual([
+			'https://console.example.com/api/rpc',
+			'https://console.example.com/operations/api/rpc',
+		])
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {

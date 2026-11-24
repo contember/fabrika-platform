@@ -153,7 +153,7 @@ jobs:
           # Control's public origin: IAM hands its mail to Control's relay there, under a key derived from the
           # provisioning key, and the relay sends it with Control's copy of the transport.
           FABRIKA_CONTROL_URL: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}
-          # The operator's identity-bound external OAuth clients (ADR-0084), a JSON array; unset registers none.
+          # The operator's OAuth clients: identity-bound ones (ADR-0084) and MCP clients (ADR-0049), a JSON array; unset registers none.
           FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
           # Only so an identity resource on the Operations host is refused here, before IAM deploys.
           OPERATIONS_HOSTNAME: ${{ vars.OPERATIONS_HOSTNAME }}
