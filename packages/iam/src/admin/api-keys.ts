@@ -119,7 +119,7 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 	}
 	const scope = parseScope(input)
 	if (!scope.ok) {
-		return fail(400, 'scopeType and scopeValue must be both set or both omitted')
+		return fail(400, scope.message)
 	}
 	const contractProblem = await contractGrantProblem(c.services.repositories.appSchema, app, { ...roleOrInline, scopeType: scope.scopeType }, false)
 	if (contractProblem !== null) {
@@ -139,13 +139,13 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 	const { principals, grants, credentials, audit } = c.services.repositories
 	await audit.commit([
 		principals.createServiceStatement(principalId, label),
-		grants.grantStatement(grantId, {
+		...grants.grantSetStatements(grantId, {
 			principalId,
 			app,
 			roleKey: roleOrInline.roleKey,
 			permissions: roleOrInline.permissions,
 			scopeType: scope.scopeType,
-			scopeValue: scope.scopeValue,
+			scopeValues: scope.scopeValues,
 			grantedBy: c.admin.id,
 			expiresAt,
 		}),
@@ -176,7 +176,8 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 				roleKey: roleOrInline.roleKey,
 				permissions: roleOrInline.permissions,
 				scopeType: scope.scopeType,
-				scopeValue: scope.scopeValue,
+				scopeValue: scope.scopeValues?.[0] ?? null,
+				...(scope.scopeValues !== null && scope.scopeValues.length > 1 ? { scopeValues: scope.scopeValues } : {}),
 				app,
 			},
 		})),
@@ -268,9 +269,10 @@ const provisionApiKeyRequestSchema = z.object({
 	permissions: z.array(z.string()).optional().catch(undefined),
 	scopeType: z.string().nullable().optional().catch(undefined),
 	scopeValue: z.string().nullable().optional().catch(undefined),
+	scopeValues: z.array(z.string()).optional().catch(undefined),
 	app: z.string().nullable().optional().catch(undefined),
 	expiresAt: z.number().finite().optional().catch(undefined),
-}).transform(({ label, type, roleKey, permissions, scopeType, scopeValue, app, expiresAt }) => {
+}).transform(({ label, type, roleKey, permissions, scopeType, scopeValue, scopeValues, app, expiresAt }) => {
 	return {
 		label,
 		type,
@@ -278,6 +280,7 @@ const provisionApiKeyRequestSchema = z.object({
 		...(permissions !== undefined ? { permissions } : {}),
 		...(scopeType !== undefined ? { scopeType } : {}),
 		...(scopeValue !== undefined ? { scopeValue } : {}),
+		...(scopeValues !== undefined ? { scopeValues } : {}),
 		...(app !== undefined ? { app } : {}),
 		...(expiresAt !== undefined ? { expiresAt } : {}),
 	}

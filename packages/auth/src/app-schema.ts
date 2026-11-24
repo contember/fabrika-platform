@@ -1,6 +1,7 @@
 import {
 	type AppSchema,
 	BUILTIN_ROLE_KEYS,
+	dimensionValuesProblem,
 	displayNameProblem,
 	isActionAllowed,
 	isOwnWorkloadName,
@@ -27,6 +28,10 @@ const scopeSchema = z.object({
 	members: z.object({ manage: z.string().min(1), list: z.string().min(1) }).optional(),
 	directory: z.literal('labels').optional(),
 	lookups: z.array(z.string().min(1)).optional(),
+	values: z.array(z.object({ value: z.string(), label: z.string().optional() }).strict()).superRefine((values, ctx) => {
+		const problem = dimensionValuesProblem(values)
+		if (problem !== null) ctx.addIssue({ code: 'custom', message: `the scope ${problem}` })
+	}).optional(),
 })
 const actionSchema = z.object({ action: z.string().min(1), description: z.string().min(1).optional() })
 const roleSchema = z.object({

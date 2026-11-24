@@ -289,6 +289,20 @@ describe('classifyAccess', () => {
 		expect(classifyAccess(EMPTY_SNAPSHOT, labelled).changes).toContainEqual({ effect: 'widens', line, review: 'closer' })
 	})
 
+	test("a dimension's listed values change no access: one neutral line naming them, and one when the list goes", () => {
+		const plain = snapshot()
+		const listed = snapshot(
+			edited("workspace: { creator: 'owner' }", "workspace: { creator: 'owner', values: [{ value: 'acme', label: 'Acme' }, { value: 'globex' }] }"),
+		)
+		const offered = 'The console offers these values of `workspace` when an administrator grants there: `acme`, `globex`'
+		expect(classifyAccess(plain, listed)).toEqual({ outcome: 'no-widening', changes: [{ effect: 'neutral', line: offered }] })
+		expect(classifyAccess(listed, plain)).toEqual({
+			outcome: 'no-widening',
+			changes: [{ effect: 'neutral', line: 'The console takes any value of `workspace` as free text again' }],
+		})
+		expect(classifyAccess(listed, listed).changes).toEqual([])
+	})
+
 	test("the application's own people widen for closer review, and so do their labels; removing them narrows", () => {
 		const people = snapshot(edited("app: 'notes',", "app: 'notes',\n\tmembers: { manage: 'notes.delete', list: 'notes.read' },"))
 		const labelled = snapshot(

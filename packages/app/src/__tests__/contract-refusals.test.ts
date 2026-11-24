@@ -510,6 +510,27 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		})
 	})
 
+	test("a dimension's listed values: carried sorted to the artifact and the IAM schema, absent when undeclared, refused when malformed", () => {
+		const listed = (values: readonly { value: string; label?: string }[]) => ({
+			...base,
+			dimensions: { ...base.dimensions, workspace: { ...base.dimensions['workspace'], values } },
+		})
+		const artifact = buildArtifact(listed([{ value: 'globex' }, { value: 'acme', label: 'Acme' }]), noteTables)
+		expect(artifact.dimensions['workspace']?.values).toEqual([{ value: 'acme', label: 'Acme' }, { value: 'globex' }])
+		expect(schemaFromContract(artifact).scopes.find((scope) => scope.type === 'workspace')?.values).toEqual([
+			{ value: 'acme', label: 'Acme' },
+			{ value: 'globex' },
+		])
+		const plain = buildArtifact(base, noteTables)
+		expect('values' in (plain.dimensions['workspace'] ?? {})).toBe(false)
+		expect(schemaFromContract(plain).scopes.some((scope) => 'values' in scope)).toBe(false)
+		expect(build(listed([]))).toEqual(["dimension 'workspace' values: lists no value (allowed: at least one, or no values field)"])
+		expect(build(listed([{ value: 'acme' }, { value: 'acme' }]))).toEqual(["dimension 'workspace' values: lists the value 'acme' twice"])
+		expect(build(listed([{ value: 'acme', label: ' ' }]))).toEqual([
+			"dimension 'workspace' values: labels the value 'acme' with ' ' (allowed: 1 to 120 characters)",
+		])
+	})
+
 	test("a directory other than 'labels', or one on a dimension that declares no members", () => {
 		const problems = build({
 			...base,

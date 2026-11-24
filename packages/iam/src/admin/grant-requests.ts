@@ -15,12 +15,13 @@ import {
 import { uuidv7 } from '@fabrika/platform'
 import { PROVISIONING_ADMIN_ID } from '../auth'
 import { contractGrantProblem, externalGrantProblem } from '../contract-rules'
-import { type AuditEventInput, auditLabelOf, type CreateGrantRequestInput, type GrantRequestRow, type GrantRow } from '../db'
+import { type AuditEventInput, auditLabelOf, type CreateGrantRequestInput, ExternalGrantError, type GrantRequestRow, type GrantSetRead } from '../db'
+import { requestScopeValues } from '../repositories/grants'
 import { unixNow } from '../repositories/sql'
 import type { Services } from '../services'
 import { parseStoredPermissions } from '../stored-permissions'
 import { type AdminContext, adminEvent, fail } from './context'
-import { appField, parseRoleOrInline } from './grant-support'
+import { appField, grantIdOf, parseRoleOrInline } from './grant-support'
 import type { ResolvedAdmin } from './router'
 import { managesApp, requireGrantablePrincipal } from './user-admin'
 
@@ -50,7 +51,8 @@ export async function requestGrantChange(
 				roleKey: change.roleKey,
 				permissions: change.permissions,
 				scopeType: change.scopeType,
-				scopeValue: change.scopeValue,
+				scopeValue: change.scopeValues?.[0] ?? null,
+				...(change.scopeValues !== null && change.scopeValues.length > 1 ? { scopeValues: change.scopeValues } : {}),
 			}),
 	)
 	return toGrantRequestDto(services, row, now)
@@ -97,22 +99,32 @@ export async function decideGrantRequestUseCase(c: AdminContext, person: boolean
 	const current = await approvable(c, request)
 	const decision = { id: uuidv7(), by: c.admin.id, at: now }
 	const action = request.kind === 'create' ? 'iam.grant.create' : request.kind === 'update' ? 'iam.grant.update' : 'iam.grant.revoke'
-	const applied = await c.services.repositories.grants.applyRequest(request, current, decision, (grantId) =>
-		adminEvent(c, {
-			action,
-			resourceType: 'grant',
-			resourceId: grantId,
-			metadata: {
-				principalId: request.principal_id,
-				app: request.app,
-				roleKey: request.role_key,
-				permissions: request.permissions === null ? null : parseStoredPermissions(request.permissions),
-				scopeType: request.scope_type,
-				scopeValue: request.scope_value,
-				grantRequestId: request.id,
-				requestedBy: request.requested_by,
-			},
-		}))
+	const scopeValues = requestScopeValues(request)
+	let applied: Awaited<ReturnType<typeof c.services.repositories.grants.applyRequest>>
+	try {
+		applied = await c.services.repositories.grants.applyRequest(request, current, decision, (grantId) =>
+			adminEvent(c, {
+				action,
+				resourceType: 'grant',
+				resourceId: grantId,
+				metadata: {
+					principalId: request.principal_id,
+					app: request.app,
+					roleKey: request.role_key,
+					permissions: request.permissions === null ? null : parseStoredPermissions(request.permissions),
+					scopeType: request.scope_type,
+					scopeValue: scopeValues?.[0] ?? null,
+					...(scopeValues !== null && scopeValues.length > 1 ? { scopeValues } : {}),
+					grantRequestId: request.id,
+					requestedBy: request.requested_by,
+				},
+			}))
+	} catch (cause) {
+		// Both roll the whole batch back, the claim included: the request stays open for a later decision or a rejection.
+		if (cause instanceof ExternalGrantError) return fail(409, `${cause.message}; reject the request`)
+		if (await heldElsewhere(c, request)) return fail(409, 'the principal already holds this grant; reject the request')
+		throw cause
+	}
 	if (!applied.claimed) return fail(409, 'the grant request is no longer open')
 	if (applied.changed === null) {
 		return fail(409, 'the change no longer applies: the access changed since the checks; the request is closed as failed')
@@ -164,14 +176,15 @@ export async function withdrawOwnGrantRequestUseCase(c: GrantRequester, input: D
  * The checks the original change ran, again, with the approver as the administrator: the approver must be able to make
  * the change now. Answers the grant an `update` or a `revoke` acts on.
  */
-async function approvable(c: AdminContext, request: GrantRequestRow): Promise<GrantRow | null> {
+async function approvable(c: AdminContext, request: GrantRequestRow): Promise<GrantSetRead | null> {
 	const { grants, principals, appSchema } = c.services.repositories
 	const principal = await principals.getPrincipalById(request.principal_id)
 	if (principal === null) return fail(409, 'the principal no longer exists; reject the request')
 	if (await grants.isWorkloadPrincipal(principal.id)) return fail(409, 'a job, a webhook or a connector holds no grant')
 	requireGrantablePrincipal(c, principal)
-	const current = request.grant_id === null ? null : await grants.getGrantById(request.grant_id)
-	if (request.kind !== 'create' && (current === null || current.app !== request.app || current.principal_id !== principal.id)) {
+	const current = request.grant_id === null ? null : await grants.getGrantSet(request.grant_id)
+	const [held] = current?.rows ?? []
+	if (request.kind !== 'create' && (held === undefined || held.app !== request.app || held.principal_id !== principal.id)) {
 		return fail(409, 'the grant is gone; reject the request')
 	}
 	if (request.kind === 'revoke') return current
@@ -190,15 +203,24 @@ async function approvable(c: AdminContext, request: GrantRequestRow): Promise<Gr
 	const problem = await contractGrantProblem(appSchema, request.app, authorization, principal.type === 'user')
 		?? await externalGrantProblem(appSchema, principal, request.app, authorization)
 	if (problem !== null) return fail(409, problem)
-	if (request.role_key !== null) {
-		const held = (await grants.listGrants(principal.id)).some((grant) =>
-			grant.id !== request.grant_id && grant.app === request.app && grant.role_key === request.role_key
-			&& grant.scope_type === request.scope_type && grant.scope_value === request.scope_value
-			&& (grant.expires_at === null || grant.expires_at > unixNow())
-		)
-		if (held) return fail(409, 'the principal already holds this grant; reject the request')
-	}
+	if (await heldElsewhere(c, request)) return fail(409, 'the principal already holds this grant; reject the request')
 	return current
+}
+
+/**
+ * Whether another grant of the principal already holds the requested role in one of the requested values. A scoped one
+ * counts expired too: the unique index refuses the value either way; only an expired app-wide grant is renewed in place.
+ */
+async function heldElsewhere(c: AdminContext, request: GrantRequestRow): Promise<boolean> {
+	if (request.role_key === null) return false
+	const values = requestScopeValues(request)
+	return (await c.services.repositories.grants.listGrants(request.principal_id)).some((grant) =>
+		grantIdOf(grant) !== request.grant_id && grant.app === request.app && grant.role_key === request.role_key
+		&& grant.scope_type === request.scope_type
+		&& (values === null
+			? grant.scope_value === null && (grant.expires_at === null || grant.expires_at > unixNow())
+			: grant.scope_value !== null && values.includes(grant.scope_value))
+	)
 }
 
 /**
@@ -241,6 +263,7 @@ async function toGrantRequestDto(services: Services, row: GrantRequestRow, now: 
 		permissions: row.permissions === null ? null : parseStoredPermissions(row.permissions),
 		scopeType: row.scope_type,
 		scopeValue: row.scope_value,
+		scopeValues: requestScopeValues(row),
 		grantExpiresAt: row.grant_expires_at,
 		requestedBy: row.requested_by,
 		requestedByLabel: (await principals.getPrincipalById(row.requested_by))?.label ?? null,

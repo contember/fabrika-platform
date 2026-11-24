@@ -30,6 +30,7 @@ bun test               # app-environment · canonical-path · client-address · 
 | `permissions.ts`           | `matchAction` and `permits` — the authorization decision itself — `uniquePermissions`, IAM's dedupe of resolved entries, and `narrowPermissions`, its ceiling of an OAuth scope or a terminal; the test kit's IAM applies both.                              |
 | `public-egress.ts`         | `PUBLIC_EGRESS`, `publicEgressRefusal` and `isPublicAddress` — what a cron job's `egress: 'public'` refuses by the URL and by an address (ADR-0075); the runtime guard and the checker share it.                                                             |
 | `requirement.ts`           | `satisfies` — an endpoint requirement checked against a token's permissions — and `callerOf`, a token's caller kind.                                                                                                                                         |
+| `scope-values.ts`          | `DimensionValue` and `dimensionValuesProblem`: the values a dimension lists for the console (ADR-0085), one rule for the build, the artifact parser, the checker and IAM.                                                                                    |
 | `sha256.ts`                | `sha256Hex` — synchronous SHA-256, for the digests checked where nothing may await.                                                                                                                                                                          |
 | `token.ts`                 | The access-token claim shape, cookie/prefix/TTL names, the size bound, `buildAccessClaims`/`parse…`.                                                                                                                                                         |
 | `terminal.ts`              | `terminalIdentifyProblem` (the identification page rule), `IamTerminalRpc` and its inputs and results (ADR-0067).                                                                                                                                            |
@@ -136,7 +137,8 @@ bun test               # app-environment · canonical-path · client-address · 
   whose order carries no meaning — `endpoints` by id, `reservedPrefixes`, role `grants` and `assignableBy`, RPC
   and endpoint `callers`, link `grants`, webhook and job `actions`, export `consumers`, import `procedures` and
   `usedBy`, a declared site's `connect`, file `types`, admission `contentTypes`, CSP sources by origin, table `insert`, `update` and
-  `inherit`, a reveal's and a member reveal's `actions`, enum `values` — by code unit; a condition's `allOf` and `anyOf`
+  `inherit`, a reveal's and a member reveal's `actions`, enum `values` — by code unit, and a dimension's listed `values` by their
+  `value`; a condition's `allOf` and `anyOf`
   operands and its `in` and `notIn` lists by their canonical JSON (`canonicalCondition`). Three arrays are ordered: tuple `items` and union `options`, because the
   order changes what a schema admits, and an attachment's `columns`, because it is the file's column order. `canonicalArtifactJson` also sorts object keys; it is the only
   serialization a digest of an artifact may be taken over. A new array field is unordered unless it is added to

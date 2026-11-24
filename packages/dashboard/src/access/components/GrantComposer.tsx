@@ -5,13 +5,13 @@ import { useAppVocab } from '../lib/useAppVocab'
 import { ActionPicker } from './ActionPicker'
 import { AppPicker, type AppValue, resolveApp } from './AppPicker'
 import { RolePicker } from './RolePicker'
-import { resolveScope, ScopePicker, type ScopeValue } from './ScopePicker'
+import { resolveScope, scopedValue, ScopePicker, type ScopeValue, ScopeValuesField } from './ScopePicker'
 
 /**
  * The authorization a grant / API-key / mapping confers, composed here:
  *  - `app`: the app the grant counts for (null = cross-app).
  *  - role XOR inline: exactly one of `roleKey` / `permissions` (enforced by the form).
- *  - scope: `scopeType` / `scopeValue` (both null = global).
+ *  - scope: `scopeType` / `scopeValues` (both null = global; several values are one grant, ADR-0085).
  *
  * This is the subset of `CreateGrantRequest` / `ProvisionApiKeyRequest` the composer owns;
  * callers add `principalId` / `label` / `expiresAt` around it.
@@ -21,7 +21,8 @@ export interface GrantAuthorization {
 	roleKey?: string
 	permissions?: string[]
 	scopeType: string | null
-	scopeValue: string | null
+	/** Omitted for a global grant. */
+	scopeValues?: string[]
 }
 
 /** 'role' = a named role/policy; 'inline' = an ad-hoc action set. Exactly one applies. */
@@ -64,7 +65,9 @@ export function useGrantComposerState(initial?: GrantDto): GrantComposerState & 
 	const [roleKey, setRoleKey] = useState(initial?.roleKey ?? '')
 	const [permissions, setPermissions] = useState<string[]>(initial?.permissions ?? [])
 	const [scope, setScope] = useState<ScopeValue>(
-		initial?.scopeType ? { kind: 'scoped', type: initial.scopeType, value: initial.scopeValue ?? '' } : { kind: 'global' },
+		initial?.scopeType
+			? scopedValue(initial.scopeType, initial.scopeValues ?? (initial.scopeValue === null ? [] : [initial.scopeValue]))
+			: { kind: 'global' },
 	)
 
 	function setAppValue(value: AppValue) {
@@ -88,13 +91,14 @@ export function useGrantComposerState(initial?: GrantDto): GrantComposerState & 
 	/** Validate and assemble the authorization, throwing an Error with a user-facing message. */
 	function build(): GrantAuthorization {
 		const app = resolveApp(appValue) // throws if app is still unset
-		const { scopeType, scopeValue } = resolveScope(scope)
+		const resolved = resolveScope(scope)
+		const scoped = { scopeType: resolved.scopeType, ...(resolved.scopeValues === null ? {} : { scopeValues: resolved.scopeValues }) }
 		if (mode === 'role') {
 			if (roleKey === '') throw new Error('Pick a role.')
-			return { app, roleKey, scopeType, scopeValue }
+			return { app, roleKey, ...scoped }
 		}
 		if (permissions.length === 0) throw new Error('Choose at least one permission.')
-		return { app, permissions, scopeType, scopeValue }
+		return { app, permissions, ...scoped }
 	}
 
 	return { appValue, setAppValue, mode, setMode, roleKey, setRoleKey, permissions, setPermissions, scope, setScope, reset, build }
@@ -139,7 +143,7 @@ export function GrantComposer(
 						onChange={(key) => {
 							setRoleKey(key)
 							const dimension = roles.find((role) => role.key === key)?.member?.scope
-							if (dimension && (scope.kind !== 'scoped' || scope.type !== dimension)) setScope({ kind: 'scoped', type: dimension, value: '' })
+							if (dimension && (scope.kind !== 'scoped' || scope.type !== dimension)) setScope(scopedValue(dimension))
 						}}
 						idPrefix={idPrefix}
 						emptyMessage={appValue.kind === 'unset' ? 'Choose an application to see its roles.' : undefined}
@@ -153,15 +157,15 @@ export function GrantComposer(
 				</div>
 			)}
 			{memberScope && (
-				<label>
-					{memberScope} value
-					<input
-						required
-						value={scope.kind === 'scoped' ? scope.value : ''}
-						onChange={(event) => setScope({ kind: 'scoped', type: memberScope, value: event.target.value })}
+				<>
+					<ScopeValuesField
+						dimension={catalog?.scopes.find((dimension) => dimension.type === memberScope) ?? { type: memberScope }}
+						value={scope.kind === 'scoped' && scope.type === memberScope ? scope : { kind: 'scoped', type: memberScope, values: [], text: '' }}
+						onChange={setScope}
+						idPrefix={`${idPrefix}-member`}
 					/>
-					<span className="hint">This membership role requires a specific {memberScope}.</span>
-				</label>
+					<p className="hint">This membership role is granted in specific values of {memberScope}.</p>
+				</>
 			)}
 			<details
 				open={openOptions}

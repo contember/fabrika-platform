@@ -16,10 +16,10 @@ const PROD = appEnvironmentId('notes', 'prod')
 
 describe('a grant scope at ingress', () => {
 	test('a reserved scope type is refused; a dimension and no scope are accepted', () => {
-		expect(parseScope({ scopeType: '~rel', scopeValue: 'assignee' })).toEqual({ ok: false })
-		expect(parseScope({ scopeType: '~other', scopeValue: 'x' })).toEqual({ ok: false })
-		expect(parseScope({ scopeType: 'team', scopeValue: 'acme' })).toEqual({ ok: true, scopeType: 'team', scopeValue: 'acme' })
-		expect(parseScope({})).toEqual({ ok: true, scopeType: null, scopeValue: null })
+		expect(parseScope({ scopeType: '~rel', scopeValue: 'assignee' })).toMatchObject({ ok: false })
+		expect(parseScope({ scopeType: '~other', scopeValues: ['x', 'y'] })).toMatchObject({ ok: false })
+		expect(parseScope({ scopeType: 'team', scopeValue: 'acme' })).toEqual({ ok: true, scopeType: 'team', scopeValues: ['acme'] })
+		expect(parseScope({})).toEqual({ ok: true, scopeType: null, scopeValues: null })
 	})
 })
 

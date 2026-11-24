@@ -203,6 +203,21 @@ describe('PUT/GET /admin/apps/:app/schema', () => {
 		expect(await h.repositories.appSchema.getTerminalIdentifyPath('opice')).toBeNull()
 	})
 
+	test("a dimension's listed values are reconciled, read back, dropped by a schema without them, and a bad list is refused", async () => {
+		const h = createHarness()
+		const token = await asAdmin(h)
+		const values = [{ value: 'acme', label: 'Acme' }, { value: 'globex' }]
+		const listed = { ...SCHEMA, scopes: SCHEMA.scopes.map((scope) => scope.type === 'team' ? { ...scope, values } : scope) }
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, listed))).status).toBe(200)
+		const dto: AppSchemaDto = await (await run(h, req('/admin/apps/opice/schema', 'GET', token))).json()
+		expect(dto.scopes.map((scope) => [scope.type, scope.values])).toEqual([['organization', undefined], ['team', values]])
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, SCHEMA))).status).toBe(200)
+		const dropped: AppSchemaDto = await (await run(h, req('/admin/apps/opice/schema', 'GET', token))).json()
+		expect(dropped.scopes.some((scope) => 'values' in scope)).toBe(false)
+		const repeated = { ...SCHEMA, scopes: SCHEMA.scopes.map((scope) => ({ ...scope, values: [{ value: 'acme' }, { value: 'acme' }] })) }
+		expect((await run(h, req('/admin/apps/opice/schema', 'PUT', token, repeated))).status).toBe(400)
+	})
+
 	test('an identification path that is not an absolute path on the app origin is refused', async () => {
 		const h = createHarness()
 		const token = await asAdmin(h)

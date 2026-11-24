@@ -69,8 +69,10 @@ export interface GrantDto {
 	permissions: string[] | null
 	/** Scope dimension; null = global (both rise/fall together). */
 	scopeType: string | null
-	/** Opaque, app-owned scope value; null = global. */
+	/** Opaque, app-owned scope value; null = global. The first of `scopeValues` (ADR-0085). */
 	scopeValue: string | null
+	/** Every value of `scopeType` the grant holds, sorted; null = global. A grant of one value lists one. */
+	scopeValues: string[] | null
 	/** App id this grant applies to; null = all apps (cross-app). */
 	app: string | null
 	grantedBy: string | null
@@ -161,6 +163,9 @@ export interface SessionList extends CursorList<SessionDto> {
 
 // ── Grants ────────────────────────────────────────────────────────────────────
 
+/** The most scope values one grant holds (ADR-0085). */
+export const MAX_GRANT_SCOPE_VALUES = 100
+
 export interface CreateGrantRequest {
 	principalId: string
 	/** A named role/policy key — XOR `permissions` (supply exactly one). */
@@ -171,6 +176,8 @@ export interface CreateGrantRequest {
 	scopeType?: string | null
 	/** Opaque, app-owned scope value; null / omitted = global. */
 	scopeValue?: string | null
+	/** Several values of `scopeType`, one grant (ADR-0085); XOR `scopeValue`, at most `MAX_GRANT_SCOPE_VALUES`. */
+	scopeValues?: string[]
 	/** App id (a registered app id); null / omitted = all apps (cross-app). */
 	app?: string | null
 	expiresAt?: number | null
@@ -210,7 +217,10 @@ export interface GrantRequestDto {
 	roleKey: string | null
 	permissions: string[] | null
 	scopeType: string | null
+	/** The first requested value; `scopeValues` holds every one. */
 	scopeValue: string | null
+	/** Every requested value, sorted (ADR-0085); null for a global grant. */
+	scopeValues: string[] | null
 	/** The grant's own expiry; null for none. */
 	grantExpiresAt: number | null
 	requestedBy: string
@@ -377,6 +387,8 @@ export interface ProvisionApiKeyRequest {
 	scopeType?: string | null
 	/** Opaque, app-owned scope value; null / omitted = global. */
 	scopeValue?: string | null
+	/** Several values of `scopeType`, one grant (ADR-0085); XOR `scopeValue`, at most `MAX_GRANT_SCOPE_VALUES`. */
+	scopeValues?: string[]
 	/** App id (a registered app id); null / omitted = all apps. */
 	app?: string | null
 	expiresAt?: number | null

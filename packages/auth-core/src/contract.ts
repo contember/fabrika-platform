@@ -4,6 +4,7 @@
 import type { Locale } from './locale'
 import type { MailTemplates } from './mail'
 import type { DeclaredEgress } from './public-egress'
+import type { DimensionValue } from './scope-values'
 import type { TerminalArtifact } from './terminal'
 
 /**
@@ -497,6 +498,8 @@ export interface DimensionArtifact {
 	readonly members: { readonly manage: string; readonly list: string } | null
 	/** `labels`: the member directory shows labels to `members.list` holders. Absent unless declared, so digests stay. */
 	readonly directory?: 'labels'
+	/** The values the console offers for a grant in this dimension (ADR-0085). Absent unless declared, so digests stay. */
+	readonly values?: readonly DimensionValue[]
 }
 
 export interface RoleArtifact {

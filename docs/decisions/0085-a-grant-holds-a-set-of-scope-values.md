@@ -1,0 +1,96 @@
+---
+id: 0085
+title: A grant holds a set of scope values, picked from the values the application lists
+status: accepted
+date: 2026-11-24
+---
+
+# 0085 — A grant holds a set of scope values, picked from the values the application lists
+
+## Context
+
+A scoped grant names one dimension and one value (`scope_type`, `scope_value`). A key that may act in four
+organisations needs four grants, added one by one in the console, and each value is typed into a free text box. IAM
+treats a value as opaque and never checks it ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md) rule 6), so a
+typo surfaces only later, as data the key cannot see.
+
+The application knows its values; IAM and the console do not. Some sets are fixed in the code (a region, a tenant
+configured at build time), others are created at run time (an organisation a person creates).
+
+What a grant gives is read in many places: permission resolution and the token, the membership operations, the
+assigner and delegation checks, the unique indexes that refuse a duplicate role grant, the authority deadlines. Each
+reads one `scope_value` per row, on two SQL engines.
+
+## Decision
+
+### 1. A grant holds a set of values of one dimension
+
+A grant with a scope holds one or more values of one dimension. IAM stores it as one `grants` row per value. The rows
+of a grant with more than one value share `scope_set`, the grant's id; a grant of one value keeps `scope_set` NULL,
+which is every grant written before this decision, so those stay as they are.
+
+Each row is an ordinary grant. Resolution gives one token entry per value, so the proxy and the application see what
+they saw for separate grants: a request matches when its value is one of the set. Nothing that reads grants changes,
+and the token, the manifest and the framework do not change either.
+
+The administration API treats the set as one grant: `grants.create`, `grants.update` and `apiKeys.provision` take
+`scopeValues`, `GrantDto` answers `scopeValues` (sorted) beside `scopeValue` (its first value, for older readers), and
+one change of the set writes one audit record in its own transaction. A grant's id is the id of its set
+(`COALESCE(scope_set, id)`), so an edit keeps it. A set holds at most `MAX_GRANT_SCOPE_VALUES` (100) values. Two role
+grants of one principal still may not share a value: that is the duplicate the unique index refuses, answered 409.
+
+Where an application's grants wait for a second administrator
+([ADR-0083](0083-an-environment-chooses-what-waits-for-approval.md)), a change of a set is one request: it carries every value,
+grants none of them while it waits, and its approval writes, replaces or revokes the whole set in the transaction that
+claims it, or nothing.
+
+### 2. The application lists a dimension's values in its contract
+
+A dimension may declare `values: [{ value, label? }]` in the vocabulary, a static list. The artifact carries it only
+when declared, so no existing digest changes; IAM's schema reconcile stores it per scope; the console reads it with the
+application's schema. The approval diff shows a change of the list as a neutral line: the list decides nothing.
+
+The list is information for the person who grants, not authorization. IAM does not refuse a value outside it: a value
+may exist before the next deploy lists it, and a grant may outlive the value.
+
+**Decided, not built: a dimension whose values the console asks the application for.** The application names a
+procedure the console calls with the administrator's identity, so the application answers the values that person may
+see. It needs an application token for the administrator, which IAM does not mint today, so it is a follow-up with its
+own decision on that token and its own security review.
+
+### 3. The console offers the listed values as checkboxes
+
+The grant form offers one checkbox per listed value, with its label. When the application lists no values, the form
+falls back to free text, one value per line, under a visible warning that nothing checks the values. A value the grant
+holds that the application no longer lists is shown checked and flagged; it goes only when the administrator unchecks
+it, never silently.
+
+## Consequences
+
+- A key for several values is one grant, one form, one audit record, one revocation.
+- Every reader of grants stays correct by construction: a membership revoke of one value, an assigner check in one
+  value or an expired row renewed by an assignment acts on that value's row, and the set shrinks or changes with it.
+  The console groups rows by `scope_set`; a row an assignment renewed may expire later than the rest of its set, and
+  the console shows the set's latest expiry, so a set reads as expired only once none of its values grants anything.
+- A set multiplies token entries like separate grants do; the token bounds of ADR-0022 rule 6 apply unchanged, and the
+  cap keeps a set from being the one thing that outgrows them.
+- A static list changes only with a deploy of the application. Values created at run time wait for the procedure
+  source; until then such a dimension falls back to free text.
+- **Rollout.** IAM's migration adds `grants.scope_set`, `app_scopes.value_list` and `grant_requests.scope_values`, all
+  NULL on every existing row; an existing grant reads as a set of one and resolves exactly as before, and an open
+  request reads as a request of its one value. `AppSchema.scopes[].values` is optional, so a schema an older framework
+  reconciles parses as before and its dimensions fall back to free text; a framework that lists values reconciles them
+  on its next deploy. No token, header or manifest row changes, so no application has to
+  upgrade or redeploy (ADR-0062).
+
+## Alternatives considered
+
+- **A set column on the grant row** (a JSON array beside `scope_value`). Every reader above would need a set-aware
+  rewrite on both engines, the membership and assigner queries included, and SQLite cannot change the
+  both-or-neither `CHECK` on the scope columns without rebuilding the table. One row per value keeps those readers as
+  they are.
+- **Keep one grant per value and only add a multi-select to the form.** The console would write N grants that it then
+  shows, edits and revokes one by one; an edit of "the key's organisations" would be N independent changes with N
+  audit records and no single grant to point at.
+- **IAM refuses a value the application does not list.** A run-time value would be refused until the next deploy, and
+  removing a value from the list would make existing grants unchangeable. The console's flag shows the drift instead.

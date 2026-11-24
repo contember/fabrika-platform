@@ -34,6 +34,7 @@ const authorization = {
 	permissions: z.array(nonEmpty).optional(),
 	scopeType: optionalNullableString,
 	scopeValue: optionalNullableString,
+	scopeValues: z.array(z.string()).optional(),
 	app: optionalNullableString,
 	expiresAt: z.number().finite().optional().nullable(),
 }

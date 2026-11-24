@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { SecretModal } from '../../../access/components/SecretModal'
 import { api } from '../../../access/lib/api'
 import { AppName } from '../../../access/lib/app-names'
-import { fmtExpiry, fmtScope, shareLinkState } from '../../../access/lib/format'
+import { fmtExpiry, fmtGrantScope, shareLinkState } from '../../../access/lib/format'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 import { Icon } from '../../../components/Icon'
 import { PrincipalStatus, Status } from '../../../components/Status'
@@ -118,7 +118,7 @@ function GrantSummary({ grants }: { grants: GrantDto[] }) {
 	return (
 		<>
 			{grants.map((grant) => {
-				const scope = fmtScope(grant.scopeType === null ? null : { type: grant.scopeType, value: grant.scopeValue ?? '' })
+				const scope = fmtGrantScope(grant)
 				return (
 					<div key={grant.id} className="grant-chip">
 						<code>{grant.roleKey ?? (grant.permissions ?? []).join(', ')}</code> on {grant.app === null ? 'all apps' : <AppName app={grant.app} />} ·{' '}

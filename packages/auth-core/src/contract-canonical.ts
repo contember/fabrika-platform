@@ -32,7 +32,11 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 	return {
 		format: artifact.format,
 		app: artifact.app,
-		dimensions: artifact.dimensions,
+		dimensions: mapValues(
+			artifact.dimensions,
+			(dimension) =>
+				dimension.values === undefined ? dimension : { ...dimension, values: [...dimension.values].sort((a, b) => compare(a.value, b.value)) },
+		),
 		actions: artifact.actions,
 		roles: mapValues(artifact.roles, canonicalRole),
 		...(artifact.relations === undefined ? {} : { relations: artifact.relations }),

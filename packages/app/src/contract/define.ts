@@ -1,7 +1,7 @@
 // `defineContract`: the application's whole access surface as data. Browser-safe: it builds plain objects and
 // holds zod schemas; it validates nothing at runtime, `compileContract` does.
 
-import type { BuiltinRoleKey, ChallengeProvider, Locale, MailTemplates, RpcCaller, WebhookScheme } from '@fabrika/auth-core'
+import type { BuiltinRoleKey, ChallengeProvider, DimensionValue, Locale, MailTemplates, RpcCaller, WebhookScheme } from '@fabrika/auth-core'
 import type { z } from 'zod/v4'
 import type { DataObject, DataSchema, ZodOf } from '../schema/data-schema'
 import {
@@ -92,6 +92,12 @@ export interface DimensionDef<A extends string, D extends string, R extends stri
 	 * picker. A user's label spells its address, so this widens what members see of each other: a reviewed declaration.
 	 */
 	readonly directory?: 'labels'
+	/**
+	 * The values the console offers as checkboxes when an administrator grants a role in this dimension, each with an
+	 * optional label (ADR-0085). Information for the person who grants, never a check: IAM takes a value outside it.
+	 * Absent, the console takes free text.
+	 */
+	readonly values?: readonly DimensionValue[]
 }
 
 export interface RoleDef<A extends string, D extends string, R extends string> {

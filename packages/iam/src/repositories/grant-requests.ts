@@ -16,7 +16,10 @@ export interface GrantRequestRow {
 	/** Inline action-pattern set (JSON array); XOR `role_key`. */
 	permissions: string | null
 	scope_type: string | null
+	/** The first of the requested values, or the only one; null for a global grant. */
 	scope_value: string | null
+	/** Every requested value (JSON array) when there are several (ADR-0085); read through `requestScopeValues`. */
+	scope_values: string | null
 	grant_expires_at: number | null
 	requested_by: string
 	requested_at: number
@@ -36,7 +39,8 @@ export interface CreateGrantRequestInput {
 	roleKey: string | null
 	permissions: string[] | null
 	scopeType: string | null
-	scopeValue: string | null
+	/** Sorted and distinct; null for a global grant. */
+	scopeValues: string[] | null
 	grantExpiresAt: number | null
 	requestedBy: string
 	requestedAt: number
@@ -87,8 +91,8 @@ export class GrantRequestRepository {
 		const id = uuidv7()
 		const [created] = await this.writer.run<GrantRequestRow>([{
 			sql: `INSERT INTO grant_requests (id, app, kind, principal_id, grant_id, role_key, permissions, scope_type, scope_value,
-					grant_expires_at, requested_by, requested_at, expires_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+					scope_values, grant_expires_at, requested_by, requested_at, expires_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
 			binds: [
 				id,
 				input.app,
@@ -98,7 +102,8 @@ export class GrantRequestRepository {
 				input.roleKey,
 				input.permissions === null ? null : JSON.stringify(input.permissions),
 				input.scopeType,
-				input.scopeValue,
+				input.scopeValues?.[0] ?? null,
+				input.scopeValues !== null && input.scopeValues.length > 1 ? JSON.stringify(input.scopeValues) : null,
 				input.grantExpiresAt,
 				input.requestedBy,
 				input.requestedAt,

@@ -86,6 +86,7 @@ function scopeDef(type: string, dimension: DimensionArtifact, lookups: readonly 
 		...(dimension.members === null ? {} : { members: { manage: dimension.members.manage, list: dimension.members.list } }),
 		...(dimension.directory === 'labels' ? { directory: 'labels' } : {}),
 		...(lookups.length === 0 ? {} : { lookups: [...lookups] }),
+		...(dimension.values === undefined ? {} : { values: dimension.values.map((value) => ({ ...value })) }),
 	}
 }
 
