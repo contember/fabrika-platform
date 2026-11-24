@@ -55,7 +55,7 @@ import { FILE_SWEEP_JOB, FILE_SWEEP_SCHEDULE, FILE_SWEEP_TIMEOUT_MS, storedFileK
 import { FILE_SCAN_JOB, FILE_SCAN_SCHEDULE, type FileScanner, SCAN_LIMITS } from '../files/scan'
 import { type MailStandIn, resolveMailTransports } from '../jobs/mail'
 import { logReporter, type OperationsReporter, operationsReporter, operationsSettings, type ReportSource } from '../jobs/report'
-import { bindJobs, type ContractJobs } from '../jobs/runner'
+import { bindJobs, type ContractJobs, type ProcessSchedule } from '../jobs/runner'
 import { environmentScrubber } from '../jobs/scrub'
 import { hasShape } from './approved'
 import { browserConfigs } from './browser-config'
@@ -125,6 +125,11 @@ export interface BootOptions {
 	 * `FILE_TOMBSTONE_RETENTION_MS` on Cloudflare. Zero when omitted, as on Bun.
 	 */
 	readonly fileRetentionMs?: number
+	/**
+	 * Where no crontab runs (ADR-0080): the serving process keeps the cron wakes as its deploy's generation and runs the
+	 * due ones itself. The Bun adapter reads it from `FABRIKA_JOBS_SCHEDULE`; without it crontab or the alarm schedules.
+	 */
+	readonly jobSchedule?: ProcessSchedule
 	/**
 	 * The malware scanner of the scan job of `scan: true` file kinds, which the Bun adapter supplies to a job run
 	 * (`clamscanScanner`). Without it the scan job leaves every quarantined file quarantined and reports.
@@ -1080,6 +1085,7 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		tokens,
 		url,
 		publicEgress: publicEgressRules(options.environment.framework, options.resolveHost ?? null),
+		...(options.jobSchedule === undefined ? {} : { schedule: options.jobSchedule }),
 	}, problems)
 	for (const id of jobs.declared) {
 		declared.add(id)

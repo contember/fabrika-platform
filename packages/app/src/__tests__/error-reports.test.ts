@@ -108,6 +108,13 @@ describe('the scrubber', () => {
 		expect(storage.scrub(message)).toBe(message)
 	})
 
+	test("the schedule's generation stays, so a report of a scheduling failure can be read", () => {
+		const generation = '019a0000-0000-7000-8000-000000000001'
+		const schedule = environmentScrubber(environment({ FABRIKA_JOBS_SCHEDULE: 'process', FABRIKA_JOBS_SCHEDULE_GENERATION: generation }))
+		const message = `the process schedule of generation ${generation} could not be read`
+		expect(schedule.scrub(message)).toBe(message)
+	})
+
 	test('a JWT, an authorization scheme and a credential header are removed', () => {
 		const jwt = 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJl'
 		expect(noSecrets.scrub(`token ${jwt} expired`)).toBe(`token ${REDACTED} expired`)

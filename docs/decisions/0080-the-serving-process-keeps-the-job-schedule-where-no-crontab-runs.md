@@ -35,7 +35,9 @@ outside Cloudflare's `repair`, and the framework's own jobs, which `wake` does n
 Two things the Cloudflare path never meets do matter here. First, `wake` hurries a job through the kick path, and a
 kick coalesces to one run plus one pending, not to one run: a replica whose `tryAcquire` is skipped sets the pending
 flag unconditionally (`handOver`), so the winner runs the handler once more for the same fire. The alarm's
-`JobScheduler.take` marks pending only when the holder does not own every due wake. Second, an environment's Durable
+`JobScheduler.take` marks pending only when the holder does not own every due wake, which holds in one object; across
+replicas it does not, because `tryAcquire` skips a lease row another replica's acquire still holds, and that replica's
+holder is not committed yet when the loser reads it. Second, an environment's Durable
 Object runs one contract at a time, while an ECS rolling update, a Container Apps revision change or a GKE rollout runs
 the old and the new contract side by side for minutes.
 
@@ -47,19 +49,21 @@ days (`signatures_stale`).
 
 We will let the Bun serving process keep the schedule when the platform says no crontab runs:
 
-1. **A framework variable switches it on.** `FABRIKA_JOB_SCHEDULE=process`, written by a provider that renders no
-   crontab. Without it nothing changes: Zerops keeps its crontab, and an application keeps no cron wake on Bun.
-2. **A due wake runs through the scheduler, not a kick.** In this mode `wake` hands each job with a due wake to
-   `JobScheduler.take` and runs what it took with `JobScheduler.run`, durable retries included, as the alarm does; the
-   framework's own jobs go the same way, since `run` already runs them. `take` takes the lease and the due wakes in one
-   step and marks pending only for a wake the holder does not own, so replicas whose timers fire at the same instant run
-   one fire once: one wins the lease, and the others leave nothing behind for it. A handler's own kicks (ADR-0060) keep
-   the kick path. On SIGTERM the serving process aborts these runs as it aborts its kicks (`stopKicks`) and drains them
+1. **A framework variable switches it on.** `FABRIKA_JOBS_SCHEDULE=process`, written by a provider that renders no
+   crontab. Without it nothing changes: Zerops keeps its crontab, and an application keeps no cron wake on Bun. The
+   name is outside `FABRIKA_JOB_*`, the family of the jobs' keys, whose members a deploy removes when Control no
+   longer hands them.
+2. **A due wake runs through the scheduler, not a kick.** In this mode `wake` takes the lease of each job with a due
+   wake, as the alarm's `take` does, and runs it as the alarm's `run` does, durable retries included; the framework's
+   own jobs go the same way. It never sets the pending flag: one replica wins the lease and owns the due wakes in that
+   transaction, and the others leave nothing behind for it, so replicas whose timers fire at the same instant run one
+   fire once. A wake that comes due while a run holds the lease stays due, unowned, and the holder's finish lowers its
+   own process's timer to it. A handler's own kicks (ADR-0060) keep the kick path. On SIGTERM the serving process aborts these runs as it aborts its kicks (`stopKicks`) and drains them
    within the same bound, so a stopped run keeps its wakes for the next container, as a stopped alarm run does on
    Cloudflare, instead of being killed mid-run and holding its lease until it expires.
-3. **One deploy owns the schedule.** The provider writes `FABRIKA_JOB_SCHEDULE_GENERATION`, a value that rises with
-   every deploy of the environment (the deploying run's UUIDv7 id serves). The environment's database keeps the highest
-   generation seen. A process whose generation is that one, or higher (it then raises it), reconciles the cron wakes
+3. **One deploy owns the schedule.** The provider writes `FABRIKA_JOBS_SCHEDULE_GENERATION`, a lowercase UUID that
+   rises with every deploy of the environment (the deploying run's UUIDv7 id serves). The environment's database keeps
+   the highest generation seen (`fabrika_job_schedule`, compared as bytes). A process whose generation is that one, or higher (it then raises it), reconciles the cron wakes
    against its declared jobs and seeds each job's next fire under `cron:<job>:<expression>`, as `repair` does, on boot
    and on every refresh; the dedupe key makes the seed idempotent across that deploy's containers. A process of an older
    generation neither seeds nor reconciles, so during a rolling update the old revision cannot restore an expression or
@@ -91,7 +95,7 @@ We will let the Bun serving process keep the schedule when the platform says no 
    `crontab`). With `process` its `jobs` stay listed for the provider's records but are rendered into no crontab, and
    `fabrika job run <name>` stays available for an operator's one-off run.
 8. **A provider that writes the variable refuses an older framework.** An application pinned below the first release
-   that reads `FABRIKA_JOB_SCHEDULE` would run no job at all, so that provider refuses its deploy, as Control refuses a
+   that reads `FABRIKA_JOBS_SCHEDULE` would run no job at all, so that provider refuses its deploy, as Control refuses a
    release outside its window (ADR-0062).
 
 ## Consequences

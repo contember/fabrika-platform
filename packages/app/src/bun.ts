@@ -24,7 +24,7 @@ import { type CrashEvents, environmentCrashReporter, type ProcessCrashKind, repo
 import { type CapturedEnvironment, captureEnvironment } from './implement/environment.js'
 import { type ContractImplementation, isContractImplementation } from './implement/implement.js'
 import { issuerWorkloadTokens, type WorkloadTokenSource } from './implement/workload.js'
-import { type ContractJobs, JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult } from './jobs/runner.js'
+import { type ContractJobs, JOB_CHECK_INTERVAL_MS, type JobRunOptions, type JobRunResult, type ProcessSchedule } from './jobs/runner.js'
 import { makeProcessUndumpable } from './undumpable.js'
 
 export { diskAssets } from './disk-assets.js'
@@ -167,7 +167,8 @@ interface UnseenWake {
  * The serving process's one timer to the jobs' next wake, Bun's side of the scheduler (ADR-0065 §5): it kicks each job
  * whose wake came due through the kick path, so the lease admits one container. A write of this process lowers it in
  * that write's transaction (`project`, `BootOptions.projectWakes`), by the delay on the database's clock; a wake another
- * container wrote is found when the serving process refreshes it with its job check. Crontab still runs the schedule.
+ * container wrote is found when the serving process refreshes it with its job check. Crontab runs the schedule, but
+ * under a process schedule (ADR-0080), where the timer seeds the cron wakes and runs each due one itself.
  */
 export class WakeTimer {
 	readonly #track: (kick: Promise<void>) => void
@@ -410,6 +411,38 @@ const DEFAULT_STORAGE_REGION = 'us-east-1'
 const STORAGE_REGION = /^[a-z0-9][a-z0-9-]{0,31}$/
 
 /**
+ * Who schedules the jobs (ADR-0080): `crontab` when unset, as on Zerops, where the platform renders the recipe's jobs
+ * into the container's crontab; `process` from a provider whose containers run no crontab, which writes its deploy's
+ * generation beside it. Outside the `FABRIKA_JOB_` family of job keys, so no deploy counts them as a job's.
+ */
+const JOB_SCHEDULE_VARIABLE = 'FABRIKA_JOBS_SCHEDULE'
+const JOB_SCHEDULE_GENERATION_VARIABLE = 'FABRIKA_JOBS_SCHEDULE_GENERATION'
+/** A lowercase UUID, whose text order is a UUIDv7's time order. */
+const SCHEDULE_GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/**
+ * The serving process's schedule under `FABRIKA_JOBS_SCHEDULE=process`, `undefined` under crontab; another mode, a
+ * process schedule without a generation of the right form, or a generation without it stops the boot.
+ */
+export function jobScheduleOf(framework: Readonly<Record<string, string>>): ProcessSchedule | undefined {
+	const mode = framework[JOB_SCHEDULE_VARIABLE]?.trim() ?? ''
+	const generation = framework[JOB_SCHEDULE_GENERATION_VARIABLE]?.trim() ?? ''
+	if (mode === '' || mode === 'crontab') {
+		if (generation !== '') {
+			throw new BootError([`${JOB_SCHEDULE_GENERATION_VARIABLE} is set, but ${JOB_SCHEDULE_VARIABLE} is not 'process'`])
+		}
+		return undefined
+	}
+	if (mode !== 'process') {
+		throw new BootError([`${JOB_SCHEDULE_VARIABLE} is 'crontab' or 'process'`])
+	}
+	if (!SCHEDULE_GENERATION.test(generation)) {
+		throw new BootError([`${JOB_SCHEDULE_GENERATION_VARIABLE} is not a lowercase UUID; the platform writes it beside ${JOB_SCHEDULE_VARIABLE}=process`])
+	}
+	return { generation }
+}
+
+/**
  * The stored files' object storage (path-style), when the platform wrote its variables; a partial set, or a region
  * without the storage or of a form no store spells, stops the boot. The credentials are never quoted in a message.
  */
@@ -559,6 +592,7 @@ async function startContractServer(
 	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
 	const files = openFileStorage(environment.framework)
 	const workloadTokens = workloadTokensOf(environment.framework)
+	const jobSchedule = jobScheduleOf(environment.framework)
 	const timerKicks = new Set<Promise<void>>()
 	const wakes = new WakeTimer((kick) => {
 		timerKicks.add(kick)
@@ -578,6 +612,7 @@ async function startContractServer(
 		localEmailProviders: LOCAL_EMAIL_PROVIDERS,
 		connections: databaseConnections(environment.framework[DATABASE_CONNECTIONS]) ?? DEFAULT_DATABASE_CONNECTIONS,
 		projectWakes: wakes.project,
+		...(jobSchedule === undefined ? {} : { jobSchedule }),
 		...(operationsFetch === undefined ? {} : { operationsFetch }),
 	})
 	wakes.attach(served.jobs)
@@ -592,7 +627,9 @@ async function startContractServer(
 		void served.jobs.check()
 		void wakes.refresh()
 	}
-	const checks = served.jobs.names.length === 0 ? undefined : setInterval(check, JOB_CHECK_INTERVAL_MS)
+	// Under a process schedule the timer runs the framework's own jobs too, so an application with files and no c.cron needs it.
+	const timed = jobSchedule === undefined ? served.jobs.names.length : served.jobs.scheduled.length
+	const checks = timed === 0 ? undefined : setInterval(check, JOB_CHECK_INTERVAL_MS)
 	if (checks !== undefined) {
 		check()
 	}

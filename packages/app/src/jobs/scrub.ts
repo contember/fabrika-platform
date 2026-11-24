@@ -27,6 +27,8 @@ const PUBLIC_FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set([
 	'FABRIKA_APP_DATABASE_CONNECTIONS',
 	// A region name (`eu-central-1`) is no credential, and a report that names it should keep it.
 	'FABRIKA_APP_STORAGE_REGION',
+	// The deploy's generation is no credential (ADR-0080), and a report of a scheduling failure should keep it.
+	'FABRIKA_JOBS_SCHEDULE_GENERATION',
 	// `platform` is eight characters, so a secret scrubber would redact the word wherever a message names it.
 	'FABRIKA_EMAIL_PROVIDER',
 	FABRIKA_CONTRACT_DIGEST,

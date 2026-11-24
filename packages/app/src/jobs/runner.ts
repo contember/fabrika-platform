@@ -126,6 +126,16 @@ export interface JobClock {
 	now?(): number
 }
 
+/**
+ * Where no crontab runs (ADR-0080, `FABRIKA_JOBS_SCHEDULE=process`): the serving process keeps one cron wake per job and
+ * runs each due wake through the scheduler, as the Cloudflare alarm does. Only a process of the highest `generation` the
+ * database has seen (its deploy's) reconciles and seeds the wakes; an older one runs what is due and writes no schedule.
+ */
+export interface ProcessSchedule {
+	/** The deploy's generation, a lowercase UUID that rises with every deploy of the environment. */
+	readonly generation: string
+}
+
 export interface JobRunOptions {
 	readonly clock?: JobClock
 	/** Where failures and missed runs go; by default the one `boot` built from `FABRIKA_OPERATIONS_DSN`. */
@@ -157,10 +167,13 @@ export interface ContractJobs {
 	 */
 	check(options?: Pick<JobRunOptions, 'reporter'>): Promise<void>
 	/**
-	 * The serving process's wake timer on Bun, where crontab runs the schedule: reaps a crashed holder of every job and
-	 * kicks each contract job with a due wake through the kick path, handing each kick to `track` until it ended. Answers
-	 * how long until a wake is due next on the database's clock (0 while one still is), `null` when none is pending. The
-	 * first call deletes the wakes of jobs the contract no longer declares.
+	 * The serving process's wake timer on Bun. Where crontab runs the schedule: reaps a crashed holder of every job and
+	 * kicks each contract job with a due wake through the kick path, handing each kick to `track` until it ended; the
+	 * first call deletes the wakes of jobs the contract no longer declares. Under a `ProcessSchedule`: a process of the
+	 * schedule's generation reconciles the cron wakes and seeds each job's next fire, the framework's jobs included, and
+	 * every process takes the lease of each job with a due wake and runs it with durable retries, handing each run to
+	 * `track`. Answers how long until a wake of a job this process runs is due next on the database's clock (0 while one
+	 * still is), `null` when none is pending.
 	 */
 	wake(track: (kick: Promise<void>) => void): Promise<number | null>
 	/** What the Cloudflare object's alarm drives the jobs through; `null` without `@fabrika/db`. */
@@ -276,6 +289,11 @@ interface RunnerContext {
 	readonly url: AppUrl
 	/** What a job that declares `egress: 'public'` reaches; such a job reaches nothing without it. */
 	readonly publicEgress: PublicEgressRules | null
+	/**
+	 * Whether a finish schedules the job's next cron fire: always, but in a process that does not keep the schedule
+	 * (ADR-0080), whose own expression may be one the newer deploy no longer declares.
+	 */
+	readonly schedulesNextFire: () => boolean
 }
 
 export interface JobBindingInput {
@@ -314,6 +332,8 @@ export interface JobBindingInput {
 	readonly url?: AppUrl
 	/** The rules of public egress, which `boot` reads from the environment; without them a public job reaches nothing. */
 	readonly publicEgress?: PublicEgressRules
+	/** The serving process keeps the schedule (ADR-0080); without it crontab or the Cloudflare alarm does. */
+	readonly schedule?: ProcessSchedule
 }
 
 interface BoundFrameworkJob {
@@ -407,6 +427,8 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		})),
 	]
 	let reconciled = false
+	// Crontab and the Cloudflare alarm keep one schedule; under a process schedule, the last answer of `holdsSchedule`.
+	let keepsSchedule = input.schedule === undefined
 	const contextFor = (tables: FrameworkTables, chosen: OperationsReporter | undefined): RunnerContext => ({
 		artifact: input.artifact,
 		database: input.database,
@@ -427,6 +449,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		publicEgress: input.publicEgress ?? null,
 		// A job's kicks run only after the job is bound, so `kick` below is defined by then.
 		kick: (name: string) => kick(name),
+		schedulesNextFire: () => keepsSchedule,
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -480,6 +503,9 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			if (framework === null) {
 				return null
 			}
+			if (input.schedule !== undefined) {
+				return await processWake(framework, input.schedule, track)
+			}
 			if (!reconciled) {
 				await framework.wakes.reconcile(declaredJobs.map((job) => ({ job: job.name, expression: job.expression })))
 				reconciled = true
@@ -503,6 +529,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		scheduler: framework === null ? null : jobScheduler({
 			framework,
 			declared: declaredJobs,
+			ownJobsOnly: input.schedule !== undefined,
 			contextFor: (reporter) => contextFor(framework, reporter),
 			run(name: string, fence: LeaseFence, options: JobRunOptions): Promise<JobRunResult> {
 				const clock = options.clock ?? systemClock
@@ -540,7 +567,76 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 			admission.release()
 		}
 	}
+	/** A run of `name` under the lease `takeDue` took, with durable retries, stopped with the process's kicks. */
+	const runTaken = (tables: FrameworkTables, name: string, fence: LeaseFence): Promise<void> => {
+		const context = contextFor(tables, undefined)
+		// The admission's signal is the object's on Cloudflare; on Bun only the process's stop ends the run early.
+		const stoppable = (control: RunControl): RunControl => ({ signal: AbortSignal.any([control.signal, stopping.signal]), track: control.track })
+		const own = frameworkJobs.get(name)
+		const job = bound.get(name)
+		const ran: Promise<unknown> = own !== undefined
+			? admitted('framework-job', name, (control) => runFrameworkJob(own, context, systemClock, stoppable(control), fence))
+			: job === undefined
+			? tables.jobs.finish(fence, 'failed')
+			: admitted('job', name, (control) => runJob(job, context, systemClock, { fence }, stoppable(control), 'durable'))
+		return ran.then(
+			() => undefined,
+			() => {
+				// A driver error may quote the database URL.
+				console.error(`fabrika: the scheduled run of job '${name}' failed: driver_failed`)
+			},
+		)
+	}
+	/** One look of the wake timer under a process schedule (ADR-0080). */
+	const processWake = async (tables: FrameworkTables, schedule: ProcessSchedule, track: (run: Promise<void>) => void): Promise<number | null> => {
+		const context = contextFor(tables, undefined)
+		keepsSchedule = await tables.wakes.holdsSchedule(schedule.generation)
+		if (keepsSchedule) {
+			// A crashed holder of a job no deploy declares any more arms every timer through its expiry until it is reaped.
+			for (const job of await tables.wakes.expiredHolders()) {
+				if (await tables.jobs.reapCrashed(job)) {
+					await reportCrashed(job, context.reporter)
+				}
+			}
+			await tables.wakes.reconcile(declaredJobs.map((job) => ({ job: job.name, expression: job.expression })))
+			const now = await tables.jobs.now()
+			for (const job of declaredJobs) {
+				const dueAt = nextFire(job.schedule, now)
+				if (dueAt !== null) {
+					// An overdue wake keeps its earlier time, so fires missed while nothing ran coalesce into one.
+					await tables.wakes.schedule({ job: job.name, reason: 'cron', dueAt, dedupe: cronKey(job.name, job.expression) })
+				}
+			}
+		}
+		for (const job of declaredJobs) {
+			const fence = await takeDue(tables, job, context)
+			if (fence !== null) {
+				track(runTaken(tables, job.name, fence))
+			}
+		}
+		const until = await tables.wakes.untilNext(undefined, declaredJobs.map((job) => job.name))
+		return until === null ? null : Math.max(0, until)
+	}
 	return { jobs, declared, kick, stopKicks: () => stopping.abort() }
+}
+
+/**
+ * The lease of `job` for a run of its due wakes, or `null` when none is due or another run holds it, after a crashed
+ * holder was reaped. Unlike `JobScheduler.take` it never sets the pending flag: another replica's lease may still be
+ * committing, so an empty holder proves nothing, and a flag set then would run the winner twice for one fire. A due wake
+ * the holder does not own stays due; the holder's finish projects it to its own process's timer.
+ */
+async function takeDue(tables: FrameworkTables, job: Scheduled & { readonly timeoutMs: number }, context: RunnerContext): Promise<LeaseFence | null> {
+	const leases = tables.jobs
+	await leases.register(job.name)
+	if (await leases.reapCrashed(job.name)) {
+		await reportCrashed(job.name, context.reporter)
+	}
+	const now = (await leases.now()).getTime()
+	if (!(await tables.wakes.pending(job.name)).some((wake) => wake.dueAt.getTime() <= now)) {
+		return null
+	}
+	return await leases.tryAcquire(job.name, attemptId(), job.timeoutMs, job.timeoutMs + LEASE_GRACE_MS)
 }
 
 /**
@@ -731,6 +827,10 @@ async function ownedWakes(job: string, context: RunnerContext): Promise<readonly
  * under its key. On Bun, where crontab runs the schedule, a job keeps none.
  */
 async function completion(job: Scheduled, context: RunnerContext, durable: boolean): Promise<FinishWakes> {
+	if (!context.schedulesNextFire()) {
+		// The process that keeps the schedule seeds the next fire under the expression its deploy declares.
+		return { kind: 'completed' }
+	}
 	if (!durable && !(await context.wakes.pending(job.name)).some((wake) => wake.reason === 'cron')) {
 		return { kind: 'completed' }
 	}
@@ -773,11 +873,17 @@ interface SchedulerInput {
 	readonly declared: readonly (Scheduled & { readonly timeoutMs: number })[]
 	readonly contextFor: (reporter: OperationsReporter | undefined) => RunnerContext
 	readonly run: (job: string, fence: LeaseFence, options: JobRunOptions) => Promise<JobRunResult>
+	/**
+	 * Under a process schedule, `next` and `untilNext` read the wakes of the declared jobs only: a wake of a job another
+	 * deploy declares would otherwise hold the timer a write projects (ADR-0080).
+	 */
+	readonly ownJobsOnly: boolean
 }
 
 function jobScheduler(input: SchedulerInput): JobScheduler {
 	const { framework, declared } = input
 	const byName = new Map(declared.map((job) => [job.name, job]))
+	const own = input.ownJobsOnly ? declared.map((job) => job.name) : undefined
 	return Object.freeze({
 		jobs: Object.freeze(declared.map((job) => job.name)),
 		async repair(options: Pick<JobRunOptions, 'reporter'> = {}): Promise<boolean> {
@@ -853,10 +959,10 @@ function jobScheduler(input: SchedulerInput): JobScheduler {
 			await reportCrashed(job, input.contextFor(options.reporter).reporter)
 		},
 		next(using?: Session): Promise<Date | null> {
-			return framework.wakes.next(using)
+			return framework.wakes.next(using, own)
 		},
 		untilNext(using?: Session): Promise<number | null> {
-			return framework.wakes.untilNext(using)
+			return framework.wakes.untilNext(using, own)
 		},
 		async failed(step: 'alarm' | 'repair', error: unknown): Promise<void> {
 			try {
