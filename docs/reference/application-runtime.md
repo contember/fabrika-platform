@@ -504,7 +504,9 @@ first and the object again, and it never boots the application.
   `nodejs_compat_do_not_populate_process_env` to every application Worker and to the proxy Worker, the bounds check
   refuses a generated config without it, and an application Worker that sets `nodejs_compat_populate_process_env` is
   refused. For an application that reads `process.env`: there is nothing in it on Cloudflare, so a dependency that
-  configures itself from `process.env` sees its defaults. The checker already refuses `process.env` in application code
+  configures itself from `process.env` sees its defaults. An application whose config sets plain `nodejs_compat` had
+  its variables and secrets there until now; they disappear at its next deploy, with no change of its code or pin.
+  The checker already refuses `process.env` in application code
   (`env-read`); the application's own values reach it through the framework's environment. Measured in workerd
   1.20260312.1.
 - **The object** (`FabrikaApplication`, `packages/app/src/cloudflare/application.ts`) answers an empty 404 to a request

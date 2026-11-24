@@ -1018,6 +1018,30 @@ describe('Cloudflare provider', () => {
 		expect(rec.provisions).toHaveLength(0)
 	})
 
+	test('the generated config keeps `process.env` closed, whatever a binding or a raw option writes into it', async () => {
+		const opened: ReadonlyArray<Record<string, unknown>> = [
+			{ compatibility_flags: ['nodejs_compat'] },
+			{ compatibility_flags: ['nodejs_compat', POPULATE_PROCESS_ENV_FLAG] },
+			{ compatibility_flags: [NO_PROCESS_ENV_FLAG, POPULATE_PROCESS_ENV_FLAG] },
+		]
+		for (const raw of opened) {
+			// A binding rewrites the generated config after the deployer added the opt-out: only the bounds check sees it.
+			await expect(deploy(rec, config({ resources: () => bindingIam(emitting(raw)) }))).rejects.toThrow(
+				`would fill \`process.env\` with the platform's secrets; its \`compatibility_flags\` must carry \`${NO_PROCESS_ENV_FLAG}\``,
+			)
+		}
+		// A raw option is the Worker's own: the deployer refuses an opt-in in it before anything is generated.
+		for (const raw of opened.slice(1)) {
+			await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), raw) }))).rejects.toThrow(
+				`sets \`${POPULATE_PROCESS_ENV_FLAG}\``,
+			)
+		}
+		expect(rec.provisions).toHaveLength(0)
+		// …and adds the opt-out to plain `nodejs_compat`, so that one deploys.
+		await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), { compatibility_flags: ['nodejs_compat'] }) }))).resolves
+			.toMatchObject({ status: 'succeeded' })
+	})
+
 	test('a binding cannot bind a D1 database or KV namespace by a literal id', async () => {
 		const probes: ReadonlyArray<readonly [Record<string, unknown>, string]> = [
 			[{ d1_databases: [{ binding: 'DB', database_name: 'stage-demo-db', database_id: '0000-other' }] }, 'binds a D1 database by an id'],
