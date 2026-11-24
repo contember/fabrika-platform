@@ -105,6 +105,13 @@ describe('the AWS codecs', () => {
 		const longest = `arn:aws:ecs:eu-central-1:123456789012:service-deployment/${'c'.repeat(255)}/${'s'.repeat(255)}/abcDEF123`
 		expect(awsRunCheckpointCodec.decode({ deploymentArn: longest })).toEqual({ deploymentArn: longest })
 	})
+
+	test('a task definition in another partition is taken', () => {
+		for (const partition of ['aws-cn', 'aws-us-gov', 'aws-iso-b', 'aws-eusc']) {
+			const taskDefinitionArn = `arn:${partition}:ecs:us-isob-east-1:123456789012:task-definition/notes:7`
+			expect(awsRunCheckpointCodec.decode({ taskDefinitionArn })).toEqual({ taskDefinitionArn })
+		}
+	})
 })
 
 describe('defineApp', () => {
