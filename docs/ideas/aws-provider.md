@@ -272,8 +272,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 5. **`src/aws/s3.ts`** (built): the S3 multipart part writer Control's source client takes (N2's `SourcePartWriter`)
    and the presigned GET the build reads. The bucket that holds the sources, with a lifecycle rule that expires them and
    aborts incomplete uploads, is the namespace stack's (step 10).
-6. **`src/build.ts`**: `StartBuild` with `NO_SOURCE` and the inline buildspec (fetch, unpack, write the rendered
-   `Dockerfile`, build, push, print the digest), the build log relay, `StopBuild` on cancel before activation.
+6. **`src/build.ts`** (built): `StartBuild` with `NO_SOURCE` and one constant inline buildspec (fetch, unpack, write
+   the rendered `Dockerfile`, build, push under the run's tag), every value of a run a build variable. The deploy reads
+   the digest from ECR by that tag, never from the log. The build log relay (`aws/logs.ts`) and `StopBuild` on cancel
+   (`run-attempt.ts`) are step 8's.
 7. **`src/ecs-task.ts`** (built): the service's definition, the server container alone (image by digest, port, health
    check on the contract's health endpoint, log configuration), and a one-off init definition for the init commands of
    `containerImage` (N3, built), which step 8 runs once per command (`RunTask` with a command override, in order) before
@@ -292,9 +294,12 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    absent, not failed (unverified against an account). `describeService` stays for the events the run log relays. ECR's lifecycle rule
    (`keepNewestImages`) counts pushes, not deployments, so builds pushed after the running image can expire it, and ECS
    can then neither replace a task nor roll back to it: size `keep` against that, or give the deployed digest an extra
-   tag a separate rule keeps. `StartBuild`'s idempotency token holds five minutes, and a repeat must send the identical
-   body (the same presigned URL included): a start whose answer was lost is settled by `findBuild` (the token travels as
-   `FABRIKA_BUILD_TOKEN`), never by a blind repeat; a `findBuild` that answers `null` for a lost start fails the run.
+   tag a separate rule keeps. The presigned URL reaches the build as a SecureString the deploy writes before the start
+   and deletes once the build ended, under a name that is a function of the run (its build token), so the build role
+   needs `ssm:GetParameters` on the runs' path only and a start records the name alone. `StartBuild`'s idempotency
+   token holds five minutes, and a repeat must send the identical body: a start whose answer was lost is settled by
+   `findBuild` (the token travels as `FABRIKA_BUILD_TOKEN`), never by a blind repeat; a `findBuild` that answers `null`
+   for a lost start fails the run.
    The candidate half is built (`src/run-attempt.ts`, the shared run's `RunAttempt`). N1 to N3 are in `main`; the steps
    wait for step 5 (the part writer Control's source client takes, `SourcePartWriter`) and step 6.
 9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`
