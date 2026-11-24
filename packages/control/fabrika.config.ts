@@ -20,6 +20,7 @@ import {
 	createCloudflareProxyWorker,
 	D1Database,
 	defineApp,
+	NO_PROCESS_ENV_FLAG,
 	platformNames,
 	Queue,
 	R2Bucket,
@@ -116,7 +117,9 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 		dir: '.',
 		name: names.controlWorker,
 		main: './src/index.ts',
-		compatibility_flags: ['nodejs_compat'],
+		// `process.env` stays empty: plain `nodejs_compat` at this date would fill it with every secret, the vault key
+		// included, for any bundled module to read. Control reads its configuration from the Worker's `env` only.
+		compatibility_flags: ['nodejs_compat', NO_PROCESS_ENV_FLAG],
 		compatibility_date: '2025-05-25',
 		workers_dev: false,
 		// Public routing belongs to the proxy Worker. The application is reached through its APP service binding.

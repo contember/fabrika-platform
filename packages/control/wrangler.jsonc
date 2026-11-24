@@ -5,7 +5,8 @@
 	"name": "vozka",
 	"main": "./src/index.ts",
 	"compatibility_flags": [
-		"nodejs_compat"
+		"nodejs_compat",
+		"nodejs_compat_do_not_populate_process_env"
 	],
 	"compatibility_date": "2025-05-25",
 	"workers_dev": false,
