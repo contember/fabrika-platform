@@ -3,20 +3,36 @@
 // ECS injects them at start. The provider writes a secret, deletes one, and lists the names under a path (never the
 // values) to remove the ones no longer declared. A value never leaves this module in an error or an answer.
 //
-// UNVERIFIED: the operations' input and answer fields, the reserved prefixes, the standard tier's 4 KB and the page
-// size follow Systems Manager's API reference; none was checked against an account.
+// No `KeyId` is sent, so every secret is encrypted with the AWS-managed `aws/ssm` key: the execution role needs no
+// `kms:Decrypt` grant and there is no key to keep. The consequence: KMS separates no application from another. The only
+// boundary between two applications' secrets is the resource scope of the role that reads them
+// (`ssm:GetParameters` on `…:parameter/<the application environment's path>/*`). That role is one per application
+// environment, scoped to its own path and log group, never one shared by every application.
+//
+// UNVERIFIED: the operations' input and answer fields, the reserved prefixes, the standard tier's 4 KB, the name's
+// length and depth and the page size follow Systems Manager's API reference; none was checked against an account.
 
 import { z } from 'zod'
 import { AwsError, awsJsonClient, type AwsJsonClientOptions, SSM } from './json'
 
-/** A parameter name in a path: `/` and segments of letters, digits and `_.-`, no empty segment, at most 1011. */
-const PARAMETER_NAME = /^(?=.{2,1011}$)(?:\/[A-Za-z0-9_.-]+)+$/
+/**
+ * A parameter name in a path: `/` and at most 15 segments of letters, digits and `_.-`, no empty segment. AWS counts
+ * its 1011 characters with the ARN's prefix (`arn:<partition>:ssm:<region>:<account>:parameter`, at most about 61), so
+ * a name here is at most 950. AWS has the last word on a name this accepts.
+ */
+const PARAMETER_NAME = /^(?=.{2,950}$)(?:\/[A-Za-z0-9_.-]+){1,15}$/
 /** A path the provider lists: a name, which lists the parameters one level below it. */
 const PARAMETER_PATH = PARAMETER_NAME
 /** The largest value a standard parameter holds, in bytes. */
 export const MAX_SECRET_BYTES = 4096
-/** The most names `listNames` reads, as a bound on its pages. */
+/** The most names `listNames` reads. */
 export const MAX_LISTED_NAMES = 1000
+/**
+ * The most pages `listNames` reads. A filtered page holds from zero to `PAGE_SIZE` names and may still carry a token,
+ * so empty pages are normal in an account with many parameters; this allows 10,000 parameters scanned 50 at a time,
+ * twice over.
+ */
+export const MAX_LISTED_PAGES = 400
 const PAGE_SIZE = 50
 
 /** Where a parameter's ARN points: the partition, region and account it lives in. */
@@ -27,7 +43,10 @@ export interface SsmLocation {
 }
 
 export interface SsmClient {
-	/** Writes `value` as a standard `SecureString` under `name`, replacing an earlier one; answers the new version. */
+	/**
+	 * Writes `value` as a standard `SecureString` under `name`, replacing an earlier one; answers the new version. An empty
+	 * value is refused (a parameter holds at least one character): the caller leaves an empty secret out, or deletes it.
+	 */
 	putSecret(name: string, value: string, signal?: AbortSignal): Promise<number>
 	/** Deletes `name`; answers `false` when there was none. */
 	deleteSecret(name: string, signal?: AbortSignal): Promise<boolean>
@@ -91,7 +110,10 @@ export function ssmClient(options: AwsJsonClientOptions): SsmClient {
 			if (!PARAMETER_PATH.test(path)) refuse('the path')
 			const names: string[] = []
 			let next: string | undefined
+			let pages = 0
 			do {
+				if (pages === MAX_LISTED_PAGES) throw new AwsError('DescribeParameters', 'too_many_pages', 200, null, false)
+				pages += 1
 				const page = await json.call(
 					'DescribeParameters',
 					{
@@ -103,11 +125,15 @@ export function ssmClient(options: AwsJsonClientOptions): SsmClient {
 					signal,
 				)
 				for (const parameter of page.Parameters ?? []) {
-					// A name outside the path is no answer to this listing.
-					if (!parameter.Name.startsWith(`${path}/`)) throw new AwsError('DescribeParameters', 'invalid_answer', 200, null, false)
+					// A name outside the path, or deeper than one level below it, is no answer to this listing: the deploy step
+					// would delete a secret it never declared.
+					const below = parameter.Name.startsWith(`${path}/`) ? parameter.Name.slice(path.length + 1) : ''
+					if (below === '' || below.includes('/')) throw new AwsError('DescribeParameters', 'invalid_answer', 200, null, false)
 					names.push(parameter.Name)
 				}
 				if (names.length > MAX_LISTED_NAMES) throw new AwsError('DescribeParameters', 'too_many_parameters', 200, null, false)
+				// A token repeated would read the same page forever.
+				if (page.NextToken !== undefined && page.NextToken === next) throw new AwsError('DescribeParameters', 'invalid_answer', 200, null, false)
 				next = page.NextToken
 			} while (next !== undefined && next !== '')
 			return names.sort()

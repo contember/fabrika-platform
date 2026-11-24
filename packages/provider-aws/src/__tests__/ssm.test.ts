@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from 'bun:test'
 import { SSM } from '../aws/json'
-import { MAX_SECRET_BYTES, parameterArn, ssmClient } from '../aws/ssm'
+import { MAX_LISTED_PAGES, MAX_SECRET_BYTES, parameterArn, ssmClient } from '../aws/ssm'
 import { awsError, fakeAws } from './helpers/fake-aws'
 
 const PATH = '/fabrika/main/apps/notes/prod'
@@ -69,6 +69,37 @@ describe('ssmClient', () => {
 		expect(endless.calls.length).toBe(21)
 	})
 
+	test('a name deeper than one level below the path is no answer', async () => {
+		const deeper = fakeAws(SSM, { DescribeParameters: () => ({ Parameters: [{ Name: `${PATH}/nested/KEY` }] }) })
+		await expect(ssmClient(deeper.options).listNames(PATH)).rejects.toMatchObject({ code: 'invalid_answer' })
+	})
+
+	test('empty pages with a token are read on, up to a bound, and a repeated token is no answer', async () => {
+		let page = 0
+		const sparse = fakeAws(SSM, {
+			DescribeParameters: () => {
+				page += 1
+				return page < 5 ? { Parameters: [], NextToken: `page-${page + 1}` } : { Parameters: [{ Name: NAME }] }
+			},
+		})
+		expect(await ssmClient(sparse.options).listNames(PATH)).toEqual([NAME])
+		expect(sparse.calls.length).toBe(5)
+
+		let empty = 0
+		const endless = fakeAws(SSM, {
+			DescribeParameters: () => {
+				empty += 1
+				return { Parameters: [], NextToken: `page-${empty + 1}` }
+			},
+		})
+		await expect(ssmClient(endless.options).listNames(PATH)).rejects.toMatchObject({ code: 'too_many_pages' })
+		expect(endless.calls.length).toBe(MAX_LISTED_PAGES)
+
+		const repeated = fakeAws(SSM, { DescribeParameters: () => ({ Parameters: [], NextToken: 'same' }) })
+		await expect(ssmClient(repeated.options).listNames(PATH)).rejects.toMatchObject({ code: 'invalid_answer' })
+		expect(repeated.calls.length).toBe(2)
+	})
+
 	test("builds the ARN a task definition's secret names", () => {
 		expect(parameterArn({ partition: 'aws', region: 'eu-central-1', accountId: '123456789012' }, NAME)).toBe(
 			`arn:aws:ssm:eu-central-1:123456789012:parameter${NAME}`,
@@ -79,7 +110,9 @@ describe('ssmClient', () => {
 	test('refuses a name, path or value of another form before anything is sent, without quoting the value', async () => {
 		const { options, calls } = fakeAws(SSM, {})
 		const ssm = ssmClient(options)
-		for (const name of ['relative/name', '/trailing/', '/double//slash', '/aws/reserved', '/SSM/reserved', '/space name']) {
+		const tooDeep = '/a'.repeat(16)
+		const tooLong = `/${'x'.repeat(950)}`
+		for (const name of ['relative/name', '/trailing/', '/double//slash', '/aws/reserved', '/SSM/reserved', '/space name', tooDeep, tooLong]) {
 			await expect(ssm.putSecret(name, VALUE)).rejects.toThrow('the parameter name')
 		}
 		await expect(ssm.putSecret(NAME, '')).rejects.toThrow('the value')
