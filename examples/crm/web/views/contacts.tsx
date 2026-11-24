@@ -1,53 +1,75 @@
 // The contacts of every company the person can see, one contact with its calls, and the dialogs that create and edit.
 
 import { Can, useInfiniteQuery, useMutation, useQuery } from '@fabrika/app/react'
-import { Button, Card, type Column, Columns, DataTable, Dialog, Field, FieldList, Form, FormActions, Input, PageHeader, Select } from '@fabrika/ui'
+import {
+	Button,
+	Card,
+	type Column,
+	Columns,
+	DataTable,
+	Dialog,
+	Field,
+	FieldList,
+	Form,
+	FormActions,
+	FormDialog,
+	Input,
+	PageHeader,
+	Select,
+	useForm,
+} from '@fabrika/ui'
 import { type ReactNode, useState } from 'react'
+import { z } from 'zod/v4'
 import { api, type Company, type Contact } from '../api'
 import { orNull, orOmitted, text } from '../format'
 import { href, Link } from '../routes'
 import { describe, Loaded, tableState, useCompanies, useReport } from './common'
 import { ActivityLog } from './deal'
 
+// What the person types, as the input `contacts.create` takes: a field left empty is left out.
+const NewContactForm = z.object({
+	companyId: z.string().min(1, 'Choose a company'),
+	name: z.string().trim().min(1, 'Enter a name').max(200),
+	email: z.string().trim().max(500).transform(orOmitted),
+	phone: z.string().trim().max(500).transform(orOmitted),
+})
+
 function NewContact({ open, onClose, companies }: { readonly open: boolean; readonly onClose: () => void; readonly companies: readonly Company[] }) {
 	const create = useMutation(api.contacts.create)
+	const form = useForm(NewContactForm, { companyId: '', name: '', email: '', phone: '' })
 	const report = useReport()
 	const close = () => {
 		create.reset()
 		onClose()
 	}
-	const submit = async (form: FormData) => {
-		const outcome = await create.mutate({
-			companyId: text(form, 'companyId'),
-			name: text(form, 'name'),
-			email: orOmitted(text(form, 'email')),
-			phone: orOmitted(text(form, 'phone')),
-		})
-		if (!outcome.ok) return
-		report(outcome, 'Contact created')
-		close()
-	}
 	return (
-		<Dialog open={open} title="New contact" onClose={close}>
-			<Form onSubmit={(form) => void submit(form)} error={create.error === null ? null : describe(create.error)} aria-label="New contact">
-				<Field label="Company" name="companyId" required>
-					<Select name="companyId" placeholder="Choose a company" options={companies.map((company) => ({ value: company.id, label: company.name }))} />
-				</Field>
-				<Field label="Name" name="name" required>
-					<Input name="name" autoComplete="off" />
-				</Field>
-				<Field label="Email" name="email">
-					<Input name="email" type="email" />
-				</Field>
-				<Field label="Phone" name="phone">
-					<Input name="phone" type="tel" />
-				</Field>
-				<FormActions>
-					<Button variant="ghost" onClick={close}>Cancel</Button>
-					<Button type="submit" variant="primary" loading={create.pending}>Create contact</Button>
-				</FormActions>
-			</Form>
-		</Dialog>
+		<FormDialog
+			open={open}
+			title="New contact"
+			form={form}
+			submitLabel="Create contact"
+			error={create.error === null ? null : describe(create.error)}
+			onClose={close}
+			onSubmit={async (input) => {
+				const outcome = await create.mutate(input)
+				if (!outcome.ok) return
+				report(outcome, 'Contact created')
+				close()
+			}}
+		>
+			<Field label="Company" required {...form.field('companyId')}>
+				<Select placeholder="Choose a company" options={companies.map((company) => ({ value: company.id, label: company.name }))} />
+			</Field>
+			<Field label="Name" required {...form.field('name')}>
+				<Input autoComplete="off" />
+			</Field>
+			<Field label="Email" {...form.field('email')}>
+				<Input type="email" />
+			</Field>
+			<Field label="Phone" {...form.field('phone')}>
+				<Input type="tel" />
+			</Field>
+		</FormDialog>
 	)
 }
 

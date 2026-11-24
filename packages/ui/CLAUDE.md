@@ -29,4 +29,6 @@ bun test --isolate packages/ui        # happy-dom; import src/__tests__/dom.ts F
 - **Every interactive component is keyboard operable**, with a visible `:focus-visible` ring and ARIA that tests assert.
 - Every string a component renders itself is a prop with an English default, so an application can translate it.
 - `FormErrorLike` stays structural: never import the framework's error union from `@fabrika/app`.
+- `useForm` takes any Standard Schema (`StandardSchema` in `src/use-form.ts`, the part of the spec it reads): never import
+  zod, which an application brings for its own schemas.
 - No `as` casts (except `as const`), no `any`; the router narrows its match with a checked type predicate.
