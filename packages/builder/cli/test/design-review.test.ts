@@ -85,7 +85,12 @@ test('design review writes the view and names every pair below AA', async () => 
 	fx.write('web/src/theme.css', ':root { --fui-text-muted: #9aa0aa; }')
 	fx.write(DESIGN_PATH, design('web/src/theme.css'))
 	fx.write('tests/browser/cart.test.ts', "browserTest('checkout', { url: '/cart', seeds: [], roles: [] }, async () => {})\n")
-	const proc = Bun.spawn([process.execPath, BIN, 'design', 'review', '--dir', fx.root], { stdout: 'pipe', stderr: 'pipe' })
+	// NODE_ENV=test whatever the run inherited, so the CLI's opener never runs a real browser (`openerAllowed`).
+	const proc = Bun.spawn([process.execPath, BIN, 'design', 'review', '--dir', fx.root], {
+		env: { ...process.env, NODE_ENV: 'test' },
+		stdout: 'pipe',
+		stderr: 'pipe',
+	})
 	const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()])
 	expect(await proc.exited).toBe(0)
 	expect(stdout.trim()).toBe(join(fx.root, '.fabrika/build/design-review.jsx'))
@@ -100,6 +105,7 @@ test('--waive-contrast is refused on an issue without the contrast check', async
 	fx = makeFixture()
 	fx.write('.fabrika/issues/ISSUE-101.md', '---\ngoal: Feature\nsatisfies: []\ndepends_on: []\ntouches: []\nverify: []\n---\nbody\n')
 	const proc = Bun.spawn([process.execPath, BIN, 'build', 'done', 'ISSUE-101', '--waive-contrast', '--dir', fx.root], {
+		env: { ...process.env, NODE_ENV: 'test' },
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})

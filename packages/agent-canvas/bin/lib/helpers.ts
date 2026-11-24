@@ -1,4 +1,4 @@
-import { openLinkThroughFile, WaitError, type WaiterSocket, waitForEvent, type WaitVerdict } from '@fabrika/daemon-kit'
+import { openerAllowed, openLinkThroughFile, WaitError, type WaiterSocket, waitForEvent, type WaitVerdict } from '@fabrika/daemon-kit'
 import { spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 import { z } from 'zod'
@@ -48,6 +48,8 @@ function openBrowser(url: string) {
 	for (const cmd of candidates) {
 		const which = Bun.spawnSync(['which', cmd])
 		if (which.exitCode === 0) {
+			// Under a test run only the test's own fake opener runs, never the user's real browser.
+			if (!openerAllowed(which.stdout.toString())) break
 			spawn(cmd, [url], { detached: true, stdio: 'ignore' }).unref()
 			return
 		}

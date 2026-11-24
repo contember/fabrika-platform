@@ -6,7 +6,7 @@ import { scratchDir } from './scratch'
 if (process.env['FABRIKA_CANVAS_CUSTODY_CHILD'] !== '1') {
 	test('canvas custody with the real kernel in a process without the fake preload', async () => {
 		const child = Bun.spawn([process.execPath, 'test', import.meta.path], {
-			env: { ...process.env, FABRIKA_CANVAS_CUSTODY_CHILD: '1' },
+			env: { ...process.env, NODE_ENV: 'test', FABRIKA_CANVAS_CUSTODY_CHILD: '1' },
 			stdout: 'pipe',
 			stderr: 'pipe',
 		})

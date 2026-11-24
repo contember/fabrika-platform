@@ -46,8 +46,11 @@ function environment(): Record<string, string> {
 		CANVAS_SESSION_ID: SESSION,
 		CANVAS_PROJECT_ROOT: project,
 		CANVAS_TIMEOUT: '20000',
-		// The fake opener records the arguments a command hands the browser instead of opening one.
+		// The fake opener records the arguments a command hands the browser instead of opening one; under a test run the
+		// CLI runs no opener outside this directory.
 		PATH: `${fakeBin}:${process.env['PATH'] ?? ''}`,
+		NODE_ENV: 'test',
+		FABRIKA_TEST_OPENER_DIR: fakeBin,
 	}
 }
 
@@ -60,6 +63,16 @@ async function cli(args: string[]): Promise<{ exitCode: number; stdout: string; 
 /** Every argument list the opener got, one per call. */
 function openerCalls(): string[] {
 	return existsSync(opened) ? readFileSync(opened, 'utf-8').split('\n').filter((line) => line !== '') : []
+}
+
+/**
+ * The opener calls once there are at least `count`: the CLI starts the opener detached and exits, so its record may land
+ * after the command returned. Answers what there is after `timeoutMs`, for the assertion to name.
+ */
+async function openerCallsAtLeast(count: number, timeoutMs = 5_000): Promise<string[]> {
+	const deadline = Date.now() + timeoutMs
+	while (openerCalls().length < count && Date.now() < deadline) await Bun.sleep(20)
+	return openerCalls()
 }
 
 /**
@@ -130,8 +143,11 @@ beforeAll(async () => {
 	// The UI secret an earlier release kept across restarts; the daemon removes it.
 	mkdirSync(join(home, '.claude', 'agent-canvas'), { recursive: true })
 	writeFileSync(join(home, '.claude', 'agent-canvas', 'ui-token'), 'x'.repeat(43), { mode: 0o600 })
-	writeFileSync(join(fakeBin, 'xdg-open'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opened}'\n`)
-	chmodSync(join(fakeBin, 'xdg-open'), 0o755)
+	// Every name the CLI looks for, macOS's `open` included: an opener left unfaked would open the user's real browser.
+	for (const opener of ['xdg-open', 'open']) {
+		writeFileSync(join(fakeBin, opener), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opened}'\n`)
+		chmodSync(join(fakeBin, opener), 0o755)
+	}
 	writeFileSync(join(project, 'notes.txt'), 'project notes')
 	writeFileSync(join(canvases, 'plan.jsx'), 'export default function Plan() { return <Section title="Demo">Hello</Section> }\n')
 	port = freePort()
@@ -166,7 +182,7 @@ describe('the canvas UI credential', () => {
 	})
 
 	test('the link push opened sets the cookie once and leads to the canvas, and the UI routes then answer', async () => {
-		const [call] = openerCalls()
+		const [call] = await openerCallsAtLeast(1)
 		if (call === undefined) throw new Error('push opened no browser')
 		const link = linkOf(call)
 		expect(link.startsWith(`${base}/open?code=`)).toBe(true)
@@ -202,7 +218,7 @@ describe('the canvas UI credential', () => {
 		const before = openerCalls().length
 		const result = await cli(['open', '--session', SESSION])
 		expect(result.exitCode).toBe(0)
-		const call = openerCalls()[before]
+		const call = (await openerCallsAtLeast(before + 1))[before]
 		if (call === undefined) throw new Error('open opened no browser')
 		const link = linkOf(call)
 		expect(result.stdout.trim()).toBe(link)
@@ -254,7 +270,7 @@ describe('the canvas UI credential', () => {
 		const proxy = opened.stdout.match(/ at (http:\/\/localhost:\d+\/)/)?.[1]
 		if (proxy === undefined) throw new Error(`review open printed no proxy: ${opened.stdout}`)
 		const proxyOrigin = new URL(proxy).origin
-		const call = openerCalls()[before]
+		const call = (await openerCallsAtLeast(before + 1))[before]
 		if (call === undefined) throw new Error('review open opened no browser')
 
 		const threads = `${base}/api/review/demo/threads`
