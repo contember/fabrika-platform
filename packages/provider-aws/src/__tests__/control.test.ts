@@ -76,6 +76,9 @@ class Fake {
 	readonly uploads: string[] = []
 	expiresAt: number | undefined = undefined
 	buildStatus: 'succeeded' | 'failed' = 'succeeded'
+	rolloutStatus: 'successful' | 'rollback_successful' = 'successful'
+	/** A parameter whose write fails, by the secret's name. */
+	failPut: string | null = null
 
 	readonly source: AwsSourcePort = {
 		resolve: async (input) => {
@@ -133,7 +136,13 @@ class Fake {
 				return { ...this.service(), taskDefinitionArn }
 			},
 			describeService: async () => this.service(),
-			describeServiceDeployment: async (arn) => ({ arn, serviceArn: SERVICE_ARN, status: 'successful', statusReason: null, targetRevisionArn: null }),
+			describeServiceDeployment: async (arn) => ({
+				arn,
+				serviceArn: SERVICE_ARN,
+				status: this.rolloutStatus,
+				statusReason: null,
+				targetRevisionArn: null,
+			}),
 			describeServiceRevision: async () => null,
 			runTask: async () => {
 				throw new Error('no init task without a database')
@@ -143,6 +152,7 @@ class Fake {
 		logs: { readForward: async () => null },
 		ssm: {
 			putSecret: async (name, value) => {
+				if (this.failPut !== null && name.endsWith(`.${this.failPut}`)) throw new Error('the write failed')
 				this.calls.push(`putSecret ${name}`)
 				this.parameters.set(name, value)
 				return 1
@@ -166,6 +176,7 @@ class Fake {
 				}),
 			},
 			baseImage: BASE_IMAGE,
+			installation: target,
 			source: this.source,
 			clients: this.clients,
 			sleep: async () => {},
@@ -243,6 +254,39 @@ describe('the AWS control provider', () => {
 			`${ENV_PATH}/${PREVIOUS}.API_TOKEN`,
 			`${ENV_PATH}/LEGACY`,
 		])
+	})
+
+	test('a run that throws while writing its secrets deletes what it wrote', async () => {
+		const fake = new Fake()
+		fake.failPut = 'FABRIKA_IAM_RPC_KEY'
+		await expect(fake.provider().deploy(deployInput())).rejects.toThrow('the write failed')
+		expect(fake.calls).toContain(`deleteSecret ${ENV_PATH}/${RUN}.API_TOKEN`)
+		expect(fake.envParameters()).not.toContain(`${ENV_PATH}/${RUN}.API_TOKEN`)
+	})
+
+	test('a run that failed after asking for the update keeps its parameters: the update may still land', async () => {
+		const fake = new Fake()
+		fake.rolloutStatus = 'rollback_successful'
+		expect((await fake.provider().deploy(deployInput())).state).toBe('failed')
+		expect(fake.calls).toContain('updateService fabrika-apps/notes_prod')
+		expect(fake.envParameters()).toContain(`${ENV_PATH}/${RUN}.API_TOKEN`)
+		expect(fake.calls.filter((call) => call.startsWith(`deleteSecret ${ENV_PATH}/`))).toEqual([])
+	})
+
+	test("the installation's coordinates replace a registrant's, and a stored target that differs is refused", async () => {
+		const provider = new Fake().provider()
+		const submitted = environmentOf({
+			target: { provider: 'aws', version: 1, payload: awsAppTargetCodec.encode({ ...target, accountId: '999999999999', cluster: 'other' }) },
+		})
+		const normalized = provider.normalizeRegistration?.({ app: deployInput().app, environment: submitted })
+		expect(normalized?.environment.target).toEqual(environmentOf().target)
+		for (const field of ['accountId', 'region', 'cluster', 'sourcesBucket', 'buildProject']) {
+			const other = { ...target, [field]: field === 'accountId' ? '999999999999' : field === 'region' ? 'us-east-1' : 'other-name' }
+			const fake = new Fake()
+			const stored = environmentOf({ target: { provider: 'aws', version: 1, payload: awsAppTargetCodec.encode(other) } })
+			await expect(fake.provider().deploy(deployInput({ environment: stored }))).rejects.toThrow(`another ${field}`)
+			expect(fake.calls).toEqual([])
+		}
 	})
 
 	test('a dry run writes no secret and calls nothing', async () => {
@@ -323,6 +367,7 @@ describe('the AWS control provider', () => {
 
 	test("a cancel of an unsubmitted run stops its build and deletes its source URL's parameter", async () => {
 		const fake = new Fake()
+		fake.parameters.set(`${ENV_PATH}/${RUN}.API_TOKEN`, 'left by a crash')
 		const providerState: JsonValue = { buildToken: TOKEN, buildId: BUILD_ID }
 		const outcome = await fake.provider().cancel?.({
 			runId: RUN,
@@ -335,6 +380,8 @@ describe('the AWS control provider', () => {
 		expect(outcome).toEqual({ state: 'settled', outcome: 'failed' })
 		expect(fake.calls).toContain(`stopBuild ${BUILD_ID}`)
 		expect(fake.calls).toContain(`deleteSecret /fabrika/apps/notes/prod/builds/${TOKEN}/source-url`)
+		// The discard also deletes the run's own secret parameters, which a crash left behind.
+		expect(fake.calls).toContain(`deleteSecret ${ENV_PATH}/${RUN}.API_TOKEN`)
 	})
 
 	test('the task values split managed credentials from public ones and skip a removed one', () => {

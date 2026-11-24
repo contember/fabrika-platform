@@ -6,8 +6,9 @@
 // - A contract application with no database, no jobs and no files: a contract with table policies, a job or a file
 //   collection is refused, because the namespace stack (checklist step 10) that would provide the database, the
 //   schedule and the bucket is not built. No source maps either: the deploy reports its artifacts `not_applicable`.
-// - The target names only what the installation shares (account, region, cluster, sources bucket, build project).
-//   Everything of one environment's own (service, repository, parameter path, log group, task and execution roles) is
+// - The target holds only what the installation shares (account, region, cluster, sources bucket, build project), and
+//   those come from Control's composition (`installation`), never from a registrant: `normalizeRegistration` replaces a
+//   submitted target with them, and a stored one that differs is refused. Everything of one environment's own (service, repository, parameter path, log group, task and execution roles) is
 //   derived from its application id and environment (`awsEnvironmentResources`), so a registration cannot point a
 //   deploy, which Control signs with its own role, at another environment's resources. The deploy creates none of
 //   them but the repository.
@@ -28,9 +29,11 @@ import {
 	cancelRun,
 	type ControlProvider,
 	decodeEnvelope,
+	type JsonValue,
 	type ProviderDeployInput,
 	type ProviderDeployOutcome,
 	type ProviderEnvironment,
+	type ProviderRunEvents,
 	type ProviderSourceBinding,
 	reconcileRun,
 } from '@fabrika/provider-contract'
@@ -45,7 +48,7 @@ import { parameterArn, type SsmClient, ssmClient } from './aws/ssm'
 import { type AwsClientOptions, awsServiceOrigin } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppArtifact, awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec } from './codecs'
 import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deploy'
-import { AWS_SOURCE_URL_SECONDS, awsRunAttempt } from './run-attempt'
+import { AWS_SOURCE_URL_SECONDS, awsRunAttempt, parseAwsCheckpoint } from './run-attempt'
 
 /** Fargate CPU units and memory in MiB of every task, until an application's size is authored. */
 export const AWS_TASK_CPU = 512
@@ -150,6 +153,11 @@ export interface AwsControlProviderOptions {
 	readonly presignCredentials?: () => AwsExpiringCredentialSource
 	/** The Bun image both build stages start from, pinned by digest (`containerImage` refuses any other). */
 	readonly baseImage: string
+	/**
+	 * The installation's account, region, cluster, sources bucket and build project: Control's own configuration, which
+	 * every environment's target is (a registration's is replaced by it, a stored one that differs is refused).
+	 */
+	readonly installation: AwsAppTarget
 	readonly source: AwsSourcePort
 	readonly fetch?: (input: string, init: RequestInit) => Promise<Response>
 	/** The clients of a target's region; absent, the package's own over `fetch`. Tests pass fakes. */
@@ -281,50 +289,71 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			s3PartWriter: (address) => s3PartWriter(clientOptions(s3BucketOrigin(target.sourcesBucket, target.region), target.region), address),
 		}
 	})
-	const targetOf = (environment: ProviderEnvironment): AwsAppTarget => decodeEnvelope('target', AWS_PROVIDER, environment.target, awsAppTargetCodec)
+	// The installation's coordinates are Control's own (its composition), never a registrant's: a registration's target is
+	// replaced by them (`normalizeRegistration`), and a stored one that differs is refused before any call.
+	// `encode` checks every field's form, so a composition with a malformed value fails at start.
+	const installationPayload = awsAppTargetCodec.encode(options.installation)
+	const installation = awsAppTargetCodec.decode(installationPayload)
+	const installationTarget = { provider: AWS_PROVIDER, version: awsAppTargetCodec.version, payload: installationPayload }
+	const targetOf = (environment: ProviderEnvironment): AwsAppTarget => {
+		const stored = decodeEnvelope('target', AWS_PROVIDER, environment.target, awsAppTargetCodec)
+		const differs = AWS_TARGET_FIELDS.filter((field) => stored[field] !== installation[field])
+		if (differs.length > 0) {
+			throw new Error(`aws: the environment's target names another ${differs.join(', ')} than this installation's; register the environment again`)
+		}
+		return installation
+	}
 	const artifactOf = (environment: ProviderEnvironment): AwsAppArtifact =>
 		decodeEnvelope('artifact', AWS_PROVIDER, environment.artifact, awsAppArtifactCodec)
 	const resourcesOf = (environment: ProviderEnvironment, target: AwsAppTarget): AwsEnvironmentResources =>
 		awsEnvironmentResources(environment.appId, environment.env, target.accountId)
 	const urlParameterPath = (resources: AwsEnvironmentResources): string => `${resources.parameterPath}/builds`
-	const attemptOf = (environment: ProviderEnvironment) => {
+	/**
+	 * Deletes secret parameters no live revision may read, best effort, within its own bound (a cancelled run's signal has
+	 * already aborted): after a success, those of every run but this one, any later one and the newest
+	 * `AWS_KEPT_SECRET_RUNS` earlier ones; for a run that never asked for the update, its own. A name left behind is read
+	 * by no task, and the next successful deploy tries again.
+	 */
+	const pruneSecrets = async (
+		clients: Pick<AwsControlClients, 'ssm'>,
+		resources: AwsEnvironmentResources,
+		runId: string,
+		mode: 'after_success' | 'own',
+		log: (line: string) => void,
+	): Promise<void> => {
+		const signal = AbortSignal.timeout(PRUNE_TIMEOUT_MS)
+		try {
+			const names = await clients.ssm.listNames(secretsPath(resources), signal)
+			const earlier = [...new Set(names.map((name) => runOfParameter(resources, name)).filter((run) => run !== null && run < runId))].sort().reverse()
+			const kept = new Set(earlier.slice(0, AWS_KEPT_SECRET_RUNS))
+			for (const name of names) {
+				const run = runOfParameter(resources, name)
+				if (run === null) continue
+				const drop = mode === 'after_success' ? run < runId && !kept.has(run) : run === runId
+				if (drop) await clients.ssm.deleteSecret(name, signal)
+			}
+		} catch {
+			log('warning: aws: some secret parameters no revision reads could not be deleted; the next deploy tries again')
+		}
+	}
+
+	const attemptOf = (environment: ProviderEnvironment, runId: string, log: (line: string) => void) => {
 		const target = targetOf(environment)
 		const resources = resourcesOf(environment, target)
 		const clients = clientsOf(target)
-		return awsRunAttempt({
+		const attempt = awsRunAttempt({
 			codeBuild: clients.codeBuild,
 			ecs: clients.ecs,
 			buildProject: target.buildProject,
 			service: { cluster: target.cluster, service: resources.service },
 			sourceUrl: { ssm: clients.ssm, parameter: (token) => awsSourceUrlParameter(urlParameterPath(resources), token) },
 		})
-	}
-
-	/**
-	 * Deletes secret parameters no live revision may read, best effort: after a success, those of every run but this one,
-	 * any later one and the newest `AWS_KEPT_SECRET_RUNS` earlier ones; after a run that never asked for the update, its
-	 * own. A name left behind is read by no task, and the next successful deploy tries again.
-	 */
-	const pruneSecrets = async (
-		clients: AwsControlClients,
-		resources: AwsEnvironmentResources,
-		runId: string,
-		succeeded: boolean,
-		input: ProviderDeployInput,
-	) => {
-		try {
-			const names = await clients.ssm.listNames(secretsPath(resources), input.signal)
-			const earlier = [...new Set(names.map((name) => runOfParameter(resources, name)).filter((run) => run !== null && run < runId))].sort().reverse()
-			const kept = new Set(earlier.slice(0, AWS_KEPT_SECRET_RUNS))
-			for (const name of names) {
-				const run = runOfParameter(resources, name)
-				if (run === null) continue
-				const drop = succeeded ? run < runId && !kept.has(run) : run === runId
-				if (drop) await clients.ssm.deleteSecret(name, input.signal)
-			}
-		} catch {
-			input.events.log('warning: aws: some secret parameters no revision reads could not be deleted; the next deploy tries again')
+		// A discarded run never asked for the update, so no revision reads its secret parameters either.
+		const discard: typeof attempt.discard = async (checkpoint, signal) => {
+			await attempt.discard(checkpoint, signal)
+			if (RUN_ID.test(runId)) await pruneSecrets(clients, resources, runId, 'own', log)
 		}
+		return { ...attempt, discard }
 	}
 
 	/** A set for the presigned read that outlives the URL, or the run fails here, before the build. */
@@ -343,6 +372,12 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 
 	return {
 		id: AWS_PROVIDER,
+		// The target a registrant submits is replaced by the installation's; nothing in it is theirs to choose.
+		normalizeRegistration: ({ app, environment }) => {
+			if (app.id !== environment.appId) throw new Error('aws: the environment belongs to another application')
+			awsEnvironmentResources(environment.appId, environment.env, installation.accountId)
+			return { app, environment: { ...environment, target: installationTarget } }
+		},
 		// Before Control publishes the snapshot: a contract this version cannot deploy never becomes the approved one.
 		validateAccess: ({ environment, access }) => {
 			refuseUnsupported(access)
@@ -403,72 +438,101 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 				if (values.secret[name] === '') throw new Error(`aws: the secret \`${name}\` is empty; Parameter Store holds no empty value`)
 				secrets[name] = parameterArn(location, awsSecretParameter(resources, input.runId, name))
 			}
-			if (!input.dryRun) {
-				for (const name of secretNames) {
-					await clients.ssm.putSecret(awsSecretParameter(resources, input.runId, name), values.secret[name] ?? '', input.signal)
-				}
-			}
 			const tags = { 'fabrika:app': input.app.id, 'fabrika:env': input.environment.env }
 			const deployClients: AwsDeployClients = { ...clients, credentials: lastingCredentials() }
 			const commitSha = input.app.source.ref
-			const result = await awsDeploy({
-				appId: input.app.id,
-				env: input.environment.env,
-				target: { accountId: target.accountId, region: target.region, cluster: target.cluster, service: resources.service },
-				sourcesBucket: target.sourcesBucket,
-				build: {
-					project: target.buildProject,
-					repositoryName: resources.repository,
-					repositoryUri: `${target.accountId}.dkr.ecr.${target.region}.amazonaws.com/${resources.repository}`,
-					repositoryTags: tags,
-					keepImages: AWS_KEPT_IMAGES,
-					urlParameterPath: urlParameterPath(resources),
-				},
-				image,
-				sourceMapKeyParameter: null,
-				task: {
-					family: resources.service,
-					healthPath: artifact.healthPath,
-					environment: values.plain,
-					secrets,
-					// Without a database the recipe has no init command, and an init definition with no command takes no secret.
-					initSecrets: {},
-					taskRoleArn: resources.taskRoleArn,
-					executionRoleArn: resources.executionRoleArn,
-					cpu: AWS_TASK_CPU,
-					memory: AWS_TASK_MEMORY,
-					log: { group: resources.logGroup, region: target.region },
-					tags,
-				},
-				clients: deployClients,
-				source: {
-					upload: async (parts, signal) => {
-						await options.source.upload({ repository, commitSha, archive: { kind: 'application', ...bindingOf(input.sourceBinding) }, parts, signal })
+			const deployRun = (events: ProviderRunEvents | undefined) =>
+				awsDeploy({
+					appId: input.app.id,
+					env: input.environment.env,
+					target: { accountId: target.accountId, region: target.region, cluster: target.cluster, service: resources.service },
+					sourcesBucket: target.sourcesBucket,
+					build: {
+						project: target.buildProject,
+						repositoryName: resources.repository,
+						repositoryUri: `${target.accountId}.dkr.ecr.${target.region}.amazonaws.com/${resources.repository}`,
+						repositoryTags: tags,
+						keepImages: AWS_KEPT_IMAGES,
+						urlParameterPath: urlParameterPath(resources),
 					},
-				},
-				events: input.events,
-				signal: input.signal,
-				dryRun: input.dryRun,
-				// Control's deploy input carries no start time; the invocation that starts a run calls `deploy` at once, and
-				// an interrupted one is reconciled with the run's own `startedAtMs`, so its deadline only shrinks.
-				startedAtMs: now(),
-				sleep: options.sleep ?? pause,
-			})
-			input.signal.throwIfAborted()
-			// A failed run whose update was asked for keeps its parameters: the update may still land, and its tasks read them.
-			const submitted = result.checkpoint?.serviceUpdateRequested === true
-			if (!input.dryRun && (result.status === 'succeeded' || !submitted)) {
-				await pruneSecrets(clients, resources, input.runId, result.status === 'succeeded', input)
+					image,
+					sourceMapKeyParameter: null,
+					task: {
+						family: resources.service,
+						healthPath: artifact.healthPath,
+						environment: values.plain,
+						secrets,
+						// Without a database the recipe has no init command, and an init definition with no command takes no secret.
+						initSecrets: {},
+						taskRoleArn: resources.taskRoleArn,
+						executionRoleArn: resources.executionRoleArn,
+						cpu: AWS_TASK_CPU,
+						memory: AWS_TASK_MEMORY,
+						log: { group: resources.logGroup, region: target.region },
+						tags,
+					},
+					clients: deployClients,
+					source: {
+						upload: async (parts, signal) => {
+							await options.source.upload({ repository, commitSha, archive: { kind: 'application', ...bindingOf(input.sourceBinding) }, parts, signal })
+						},
+					},
+					events: events ?? input.events,
+					signal: input.signal,
+					dryRun: input.dryRun,
+					// Control's deploy input carries no start time; the invocation that starts a run calls `deploy` at once, and
+					// an interrupted one is reconciled with the run's own `startedAtMs`, so its deadline only shrinks.
+					startedAtMs: now(),
+					sleep: options.sleep ?? pause,
+				})
+			const log = (line: string): void => input.events.log(line)
+			if (input.dryRun) return { state: (await deployRun(undefined)).status, artifactState: 'not_applicable' }
+			// Whether the run recorded the update's marker: from then on its revision may run and read its parameters.
+			let submitted = false
+			const sees = (state: JsonValue | undefined): void => {
+				if (parseAwsCheckpoint(state)?.serviceUpdateRequested === true) submitted = true
 			}
-			return { state: result.status, artifactState: 'not_applicable' }
+			const events: ProviderRunEvents = {
+				log,
+				boundary: () => input.events.boundary(),
+				externalId: async (id, state) => {
+					sees(state)
+					await input.events.externalId(id, state)
+				},
+				checkpoint: async (state) => {
+					sees(state)
+					await input.events.checkpoint(state)
+				},
+			}
+			let succeeded = false
+			try {
+				for (const name of secretNames) {
+					await clients.ssm.putSecret(awsSecretParameter(resources, input.runId, name), values.secret[name] ?? '', input.signal)
+				}
+				const result = await deployRun(events)
+				succeeded = result.status === 'succeeded'
+				input.signal.throwIfAborted()
+				return { state: result.status, artifactState: 'not_applicable' }
+			} finally {
+				// A run that did not ask for the update (failed, cancelled, or thrown, its writes perhaps partial) deletes its
+				// own; one that did keeps them, because the update may still land and its tasks read them.
+				if (succeeded) await pruneSecrets(clients, resources, input.runId, 'after_success', log)
+				else if (!submitted) await pruneSecrets(clients, resources, input.runId, 'own', log)
+			}
 		},
 		cancel: async (input) => {
 			input.signal.throwIfAborted()
-			return cancelRun(attemptOf(input.environment), input)
+			return cancelRun(attemptOf(input.environment, input.runId, () => {}), input)
 		},
 		reconcile: async (input) => {
 			input.signal.throwIfAborted()
-			return reconcileRun(attemptOf(input.environment), input)
+			const log = (line: string): void => void input.log?.(line).catch(() => {})
+			return reconcileRun(attemptOf(input.environment, input.runId, log), input)
 		},
 	}
 }
+
+/** The fields of the target, each the installation's own. */
+const AWS_TARGET_FIELDS: readonly (keyof AwsAppTarget)[] = ['accountId', 'region', 'cluster', 'sourcesBucket', 'buildProject']
+/** How long pruning a run's secret parameters may take, apart from the run's own signal. */
+const PRUNE_TIMEOUT_MS = 15_000

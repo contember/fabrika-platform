@@ -309,8 +309,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 9. **`src/control.ts`** (built, first part): the `ControlProvider`'s `resolveSource`, `deploy`, `cancel` and
    `reconcile` (the last two through the shared run), and `validateAccess`, which refuses before publication a contract
    with a database, jobs or files; `deploy` refuses it again before any call, as it does a dev environment.
-   - **Names.** The target names only what the installation shares: account, region, cluster, sources bucket, build
-     project (until step 10 creates them). Every resource of one environment is derived from its application id and
+   - **Names.** The target holds only what the installation shares: account, region, cluster, sources bucket, build
+     project (until step 10 creates them). Those are Control's own configuration (`FABRIKA_AWS_ACCOUNT_ID`,
+     `FABRIKA_AWS_REGION`, `FABRIKA_AWS_CLUSTER`, `FABRIKA_AWS_SOURCES_BUCKET`, `FABRIKA_AWS_BUILD_PROJECT`), never a
+     registrant's: `normalizeRegistration` replaces a submitted target with them, and `validateAccess`, `deploy`,
+     `cancel` and `reconcile` refuse a stored target that differs. Every resource of one environment is derived from its application id and
      environment (`awsEnvironmentResources`), never registered, so no registration can aim a deploy, which Control
      signs with its own role, at another environment's resources: the service `<app>_<env>`, the repository
      `fabrika/apps/<app>/<env>`, the parameter path and log group `/fabrika/apps/<app>/<env>`, the roles
@@ -319,10 +322,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
      a build start overrides only the buildspec, its variables (the derived repository, the run's URL parameter under
      the environment's path) and the timeouts, never the project's role, image or source.
    - **Secrets.** The secrets and managed credentials are the run's own parameters (`<path>/env/<runId>.<NAME>`),
-     written before the steps, so no write touches a parameter a live revision reads. A run that fails before it asked
-     for the update deletes its own; a successful one deletes those of every earlier run but the newest
-     `AWS_KEPT_SECRET_RUNS` (2), which a rollback's revision may read. Run ids are UUIDv7, whose text order is their
-     time order.
+     written before the steps, so no write touches a parameter a live revision reads. A run that did not ask for the
+     update deletes its own, also when it throws or is cancelled (a `finally`, under its own bound), and a discard
+     after a crash deletes them too; one that asked keeps them, because the update may still land. A successful run
+     deletes those of every earlier run but the newest `AWS_KEPT_SECRET_RUNS` (2), which a rollback's revision may
+     read. Run ids are UUIDv7, whose text order is their time order. UNVERIFIED: AWS documents a quota of 10,000
+     standard parameters per account and region. An environment holds up to four runs' copies (this one, two kept, one
+     whose update was asked and may still land), so with `s` secrets and managed credentials each it takes up to `4s`
+     parameters, and an account fits about `2500 / s` environments. Step 10 sizes against that, or moves to the
+     advanced tier.
    - **Limits.** Tasks get fixed sizes (`AWS_TASK_CPU`, `AWS_TASK_MEMORY`); the build has no SPA commands, no source
      maps and no runtime packages. The build's URL is signed with a fresh read of the container credentials, and a set
      that expires before it fails the run before the build.
@@ -356,7 +364,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     (`repository/fabrika/apps/<app>/<env>`) and parameter path; the derived names make that scope expressible.
 12. **`packages/control/src/aws/`** (built): the composition root over the neutral Bun host (`provider.ts`, the server,
     maintenance and migration entries), and `entrypoint-isolation.test.ts` extended to it. It reads
-    `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (set by ECS) and `FABRIKA_AWS_BASE_IMAGE` (the pinned Bun image), and
+    `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (set by ECS), `FABRIKA_AWS_BASE_IMAGE` (the pinned Bun image) and the
+    five installation coordinates of step 9, and
     reads repositories through the unbound GitHub source. Nothing runs it until step 11 defines Control's task.
 13. **Tests**: the conformance suite over a fake AWS, renderer tests, and a live suite gated on
     `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack.
