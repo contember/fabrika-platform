@@ -152,3 +152,8 @@ grants a value neither lists.
   there for a call that needs one. The key carries only the procedure's action.
 - **IAM refuses a value the application does not list.** A run-time value would be refused until the next deploy, and
   removing a value from the list would make existing grants unchangeable. The console's flag shows the drift instead.
+- **Control projects the one origin the platform proxy serves for the environment**, derived from its person-guarded
+  domain, and IAM calls only that. It would take the destination out of the browser return-origin registry entirely,
+  but it adds a new fact Control hands IAM and a new reconcile step. IAM keeps reading the registry instead, trusting it
+  only with one https origin, and Control guards the public origin as it guards the domain; a registry that holds the
+  proxy's origin is the trust that remains.
