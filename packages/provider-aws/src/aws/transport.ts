@@ -92,6 +92,27 @@ const RETRYABLE_CODES: ReadonlySet<string> = new Set([
 ])
 const RETRYABLE_STATUS: ReadonlySet<number> = new Set([429, 500, 502, 503, 504])
 
+/** The codes of a refusal for rate: AWS did not process the call, so a repeat is safe whatever it does. */
+const THROTTLE_CODES: ReadonlySet<string> = new Set([
+	'Throttling',
+	'ThrottlingException',
+	'ThrottledException',
+	'TooManyRequestsException',
+	'RequestLimitExceeded',
+	'RequestThrottled',
+	'RequestThrottledException',
+	'SlowDown',
+	'EC2ThrottledException',
+])
+
+/**
+ * Whether `error` is AWS refusing a call for rate: the call was not processed. Unlike a timeout or a 5xx, after which a
+ * call may have taken effect, a throttled submitting call certainly did not.
+ */
+export function isThrottled(error: unknown): boolean {
+	return error instanceof AwsError && (THROTTLE_CODES.has(error.code) || error.status === 429)
+}
+
 /** Whether an error answer with `code` and `status` may succeed when repeated. */
 export function retryable(code: string, status: number): boolean {
 	return RETRYABLE_CODES.has(code) || RETRYABLE_STATUS.has(status)

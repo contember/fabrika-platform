@@ -118,6 +118,27 @@ describe('awsRunAttempt', () => {
 		expect(attempt.submitted(before)).toBe(false)
 	})
 
+	test("a discard also deletes the run's source URL parameter, which a crash left behind", async () => {
+		const deleted: string[] = []
+		const attempt = awsRunAttempt({
+			buildProject: 'fabrika-apps-build',
+			service: address,
+			codeBuild: { findBuild: async () => null, stopBuild: async () => null },
+			ecs: { describeService: async () => null, describeServiceDeployment: async () => null, describeServiceRevision: async () => null },
+			sourceUrl: {
+				ssm: {
+					deleteSecret: async (name) => {
+						deleted.push(name)
+						return false
+					},
+				},
+				parameter: (buildToken) => `/fabrika/main/builds/${buildToken}/source-url`,
+			},
+		})
+		await attempt.discard({ ...built }, signal)
+		expect(deleted).toEqual([`/fabrika/main/builds/${TOKEN}/source-url`])
+	})
+
 	test('discards an unsubmitted run by stopping its build, found by the token when its id was lost', async () => {
 		const known = new FakeAws()
 		await known.attempt.discard({ ...built }, signal)

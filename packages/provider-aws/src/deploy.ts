@@ -7,19 +7,25 @@
 //   application's repository is ensured, with its lifecycle rule.
 // - `upload`: Control streams the commit's archive into the sources bucket in parts (`s3PartWriter`), under a key that
 //   is this run's own (`awsSourceKey`).
-// - `build`: the presigned read goes into a SecureString under the run's path; the build starts with the token as its
-//   idempotency token, and a start whose answer was lost is found by the token, never repeated blindly; its id is
-//   recorded; the build is polled to its end, its log relayed into the run log; the SecureString is deleted either way.
+// - `build`: the presigned read (valid for the queue allowance and the provisioning, `AWS_SOURCE_URL_SECONDS`) goes into
+//   a SecureString under the run's path; the build starts with the token as its idempotency token; its id is recorded;
+//   the build is polled to its end, its log relayed into the run log and drained once it ended; the SecureString is
+//   deleted either way, and by `discard` after a crash.
 // - `register`: the image's digest is read from ECR by the run's tag, and both task definitions are registered; the
 //   service's revision is recorded.
 // - `init`: each init command runs once as a one-off task of the init definition in the service's network, in order,
-//   and must exit 0.
+//   and must exit 0. A cancelled or abandoned run does not stop an init task that is running: a migration runs to its
+//   end under the application's migration lock, which a later deploy's migration waits for.
 // - `update`: `serviceUpdateRequested` is recorded before `UpdateService`, the only call that activates anything, and
 //   the service deployment it answered after it.
 // - `rollout`: the service deployment is polled to its verdict (`awsRunAttempt`'s `observe`).
 //
-// A failed run whose service was never updated stops its build (`runDeploy` discards it); one whose update was sent is
-// settled by polling, never by a rollback. A dry run calls nothing.
+// A refusal for rate (`isThrottled`) was not processed, so the call is sent again, with the same idempotency token where
+// it has one. Another retryable failure may have taken effect: a lost start is found by its token, never repeated
+// blindly; a repeated `RunTask` keeps its client token, so a task that started is not started twice; a lost update is
+// left to the rollout, which keeps the run pending until the deadline. A failed run whose service was never updated
+// stops its build (`runDeploy` discards it); one whose update was sent is settled by polling, never by a rollback. A dry
+// run calls nothing.
 
 import type { ContainerImage } from '@fabrika/app/build'
 import {
@@ -27,6 +33,7 @@ import {
 	type DeployRunContext,
 	type DeployStepResult,
 	type ProviderRunEvents,
+	type RunAttempt,
 	runDeploy,
 	type RunObservation,
 } from '@fabrika/provider-contract'
@@ -36,16 +43,23 @@ import type { EcsClient } from './aws/ecs'
 import type { LogsClient } from './aws/logs'
 import { awsSourceKey, type S3ObjectAddress, type S3PartWriter, s3PresignedGet } from './aws/s3'
 import type { SsmClient } from './aws/ssm'
-import { type AwsCredentialSource, AwsError } from './aws/transport'
+import { type AwsCredentialSource, AwsError, isThrottled } from './aws/transport'
 import { awsBuildStart, awsImageTag } from './build'
 import type { AwsAppTarget } from './codecs'
 import { type AwsTaskDefinitionInput, awsTaskDefinitions, INIT_CONTAINER } from './ecs-task'
-import { AWS_RUN_DEADLINE_MS, awsRunAttempt, type RecordedCheckpoint } from './run-attempt'
+import { AWS_RUN_DEADLINE_MS, AWS_SOURCE_URL_SECONDS, awsRunAttempt, type RecordedCheckpoint } from './run-attempt'
 
 /** How often a build, an init task and the rollout are read while the run waits. */
 export const AWS_POLL_INTERVAL_MS = 10_000
+/** How often a call refused for rate, or a `RunTask` whose answer was lost, is sent in all. */
+export const AWS_CALL_ATTEMPTS = 4
+/** The backoff before the first repeat, doubled for each further one. */
+const REPEAT_BACKOFF_MS = 1000
 /** How long the deletion of the source URL's parameter may take once the build ended. */
 const CLEANUP_TIMEOUT_MS = 10_000
+/** How many pages of a build's log are read after it ended, within `DRAIN_TIMEOUT_MS`: its last lines arrive late. */
+const DRAIN_PAGES = 5
+const DRAIN_TIMEOUT_MS = 15_000
 
 export type AwsDeployStepId = 'repository' | 'upload' | 'build' | 'register' | 'init' | 'update' | 'rollout'
 
@@ -106,7 +120,7 @@ export interface AwsDeployInput {
 		readonly repositoryUri: string
 		readonly repositoryTags: Readonly<Record<string, string>>
 		readonly keepImages: number
-		/** The Parameter Store path a run's source URL goes under (`<path>/<build token>/source-url`). */
+		/** The Parameter Store path a run's source URL goes under (`awsSourceUrlParameter`). */
 		readonly urlParameterPath: string
 	}
 	/** What `containerImage` rendered from the contract's recipe. */
@@ -120,8 +134,14 @@ export interface AwsDeployInput {
 	readonly events: ProviderRunEvents
 	readonly signal: AbortSignal
 	readonly dryRun: boolean
+	/**
+	 * When the run started, in epoch milliseconds (Control's `startedAtMs`): its deadline counts from here, as
+	 * `cancelRun` and `reconcileRun` count it, on the clock `awaitSettlement` reads (`Date.now()`).
+	 */
+	readonly startedAtMs: number
 	readonly pollIntervalMs?: number
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+	/** The time the presigned read is signed at. */
 	readonly now?: () => Date
 	/** The run's build token: a lowercase UUID. */
 	readonly newToken?: () => string
@@ -131,6 +151,11 @@ export interface AwsDeployResult {
 	readonly status: 'succeeded' | 'failed'
 	readonly steps: readonly DeployStepResult[]
 	readonly checkpoint: RecordedCheckpoint | undefined
+}
+
+/** The Parameter Store name of one run's source URL: a function of the run, so a recovery can delete it. */
+export function awsSourceUrlParameter(path: string, buildToken: string): string {
+	return `${path}/${buildToken}/source-url`
 }
 
 /** Waits `ms`, or rejects once `signal` aborts. */
@@ -167,9 +192,16 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 	const intervalMs = input.pollIntervalMs ?? AWS_POLL_INTERVAL_MS
 	const log = (line: string): void => events.log(line)
 	const token = (input.newToken ?? (() => crypto.randomUUID()))()
-	const giveUpAtMs = now().getTime() + AWS_RUN_DEADLINE_MS
+	const giveUpAtMs = input.startedAtMs + AWS_RUN_DEADLINE_MS
 	const service = { cluster: target.cluster, service: target.service }
-	const attempt = awsRunAttempt({ codeBuild: clients.codeBuild, ecs: clients.ecs, buildProject: build.project, service })
+	const parameter = awsSourceUrlParameter(build.urlParameterPath, token)
+	const attempt = awsRunAttempt({
+		codeBuild: clients.codeBuild,
+		ecs: clients.ecs,
+		buildProject: build.project,
+		service,
+		sourceUrl: { ssm: clients.ssm, parameter: (buildToken) => awsSourceUrlParameter(build.urlParameterPath, buildToken) },
+	})
 	const address: S3ObjectAddress = {
 		bucket: input.sourcesBucket,
 		region: target.region,
@@ -186,25 +218,47 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 		return checkpoint
 	}
 
+	/**
+	 * `call`, sent again while `repeatable` says its failure was not processed (or, for a call with an idempotency token,
+	 * may be repeated), at most `AWS_CALL_ATTEMPTS` times, backing off, within the signal and the deadline.
+	 */
+	const repeated = async <T>(call: () => Promise<T>, repeatable: (error: unknown) => boolean): Promise<T> => {
+		for (let attempt_ = 1;; attempt_ += 1) {
+			try {
+				return await call()
+			} catch (error) {
+				if (!repeatable(error) || attempt_ >= AWS_CALL_ATTEMPTS || signal.aborted || Date.now() > giveUpAtMs) throw error
+				await sleep(REPEAT_BACKOFF_MS * 2 ** (attempt_ - 1), signal)
+			}
+		}
+	}
+
 	/** One page of a build's log, relayed into the run log; a failed read only skips the page. */
-	const relay = async (log_: { readonly group: string; readonly stream: string }, cursor: string | undefined, read: AbortSignal) => {
+	const relay = async (stream: { readonly group: string; readonly stream: string }, cursor: string | undefined, read: AbortSignal) => {
 		try {
-			const page = await clients.logs.readForward(log_.group, log_.stream, cursor, read)
-			if (page === null) return cursor
+			const page = await clients.logs.readForward(stream.group, stream.stream, cursor, read)
+			if (page === null) return { cursor, atEnd: true }
 			for (const event of page.events) {
 				for (const line of event.message.split('\n')) if (line.trim() !== '') log(`  │ ${line.trimEnd()}`)
 			}
-			return page.cursor
+			return { cursor: page.cursor, atEnd: page.atEnd }
 		} catch {
-			return cursor
+			return { cursor, atEnd: true }
 		}
 	}
+
+	/** A view of the run's candidate for a wait on something else than the build, named in its words, stopping nothing. */
+	const waitingOn = (what: string): RunAttempt<RecordedCheckpoint> => ({
+		...attempt,
+		stop: async () => {},
+		words: { ...attempt.words, candidate: () => what },
+	})
 
 	const steps: Record<AwsDeployStepId, (context: DeployRunContext<RecordedCheckpoint>) => Promise<void>> = {
 		async repository(context) {
 			await context.record({ buildToken: token })
-			await clients.ecr.ensureRepository(build.repositoryName, build.repositoryTags, signal)
-			await clients.ecr.keepNewestImages(build.repositoryName, build.keepImages, signal)
+			await repeated(() => clients.ecr.ensureRepository(build.repositoryName, build.repositoryTags, signal), isThrottled)
+			await repeated(() => clients.ecr.keepNewestImages(build.repositoryName, build.keepImages, signal), isThrottled)
 		},
 
 		async upload() {
@@ -213,8 +267,10 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 		},
 
 		async build(context) {
-			const parameter = `${build.urlParameterPath}/${token}/source-url`
-			await clients.ssm.putSecret(parameter, await s3PresignedGet(clients.credentials, address, now()), signal)
+			const url = await s3PresignedGet(clients.credentials, address, now(), AWS_SOURCE_URL_SECONDS)
+			await repeated(() => clients.ssm.putSecret(parameter, url, signal), isThrottled)
+			let stream: { readonly group: string; readonly stream: string } | null = null
+			let cursor: string | undefined
 			try {
 				const start = awsBuildStart({
 					project: build.project,
@@ -226,17 +282,17 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 				})
 				let started: CodeBuildBuild
 				try {
-					started = await clients.codeBuild.startBuild(start, signal)
+					// A throttled start was not processed: the same start under the same token is sent again.
+					started = await repeated(() => clients.codeBuild.startBuild(start, signal), isThrottled)
 				} catch (error) {
-					// The start's answer may have been lost: only the token tells whether a build started (ADR-0044).
-					if (!(error instanceof AwsError) || !error.retryable) throw error
+					// Any other retryable failure may hide a start: only the token tells (ADR-0044), never a blind repeat.
+					if (!(error instanceof AwsError) || !error.retryable || isThrottled(error)) throw error
 					const found = await clients.codeBuild.findBuild(build.project, token, signal)
 					if (found === null) throw error
 					started = found
 				}
 				await context.record({ ...recorded(context), buildId: started.id })
 				log(`  build ${started.id}`)
-				let cursor: string | undefined
 				await awaitSettlement({
 					attempt,
 					checkpoint: recorded(context),
@@ -249,7 +305,10 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 						try {
 							const current = await clients.codeBuild.getBuild(started.id, read)
 							if (current === null) return { state: 'absent' }
-							if (current.log !== null) cursor = await relay(current.log, cursor, read)
+							if (current.log !== null) {
+								stream = current.log
+								cursor = (await relay(current.log, cursor, read)).cursor
+							}
 							return buildObservation(current)
 						} catch (error) {
 							return { state: 'unobservable', cause: error }
@@ -257,23 +316,34 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 					},
 				})
 			} finally {
+				// The build's last lines arrive in its log after it stopped: read on a few pages, bounded in time.
+				const drained = stream
+				if (drained !== null) {
+					const drain = AbortSignal.timeout(DRAIN_TIMEOUT_MS)
+					for (let page = 0; page < DRAIN_PAGES && !drain.aborted; page += 1) {
+						const next = await relay(drained, cursor, drain)
+						cursor = next.cursor
+						if (next.atEnd) break
+					}
+				}
 				// The URL opens the archive until it expires; its parameter goes once the build no longer needs it.
 				await clients.ssm.deleteSecret(parameter, AbortSignal.timeout(CLEANUP_TIMEOUT_MS)).catch(() => {
-					log(`  [warn] the source URL's parameter of this run could not be deleted; it expires with the URL`)
+					log(`  [warn] the source URL's parameter of this run could not be deleted; the URL in it expires, a recovery deletes it`)
 				})
 			}
 		},
 
 		async register(context) {
 			const tag = awsImageTag(token)
-			const pushed = await clients.ecr.findImage(build.repositoryName, { tag }, signal)
+			const pushed = await repeated(() => clients.ecr.findImage(build.repositoryName, { tag }, signal), isThrottled)
 			if (pushed === null) throw new Error(`aws: the build pushed no image tagged ${tag}`)
 			const definitions = awsTaskDefinitions({ ...input.task, image: `${build.repositoryUri}@${pushed.digest}`, rendered: input.image })
-			const revision = await clients.ecs.registerTaskDefinition(definitions.service, signal)
+			const revision = await repeated(() => clients.ecs.registerTaskDefinition(definitions.service, signal), isThrottled)
 			await context.record({ ...recorded(context), taskDefinitionArn: revision.arn })
 			log(`  registered ${revision.arn}`)
 			if (definitions.init !== null) {
-				const initRevision = await clients.ecs.registerTaskDefinition(definitions.init.definition, signal)
+				const initDefinition = definitions.init.definition
+				const initRevision = await repeated(() => clients.ecs.registerTaskDefinition(initDefinition, signal), isThrottled)
 				init = { arn: initRevision.arn, commands: definitions.init.commands }
 			}
 		},
@@ -283,24 +353,32 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 				log('  no init command')
 				return
 			}
-			const current = await clients.ecs.describeService(service, signal)
-			if (current?.network == null) throw new Error('aws: the service has no awsvpc network for the init tasks to run in')
-			for (const [index, command] of init.commands.entries()) {
-				const task = await clients.ecs.runTask(
-					{
-						cluster: target.cluster,
-						taskDefinitionArn: init.arn,
-						container: INIT_CONTAINER,
-						command,
-						network: current.network,
-						clientToken: `${token}-init-${index + 1}`,
-						startedBy: `fabrika-${token}`,
-					},
-					signal,
+			const { arn, commands } = init
+			const current = await repeated(() => clients.ecs.describeService(service, signal), isThrottled)
+			if (current === null) throw new Error(`aws: the service ${target.service} does not exist`)
+			const network = current.network
+			if (network === null) throw new Error(`aws: the service ${target.service} has no awsvpc network for the init tasks to run in`)
+			for (const [index, command] of commands.entries()) {
+				// Under its client token a repeated start starts no second task, so any retryable failure is repeated.
+				const task = await repeated(
+					() =>
+						clients.ecs.runTask(
+							{
+								cluster: target.cluster,
+								taskDefinitionArn: arn,
+								container: INIT_CONTAINER,
+								command,
+								network,
+								clientToken: `${token}-init-${index + 1}`,
+								startedBy: `fabrika-${token}`,
+							},
+							signal,
+						),
+					(error) => error instanceof AwsError && error.retryable,
 				)
-				log(`  init ${index + 1}/${init.commands.length}: task ${task.arn}`)
+				log(`  init ${index + 1}/${commands.length}: task ${task.arn}`)
 				await awaitSettlement({
-					attempt,
+					attempt: waitingOn(`init task ${task.arn}`),
 					checkpoint: recorded(context),
 					events,
 					signal,
@@ -330,7 +408,8 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 			// Recorded before the call: from here the run is settled only by polling (ADR-0044).
 			await context.record({ ...checkpoint, serviceUpdateRequested: true })
 			try {
-				const updated = await clients.ecs.updateService(service, revision, signal)
+				// A throttled update was not processed: the same revision is asked for again.
+				const updated = await repeated(() => clients.ecs.updateService(service, revision, signal), isThrottled)
 				if (updated.currentDeploymentArn !== null) {
 					await context.record({ ...checkpoint, serviceUpdateRequested: true, deploymentArn: updated.currentDeploymentArn }).catch(() => {
 						// The rollout finds the deployment through the service when its ARN is not recorded.
@@ -338,8 +417,8 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 					})
 				}
 			} catch (error) {
-				// A lost answer may still have updated the service: the rollout settles it, pending until the deadline.
-				if (!(error instanceof AwsError) || !error.retryable) throw error
+				// Any other retryable failure may still have updated the service: the rollout settles it, pending until the deadline.
+				if (!(error instanceof AwsError) || !error.retryable || isThrottled(error)) throw error
 				log(`  [warn] the update's answer was lost (${error.code}); the rollout settles it`)
 			}
 		},

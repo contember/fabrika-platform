@@ -301,7 +301,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    `findBuild` (the token travels as `FABRIKA_BUILD_TOKEN`), never by a blind repeat; a `findBuild` that answers `null`
    for a lost start fails the run.
    The candidate is `src/run-attempt.ts`, the shared run's `RunAttempt`. What the steps are handed (the rendered image,
-   the task's environment and secrets, the clients and Control's source upload) is step 9's to assemble. Not yet
+   the task's environment and secrets, the clients, Control's source upload and the run's `startedAtMs`) is step 9's
+   to assemble; its `reconcile` and `cancel` build the attempt with the run's source URL parameter, so a discard after
+   a crash deletes it. A cancelled or abandoned run does not stop an init task that is running: the migration runs to
+   its end under the application's migration lock, which a later deploy's migration waits for. Not yet
    relayed: the service's own events during the rollout (`describeService` reads them).
 9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`
    (stop the build; once the service is updated, cancellation never implies rollback), `secrets` (`PutParameter`,
