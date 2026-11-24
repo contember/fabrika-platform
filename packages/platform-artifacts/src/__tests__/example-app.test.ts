@@ -613,6 +613,7 @@ describe("the contract's endpoint table is enforced by the proxy, and survives t
 			'api.notes.remove',
 			'api.notes.restore',
 			'api.notes.trash',
+			'api.notes.workspaces',
 			'health',
 			'people.guests.invite',
 			'site',
