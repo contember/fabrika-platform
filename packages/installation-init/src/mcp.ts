@@ -19,7 +19,7 @@ export interface IamOAuthConfig {
 	readonly resources: readonly OAuthResourceDto[]
 }
 
-const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl']
+const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl', 'identity']
 /** IAM's own ceiling: it refuses to boot with more. */
 const MAX_CLIENTS = 16
 
@@ -39,7 +39,10 @@ const isHttpsUrl = (value: string): boolean => {
 const parseClient = (value: unknown, index: number): McpClient => {
 	const client = parseOAuthManagedClient(value)
 	if (client === null || !isObject(value) || !Object.keys(value).every((key) => CLIENT_KEYS.includes(key))) {
-		throw new Error(`MCP client ${index} must be { provider: ${PROVIDERS}, clientId: <https URL>, redirectUris: [...], metadataUrl? }`)
+		throw new Error(
+			`MCP client ${index} must be { provider: ${PROVIDERS}, clientId: <https URL>, redirectUris: [...], metadataUrl?, identity? }; `
+				+ 'identity is { app: <app id>, resource: <https URL> } and only on an external client',
+		)
 	}
 	const metadataUrl = value['metadataUrl']
 	if (metadataUrl === undefined) {
@@ -76,6 +79,10 @@ export const parseMcpClientsJson = (raw: string): readonly McpClient[] => {
 	return clients
 }
 
+/** MCP authoring is on when the operator registers a client that is not identity-only: those sign people in, nothing more. */
+export const mcpAuthoringOn = (clients: readonly McpClient[] | undefined): boolean =>
+	clients?.some((client) => client.identity === undefined) ?? false
+
 /**
  * IAM's OAuth configuration for one placed installation: the MCP clients (none when MCP authoring is off; the
  * command-line client is IAM's own and is never listed), and every resource the composition registers, each marked
@@ -107,6 +114,14 @@ export const platformIamOAuthConfig = (
 	}
 	if (resources.length === 0) {
 		throw new Error('the platform proxy manifest template declares no OAuth resource on this composition')
+	}
+	// An identity token must never be one a platform service accepts: not its app id, not a resource on its hosts.
+	const platformHosts = Object.values(composition.placement).flatMap((placement) => placement.hosts)
+	for (const { clientId, identity } of clients) {
+		if (identity === undefined) continue
+		if (template.apps.some((app) => app.id === identity.app) || platformHosts.includes(new URL(identity.resource).hostname)) {
+			throw new Error(`MCP client ${clientId}: its identity resource names a platform service's app id or host`)
+		}
 	}
 	return { clients, resources }
 }

@@ -237,7 +237,7 @@ Options (a flag beats the environment variable beside it):
   --operations-host=<host>          FABRIKA_PLATFORM_OPERATIONS_HOST
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   --source-dir=<checkout>           required                       clean full checkout running this CLI
-  --mcp-clients=<json>              FABRIKA_PLATFORM_MCP_CLIENTS_JSON  MCP authoring clients; unset = off
+  --mcp-clients=<json>              FABRIKA_PLATFORM_MCP_CLIENTS_JSON  OAuth clients; MCP authoring is on with one not identity-only
   --plain-variables=<svc/KEY,...>   FABRIKA_PLATFORM_PLAIN_VARIABLES   readable variables that are not credentials
   --dry-run                                                         read everything, change nothing
 

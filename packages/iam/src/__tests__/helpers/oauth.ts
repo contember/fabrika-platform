@@ -1,5 +1,5 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
-import type { OAuthClientProvider, OAuthResourceDto } from '@fabrika/iam-contract'
+import type { OAuthClientProvider, OAuthIdentityResource, OAuthResourceDto } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { spyOn } from 'bun:test'
 import type { IamRepositories } from '../../db'
@@ -32,6 +32,8 @@ export async function oauthFixture(
 		provider?: OAuthClientProvider
 		/** Resources served beside the managed client's `RESOURCE`, such as the command-line client's. */
 		extraResources?: readonly OAuthResourceDto[]
+		/** Binds the registered client to its own identity resource; it is then served that one alone. */
+		identity?: OAuthIdentityResource
 	} = {},
 ) {
 	const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
@@ -52,7 +54,13 @@ export async function oauthFixture(
 	const clientId = `https://claude.example.test/cimd/${uuidv7()}`
 	const jwksUri = `https://claude.example.test/jwks/${uuidv7()}.json`
 	const config: OAuthConfig = {
-		clients: [{ provider: options.provider ?? 'claude', clientId, redirectUris: [REDIRECT_URI], metadataUrl: clientId }],
+		clients: [{
+			provider: options.provider ?? 'claude',
+			clientId,
+			redirectUris: [REDIRECT_URI],
+			metadataUrl: clientId,
+			...(options.identity === undefined ? {} : { identity: options.identity }),
+		}],
 		resources: [{
 			app: 'control',
 			resource: RESOURCE,

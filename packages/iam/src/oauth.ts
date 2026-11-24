@@ -9,6 +9,7 @@ import {
 } from '@fabrika/auth-core'
 import {
 	OAUTH_DEVICE_CODE_GRANT_TYPE,
+	OAUTH_IDENTITY_SCOPE,
 	type OAuthAuthorizationRequest,
 	type OAuthClientMetadataDocument,
 	type OAuthResourceDto,
@@ -82,10 +83,13 @@ export async function establishClient(config: OAuthConfig, clientId: string, red
 	return { kind: 'managed', registration, metadata }
 }
 
+/** What a consent grants: a registered resource, or an identity-only client's own resource. */
+export type AuthorizationTarget = Pick<OAuthResourceDto, 'app' | 'resource'>
+
 /** Record the consent and return the plaintext authorization code — the only time it exists. */
 export async function grantAuthorization(
 	services: Services,
-	input: { request: OAuthAuthorizationRequest; resource: OAuthResourceDto; scopes: string[]; session: SessionRow; requestId: string },
+	input: { request: OAuthAuthorizationRequest; resource: AuthorizationTarget; scopes: string[]; session: SessionRow; requestId: string },
 ): Promise<string> {
 	const now = unixNow()
 	const code = generateToken()
@@ -294,13 +298,8 @@ export async function grantAuthority(
 ): Promise<{ principal: PrincipalRow; scopes: string[]; permissions: PermissionEntry[]; expiresAt: number | null } | null> {
 	const config = services.config.oauth
 	if (config === null || grant.revoked_at !== null || grant.expires_at <= now || !grantResources(grant).includes(resourceUri)) return null
-	const resource = config.resources.find((entry) =>
-		entry.resource === resourceUri && entry.app === grant.app && servesClient(entry, grant.client_id === OAUTH_CLI_CLIENT_ID)
-	)
-	const clientKnown = grant.client_id === OAUTH_CLI_CLIENT_ID || config.clients.some((client) => client.clientId === grant.client_id)
-	if (resource === undefined || !clientKnown) return null
 	const scopes = parseOAuthScopes(parseJsonOrNull(grant.scopes))
-	const ceiling = scopes === null ? null : scopeCeiling(resource, scopes)
+	const ceiling = scopes === null ? null : grantCeiling(config, grant, resourceUri, scopes)
 	if (scopes === null || ceiling === null) return null
 	const session = await services.repositories.sessions.getActiveSessionById(grant.session_id)
 	if (session === null || session.app !== null || session.principal_id !== grant.principal_id || !sessionUsable(session, services.config, now)) {
@@ -308,11 +307,41 @@ export async function grantAuthority(
 	}
 	const principal = await services.repositories.principals.getPrincipalById(grant.principal_id)
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') return null
+	// No grant is read for an identity resource: its token names the person and carries no permission.
+	if (ceiling.kind === 'identity') return { principal, scopes, permissions: [], expiresAt: sessionEndsAt(session, services.config) }
 	const live = await resolveAuthorityAt(services, principal, grant.app)
-	const permissions = narrowPermissions(live.permissions, ceiling)
+	const permissions = narrowPermissions(live.permissions, ceiling.permissions)
 	// A refreshed token ends with its login too: an OIDC login issued before the cap stores a later expiry than its end.
 	const expiresAt = Math.min(authorityDeadline(live, permissions, now) ?? Number.POSITIVE_INFINITY, sessionEndsAt(session, services.config))
 	return { principal, scopes, permissions, expiresAt }
+}
+
+/**
+ * What a grant's token may carry at `resourceUri` under the current configuration, or null when its client or resource
+ * is no longer configured for it. An identity-only client is served its own resource alone, so a grant it holds for
+ * any other one (given before it was bound) mints nothing, and a grant for an identity resource carries no permission.
+ */
+function grantCeiling(
+	config: OAuthConfig,
+	grant: OAuthGrantRow,
+	resourceUri: string,
+	scopes: readonly string[],
+): { kind: 'identity' } | { kind: 'scoped'; permissions: KeyGrant[] } | null {
+	const cli = grant.client_id === OAUTH_CLI_CLIENT_ID
+	const client = config.clients.find((entry) => entry.clientId === grant.client_id)
+	if (!cli && client === undefined) return null
+	const identity = client?.identity
+	if (identity !== undefined) {
+		const matches = identity.resource === resourceUri && identity.app === grant.app && sameScopes(scopes, [OAUTH_IDENTITY_SCOPE])
+		return matches ? { kind: 'identity' } : null
+	}
+	const resource = config.resources.find((entry) => entry.resource === resourceUri && entry.app === grant.app && servesClient(entry, cli))
+	const permissions = resource === undefined ? null : scopeCeiling(resource, scopes)
+	return permissions === null ? null : { kind: 'scoped', permissions }
+}
+
+function sameScopes(scopes: readonly string[], expected: readonly string[]): boolean {
+	return scopes.length === expected.length && scopes.every((scope, index) => scope === expected[index])
 }
 
 /** The union of the scopes' grants, or null when a scope is no longer configured. */

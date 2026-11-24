@@ -15,15 +15,16 @@ export interface OAuthConfig {
 const MAX_CLIENTS = 16
 const MAX_RESOURCES = 32
 const CONFIG_KEYS = ['clients', 'resources']
-const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl']
+const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl', 'identity']
 const RESOURCE_KEYS = ['app', 'resource', 'defaultScopes', 'scopeGrants', 'client']
 
 /**
  * Parse `OAUTH_CONFIG`. Absent or empty disables OAuth; anything malformed THROWS, so a typo fails the boot instead of
  * quietly serving fewer clients or scopes than the operator wrote. Unknown keys are refused for the same reason.
- * `clients` may be empty: the command-line client is IAM's own and never listed.
+ * `clients` may be empty: the command-line client is IAM's own and never listed. A client's identity resource names
+ * neither a registered resource nor a `platformAudiences` app, so its token is never one an installation service accepts.
  */
-export function parseOAuthConfig(raw: string | undefined): OAuthConfig | null {
+export function parseOAuthConfig(raw: string | undefined, platformAudiences: ReadonlySet<string>): OAuthConfig | null {
 	if (raw === undefined || raw.trim() === '') return null
 	const value = parseJsonOrNull(raw)
 	const rawClients = prop(value, 'clients')
@@ -54,6 +55,14 @@ export function parseOAuthConfig(raw: string | undefined): OAuthConfig | null {
 			throw new Error(`OAUTH_CONFIG.resources[${resources.length}] is not a valid resource`)
 		}
 		resources.push(resource)
+	}
+	for (const [index, { identity }] of clients.entries()) {
+		if (
+			identity !== undefined
+			&& (platformAudiences.has(identity.app) || resources.some((entry) => entry.resource === identity.resource || entry.app === identity.app))
+		) {
+			throw new Error(`OAUTH_CONFIG.clients[${index}].identity names an installation service's app or resource`)
+		}
 	}
 	return { clients, resources }
 }

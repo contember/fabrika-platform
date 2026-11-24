@@ -256,7 +256,7 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
 
    `metadataUrl` is optional; IAM fetches the client id when it is absent. The deploy refuses a
    malformed list, more than 16 clients, or `--scheme=http`, before it writes anything. Register
-   [Claude and ChatGPT](#registering-claude-and-chatgpt), or [an external client](#registering-an-external-client), as below. With the list, the deploy:
+   [Claude and ChatGPT](#registering-claude-and-chatgpt), or [an external client](#registering-an-external-client), as below. With a client that is not identity-only in the list, the deploy:
    - publishes the console's MCP table, whose `/mcp` row admits OAuth bearers, and registers the
      resource in the proxy manifest;
    - writes `FABRIKA_SERVICE_TABLE_DIGEST` on `control`: the digest of that table. Control serves
@@ -265,8 +265,8 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
      whose `authoring` scope grants `source.workspace.read`, `source.workspace.write`,
      `source.pull-request.create`, `deploy.trigger` and `deploy.read`, beside the command-line client's resources.
 
-   Without the list, the console's table makes `/mcp` a session-only row that Control answers `404`,
-   so no MCP client reaches it. An https deploy still writes `FABRIKA_IAM_OAUTH_CONFIG`, with no client and
+   Without one (no list, or identity-only clients alone), the console's table makes `/mcp` a session-only row that Control answers `404`,
+   so no MCP client reaches it. An https deploy still writes `FABRIKA_IAM_OAUTH_CONFIG`, with only the identity-only clients and
    only the command-line client's resources (`https://<console>/api/rpc` and `/operations/api/rpc`, served to that
    client alone through its device grant), and writes `FABRIKA_OPERATIONS_OAUTH_RESOURCE` on `operations`, the one
    OAuth resource it accepts (`https://<console>/operations/api/rpc`). A plain-http deploy writes neither, leaves both variables as they are, and
@@ -406,11 +406,37 @@ known to declare `private_key_jwt`.
 
 ## Registering an external client
 
-An application other than Claude or ChatGPT (an operations tool that signs people in through the installation's
-IAM, say) registers with `"provider": "external"`. The kind is a label: IAM treats it as any other client, so it gets
-what they get. That is an access token for a registered resource, and the only one an installation registers is the
+An application other than Claude or ChatGPT registers with `"provider": "external"`. It is registered one of two ways.
+
+**Identity only** (an operations tool that signs people in through the installation's IAM, say). The entry names the
+client's own resource and an app id for it:
+
+```json
+{
+	"provider": "external",
+	"clientId": "https://<client host>/oauth/client.json",
+	"redirectUris": ["https://<client host>/oauth/callback"],
+	"identity": { "app": "<app id>", "resource": "https://<client host>" }
+}
+```
+
+The client is then served that resource alone, with the one scope `identity` (the default when `scope` is omitted).
+Its access token names the signed-in person (`sub`, `label`, `ptype: user`) for `aud` = that resource and `app` = that
+id, and carries no permission: IAM reads no grant for it, at the code exchange and at every refresh. Every installation
+service and every application refuses it, because its audience is none of theirs. The client verifies it against IAM's
+JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). A request for any other resource is `invalid_target`,
+any other scope `invalid_scope`, and a grant the client held before it was bound mints nothing after.
+`app` is a lowercase id without `@`, at most 63 characters (`^[a-z0-9][a-z0-9-]{0,62}$`); the deploy refuses a platform service's app id and a resource on a
+platform host, and IAM refuses a platform audience and a registered resource at boot. Registering only identity-only
+clients leaves MCP authoring off: no `/mcp` row is published and no authoring resource is served. It needs `https`,
+like every client.
+Every active user of the installation can sign in to such a client, an external principal included: the token
+proves who the person is, not that they belong to the application, so the application decides whom it admits.
+
+**Authoring.** Without `identity`, the kind is a label: IAM treats the client as any other, so it gets what they get.
+That is an access token for a registered resource, and the only one an installation serves managed clients is the
 console's `/mcp` with the `authoring` scope: within the consenting person's grants, the client can write workspaces
-and deploy to stage. It gets no ID token and no resource of its own. Register only a client you would trust with that.
+and deploy to stage. Register only a client you would trust with that.
 
 ```json
 {
@@ -420,11 +446,14 @@ and deploy to stage. It gets no ID token and no resource of its own. Register on
 }
 ```
 
-The client serves a Client ID Metadata Document at `clientId` (or at `metadataUrl`) with `client_id` equal to that
-URL, `redirect_uris` within the registered ones, `response_types` absent or `["code"]`, and `token_endpoint_auth_method` `none`
-or `private_key_jwt` ([above](#registering-claude-and-chatgpt)). It authorizes with the authorization code flow, S256 PKCE and `resource` set to a
-registered resource (`https://<console>/mcp`); its scopes are bounded by that resource's `scopeGrants`, and the token
-carries only what the signed-in person holds within them. There is no implicit grant and no client secret.
+Either way the client serves a Client ID Metadata Document at `clientId` (or at `metadataUrl`) with `client_id` equal
+to that URL, `redirect_uris` within the registered ones, `response_types` absent or `["code"]`, and
+`token_endpoint_auth_method` `none` or `private_key_jwt` ([above](#registering-claude-and-chatgpt)). It authorizes with
+the authorization code flow, S256 PKCE and `resource` set to its resource. It gets no ID token, no implicit grant and no
+client secret.
+
+**Rollout.** The binding is new in `FABRIKA_IAM_OAUTH_CONFIG`; an IAM from before it refuses the key and stops at boot.
+Before rolling `iam` back, remove every `identity` entry from the client list and deploy.
 
 ## Locally
 

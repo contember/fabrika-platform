@@ -22,6 +22,7 @@ import { parseOAuthConfig } from '../oauth-config'
 import { parseOidcSessionSeconds } from '../oidc-session'
 import { BUN_PBKDF2_COST } from '../password-crypto'
 import { parseRetention } from '../retention'
+import { parseAdminAudiences, platformAudiencesFor } from '../services'
 
 /** Config that exists ONLY off Workers — the process's own knobs, not part of the service's `Env`. */
 export interface ProcessConfig {
@@ -102,7 +103,7 @@ export async function createRuntime(source: Record<string, string | undefined> =
 	const controlUrl = httpOrigin(source, 'FABRIKA_CONTROL_URL')
 
 	// Parsed here as well as per request in `buildServices`, for the same readiness-probe reason as above.
-	parseOAuthConfig(source['FABRIKA_IAM_OAUTH_CONFIG'])
+	parseOAuthConfig(source['FABRIKA_IAM_OAUTH_CONFIG'], platformAudiencesFor(parseAdminAudiences(source['FABRIKA_IAM_ADMIN_AUDIENCES'])))
 	const authLogRetentionDays = source['FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS']
 	const auditRetentionDays = source['FABRIKA_IAM_AUDIT_RETENTION_DAYS']
 	parseRetention(
