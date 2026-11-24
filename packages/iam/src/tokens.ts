@@ -457,7 +457,7 @@ export async function resolveCredential(services: Services, cred: CredentialRow,
  * A user's mailbox for its token: `principals.email`, normalized by `PrincipalRepository`, the address the person signs
  * in with. An application mails it as `ctx.principal.email`, so it is never `label`, the spelling the person sees.
  */
-function mailboxClaim(principal: PrincipalRow): { email?: string } {
+export function mailboxClaim(principal: PrincipalRow): { email?: string } {
 	return principal.type === 'user' && principal.email !== null ? { email: principal.email } : {}
 }
 

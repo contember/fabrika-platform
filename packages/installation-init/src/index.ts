@@ -36,7 +36,15 @@ export {
 } from './environment'
 export { ghRepoExists, hasGhCli } from './gh'
 export { action, detail, fail, info, ok, step, url, warn } from './log'
-export { type IamOAuthConfig, mcpAuthoringOn, type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from './mcp'
+export {
+	type IamOAuthConfig,
+	type IdentityAppSchema,
+	identityAppSchemas,
+	mcpAuthoringOn,
+	type McpClient,
+	parseMcpClientsJson,
+	platformIamOAuthConfig,
+} from './mcp'
 export { type CommandEnv, describeArgument, readEnv, readFlag, requiredSetting, setting, shellWord } from './options'
 export { assertPinnedTag } from './pin'
 export { confirm } from './prompt'

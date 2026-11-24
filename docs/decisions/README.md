@@ -105,3 +105,4 @@ a commit message suffices.
 | [0080](0080-the-serving-process-keeps-the-job-schedule-where-no-crontab-runs.md)        | The serving process keeps the job schedule where no crontab runs                                          |
 | [0081](0081-the-aws-provider-calls-aws-without-the-sdk.md)                              | The AWS provider calls AWS without the SDK                                                                |
 | [0082](0082-framework-secrets-reach-the-application-only-through-its-launcher.md)       | Framework secrets reach the application's process only through its launcher (proposed)                    |
+| [0084](0084-an-external-application-signs-people-in-through-iam.md)                     | An external application signs people in through IAM and receives their roles there                        |

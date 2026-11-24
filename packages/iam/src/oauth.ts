@@ -12,6 +12,7 @@ import {
 	OAUTH_IDENTITY_SCOPE,
 	type OAuthAuthorizationRequest,
 	type OAuthClientMetadataDocument,
+	type OAuthIdentityRole,
 	type OAuthResourceDto,
 	type OAuthRevocationRequest,
 	type OAuthTokenRequest,
@@ -31,7 +32,7 @@ import { authorityDeadline, resolveAuthorityAt } from './resolve'
 import { generateToken, hashToken, timingSafeEqualHex } from './secret'
 import type { Services } from './services'
 import { getSigner, verifyResourceAccessToken } from './signing'
-import { boundedToken } from './tokens'
+import { boundedToken, mailboxClaim } from './tokens'
 
 /** An authorization code is redeemed by the client's back end within seconds of the redirect. */
 export const OAUTH_CODE_TTL_SECONDS = 60
@@ -274,6 +275,7 @@ export async function mintForGrant(
 		scopes: authority.scopes,
 		grantId: grant.id,
 		tokenId: uuidv7(),
+		...(authority.identity === undefined ? {} : { ...mailboxClaim(authority.principal), ...authority.identity }),
 	})
 	const token = await boundedToken((await getSigner(env)).signResourceToken(claims), { app: grant.app, subject: authority.principal.id })
 	if (token === null) return null
@@ -283,6 +285,15 @@ export async function mintForGrant(
 		expires_in: expiresAt - now,
 		scope: authority.scopes.join(' '),
 	}
+}
+
+/** What a grant's next token carries. `identity` is present on an identity resource's: its roles, when it declares them. */
+export interface GrantAuthority {
+	principal: PrincipalRow
+	scopes: string[]
+	permissions: PermissionEntry[]
+	expiresAt: number | null
+	identity?: { roles?: string[] }
 }
 
 /**
@@ -295,7 +306,7 @@ export async function grantAuthority(
 	grant: OAuthGrantRow,
 	now: number,
 	resourceUri: string = grant.resource,
-): Promise<{ principal: PrincipalRow; scopes: string[]; permissions: PermissionEntry[]; expiresAt: number | null } | null> {
+): Promise<GrantAuthority | null> {
 	const config = services.config.oauth
 	if (config === null || grant.revoked_at !== null || grant.expires_at <= now || !grantResources(grant).includes(resourceUri)) return null
 	const scopes = parseOAuthScopes(parseJsonOrNull(grant.scopes))
@@ -307,8 +318,16 @@ export async function grantAuthority(
 	}
 	const principal = await services.repositories.principals.getPrincipalById(grant.principal_id)
 	if (principal === null || principal.type !== 'user' || principalStatus(principal) !== 'active') return null
-	// No grant is read for an identity resource: its token names the person and carries no permission.
-	if (ceiling.kind === 'identity') return { principal, scopes, permissions: [], expiresAt: sessionEndsAt(session, services.config) }
+	if (ceiling.kind === 'identity') {
+		// An identity resource's token names the person and carries no permission. With declared roles it names those
+		// the person holds, and a person holding none gets no token: the grant stops at the next refresh.
+		const sessionEnd = sessionEndsAt(session, services.config)
+		if (ceiling.roles === undefined) return { principal, scopes, permissions: [], expiresAt: sessionEnd, identity: {} }
+		const held = await heldIdentityRoles(services, principal, grant.app, ceiling.roles)
+		if (held === null) return null
+		const expiresAt = Math.min(held.until ?? Number.POSITIVE_INFINITY, sessionEnd)
+		return { principal, scopes, permissions: [], expiresAt, identity: { roles: held.keys } }
+	}
 	const live = await resolveAuthorityAt(services, principal, grant.app)
 	const permissions = narrowPermissions(live.permissions, ceiling.permissions)
 	// A refreshed token ends with its login too: an OIDC login issued before the cap stores a later expiry than its end.
@@ -326,18 +345,45 @@ function grantCeiling(
 	grant: OAuthGrantRow,
 	resourceUri: string,
 	scopes: readonly string[],
-): { kind: 'identity' } | { kind: 'scoped'; permissions: KeyGrant[] } | null {
+): { kind: 'identity'; roles: readonly OAuthIdentityRole[] | undefined } | { kind: 'scoped'; permissions: KeyGrant[] } | null {
 	const cli = grant.client_id === OAUTH_CLI_CLIENT_ID
 	const client = config.clients.find((entry) => entry.clientId === grant.client_id)
 	if (!cli && client === undefined) return null
 	const identity = client?.identity
 	if (identity !== undefined) {
 		const matches = identity.resource === resourceUri && identity.app === grant.app && sameScopes(scopes, [OAUTH_IDENTITY_SCOPE])
-		return matches ? { kind: 'identity' } : null
+		return matches ? { kind: 'identity', roles: identity.roles } : null
 	}
 	const resource = config.resources.find((entry) => entry.resource === resourceUri && entry.app === grant.app && servesClient(entry, cli))
 	const permissions = resource === undefined ? null : scopeCeiling(resource, scopes)
 	return permissions === null ? null : { kind: 'scoped', permissions }
+}
+
+/**
+ * The declared roles `principal` holds at an external application, in declared order, and when the earliest of them
+ * ends (null: none ends); null when it holds none. Only a global grant of a declared role counts, and only for an
+ * internal principal: an external one holds nothing but roles its application declares external (ADR-0051).
+ */
+export async function heldIdentityRoles(
+	services: Services,
+	principal: PrincipalRow,
+	app: string,
+	declared: readonly OAuthIdentityRole[],
+): Promise<{ keys: string[]; until: number | null } | null> {
+	if (principal.affiliation !== 'internal') return null
+	const grants = await services.repositories.grants.getActiveGrantsForApp(principal.id, app, { includeCrossApp: false })
+	const held = new Map<string, number | null>()
+	for (const grant of grants) {
+		const key = grant.role_key
+		if (key === null || grant.app !== app || grant.scope_type !== null || !declared.some((role) => role.key === key)) continue
+		const known = held.get(key)
+		// A role holds until the last of its grants ends.
+		held.set(key, known === undefined ? grant.expires_at : known === null || grant.expires_at === null ? null : Math.max(known, grant.expires_at))
+	}
+	const keys = declared.map((role) => role.key).filter((key) => held.has(key))
+	if (keys.length === 0) return null
+	const ends = [...held.values()].filter((until): until is number => until !== null)
+	return { keys, until: ends.length === 0 ? null : Math.min(...ends) }
 }
 
 function sameScopes(scopes: readonly string[], expected: readonly string[]): boolean {

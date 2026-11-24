@@ -5,7 +5,8 @@
 // is resolved from, so the two cannot disagree: each `oauth` row's registered resource in the manifest, and IAM's
 // `FABRIKA_IAM_OAUTH_CONFIG`, which issues tokens for exactly those resources.
 
-import { OAUTH_CLIENT_PROVIDERS, type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'
+import type { AppSchema, RoleDef } from '@fabrika/auth-core'
+import { IAM_APP_ID, OAUTH_CLIENT_PROVIDERS, type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'
 import { platformOAuthResourceUris, platformOAuthServed, type PlatformProxyComposition, type PlatformProxyManifestTemplate } from './proxy-manifest'
 
 /** One operator-registered MCP client: its CIMD identity, plus where IAM fetches it when that differs. */
@@ -41,7 +42,7 @@ const parseClient = (value: unknown, index: number): McpClient => {
 	if (client === null || !isObject(value) || !Object.keys(value).every((key) => CLIENT_KEYS.includes(key))) {
 		throw new Error(
 			`MCP client ${index} must be { provider: ${PROVIDERS}, clientId: <https URL>, redirectUris: [...], metadataUrl?, identity? }; `
-				+ 'identity is { app: <app id>, resource: <https URL> } and only on an external client',
+				+ 'identity is { app: <app id>, resource: <https URL>, roles?: [{ key, name }] } and only on an external client',
 		)
 	}
 	const metadataUrl = value['metadataUrl']
@@ -76,7 +77,37 @@ export const parseMcpClientsJson = (raw: string): readonly McpClient[] => {
 	if (ids.size !== clients.length) {
 		throw new Error('the MCP client list names one client id twice')
 	}
+	identityAppSchemas(clients)
 	return clients
+}
+
+/** An external application's vocabulary in IAM: its declared roles, each granting no action (ADR-0049). */
+export interface IdentityAppSchema {
+	readonly app: string
+	readonly schema: AppSchema
+}
+
+/**
+ * The vocabulary each external application that declares roles reconciles into IAM, once per app. The deploy writes it
+ * with the provisioning key it already holds, so the application needs no IAM credential to declare its roles. Two
+ * clients of one app must declare the same roles.
+ */
+export const identityAppSchemas = (clients: readonly McpClient[]): readonly IdentityAppSchema[] => {
+	const declared = new Map<string, string>()
+	const schemas: IdentityAppSchema[] = []
+	for (const { clientId, identity } of clients) {
+		if (identity === undefined) continue
+		const roles = JSON.stringify(identity.roles ?? null)
+		const known = declared.get(identity.app)
+		if (known !== undefined && known !== roles) {
+			throw new Error(`MCP client ${clientId}: another client of \`${identity.app}\` declares other roles`)
+		}
+		declared.set(identity.app, roles)
+		if (known !== undefined || identity.roles === undefined) continue
+		const entries = identity.roles.map((role): [string, RoleDef] => [role.key, { name: role.name, permissions: [] }])
+		schemas.push({ app: identity.app, schema: { scopes: [], actions: [], roles: Object.fromEntries(entries) } })
+	}
+	return schemas
 }
 
 /** MCP authoring is on when the operator registers a client that is not identity-only: those sign people in, nothing more. */
@@ -119,7 +150,9 @@ export const platformIamOAuthConfig = (
 	const platformHosts = Object.values(composition.placement).flatMap((placement) => placement.hosts)
 	for (const { clientId, identity } of clients) {
 		if (identity === undefined) continue
-		if (template.apps.some((app) => app.id === identity.app) || platformHosts.includes(new URL(identity.resource).hostname)) {
+		// IAM's own id is no proxy app's: a roles reconcile under it would rewrite IAM's vocabulary.
+		const platformApps = [IAM_APP_ID, ...template.apps.map((app) => app.id)]
+		if (platformApps.includes(identity.app) || platformHosts.includes(new URL(identity.resource).hostname)) {
 			throw new Error(`MCP client ${clientId}: its identity resource names a platform service's app id or host`)
 		}
 	}

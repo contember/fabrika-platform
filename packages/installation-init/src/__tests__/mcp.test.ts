@@ -1,6 +1,6 @@
 import type { OAuthResourceDto } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
-import { mcpAuthoringOn, type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from '../mcp'
+import { identityAppSchemas, mcpAuthoringOn, type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from '../mcp'
 import type { PlatformProxyComposition, PlatformProxyManifestTemplate } from '../proxy-manifest'
 
 const CLAUDE: McpClient = {
@@ -83,6 +83,35 @@ describe('the MCP client list', () => {
 		expect(() => parseMcpClientsJson(JSON.stringify([{ ...OPS_TOOL, identity: { app: 'ops@prod', resource: 'https://ops.example.test' } }]))).toThrow()
 	})
 
+	test("an external application's roles become its IAM vocabulary, once per app, each granting no action", () => {
+		const roles = [{ key: 'admin-ops', name: 'Administrator' }, { key: 'viewer', name: 'Viewer' }]
+		const web = { ...OPS_TOOL, identity: { ...OPS_TOOL.identity, app: 'ops-tool', resource: 'https://ops.example.test', roles } }
+		const native = { ...web, clientId: 'https://ops.example.test/oauth/native.json' }
+		expect(parseMcpClientsJson(JSON.stringify([web, native]))).toEqual([web, native])
+		// An identity-only client without roles adds no vocabulary.
+		const other = {
+			...OPS_TOOL,
+			clientId: 'https://other.example.test/oauth/client.json',
+			identity: { app: 'other', resource: 'https://other.example.test' },
+		}
+		expect(identityAppSchemas([web, native, other]))
+			.toEqual([{
+				app: 'ops-tool',
+				schema: {
+					scopes: [],
+					actions: [],
+					roles: { 'admin-ops': { name: 'Administrator', permissions: [] }, viewer: { name: 'Viewer', permissions: [] } },
+				},
+			}])
+	})
+
+	test('two clients of one external application must declare the same roles', () => {
+		const roles = [{ key: 'viewer', name: 'Viewer' }]
+		const web = { ...OPS_TOOL, identity: { app: 'ops-tool', resource: 'https://ops.example.test', roles } }
+		const native = { ...OPS_TOOL, clientId: 'https://ops.example.test/oauth/native.json' }
+		expect(() => parseMcpClientsJson(JSON.stringify([web, native]))).toThrow('declares other roles')
+	})
+
 	test('only a client that is not identity-only turns MCP authoring on', () => {
 		expect(mcpAuthoringOn(undefined)).toBe(false)
 		expect(mcpAuthoringOn([OPS_TOOL])).toBe(false)
@@ -118,8 +147,10 @@ describe("IAM's OAuth configuration", () => {
 	test("an identity resource on a platform host, or under a platform service's app id, is refused", () => {
 		const onConsole = { ...OPS_TOOL, identity: { app: 'ops-tool', resource: 'https://console.example.test/ops' } }
 		expect(() => platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [onConsole])).toThrow("platform service's app id or host")
-		const asConsole = { ...OPS_TOOL, identity: { app: 'vozka', resource: 'https://ops.example.test' } }
-		expect(() => platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [asConsole])).toThrow("platform service's app id or host")
+		for (const app of ['vozka', 'propustka', 'operations']) {
+			const asPlatform = { ...OPS_TOOL, identity: { app, resource: 'https://ops.example.test', roles: [{ key: 'viewer', name: 'Viewer' }] } }
+			expect(() => platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [asPlatform])).toThrow("platform service's app id or host")
+		}
 	})
 
 	test('without an authorization server there is nothing to configure', () => {
