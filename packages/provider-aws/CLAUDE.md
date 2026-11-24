@@ -9,10 +9,10 @@ bun run typecheck
 bun test
 ```
 
-| Module         | What it owns                                                                                                                                                                                                                                                           |
-| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `codecs.ts`    | `AWS_PROVIDER` and what Control persists: the app target (account, region, cluster, service), the artifact (the contract's digest and health path), the namespace target (its stack and sizing), the run checkpoint (`buildId`, `taskDefinitionArn`, `deploymentArn`). |
-| `authoring.ts` | `defineApp({ id })` and `isAwsAppConfig`: the config `authoredAppProvider` reads as `aws`, under the contract's app id rule.                                                                                                                                           |
+| Module         | What it owns                                                                                                                                                                                                                                                                                                   |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `codecs.ts`    | `AWS_PROVIDER` and what Control persists: the app target (account, region, cluster, service), the artifact (the contract's digest and health path), the namespace target (its stack and sizing), the run checkpoint (`buildToken`, `buildId`, `taskDefinitionArn`, `serviceUpdateRequested`, `deploymentArn`). |
+| `authoring.ts` | `defineApp({ id })` and `isAwsAppConfig`: the config `authoredAppProvider` reads as `aws`, under the contract's app id rule.                                                                                                                                                                                   |
 
 ## Invariants
 

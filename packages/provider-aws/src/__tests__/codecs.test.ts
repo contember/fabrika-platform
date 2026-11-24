@@ -60,9 +60,15 @@ describe('the AWS codecs', () => {
 
 	test('an unknown field is refused, not dropped, and its value is not quoted', () => {
 		const message = refused(awsAppTargetCodec, { ...target, secretAccessKey: 'must-not-be-stored' })
-		expect(message).toContain('the AWS target is not one this provider reads')
-		expect(message).not.toContain('must-not-be-stored')
-		expect(refused(awsRunCheckpointCodec, { buildId: checkpoint.buildId ?? '', appVersionId: 'zerops' })).toContain('run checkpoint')
+		expect(message).toBe('the AWS target is not one this provider reads (secretAccessKey)')
+		expect(refused(awsRunCheckpointCodec, { buildId: checkpoint.buildId ?? '', appVersionId: 'zerops' })).toContain('(appVersionId)')
+	})
+
+	test('the markers recorded before each submitting call round-trip, and take only their one form', () => {
+		const full: AwsRunCheckpoint = { ...checkpoint, buildToken: '0f1e2d3c-4b5a-4968-8776-655443322110', serviceUpdateRequested: true }
+		expect(roundTrip(awsRunCheckpointCodec, full)).toEqual({ decoded: full, json: full })
+		expect(refused(awsRunCheckpointCodec, { serviceUpdateRequested: false })).toContain('serviceUpdateRequested')
+		expect(refused(awsRunCheckpointCodec, { buildToken: 'not-a-uuid' })).toContain('buildToken')
 	})
 
 	test('a value of another form is refused, naming the field only', () => {
@@ -85,9 +91,19 @@ describe('the AWS codecs', () => {
 		}
 	})
 
-	test('an identifier past its bound is refused, so no payload nears the limit', () => {
+	test('an identifier past its bound is refused by its pattern, so no payload nears the limit', () => {
 		const long = `arn:aws:ecs:eu-central-1:123456789012:service-deployment/${'a'.repeat(MAX_PROVIDER_STATE_BYTES)}`
-		expect(refused(awsRunCheckpointCodec, { deploymentArn: long })).toContain('run checkpoint')
+		expect(refused(awsRunCheckpointCodec, { deploymentArn: long })).toContain('(deploymentArn)')
+		const longRegion = `arn:aws:ecs:${'a'.repeat(5000)}:123456789012:task-definition/notes:1`
+		expect(refused(awsRunCheckpointCodec, { taskDefinitionArn: longRegion })).toContain('(taskDefinitionArn)')
+		expect(refused(awsRunCheckpointCodec, { taskDefinitionArn: 'arn:aws:ecs:---:123456789012:task-definition/notes:1' })).toContain(
+			'(taskDefinitionArn)',
+		)
+	})
+
+	test('a service deployment of the longest cluster and service names is taken', () => {
+		const longest = `arn:aws:ecs:eu-central-1:123456789012:service-deployment/${'c'.repeat(255)}/${'s'.repeat(255)}/abcDEF123`
+		expect(awsRunCheckpointCodec.decode({ deploymentArn: longest })).toEqual({ deploymentArn: longest })
 	})
 })
 
