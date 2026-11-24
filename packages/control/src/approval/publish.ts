@@ -1,10 +1,14 @@
-// Publishing a run's snapshot (ADR-0050 §2): classify it against the environment's active snapshot, park a widening
-// on a protected environment until a human approves it, and publish with a compare-and-swap on the generation.
+// Publishing a run's snapshot (ADR-0050 §2): classify it against the environment's active snapshot, park a change of a
+// category the protected environment chose (ADR-0083) until a human approves it, and publish with a compare-and-swap
+// on the generation.
 
 import { incompatibleMountChanges } from '@fabrika/app/contract'
 import {
 	type AccessChangeDto,
+	APPROVAL_CATEGORIES,
+	type ApprovalCategory,
 	CHANGE_SUBJECT_KINDS,
+	DEFAULT_APPROVAL_CATEGORIES,
 	REVIEW_REASONS,
 	SURFACE_NOTE_TOPICS,
 	SURFACE_REACHES,
@@ -20,6 +24,7 @@ import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { mailCustodyRefusal } from '../mail-transport'
+import { appEnvCategories, isDefaultCategories } from './categories'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { relationGrantsRefusal } from './enforcement'
 import { AppliedMigrationsChanged, ContractMissing, readAccessSnapshot, readLockfile, snapshotReads, SnapshotRefused } from './read'
@@ -48,6 +53,16 @@ export interface StoredClassification {
 	/** The published run the candidate was compared with; null for the empty snapshot. */
 	readonly baselineRunId: string | null
 	readonly protected: boolean
+	/**
+	 * The categories the change was classified under (ADR-0083). Stored only when they are not the defaults, so a release
+	 * before them still reads every other classification; absent reads as the defaults.
+	 */
+	readonly categories?: readonly ApprovalCategory[]
+}
+
+/** The categories a stored classification waits for: its own, or the defaults it was classified under. */
+export function classificationCategories(classification: StoredClassification): readonly ApprovalCategory[] {
+	return classification.categories ?? DEFAULT_APPROVAL_CATEGORIES
 }
 
 /** A human's approval of one classified change: valid only for these two digests (ADR-0050 §5). */
@@ -114,6 +129,7 @@ const classificationSchema = z.object({
 	baselineDigest: digest,
 	baselineRunId: z.string().min(1).nullable(),
 	protected: z.boolean(),
+	categories: z.array(z.enum(APPROVAL_CATEGORIES)).optional(),
 }).strict() satisfies z.ZodType<StoredClassification, z.ZodTypeDef, unknown>
 
 const approvalSchema = z.object({
@@ -211,7 +227,9 @@ export async function publishRunSnapshot(
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
 		const serialized = JSON.stringify(classification)
-		if (classification.protected && waitsForApproval(classification.changes) && !approves(run, classification)) {
+		if (
+			classification.protected && waitsForApproval(classification.changes, classificationCategories(classification)) && !approves(run, classification)
+		) {
 			await invocation.write((fence) => runs.parkRunForApproval(run.id, serialized, fence))
 			input.log(`access: waiting for a human with access.approve to approve this change on \`${appEnv.env}\``)
 			return { kind: 'parked', classification }
@@ -228,12 +246,14 @@ export async function publishRunSnapshot(
 }
 
 function classify(active: ActiveSnapshot, candidate: AccessSnapshot, appEnv: AppEnvRow): StoredClassification {
+	const categories = appEnvCategories(appEnv)
 	return {
 		...classifyAccess(active.snapshot, candidate),
 		candidateDigest: snapshotDigest(candidate),
 		baselineDigest: snapshotDigest(active.snapshot),
 		baselineRunId: active.runId,
 		protected: appEnv.protected === 1,
+		...(isDefaultCategories(categories) ? {} : { categories }),
 	}
 }
 

@@ -1,25 +1,61 @@
 // How the approval page shows one access change (ADR-0050 §7): the classification's facts grouped by who reaches an
 // endpoint and by what else they are about, one row per subject with all its lines, ranked by effect, review and
 // reach, and quiet subjects that changed alike folded into one row. Pure, and it decides nothing: whether a run waits is
-// `waitsForApproval` of its lines and its environment's protection alone.
+// `waitsForApproval` of its lines, its environment's protection and the categories it chose alone.
 
 import {
 	type AccessChangeDto,
+	type ApprovalCategory,
 	CHANGE_SUBJECT_KINDS,
 	type ChangeAudienceDto,
 	type ChangeSubjectDto,
 	type ChangeSubjectKind,
+	REVIEW_REASONS,
 	SURFACE_REACHES,
 	type SurfaceReach,
 } from './index.js'
 
+/** The fields of a line that place it in a category. */
+export type CategorizedChange = Pick<AccessChangeDto, 'effect' | 'review' | 'reason' | 'rule' | 'audience'>
+
 /**
- * Whether a change waits for a person on a protected environment (ADR-0050 §3): it has a line that needs closer review,
- * a step off the paved road, something anyone sets off, people becoming visible or a migration that may change stored
- * data. Any other change publishes at once, its lines recorded.
+ * The approval categories a line belongs to (ADR-0083 §1). A closer-review line belongs to its reason; one stored before
+ * lines carried a reason belongs to every reason, so it waits whenever any of them is chosen. The permission, public and
+ * CSP categories take a line by its rule, and only when it widens, except a new role. `grants` holds no deploy line.
  */
-export function waitsForApproval(changes: readonly Pick<AccessChangeDto, 'review'>[]): boolean {
-	return changes.some((change) => change.review === 'closer')
+export function changeCategories(change: CategorizedChange): ApprovalCategory[] {
+	const categories: ApprovalCategory[] = []
+	if (change.review === 'closer') categories.push(...(change.reason === undefined ? REVIEW_REASONS : [change.reason]))
+	if (change.rule === 'role.added') categories.push('role-added')
+	if (change.effect !== 'widens') return categories
+	switch (change.rule) {
+		case 'role.grants':
+		case 'role.via':
+			categories.push('role-actions')
+			break
+		case 'role.external':
+			categories.push('role-external')
+			break
+		case 'endpoint.public':
+			categories.push('public')
+			break
+		case 'endpoint.added':
+			if (change.audience?.reach === 'anyone') categories.push('public')
+			break
+		case 'csp.source':
+			categories.push('csp')
+			break
+	}
+	return categories
+}
+
+/**
+ * Whether a change waits for a person on a protected environment (ADR-0050 §3, ADR-0083 §3): one of its lines belongs to
+ * a category the environment chose. Any other change publishes at once, its lines recorded.
+ */
+export function waitsForApproval(changes: readonly CategorizedChange[], categories: readonly ApprovalCategory[]): boolean {
+	const chosen = new Set(categories)
+	return changes.some((change) => changeCategories(change).some((category) => chosen.has(category)))
 }
 
 /**

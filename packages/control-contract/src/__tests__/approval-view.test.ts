@@ -2,8 +2,8 @@
 // expanding anything, folds only quiet subjects that changed alike, and decides nothing.
 
 import { describe, expect, test } from 'bun:test'
-import { type ApprovalView, approvalView, type ChangeRow, rowChanges } from '../approval-view'
-import type { AccessChangeDto, ChangeAudienceDto } from '../index'
+import { type ApprovalView, approvalView, changeCategories, type ChangeRow, rowChanges, waitsForApproval } from '../approval-view'
+import { type AccessChangeDto, type ApprovalCategory, type ChangeAudienceDto, DEFAULT_APPROVAL_CATEGORIES, REVIEW_REASONS } from '../index'
 
 const anyone: ChangeAudienceDto = { reach: 'anyone', requirement: null }
 const staff: ChangeAudienceDto = { reach: 'human', requirement: 'with `candidates.read` (on `candidate`)' }
@@ -187,5 +187,45 @@ describe('the approval view', () => {
 			undefined,
 			1,
 		]])
+	})
+})
+
+// ADR-0083: a line's categories are facts the diff recorded; an environment waits for the categories it chose.
+describe('approval categories', () => {
+	const line = (change: Omit<AccessChangeDto, 'line'> & { rule: string }): AccessChangeDto => ({ line: change.rule, ...change })
+	const cases: Array<[string, AccessChangeDto, ApprovalCategory[]]> = [
+		['a closer-review line', line({ effect: 'widens', rule: 'migration.data', review: 'closer', reason: 'deletes-data' }), ['deletes-data']],
+		['a closer-review line stored before reasons', line({ effect: 'widens', rule: 'sql', review: 'closer' }), [...REVIEW_REASONS]],
+		['a role that gains an action', line({ effect: 'widens', rule: 'role.grants' }), ['role-actions']],
+		['a role that gains an action through a relation', line({ effect: 'widens', rule: 'role.via' }), ['role-actions']],
+		['a role opened to externals', line({ effect: 'widens', rule: 'role.external' }), ['role-external']],
+		['a new role', line({ effect: 'widens', rule: 'role.added' }), ['role-added']],
+		['an endpoint made public', line({ effect: 'widens', rule: 'endpoint.public' }), ['public']],
+		['a new endpoint anyone opens', line({ effect: 'widens', rule: 'endpoint.added', audience: anyone }), ['public']],
+		['a new signed-in endpoint', line({ effect: 'widens', rule: 'endpoint.added', audience: staff }), []],
+		['a CSP source added', line({ effect: 'widens', rule: 'csp.source' }), ['csp']],
+		['a role that loses an action', line({ effect: 'narrows', rule: 'role.grants' }), []],
+		['a CSP source removed', line({ effect: 'narrows', rule: 'csp.source' }), []],
+	]
+
+	for (const [name, change, categories] of cases) {
+		test(`${name}: ${categories.join(', ') || 'no category'}`, () => {
+			expect(changeCategories(change)).toEqual(categories)
+		})
+	}
+
+	test('the defaults are the closer-review reasons, so a line without one never waits by default', () => {
+		expect([...DEFAULT_APPROVAL_CATEGORIES]).toEqual([...REVIEW_REASONS])
+		expect(waitsForApproval([line({ effect: 'widens', rule: 'role.grants' })], DEFAULT_APPROVAL_CATEGORIES)).toBe(false)
+		expect(waitsForApproval([line({ effect: 'widens', rule: 'x', review: 'closer', reason: 'people' })], DEFAULT_APPROVAL_CATEGORIES)).toBe(true)
+	})
+
+	test('a line waits only for a chosen category', () => {
+		const grows = [line({ effect: 'widens', rule: 'role.grants' })]
+		expect(waitsForApproval(grows, ['role-actions'])).toBe(true)
+		expect(waitsForApproval(grows, ['role-added', 'csp'])).toBe(false)
+		const deletes = [line({ effect: 'widens', rule: 'm', review: 'closer', reason: 'deletes-data' })]
+		expect(waitsForApproval(deletes, REVIEW_REASONS.filter((reason) => reason !== 'deletes-data'))).toBe(false)
+		expect(waitsForApproval(deletes, [])).toBe(false)
 	})
 })

@@ -2,7 +2,10 @@ import { createRpcClient, type RpcFetch } from '@fabrika/app'
 import {
 	APP_ENV_KINDS,
 	type AppEnvDto,
+	APPROVAL_CATEGORIES,
+	type ApprovalCategory,
 	type ControlRpcContract,
+	DEFAULT_APPROVAL_CATEGORIES,
 	type JsonValue,
 	type ProviderEnvelopeDto,
 	type RunStatus,
@@ -56,6 +59,10 @@ const environmentsSchema = z.object({
 		triggerRef: storedTextSchema.nullable(),
 		authoring: z.boolean(),
 		protected: z.boolean(),
+		// A Control older than the field waits for the defaults; a category this release does not know is left out.
+		approvalCategories: z.array(storedTextSchema).optional().transform((values): ApprovalCategory[] =>
+			values === undefined ? [...DEFAULT_APPROVAL_CATEGORIES] : APPROVAL_CATEGORIES.filter((category) => values.includes(category))
+		),
 		publishedRunId: storedTextSchema.nullable(),
 		// A Control older than the field lists none.
 		deviationSubjects: z.array(z.object({ subject: storedTextSchema, steps: z.array(storedTextSchema) })).default([]),
