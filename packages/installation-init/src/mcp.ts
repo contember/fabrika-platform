@@ -6,7 +6,7 @@
 // `FABRIKA_IAM_OAUTH_CONFIG`, which issues tokens for exactly those resources.
 
 import type { AppSchema, RoleDef } from '@fabrika/auth-core'
-import { OAUTH_CLIENT_PROVIDERS, type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'
+import { IAM_APP_ID, OAUTH_CLIENT_PROVIDERS, type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'
 import { platformOAuthResourceUris, platformOAuthServed, type PlatformProxyComposition, type PlatformProxyManifestTemplate } from './proxy-manifest'
 
 /** One operator-registered MCP client: its CIMD identity, plus where IAM fetches it when that differs. */
@@ -150,7 +150,9 @@ export const platformIamOAuthConfig = (
 	const platformHosts = Object.values(composition.placement).flatMap((placement) => placement.hosts)
 	for (const { clientId, identity } of clients) {
 		if (identity === undefined) continue
-		if (template.apps.some((app) => app.id === identity.app) || platformHosts.includes(new URL(identity.resource).hostname)) {
+		// IAM's own id is no proxy app's: a roles reconcile under it would rewrite IAM's vocabulary.
+		const platformApps = [IAM_APP_ID, ...template.apps.map((app) => app.id)]
+		if (platformApps.includes(identity.app) || platformHosts.includes(new URL(identity.resource).hostname)) {
 			throw new Error(`MCP client ${clientId}: its identity resource names a platform service's app id or host`)
 		}
 	}

@@ -147,8 +147,10 @@ describe("IAM's OAuth configuration", () => {
 	test("an identity resource on a platform host, or under a platform service's app id, is refused", () => {
 		const onConsole = { ...OPS_TOOL, identity: { app: 'ops-tool', resource: 'https://console.example.test/ops' } }
 		expect(() => platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [onConsole])).toThrow("platform service's app id or host")
-		const asConsole = { ...OPS_TOOL, identity: { app: 'vozka', resource: 'https://ops.example.test' } }
-		expect(() => platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [asConsole])).toThrow("platform service's app id or host")
+		for (const app of ['vozka', 'propustka', 'operations']) {
+			const asPlatform = { ...OPS_TOOL, identity: { app, resource: 'https://ops.example.test', roles: [{ key: 'viewer', name: 'Viewer' }] } }
+			expect(() => platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [asPlatform])).toThrow("platform service's app id or host")
+		}
 	})
 
 	test('without an authorization server there is nothing to configure', () => {

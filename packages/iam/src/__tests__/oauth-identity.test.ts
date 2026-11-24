@@ -14,8 +14,12 @@ const IDENTITY_REQUEST = { resource: IDENTITY.resource, scope: 'identity' }
 type Fixture = Awaited<ReturnType<typeof oauthFixture>>
 let active: Fixture | null = null
 
+let database: ReturnType<typeof createHarness>['sqlite'] | null = null
+
 async function fixture(options: Parameters<typeof oauthFixture>[1] = {}): Promise<Fixture> {
-	active = await oauthFixture(createHarness().repositories, options)
+	const harness = createHarness()
+	database = harness.sqlite
+	active = await oauthFixture(harness.repositories, options)
 	return active
 }
 
@@ -211,6 +215,23 @@ describe('an external application that declares roles', () => {
 		const code = await identityCode(f)
 		await f.repositories.grants.deleteGrant(grant.id)
 		expect((await f.exchange(code, { resource: IDENTITY.resource })).status).toBe(400)
+	})
+
+	test('a cross-app grant and a grant of the built-in admin name no role', async () => {
+		const f = await fixture({ provider: 'external', identity: ROLES })
+		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: null, roleKey: 'viewer' })
+		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin' })
+		expect(locationOf(await f.authorize(IDENTITY_REQUEST)).searchParams.get('error')).toBe('access_denied')
+	})
+
+	test('an external principal holds no role of it, a grant written around the locks included', async () => {
+		const f = await fixture({ provider: 'external', identity: ROLES })
+		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'viewer' })
+		const first = await tokenBody(await signIn(f))
+		// The grant locks refuse this grant for an external principal; resolution is the lock that remains.
+		database?.run("UPDATE principals SET affiliation = 'external' WHERE id = ?", [f.principal.id])
+		expect((await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource })).status).toBe(400)
+		expect(locationOf(await f.authorize(IDENTITY_REQUEST)).searchParams.get('error')).toBe('access_denied')
 	})
 
 	test('without declared roles the token names none and every active user signs in', async () => {

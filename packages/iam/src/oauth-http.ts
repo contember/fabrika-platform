@@ -280,7 +280,7 @@ async function consentPage(services: Services, check: Extract<AuthorizationCheck
 	})
 	const asks = client.registration.identity === undefined
 		? `<p><strong>${escapeHtml(clientName)}</strong> asks to act as you in <strong>${escapeHtml(resource.app)}</strong>.</p>`
-		: `<p><strong>${escapeHtml(clientName)}</strong> asks to know who you are. It receives your account, name and e-mail${
+		: `<p><strong>${escapeHtml(clientName)}</strong> asks to know who you are. It receives who you are${
 			client.registration.identity.roles === undefined ? '' : ` and the roles you hold in <strong>${escapeHtml(resource.app)}</strong>`
 		}, and no permission.</p>`
 	const grants = client.registration.identity === undefined

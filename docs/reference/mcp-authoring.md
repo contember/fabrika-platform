@@ -444,6 +444,9 @@ against IAM's JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). 
   it already holds; the application holds no IAM credential. Two clients of one app declare the same roles. An
   installation administrator, or a user administrator in its scope, grants a role in the console's user access form (Add access: app `<app id>`, the role, no scope),
   globally: a role granted in a scope value is not named.
+- **Changing `roles`.** Removing a role from the list removes it from IAM at the next deploy. Dropping `roles`
+  altogether stops the reconcile: the last roles stay in IAM and no token names them. Adding `roles` to a client in use
+  refuses everyone until the roles are granted, so grant them right after that deploy.
 - **With `roles`,** the token carries `roles`: the keys the person holds, in declared order. A person holding none is
   refused at the consent (`access_denied` to the redirect URI) and at the code exchange. Each refresh resolves the
   roles again (an access token lives 300 s), so a removed role ends the sign-in at the next refresh, and a token never

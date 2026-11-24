@@ -56,7 +56,9 @@ other resource.
 - **Rollout.** No generated file changes. `fabrika platform deploy` rewrites `FABRIKA_IAM_OAUTH_CONFIG` as before;
   it gains a binding only when the operator adds one to `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`, and it reconciles the
   application's roles on every deploy. Removing a role from the list removes it from IAM at the next deploy, and the
-  role's grants then name nothing. An IAM from before the binding refuses the key and stops at boot, so rolling `iam`
+  role's grants then name nothing; dropping `roles` altogether stops the reconcile and leaves the last roles in IAM,
+  unnamed by any token. Adding `roles` to a client that signed everyone in refuses everyone until an administrator
+  grants the roles, so grant them right after that deploy. An IAM from before the binding refuses the key and stops at boot, so rolling `iam`
   back first removes the entry and deploys. A Cloudflare installation registers no managed client.
 
 ## Alternatives considered
