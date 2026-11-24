@@ -277,6 +277,8 @@ describe('platform scaffold', () => {
 			expect(workflow).not.toMatch(/^\s*environment:/m)
 			expect(references(workflow)).toEqual(references(before))
 			expect(references(workflow).length).toBeGreaterThan(20)
+			// Variables the operator sets by hand reach the stages from the repository too, such as the external OAuth clients.
+			expect(references(workflow)).toContain('${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}')
 			expect(workflow).toContain('no deployment protection rule guards them')
 			expect(workflow).not.toMatch(/\{\{[#/A-Z]/)
 		})

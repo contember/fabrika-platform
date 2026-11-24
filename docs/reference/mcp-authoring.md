@@ -459,7 +459,8 @@ against IAM's JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). 
 Registering only identity-only clients leaves MCP authoring off: no `/mcp` row is published and no authoring resource
 is served. It needs `https`, like every client.
 
-**On Cloudflare** the same variable in the installation's GitHub Environment registers identity-only clients. MCP
+**On Cloudflare** the same variable in the installation's GitHub Environment (a repository variable for an installation
+made with `--github-secrets=repository`) registers identity-only clients. MCP
 authoring is not supported on Cloudflare yet, so the deploy refuses any other entry as not supported yet, before it
 deploys anything.
 The scaffolded `platform.yml` passes it to the IAM stage, which writes it into IAM's `OAUTH_CONFIG`, and to the
