@@ -286,8 +286,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    and pull only its repository, because with the `aws/ssm` key that scope is the only boundary between two
    applications' secrets. Whoever provisions the roles (the namespace stack, step 10) creates them per application
    environment, never one shared execution role.
-8. **`src/deploy.ts`**: the run's steps (resolve, upload, build, register, update the service, wait for the
-   deployment), each external id recorded in the checkpoint before the call that needs it; `succeeded` only when the
+8. **`src/deploy.ts`** (built): the run's steps (repository, upload, build, register, the init tasks, update the
+   service, wait for the deployment) over the shared run's `runDeploy` and `awaitSettlement`, each external id recorded in the checkpoint before the call that needs it; `succeeded` only when the
    deployment is `SUCCESSFUL`, `failed` when the circuit breaker rolled back. Read that verdict from the service
    deployment (`DescribeServiceDeployments` by the checkpoint's `deploymentArn`), not from `DescribeServices`: once a
    rollback finishes, ECS drops the replaced deployment from the service's `deployments`, so a run read there would look
@@ -300,8 +300,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    token holds five minutes, and a repeat must send the identical body: a start whose answer was lost is settled by
    `findBuild` (the token travels as `FABRIKA_BUILD_TOKEN`), never by a blind repeat; a `findBuild` that answers `null`
    for a lost start fails the run.
-   The candidate half is built (`src/run-attempt.ts`, the shared run's `RunAttempt`). N1 to N3 are in `main`; the steps
-   wait for step 5 (the part writer Control's source client takes, `SourcePartWriter`) and step 6.
+   The candidate is `src/run-attempt.ts`, the shared run's `RunAttempt`. What the steps are handed (the rendered image,
+   the task's environment and secrets, the clients and Control's source upload) is step 9's to assemble. Not yet
+   relayed: the service's own events during the rollout (`describeService` reads them).
 9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`
    (stop the build; once the service is updated, cancellation never implies rollback), `secrets` (`PutParameter`,
    `DeleteParameter`), `declaredVariables`, `normalizeRegistration`, `lockfileRefusal`, the `backupBeforeMigrations`

@@ -45,7 +45,7 @@ export interface AwsRunAttemptInput {
 }
 
 /** A checkpoint the run has as it does: a token first, and each later field only behind the one it needs. */
-type RecordedCheckpoint = AwsRunCheckpoint & { readonly buildToken: string }
+export type RecordedCheckpoint = AwsRunCheckpoint & { readonly buildToken: string }
 
 /** The run checkpoint, or null for any other shape (an older one, or one whose fields could not have been recorded so). */
 export function parseAwsCheckpoint(state: JsonValue | undefined): RecordedCheckpoint | null {

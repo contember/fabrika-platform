@@ -1,0 +1,376 @@
+// The deploy of one application environment (the AWS idea's checklist, step 8): its steps over the shared deploy run
+// (`@fabrika/provider-contract`'s `runDeploy` and `awaitSettlement`, ADR-0044), with the AWS candidate `awsRunAttempt`.
+// What it is handed is already decided: the rendered image, the task's environment and secrets, the clients, and
+// Control's source upload. Step 9 (`control.ts`) assembles them.
+//
+// - `repository`: the run's build token is recorded first, as the run's external id, before anything exists; then the
+//   application's repository is ensured, with its lifecycle rule.
+// - `upload`: Control streams the commit's archive into the sources bucket in parts (`s3PartWriter`), under a key that
+//   is this run's own (`awsSourceKey`).
+// - `build`: the presigned read goes into a SecureString under the run's path; the build starts with the token as its
+//   idempotency token, and a start whose answer was lost is found by the token, never repeated blindly; its id is
+//   recorded; the build is polled to its end, its log relayed into the run log; the SecureString is deleted either way.
+// - `register`: the image's digest is read from ECR by the run's tag, and both task definitions are registered; the
+//   service's revision is recorded.
+// - `init`: each init command runs once as a one-off task of the init definition in the service's network, in order,
+//   and must exit 0.
+// - `update`: `serviceUpdateRequested` is recorded before `UpdateService`, the only call that activates anything, and
+//   the service deployment it answered after it.
+// - `rollout`: the service deployment is polled to its verdict (`awsRunAttempt`'s `observe`).
+//
+// A failed run whose service was never updated stops its build (`runDeploy` discards it); one whose update was sent is
+// settled by polling, never by a rollback. A dry run calls nothing.
+
+import type { ContainerImage } from '@fabrika/app/build'
+import {
+	awaitSettlement,
+	type DeployRunContext,
+	type DeployStepResult,
+	type ProviderRunEvents,
+	runDeploy,
+	type RunObservation,
+} from '@fabrika/provider-contract'
+import type { CodeBuildBuild, CodeBuildClient } from './aws/codebuild'
+import type { EcrClient } from './aws/ecr'
+import type { EcsClient } from './aws/ecs'
+import type { LogsClient } from './aws/logs'
+import { awsSourceKey, type S3ObjectAddress, type S3PartWriter, s3PresignedGet } from './aws/s3'
+import type { SsmClient } from './aws/ssm'
+import { type AwsCredentialSource, AwsError } from './aws/transport'
+import { awsBuildStart, awsImageTag } from './build'
+import type { AwsAppTarget } from './codecs'
+import { type AwsTaskDefinitionInput, awsTaskDefinitions, INIT_CONTAINER } from './ecs-task'
+import { AWS_RUN_DEADLINE_MS, awsRunAttempt, type RecordedCheckpoint } from './run-attempt'
+
+/** How often a build, an init task and the rollout are read while the run waits. */
+export const AWS_POLL_INTERVAL_MS = 10_000
+/** How long the deletion of the source URL's parameter may take once the build ended. */
+const CLEANUP_TIMEOUT_MS = 10_000
+
+export type AwsDeployStepId = 'repository' | 'upload' | 'build' | 'register' | 'init' | 'update' | 'rollout'
+
+export interface AwsDeployStep {
+	readonly id: AwsDeployStepId
+	readonly description: string
+}
+
+/** The steps of every deploy, in order. */
+export const AWS_DEPLOY_STEPS: readonly AwsDeployStep[] = [
+	{ id: 'repository', description: "record the run's build token and ensure the image repository" },
+	{ id: 'upload', description: "upload the commit's archive to the sources bucket" },
+	{ id: 'build', description: 'build and push the image' },
+	{ id: 'register', description: 'register the task definitions of the pushed image' },
+	{ id: 'init', description: 'run the init commands once (the migrations)' },
+	{ id: 'update', description: 'update the service to the new revision' },
+	{ id: 'rollout', description: 'wait for the service deployment' },
+]
+
+/** Control's source upload, as the composition root hands it: the run's commit as one archive, cut into parts. */
+export interface AwsSourceUpload {
+	upload(parts: S3PartWriter, signal: AbortSignal): Promise<void>
+}
+
+/** The AWS calls a deploy makes. */
+export interface AwsDeployClients {
+	readonly ecr: Pick<EcrClient, 'ensureRepository' | 'keepNewestImages' | 'findImage'>
+	readonly codeBuild: Pick<CodeBuildClient, 'startBuild' | 'findBuild' | 'getBuild' | 'stopBuild'>
+	readonly ecs: Pick<
+		EcsClient,
+		| 'registerTaskDefinition'
+		| 'updateService'
+		| 'describeService'
+		| 'describeServiceDeployment'
+		| 'describeServiceRevision'
+		| 'runTask'
+		| 'describeTask'
+	>
+	readonly logs: Pick<LogsClient, 'readForward'>
+	readonly ssm: Pick<SsmClient, 'putSecret' | 'deleteSecret'>
+	/** The part writer of an object in the sources bucket (`s3PartWriter` over the bucket's origin). */
+	readonly s3PartWriter: (address: S3ObjectAddress) => S3PartWriter
+	/** The credentials the build's presigned read is signed with. */
+	readonly credentials: AwsCredentialSource
+}
+
+export interface AwsDeployInput {
+	readonly appId: string
+	readonly env: string
+	readonly target: AwsAppTarget
+	/** The namespace's sources bucket, in the target's region and account. */
+	readonly sourcesBucket: string
+	readonly build: {
+		/** The installation's CodeBuild project. */
+		readonly project: string
+		/** The application environment's ECR repository, its URI, its tags and how many images its rule keeps. */
+		readonly repositoryName: string
+		readonly repositoryUri: string
+		readonly repositoryTags: Readonly<Record<string, string>>
+		readonly keepImages: number
+		/** The Parameter Store path a run's source URL goes under (`<path>/<build token>/source-url`). */
+		readonly urlParameterPath: string
+	}
+	/** What `containerImage` rendered from the contract's recipe. */
+	readonly image: Pick<ContainerImage, 'dockerfile' | 'init' | 'start'>
+	/** The Parameter Store name of the source-map bearer, when the recipe uploads maps. */
+	readonly sourceMapKeyParameter: string | null
+	/** The task definitions' inputs besides the image. */
+	readonly task: Omit<AwsTaskDefinitionInput, 'image' | 'rendered'>
+	readonly clients: AwsDeployClients
+	readonly source: AwsSourceUpload
+	readonly events: ProviderRunEvents
+	readonly signal: AbortSignal
+	readonly dryRun: boolean
+	readonly pollIntervalMs?: number
+	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+	readonly now?: () => Date
+	/** The run's build token: a lowercase UUID. */
+	readonly newToken?: () => string
+}
+
+export interface AwsDeployResult {
+	readonly status: 'succeeded' | 'failed'
+	readonly steps: readonly DeployStepResult[]
+	readonly checkpoint: RecordedCheckpoint | undefined
+}
+
+/** Waits `ms`, or rejects once `signal` aborts. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+	return new Promise((resolve, reject) => {
+		if (signal.aborted) {
+			reject(signal.reason)
+			return
+		}
+		const timer = setTimeout(() => {
+			signal.removeEventListener('abort', stop)
+			resolve()
+		}, ms)
+		const stop = (): void => {
+			clearTimeout(timer)
+			reject(signal.reason)
+		}
+		signal.addEventListener('abort', stop, { once: true })
+	})
+}
+
+/** A build's state as the wait reads it. */
+function buildObservation(build: CodeBuildBuild): RunObservation {
+	if (build.status === 'succeeded') return { state: 'active' }
+	if (build.status === 'in_progress') return { state: 'pending', status: build.phase ?? 'in_progress' }
+	return { state: 'failed', reason: `aws: build ${build.id} is ${build.status}` }
+}
+
+/** Runs the deploy of one application environment. */
+export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult> {
+	const { clients, events, signal, target, build } = input
+	const now = input.now ?? (() => new Date())
+	const sleep = input.sleep ?? pause
+	const intervalMs = input.pollIntervalMs ?? AWS_POLL_INTERVAL_MS
+	const log = (line: string): void => events.log(line)
+	const token = (input.newToken ?? (() => crypto.randomUUID()))()
+	const giveUpAtMs = now().getTime() + AWS_RUN_DEADLINE_MS
+	const service = { cluster: target.cluster, service: target.service }
+	const attempt = awsRunAttempt({ codeBuild: clients.codeBuild, ecs: clients.ecs, buildProject: build.project, service })
+	const address: S3ObjectAddress = {
+		bucket: input.sourcesBucket,
+		region: target.region,
+		accountId: target.accountId,
+		key: awsSourceKey(input.appId, input.env, token),
+	}
+	// What a step hands the next one, beside the checkpoint.
+	let init: { readonly arn: string; readonly commands: readonly (readonly string[])[] } | null = null
+
+	/** The checkpoint recorded so far; every step after the first has one. */
+	const recorded = (context: DeployRunContext<RecordedCheckpoint>): RecordedCheckpoint => {
+		const checkpoint = context.checkpoint
+		if (checkpoint === undefined) throw new Error('aws: a step ran before the run recorded its build token')
+		return checkpoint
+	}
+
+	/** One page of a build's log, relayed into the run log; a failed read only skips the page. */
+	const relay = async (log_: { readonly group: string; readonly stream: string }, cursor: string | undefined, read: AbortSignal) => {
+		try {
+			const page = await clients.logs.readForward(log_.group, log_.stream, cursor, read)
+			if (page === null) return cursor
+			for (const event of page.events) {
+				for (const line of event.message.split('\n')) if (line.trim() !== '') log(`  │ ${line.trimEnd()}`)
+			}
+			return page.cursor
+		} catch {
+			return cursor
+		}
+	}
+
+	const steps: Record<AwsDeployStepId, (context: DeployRunContext<RecordedCheckpoint>) => Promise<void>> = {
+		async repository(context) {
+			await context.record({ buildToken: token })
+			await clients.ecr.ensureRepository(build.repositoryName, build.repositoryTags, signal)
+			await clients.ecr.keepNewestImages(build.repositoryName, build.keepImages, signal)
+		},
+
+		async upload() {
+			await input.source.upload(clients.s3PartWriter(address), signal)
+			log(`  uploaded ${address.key}`)
+		},
+
+		async build(context) {
+			const parameter = `${build.urlParameterPath}/${token}/source-url`
+			await clients.ssm.putSecret(parameter, await s3PresignedGet(clients.credentials, address, now()), signal)
+			try {
+				const start = awsBuildStart({
+					project: build.project,
+					buildToken: token,
+					sourceUrlParameter: parameter,
+					dockerfile: input.image.dockerfile,
+					repositoryUri: build.repositoryUri,
+					sourceMapKeyParameter: input.sourceMapKeyParameter,
+				})
+				let started: CodeBuildBuild
+				try {
+					started = await clients.codeBuild.startBuild(start, signal)
+				} catch (error) {
+					// The start's answer may have been lost: only the token tells whether a build started (ADR-0044).
+					if (!(error instanceof AwsError) || !error.retryable) throw error
+					const found = await clients.codeBuild.findBuild(build.project, token, signal)
+					if (found === null) throw error
+					started = found
+				}
+				await context.record({ ...recorded(context), buildId: started.id })
+				log(`  build ${started.id}`)
+				let cursor: string | undefined
+				await awaitSettlement({
+					attempt,
+					checkpoint: recorded(context),
+					events,
+					signal,
+					giveUpAtMs,
+					intervalMs,
+					sleep,
+					observe: async (read) => {
+						try {
+							const current = await clients.codeBuild.getBuild(started.id, read)
+							if (current === null) return { state: 'absent' }
+							if (current.log !== null) cursor = await relay(current.log, cursor, read)
+							return buildObservation(current)
+						} catch (error) {
+							return { state: 'unobservable', cause: error }
+						}
+					},
+				})
+			} finally {
+				// The URL opens the archive until it expires; its parameter goes once the build no longer needs it.
+				await clients.ssm.deleteSecret(parameter, AbortSignal.timeout(CLEANUP_TIMEOUT_MS)).catch(() => {
+					log(`  [warn] the source URL's parameter of this run could not be deleted; it expires with the URL`)
+				})
+			}
+		},
+
+		async register(context) {
+			const tag = awsImageTag(token)
+			const pushed = await clients.ecr.findImage(build.repositoryName, { tag }, signal)
+			if (pushed === null) throw new Error(`aws: the build pushed no image tagged ${tag}`)
+			const definitions = awsTaskDefinitions({ ...input.task, image: `${build.repositoryUri}@${pushed.digest}`, rendered: input.image })
+			const revision = await clients.ecs.registerTaskDefinition(definitions.service, signal)
+			await context.record({ ...recorded(context), taskDefinitionArn: revision.arn })
+			log(`  registered ${revision.arn}`)
+			if (definitions.init !== null) {
+				const initRevision = await clients.ecs.registerTaskDefinition(definitions.init.definition, signal)
+				init = { arn: initRevision.arn, commands: definitions.init.commands }
+			}
+		},
+
+		async init(context) {
+			if (init === null) {
+				log('  no init command')
+				return
+			}
+			const current = await clients.ecs.describeService(service, signal)
+			if (current?.network == null) throw new Error('aws: the service has no awsvpc network for the init tasks to run in')
+			for (const [index, command] of init.commands.entries()) {
+				const task = await clients.ecs.runTask(
+					{
+						cluster: target.cluster,
+						taskDefinitionArn: init.arn,
+						container: INIT_CONTAINER,
+						command,
+						network: current.network,
+						clientToken: `${token}-init-${index + 1}`,
+						startedBy: `fabrika-${token}`,
+					},
+					signal,
+				)
+				log(`  init ${index + 1}/${init.commands.length}: task ${task.arn}`)
+				await awaitSettlement({
+					attempt,
+					checkpoint: recorded(context),
+					events,
+					signal,
+					giveUpAtMs,
+					intervalMs,
+					sleep,
+					observe: async (read) => {
+						try {
+							const ran = await clients.ecs.describeTask(target.cluster, task.arn, INIT_CONTAINER, read)
+							if (ran === null) return { state: 'absent' }
+							if (ran.status !== 'stopped') return { state: 'pending', status: ran.status }
+							if (ran.exitCode === 0) return { state: 'active' }
+							const reason = ran.reason === null ? '' : `: ${ran.reason}`
+							return { state: 'failed', reason: `aws: init command ${index + 1} exited ${ran.exitCode ?? 'without an exit code'}${reason}` }
+						} catch (error) {
+							return { state: 'unobservable', cause: error }
+						}
+					},
+				})
+			}
+		},
+
+		async update(context) {
+			const checkpoint = recorded(context)
+			const revision = checkpoint.taskDefinitionArn
+			if (revision === undefined) throw new Error('aws: the update ran before a revision was registered')
+			// Recorded before the call: from here the run is settled only by polling (ADR-0044).
+			await context.record({ ...checkpoint, serviceUpdateRequested: true })
+			try {
+				const updated = await clients.ecs.updateService(service, revision, signal)
+				if (updated.currentDeploymentArn !== null) {
+					await context.record({ ...checkpoint, serviceUpdateRequested: true, deploymentArn: updated.currentDeploymentArn }).catch(() => {
+						// The rollout finds the deployment through the service when its ARN is not recorded.
+						log('  [warn] the service deployment could not be recorded; the rollout reads it through the service')
+					})
+				}
+			} catch (error) {
+				// A lost answer may still have updated the service: the rollout settles it, pending until the deadline.
+				if (!(error instanceof AwsError) || !error.retryable) throw error
+				log(`  [warn] the update's answer was lost (${error.code}); the rollout settles it`)
+			}
+		},
+
+		async rollout(context) {
+			const checkpoint = recorded(context)
+			await awaitSettlement({
+				attempt,
+				checkpoint,
+				events,
+				signal,
+				giveUpAtMs,
+				intervalMs,
+				sleep,
+				observe: (read) => attempt.observe(checkpoint, read),
+			})
+		},
+	}
+
+	const result = await runDeploy({
+		attempt,
+		steps: AWS_DEPLOY_STEPS,
+		options: { appId: input.appId, env: input.env, dryRun: input.dryRun, signal, log },
+		events,
+		runOne: async (step, context) => {
+			if (input.dryRun) {
+				log(`  dry run: would ${step.description}`)
+				return
+			}
+			await steps[step.id](context)
+		},
+	})
+	return { status: result.status, steps: result.steps, checkpoint: result.checkpoint }
+}

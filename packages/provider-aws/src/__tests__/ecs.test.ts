@@ -249,7 +249,7 @@ describe('ecsClient', () => {
 		})
 	})
 
-	test('runs one Fargate task of a revision with one command overridden, privately, and reads it back', async () => {
+	test("runs one Fargate task of a revision with one command overridden, in the service's network, and reads it back", async () => {
 		const TASK = `arn:aws:ecs:eu-central-1:123456789012:task/fabrika-apps/${'a'.repeat(32)}`
 		const network = { subnets: ['subnet-0123456789abcdef0'], securityGroups: ['sg-0123456789abcdef0'], publicIp: false }
 		const { options, calls } = fakeAws(ECS, {
