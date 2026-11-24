@@ -374,10 +374,10 @@ describe('IAM resource graph', () => {
 
 		const refused = (clients: unknown[]) => () =>
 			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify(clients) })
-		// An MCP client would need the console's /mcp, which a Worker console does not serve.
+		// MCP authoring is not supported on Cloudflare yet.
 		const claude = { provider: 'claude', clientId: 'https://claude.ai/oauth/client', redirectUris: ['https://claude.ai/api/mcp/auth_callback'] }
-		expect(refused([sonda, claude])).toThrow('is not an identity-bound external client')
-		expect(refused([{ ...sonda, identity: undefined }])).toThrow('is not an identity-bound external client')
+		expect(refused([sonda, claude])).toThrow('is not supported on Cloudflare yet')
+		expect(refused([{ ...sonda, identity: undefined }])).toThrow('is not supported on Cloudflare yet')
 		expect(refused([{ ...sonda, identity: { ...sonda.identity, app: 'operations' } }])).toThrow("is a platform service's")
 		// What IAM would refuse to boot with is refused at the deploy: here an admin audience the installation names.
 		expect(() =>

@@ -28,8 +28,8 @@ application. What it needs from IAM is the person, and the person's role in the 
    lowercase, no `@`, and not a platform audience or a registered resource's app. The binding lives on the client,
    so a bound client is served that resource alone, with the one scope `identity`. A grant it held for another
    resource before it was bound mints nothing. Both clouds read the list from `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`.
-   A Cloudflare installation accepts only identity-bound external clients, because its Worker console serves no
-   `/mcp`; its deploy refuses any other entry before it deploys anything.
+   A Cloudflare installation supports identity-bound external clients. It does not support MCP authoring yet, so its
+   deploy refuses any other entry as not supported yet, before it deploys anything.
 2. **Its token names the person and carries no permission.** `sub`, `label`, `ptype: user` and `email`, for
    `aud` = the resource and `app` = the id. `perms` is always empty, at the code exchange and at every refresh. No
    installation service or application accepts the token, because none has its audience.
@@ -53,7 +53,7 @@ other resource.
   authoring reach of `/mcp`.
 - A role is a name. An application that needs finer rules keeps them itself; IAM does not learn its data.
 - A list of identity-bound clients alone leaves MCP authoring off: no `/mcp` row, no authoring resource. That is
-  why a Cloudflare installation, which has no `/mcp`, can register them.
+  why a Cloudflare installation, which does not support MCP authoring yet, can register them.
 - `roles` is an additive claim of a resource token. A parser that predates it ignores it. `email` was already a user
   token's claim.
 - **Rollout.** No generated file changes. `fabrika platform deploy` rewrites `FABRIKA_IAM_OAUTH_CONFIG` as before;

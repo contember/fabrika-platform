@@ -12,10 +12,10 @@ export const MCP_CLIENTS_VARIABLE = 'FABRIKA_PLATFORM_MCP_CLIENTS_JSON'
 const PLATFORM_APPS: readonly string[] = [IAM_APP_ID, CONTROL_APP_ID, OPERATIONS_APP_ID]
 
 /**
- * The client list of a Cloudflare installation, parsed once where it enters a stage: identity-bound external clients
- * only (ADR-0084), because the Worker console serves no `/mcp`. Unset or empty registers none. Anything else, an
- * identity app that is a platform service's, and an identity resource on one of `platformHosts`, is refused before the
- * stage deploys anything.
+ * The client list of a Cloudflare installation, parsed once where it enters a stage. Unset or empty registers none.
+ * Identity-bound external clients are supported (ADR-0084). MCP authoring is not supported on Cloudflare yet, so any
+ * other entry is refused as unsupported; so are an identity app that is a platform service's and an identity resource
+ * on one of `platformHosts`. Every refusal comes before the stage deploys anything.
  */
 export const parseCloudflareIdentityClients = (raw: string | undefined, platformHosts: readonly string[]): readonly McpClient[] => {
 	if (raw === undefined || raw.trim() === '') return []
@@ -28,8 +28,8 @@ export const parseCloudflareIdentityClients = (raw: string | undefined, platform
 	for (const { clientId, provider, identity } of clients) {
 		if (provider !== 'external' || identity === undefined) {
 			throw new Error(
-				`${MCP_CLIENTS_VARIABLE}: client ${clientId} is not an identity-bound external client. A Cloudflare installation serves no /mcp, `
-					+ "so it registers only { provider: 'external', identity: { app, resource, roles? } } clients",
+				`${MCP_CLIENTS_VARIABLE}: client ${clientId} is not supported on Cloudflare yet. A Cloudflare installation does not `
+					+ "support MCP authoring yet; it registers only identity-bound clients { provider: 'external', identity: { app, resource, roles? } }",
 			)
 		}
 		if (PLATFORM_APPS.includes(identity.app)) {

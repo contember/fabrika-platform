@@ -119,7 +119,7 @@ const controlUrl = (source: EnvironmentSource): string | undefined => {
 /**
  * IAM's `OAUTH_CONFIG` on a Cloudflare installation: the command-line client's resources on the console's origin,
  * recomputed on every deploy so a release that changes the presets converges with no other step, and the operator's
- * identity-bound external clients (ADR-0084). No MCP client: a Worker console serves no `/mcp`. Without a console origin
+ * identity-bound external clients (ADR-0084). No MCP client yet: MCP authoring is not supported on Cloudflare. Without a console origin
  * OAuth stays off. The result passes IAM's own boot parser here, so a value IAM would refuse stops the deploy instead.
  */
 const oauthConfig = (control: string | undefined, clients: readonly McpClient[], adminAudiences: string | undefined): string => {

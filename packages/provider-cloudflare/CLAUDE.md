@@ -404,10 +404,11 @@ Invariants:
   app deployment.
 - **Runner images are account-owned.** Every scaffolded workflow run builds the image from the exact
   `fabrika.ref` checkout into the target account. Upstream CI never publishes a shared runner image.
-- **An installation registers identity-bound external OAuth clients only** (ADR-0084, `identity-clients.ts`).
+- **An installation registers identity-bound external OAuth clients; MCP authoring is not supported yet** (ADR-0084,
+  `identity-clients.ts`).
   `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`, the Zerops variable, reaches IAM's stage and the control-plane stage;
-  `parseCloudflareIdentityClients` refuses every entry that is not `external` with an `identity` (the Worker console
-  serves no `/mcp`), an identity app that is IAM's, the console's or Operations' id (its roles reconcile would rewrite
+  `parseCloudflareIdentityClients` refuses every entry that is not `external` with an `identity` as not supported yet
+  (MCP authoring on Cloudflare would lift that one check), an identity app that is IAM's, the console's or Operations' id (its roles reconcile would rewrite
   that vocabulary) and an identity resource on a platform host, before the stage deploys. IAM's `fabrika.config.ts`
   writes the list into `OAUTH_CONFIG`; the pair form reconciles their roles after IAM's vocabulary with
   `@fabrika/installation-init`'s `reconcileIdentityApps`, the Zerops deploy's own.
