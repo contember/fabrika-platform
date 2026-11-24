@@ -26,7 +26,8 @@ mistakes, not code in the same process), but the capture's comments promised mor
 
 ## Approach / acceptance
 
-Decide between, for example:
+[ADR-0082](../decisions/0082-framework-secrets-reach-the-application-only-through-its-launcher.md) proposes
+the design (the first option below, with the alternatives weighed); it is not decided. Decide between, for example:
 
 - the serving process re-executing itself without the framework's variables and handing them to the child over an
   inherited descriptor it reads once at boot and closes, as `relaunchAsRuntime` already re-executes without the
