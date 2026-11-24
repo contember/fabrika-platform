@@ -233,6 +233,8 @@ export class SourceTransport {
 async function writeParts(writer: SourcePartWriter, archive: RepositoryArchive, signal: AbortSignal, pipeMs: number): Promise<void> {
 	const combined = linkedController(signal, AbortSignal.timeout(pipeMs))
 	const reader = gzipStream(archive.body).getReader()
+	// The bound covers the download too: a stalled read ends when it does, as a PUT's body does when its fetch aborts.
+	combined.signal.addEventListener('abort', () => reader.cancel().catch(() => {}), { once: true })
 	let part = new Uint8Array(writer.partBytes)
 	let filled = 0
 	let written = 0
@@ -241,7 +243,11 @@ async function writeParts(writer: SourcePartWriter, archive: RepositoryArchive, 
 	try {
 		for (;;) {
 			const read = await reader.read()
-			if (read.done) break
+			if (read.done) {
+				// A read the bound cancelled ends as if the archive did; it did not.
+				combined.signal.throwIfAborted()
+				break
+			}
 			let offset = 0
 			while (offset < read.value.byteLength) {
 				if (filled === part.byteLength) {

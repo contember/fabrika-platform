@@ -852,6 +852,37 @@ describe('source upload in parts', () => {
 		expect(recorded.calls.some((call) => call.startsWith('complete'))).toBe(false)
 	})
 
+	test("an archive download stalled mid-stream ends at the pipe's bound as upload_failed", async () => {
+		let pulls = 0
+		// The verdict settles only when the archive is disposed, as the real rewrite's does once abandoned.
+		const verdict = Promise.withResolvers<ArchiveSummary>()
+		verdict.promise.catch(() => {})
+		const stalled: RepositoryArchive = {
+			// One chunk, then a download that never delivers again.
+			body: new ReadableStream<SourceBytes>({
+				pull(controller) {
+					pulls++
+					if (pulls === 1) controller.enqueue(new TextEncoder().encode('the first bytes of an archive'))
+					return new Promise(() => {})
+				},
+			}),
+			completed: verdict.promise,
+			dispose: () => verdict.reject(new SourceFailure('upload_failed', 'upload')),
+		}
+		const recorded = recordingWriter()
+		const started = performance.now()
+		const raised = await transport({
+			repository: { resolve: noResolve, archive: async () => stalled },
+			uploadFetch: noUploadFetch,
+			timeoutsMs: { pipe: 200, upload: 5_000 },
+		}).upload(partsInput(recorded.writer)).then(() => undefined, (error: unknown) => error)
+
+		expect(raised).toMatchObject({ code: 'upload_failed', stage: 'upload' })
+		// The pipe's bound, not the upload deadline, ended it.
+		expect(performance.now() - started).toBeLessThan(4_000)
+		expect(recorded.calls).toEqual([])
+	})
+
 	test('a failed completion is upload_failed and drops what it may have made', async () => {
 		const prepared = preparedArchive('a small archive')
 		const recorded = recordingWriter({ failComplete: true })
