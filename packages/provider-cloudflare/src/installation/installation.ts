@@ -9,6 +9,7 @@ import type { PlatformIamTarget } from '../provider'
 import { defaultReconcileSchema } from '../schema'
 import { MCP_CLIENTS_VARIABLE, parseCloudflareIdentityClients, registerIdentityApps } from './identity-clients'
 import { initCommand } from './init'
+import { cloudflarePlatformHosts } from './mcp-authoring'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
 const EMAIL_PROVIDER_VARIABLES = builtinEmailProviderVariables.map((variable) => variable.name).join(', ')
@@ -69,7 +70,7 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 	const names = platformNames(process.env)
 	const iam = platformIam()
 	// Parsed before any component deploys, so a refused entry stops the stage with nothing written.
-	const identityClients = parseCloudflareIdentityClients(process.env[MCP_CLIENTS_VARIABLE], platformHosts())
+	const identityClients = parseCloudflareIdentityClients(process.env[MCP_CLIENTS_VARIABLE], cloudflarePlatformHosts(process.env))
 	const rootCwd = process.cwd()
 	for (const component of platformComponents(args)) {
 		const absolute = resolve(rootCwd, component.configPath)
@@ -102,17 +103,6 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 		await registerIamVocabulary(iam, args.dryRun)
 		await registerIdentityApps({ iam, clients: identityClients, dryRun: args.dryRun, reconcile: defaultReconcileSchema })
 	}
-}
-
-/** The hostnames of the console, IAM and Operations this stage names; an identity resource may be on none of them. */
-const platformHosts = (): string[] => {
-	const hosts: string[] = []
-	const control = process.env['FABRIKA_CONTROL_DOMAIN']
-	if (control !== undefined && control !== '') hosts.push(control)
-	for (const origin of [process.env['FABRIKA_IAM_ISSUER'], process.env['OPERATIONS_ARTIFACT_ORIGIN']]) {
-		if (origin !== undefined && URL.canParse(origin)) hosts.push(new URL(origin).hostname)
-	}
-	return hosts
 }
 
 const registerIamVocabulary = async (iam: PlatformIamTarget | undefined, dryRun: boolean): Promise<void> => {
