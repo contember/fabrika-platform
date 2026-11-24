@@ -1,6 +1,7 @@
 // The SigV4 signer against known answers. Each vector's request, canonical request and signature come from AWS's
 // Signature Version 4 test suite as published in awslabs/aws-c-auth (`tests/aws-signing-test-suite/v4/<case>/`),
-// Copyright Amazon.com, Inc. or its affiliates, licensed under the Apache License, Version 2.0. Every case signs with
+// Copyright Amazon.com, Inc. or its affiliates, licensed under the Apache License, Version 2.0, whose text is
+// `aws-signing-test-suite.LICENSE` beside this file. Every case signs with
 // the suite's context: the key pair below, region `us-east-1`, service `service`, at 2015-08-30T12:36:00Z, header
 // signing, path normalization on. A case whose path needs encoding (`get-utf8`, `get-space-normalized`) is not taken:
 // this signer refuses such a path instead (see the refusals below).
@@ -229,14 +230,38 @@ describe('signRequest', () => {
 		expect(signed.headers['x-amz-date']).toBe('20150830T123600Z')
 	})
 
-	test("signs a local emulator's origin with its port, and a session token as its header", async () => {
-		const local = { ...credentials, sessionToken: SESSION_TOKEN }
-		const signed = await signRequest({ method: 'POST', origin: 'http://localhost:4566', path: '/', body: '{}' }, local, scope, at)
+	test("signs a local emulator's origin with its port and its short key when allowed, and a session token as its header", async () => {
+		const local = { accessKeyId: 'test', secretAccessKey: 'test', sessionToken: SESSION_TOKEN }
+		const insecure = { allowInsecureOrigin: true }
+		const signed = await signRequest({ method: 'POST', origin: 'http://localhost:4566', path: '/', body: '{}' }, local, scope, at, insecure)
 		expect(signed.url).toBe('http://localhost:4566/')
 		expect(signed.headers['x-amz-security-token']).toBe(SESSION_TOKEN)
-		expect(signed.headers.authorization).toContain('SignedHeaders=host;x-amz-date;x-amz-security-token,')
-		const other = await signRequest({ method: 'POST', origin: 'http://localhost:4567', path: '/', body: '{}' }, local, scope, at)
+		expect(signed.headers.authorization).toContain(
+			'Credential=test/20150830/us-east-1/service/aws4_request, SignedHeaders=host;x-amz-date;x-amz-security-token,',
+		)
+		const other = await signRequest({ method: 'POST', origin: 'http://localhost:4567', path: '/', body: '{}' }, local, scope, at, insecure)
 		expect(other.headers.authorization).not.toBe(signed.headers.authorization)
+	})
+
+	test('refuses an http: origin unless the caller allows it, whatever the host', async () => {
+		for (const insecure of ['http://localhost:4566', 'http://ecs.eu-central-1.amazonaws.com']) {
+			expect(await refusal({ method: 'POST', origin: insecure, path: '/' })).toContain('allowInsecureOrigin')
+		}
+	})
+
+	test('signs the query as it was when called, and sends that same query', async () => {
+		const query: [string, string][] = [['a', '1']]
+		const pending = signRequest({ method: 'GET', origin, path: '/', query }, credentials, scope, at)
+		query.push(['b', '2'])
+		const signed = await pending
+		const alone = await signRequest({ method: 'GET', origin, path: '/', query: [['a', '1']] }, credentials, scope, at)
+		expect(signed).toEqual(alone)
+		expect(signed.url).toBe('https://example.amazonaws.com/?a=1')
+	})
+
+	test('a run of spaces and tabs inside a header value signs as one space', () => {
+		const headers = { host: 'example.amazonaws.com', 'my-header': ' a\t\tb  \t c ' }
+		expect(canonicalRequest('GET', '/', [], headers, EMPTY_SHA256).text).toContain('\nmy-header:a b c\n')
 	})
 
 	test("a header named like an object's own property is signed as any other", async () => {
@@ -291,6 +316,7 @@ describe('signRequest', () => {
 		const badToken = await refusal({ method: 'GET', origin, path: '/' }, { ...credentials, sessionToken: 'tok\nsecret' })
 		expect(badToken).toContain('session token')
 		expect(badToken).not.toContain('secret')
+		expect(await refusal({ method: 'GET', origin, path: '/' }, { ...credentials, sessionToken: '' })).toContain('session token is empty')
 		expect(await refusal({ method: 'GET', origin, path: '/' }, credentials, { region: 'US-EAST-1', service: 'service' })).toContain('region')
 		const query = await refusal({ method: 'GET', origin, path: '/', query: [['\ud800', 'x']] })
 		expect(query).toContain('query')

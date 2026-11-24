@@ -1,8 +1,8 @@
 // AWS Signature Version 4 for the requests this package's clients send (ADR-0081): header signing of a request to one
 // regional service endpoint, over Web Crypto so it runs on Bun and on Workers alike. It signs only what those clients
 // need and refuses the rest: a path of unreserved characters (the JSON and query protocols post to `/`), no duplicate
-// header, no line break in a value, no header the signer owns. Presigned URLs (query signing) are not here; S3's go
-// through `Bun.S3Client`.
+// header, no line break in a value, no header the signer owns, and `http:` only where the caller allows it (a local
+// emulator). Presigned URLs (query signing) are not here; S3's go through `Bun.S3Client`.
 //
 // Pinned by the known-answer tests in `__tests__/sigv4.test.ts`, from AWS's published Signature Version 4 test suite.
 // This is security-critical code: a change to it is reviewed as one. No error here quotes a header value, a body, a
@@ -27,7 +27,7 @@ export interface SigningScope {
 /** A request to sign, as its client builds it. */
 export interface SignableRequest {
 	readonly method: 'GET' | 'POST'
-	/** The endpoint's origin, `https://ecs.eu-central-1.amazonaws.com`; `http:` only for a local emulator. */
+	/** The endpoint's origin, `https://ecs.eu-central-1.amazonaws.com`; `http:` only with `allowInsecureOrigin`. */
 	readonly origin: string
 	/** The path, unencoded: `/`, or segments of unreserved characters. */
 	readonly path: string
@@ -41,6 +41,11 @@ export interface SignableRequest {
 export interface SigningOptions {
 	/** Send the body's digest as `x-amz-content-sha256` and sign it (S3's form); the JSON and query protocols need not. */
 	readonly bodyDigestHeader?: boolean
+	/**
+	 * Sign for an `http:` origin: a local emulator only, which the composition names. Without it an `http:` origin is
+	 * refused, so a misconfigured endpoint never carries the authorization, a session token or the body without TLS.
+	 */
+	readonly allowInsecureOrigin?: boolean
 }
 
 /** What to send: the URL with its canonical query, and every header, the signer's included. Host is the URL's. */
@@ -65,8 +70,12 @@ const HEADER_VALUE = /^[\t\x20-\x7e]*$/
 const PATH_SEGMENT = /^[A-Za-z0-9._~-]+$/
 /** A region or service name as it appears in a credential scope. */
 const SCOPE_PART = /^[a-z0-9-]{1,64}$/
-/** An access key id: upper-case letters and digits. */
-const ACCESS_KEY_ID = /^[A-Z0-9]{16,128}$/
+/**
+ * An access key id as the signer takes it: letters and digits, which cannot break the `Credential=` field. AWS's own
+ * form (upper case, 16 or more) is for the code that loads real credentials to check; the published test suite's
+ * `AKIDEXAMPLE` and a local emulator's `test` must sign.
+ */
+const ACCESS_KEY_ID = /^[A-Za-z0-9]{1,128}$/
 
 const encoder = new TextEncoder()
 
@@ -133,9 +142,23 @@ function canonicalQuery(query: readonly (readonly [string, string])[]): string {
 		.join('&')
 }
 
-/** A header value as signed: trimmed, each run of spaces made one. */
+/** A header value as signed: trimmed, each run of spaces and tabs made one space, as the SDKs sign it. */
 function canonicalValue(value: string): string {
-	return value.trim().replace(/ {2,}/g, ' ')
+	return value.trim().replace(/[ \t]+/g, ' ')
+}
+
+/** The canonical request over a path and a query already in their canonical form. */
+function canonicalText(
+	method: string,
+	path: string,
+	search: string,
+	headers: Readonly<Record<string, string>>,
+	bodySha256: string,
+): CanonicalRequest {
+	const names = Object.keys(headers).sort()
+	const lines = names.map((name) => `${name}:${canonicalValue(headers[name] ?? '')}\n`).join('')
+	const signedHeaders = names.join(';')
+	return { text: `${method}\n${path}\n${search}\n${lines}\n${signedHeaders}\n${bodySha256}`, signedHeaders }
 }
 
 /**
@@ -149,10 +172,7 @@ export function canonicalRequest(
 	headers: Readonly<Record<string, string>>,
 	bodySha256: string,
 ): CanonicalRequest {
-	const names = Object.keys(headers).sort()
-	const lines = names.map((name) => `${name}:${canonicalValue(headers[name] ?? '')}\n`).join('')
-	const signedHeaders = names.join(';')
-	return { text: `${method}\n${canonicalPath(path)}\n${canonicalQuery(query)}\n${lines}\n${signedHeaders}\n${bodySha256}`, signedHeaders }
+	return canonicalText(method, canonicalPath(path), canonicalQuery(query), headers, bodySha256)
 }
 
 /** The credential scope: `<date>/<region>/<service>/aws4_request`. */
@@ -178,8 +198,8 @@ export async function signature(secretAccessKey: string, date: string, scope: Si
 	return hex(await hmac(await signingKey(secretAccessKey, date, scope), toSign))
 }
 
-/** The origin's `URL`, refused unless it is a bare `https:` or `http:` origin. */
-function endpointUrl(origin: string): URL {
+/** The origin's `URL`, refused unless it is a bare `https:` origin, or `http:` where `insecure` allows it. */
+function endpointUrl(origin: string, insecure: boolean): URL {
 	let url: URL
 	try {
 		url = new URL(origin)
@@ -187,6 +207,7 @@ function endpointUrl(origin: string): URL {
 		return refuse('the origin is not a URL')
 	}
 	if ((url.protocol !== 'https:' && url.protocol !== 'http:') || url.origin !== origin) return refuse('the origin is not a bare http(s) origin')
+	if (url.protocol === 'http:' && !insecure) return refuse('the origin is http: without allowInsecureOrigin')
 	return url
 }
 
@@ -219,21 +240,28 @@ export async function signRequest(
 	if (!SCOPE_PART.test(scope.region) || !SCOPE_PART.test(scope.service)) refuse('the region or service is not a scope name')
 	if (!ACCESS_KEY_ID.test(credentials.accessKeyId)) refuse('the access key id is not one')
 	if (credentials.secretAccessKey === '') refuse('the secret access key is empty')
+	if (credentials.sessionToken === '') refuse('the session token is empty')
 	if (credentials.sessionToken !== undefined && !HEADER_VALUE.test(credentials.sessionToken)) refuse('the session token has a control character')
-	const url = endpointUrl(request.origin)
-	const query = request.query ?? []
-	const stamp = amzDate(at)
-	const bodySha256 = await sha256Hex(request.body ?? '')
+	// Everything the request and the credentials say is read here, before the first await, and used as read: the URL
+	// sent carries the very path and query that were signed, whatever the caller changes meanwhile.
+	const { accessKeyId, secretAccessKey, sessionToken } = credentials
+	const signedScope: SigningScope = { region: scope.region, service: scope.service }
+	const method = request.method
+	const url = endpointUrl(request.origin, options.allowInsecureOrigin === true)
+	const path = canonicalPath(request.path)
+	const search = canonicalQuery(request.query ?? [])
 	const sent = callerHeaders(request.headers ?? {})
+	const stamp = amzDate(at)
+	const digest = sha256Hex(request.body ?? '')
+	const bodySha256 = await digest
 	sent['x-amz-date'] = stamp
-	if (credentials.sessionToken !== undefined) sent['x-amz-security-token'] = credentials.sessionToken
+	if (sessionToken !== undefined) sent['x-amz-security-token'] = sessionToken
 	if (options.bodyDigestHeader === true) sent['x-amz-content-sha256'] = bodySha256
-	const canonical = canonicalRequest(request.method, request.path, query, { ...sent, host: url.host }, bodySha256)
-	const toSign = await stringToSign(stamp, scope, canonical.text)
+	const canonical = canonicalText(method, path, search, { ...sent, host: url.host }, bodySha256)
+	const toSign = await stringToSign(stamp, signedScope, canonical.text)
 	const date = stamp.slice(0, 8)
-	const signed = await signature(credentials.secretAccessKey, date, scope, toSign)
-	const credential = `${credentials.accessKeyId}/${credentialScope(date, scope)}`
+	const signed = await signature(secretAccessKey, date, signedScope, toSign)
+	const credential = `${accessKeyId}/${credentialScope(date, signedScope)}`
 	const authorization = `${SIGV4_ALGORITHM} Credential=${credential}, SignedHeaders=${canonical.signedHeaders}, Signature=${signed}`
-	const search = canonicalQuery(query)
-	return { url: `${url.origin}${request.path}${search === '' ? '' : `?${search}`}`, headers: { ...sent, authorization } }
+	return { url: `${url.origin}${path}${search === '' ? '' : `?${search}`}`, headers: { ...sent, authorization } }
 }

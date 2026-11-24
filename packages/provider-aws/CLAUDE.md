@@ -13,7 +13,7 @@ bun test
 | -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `codecs.ts`    | `AWS_PROVIDER` and what Control persists: the app target (account, region, cluster, service), the artifact (the contract's digest and health path), the namespace target (its stack and sizing), the run checkpoint (`buildToken`, `buildId`, `taskDefinitionArn`, `serviceUpdateRequested`, `deploymentArn`). |
 | `authoring.ts` | `defineApp({ id })` and `isAwsAppConfig`: the config `authoredAppProvider` reads as `aws`, under the contract's app id rule.                                                                                                                                                                                   |
-| `aws/sigv4.ts` | `signRequest`: Signature Version 4 header signing for the package's clients, over Web Crypto. It refuses what it would have to encode or normalize (a path outside the unreserved characters), a repeated header, a line break, and a header it sets itself.                                                   |
+| `aws/sigv4.ts` | `signRequest`: Signature Version 4 header signing for the package's clients, over Web Crypto. It refuses what it would have to encode or normalize (a path outside the unreserved characters), a repeated header, a line break, a header it sets itself, and an `http:` origin without `allowInsecureOrigin`.  |
 
 ## Invariants
 
