@@ -17,17 +17,9 @@ import type {
 	ProviderSourceResolution,
 	ProviderSourceResolutionInput,
 } from '@fabrika/provider-contract'
-import { decodeEnvelope, ProviderSecretError } from '@fabrika/provider-contract'
+import { cancelRun, decodeEnvelope, ProviderSecretError, reconcileRun } from '@fabrika/provider-contract'
 import { z } from 'zod'
-import {
-	createZeropsApi,
-	waitForProcess,
-	ZEROPS_ACTIVE,
-	ZEROPS_TERMINAL,
-	type ZeropsApi,
-	type ZeropsAppVersion,
-	ZeropsServiceEnvValueTooLargeError,
-} from './api'
+import { createZeropsApi, waitForProcess, type ZeropsApi, ZeropsServiceEnvValueTooLargeError } from './api'
 import { lockfileBuildBaseRefusal } from './build-base'
 import { defaultSleep, defaultZeropsCollaborators, type Sleeper } from './collaborators'
 import { createdServices, type ExposureAlerter, isObjectStorageType } from './exposure'
@@ -52,15 +44,15 @@ import {
 import { namespaceError, ZEROPS_DEV_TARGET_RETIRED } from './namespace/errors'
 import { assertNamespaceProxyAcceptsSandboxes, assertNamespaceProxyReads, type OlderProxyReaders } from './namespace/proxy-reads'
 import type { ZeropsNamespaceSandboxHost } from './namespace/types'
-import { createZeropsDeployer, ZEROPS_VERSION_DEADLINE_MS } from './provider'
+import { createZeropsDeployer } from './provider'
+import { zeropsRunAttempt } from './run-attempt'
 import { deploySandbox, parseSandboxCheckpoint } from './sandbox/deploy'
 import { assertSandboxArtifact } from './sandbox/dev-artifact'
 import { createZeropsDevSandboxes } from './sandbox/lifecycle'
 import { allowedReferenceHosts, assertNoPlatformOnlyReference, foreignReferenceHost, serviceReferenceHosts } from './service-references'
 import { normalizeZeropsSourceRepository } from './source'
 import type { ZeropsSourcePort, ZeropsSourcePrivateBinding } from './source/port'
-import type { ZeropsRunState, ZeropsRuntimeTarget } from './types'
-import { deleteVersion, isVersionNotFound } from './version-attempt'
+import type { ZeropsRuntimeTarget } from './types'
 import { createZboxClient, type ZboxClient, type ZboxFetch } from './zbox'
 
 /** Provider coordinates that are safe to persist. Credentials are composed only for a live run. */
@@ -220,21 +212,7 @@ const privateBinding = (binding: ProviderSourceBinding | undefined): ZeropsSourc
 
 const IMMUTABLE_GIT_OBJECT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 
-const checkpointSchema = z.object({ appVersionId: z.string().min(1), triggered: z.boolean() }).strict()
-
-/** The run checkpoint (ADR-0044), or null for anything else — an older shape included. */
-export const parseZeropsCheckpoint = (value: unknown): ZeropsRunState | null => {
-	const result = checkpointSchema.safeParse(value)
-	return result.success ? result.data : null
-}
-
-/** The recorded checkpoint for exactly this run's external id, or null. */
-const runCheckpoint = (input: { providerState?: JsonValue; externalId: string }): ZeropsRunState | null => {
-	const checkpoint = parseZeropsCheckpoint(input.providerState)
-	return checkpoint !== null && checkpoint.appVersionId === input.externalId ? checkpoint : null
-}
-
-const pastDeadline = (startedAtMs: number | undefined): boolean => startedAtMs !== undefined && Date.now() > startedAtMs + ZEROPS_VERSION_DEADLINE_MS
+export { parseZeropsCheckpoint } from './run-attempt'
 
 /** Build the complete Zerops lifecycle bundle without importing control-plane persistence. */
 export const createZeropsControlProvider = (options: ZeropsControlProviderOptions): ControlProvider => {
@@ -242,16 +220,9 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		throw new Error('Zerops access token must be a non-empty string')
 	}
 	const api = options.api ?? createZeropsApi({ token: options.accessToken, baseUrl: options.apiBaseUrl })
-	const getVersion = async (input: { appVersionId: string; signal: AbortSignal }): Promise<ZeropsAppVersion | null> => {
-		input.signal.throwIfAborted()
-		try {
-			return await api.getAppVersion(input)
-		} catch (error) {
-			input.signal.throwIfAborted()
-			if (!isVersionNotFound(error)) throw error
-			return null
-		}
-	}
+	/** The run's app version on the environment's own service; a dev environment has none, which the read then refuses. */
+	const runAttempt = (environment: ProviderEnvironment) =>
+		zeropsRunAttempt(api, () => serviceTargetOf(decodeEnvironment(environment).target).serviceId)
 	const deployRun = createZeropsDeployer((target) => {
 		const defaults = defaultZeropsCollaborators(target)
 		return {
@@ -288,19 +259,6 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		if (foreign !== null) {
 			throw new ProviderSecretError(`zerops: secret \`${name}\` references service \`${foreign}\`, which this app does not own`, 'foreignReference')
 		}
-	}
-
-	const assertVersionCoordinates = (environment: ProviderEnvironment, appVersionId: string, version: ZeropsAppVersion): void => {
-		const serviceId = serviceTargetOf(decodeEnvironment(environment).target).serviceId
-		if (version.id !== appVersionId || (version.serviceStackId !== undefined && version.serviceStackId !== serviceId)) {
-			throw new Error('Zerops app-version response has different coordinates')
-		}
-	}
-
-	/** Best-effort: a refused or slow cancel-build must not decide the outcome. */
-	const cancelBuildQuietly = async (appVersionId: string, signal: AbortSignal): Promise<void> => {
-		signal.throwIfAborted()
-		await api.cancelBuild({ appVersionId, signal: AbortSignal.any([signal, AbortSignal.timeout(5000)]) }).catch(() => {})
 	}
 
 	const resolveSource = async (input: ProviderSourceResolutionInput): Promise<ProviderSourceResolution> => {
@@ -519,74 +477,18 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 		},
 		devSandboxes,
 		cancel: async (input): Promise<ProviderCancelOutcome> => {
-			const signal = input.signal
-			signal.throwIfAborted()
+			input.signal.throwIfAborted()
 			// The deploy's own invocation stops a sandbox build on a cancel; nothing here holds the sandbox host's key.
 			if (parseSandboxCheckpoint(input) !== null) return { state: 'settled', outcome: 'failed' }
-			const checkpoint = runCheckpoint(input)
-			if (checkpoint === null) return { state: 'settled', outcome: 'failed' }
-			if (!checkpoint.triggered) {
-				try {
-					await deleteVersion(api, checkpoint.appVersionId, signal)
-				} catch {
-					signal.throwIfAborted()
-					return { state: 'pending' }
-				}
-				return { state: 'settled', outcome: 'failed' }
-			}
-			const version = await getVersion({ appVersionId: checkpoint.appVersionId, signal })
-			if (version === null) return { state: 'settled', outcome: 'failed' }
-			assertVersionCoordinates(input.environment, checkpoint.appVersionId, version)
-			// Cancellation never implies rollback: a version that activated first makes the run a success.
-			if (version.status === ZEROPS_ACTIVE) return { state: 'settled', outcome: 'succeeded' }
-			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'settled', outcome: 'failed' }
-			await cancelBuildQuietly(checkpoint.appVersionId, signal)
-			// A build request that never landed leaves the version UPLOADING for good; the deadline settles it.
-			return pastDeadline(input.startedAtMs) ? { state: 'settled', outcome: 'failed' } : { state: 'pending' }
+			return cancelRun(runAttempt(input.environment), input)
 		},
 		reconcile: async (input): Promise<ProviderReconcileOutcome> => {
-			const signal = input.signal
-			signal.throwIfAborted()
-			const log = async (line: string): Promise<void> => {
-				await input.log?.(line).catch(() => {})
-			}
+			input.signal.throwIfAborted()
 			if (parseSandboxCheckpoint(input) !== null) {
-				await log('deploy interrupted: Control stopped while it deployed into the workspace sandbox; bind the workspace again')
+				await input.log?.('deploy interrupted: Control stopped while it deployed into the workspace sandbox; bind the workspace again').catch(() => {})
 				return { state: 'failed' }
 			}
-			const checkpoint = runCheckpoint(input)
-			if (checkpoint === null) {
-				await log('unrecognised checkpoint; failing without platform calls')
-				return { state: 'failed' }
-			}
-			if (!checkpoint.triggered) {
-				// A throw keeps the run running; the next maintenance pass retries the deletion.
-				await deleteVersion(api, checkpoint.appVersionId, signal)
-				await log(
-					`deploy interrupted: Control stopped before it requested the build; deleted app-version ${checkpoint.appVersionId}; run the deploy again`,
-				)
-				return { state: 'failed' }
-			}
-			let version: ZeropsAppVersion | null
-			try {
-				version = await getVersion({ appVersionId: checkpoint.appVersionId, signal })
-			} catch {
-				signal.throwIfAborted()
-				if (!pastDeadline(input.startedAtMs)) return { state: 'running' }
-				await cancelBuildQuietly(checkpoint.appVersionId, signal)
-				await log(`abandoned app-version ${checkpoint.appVersionId}: its status stayed unobservable past the run deadline`)
-				return { state: 'failed' }
-			}
-			if (version === null) return { state: 'failed' }
-			assertVersionCoordinates(input.environment, checkpoint.appVersionId, version)
-			if (version.status === ZEROPS_ACTIVE) return { state: 'succeeded' }
-			if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'failed' }
-			if (pastDeadline(input.startedAtMs)) {
-				await cancelBuildQuietly(checkpoint.appVersionId, signal)
-				await log(`abandoned non-terminal app-version ${checkpoint.appVersionId} (${version.status ?? 'unknown'})`)
-				return { state: 'failed' }
-			}
-			return { state: 'running' }
+			return reconcileRun(runAttempt(input.environment), input)
 		},
 		secrets: {
 			put: async (input) => {

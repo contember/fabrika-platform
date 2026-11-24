@@ -11,16 +11,19 @@
 import { FABRIKA_SOURCE_MAP_UPLOAD_KEY, managedValue, staleManagedVariables } from '@fabrika/auth-core'
 import { type OperationsSourceMapUploadState, readSourceMapUploadReport } from '@fabrika/operations-contract/releases'
 import {
+	awaitSettlement,
+	type DeployRunContext,
 	type DeployStepResult,
 	followLeaseLoss,
-	isLeaseLoss,
 	type JsonValue,
 	type ProviderApprovedAccess,
 	type ProviderDeployInput,
 	ProviderInvocationAbort,
 	type ProviderManagedEnvironment,
 	type ProviderRunEvents,
-	runSteps,
+	type RunAttempt,
+	runDeploy,
+	type RunObservation,
 } from '@fabrika/provider-contract'
 import {
 	readableContent,
@@ -91,10 +94,10 @@ import {
 	verifyZeropsArtifactSourceDescriptor,
 } from './manifest'
 import { buildZeropsPlan, resolveDeployHostname, type ZeropsStep } from './plan'
+import { ZEROPS_VERSION_DEADLINE_MS, zeropsRunAttempt } from './run-attempt'
 import { allowedReferenceHosts, assertNoPlatformOnlyReference, foreignReferenceHost } from './service-references'
 import { isZeropsUploadDestination } from './source'
 import type { ZeropsRunState, ZeropsRuntimeSource, ZeropsRuntimeTarget } from './types'
-import { deleteVersion } from './version-attempt'
 
 export const CANCELLED = 'deploy cancelled'
 
@@ -129,9 +132,6 @@ export interface ZeropsDeployResult {
 
 /** How often `await-version` asks Zerops for the version's status. */
 const POLL_INTERVAL_MS = 3000
-
-/** A run stops waiting for its version this long after it started. Zerops' own pipeline limit is 1 hour. */
-export const ZEROPS_VERSION_DEADLINE_MS = 75 * 60 * 1000
 
 /**
  * `backup-database` waits at most this long of elapsed time for the backup to be stored, request times included, and
@@ -328,18 +328,16 @@ const activationHint = (version: ZeropsAppVersion, checks: boolean): string => {
 }
 
 /**
- * The attempt this invocation is making. `appVersionId` is set once a version is reserved and `triggered`
- * just before the build request is sent; together they decide whether a failure may delete the version.
+ * What this invocation learned on the way. The reserved version and whether its build was requested are the
+ * checkpoint, which `runDeploy` holds (`DeployRunContext`).
  */
 interface Attempt {
 	/** Hostname → id of every service this run's import created. */
 	created?: ReadonlyMap<string, string>
 	/** The provenance marker `write-service-env` writes, or null to remove a marker no bucket needs any more. */
 	storageProvenance?: string | null
-	appVersionId?: string
 	uploadUrl?: string
 	processId?: string
-	triggered: boolean
 	/** What the build's source-map upload reported in its log, once a relayed line said so. */
 	sourceMaps?: OperationsSourceMapUploadState
 	/** The most connections each process of the application opens, as `size-database` sized them. */
@@ -360,6 +358,8 @@ interface StepEnv {
 	managed: ProviderManagedEnvironment
 	/** `await-version` gives up at this instant. */
 	deadlineMs: number
+	/** The run's candidate, which `runDeploy` records and settles. */
+	candidate: RunAttempt<ZeropsRunState>
 }
 
 const requireSource = (env: StepEnv): { runtime: ZeropsRuntimeSource; client: NonNullable<ZeropsCollaborators['source']> } => {
@@ -371,15 +371,10 @@ const requireSource = (env: StepEnv): { runtime: ZeropsRuntimeSource; client: No
 	return { runtime, client }
 }
 
-const requireVersion = (env: StepEnv, step: string): string => {
-	const appVersionId = env.attempt.appVersionId
-	if (appVersionId === undefined) throw new Error(`zerops: ${step} has no reserved app-version (reserve-version did not run)`)
-	return appVersionId
-}
-
-/** Best-effort: the caller is already giving up, so a failed cancellation must not replace the reason. */
-const cancelBuildQuietly = async (env: StepEnv, appVersionId: string): Promise<void> => {
-	await env.zerops.api.cancelBuild({ appVersionId, signal: AbortSignal.timeout(5000) }).catch(() => {})
+const requireVersion = (deployRun: DeployRunContext<ZeropsRunState>, step: string): ZeropsRunState => {
+	const checkpoint = deployRun.checkpoint
+	if (checkpoint === undefined) throw new Error(`zerops: ${step} has no reserved app-version (reserve-version did not run)`)
+	return checkpoint
 }
 
 /**
@@ -449,39 +444,25 @@ const openLog = async (env: StepEnv): Promise<ZeropsLogAccess | null> => {
  *
  * A cancelled run asks Zerops to cancel the BUILD too: the platform is running the work, so abandoning the
  * poll loop without telling it leaves a build container burning through the pipeline's hour. A lost lease
- * gives no such permission (ADR-0044), so it stops without touching the build.
+ * gives no such permission (ADR-0044), so it stops without touching the build. `awaitSettlement` owns both.
  */
-const awaitVersion = async (env: StepEnv, appVersionId: string, processId: string | undefined, checks: boolean): Promise<void> => {
-	const { zerops, signal, log } = env
+const awaitVersion = async (env: StepEnv, checkpoint: ZeropsRunState, processId: string | undefined, checks: boolean): Promise<void> => {
+	const { zerops, log } = env
+	const { appVersionId } = checkpoint
 	const access = await openLog(env)
 	const seen = new Set<string>()
 	let previous: string | undefined
-	const timedOut = async (): Promise<never> => {
-		await cancelBuildQuietly(env, appVersionId)
-		throw new Error(`zerops: gave up waiting for app-version ${appVersionId} at the run deadline`)
-	}
-
-	for (;;) {
-		// Only a boundary that still holds the lease may cancel the build; a lost lease rejects it as lease_lost.
-		const crossed: unknown = await env.run.events.boundary().then(() => null, (error: unknown) => error)
-		if (isLeaseLoss(crossed)) throw crossed
-		if (signal.aborted) {
-			if (isLeaseLoss(signal.reason)) throw signal.reason
-			await cancelBuildQuietly(env, appVersionId)
-			throw new ProviderInvocationAbort('cancel_requested')
-		}
+	const observe = async (signal: AbortSignal): Promise<RunObservation> => {
 		let process: ZeropsProcess | undefined
 		let version: ZeropsAppVersion
 		try {
 			process = processId === undefined ? undefined : await zerops.api.getProcess({ processId, signal })
 			version = await zerops.api.getAppVersion({ appVersionId, signal })
-		} catch {
+		} catch (cause) {
 			log(`  ${appVersionId}: status observation unavailable; retrying`)
-			if (Date.now() > env.deadlineMs) await timedOut()
-			await zerops.sleep(POLL_INTERVAL_MS, signal)
-			continue
+			return { state: 'unobservable', cause }
 		}
-		if (signal.aborted) continue
+		if (signal.aborted) return { state: 'pending' }
 		if (
 			version.id !== appVersionId || (version.serviceStackId !== undefined && version.serviceStackId !== env.run.target.serviceId)
 			|| (processId !== undefined && process?.id !== processId)
@@ -496,21 +477,27 @@ const awaitVersion = async (env: StepEnv, appVersionId: string, processId: strin
 		await relayLog(env, access, seen, appVersionId, version.build?.pipelineStart)
 
 		if (process?.status !== undefined && ZEROPS_PROCESS_TERMINAL.has(process.status) && process.status !== ZEROPS_PROCESS_FINISHED) {
-			throw new Error(
-				`zerops: pipeline process ${process.id} is ${process.status} while app-version ${appVersionId} is ${version.status ?? 'in an unknown state'}${
-					activationHint(version, checks)
-				}`,
-			)
-		}
-		if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) {
-			if (version.status === ZEROPS_ACTIVE) {
-				return
+			return {
+				state: 'failed',
+				reason: `zerops: pipeline process ${process.id} is ${process.status} while app-version ${appVersionId} is ${
+					version.status ?? 'in an unknown state'
+				}${activationHint(version, checks)}`,
 			}
-			throw new Error(terminalFailure(version, checks))
 		}
-		if (Date.now() > env.deadlineMs) await timedOut()
-		await zerops.sleep(POLL_INTERVAL_MS, signal)
+		if (version.status === ZEROPS_ACTIVE) return { state: 'active' }
+		if (version.status !== undefined && ZEROPS_TERMINAL.has(version.status)) return { state: 'failed', reason: terminalFailure(version, checks) }
+		return { state: 'pending' }
 	}
+	await awaitSettlement({
+		attempt: env.candidate,
+		checkpoint,
+		events: env.run.events,
+		signal: env.signal,
+		deadlineMs: env.deadlineMs,
+		intervalMs: POLL_INTERVAL_MS,
+		sleep: zerops.sleep,
+		observe,
+	})
 }
 
 const declaredBuckets = (artifact: FabrikaManifest): string[] =>
@@ -974,8 +961,8 @@ const sizedExecution = (locked: ZeropsLockedExecution, attempt: Attempt): Zerops
 	return { ...locked, databaseConnections: connections }
 }
 
-/** Run one step's effect. Resolves on success, throws on failure (caught + recorded by `runSteps`). */
-const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
+/** Run one step's effect. Resolves on success, throws on failure (caught + recorded by `runDeploy`). */
+const runStep = async (spec: ZeropsStep, env: StepEnv, deployRun: DeployRunContext<ZeropsRunState>): Promise<void> => {
 	const { run, zerops, compiled, log, signal, dryRun, attempt } = env
 	const { target, artifact } = run
 	await run.events.boundary()
@@ -1052,10 +1039,9 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			assertRunning(signal)
 			const version = await zerops.api.createAppVersion({ serviceId: target.serviceId, name: source.runtime.runId, signal })
-			attempt.appVersionId = version.id
 			attempt.uploadUrl = version.uploadUrl
-			const checkpoint: ZeropsRunState = { appVersionId: version.id, triggered: false }
-			await run.events.externalId(version.id, { ...checkpoint })
+			// The version exists from here on, so a failure deletes it even when this record fails.
+			await deployRun.record({ appVersionId: version.id, triggered: false })
 			log(`  reserved app-version ${version.id}`)
 			return
 		}
@@ -1066,7 +1052,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 				return
 			}
 			const source = requireSource(env)
-			const appVersionId = requireVersion(env, 'upload-source')
+			const { appVersionId } = requireVersion(deployRun, 'upload-source')
 			const uploadUrl = attempt.uploadUrl
 			if (uploadUrl === undefined) throw new Error('zerops: upload-source has no upload URL')
 			// The upload URL carries its own credential; it is checked here and never put in an error.
@@ -1104,7 +1090,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 				)
 				return
 			}
-			const appVersionId = requireVersion(env, 'trigger-build')
+			const { appVersionId } = requireVersion(deployRun, 'trigger-build')
 			await verifyZeropsArtifactSourceDescriptor(artifact.target.sourceDescriptor)
 			const { contents } = artifact.target.sourceDescriptor
 			const release = managedValue(env.managed, 'FABRIKA_RELEASE')
@@ -1117,9 +1103,7 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 			}
 			assertRunning(signal)
 			// Recorded BEFORE the request: from here on the version is settled only by polling it (ADR-0044).
-			const checkpoint: ZeropsRunState = { appVersionId, triggered: true }
-			await run.events.checkpoint({ ...checkpoint })
-			attempt.triggered = true
+			await deployRun.record({ appVersionId, triggered: true })
 			// A cancel from here on still sends the build, so `cancel()` cancels a real build instead of
 			// polling a version that would sit in UPLOADING until the deadline. Only a lost lease stops it.
 			const buildSignal = followLeaseLoss(signal)
@@ -1151,10 +1135,10 @@ const runStep = async (spec: ZeropsStep, env: StepEnv): Promise<void> => {
 				log('  [dry-run] would poll the pipeline process when available and /app-version until it is ACTIVE, relaying the build log')
 				return
 			}
-			const appVersionId = requireVersion(env, 'await-version')
+			const checkpoint = requireVersion(deployRun, 'await-version')
 			assertRunning(signal)
 			const locked = lockedExecutionFor(artifact, run, dryRun)
-			await awaitVersion(env, appVersionId, attempt.processId, locked !== null && locked.databaseUrl !== null)
+			await awaitVersion(env, checkpoint, attempt.processId, locked !== null && locked.databaseUrl !== null)
 			return
 		}
 	}
@@ -1191,24 +1175,22 @@ async (run: ZeropsDeployRun): Promise<ZeropsDeployResult> => {
 		log: run.events.log,
 		signal: run.signal,
 		dryRun: run.dryRun,
-		attempt: { triggered: false },
+		attempt: {},
 		managed: run.managedEnvironment,
 		deadlineMs: Date.now() + ZEROPS_VERSION_DEADLINE_MS,
+		candidate: zeropsRunAttempt(zerops.api, () => run.target.serviceId),
 	}
 	const steps = buildZeropsPlan(run.artifact, { backup: run.backupBeforeMigrations !== undefined })
 	const options = { appId: run.appId, env: run.env, dryRun: run.dryRun, signal: run.signal, log: run.events.log }
-	const result = await runSteps(steps, options, (step) => runStep(step, env))
-	const { appVersionId, triggered } = env.attempt
-	// A cancelled run leaves the version to `cancel()`; a lost lease leaves it to the next owner.
-	if (result.status === 'failed' && appVersionId !== undefined && !triggered && !run.signal.aborted) {
-		try {
-			await deleteVersion(zerops.api, appVersionId, run.signal)
-			run.events.log(`  deleted app-version ${appVersionId}`)
-		} catch {
-			run.events.log(`  [warn] app-version ${appVersionId} could not be deleted; it was never built`)
-		}
-	}
-	return { appId: run.appId, env: run.env, ...result, ...artifactStateOf(run, result.status, env.attempt) }
+	// A failed run deletes a version it never triggered; a cancelled one leaves it to `cancel()`, a lost lease to the next owner.
+	const { status, steps: results } = await runDeploy({
+		attempt: env.candidate,
+		steps,
+		options,
+		events: run.events,
+		runOne: (step, deployRun) => runStep(step, env, deployRun),
+	})
+	return { appId: run.appId, env: run.env, status, steps: results, ...artifactStateOf(run, status, env.attempt) }
 }
 
 /** A run that uploads reports `complete` only when its build log said so; a missing or unread report is `incomplete`. */
