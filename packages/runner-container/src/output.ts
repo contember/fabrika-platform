@@ -1,10 +1,12 @@
 // The one way a build's output reaches the deploy (ADR-0086): the runner creates a tree of its own and copies into it
 // regular files only, each checked with `lstat` and again on the open descriptor. A link, a hard link, a device, a fifo,
 // a socket, an unsafe name or an output over the limits fails the deploy with one line. The build's processes are
-// reaped before the copy starts, so nothing changes the tree while it is read.
+// reaped before the copy starts, so nothing changes the tree while it is read; on Linux the walk does not rely on that
+// either: every name is resolved inside the directory already opened (`/proc/self/fd/<fd>/<name>`, as `openat` does), so
+// a directory swapped for a link after it was checked cannot lead the copy outside the output.
 
 import { constants, type Stats } from 'node:fs'
-import { lstat, mkdir, open, readdir } from 'node:fs/promises'
+import { type FileHandle, lstat, mkdir, open, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export interface CopyLimits {
@@ -95,19 +97,52 @@ const copyFileChecked = async (source: string, target: string, path: string, che
 	}
 }
 
-const walk = async (source: string, target: string, path: string, depth: number, limits: CopyLimits, budget: Budget): Promise<void> => {
-	const names = (await readdir(source, { encoding: 'buffer' })).sort(Buffer.compare)
+/**
+ * Where the names of an open directory resolve: on Linux the descriptor itself, so a name is looked up in the directory
+ * that was opened and checked, whatever its path names now. Elsewhere (the tests on a developer's machine) its path.
+ */
+const anchor = (handle: FileHandle, path: string): string => process.platform === 'linux' ? `/proc/self/fd/${handle.fd}` : path
+
+/** Open a directory without following a link, and check it is the one `checked` described. */
+const openDirectory = async (path: string, shown: string, checked: Stats | null): Promise<FileHandle> => {
+	const handle = await open(path, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW).catch(() => {
+		throw refuse(shown === '' ? 'it is not a directory' : `${quoted(shown)} cannot be opened as a directory`)
+	})
+	const stats = await handle.stat().catch(() => null)
+	if (stats === null || !stats.isDirectory() || (checked !== null && (stats.ino !== checked.ino || stats.dev !== checked.dev))) {
+		await handle.close()
+		throw refuse(shown === '' ? 'it is not a directory' : `${quoted(shown)} changed while it was copied`)
+	}
+	return handle
+}
+
+const walk = async (
+	directory: FileHandle,
+	source: string,
+	target: string,
+	path: string,
+	depth: number,
+	limits: CopyLimits,
+	budget: Budget,
+): Promise<void> => {
+	const base = anchor(directory, source)
+	const names = (await readdir(base, { encoding: 'buffer' })).sort(Buffer.compare)
 	for (const raw of names) {
 		const name = safeName(raw, path)
 		const relative = path === '' ? name : `${path}/${name}`
 		if (Buffer.byteLength(relative) > limits.maxPathBytes) throw refuse(`holds a path longer than ${limits.maxPathBytes} bytes`)
-		const from = join(source, name)
+		const from = join(base, name)
 		const to = join(target, name)
 		const stats = await lstat(from)
 		if (stats.isDirectory()) {
 			if (depth + 1 > limits.maxDepth) throw refuse(`nests directories deeper than ${limits.maxDepth}`)
 			await mkdir(to, { mode: 0o700 })
-			await walk(from, to, relative, depth + 1, limits, budget)
+			const child = await openDirectory(from, relative, stats)
+			try {
+				await walk(child, join(source, name), to, relative, depth + 1, limits, budget)
+			} finally {
+				await child.close()
+			}
 			continue
 		}
 		if (!stats.isFile()) throw refuse(`${quoted(relative)} is ${kind(stats)}`)
@@ -130,10 +165,13 @@ export const copyBuildOutput = async (
 	target: string,
 	limits: CopyLimits = DEFAULT_COPY_LIMITS,
 ): Promise<{ readonly files: number; readonly bytes: number }> => {
-	const root = await lstat(source).catch(() => null)
-	if (root === null || !root.isDirectory()) throw refuse('it is not a directory')
-	await mkdir(target, { mode: 0o700 })
-	const budget: Budget = { files: 0, bytes: 0 }
-	await walk(source, target, '', 0, limits, budget)
-	return budget
+	const root = await openDirectory(source, '', null)
+	try {
+		await mkdir(target, { mode: 0o700 })
+		const budget: Budget = { files: 0, bytes: 0 }
+		await walk(root, source, target, '', 0, limits, budget)
+		return budget
+	} finally {
+		await root.close()
+	}
 }
