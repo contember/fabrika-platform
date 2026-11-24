@@ -16,7 +16,7 @@ export const contract = defineContract({
 	displayName: 'Úkoly',
 	mail: { reset: { cs: { subject: 'Nové heslo do aplikace {{displayName}}', text: `Heslo si nastavíte zde:\n{{actionUrl}}` } } },
 	dimensions: {
-		project: { creator: 'maintainer', members: { manage: 'tasks.admin', list: READ }, directory: 'labels' },
+		project: { creator: 'maintainer', members: { manage: 'tasks.admin', list: READ }, directory: 'labels', valuesFrom: 'api.projectValues' },
 		task: { in: 'project', values: [{ value: 'triage', label: 'Triage' }, { value: 'backlog' }] },
 	},
 	actions,
@@ -36,6 +36,10 @@ export const contract = defineContract({
 			create: c.mutation({ input: NewProject, output: ById, access: { action: 'projects.create', creates: 'project' } }),
 		},
 		me: c.query({ input: null, output: z.strictObject({ ok: z.boolean() }), access: { member: true } }),
+		projectValues: c.query({
+			output: z.strictObject({ values: z.array(z.strictObject({ value: z.string(), label: z.string().optional() })).max(500) }),
+			access: { action: 'tasks.read', over: 'project' },
+		}),
 	}),
 	shared: c.link('/share', {
 		spa: 'dist/share',

@@ -1,6 +1,6 @@
 import type { Locale } from './locale'
 import type { MailTemplates } from './mail'
-import type { DimensionValue } from './scope-values'
+import type { DimensionValue, DimensionValueSource } from './scope-values'
 
 export type PrincipalType = 'user' | 'service'
 
@@ -166,6 +166,8 @@ export interface AppScopeDef {
 	lookups?: string[]
 	/** The values the console offers for a grant in this dimension (ADR-0085); absent, it takes free text. */
 	values?: DimensionValue[]
+	/** The procedure IAM asks for this dimension's values as the administrator (ADR-0085 §4); absent, only `values` count. */
+	valueSource?: DimensionValueSource
 }
 
 /**

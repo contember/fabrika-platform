@@ -500,6 +500,11 @@ export interface DimensionArtifact {
 	readonly directory?: 'labels'
 	/** The values the console offers for a grant in this dimension (ADR-0085). Absent unless declared, so digests stay. */
 	readonly values?: readonly DimensionValue[]
+	/**
+	 * The id of the query procedure IAM asks, as the administrator, for this dimension's values (ADR-0085 §4). Absent
+	 * unless declared, so digests stay.
+	 */
+	readonly valuesFrom?: string
 }
 
 export interface RoleArtifact {

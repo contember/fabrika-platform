@@ -11,6 +11,7 @@ import {
 	type ContractArtifact,
 	contractWorkloads,
 	type DimensionArtifact,
+	type DimensionValueSource,
 	directoryLookups,
 	endpointDelegation,
 	type EndpointRow,
@@ -30,7 +31,7 @@ import {
 export function schemaFromContract(artifact: ContractArtifact): AppSchema {
 	return {
 		scopes: Object.entries(artifact.dimensions).sort(([a], [b]) => byCodeUnit(a, b)).map(([type, dimension]) =>
-			scopeDef(type, dimension, directoryLookups(artifact, type))
+			scopeDef(type, dimension, directoryLookups(artifact, type), artifact.endpoints)
 		),
 		actions: Object.entries(artifact.actions).sort(([a], [b]) => byCodeUnit(a, b)).map(([action, description]) => ({ action, description })),
 		roles: Object.fromEntries(Object.entries(artifact.roles).map(([key, role]) => [key, roleDef(key, role)])),
@@ -78,7 +79,7 @@ function byCodeUnit(a: string, b: string): number {
 	return a < b ? -1 : a > b ? 1 : 0
 }
 
-function scopeDef(type: string, dimension: DimensionArtifact, lookups: readonly string[]): AppScopeDef {
+function scopeDef(type: string, dimension: DimensionArtifact, lookups: readonly string[], endpoints: readonly EndpointRow[]): AppScopeDef {
 	return {
 		type,
 		...(dimension.in === null ? {} : { in: dimension.in }),
@@ -87,7 +88,16 @@ function scopeDef(type: string, dimension: DimensionArtifact, lookups: readonly 
 		...(dimension.directory === 'labels' ? { directory: 'labels' } : {}),
 		...(lookups.length === 0 ? {} : { lookups: [...lookups] }),
 		...(dimension.values === undefined ? {} : { values: dimension.values.map((value) => ({ ...value })) }),
+		...valueSourceOf(dimension.valuesFrom, endpoints),
 	}
+}
+
+/** The value source IAM calls: the row `buildArtifact` checked, by its id, with its path and its requirement's action. */
+function valueSourceOf(id: string | undefined, endpoints: readonly EndpointRow[]): { valueSource?: DimensionValueSource } {
+	if (id === undefined) return {}
+	const row = endpoints.find((endpoint) => endpoint.id === id)
+	if (row?.requirement?.kind !== 'action') return {}
+	return { valueSource: { endpoint: row.id, path: row.path, action: row.requirement.action } }
 }
 
 function roleDef(key: string, role: RoleArtifact): RoleDef {

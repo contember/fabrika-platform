@@ -453,6 +453,7 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 			values: z.array(z.strictObject({ value: z.string(), label: z.string().optional() }))
 				.refine((values) => dimensionValuesProblem(values) === null, { message: 'is not a list of values (dimensionValuesProblem)' })
 				.optional(),
+			valuesFrom: z.string().min(1).optional(),
 		})),
 		actions: z.record(action, z.string()),
 		roles: z.record(

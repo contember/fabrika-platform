@@ -67,6 +67,7 @@ import {
 	type TerminalArtifact,
 	terminalIdentifyProblem,
 	type TokenPurposeArtifact,
+	valueSourceProblem,
 	type WebhookScheme,
 } from '@fabrika/auth-core'
 import { inlineFileTypes, isPolicyOrigin, MAX_CSP_ORIGINS, WORKER_BLOB_SOURCE } from '@fabrika/proxy-core/headers'
@@ -228,6 +229,7 @@ class ArtifactBuilder {
 		}
 		this.#checkPublicVariables()
 		this.#checkOwnPaths()
+		this.#checkValueSources(dimensions)
 		for (const row of this.#endpoints) {
 			if (row.kind === 'webhook' && row.input !== null && containsFile(row.input)) {
 				this.#problem(`mount '${row.id}'`, "takes a file in its input, which only a procedure's top-level field does (file('<kind>'))")
@@ -317,6 +319,16 @@ class ArtifactBuilder {
 		if (plan.outcome !== 'endpoint' || plan.endpoint.kind !== 'public-spa') {
 			const served = plan.outcome === 'endpoint' ? `'${plan.endpoint.id}' (${plan.endpoint.kind})` : 'no endpoint'
 			this.#problem('terminal.identify', `'${terminal.identify}' is served by ${served}; serve it from an spa mount with access: { public: true }`)
+		}
+	}
+
+	/** Each dimension's `valuesFrom` names a procedure whose row `valueSourceProblem` admits (ADR-0085 §4). */
+	#checkValueSources(dimensions: ContractArtifact['dimensions']): void {
+		for (const [name, dimension] of Object.entries(dimensions)) {
+			if (dimension.valuesFrom === undefined) continue
+			const row = this.#endpoints.find((endpoint) => endpoint.id === dimension.valuesFrom)
+			const problem = row === undefined ? `'${dimension.valuesFrom}' is not a procedure of the contract` : valueSourceProblem(row, name)
+			if (problem !== null) this.#problem(`dimension '${name}' valuesFrom`, problem)
 		}
 	}
 
@@ -448,6 +460,7 @@ class ArtifactBuilder {
 				members: dimension.members === undefined ? null : { manage: dimension.members.manage, list: dimension.members.list },
 				...(dimension.directory === 'labels' ? { directory: 'labels' } : {}),
 				...(values === undefined ? {} : { values }),
+				...(dimension.valuesFrom === undefined ? {} : { valuesFrom: dimension.valuesFrom }),
 			}
 		}
 		for (const name of Object.keys(declared)) {
