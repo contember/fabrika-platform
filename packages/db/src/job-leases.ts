@@ -68,6 +68,12 @@ export interface JobLeases {
 	 * the run owned (`job-wakes.ts`). `false` when `fence` no longer held it: then nothing is applied.
 	 */
 	finish(fence: LeaseFence, outcome: JobOutcome, wakes?: FinishWakes): Promise<boolean>
+	/**
+	 * Gives back a lease under which no run started: frees it and leaves every wake as it is, owned ones disowned, and
+	 * records no run (no status, end or duration). A process schedule's timer releases a lease whose take owned no due
+	 * wake (ADR-0080). `false` when `fence` no longer held it.
+	 */
+	release(fence: LeaseFence): Promise<boolean>
 	/** Records that a kick arrived: the run that started before it runs the job once more. Never waits on the lease. */
 	markPending(job: string): Promise<void>
 	/**
@@ -175,6 +181,11 @@ const SQL_FINISH: DialectTexts = {
 	last_duration_ms = ${SQLITE_RUN_MS},
 	last_succeeded_at = case when ?4 = 'succeeded' then ${N} else last_succeeded_at end
 	where job = ?1 and generation = ?2 and holder = ?3 returning job`,
+}
+
+const SQL_RELEASE: DialectTexts = {
+	postgres: `update ${T} set holder = null where job = $1 and generation = $2 and holder = $3 returning job`,
+	sqlite: `update ${T} set holder = null where job = ?1 and generation = ?2 and holder = ?3 returning job`,
 }
 
 const SQL_TRY_ACQUIRE: DialectTexts = {
@@ -495,6 +506,11 @@ export function jobLeases(runtime: () => DataLayerRuntime, project: LeaseProject
 		async finish(fence: LeaseFence, outcome: JobOutcome, wakes?: FinishWakes): Promise<boolean> {
 			const change: LeaseChange = { kind: 'finished', wakes: finishWakes(outcome, wakes) }
 			return (await changing(SQL_FINISH, [...params(fence), outcome], fence.job, change)).length > 0
+		},
+
+		async release(fence: LeaseFence): Promise<boolean> {
+			// A finish that applies nothing to the wakes: the projection only disowns what the take marked owned.
+			return (await changing(SQL_RELEASE, params(fence), fence.job, { kind: 'finished', wakes: null })).length > 0
 		},
 
 		async tryAcquire(job: string, holder: string, attemptMs: number, leaseMs: number): Promise<LeaseFence | null> {

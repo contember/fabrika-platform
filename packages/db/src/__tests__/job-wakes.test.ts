@@ -627,6 +627,68 @@ describe.skipIf(!hasPostgres)('keeping the schedule, on Postgres', () => {
 		expect(await dedupes()).toEqual(['cron:fresh:* * * * *'])
 	})
 
+	test("a lease taken while another replica's seed is open still owns the pending wake: the seed locks no row it finds", async () => {
+		const due = at(-MINUTE)
+		await on.wakes.schedule({ job: 'digest', reason: 'cron', dueAt: due, dedupe: 'cron:digest:* * * * *' })
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		const seeding = await sql.reserve()
+		try {
+			await seeding.unsafe(`set search_path to ${on.schema}`)
+			await seeding.unsafe('begin')
+			// What keepSchedule runs for an existing key, left open.
+			await seeding.unsafe(`insert into fabrika_wakes (id, job, due_at, reason, attempt, dedupe)
+				values (gen_random_uuid(), 'digest', ${Date.now() + MINUTE}, 'cron', 0, 'cron:digest:* * * * *')
+				on conflict (dedupe) where dedupe is not null do nothing`)
+			await on.leases.register('digest')
+			const run = await on.leases.tryAcquire('digest', 'replica', HOUR, HOUR)
+			expect(run).not.toBeNull()
+			expect((await on.wakes.pending('digest')).map((wake) => ({ owned: wake.owned, due: wake.dueAt.getTime() }))).toEqual([
+				{ owned: true, due: due.getTime() },
+			])
+			await seeding.unsafe('commit')
+		} finally {
+			seeding.release()
+			await sql.close()
+		}
+	})
+
+	test('a guarded finish waits for an open seed of a newer generation, and writes no fire under a key it dropped', async () => {
+		expect(await on.wakes.keepSchedule(older, [{ job: 'digest', expression: '0 3 * * *', dueAt: null }])).toBe(true)
+		await on.leases.register('digest')
+		const run = await on.leases.tryAcquire('digest', 'older-run', HOUR, HOUR)
+		if (run === null) throw new Error('no lease')
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		const seeding = await sql.reserve()
+		const settled = (promise: Promise<unknown>): Promise<boolean> => Promise.race([promise.then(() => true), Bun.sleep(300).then(() => false)])
+		try {
+			await seeding.unsafe(`set search_path to ${on.schema}`)
+			await seeding.unsafe('begin')
+			await seeding.unsafe(`update fabrika_job_schedule set generation = '${newer}', declared = '["cron:digest:0 4 * * *"]'`)
+			const finishing = on.leases.finish(run, 'succeeded', {
+				kind: 'completed',
+				nextCron: { expression: '0 3 * * *', dueAt: at(HOUR), scheduled: true },
+			})
+			expect(await settled(finishing)).toBe(false)
+			await seeding.unsafe('commit')
+			expect(await finishing).toBe(true)
+			expect(await on.wakes.pending('digest')).toEqual([])
+		} finally {
+			seeding.release()
+			await sql.close()
+		}
+	})
+
+	test('a released lease frees the job, disowns its wakes and records no run', async () => {
+		await on.wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:digest:* * * * *' })
+		await on.leases.register('digest')
+		const run = await on.leases.tryAcquire('digest', 'replica', HOUR, HOUR)
+		if (run === null) throw new Error('no lease')
+		expect(await on.leases.release(run)).toBe(true)
+		expect(await on.leases.release(run)).toBe(false)
+		expect(await on.leases.state('digest')).toMatchObject({ holder: null, lastStatus: null, lastFinishedAt: null })
+		expect((await on.wakes.pending('digest')).map((wake) => wake.owned)).toEqual([false])
+	})
+
 	test("a newer generation waits for an older one's open seed and reconciles after it; an older one behind a newer writes nothing", async () => {
 		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
 		const seeding = await sql.reserve()
@@ -661,17 +723,17 @@ describe.skipIf(!hasPostgres)('keeping the schedule, on Postgres', () => {
 })
 
 describe.skipIf(!hasPostgres)('the schedule migration', () => {
-	test('an existing schema applies 0013 alone, and the runtime role holds the schedule', async () => {
+	test('an existing schema applies 0013 and 0014 alone, and the runtime role holds the schedule', async () => {
 		const appId = `sched-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 		const earlier = FRAMEWORK_MIGRATIONS.filter((file) => file.name < '0013_job_schedule.sql')
-		expect(earlier).toHaveLength(FRAMEWORK_MIGRATIONS.length - 1)
+		expect(earlier).toHaveLength(FRAMEWORK_MIGRATIONS.length - 2)
 		const migrationsOf = (framework: typeof FRAMEWORK_MIGRATIONS) =>
 			definePostgresApplicationMigrations({ appId, directory: '/nonexistent', framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: framework } })
 		try {
 			const app = [{ name: '20261124120000_init.sql', sql: 'CREATE TABLE notes (id TEXT PRIMARY KEY)' }]
 			expect(await migrationsOf(earlier).migrate(url, app)).toEqual([...earlier.map((file) => `fabrika/${file.name}`), `app/${app[0]?.name}`])
 			const after = migrationsOf(FRAMEWORK_MIGRATIONS)
-			expect(await after.migrate(url, app)).toEqual(['fabrika/0013_job_schedule.sql'])
+			expect(await after.migrate(url, app)).toEqual(['fabrika/0013_job_schedule.sql', 'fabrika/0014_job_schedule_declared.sql'])
 			const runtime = openPostgres({ url: applicationRuntimeUrl(url, appId), schema: after.schema, max: 1 })
 			try {
 				const migrated = frameworkTablesOf(connected(tables, { database: runtime, capabilities: authority }).database).wakes

@@ -9,7 +9,7 @@ import { applicationSchema, type Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, setDefaultTimeout, spyOn, test } from 'bun:test'
 import type { ProcessSchedule } from '../jobs/runner'
 import { bootApp, environment, frameworkEnvFor, workloadTokensFor } from './fixtures/implement/harness'
 import { awayFromMinuteEdge } from './fixtures/minute-edge'
@@ -20,6 +20,9 @@ import type { SignupWorld } from './fixtures/public-kick/src/world'
 const URL_VAR = 'FABRIKA_TEST_POSTGRES_URL'
 const url = process.env[URL_VAR] ?? ''
 const hasPostgres = url !== ''
+
+// A case may wait up to six seconds for the database's next minute (`awayFromMinuteEdge`), and one runs ten rounds.
+setDefaultTimeout(30_000)
 
 if (!hasPostgres) {
 	console.warn(`process-schedule.test.ts skipped: set ${URL_VAR} to run it (the wakes, the leases and the schedule live in @fabrika/db)`)
@@ -274,7 +277,7 @@ describe.skipIf(!hasPostgres)('the serving process keeps the job schedule (FABRI
 		expect((await wakes()).map((wake) => wake.reason)).toEqual(['cron'])
 	})
 
-	test("an older deploy's run of a due fire writes no next fire; the deploy's process seeds it", async () => {
+	test("an older deploy's run of a job the deploy declares alike schedules its next fire, so no fire of the overlap is skipped", async () => {
 		await awayFromMinuteEdge(url)
 		const newer = start(NEWER)
 		const older = start(OLDER)
@@ -283,12 +286,67 @@ describe.skipIf(!hasPostgres)('the serving process keeps the job schedule (FABRI
 		await older.wake()
 		await older.settled()
 		expect(runsOf(newer, older)).toBe(1)
-		expect(await wakes()).toEqual([])
-		await newer.wake()
-		const [seeded, ...rest] = await wakes()
+		const [next, ...rest] = await wakes()
 		expect(rest).toEqual([])
-		expect(seeded).toMatchObject({ job: 'welcome', reason: 'cron', dedupe: CRON_KEY })
-		expect(seeded?.due).toBeGreaterThan(await databaseNow())
+		expect(next).toMatchObject({ job: 'welcome', reason: 'cron', dedupe: CRON_KEY })
+		expect(next?.due).toBeGreaterThan(await databaseNow())
+	})
+
+	test("an older deploy's run writes no fire under a key the deploy no longer declares", async () => {
+		await awayFromMinuteEdge(url)
+		const newer = start(NEWER)
+		const older = start(OLDER)
+		await newer.wake()
+		await overdue()
+		// As if the newer deploy had changed the job's expression: its keys no longer name the older one's.
+		await admin((sql) => sql.unsafe(`update ${schema}.fabrika_job_schedule set declared = '["cron:welcome:0 3 * * *"]'`))
+		await older.wake()
+		await older.settled()
+		expect(runsOf(newer, older)).toBe(1)
+		expect(await wakes()).toEqual([])
+	})
+
+	test('a lease taken while a write holds the due wake owns nothing, is released, and runs the fire once the row is free', async () => {
+		await awayFromMinuteEdge(url)
+		const newer = start(NEWER)
+		const older = start(OLDER)
+		await newer.wake()
+		await overdue()
+		const sql = new SQL({ url, adapter: 'postgres', max: 1 })
+		const holding = await sql.reserve()
+		try {
+			// Another replica's write of the row, still open: the take skips a locked row, so the lease would own nothing.
+			await holding.unsafe('begin')
+			await holding.unsafe(`select id from ${schema}.fabrika_wakes where job = 'welcome' for update`)
+			expect(await older.wake()).toBeGreaterThanOrEqual(0)
+			await older.settled()
+			expect(runsOf(newer, older)).toBe(0)
+			expect(await leaseOf()).toMatchObject({ holder: null, pending: false })
+			await holding.unsafe('commit')
+		} finally {
+			holding.release()
+			await sql.close()
+		}
+		await older.wake()
+		await older.settled()
+		expect(runsOf(newer, older)).toBe(1)
+		await older.wake()
+		await older.settled()
+		expect(runsOf(newer, older)).toBe(1)
+	})
+
+	test('six replicas whose timers fire together run each due fire once, round after round', async () => {
+		await awayFromMinuteEdge(url)
+		const replicas = Array.from({ length: 6 }, () => start(NEWER))
+		await replicas[0]?.wake()
+		for (let round = 1; round <= 10; round++) {
+			await overdue()
+			await Promise.all(replicas.map((replica) => replica.wake()))
+			await Promise.all(replicas.map((replica) => replica.settled()))
+			await Promise.all(replicas.map((replica) => replica.wake()))
+			await Promise.all(replicas.map((replica) => replica.settled()))
+			expect(runsOf(...replicas)).toBe(round)
+		}
 	})
 
 	test("the deploy's process reconciles what an older contract left; an older process neither restores it nor waits on it", async () => {

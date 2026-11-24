@@ -290,10 +290,11 @@ interface RunnerContext {
 	/** What a job that declares `egress: 'public'` reaches; such a job reaches nothing without it. */
 	readonly publicEgress: PublicEgressRules | null
 	/**
-	 * Whether a finish schedules the job's next cron fire: always, but in a process that does not keep the schedule
-	 * (ADR-0080), whose own expression may be one the newer deploy no longer declares.
+	 * Under a process schedule (ADR-0080), a finish writes the job's next fire only under a key the stored schedule
+	 * declares, read in the finish's transaction: a run of an older deploy then schedules an unchanged job's next fire, and
+	 * writes none for a job or an expression the newer deploy removed.
 	 */
-	readonly schedulesNextFire: () => boolean
+	readonly guardsNextFire: boolean
 }
 
 export interface JobBindingInput {
@@ -427,8 +428,6 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		})),
 	]
 	let reconciled = false
-	// Crontab and the Cloudflare alarm keep one schedule; under a process schedule, the last answer of `holdsSchedule`.
-	let keepsSchedule = input.schedule === undefined
 	const contextFor = (tables: FrameworkTables, chosen: OperationsReporter | undefined): RunnerContext => ({
 		artifact: input.artifact,
 		database: input.database,
@@ -449,7 +448,7 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		publicEgress: input.publicEgress ?? null,
 		// A job's kicks run only after the job is bound, so `kick` below is defined by then.
 		kick: (name: string) => kick(name),
-		schedulesNextFire: () => keepsSchedule,
+		guardsNextFire: input.schedule !== undefined,
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -590,21 +589,18 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 	/** One look of the wake timer under a process schedule (ADR-0080). */
 	const processWake = async (tables: FrameworkTables, schedule: ProcessSchedule, track: (run: Promise<void>) => void): Promise<number | null> => {
 		const context = contextFor(tables, undefined)
-		keepsSchedule = await tables.wakes.holdsSchedule(schedule.generation)
-		if (keepsSchedule) {
+		const now = await tables.jobs.now()
+		// One transaction under the generation's lock: an older deploy that read itself the holder cannot reconcile or
+		// seed after a newer one took over. A pending wake is left as it is, so fires missed meanwhile coalesce.
+		const keeps = await tables.wakes.keepSchedule(
+			schedule.generation,
+			declaredJobs.map((job) => ({ job: job.name, expression: job.expression, dueAt: nextFire(job.schedule, now) })),
+		)
+		if (keeps) {
 			// A crashed holder of a job no deploy declares any more arms every timer through its expiry until it is reaped.
 			for (const job of await tables.wakes.expiredHolders()) {
 				if (await tables.jobs.reapCrashed(job)) {
 					await reportCrashed(job, context.reporter)
-				}
-			}
-			await tables.wakes.reconcile(declaredJobs.map((job) => ({ job: job.name, expression: job.expression })))
-			const now = await tables.jobs.now()
-			for (const job of declaredJobs) {
-				const dueAt = nextFire(job.schedule, now)
-				if (dueAt !== null) {
-					// An overdue wake keeps its earlier time, so fires missed while nothing ran coalesce into one.
-					await tables.wakes.schedule({ job: job.name, reason: 'cron', dueAt, dedupe: cronKey(job.name, job.expression) })
 				}
 			}
 		}
@@ -621,10 +617,13 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 }
 
 /**
- * The lease of `job` for a run of its due wakes, or `null` when none is due or another run holds it, after a crashed
- * holder was reaped. Unlike `JobScheduler.take` it never sets the pending flag: another replica's lease may still be
- * committing, so an empty holder proves nothing, and a flag set then would run the winner twice for one fire. A due wake
- * the holder does not own stays due; the holder's finish projects it to its own process's timer.
+ * The lease of `job` for a run of its due wakes, or `null` when none is due, another run holds it, or the lease owns no
+ * due wake, after a crashed holder was reaped. Unlike `JobScheduler.take` it never sets the pending flag: another
+ * replica's lease may still be committing, so an empty holder proves nothing, and a flag set then would run the winner
+ * twice for one fire. A due wake the holder does not own stays due; the holder's finish projects it to its own process's
+ * timer. A run starts only for a wake it owns: a lease taken while a write held the wake's row (the take skips a locked
+ * row), or after another replica already ran and consumed the fire, owns none and is released, recording no run, so the
+ * fire is never run a second time and a wake still due goes to the next refresh.
  */
 async function takeDue(tables: FrameworkTables, job: Scheduled & { readonly timeoutMs: number }, context: RunnerContext): Promise<LeaseFence | null> {
 	const leases = tables.jobs
@@ -636,7 +635,12 @@ async function takeDue(tables: FrameworkTables, job: Scheduled & { readonly time
 	if (!(await tables.wakes.pending(job.name)).some((wake) => wake.dueAt.getTime() <= now)) {
 		return null
 	}
-	return await leases.tryAcquire(job.name, attemptId(), job.timeoutMs, job.timeoutMs + LEASE_GRACE_MS)
+	const fence = await leases.tryAcquire(job.name, attemptId(), job.timeoutMs, job.timeoutMs + LEASE_GRACE_MS)
+	if (fence === null || (await tables.wakes.pending(job.name)).some((wake) => wake.owned)) {
+		return fence
+	}
+	await leases.release(fence)
+	return null
 }
 
 /**
@@ -827,15 +831,17 @@ async function ownedWakes(job: string, context: RunnerContext): Promise<readonly
  * under its key. On Bun, where crontab runs the schedule, a job keeps none.
  */
 async function completion(job: Scheduled, context: RunnerContext, durable: boolean): Promise<FinishWakes> {
-	if (!context.schedulesNextFire()) {
-		// The process that keeps the schedule seeds the next fire under the expression its deploy declares.
-		return { kind: 'completed' }
-	}
 	if (!durable && !(await context.wakes.pending(job.name)).some((wake) => wake.reason === 'cron')) {
 		return { kind: 'completed' }
 	}
 	const dueAt = nextFire(job.schedule, await context.leases.now())
-	return dueAt === null ? { kind: 'completed' } : { kind: 'completed', nextCron: { expression: job.expression, dueAt } }
+	if (dueAt === null) {
+		return { kind: 'completed' }
+	}
+	return {
+		kind: 'completed',
+		nextCron: context.guardsNextFire ? { expression: job.expression, dueAt, scheduled: true } : { expression: job.expression, dueAt },
+	}
 }
 
 /** A crashed run (its lease expired before it finished): one report. */

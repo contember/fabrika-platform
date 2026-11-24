@@ -417,8 +417,8 @@ const STORAGE_REGION = /^[a-z0-9][a-z0-9-]{0,31}$/
  */
 const JOB_SCHEDULE_VARIABLE = 'FABRIKA_JOBS_SCHEDULE'
 const JOB_SCHEDULE_GENERATION_VARIABLE = 'FABRIKA_JOBS_SCHEDULE_GENERATION'
-/** A lowercase UUID, whose text order is a UUIDv7's time order. */
-const SCHEDULE_GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+/** A lowercase UUIDv7 (version 7, the RFC variant), whose text order is its time order, as `@fabrika/db` requires it. */
+const SCHEDULE_GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 /**
  * The serving process's schedule under `FABRIKA_JOBS_SCHEDULE=process`, `undefined` under crontab; another mode, a
@@ -437,7 +437,9 @@ export function jobScheduleOf(framework: Readonly<Record<string, string>>): Proc
 		throw new BootError([`${JOB_SCHEDULE_VARIABLE} is 'crontab' or 'process'`])
 	}
 	if (!SCHEDULE_GENERATION.test(generation)) {
-		throw new BootError([`${JOB_SCHEDULE_GENERATION_VARIABLE} is not a lowercase UUID; the platform writes it beside ${JOB_SCHEDULE_VARIABLE}=process`])
+		throw new BootError([
+			`${JOB_SCHEDULE_GENERATION_VARIABLE} is not a lowercase UUIDv7; the platform writes it beside ${JOB_SCHEDULE_VARIABLE}=process`,
+		])
 	}
 	return { generation }
 }

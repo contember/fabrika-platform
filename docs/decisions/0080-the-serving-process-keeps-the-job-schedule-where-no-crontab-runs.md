@@ -57,19 +57,26 @@ We will let the Bun serving process keep the schedule when the platform says no 
    wake, as the alarm's `take` does, and runs it as the alarm's `run` does, durable retries included; the framework's
    own jobs go the same way. It never sets the pending flag: one replica wins the lease and owns the due wakes in that
    transaction, and the others leave nothing behind for it, so replicas whose timers fire at the same instant run one
-   fire once. A wake that comes due while a run holds the lease stays due, unowned, and the holder's finish lowers its
-   own process's timer to it. A handler's own kicks (ADR-0060) keep the kick path. On SIGTERM the serving process aborts these runs as it aborts its kicks (`stopKicks`) and drains them
+   fire once. A run starts only for a wake it owns. A lease taken while another write held the wake's row (the take
+   skips a locked row) or after another replica already ran the fire owns none, and is released without recording a
+   run (`JobLeases.release`); a wake still due goes to the next refresh. The owner's seed only adds a missing wake and
+   locks none it finds. A wake that comes due while a run holds the lease stays due, unowned, and the holder's finish
+   lowers its own process's timer to it. A handler's own kicks (ADR-0060) keep the kick path. On SIGTERM the serving
+   process aborts these runs as it aborts its kicks (`stopKicks`) and drains them
    within the same bound, so a stopped run keeps its wakes for the next container, as a stopped alarm run does on
    Cloudflare, instead of being killed mid-run and holding its lease until it expires.
 3. **One deploy owns the schedule.** The provider writes `FABRIKA_JOBS_SCHEDULE_GENERATION`, a lowercase UUID that
    rises with every deploy of the environment (the deploying run's UUIDv7 id serves). The environment's database keeps
-   the highest generation seen (`fabrika_job_schedule`, compared as bytes). A process whose generation is that one, or higher (it then raises it), reconciles the cron wakes
-   against its declared jobs and seeds each job's next fire under `cron:<job>:<expression>`, as `repair` does, on boot
-   and on every refresh; the dedupe key makes the seed idempotent across that deploy's containers. A process of an older
-   generation neither seeds nor reconciles, so during a rolling update the old revision cannot restore an expression or
-   a job the new one removed. Its runs finish without scheduling a next fire (`completion`'s `nextCron`, which would
-   write the wake under its own expression); the owner's seed schedules it. A redeploy of an older release is a new
-   deploy with a higher generation, so a rollback takes the schedule back.
+   the highest generation seen and the cron keys its deploy declares (`fabrika_job_schedule`, compared as bytes). A
+   process whose generation is that one, or higher (it then raises it), reconciles the cron wakes against its declared
+   jobs and seeds each job's next fire under `cron:<job>:<expression>`, on boot and on every refresh, all in one
+   transaction under the row's lock (`JobWakes.keepSchedule`): an older process that read itself the holder waits, then
+   reads the newer generation and writes nothing. The dedupe key makes the seed idempotent across that deploy's
+   containers. A process of an older generation neither seeds nor reconciles. A run of any deploy writes its job's next
+   fire only under a key the stored schedule declares, read in the finish's transaction: during a rolling update the
+   old revision schedules the next fire of a job both contracts declare alike, so no fire of the overlap is skipped, and
+   cannot restore an expression or a job the new one removed. A redeploy of an older release is a new deploy with a
+   higher generation, so a rollback takes the schedule back.
 
    The generation is raised by a container that starts, not by a rollout that succeeds, so every return to an older
    revision must be a deploy. A provider that writes the variable switches the cloud's own rollback off (the ECS
@@ -111,8 +118,8 @@ We will let the Bun serving process keep the schedule when the platform says no 
   next refresh (60 s), and only the first to take the lease runs it. An overdue fire coalesces with the next, as on
   Cloudflare. A crontab fired on the minute.
 - During a rolling update the old revision keeps running the fires of jobs both contracts declare, with its own
-  handler, until its containers stop, as it keeps serving requests; it no longer writes the schedule, neither by a seed
-  nor by a run's finish.
+  handler, until its containers stop, as it keeps serving requests. It no longer seeds or reconciles, and its runs
+  schedule a next fire only under a key the newer deploy declares.
 - A provider in this mode gives up the cloud's automatic rollback: a failed rollout becomes a new deploy of the
   previous release, which the provider starts itself (item 3).
 - Jobs share the serving process's database pool and CPU with requests, which on Zerops they did not: a crontab line is
@@ -122,7 +129,8 @@ We will let the Bun serving process keep the schedule when the platform says no 
   never writes it, and Cloudflare's object keeps its alarm. The variable is additive platform protocol (ADR-0062): an
   older framework ignores it, which item 8 makes a refusal rather than a silent loss of every job.
 - Both variables join `FRAMEWORK_VARIABLE_NAMES`, and the job scrubber's and the managed environment's public names.
-  The highest generation needs one row in the application's framework schema, written in the seeding transaction.
+  The highest generation and its deploy's cron keys need one row in the application's framework schema, written in
+  the seeding transaction.
 
 ## Alternatives considered
 

@@ -1278,12 +1278,13 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   owns every due wake (`Wake.owned`). A run failed past its inline retries consumes the wakes it owned.
 - **Where no crontab runs, the serving process keeps the schedule** (ADR-0080, `BootOptions.jobSchedule`, which
   `serveContract` reads with `jobScheduleOf` from `FABRIKA_JOBS_SCHEDULE=process` and
-  `FABRIKA_JOBS_SCHEDULE_GENERATION`). `wake` raises the stored generation (`holdsSchedule`); only a process of the
-  stored one reaps, reconciles and seeds each job's next fire, and only its runs' finishes schedule one
-  (`RunnerContext.schedulesNextFire`). Every process takes each due job's lease (`takeDue`, never the pending flag: a
-  replica's acquire may still be committing) and runs it with durable retries, stopped by `stopKicks`. The timer and
-  the projection count only the process's own jobs (`SchedulerInput.ownJobsOnly`). Keep the names out of the
-  `FABRIKA_JOB_*` key family.
+  `FABRIKA_JOBS_SCHEDULE_GENERATION`). `wake` calls `keepSchedule` (one transaction: the generation and its deploy's
+  cron keys; only the stored generation reconciles and adds missing fires), and that process reaps. Every process
+  takes each due job's lease (`takeDue`, never the pending flag: a replica's acquire may still be committing) and runs
+  it with durable retries only when the lease owns a due wake, else releases it (`JobLeases.release`); runs stop with
+  `stopKicks`. A finish writes a next fire only under a key the stored schedule declares
+  (`RunnerContext.guardsNextFire`, `nextCron.scheduled`). The timer and the projection count only the process's own
+  jobs (`SchedulerInput.ownJobsOnly`). Keep the names out of the `FABRIKA_JOB_*` key family.
 - **A job acts only with what IAM signs for its key** (`implement/workload.ts`, ADR-0022 "Principal kinds"). Control
   writes `FABRIKA_JOB_<NAME>_KEY`; each attempt exchanges it through the adapter's `WorkloadTokenSource` (on Bun
   `issuerWorkloadTokens`, IAM's public `WORKLOAD_TOKEN_PATH`), verifies the token with the application's own
