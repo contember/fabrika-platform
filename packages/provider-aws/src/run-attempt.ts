@@ -29,8 +29,9 @@ export const AWS_BUILD_PROVISION_MARGIN_MINUTES = 15
 /**
  * How long the build's presigned read of its source stays valid: the whole queue allowance plus the provisioning, so a
  * build that waited its full allowance still fetches with a live URL. A URL signed with temporary credentials also ends
- * with their session, so the credentials it is signed with must outlive it (the container credentials are refreshed
- * well before their expiry).
+ * with their session, so the credentials it is signed with must outlive it. platform-node's container credentials are
+ * refreshed only within `CREDENTIAL_REFRESH_BEFORE_MS` (five minutes) of their expiry, so a held set may have less left than the URL's validity:
+ * step 9 signs with a set that has at least `AWS_SOURCE_URL_SECONDS` left (a fresh one if not), or the URL dies early.
  */
 export const AWS_SOURCE_URL_SECONDS = (AWS_BUILD_QUEUED_TIMEOUT_MINUTES + AWS_BUILD_PROVISION_MARGIN_MINUTES) * 60
 /**

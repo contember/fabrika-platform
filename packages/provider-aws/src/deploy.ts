@@ -23,7 +23,9 @@
 // A refusal for rate (`isThrottled`) was not processed, so the call is sent again, with the same idempotency token where
 // it has one. Another retryable failure may have taken effect: a lost start is found by its token, never repeated
 // blindly; a repeated `RunTask` keeps its client token, so a task that started is not started twice; a lost update is
-// left to the rollout, which keeps the run pending until the deadline. A failed run whose service was never updated
+// left to the rollout, which keeps the run pending until the deadline (an update fails its step only on a definite
+// refusal). UNVERIFIED: that `RunTask` with a repeated `clientToken` starts no second task follows ECS's API reference;
+// it was not checked against an account. A failed run whose service was never updated
 // stops its build (`runDeploy` discards it); one whose update was sent is settled by polling, never by a rollback. A dry
 // run calls nothing.
 
@@ -175,6 +177,14 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
 		}
 		signal.addEventListener('abort', stop, { once: true })
 	})
+}
+
+/** The client's refusals before a request is sent: nothing reached ECS. */
+const UNSENT: ReadonlySet<string> = new Set(['invalid_operation', 'invalid_request', 'credentials'])
+
+/** Whether a failed `UpdateService` certainly changed nothing: ECS answered a 4xx, or the request was never sent. */
+function refusedUpdate(error: AwsError): boolean {
+	return (error.status >= 400 && error.status < 500) || (error.status === 0 && UNSENT.has(error.code))
 }
 
 /** A build's state as the wait reads it. */
@@ -417,9 +427,11 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 					})
 				}
 			} catch (error) {
-				// Any other retryable failure may still have updated the service: the rollout settles it, pending until the deadline.
-				if (!(error instanceof AwsError) || !error.retryable || isThrottled(error)) throw error
-				log(`  [warn] the update's answer was lost (${error.code}); the rollout settles it`)
+				// Only a definite refusal fails the step: ECS's 4xx (a throttle was repeated above), or the client's own refusal
+				// before anything was sent. Anything else (a timeout, a 5xx, a 200 the client could not read) may hide an update
+				// that landed: the rollout settles it, pending until the deadline.
+				if (!(error instanceof AwsError) || refusedUpdate(error)) throw error
+				log(`  [warn] the update's answer is unknown (${error.code}); the rollout settles it`)
 			}
 		},
 

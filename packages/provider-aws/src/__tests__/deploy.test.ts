@@ -176,7 +176,11 @@ class Recorder implements ProviderRunEvents {
 		if (this.refuse !== null && JSON.stringify(state).includes(this.refuse)) throw new Error('the store refused the checkpoint')
 		this.checkpoints.push(state)
 	}
-	async boundary(): Promise<void> {}
+	/** Called at every boundary, e.g. to see the wait reach the one after a cancel. */
+	onBoundary: () => void = () => {}
+	async boundary(): Promise<void> {
+		this.onBoundary()
+	}
 }
 
 const deploy = (aws: FakeAws, events: Recorder, change: Partial<AwsDeployInput> = {}) =>
@@ -222,12 +226,6 @@ const deploy = (aws: FakeAws, events: Recorder, change: Partial<AwsDeployInput> 
 		newToken: () => TOKEN,
 		...change,
 	})
-
-/**
- * A cancelled step ends in the background after the run returned (`runSteps` stops waiting at once), so a test lets it
- * finish before it reads what the step did; every fake answers within microtasks.
- */
-const settled = () => new Promise((resolve) => setTimeout(resolve, 20))
 
 const stepOf = (result: { readonly steps: readonly DeployStepResult[] }, id: string) => result.steps.find((step) => step.id === id)
 
@@ -378,6 +376,34 @@ describe('awsDeploy', () => {
 		expect(answerLost.calls).toContain(`describeServiceRevision ${SERVICE_REVISION}`)
 	})
 
+	test('an update answer the client could not read is settled by the rollout; a definite refusal fails the step', async () => {
+		const unread = new FakeAws()
+		unread.failures['updateService'] = [new AwsError('UpdateService', 'invalid_answer', 200, null, false)]
+		const settled = await deploy(unread, new Recorder())
+		expect(settled.status).toBe('succeeded')
+		expect(unread.calls).toContain(`describeServiceRevision ${SERVICE_REVISION}`)
+		for (
+			const failure of [new AwsError('UpdateService', 'answer_too_large', 200, null, false), new AwsError('UpdateService', 'unknown', 502, null, true)]
+		) {
+			const aws = new FakeAws()
+			aws.failures['updateService'] = [failure]
+			expect((await deploy(aws, new Recorder())).status).toBe('succeeded')
+		}
+
+		for (
+			const failure of [
+				new AwsError('UpdateService', 'InvalidParameterException', 400, null, false),
+				new AwsError('UpdateService', 'credentials', 0, null, true),
+			]
+		) {
+			const refused = new FakeAws()
+			refused.failures['updateService'] = [failure]
+			const result = await deploy(refused, new Recorder())
+			expect(stepOf(result, 'update')).toMatchObject({ status: 'failed' })
+			expect(refused.calls.some((call) => call.startsWith('describeServiceDeployment'))).toBe(false)
+		}
+	})
+
 	test("a failed write of the deployment's ARN leaves the rollout to the service read", async () => {
 		const aws = new FakeAws()
 		const events = new Recorder()
@@ -398,9 +424,14 @@ describe('awsDeploy', () => {
 		const aws = new FakeAws()
 		const controller = new AbortController()
 		aws.on['getBuild'] = () => controller.abort()
+		// A cancelled step ends in the background after the run returned (`runSteps` stops waiting at once): its last act
+		// is the deletion of the source URL's parameter, after the build was stopped.
+		const cleaned = new Promise<void>((resolve) => {
+			aws.on['deleteSecret'] = resolve
+		})
 		const events = new Recorder()
 		const result = await deploy(aws, events, { signal: controller.signal })
-		await settled()
+		await cleaned
 		expect(result.status).toBe('failed')
 		expect(aws.calls).toContain(`stopBuild ${BUILD_ID}`)
 		expect(aws.parameters.size).toBe(0)
@@ -411,8 +442,15 @@ describe('awsDeploy', () => {
 		const aws = new FakeAws()
 		const controller = new AbortController()
 		aws.on['describeServiceDeployment'] = () => controller.abort()
-		const result = await deploy(aws, new Recorder(), { signal: controller.signal })
-		await settled()
+		// The wait meets the cancel at its next boundary; from there it calls nothing of AWS for a submitted run.
+		const events = new Recorder()
+		const reached = new Promise<void>((resolve) => {
+			events.onBoundary = () => {
+				if (controller.signal.aborted) resolve()
+			}
+		})
+		const result = await deploy(aws, events, { signal: controller.signal })
+		await reached
 		expect(result.status).toBe('failed')
 		expect(aws.calls.some((call) => call.startsWith('stopBuild'))).toBe(false)
 		expect(result.checkpoint).toMatchObject({ serviceUpdateRequested: true })
