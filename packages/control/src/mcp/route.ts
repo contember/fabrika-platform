@@ -4,20 +4,26 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
 import { devSandboxRemoval } from '../api/dev-environments'
 import { ControlApiError } from '../api/domain'
-import type { McpRoute } from '../app'
 import { devSandboxDepsOf } from '../dev/service'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
-import { createControlMcpHandler } from '../mcp/handler'
 import type { WorkspaceSourcePort } from '../workspace-source-port'
+import type { AppRules } from './app-rules'
+import { createControlMcpHandler } from './handler'
 
 /**
- * The MCP endpoint of this installation. The resource URI a token is minted for is derived from the console's public
- * origin, so a console told to serve MCP without one refuses to start.
+ * The MCP endpoint of this installation, on either runtime. The resource URI a token is minted for is derived from the
+ * console's public origin, so a console told to serve MCP without one refuses to start. Dev sandboxes are served
+ * only where the provider and the composition supply them; elsewhere their tools answer that none is available.
  */
-export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider: ControlProvider): McpRoute {
+export function controlMcpRoute(
+	env: Env,
+	source: WorkspaceSourcePort,
+	provider: ControlProvider,
+	rules: AppRules,
+): (request: Request) => Promise<Response> {
 	if (provider.authoring === undefined) throw new Error(`MCP authoring is on, but the ${provider.id} provider supports no authoring target`)
-	const { protectedFiles } = provider.authoring
+	const { protectedFiles, stageDeployRefusal } = provider.authoring
 	const publicOrigin = controlPublicOrigin(env)
 	if (publicOrigin === undefined) throw new Error('MCP authoring is on, but FABRIKA_CONTROL_DOMAIN names no public origin to derive its resource from')
 	const resource = controlMcpResource(publicOrigin)
@@ -29,6 +35,7 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 			return iam.authenticate(request)
 		},
 		resourceMetadata: controlMcpResourceMetadata(publicOrigin),
+		rules,
 		useCases: (auth, signal) => ({
 			repositories: env.REPOSITORIES,
 			source,
@@ -44,6 +51,7 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 			signal,
 			consoleOrigin: publicOrigin,
 			protectedFiles,
+			...(stageDeployRefusal === undefined ? {} : { stageDeployRefusal }),
 			...(sandboxes === undefined ? {} : { devSandboxRemoval: devSandboxRemoval(sandboxes) }),
 			dev: env.DEV_SOURCE === undefined || sandboxes === undefined ? undefined : {
 				signals: env.DEV_SOURCE.signals,
