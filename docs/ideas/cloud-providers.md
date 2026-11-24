@@ -89,8 +89,9 @@ Three places build the S3 client from their own variables: Control's run logs (`
 are already neutral (`BlobStore`, `FileObjectStore`, `packages/platform/src/ports.ts`). Needed: one parser of a storage
 connection (endpoint, region, addressing, credential source) used by the three; a credential source that refreshes (the
 ECS container credentials endpoint, an Entra or Google token); new optional variables beside today's, which stay as
-they are, because the application's are platform protocol (ADR-0062). The application's region is the first such
-variable (`FABRIKA_APP_STORAGE_REGION`; without it the store signs for `us-east-1`). An older framework ignores it and
+they are, because the application's are platform protocol (ADR-0062). The first such variable would be the
+application's region (proposed as `FABRIKA_APP_STORAGE_REGION`; without it the store signs for `us-east-1`). An older
+framework ignores it and
 keeps signing for `us-east-1`, which an S3 bucket in another region refuses, so a provider that writes it must refuse an
 application pinned to a release older than the first one that reads it, as Control already refuses releases outside its
 window.
