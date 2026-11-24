@@ -104,7 +104,9 @@ describe('the stylesheet', () => {
 		expect(rule('\\.fui-table__cell--wrap\\.fui-table__cell--grow')).toContain('min-width: var(--fui-column-width-lg)')
 		for (const size of ['xs', 'sm', 'md', 'lg', 'xl']) {
 			expect(rule(`\\.fui-table__cell--wrap\\.fui-table__cell--width-${size}`)).toContain(`min-width: var(--fui-column-width-${size})`)
-			expect(rule(`\\.fui-table__cell--width-${size}`)).not.toContain('min-width')
+			const width = rule(`\\.fui-table__cell--width-${size}`)
+			expect(width).toContain(`width: var(--fui-column-width-${size})`)
+			expect(width).not.toContain('min-width')
 		}
 	})
 })
