@@ -1,4 +1,4 @@
-<!-- Generated from skill/ of @fabrika/app 0.9.0-dev.37. Change those files, not this one. -->
+<!-- Generated from skill/ of @fabrika/app 0.9.0-dev.38. Change those files, not this one. -->
 
 # Fabrika application rules
 
