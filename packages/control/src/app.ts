@@ -2,7 +2,7 @@ import type { AuthContext, FetchService, RequestExecutionContext } from '@fabrik
 import { dispatchRpcRequest, serveService, type ServiceHandler } from '@fabrika/app/service'
 import { CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import type { ControlProvider } from '@fabrika/provider-contract'
-import { type ControlEndpointId, controlServiceContract } from '../fabrika.service'
+import { type ControlEndpointId, controlServiceContract, ControlTableError, controlTableSwitch } from '../fabrika.service'
 import { builderPublicResponse } from './builder-bootstrap'
 import { controlRpcRouter } from './control-rpc'
 import { handleDevSource } from './dev/receiver'
@@ -15,7 +15,7 @@ import { handedOffCallback, handedOffManifest, handoffOpening, manifestCallback,
 import type { SourceConnectionPort } from './github/connections/port'
 import { handleWebhook } from './github/triggers/webhook'
 import { error } from './http'
-import { controlAuthenticator } from './iam'
+import { controlAuthenticator, controlOAuthResource } from './iam'
 import { forwardIamAdmin } from './iam-admin'
 import { handleMailRelay } from './mail-relay/handler'
 import { forwardOperationsApi } from './operations-gateway'
@@ -96,8 +96,30 @@ export function createControlApp(mcp: McpRoute | null, cli: boolean): FetchServi
 	})
 }
 
-/** The console without OAuth: what the Cloudflare Worker serves. */
+/** The console without OAuth, for a caller that serves no authorization server's table. Workers use `workerControlApp`. */
 export const controlApp: FetchService<ControlAppEnv> = createControlApp(null, false)
+
+/** The console a Worker serves per table digest. A deployment's vars are fixed, so an isolate builds one. */
+const workerApps = new Map<string, FetchService<ControlAppEnv>>()
+
+/**
+ * The console a Cloudflare Worker serves: the table its proxy publishes, read from the digest `fabrika.config.ts` writes
+ * beside it, as the Bun process reads it. A digest that names no table, or MCP's, which a Worker cannot serve, fails
+ * every request rather than serving another table than the proxy decides from.
+ */
+export function workerControlApp(
+	vars: Pick<Env, 'FABRIKA_CONTROL_DOMAIN'> & { readonly FABRIKA_SERVICE_TABLE_DIGEST?: string },
+): FetchService<ControlAppEnv> {
+	const digest = vars.FABRIKA_SERVICE_TABLE_DIGEST ?? ''
+	const served = workerApps.get(digest)
+	if (served !== undefined) return served
+	const { mcp, cli } = controlTableSwitch(digest)
+	if (mcp) throw new ControlTableError('a Cloudflare console serves no MCP, but its proxy publishes the MCP table')
+	if (cli) controlOAuthResource(vars, CONTROL_RPC_PATH)
+	const app = createControlApp(null, cli)
+	workerApps.set(digest, app)
+	return app
+}
 
 async function mcpRequest(mcp: McpRoute, request: Request): Promise<Response> {
 	try {

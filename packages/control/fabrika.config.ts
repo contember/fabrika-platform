@@ -13,10 +13,13 @@
 // `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`). GitHub App keys
 // are not among them: each source connection's key lives in the vault (ADR-0029).
 
-import { CONTROL_APP_ID } from '@fabrika/control-contract'
+import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
+import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
 import { EMAIL_PROVIDER_VARIABLE, NO_EMAIL_PROVIDER, pickEmailEnvironment } from '@fabrika/email'
+import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import {
+	type CloudflareInstallationProxyTable,
 	createCloudflareProxyWorker,
 	D1Database,
 	defineApp,
@@ -31,7 +34,7 @@ import {
 } from '@fabrika/provider-cloudflare'
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
-import { controlServiceContract } from './fabrika.service'
+import { controlServiceContract, controlServiceDigest, type ControlServiceOptions } from './fabrika.service'
 import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './src/mail-transport'
 
 /**
@@ -44,6 +47,35 @@ const LOCAL_IAM_URL = 'http://localhost:18191'
 const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_ISSUER'] ?? (isLocal ? LOCAL_IAM_URL : '')
 
 type EnvironmentSource = Readonly<Record<string, string | undefined>>
+
+/**
+ * The console table a Worker serves: the command-line client's on a deployed installation, whose console has an https
+ * domain and IAM for its authorization server (ADR-0049); none locally. A Worker serves no MCP.
+ */
+const controlTable = (ctx: ResourceContext): ControlServiceOptions => ({
+	mcp: false,
+	cli: ctx.env !== 'local' && ctx.domain !== undefined && ctx.domain !== '',
+})
+
+/** What the console's proxy publishes: the table, and with the CLI's rows the resources they are bound to. */
+const controlProxyTable = (ctx: ResourceContext, iamUrl: string): CloudflareInstallationProxyTable => {
+	const table = controlTable(ctx)
+	const published = serviceProxyTable(controlServiceContract(table), { oauth: table.cli })
+	if (!table.cli || ctx.domain === undefined) return published
+	if (!iamUrl.startsWith('https://') || !isHttpOrigin(iamUrl)) {
+		throw new Error('FABRIKA_IAM_ISSUER must be the https origin of IAM, the authorization server, with no path and no trailing slash')
+	}
+	const origin = `https://${ctx.domain}`
+	return {
+		...published,
+		oauthResources: CONTROL_CLI_RESOURCES.map(({ path, grants }) => ({
+			resource: `${origin}${path}`,
+			resourceMetadata: `${origin}/.well-known/oauth-protected-resource${path}`,
+			authorizationServers: [iamUrl],
+			scopesSupported: grants.map((grant) => grant.scope),
+		})),
+	}
+}
 
 /** The installation's mail transport, from the same `FABRIKA_EMAIL_*` the workflow hands IAM. */
 const installationMail = (source: EnvironmentSource): InstallationMail =>
@@ -146,6 +178,8 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			ENVIRONMENT: env,
 			// The public domain this stage serves on (drives absolute URLs); empty when unknown.
 			FABRIKA_CONTROL_DOMAIN: domain ?? '',
+			// The table the proxy in front publishes (`buildControlWorker`): the Worker serves the same one (src/index.ts).
+			[FABRIKA_SERVICE_TABLE_DIGEST]: controlServiceDigest(controlTable(ctx)),
 			// Bootstrap-admin fallback (src/iam.ts): a JSON array of emails authorized as admin even
 			// when IAM denies / the binding isn't wired yet. Empty by default; the bootstrap
 			// script (scripts/bootstrap.ts) sets the first operator's email here for initial bring-up.
@@ -217,8 +251,7 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 		app: buildControlApplicationWorker(ctx),
 		appId: CONTROL_APP_ID,
 		appHost: ctx.domain ?? 'localhost',
-		// A Worker serves no MCP: the console's table without its `oauth` row.
-		installation: serviceProxyTable(controlServiceContract({ mcp: false, cli: false }), { oauth: false }),
+		installation: controlProxyTable(ctx, iamUrl),
 		domain: ctx.domain,
 		iamService: names.iamWorker,
 		iamUrl,

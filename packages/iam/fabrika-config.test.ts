@@ -3,6 +3,7 @@ import { D1Database, NO_IMPORTABLE_ENV_FLAG, NO_PROCESS_ENV_FLAG, Worker } from 
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import config, { buildIamWorker, iamPipelineSecrets, iamPipelineVars } from './fabrika.config'
 import oblakaDefinition from './oblaka'
+import { parseOAuthConfig } from './src/oauth-config'
 
 const REMOTE_SOURCE: Record<string, string> = {
 	FABRIKA_IAM_OIDC_ENABLED: 'true',
@@ -63,7 +64,6 @@ describe('IAM resource graph', () => {
 	test('declares only canonical IAM pipeline inputs', () => {
 		expect(iamPipelineVars(REMOTE_SOURCE)).toEqual([
 			'FABRIKA_IAM_ADMIN_AUDIENCES',
-			'FABRIKA_IAM_OAUTH_CONFIG',
 			'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
 			'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
 			'FABRIKA_IAM_OIDC_SESSION_HOURS',
@@ -203,7 +203,6 @@ describe('IAM resource graph', () => {
 		expect(worker.options.vars?.['OIDC_ISSUER']).toBe('')
 		expect(iamPipelineVars(source)).toEqual([
 			'FABRIKA_IAM_ADMIN_AUDIENCES',
-			'FABRIKA_IAM_OAUTH_CONFIG',
 			'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
 			'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
 			'FABRIKA_IAM_OIDC_SESSION_HOURS',
@@ -333,6 +332,22 @@ describe('IAM resource graph', () => {
 				'FABRIKA_CONTROL_URL needs FABRIKA_IAM_PROVISIONING_KEY',
 			)
 		}
+	})
+
+	test("serves the command-line client's two console resources, from Control's origin, on every deploy", () => {
+		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
+		// A value left in the environment is not read: the config is recomputed from the release's own presets.
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_IAM_OAUTH_CONFIG: '{"clients":[],"resources":[]}' })
+		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'])
+		expect(parsed?.clients).toEqual([])
+		expect(parsed?.resources.map(({ app, resource, client }) => ({ app, resource, client }))).toEqual([
+			{ app: 'vozka', resource: 'https://console.example.com/api/rpc', client: 'cli' },
+			{ app: 'vozka', resource: 'https://console.example.com/operations/api/rpc', client: 'cli' },
+		])
+		const operations = parsed?.resources[1]?.scopeGrants.map(({ scope, parameter }) => `${scope}:${parameter ?? '-'}`)
+		expect(operations).toEqual(['read:app', 'deploy:app', 'operate:app'])
+
+		expect(buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE).options.vars?.['OAUTH_CONFIG']).toBe('')
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {

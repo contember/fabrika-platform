@@ -376,6 +376,7 @@
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/operations-contract": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "zod": "^3.25.76",
       },
@@ -459,6 +460,7 @@
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/control-contract": "workspace:*",
         "@fabrika/email": "workspace:*",
         "@fabrika/iam-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
@@ -551,6 +553,7 @@
         "@fabrika/app": "workspace:*",
         "@fabrika/auth": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/control-contract": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",

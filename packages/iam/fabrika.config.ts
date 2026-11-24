@@ -6,9 +6,11 @@
 // them as plaintext. The Custom Domain route comes from `ctx.domain` (`FABRIKA_IAM_HOSTNAME` in the
 // standalone Oblaka adapter).
 
+import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
 import { type EmailTransportConfig, readEmailTransportConfig } from '@fabrika/email'
 import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
+import type { OAuthResourceDto } from '@fabrika/iam-contract'
 import {
 	D1Database,
 	defineApp,
@@ -106,6 +108,26 @@ const controlUrl = (source: EnvironmentSource): string | undefined => {
 	return raw
 }
 
+/**
+ * IAM's `OAUTH_CONFIG` on a Cloudflare installation: the command-line client's resources on the console's origin,
+ * recomputed on every deploy so a release that changes the presets converges with no other step. No MCP client: a
+ * Worker console serves no `/mcp`. Without a console origin OAuth stays off.
+ */
+const oauthConfig = (control: string | undefined): string => {
+	if (control === undefined) return ''
+	const resources: OAuthResourceDto[] = CONTROL_CLI_RESOURCES.map(({ path, grants }) => ({
+		app: CONTROL_APP_ID,
+		resource: `${control}${path}`,
+		scopeGrants: grants.map((grant) => ({
+			scope: grant.scope,
+			...(grant.parameter === undefined ? {} : { parameter: grant.parameter }),
+			permissions: grant.actions.map((action) => ({ action })),
+		})),
+		client: 'cli',
+	}))
+	return JSON.stringify({ clients: [], resources })
+}
+
 const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
 	const authentication = authenticationConfig(source)
 	const email = emailConfig(source)
@@ -169,7 +191,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
-		OAUTH_CONFIG: source['FABRIKA_IAM_OAUTH_CONFIG'] ?? '',
+		OAUTH_CONFIG: oauthConfig(config.controlUrl),
 		// Only when named: an empty ADMIN_AUDIENCES means "no JWT may administer", so a `?? ''`
 		// default would lock the console out of every install instead of falling back to its app id.
 		...(config.adminAudiences === undefined ? {} : { ADMIN_AUDIENCES: config.adminAudiences }),
@@ -208,7 +230,6 @@ export const iamPipelineVars = (source: EnvironmentSource): string[] => {
 	const email = emailConfig(source)
 	return [
 		'FABRIKA_IAM_ADMIN_AUDIENCES',
-		'FABRIKA_IAM_OAUTH_CONFIG',
 		'FABRIKA_IAM_AUTH_LOG_RETENTION_DAYS',
 		'FABRIKA_IAM_AUDIT_RETENTION_DAYS',
 		'FABRIKA_IAM_OIDC_SESSION_HOURS',

@@ -100,6 +100,18 @@ describe('Operations Cloudflare composition', () => {
 		expect(flags).toContain(NO_IMPORTABLE_ENV_FLAG)
 	})
 
+	test("accepts the command-line client's resource on the console's origin, and none without that origin or locally", () => {
+		const ctx = { env: 'prod', domain: 'errors.example.test' }
+		const accepted = buildOperationsWorker(ctx, { FABRIKA_CONTROL_URL: 'https://console.example.test' })
+		expect(accepted.options.vars?.['FABRIKA_OPERATIONS_OAUTH_RESOURCE']).toBe('https://console.example.test/operations/api/rpc')
+		expect(buildOperationsWorker(ctx, {}).options.vars?.['FABRIKA_OPERATIONS_OAUTH_RESOURCE']).toBeUndefined()
+		const local = buildOperationsWorker({ env: 'local' }, { FABRIKA_CONTROL_URL: 'https://console.example.test' })
+		expect(local.options.vars?.['FABRIKA_OPERATIONS_OAUTH_RESOURCE']).toBeUndefined()
+		for (const origin of ['http://console.example.test', 'https://console.example.test/', 'https://console.example.test/console']) {
+			expect(() => buildOperationsWorker(ctx, { FABRIKA_CONTROL_URL: origin })).toThrow('FABRIKA_CONTROL_URL must be the https origin of the console')
+		}
+	})
+
 	test('the local composition binds IAM too and keeps no public route — there is no local auth mode', () => {
 		const worker = buildOperationsWorker({ env: 'local' })
 		expect(binding(worker, 'IAM')).toBeInstanceOf(ServiceReference)

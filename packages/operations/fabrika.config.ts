@@ -1,3 +1,4 @@
+import { CONTROL_OPERATIONS_RPC_PATH } from '@fabrika/control-contract'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import {
 	createCloudflareProxyWorker,
@@ -24,12 +25,27 @@ const LOCAL_IAM_URL = 'http://localhost:18191'
 
 const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_ISSUER'] ?? (isLocal ? LOCAL_IAM_URL : '')
 
-export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
+/**
+ * The command-line client's Operations resource: the console's path that its gateway forwards here unchanged, on the
+ * console's origin (`FABRIKA_CONTROL_URL`, ADR-0049). Without that origin, or locally, Operations accepts no resource
+ * token. IAM's deploy derives the same URI from the same origin.
+ */
+const operationsOAuthResource = (isLocal: boolean, source: Readonly<Record<string, string | undefined>>): string | undefined => {
+	const control = source['FABRIKA_CONTROL_URL']
+	if (isLocal || control === undefined || control === '') return undefined
+	if (!control.startsWith('https://') || URL.parse(control)?.origin !== control) {
+		throw new Error('FABRIKA_CONTROL_URL must be the https origin of the console, with no path and no trailing slash')
+	}
+	return `${control}${CONTROL_OPERATIONS_RPC_PATH}`
+}
+
+export const buildOperationsWorker = (ctx: ResourceContext, source: Readonly<Record<string, string | undefined>> = process.env): Worker => {
 	const isLocal = ctx.env === 'local'
 	const publicHost = ctx.domain ?? ''
 	const names = platformNames(process.env)
 	const deadLetterQueue = `${ctx.env}-${names.operationsIngestDlq}`
 	const iamUrl = resolveIamUrl(isLocal)
+	const oauthResource = operationsOAuthResource(isLocal, source)
 	return new Worker({
 		dir: '.',
 		name: names.operationsWorker,
@@ -48,6 +64,7 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 			ENVIRONMENT: ctx.env,
 			OPERATIONS_PUBLIC_HOST: publicHost,
 			FABRIKA_IAM_ISSUER: iamUrl,
+			...(oauthResource === undefined ? {} : { FABRIKA_OPERATIONS_OAUTH_RESOURCE: oauthResource }),
 		},
 		bindings: {
 			DB: new D1Database({ name: names.operationsDatabase, migrationsDir: './migrations', locationHint: 'weur' }),

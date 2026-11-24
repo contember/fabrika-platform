@@ -170,6 +170,8 @@ jobs:
           # The provider's app-deploy adapter reads FABRIKA_CONTROL_DOMAIN as the selected app domain.
           FABRIKA_CONTROL_DOMAIN: ${{ vars.OPERATIONS_HOSTNAME }}
           FABRIKA_IAM_ISSUER: ${{ vars.FABRIKA_IAM_ISSUER }}
+          # The console's origin: the command-line client's Operations resource is a path on it (ADR-0049).
+          FABRIKA_CONTROL_URL: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}
           OPERATIONS_SYNC_KEY: ${{ secrets.OPERATIONS_SYNC_KEY }}
         run: fabrika platform deploy --provider=cloudflare --env=prod --component-config=fabrika.config.ts
 

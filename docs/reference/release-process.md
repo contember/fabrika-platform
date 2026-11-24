@@ -259,4 +259,14 @@ A Zerops installation rolls forward with one command: `fabrika platform upgrade 
 
 A Cloudflare installation has no `platform upgrade`: the operator bumps `fabrika.ref` in the per-account repository and pushes it. That push does not rewrite the sidecar workflow. Re-running `fabrika platform init --provider=cloudflare <account>` with the same flags does: it rewrites the CLI-owned `platform.yml`, `README.md` and `.gitignore` to the ones the running CLI generates, keeps `fabrika.ref`, and dispatches the workflow. Run it with the CLI of the release the pin names.
 
+The command-line client's device grant ([`cli-device-grant.md`](cli-device-grant.md)) reaches an existing Cloudflare
+installation in two steps:
+
+1. The `fabrika.ref` bump redeploys IAM and the console. The console's proxy then publishes the grant's resources,
+   and IAM computes its OAuth config from the console's origin its stage is handed (`FABRIKA_CONTROL_URL`, in every
+   `platform.yml` written by `init` since v0.9.0-dev.8; an older one hands none, and IAM then serves no OAuth, which
+   the CLI reports at discovery).
+2. The re-run of `init` regenerates `platform.yml`, which also hands the Operations stage the console's origin. Until
+   then Operations refuses the grant's tokens: `fabrika operations` under a grant fails, every other command works.
+
 Scaffold commits skip push CI because the GitHub Environment does not exist yet. `fabrika platform init` writes the account secrets and variables first, then explicitly dispatches the platform workflow.

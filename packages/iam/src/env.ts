@@ -38,8 +38,9 @@ export interface Env {
 	 */
 	ADMIN_AUDIENCES?: string
 	/**
-	 * JSON: the OAuth 2.1 authorization server for MCP clients (`src/oauth-config.ts`). Absent or empty
-	 * means OAuth is off and its routes 404. Deploy var `FABRIKA_IAM_OAUTH_CONFIG`. Malformed fails the boot.
+	 * JSON: the OAuth 2.1 authorization server's clients and resources (`src/oauth-config.ts`). Absent or empty means
+	 * OAuth is off and its routes 404. On Bun, `FABRIKA_IAM_OAUTH_CONFIG`; a Cloudflare deploy computes it in
+	 * `fabrika.config.ts`. Malformed fails the boot.
 	 */
 	OAUTH_CONFIG?: string
 	/**

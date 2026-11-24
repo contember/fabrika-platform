@@ -14,27 +14,18 @@
 // `src/installation/generated/platform-proxy-manifest.ts` (the tables, as data) — it never reaches this file.
 
 import type { BodyAdmission, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
-import {
-	CONTROL_ACTIONS,
-	CONTROL_APP_ID,
-	CONTROL_CLI_PRESET_PARAMETER,
-	CONTROL_CLI_PRESETS,
-	CONTROL_CLI_RPC_GRANTS,
-	CONTROL_OPERATIONS_RPC_PATH,
-	CONTROL_RPC_PATH,
-} from '@fabrika/control-contract'
+import { CONTROL_ACTIONS, CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
 import { controlSchema } from '@fabrika/control/schema'
 import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, controlServiceContract } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
 import {
 	type PlatformOAuthApp,
 	type PlatformOAuthResourceTemplate,
-	type PlatformOAuthScopeGrant,
 	type PlatformProxyApp,
 	type PlatformProxyManifestTemplate,
 	resolvePlatformProxyManifest,
 } from '@fabrika/installation-init'
-import { OPERATIONS_ACTIONS, OPERATIONS_APP_ID } from '@fabrika/operations-contract'
+import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import { OPERATIONS_PUBLIC_SERVICE } from '@fabrika/operations/service'
 import type { Artifact } from '@fabrika/provider-zerops/installation/topology'
 
@@ -83,30 +74,13 @@ const CONTROL_MCP_RESOURCE: PlatformOAuthResourceTemplate = {
 	}],
 }
 
-/** The console's RPC, for the command-line client's device grant: one preset per scope (`@fabrika/control-contract`). */
-const CONTROL_CLI_RPC_RESOURCE: PlatformOAuthResourceTemplate = {
-	path: CONTROL_RPC_PATH,
-	scopes: [...CONTROL_CLI_PRESETS],
-	scopeGrants: CONTROL_CLI_RPC_GRANTS,
-}
-
-/**
- * Operations through the console, under the same presets: reading on `read` and `deploy`, triage on `operate`, nothing
- * on `create`. Managing sources, alerts and retention stays with a person in the console.
- */
-const OPERATIONS_CLI_GRANTS: readonly PlatformOAuthScopeGrant[] = [
-	{ scope: 'read', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ] },
-	{ scope: 'deploy', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ] },
-	{ scope: 'operate', parameter: CONTROL_CLI_PRESET_PARAMETER, actions: [OPERATIONS_ACTIONS.READ, OPERATIONS_ACTIONS.TRIAGE] },
-]
-
-/** The console's gateway forwards this path to Operations unchanged, and Operations verifies the token. */
-const CONTROL_CLI_OPERATIONS_RESOURCE: PlatformOAuthResourceTemplate = {
-	path: CONTROL_OPERATIONS_RPC_PATH,
-	scopes: OPERATIONS_CLI_GRANTS.map((grant) => grant.scope),
-	scopeGrants: OPERATIONS_CLI_GRANTS,
-	verifiedBy: 'operations',
-}
+/** The command-line client's resources on the console, as `@fabrika/control-contract` declares them for every provider. */
+const CONTROL_CLI_RESOURCE_TEMPLATES: readonly PlatformOAuthResourceTemplate[] = CONTROL_CLI_RESOURCES.map((resource) => ({
+	path: resource.path,
+	scopes: resource.grants.map((grant) => grant.scope),
+	scopeGrants: resource.grants,
+	...(resource.verifiedBy === undefined ? {} : { verifiedBy: resource.verifiedBy }),
+}))
 
 /** A service contract as template data: its rows and reserved prefixes, without the service's id. */
 const serviceTable = ({ endpoints, reservedPrefixes }: InstallationEndpointTable): InstallationEndpointTable => ({ endpoints, reservedPrefixes })
@@ -136,7 +110,7 @@ export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
 		upstream: 'control:3000',
 		table: serviceTable(controlServiceContract({ mcp: false, cli: false })),
 		oauth: {
-			resources: [CONTROL_CLI_RPC_RESOURCE, CONTROL_CLI_OPERATIONS_RESOURCE],
+			resources: CONTROL_CLI_RESOURCE_TEMPLATES,
 			table: serviceTable(controlServiceContract({ mcp: false, cli: true })),
 			mcp: { resource: CONTROL_MCP_RESOURCE, table: serviceTable(controlServiceContract({ mcp: true, cli: true })) },
 		},
