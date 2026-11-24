@@ -1,8 +1,8 @@
 // The SQL statements of an application's server modules, read from their text and never run: Control records each by
 // file and the digest of its text, so a statement that changes in a site already declared `sql` waits for review
-// (ADR-0050 §3). Statements are found by syntax only, so the reading errs towards a tagged template too many.
+// (ADR-0050 §3). Every tagged template counts: `ctx.sql` may be held under any name, a member's included.
 
-import { type AstNode, child, parseModule, positionOf, staticKey, walk } from './ast'
+import { child, parseModule, positionOf, walk } from './ast'
 import { isServerModule, isSkippedPath, isSourceFile } from './layout'
 
 /** One tagged template that may run SQL. */
@@ -23,9 +23,8 @@ export type SqlStatementsResult = readonly SqlStatement[] | null
 export const isSqlStatementSource = (path: string): boolean => isSourceFile(path) && isServerModule(path) && !isSkippedPath(path)
 
 /**
- * Every tagged template of the module whose tag may be `ctx.sql`: `ctx.sql(Row)` and `tx.sql(Row)`, a parameter or
- * variable that holds the tag under any name, and any other expression, called or not. Only a tag that is a member
- * other than `.sql` (`String.raw`, `styled.div`) is a template of something else.
+ * Every tagged template of the module: `ctx.sql(Row)` and `tx.sql(Row)`, and the tag held by a parameter, a variable or
+ * an object under any name. Telling a `String.raw` from an alias would take what the code runs, so it is not tried.
  */
 export function readSqlStatements(file: string, text: string): SqlStatementsResult {
 	const parsed = parseModule(file, text)
@@ -33,42 +32,12 @@ export function readSqlStatements(file: string, text: string): SqlStatementsResu
 	const statements: SqlStatement[] = []
 	walk(parsed.module.program, (node) => {
 		if (node.type !== 'TaggedTemplateExpression') return
-		const tag = child(node, 'tag')
 		const quasi = child(node, 'quasi')
-		if (tag === undefined || quasi === undefined || !maySql(tag)) return
+		if (quasi === undefined) return
 		const start = quasi['start']
 		const end = quasi['end']
 		if (typeof start !== 'number' || typeof end !== 'number') return
 		statements.push({ line: positionOf(node).line, text: text.slice(start + 1, end - 1) })
 	})
 	return statements
-}
-
-/** Whether a tag, or the callee of a called tag, is anything but a member whose static name is not `sql`. */
-function maySql(tag: AstNode): boolean {
-	const bare = transparent(tag)
-	const callee = bare.type === 'CallExpression' ? child(bare, 'callee') : bare
-	const target = callee === undefined ? undefined : transparent(callee)
-	if (target?.type !== 'MemberExpression') return true
-	const name = staticKey(target, 'property')
-	return name === undefined || name === 'sql'
-}
-
-const TRANSPARENT = new Set([
-	'ChainExpression',
-	'ParenthesizedExpression',
-	'TSNonNullExpression',
-	'TSAsExpression',
-	'TSSatisfiesExpression',
-	'TSTypeAssertion',
-	'TSInstantiationExpression',
-])
-
-/** Strips the wrappers that leave the value an expression denotes as it is, type assertions included. */
-function transparent(node: AstNode): AstNode {
-	let current = node
-	for (let inner = child(current, 'expression'); TRANSPARENT.has(current.type) && inner !== undefined; inner = child(current, 'expression')) {
-		current = inner
-	}
-	return current
 }

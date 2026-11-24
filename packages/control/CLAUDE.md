@@ -756,7 +756,7 @@ other environment, before the provider prepares anything, and the write maps a r
   refuses it. Checker structure hints never enter the snapshot. `AppEnvDto.deviationSubjects` lists the published
   snapshot's, grouped by site and migration, and `AppEnvDto.surface` (`surface.ts`) its endpoints under their most
   exposed caller, in `diff.ts`'s words.
-  `sqlStatements` holds every tagged template of `src/` (tests excluded) whose tag may be `ctx.sql`
+  `sqlStatements` holds every tagged template of `src/` (tests excluded), since `ctx.sql` may be held under any name
   (`readSqlStatements` of `@fabrika/check/contract`, this release's, whatever the application pins), by file, line and
   the SHA-256 of its text as written (whitespace may stand in a quoted literal or end a `--` comment); a module the parser
   refuses is one entry, line 0, over its whole text. It is present, even empty, whenever a site declares `sql`, and

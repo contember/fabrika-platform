@@ -945,7 +945,9 @@ function compareSqlStatements(changes: Changes, baseline: AccessSnapshot, candid
 }
 
 function statementPlace(file: string, entry: SqlStatementEntry): string {
-	return entry.line === 0 ? `\`${file}\`, which Control cannot parse for its SQL statements,` : `The SQL statement at \`${file}:${entry.line}\``
+	return entry.line === 0
+		? `\`${file}\`, which Control cannot parse for its SQL statements,`
+		: `The tagged template at \`${file}:${entry.line}\`, which may run SQL,`
 }
 
 function byFile(entries: readonly SqlStatementEntry[]): Map<string, SqlStatementEntry[]> {

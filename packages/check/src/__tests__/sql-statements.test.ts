@@ -26,8 +26,13 @@ describe('readSqlStatements', () => {
 		expect(texts(source)).toEqual(['select * from notes where owner = ${owner}', 'select 2'])
 	})
 
-	test('a template whose tag is a member other than .sql is not a statement', () => {
-		expect(texts('export const a = String.raw`x`; export const b = styled.div`color: red`; export const c = `plain ${1}`')).toEqual([])
+	test('every tagged template counts, a member of any name included; an untagged template does not', () => {
+		const source = [
+			'export const a = (ctx) => { const queries = { run: ctx.sql }; return queries.run(Row)`select 1` }',
+			'export const b = String.raw`x`',
+			'export const c = `plain ${1}`',
+		].join('\n')
+		expect(texts(source)).toEqual(['select 1', 'x'])
 	})
 
 	test('a tag behind a type assertion, a non-null assertion or a choice is still read', () => {

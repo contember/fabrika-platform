@@ -294,7 +294,7 @@ describe('SQL statements in the reviewed snapshot', () => {
 
 		// The scope fragment is dropped: the declaration is the same, the statement now reads every note.
 		w.files = sqlCommit('select title from notes')
-		const line = `The SQL statement at \`${summaryStatement()}\` changes`
+		const line = `The tagged template at \`${summaryStatement()}\`, which may run SQL, changes`
 		const prod = await deploy(w, 'prod')
 		expect(prod.status).toBe('awaiting_approval')
 		expect(classified(prod).changes).toEqual([
@@ -330,8 +330,8 @@ describe('SQL statements in the reviewed snapshot', () => {
 	test('a statement in another server module of any tag name is new, and its removal needs closer review too', async () => {
 		const before = await snapshotOf(sqlCommit(SCOPED))
 		const added = await snapshotOf(sqlCommit(SCOPED, queries('select count(*) from notes')))
-		expect(closer(classifyAccess(before, added))).toEqual([`The SQL statement at \`${QUERIES}:1\` is new`])
-		expect(closer(classifyAccess(added, before))).toEqual([`The SQL statement at \`${QUERIES}:1\` is removed`])
+		expect(closer(classifyAccess(before, added))).toEqual([`The tagged template at \`${QUERIES}:1\`, which may run SQL, is new`])
+		expect(closer(classifyAccess(added, before))).toEqual([`The tagged template at \`${QUERIES}:1\`, which may run SQL, is removed`])
 		// A test module and the SPA run no statement against the application's database.
 		const elsewhere = await snapshotOf(
 			sqlCommit(SCOPED, { 'src/notes/queries.test.ts': queries('select 1')[QUERIES] ?? '', 'web/app.ts': 'x`select 1`' }),
@@ -355,7 +355,9 @@ describe('SQL statements in the reviewed snapshot', () => {
 		// A declaring site that runs no statement yet records an empty list, so its first statement compares.
 		const empty = await snapshotOf(commitOf({ summary: "sql: 'read'" }))
 		expect(empty.sqlStatements).toEqual([])
-		expect(closer(classifyAccess(empty, await snapshotOf(sqlCommit(SCOPED))))).toEqual([`The SQL statement at \`${summaryStatement()}\` is new`])
+		expect(closer(classifyAccess(empty, await snapshotOf(sqlCommit(SCOPED))))).toEqual([
+			`The tagged template at \`${summaryStatement()}\`, which may run SQL, is new`,
+		])
 	})
 
 	test('the statements survive the publication, an empty list included', async () => {

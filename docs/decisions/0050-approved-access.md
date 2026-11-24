@@ -109,12 +109,12 @@ the result as its **snapshot**:
 - the **database code** the migrations declare (`databaseCode`): each function, procedure, trigger, view, rule,
   policy, `DO` block and expression that calls database code, by file, kind and object;
 - the **SQL statements** (`sqlStatements`), once a site declares `sql`: each tagged template of a server module under
-  `src/` whose tag may be `ctx.sql` (any tag, called or not, but a member other than `.sql`, such as `String.raw`), by
-  file, line and the SHA-256 of its text as written, since whitespace may stand in a quoted literal or end a comment. A
-  declaration says only that a site runs raw SQL, and since `ctx.sql` does not check where a scope fragment stands
-  ([ADR-0012](0012-fabrika-app-runtime.md)), the statement is the only record of what it reads. Control reads these
-  modules as text and parses them; it never runs them. The reading is syntactic, so it errs towards a template too
-  many: a statement through a tag held in an object member other than `.sql` is not seen;
+  `src/`, by file, line and the SHA-256 of its text as written, since whitespace may stand in a quoted literal or end
+  a comment. A declaration says only that a site runs raw SQL, and since `ctx.sql` does not check where a scope
+  fragment stands ([ADR-0012](0012-fabrika-app-runtime.md)), the statement is the only record of what it reads.
+  Control reads these modules as text and parses them; it never runs them. Every tagged template counts, `String.raw`
+  included: the tag may be held under any name, a member's too, and telling one from the other would take running the
+  code. A template array forged by hand, rather than written as a template, is not seen;
 - the **file adoptions** the migrations make (`fileAdoptions`, [ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)):
   each `INSERT … SELECT` that copies a file collection's files into a table, and each release of a collection. They
   follow from the migration files, so the digest does not cover them beyond the files' checksums. The diff compares
