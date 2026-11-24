@@ -23,6 +23,7 @@ export type {
 	DaemonStopResult,
 	DaemonTimeouts,
 } from './src/lifecycle'
+export { openerAllowed, TEST_OPENER_DIR_VARIABLE } from './src/opener'
 export { dispatch } from './src/router'
 export type { Route, RouteHandler } from './src/router'
 export { ensureRuntimeDir, userRuntimeDir } from './src/runtime-dir'

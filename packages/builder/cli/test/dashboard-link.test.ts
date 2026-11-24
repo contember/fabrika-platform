@@ -92,6 +92,9 @@ async function run(args: string[]): Promise<{ code: number; stdout: string; stde
 			FABRIKA_DATA_DIR: dataDir,
 			FABRIKA_SESSION_ID: 'dashboard-session',
 			PATH: `${fakeBin}:${process.env['PATH'] ?? ''}`,
+			// Under a test run the CLI runs no opener outside this directory, so a forgotten fake prints the link instead.
+			NODE_ENV: 'test',
+			FABRIKA_TEST_OPENER_DIR: fakeBin,
 		},
 		stdout: 'pipe',
 		stderr: 'pipe',

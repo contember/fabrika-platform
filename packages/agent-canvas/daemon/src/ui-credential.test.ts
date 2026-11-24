@@ -46,8 +46,11 @@ function environment(): Record<string, string> {
 		CANVAS_SESSION_ID: SESSION,
 		CANVAS_PROJECT_ROOT: project,
 		CANVAS_TIMEOUT: '20000',
-		// The fake opener records the arguments a command hands the browser instead of opening one.
+		// The fake opener records the arguments a command hands the browser instead of opening one; under a test run the
+		// CLI runs no opener outside this directory.
 		PATH: `${fakeBin}:${process.env['PATH'] ?? ''}`,
+		NODE_ENV: 'test',
+		FABRIKA_TEST_OPENER_DIR: fakeBin,
 	}
 }
 
@@ -130,8 +133,11 @@ beforeAll(async () => {
 	// The UI secret an earlier release kept across restarts; the daemon removes it.
 	mkdirSync(join(home, '.claude', 'agent-canvas'), { recursive: true })
 	writeFileSync(join(home, '.claude', 'agent-canvas', 'ui-token'), 'x'.repeat(43), { mode: 0o600 })
-	writeFileSync(join(fakeBin, 'xdg-open'), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opened}'\n`)
-	chmodSync(join(fakeBin, 'xdg-open'), 0o755)
+	// Every name the CLI looks for, macOS's `open` included: an opener left unfaked would open the user's real browser.
+	for (const opener of ['xdg-open', 'open']) {
+		writeFileSync(join(fakeBin, opener), `#!/bin/sh\nprintf '%s\\n' "$*" >> '${opened}'\n`)
+		chmodSync(join(fakeBin, opener), 0o755)
+	}
 	writeFileSync(join(project, 'notes.txt'), 'project notes')
 	writeFileSync(join(canvases, 'plan.jsx'), 'export default function Plan() { return <Section title="Demo">Hello</Section> }\n')
 	port = freePort()

@@ -1,4 +1,11 @@
-import { createDaemonLifecycle, type DaemonLifecycleConfig, DaemonStartError, ensureRuntimeDir, openLinkThroughFile } from '@fabrika/daemon-kit'
+import {
+	createDaemonLifecycle,
+	type DaemonLifecycleConfig,
+	DaemonStartError,
+	ensureRuntimeDir,
+	openerAllowed,
+	openLinkThroughFile,
+} from '@fabrika/daemon-kit'
 import { spawn } from 'node:child_process'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -90,6 +97,8 @@ export function openBrowser(url: string, fallbackUrl: string = url): void {
 	for (const cmd of candidates) {
 		const which = Bun.spawnSync(['which', cmd])
 		if (which.exitCode === 0) {
+			// Under a test run only the test's own fake opener runs, never the user's real browser.
+			if (!openerAllowed(which.stdout.toString())) break
 			const child = spawn(cmd, [url], { detached: true, stdio: 'ignore' })
 			child.on('error', () => console.error(`Open this URL in your browser: ${fallbackUrl}`))
 			child.unref()
