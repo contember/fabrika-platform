@@ -102,6 +102,12 @@ describe('the scrubber', () => {
 		expect(ops.scrub(message)).toBe(message)
 	})
 
+	test("the storage's region stays, so a report that names it can be read", () => {
+		const storage = environmentScrubber(environment({ FABRIKA_APP_STORAGE_REGION: 'eu-central-1' }))
+		const message = 'the bucket in eu-central-1 refused the write'
+		expect(storage.scrub(message)).toBe(message)
+	})
+
 	test('a JWT, an authorization scheme and a credential header are removed', () => {
 		const jwt = 'eyJhbGciOiJFUzI1NiJ9.eyJzdWIiOiJ1c2VyLTEifQ.c2lnbmF0dXJl'
 		expect(noSecrets.scrub(`token ${jwt} expired`)).toBe(`token ${REDACTED} expired`)

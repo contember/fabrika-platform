@@ -25,6 +25,8 @@ const PUBLIC_FRAMEWORK_VARIABLES: ReadonlySet<string> = new Set([
 	'FABRIKA_ENVIRONMENT',
 	'FABRIKA_IAM_RPC_URL',
 	'FABRIKA_APP_DATABASE_CONNECTIONS',
+	// A region name (`eu-central-1`) is no credential, and a report that names it should keep it.
+	'FABRIKA_APP_STORAGE_REGION',
 	// `platform` is eight characters, so a secret scrubber would redact the word wherever a message names it.
 	'FABRIKA_EMAIL_PROVIDER',
 	FABRIKA_CONTRACT_DIGEST,

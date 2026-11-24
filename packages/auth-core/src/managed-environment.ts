@@ -57,6 +57,8 @@ const PUBLIC_VARIABLES: ReadonlySet<string> = new Set<FrameworkVariableName>([
 	FABRIKA_OPS_KEY_DIGESTS,
 	// Host names anyone can look up in DNS.
 	FABRIKA_EGRESS_REFUSED_HOSTS,
+	// The storage's region, a public name like `eu-central-1`.
+	'FABRIKA_APP_STORAGE_REGION',
 ])
 
 const PLATFORM_URL_VARIABLES: ReadonlySet<string> = new Set(PLATFORM_RECEIVERS.map((receiver) => platformTransportVariables(receiver).url))

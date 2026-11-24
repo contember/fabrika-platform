@@ -400,25 +400,40 @@ const STORAGE_VARIABLES = {
 } as const
 
 /**
- * The stored files' object storage (Zerops object storage, path-style), when the platform wrote its variables;
- * a partial set stops the boot. The credentials are never quoted in a message.
+ * The region requests to the storage are signed for. Optional, written only by a provider whose storage checks it
+ * (S3 refuses a signature for another region than the bucket's); without it, `us-east-1`, which Zerops' object storage
+ * and every release before the variable sign with.
+ */
+const STORAGE_REGION_VARIABLE = 'FABRIKA_APP_STORAGE_REGION'
+const DEFAULT_STORAGE_REGION = 'us-east-1'
+/** A region name as S3-compatible stores spell them: `eu-central-1`, `auto`. */
+const STORAGE_REGION = /^[a-z0-9][a-z0-9-]{0,31}$/
+
+/**
+ * The stored files' object storage (path-style), when the platform wrote its variables; a partial set, or a region
+ * without the storage or of a form no store spells, stops the boot. The credentials are never quoted in a message.
  */
 export function openFileStorage(framework: Readonly<Record<string, string>>): FileObjectStore | undefined {
 	const value = (name: string) => framework[name]?.trim() ?? ''
 	const names = Object.values(STORAGE_VARIABLES)
 	const missing = names.filter((name) => value(name) === '')
+	const region = value(STORAGE_REGION_VARIABLE)
 	if (missing.length === names.length) {
+		if (region !== '') throw new BootError([`${STORAGE_REGION_VARIABLE} is set, but no FABRIKA_APP_STORAGE_* storage is`])
 		return undefined
 	}
 	if (missing.length > 0) {
 		throw new BootError(missing.map((name) => `${name} is not set; the platform writes every FABRIKA_APP_STORAGE_* variable together`))
+	}
+	if (region !== '' && !STORAGE_REGION.test(region)) {
+		throw new BootError([`${STORAGE_REGION_VARIABLE} is not a region name (lowercase letters, digits and hyphens)`])
 	}
 	return S3BlobStore.connect({
 		endpoint: value(STORAGE_VARIABLES.endpoint),
 		bucket: value(STORAGE_VARIABLES.bucket),
 		accessKeyId: value(STORAGE_VARIABLES.accessKeyId),
 		secretAccessKey: value(STORAGE_VARIABLES.secretAccessKey),
-		region: 'us-east-1',
+		region: region === '' ? DEFAULT_STORAGE_REGION : region,
 		virtualHostedStyle: false,
 	})
 }
