@@ -387,7 +387,7 @@ describe.skipIf(!runPackWitness)('an application outside the repository on a loc
 			// The source's minor, not the last one npm has: the checker and the platform read the pack as that release.
 			const { sourceVersion } = packageGraph(await readPackages())
 			const commit = (await exec(['git', 'rev-parse', '--short', 'HEAD'], ROOT)).stdout.trim()
-			expect(manifest.version).toBe(`${sourceVersion}-local.g${commit}`)
+			expect(manifest.version).toBe(localVersion(sourceVersion, commit))
 			const block = z.object({ dependencies: z.record(z.string()), overrides: z.record(z.string()) })
 				.parse(JSON.parse(await readFile(join(artifacts, LOCAL_INSTALL_FILE), 'utf8')))
 			expect(block).toEqual(localInstallBlock(manifest.packages))
