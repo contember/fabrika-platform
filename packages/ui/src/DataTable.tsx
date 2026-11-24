@@ -12,7 +12,7 @@ export interface Column<Row> {
 	readonly grow?: boolean
 	/** A width of the column scale (`--fui-column-width-<size>`), on its head and its cells. */
 	readonly width?: ColumnWidth
-	/** Its cells wrap their text instead of keeping it on one line. */
+	/** Its cells wrap their text, a long token anywhere; the column keeps at least its `width`, else `md` (`lg` with `grow`). */
 	readonly wrap?: boolean
 }
 

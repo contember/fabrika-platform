@@ -26,9 +26,6 @@ Components:
 
 Rules:
 
-- **A wrapped column breaks inside words.** `fui-table__cell--wrap` sets `overflow-wrap: anywhere`
-  (`packages/ui/src/components.css:798`). That lowers the min-content width, so in an auto-layout table a wrapped
-  column without a `width` shrinks to a few letters per line. Every wrapped column then needs a `width`.
 - **A control's horizontal padding has no token.** `.fui-input` pads `0 var(--fui-space-2)` (`components.css:405`)
   and `.fui-textarea` re-pads all sides (`components.css:442`). An application that widens the single-line padding
   must override `.fui-input`, which outranks `.fui-textarea` and flattens a textarea's first line onto its top edge.
@@ -49,8 +46,6 @@ Rules:
 - `Checkbox` reads `useFieldAttributes`, so `Form` shows its field error and sets `aria-invalid`. Witness: a `Form`
   test with a required checkbox field. A file input and a combobox are separate decisions; file them only when an
   application needs them beyond `Input type="file"` and `<datalist>`.
-- Wrap with `overflow-wrap: break-word`. Witness: a CSS assertion in the kit's tests, or a note in the column docs if
-  no test can see layout.
 - Tokens: `--fui-control-padding-x` (read by `.fui-input`; `.fui-textarea` keeps its own block padding), and one
   token per rule above, defaulting to today's values. Witness: `theme.css` declares them and every rule above reads
   them; the kit's rendered output does not change with the defaults.

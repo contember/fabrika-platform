@@ -95,4 +95,16 @@ describe('the stylesheet', () => {
 		expect(theme).toContain(`${token}:`)
 		expect(components).toContain(rule)
 	})
+
+	// `overflow-wrap: anywhere` lowers a cell's min-content width to one letter: without a floor, an auto-layout table
+	// squeezed a wrapped column to a letter per line beside columns that keep their text on one line.
+	test('a wrapped column keeps a floor: md, lg when it grows, else its own width; an unwrapped column gets none', () => {
+		const rule = (selector: string): string => components.match(new RegExp(`(?:^|\\n)${selector} \\{([^}]*)\\}`))?.[1] ?? ''
+		expect(rule('\\.fui-table__cell--wrap')).toContain('min-width: var(--fui-column-width-md)')
+		expect(rule('\\.fui-table__cell--wrap\\.fui-table__cell--grow')).toContain('min-width: var(--fui-column-width-lg)')
+		for (const size of ['xs', 'sm', 'md', 'lg', 'xl']) {
+			expect(rule(`\\.fui-table__cell--wrap\\.fui-table__cell--width-${size}`)).toContain(`min-width: var(--fui-column-width-${size})`)
+			expect(rule(`\\.fui-table__cell--width-${size}`)).not.toContain('min-width')
+		}
+	})
 })
