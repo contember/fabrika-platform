@@ -17,8 +17,14 @@ decided work or status.
   behind it share: serializable grants, declarative rules, and code that narrows freely but widens only when declared.
 - [A compact installation](compact-installation.md) — applications beside the platform on one HA database; reviewed,
   gated by two live-account facts, and only worth it if platform data must also be HA.
+- [Fabrika on the big three clouds](cloud-providers.md): AWS, Azure and Google Cloud side by side, the twelve
+  provider-neutral prerequisites all three need first, and one Kubernetes provider as the alternative.
 - [An AWS provider](aws-provider.md): ECS on Fargate, RDS with point-in-time recovery, S3 and CodeBuild behind the
-  existing contract. What it takes, what it costs to run against Zerops, and why to build it with the first installation that needs it.
+  existing contract; the checklist, what it costs to run against Zerops, and why to build it with the first installation that needs it.
+- [An Azure provider](azure-provider.md): Container Apps with an environment per namespace, Flexible Server, ACR Tasks,
+  and a native Blob Storage adapter because Blob Storage speaks no S3.
+- [A Google Cloud provider](gcp-provider.md): GKE Autopilot rather than Cloud Run, Cloud SQL, Cloud Build and Cloud
+  Storage; a Kubernetes provider other clouds could reuse.
 - [A dev environment for MCP authoring](mcp-dev-containers.md) — a `dev` environment that takes each workspace
   commit in about two seconds through an in-container launcher that pulls from Control; measured on Zerops.
 - [Start memory and init connections without the isolation tests](start-memory-without-isolation-tests.md) — the
