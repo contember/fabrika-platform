@@ -6,6 +6,9 @@ import { describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { controlServiceDigest } from '../../fabrika.service'
+import { APP_AGENT_SKILL_DEFINE } from '../mcp/app-rules'
+import { proxiedRequest } from './helpers/proxy'
 
 const PACKAGE = resolve(import.meta.dir, '..', '..')
 const WRANGLER = join(PACKAGE, 'node_modules', '.bin', 'wrangler')
@@ -45,31 +48,67 @@ function readyAddress(streams: readonly ReadableStream<Uint8Array>[], seen: stri
 	})
 }
 
+/** Run `wrangler dev` on the committed config with `extra` arguments, and hand `use` the address it serves on. */
+async function withWorker(extra: readonly string[], use: (address: string) => Promise<void>): Promise<void> {
+	const scratch = await mkdtemp(join(tmpdir(), 'control-worker-boot-'))
+	await mkdir(join(scratch, 'assets'))
+	const child = Bun.spawn(
+		[WRANGLER, 'dev', '--port', '0', '--ip', '127.0.0.1', '--assets', join(scratch, 'assets'), '--persist-to', join(scratch, 'state'), ...extra],
+		{
+			cwd: PACKAGE,
+			// No metrics, and no download of the request.cf defaults, which has no timeout of its own.
+			env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_CF_FETCH_ENABLED: 'false' },
+			stdin: 'ignore',
+			stdout: 'pipe',
+			stderr: 'pipe',
+			timeout: WRANGLER_TIMEOUT_MS,
+		},
+	)
+	try {
+		await use(await readyAddress([child.stdout, child.stderr], []))
+	} finally {
+		child.kill()
+		await child.exited
+		await rm(scratch, { recursive: true, force: true })
+	}
+}
+
 describe("Control's Worker", () => {
 	test('starts in workerd and answers its health check', async () => {
-		const scratch = await mkdtemp(join(tmpdir(), 'control-worker-boot-'))
-		await mkdir(join(scratch, 'assets'))
-		const child = Bun.spawn(
-			[WRANGLER, 'dev', '--port', '0', '--ip', '127.0.0.1', '--assets', join(scratch, 'assets'), '--persist-to', join(scratch, 'state')],
-			{
-				cwd: PACKAGE,
-				// No metrics, and no download of the request.cf defaults, which has no timeout of its own.
-				env: { ...process.env, WRANGLER_SEND_METRICS: 'false', CLOUDFLARE_CF_FETCH_ENABLED: 'false' },
-				stdin: 'ignore',
-				stdout: 'pipe',
-				stderr: 'pipe',
-				timeout: WRANGLER_TIMEOUT_MS,
-			},
-		)
-		try {
-			const address = await readyAddress([child.stdout, child.stderr], [])
+		await withWorker([], async (address) => {
 			const response = await fetch(`${address}/healthz`)
 			expect(response.status).toBe(200)
 			expect(await response.json()).toEqual({ status: 'ok' })
-		} finally {
-			child.kill()
-			await child.exited
-			await rm(scratch, { recursive: true, force: true })
-		}
+		})
+	}, BOOT_TIMEOUT_MS)
+
+	test('with the MCP table and an embedded skill, it loads the MCP handler and answers /mcp with the resource challenge', async () => {
+		// A small stand-in for the skill the deploy embeds: what this proves is that workerd loads the SDK and the handler.
+		const skill = JSON.stringify({ version: '0.0.0', body: 'rules', references: [] })
+		const args = [
+			'--define',
+			`${APP_AGENT_SKILL_DEFINE}:${JSON.stringify(skill)}`,
+			'--var',
+			`FABRIKA_SERVICE_TABLE_DIGEST:${controlServiceDigest({ mcp: true, cli: true })}`,
+			'--var',
+			'FABRIKA_CONTROL_DOMAIN:console.example.com',
+			'--var',
+			'ENVIRONMENT:stage',
+		]
+		await withWorker(args, async (address) => {
+			const request = proxiedRequest(
+				new Request('https://console.example.com/mcp', {
+					method: 'POST',
+					headers: { 'content-type': 'application/json', accept: 'application/json, text/event-stream' },
+					body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+				}),
+				{ mcp: true },
+			)
+			const response = await fetch(`${address}/mcp`, { method: 'POST', headers: request.headers, body: await request.text() })
+			expect(response.status).toBe(401)
+			expect(response.headers.get('www-authenticate')).toBe(
+				'Bearer resource_metadata="https://console.example.com/.well-known/oauth-protected-resource/mcp"',
+			)
+		})
 	}, BOOT_TIMEOUT_MS)
 })

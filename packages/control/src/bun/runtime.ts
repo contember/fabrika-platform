@@ -48,10 +48,11 @@ import { githubWorkspaceSource, workspaceGitHubClientFactory } from '../github/w
 import { controlOAuthResource, controlPublicOrigin } from '../iam'
 import { iamMailKeyHash, type MailDispatchMessage } from '../mail-relay/queue'
 import { readInstallationMail } from '../mail-transport'
+import { controlMcpRoute } from '../mcp/route'
 import type { ControlJobMessage } from '../run-lifecycle'
 import { vault } from '../services'
+import { processAppRules } from './app-rules'
 import { HttpIamAdminGateway } from './iam-admin'
-import { controlMcpRoute } from './mcp'
 import { HttpOperationsService } from './operations'
 
 /** Transport seams only the local stack and tests inject; the GitHub origins stay fixed (ADR-0029). */
@@ -232,7 +233,7 @@ export function createRuntime(
 			vault: () => vault(env),
 			createClient: gitHubAppClientFactory(sourceSeams.githubAppFetch),
 		}),
-		mcp: mcp ? controlMcpRoute(env, workspaceSource, composed.provider) : null,
+		mcp: mcp ? controlMcpRoute(env, workspaceSource, composed.provider, processAppRules()) : null,
 		cli,
 		config,
 		queue,

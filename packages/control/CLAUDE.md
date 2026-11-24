@@ -48,7 +48,7 @@ history, and ask the owner.
 
 The shared layer is `app.ts` · `consumer.ts` · `cron.ts` · `services.ts` and everything they reach.
 It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare. The Bun host
-(`src/bun/`: server, runtime, cron, migrate, MCP, the IAM and Operations gateways) takes its provider as a
+(`src/bun/`: server, runtime, cron, migrate, the skill reader for MCP, the IAM and Operations gateways) takes its provider as a
 `BunProviderComposition`; `src/zerops/` holds Zerops' composition (`provider.ts`) and the thin entries
 `zerops.yaml` names. `entrypoint-isolation.test.ts` proves that neither entrypoint reaches the other provider
 or runtime, and that the Bun host names no provider.
@@ -152,7 +152,8 @@ other environment, before the provider prepares anything, and the write maps a r
   names none of `CONTROL_SERVICE_VARIANTS` (no OAuth; the command-line client's RPC rows; those plus MCP). With MCP
   on, `FABRIKA_CONTROL_DOMAIN` is required too. The Cloudflare Worker reads the same switch (`workerControlApp`) from
   the digest `fabrika.config.ts` writes beside its proxy's table: the command-line client's table on a deployed
-  installation, none locally, never MCP's.
+  installation, plus MCP when `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` registers a client that is not identity-only
+  (`cloudflareMcpAuthoringOn`), none locally.
 - **With `cli` on, `/api/rpc` accepts the command-line client's resource token** for `<FABRIKA_CONTROL_DOMAIN>/api/rpc`
   beside native tokens (`controlAuthenticator` → `createIam(…, { oauthResource })`), so `FABRIKA_CONTROL_DOMAIN` is
   required. Its permissions are the grant's, never more than the person's. **`isPerson` (`src/iam.ts`) is the ONE
@@ -594,9 +595,14 @@ other environment, before the provider prepares anything, and the write maps a r
   guarded transaction (claims first — both FKs are `ON DELETE RESTRICT`) and frees the id for reuse, which
   is the id the provider's own marker recovery is keyed to. It deletes NO provider resource (ADR-0034) and
   answers with the row the DELETE returned, so the operator is told what is now unowned.
-- **MCP authoring is a Bun-only protocol adapter (ADR-0049).** `src/bun/server.ts` routes
-  `POST|GET|DELETE /mcp` to `src/mcp/handler.ts`; everything else reaches `controlApp`. The Worker graph
-  never imports the MCP SDK (`entrypoint-isolation.test.ts`). `/mcp` verifies the injected token for the
+- **MCP authoring is a runtime-neutral protocol adapter (ADR-0049).** The `mcp` row of the MCP table hands `/mcp` to
+  `src/mcp/route.ts` (`controlMcpRoute`) over `src/mcp/handler.ts`, on both runtimes. The Bun process builds it once
+  with the skill read from `@fabrika/app` (`src/bun/app-rules.ts`); the Worker composes it per request
+  (`src/mcp/worker.ts`) over the skill the deploy embeds as the wrangler `define` `__FABRIKA_APP_AGENT_SKILL__`, which
+  `fabrika.config.ts` writes only with the MCP table. The Worker graph never reaches `@fabrika/app/agent-skill`, which
+  reads files, nor `Bun.semver` (it judges only an exact pin; `entrypoint-isolation.test.ts`). A provider's
+  `authoring.stageDeployRefusal` makes `deploy_stage` answer 409 with it after the workspace check, and every other
+  tool stays served (Cloudflare until its runner builds a workspace commit apart from the account token). `/mcp` verifies the injected token for the
   resource profile `controlMcpResource(controlPublicOrigin)` only, requires `AuthContext.oauth` and a
   user, and never applies the bootstrap-admin hatch. The tools call `src/api/workspaces.ts`, which reaches
   the repository through the `WorkspaceSourcePort` — `src/github/workspace.ts`, the binding's own GitHub

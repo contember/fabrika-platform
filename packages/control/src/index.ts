@@ -8,6 +8,7 @@ import { gitHubAppClientFactory } from './github/connections/credentials'
 import { createSourceConnections } from './github/connections/port'
 import { dispatchMail } from './mail-relay/dispatch'
 import { decodeMailDispatchMessage, type MailDispatchMessage } from './mail-relay/queue'
+import { workerMcpRoute } from './mcp/worker'
 import { cloudflareControlProvider, controlEnv, type WorkerBindings } from './platform-cf'
 import { reconcileProviderRuns } from './provider-reconcile'
 import { type ControlJobMessage, operationDeploys } from './run-lifecycle'
@@ -33,6 +34,15 @@ const MAIL_QUEUE_SUFFIX = '-mail'
 /** Anonymous reads of a GitHub App's public page before GitHub's rate limit is the answer (the client's maximum). */
 const SHARED_EGRESS_PUBLIC_APP_ATTEMPTS = 4
 
+/**
+ * The `@fabrika/app` skill `get_app_rules` answers, as JSON. A Worker reads no files, so `fabrika.config.ts` has wrangler
+ * replace this identifier with the skill when the console serves MCP; otherwise it is never defined.
+ */
+declare const __FABRIKA_APP_AGENT_SKILL__: string
+
+/** The `/mcp` route, when the deploy embedded the skill for it. */
+const MCP_ROUTE = workerMcpRoute(typeof __FABRIKA_APP_AGENT_SKILL__ === 'string' ? __FABRIKA_APP_AGENT_SKILL__ : undefined)
+
 export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	/** The runtime-neutral view of this Worker's bindings. Cheap — three closures and a spread. */
 	private get control(): Env {
@@ -41,7 +51,7 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 
 	override fetch(request: Request): Promise<Response> {
 		const env = this.control
-		return workerControlApp(this.env).fetch(request, {
+		return workerControlApp(this.env, MCP_ROUTE).fetch(request, {
 			env,
 			provider: cloudflareControlProvider(this.env, env),
 			sourceConnection: createSourceConnections({

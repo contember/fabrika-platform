@@ -43,6 +43,8 @@ export interface WorkspaceUseCaseContext {
 	readonly consoleOrigin?: string
 	/** The files that configure the provider's deploy (`ControlProvider.authoring`), protected at any depth. */
 	readonly protectedFiles: readonly string[]
+	/** Why the provider cannot deploy a workspace commit yet (`ControlProvider.authoring`); set, `deploy_stage` refuses with it. */
+	readonly stageDeployRefusal?: string
 	/** Removes the workspace's dev sandbox, if it has one; absent where the provider gives workspaces no sandbox. */
 	readonly devSandboxRemoval?: DevSandboxRemovalPort
 }
@@ -579,6 +581,8 @@ function replaceOnce(content: string, edit: WorkspaceFileEdit, index: number, ex
 /** Deploy the live head of the workspace branch, pinned, to the authoring environment as an ordinary manual run. */
 export async function deployStageUseCase(c: WorkspaceUseCaseContext, input: { workspaceId: string }): Promise<RunDto> {
 	const owned = await requireWorkspace(c, input.workspaceId, CONTROL_ACTIONS.DEPLOY_TRIGGER)
+	// After the workspace check, so a caller who may not deploy it learns nothing about the provider.
+	if (c.stageDeployRefusal !== undefined) fail(409, c.stageDeployRefusal)
 	const commitSha = await requireHead(c, owned)
 	return createManualRun(c, {
 		appEnv: owned.appEnv,

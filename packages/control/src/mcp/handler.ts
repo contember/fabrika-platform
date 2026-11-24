@@ -1,7 +1,6 @@
-// The MCP endpoint (ADR-0049): a user-facing protocol adapter over the workspace use cases. Only the
-// Bun host mounts it; the Worker graph must never import this module or the MCP SDK.
+// The MCP endpoint (ADR-0049): a user-facing protocol adapter over the workspace use cases. Runtime-neutral: the Bun
+// process and the Cloudflare Worker both mount it, each with the skill `get_app_rules` answers.
 
-import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { DEV_REPORT_MAX_LINES } from '@fabrika/app/dev/wire'
 import type { AuthContext, AuthResult } from '@fabrika/auth'
 import { formatOAuthBearerChallenge } from '@fabrika/proxy-core/manifest'
@@ -51,6 +50,7 @@ import {
 	type WorkspaceUseCaseContext,
 } from '../api/workspaces'
 import { logFailure } from '../error-label'
+import type { AppRules } from './app-rules'
 
 const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
 /** Room left in the commit-message bound for the Fabrika trailers. */
@@ -73,8 +73,6 @@ Before editing an application, call get_app_rules and follow it. Its topics hold
 /** Hints only (MCP 2025-11-25): a client may skip its confirmation for a read; Control still authorizes every call. */
 const READ_ONLY: ToolAnnotations = { readOnlyHint: true, openWorldHint: false }
 
-const APP_SKILL = readAppAgentSkill()
-const APP_TOPICS = APP_SKILL.references.map((reference) => reference.topic)
 const AppDependency = z.object({ dependencies: z.record(z.string(), z.string()).optional() })
 
 export interface ControlMcpOptions {
@@ -83,6 +81,8 @@ export interface ControlMcpOptions {
 	/** RFC 9728 metadata URL named in every bearer challenge. */
 	readonly resourceMetadata: string
 	readonly useCases: (auth: AuthContext, signal: AbortSignal) => DevUseCaseContext
+	/** What `get_app_rules` answers. */
+	readonly rules: AppRules
 }
 
 interface Caller {
@@ -97,6 +97,7 @@ interface Caller {
  */
 export function createControlMcpHandler(options: ControlMcpOptions): (request: Request) => Promise<Response> {
 	const callers = new WeakMap<AuthInfo, Caller>()
+	const rules = appRulesTool(options.rules)
 	let handler: McpHttpHandler | undefined
 	return async (request) => {
 		const result = await options.authenticate(request)
@@ -110,7 +111,7 @@ export function createControlMcpHandler(options: ControlMcpOptions): (request: R
 		handler ??= createMcpHandler((context) => {
 			const caller = context.authInfo === undefined ? undefined : callers.get(context.authInfo)
 			if (caller === undefined) throw new Error('mcp request reached the server without an authenticated caller')
-			return controlMcpServer(options.useCases(caller.auth, caller.signal))
+			return controlMcpServer(options.useCases(caller.auth, caller.signal), rules)
 		}, {
 			// The tools emit no mid-call notifications, so one JSON response loses nothing.
 			responseMode: 'json',
@@ -140,11 +141,26 @@ const utf8Bytes = (value: string): number => new TextEncoder().encode(value).byt
 const fileText = z.string().refine((text) => utf8Bytes(text) <= WORKSPACE_FILE_MAX_BYTES, 'text exceeds 512 KiB')
 const workspaceInput = z.object({ workspaceId: identifier }).strict()
 
-const toolInputs = {
-	getAppRules: z.object({
-		topic: z.string().refine((topic) => APP_TOPICS.includes(topic), `the topics are ${APP_TOPICS.join(', ')}`).optional(),
+/** `get_app_rules` over one skill: its topics are the input's, so the tool is built once per handler. */
+interface AppRulesTool {
+	readonly rules: AppRules
+	readonly topics: readonly string[]
+	readonly input: ReturnType<typeof appRulesInput>
+}
+
+function appRulesInput(topics: readonly string[]) {
+	return z.object({
+		topic: z.string().refine((topic) => topics.includes(topic), `the topics are ${topics.join(', ')}`).optional(),
 		workspaceId: identifier.optional(),
-	}).strict(),
+	}).strict()
+}
+
+function appRulesTool(rules: AppRules): AppRulesTool {
+	const topics = rules.skill.references.map((reference) => reference.topic)
+	return { rules, topics, input: appRulesInput(topics) }
+}
+
+const toolInputs = {
 	listTargets: z.object({}).strict(),
 	createWorkspace: z.object({ appId: identifier, env: identifier, title: z.string().min(1).max(200) }).strict(),
 	listWorkspaces: z.object({ appId: identifier.optional(), env: identifier.optional() }).strict(),
@@ -213,20 +229,21 @@ function toolInput<T extends z.ZodType>(schema: T): StandardSchemaWithJSON<z.inp
 	}
 }
 
-function controlMcpServer(c: DevUseCaseContext): McpServer {
+function controlMcpServer(c: DevUseCaseContext, rules: AppRulesTool): McpServer {
+	const skill = rules.rules.skill
 	const server = new McpServer({ name: 'fabrika', version: '0.1.0' }, { instructions: CONTROL_MCP_INSTRUCTIONS })
 	server.registerTool('get_app_rules', {
 		description: 'Read the rules for writing and changing a Fabrika application: the paved road, the declared steps off it, '
 			+ 'the loop and when to ask. Call it before editing an application. Without a topic it answers the main rules; '
-			+ `a topic answers one reference file they name (references/<topic>.md): ${APP_TOPICS.join(', ')}. `
+			+ `a topic answers one reference file they name (references/<topic>.md): ${rules.topics.join(', ')}. `
 			+ 'With workspaceId it also warns when that workspace pins another @fabrika/app than these rules describe.',
-		inputSchema: toolInput(toolInputs.getAppRules),
+		inputSchema: toolInput(rules.input),
 		annotations: READ_ONLY,
 	}, async (input): Promise<CallToolResult> => {
 		try {
-			const warning = input.workspaceId === undefined ? null : await pinWarning(c, input.workspaceId)
-			const text = APP_SKILL.references.find((reference) => reference.topic === input.topic)?.text ?? APP_SKILL.body
-			const header = `fabrika-app ${APP_SKILL.version}${warning === null ? '' : `\n${warning}`}\n\n`
+			const warning = input.workspaceId === undefined ? null : await pinWarning(c, input.workspaceId, rules.rules)
+			const text = skill.references.find((reference) => reference.topic === input.topic)?.text ?? skill.body
+			const header = `fabrika-app ${skill.version}${warning === null ? '' : `\n${warning}`}\n\n`
 			return { content: [{ type: 'text', text: header + text }] }
 		} catch (cause) {
 			return toolFailure(cause)
@@ -414,7 +431,7 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 }
 
 /** A warning when the workspace's `package.json` pins an `@fabrika/app` range these rules' version is outside. */
-async function pinWarning(c: WorkspaceUseCaseContext, workspaceId: string): Promise<string | null> {
+async function pinWarning(c: WorkspaceUseCaseContext, workspaceId: string, rules: AppRules): Promise<string | null> {
 	const read = await readFilesUseCase(c, { workspaceId, paths: ['package.json'] })
 	const content = read.files[0]?.content ?? null
 	if (content === null) return null
@@ -425,8 +442,8 @@ async function pinWarning(c: WorkspaceUseCaseContext, workspaceId: string): Prom
 		return null
 	}
 	const range = manifest.dependencies?.['@fabrika/app']
-	if (range === undefined || Bun.semver.satisfies(APP_SKILL.version, range)) return null
-	return `Warning: this workspace pins @fabrika/app ${range}, and these rules describe ${APP_SKILL.version}. `
+	if (range === undefined || rules.satisfies(rules.skill.version, range) !== false) return null
+	return `Warning: this workspace pins @fabrika/app ${range}, and these rules describe ${rules.skill.version}. `
 		+ 'Follow node_modules/@fabrika/app/skill/ of the pinned version where they differ, or ask the human to upgrade.'
 }
 

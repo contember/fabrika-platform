@@ -69,7 +69,7 @@ Usage:
   fabrika control apps environments list --app=<id>
   fabrika control apps environments put --provider=<name> --app=<id> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>] [--namespace=<id>]
-                           [--cross-origin=<origin> ...] [--kind=standard|dev]
+                           [--cross-origin=<origin> ...] [--kind=standard|dev] [--authoring=true|false]
   fabrika control apps environments suspend --app=<id> --env=<name>
   fabrika control apps environments resume  --app=<id> --env=<name>
   fabrika control apps variables list --app=<id>
@@ -131,6 +131,10 @@ repeats: the flags given are the environment's whole list. Each is an exact orig
 \`apps environments put\` without the flag keeps the stored list, and a lone empty \`--cross-origin=\` clears it.
 On Zerops the change reaches the namespace proxy at once; on Cloudflare the next deploy of the environment
 applies it.
+
+\`--authoring=true\` marks the environment as the app's MCP authoring target (ADR-0049): an agent deploys its
+workspaces there with \`deploy_stage\`. One per app, never a protected environment, and only for an app with a GitHub
+connection on a provider that supports authoring. \`--authoring=false\` clears it; without the flag the stored value stays.
 
 \`--installation-id\` has three states: omitted resolves the installation from the repository owner's
 connected GitHub App, \`none\` registers an anonymous PUBLIC repository source, and a number names one
@@ -726,6 +730,7 @@ const runEnvironments = async (
 		const triggerRef = optional(flags, 'trigger-ref')
 		const namespaceId = optional(flags, 'namespace')
 		const kind = environmentKind(flags)
+		const authoring = environmentAuthoring(flags)
 		const environment: PutAppEnvRequest = {
 			// The same empty placeholder `register` sends: the target is DISCOVERED from the manifest.
 			target: { provider, version, payload: {} },
@@ -736,6 +741,7 @@ const runEnvironments = async (
 			...(triggerRef === undefined ? {} : { triggerRef }),
 			...(namespaceId === undefined ? {} : { namespaceId }),
 			...(kind === undefined ? {} : { kind }),
+			...(authoring === undefined ? {} : { authoring }),
 		}
 		const result = await client.apps.environments.put({ appId: required(flags, 'app'), env: required(flags, 'env'), environment })
 		emit(flags, result, () => `${result.appId}\t${result.env}\t${result.provider}`)
@@ -753,6 +759,14 @@ const runEnvironments = async (
 		return
 	}
 	throw new Error(`Unknown \`control apps environments\` verb: ${verb ?? '(missing)'}`)
+}
+
+/** `--authoring`: whether the environment is the app's MCP authoring target (ADR-0049); without it the stored flag stays. */
+const environmentAuthoring = (flags: Flags): boolean | undefined => {
+	const authoring = optional(flags, 'authoring')
+	if (authoring === undefined) return undefined
+	if (authoring !== 'true' && authoring !== 'false') throw new Error('--authoring must be true or false')
+	return authoring === 'true'
 }
 
 /** `--kind`, set only when the environment is created: a `dev` environment follows one workspace (ADR-0049). */
