@@ -1,4 +1,4 @@
-import { Container, NO_PROCESS_ENV_FLAG, R2Bucket, type Worker } from '@fabrika/provider-cloudflare'
+import { Container, NO_IMPORTABLE_ENV_FLAG, NO_PROCESS_ENV_FLAG, R2Bucket, type Worker } from '@fabrika/provider-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -22,10 +22,12 @@ describe('defineApp(runner config)', () => {
 		expect(worker.options.main).toBe('./src/worker.ts')
 	})
 
-	test('the Worker keeps `process.env` empty, in the built config and in the committed wrangler.jsonc', () => {
-		expect(buildRunnerWorker({ env: 'stage' }).options.compatibility_flags).toContain(NO_PROCESS_ENV_FLAG)
+	test('the Worker keeps `process.env` and the importable `env` empty, in the built config and in the committed wrangler.jsonc', () => {
 		const committed = readFileSync(join(import.meta.dir, '..', '..', 'wrangler.jsonc'), 'utf8').match(/"compatibility_flags":\s*\[([^\]]*)\]/)
-		expect(committed?.[1]).toContain(`"${NO_PROCESS_ENV_FLAG}"`)
+		for (const flag of [NO_PROCESS_ENV_FLAG, NO_IMPORTABLE_ENV_FLAG]) {
+			expect(buildRunnerWorker({ env: 'stage' }).options.compatibility_flags).toContain(flag)
+			expect(committed?.[1]).toContain(`"${flag}"`)
+		}
 	})
 
 	test('binds the RunnerContainer DO + the shared (adopted) R2, and no database', () => {

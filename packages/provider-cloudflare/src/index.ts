@@ -56,6 +56,8 @@ export {
 	createCloudflareProxyWorker,
 	IAM_APPLICATION_ENTRYPOINT,
 	iamServiceReference,
+	IMPORTABLE_ENV_FLAG,
+	NO_IMPORTABLE_ENV_FLAG,
 	NO_PROCESS_ENV_FLAG,
 	POPULATE_PROCESS_ENV_FLAG,
 	proxyManifestJson,

@@ -64,6 +64,21 @@ export const CLOUDFLARE_PROXY_WORKER_MAIN = './proxy-worker.ts'
 export const NO_PROCESS_ENV_FLAG = 'nodejs_compat_do_not_populate_process_env'
 /** workerd's flag that fills `process.env`; an application Worker that sets it is refused. */
 export const POPULATE_PROCESS_ENV_FLAG = 'nodejs_compat_populate_process_env'
+/**
+ * workerd's flag that empties the `env` any module can import from `cloudflare:workers`. Without it (it has no
+ * enable date at workerd 1.20260312.1), that `env` is every binding and secret of the Worker, at module evaluation and
+ * at request; with it, an empty object, and `WorkerEntrypoint` and `DurableObject` still load. Both the proxy Worker
+ * and every application Worker carry it.
+ */
+export const NO_IMPORTABLE_ENV_FLAG = 'disallow_importable_env'
+/** workerd's flag that keeps the importable `env`; an application Worker that sets it is refused. */
+export const IMPORTABLE_ENV_FLAG = 'allow_importable_env'
+
+/** The flag pairs that keep the Worker's environment out of module scope: each opt-out the platform adds, and the opt-in it refuses. */
+export const CLOSED_ENVIRONMENT_FLAGS: readonly { readonly closed: string; readonly opened: string; readonly what: string }[] = [
+	{ closed: NO_PROCESS_ENV_FLAG, opened: POPULATE_PROCESS_ENV_FLAG, what: '`process.env`' },
+	{ closed: NO_IMPORTABLE_ENV_FLAG, opened: IMPORTABLE_ENV_FLAG, what: 'the `env` of `cloudflare:workers`' },
+]
 
 /**
  * The identifier the proxy Worker's bundle reads its manifest from. The generated config's `define` replaces it with
@@ -158,7 +173,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		dir: CLOUDFLARE_PROXY_WORKER_DIR,
 		name: options.name,
 		main: CLOUDFLARE_PROXY_WORKER_MAIN,
-		compatibility_flags: ['nodejs_compat', NO_PROCESS_ENV_FLAG],
+		compatibility_flags: ['nodejs_compat', ...CLOSED_ENVIRONMENT_FLAGS.map(({ closed }) => closed)],
 		compatibility_date: '2025-05-25',
 		routes: domain === undefined || domain === '' ? [] : [{ pattern: domain, custom_domain: true }],
 		observability: { logs: { enabled: true, invocation_logs: false } },
