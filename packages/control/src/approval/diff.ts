@@ -18,6 +18,7 @@ import {
 	type DeclaredEgress,
 	type DeclaredReach,
 	type DimensionArtifact,
+	type DimensionValue,
 	type EndpointAuthorization,
 	type EndpointCache,
 	endpointDelegation,
@@ -279,7 +280,13 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 		changed: dimensionChanges,
 	})
 	for (const [name, dimension] of Object.entries(candidate.dimensions)) {
-		if (!Object.hasOwn(baseline.dimensions, name)) changes.add(subjectOf('dimension', name), ...directoryChange(name, undefined, dimension.directory))
+		if (!Object.hasOwn(baseline.dimensions, name)) {
+			changes.add(
+				subjectOf('dimension', name),
+				...directoryChange(name, undefined, dimension.directory),
+				...valuesChange(name, undefined, dimension.values),
+			)
+		}
 	}
 	for (const name of union(opaqueRoots(baseline), opaqueRoots(candidate))) {
 		changes.add(subjectOf('dimension', name), ...opaqueRootChange(name, baseline, candidate))
@@ -2457,9 +2464,29 @@ function opaqueRootChange(name: string, baseline: ContractArtifact, candidate: C
 }
 
 function dimensionChanges(name: string, from: DimensionArtifact, to: DimensionArtifact): RuledLine[] {
-	const { directory: before, ...fromRest } = from
-	const { directory: after, ...toRest } = to
-	return [...ruled('dimension.declaration', valueChange(`Dimension \`${name}\``, fromRest, toRest)), ...directoryChange(name, before, after)]
+	const { directory: before, values: valuesBefore, ...fromRest } = from
+	const { directory: after, values: valuesAfter, ...toRest } = to
+	return [
+		...ruled('dimension.declaration', valueChange(`Dimension \`${name}\``, fromRest, toRest)),
+		...directoryChange(name, before, after),
+		...valuesChange(name, valuesBefore, valuesAfter),
+	]
+}
+
+/** The values a dimension lists are what the console offers an administrator who grants there (ADR-0085): they decide nothing. */
+function valuesChange(name: string, before: readonly DimensionValue[] | undefined, after: readonly DimensionValue[] | undefined): RuledLine[] {
+	if (canonicalJson(before ?? null) === canonicalJson(after ?? null)) return []
+	const listed = (values: readonly DimensionValue[]): string => {
+		const shown = values.slice(0, 10).map((entry) => `\`${entry.value}\``).join(', ')
+		return values.length > 10 ? `${shown} and ${values.length - 10} more` : shown
+	}
+	return ruled('dimension.values', [
+		neutral(
+			after === undefined
+				? `The console takes any value of \`${name}\` as free text again`
+				: `The console offers these values of \`${name}\` when an administrator grants there: ${listed(after)}`,
+		),
+	])
 }
 
 /**

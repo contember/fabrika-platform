@@ -11,6 +11,7 @@ import {
 	CONTRACT_FORMAT,
 	type ContractArtifact,
 	CROSS_ORIGIN_KINDS,
+	dimensionValuesProblem,
 	displayNameProblem,
 	type EndpointRow,
 	FILE_RESPONSE_KINDS,
@@ -449,6 +450,9 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 			creator: nullableName,
 			members: z.strictObject({ manage: action, list: action }).nullable(),
 			directory: z.literal('labels').optional(),
+			values: z.array(z.strictObject({ value: z.string(), label: z.string().optional() }))
+				.refine((values) => dimensionValuesProblem(values) === null, { message: 'is not a list of values (dimensionValuesProblem)' })
+				.optional(),
 		})),
 		actions: z.record(action, z.string()),
 		roles: z.record(

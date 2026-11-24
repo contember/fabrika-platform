@@ -17,7 +17,7 @@ export const contract = defineContract({
 	mail: { reset: { cs: { subject: 'Nové heslo do aplikace {{displayName}}', text: `Heslo si nastavíte zde:\n{{actionUrl}}` } } },
 	dimensions: {
 		project: { creator: 'maintainer', members: { manage: 'tasks.admin', list: READ }, directory: 'labels' },
-		task: { in: 'project' },
+		task: { in: 'project', values: [{ value: 'triage', label: 'Triage' }, { value: 'backlog' }] },
 	},
 	actions,
 	roles,

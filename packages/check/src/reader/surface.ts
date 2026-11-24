@@ -41,6 +41,7 @@ import {
 import { DataObject } from '@fabrika/app/schema'
 import {
 	type CspSource,
+	type DimensionValue,
 	isLocale,
 	isMessageKind,
 	type Locale,
@@ -278,10 +279,11 @@ class SurfaceReader {
 	}
 
 	#dimension(name: string, value: LiteralValue): DimensionDef<string, string, string> {
-		const fields = strictFields(value, `dimension '${name}'`, [], ['in', 'creator', 'members', 'directory'])
+		const fields = strictFields(value, `dimension '${name}'`, [], ['in', 'creator', 'members', 'directory', 'values'])
 		const members = fields.get('members')
 		const memberFields = members === undefined ? undefined : strictFields(members, `dimension '${name}' members`, ['manage', 'list'], [])
 		const directory = fields.get('directory')
+		const values = fields.get('values')
 		return {
 			in: optionalText(fields.get('in'), 'in'),
 			creator: optionalText(fields.get('creator'), 'creator'),
@@ -289,6 +291,7 @@ class SurfaceReader {
 				? undefined
 				: { manage: text(memberFields.get('manage'), value, 'manage'), list: text(memberFields.get('list'), value, 'list') },
 			...(directory === undefined ? {} : { directory: directoryOf(directory, value) }),
+			...(values === undefined ? {} : { values: dimensionValuesOf(name, values) }),
 		}
 	}
 
@@ -956,6 +959,18 @@ function directoryOf(value: LiteralValue, owner: Owner): 'labels' {
 		throw new Refused(value.at, `directory is '${directory}'`, "directory: 'labels'")
 	}
 	return directory
+}
+
+/** A dimension's `values: [{ value, label? }]`, copied as the kit copies them; `buildArtifact` checks the list. */
+function dimensionValuesOf(name: string, value: LiteralValue): DimensionValue[] {
+	if (value.kind !== 'array') {
+		throw new Refused(value.at, `values of dimension '${name}' is a ${describeKind(value)}`, "values: [{ value: '…', label: '…' }]")
+	}
+	return value.items.map((item) => {
+		const fields = strictFields(item, `a value of dimension '${name}'`, ['value'], ['label'])
+		const label = fields.get('label')
+		return { value: text(fields.get('value'), item, 'value'), ...(label === undefined ? {} : { label: text(label, item, 'label') }) }
+	})
 }
 
 /** The vocabulary's `terminal: { identify: '/path' }`; `buildArtifact` checks the path itself. */

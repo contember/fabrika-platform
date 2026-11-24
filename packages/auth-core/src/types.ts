@@ -1,5 +1,6 @@
 import type { Locale } from './locale'
 import type { MailTemplates } from './mail'
+import type { DimensionValue } from './scope-values'
 
 export type PrincipalType = 'user' | 'service'
 
@@ -163,6 +164,8 @@ export interface AppScopeDef {
 	 * answers a lookup only for one of them, held on the directory's value. Absent, no endpoint looks one up.
 	 */
 	lookups?: string[]
+	/** The values the console offers for a grant in this dimension (ADR-0085); absent, it takes free text. */
+	values?: DimensionValue[]
 }
 
 /**

@@ -21,6 +21,7 @@ import {
 	type DeclaredEgress,
 	type DeclaredReach,
 	type DimensionArtifact,
+	dimensionValuesProblem,
 	directoryReach,
 	displayNameProblem,
 	type EndpointCache,
@@ -434,11 +435,19 @@ class ArtifactBuilder {
 			if (dimension.directory !== undefined && dimension.members === undefined) {
 				this.#problem(where, 'declares a directory and no members: { manage, list } whose list it labels')
 			}
+			const values = dimension.values === undefined
+				? undefined
+				: dimension.values.map(({ value, label }) => (label === undefined ? { value } : { value, label }))
+			const valuesProblem = values === undefined ? null : dimensionValuesProblem(values)
+			if (valuesProblem !== null) {
+				this.#problem(`${where} values`, valuesProblem)
+			}
 			dimensions[name] = {
 				in: dimension.in ?? null,
 				creator: dimension.creator ?? null,
 				members: dimension.members === undefined ? null : { manage: dimension.members.manage, list: dimension.members.list },
 				...(dimension.directory === 'labels' ? { directory: 'labels' } : {}),
+				...(values === undefined ? {} : { values }),
 			}
 		}
 		for (const name of Object.keys(declared)) {

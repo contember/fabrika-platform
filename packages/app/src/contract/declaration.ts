@@ -2,7 +2,7 @@
 // once described. `buildArtifact` reads only this shape, so a reader that produces it from source (B1) and
 // `compileContract` normalize through the same code.
 
-import type { CspSource, MailTemplate, RpcCaller } from '@fabrika/auth-core'
+import type { CspSource, DimensionValue, MailTemplate, RpcCaller } from '@fabrika/auth-core'
 
 export interface ContractDeclaration<S> {
 	readonly app: string
@@ -137,6 +137,8 @@ export interface DimensionDeclaration {
 	readonly members?: { readonly manage: string; readonly list: string }
 	/** `'labels'` only; `buildArtifact` refuses another value. */
 	readonly directory?: string
+	/** The values the console offers for a grant here (ADR-0085); `buildArtifact` checks the list. */
+	readonly values?: readonly DimensionValue[]
 }
 
 export interface RoleDeclaration {
