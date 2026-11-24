@@ -450,7 +450,6 @@ export async function ensureGitHubSecretsLocation(
 	effects: Pick<InitEffects, 'environmentVariables' | 'repositoryVariables'>,
 ): Promise<void> {
 	step('GitHub secrets location')
-	await persistEnv(GITHUB_SECRETS_VARIABLE, input.githubSecrets)
 	if (input.githubSecrets === 'repository') {
 		// A plan without Environments may refuse the read outright; then there is no Environment to collide with.
 		const environment = await effects.environmentVariables(input.repo, input.account).catch(() => null)
@@ -462,6 +461,8 @@ export async function ensureGitHubSecretsLocation(
 					+ 'with the same installer env file, which still holds every value.',
 			)
 		}
+		// Saved only once the store is known to be free, so a refused switch leaves the env file naming the store in use.
+		await persistEnv(GITHUB_SECRETS_VARIABLE, input.githubSecrets)
 		ok(`Repository secrets and variables of ${input.repo}: no GitHub Environment, no deployment protection rule.`)
 		return
 	}
@@ -475,6 +476,7 @@ export async function ensureGitHubSecretsLocation(
 				+ 'then `gh secret delete` / `gh variable delete` each) and run init again with the same installer env file.',
 		)
 	}
+	await persistEnv(GITHUB_SECRETS_VARIABLE, input.githubSecrets)
 	ok(`GitHub Environment ${input.account} on ${input.repo}.`)
 }
 

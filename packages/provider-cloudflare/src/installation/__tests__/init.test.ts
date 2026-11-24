@@ -621,6 +621,19 @@ describe('Cloudflare init flow with repository secrets', () => {
 		expect(recorded.effects).not.toContain('configureRepository')
 	})
 
+	test('a refused switch leaves the env file naming the store the installation is in', async () => {
+		const first = recorder({})
+		const second = recorder({ environment: { FABRIKA_CLOUDFLARE_NAMES: 'fabrika' } })
+		let refusal: unknown
+		const { persisted } = await withEnvFile(async () => {
+			await runInit(parse(REQUIRED), first.collaborators)
+			refusal = await runInit(parse(REPOSITORY, { ...CREDENTIALS, ...process.env }), second.collaborators).catch((error: unknown) => error)
+		})
+
+		expect(refusal).toBeInstanceOf(Error)
+		expect(persisted['FABRIKA_GITHUB_SECRETS']).toBe('environment')
+	})
+
 	test('repository variables that already hold the installation refuse the switch to an Environment before any write', async () => {
 		const { recorded, collaborators } = recorder({ repository: { FABRIKA_CLOUDFLARE_NAMES: 'fabrika' } })
 		const run = withEnvFile(() => runInit(parse(REQUIRED), collaborators))
