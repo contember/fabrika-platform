@@ -150,9 +150,65 @@ describe('awsJsonClient', () => {
 
 	test("an http: origin is refused unless it is a local emulator's, as the signer refuses it", async () => {
 		const plain = client(() => json({ services: [] }), { origin: 'http://localhost:4566' })
-		await expect(plain.ecs.call('DescribeServices', {}, services)).rejects.toThrow('allowInsecureOrigin')
+		expect(await failure(plain.ecs.call('DescribeServices', {}, services))).toMatchObject({ code: 'invalid_request', retryable: false })
+		expect(plain.sent).toHaveLength(0)
 		const local = client(() => json({ services: [] }), { origin: 'http://localhost:4566', allowInsecureOrigin: true })
 		expect(await local.ecs.call('DescribeServices', {}, services)).toEqual({ services: [] })
 		expect(local.sent[0]?.url).toBe('http://localhost:4566/')
+	})
+
+	test("the caller's abort is no retryable failure: before the call nothing is sent, and during it the call stops", async () => {
+		const before = client(() => json({ services: [] }))
+		const cancelled = new AbortController()
+		cancelled.abort()
+		expect(await failure(before.ecs.call('DescribeServices', {}, services, cancelled.signal))).toMatchObject({ code: 'aborted', retryable: false })
+		expect(before.sent).toHaveLength(0)
+		expect(before.credentialReads()).toBe(0)
+		const during = new AbortController()
+		const hung = client(({ init }) =>
+			new Promise<Response>((_, reject) => {
+				init.signal?.addEventListener('abort', () => reject(new Error('aborted')))
+				during.abort()
+			})
+		)
+		expect(await failure(hung.ecs.call('DescribeServices', {}, services, during.signal))).toMatchObject({ code: 'aborted', retryable: false })
+	})
+
+	test('a credential source that fails, or hangs past the deadline, is an AwsError, and nothing is sent', async () => {
+		const failing = client(() => json({}), { credentials: { current: () => Promise.reject(new Error(`endpoint down ${SECRET}`)) } })
+		const error = await failure(failing.ecs.call('DescribeServices', {}, services))
+		expect(error).toMatchObject({ code: 'credentials', retryable: true })
+		expect(error.message).not.toContain(SECRET)
+		expect(failing.sent).toHaveLength(0)
+		const hanging = client(() => json({}), { credentials: { current: () => new Promise<SigningCredentials>(() => {}) }, timeoutMs: 20 })
+		expect(await failure(hanging.ecs.call('DescribeServices', {}, services))).toMatchObject({ code: 'timeout', retryable: true })
+	})
+
+	test('the input is serialized once, so the body sent is the body signed', async () => {
+		let serialized = 0
+		const input = {
+			toJSON: () => {
+				serialized += 1
+				return { cluster: `fabrika-apps-${serialized}` }
+			},
+		}
+		const { ecs, sent } = client(() => json({ services: [] }))
+		await ecs.call('DescribeServices', input, services)
+		expect(serialized).toBe(1)
+		expect(sent[0]?.init.body).toBe(JSON.stringify({ cluster: 'fabrika-apps-1' }))
+	})
+
+	test('a 200 that is no JSON is refused even by a schema that would take anything; an empty one is an empty object', async () => {
+		const garbled = client(() => new Response('<html>maintenance</html>', { status: 200 }))
+		expect(await failure(garbled.ecs.call('DescribeServices', {}, z.unknown()))).toMatchObject({ code: 'invalid_answer' })
+		const empty = client(() => new Response('', { status: 200 }))
+		expect(await empty.ecs.call('DeleteService', {}, z.object({}))).toEqual({})
+	})
+
+	test("the error type is read in the protocol's order: the header, the body's code, then __type", async () => {
+		const both = client(() => json({ __type: 'com.amazonaws.ecs#ClientException' }, 400, { 'x-amzn-errortype': 'ThrottlingException:http://x/' }))
+		expect(await failure(both.ecs.call('DescribeServices', {}, services))).toMatchObject({ code: 'ThrottlingException' })
+		const coded = client(() => json({ code: 'ExpiredTokenException', __type: 'com.amazonaws.ecs#ClientException' }, 400))
+		expect(await failure(coded.ecs.call('DescribeServices', {}, services))).toMatchObject({ code: 'ExpiredTokenException', retryable: true })
 	})
 })

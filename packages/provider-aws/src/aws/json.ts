@@ -8,7 +8,7 @@
 // checked against an account.
 
 import type { z } from 'zod'
-import { type SigningCredentials, signRequest } from './sigv4'
+import { type SignedRequest, type SigningCredentials, signRequest } from './sigv4'
 
 /** One service of the JSON protocol: the name it signs for, the prefix of its operations and its JSON version. */
 export interface AwsJsonService {
@@ -54,8 +54,15 @@ export function awsServiceOrigin(service: AwsJsonService, region: string): strin
 }
 
 /**
- * A failed call. `code` is the service's error code (`ClusterNotFoundException`), or the client's own: `redirect`,
- * `unreachable`, `timeout`, `answer_too_large`, `invalid_answer`, `unknown`.
+ * A failed call. `code` is the service's error code (`ClusterNotFoundException`), or the client's own:
+ * `invalid_operation` and `invalid_request` (refused before anything is sent), `credentials` (the source failed),
+ * `aborted` (the caller's signal), `timeout`, `unreachable`, `redirect`, `answer_too_large`, `invalid_answer`,
+ * `unknown` (an error answer without a code of the expected form).
+ *
+ * `retryable` means a repeat may succeed, not that this attempt had no effect: after `timeout`, `unreachable` or a 5xx
+ * a submitting call (`StartBuild`, `UpdateService`) may have taken effect, which is why its caller records a marker
+ * first (ADR-0044). Clock skew is not corrected: a host whose clock is off gets `InvalidSignatureException`,
+ * `RequestExpired` or `SignatureDoesNotMatch`, not retryable. Fargate keeps its clock.
  */
 export class AwsError extends Error {
 	override readonly name = 'AwsError'
@@ -96,18 +103,53 @@ const RETRYABLE_CODES: ReadonlySet<string> = new Set([
 	'InternalFailure',
 	'InternalServerError',
 	'ServerException',
+	'RequestTimeout',
+	'RequestTimeoutException',
+	'PriorRequestNotComplete',
+	'TransactionInProgressException',
+	'SlowDown',
+	'BandwidthLimitExceeded',
+	'EC2ThrottledException',
+	// The credential source refreshes before a set expires, so a repeat signs with a fresh one.
+	'ExpiredTokenException',
 ])
 const RETRYABLE_STATUS: ReadonlySet<number> = new Set([429, 500, 502, 503, 504])
 
+/** The string field `name` of a parsed body, if it has one. */
+function field(body: unknown, name: string): string | undefined {
+	if (typeof body !== 'object' || body === null || !(name in body)) return undefined
+	const value: unknown = Reflect.get(body, name)
+	return typeof value === 'string' ? value : undefined
+}
+
 /**
- * The error code of a JSON-protocol error answer: the body's `__type` (`com.amazonaws.ecs#ClientException`), else the
- * `x-amzn-ErrorType` header (`ThrottlingException:http://…`); the part after `#` and before `:`.
+ * The error code of a JSON-protocol error answer, in the protocol's order: the `x-amzn-ErrorType` header
+ * (`ThrottlingException:http://…`), else the body's `code`, else its `__type` (`com.amazonaws.ecs#ClientException`);
+ * the part after `#` and before `:`.
  */
 function errorCode(body: unknown, header: string | null): string {
-	const typed = typeof body === 'object' && body !== null && '__type' in body ? body.__type : undefined
-	const raw = typeof typed === 'string' ? typed : header ?? ''
+	const raw = header ?? field(body, 'code') ?? field(body, '__type') ?? ''
 	const code = (raw.split('#').at(-1) ?? '').split(':')[0] ?? ''
 	return ERROR_CODE.test(code) ? code : 'unknown'
+}
+
+/** `promise`, or a rejection once `signal` aborts, whichever comes first. */
+function untilAborted<T>(promise: Promise<T>, signal: AbortSignal): Promise<T> {
+	if (signal.aborted) return Promise.reject(signal.reason)
+	return new Promise<T>((resolve, reject) => {
+		const abort = (): void => reject(signal.reason)
+		signal.addEventListener('abort', abort, { once: true })
+		promise.then(
+			(value) => {
+				signal.removeEventListener('abort', abort)
+				resolve(value)
+			},
+			(error: unknown) => {
+				signal.removeEventListener('abort', abort)
+				reject(error)
+			},
+		)
+	})
 }
 
 /** The body, read as text up to `max` bytes; `null` past it, the rest of the stream cancelled. */
@@ -135,11 +177,18 @@ async function boundedText(response: Response, max: number): Promise<string | nu
 	return new TextDecoder().decode(joined)
 }
 
-function parsed(text: string): unknown {
+type Parsed = { readonly valid: true; readonly value: unknown } | { readonly valid: false }
+
+/** An empty answer, which the JSON protocol sends for an operation without output. */
+const EMPTY_ANSWER: Parsed = { valid: true, value: {} }
+
+/** The parsed JSON of `text`, or `invalid` when it is none. */
+function parsed(text: string): Parsed {
 	try {
-		return JSON.parse(text)
+		const value: unknown = JSON.parse(text)
+		return { valid: true, value }
 	} catch {
-		return undefined
+		return { valid: false }
 	}
 }
 
@@ -155,35 +204,49 @@ export function awsJsonClient(service: AwsJsonService, options: AwsJsonClientOpt
 			if (!OPERATION.test(operation)) throw new AwsError('(operation)', 'invalid_operation', 0, null, false)
 			const fail = (code: string, status: number, requestId: string | null, retryable: boolean): AwsError =>
 				new AwsError(operation, code, status, requestId, retryable)
+			if (signal?.aborted === true) throw fail('aborted', 0, null, false)
 			const deadline = AbortSignal.timeout(timeoutMs)
 			const aborted = signal === undefined ? deadline : AbortSignal.any([signal, deadline])
-			const signed = await signRequest(
-				{
-					method: 'POST',
-					origin: options.origin,
-					path: '/',
-					headers: {
-						'content-type': `application/x-amz-json-${service.jsonVersion}`,
-						'x-amz-target': `${service.targetPrefix}.${operation}`,
+			/** What a failure in flight was: the caller's abort, the deadline, or else `otherwise`. */
+			const interrupted = (status: number, requestId: string | null, otherwise: AwsError): AwsError => {
+				if (signal?.aborted === true) return fail('aborted', status, requestId, false)
+				if (deadline.aborted) return fail('timeout', status, requestId, true)
+				return otherwise
+			}
+			// Serialized once: the body sent is the body signed, whatever the caller changes meanwhile.
+			const body = JSON.stringify(input)
+			let credentials: SigningCredentials
+			try {
+				credentials = await untilAborted(options.credentials.current(), aborted)
+			} catch {
+				throw interrupted(0, null, fail('credentials', 0, null, true))
+			}
+			let signed: SignedRequest
+			try {
+				signed = await signRequest(
+					{
+						method: 'POST',
+						origin: options.origin,
+						path: '/',
+						headers: {
+							'content-type': `application/x-amz-json-${service.jsonVersion}`,
+							'x-amz-target': `${service.targetPrefix}.${operation}`,
+						},
+						body,
 					},
-					body: JSON.stringify(input),
-				},
-				await options.credentials.current(),
-				scope,
-				now(),
-				{ allowInsecureOrigin: options.allowInsecureOrigin === true },
-			)
+					credentials,
+					scope,
+					now(),
+					{ allowInsecureOrigin: options.allowInsecureOrigin === true },
+				)
+			} catch {
+				throw fail('invalid_request', 0, null, false)
+			}
 			let response: Response
 			try {
-				response = await send(signed.url, {
-					method: 'POST',
-					headers: signed.headers,
-					body: JSON.stringify(input),
-					redirect: 'manual',
-					signal: aborted,
-				})
+				response = await send(signed.url, { method: 'POST', headers: signed.headers, body, redirect: 'manual', signal: aborted })
 			} catch {
-				throw deadline.aborted ? fail('timeout', 0, null, true) : fail('unreachable', 0, null, true)
+				throw interrupted(0, null, fail('unreachable', 0, null, true))
 			}
 			const id = response.headers.get('x-amzn-requestid')
 			const requestId = id !== null && REQUEST_ID.test(id) ? id : null
@@ -195,14 +258,18 @@ export function awsJsonClient(service: AwsJsonService, options: AwsJsonClientOpt
 			try {
 				text = await boundedText(response, maxAnswerBytes)
 			} catch {
-				throw deadline.aborted ? fail('timeout', response.status, requestId, true) : fail('unreachable', response.status, requestId, true)
+				throw interrupted(response.status, requestId, fail('unreachable', response.status, requestId, true))
 			}
 			if (text === null) throw fail('answer_too_large', response.status, requestId, false)
 			if (!response.ok) {
-				const code = errorCode(parsed(text), response.headers.get('x-amzn-errortype'))
+				const errorBody = parsed(text)
+				const code = errorCode(errorBody.valid ? errorBody.value : undefined, response.headers.get('x-amzn-errortype'))
 				throw fail(code, response.status, requestId, RETRYABLE_CODES.has(code) || RETRYABLE_STATUS.has(response.status))
 			}
-			const read = answer.safeParse(text === '' ? {} : parsed(text))
+			// An empty answer is an empty object; anything else must be JSON before the schema sees it.
+			const content = text === '' ? EMPTY_ANSWER : parsed(text)
+			if (!content.valid) throw fail('invalid_answer', response.status, requestId, false)
+			const read = answer.safeParse(content.value)
 			if (!read.success) throw fail('invalid_answer', response.status, requestId, false)
 			return read.data
 		},
