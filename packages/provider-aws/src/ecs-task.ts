@@ -14,6 +14,10 @@
 // - Variables are plain values, which anyone who may read the task definition reads, and secrets are Parameter Store
 //   ARNs (ADR-0004). A framework variable that carries a credential (`isManagedCredential`, the rule Control writes by,
 //   failing closed) is refused among the plain values.
+// - The provisioning credential (`FABRIKA_APP_DATABASE_URL`, ADR-0017) reaches the init task only: each definition takes
+//   its own secrets, and the server's may not hold it. The server reads `FABRIKA_APP_RUNTIME_DATABASE_URL` (the deploy
+//   writes the runtime role's URL as its own parameter), so on ECS no application process ever holds the credential that
+//   creates roles, which on Zerops only the launcher keeps from the application.
 // - The task role and the execution role are the application environment's own (ADR-0004's AWS invariant); this module
 //   takes them as given and the ECS client refuses the two being one role.
 // - The recipe's jobs are not here: the image runs none of them, and their schedule is the provider's (ADR-0080).
@@ -34,6 +38,10 @@ export const SERVER_CONTAINER = 'server'
 export const INIT_CONTAINER = 'init'
 /** The init definition's family is the service's with this suffix. */
 export const INIT_FAMILY_SUFFIX = '-init'
+/** The provisioning credential: the database's owner, which creates the application's roles (ADR-0017). */
+export const PROVISIONING_DATABASE_URL = 'FABRIKA_APP_DATABASE_URL'
+/** The runtime role's URL, which the server reads instead (`applicationRuntimeUrl`). */
+export const RUNTIME_DATABASE_URL = 'FABRIKA_APP_RUNTIME_DATABASE_URL'
 /** How long a new task has before a failed health check counts: the server's boot. */
 const HEALTH_START_PERIOD_SECONDS = 60
 /** A family the init suffix still fits behind (ECS takes 255). */
@@ -51,8 +59,13 @@ export interface AwsTaskDefinitionInput {
 	readonly healthPath: string
 	/** Plain values: the managed variables that carry no credential, and the application's own. */
 	readonly environment: Readonly<Record<string, string>>
-	/** Secrets by the ARN of the Parameter Store parameter ECS reads at start (`parameterArn`). */
+	/**
+	 * The server's secrets, by the ARN of the Parameter Store parameter ECS reads at start (`parameterArn`). Never the
+	 * provisioning credential: with a database, `FABRIKA_APP_RUNTIME_DATABASE_URL` instead.
+	 */
 	readonly secrets: Readonly<Record<string, string>>
+	/** The init task's secrets, the same way: with a database, the provisioning credential the migrations run with. */
+	readonly initSecrets: Readonly<Record<string, string>>
 	readonly taskRoleArn: string
 	readonly executionRoleArn: string
 	/** Fargate CPU units and memory in MiB, from the application's size. */
@@ -91,13 +104,15 @@ export function awsTaskDefinitions(input: AwsTaskDefinitionInput): AwsTaskDefini
 	if (!isHealthPath(input.healthPath)) refuse('the health path')
 	if (input.rendered.start.length === 0 || input.rendered.init.some((command) => command.length === 0)) refuse('the image commands')
 	// The port is the platform's: a `PORT` of the application's would move the server away from its health check.
-	if (Object.hasOwn(input.environment, 'PORT') || Object.hasOwn(input.secrets, 'PORT')) refuse('the variable PORT')
+	if ([input.environment, input.secrets, input.initSecrets].some((variables) => Object.hasOwn(variables, 'PORT'))) refuse('the variable PORT')
+	// The credential that creates roles never reaches the application's process (ADR-0017).
+	if (Object.hasOwn(input.secrets, PROVISIONING_DATABASE_URL)) refuse(`the server's secret ${PROVISIONING_DATABASE_URL}`)
+	if (input.rendered.init.length === 0 && Object.keys(input.initSecrets).length > 0) refuse('init secrets without an init command')
 	for (const name of Object.keys(input.environment)) {
 		// A plain value is readable in the task definition: a framework credential goes by parameter ARN only.
 		if (name.startsWith('FABRIKA_') && isManagedCredential(name)) refuse(`the plain variable ${name} (a credential)`)
 	}
 	const environment = { ...input.environment }
-	const secrets = { ...input.secrets }
 	const log = (streamPrefix: string) => ({ group: input.log.group, region: input.log.region, streamPrefix })
 	const definition = (family: string, container: EcsContainer): EcsTaskDefinition => ({
 		family,
@@ -116,7 +131,7 @@ export function awsTaskDefinitions(input: AwsTaskDefinitionInput): AwsTaskDefini
 		port: AWS_APPLICATION_PORT,
 		command: [...input.rendered.start],
 		environment,
-		secrets,
+		secrets: { ...input.secrets },
 		healthCheck: {
 			command: healthCommand(input.healthPath),
 			intervalSeconds: 10,
@@ -135,7 +150,7 @@ export function awsTaskDefinitions(input: AwsTaskDefinitionInput): AwsTaskDefini
 		essential: true,
 		command: [...first],
 		environment,
-		secrets,
+		secrets: { ...input.initSecrets },
 		log: log(INIT_CONTAINER),
 	})
 	return { service, init: { definition: init, commands: input.rendered.init.map((command) => [...command]) } }

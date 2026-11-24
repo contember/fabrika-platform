@@ -75,7 +75,7 @@ In AWS:
 | Build (ADR-0003: no runner)               | Zerops build container, triggered over REST                  | CodeBuild, `NO_SOURCE` with an inline buildspec; image to ECR, deployed by digest              | Building in Control; CodePipeline                 |
 | Source transport (ADR-0029)               | Control streams the GitHub tarball to the app version upload | The same stream as an S3 multipart upload; the build fetches it through a presigned GET        | One presigned PUT (needs a length)                |
 | Deploy and activation                     | `build-and-deploy`, readiness check gates activation         | Register a task definition, update the service, health check gates, circuit breaker rolls back |                                                   |
-| Migrations                                | `run.initCommands` on every container start                  | A non-essential init container, `dependsOn: SUCCESS`; later a pause hook and one `RunTask`     | Migrating in the server process                   |
+| Migrations                                | `run.initCommands` on every container start                  | One `RunTask` per init command before the service update; later perhaps a pause hook           | An init container in every task                   |
 | Run checkpoint and recovery (ADR-0044)    | `{ appVersionId, triggered }`                                | `{ buildId, taskDefinitionArn, deploymentArn }`, each recorded before the call that needs it   |                                                   |
 | Secrets (ADR-0004)                        | Sensitive service variables                                  | SSM Parameter Store standard `SecureString`, injected by the task definition's `secrets`       | Secrets Manager ($0.40 a secret, rotation unused) |
 | Managed environment                       | Service variables plus literals in the descriptor            | Task definition `environment` and `secrets`, written per run                                   |                                                   |
@@ -139,14 +139,20 @@ In AWS:
 - **ECR** keeps the images, a lifecycle policy expires old ones, and the task definition names the digest, never a tag.
   ECR's pull-through cache can mirror the Bun base image, so a build does not depend on Docker Hub's rate limit.
 
-### Migrations: an init container first, a pause hook later
+### Migrations: one task per deploy, before the update
 
-A non-essential init container runs `fabrika/migrate.generated.sh` with the provisioning credential, and the server
-container waits for its `SUCCESS`. ECS gives each container its own environment, so the provisioning credential
-reaches the migration container only, never the application process; on Zerops that takes the launcher of ADR-0017.
-The cost: every task start migrates (a no-op after the first), as on Zerops today.
+The deploy runs each init command of `containerImage` (the migrations, then the schema check) once, as a one-off task
+of the application environment's init definition (`RunTask` with a command override), in order, and updates the
+service only after every one exited 0 (`src/ecs-task.ts`). The init definition alone holds the provisioning credential
+(`FABRIKA_APP_DATABASE_URL`); the server's holds the runtime role's URL (`FABRIKA_APP_RUNTIME_DATABASE_URL`, a parameter
+the deploy writes), so no application process ever holds the credential that creates roles, which on Zerops only the
+launcher of ADR-0017 keeps from it.
 
-ECS pause hooks offer the cleaner shape: at `PRE_SCALE_UP` the deployment waits until Control has run the migration
+An init container in every task was the first idea, and was rejected: the schema check fails against a schema a newer
+revision migrated, so a rollback, a replacement or a scale-out of the older revision could not start; and Fargate bounds
+a container dependency's wait at 120 s, which a long migration would outrun.
+
+ECS pause hooks may offer a later shape: at `PRE_SCALE_UP` the deployment waits until Control has run the migration
 once as a `RunTask` and calls `ContinueServiceDeployment`; a hook waits up to 14 days
 ([pause hooks](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/pause-lifecycle-hooks.html)). The docs show
 them with blue/green deployments; whether they work with a rolling update was not confirmed. Take it with the second
@@ -318,7 +324,7 @@ build image are Fabrika's to declare.
 | Provider skeleton, codecs, `defineApp`, conformance harness over a fake AWS                             |       3–4 |            3 |
 | AWS client layer and fakes                                                                              |       4–6 |            4 |
 | Build: multipart source, CodeBuild, ECR, source maps, log relay                                         |       4–6 |            4 |
-| Deploy: task definitions, init container, rollout, rollback, checkpoint, reconcile, cancel              |      6–10 |            6 |
+| Deploy: task definitions, init task, rollout, rollback, checkpoint, reconcile, cancel                   |      6–10 |            6 |
 | Secrets and the managed environment                                                                     |       2–3 |            2 |
 | PostgreSQL on RDS: roles, connection budget, snapshot before migration, restore and repoint runbook     |       3–5 |            3 |
 | Namespaces: presets, security groups, Service Connect, namespace proxy, ALB rules, certificates, claims |      8–12 |  4 (`cheap`) |

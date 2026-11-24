@@ -39,6 +39,8 @@ const imageInput: ContainerImageInput = {
 const rendered = containerImage(imageInput)
 const IMAGE = `123456789012.dkr.ecr.eu-central-1.amazonaws.com/fabrika/notes-prod@sha256:${'a'.repeat(64)}`
 const PARAMETER = 'arn:aws:ssm:eu-central-1:123456789012:parameter/fabrika/main/apps/notes/prod/STRIPE_KEY'
+const RUNTIME_URL = 'arn:aws:ssm:eu-central-1:123456789012:parameter/fabrika/main/apps/notes/prod/FABRIKA_APP_RUNTIME_DATABASE_URL'
+const PROVISIONING_URL = 'arn:aws:ssm:eu-central-1:123456789012:parameter/fabrika/main/apps/notes/prod/FABRIKA_APP_DATABASE_URL'
 
 const input: AwsTaskDefinitionInput = {
 	family: 'notes-prod',
@@ -46,7 +48,8 @@ const input: AwsTaskDefinitionInput = {
 	rendered,
 	healthPath: '/__fabrika/health',
 	environment: { FABRIKA_APP_ID: 'notes', FABRIKA_IAM_RPC_URL: 'http://iam.fabrika.local:3000', LOG_LEVEL: 'info' },
-	secrets: { STRIPE_KEY: PARAMETER },
+	secrets: { STRIPE_KEY: PARAMETER, FABRIKA_APP_RUNTIME_DATABASE_URL: RUNTIME_URL },
+	initSecrets: { FABRIKA_APP_DATABASE_URL: PROVISIONING_URL },
 	taskRoleArn: 'arn:aws:iam::123456789012:role/fabrika-apps-notes-prod',
 	executionRoleArn: 'arn:aws:iam::123456789012:role/fabrika-apps-notes-prod-execution',
 	cpu: 512,
@@ -100,15 +103,17 @@ describe('awsTaskDefinitions', () => {
 			essential: true,
 			command: [...(rendered.init[0] ?? [])],
 			environment: input.environment,
-			secrets: input.secrets,
+			// The provisioning credential reaches the init task only.
+			secrets: input.initSecrets,
 			log: { ...input.log, streamPrefix: INIT_CONTAINER },
 		}])
+		expect(service.containers[0]?.secrets).not.toHaveProperty('FABRIKA_APP_DATABASE_URL')
 		expect(init?.definition).toMatchObject({ taskRoleArn: input.taskRoleArn, executionRoleArn: input.executionRoleArn, cpu: 512, memory: 1024 })
 	})
 
 	test('without a database there is no init definition', () => {
 		const alone = containerImage({ ...imageInput, recipe: { ...imageInput.recipe, database: false } })
-		expect(awsTaskDefinitions({ ...input, rendered: alone }).init).toBeNull()
+		expect(awsTaskDefinitions({ ...input, rendered: alone, initSecrets: {} }).init).toBeNull()
 	})
 
 	test('the ECS client registers both definitions', async () => {
@@ -127,10 +132,12 @@ describe('awsTaskDefinitions', () => {
 			containerDefinitions: [{
 				name: SERVER_CONTAINER,
 				portMappings: [{ containerPort: 3000, protocol: 'tcp' }],
-				secrets: [{ name: 'STRIPE_KEY', valueFrom: PARAMETER }],
+				secrets: [{ name: 'STRIPE_KEY', valueFrom: PARAMETER }, { name: 'FABRIKA_APP_RUNTIME_DATABASE_URL', valueFrom: RUNTIME_URL }],
 			}],
 		})
-		expect(calls[1]?.body).toMatchObject({ containerDefinitions: [{ name: INIT_CONTAINER, essential: true }] })
+		expect(calls[1]?.body).toMatchObject({
+			containerDefinitions: [{ name: INIT_CONTAINER, essential: true, secrets: [{ name: 'FABRIKA_APP_DATABASE_URL', valueFrom: PROVISIONING_URL }] }],
+		})
 	})
 
 	test('refuses what it cannot render, and a framework credential as a plain value', () => {
@@ -143,6 +150,10 @@ describe('awsTaskDefinitions', () => {
 			[{ rendered: { init: [[]], start: rendered.start } }, 'the image commands'],
 			[{ environment: { PORT: '8080' } }, 'the variable PORT'],
 			[{ secrets: { PORT: PARAMETER } }, 'the variable PORT'],
+			[{ initSecrets: { PORT: PARAMETER } }, 'the variable PORT'],
+			// The credential that creates roles never reaches the server.
+			[{ secrets: { FABRIKA_APP_DATABASE_URL: PROVISIONING_URL } }, "the server's secret FABRIKA_APP_DATABASE_URL"],
+			[{ rendered: { init: [], start: rendered.start } }, 'init secrets without an init command'],
 			[{ environment: { FABRIKA_PROXY_SECRET: 'not-to-be-quoted' } }, 'the plain variable FABRIKA_PROXY_SECRET (a credential)'],
 			[{ environment: { FABRIKA_IAM_RPC_KEY: 'not-to-be-quoted' } }, 'the plain variable FABRIKA_IAM_RPC_KEY'],
 			// Fail closed: a framework name not known to be public is a credential.
