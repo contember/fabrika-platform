@@ -71,7 +71,7 @@ it, never silently.
 - Every reader of grants stays correct by construction: a membership revoke of one value, an assigner check in one
   value or an expired row renewed by an assignment acts on that value's row, and the set shrinks or changes with it.
   The console groups rows by `scope_set`; a row an assignment renewed may expire later than the rest of its set, and
-  the console shows the set's earliest expiry.
+  the console shows the set's latest expiry, so a set reads as expired only once none of its values grants anything.
 - A set multiplies token entries like separate grants do; the token bounds of ADR-0022 rule 6 apply unchanged, and the
   cap keeps a set from being the one thing that outgrows them.
 - A static list changes only with a deploy of the application. Values created at run time wait for the procedure

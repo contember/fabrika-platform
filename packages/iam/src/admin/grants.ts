@@ -59,7 +59,8 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	if (app !== null && await grantsWait(c.services, app)) {
 		if (roleKey !== null) {
 			const held = await findHeldRoleGrant(c, { ...values, roleKey, scopeValues })
-			if (held !== undefined && (held.expires_at === null || held.expires_at > Math.floor(Date.now() / 1000))) {
+			// An expired app-wide grant is renewed in place; a scoped value is refused by the unique index, expired or not.
+			if (held !== undefined && (scopeValues !== null || held.expires_at === null || held.expires_at > Math.floor(Date.now() / 1000))) {
 				return fail(409, `principal ${principalId} already holds this grant: ${grantIdOf(held)}`)
 			}
 		}

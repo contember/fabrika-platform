@@ -61,14 +61,16 @@ export function grantSets(rows: readonly GrantRow[]): GrantRow[][] {
 	return [...sets.values()]
 }
 
-/** One grant's DTO from the rows of its set; a row an assignment renewed may expire later, so the earliest expiry counts. */
+/**
+ * One grant's DTO from the rows of its set. A row an assignment renewed may expire later than the rest, so the latest
+ * expiry counts (none wins): the grant reads as expired only once none of its values grants anything.
+ */
 export async function toGrantDto(rows: readonly [GrantRow, ...GrantRow[]], roleCache: RoleKnownCache): Promise<GrantDto> {
 	const [row] = rows
 	const dangling = row.role_key !== null && !(await roleCache.isKnown(row.role_key, row.app))
 	const scopeValues = row.scope_type === null
 		? null
 		: rows.flatMap((each) => each.scope_value === null ? [] : [each.scope_value]).sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
-	const expiries = rows.flatMap((each) => each.expires_at === null ? [] : [each.expires_at])
 	return {
 		id: grantIdOf(row),
 		principalId: row.principal_id,
@@ -79,7 +81,7 @@ export async function toGrantDto(rows: readonly [GrantRow, ...GrantRow[]], roleC
 		scopeValues,
 		app: row.app,
 		grantedBy: row.granted_by,
-		expiresAt: expiries.length === 0 ? null : Math.min(...expiries),
+		expiresAt: rows.some((each) => each.expires_at === null) ? null : Math.max(...rows.flatMap((each) => each.expires_at ?? [])),
 		createdAt: Math.min(...rows.map((each) => each.created_at)),
 		dangling,
 	}

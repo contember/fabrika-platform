@@ -207,15 +207,19 @@ async function approvable(c: AdminContext, request: GrantRequestRow): Promise<Gr
 	return current
 }
 
-/** Whether another live grant of the principal already holds the requested role in one of the requested values. */
+/**
+ * Whether another grant of the principal already holds the requested role in one of the requested values. A scoped one
+ * counts expired too: the unique index refuses the value either way; only an expired app-wide grant is renewed in place.
+ */
 async function heldElsewhere(c: AdminContext, request: GrantRequestRow): Promise<boolean> {
 	if (request.role_key === null) return false
 	const values = requestScopeValues(request)
 	return (await c.services.repositories.grants.listGrants(request.principal_id)).some((grant) =>
 		grantIdOf(grant) !== request.grant_id && grant.app === request.app && grant.role_key === request.role_key
 		&& grant.scope_type === request.scope_type
-		&& (values === null ? grant.scope_value === null : grant.scope_value !== null && values.includes(grant.scope_value))
-		&& (grant.expires_at === null || grant.expires_at > unixNow())
+		&& (values === null
+			? grant.scope_value === null && (grant.expires_at === null || grant.expires_at > unixNow())
+			: grant.scope_value !== null && values.includes(grant.scope_value))
 	)
 }
 

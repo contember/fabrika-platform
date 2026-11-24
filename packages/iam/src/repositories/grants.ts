@@ -199,14 +199,17 @@ export class GrantRepository {
 	}
 
 	/**
-	 * The rows of the grant `grantId` names, the id of its set or of its one row (ADR-0085), with the principal's grant
-	 * revision read in the same statement, so a removal after this read moves the revision `replaceGrantSet` checks.
+	 * Every row of the grant `grantId` belongs to (ADR-0085), whichever of its rows the id names, with the principal's
+	 * grant revision read in the same statement, so a removal after this read moves the revision `replaceGrantSet` checks.
 	 */
 	async getGrantSet(grantId: string): Promise<GrantSetRead | null> {
 		const { results } = await this.db
-			.prepare(`SELECT g.*, p.grant_revision AS principal_grant_revision FROM grants g JOIN principals p ON p.id = g.principal_id
-				WHERE g.id = ? OR g.scope_set = ? ORDER BY g.scope_value, g.id`)
-			.bind(grantId, grantId)
+			.prepare(`SELECT g.*, p.grant_revision AS principal_grant_revision
+				FROM (SELECT COALESCE(scope_set, id) AS grant_id FROM grants WHERE id = ?) named
+				JOIN grants g ON g.id = named.grant_id OR g.scope_set = named.grant_id
+				JOIN principals p ON p.id = g.principal_id
+				ORDER BY g.scope_value, g.id`)
+			.bind(grantId)
 			.all<GrantRow & { principal_grant_revision: number }>()
 		const rows = results.map(({ principal_grant_revision: _revision, ...row }) => row)
 		const [first, ...rest] = rows

@@ -1,5 +1,6 @@
 import { permits } from '@fabrika/auth-core'
 import { MAX_GRANT_SCOPE_VALUES } from '@fabrika/iam-contract'
+import type { SqlDatabase } from '@fabrika/platform'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { type AdminContext } from '../admin/context'
 import { decideGrantRequestUseCase, listGrantRequestsUseCase } from '../admin/grant-requests'
@@ -7,11 +8,16 @@ import { adminUseCases } from '../admin/handlers'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import { resolvePermissionsAt } from '../resolve'
 import { applied } from './helpers/grants'
-import { createHarness, makeServicesFor } from './helpers/harness'
+import { createHarness, makeServicesFor, TestSqlDatabase } from './helpers/harness'
 import { APP, membershipFixture, ONBOARDING_SCHEMA } from './helpers/membership'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
-async function fixture(repositories: IamRepositories) {
+interface Backend {
+	readonly repositories: IamRepositories
+	readonly db: SqlDatabase
+}
+
+async function fixture({ repositories, db }: Backend) {
 	const f = await membershipFixture(repositories)
 	await f.putSchema(ONBOARDING_SCHEMA)
 	const admin = await repositories.principals.createUser(crypto.randomUUID(), `${crypto.randomUUID()}@example.test`)
@@ -57,7 +63,11 @@ async function fixture(repositories: IamRepositories) {
 		return await decideGrantRequestUseCase(approving, true, { id, decision: 'approve' })
 	}
 	await gate(false)
-	return { repositories, context, user, writes, records, gate, approve }
+	/** Set the expiry of the user's row holding `value`, as an assignment's renewal or the clock does. */
+	const expire = async (value: string, at: number | null) => {
+		await db.prepare('UPDATE grants SET expires_at = ? WHERE principal_id = ? AND scope_value = ?').bind(at, user.id, value).run()
+	}
+	return { repositories, context, user, writes, records, gate, approve, expire }
 }
 
 let gateRevision = 0
@@ -69,7 +79,7 @@ function pendingId(change: unknown): string {
 	return pending.id
 }
 
-function suite(label: string, backend: () => IamRepositories) {
+function suite(label: string, backend: () => Backend) {
 	describe(`a grant of several scope values (${label})`, () => {
 		test('allows each listed value, denies every other, and is one grant with one record', async () => {
 			const f = await fixture(backend())
@@ -309,10 +319,82 @@ function suite(label: string, backend: () => IamRepositories) {
 			expect((await f.repositories.grantRequests.get(request.id))?.status).toBe('pending')
 			expect((await f.repositories.grants.listGrants(f.user.id)).map((row) => row.scope_value)).toEqual(['beta'])
 		})
+
+		test('an expired grant of the role in a requested value refuses the request and its approval with 409, never a 500', async () => {
+			const f = await fixture(backend())
+			await f.gate()
+			const requested = await adminUseCases.createGrant(f.context, {
+				principalId: f.user.id,
+				app: APP,
+				roleKey: 'editor',
+				scopeType: 'workspace',
+				scopeValues: ['alpha', 'beta'],
+			})
+			await f.repositories.grants.createGrant({ principalId: f.user.id, app: APP, roleKey: 'editor', scopeType: 'workspace', scopeValue: 'beta' })
+			await f.expire('beta', 1)
+			await expect(f.approve(requested)).rejects.toMatchObject({ httpStatus: 409 })
+			expect((await f.repositories.grantRequests.get(pendingId(requested)))?.status).toBe('pending')
+			const again = adminUseCases.createGrant(f.context, {
+				principalId: f.user.id,
+				app: APP,
+				roleKey: 'editor',
+				scopeType: 'workspace',
+				scopeValues: ['beta', 'gamma'],
+			})
+			await expect(again).rejects.toMatchObject({ httpStatus: 409 })
+		})
+
+		test('a set reads as expired only once none of its values grants anything', async () => {
+			const f = await fixture(backend())
+			const now = Math.floor(Date.now() / 1000)
+			const grant = applied(
+				await adminUseCases.createGrant(f.context, {
+					principalId: f.user.id,
+					app: APP,
+					roleKey: 'editor',
+					scopeType: 'workspace',
+					scopeValues: ['alpha', 'beta'],
+					expiresAt: now + 3600,
+				}),
+			)
+			await f.expire('alpha', now - 60)
+			const expiry = async () => (await adminUseCases.getPrincipal(f.context, { principalId: f.user.id })).grants.map((each) => each.expiresAt)
+			expect(await expiry()).toEqual([now + 3600])
+			await f.expire('beta', null)
+			expect(await expiry()).toEqual([null])
+			expect(await f.writes('beta')).toBe(true)
+			expect(grant.expiresAt).toBe(now + 3600)
+		})
+
+		test("any row's id addresses the whole set, and the record of its edit names every value it held", async () => {
+			const f = await fixture(backend())
+			const grant = applied(
+				await adminUseCases.createGrant(f.context, {
+					principalId: f.user.id,
+					app: APP,
+					roleKey: 'editor',
+					scopeType: 'workspace',
+					scopeValues: ['alpha', 'beta', 'gamma'],
+				}),
+			)
+			const gamma = (await f.repositories.grants.listGrants(f.user.id)).find((row) => row.scope_value === 'gamma')
+			if (gamma === undefined || gamma.id === grant.id) throw new Error('the set has no row of its own for gamma')
+			expect((await f.repositories.grants.getGrantSet(gamma.id))?.rows.map((row) => row.scope_value)).toEqual(['alpha', 'beta', 'gamma'])
+			const narrowed = applied(
+				await adminUseCases.updateGrant(f.context, { id: gamma.id, roleKey: 'editor', scopeType: 'workspace', scopeValues: ['gamma'] }),
+			)
+			expect(narrowed.id).toBe(grant.id)
+			const [record] = await f.records('iam.grant.update')
+			expect(record?.resourceId).toBe(grant.id)
+			expect(record?.diff).toMatchObject({ before: { scopeValues: ['alpha', 'beta', 'gamma'] }, after: { scopeValue: 'gamma' } })
+		})
 	})
 }
 
-suite('SQLite', () => createHarness().repositories)
+suite('SQLite', () => {
+	const h = createHarness()
+	return { repositories: h.repositories, db: new TestSqlDatabase(h.sqlite) }
+})
 
 if (!hasPostgres) console.warn(`grant-scope-sets.test.ts ${skipReason}`)
 describe.skipIf(!hasPostgres)('on Postgres', () => {
@@ -325,6 +407,6 @@ describe.skipIf(!hasPostgres)('on Postgres', () => {
 	})
 	suite('Postgres', () => {
 		if (backend === null) throw new Error('fixture')
-		return createPostgresIamRepositories(backend.db)
+		return { repositories: createPostgresIamRepositories(backend.db), db: backend.db }
 	})
 })
