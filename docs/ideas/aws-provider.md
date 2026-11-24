@@ -283,7 +283,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    can then neither replace a task nor roll back to it: size `keep` against that, or give the deployed digest an extra
    tag a separate rule keeps. `StartBuild`'s idempotency token holds five minutes, and a repeat must send the identical
    body (the same presigned URL included): a start whose answer was lost is settled by `findBuild` (the token travels as
-   `FABRIKA_BUILD_TOKEN`), never by a blind repeat.
+   `FABRIKA_BUILD_TOKEN`), never by a blind repeat; a `findBuild` that answers `null` for a lost start fails the run.
+   The candidate half is built (`src/run-attempt.ts`, the shared run's `RunAttempt`); the steps wait for the upload in
+   parts (N2), the image renderer (N3) and steps 5 to 7.
 9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`
    (stop the build; once the service is updated, cancellation never implies rollback), `secrets` (`PutParameter`,
    `DeleteParameter`), `declaredVariables`, `normalizeRegistration`, `lockfileRefusal`, the `backupBeforeMigrations`

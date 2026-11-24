@@ -117,6 +117,8 @@ export interface EcsService {
 	readonly status: 'active' | 'draining' | 'inactive'
 	readonly taskDefinitionArn: string
 	readonly deployments: readonly EcsDeployment[]
+	/** The ARN of the service's current service deployment (`currentServiceDeployment`), `null` when it names none. */
+	readonly currentDeploymentArn: string | null
 	/** ECS's own event messages, newest first: what the run log relays. */
 	readonly events: readonly { readonly id: string; readonly at: Date; readonly message: string }[]
 }
@@ -126,6 +128,35 @@ export interface EcsServiceAddress {
 	readonly service: string
 }
 
+/** A service deployment's state; a circuit breaker's rollback is a state of the same deployment. */
+export type EcsServiceDeploymentStatus =
+	| 'pending'
+	| 'in_progress'
+	| 'successful'
+	| 'stop_requested'
+	| 'stopped'
+	| 'rollback_requested'
+	| 'rollback_in_progress'
+	| 'rollback_successful'
+	| 'rollback_failed'
+
+/** One service deployment: what the run's verdict is read from. */
+export interface EcsServiceDeployment {
+	readonly arn: string
+	readonly serviceArn: string
+	readonly status: EcsServiceDeploymentStatus
+	/** ECS's words for the state, e.g. that the circuit breaker detected a failure. */
+	readonly statusReason: string | null
+	/** The service revision the deployment deploys, `null` when ECS names none. */
+	readonly targetRevisionArn: string | null
+}
+
+/** A service revision: which task definition a deployment deploys. */
+export interface EcsServiceRevision {
+	readonly arn: string
+	readonly taskDefinitionArn: string
+}
+
 export interface EcsClient {
 	/** Registers `definition` as a new revision of its family; nothing runs it until a service is updated to it. */
 	registerTaskDefinition(definition: EcsTaskDefinition, signal?: AbortSignal): Promise<EcsTaskDefinitionRevision>
@@ -133,7 +164,29 @@ export interface EcsClient {
 	updateService(address: EcsServiceAddress, taskDefinitionArn: string, signal?: AbortSignal): Promise<EcsService>
 	/** The service, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
 	describeService(address: EcsServiceAddress, signal?: AbortSignal): Promise<EcsService | null>
+	/** The service deployment `arn`, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
+	describeServiceDeployment(arn: string, signal?: AbortSignal): Promise<EcsServiceDeployment | null>
+	/** The service revision `arn`, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
+	describeServiceRevision(arn: string, signal?: AbortSignal): Promise<EcsServiceRevision | null>
 }
+
+const SERVICE_DEPLOYMENT_STATUSES: Readonly<Record<string, EcsServiceDeploymentStatus>> = {
+	PENDING: 'pending',
+	IN_PROGRESS: 'in_progress',
+	SUCCESSFUL: 'successful',
+	STOP_REQUESTED: 'stop_requested',
+	STOPPED: 'stopped',
+	ROLLBACK_REQUESTED: 'rollback_requested',
+	ROLLBACK_IN_PROGRESS: 'rollback_in_progress',
+	ROLLBACK_SUCCESSFUL: 'rollback_successful',
+	ROLLBACK_FAILED: 'rollback_failed',
+}
+/** A service deployment's ARN: `…:service-deployment/<cluster>/<service>/<id>`. */
+const SERVICE_DEPLOYMENT_ARN =
+	/^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:service-deployment\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,64}$/
+/** A service revision's ARN: `…:service-revision/<cluster>/<service>/<id>`. */
+const SERVICE_REVISION_ARN =
+	/^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:service-revision\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,64}$/
 
 const DEPLOYMENT_STATUSES: Readonly<Record<string, EcsDeployment['status']>> = { PRIMARY: 'primary', ACTIVE: 'active', INACTIVE: 'inactive' }
 const ROLLOUT_STATES: Readonly<Record<string, EcsRolloutState>> = { IN_PROGRESS: 'in_progress', COMPLETED: 'completed', FAILED: 'failed' }
@@ -156,6 +209,24 @@ const serviceSchema = z.object({
 		}),
 	).optional(),
 	events: z.array(z.object({ id: z.string(), createdAt: z.number(), message: z.string() })).optional(),
+	currentServiceDeployment: z.string().regex(SERVICE_DEPLOYMENT_ARN).optional(),
+})
+const failuresSchema = z.array(z.object({ arn: z.string().optional(), reason: z.string().optional() })).optional()
+const serviceDeploymentsSchema = z.object({
+	serviceDeployments: z.array(
+		z.object({
+			serviceDeploymentArn: z.string(),
+			serviceArn: z.string(),
+			status: z.string(),
+			statusReason: z.string().optional(),
+			targetServiceRevision: z.object({ arn: z.string().regex(SERVICE_REVISION_ARN).optional() }).optional(),
+		}),
+	),
+	failures: failuresSchema,
+})
+const serviceRevisionsSchema = z.object({
+	serviceRevisions: z.array(z.object({ serviceRevisionArn: z.string(), taskDefinition: z.string().regex(TASK_DEFINITION_ARN) })),
+	failures: failuresSchema,
 })
 const registeredSchema = z.object({
 	taskDefinition: z.object({ taskDefinitionArn: z.string().regex(TASK_DEFINITION_ARN), family: z.string(), revision: z.number().int().positive() }),
@@ -252,6 +323,7 @@ function serviceOf(operation: string, raw: z.infer<typeof serviceSchema>): EcsSe
 			desiredCount: deployment.desiredCount,
 			failedTasks: deployment.failedTasks ?? 0,
 		})),
+		currentDeploymentArn: raw.currentServiceDeployment ?? null,
 		// ECS's JSON protocol writes a timestamp as seconds since the epoch, fractions included.
 		events: (raw.events ?? []).map((event) => ({ id: event.id, at: new Date(event.createdAt * 1000), message: event.message })),
 	}
@@ -346,6 +418,38 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			// Only an explicit MISSING says there is no such service; anything else is no answer.
 			if ((described.failures ?? []).some((failure) => failure.reason === 'MISSING')) return null
 			throw new AwsError('DescribeServices', 'invalid_answer', 200, null, false)
+		},
+
+		async describeServiceDeployment(arn, signal) {
+			if (!SERVICE_DEPLOYMENT_ARN.test(arn)) refuse('the service deployment')
+			const operation = 'DescribeServiceDeployments'
+			const described = await json.call(operation, { serviceDeploymentArns: [arn] }, serviceDeploymentsSchema, signal)
+			const found = described.serviceDeployments.find((candidate) => candidate.serviceDeploymentArn === arn)
+			if (found === undefined) {
+				// Only an explicit MISSING for this ARN says there is no such deployment; anything else is no answer.
+				if ((described.failures ?? []).some((failure) => failure.arn === arn && failure.reason === 'MISSING')) return null
+				throw new AwsError(operation, 'invalid_answer', 200, null, false)
+			}
+			const status = SERVICE_DEPLOYMENT_STATUSES[found.status]
+			// A state ECS may add later is no answer, never a guess.
+			if (status === undefined) throw new AwsError(operation, 'invalid_answer', 200, null, false)
+			return {
+				arn: found.serviceDeploymentArn,
+				serviceArn: found.serviceArn,
+				status,
+				statusReason: found.statusReason ?? null,
+				targetRevisionArn: found.targetServiceRevision?.arn ?? null,
+			}
+		},
+
+		async describeServiceRevision(arn, signal) {
+			if (!SERVICE_REVISION_ARN.test(arn)) refuse('the service revision')
+			const operation = 'DescribeServiceRevisions'
+			const described = await json.call(operation, { serviceRevisionArns: [arn] }, serviceRevisionsSchema, signal)
+			const found = described.serviceRevisions.find((candidate) => candidate.serviceRevisionArn === arn)
+			if (found !== undefined) return { arn: found.serviceRevisionArn, taskDefinitionArn: found.taskDefinition }
+			if ((described.failures ?? []).some((failure) => failure.arn === arn && failure.reason === 'MISSING')) return null
+			throw new AwsError(operation, 'invalid_answer', 200, null, false)
 		},
 	}
 }
