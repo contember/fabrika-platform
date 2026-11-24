@@ -159,13 +159,20 @@ describe('OAUTH_CONFIG with an identity-only client', () => {
 	})
 
 	test("refuses it on another client kind, with a malformed app or resource, or on an installation service's app or resource", () => {
-		expect(() => parse({ provider: 'claude' })).toThrow()
-		expect(() => parse({ identity: { ...IDENTITY, app: 'notes@prod' } })).toThrow()
-		expect(() => parse({ identity: { ...IDENTITY, app: '*' } })).toThrow()
-		expect(() => parse({ identity: { ...IDENTITY, resource: 'http://ops.example.test' } })).toThrow()
-		expect(() => parse({ identity: { ...IDENTITY, extra: true } })).toThrow()
-		expect(() => parse({ identity: { ...IDENTITY, app: 'operations' } })).toThrow()
-		expect(() => parse({ identity: { ...IDENTITY, resource: RESOURCE } })).toThrow()
-		expect(() => parse({}, new Set([...DEFAULT_PLATFORM_AUDIENCES, IDENTITY.app]))).toThrow()
+		const malformed = 'is not a valid managed client'
+		const reserved = "names an installation service's app or resource"
+		expect(() => parse({ provider: 'claude' })).toThrow(malformed)
+		expect(() => parse({ identity: { ...IDENTITY, app: 'notes@prod' } })).toThrow(malformed)
+		expect(() => parse({ identity: { ...IDENTITY, app: '*' } })).toThrow(malformed)
+		expect(() => parse({ identity: { ...IDENTITY, app: 'a'.repeat(64) } })).toThrow(malformed)
+		expect(() => parse({ identity: { ...IDENTITY, resource: 'http://ops.example.test' } })).toThrow(malformed)
+		expect(() => parse({ identity: { ...IDENTITY, extra: true } })).toThrow(malformed)
+		expect(() => parse({ identity: { ...IDENTITY, app: 'operations' } })).toThrow(reserved)
+		expect(() => parse({ identity: { ...IDENTITY, resource: RESOURCE } })).toThrow(reserved)
+		expect(() => parse({}, new Set([...DEFAULT_PLATFORM_AUDIENCES, IDENTITY.app]))).toThrow(reserved)
+		// A registered resource's app that is no platform audience is refused on its own.
+		const registered = [{ ...resources[0], app: 'tools' }]
+		const config = { clients: [{ ...client, identity: { ...IDENTITY, app: 'tools' } }], resources: registered }
+		expect(() => parseOAuthConfig(JSON.stringify(config), DEFAULT_PLATFORM_AUDIENCES)).toThrow(reserved)
 	})
 })

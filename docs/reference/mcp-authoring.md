@@ -426,10 +426,12 @@ id, and carries no permission: IAM reads no grant for it, at the code exchange a
 service and every application refuses it, because its audience is none of theirs. The client verifies it against IAM's
 JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). A request for any other resource is `invalid_target`,
 any other scope `invalid_scope`, and a grant the client held before it was bound mints nothing after.
-`app` is a lowercase id without `@` (`^[a-z0-9][a-z0-9-]*$`); the deploy refuses a platform service's app id and a resource on a
+`app` is a lowercase id without `@`, at most 63 characters (`^[a-z0-9][a-z0-9-]{0,62}$`); the deploy refuses a platform service's app id and a resource on a
 platform host, and IAM refuses a platform audience and a registered resource at boot. Registering only identity-only
 clients leaves MCP authoring off: no `/mcp` row is published and no authoring resource is served. It needs `https`,
 like every client.
+Every active user of the installation can sign in to such a client, an external principal included: the token
+proves who the person is, not that they belong to the application, so the application decides whom it admits.
 
 **Authoring.** Without `identity`, the kind is a label: IAM treats the client as any other, so it gets what they get.
 That is an access token for a registered resource, and the only one an installation serves managed clients is the
