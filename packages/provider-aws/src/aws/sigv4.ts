@@ -26,7 +26,8 @@ export interface SigningScope {
 
 /** A request to sign, as its client builds it. */
 export interface SignableRequest {
-	readonly method: 'GET' | 'POST'
+	/** `PUT` and `DELETE` are S3's (a part's upload, an upload's abort); the JSON and query protocols post. */
+	readonly method: 'GET' | 'POST' | 'PUT' | 'DELETE'
 	/** The endpoint's origin, `https://ecs.eu-central-1.amazonaws.com`; `http:` only with `allowInsecureOrigin`. */
 	readonly origin: string
 	/** The path, unencoded: `/`, or segments of unreserved characters. */
