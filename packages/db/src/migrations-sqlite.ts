@@ -17,6 +17,7 @@ import {
 	type FrameworkMigration,
 	JOB_KICKS_TABLE,
 	JOB_LEASES_TABLE,
+	JOB_SCHEDULE_TABLE,
 	JOB_WAKES_TABLE,
 	LIST_CURSOR_KEY_TABLE,
 	REQUEST_RECEIPTS_TABLE,
@@ -188,6 +189,16 @@ CREATE TABLE ${LIST_CURSOR_KEY_TABLE} (
 	secret TEXT NOT NULL
 ) STRICT;
 INSERT INTO ${LIST_CURSOR_KEY_TABLE} (id, secret) VALUES (1, hex(randomblob(32)));
+`,
+	}),
+	Object.freeze({
+		name: '0007_job_schedule.sql',
+		sql: `-- Which deploy keeps the cron wakes where no crontab runs (ADR-0080): one row, the highest generation a serving process
+-- has seen. The Durable Object keeps its schedule itself and never writes it; the table keeps both bundles alike.
+CREATE TABLE ${JOB_SCHEDULE_TABLE} (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	generation TEXT NOT NULL
+) STRICT;
 `,
 	}),
 ])
