@@ -9,7 +9,7 @@ import { EmptyState } from '../../../components/Table'
 import { fmtAgo, fmtDate } from '../../../lib/format'
 import { api } from '../../lib/api'
 import { AppName, useAppNames } from '../../lib/app-names'
-import { fmtScope } from '../../lib/format'
+import { fmtGrantScope, fmtScope } from '../../lib/format'
 
 export function UserAccess({ principal, onDone }: { principal: PrincipalDetail; onDone: () => void }) {
 	const [query, setQuery] = useState('')
@@ -24,7 +24,7 @@ export function UserAccess({ principal, onDone }: { principal: PrincipalDetail; 
 			grant.app === null ? 'Platform services' : appNames.get(grant.app),
 			grant.roleName,
 			grant.roleKey,
-			grant.scopeValue,
+			...(grant.scopeValues ?? []),
 			...(grant.permissions ?? []),
 		].some((value) => value?.toLowerCase().includes(query.toLowerCase()))
 	)
@@ -130,7 +130,7 @@ function AccessAssignment({ grant, disabled, onDone }: { grant: PrincipalGrantDt
 	const [pending, setPending] = useState<GrantRequestDto | null>(null)
 	const expired = grant.expiresAt !== null && grant.expiresAt <= Date.now() / 1000
 	const label = grant.roleName ?? grant.roleKey ?? 'Custom actions'
-	const scope = fmtScope(grant.scopeType === null ? null : { type: grant.scopeType, value: grant.scopeValue ?? '' })
+	const scope = fmtGrantScope(grant)
 	return (
 		<div className="user-access-item">
 			<div className="user-item-row">

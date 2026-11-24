@@ -11,7 +11,8 @@ const KIND_WORDS: Record<GrantRequestDto['kind'], string> = { create: 'Grant', u
 /** What the request changes, in one line: the role or the actions, where, and until when the grant it writes holds. */
 export function grantRequestChange(request: GrantRequestDto): string {
 	const what = request.roleKey !== null ? `role ${request.roleKey}` : `actions ${(request.permissions ?? []).join(', ')}`
-	const where = request.scopeType === null ? 'app-wide' : `in ${request.scopeType} ${request.scopeValue ?? ''}`
+	const values = request.scopeValues ?? (request.scopeValue === null ? [] : [request.scopeValue])
+	const where = request.scopeType === null ? 'app-wide' : `in ${request.scopeType} ${values.join(', ')}`
 	if (request.kind === 'revoke') return `${KIND_WORDS[request.kind]} ${what} ${where}`
 	const until = request.grantExpiresAt === null ? 'no expiration' : `until ${fmtDate(request.grantExpiresAt)}`
 	return `${KIND_WORDS[request.kind]} ${what} ${where}, ${until}`

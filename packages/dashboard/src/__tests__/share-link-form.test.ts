@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { resolveApp } from '../access/components/AppPicker'
-import { resolveScope } from '../access/components/ScopePicker'
+import { resolveScope, scopedValue } from '../access/components/ScopePicker'
 import { type GrantRow, parseShareLinkForm } from '../access/lib/share-link-form'
 
 const blank: GrantRow = { action: ' ', scopeType: '', scopeValue: '' }
@@ -55,7 +55,7 @@ test('scope and app pickers keep explicit global selection and opaque scope valu
 	expect(resolveApp({ kind: 'all' })).toBeNull()
 	expect(resolveApp({ kind: 'app', app: 'reports' })).toBe('reports')
 	expect(() => resolveApp({ kind: 'unset' })).toThrow('Pick an app first.')
-	expect(resolveScope({ kind: 'global' })).toEqual({ scopeType: null, scopeValue: null })
-	expect(resolveScope({ kind: 'scoped', type: ' tenant ', value: ' opaque:* ' })).toEqual({ scopeType: 'tenant', scopeValue: 'opaque:*' })
-	expect(() => resolveScope({ kind: 'scoped', type: 'tenant', value: ' ' })).toThrow('Pick a scope dimension and enter a value, or choose Global.')
+	expect(resolveScope({ kind: 'global' })).toEqual({ scopeType: null, scopeValues: null })
+	expect(resolveScope(scopedValue(' tenant ', [' opaque:* ']))).toEqual({ scopeType: 'tenant', scopeValues: ['opaque:*'] })
+	expect(() => resolveScope(scopedValue('tenant', [' ']))).toThrow('Pick a scope dimension and at least one value, or choose Global.')
 })

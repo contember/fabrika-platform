@@ -1,6 +1,6 @@
 // Access-only formatting helpers; the console-wide ones live in `lib/format.ts`.
 
-import type { PermissionEntry, ShareLinkListItem } from '@fabrika/iam-contract'
+import type { GrantDto, PermissionEntry, ShareLinkListItem } from '@fabrika/iam-contract'
 import { fmtDate } from '../../lib/format'
 
 /** A flat scope coordinate (one dimension + opaque value); null = global. */
@@ -10,6 +10,13 @@ type Scope = NonNullable<PermissionEntry['scope']>
 export function fmtScope(scope: Scope | null): string {
 	if (scope === null) return 'Global'
 	return `${scope.type} = ${scope.value}`
+}
+
+/** Format a grant's scope: `Global`, or its dimension and every value it holds (ADR-0085). */
+export function fmtGrantScope(grant: Pick<GrantDto, 'scopeType' | 'scopeValue' | 'scopeValues'>): string {
+	if (grant.scopeType === null) return 'Global'
+	const values = grant.scopeValues ?? (grant.scopeValue === null ? [] : [grant.scopeValue])
+	return `${grant.scopeType} = ${values.join(', ')}`
 }
 
 /** Format an optional epoch-seconds expiry timestamp; `null` means "never". */

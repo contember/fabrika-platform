@@ -6,7 +6,7 @@ import { pendingOf } from '../../components/PendingGrant'
 import { fmtAgo, fmtDate } from '../../lib/format'
 import { api } from '../lib/api'
 import { AppName } from '../lib/app-names'
-import { fmtExpiry, fmtScope } from '../lib/format'
+import { fmtExpiry, fmtGrantScope } from '../lib/format'
 import { Badge } from './Badge'
 
 /** The head of a grant table, for the rows `GrantRow` renders. */
@@ -28,7 +28,7 @@ export function GrantTableHead() {
 export function GrantRow({ grant, editable, onDone }: { grant: ApiKeyGrantDto; editable: boolean; onDone: () => void }) {
 	const [confirming, setConfirming] = useState(false)
 	const [pending, setPending] = useState<GrantRequestDto | null>(null)
-	const scopeLabel = fmtScope(grant.scopeType === null ? null : { type: grant.scopeType, value: grant.scopeValue ?? '' })
+	const scopeLabel = fmtGrantScope(grant)
 
 	async function revoke() {
 		const request = pendingOf(await api.grants.delete({ id: grant.id }))

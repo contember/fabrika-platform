@@ -109,6 +109,7 @@ const GRANT: GrantDto = {
 	permissions: ['report.write'],
 	scopeType: null,
 	scopeValue: null,
+	scopeValues: null,
 	app: 'crm@prod',
 	grantedBy: null,
 	expiresAt: null,
