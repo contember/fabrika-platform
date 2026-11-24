@@ -29,6 +29,9 @@ const IAM_APP_ID = 'propustka'
 
 const KNOWN_ENVS = new Set(['local', 'stage', 'prod'])
 
+/** Cloudflare refuses a plain Worker variable above this (docs/reference/cloudflare-platform.md). */
+const WORKER_VARIABLE_MAX_BYTES = 5120
+
 type EnvironmentSource = Readonly<Record<string, string | undefined>>
 
 interface RemoteConfig {
@@ -136,6 +139,9 @@ const oauthConfig = (control: string | undefined, clients: readonly McpClient[],
 	}))
 	const config = JSON.stringify({ clients, resources })
 	parseOAuthConfig(config, platformAudiencesFor(parseAdminAudiences(adminAudiences)))
+	if (new TextEncoder().encode(config).length > WORKER_VARIABLE_MAX_BYTES) {
+		throw new Error(`${MCP_CLIENTS_VARIABLE} makes OAUTH_CONFIG longer than a Worker variable holds (${WORKER_VARIABLE_MAX_BYTES} bytes)`)
+	}
 	return config
 }
 
@@ -143,9 +149,11 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 	const authentication = authenticationConfig(source)
 	const email = emailConfig(source)
 	const control = controlUrl(source)
+	const operationsHost = source['OPERATIONS_HOSTNAME']
 	const identityClients = parseCloudflareIdentityClients(source[MCP_CLIENTS_VARIABLE], [
 		...(domain === undefined || domain === '' ? [] : [domain]),
 		...(control === undefined ? [] : [new URL(control).hostname]),
+		...(operationsHost === undefined || operationsHost === '' ? [] : [operationsHost]),
 	])
 	const humanEmailDomains = source['FABRIKA_IAM_HUMAN_EMAIL_DOMAINS']
 	const oidcIssuer = source['FABRIKA_IAM_OIDC_ISSUER']

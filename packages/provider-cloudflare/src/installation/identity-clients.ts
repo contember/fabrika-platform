@@ -1,14 +1,21 @@
+import { CONTROL_APP_ID } from '@fabrika/control-contract'
+import { IAM_APP_ID } from '@fabrika/iam-contract'
 import { type McpClient, parseMcpClientsJson, reconcileIdentityApps } from '@fabrika/installation-init'
+import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import type { PlatformIamTarget } from '../provider'
 
 /** The GitHub Environment variable the operator registers OAuth clients in, the same name as on Zerops. */
 export const MCP_CLIENTS_VARIABLE = 'FABRIKA_PLATFORM_MCP_CLIENTS_JSON'
 
+/** A roles reconcile under one of these would rewrite a platform service's vocabulary. */
+const PLATFORM_APPS: readonly string[] = [IAM_APP_ID, CONTROL_APP_ID, OPERATIONS_APP_ID]
+
 /**
  * The client list of a Cloudflare installation, parsed once where it enters a stage: identity-bound external clients
- * only (ADR-0084), because the Worker console serves no `/mcp`. Unset or empty registers none. Anything else, and an
- * identity resource on one of `platformHosts`, is refused before the stage deploys anything.
+ * only (ADR-0084), because the Worker console serves no `/mcp`. Unset or empty registers none. Anything else, an
+ * identity app that is a platform service's, and an identity resource on one of `platformHosts`, is refused before the
+ * stage deploys anything.
  */
 export const parseCloudflareIdentityClients = (raw: string | undefined, platformHosts: readonly string[]): readonly McpClient[] => {
 	if (raw === undefined || raw.trim() === '') return []
@@ -24,6 +31,9 @@ export const parseCloudflareIdentityClients = (raw: string | undefined, platform
 				`${MCP_CLIENTS_VARIABLE}: client ${clientId} is not an identity-bound external client. A Cloudflare installation serves no /mcp, `
 					+ "so it registers only { provider: 'external', identity: { app, resource, roles? } } clients",
 			)
+		}
+		if (PLATFORM_APPS.includes(identity.app)) {
+			throw new Error(`${MCP_CLIENTS_VARIABLE}: client ${clientId}: its identity app \`${identity.app}\` is a platform service's`)
 		}
 		if (platformHosts.includes(new URL(identity.resource).hostname)) {
 			throw new Error(`${MCP_CLIENTS_VARIABLE}: client ${clientId}: its identity resource is on a platform service's host`)

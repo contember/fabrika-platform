@@ -378,9 +378,30 @@ describe('IAM resource graph', () => {
 		const claude = { provider: 'claude', clientId: 'https://claude.ai/oauth/client', redirectUris: ['https://claude.ai/api/mcp/auth_callback'] }
 		expect(refused([sonda, claude])).toThrow('is not an identity-bound external client')
 		expect(refused([{ ...sonda, identity: undefined }])).toThrow('is not an identity-bound external client')
-		// What IAM would refuse to boot with is refused at the deploy: a platform audience, IAM's own host.
-		expect(refused([{ ...sonda, identity: { ...sonda.identity, app: 'operations' } }])).toThrow("names an installation service's app or resource")
+		expect(refused([{ ...sonda, identity: { ...sonda.identity, app: 'operations' } }])).toThrow("is a platform service's")
+		// What IAM would refuse to boot with is refused at the deploy: here an admin audience the installation names.
+		expect(() =>
+			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
+				...relayed,
+				FABRIKA_IAM_ADMIN_AUDIENCES: 'vozka,gateway',
+				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{ ...sonda, identity: { ...sonda.identity, app: 'gateway' } }]),
+			})
+		).toThrow("names an installation service's app or resource")
 		expect(refused([{ ...sonda, identity: { ...sonda.identity, resource: `https://${REMOTE_DOMAIN}/x` } }])).toThrow("platform service's host")
+		expect(() =>
+			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
+				...relayed,
+				OPERATIONS_HOSTNAME: 'operations.example.com',
+				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{ ...sonda, identity: { ...sonda.identity, resource: 'https://operations.example.com/x' } }]),
+			})
+		).toThrow("platform service's host")
+		// A list that would not fit IAM's Worker variable stops here, not inside wrangler.
+		const many = Array.from({ length: 16 }, (_, index) => ({
+			...sonda,
+			clientId: `https://sonda${index}.example.com/admin/oauth/client`,
+			identity: { ...sonda.identity, app: `sonda-${index}` },
+		}))
+		expect(refused(many)).toThrow('longer than a Worker variable holds (5120 bytes)')
 		// Without the console's origin IAM serves no OAuth at all.
 		expect(() =>
 			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...REMOTE_SOURCE, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([sonda]) })

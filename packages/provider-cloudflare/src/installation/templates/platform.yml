@@ -155,6 +155,8 @@ jobs:
           FABRIKA_CONTROL_URL: https://${{ vars.FABRIKA_CONTROL_DOMAIN }}
           # The operator's identity-bound external OAuth clients (ADR-0084), a JSON array; unset registers none.
           FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}
+          # Only so an identity resource on the Operations host is refused here, before IAM deploys.
+          OPERATIONS_HOSTNAME: ${{ vars.OPERATIONS_HOSTNAME }}
           # Every built-in mail provider's variables, written by init from the provider registry: IAM reads only the
           # selected provider's, and an unset one is ''.
           # {{EMAIL_PROVIDER_ENV}}

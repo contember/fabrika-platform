@@ -60,6 +60,13 @@ describe('the client list of a Cloudflare installation', () => {
 		expect(() => parseCloudflareIdentityClients(JSON.stringify([unbound]), HOSTS)).toThrow('is not an identity-bound external client')
 	})
 
+	test("refuses an identity app that is a platform service's: its roles would rewrite that vocabulary", () => {
+		for (const app of ['propustka', 'vozka', 'operations']) {
+			const platform = { ...SONDA, identity: { ...SONDA.identity, app } }
+			expect(() => parseCloudflareIdentityClients(JSON.stringify([platform]), HOSTS)).toThrow(`its identity app \`${app}\` is a platform service's`)
+		}
+	})
+
 	test("refuses an identity resource on a platform service's host", () => {
 		const onConsole = { ...SONDA, identity: { ...SONDA.identity, resource: 'https://console.example.com/sonda' } }
 		expect(() => parseCloudflareIdentityClients(JSON.stringify([onConsole]), HOSTS)).toThrow("its identity resource is on a platform service's host")
