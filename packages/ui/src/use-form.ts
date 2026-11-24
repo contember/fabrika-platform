@@ -80,7 +80,8 @@ function sameValue(left: unknown, right: unknown): boolean {
  * The state of a form over a schema: the values its fields show, starting at `initial`, and the schema's messages by
  * field. A field binds through `<Field label="Title" {...form.field('title')}>`. Errors appear after the first check
  * and then follow every change, so a fixed field clears at once. When `initial` holds other values (the record was
- * saved or changed meanwhile), the form starts over from them.
+ * saved or changed meanwhile), the form starts over from them. Arrays, plain objects and `Date`s compare by content; any
+ * other value in `initial` (a `Map`, a function) must keep its identity across renders, or every render starts over.
  */
 export function useForm<Input extends object, Output>(schema: StandardSchema<Input, Output>, initial: NoInfer<Input>): FormState<Input, Output> {
 	const [values, setValues] = useState(initial)

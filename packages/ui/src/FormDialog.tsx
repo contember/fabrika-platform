@@ -10,8 +10,9 @@ export interface FormDialogProps<Input, Output> {
 	readonly description?: ReactNode
 	readonly form: FormState<Input, Output>
 	/**
-	 * Runs with the schema's output once the values pass it; the dialog is pending until it settles. It answers a refusal
-	 * through `error` and does not throw: a rejection is the page's unhandled error.
+	 * Runs with the schema's output once the values pass it; the dialog is pending until it settles, so return the
+	 * mutation's promise: a refused field takes the focus only if `error` holds it by then. It answers a refusal through
+	 * `error` and does not throw: a rejection is the page's unhandled error.
 	 */
 	readonly onSubmit: (value: Output) => Promise<unknown> | void
 	readonly onClose: () => void
