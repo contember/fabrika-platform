@@ -35,6 +35,11 @@ This page puts them side by side and lists the provider-neutral work all three n
 Checked against the code at `11e8da5bf`. Each lands in Control, a neutral library or the framework, and every cloud
 above uses it. Ordered by what blocks a first deploy on any of them.
 
+Built since, each in `main`: N1 (#364), N2 (#359), N3 (#358), N4's test (#356), N5 (#365, #360) and N7 (#362, #363).
+Their sections below keep the analysis as it was written. What a cloud still adds over them is its own: on AWS, the S3
+part writer and the presigned read the build fetches with ([the AWS checklist](aws-provider.md#b-the-aws-package-in-order),
+step 5), and Control's composition root that hands Control's source client to the provider (step 12).
+
 ### N1. A source archive that binds no repository descriptor (S, all three)
 
 `createGitHubSource` takes one `SourceDescriptorRule` (`packages/control/src/github/source/index.ts`), and every archive
