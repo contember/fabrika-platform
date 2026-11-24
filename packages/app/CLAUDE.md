@@ -127,6 +127,9 @@ src/
   build-recipe.ts     contractRecipe: a contract application's build, init, start and jobs in a Bun container, as
                       data a provider renders (re-exported by @fabrika/app/build). PLATFORM PROTOCOL: the
                       platform renders its own copy for older applications, so change it only additively
+  build-image.ts      containerImage: the recipe as a two-stage Dockerfile for a container cloud's builder, with the
+                      init and start commands the provider runs (re-exported by @fabrika/app/build); the schema check
+                      runs at container start, the source-map bearer is a build secret, the jobs stay the provider's
   dev/                @fabrika/app/dev — the launcher of a `dev` environment (ADR-0017, ADR-0064); Bun only
     wire.ts           @fabrika/app/dev/wire — the source receiver's wire, which Control imports too (runtime-neutral)
     changes.ts        @fabrika/app/dev/changes — which paths need a bootstrap run; Control applies the same rule at bind_dev
