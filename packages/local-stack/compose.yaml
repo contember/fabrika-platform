@@ -1,5 +1,7 @@
 # The project name comes from `src/compose.ts` (`COMPOSE_PROJECT`), one per checkout; run this file through `local:*`.
 
+# A Bun container that calls a public `*.fabrika.localhost` URL forwards its loopback to the proxy serving it
+# (`src/loopback-forward.ts`): Bun 1.4.1+ resolves every `*.localhost` name to loopback, past the network aliases.
 x-bun: &bun
   image: oven/bun:1.4.4-alpine
   working_dir: /workspace
@@ -124,6 +126,7 @@ services:
 
   control:
     <<: *bun
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18080=platform-proxy-auth:18080, --]
     # The production server with its GitHub and upload transports pointed at the local fixtures (ADR-0029).
     command: [sh, -c, "bun packages/control/src/zerops/migrate.ts && bun packages/local-stack/src/source-connection-fixture-seed.ts && exec bun packages/local-stack/src/control-server.ts"]
     # `control-table.env` is rewritten by every prepare: the digest of the table the platform proxy publishes for it.
@@ -167,6 +170,7 @@ services:
 
   operations:
     <<: *bun
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18080=platform-proxy-auth:18080, --]
     command: [sh, -c, "bun packages/operations/src/node/migrate.ts && exec bun packages/operations/src/node/server.ts"]
     # `operations-oauth.env` is rewritten by every prepare: the console's Operations RPC as an OAuth resource.
     env_file:
@@ -265,6 +269,7 @@ services:
   # `followNotesDeploy` points it at another fixture commit the emulator activated (`src/notes-follow.ts`).
   notes:
     <<: *bun
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18080=platform-proxy-auth:18080, 18081=apps-proxy-auth:18081, --]
     # The application image: Bun with ClamAV, so a `scan: true` collection's scan job finds its scanner.
     image: fabrika-local-app:clamav
     build: app-image
@@ -308,6 +313,7 @@ services:
 
   apps-proxy-auth:
     <<: *bun
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18080=platform-proxy-auth:18080, --]
     command: bun packages/proxy/src/main.ts
     env_file:
       - .state/apps-proxy.env
