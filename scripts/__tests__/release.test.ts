@@ -313,8 +313,11 @@ describe('the source version', () => {
 })
 
 describe('a local pack', () => {
-	test('is a prerelease of the source version, named after the commit', () => {
+	test('of a release source is a prerelease of it, named after the commit', () => {
 		expect(localVersion('0.3.3', 'abc1234')).toBe('0.3.3-local.gabc1234')
+	})
+
+	test('refuses a commit that is no object name, and a source with build metadata or a malformed identifier', () => {
 		expect(() => localVersion('0.3.3', 'HEAD')).toThrow('is not a git object name')
 		expect(() => localVersion('0.3.3+build.1', 'abc1234')).toThrow('is not a release or a prerelease')
 		expect(() => localVersion('0.3.3-dev.01', 'abc1234')).toThrow('is not a release or a prerelease')
