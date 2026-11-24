@@ -133,7 +133,8 @@ const notes = app.group({ callers: ['human'] }, (r) => ({
 		.handle(async ({ input, ctx }) => ({ id: (await ctx.db.app.documents.insert({ file: input.file })).id })),
 }))
 
-const slow = app.cron('0 3 * * *', { actions: ['notes.read'] }).handle(async ({ ctx }) => {
+// Daily, twelve hours from the time this file loads, so the schedule never comes due on its own while the file runs.
+const slow = app.cron(`0 ${(new Date().getUTCHours() + 12) % 24} * * *`, { actions: ['notes.read'] }).handle(async ({ ctx }) => {
 	await holds.job?.(ctx.signal)
 })
 

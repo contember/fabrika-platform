@@ -82,8 +82,9 @@ const app = defineApp(vocabulary, tables)
 /** The claim's limit for the next run, a second claim of another kind in the same run, and the rows each claim took. */
 const claims: { limit: number; then: string | null; claimed: string[][] } = { limit: 5, then: null, claimed: [] }
 
-// Daily, so a claimed row's backoff (the schedule's period) lies a day ahead of every row a test places.
-const render = app.cron('0 3 * * *', { actions: ['reports.render'] }).handle(async ({ ctx }) => {
+// Daily, so a claimed row's backoff (the schedule's period) lies a day ahead of every row a test places; at twelve
+// hours from the time this file loads, so the schedule never comes due on its own while the file runs.
+const render = app.cron(`0 ${(new Date().getUTCHours() + 12) % 24} * * *`, { actions: ['reports.render'] }).handle(async ({ ctx }) => {
 	const queue = ctx.db.over(ctx.within('reports.render', 'deal')).report_requests
 	const rows = await queue.claim({ limit: claims.limit, where: [['kind', '=', 'summary'], ['result', 'is', null]] })
 	claims.claimed.push(rows.map((row) => row.id).sort())
