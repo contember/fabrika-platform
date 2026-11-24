@@ -580,6 +580,11 @@ describe('buildArtifact refuses a declaration the types would refuse', () => {
 		expect(build(sourced('api.workspaceValues', { ...good, access: { action: 'notes.read', app: true } }))).toEqual([
 			`${where}: 'api.workspaceValues' does not require an action over 'workspace' (allowed: access: { action: '<action>', over: 'workspace' })`,
 		])
+		const managed = sourced('api.workspaceValues', good)
+		const managedWorkspace = { ...managed.dimensions['workspace'], members: { manage: 'notes.read', list: 'notes.read' } }
+		expect(build({ ...managed, dimensions: { ...managed.dimensions, workspace: managedWorkspace } })).toContain(
+			`${where}: 'api.workspaceValues' requires 'notes.read', which manages the members of 'workspace' (allowed: an action that reads, not members.manage)`,
+		)
 		expect(build(sourced('api.workspaceValues', { ...good, input: { type: 'object', fields: {} } }))).toEqual([
 			`${where}: 'api.workspaceValues' takes an input (allowed: no input)`,
 		])

@@ -185,6 +185,12 @@ function suite(label: string, backend: () => IamRepositories) {
 			await f.edit('w1')
 			await f.repositories.handoff.setReturnOrigins(APP, [])
 			expect(await ask('workspace')).toEqual({ source: 'unavailable', reason: 'no_origin' })
+			// Several origins (a dev environment's workspace sandboxes) name no one application to ask.
+			await f.repositories.handoff.setReturnOrigins(APP, [APP_ORIGIN, 'https://ws-1.notes.example.test'])
+			expect(await ask('workspace')).toEqual({ source: 'unavailable', reason: 'no_origin' })
+			// A plain-http origin gets no key outside a local IAM.
+			await f.repositories.handoff.setReturnOrigins(APP, ['http://notes.example.test'])
+			expect(await ask('workspace')).toEqual({ source: 'unavailable', reason: 'no_origin' })
 			await expect(ask('nowhere')).rejects.toMatchObject({ httpStatus: 404 })
 
 			expect(app.requests.length).toBe(0)

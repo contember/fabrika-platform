@@ -6,6 +6,7 @@ import {
 	API_KEY_PREFIX,
 	type DimensionValueSource,
 	isReservedScopeType,
+	LOCAL_ENVIRONMENT,
 	MAX_DIMENSION_VALUES,
 	MAX_SCOPE_VALUE_SOURCE_BYTES,
 	parseDimensionValues,
@@ -47,7 +48,7 @@ export async function listScopeValuesUseCase(
 	if (scope === null) return fail(404, `'${input.scopeType}' is not a scope of '${input.app}'`)
 	const source = parseStoredValueSource(scope.value_source)
 	if (source === null) return unavailable('no_source')
-	const target = sourceUrl((await handoff.listReturnOrigins(input.app))[0], source)
+	const target = sourceUrl(await handoff.listReturnOrigins(input.app), source, c.services.config.environment === LOCAL_ENVIRONMENT)
 	if (target === null) return unavailable('no_origin')
 	const principal = await principals.getPrincipalById(c.admin.id)
 	if (principal === null) return fail(404, 'principal not found')
@@ -82,11 +83,17 @@ function unavailable(reason: ScopeValuesUnavailable): ScopeValuesResult {
 	return { source: 'unavailable', reason }
 }
 
-/** The procedure's URL on the application's registered origin, or null when the origin or the path would leave it. */
-function sourceUrl(origin: string | undefined, source: DimensionValueSource): URL | null {
-	if (origin === undefined) return null
+/**
+ * The procedure's URL on the application's one registered origin, or null. The key goes only where its application is
+ * served: an environment registering several origins (a dev environment's workspace sandboxes, each serving its own
+ * contract) names none, a plain `http:` origin only in a local IAM, and never a path that would leave the origin.
+ */
+function sourceUrl(origins: readonly string[], source: DimensionValueSource, local: boolean): URL | null {
+	const [origin] = origins
+	if (origin === undefined || origins.length !== 1) return null
 	try {
 		const url = new URL(source.path, origin)
+		if (url.protocol !== 'https:' && !(local && url.protocol === 'http:')) return null
 		return url.origin === origin && url.pathname === source.path && url.search === '' ? url : null
 	} catch {
 		return null

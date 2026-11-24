@@ -324,11 +324,20 @@ export const appSchemaSchema = appSchemaShape.superRefine((schema, ctx) => {
 		}
 	}
 	for (const [index, scope] of schema.scopes.entries()) {
-		if (scope.valueSource !== undefined && !catalog.includes(scope.valueSource.action)) {
+		const sourceAction = scope.valueSource?.action
+		if (sourceAction !== undefined && (sourceAction.includes('*') || !catalog.includes(sourceAction))) {
 			ctx.addIssue({
 				code: 'custom',
 				path: ['scopes', index, 'valueSource', 'action'],
-				message: `scope ${quote(scope.type)} names a value source of the unknown action ${quote(scope.valueSource.action)}`,
+				message: `scope ${quote(scope.type)} names a value source of ${quote(sourceAction)}, which is not an exact action of the catalog`,
+			})
+		}
+		// The key IAM issues for the call carries this action; the members' action would carry a membership delegation.
+		if (sourceAction !== undefined && sourceAction === scope.members?.manage) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['scopes', index, 'valueSource', 'action'],
+				message: `scope ${quote(scope.type)} names a value source of ${quote(sourceAction)}, which manages its members`,
 			})
 		}
 	}

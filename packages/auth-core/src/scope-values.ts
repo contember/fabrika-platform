@@ -67,15 +67,20 @@ interface ValueSourceRow {
 
 /**
  * Why `row` cannot be `dimension`'s value source, or null: a person's `POST` query without input, requiring an action
- * `over` that dimension, whose output is `{ values: [{ value: string, label?: string }] }`. The proxy decides the call
- * from the row like any other; the requirement's action is what IAM's key for the call carries.
+ * `over` that dimension other than its `members.manage` (`managedBy`), whose output is
+ * `{ values: [{ value: string, label?: string }] }`. The proxy decides the call from the row like any other; the
+ * requirement's action is what IAM's key for the call carries, and a row of `members.manage` would carry a membership
+ * delegation into a call the administrator only reads with.
  */
-export function valueSourceProblem(row: ValueSourceRow, dimension: string): string | null {
+export function valueSourceProblem(row: ValueSourceRow, dimension: string, managedBy: string | null): string | null {
 	if (row.kind !== 'query' || row.method !== 'POST') return `'${row.id}' is not a query procedure (allowed: r.query(…) of an rpc mount)`
 	if (!row.callers.includes('human')) return `'${row.id}' admits no person (allowed: callers including 'human')`
 	const requirement = row.requirement
 	if (requirement?.kind !== 'action' || requirement.access?.form !== 'over' || requirement.access.dimension !== dimension) {
 		return `'${row.id}' does not require an action over '${dimension}' (allowed: access: { action: '<action>', over: '${dimension}' })`
+	}
+	if (managedBy !== null && requirement.action === managedBy) {
+		return `'${row.id}' requires '${managedBy}', which manages the members of '${dimension}' (allowed: an action that reads, not members.manage)`
 	}
 	if (row.input !== null) return `'${row.id}' takes an input (allowed: no input)`
 	if (row.output === null || !isDimensionValuesShape(row.output)) {

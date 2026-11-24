@@ -66,8 +66,9 @@ it, never silently.
 ### 4. The application answers a dimension's values to the administrator who grants
 
 A dimension may name a procedure of its own contract, `valuesFrom: '<endpoint id>'`. The build refuses one that is not
-a query, admits no person (`human`), does not require an action `over` that dimension, takes an input, or answers
-anything but `{ values: [{ value, label? }] }` under the bounds of the static list. `schemaFromContract` hands IAM the
+a query, admits no person (`human`), does not require an action `over` that dimension, requires the dimension's
+`members.manage` (a key carrying it would carry a membership delegation into a call that only reads), takes an input,
+or answers anything but `{ values: [{ value, label? }] }` under the bounds of the static list. `schemaFromContract` hands IAM the
 procedure's id, path and action (`AppScopeDef.valueSource`), and IAM stores them with the dimension.
 
 When the console's grant form opens such a dimension, it asks IAM (`scopeValues.list` of `/admin/rpc`) and never the
@@ -83,8 +84,11 @@ application itself. IAM:
    self-bound key, its grants only narrow the person's live permissions at each mint, so the key never carries more
    than the person holds then, and nothing at another application. The key and an `iam.scope_values.read` record
    naming it are written in one transaction.
-3. POSTs `{}` to the procedure's path on the application's first registered return origin, the application's public
-   origin, so the call reaches the application's proxy like any other request. The proxy exchanges the key with
+3. POSTs `{}` to the procedure's path on the application's registered return origin, its public origin, so the call
+   reaches the application's proxy like any other request. Only an environment with exactly one registered origin, on
+   `https` (`http` only in a local IAM), gets the call: a dev environment's sandbox origins and anything else are
+   `no_origin`. That origin is where the administrator's key goes, so on a protected environment only a person changes
+   it (Control's `requirePersonToPointPublicOrigin`, beside the domain's guard). The proxy exchanges the key with
    `mintFromKey`, selects the row and checks its requirement: the proxy stays the only enforcement point, and nothing
    about it changes. The request carries the key as a bearer, follows no redirect, and is cut after 3 s and 256 KiB.
 4. Parses the answer once, with the rule the build applied to the declared list, and answers the console

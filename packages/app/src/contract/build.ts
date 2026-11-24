@@ -327,7 +327,9 @@ class ArtifactBuilder {
 		for (const [name, dimension] of Object.entries(dimensions)) {
 			if (dimension.valuesFrom === undefined) continue
 			const row = this.#endpoints.find((endpoint) => endpoint.id === dimension.valuesFrom)
-			const problem = row === undefined ? `'${dimension.valuesFrom}' is not a procedure of the contract` : valueSourceProblem(row, name)
+			const problem = row === undefined
+				? `'${dimension.valuesFrom}' is not a procedure of the contract`
+				: valueSourceProblem(row, name, dimension.members?.manage ?? null)
 			if (problem !== null) this.#problem(`dimension '${name}' valuesFrom`, problem)
 		}
 	}

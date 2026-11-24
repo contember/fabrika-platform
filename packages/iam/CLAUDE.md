@@ -354,8 +354,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   session whose administration covers the app (`requireManagedApp`), never a key. It reads the dimension's
   `app_scopes.value_source`, issues a self-bound key of that person bound to the app for
   `SCOPE_VALUE_KEY_TTL_SECONDS` whose inline grants are the person's entries of the source's action only, writes it
-  with `iam.scope_values.read` in one transaction, and POSTs the procedure on the app's first registered return origin
-  (`redirect: 'manual'`, 3 s, 256 KiB), so the application's proxy exchanges the key. Every failure of the application
+  with `iam.scope_values.read` in one transaction, and POSTs the procedure on the app's one registered return origin,
+  https only (http in a local IAM), else `no_origin` (`sourceUrl`; `redirect: 'manual'`, 3 s, 256 KiB), so the application's proxy exchanges the key. Every failure of the application
   is `{ source: 'unavailable', reason }`, never an error. Never send the key anywhere else, log it, or widen its grants.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
   Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it

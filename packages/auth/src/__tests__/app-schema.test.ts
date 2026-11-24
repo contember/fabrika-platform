@@ -67,6 +67,19 @@ describe('appSchemaSchema — membership metadata', () => {
 		])
 	})
 
+	test("a value source names an exact catalog action that is not the scope's members.manage", () => {
+		const schema = notes()
+		const [workspace, note] = schema.scopes
+		if (workspace === undefined || note === undefined) throw new Error('fixture')
+		const sourced = (action: string) => ({
+			...schema,
+			scopes: [{ ...workspace, valueSource: { endpoint: 'api.workspaces.values', path: '/api/workspaces.values', action } }, note],
+		})
+		expect(messages(sourced('notes.read'))).toEqual([])
+		expect(messages(sourced('notes.*'))).toEqual(['scope `workspace` names a value source of `notes.*`, which is not an exact action of the catalog'])
+		expect(messages(sourced('notes.admin'))).toEqual(['scope `workspace` names a value source of `notes.admin`, which manages its members'])
+	})
+
 	test('containment names a declared scope and never loops', () => {
 		expect(messages(notes({ scopes: [{ type: 'workspace', creator: 'owner' }, { type: 'note', in: 'folder' }] }))).toContain(
 			'scope `note` is in an undeclared scope: `folder`',
