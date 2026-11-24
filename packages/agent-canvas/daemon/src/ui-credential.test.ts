@@ -66,6 +66,16 @@ function openerCalls(): string[] {
 }
 
 /**
+ * The opener calls once there are at least `count`: the CLI starts the opener detached and exits, so its record may land
+ * after the command returned. Answers what there is after `timeoutMs`, for the assertion to name.
+ */
+async function openerCallsAtLeast(count: number, timeoutMs = 5_000): Promise<string[]> {
+	const deadline = Date.now() + timeoutMs
+	while (openerCalls().length < count && Date.now() < deadline) await Bun.sleep(20)
+	return openerCalls()
+}
+
+/**
  * The link an opener call leads the browser to. The opener gets a file of the user's own, never the link: other OS users
  * read every process's arguments.
  */
@@ -172,7 +182,7 @@ describe('the canvas UI credential', () => {
 	})
 
 	test('the link push opened sets the cookie once and leads to the canvas, and the UI routes then answer', async () => {
-		const [call] = openerCalls()
+		const [call] = await openerCallsAtLeast(1)
 		if (call === undefined) throw new Error('push opened no browser')
 		const link = linkOf(call)
 		expect(link.startsWith(`${base}/open?code=`)).toBe(true)
@@ -208,7 +218,7 @@ describe('the canvas UI credential', () => {
 		const before = openerCalls().length
 		const result = await cli(['open', '--session', SESSION])
 		expect(result.exitCode).toBe(0)
-		const call = openerCalls()[before]
+		const call = (await openerCallsAtLeast(before + 1))[before]
 		if (call === undefined) throw new Error('open opened no browser')
 		const link = linkOf(call)
 		expect(result.stdout.trim()).toBe(link)
@@ -260,7 +270,7 @@ describe('the canvas UI credential', () => {
 		const proxy = opened.stdout.match(/ at (http:\/\/localhost:\d+\/)/)?.[1]
 		if (proxy === undefined) throw new Error(`review open printed no proxy: ${opened.stdout}`)
 		const proxyOrigin = new URL(proxy).origin
-		const call = openerCalls()[before]
+		const call = (await openerCallsAtLeast(before + 1))[before]
 		if (call === undefined) throw new Error('review open opened no browser')
 
 		const threads = `${base}/api/review/demo/threads`

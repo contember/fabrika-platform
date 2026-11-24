@@ -18,7 +18,15 @@ async function runInCli(script: string, opts: { temp: string; env?: Record<strin
 	mkdirSync(join(opts.temp, 'run'), { recursive: true, mode: 0o700 })
 	const child = Bun.spawn([process.execPath, '-e', script], {
 		cwd: opts.temp,
-		env: { ...process.env, TMPDIR: opts.temp, XDG_RUNTIME_DIR: join(opts.temp, 'run'), FABRIKA_PORT: String(unusedPort()), ...opts.env },
+		// NODE_ENV=test whatever the run inherited, so the CLI's opener never runs a real browser (`openerAllowed`).
+		env: {
+			...process.env,
+			NODE_ENV: 'test',
+			TMPDIR: opts.temp,
+			XDG_RUNTIME_DIR: join(opts.temp, 'run'),
+			FABRIKA_PORT: String(unusedPort()),
+			...opts.env,
+		},
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})

@@ -108,6 +108,16 @@ function openerCalls(): string[] {
 	return existsSync(opened) ? readFileSync(opened, 'utf-8').split('\n').filter((line) => line !== '') : []
 }
 
+/**
+ * The opener calls once there are at least `count`: the CLI starts the opener detached and exits, so its record may land
+ * after the command returned. Answers what there is after `timeoutMs`, for the assertion to name.
+ */
+async function openerCallsAtLeast(count: number, timeoutMs = 5_000): Promise<string[]> {
+	const deadline = Date.now() + timeoutMs
+	while (openerCalls().length < count && Date.now() < deadline) await Bun.sleep(20)
+	return openerCalls()
+}
+
 /** The link an opener call leads to: the call names a file of the user's own, which refreshes to it. */
 function linkOf(call: string): string {
 	expect(call).not.toContain('code=')
@@ -124,7 +134,7 @@ test('`dashboard` asks for a link with the CLI capability, prints it, and opens 
 	expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' })
 	expect(JSON.parse(result.stdout)).toEqual({ ok: true, sessionId: 'dashboard-session', browserUrl: link })
 	expect(linkRequests).toEqual([CAPABILITY])
-	const calls = openerCalls()
+	const calls = await openerCallsAtLeast(1)
 	expect(calls).toHaveLength(1)
 	expect(linkOf(calls[0] ?? '')).toBe(link)
 	expect(statSync(join(temp, 'fabrika')).mode & 0o777).toBe(0o700)
@@ -141,7 +151,7 @@ test('`gate open` opens the link its push answered with through a private file',
 	const result = await run(['gate', 'open', 'vision', '--view', join(project, 'view.jsx')])
 	expect(result.code).toBe(0)
 	expect(JSON.parse(result.stdout).browserUrl).toBe(link)
-	const calls = openerCalls()
+	const calls = await openerCallsAtLeast(1)
 	expect(calls).toHaveLength(1)
 	expect(linkOf(calls[0] ?? '')).toBe(link)
 })
@@ -160,5 +170,5 @@ test('`gate open` against a daemon of an earlier release opens the page it answe
 	expect(result.code).toBe(0)
 	const page = `http://${BUILDER_DAEMON_HOST}:${server?.port}/s/dashboard-session`
 	expect(JSON.parse(result.stdout).browserUrl).toBe(page)
-	expect(openerCalls()).toEqual([page])
+	expect(await openerCallsAtLeast(1)).toEqual([page])
 })

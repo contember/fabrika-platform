@@ -17,8 +17,9 @@ Bun daemon infrastructure without canvas or browser dependencies:
   which `/open` trades for the cookie through a page that refreshes; and the CLI side, which hands the browser such a
   link through a `0600` file, never as a process argument. The daemon supplies its cookie prefix and its pages.
 - `openerAllowed`, `TEST_OPENER_DIR_VARIABLE`: what a CLI's browser opener asks before it runs. Under a test run
-  (`NODE_ENV=test`, which `bun test` sets and a CLI it spawns inherits) only an opener inside `FABRIKA_TEST_OPENER_DIR`,
-  the test's own fake, runs; without it the CLI prints the URL. A test never opens the user's real browser.
+  (`NODE_ENV=test`) only an opener inside `FABRIKA_TEST_OPENER_DIR`, the test's own fake, runs; without it the CLI
+  prints the URL. `bun test` sets `NODE_ENV=test` only when it is unset, so a test helper that spawns a CLI sets it
+  explicitly; then that test never opens the user's real browser.
 - `@fabrika/daemon-kit/ui-client` `reconnectOrReload`: a UI whose socket dropped reloads when the daemon answers 401, so
   the browser shows the daemon's page that names the command for a fresh link. It imports no runtime of the daemon.
 
