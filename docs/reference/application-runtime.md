@@ -509,6 +509,12 @@ first and the object again, and it never boots the application.
   The checker already refuses `process.env` in application code
   (`env-read`); the application's own values reach it through the framework's environment. Measured in workerd
   1.20260312.1.
+- **The importable `env` stays empty too.** Any module of a Worker can `import { env } from 'cloudflare:workers'`, and
+  without `disallow_importable_env` (which has no enable date at workerd 1.20260312.1) that `env` is every binding and
+  secret, at module evaluation and at request. The deployer adds `disallow_importable_env` beside the `process.env`
+  opt-out, the bounds check refuses a generated config without it, and an application Worker that sets
+  `allow_importable_env` is refused; `WorkerEntrypoint` and `DurableObject` still load. The checker's `env-read` refuses
+  the import in application code. A dependency that reads it sees an empty object.
 - **The object** (`FabrikaApplication`, `packages/app/src/cloudflare/application.ts`) answers an empty 404 to a request
   without the secret or with another, before anything else. On the first request or tick that needs the application,
   under `blockConcurrencyWhile`, it captures the environment,

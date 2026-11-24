@@ -215,6 +215,16 @@ const refused: readonly DirectForm[] = [
 		expected: ['src/config.ts:1:18', 'src/config.ts:2:25', 'src/config.ts:3:1', 'src/config.ts:4:18'],
 	},
 	{
+		name: "Cloudflare's importable environment: a named, a namespace and a dynamic import, and a re-export",
+		rule: 'env-read',
+		files: {
+			'src/config.ts': "import { env } from 'cloudflare:workers'\nimport * as workers from 'cloudflare:workers'\n"
+				+ "export const b = (await import('cloudflare:workers')).env.SECRET\nexport { env as bindings } from 'cloudflare:workers'\n"
+				+ "import { WorkerEntrypoint } from 'cloudflare:workers'\nexport const a = [env.SECRET, workers, WorkerEntrypoint]\n",
+		},
+		expected: ['src/config.ts:1:1', 'src/config.ts:2:1', 'src/config.ts:3:25', 'src/config.ts:4:1'],
+	},
+	{
 		name: 'template specifiers, module.require and aws-sdk',
 		rule: 'forbidden-import',
 		files: {

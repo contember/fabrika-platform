@@ -9,7 +9,15 @@
 import { type EmailTransportConfig, readEmailTransportConfig } from '@fabrika/email'
 import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
-import { D1Database, defineApp, NO_PROCESS_ENV_FLAG, platformNames, type ResourceContext, Worker } from '@fabrika/provider-cloudflare'
+import {
+	D1Database,
+	defineApp,
+	NO_IMPORTABLE_ENV_FLAG,
+	NO_PROCESS_ENV_FLAG,
+	platformNames,
+	type ResourceContext,
+	Worker,
+} from '@fabrika/provider-cloudflare'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const IAM_APP_ID = 'propustka'
@@ -246,8 +254,10 @@ export const buildIamWorker = (ctx: ResourceContext, source: EnvironmentSource =
 		dir: '.',
 		name: names.iamWorker,
 		main: './src/index.ts',
-		// `nodejs_compat_v2` alone leaves `process.env` empty; the opt-out keeps it so if the flags change.
-		compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG],
+		// `process.env` and the importable `env` of `cloudflare:workers` stay empty: otherwise each could hold every secret,
+		// the signing keys included, for any bundled module to read (`nodejs_compat_v2` alone already leaves `process.env`
+		// empty). IAM reads its configuration from the Worker's `env` only.
+		compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG, NO_IMPORTABLE_ENV_FLAG],
 		compatibility_date: '2025-10-01',
 		// This is the public auth surface. Control reaches admin APIs over a service binding.
 		routes: domain === undefined ? [] : [{ pattern: domain, custom_domain: true }],

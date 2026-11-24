@@ -7,13 +7,12 @@ import { CloudflareClient } from 'oblaka-iac/src/client'
 import { ResourceProcessor } from 'oblaka-iac/src/commands/resource-processor'
 import { PLATFORM_RESOURCE_NAMES } from './platform-names'
 import {
+	CLOSED_ENVIRONMENT_FLAGS,
 	CLOUDFLARE_PROXY_WORKER_DIR,
 	IAM_APPLICATION_ENTRYPOINT,
 	IAM_SERVICE,
 	type IamBindingHolder,
 	iamBindingProps,
-	NO_PROCESS_ENV_FLAG,
-	POPULATE_PROCESS_ENV_FLAG,
 	PROXY_MANIFEST_DEFINE,
 } from './proxy'
 
@@ -379,15 +378,18 @@ const assertUnexposed = (worker: string, config: WranglerConfig): void => {
 }
 
 /**
- * The Worker keeps `process.env` empty: its flags carry `NO_PROCESS_ENV_FLAG` and not `POPULATE_PROCESS_ENV_FLAG`, so no
- * module of its bundle finds the platform's secrets there. The deployer adds the first; this checks what wrangler reads.
+ * The Worker keeps its environment out of module scope: for each pair of `CLOSED_ENVIRONMENT_FLAGS` its flags carry the
+ * opt-out and not the opt-in, so no module of its bundle finds the platform's secrets in `process.env` or in the `env`
+ * of `cloudflare:workers`. The deployer adds the opt-outs; this checks what wrangler reads.
  */
 const assertProcessEnvironmentClosed = (worker: string, flags: unknown): void => {
 	const listed: readonly unknown[] = Array.isArray(flags) ? flags : []
-	if (listed.includes(POPULATE_PROCESS_ENV_FLAG) || !listed.includes(NO_PROCESS_ENV_FLAG)) {
-		throw new Error(
-			`cloudflare: Worker \`${worker}\` would fill \`process.env\` with the platform's secrets; its \`compatibility_flags\` must carry \`${NO_PROCESS_ENV_FLAG}\` and not \`${POPULATE_PROCESS_ENV_FLAG}\``,
-		)
+	for (const { closed, opened, what } of CLOSED_ENVIRONMENT_FLAGS) {
+		if (listed.includes(opened) || !listed.includes(closed)) {
+			throw new Error(
+				`cloudflare: Worker \`${worker}\` would fill ${what} with the platform's secrets; its \`compatibility_flags\` must carry \`${closed}\` and not \`${opened}\``,
+			)
+		}
 	}
 }
 

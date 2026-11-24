@@ -3,6 +3,7 @@ import {
 	createCloudflareProxyWorker,
 	D1Database,
 	defineApp,
+	NO_IMPORTABLE_ENV_FLAG,
 	NO_PROCESS_ENV_FLAG,
 	platformNames,
 	Queue,
@@ -33,8 +34,10 @@ export const buildOperationsWorker = (ctx: ResourceContext): Worker => {
 		dir: '.',
 		name: names.operationsWorker,
 		main: './src/worker.ts',
-		// `nodejs_compat_v2` alone leaves `process.env` empty; the opt-out keeps it so if the flags change.
-		compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG],
+		// `process.env` and the importable `env` of `cloudflare:workers` stay empty: otherwise each could hold every secret
+		// for any bundled module to read (`nodejs_compat_v2` alone already leaves `process.env` empty). Operations reads its
+		// configuration from the Worker's `env` only.
+		compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG, NO_IMPORTABLE_ENV_FLAG],
 		compatibility_date: '2025-10-01',
 		workers_dev: false,
 		// Public routing belongs to the proxy Worker. Operations is reached through its APP service binding.

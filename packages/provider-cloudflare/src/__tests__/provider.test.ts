@@ -38,7 +38,15 @@ import {
 import { SCHEMA_CHECK_CONFIG_SINCE } from '../contract-support'
 import { deployOrder } from '../deploy-order'
 import type { PlatformIamTarget } from '../provider'
-import { CLOUDFLARE_PROXY_WORKER_DIR, NO_PROCESS_ENV_FLAG, POPULATE_PROCESS_ENV_FLAG, PROXY_MANIFEST_DEFINE, proxyManifestJson } from '../proxy'
+import {
+	CLOUDFLARE_PROXY_WORKER_DIR,
+	IMPORTABLE_ENV_FLAG,
+	NO_IMPORTABLE_ENV_FLAG,
+	NO_PROCESS_ENV_FLAG,
+	POPULATE_PROCESS_ENV_FLAG,
+	PROXY_MANIFEST_DEFINE,
+	proxyManifestJson,
+} from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
@@ -1036,8 +1044,16 @@ describe('Cloudflare provider', () => {
 				`sets \`${POPULATE_PROCESS_ENV_FLAG}\``,
 			)
 		}
+		// The importable `env` the same way: a binding that drops its opt-out or adds the opt-in, and a raw opt-in.
+		for (const flags of [[NO_PROCESS_ENV_FLAG], [NO_PROCESS_ENV_FLAG, NO_IMPORTABLE_ENV_FLAG, IMPORTABLE_ENV_FLAG]]) {
+			await expect(deploy(rec, config({ resources: () => bindingIam(emitting({ compatibility_flags: flags })) }))).rejects.toThrow(
+				`would fill the \`env\` of \`cloudflare:workers\` with the platform's secrets; its \`compatibility_flags\` must carry \`${NO_IMPORTABLE_ENV_FLAG}\``,
+			)
+		}
+		await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), { compatibility_flags: [IMPORTABLE_ENV_FLAG] }) }))).rejects
+			.toThrow(`sets \`${IMPORTABLE_ENV_FLAG}\``)
 		expect(rec.provisions).toHaveLength(0)
-		// …and adds the opt-out to plain `nodejs_compat`, so that one deploys.
+		// …and adds the opt-outs to plain `nodejs_compat`, so that one deploys.
 		await expect(deploy(rec, config({ resources: () => withRawOptions(appWorker(), { compatibility_flags: ['nodejs_compat'] }) }))).resolves
 			.toMatchObject({ status: 'succeeded' })
 	})
@@ -2506,7 +2522,7 @@ describe('the application Worker `defineApp` builds for a config without `resour
 			expect(minimal.steps.map((step) => step.id)).not.toContain('reconcile-schema')
 			expect(configs.find((config) => config.name === 'stage-demo')).toMatchObject({
 				main: './fabrika/entry.generated.ts',
-				compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG],
+				compatibility_flags: ['nodejs_compat_v2', NO_PROCESS_ENV_FLAG, NO_IMPORTABLE_ENV_FLAG],
 				routes: [],
 				workers_dev: false,
 				preview_urls: false,
@@ -2535,8 +2551,14 @@ describe('the application Worker `defineApp` builds for a config without `resour
 				const flags = configs.find((config) => config.name === name)?.compatibility_flags
 				expect(flags).toContain(NO_PROCESS_ENV_FLAG)
 				expect(flags).not.toContain(POPULATE_PROCESS_ENV_FLAG)
+				expect(flags).toContain(NO_IMPORTABLE_ENV_FLAG)
+				expect(flags).not.toContain(IMPORTABLE_ENV_FLAG)
 			}
 		}
+		const importable = defineApp({ id: 'demo', worker: { compatibility_flags: ['nodejs_compat_v2', IMPORTABLE_ENV_FLAG] } })
+		await expect(deploy(rec, importable, { contract: notesArtifact, framework: '0.9.0', declaresSchema: false })).rejects.toThrow(
+			`sets \`${IMPORTABLE_ENV_FLAG}\`, which would put the platform's secrets in the \`env\` of \`cloudflare:workers\``,
+		)
 		const optedIn = defineApp({ id: 'demo', worker: { compatibility_flags: ['nodejs_compat_v2', POPULATE_PROCESS_ENV_FLAG] } })
 		await expect(deploy(rec, optedIn, { contract: notesArtifact, framework: '0.9.0', declaresSchema: false })).rejects.toThrow(
 			`sets \`${POPULATE_PROCESS_ENV_FLAG}\`, which would put the platform's secrets in \`process.env\``,

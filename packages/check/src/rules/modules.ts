@@ -154,6 +154,11 @@ const checkPackage = (reference: ModuleReference, specifier: string, report: Rep
 	}
 	const takesEnvironment = reference.names.some((imported) => imported === 'env' || imported === '*' || imported === 'default')
 	if (name === 'process' && takesEnvironment && !isGeneratedEntry) report(node, 'env-read', `'${specifier}' loaded for its environment`, ALLOWED_ENV)
+	// On Cloudflare `env` of `cloudflare:workers` is every binding and secret of the Worker, the framework's included.
+	// The platform sets `disallow_importable_env`, which leaves it empty; an import of it is a read nonetheless.
+	if (specifier === 'cloudflare:workers' && takesEnvironment && !isGeneratedEntry) {
+		report(node, 'env-read', `'${specifier}' loaded for its environment, every binding of the Worker`, ALLOWED_ENV)
+	}
 }
 
 export const checkModuleReferences = (
