@@ -6,7 +6,15 @@ import { defineVocabulary } from '@fabrika/app/contract'
 export const vocabulary = defineVocabulary({
 	app: 'example-app',
 	dimensions: {
-		organization: {},
+		// The organizations a grant may name, offered to an administrator as checkboxes (ADR-0085).
+		organization: {
+			values: [
+				{ value: 'acme', label: 'Acme Corporation' },
+				{ value: 'globex', label: 'Globex' },
+				{ value: 'initech', label: 'Initech' },
+				{ value: 'umbrella', label: 'Umbrella' },
+			],
+		},
 		project: {},
 		note: { in: 'project' },
 	},
