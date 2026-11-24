@@ -74,12 +74,15 @@ export function GrantRequests({ initial, viewerId }: { initial: readonly GrantRe
 									<span className="muted small">for {request.principalLabel ?? request.principalId}</span>
 								</div>
 							</td>
-							<td className="small" title={fmtDate(request.requestedAt)}>
-								{request.requestedByLabel ?? request.requestedBy} · {fmtAgo(request.requestedAt)}
-							</td>
-							<td className="muted small" title={fmtDate(request.expiresAt)}>{fmtDate(request.expiresAt)}</td>
 							<td>
-								<div className="row-actions">
+								<div className="cell-stack">
+									<span className="small">{request.requestedByLabel ?? request.requestedBy}</span>
+									<span className="muted small" title={fmtDate(request.requestedAt)}>{fmtAgo(request.requestedAt)}</span>
+								</div>
+							</td>
+							<td className="muted small nowrap">{fmtDate(request.expiresAt)}</td>
+							<td className="row-actions nowrap">
+								<div className="toolbar">
 									{!own && (
 										<button type="button" className="btn small" disabled={busy !== null} onClick={() => void decide(request, 'approve')}>
 											Approve

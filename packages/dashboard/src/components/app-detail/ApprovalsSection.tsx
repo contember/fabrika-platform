@@ -181,8 +181,15 @@ export function CategoryEditor({ appId, env, onDone }: { appId: string; env: App
 								disabled={busy}
 								onChange={(event) => toggle(option.category, event.target.checked)}
 							/>
-							{option.label}
-							{isDefaultCategory(option.category) && <span className="muted small">default</span>}
+							<span>
+								{option.label}
+								{isDefaultCategory(option.category) && (
+									<>
+										{' '}
+										<span className="muted small">default</span>
+									</>
+								)}
+							</span>
 						</label>
 					))}
 				</div>
