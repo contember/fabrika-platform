@@ -1,11 +1,15 @@
 import type { ControlProviderConformanceHarness } from '../../conformance'
 import type { ControlProvider } from '../../control'
+import { type JsonValue, MAX_PROVIDER_STATE_BYTES } from '../../json'
 
 /**
- * The smallest provider the suite admits: one external job per deploy. `cancelOnLeaseLoss` breaks the contract the
- * way a real provider could, stopping the job when its lease goes.
+ * The smallest provider the suite admits: one external job per deploy. `cancelOnLeaseLoss` and `oversizedState` each
+ * break the contract the way a real provider could: stopping the job when its lease goes, and recording a job state
+ * larger than Control stores.
  */
-export const memoryHarness = (options: { readonly cancelOnLeaseLoss?: boolean } = {}): ControlProviderConformanceHarness => ({
+export const memoryHarness = (
+	options: { readonly cancelOnLeaseLoss?: boolean; readonly oversizedState?: boolean } = {},
+): ControlProviderConformanceHarness => ({
 	create: (hooks) => {
 		const mutations: string[] = []
 		const stops: string[] = []
@@ -18,7 +22,10 @@ export const memoryHarness = (options: { readonly cancelOnLeaseLoss?: boolean } 
 					input.events.log('[dry-run] would start a job')
 					return { state: 'succeeded' }
 				}
-				await input.events.externalId(`job-${input.runId}`, { started: true })
+				const state: JsonValue = options.oversizedState === true
+					? { started: true, log: 'x'.repeat(MAX_PROVIDER_STATE_BYTES) }
+					: { started: true }
+				await input.events.externalId(`job-${input.runId}`, state)
 				mutations.push(`start:job-${input.runId}`)
 				hooks.accepted()
 				try {

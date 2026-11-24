@@ -1,6 +1,6 @@
 import { sha256Hex } from '@fabrika/auth-core'
 import type { BlobStore, SqlDatabase, SqlStatement } from '@fabrika/platform'
-import type { JsonValue } from '@fabrika/provider-contract'
+import { type JsonValue, MAX_PROVIDER_STATE_BYTES } from '@fabrika/provider-contract'
 import type { LeaseFence } from '../lease'
 import { runCoordinateLockStatements } from './coordinate-lock'
 import { firstRow } from './returning'
@@ -70,8 +70,6 @@ const isJsonValue = (value: unknown, seen: WeakSet<object> = new WeakSet()): val
 	seen.delete(value)
 	return valid
 }
-
-const MAX_PROVIDER_STATE_BYTES = 16 * 1024
 
 /** Parse provider-owned JSON without trusting persisted database text. */
 export const parseProviderJson = (raw: string, label: string): JsonValue => {

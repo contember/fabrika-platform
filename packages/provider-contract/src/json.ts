@@ -1,6 +1,12 @@
 /** A value that can cross the provider persistence boundary without provider-specific types. */
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue }
 
+/**
+ * The most a run's provider state may take as JSON text, in UTF-8 bytes: an external id's state and every checkpoint.
+ * Control refuses a larger one, so a provider whose state outgrows it fails its first real run.
+ */
+export const MAX_PROVIDER_STATE_BYTES = 16 * 1024
+
 /** Persisted provider data. The provider owns the payload schema and its version. */
 export interface ProviderEnvelope {
 	readonly provider: string

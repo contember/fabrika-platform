@@ -114,7 +114,6 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [227](227-authorization-model-follow-ups.md): Smaller gaps of the authorization model's fixes: the workload token bound, a stale doc line, an early terminal re-mint.
 - [228](228-application-object-review-follow-ups.md): The P2s and open decisions of the application object waves 0–3 reviews: checker lexer, timers, ledger digest, read path, entry pin.
 - [219](219-the-cloudflare-executor-s-managed-environment-parse-is-untested.md): No test shows the Cloudflare executor refuses a managed value Control would not hand.
-- [220](220-the-provider-conformance-suite-checks-no-checkpoint-size.md): The provider conformance suite checks no checkpoint size, and Zerops' harness hands no upload bearer.
 - [229](229-provider-neutral-core-review-follow-ups.md): The provider-neutral core reviews' gaps; P2: a late cancel leaves a Cloudflare version without its IAM schema.
 - [234](234-mcp-authoring-review-follow-ups.md): Review follow-ups of MCP authoring and dev environments: one failing repository fails `list_workspaces`, a long `run_checks` reads as a gone launcher, a crash loop never idles, a committed launcher state file or booted marker misleads a new container, and the SPA type check awaits an ADR-0062 decision.
 - [235](235-a-long-job-on-cloudflare-has-no-workflow-escape-hatch.md): A job that cannot chunk through claims has no form on Cloudflare; a contract-declared Workflow generated into the entry.
