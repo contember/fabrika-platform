@@ -125,7 +125,7 @@ export interface EcsService {
 	readonly events: readonly { readonly id: string; readonly at: Date; readonly message: string }[]
 }
 
-/** An `awsvpc` network: the subnets and security groups a task's interface is placed in, never a public address. */
+/** An `awsvpc` network: the subnets and security groups a task's interface is placed in, and whether it has a public address. */
 export interface EcsNetwork {
 	readonly subnets: readonly string[]
 	readonly securityGroups: readonly string[]
