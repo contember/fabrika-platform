@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test'
+import { tmpdir } from 'node:os'
+import { resolve } from 'node:path'
 import { COMPOSE_PROJECT, composeProjectName } from '../compose'
 import { REPO_ROOT } from '../prepare'
+
+const COMPOSE_MODULE = resolve(import.meta.dir, '..', 'compose.ts')
 
 // Compose names a project's volumes `<project>_<volume>`: two checkouts that shared a project shared their databases.
 describe('the local compose project', () => {
@@ -13,8 +17,15 @@ describe('the local compose project', () => {
 		expect(sameName).toStartWith('fabrika-local-fix-a-')
 	})
 
-	test('a checkout keeps its project between runs, so down and reset reach the volumes up created', () => {
-		expect(composeProjectName('/work/fabrika-platform')).toBe(composeProjectName('/work/fabrika-platform'))
+	test('a checkout keeps its project wherever a command runs from, so down and reset reach the volumes up created', async () => {
+		const child = Bun.spawn(['bun', '-e', `console.log((await import(${JSON.stringify(COMPOSE_MODULE)})).COMPOSE_PROJECT)`], {
+			cwd: tmpdir(),
+			stdout: 'pipe',
+			stderr: 'inherit',
+		})
+		const [output, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
+		expect(exitCode).toBe(0)
+		expect(output.trim()).toBe(COMPOSE_PROJECT)
 		expect(COMPOSE_PROJECT).toBe(composeProjectName(REPO_ROOT))
 	})
 

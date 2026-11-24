@@ -85,9 +85,17 @@ checkout's path>` (`COMPOSE_PROJECT` in `src/compose.ts`), so a worktree's
 volumes, networks and containers never meet another worktree's credentials. The
 host ports are fixed, so one stack runs at a time: run `local:down` in the
 worktree that runs one before `local:up` in another; `docker ps` names the
-project in each container's name. Volumes from before this naming carry the
-project `fabrika-local`; once no checkout needs their data, remove them with
-`docker volume rm $(docker volume ls -q --filter label=com.docker.compose.project=fabrika-local)`.
+project in each container's name.
+
+A stack started before this naming is the project `fabrika-local`, which
+`local:down` no longer reaches: stop it, and once no checkout needs its data
+remove its containers, networks and volumes, with
+`docker compose --project-name fabrika-local down --volumes --remove-orphans`.
+A worktree's volumes outlive the worktree, because nothing derives its name
+again: run `local:down` and remove its volumes before removing the worktree,
+or list the projects with
+`docker volume ls --format '{{.Label "com.docker.compose.project"}}' | sort -u`
+and remove one with `docker compose --project-name <name> down --volumes`.
 
 ## Local object storage
 
