@@ -88,6 +88,32 @@ Cloudflare runner. `@fabrika/runner-container` invokes the internal
 `fabrika-cloudflare-executor`; shared control code does not import Oblaka or
 interpret Cloudflare steps.
 
+## PostgreSQL over TLS
+
+The connection URL is the whole TLS configuration. Bun's client (`Bun.SQL`, under `PostgresDatabase.connect` and
+`@fabrika/db`'s `openPostgres`) reads `sslmode` and `sslrootcert` from it: with `sslmode=verify-full` it refuses a
+server whose certificate no trusted CA signed and a host the certificate does not name, and `sslrootcert=<path>` names
+the PEM bundle to trust (the CA may also come from `NODE_EXTRA_CA_CERTS`). The URLs the platform derives for an
+application's roles (`postgresRoleUrl`, `applicationRuntimeUrl`) keep the provisioning URL's query, so a provisioning
+credential with `?sslmode=verify-full&sslrootcert=<bundle>` gives every role a verified connection. A managed database
+on a cloud is reached this way, with the cloud's CA bundle in the image; the Zerops URLs say `sslmode=disable` on the
+project's private network ([platform facts](zerops-platform.md)).
+
+`packages/platform-node/src/__tests__/postgres-tls.test.ts` pins both halves. Its server half runs against a PostgreSQL
+whose certificate names `localhost` (and not `127.0.0.1`), signed by a CA of the test's own:
+
+```bash
+openssl req -x509 -newkey rsa:2048 -nodes -keyout ca.key -out ca.pem -days 2 -subj "/CN=fabrika-test-ca"
+openssl req -newkey rsa:2048 -nodes -keyout server.key -out server.csr -subj "/CN=localhost"
+printf 'subjectAltName=DNS:localhost\n' > san.ext
+openssl x509 -req -in server.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out server.crt -days 2 -extfile san.ext
+```
+
+Serve them from `postgres:18-alpine` with `-c ssl=on -c ssl_cert_file=… -c ssl_key_file=…` (the key owned by the
+`postgres` user with mode 600), published on a loopback port, and run the test with
+`FABRIKA_TEST_POSTGRES_TLS_URL=postgres://postgres:<password>@localhost:<port>/postgres` and
+`FABRIKA_TEST_POSTGRES_TLS_CA=<path of ca.pem>`.
+
 ## IAM (`@fabrika/iam`) — port assessment
 
 IAM's runtime coupling is unusually narrow: of roughly **8,800 non-test lines**, the
