@@ -102,3 +102,4 @@ a commit message suffices.
 | [0077](0077-a-person-reads-iam-in-their-own-language.md)                                | A person reads IAM in their own language, on the whole installation                                       |
 | [0078](0078-a-repeated-request-is-answered-from-its-receipt.md)                         | A repeated request is answered from its receipt                                                           |
 | [0079](0079-the-framework-reads-the-caller-s-row-before-the-handler.md)                 | The framework reads the caller's row before the handler                                                   |
+| [0080](0080-the-serving-process-keeps-the-job-schedule-where-no-crontab-runs.md)        | The serving process keeps the job schedule where no crontab runs                                          |
