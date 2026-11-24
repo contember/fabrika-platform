@@ -6,7 +6,7 @@ import type { GitHubSourceCredentials } from '../../connections/credentials'
 import type { SourceBytes } from '../archive'
 import { GitHubMetadataClient } from '../metadata'
 import { type RepositoryArchive, type RepositoryArchiveInput, type SourceDownloadFetch, TarballRepositorySource } from '../repository'
-import type { SourceArchiveKind, SourceDataFile } from '../types'
+import type { SourceArchiveKind, SourceDataFile, SourceDescriptorRule } from '../types'
 
 export const DESCRIPTOR = { path: 'zerops.yaml', maxBytes: 256 * 1024 }
 export const descriptor = 'zerops:\n  - setup: app\n'
@@ -175,6 +175,8 @@ export async function gitFixture(options: FixtureOptions = {}): Promise<Fixture>
 }
 
 export interface SourceOptions {
+	/** The descriptor rule the source binds; `DESCRIPTOR` by default, `null` for a source that binds none. */
+	descriptor?: SourceDescriptorRule | null
 	treeResponse?: () => Response
 	credentials?: GitHubSourceCredentials
 	location?: string
@@ -192,7 +194,7 @@ export function sourceFor(fixture: Fixture, options: SourceOptions = {}): Tarbal
 			repositoryToken: () => Promise.reject(new Error('no credential expected')),
 			ownerConnectionToken: async () => undefined,
 		},
-		descriptor: DESCRIPTOR,
+		descriptor: options.descriptor === undefined ? DESCRIPTOR : options.descriptor,
 		metadata: new GitHubMetadataClient({
 			fetch: async (input, init) => {
 				const url = input.toString()

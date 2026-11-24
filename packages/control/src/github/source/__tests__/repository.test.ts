@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test'
 import type { GitHubSourceCredentialRequest, GitHubSourceCredentials } from '../../connections/credentials'
-import { createGitHubSource } from '..'
+import { createGitHubSource, createUnboundGitHubSource } from '..'
 import type { SourceBytes } from '../archive'
 import { SourceDescriptorMismatch, SourceFailure, SourceRateLimited } from '../failure'
 import type { SourceResolveInput } from '../types'
@@ -20,6 +20,7 @@ import {
 	repository,
 	runArchive,
 	sourceFor,
+	uploadUrl,
 } from './fixtures'
 
 afterEach(removeFixtureRoots)
@@ -344,5 +345,68 @@ describe('the GitHub tarball repository', () => {
 				signal: new AbortController().signal,
 			}),
 		).rejects.toMatchObject({ code: 'descriptor_mismatch', stage: 'archive' })
+	})
+})
+
+describe('a repository that binds no descriptor', () => {
+	const signal = () => new AbortController().signal
+	const unbound = (tarball: SourceBytes) => handSource(tarball, { descriptor: null })
+
+	test('resolves a commit without the root file, and reports no digest', async () => {
+		const source = unbound(handTarball([file(`${handPrefix}README.md`, 'readme')]))
+		expect(await source.resolve({ repository, requestedRef: 'main', signal: signal() })).toEqual({ commitSha: handCommitSha, descriptorSha256: null })
+	})
+
+	test('a zerops.yaml in the commit is an ordinary file it neither hashes nor checks', async () => {
+		const source = unbound(handTarball([file(`${handPrefix}zerops.yaml`, 'zerops: anything\n'), file(`${handPrefix}README.md`, 'readme')]))
+		const archive = await source.archive({ repository, commitSha: handCommitSha, archive: { kind: 'application' }, signal: signal() })
+		await archive.body.pipeTo(new WritableStream())
+		expect(await archive.completed).toMatchObject({ commitSha: handCommitSha, descriptorSha256: null })
+	})
+
+	test('a digest handed to it is refused at either stage before anything is read', async () => {
+		let downloads = 0
+		const source = handSource(handTarball([file(`${handPrefix}README.md`, 'readme')]), { descriptor: null, onDownload: () => downloads++ })
+		await expect(source.resolve({ repository, requestedRef: 'main', descriptorSha256, signal: signal() })).rejects.toMatchObject({
+			code: 'descriptor_mismatch',
+			stage: 'resolve',
+		})
+		await expect(
+			source.archive({ repository, commitSha: handCommitSha, descriptorSha256, archive: { kind: 'application' }, signal: signal() }),
+		).rejects.toMatchObject({ code: 'descriptor_mismatch', stage: 'archive' })
+		expect(downloads).toBe(0)
+	})
+
+	test('a repository that binds one refuses a request without its digest', async () => {
+		const source = handSource(handTarball([file(`${handPrefix}zerops.yaml`, descriptor)]))
+		await expect(source.resolve({ repository, requestedRef: 'main', signal: signal() })).rejects.toMatchObject({
+			code: 'descriptor_mismatch',
+			stage: 'resolve',
+		})
+		await expect(source.archive({ repository, commitSha: handCommitSha, archive: { kind: 'application' }, signal: signal() })).rejects
+			.toMatchObject({ code: 'descriptor_mismatch', stage: 'archive' })
+	})
+
+	test('the unbound source a composition builds resolves and uploads with no digest in or out', async () => {
+		const tarball = handTarball([file(`${handPrefix}README.md`, 'readme')])
+		const uploads: number[] = []
+		const source = createUnboundGitHubSource({
+			credentials: { repositoryToken: () => Promise.reject(new Error('no credential expected')), ownerConnectionToken: async () => undefined },
+			isUploadDestination: (url) => url === uploadUrl,
+			metadataFetch: () => Promise.reject(new Error('resolve reads no REST metadata')),
+			downloadFetch: async (url) =>
+				url.startsWith('https://api.github.com/')
+					? new Response(null, { status: 302, headers: { location: codeloadUrl } })
+					: new Response(Bun.gzipSync(tarball)),
+			uploadFetch: async (_input, init) => {
+				uploads.push((await new Response(init.body).arrayBuffer()).byteLength)
+				return new Response(null, { status: 200 })
+			},
+		})
+		expect(await source.resolve({ repository, requestedRef: 'main', signal: signal() })).toEqual({ commitSha: handCommitSha })
+		const uploaded = await source.upload({ repository, commitSha: handCommitSha, archive: { kind: 'application' }, uploadUrl, signal: signal() })
+		expect(uploaded).toEqual({ commitSha: handCommitSha, entryCount: expect.any(Number), expandedBytes: expect.any(Number) })
+		expect(Object.hasOwn(uploaded, 'descriptorSha256')).toBe(false)
+		expect(uploads).toHaveLength(1)
 	})
 })

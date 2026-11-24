@@ -126,6 +126,16 @@ describe('the archive rewrite', () => {
 		expect(archived.failure).toMatchObject({ code: 'archive_rejected', stage: 'archive' })
 	})
 
+	test('a rewrite that binds no descriptor refuses a digest, and one that binds it refuses a malformed one', () => {
+		expect(() => createTarRewrite({ commitSha: handCommitSha, descriptor: null, descriptorSha256 })).toThrow(
+			expect.objectContaining({ code: 'descriptor_mismatch', stage: 'archive' }),
+		)
+		expect(() => createTarRewrite({ commitSha: handCommitSha, descriptor: DESCRIPTOR, descriptorSha256: 'not-a-digest' })).toThrow(
+			expect.objectContaining({ code: 'descriptor_mismatch' }),
+		)
+		expect(() => createTarRewrite({ commitSha: handCommitSha, descriptor: null })).not.toThrow()
+	})
+
 	test('refuses a data file on an application archive', () => {
 		expect(() =>
 			createTarRewrite({ commitSha: handCommitSha, descriptor: DESCRIPTOR, descriptorSha256, dataFile: { path: 'proxy.manifest.json', contents: '{}' } })

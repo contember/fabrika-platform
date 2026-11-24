@@ -2,7 +2,7 @@ import type { ArchiveSummary, SourceBytes } from './archive'
 import { cancelled, SourceFailure, type SourceFailureStage, uploadTooLarge } from './failure'
 import type { RepositoryArchive, RepositoryArchiveInput } from './repository'
 import { pullThrough } from './streams'
-import type { SourcePartWriter, SourceResolution, SourceResolveInput, SourceUploadInput, SourceUploadResult } from './types'
+import type { ResolvedSource, SourcePartWriter, SourceResolveRequest, SourceUploadRequest, UploadedSource } from './types'
 
 export interface SourceUploadRequestInit extends RequestInit {
 	duplex: 'half'
@@ -34,7 +34,7 @@ export const MAX_SOURCE_PART_BYTES = 64 * 1024 * 1024
 const PART_ABORT_MS = 30_000
 
 export interface SourceRepositoryReader {
-	resolve(input: SourceResolveInput): Promise<SourceResolution>
+	resolve(input: SourceResolveRequest): Promise<ResolvedSource>
 	archive(input: RepositoryArchiveInput): Promise<RepositoryArchive>
 }
 
@@ -71,7 +71,7 @@ export class SourceTransport {
 		this.uploads = new ConcurrencyLimit(options.maxConcurrentUploads ?? DEFAULT_MAX_CONCURRENT_UPLOADS)
 	}
 
-	async resolve(input: SourceResolveInput): Promise<SourceResolution> {
+	async resolve(input: SourceResolveRequest): Promise<ResolvedSource> {
 		const deadline = operationDeadline(input.signal, this.timeouts.resolve)
 		try {
 			const result = await this.repository.resolve({ ...input, signal: deadline.signal })
@@ -87,7 +87,7 @@ export class SourceTransport {
 		}
 	}
 
-	async upload(input: SourceUploadInput): Promise<SourceUploadResult> {
+	async upload(input: SourceUploadRequest): Promise<UploadedSource> {
 		if (!this.acceptsDestination(input)) throw new SourceFailure('upload_rejected', 'upload')
 		// The deadline starts before the queue, so a waiting upload is bounded like a running one.
 		const deadline = operationDeadline(input.signal, this.timeouts.upload)
@@ -113,7 +113,7 @@ export class SourceTransport {
 	 * A part writer brings its own destination and credentials, so only its part size is checked. A bearer goes only to a
 	 * sandbox host's file endpoint, and a sandbox file endpoint is reached only with one.
 	 */
-	private acceptsDestination(input: SourceUploadInput): boolean {
+	private acceptsDestination(input: SourceUploadRequest): boolean {
 		if (input.parts !== undefined) {
 			const size = input.parts.partBytes
 			return Number.isSafeInteger(size) && size >= MIN_SOURCE_PART_BYTES && size <= MAX_SOURCE_PART_BYTES && size % MIN_SOURCE_PART_BYTES === 0
@@ -122,14 +122,14 @@ export class SourceTransport {
 		return input.uploadBearer !== '' && this.isSandboxUploadDestination !== undefined && this.isSandboxUploadDestination(input.uploadUrl)
 	}
 
-	private async uploadOne(input: SourceUploadInput, deadline: OperationDeadline): Promise<SourceUploadResult> {
+	private async uploadOne(input: SourceUploadRequest, deadline: OperationDeadline): Promise<UploadedSource> {
 		const caller = input.signal
 		let putStarted = false
 		try {
 			const archive = await this.repository.archive({
 				repository: input.repository,
 				commitSha: input.commitSha,
-				descriptorSha256: input.descriptorSha256,
+				...(input.descriptorSha256 === undefined ? {} : { descriptorSha256: input.descriptorSha256 }),
 				archive: input.archive,
 				signal: deadline.signal,
 			})

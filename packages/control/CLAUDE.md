@@ -209,6 +209,9 @@ other environment, before the provider prepares anything, and the write maps a r
   Bun's compression streams ignore backpressure, and `pipeThrough` would buffer a whole repository.
   A platform archive may carry ONE generated data file (`SourceDataFile`, the Zerops proxy manifest, ADR-0045),
   appended after every entry of the commit; a commit that holds its path is refused, and the upload reports its sha256.
+  `createGitHubSource` binds the provider's root descriptor (Zerops' `zerops.yaml`); `createUnboundGitHubSource` binds
+  none, for a provider that renders its build from the contract: no digest goes in or comes out, and one handed to it
+  is `descriptor_mismatch`. Keep the bound source's types requiring the digest, so Zerops cannot forget it.
 - **App secrets are vault-only** (`src/secret-resolver.ts`, D4). `apps.secrets.put` and `vault.set` take the
   plaintext VALUE and seal it (or hand it to a provider that manages secrets itself, `providerKeepsSecrets`, never for
   a `dev` environment, whose sandboxes keep none); no API accepts a ref.

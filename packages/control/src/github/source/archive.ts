@@ -19,7 +19,8 @@ export type SourceBytes = Uint8Array<ArrayBuffer>
 
 export interface ArchiveSummary {
 	commitSha: string
-	descriptorSha256: string
+	/** The descriptor's digest; `null` from a pass that binds no descriptor. */
+	descriptorSha256: string | null
 	dataFileSha256?: string
 	entryCount: number
 	expandedBytes: number
@@ -47,8 +48,12 @@ export interface TarRewriteInput {
 	archiveKind?: 'platform'
 	/** The exact commit the tarball must name in its pax global header; absent, the pass reports the one it names. */
 	commitSha?: string
-	descriptor: SourceDescriptorRule
-	/** The digest the descriptor must have; absent, the pass reports the one it has. */
+	/**
+	 * The repository-root file the archive binds, or `null` for a provider that renders its whole build itself
+	 * (`contractRecipe`): such a pass hashes nothing and reports no digest.
+	 */
+	descriptor: SourceDescriptorRule | null
+	/** The digest the descriptor must have; absent, the pass reports the one it has. Never with a `null` descriptor. */
 	descriptorSha256?: string
 	/** Appended after the commit's entries; platform archives only. */
 	dataFile?: SourceDataFile
@@ -69,7 +74,7 @@ export interface TarRewrite {
  * through chunk by chunk. Platform mode also retains bounded namespace metadata for link validation.
  */
 export function createTarRewrite(input: TarRewriteInput): TarRewrite {
-	if (input.descriptorSha256 !== undefined && !SHA256_PATTERN.test(input.descriptorSha256)) {
+	if (input.descriptorSha256 !== undefined && (input.descriptor === null || !SHA256_PATTERN.test(input.descriptorSha256))) {
 		throw new SourceFailure('descriptor_mismatch', 'archive')
 	}
 	if (input.commitSha !== undefined && !OBJECT_ID_PATTERN.test(input.commitSha)) throw commitMismatch()
@@ -230,7 +235,7 @@ class TarRewriter {
 		for (const [path, entry] of this.namespace) {
 			if (entry.kind === 'symlink') this.validateLink(path)
 		}
-		const descriptorSha256 = this.descriptorDigest
+		const descriptorSha256 = this.input.descriptor === null ? null : this.descriptorDigest
 		if (descriptorSha256 === undefined) {
 			throw new SourceFailure('descriptor_missing', 'archive')
 		}
@@ -328,7 +333,7 @@ class TarRewriter {
 			return
 		}
 		if (header.typeflag === '2' && this.input.archiveKind === 'platform') {
-			if (size !== 0 || relative === this.input.descriptor.path || !safeLinkTarget(linkpath)) throw archiveRejected()
+			if (size !== 0 || relative === this.input.descriptor?.path || !safeLinkTarget(linkpath)) throw archiveRejected()
 			this.registerPath(relative, { kind: 'symlink', target: linkpath })
 			this.entryCount++
 			this.writeParentDirectories(relative, controller)
@@ -370,8 +375,9 @@ class TarRewriter {
 		) {
 			throw new SourceFailure('archive_rejected', 'archive')
 		}
-		if (path === this.input.descriptor.path) {
-			if (size > this.input.descriptor.maxBytes) {
+		const descriptor = this.input.descriptor
+		if (descriptor !== null && path === descriptor.path) {
+			if (size > descriptor.maxBytes) {
 				throw new SourceFailure('archive_rejected', 'archive')
 			}
 			this.descriptorHash = createHash('sha256')
@@ -413,7 +419,12 @@ class TarRewriter {
 		if (expected !== undefined && digest !== expected) {
 			const commitSha = this.commitSha
 			if (commitSha === undefined) throw commitMismatch()
-			throw new SourceDescriptorMismatch('archive', { path: this.input.descriptor.path, commitSha, expectedSha256: expected, actualSha256: digest })
+			throw new SourceDescriptorMismatch('archive', {
+				path: this.input.descriptor?.path ?? '',
+				commitSha,
+				expectedSha256: expected,
+				actualSha256: digest,
+			})
 		}
 		this.descriptorDigest = digest
 	}
