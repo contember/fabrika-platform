@@ -30,7 +30,9 @@ machine API key described below.
 
 1. creates or reuses the cheap `apps-prod` namespace with shared PostgreSQL;
 2. registers the notes app from its compiled Zerops manifest, bound to the keyed
-   source connection `local-keyed-alpha` that owns its private repository;
+   source connection `local-keyed-alpha` that owns its private repository. It
+   registers as the person signed in to the console: `prod` starts protected, and
+   only a person names its trigger ref or domain, so the machine key would be refused;
 3. signs a push with that connection's webhook secret, requires its scoped route
    `/webhooks/github/local-keyed-alpha` to answer 200 with exactly one triggered
    run, and waits for that run's external app-version id. Notes is a contract

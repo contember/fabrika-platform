@@ -52,7 +52,7 @@ export async function seedNotesAgentChange(login: IamLogin): Promise<void> {
 	const machineKey = requireMachineKey()
 	const webhookSecret = envValue(resolve(STATE_DIR, 'control.env'), 'GITHUB_WEBHOOK_SECRET')
 	await ensureNamespace(machineKey)
-	await ensureNotesApp(machineKey, fixtures)
+	await ensureNotesApp(machineKey, fixtures, login)
 
 	const baselineRunId = await triggerByScopedWebhook(webhookSecret, fixtures.application.commitSha)
 	if ((await waitForParkOrProvider(machineKey, baselineRunId)).status === 'awaiting_approval') {

@@ -9,6 +9,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
 import { composeOutput } from './compose'
+import { consoleRpc, type IamLogin, signInToConsole } from './console-approval'
 import {
 	LOCAL_SOURCE_APPLICATION_REPOSITORY_URL,
 	LOCAL_SOURCE_BRANCH_HEAD_FILE,
@@ -165,7 +166,12 @@ export const ensureNamespace = async (machineKey: string): Promise<void> => {
 	await namespaceIsReady(machineKey)
 }
 
-export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest): Promise<void> => {
+/**
+ * Register Notes, or bring its `prod` back to the local domain. `prod` starts protected, and only a person names its
+ * trigger ref or domain (ADR-0050 §4), so both writes go through the console as the signed-in person; `login` is the
+ * browser stack's seeded sign-in, absent where `LOCAL_DEV_LOGIN` signs in.
+ */
+export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest, login?: IamLogin): Promise<void> => {
 	const apps = await controlRequest('apps.list', machineKey)
 	const sourceDescriptor = await createZeropsArtifactSourceDescriptor(fixtures.application.descriptorContents)
 	const manifest = compileFabrikaManifest(cheapNotesConfig, 'prod', sourceDescriptor)
@@ -192,7 +198,7 @@ export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceMa
 			existing?.domain !== 'notes.fabrika.localhost'
 			|| existing?.publicOrigin !== 'http://notes.fabrika.localhost:18081'
 		) {
-			await controlRequest('apps.environments.put', machineKey, {
+			await consoleRpc(CONTROL_ORIGIN, await signInToConsole(CONTROL_ORIGIN, login), 'apps.environments.put', {
 				appId: NOTES_APP_ID,
 				env: NOTES_ENVIRONMENT,
 				environment: {
@@ -207,7 +213,7 @@ export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceMa
 		}
 		return
 	}
-	await controlRequest('register', machineKey, {
+	await consoleRpc(CONTROL_ORIGIN, await signInToConsole(CONTROL_ORIGIN, login), 'register', {
 		id: 'notes',
 		repoUrl: LOCAL_SOURCE_APPLICATION_REPOSITORY_URL,
 		defaultBranch: 'main',

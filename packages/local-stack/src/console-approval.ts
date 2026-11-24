@@ -84,7 +84,8 @@ const approvalSchema = z.object({
 /** What the approval page shows: the digests the decision is bound to, and the diff's lines. */
 export type ConsoleApproval = z.infer<typeof approvalSchema>
 
-const consoleRpc = async (consoleOrigin: string, cookie: string, method: string, input: unknown): Promise<unknown> => {
+/** One Control RPC as the signed-in person, from the console's own origin; `cookie` is `signInToConsole`'s. */
+export const consoleRpc = async (consoleOrigin: string, cookie: string, method: string, input: unknown): Promise<unknown> => {
 	const response = await fetch(`${consoleOrigin}/api/rpc`, {
 		method: 'POST',
 		redirect: 'manual',
