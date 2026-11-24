@@ -107,3 +107,4 @@ a commit message suffices.
 | [0082](0082-framework-secrets-reach-the-application-only-through-its-launcher.md)       | Framework secrets reach the application's process only through its launcher (proposed)                    |
 | [0083](0083-an-environment-chooses-what-waits-for-approval.md)                          | An environment chooses which kinds of change wait for approval                                            |
 | [0084](0084-an-external-application-signs-people-in-through-iam.md)                     | An external application signs people in through IAM and receives their roles there                        |
+| [0085](0085-a-grant-holds-a-set-of-scope-values.md)                                     | A grant holds a set of scope values, picked from the values the application lists                         |
