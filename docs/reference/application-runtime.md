@@ -1300,6 +1300,23 @@ A mutation (of an RPC, link or public procedure), a webhook or a cron job declar
   cannot see yet (its write still committing) is looked for again after 1, 2, 4 and 8 s, within 15 s. A stopping
   server waits for the refresh under way before it drains the timer's kicks. On both runtimes the scheduler skips a
   job whose lease holder owns every due wake: that run consumes them. The crontab still runs the schedule.
+- **Where no crontab runs, the serving process keeps the schedule** (ADR-0080). A provider whose containers run no
+  crontab writes `FABRIKA_JOBS_SCHEDULE=process` and `FABRIKA_JOBS_SCHEDULE_GENERATION`, a lowercase UUID that rises
+  with every deploy of the environment; without them nothing changes, and any other value stops the boot
+  (`jobScheduleOf`). Each refresh of the timer first runs `JobWakes.keepSchedule`, one transaction under the row of
+  `fabrika_job_schedule`: it raises the stored generation, with the cron keys its deploy declares, and for the stored
+  generation only reconciles the cron wakes against the declared jobs and adds each job's missing next fire, the
+  framework's own jobs included. A process of an older generation (the old revision of a rolling update) writes none
+  of it; the process of the stored one then reaps a crashed holder of any job. Every process takes the lease of each
+  job with a due wake and runs it with durable retries, as the alarm does, but only when the lease owns a due wake: a
+  lease taken while another write held the wake's row, or after another replica already ran the fire, is released
+  without recording a run (`JobLeases.release`). It never sets the pending flag: a replica's lease may still be
+  committing, so a flag set then would run the winner twice for one fire. A due wake the holder does not own stays
+  due, and the holder's finish lowers its own timer to it. A finish writes its job's next fire only under a key the
+  stored schedule declares (`nextCron.scheduled`). The timer, and what a write projects, count only the wakes of jobs
+  the process declares. On SIGTERM those runs stop with the process's kicks and keep their wakes
+  (`process-schedule.test.ts`). The serving process also checks the jobs every 60 s when the contract has no `c.cron`
+  but framework jobs.
 - The wake is the recovery path: a kicked run that dies before its finish leaves its wake, and the scheduler runs the
   job again once the lease expired; the schedule stays a second one. A run that fails past its inline retries consumes
   the wakes it owned, so a failing job does not loop (`public-kick.test.ts`, `mutation-kick.test.ts`). On SIGTERM a Bun

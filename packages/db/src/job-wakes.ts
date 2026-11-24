@@ -49,7 +49,15 @@ export interface Wake {
  */
 export type FinishWakes =
 	/** The run is done with them: they are consumed, then the job's next cron run is scheduled (`cron:<job>:<expression>`). */
-	| { readonly kind: 'completed'; readonly nextCron?: { readonly expression: string; readonly dueAt: Date } }
+	| {
+		readonly kind: 'completed'
+		/**
+		 * With `scheduled`, the next fire is written only when the stored schedule (`keepSchedule`) declares its key, read
+		 * in the finish's transaction: under a process schedule, a run of an older deploy writes no removed job's or
+		 * changed expression's fire (ADR-0080).
+		 */
+		readonly nextCron?: { readonly expression: string; readonly dueAt: Date; readonly scheduled?: boolean }
+	}
 	/** The run failed and runs again: they move to `at`, and their attempt counts up. Only with a failed outcome. */
 	| { readonly kind: 'retry'; readonly at: Date }
 
@@ -73,9 +81,10 @@ export interface JobWakes {
 	untilNext(using?: Session, jobs?: readonly string[]): Promise<number | null>
 	/**
 	 * Where no crontab runs (ADR-0080), in one transaction: raises the stored schedule generation to `generation` when that
-	 * one is higher in byte order, and when `generation` is then the stored one, reconciles the wakes against `fires` (as
-	 * `reconcile`) and schedules each fire under its job's cron key (as `schedule`, so an overdue wake keeps its time).
-	 * Answers whether `generation` is the stored one; a process of an older one writes nothing. The generation's row stays
+	 * one is higher in byte order, with the cron keys `fires` declare, and when `generation` is then the stored one,
+	 * reconciles the wakes against `fires` (as `reconcile`) and adds each fire's wake under its job's cron key where none
+	 * is pending (an existing one, overdue or not, is left as it is and not locked, so a lease taken meanwhile still owns
+	 * it). Answers whether `generation` is the stored one; a process of an older one writes nothing. The generation's row stays
 	 * locked until the transaction commits, so on Postgres a newer generation waits for an older one's seed and reconciles
 	 * after it, and an older one queued behind a newer one reads the newer and writes nothing. A UUIDv7, lowercase: a
 	 * later deploy's sorts later.
@@ -178,12 +187,42 @@ const SQL_NEXT: DialectTexts = {
 		${SQLITE_EPOCH_MS(SQLITE_NOW)} as now`,
 }
 
-// One row; a lower generation leaves it as it is, and the row answers what is stored after the write.
+// One row; a lower generation leaves it as it is, keys included, and the row answers what is stored after the write.
 const SQL_HOLD_SCHEDULE: DialectTexts = {
-	postgres: `insert into ${S} (id, generation) values (1, $1)
-		on conflict (id) do update set generation = greatest(${S}.generation, excluded.generation) returning generation`,
-	sqlite: `insert into ${S} (id, generation) values (1, ?1)
-		on conflict (id) do update set generation = max(${S}.generation, excluded.generation) returning generation`,
+	postgres: `insert into ${S} (id, generation, declared) values (1, $1, $2)
+		on conflict (id) do update set generation = greatest(${S}.generation, excluded.generation),
+			declared = case when excluded.generation >= ${S}.generation then excluded.declared else ${S}.declared end
+		returning generation`,
+	sqlite: `insert into ${S} (id, generation, declared) values (1, ?1, ?2)
+		on conflict (id) do update set generation = max(${S}.generation, excluded.generation),
+			declared = case when excluded.generation >= ${S}.generation then excluded.declared else ${S}.declared end
+		returning generation`,
+}
+
+// A seed only adds a missing wake. `do nothing` takes no lock on a row that exists, so a replica's lease, taken while
+// a seed is open, still marks that row owned (`SQL_OWN` skips a locked row).
+const SQL_SEED: DialectTexts = {
+	postgres: `insert into ${W} (id, ${COLUMNS}) values ($1::uuid, $2, $3::bigint, $4, 0, $5) on conflict (dedupe) where dedupe is not null do nothing`,
+	sqlite: `insert into ${W} (id, ${COLUMNS}) values (?1, ?2, cast(?3 as integer), ?4, 0, ?5) on conflict (dedupe) where dedupe is not null do nothing`,
+}
+
+// The keys the stored generation declares, read by a finish in its transaction; `for share` waits for a seed under way.
+const SQL_SCHEDULE_DECLARED: DialectTexts = {
+	postgres: `select declared from ${S} where id = 1 for share`,
+	sqlite: `select declared from ${S} where id = 1`,
+}
+
+/** Whether the stored schedule declares `key`: its row's keys, read in `transaction`. No row declares nothing. */
+async function scheduleDeclares(transaction: Session, key: string): Promise<boolean> {
+	const [row] = await rows(transaction, SQL_SCHEDULE_DECLARED, [])
+	if (row === undefined) {
+		return false
+	}
+	const declared: unknown = typeof row['declared'] === 'string' ? JSON.parse(row['declared']) : undefined
+	if (!Array.isArray(declared)) {
+		throw new QueryRefusedError('unexpected_row', `${S}.declared is not a list of keys`)
+	}
+	return declared.includes(key)
 }
 
 /**
@@ -374,7 +413,11 @@ export function finishWakes(outcome: JobOutcome, wakes: FinishWakes | undefined)
 	}
 	nonEmpty(wakes.nextCron.expression, "a cron wake's expression")
 	epochOf(wakes.nextCron.dueAt, "a cron wake's due time")
-	return freeze({ kind: 'completed', nextCron: freeze({ expression: wakes.nextCron.expression, dueAt: wakes.nextCron.dueAt }) })
+	const { expression, dueAt, scheduled } = wakes.nextCron
+	if (scheduled !== undefined && typeof scheduled !== 'boolean') {
+		throw new QueryRefusedError('invalid_argument', "a cron wake's schedule guard is a boolean")
+	}
+	return freeze({ kind: 'completed', nextCron: freeze(scheduled === true ? { expression, dueAt, scheduled } : { expression, dueAt }) })
 }
 
 /** The runtime's projection of a change, in its transaction; nothing without one. */
@@ -399,10 +442,14 @@ export function leaseProjection(runtime: () => DataLayerRuntime): LeaseProjectio
 			if (change.wakes.kind === 'retry') {
 				await rows(transaction, SQL_RETRY, [job, String(change.wakes.at.getTime())])
 			} else {
-				await rows(transaction, SQL_CONSUME, [job])
 				const next = change.wakes.nextCron
-				if (next !== undefined) {
-					await insert(transaction, newWake({ job, reason: 'cron', dueAt: next.dueAt, dedupe: `cron:${job}:${next.expression}` }), job)
+				const key = next === undefined ? null : `cron:${job}:${next.expression}`
+				// The schedule row before the wakes, the order `keepSchedule` takes them in: a seed that holds the row waits
+				// for no delete of this finish, so the two never wait on each other.
+				const declared = next?.scheduled === true && key !== null ? await scheduleDeclares(transaction, key) : true
+				await rows(transaction, SQL_CONSUME, [job])
+				if (next !== undefined && key !== null && declared) {
+					await insert(transaction, newWake({ job, reason: 'cron', dueAt: next.dueAt, dedupe: key }), job)
 				}
 			}
 		}
@@ -492,9 +539,11 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 				throw new QueryRefusedError('invalid_argument', 'a schedule generation is a lowercase UUIDv7')
 			}
 			const { declared, wakes } = scheduledFires(fires)
+			const keys = JSON.stringify(declared.map(({ job, expression }) => `cron:${job}:${expression}`))
 			return await session().transaction(async (transaction) => {
-				// The upsert locks the row until this transaction commits: the reconcile and the seed below happen under it.
-				const [{ generation: stored } = {}] = await rows(transaction, SQL_HOLD_SCHEDULE, [generation])
+				// The upsert locks the row until this transaction commits: the reconcile and the seed below happen under it,
+				// and a finish that reads the declared keys waits for them.
+				const [{ generation: stored } = {}] = await rows(transaction, SQL_HOLD_SCHEDULE, [generation, keys])
 				if (typeof stored !== 'string') {
 					throw new QueryRefusedError('unexpected_row', `${S} came back in another shape than its migration declares`)
 				}
@@ -503,7 +552,7 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 				}
 				await rows(transaction, SQL_RECONCILE, [JSON.stringify(declared)])
 				for (const wake of wakes) {
-					await insert(transaction, wake.parameters, wake.job)
+					await rows(transaction, SQL_SEED, wake.parameters)
 				}
 				await project(transaction)
 				return true

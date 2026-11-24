@@ -27,6 +27,9 @@ describe('the credential rule', () => {
 				'FABRIKA_OPS_KEY_DIGESTS',
 				// A region name.
 				'FABRIKA_APP_STORAGE_REGION',
+				// A mode word and a deploy's generation (ADR-0080).
+				'FABRIKA_JOBS_SCHEDULE',
+				'FABRIKA_JOBS_SCHEDULE_GENERATION',
 			]
 		) {
 			expect(isManagedCredential(name)).toBe(false)
@@ -131,6 +134,9 @@ describe('the variables a deploy no longer hands', () => {
 			'FABRIKA_EMAIL_RESEND_API_KEY',
 			'FABRIKA_STORAGE_PROVENANCE',
 			'FABRIKA_SOURCE_MAP_UPLOAD_KEY',
+			// A provider writes these itself (ADR-0080); they are outside the jobs' key family on purpose.
+			'FABRIKA_JOBS_SCHEDULE',
+			'FABRIKA_JOBS_SCHEDULE_GENERATION',
 			// A bare family prefix names no member.
 			'FABRIKA_EMAIL_',
 			'API_KEY',

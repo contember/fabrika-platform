@@ -322,4 +322,11 @@ CREATE TABLE ${JOB_SCHEDULE_TABLE} (
 );
 `,
 	}),
+	Object.freeze({
+		name: '0014_job_schedule_declared.sql',
+		sql: `-- The cron keys (cron:<job>:<expression>) the stored generation's deploy declares, as a JSON array: a run of any
+-- deploy schedules its job's next fire only under a key in it, so an old revision restores no removed job or expression.
+ALTER TABLE ${JOB_SCHEDULE_TABLE} ADD COLUMN declared TEXT NOT NULL DEFAULT '[]';
+`,
+	}),
 ])

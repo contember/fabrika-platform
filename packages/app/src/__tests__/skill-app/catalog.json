@@ -757,6 +757,20 @@
 			"enum_labels": []
 		},
 		{
+			"table_name": "fabrika_job_schedule",
+			"view": false,
+			"column_name": "declared",
+			"type_name": "text",
+			"type_type": "b",
+			"type_category": "S",
+			"nullable": false,
+			"generated": "default",
+			"computed": false,
+			"formatted_type": "text",
+			"keyed": false,
+			"enum_labels": []
+		},
+		{
 			"table_name": "fabrika_list_cursor_key",
 			"view": false,
 			"column_name": "id",

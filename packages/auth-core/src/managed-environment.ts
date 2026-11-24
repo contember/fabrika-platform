@@ -59,6 +59,9 @@ const PUBLIC_VARIABLES: ReadonlySet<string> = new Set<FrameworkVariableName>([
 	FABRIKA_EGRESS_REFUSED_HOSTS,
 	// The storage's region, a public name like `eu-central-1`.
 	'FABRIKA_APP_STORAGE_REGION',
+	// A mode word and a deploy's generation: neither opens anything.
+	'FABRIKA_JOBS_SCHEDULE',
+	'FABRIKA_JOBS_SCHEDULE_GENERATION',
 ])
 
 const PLATFORM_URL_VARIABLES: ReadonlySet<string> = new Set(PLATFORM_RECEIVERS.map((receiver) => platformTransportVariables(receiver).url))

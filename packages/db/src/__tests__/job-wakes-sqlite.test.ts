@@ -227,6 +227,7 @@ describe('the wakes migration', () => {
 			'fabrika/0005_request_receipts.sql',
 			'fabrika/0006_list_cursor_key.sql',
 			'fabrika/0007_job_schedule.sql',
+			'fabrika/0008_job_schedule_declared.sql',
 		])
 		const migrated = frameworkTablesOf(connected(tables, { database: openSqlite(storage), capabilities: new TestAuthority() }).database).wakes
 		const due = at(MINUTE)
@@ -438,6 +439,19 @@ describe('the schedule generation', () => {
 		expect(await wakes.keepSchedule(first, [{ job: 'removed', expression: '* * * * *', dueAt: next }])).toBe(false)
 		expect(await shapes('removed')).toEqual([{ reason: 'cron', due: overdue.getTime(), attempt: 0, dedupe: 'cron:removed:* * * * *' }])
 		expect(await shapes('sweep')).toHaveLength(1)
+		// The older generation's keys did not replace the stored ones.
+		expect(db.exec('select declared from fabrika_job_schedule')).toEqual([
+			{ declared: JSON.stringify(['cron:digest:0 * * * *', 'cron:sweep:*/5 * * * *', 'cron:never:0 0 31 2 *']) },
+		])
+	})
+
+	test('a seed leaves a pending wake as it is: a retried fire keeps its later time', async () => {
+		const retryAt = at(10 * MINUTE)
+		await wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:digest:* * * * *' })
+		const run = await lease('digest')
+		expect(await leases.finish(run, 'failed', { kind: 'retry', at: retryAt })).toBe(true)
+		expect(await wakes.keepSchedule(first, [{ job: 'digest', expression: '* * * * *', dueAt: at(MINUTE) }])).toBe(true)
+		expect(await shapes('digest')).toEqual([{ reason: 'cron', due: retryAt.getTime(), attempt: 1, dedupe: 'cron:digest:* * * * *' }])
 	})
 
 	test('a generation that is not a lowercase UUIDv7, or a fire of another shape, is refused and writes nothing', async () => {
@@ -451,6 +465,43 @@ describe('the schedule generation', () => {
 			QueryRefusedError,
 		)
 		expect(db.exec('select generation from fabrika_job_schedule')).toEqual([])
+	})
+})
+
+describe('a guarded next fire and a released lease', () => {
+	const generation = '019a0000-0000-7000-8000-000000000003'
+
+	test('a guarded next fire is written only under a key the stored schedule declares', async () => {
+		const due = at(MINUTE)
+		const finishWith = async (expression: string, scheduled: boolean): Promise<void> => {
+			const run = await lease('digest')
+			expect(await leases.finish(run, 'succeeded', { kind: 'completed', nextCron: { expression, dueAt: due, ...(scheduled ? { scheduled } : {}) } }))
+				.toBe(true)
+		}
+		// No schedule row yet: a guarded fire is not written, an unguarded one is.
+		await finishWith('0 * * * *', true)
+		expect(await wakes.pending('digest')).toEqual([])
+		await finishWith('0 * * * *', false)
+		expect(await shapes('digest')).toEqual([{ reason: 'cron', due: due.getTime(), attempt: 0, dedupe: 'cron:digest:0 * * * *' }])
+		db.exec('delete from fabrika_wakes')
+
+		expect(await wakes.keepSchedule(generation, [{ job: 'digest', expression: '0 * * * *', dueAt: null }])).toBe(true)
+		await finishWith('0 3 * * *', true)
+		expect(await wakes.pending('digest')).toEqual([])
+		await finishWith('0 * * * *', true)
+		expect(await shapes('digest')).toEqual([{ reason: 'cron', due: due.getTime(), attempt: 0, dedupe: 'cron:digest:0 * * * *' }])
+	})
+
+	test('a released lease frees the job, disowns its wakes and records no run', async () => {
+		await wakes.schedule({ job: 'digest', reason: 'cron', dueAt: at(-MINUTE), dedupe: 'cron:digest:* * * * *' })
+		const run = await lease('digest')
+		expect((await wakes.pending('digest')).map((wake) => wake.owned)).toEqual([true])
+		expect(await leases.release(run)).toBe(true)
+		expect(await leases.release(run)).toBe(false)
+		const state = await leases.state('digest')
+		expect(state?.holder).toBeNull()
+		expect(state?.lastStatus).toBeNull()
+		expect((await wakes.pending('digest')).map((wake) => ({ owned: wake.owned, attempt: wake.attempt }))).toEqual([{ owned: false, attempt: 0 }])
 	})
 })
 

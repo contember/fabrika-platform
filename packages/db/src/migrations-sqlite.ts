@@ -201,4 +201,10 @@ CREATE TABLE ${JOB_SCHEDULE_TABLE} (
 ) STRICT;
 `,
 	}),
+	Object.freeze({
+		name: '0008_job_schedule_declared.sql',
+		sql: `-- The cron keys the stored generation's deploy declares, as a JSON array (see the Postgres bundle's 0014).
+ALTER TABLE ${JOB_SCHEDULE_TABLE} ADD COLUMN declared TEXT NOT NULL DEFAULT '[]';
+`,
+	}),
 ])
