@@ -46,6 +46,31 @@ describe('awsQueryClient', () => {
 		})
 	})
 
+	test('an error listed under Errors is read too, and the header request id wins over the body one', async () => {
+		const listed =
+			'<Response><Errors><Error><Code>InvalidParameterValue</Code><Message>quoted</Message></Error></Errors><RequestID>x</RequestID></Response>'
+		const { options } = fakeAwsQuery(RDS, { DescribeDBInstances: () => new FakeRawAnswer(listed, 400, { 'x-amzn-RequestId': 'from-the-header' }) })
+		await expect(awsQueryClient(RDS, options).call('DescribeDBInstances', {}, () => null)).rejects.toMatchObject({
+			code: 'InvalidParameterValue',
+			requestId: 'from-the-header',
+		})
+		const both = fakeAwsQuery(RDS, {
+			DescribeDBInstances: () =>
+				new FakeRawAnswer(
+					`<DescribeDBInstancesResponse><DescribeDBInstancesResult/><ResponseMetadata><RequestId>from-the-body</RequestId></ResponseMetadata></DescribeDBInstancesResponse>`,
+					200,
+					{ 'x-amzn-RequestId': 'from-the-header' },
+				),
+		})
+		const reader = (): never => {
+			throw new Error('the reader refuses')
+		}
+		await expect(awsQueryClient(RDS, both.options).call('DescribeDBInstances', {}, reader)).rejects.toMatchObject({
+			code: 'invalid_answer',
+			requestId: 'from-the-header',
+		})
+	})
+
 	test('an error answer without a code of the expected form is unknown', async () => {
 		for (const body of ['<ErrorResponse><Error><Code>no spaces allowed</Code></Error></ErrorResponse>', 'not xml', '']) {
 			const { options } = fakeAwsQuery(RDS, { DescribeDBInstances: () => new FakeRawAnswer(body, 500) })

@@ -302,7 +302,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 10. **`src/namespace/`**: the namespace stack (security groups, the Service Connect namespace, the proxy service, the
     ALB rule and certificate; for `full` an RDS instance), the database per application in the shared instance for
     `cheap`, `claimedResources` from the stack, and the proxy manifest carried in the proxy's build as on Zerops
-    (ADR-0045), so a running proxy never reads a manifest newer than its image.
+    (ADR-0045), so a running proxy never reads a manifest newer than its image. CloudFormation answers a missing stack
+    with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
+    a message: decide a stack's absence from `ListStacks` (or a `DescribeStacks` by the stack's id, which keeps
+    answering a deleted stack), never from that error.
 11. **`src/installation/`**: the CloudFormation template rendered from the installation model (N9), `platform install`,
     `plan`, `deploy`, `upgrade` and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the
     sidecar workflow, and an operator guide.

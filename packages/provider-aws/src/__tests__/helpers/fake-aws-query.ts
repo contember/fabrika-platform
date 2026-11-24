@@ -20,6 +20,7 @@ export class FakeRawAnswer {
 	constructor(
 		readonly body: string,
 		readonly status = 200,
+		readonly headers: Readonly<Record<string, string>> = {},
 	) {}
 }
 
@@ -63,7 +64,9 @@ export function fakeAwsQuery(
 				? new FakeAwsError('InvalidAction', 400)
 				: handler(parameters, calls)
 			const xml = { 'content-type': 'text/xml' }
-			if (answer instanceof FakeRawAnswer) return Promise.resolve(new Response(answer.body, { status: answer.status, headers: xml }))
+			if (answer instanceof FakeRawAnswer) {
+				return Promise.resolve(new Response(answer.body, { status: answer.status, headers: { ...xml, ...answer.headers } }))
+			}
 			if (answer instanceof FakeAwsError) {
 				const error = `<ErrorResponse xmlns="https://${service.service}.amazonaws.com/doc/${service.version}/">`
 					+ `<Error><Type>Sender</Type><Code>${answer.code}</Code><Message>Value sk_live_quoted_input is invalid</Message></Error>`

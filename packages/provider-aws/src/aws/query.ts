@@ -105,9 +105,8 @@ export function awsQueryClient(service: AwsQueryService, options: AwsClientOptio
 			if (root.name !== `${action}Response`) throw fail('invalid_answer', status, requestId, false)
 			try {
 				return read(xmlOptional(root, `${action}Result`))
-			} catch (error) {
-				if (error instanceof AwsError) throw error
-				// The XML reader's refusal or the caller's: either way the answer is not one this call reads.
+			} catch {
+				// The XML reader's refusal or the caller's, whatever it threw: the answer is not one this call reads.
 				throw fail('invalid_answer', status, requestId, false)
 			}
 		},
