@@ -272,8 +272,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 5. **`src/aws/s3.ts`** (built): the S3 multipart part writer Control's source client takes (N2's `SourcePartWriter`)
    and the presigned GET the build reads. The bucket that holds the sources, with a lifecycle rule that expires them and
    aborts incomplete uploads, is the namespace stack's (step 10).
-6. **`src/build.ts`**: `StartBuild` with `NO_SOURCE` and the inline buildspec (fetch, unpack, write the rendered
-   `Dockerfile`, build, push, print the digest), the build log relay, `StopBuild` on cancel before activation.
+6. **`src/build.ts`** (built): `StartBuild` with `NO_SOURCE` and one constant inline buildspec (fetch, unpack, write
+   the rendered `Dockerfile`, build, push under the run's tag), every value of a run a build variable. The deploy reads
+   the digest from ECR by that tag, never from the log. The build log relay (`aws/logs.ts`) and `StopBuild` on cancel
+   (`run-attempt.ts`) are step 8's.
 7. **`src/ecs-task.ts`** (built): the service's definition, the server container alone (image by digest, port, health
    check on the contract's health endpoint, log configuration), and a one-off init definition for the init commands of
    `containerImage` (N3, built), which step 8 runs once per command (`RunTask` with a command override, in order) before
