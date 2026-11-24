@@ -162,4 +162,11 @@ Read this before moving a service onto this driver.
   `S3BlobStore` also implements `FileObjectStore`: `write` counts the bytes in a transform that errors past
   `maxBytes`, which cancels the body and fails the upload, then deletes the key; `read` is one HEAD (`stat`)
   for the size and type, then the stream.
+- **One parser of a storage connection** (`storage-connection.ts`): `parseStorageConnection(variables, prefix, …)`
+  reads `<prefix>_BUCKET`, `_ENDPOINT`, `_REGION`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY`, `_ADDRESSING` and
+  `_CREDENTIALS` for the application's files, Control's run logs and Operations' payloads; `S3BlobStore.open` builds
+  the store. `container` credentials come from the ECS container credentials endpoint, one fetch at a time, refreshed
+  before expiry, with `redirect: 'manual'`, and the store builds a new client only when the set changes
+  (`storageClients`). Its messages name variables, never values; callers in another package read its error through
+  `storageConnectionProblems`, not `instanceof`.
 - Real Postgres and S3 tests skip unless `FABRIKA_TEST_POSTGRES_URL` / `FABRIKA_TEST_S3_*` are set.

@@ -53,10 +53,22 @@ describe('openFileStorage', () => {
 		expect(openFileStorage({})).toBeUndefined()
 	})
 
+	test("opens a store over the task's own credentials, read from the application's environment, without asking for them yet", () => {
+		const container = {
+			FABRIKA_APP_STORAGE_BUCKET: 'notes-files',
+			FABRIKA_APP_STORAGE_REGION: 'eu-central-1',
+			FABRIKA_APP_STORAGE_CREDENTIALS: 'container',
+		}
+		expect(openFileStorage(container, { AWS_CONTAINER_CREDENTIALS_RELATIVE_URI: '/v2/credentials/task' })).toBeDefined()
+	})
+
 	test.each([
 		['a region without the storage it names', { FABRIKA_APP_STORAGE_REGION: 'eu-central-1' }],
 		['a region no store spells', storage({ FABRIKA_APP_STORAGE_REGION: 'EU Central' })],
 		['a partial set', { FABRIKA_APP_STORAGE_ENDPOINT: 'http://127.0.0.1:1', FABRIKA_APP_STORAGE_REGION: 'eu-central-1' }],
+		['a key pair beside container credentials', storage({ FABRIKA_APP_STORAGE_CREDENTIALS: 'container' })],
+		['container credentials without the endpoint path', { FABRIKA_APP_STORAGE_BUCKET: 'notes-files', FABRIKA_APP_STORAGE_CREDENTIALS: 'container' }],
+		['an addressing no store takes', storage({ FABRIKA_APP_STORAGE_ADDRESSING: 'subdomain' })],
 	])('stops the boot for %s, quoting no credential', (_name, variables) => {
 		let raised: unknown
 		try {

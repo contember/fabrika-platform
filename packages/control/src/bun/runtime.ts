@@ -28,6 +28,7 @@ import {
 	type BackgroundTasks,
 	createBackgroundTasks,
 	FileSystemAssetServer,
+	parseStorageConnection,
 	PostgresDatabase,
 	PostgresJobQueue,
 	S3BlobStore,
@@ -283,15 +284,11 @@ function operationsConfig(source: Record<string, string | undefined>): Operation
  * normally wants it, and R2/AWS accept it.
  */
 function blobStore(source: Record<string, string | undefined>): S3BlobStore {
-	const endpoint = source['FABRIKA_CONTROL_RUN_LOGS_ENDPOINT']
-	return S3BlobStore.connect({
-		bucket: required(source, 'FABRIKA_CONTROL_RUN_LOGS_BUCKET'),
-		accessKeyId: required(source, 'FABRIKA_CONTROL_RUN_LOGS_ACCESS_KEY_ID'),
-		secretAccessKey: required(source, 'FABRIKA_CONTROL_RUN_LOGS_SECRET_ACCESS_KEY'),
-		region: source['FABRIKA_CONTROL_RUN_LOGS_REGION'] ?? 'auto',
-		virtualHostedStyle: false,
-		...(endpoint !== undefined && endpoint !== '' ? { endpoint } : {}),
-	})
+	// `parseStorageConnection` reads `_ADDRESSING` and `_CREDENTIALS` too: a container cloud's task signs with its own
+	// short-lived credentials instead of a key pair.
+	const connection = parseStorageConnection(source, 'FABRIKA_CONTROL_RUN_LOGS', { defaultRegion: 'auto', endpoint: 'optional', environment: source })
+	if (connection === undefined) throw new Error('FABRIKA_CONTROL_RUN_LOGS_BUCKET is required')
+	return S3BlobStore.open(connection)
 }
 
 /**

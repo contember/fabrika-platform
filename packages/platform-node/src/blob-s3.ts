@@ -18,6 +18,13 @@ import {
 	type ObjectWriteOptions,
 	type StoredObject,
 } from '@fabrika/platform'
+import {
+	type ContainerCredentialOptions,
+	type CredentialProvider,
+	credentialProvider,
+	type StorageConnection,
+	type StorageCredentials,
+} from './storage-connection'
 
 /** Connection details for an S3-compatible bucket. `endpoint` is what makes it R2, MinIO, or AWS. */
 export interface S3BlobStoreOptions {
@@ -40,8 +47,31 @@ interface BlobBody {
 	text(): Promise<string>
 }
 
+/** The client a store's next request goes through: one fixed client, or one rebuilt when its credentials rotate. */
+export type S3ClientSource = () => Promise<Bun.S3Client>
+
+/** The options of one client, as `Bun.S3Client` takes them. */
+export type S3ClientOptions = ConstructorParameters<typeof Bun.S3Client>[0]
+
+export interface S3BlobStoreOpenOptions extends ContainerCredentialOptions {
+	/** Builds a client; `new Bun.S3Client` by default. Tests record what each client was built with. */
+	readonly client?: (options: S3ClientOptions) => Bun.S3Client
+}
+
 export class S3BlobStore implements BlobStore, FileObjectStore {
-	constructor(private readonly client: Bun.S3Client) {}
+	readonly #client: S3ClientSource
+
+	constructor(client: Bun.S3Client | S3ClientSource) {
+		this.#client = typeof client === 'function' ? client : () => Promise.resolve(client)
+	}
+
+	/**
+	 * A store over a parsed connection (`parseStorageConnection`): its region and addressing, and credentials that are
+	 * either fixed or the container endpoint's, refreshed before they expire. Never logs them.
+	 */
+	static open(connection: StorageConnection, options: S3BlobStoreOpenOptions = {}): S3BlobStore {
+		return new S3BlobStore(storageClients(connection, credentialProvider(connection.credentials, options), options.client))
+	}
 
 	/** Build a store from plain connection options. Never logs them. */
 	static connect(options: S3BlobStoreOptions): S3BlobStore {
@@ -62,11 +92,11 @@ export class S3BlobStore implements BlobStore, FileObjectStore {
 		// The S3 client takes bytes or a Response, not a bare stream — wrapping a stream in a Response
 		// is what lets it be uploaded without buffering the whole body first.
 		const payload = value instanceof ReadableStream ? new Response(value) : value
-		await this.client.write(key, payload)
+		await (await this.#client()).write(key, payload)
 	}
 
 	async get(key: string): Promise<BlobBody | null> {
-		const file = this.client.file(key)
+		const file = (await this.#client()).file(key)
 		if (!(await file.exists())) {
 			return null
 		}
@@ -82,13 +112,15 @@ export class S3BlobStore implements BlobStore, FileObjectStore {
 	}
 
 	async delete(key: string): Promise<void> {
-		await this.client.delete(key)
+		await (await this.#client()).delete(key)
 	}
 
 	async write(key: string, body: ReadableStream<Uint8Array>, options: ObjectWriteOptions): Promise<ObjectMetadata> {
 		// Bun's client sends no `If-None-Match`; a file's key is a fresh UUID behind a unique row, and a download checks
 		// the version the scan recorded, so this check refuses a reused key rather than racing a concurrent writer.
-		if ((await statOrNull(this.client.file(key))) !== null) {
+		// One client for the whole write: its check, its upload and the cleanup of a failed one sign with one set.
+		const client = await this.#client()
+		if ((await statOrNull(client.file(key))) !== null) {
 			await body.cancel()
 			throw new ObjectExistsError()
 		}
@@ -107,9 +139,9 @@ export class S3BlobStore implements BlobStore, FileObjectStore {
 			}),
 		)
 		try {
-			await this.client.write(key, new Response(bounded), { type: options.contentType })
+			await client.write(key, new Response(bounded), { type: options.contentType })
 		} catch (error) {
-			await this.client.delete(key).catch(() => undefined)
+			await client.delete(key).catch(() => undefined)
 			throw size > options.maxBytes ? new ObjectTooLargeError(options.maxBytes) : error
 		}
 		return { size, contentType: options.contentType }
@@ -128,7 +160,7 @@ export class S3BlobStore implements BlobStore, FileObjectStore {
 	 * conditional header can be sent, which `Bun.S3File` does not offer. Errors never carry the URL: it is signed.
 	 */
 	async #get(key: string, headers: Readonly<Record<string, string>>, signal: AbortSignal | undefined): Promise<StoredObject | null> {
-		const url = this.client.file(key).presign({ method: 'GET', expiresIn: PRESIGNED_READ_SECONDS })
+		const url = (await this.#client()).file(key).presign({ method: 'GET', expiresIn: PRESIGNED_READ_SECONDS })
 		let response: Response
 		try {
 			response = await fetch(url, { headers, ...(signal === undefined ? {} : { signal }) })
@@ -151,6 +183,36 @@ export class S3BlobStore implements BlobStore, FileObjectStore {
 }
 
 const PRESIGNED_READ_SECONDS = 60
+
+/**
+ * The client for `connection`, built once per set of credentials `provider` hands out: a store over fixed credentials
+ * keeps one client, one over the container endpoint gets a new client when the endpoint rotates them.
+ */
+export function storageClients(
+	connection: StorageConnection,
+	provider: CredentialProvider,
+	make: (options: S3ClientOptions) => Bun.S3Client = (options) => new Bun.S3Client(options),
+): S3ClientSource {
+	let built: { readonly credentials: StorageCredentials; readonly client: Bun.S3Client } | undefined
+	return async () => {
+		const credentials = await provider.current()
+		if (built?.credentials !== credentials) {
+			built = {
+				credentials,
+				client: make({
+					bucket: connection.bucket,
+					accessKeyId: credentials.accessKeyId,
+					secretAccessKey: credentials.secretAccessKey,
+					...(credentials.sessionToken === undefined ? {} : { sessionToken: credentials.sessionToken }),
+					...(connection.endpoint === undefined ? {} : { endpoint: connection.endpoint }),
+					region: connection.region,
+					virtualHostedStyle: connection.addressing === 'virtual',
+				}),
+			}
+		}
+		return built.client
+	}
+}
 
 /** One HEAD; a missing key is `null`, any other failure propagates. */
 async function statOrNull(file: Bun.S3File): Promise<Bun.S3Stats | null> {

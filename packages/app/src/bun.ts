@@ -13,7 +13,7 @@ import type { EmailProviderRegistry } from '@fabrika/email'
 import { directoryEmailProvider } from '@fabrika/email/directory'
 import { parseJwks } from '@fabrika/jwks'
 import type { FileObjectStore } from '@fabrika/platform'
-import { applicationRuntimeUrl, S3BlobStore } from '@fabrika/platform-node'
+import { applicationRuntimeUrl, parseStorageConnection, S3BlobStore, type StorageConnection, storageConnectionProblems } from '@fabrika/platform-node'
 import { lookup } from 'node:dns/promises'
 import { diskAssets } from './disk-assets.js'
 import type { FetchService, RequestExecutionContext } from './fetch.js'
@@ -393,22 +393,15 @@ async function relaunchAsRuntime(env: Readonly<Record<string, string | undefined
 	process.exit(child.exitCode ?? 1)
 }
 
-const STORAGE_VARIABLES = {
-	endpoint: 'FABRIKA_APP_STORAGE_ENDPOINT',
-	bucket: 'FABRIKA_APP_STORAGE_BUCKET',
-	accessKeyId: 'FABRIKA_APP_STORAGE_ACCESS_KEY_ID',
-	secretAccessKey: 'FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY',
-} as const
+/** The prefix of the stored files' variables: `_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID`, `_SECRET_ACCESS_KEY` and more. */
+const STORAGE_PREFIX = 'FABRIKA_APP_STORAGE'
 
 /**
- * The region requests to the storage are signed for. Optional, written only by a provider whose storage checks it
- * (S3 refuses a signature for another region than the bucket's); without it, `us-east-1`, which Zerops' object storage
- * and every release before the variable sign with.
+ * The region requests to the storage are signed for when `FABRIKA_APP_STORAGE_REGION` names none: `us-east-1`, which
+ * Zerops' object storage and every release before the variable sign with. A provider whose storage checks it (S3
+ * refuses a signature for another region than the bucket's) writes the variable.
  */
-const STORAGE_REGION_VARIABLE = 'FABRIKA_APP_STORAGE_REGION'
 const DEFAULT_STORAGE_REGION = 'us-east-1'
-/** A region name as S3-compatible stores spell them: `eu-central-1`, `auto`. */
-const STORAGE_REGION = /^[a-z0-9][a-z0-9-]{0,31}$/
 
 /**
  * Who schedules the jobs (ADR-0080): `crontab` when unset, as on Zerops, where the platform renders the recipe's jobs
@@ -445,32 +438,33 @@ export function jobScheduleOf(framework: Readonly<Record<string, string>>): Proc
 }
 
 /**
- * The stored files' object storage (path-style), when the platform wrote its variables; a partial set, or a region
- * without the storage or of a form no store spells, stops the boot. The credentials are never quoted in a message.
+ * The stored files' object storage, when the platform wrote its variables (`parseStorageConnection`): path-style unless
+ * `FABRIKA_APP_STORAGE_ADDRESSING=virtual`, with the key pair, or with `FABRIKA_APP_STORAGE_CREDENTIALS=container` the
+ * task's own short-lived credentials, whose endpoint path `container` (the application's variables) names. A partial set,
+ * or a value of a form no store takes, stops the boot. The credentials are never quoted in a message.
  */
-export function openFileStorage(framework: Readonly<Record<string, string>>): FileObjectStore | undefined {
-	const value = (name: string) => framework[name]?.trim() ?? ''
-	const names = Object.values(STORAGE_VARIABLES)
-	const missing = names.filter((name) => value(name) === '')
-	const region = value(STORAGE_REGION_VARIABLE)
-	if (missing.length === names.length) {
-		if (region !== '') throw new BootError([`${STORAGE_REGION_VARIABLE} is set, but no FABRIKA_APP_STORAGE_* storage is`])
-		return undefined
+export function openFileStorage(
+	framework: Readonly<Record<string, string>>,
+	container: Readonly<Record<string, string | undefined>> = {},
+): FileObjectStore | undefined {
+	let connection: StorageConnection | undefined
+	try {
+		connection = parseStorageConnection(framework, STORAGE_PREFIX, {
+			defaultRegion: DEFAULT_STORAGE_REGION,
+			endpoint: 'required',
+			environment: container,
+		})
+	} catch (error) {
+		const problems = storageConnectionProblems(error)
+		if (problems !== null) throw new BootError(problems)
+		throw error
 	}
-	if (missing.length > 0) {
-		throw new BootError(missing.map((name) => `${name} is not set; the platform writes every FABRIKA_APP_STORAGE_* variable together`))
-	}
-	if (region !== '' && !STORAGE_REGION.test(region)) {
-		throw new BootError([`${STORAGE_REGION_VARIABLE} is not a region name (lowercase letters, digits and hyphens)`])
-	}
-	return S3BlobStore.connect({
-		endpoint: value(STORAGE_VARIABLES.endpoint),
-		bucket: value(STORAGE_VARIABLES.bucket),
-		accessKeyId: value(STORAGE_VARIABLES.accessKeyId),
-		secretAccessKey: value(STORAGE_VARIABLES.secretAccessKey),
-		region: region === '' ? DEFAULT_STORAGE_REGION : region,
-		virtualHostedStyle: false,
-	})
+	return connection === undefined ? undefined : S3BlobStore.open(connection)
+}
+
+/** The application's plain variables, the ones the container credentials endpoint's path is among. */
+function stringVariables(application: Readonly<Record<string, unknown>>): Record<string, string> {
+	return Object.fromEntries(Object.entries(application).filter((entry): entry is [string, string] => typeof entry[1] === 'string'))
 }
 
 /**
@@ -592,7 +586,7 @@ async function startContractServer(
 	const membership = httpMembership(environment.framework)
 	const terminals = httpTerminals(environment.framework)
 	// Zerops is where a Bun application runs, and a namespace there is one private network (ADR-0022 rule 5).
-	const files = openFileStorage(environment.framework)
+	const files = openFileStorage(environment.framework, stringVariables(environment.application))
 	const workloadTokens = workloadTokensOf(environment.framework)
 	const jobSchedule = jobScheduleOf(environment.framework)
 	const timerKicks = new Set<Promise<void>>()
@@ -691,7 +685,7 @@ export async function runContractJob(
 		const workloadTokens = workloadTokensOf(environment.framework)
 		const membership = httpMembership(environment.framework)
 		const terminals = httpTerminals(environment.framework)
-		const files = openFileStorage(environment.framework)
+		const files = openFileStorage(environment.framework, stringVariables(environment.application))
 		return await boot(app, {
 			environment,
 			iam,

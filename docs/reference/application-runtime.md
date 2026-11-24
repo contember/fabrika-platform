@@ -907,7 +907,15 @@ deal_attachments: {
   `S3BlobStore`) from `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a partial
   set stops the boot. Requests are signed for `FABRIKA_APP_STORAGE_REGION` when the platform writes it (an S3 bucket
   refuses a signature for another region), else for `us-east-1`; a region without the storage, or one that is not
-  lowercase letters, digits and hyphens, stops the boot. On Zerops the platform writes the four into the generated run section as `${<host>_…}`
+  lowercase letters, digits and hyphens, stops the boot. Two more are optional, for a container cloud:
+  `FABRIKA_APP_STORAGE_ADDRESSING` (`path`, the default, or `virtual`) and `FABRIKA_APP_STORAGE_CREDENTIALS` (`static`,
+  the key pair, or `container`, which takes no key pair and no endpoint: the store signs with the task's own
+  short-lived credentials from the ECS container credentials endpoint at `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`,
+  refreshed five minutes before they expire, no redirect followed). The parser is `@fabrika/platform-node`'s
+  `parseStorageConnection`, which Control's run logs (`FABRIKA_CONTROL_RUN_LOGS_*`) and Operations' payloads
+  (`FABRIKA_OPERATIONS_BLOB_*`) read too, each with its own default region (`auto`). An older framework ignores the two
+  application variables, so a provider that writes them refuses an application pinned below the first release that
+  reads them. On Zerops the platform writes the four into the generated run section as `${<host>_…}`
   references to the application's one `object-storage` service, which must be a bucket the platform created for it. A
   job run (`fabrika job run`) gets ClamAV's `clamscan` from `PATH` as its scanner; on Zerops the build installs it for
   a contract with a `scan: true` kind (see [Zerops platform](zerops-platform.md)). On Cloudflare the store is the

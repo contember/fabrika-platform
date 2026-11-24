@@ -1,5 +1,5 @@
 import { HttpIamRpc } from '@fabrika/auth'
-import { PostgresDatabase, S3BlobStore } from '@fabrika/platform-node'
+import { parseStorageConnection, PostgresDatabase, S3BlobStore } from '@fabrika/platform-node'
 import { z } from 'zod'
 import { OperationsAlertProducer } from '../alerts.js'
 import { createOperationsIam, OPERATIONS_OAUTH_RESOURCE_VARIABLE } from '../auth.js'
@@ -25,16 +25,11 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 	const repositories = createPostgresOperationsRepositories(db)
 	const healthRepository = new PostgresHealthRepository(db)
 	const ingestQueue = createOperationsIngestQueue(db)
-	const payloads = S3BlobStore.connect({
-		bucket: required(source, 'FABRIKA_OPERATIONS_BLOB_BUCKET'),
-		accessKeyId: required(source, 'FABRIKA_OPERATIONS_BLOB_ACCESS_KEY_ID'),
-		secretAccessKey: required(source, 'FABRIKA_OPERATIONS_BLOB_SECRET_ACCESS_KEY'),
-		region: source['FABRIKA_OPERATIONS_BLOB_REGION'] ?? 'auto',
-		virtualHostedStyle: false,
-		...(optional(source, 'FABRIKA_OPERATIONS_BLOB_ENDPOINT') === undefined
-			? {}
-			: { endpoint: optional(source, 'FABRIKA_OPERATIONS_BLOB_ENDPOINT') }),
-	})
+	// `parseStorageConnection` reads `_ADDRESSING` and `_CREDENTIALS` too: a container cloud's task signs with its own
+	// short-lived credentials instead of a key pair.
+	const blobs = parseStorageConnection(source, 'FABRIKA_OPERATIONS_BLOB', { defaultRegion: 'auto', endpoint: 'optional', environment: source })
+	if (blobs === undefined) throw new Error('FABRIKA_OPERATIONS_BLOB_BUCKET is required')
+	const payloads = S3BlobStore.open(blobs)
 	const env: OperationsHttpEnv = {
 		repositories,
 		ingestQueue,

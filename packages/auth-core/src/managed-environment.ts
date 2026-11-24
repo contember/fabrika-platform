@@ -57,8 +57,10 @@ const PUBLIC_VARIABLES: ReadonlySet<string> = new Set<FrameworkVariableName>([
 	FABRIKA_OPS_KEY_DIGESTS,
 	// Host names anyone can look up in DNS.
 	FABRIKA_EGRESS_REFUSED_HOSTS,
-	// The storage's region, a public name like `eu-central-1`.
+	// The storage's region, a public name like `eu-central-1`, and two mode words.
 	'FABRIKA_APP_STORAGE_REGION',
+	'FABRIKA_APP_STORAGE_ADDRESSING',
+	'FABRIKA_APP_STORAGE_CREDENTIALS',
 	// A mode word and a deploy's generation: neither opens anything.
 	'FABRIKA_JOBS_SCHEDULE',
 	'FABRIKA_JOBS_SCHEDULE_GENERATION',

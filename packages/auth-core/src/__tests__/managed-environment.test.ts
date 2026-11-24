@@ -25,8 +25,10 @@ describe('the credential rule', () => {
 				'FABRIKA_PLATFORM_MAIL_URL',
 				// A digest of a random key forges no key.
 				'FABRIKA_OPS_KEY_DIGESTS',
-				// A region name.
+				// A region name, and the storage's two mode words.
 				'FABRIKA_APP_STORAGE_REGION',
+				'FABRIKA_APP_STORAGE_ADDRESSING',
+				'FABRIKA_APP_STORAGE_CREDENTIALS',
 				// A mode word and a deploy's generation (ADR-0080).
 				'FABRIKA_JOBS_SCHEDULE',
 				'FABRIKA_JOBS_SCHEDULE_GENERATION',

@@ -51,6 +51,9 @@ export const FRAMEWORK_VARIABLE_NAMES = [
 	'FABRIKA_APP_STORAGE_ACCESS_KEY_ID',
 	'FABRIKA_APP_STORAGE_SECRET_ACCESS_KEY',
 	'FABRIKA_APP_STORAGE_REGION',
+	// `path` or `virtual`, and `static` or `container`: how a container cloud's storage is addressed and signed for.
+	'FABRIKA_APP_STORAGE_ADDRESSING',
+	'FABRIKA_APP_STORAGE_CREDENTIALS',
 	'FABRIKA_STORAGE_PROVENANCE',
 	// Who schedules the jobs, and the deploy that keeps the schedule (ADR-0080). Not `FABRIKA_JOB_*`: that family is the
 	// jobs' keys, and a deploy removes a member of it that Control no longer hands it.
