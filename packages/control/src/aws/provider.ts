@@ -1,0 +1,70 @@
+// The AWS installation's composition: Control's process on ECS signs every AWS call with its task role's credentials
+// from the container endpoint, and reads an application's repository through the unbound GitHub source, because the
+// AWS provider renders the build from the contract and binds no root file. No installation runs this yet: the
+// installation's stack (checklist step 11 of docs/ideas/aws-provider.md) is not built.
+//
+// Variables:
+// - `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`: set by ECS in every task with a task role.
+// - `FABRIKA_AWS_BASE_IMAGE`: the Bun image an application's build starts from, pinned by digest.
+// - `FABRIKA_AWS_ACCOUNT_ID`, `FABRIKA_AWS_REGION`, `FABRIKA_AWS_CLUSTER`, `FABRIKA_AWS_SOURCES_BUCKET`,
+//   `FABRIKA_AWS_BUILD_PROJECT`: the installation's coordinates, every environment's target. They are Control's
+//   configuration, never a registrant's, because each aims Control's signed calls.
+
+import { containerCredentials } from '@fabrika/platform-node'
+import { type AwsSourcePort, createAwsControlProvider } from '@fabrika/provider-aws'
+import type { ControlProvider } from '@fabrika/provider-contract'
+import type { BunProviderComposition, GitHubSourceSeams } from '../bun/runtime'
+import type { Env } from '../env'
+import { gitHubAppClientFactory, vaultGitHubCredentials } from '../github/connections/credentials'
+import { createUnboundGitHubSource } from '../github/source'
+import type { CommitSource } from '../github/source/commit-files'
+import { AWS_MAIL_REMEDY } from '../mail-transport'
+
+const required = (source: Record<string, string | undefined>, name: string): string => {
+	const value = source[name]
+	if (value === undefined || value.trim() === '') throw new Error(`${name} is required by the AWS provider`)
+	return value
+}
+
+/**
+ * Control's in-process source over the vault's GitHub keys. A source upload goes to the provider's S3 part writer
+ * only, so no URL is a destination.
+ */
+export function awsGitHubSources(env: Env, seams: GitHubSourceSeams = {}): { readonly port: AwsSourcePort; readonly commits: CommitSource } {
+	const source = createUnboundGitHubSource({
+		credentials: vaultGitHubCredentials(env, { createClient: gitHubAppClientFactory(seams.githubAppFetch) }),
+		isUploadDestination: () => false,
+		...(seams.metadataFetch === undefined ? {} : { metadataFetch: seams.metadataFetch }),
+		...(seams.downloadFetch === undefined ? {} : { downloadFetch: seams.downloadFetch }),
+	})
+	return { port: { resolve: (input) => source.resolve(input), upload: (input) => source.upload(input) }, commits: source.commits }
+}
+
+/** Compose the only provider available in the AWS installation's process. */
+export function awsControlProvider(source: Record<string, string | undefined>, sourcePort: AwsSourcePort): ControlProvider {
+	const relativeUri = required(source, 'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI')
+	return createAwsControlProvider({
+		credentials: containerCredentials(relativeUri),
+		// A fresh read of the endpoint per run: the held set is refreshed only shortly before it expires, and the build's
+		// presigned read must outlive its URL.
+		presignCredentials: () => containerCredentials(relativeUri),
+		baseImage: required(source, 'FABRIKA_AWS_BASE_IMAGE'),
+		installation: {
+			accountId: required(source, 'FABRIKA_AWS_ACCOUNT_ID'),
+			region: required(source, 'FABRIKA_AWS_REGION'),
+			cluster: required(source, 'FABRIKA_AWS_CLUSTER'),
+			sourcesBucket: required(source, 'FABRIKA_AWS_SOURCES_BUCKET'),
+			buildProject: required(source, 'FABRIKA_AWS_BUILD_PROJECT'),
+		},
+		source: sourcePort,
+	})
+}
+
+/** The AWS installation's provider, over the in-process GitHub source, for the Bun host. */
+export const awsComposition: BunProviderComposition = {
+	mailRemedy: AWS_MAIL_REMEDY,
+	compose: (env, source, seams) => {
+		const github = awsGitHubSources(env, seams)
+		return { provider: awsControlProvider(source, github.port), commits: github.commits }
+	},
+}

@@ -50,7 +50,7 @@ The shared layer is `app.ts` · `consumer.ts` · `cron.ts` · `services.ts` and 
 It imports only `@fabrika/provider-contract`. `src/index.ts` statically selects Cloudflare. The Bun host
 (`src/bun/`: server, runtime, cron, migrate, MCP, the IAM and Operations gateways) takes its provider as a
 `BunProviderComposition`; `src/zerops/` holds Zerops' composition (`provider.ts`) and the thin entries
-`zerops.yaml` names. `entrypoint-isolation.test.ts` proves that neither entrypoint reaches the other provider
+`zerops.yaml` names, and `src/aws/` the AWS provider's, which no installation runs yet. `entrypoint-isolation.test.ts` proves that neither entrypoint reaches the other provider
 or runtime, and that the Bun host names no provider.
 
 ## Architecture

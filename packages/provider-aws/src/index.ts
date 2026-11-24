@@ -15,3 +15,20 @@ export {
 	type AwsRunCheckpoint,
 	awsRunCheckpointCodec,
 } from './codecs'
+export {
+	AWS_KEPT_IMAGES,
+	AWS_KEPT_SECRET_RUNS,
+	AWS_TASK_CPU,
+	AWS_TASK_MEMORY,
+	type AwsControlClients,
+	type AwsControlProviderOptions,
+	type AwsEnvironmentResources,
+	awsEnvironmentResources,
+	type AwsExpiringCredentialSource,
+	awsSecretParameter,
+	type AwsSourcePort,
+	type AwsSourceRepository,
+	awsSourceRepository,
+	awsTaskValues,
+	createAwsControlProvider,
+} from './control'

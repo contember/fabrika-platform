@@ -17,7 +17,13 @@ import {
 	isAwsAppConfig,
 } from '..'
 
-const target: AwsAppTarget = { accountId: '123456789012', region: 'eu-central-1', cluster: 'fabrika-apps', service: 'notes-prod' }
+const target: AwsAppTarget = {
+	accountId: '123456789012',
+	region: 'eu-central-1',
+	cluster: 'fabrika-apps',
+	sourcesBucket: 'fabrika-sources-123456789012',
+	buildProject: 'fabrika-build',
+}
 const artifact: AwsAppArtifact = { contractDigest: `sha256:${'a'.repeat(64)}`, healthPath: '/healthz' }
 const namespace: AwsNamespaceTarget = { accountId: '123456789012', region: 'eu-central-1', stackName: 'fabrika-ns-acme', sizing: 'cheap' }
 const checkpoint: AwsRunCheckpoint = {
@@ -61,6 +67,10 @@ describe('the AWS codecs', () => {
 	test('an unknown field is refused, not dropped, and its value is not quoted', () => {
 		const message = refused(awsAppTargetCodec, { ...target, secretAccessKey: 'must-not-be-stored' })
 		expect(message).toBe('the AWS target is not one this provider reads (secretAccessKey)')
+		// An environment's own resources are derived, never registered: a target naming one is refused.
+		for (const field of ['service', 'repository', 'parameterPath', 'taskRoleArn', 'executionRoleArn']) {
+			expect(refused(awsAppTargetCodec, { ...target, [field]: 'other' })).toContain(`(${field})`)
+		}
 		expect(refused(awsRunCheckpointCodec, { buildId: checkpoint.buildId ?? '', appVersionId: 'zerops' })).toContain('(appVersionId)')
 	})
 
@@ -76,6 +86,8 @@ describe('the AWS codecs', () => {
 			{ codec: awsAppTargetCodec, payload: { ...target, accountId: '12345' }, field: 'accountId' },
 			{ codec: awsAppTargetCodec, payload: { ...target, region: 'Frankfurt' }, field: 'region' },
 			{ codec: awsAppTargetCodec, payload: { ...target, cluster: 'a/b' }, field: 'cluster' },
+			{ codec: awsAppTargetCodec, payload: { ...target, sourcesBucket: 'Sources_Bucket' }, field: 'sourcesBucket' },
+			{ codec: awsAppTargetCodec, payload: { ...target, buildProject: 'build/project' }, field: 'buildProject' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, contractDigest: 'a'.repeat(64) }, field: 'contractDigest' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, healthPath: 'healthz' }, field: 'healthPath' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, healthPath: '/a/../b' }, field: 'healthPath' },

@@ -45,12 +45,23 @@ export function isHealthPath(path: string): boolean {
 	return HEALTH_PATH.test(path) && !path.split('/').some((segment) => segment === '.' || segment === '..')
 }
 
-/** Where one application environment runs: its ECS service in a cluster of one account and region. */
+/** An S3 bucket's name: 3 to 63 lowercase letters, digits, dots and hyphens, a letter or digit at each end. */
+const BUCKET = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
+/** A CodeBuild project's name. */
+const BUILD_PROJECT = /^[A-Za-z0-9][A-Za-z0-9_-]{1,254}$/
+
+/**
+ * Where one application environment runs: the account, the region and the cluster, and the installation's shared
+ * sources bucket and build project, until the namespace stack creates them (checklist step 10). Nothing of one
+ * environment's own is named here: its service, repository, parameter path, log group and roles are derived from its
+ * application id and environment (`awsEnvironmentResources`), so no registration can name another environment's.
+ */
 export interface AwsAppTarget {
 	readonly accountId: string
 	readonly region: string
 	readonly cluster: string
-	readonly service: string
+	readonly sourcesBucket: string
+	readonly buildProject: string
 }
 
 /** What a registration records about a contract application: its contract alone, no manifest file. */
@@ -98,7 +109,8 @@ const appTargetSchema = z.object({
 	accountId: z.string().regex(ACCOUNT_ID),
 	region: z.string().regex(REGION),
 	cluster: z.string().regex(ECS_NAME),
-	service: z.string().regex(ECS_NAME),
+	sourcesBucket: z.string().regex(BUCKET),
+	buildProject: z.string().regex(BUILD_PROJECT),
 }).strict()
 
 const appArtifactSchema = z.object({

@@ -108,10 +108,16 @@ export interface AwsDeployClients {
 	readonly credentials: AwsCredentialSource
 }
 
+/** One application environment's ECS service, in its account, region and cluster. */
+export interface AwsServiceTarget extends Pick<AwsAppTarget, 'accountId' | 'region' | 'cluster'> {
+	readonly service: string
+}
+
 export interface AwsDeployInput {
 	readonly appId: string
 	readonly env: string
-	readonly target: AwsAppTarget
+	/** The service the deploy updates; every other resource arrives below as the step that uses it takes it. */
+	readonly target: AwsServiceTarget
 	/** The namespace's sources bucket, in the target's region and account. */
 	readonly sourcesBucket: string
 	readonly build: {
