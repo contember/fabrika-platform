@@ -51,22 +51,30 @@ holder of `CAP_SYS_PTRACE`.
   itself.
 - **Cloudflare.** There is no process and no `/proc`. The object receives its bindings and variables as `env`, and
   `cloudflare:workers` exports that `env` to any module of the Worker (UNVERIFIED here, per Cloudflare's
-  documentation). Under `nodejs_compat` with a compatibility date from 2025-04-01, workerd may also fill
+  documentation). Under plain `nodejs_compat` with a compatibility date from 2025-04-01, workerd also fills
   `process.env` with the text variables and secrets at module evaluation, before the object's boot captures anything
-  (UNVERIFIED; the provider's defaults are `nodejs_compat_v2` and `2025-10-01`). If it does, the capture's promise
-  does not hold on Cloudflare today.
+  (measured in workerd 1.20260312.1). The provider's default, `nodejs_compat_v2`, leaves it empty; an author's own
+  flags and the proxy Worker's did not, which the provider now closes for both.
 
 ## Decision
 
 Proposed, in this order:
 
 1. **Zerops first runs the application without `sudo`** (backlog 198, remedy 2). Until then, nothing below changes
-   what application code on Zerops can read.
+   what application code on Zerops can read. The uid switch is the start script's and the crontab's, not the
+   launcher's: they run the launcher as the dedicated user with `sudo --preserve-env=<the service's variables> -u
+   <user> --`, so the framework variables cross that one `sudo` (UNVERIFIED: that Zerops' sudoers grants `zerops` a
+   rule of `ALL`, under which `SETENV` is implied). The launcher then starts as the application's user, holds no
+   privilege to drop, and A′ below applies as written. A launcher that switched the uid itself would need `sudo` from
+   framework code, would have to set `PR_SET_NO_NEW_PRIVS` only after the switch, and would lose the `memfd` to
+   `sudo`'s `env_reset` and `closefrom`.
 2. **The launcher re-executes in place (A′)**, if the spike shows it sound, with a spawned child as the fallback (A).
    The launcher runs first in `serveContract` and `runContractJob`, whether or not it holds the provisioning
    credential. It reads the framework variables (every `FABRIKA_*` name and `CONTAINER_CREDENTIAL_VARIABLES`), derives
    the runtime credential when it holds the provisioning one, and sets `PR_SET_NO_NEW_PRIVS`. That flag is inherited
-   across `fork` and `execve`, so nothing the application starts gains privileges through a setuid binary.
+   across `fork` and `execve`, so nothing the application starts gains privileges through a setuid binary. It is not
+   enough on its own: the crontab and the init commands do not descend from the launcher, and they run files the
+   application's user can write, which is why item 1 comes first.
    - **A′:** it writes the variables, as one JSON object, to a `memfd` without close-on-exec, then `execve`s the same
      command (`bun:ffi`, Linux only) with the environment minus every framework variable, plus the marker
      `FABRIKA_HANDOVER_FD`. There is one process: no second process holds the original environment or the
@@ -75,13 +83,17 @@ Proposed, in this order:
      forwarding before writing, writes until every byte is out (a short write is possible: macOS wrote 8192 of
      100013 bytes in review), closes its end and stays as today, non-dumpable. Not Bun's `ipc` channel, which stays
      open both ways for the child's whole life.
-3. **The runtime reads the handover before anything else**: to the end, then the size bound, then the parse. It
-   closes the descriptor, builds the captured record from it, and sets `PR_SET_DUMPABLE 0` on itself, so no process
-   of the same uid reads its memory and no core dump holds the record. A marker without a readable, well-formed
-   handover is a `BootError`. So is any framework variable in its own environment other than the marker.
-4. **Cloudflare:** if the spike finds `process.env` filled, the generated Worker sets
-   `nodejs_compat_no_populate_process_env`. In both cases, `cloudflare:workers` joins the checker's `env-read` rule
-   for application code.
+3. **The runtime sets `PR_SET_DUMPABLE 0` on itself, then reads the handover, then closes it**: read to the end,
+   then the size bound, then the parse, and the captured record built from it. Non-dumpable first, so no process of
+   the same uid reads its memory or the open descriptor, and no core dump holds the record. Under A′, `execve` makes
+   the new image dumpable again, so between the exec and that first statement the `memfd` is reachable at
+   `/proc/<pid>/fd/<n>` for a process of the same uid. Once item 1 has landed, every such process is this application,
+   which receives the same secrets anyway, so the window is accepted. A marker without a readable, well-formed handover
+   is a `BootError`. So is any framework variable in its own environment other than the marker.
+4. **Cloudflare:** measured in workerd 1.20260312.1, `nodejs_compat_v2` (the provider's default) leaves `process.env`
+   empty, while plain `nodejs_compat` from 2025-04-01 fills it. The provider now always sets
+   `nodejs_compat_do_not_populate_process_env` on every application Worker and its proxy, and refuses an authored
+   opt-in (a separate change). `cloudflare:workers` joins the checker's `env-read` rule for application code.
 
 **What this buys, and what it does not.** A careless dependency or a diagnostic dump that reads the environment no
 longer sees a framework secret, and a process of the same uid reads none of them. It is no defence against a hostile
@@ -109,9 +121,8 @@ dependency, on any runtime:
   one without a database gains the launcher, in every container and job run.
 - **AWS:** with A′, ECS's SIGTERM reaches the drain directly. With A, the launcher forwards it, as today. The container
   credentials path crosses in the handover, and `containerCredentials` keeps refreshing from it.
-- **Cloudflare:** the flag, if needed, is a provider change. A deploy writes the Worker's compatibility flags, so an
-  existing application gets it at its next deploy, and the provider PR states that rollout. The checker rule reaches
-  an application with its minor's next `@fabrika/check` patch.
+- **Cloudflare:** the `process.env` flag is its own provider change, with its own rollout note: each Worker gets it at
+  its next deploy. The checker rule reaches an application with its minor's next `@fabrika/check` patch.
 - **Rollout of an existing installation:** for the launcher, none. The platform writes the same variables, and the
   handover is between two images of one framework release. An application gets it when it raises its pin; an older
   release keeps the documented limit (ADR-0062).
@@ -124,7 +135,7 @@ dependency, on any runtime:
     the launcher) still work;
   - on Zerops: the serving process's ancestry (`ps -o pid,ppid,user,args`) and whether an ancestor keeps the service
     environment, and the non-framework variables the serving process holds;
-  - Fargate's capability set, and `process.env` in a Cloudflare object under the provider's defaults;
+  - Fargate's capability set, and that Zerops' sudoers lets `zerops` keep the variables across `sudo -u`;
   - the acceptance probe: no framework secret in the runtime's `process.env` or `/proc/self/environ`; `sudo -n true`
     fails in it; no other process of its uid reads its environment or that of an ancestor.
 - **Docs on shipping:** the capture's comments, `packages/app/CLAUDE.md` and `docs/reference/application-runtime.md`;
@@ -146,5 +157,7 @@ dependency, on any runtime:
   writing over `envp` through `bun:ffi` depends on Bun's memory layout.
 - **E, keep the capture and the documented limit**: honest and free; the answer if the spike rejects A′ and A's cost
   is judged too high.
-- **F, the launcher drops to another uid before exec**: that needs root or `sudo`. On Zerops it is backlog 198
-  remedy 2's job, in the start script; on ECS the image already runs as a non-root user.
+- **F, the launcher drops to another uid before exec**: that needs root or `sudo` in framework code, `sudo` resets the
+  environment and closes the `memfd`, and `PR_SET_NO_NEW_PRIVS` could only follow the switch. With a uid switch inside
+  it, A would be stronger (the application could not read a launcher of another uid at all), but the switch belongs to
+  the start script (item 1), where it covers the crontab too. On ECS the image already runs as a non-root user.
