@@ -2,7 +2,7 @@
 // writes the values it does on Postgres — timestamps as `Date`, booleans as `true`/`false`, days as `YYYY-MM-DD`, a
 // count as a number — a keyset page orders nulls as Postgres does, and `ctx.sql` reads and writes.
 
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { z } from 'zod/v4'
 import { runApplicationStatement } from '../database'
 import { QueryRefusedError } from '../errors'
@@ -397,6 +397,40 @@ describe('all(): every row of a read, bounded', () => {
 		expect(names(await all({ orderBy: [['name', 'desc']] }))).toEqual(['c', 'b', 'a'])
 		expect(names(await all({ where: [['rank', '=', 1]], orderBy: [['name', 'asc']] }))).toEqual(['b', 'c'])
 		await expect(all({ after: 'x' })).rejects.toThrow('after is not an option of all')
+	})
+})
+
+describe("an empty 'in' list matches no row", () => {
+	/** Runs `work` and answers what it answered with the number of statements it sent to the database. */
+	async function counted(work: () => Promise<unknown>): Promise<{ readonly answer: unknown; readonly statements: number }> {
+		const exec = spyOn(storage.sql, 'exec')
+		try {
+			const answer = await work()
+			return { answer, statements: exec.mock.calls.length }
+		} finally {
+			exec.mockRestore()
+		}
+	}
+	const read = (method: string, options: unknown) =>
+		counted(() => invoke('query', (db) => call(db.within(inOrganizations('projects.read')), `projects.${method}`, options)))
+
+	test('all, list and count answer nothing without a statement', async () => {
+		await insertProject({ name: 'kept' })
+		const where = [['name', '=', 'kept'], ['id', 'in', []]]
+		expect(await read('all', { where })).toEqual({ answer: [], statements: 0 })
+		expect(await read('list', { where, limit: 10 })).toEqual({ answer: { items: [], next: null }, statements: 0 })
+		expect(await read('count', { where })).toEqual({ answer: 0, statements: 0 })
+		// The same read without the empty list finds the row: the answer comes from the list, not from the data.
+		expect(itemsOf((await read('list', { where: [['name', '=', 'kept']] })).answer)).toHaveLength(1)
+	})
+
+	test('every other condition and option is still checked first', async () => {
+		await expect(read('all', { where: [['nope', 'in', []]] })).rejects.toThrow(QueryRefusedError)
+		await expect(read('all', { where: [['settings', 'in', []]] })).rejects.toThrow(QueryRefusedError)
+		await expect(read('all', { where: [['id', 'in', []], ['name', '=', { x: 1 }]] })).rejects.toThrow(QueryRefusedError)
+		await expect(read('all', { where: [['id', 'in', []]], after: 'x' })).rejects.toThrow('after is not an option of all')
+		await expect(read('list', { where: [['id', 'in', []]], after: 'forged' })).rejects.toThrow(QueryRefusedError)
+		await expect(read('all', { where: [['id', 'not in', []]] })).rejects.toThrow('not in needs a non-empty plain array of values')
 	})
 })
 

@@ -896,7 +896,7 @@ async function claimRows(
 	const limit = limitOf(options['limit'])
 	const visible = visibleFor(model, action)
 	const conditions = conditionsOf(context, actionShape(model, visible), options['where'])
-	if (scope === undefined) {
+	if (scope === undefined || conditions === undefined) {
 		return []
 	}
 	const dialect = dialectOf(context)
@@ -1246,20 +1246,36 @@ function readOptions(options: unknown, allowed: readonly string[], what: string)
 	return read
 }
 
-/** A list's `where`, parsed, with each value as its dialect binds it (`boundTerms`). */
-function conditionsOf(context: TableContext, shape: TableShape, where: unknown): readonly (Compare | Contains)[] {
+/**
+ * A list's `where`, parsed, with each value as its dialect binds it (`boundTerms`). Undefined when a condition is an
+ * `in` with an empty list: it matches no row, so the read answers nothing and sends no statement, as an empty `Within`.
+ */
+function conditionsOf(context: TableContext, shape: TableShape, where: unknown): readonly (Compare | Contains)[] | undefined {
 	if (where === undefined) {
 		return []
 	}
-	const conditions = parseList(where, (condition) => {
+	const parsed = parseList(where, (condition): Compare | Contains | undefined => {
 		const parts = parseList(condition, (part) => part)
 		if (parts === undefined || parts.length !== 3) {
 			throw new QueryRefusedError('invalid_argument', 'where takes [column, operator, value] conditions, each a plain array')
 		}
+		if (parts[1] === 'in' && parseList(parts[2], (item) => item)?.length === 0) {
+			// The column is still held to the capability's columns: an empty list does not make a hidden one nameable.
+			comparableColumnOf(shape, parts[0], 'compares')
+			return undefined
+		}
 		return parseCondition(shape, parts[0], parts[1], parts[2])
 	})
-	if (conditions === undefined) {
+	if (parsed === undefined) {
 		throw new QueryRefusedError('invalid_argument', 'where takes a plain array of [column, operator, value] conditions')
+	}
+	const conditions: (Compare | Contains)[] = []
+	for (let index = 0; index < parsed.length; index++) {
+		const condition = parsed[index]
+		if (condition === undefined) {
+			return undefined
+		}
+		conditions[index] = condition
 	}
 	return boundTerms(context, context.model, conditions)
 }
@@ -1397,7 +1413,7 @@ async function listRows(
 	const position = options['after'] === undefined
 		? undefined
 		: keysetAfter(table, order, await openCursor(key, cursorList(table, order), options['after'], order.length))
-	if (scope === undefined) {
+	if (scope === undefined || conditions === undefined) {
 		return { items: [], next: null }
 	}
 	const dialect = dialectOf(context)
@@ -1441,7 +1457,7 @@ async function allRows(
 	const shape = actionShape(context.model, visible)
 	const conditions = conditionsOf(context, shape, options['where'])
 	const order = orderOf(shape, options['orderBy'], tiebreak)
-	if (scope === undefined) {
+	if (scope === undefined || conditions === undefined) {
 		return []
 	}
 	const dialect = dialectOf(context)
@@ -1472,7 +1488,7 @@ async function countRows(
 	const table = context.model.name
 	const options = readOptions(input, ['where'], 'count')
 	const conditions = conditionsOf(context, actionShape(context.model, visible), options['where'])
-	if (scope === undefined) {
+	if (scope === undefined || conditions === undefined) {
 		return 0
 	}
 	const node = aggregateNode(table, { groupBy: [], count: true, sum: [], min: [], max: [] }, conditions, scope)
