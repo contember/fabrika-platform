@@ -270,6 +270,10 @@ expects it. It leaves the Notes database holding the suite's rows; `local:up` ke
 | Operations public ingest | `http://errors.fabrika.localhost:18080`  |
 | Notes example app        | `http://notes.fabrika.localhost:18081`   |
 
+Containers call the same URLs. Since Bun 1.4.1, a Bun `fetch` sends every `*.localhost` name to the container's own
+loopback, so each container that calls one starts through `packages/local-stack/src/loopback-forward.ts`, which
+forwards loopback `:18080` to the platform proxy and `:18081` to the apps proxy (`entrypoint` in `compose.yaml`).
+
 ## Signing in
 
 The proxy is the only front door locally, exactly as it is in a deployed
