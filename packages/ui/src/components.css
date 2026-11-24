@@ -827,6 +827,13 @@
 .fui-table__cell--wrap {
 	white-space: normal;
 	overflow-wrap: anywhere;
+	/* `anywhere` lowers the min-content width to one letter: without a floor, columns that keep their text on one line squeeze it. */
+	min-width: var(--fui-column-width-md);
+}
+
+/* The growing column carries the table's main text. */
+.fui-table__cell--wrap.fui-table__cell--grow {
+	min-width: var(--fui-column-width-lg);
 }
 
 .fui-table__cell--width-xs {
@@ -847,6 +854,27 @@
 
 .fui-table__cell--width-xl {
 	width: var(--fui-column-width-xl);
+}
+
+/* A wrapped column's own width replaces its floor. */
+.fui-table__cell--wrap.fui-table__cell--width-xs {
+	min-width: var(--fui-column-width-xs);
+}
+
+.fui-table__cell--wrap.fui-table__cell--width-sm {
+	min-width: var(--fui-column-width-sm);
+}
+
+.fui-table__cell--wrap.fui-table__cell--width-md {
+	min-width: var(--fui-column-width-md);
+}
+
+.fui-table__cell--wrap.fui-table__cell--width-lg {
+	min-width: var(--fui-column-width-lg);
+}
+
+.fui-table__cell--wrap.fui-table__cell--width-xl {
+	min-width: var(--fui-column-width-xl);
 }
 
 .fui-table__select {
