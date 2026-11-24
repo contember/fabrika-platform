@@ -905,7 +905,9 @@ deal_attachments: {
 - `boot` refuses a kind that admits a type the framework cannot sniff, and file kinds without object storage or
   without the `scoped(tables)` data layer. `serveContract` opens the storage (path-style S3, `@fabrika/platform-node`'s
   `S3BlobStore`) from `FABRIKA_APP_STORAGE_ENDPOINT`, `_BUCKET`, `_ACCESS_KEY_ID` and `_SECRET_ACCESS_KEY`; a partial
-  set stops the boot. On Zerops the platform writes all four into the generated run section as `${<host>_…}`
+  set stops the boot. Requests are signed for `FABRIKA_APP_STORAGE_REGION` when the platform writes it (an S3 bucket
+  refuses a signature for another region), else for `us-east-1`; a region without the storage, or one that is not
+  lowercase letters, digits and hyphens, stops the boot. On Zerops the platform writes the four into the generated run section as `${<host>_…}`
   references to the application's one `object-storage` service, which must be a bucket the platform created for it. A
   job run (`fabrika job run`) gets ClamAV's `clamscan` from `PATH` as its scanner; on Zerops the build installs it for
   a contract with a `scan: true` kind (see [Zerops platform](zerops-platform.md)). On Cloudflare the store is the
