@@ -495,8 +495,10 @@ configs oblaka wrote before the first `wrangler deploy`. An application config h
 no routes and sets `workers_dev` and `preview_urls` to `false`; only the platform
 proxy is routed, on the run's own domain. Config keys are an allowlist. No name a
 config binds, and no name a resource adopts, may be a platform resource or a name
-of another application of the installation — the deployment in Control's registry
-whose `<env>-<app>` is the longest prefix of the remote name. A D1 or KV binding
+of another deployment of the installation — the deployment in Control's registry
+whose `<env>-<app>` is the longest prefix of the remote name. Another environment
+of the same application is another deployment: a stage Worker bound to production's
+application Worker would be production's authenticated proxy hop. A D1 or KV binding
 must carry an id the generation run handed out. Every Worker in the graph, the
 proxy included, binds IAM at its `PropustkaApplication` entrypoint
 (`iamServiceReference()`); a binding to IAM's default entrypoint, which also issues

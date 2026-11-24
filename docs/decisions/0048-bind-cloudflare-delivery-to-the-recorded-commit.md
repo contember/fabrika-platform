@@ -73,7 +73,9 @@ The provider refuses these on application Workers:
 - any `workers_dev` other than `false`;
 - a binding to another application's resources: a binding whose name belongs to another application of
   the installation, checked against Control's registry. A remote name `<env>-<name>` belongs to the
-  registered deployment whose `<env>-<app>` is its longest prefix (exact, or followed by `-`).
+  registered deployment whose `<env>-<app>` is its longest prefix (exact, or followed by `-`). Another
+  environment of the same application counts as another deployment (amended by
+  [ADR-0086](0086-a-cloudflare-deploy-builds-without-credentials-and-deploys-without-repository-code.md)).
 
 The provider checks what `wrangler deploy` reads — the wrangler configs oblaka generates — and never the
 objects that emitted them, because any binding object can write any key into a config.

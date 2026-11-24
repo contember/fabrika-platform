@@ -90,7 +90,10 @@ same path as any other.
    Object deletions), each parsed: oblaka spreads every option into the generated config, so a resource key there would
    bind by literal name or id past the classes the deploy rebuilds. A committed Durable Object history may transfer
    classes only from a script of the application itself: a `transferred_classes` entry moves another script's objects,
-   with their storage, into the Worker (the bounds check its `from_script` like every other remote name). Its bindings are resources the deploy rebuilds
+   with their storage, into the Worker (the bounds check its `from_script` like every other remote name). A remote
+   name of another environment of the same application is refused like another application's: production's application
+   Worker treats whatever reaches it over a service binding as its proxy's authenticated hop, so a stage Worker bound
+   to it could act as any person in production, and a stage queue could dead-letter into production's. Its bindings are resources the deploy rebuilds
    (D1, KV, R2, queues, Durable Objects, workflows, Vectorize, Analytics Engine) or plain bindables (services, IAM, AI).
    A container (an image built from the checkout's Dockerfile) and a second Worker are refused in the build.
 7. **A Control that relies on the isolated build says so in the job.** Every job's approved access carries
