@@ -65,7 +65,9 @@ same path as any other.
    into it directories and regular files, each checked with `lstat` and again on the open descriptor (`O_NOFOLLOW`, same
    inode, `nlink` 1, unchanged size). A symbolic link, a hard link, a fifo, a socket, a device, a name that is not UTF-8
    or holds a control character or a backslash, more than 60,000 files, 1 GiB, 32 levels or a 1,024-byte path fails the
-   deploy with one line (`copyBuildOutput`). The deploy then admits only the manifest, the application directory and
+   deploy with one line (`copyBuildOutput`). On Linux every name is resolved inside the directory already opened
+   (`/proc/self/fd/<fd>/<name>`, as `openat` does), so even a build process that outlived the reap could not swap a
+   directory for a link and lead the copy outside the output. The deploy then admits only the manifest, the application directory and
    the source maps at the top, and only the bundle, the assets, the staged SPA files and the migrations in the
    application directory, so nothing there is a file wrangler or a runtime reads on its own (`assertBuildLayout`).
 5. **The deploy runs no repository code.** `fabrika-cloudflare-executor deploy --bundle=<copy>` runs in an empty
@@ -80,8 +82,15 @@ same path as any other.
    application running the copied bundle or the platform's proxy. The composition (proxy, IAM identity, object, files bucket, managed values) and the
    bounds on the generated configs are the ones every deploy runs. The application Worker is uploaded with `wrangler
    deploy --no-bundle`; the platform's proxy Worker is bundled from the runner image's own source. The application id
-   must be the one whose contract Control approved.
-6. **What a build may describe.** The Worker's options are plain data. Its bindings are resources the deploy rebuilds
+   must be the one whose contract Control approved, and only a dry run goes without approved access. The secrets and
+   vars the manifest names are looked up only in the runner's values file, never in the deploy's environment, where a
+   name such as `CLOUDFLARE_API_TOKEN` would find the credential.
+6. **What a build may describe.** The Worker's options are the ones an authored Worker sets (compatibility date and
+   flags, observability, an empty `routes`, `workers_dev`, `preview_urls`, triggers, vars, assets and the Durable
+   Object deletions), each parsed: oblaka spreads every option into the generated config, so a resource key there would
+   bind by literal name or id past the classes the deploy rebuilds. A committed Durable Object history may transfer
+   classes only from a script of the application itself: a `transferred_classes` entry moves another script's objects,
+   with their storage, into the Worker (the bounds check its `from_script` like every other remote name). Its bindings are resources the deploy rebuilds
    (D1, KV, R2, queues, Durable Objects, workflows, Vectorize, Analytics Engine) or plain bindables (services, IAM, AI).
    A container (an image built from the checkout's Dockerfile) and a second Worker are refused in the build.
 7. **A Control that relies on the isolated build says so in the job.** Every job's approved access carries

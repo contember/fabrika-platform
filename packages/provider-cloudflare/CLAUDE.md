@@ -20,7 +20,10 @@ this one import.
   out of this package's classes: a resource from its kind and exactly its class's options, a D1 database's migrations
   only from `migrations/<binding>`, any other binding as the config entries its `configureBinding` wrote
   (`RecordedBinding`), which must be exactly its own `services` entry or its own `ai` binding (merged after oblaka wrote
-  the Worker, any other key would replace `main`, `name` or a D1 entry), and the bundle as `main`. The deployer then
+  the Worker, any other key would replace `main`, `name` or a D1 entry), the Worker's options only from `WORKER_OPTIONS`
+  (oblaka spreads every option into the config, so a resource key there would bind by literal name or id), and the
+  bundle as `main`. Its secrets and vars come only from the values file and it runs without approved access only as a
+  dry run (`deployCloudflareBundle`). The deployer then
   runs as for any deploy with `prebuilt`: no build or check step, no SPA staging (the build staged the files), `wrangler
   deploy --no-bundle` for the application Worker, the platform proxy bundled from this package; before the first upload
   every generated config must be either the application running the copied bundle or that proxy. The application id must be the approved contract's `app`. Never import,
@@ -186,7 +189,7 @@ this one import.
   - exactly one application config beside the platform proxy's: "only the application Worker and its proxy
     are deployable";
   - on every name it binds — the Worker's own name, `services`, D1, R2, queues, containers, workflows, a
-    Durable Object's `script_name` — no `PLATFORM_RESOURCE_NAMES` name (both schemes of `src/platform-names.ts`,
+    Durable Object's `script_name`, a migration's `transferred_classes[].from_script` — no `PLATFORM_RESOURCE_NAMES` name (both schemes of `src/platform-names.ts`,
     whatever the installation uses) and no other application's name. The bound is on the REMOTE name: an env name
     may contain `-`, so env `prod-propustka` + Worker `worker` lands on IAM's `prod-propustka-worker`; a remote name
     that equals or ends with `-<platform name>` is refused. The state namespace is matched exactly, because
