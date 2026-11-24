@@ -2133,7 +2133,20 @@ describeControlProviderConformance('the Zerops control provider', {
 			},
 			source: makeSource(sourceCalls),
 		})
-		const { dryRun: _dryRun, signal: _signal, events: _events, ...input } = deployInput(cloud)
+		const { dryRun: _dryRun, signal: _signal, events: _events, ...deploy } = deployInput(cloud)
+		// The upload bearer is a credential the deploy writes as a service variable: the suite checks no event carries it.
+		const input = {
+			...deploy,
+			artifactUpload: {
+				url: 'https://errors.test/api/artifacts/source-maps/',
+				bearer: 'conformance-upload-bearer-'.padEnd(64, 'b'),
+				appId: 'notes',
+				environment: 'prod',
+				serviceKey: 'default',
+				release: `fabrika/notes/prod/default/${COMMIT_SHA}`,
+				runId: deploy.runId,
+			},
+		}
 		const stopped = (call: string): boolean => call.startsWith('cancelBuild:') || call.startsWith('deleteAppVersion:')
 		return {
 			provider,

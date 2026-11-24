@@ -10,7 +10,7 @@ import {
 	ProviderInvocationAbort,
 	type ProviderRunEvents,
 } from './control'
-import type { JsonValue } from './json'
+import { type JsonValue, MAX_PROVIDER_STATE_BYTES } from './json'
 
 /** What the suite hands a fake cloud: `accepted` is called once the cloud has taken the deploy's operation. */
 export interface ConformanceCloudHooks {
@@ -73,8 +73,14 @@ function invocation(cloud: ConformanceCloud, dryRun: boolean, options: { readonl
 		if (controller.signal.aborted) throw controller.signal.reason
 	}
 	const stored = (kind: string, state: JsonValue): JsonValue => {
-		const parsed: JsonValue = JSON.parse(JSON.stringify(state))
+		const text = JSON.stringify(state)
+		const parsed: JsonValue = JSON.parse(text)
 		if (!Bun.deepEquals(parsed, state, true)) recorded.violations.push(`${kind} state is not JSON as given`)
+		// Control refuses a larger state (`serializeProviderJson`), so the provider's first real run would fail there.
+		const bytes = new TextEncoder().encode(text).byteLength
+		if (bytes > MAX_PROVIDER_STATE_BYTES) {
+			recorded.violations.push(`${kind} state takes ${bytes} bytes, over Control's limit of ${MAX_PROVIDER_STATE_BYTES}`)
+		}
 		return parsed
 	}
 	const events: ProviderRunEvents = {

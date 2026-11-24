@@ -68,7 +68,7 @@ point per operation, not a bound and an unbound variant.
 
 **What every provider does is tested once.** `@fabrika/provider-contract/conformance` holds the cases
 every `ControlProvider` passes (a dry run changes nothing, a lost lease stops nothing, nothing an event
-carries holds a credential, a registration normalizes to itself). Each provider's own test calls
+carries holds a credential, a recorded state fits the 16 KiB Control stores, a registration normalizes to itself). Each provider's own test calls
 `describeControlProviderConformance` once with a harness over its fake cloud, and keeps its own tests of
 how it drives that cloud: the suite sees only what the harness reports.
 

@@ -1,6 +1,6 @@
 import { sha256Hex } from '@fabrika/auth-core'
 import type { BlobStore, SqlDatabase, SqlStatement } from '@fabrika/platform'
-import type { JsonValue } from '@fabrika/provider-contract'
+import { type JsonValue, MAX_PROVIDER_STATE_BYTES } from '@fabrika/provider-contract'
 import type { LeaseFence } from '../lease'
 import { runCoordinateLockStatements } from './coordinate-lock'
 import { firstRow } from './returning'
@@ -71,11 +71,12 @@ const isJsonValue = (value: unknown, seen: WeakSet<object> = new WeakSet()): val
 	return valid
 }
 
-const MAX_PROVIDER_STATE_BYTES = 16 * 1024
+/** The limit as a message names it: `16 KiB` while the constant is 16 * 1024. */
+const PROVIDER_STATE_LIMIT = `${MAX_PROVIDER_STATE_BYTES / 1024} KiB`
 
 /** Parse provider-owned JSON without trusting persisted database text. */
 export const parseProviderJson = (raw: string, label: string): JsonValue => {
-	if (new TextEncoder().encode(raw).byteLength > MAX_PROVIDER_STATE_BYTES) throw new Error(`${label} exceeds 16 KiB`)
+	if (new TextEncoder().encode(raw).byteLength > MAX_PROVIDER_STATE_BYTES) throw new Error(`${label} exceeds ${PROVIDER_STATE_LIMIT}`)
 	let value: unknown
 	try {
 		value = JSON.parse(raw)
@@ -90,7 +91,9 @@ export const serializeProviderJson = (value: JsonValue): string => {
 	if (!isJsonValue(value)) throw new Error('provider checkpoint is not a JSON value')
 	const serialized = JSON.stringify(value)
 	if (typeof serialized !== 'string') throw new Error('provider checkpoint is not serializable')
-	if (new TextEncoder().encode(serialized).byteLength > MAX_PROVIDER_STATE_BYTES) throw new Error('provider checkpoint exceeds 16 KiB')
+	if (new TextEncoder().encode(serialized).byteLength > MAX_PROVIDER_STATE_BYTES) {
+		throw new Error(`provider checkpoint exceeds ${PROVIDER_STATE_LIMIT}`)
+	}
 	return serialized
 }
 
