@@ -89,3 +89,12 @@ it to fact without a probe.
 - **A large `define`.** Probed locally: a 233,280-character manifest string builds (`wrangler deploy --dry-run`,
   291 KiB) and the Worker reads it back intact. Probed live (2026-11-20): the account accepts a proxy Worker of
   545,747 bytes whose `define` bakes a 219,931-byte manifest of 700 endpoints, and the proxy serves.
+- **The MCP SDK runs in workerd.** `@modelcontextprotocol/server` 2.2.0 resolves its `workerd` export condition in
+  wrangler's bundle (`shimsWorkerd`, with its Workers JSON Schema validator). Probed on local workerd: Control's
+  Worker with the MCP table and an embedded skill boots and answers `/mcp` with the resource challenge
+  (`packages/control/src/__tests__/worker-boot.test.ts`). An MCP client session against a Worker console is _not
+  verified live_.
+- **Control's Worker bundle with MCP.** Measured with `wrangler deploy --dry-run` (wrangler 4.x, 2026-11): 5.05 MB raw,
+  1.08 MB gzip without the MCP handler; 5.79 MB raw, 1.23 MB gzip with it; 6.21 MB raw, 1.35 MB gzip with the
+  `@fabrika/app` skill (404 KB of JSON) embedded through `define`, as an installation with MCP authoring deploys it.
+  Cloudflare's limit is 10 MB gzip on a paid plan and 3 MB on the free plan (documentation).

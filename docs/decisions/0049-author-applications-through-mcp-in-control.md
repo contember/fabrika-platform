@@ -48,7 +48,8 @@ workspace its own running application, where one pinned service could show only 
 
 1. **Control serves MCP at `/mcp`** (Streamable HTTP). Each tool calls a Control use case. MCP is a
    user-facing protocol adapter beside the RPC, like webhooks and auth callbacks; ADR-0041's single
-   administrative transport is unchanged. Only the Bun/Zerops composition mounts it.
+   administrative transport is unchanged. The Bun process and the Cloudflare console Worker mount the same handler
+   (rule 9).
 2. **IAM is the OAuth 2.1 authorization server.** Authorization code with S256 PKCE, explicit RFC 8707
    resource, refresh rotation and revocation. Clients are operator-registered Client ID Metadata
    Documents of kind `claude`, `chatgpt` or `external`; there is no open dynamic registration. A client authenticates at the token
@@ -115,7 +116,7 @@ workspace its own running application, where one pinned service could show only 
    (rule 7); deploying a workspace creates an ordinary run for the exact head SHA in that environment.
 6. **Repository configuration is protected; the contract files are classified.** Control refuses edits
    to the provider's deploy files at any depth (`ControlProvider.authoring.protectedFiles`: `zerops.yaml` /
-   `zerops.yml` on Zerops; a provider without `authoring` has no authoring target), `fabrika.*` files and everything under `.github/`; the
+   `zerops.yml` on Zerops, `wrangler.json`, `wrangler.jsonc` and `wrangler.toml` on Cloudflare; a provider without `authoring` has no authoring target), `fabrika.*` files and everything under `.github/`; the
    operator changes them through normal review. The only exceptions are `fabrika.contract.ts`, the
    schema modules it imports, `src/db/tables.ts` and the files under `migrations/`. A workspace may
    edit them, and Control classifies those changes at deploy time instead of refusing them (ADR-0050).
@@ -134,17 +135,33 @@ workspace its own running application, where one pinned service could show only 
    environment.
 8. **No MCP token approves.** An OAuth or MCP token is refused by `approvals.complete`, whatever its
    scope (ADR-0050). Every run records its actor, including runs created through MCP.
-9. **MCP authoring is Zerops only** for this version, opt-in on an https installation and on the local stack: a Worker
-   console serves no `/mcp`. The command-line client's grant is served by every https Zerops deploy, by every
-   Cloudflare deploy and by the local stack.
+9. **MCP authoring is served by Zerops and Cloudflare installations**, opt-in on an https installation and on the
+   local stack. It is on when the operator registers a client that is not identity-only. The command-line client's
+   grant is served by every https Zerops deploy, by every Cloudflare deploy and by the local stack.
    - Both providers register the same resources, `CONTROL_CLI_RESOURCES` in `@fabrika/control-contract`'s
      `cli-access.ts`, and both recompute IAM's config from them on every deploy, so a release that changes a preset
      converges with no other step. On Zerops the installation's deploy computes it. On Cloudflare IAM's own
      `fabrika.config.ts` does, from the console's origin its stage is handed, and so imports Control's contract: the
      resources are the console's, and IAM's deploy is the only step that writes IAM's variables. That contract depends
-     on `@fabrika/operations-contract` for the Operations actions, one way.
+     on `@fabrika/operations-contract` for the Operations actions, one way. IAM's config writes the `/mcp` resource
+     beside them when MCP authoring is on.
    - On Cloudflare the console Worker serves the table its proxy publishes, by the digest the same config writes beside
-     it, as the Bun process does.
+     it, as the Bun process does. Control's `fabrika.config.ts` derives the table from the operator's client list
+     (`FABRIKA_PLATFORM_MCP_CLIENTS_JSON`), as the Zerops deploy does. With the MCP table the Worker mounts the same
+     stateless `/mcp` handler (JSON responses, no session), composed per request from the request's bindings; the
+     console proxy Worker enforces the `/mcp` row and serves its resource metadata. A Worker reads no files, so the
+     deploy embeds the `@fabrika/app` skill that `get_app_rules` answers in the Worker's bundle.
+   - The Cloudflare provider declares `authoring`. Its protected files (rule 6) are `wrangler.json`, `wrangler.jsonc`
+     and `wrangler.toml`.
+   - On Cloudflare a workspace deploy runs unreviewed code, and the runner container holds the account-wide API token
+     (backlog 86). So a workspace commit is deployed in two steps: the runner builds the checkout in a step that holds
+     no credential, and the credentialed step deploys the built bundle without running the checkout's code. Until the
+     runner does so, the provider says so (`ProviderAuthoring.stageDeployRefusal`, from the capability flag
+     `CLOUDFLARE_ISOLATED_BUILD` in `@fabrika/provider-cloudflare`) and Control refuses `deploy_stage` with it; every
+     other tool, `apply_changes` and `create_pull_request` among them, is served.
+   - An authoring target on Cloudflare is an ordinary unprotected environment of the app, with its own Worker, object,
+     domain and IAM application. Rules 5, 7 and 8 apply unchanged.
+   - Dev environments and their sandboxes (rule 10) remain Zerops only.
 10. **An application may have one `dev` environment, and each MCP workspace gets its own sandbox in it.** A commit to
     a workspace reaches that workspace's running sandbox through the dev launcher, without a run. `deploy_stage` stays
     the only path to a checked build.
