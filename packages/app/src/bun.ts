@@ -358,7 +358,10 @@ const FORWARDED_SIGNALS = ['SIGTERM', 'SIGINT', 'SIGHUP'] as const
  * The launcher: before any application module loads, derives the runtime role's credential from the provisioning one
  * and runs this same command again with an environment that carries the runtime credential and not the provisioning
  * one, so neither the application's process nor anything it spawns can read the latter, `/proc/self/environ`
- * included; the launcher makes itself non-dumpable first, so its own `/proc/<pid>/environ` is not readable either. Stdio is inherited, signals are forwarded, and the child's exit becomes this process's.
+ * included. The launcher makes itself non-dumpable first, so a process of the same user cannot read its own
+ * `/proc/<pid>/environ`; `sudo` can, and on Zerops the application has it, so there the provisioning credential stays
+ * readable until backlog 198 removes it (ADR-0082). Stdio is inherited, signals are forwarded, and the child's exit
+ * becomes this process's.
  */
 async function relaunchAsRuntime(env: Readonly<Record<string, string | undefined>>): Promise<never> {
 	let runtimeUrl: string

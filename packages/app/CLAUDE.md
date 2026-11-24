@@ -606,7 +606,9 @@ vocabulary (`packages/db/CLAUDE.md`).
   instead, both are launchers: they load no application module, derive the runtime URL (`applicationRuntimeUrl`) and
   run the same command again without the provisioning credential (stdio inherited, signals forwarded, exit code
   propagated; `launcher.test.ts`), after making themselves non-dumpable (`src/undumpable.ts`, `prctl` through
-  `bun:ffi`) so the application cannot read their `/proc/<pid>/environ`. Never load application code in a process that holds it, and never open the layer
+  `bun:ffi`) so another process of the same user cannot read their `/proc/<pid>/environ`. That does not hold against
+  `sudo`: on Zerops the application has it and reads the launcher's environment, provisioning credential included,
+  until backlog 198 runs it without `sudo` (ADR-0082). Never load application code in a process that holds it, and never open the layer
   on it. On Cloudflare the application's object opens `openSqlite` (`@fabrika/db/sqlite`) over its own
   `ctx.storage` (see "The Cloudflare runtime"). No connection or a layer bound before boot is a `BootError`.
   `boot.ts` imports only `@fabrika/db/framework` at runtime (browser-safe), because the Worker adapter

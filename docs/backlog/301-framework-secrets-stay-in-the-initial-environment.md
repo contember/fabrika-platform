@@ -1,7 +1,7 @@
 ---
 id: 301
 title: Framework secrets stay in a process's initial environment
-blocked-by: []
+blocked-by: [./198-an-in-container-env-write-may-reach-another-services-credentials.md]
 ---
 
 # 301: Framework secrets stay in a process's initial environment
@@ -27,17 +27,14 @@ mistakes, not code in the same process), but the capture's comments promised mor
 ## Approach / acceptance
 
 [ADR-0082](../decisions/0082-framework-secrets-reach-the-application-only-through-its-launcher.md) proposes
-the design (the first option below, with the alternatives weighed); it is not decided. Decide between, for example:
+the design and is not decided: the launcher re-executes in place over a `memfd` handover, or spawns the runtime with
+the handover on an inherited descriptor, under `PR_SET_NO_NEW_PRIVS`; the alternatives are weighed there. **On Zerops
+it waits for backlog 198's remedy 2**: the application has `sudo` there, which reads any process's environment,
+non-dumpable or not.
 
-- the serving process re-executing itself without the framework's variables and handing them to the child over an
-  inherited descriptor it reads once at boot and closes, as `relaunchAsRuntime` already re-executes without the
-  provisioning credential;
-- or keeping a small parent that holds the secrets and answers the child's requests (credentials, signatures), so the
-  child never holds them at all.
-
-Acceptance: in a Linux container, a framework secret is in neither `process.env` nor `/proc/self/environ` of the
-process that loads the application; an ADR records the choice and its limit (`/proc/<parent>/environ` of a parent
-running as the same user, which `makeProcessUndumpable` covers today).
+Acceptance (the ADR's spike): in a Linux container, a framework secret is in neither `process.env` nor
+`/proc/self/environ` of the process that loads the application; `sudo -n true` fails in it; no other process of its
+uid reads its environment or an ancestor's.
 
 ## Touch points
 
