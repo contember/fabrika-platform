@@ -266,10 +266,12 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 5. **`src/source.ts`**: the S3 multipart part writer for N2 and the presigned GET the build reads.
 6. **`src/build.ts`**: `StartBuild` with `NO_SOURCE` and the inline buildspec (fetch, unpack, write the rendered
    `Dockerfile`, build, push, print the digest), the build log relay, `StopBuild` on cancel before activation.
-7. **`src/ecs-task.ts`** (built): the server container (image by digest, port, health check on the contract's health
-   endpoint, log configuration), one init container per init command of `containerImage` (N3, built), the environment
-   and `secrets` by parameter ARN, the task and execution roles. Assembling the managed environment is the deploy
-   step's (step 8). Both roles are the application environment's own and never the same role (ADR-0004's AWS
+7. **`src/ecs-task.ts`** (built): the service's definition, the server container alone (image by digest, port, health
+   check on the contract's health endpoint, log configuration), and a one-off init definition for the init commands of
+   `containerImage` (N3, built), which step 8 runs once per command (`RunTask` with a command override, in order) before
+   the service update, never in every service task: the schema check would fail an older revision's tasks against a
+   newer schema. The environment and `secrets` by parameter ARN, a framework credential never plain; the task and
+   execution roles. Assembling the managed environment is the deploy step's (step 8). Both roles are the application environment's own and never the same role (ADR-0004's AWS
    invariant): the execution role may read only its parameter path (`ssm:GetParameters`), write only its log group
    and pull only its repository, because with the `aws/ssm` key that scope is the only boundary between two
    applications' secrets. Whoever provisions the roles (the namespace stack, step 10) creates them per application

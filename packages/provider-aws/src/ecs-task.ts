@@ -1,37 +1,47 @@
-// The task definition of one application environment (the AWS idea's checklist, step 7): its image, rendered from the
+// The task definitions of one application environment (the AWS idea's checklist, step 7): its image, rendered from the
 // contract's recipe by `containerImage` (`@fabrika/app/build`) and pushed by the build, as ECS runs it. Pure: no AWS
 // call, no clock. `ecsClient(…).registerTaskDefinition` checks every value again before anything is sent.
 //
-// - The recipe's init commands (the migrations, and the schema check an image build moves to container start) each run
-//   in a non-essential container of their own, in order, and the server starts only once the last one exited 0. Every
-//   task runs them, as every Zerops container does: `fabrika db migrate` takes its own lock.
-// - The server runs the recipe's start command on port 3000, the Bun adapter's default, and its health check asks the
-//   contract's health endpoint on the loopback, the one path the application serves without the proxy's headers.
-// - Variables are plain values and secrets are Parameter Store ARNs, never a secret's value (ADR-0004).
+// - The service's definition carries the server alone: it runs the recipe's start command on port 3000, the Bun
+//   adapter's default, and its health check asks the contract's health endpoint on the loopback, the one path the
+//   application serves without the proxy's headers.
+// - The recipe's init commands (the migrations, and the schema check an image build moves to container start) run once
+//   per deploy, before the service is updated, as `ContainerImage.init` says: the deploy step runs the init definition
+//   as a one-off task per command, in order, each overriding its command, and updates the service only after every one
+//   exited 0. Never in every service task: the schema check fails against a schema a newer revision migrated, so a
+//   rollback, a replacement or a scale-out of the older revision could not start; and Fargate bounds a container
+//   dependency's wait at 120 s, which a long migration would outrun.
+// - Variables are plain values, which anyone who may read the task definition reads, and secrets are Parameter Store
+//   ARNs (ADR-0004). A framework variable that carries a credential (`isManagedCredential`, the rule Control writes by,
+//   failing closed) is refused among the plain values.
 // - The task role and the execution role are the application environment's own (ADR-0004's AWS invariant); this module
 //   takes them as given and the ECS client refuses the two being one role.
 // - The recipe's jobs are not here: the image runs none of them, and their schedule is the provider's (ADR-0080).
 //
-// UNVERIFIED: that ECS starts the `dependsOn` chain in order and counts a failed container health check against the
-// deployment's circuit breaker follows ECS's developer guide; none was checked against an account.
+// UNVERIFIED: that ECS counts a failed container health check against the deployment's circuit breaker follows ECS's
+// developer guide; it was not checked against an account.
 
 import type { ContainerImage } from '@fabrika/app/build'
-import type { EcsContainer, EcsTaskDefinition } from './aws/ecs'
+import { isManagedCredential } from '@fabrika/auth-core'
+import { type EcsContainer, type EcsTaskDefinition, IMAGE_BY_DIGEST } from './aws/ecs'
+import { isHealthPath } from './codecs'
 
 /** The port the Bun adapter serves on when `PORT` is not set. */
 export const AWS_APPLICATION_PORT = 3000
 /** The server container's name, which the service's Service Connect configuration names too. */
 export const SERVER_CONTAINER = 'server'
-/** How long a new task has before a failed health check counts: the boot after the init containers. */
+/** The init definition's one container, whose command each one-off task overrides. */
+export const INIT_CONTAINER = 'init'
+/** The init definition's family is the service's with this suffix. */
+export const INIT_FAMILY_SUFFIX = '-init'
+/** How long a new task has before a failed health check counts: the server's boot. */
 const HEALTH_START_PERIOD_SECONDS = 60
-/** A pushed image by digest; a tag would let the image change under the revision. */
-const IMAGE_BY_DIGEST = /^[a-z0-9.-]{1,255}\/[a-z0-9._/-]{1,256}@sha256:[0-9a-f]{64}$/
-/** The contract's health endpoint, as the artifact codec reads it. */
-const HEALTH_PATH = /^\/[A-Za-z0-9._~/-]{0,255}$/
+/** A family the init suffix still fits behind (ECS takes 255). */
+const FAMILY = /^[A-Za-z0-9_-]{1,250}$/
 
-/** One application environment's task, besides its image. */
+/** One application environment's tasks, besides its image. */
 export interface AwsTaskDefinitionInput {
-	/** The task definition's family: one per application environment. */
+	/** The service's task definition family: one per application environment. */
 	readonly family: string
 	/** The image the build pushed, by digest. */
 	readonly image: string
@@ -39,7 +49,7 @@ export interface AwsTaskDefinitionInput {
 	readonly rendered: Pick<ContainerImage, 'init' | 'start'>
 	/** The contract's health endpoint (`AwsAppArtifact.healthPath`). */
 	readonly healthPath: string
-	/** Plain values: the managed variables a deploy hands every container, and the application's own. */
+	/** Plain values: the managed variables that carry no credential, and the application's own. */
 	readonly environment: Readonly<Record<string, string>>
 	/** Secrets by the ARN of the Parameter Store parameter ECS reads at start (`parameterArn`). */
 	readonly secrets: Readonly<Record<string, string>>
@@ -51,6 +61,13 @@ export interface AwsTaskDefinitionInput {
 	/** The application environment's log group and its region. */
 	readonly log: { readonly group: string; readonly region: string }
 	readonly tags: Readonly<Record<string, string>>
+}
+
+/** The service's task definition, and the one-off init definition with the commands the deploy runs on it, in order. */
+export interface AwsTaskDefinitions {
+	readonly service: EcsTaskDefinition
+	/** `null` when the recipe has no init command (an application without a database). */
+	readonly init: { readonly definition: EcsTaskDefinition; readonly commands: readonly (readonly string[])[] } | null
 }
 
 /** Refuses an input this module cannot render, naming the argument only. */
@@ -67,31 +84,32 @@ function healthCommand(healthPath: string): readonly string[] {
 	return ['CMD', 'bun', '-e', `fetch(${url}).then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))`]
 }
 
-/** The task definition of one application environment, as `ecsClient(…).registerTaskDefinition` takes it. */
-export function awsTaskDefinition(input: AwsTaskDefinitionInput): EcsTaskDefinition {
+/** The task definitions of one application environment, as `ecsClient(…).registerTaskDefinition` takes them. */
+export function awsTaskDefinitions(input: AwsTaskDefinitionInput): AwsTaskDefinitions {
+	if (!FAMILY.test(input.family)) refuse('the family')
 	if (!IMAGE_BY_DIGEST.test(input.image)) refuse('the image (by digest)')
-	if (!HEALTH_PATH.test(input.healthPath) || input.healthPath.split('/').some((segment) => segment === '.' || segment === '..')) {
-		refuse('the health path')
-	}
+	if (!isHealthPath(input.healthPath)) refuse('the health path')
 	if (input.rendered.start.length === 0 || input.rendered.init.some((command) => command.length === 0)) refuse('the image commands')
 	// The port is the platform's: a `PORT` of the application's would move the server away from its health check.
 	if (Object.hasOwn(input.environment, 'PORT') || Object.hasOwn(input.secrets, 'PORT')) refuse('the variable PORT')
-	const log = (streamPrefix: string) => ({ group: input.log.group, region: input.log.region, streamPrefix })
+	for (const name of Object.keys(input.environment)) {
+		// A plain value is readable in the task definition: a framework credential goes by parameter ARN only.
+		if (name.startsWith('FABRIKA_') && isManagedCredential(name)) refuse(`the plain variable ${name} (a credential)`)
+	}
 	const environment = { ...input.environment }
 	const secrets = { ...input.secrets }
+	const log = (streamPrefix: string) => ({ group: input.log.group, region: input.log.region, streamPrefix })
+	const definition = (family: string, container: EcsContainer): EcsTaskDefinition => ({
+		family,
+		taskRoleArn: input.taskRoleArn,
+		executionRoleArn: input.executionRoleArn,
+		cpu: input.cpu,
+		memory: input.memory,
+		containers: [container],
+		tags: input.tags,
+	})
 
-	// Each init command in a container of its own, each waiting for the one before it to exit 0.
-	const init: EcsContainer[] = input.rendered.init.map((command, index) => ({
-		name: `init-${index + 1}`,
-		image: input.image,
-		essential: false,
-		command: [...command],
-		environment,
-		secrets,
-		...(index === 0 ? {} : { dependsOn: [{ container: `init-${index}`, condition: 'SUCCESS' }] }),
-		log: log(`init-${index + 1}`),
-	}))
-	const server: EcsContainer = {
+	const service = definition(input.family, {
 		name: SERVER_CONTAINER,
 		image: input.image,
 		essential: true,
@@ -106,16 +124,19 @@ export function awsTaskDefinition(input: AwsTaskDefinitionInput): EcsTaskDefinit
 			retries: 3,
 			startPeriodSeconds: HEALTH_START_PERIOD_SECONDS,
 		},
-		...(init.length === 0 ? {} : { dependsOn: [{ container: `init-${init.length}`, condition: 'SUCCESS' }] }),
 		log: log(SERVER_CONTAINER),
-	}
-	return {
-		family: input.family,
-		taskRoleArn: input.taskRoleArn,
-		executionRoleArn: input.executionRoleArn,
-		cpu: input.cpu,
-		memory: input.memory,
-		containers: [...init, server],
-		tags: input.tags,
-	}
+	})
+	const [first] = input.rendered.init
+	if (first === undefined) return { service, init: null }
+	// No port and no health check: the one-off task runs a command and exits, and its exit code is the verdict.
+	const init = definition(`${input.family}${INIT_FAMILY_SUFFIX}`, {
+		name: INIT_CONTAINER,
+		image: input.image,
+		essential: true,
+		command: [...first],
+		environment,
+		secrets,
+		log: log(INIT_CONTAINER),
+	})
+	return { service, init: { definition: init, commands: input.rendered.init.map((command) => [...command]) } }
 }

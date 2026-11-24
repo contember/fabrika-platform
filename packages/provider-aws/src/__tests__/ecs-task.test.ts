@@ -1,12 +1,20 @@
-// The task definition of one application environment, from an image `containerImage` rendered: the init containers in
-// order before the server, the server's health check on the contract's health endpoint, and that the ECS client takes
+// The task definitions of one application environment, from an image `containerImage` rendered: the service's carries
+// the server alone with its health check on the contract's health endpoint, the init definition carries the commands
+// the deploy runs once before the update, a framework credential never goes as a plain value, and the ECS client takes
 // what it renders (every check of `registerTaskDefinition` runs over it).
 
 import { containerImage, type ContainerImageInput } from '@fabrika/app/build'
 import { describe, expect, test } from 'bun:test'
 import { ecsClient } from '../aws/ecs'
 import { ECS } from '../aws/json'
-import { AWS_APPLICATION_PORT, awsTaskDefinition, type AwsTaskDefinitionInput, SERVER_CONTAINER } from '../ecs-task'
+import {
+	AWS_APPLICATION_PORT,
+	type AwsTaskDefinitionInput,
+	awsTaskDefinitions,
+	INIT_CONTAINER,
+	INIT_FAMILY_SUFFIX,
+	SERVER_CONTAINER,
+} from '../ecs-task'
 import { fakeAws } from './helpers/fake-aws'
 
 const imageInput: ContainerImageInput = {
@@ -37,7 +45,7 @@ const input: AwsTaskDefinitionInput = {
 	image: IMAGE,
 	rendered,
 	healthPath: '/__fabrika/health',
-	environment: { FABRIKA_APP_ID: 'notes', LOG_LEVEL: 'info' },
+	environment: { FABRIKA_APP_ID: 'notes', FABRIKA_IAM_RPC_URL: 'http://iam.fabrika.local:3000', LOG_LEVEL: 'info' },
 	secrets: { STRIPE_KEY: PARAMETER },
 	taskRoleArn: 'arn:aws:iam::123456789012:role/fabrika-apps-notes-prod',
 	executionRoleArn: 'arn:aws:iam::123456789012:role/fabrika-apps-notes-prod-execution',
@@ -47,24 +55,29 @@ const input: AwsTaskDefinitionInput = {
 	tags: { 'fabrika:app': 'notes' },
 }
 
-describe('awsTaskDefinition', () => {
-	test('runs each init command in order in a container of its own before the server', () => {
-		// With a database the recipe migrates and then checks the schema at container start.
-		expect(rendered.init.length).toBe(2)
-		const definition = awsTaskDefinition(input)
-		expect(definition.containers.map((container) => [container.name, container.essential, container.dependsOn ?? []])).toEqual([
-			['init-1', false, []],
-			['init-2', false, [{ container: 'init-1', condition: 'SUCCESS' }]],
-			[SERVER_CONTAINER, true, [{ container: 'init-2', condition: 'SUCCESS' }]],
-		])
-		expect(definition.containers.map((container) => container.command)).toEqual([...rendered.init, rendered.start])
-		for (const container of definition.containers) {
-			expect(container.image).toBe(IMAGE)
-			expect(container.environment).toEqual(input.environment)
-			expect(container.secrets).toEqual(input.secrets)
-			expect(container.log).toEqual({ ...input.log, streamPrefix: container.name })
-		}
-		expect(definition).toMatchObject({
+describe('awsTaskDefinitions', () => {
+	test("the service's definition carries the server alone, with its health check on the contract's health endpoint", () => {
+		const { service } = awsTaskDefinitions(input)
+		expect(service.containers.length).toBe(1)
+		const [server] = service.containers
+		expect(server).toEqual({
+			name: SERVER_CONTAINER,
+			image: IMAGE,
+			essential: true,
+			port: AWS_APPLICATION_PORT,
+			command: [...rendered.start],
+			environment: input.environment,
+			secrets: input.secrets,
+			healthCheck: {
+				command: ['CMD', 'bun', '-e', 'fetch("http://127.0.0.1:3000/__fabrika/health").then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))'],
+				intervalSeconds: 10,
+				timeoutSeconds: 5,
+				retries: 3,
+				startPeriodSeconds: 60,
+			},
+			log: { ...input.log, streamPrefix: SERVER_CONTAINER },
+		})
+		expect(service).toMatchObject({
 			family: 'notes-prod',
 			taskRoleArn: input.taskRoleArn,
 			executionRoleArn: input.executionRoleArn,
@@ -74,49 +87,55 @@ describe('awsTaskDefinition', () => {
 		})
 	})
 
-	test("checks the server's health on the contract's health endpoint over the loopback", () => {
-		const server = awsTaskDefinition(input).containers.at(-1)
-		expect(server?.port).toBe(AWS_APPLICATION_PORT)
-		expect(server?.healthCheck).toEqual({
-			command: ['CMD', 'bun', '-e', 'fetch("http://127.0.0.1:3000/__fabrika/health").then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))'],
-			intervalSeconds: 10,
-			timeoutSeconds: 5,
-			retries: 3,
-			startPeriodSeconds: 60,
-		})
+	test('the init commands are a one-off definition the deploy runs once per command, never a container of every task', () => {
+		// With a database the recipe migrates and then checks the schema at container start.
+		expect(rendered.init.length).toBe(2)
+		const { service, init } = awsTaskDefinitions(input)
+		expect(service.containers.some((container) => container.dependsOn !== undefined)).toBe(false)
+		expect(init?.commands).toEqual(rendered.init.map((command) => [...command]))
+		expect(init?.definition.family).toBe(`notes-prod${INIT_FAMILY_SUFFIX}`)
+		expect(init?.definition.containers).toEqual([{
+			name: INIT_CONTAINER,
+			image: IMAGE,
+			essential: true,
+			command: [...(rendered.init[0] ?? [])],
+			environment: input.environment,
+			secrets: input.secrets,
+			log: { ...input.log, streamPrefix: INIT_CONTAINER },
+		}])
+		expect(init?.definition).toMatchObject({ taskRoleArn: input.taskRoleArn, executionRoleArn: input.executionRoleArn, cpu: 512, memory: 1024 })
 	})
 
-	test('without a database the server runs alone', () => {
+	test('without a database there is no init definition', () => {
 		const alone = containerImage({ ...imageInput, recipe: { ...imageInput.recipe, database: false } })
-		const definition = awsTaskDefinition({ ...input, rendered: alone })
-		expect(definition.containers.map((container) => container.name)).toEqual([SERVER_CONTAINER])
-		expect(definition.containers[0]?.dependsOn).toBeUndefined()
+		expect(awsTaskDefinitions({ ...input, rendered: alone }).init).toBeNull()
 	})
 
-	test('the ECS client registers what it renders', async () => {
+	test('the ECS client registers both definitions', async () => {
 		const { options, calls } = fakeAws(ECS, {
-			RegisterTaskDefinition: () => ({
-				taskDefinition: { taskDefinitionArn: 'arn:aws:ecs:eu-central-1:123456789012:task-definition/notes-prod:7', family: 'notes-prod', revision: 7 },
-			}),
+			RegisterTaskDefinition: (body) => {
+				const family = JSON.stringify(body).includes(INIT_FAMILY_SUFFIX) ? `notes-prod${INIT_FAMILY_SUFFIX}` : 'notes-prod'
+				return { taskDefinition: { taskDefinitionArn: `arn:aws:ecs:eu-central-1:123456789012:task-definition/${family}:7`, family, revision: 7 } }
+			},
 		})
-		expect(await ecsClient(options).registerTaskDefinition(awsTaskDefinition(input))).toMatchObject({ revision: 7 })
+		const ecs = ecsClient(options)
+		const { service, init } = awsTaskDefinitions(input)
+		expect(await ecs.registerTaskDefinition(service)).toMatchObject({ family: 'notes-prod', revision: 7 })
+		if (init === null) throw new Error('an application with a database has init commands')
+		expect(await ecs.registerTaskDefinition(init.definition)).toMatchObject({ family: `notes-prod${INIT_FAMILY_SUFFIX}` })
 		expect(calls[0]?.body).toMatchObject({
-			family: 'notes-prod',
-			containerDefinitions: [
-				{ name: 'init-1', essential: false },
-				{ name: 'init-2', essential: false, dependsOn: [{ containerName: 'init-1', condition: 'SUCCESS' }] },
-				{
-					name: SERVER_CONTAINER,
-					essential: true,
-					portMappings: [{ containerPort: 3000, protocol: 'tcp' }],
-					secrets: [{ name: 'STRIPE_KEY', valueFrom: PARAMETER }],
-				},
-			],
+			containerDefinitions: [{
+				name: SERVER_CONTAINER,
+				portMappings: [{ containerPort: 3000, protocol: 'tcp' }],
+				secrets: [{ name: 'STRIPE_KEY', valueFrom: PARAMETER }],
+			}],
 		})
+		expect(calls[1]?.body).toMatchObject({ containerDefinitions: [{ name: INIT_CONTAINER, essential: true }] })
 	})
 
-	test('refuses what it cannot render', () => {
+	test('refuses what it cannot render, and a framework credential as a plain value', () => {
 		const refusals: readonly [Partial<AwsTaskDefinitionInput>, string][] = [
+			[{ family: 'x'.repeat(251) }, 'the family'],
 			[{ image: IMAGE.replace(/@sha256:.*/, ':latest') }, 'the image (by digest)'],
 			[{ healthPath: 'health' }, 'the health path'],
 			[{ healthPath: '/a/../b' }, 'the health path'],
@@ -124,7 +143,12 @@ describe('awsTaskDefinition', () => {
 			[{ rendered: { init: [[]], start: rendered.start } }, 'the image commands'],
 			[{ environment: { PORT: '8080' } }, 'the variable PORT'],
 			[{ secrets: { PORT: PARAMETER } }, 'the variable PORT'],
+			[{ environment: { FABRIKA_PROXY_SECRET: 'not-to-be-quoted' } }, 'the plain variable FABRIKA_PROXY_SECRET (a credential)'],
+			[{ environment: { FABRIKA_IAM_RPC_KEY: 'not-to-be-quoted' } }, 'the plain variable FABRIKA_IAM_RPC_KEY'],
+			// Fail closed: a framework name not known to be public is a credential.
+			[{ environment: { FABRIKA_SOMETHING_NEW: 'x' } }, 'the plain variable FABRIKA_SOMETHING_NEW'],
 		]
-		for (const [change, message] of refusals) expect(() => awsTaskDefinition({ ...input, ...change })).toThrow(message)
+		for (const [change, message] of refusals) expect(() => awsTaskDefinitions({ ...input, ...change })).toThrow(message)
+		expect(() => awsTaskDefinitions({ ...input, environment: { FABRIKA_PROXY_SECRET: 'not-to-be-quoted' } })).not.toThrow('not-to-be-quoted')
 	})
 })
