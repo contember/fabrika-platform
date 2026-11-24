@@ -450,7 +450,9 @@ the bounds below require of it: the Worker name `<app>` (remote `<env>-<app>`,
 the deployment's own prefix), `main` `./fabrika/entry.generated.ts`, no route,
 `workers_dev` and `preview_urls` off, and IAM at its application entrypoint. The
 author may add bindings and change `compatibility_date` and `compatibility_flags`
-(`worker: { … }`); `IAM` stays the platform's. The returned config still carries
+(`worker: { … }`); `IAM` stays the platform's, and so does `process.env`: the
+deployer adds `nodejs_compat_do_not_populate_process_env` to the flags and refuses
+`nodejs_compat_populate_process_env`. The returned config still carries
 a `resources` function, so `isCloudflareAppConfig` reads it as before. A contract
 application declares no `schema`: Control writes the approved contract's
 (ADR-0050), and the deployer refuses only a declared one that does not say

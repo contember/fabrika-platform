@@ -66,7 +66,14 @@ import { deployOrder } from './deploy-order'
 import { localWorkloadKeyVariables } from './local-workload-keys'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
 import { buildPlan, type CloudflareStep, findMigratableDatabases } from './plan'
-import { createCloudflareProxyWorker, IamApplicationReference, PROXY_MANIFEST_DEFINE, proxyManifestJson } from './proxy'
+import {
+	createCloudflareProxyWorker,
+	IamApplicationReference,
+	NO_PROCESS_ENV_FLAG,
+	POPULATE_PROCESS_ENV_FLAG,
+	PROXY_MANIFEST_DEFINE,
+	proxyManifestJson,
+} from './proxy'
 import { CHECKOUT_INSTALL_ARGS, type RunnerApprovedAccess } from './runner-protocol'
 import { defaultReconcileSchema } from './schema'
 import { type AssetMount, assetMounts, SPA_ASSETS, SPA_ASSETS_DIRECTORY, stageSpaAssets } from './spa-assets'
@@ -449,6 +456,24 @@ const withApplicationRuntime = (
 		triggers: { crons: [...runtime.crons] },
 	})
 	return replaceApplicationWorker(authored, configured)
+}
+
+/**
+ * Keep the application Worker's `process.env` empty. Under `nodejs_compat` from compatibility date 2025-04-01, or with
+ * `nodejs_compat_populate_process_env`, workerd fills it at module evaluation with every text variable and secret, the
+ * framework's included, before the object's boot captures them; `nodejs_compat_v2` alone leaves it empty (measured in
+ * workerd 1.20260312.1). The platform therefore always adds the opt-out, and refuses an authored opt-in.
+ */
+const withoutProcessEnvironment = (authored: Worker): Worker => {
+	const application = applicationWorker(authored)
+	const flags = application.options.compatibility_flags ?? []
+	if (flags.includes(POPULATE_PROCESS_ENV_FLAG)) {
+		throw new Error(
+			`cloudflare: application Worker \`${application.options.name}\` sets \`${POPULATE_PROCESS_ENV_FLAG}\`, which would put the platform's secrets in \`process.env\`; drop it and read the application's own values through the framework`,
+		)
+	}
+	if (flags.includes(NO_PROCESS_ENV_FLAG)) return authored
+	return replaceApplicationWorker(authored, new Worker({ ...application.options, compatibility_flags: [...flags, NO_PROCESS_ENV_FLAG] }))
 }
 
 /** The proxy Worker the platform builds for application `appId`, before oblaka's environment prefix. */
@@ -979,7 +1004,8 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	// An application Worker that declares its own `assets` keeps them; otherwise the platform stages the mounts' files.
 	const mounts = runtime !== null && contract !== null ? assetMounts(contract) : []
 	const spaAssets = mounts.length > 0 && applicationWorker(connected).options.assets === undefined ? { mounts, root: loaded.cwd } : null
-	const worker = runtime === null ? connected : withApplicationRuntime(connected, run, runtime, opsRelease, spaAssets !== null)
+	const composed = runtime === null ? connected : withApplicationRuntime(connected, run, runtime, opsRelease, spaAssets !== null)
+	const worker = platformResources === 'refuse' ? withoutProcessEnvironment(composed) : composed
 	const dir = workerDir(loaded.config, loaded.cwd)
 	const bounds: DeploymentBounds = {
 		env: run.env,

@@ -57,6 +57,15 @@ export const CLOUDFLARE_PROXY_WORKER_DIR: string = import.meta.dir
 export const CLOUDFLARE_PROXY_WORKER_MAIN = './proxy-worker.ts'
 
 /**
+ * workerd's flag that keeps `process.env` empty. Without it, `nodejs_compat` from compatibility date 2025-04-01 (and
+ * `POPULATE_PROCESS_ENV_FLAG` under any flag) fills it at module evaluation with the Worker's text variables and
+ * secrets, for every module of the bundle to read. Both the proxy Worker and every application Worker carry it.
+ */
+export const NO_PROCESS_ENV_FLAG = 'nodejs_compat_do_not_populate_process_env'
+/** workerd's flag that fills `process.env`; an application Worker that sets it is refused. */
+export const POPULATE_PROCESS_ENV_FLAG = 'nodejs_compat_populate_process_env'
+
+/**
  * The identifier the proxy Worker's bundle reads its manifest from. The generated config's `define` replaces it with
  * the manifest as a string literal when wrangler bundles the Worker, so the table has no Worker variable's 5 KB cap.
  */
@@ -149,7 +158,7 @@ export function createCloudflareProxyWorker(options: CloudflareProxyWorkerOption
 		dir: CLOUDFLARE_PROXY_WORKER_DIR,
 		name: options.name,
 		main: CLOUDFLARE_PROXY_WORKER_MAIN,
-		compatibility_flags: ['nodejs_compat'],
+		compatibility_flags: ['nodejs_compat', NO_PROCESS_ENV_FLAG],
 		compatibility_date: '2025-05-25',
 		routes: domain === undefined || domain === '' ? [] : [{ pattern: domain, custom_domain: true }],
 		observability: { logs: { enabled: true, invocation_logs: false } },
