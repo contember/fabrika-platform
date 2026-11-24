@@ -30,6 +30,7 @@ const ENV_NAMES = [
 	'FABRIKA_EMAIL_FROM_NAME',
 	'FABRIKA_CONTROL_URL',
 	'FABRIKA_IAM_PROVISIONING_KEY',
+	'FABRIKA_PLATFORM_MCP_CLIENTS_JSON',
 	...builtinEmailProviderVariables.map((variable) => variable.name),
 ]
 const originalEnvironment = new Map(ENV_NAMES.map((name) => [name, process.env[name]]))
@@ -349,6 +350,63 @@ describe('IAM resource graph', () => {
 		expect(operations).toEqual(['read:app', 'deploy:app', 'operate:app'])
 
 		expect(buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE).options.vars?.['OAUTH_CONFIG']).toBe('')
+	})
+
+	test("registers the operator's identity-bound external clients beside the command-line client's resources (ADR-0084)", () => {
+		const sonda = {
+			provider: 'external',
+			clientId: 'https://sonda.contember.com/admin/oauth/client',
+			redirectUris: ['https://sonda.contember.com/admin/oauth/callback'],
+			identity: {
+				app: 'sonda',
+				resource: 'https://sonda.contember.com/admin',
+				roles: [{ key: 'sonda-admin', name: 'Sonda administrator' }, { key: 'sonda-viewer', name: 'Sonda viewer' }],
+			},
+		}
+		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([sonda]) })
+		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)
+		expect(parsed?.clients).toEqual([{ ...sonda, provider: 'external', metadataUrl: sonda.clientId }])
+		expect(parsed?.resources.map(({ resource }) => resource)).toEqual([
+			'https://console.example.com/api/rpc',
+			'https://console.example.com/operations/api/rpc',
+		])
+
+		const refused = (clients: unknown[]) => () =>
+			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify(clients) })
+		// MCP authoring is not supported on Cloudflare yet.
+		const claude = { provider: 'claude', clientId: 'https://claude.ai/oauth/client', redirectUris: ['https://claude.ai/api/mcp/auth_callback'] }
+		expect(refused([sonda, claude])).toThrow('is not supported on Cloudflare yet')
+		expect(refused([{ ...sonda, identity: undefined }])).toThrow('is not supported on Cloudflare yet')
+		expect(refused([{ ...sonda, identity: { ...sonda.identity, app: 'operations' } }])).toThrow("is a platform service's")
+		// What IAM would refuse to boot with is refused at the deploy: here an admin audience the installation names.
+		expect(() =>
+			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
+				...relayed,
+				FABRIKA_IAM_ADMIN_AUDIENCES: 'vozka,gateway',
+				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{ ...sonda, identity: { ...sonda.identity, app: 'gateway' } }]),
+			})
+		).toThrow("names an installation service's app or resource")
+		expect(refused([{ ...sonda, identity: { ...sonda.identity, resource: `https://${REMOTE_DOMAIN}/x` } }])).toThrow("platform service's host")
+		expect(() =>
+			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
+				...relayed,
+				OPERATIONS_HOSTNAME: 'operations.example.com',
+				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{ ...sonda, identity: { ...sonda.identity, resource: 'https://operations.example.com/x' } }]),
+			})
+		).toThrow("platform service's host")
+		// A list that would not fit IAM's Worker variable stops here, not inside wrangler.
+		const many = Array.from({ length: 16 }, (_, index) => ({
+			...sonda,
+			clientId: `https://sonda${index}.example.com/admin/oauth/client`,
+			identity: { ...sonda.identity, app: `sonda-${index}` },
+		}))
+		expect(refused(many)).toThrow('longer than a Worker variable holds (5120 bytes)')
+		// Without the console's origin IAM serves no OAuth at all.
+		expect(() =>
+			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...REMOTE_SOURCE, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([sonda]) })
+		)
+			.toThrow('FABRIKA_PLATFORM_MCP_CLIENTS_JSON needs FABRIKA_CONTROL_URL')
 	})
 
 	test('remote secrets are required but never enter plaintext Worker vars', () => {

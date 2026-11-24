@@ -52,7 +52,8 @@ Public because both provider packages are, and
   IAM's sign-in switches and OIDC client are the bring-up's alone: a deploy writes none of them.
 - `proxy-manifest.ts` — the platform proxy manifest TEMPLATE type, `resolvePlatformProxyManifest` and
   `platformServiceTableDigest`. The template itself is a provider's generated data (Zerops: `generated/`).
-- `mcp.ts` — the operator's MCP client list and IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it (ADR-0049).
+- `mcp.ts` — the operator's MCP client list and IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it (ADR-0049), and
+  `reconcileIdentityApps`, the one reconcile of external applications' roles both providers' deploys call (ADR-0084).
 
 ## Invariants
 

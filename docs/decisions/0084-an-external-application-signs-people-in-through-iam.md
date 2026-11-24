@@ -27,13 +27,15 @@ application. What it needs from IAM is the person, and the person's role in the 
    of the application, never one on a platform host or a registered resource. `app` is an id of the application in IAM:
    lowercase, no `@`, and not a platform audience or a registered resource's app. The binding lives on the client,
    so a bound client is served that resource alone, with the one scope `identity`. A grant it held for another
-   resource before it was bound mints nothing.
+   resource before it was bound mints nothing. Both clouds read the list from `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`.
+   A Cloudflare installation supports identity-bound external clients. It does not support MCP authoring yet, so its
+   deploy refuses any other entry as not supported yet, before it deploys anything.
 2. **Its token names the person and carries no permission.** `sub`, `label`, `ptype: user` and `email`, for
    `aud` = the resource and `app` = the id. `perms` is always empty, at the code exchange and at every refresh. No
    installation service or application accepts the token, because none has its audience.
 3. **The application's roles are IAM's to grant and the token's to name.** `roles` is a list of `{ key, name }`. The
    deploy reconciles them into IAM as the application's vocabulary, each role granting no action, with the
-   provisioning key it already holds. So the application needs no IAM credential, and an administrator grants the
+   provisioning key it already holds (on Cloudflare, the control-plane stage, after IAM's own vocabulary). So the application needs no IAM credential, and an administrator grants the
    roles in the console like any application's. The token carries the keys of the roles the person holds globally at
    the application (`roles`). The application decides what each role allows.
 4. **With declared roles, no role means no sign-in.** The consent and the code exchange refuse a person holding no
@@ -50,7 +52,8 @@ other resource.
 - An external application gets single sign-on and role-based access without an IAM credential, and without the
   authoring reach of `/mcp`.
 - A role is a name. An application that needs finer rules keeps them itself; IAM does not learn its data.
-- A list of identity-bound clients alone leaves MCP authoring off: no `/mcp` row, no authoring resource.
+- A list of identity-bound clients alone leaves MCP authoring off: no `/mcp` row, no authoring resource. That is
+  why a Cloudflare installation, which does not support MCP authoring yet, can register them.
 - `roles` is an additive claim of a resource token. A parser that predates it ignores it. `email` was already a user
   token's claim.
 - **Rollout.** No generated file changes. `fabrika platform deploy` rewrites `FABRIKA_IAM_OAUTH_CONFIG` as before;
@@ -59,7 +62,14 @@ other resource.
   role's grants then name nothing; dropping `roles` altogether stops the reconcile and leaves the last roles in IAM,
   unnamed by any token. Adding `roles` to a client that signed everyone in refuses everyone until an administrator
   grants the roles, so grant them right after that deploy. An IAM from before the binding refuses the key and stops at boot, so rolling `iam`
-  back first removes the entry and deploys. A Cloudflare installation registers no managed client.
+  back first removes the entry and deploys.
+- **Rollout on Cloudflare.** The scaffolded `platform.yml` passes `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` from the GitHub
+  Environment to the IAM stage, which writes it into IAM's `OAUTH_CONFIG` after checking it with IAM's own boot
+  parser, and to the control-plane stage, which reconciles the roles. An existing installation gets the new workflow
+  when it bumps `fabrika.ref` and regenerates `platform.yml`; until the operator sets the variable, nothing changes.
+  A workflow that predates it never passes the variable, so its deploys register no client. Removing the variable
+  removes the clients from `OAUTH_CONFIG` at the next deploy. `OAUTH_CONFIG` is a plain Worker variable, capped at
+  5,120 bytes, so the list fits a few clients, not IAM's ceiling of 16.
 
 ## Alternatives considered
 

@@ -110,6 +110,41 @@ export const identityAppSchemas = (clients: readonly McpClient[]): readonly Iden
 	return schemas
 }
 
+/** One write of an external application's roles to IAM's provisioning surface, as `reconcileSchema` of `@fabrika/auth` takes it. */
+export interface IdentityAppReconcileCall {
+	readonly url: string
+	readonly app: string
+	readonly schema: AppSchema
+	readonly adminKey: string
+	readonly signal: AbortSignal
+}
+
+export interface IdentityAppsReconcile {
+	readonly clients: readonly McpClient[]
+	/** IAM's origin. */
+	readonly url: string
+	readonly adminKey: string
+	readonly dryRun: boolean
+	readonly signal: AbortSignal
+	readonly reconcile: (call: IdentityAppReconcileCall) => Promise<void>
+	readonly info: (message: string) => void
+}
+
+/**
+ * Reconcile every external application's declared roles into IAM with the provisioning key the deploy holds
+ * (ADR-0084). The deploy of every provider calls this one. No return origin: IAM never hands such an application off.
+ */
+export const reconcileIdentityApps = async (input: IdentityAppsReconcile): Promise<void> => {
+	for (const { app, schema } of identityAppSchemas(input.clients)) {
+		if (input.dryRun) {
+			input.info(`would reconcile the roles of the external application \`${app}\``)
+			continue
+		}
+		await input.reconcile({ url: input.url, app, schema, adminKey: input.adminKey, signal: input.signal })
+		input.info(`\`${app}\` reconciled: ${Object.keys(schema.roles).join(', ')}`)
+	}
+}
+
 /** MCP authoring is on when the operator registers a client that is not identity-only: those sign people in, nothing more. */
 export const mcpAuthoringOn = (clients: readonly McpClient[] | undefined): boolean =>
 	clients?.some((client) => client.identity === undefined) ?? false

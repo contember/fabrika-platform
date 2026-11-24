@@ -38,12 +38,15 @@ export { ghRepoExists, hasGhCli } from './gh'
 export { action, detail, fail, info, ok, step, url, warn } from './log'
 export {
 	type IamOAuthConfig,
+	type IdentityAppReconcileCall,
 	type IdentityAppSchema,
 	identityAppSchemas,
+	type IdentityAppsReconcile,
 	mcpAuthoringOn,
 	type McpClient,
 	parseMcpClientsJson,
 	platformIamOAuthConfig,
+	reconcileIdentityApps,
 } from './mcp'
 export { type CommandEnv, describeArgument, readEnv, readFlag, requiredSetting, setting, shellWord } from './options'
 export { assertPinnedTag } from './pin'

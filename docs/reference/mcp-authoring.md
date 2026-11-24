@@ -457,7 +457,14 @@ against IAM's JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). 
   it admits.
 
 Registering only identity-only clients leaves MCP authoring off: no `/mcp` row is published and no authoring resource
-is served. It needs `https`, like every client. Locally, `FABRIKA_LOCAL_MCP_CLIENTS_JSON` takes the same entries and
+is served. It needs `https`, like every client.
+
+**On Cloudflare** the same variable in the installation's GitHub Environment registers identity-only clients. MCP
+authoring is not supported on Cloudflare yet, so the deploy refuses any other entry as not supported yet, before it
+deploys anything.
+The scaffolded `platform.yml` passes it to the IAM stage, which writes it into IAM's `OAUTH_CONFIG`, and to the
+control-plane stage, which reconciles the roles after IAM's own vocabulary. A workflow generated before this release
+does not pass it: bump `fabrika.ref`, regenerate the workflow, then set the variable and run `platform`. Locally, `FABRIKA_LOCAL_MCP_CLIENTS_JSON` takes the same entries and
 `local:up` reconciles their roles.
 
 **Authoring.** Without `identity`, the kind is a label: IAM treats the client as any other, so it gets what they get.
