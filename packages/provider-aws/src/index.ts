@@ -17,12 +17,15 @@ export {
 } from './codecs'
 export {
 	AWS_KEPT_IMAGES,
+	AWS_KEPT_SECRET_RUNS,
 	AWS_TASK_CPU,
 	AWS_TASK_MEMORY,
 	type AwsControlClients,
 	type AwsControlProviderOptions,
-	awsEnvironmentParameter,
+	type AwsEnvironmentResources,
+	awsEnvironmentResources,
 	type AwsExpiringCredentialSource,
+	awsSecretParameter,
 	type AwsSourcePort,
 	type AwsSourceRepository,
 	awsSourceRepository,

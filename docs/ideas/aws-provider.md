@@ -307,16 +307,28 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    its end under the application's migration lock, which a later deploy's migration waits for. Not yet
    relayed: the service's own events during the rollout (`describeService` reads them).
 9. **`src/control.ts`** (built, first part): the `ControlProvider`'s `resolveSource`, `deploy`, `cancel` and
-   `reconcile` (the last two through the shared run). Until step 10 the target names the resources a deploy uses (the
-   sources bucket, the build project, the repository, the parameter path, the log group, the task and execution
-   roles), and a contract with a database, jobs or files is refused before any call, as is a dev environment. The
-   secrets and managed credentials are written to Parameter Store under `<parameterPath>/env/` before the steps and
-   replaced in place, so a task of the running revision that starts before the update reads the new values; a name no
-   longer handed is deleted after a successful rollout. Tasks get fixed sizes (`AWS_TASK_CPU`, `AWS_TASK_MEMORY`), the
-   build has no SPA commands, no source maps and no runtime packages. The build's URL is signed with a fresh read of
-   the container credentials, and a set that expires before it fails the run before the build. Not yet: `secrets`
-   (`PutParameter`, `DeleteParameter` per request), `declaredVariables`, `normalizeRegistration`, `lockfileRefusal`,
-   the `backupBeforeMigrations` snapshot. No `devSandboxes`, `dataOperations` or `authoring` in the first version.
+   `reconcile` (the last two through the shared run), and `validateAccess`, which refuses before publication a contract
+   with a database, jobs or files; `deploy` refuses it again before any call, as it does a dev environment.
+   - **Names.** The target names only what the installation shares: account, region, cluster, sources bucket, build
+     project (until step 10 creates them). Every resource of one environment is derived from its application id and
+     environment (`awsEnvironmentResources`), never registered, so no registration can aim a deploy, which Control
+     signs with its own role, at another environment's resources: the service `<app>_<env>`, the repository
+     `fabrika/apps/<app>/<env>`, the parameter path and log group `/fabrika/apps/<app>/<env>`, the roles
+     `role/fabrika/apps/<app>_<env>_task` and `…_execution`. An id or name holds no `_`, `/` or `.`, so no two
+     environments derive one name. In the shared bucket an environment's archives live under `sources/<app>/<env>/`;
+     a build start overrides only the buildspec, its variables (the derived repository, the run's URL parameter under
+     the environment's path) and the timeouts, never the project's role, image or source.
+   - **Secrets.** The secrets and managed credentials are the run's own parameters (`<path>/env/<runId>.<NAME>`),
+     written before the steps, so no write touches a parameter a live revision reads. A run that fails before it asked
+     for the update deletes its own; a successful one deletes those of every earlier run but the newest
+     `AWS_KEPT_SECRET_RUNS` (2), which a rollback's revision may read. Run ids are UUIDv7, whose text order is their
+     time order.
+   - **Limits.** Tasks get fixed sizes (`AWS_TASK_CPU`, `AWS_TASK_MEMORY`); the build has no SPA commands, no source
+     maps and no runtime packages. The build's URL is signed with a fresh read of the container credentials, and a set
+     that expires before it fails the run before the build.
+   - **Not yet:** `secrets` (`PutParameter`, `DeleteParameter` per request), `declaredVariables`,
+     `normalizeRegistration`, `lockfileRefusal`, the `backupBeforeMigrations` snapshot. No `devSandboxes`,
+     `dataOperations` or `authoring` in the first version.
 10. **`src/namespace/`**: the namespace stack (security groups, the Service Connect namespace, the proxy service, the
     ALB rule and certificate; for `full` an RDS instance), the database per application in the shared instance for
     `cheap`, `claimedResources` from the stack, and the proxy manifest carried in the proxy's build as on Zerops
@@ -326,7 +338,22 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     answering a deleted stack), never from that error.
 11. **`src/installation/`**: the CloudFormation template rendered from the installation model (N9), `platform install`,
     `plan`, `deploy`, `upgrade` and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the
-    sidecar workflow, and an operator guide.
+    sidecar workflow, and an operator guide. Control's role is scoped by the prefixes step 9 derives its names under,
+    so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
+    - ECS: `UpdateService`, `DescribeServices`, the service deployment and revision reads, `RunTask`, `DescribeTasks`
+      on `service/<cluster>/*` and `task/<cluster>/*`; `RegisterTaskDefinition` (no resource scope in ECS), with
+      `iam:PassRole` only on `role/fabrika/apps/*` and the condition `iam:PassedToService = ecs-tasks.amazonaws.com`.
+    - ECR: the repository calls on `repository/fabrika/apps/*`.
+    - SSM: `PutParameter`, `DeleteParameter`, `DescribeParameters` on `parameter/fabrika/apps/*`.
+    - CodeBuild: `StartBuild`, `BatchGetBuilds`, `StopBuild`, `ListBuildsForProject` on the one build project.
+    - CloudWatch Logs: the reads on `log-group:/fabrika/apps/*` and the build project's group.
+    - S3: `PutObject`, the multipart calls and `GetObject` (the presigned read) on `<bucket>/sources/*`.
+
+    **Open, before an installation runs untrusted applications:** one build project serves every application, and an
+    application's own build steps run with that project's role, which must reach every repository and every run's URL
+    parameter. An application's build could so push to another's repository or read another run's source URL while it
+    is live. Step 10 gives each application environment its own build project and a role scoped to its own repository
+    (`repository/fabrika/apps/<app>/<env>`) and parameter path; the derived names make that scope expressible.
 12. **`packages/control/src/aws/`** (built): the composition root over the neutral Bun host (`provider.ts`, the server,
     maintenance and migration entries), and `entrypoint-isolation.test.ts` extended to it. It reads
     `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (set by ECS) and `FABRIKA_AWS_BASE_IMAGE` (the pinned Bun image), and

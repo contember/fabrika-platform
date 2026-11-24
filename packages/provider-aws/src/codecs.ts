@@ -49,34 +49,19 @@ export function isHealthPath(path: string): boolean {
 const BUCKET = /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/
 /** A CodeBuild project's name. */
 const BUILD_PROJECT = /^[A-Za-z0-9][A-Za-z0-9_-]{1,254}$/
-/** An ECR repository's name: lowercase path components of letters and digits joined by `.`, `_` or `-`, at most 256. */
-const REPOSITORY = /^(?=.{2,256}$)(?:[a-z0-9]+(?:[._-][a-z0-9]+)*\/)*[a-z0-9]+(?:[._-][a-z0-9]+)*$/
-/** A Parameter Store path a deploy writes below: at most ten levels, leaving room for a run's own names under it. */
-const PARAMETER_PATH = /^(?=.{2,512}$)(?:\/[A-Za-z0-9_.-]+){1,10}$/
-/** A CloudWatch Logs group's name. */
-const LOG_GROUP = /^[A-Za-z0-9_\-/.#]{1,512}$/
-/** An IAM role's ARN, a path allowed. */
-const ROLE_ARN = new RegExp(`^arn:${PARTITION}:iam::\\d{12}:role/[A-Za-z0-9+=,.@_/-]{1,512}$`)
 
 /**
- * Where one application environment runs: its ECS service in a cluster of one account and region, and the resources a
- * deploy of it uses. Until the namespace stack creates those resources (checklist step 10), the registration names
- * them, and the deploy only uses what is named: the sources bucket, the build project, the image repository, the
- * Parameter Store path its secrets go under, the log group, and the environment's own task and execution roles
- * (ADR-0004's AWS invariant: two roles, never one).
+ * Where one application environment runs: the account, the region and the cluster, and the installation's shared
+ * sources bucket and build project, until the namespace stack creates them (checklist step 10). Nothing of one
+ * environment's own is named here: its service, repository, parameter path, log group and roles are derived from its
+ * application id and environment (`awsEnvironmentResources`), so no registration can name another environment's.
  */
 export interface AwsAppTarget {
 	readonly accountId: string
 	readonly region: string
 	readonly cluster: string
-	readonly service: string
 	readonly sourcesBucket: string
 	readonly buildProject: string
-	readonly repository: string
-	readonly parameterPath: string
-	readonly logGroup: string
-	readonly taskRoleArn: string
-	readonly executionRoleArn: string
 }
 
 /** What a registration records about a contract application: its contract alone, no manifest file. */
@@ -124,14 +109,8 @@ const appTargetSchema = z.object({
 	accountId: z.string().regex(ACCOUNT_ID),
 	region: z.string().regex(REGION),
 	cluster: z.string().regex(ECS_NAME),
-	service: z.string().regex(ECS_NAME),
 	sourcesBucket: z.string().regex(BUCKET),
 	buildProject: z.string().regex(BUILD_PROJECT),
-	repository: z.string().regex(REPOSITORY),
-	parameterPath: z.string().regex(PARAMETER_PATH),
-	logGroup: z.string().regex(LOG_GROUP),
-	taskRoleArn: z.string().regex(ROLE_ARN),
-	executionRoleArn: z.string().regex(ROLE_ARN),
 }).strict()
 
 const appArtifactSchema = z.object({

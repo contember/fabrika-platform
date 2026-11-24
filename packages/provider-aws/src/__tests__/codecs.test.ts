@@ -21,14 +21,8 @@ const target: AwsAppTarget = {
 	accountId: '123456789012',
 	region: 'eu-central-1',
 	cluster: 'fabrika-apps',
-	service: 'notes-prod',
 	sourcesBucket: 'fabrika-sources-123456789012',
 	buildProject: 'fabrika-build',
-	repository: 'fabrika/notes-prod',
-	parameterPath: '/fabrika/notes/prod',
-	logGroup: '/fabrika/notes/prod',
-	taskRoleArn: 'arn:aws:iam::123456789012:role/fabrika/notes-prod-task',
-	executionRoleArn: 'arn:aws:iam::123456789012:role/fabrika/notes-prod-execution',
 }
 const artifact: AwsAppArtifact = { contractDigest: `sha256:${'a'.repeat(64)}`, healthPath: '/healthz' }
 const namespace: AwsNamespaceTarget = { accountId: '123456789012', region: 'eu-central-1', stackName: 'fabrika-ns-acme', sizing: 'cheap' }
@@ -73,6 +67,10 @@ describe('the AWS codecs', () => {
 	test('an unknown field is refused, not dropped, and its value is not quoted', () => {
 		const message = refused(awsAppTargetCodec, { ...target, secretAccessKey: 'must-not-be-stored' })
 		expect(message).toBe('the AWS target is not one this provider reads (secretAccessKey)')
+		// An environment's own resources are derived, never registered: a target naming one is refused.
+		for (const field of ['service', 'repository', 'parameterPath', 'taskRoleArn', 'executionRoleArn']) {
+			expect(refused(awsAppTargetCodec, { ...target, [field]: 'other' })).toContain(`(${field})`)
+		}
 		expect(refused(awsRunCheckpointCodec, { buildId: checkpoint.buildId ?? '', appVersionId: 'zerops' })).toContain('(appVersionId)')
 	})
 
@@ -89,9 +87,7 @@ describe('the AWS codecs', () => {
 			{ codec: awsAppTargetCodec, payload: { ...target, region: 'Frankfurt' }, field: 'region' },
 			{ codec: awsAppTargetCodec, payload: { ...target, cluster: 'a/b' }, field: 'cluster' },
 			{ codec: awsAppTargetCodec, payload: { ...target, sourcesBucket: 'Sources_Bucket' }, field: 'sourcesBucket' },
-			{ codec: awsAppTargetCodec, payload: { ...target, repository: 'Fabrika/Notes' }, field: 'repository' },
-			{ codec: awsAppTargetCodec, payload: { ...target, parameterPath: 'fabrika/notes' }, field: 'parameterPath' },
-			{ codec: awsAppTargetCodec, payload: { ...target, taskRoleArn: 'arn:aws:iam::123456789012:user/notes' }, field: 'taskRoleArn' },
+			{ codec: awsAppTargetCodec, payload: { ...target, buildProject: 'build/project' }, field: 'buildProject' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, contractDigest: 'a'.repeat(64) }, field: 'contractDigest' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, healthPath: 'healthz' }, field: 'healthPath' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, healthPath: '/a/../b' }, field: 'healthPath' },
