@@ -77,8 +77,17 @@ credentials, use:
 bun run local:reset
 ```
 
-This command removes only the `fabrika-local` Compose volumes and
+This command removes only this checkout's Compose volumes and
 `packages/local-stack/.state/`. It then creates and starts a fresh stack.
+
+Each checkout is its own Compose project, `fabrika-local-<directory>-<hash of the
+checkout's path>` (`COMPOSE_PROJECT` in `src/compose.ts`), so a worktree's
+volumes, networks and containers never meet another worktree's credentials. The
+host ports are fixed, so one stack runs at a time: run `local:down` in the
+worktree that runs one before `local:up` in another; `docker ps` names the
+project in each container's name. Volumes from before this naming carry the
+project `fabrika-local`; once no checkout needs their data, remove them with
+`docker volume rm $(docker volume ls -q --filter label=com.docker.compose.project=fabrika-local)`.
 
 ## Local object storage
 
