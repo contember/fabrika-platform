@@ -119,13 +119,58 @@ export interface EcsService {
 	readonly deployments: readonly EcsDeployment[]
 	/** The ARN of the service's current service deployment (`currentServiceDeployment`), `null` when it names none. */
 	readonly currentDeploymentArn: string | null
+	/** The service's `awsvpc` network, which a one-off task of the application environment runs in too; `null` without one. */
+	readonly network: EcsNetwork | null
 	/** ECS's own event messages, newest first: what the run log relays. */
 	readonly events: readonly { readonly id: string; readonly at: Date; readonly message: string }[]
+}
+
+/** An `awsvpc` network: the subnets and security groups a task's interface is placed in, never a public address. */
+export interface EcsNetwork {
+	readonly subnets: readonly string[]
+	readonly securityGroups: readonly string[]
+	/**
+	 * Whether a task gets a public address (`assignPublicIp: ENABLED`): the network of a small installation, whose tasks
+	 * reach AWS's endpoints without a NAT gateway. A one-off task takes the service's own setting.
+	 */
+	readonly publicIp: boolean
 }
 
 export interface EcsServiceAddress {
 	readonly cluster: string
 	readonly service: string
+}
+
+/**
+ * One run of a one-off task (the init commands, `ecs-task.ts`): its ARN, where it stands, and once stopped, the exit
+ * code of the container it ran (`null` when that container never ran to an exit) and ECS's stop code.
+ */
+export interface EcsTaskRun {
+	readonly arn: string
+	readonly status: 'pending' | 'running' | 'stopped'
+	readonly exitCode: number | null
+	readonly stopCode: string | null
+	/**
+	 * ECS's words for why it stopped, the task's `stoppedReason` and the container's `reason` (an image that would not
+	 * pull, a secret that would not resolve), each cut at `MAX_REASON_LENGTH`: what the run log says when an init failed.
+	 */
+	readonly reason: string | null
+}
+
+/** What `runTask` starts: one Fargate task of a registered revision, with one container's command overridden. */
+export interface EcsTaskStart {
+	readonly cluster: string
+	readonly taskDefinitionArn: string
+	readonly container: string
+	readonly command: readonly string[]
+	readonly network: EcsNetwork
+	/**
+	 * The idempotency token: a repeat with the same token starts no second task, so it is unique per run and command
+	 * (the run's build token and the command's index), and a lost answer is settled by repeating the call.
+	 */
+	readonly clientToken: string
+	/** Who started the task, which `ListTasks` filters by: one value per run, so a recovery finds the run's tasks. */
+	readonly startedBy: string
 }
 
 /** A service deployment's state; a circuit breaker's rollback is a state of the same deployment. */
@@ -168,6 +213,10 @@ export interface EcsClient {
 	describeServiceDeployment(arn: string, signal?: AbortSignal): Promise<EcsServiceDeployment | null>
 	/** The service revision `arn`, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
 	describeServiceRevision(arn: string, signal?: AbortSignal): Promise<EcsServiceRevision | null>
+	/** Starts one task; a task ECS could not place (`failures`) is the error `task_not_started`. */
+	runTask(start: EcsTaskStart, signal?: AbortSignal): Promise<EcsTaskRun>
+	/** The task `arn` in `cluster`, its `container`'s exit code read; `null` when ECS answers it `MISSING`. */
+	describeTask(cluster: string, arn: string, container: string, signal?: AbortSignal): Promise<EcsTaskRun | null>
 }
 
 const SERVICE_DEPLOYMENT_STATUSES: Readonly<Record<string, EcsServiceDeploymentStatus>> = {
@@ -187,6 +236,30 @@ const SERVICE_DEPLOYMENT_ARN =
 /** A service revision's ARN: `…:service-revision/<cluster>/<service>/<id>`. */
 const SERVICE_REVISION_ARN =
 	/^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:service-revision\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,255}\/[A-Za-z0-9_-]{1,64}$/
+
+/** A subnet's and a security group's id. */
+const SUBNET = /^subnet-[0-9a-f]{8,17}$/
+const SECURITY_GROUP = /^sg-[0-9a-f]{8,17}$/
+/** A task's ARN: `…:task/<cluster>/<id>`. */
+const TASK_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:task\/[A-Za-z0-9_-]{1,255}\/[0-9a-f]{32}$/
+/** A `RunTask` idempotency token. */
+const CLIENT_TOKEN = /^[A-Za-z0-9-]{1,64}$/
+/** `startedBy`: letters, digits, hyphens and underscores, at most 128. */
+const STARTED_BY = /^[A-Za-z0-9_-]{1,128}$/
+/** The longest reason a stopped task reports, per part. */
+const MAX_REASON_LENGTH = 300
+/** A task's states, as ECS writes them; a state ECS may add later is no answer. */
+const TASK_STATUSES: Readonly<Record<string, EcsTaskRun['status']>> = {
+	PROVISIONING: 'pending',
+	PENDING: 'pending',
+	ACTIVATING: 'pending',
+	RUNNING: 'running',
+	DEACTIVATING: 'running',
+	STOPPING: 'running',
+	DEPROVISIONING: 'running',
+	STOPPED: 'stopped',
+	DELETED: 'stopped',
+}
 
 const DEPLOYMENT_STATUSES: Readonly<Record<string, EcsDeployment['status']>> = { PRIMARY: 'primary', ACTIVE: 'active', INACTIVE: 'inactive' }
 const ROLLOUT_STATES: Readonly<Record<string, EcsRolloutState>> = { IN_PROGRESS: 'in_progress', COMPLETED: 'completed', FAILED: 'failed' }
@@ -210,6 +283,24 @@ const serviceSchema = z.object({
 	).optional(),
 	events: z.array(z.object({ id: z.string(), createdAt: z.number(), message: z.string() })).optional(),
 	currentServiceDeployment: z.string().regex(SERVICE_DEPLOYMENT_ARN).optional(),
+	networkConfiguration: z.object({
+		awsvpcConfiguration: z.object({
+			subnets: z.array(z.string().regex(SUBNET)).min(1).max(16),
+			securityGroups: z.array(z.string().regex(SECURITY_GROUP)).max(5).optional(),
+			assignPublicIp: z.string().optional(),
+		}).optional(),
+	}).optional(),
+})
+const taskSchema = z.object({
+	taskArn: z.string().regex(TASK_ARN),
+	lastStatus: z.string(),
+	stopCode: z.string().optional(),
+	stoppedReason: z.string().optional(),
+	containers: z.array(z.object({ name: z.string(), exitCode: z.number().int().optional(), reason: z.string().optional() })).optional(),
+})
+const tasksSchema = z.object({
+	tasks: z.array(taskSchema).optional(),
+	failures: z.array(z.object({ arn: z.string().optional(), reason: z.string().optional() })).optional(),
 })
 const failuresSchema = z.array(z.object({ arn: z.string().optional(), reason: z.string().optional() })).optional()
 const serviceDeploymentsSchema = z.object({
@@ -325,6 +416,13 @@ function serviceOf(operation: string, raw: z.infer<typeof serviceSchema>): EcsSe
 			failedTasks: deployment.failedTasks ?? 0,
 		})),
 		currentDeploymentArn: raw.currentServiceDeployment ?? null,
+		network: (() => {
+			const awsvpc = raw.networkConfiguration?.awsvpcConfiguration
+			// ECS's default is no public address.
+			return awsvpc === undefined
+				? null
+				: { subnets: awsvpc.subnets, securityGroups: awsvpc.securityGroups ?? [], publicIp: awsvpc.assignPublicIp === 'ENABLED' }
+		})(),
 		// ECS's JSON protocol writes a timestamp as seconds since the epoch, fractions included.
 		events: (raw.events ?? []).map((event) => ({ id: event.id, at: new Date(event.createdAt * 1000), message: event.message })),
 	}
@@ -452,5 +550,75 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if ((described.failures ?? []).some((failure) => failure.arn === arn && failure.reason === 'MISSING')) return null
 			throw new AwsError(operation, 'invalid_answer', 200, null, false)
 		},
+
+		async runTask(start, signal) {
+			if (!ECS_NAME.test(start.cluster)) refuse('the cluster name')
+			if (!TASK_DEFINITION_ARN.test(start.taskDefinitionArn)) refuse('the task definition')
+			if (!ECS_NAME.test(start.container)) refuse('the container')
+			if (start.command.length === 0) refuse('the command')
+			if (!CLIENT_TOKEN.test(start.clientToken)) refuse('the client token')
+			if (!STARTED_BY.test(start.startedBy)) refuse('the starter')
+			if (start.network.subnets.length === 0 || !start.network.subnets.every((subnet) => SUBNET.test(subnet))) refuse('the subnets')
+			if (!start.network.securityGroups.every((group) => SECURITY_GROUP.test(group))) refuse('the security groups')
+			const operation = 'RunTask'
+			const answered = await json.call(
+				operation,
+				{
+					cluster: start.cluster,
+					taskDefinition: start.taskDefinitionArn,
+					launchType: 'FARGATE',
+					count: 1,
+					clientToken: start.clientToken,
+					startedBy: start.startedBy,
+					networkConfiguration: {
+						awsvpcConfiguration: {
+							subnets: [...start.network.subnets],
+							securityGroups: [...start.network.securityGroups],
+							assignPublicIp: start.network.publicIp ? 'ENABLED' : 'DISABLED',
+						},
+					},
+					overrides: { containerOverrides: [{ name: start.container, command: [...start.command] }] },
+				},
+				tasksSchema,
+				signal,
+			)
+			const tasks = answered.tasks ?? []
+			// A task ECS could not place is named in `failures` (capacity, an unknown revision): nothing runs.
+			if (tasks.length === 0 && (answered.failures ?? []).length > 0) throw new AwsError(operation, 'task_not_started', 200, null, false)
+			const [task] = tasks
+			if (tasks.length !== 1 || task === undefined) throw new AwsError(operation, 'invalid_answer', 200, null, false)
+			return taskRunOf(operation, task, start.container)
+		},
+
+		async describeTask(cluster, arn, container, signal) {
+			if (!ECS_NAME.test(cluster)) refuse('the cluster name')
+			if (!TASK_ARN.test(arn)) refuse('the task')
+			if (!ECS_NAME.test(container)) refuse('the container')
+			const operation = 'DescribeTasks'
+			const described = await json.call(operation, { cluster, tasks: [arn] }, tasksSchema, signal)
+			const found = (described.tasks ?? []).find((candidate) => candidate.taskArn === arn)
+			if (found !== undefined) return taskRunOf(operation, found, container)
+			if ((described.failures ?? []).some((failure) => failure.arn === arn && failure.reason === 'MISSING')) return null
+			throw new AwsError(operation, 'invalid_answer', 200, null, false)
+		},
+	}
+}
+
+/** A task as the deploy reads it; a state ECS may add later, or a stopped task without the container, is no answer. */
+function taskRunOf(operation: string, task: z.infer<typeof taskSchema>, container: string): EcsTaskRun {
+	const status = TASK_STATUSES[task.lastStatus]
+	if (status === undefined) throw new AwsError(operation, 'invalid_answer', 200, null, false)
+	const named = (task.containers ?? []).filter((candidate) => candidate.name === container)
+	if (named.length > 1 || (status === 'stopped' && named.length === 0)) throw new AwsError(operation, 'invalid_answer', 200, null, false)
+	const reasons: string[] = []
+	for (const reason of [task.stoppedReason, named[0]?.reason]) {
+		if (reason !== undefined && reason !== '') reasons.push(reason)
+	}
+	return {
+		arn: task.taskArn,
+		status,
+		exitCode: named[0]?.exitCode ?? null,
+		stopCode: task.stopCode ?? null,
+		reason: reasons.length === 0 ? null : reasons.map((reason) => reason.slice(0, MAX_REASON_LENGTH)).join('; '),
 	}
 }

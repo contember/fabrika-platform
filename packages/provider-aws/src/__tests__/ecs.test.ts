@@ -58,6 +58,7 @@ const read: EcsService = {
 	name: 'notes-prod',
 	arn: service.serviceArn,
 	status: 'active',
+	network: null,
 	taskDefinitionArn: TASK_DEFINITION,
 	deployments: [
 		{
@@ -220,6 +221,112 @@ describe('ecsClient', () => {
 		}
 		await expect(ecs.describeServiceDeployment('ecs-svc/1')).rejects.toThrow('the service deployment')
 		await expect(ecs.describeServiceRevision(DEPLOYMENT)).rejects.toThrow('the service revision')
+	})
+
+	test("reads the service's awsvpc network, which a one-off task reuses", async () => {
+		const networked = {
+			...service,
+			networkConfiguration: {
+				awsvpcConfiguration: { subnets: ['subnet-0123456789abcdef0'], securityGroups: ['sg-0123456789abcdef0'], assignPublicIp: 'DISABLED' },
+			},
+		}
+		const { options } = fakeAws(ECS, { DescribeServices: () => ({ services: [networked] }) })
+		expect((await ecsClient(options).describeService(address))?.network).toEqual({
+			subnets: ['subnet-0123456789abcdef0'],
+			securityGroups: ['sg-0123456789abcdef0'],
+			publicIp: false,
+		})
+		// A small installation's network gives each task a public address, and a one-off task takes the same.
+		const exposed = {
+			...networked,
+			networkConfiguration: { awsvpcConfiguration: { subnets: ['subnet-0123456789abcdef0'], assignPublicIp: 'ENABLED' } },
+		}
+		const publicNetwork = fakeAws(ECS, { DescribeServices: () => ({ services: [exposed] }) })
+		expect((await ecsClient(publicNetwork.options).describeService(address))?.network).toEqual({
+			subnets: ['subnet-0123456789abcdef0'],
+			securityGroups: [],
+			publicIp: true,
+		})
+	})
+
+	test('runs one Fargate task of a revision with one command overridden, privately, and reads it back', async () => {
+		const TASK = `arn:aws:ecs:eu-central-1:123456789012:task/fabrika-apps/${'a'.repeat(32)}`
+		const network = { subnets: ['subnet-0123456789abcdef0'], securityGroups: ['sg-0123456789abcdef0'], publicIp: false }
+		const { options, calls } = fakeAws(ECS, {
+			RunTask: () => ({ tasks: [{ taskArn: TASK, lastStatus: 'PROVISIONING', containers: [{ name: 'init' }] }], failures: [] }),
+			DescribeTasks: () => ({
+				tasks: [{
+					taskArn: TASK,
+					lastStatus: 'STOPPED',
+					stopCode: 'EssentialContainerExited',
+					stoppedReason: 'Essential container in task exited',
+					containers: [{ name: 'init', exitCode: 0, reason: 'x'.repeat(400) }],
+				}],
+			}),
+		})
+		const ecs = ecsClient(options)
+		const start = {
+			cluster: 'fabrika-apps',
+			taskDefinitionArn: TASK_DEFINITION,
+			container: 'init',
+			command: ['sh', '/app/fabrika/migrate.generated.sh'],
+			network,
+			clientToken: 'token-init-1',
+			startedBy: 'fabrika-run-token',
+		}
+		expect(await ecs.runTask(start)).toEqual({ arn: TASK, status: 'pending', exitCode: null, stopCode: null, reason: null })
+		expect(calls[0]?.body).toEqual({
+			cluster: 'fabrika-apps',
+			taskDefinition: TASK_DEFINITION,
+			launchType: 'FARGATE',
+			count: 1,
+			clientToken: 'token-init-1',
+			startedBy: 'fabrika-run-token',
+			networkConfiguration: {
+				awsvpcConfiguration: { subnets: network.subnets, securityGroups: network.securityGroups, assignPublicIp: 'DISABLED' },
+			},
+			overrides: { containerOverrides: [{ name: 'init', command: ['sh', '/app/fabrika/migrate.generated.sh'] }] },
+		})
+		// Both reasons, each cut at 300 characters.
+		expect(await ecs.describeTask('fabrika-apps', TASK, 'init')).toEqual({
+			arn: TASK,
+			status: 'stopped',
+			exitCode: 0,
+			stopCode: 'EssentialContainerExited',
+			reason: `Essential container in task exited; ${'x'.repeat(300)}`,
+		})
+		// A service with public addresses gives its one-off tasks one too.
+		const exposed = fakeAws(ECS, { RunTask: () => ({ tasks: [{ taskArn: TASK, lastStatus: 'PENDING' }] }) })
+		await ecsClient(exposed.options).runTask({ ...start, network: { ...network, publicIp: true } })
+		expect(JSON.stringify(exposed.calls[0]?.body)).toContain('"assignPublicIp":"ENABLED"')
+		expect(calls[1]?.body).toEqual({ cluster: 'fabrika-apps', tasks: [TASK] })
+
+		const unplaced = fakeAws(ECS, { RunTask: () => ({ tasks: [], failures: [{ arn: TASK_DEFINITION, reason: 'RESOURCE:MEMORY' }] }) })
+		await expect(ecsClient(unplaced.options).runTask(start)).rejects.toMatchObject({ code: 'task_not_started' })
+		const missing = fakeAws(ECS, { DescribeTasks: () => ({ tasks: [], failures: [{ arn: TASK, reason: 'MISSING' }] }) })
+		expect(await ecsClient(missing.options).describeTask('fabrika-apps', TASK, 'init')).toBeNull()
+		// A state ECS may add later, or a stopped task without the container it ran, is no answer.
+		for (
+			const task of [{ taskArn: TASK, lastStatus: 'PAUSED' }, { taskArn: TASK, lastStatus: 'STOPPED', containers: [{ name: 'other', exitCode: 0 }] }]
+		) {
+			const odd = fakeAws(ECS, { DescribeTasks: () => ({ tasks: [task] }) })
+			await expect(ecsClient(odd.options).describeTask('fabrika-apps', TASK, 'init')).rejects.toMatchObject({ code: 'invalid_answer' })
+		}
+		const refused = fakeAws(ECS, {})
+		const client = ecsClient(refused.options)
+		for (
+			const change of [
+				{ clientToken: 'x'.repeat(65) },
+				{ startedBy: 'has space' },
+				{ command: [] },
+				{ network: { subnets: [], securityGroups: [], publicIp: false } },
+				{ network: { subnets: ['subnet-x'], securityGroups: [], publicIp: false } },
+			]
+		) {
+			await expect(client.runTask({ ...start, ...change })).rejects.toThrow('ECS')
+		}
+		await expect(client.describeTask('fabrika-apps', 'not-an-arn', 'init')).rejects.toThrow('the task')
+		expect(refused.calls).toEqual([])
 	})
 
 	test('a state ECS may add later is an invalid answer, never a guess', async () => {
