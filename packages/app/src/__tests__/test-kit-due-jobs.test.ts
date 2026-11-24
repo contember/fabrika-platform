@@ -17,15 +17,10 @@ import { z } from 'zod/v4'
 import { runFixedStatement, sessionOf } from '../../../db/src/database'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
+import { dailyAhead } from './fixtures/cron-ahead'
 
 const MINUTE = 60_000
 const HOUR = 60 * MINUTE
-
-/** A daily cron fire `hoursAhead` from now, so its next fire lies just under that far ahead. */
-function dailyAhead(hoursAhead: number): string {
-	const fire = new Date(Date.now() + hoursAhead * HOUR)
-	return `${fire.getUTCMinutes()} ${fire.getUTCHours()} * * *`
-}
 
 const app = defineApp(vocabulary, tables)
 

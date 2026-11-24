@@ -37,6 +37,7 @@ import { admitInvocation, runGated } from '../implement/dispatch'
 import type { JobClock } from '../jobs/runner'
 import type { NotesTable } from './cloudflare-fixture/src/db/schema.generated'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
+import { dailyAhead } from './fixtures/cron-ahead'
 import {
 	endpointHeaderFor,
 	frameworkEnvFor,
@@ -134,7 +135,7 @@ const notes = app.group({ callers: ['human'] }, (r) => ({
 }))
 
 // Daily, twelve hours from the time this file loads, so the schedule never comes due on its own while the file runs.
-const slow = app.cron(`0 ${(new Date().getUTCHours() + 12) % 24} * * *`, { actions: ['notes.read'] }).handle(async ({ ctx }) => {
+const slow = app.cron(dailyAhead(12), { actions: ['notes.read'] }).handle(async ({ ctx }) => {
 	await holds.job?.(ctx.signal)
 })
 

@@ -22,6 +22,7 @@ import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import { type ApplicationState, type ApplicationStorage, createContractWorker, FabrikaApplication } from '../cloudflare'
 import { TICK_HEADER } from '../cloudflare/application'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
+import { dailyAhead } from './fixtures/cron-ahead'
 import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
 
 interface DealsTable {
@@ -84,7 +85,7 @@ const claims: { limit: number; then: string | null; claimed: string[][] } = { li
 
 // Daily, so a claimed row's backoff (the schedule's period) lies a day ahead of every row a test places; at twelve
 // hours from the time this file loads, so the schedule never comes due on its own while the file runs.
-const render = app.cron(`0 ${(new Date().getUTCHours() + 12) % 24} * * *`, { actions: ['reports.render'] }).handle(async ({ ctx }) => {
+const render = app.cron(dailyAhead(12), { actions: ['reports.render'] }).handle(async ({ ctx }) => {
 	const queue = ctx.db.over(ctx.within('reports.render', 'deal')).report_requests
 	const rows = await queue.claim({ limit: claims.limit, where: [['kind', '=', 'summary'], ['result', 'is', null]] })
 	claims.claimed.push(rows.map((row) => row.id).sort())
@@ -454,10 +455,13 @@ describe('a claim re-arms its job under the Cloudflare alarm', () => {
 			sqliteRows(database, [...rowsAt(now), { id: 'r7', kind: 'summary', due: now - MINUTE }])
 			claims.limit = 1
 			kickNow(database)
+			const before = Date.now()
 			await fire()
 			expect(claims.claimed).toEqual([['r1']])
 			const [full] = sqliteWakes(database, 'claim')
-			expect(full?.due_at).toBeLessThanOrEqual(Date.now())
+			// A full claim re-arms at the database's now + 1 ms: after the fire started, and at most a millisecond past now.
+			expect(full?.due_at).toBeGreaterThan(before)
+			expect(full?.due_at).toBeLessThanOrEqual(Date.now() + 1)
 			expect(alarm.scheduled).toBe(full?.due_at ?? Number.NaN)
 			claims.limit = 5
 			await fire()
