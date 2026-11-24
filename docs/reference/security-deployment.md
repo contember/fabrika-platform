@@ -54,8 +54,10 @@ flowchart TD
 | 19 | Readiness (Zerops)                        | The contract's health endpoint answers within 180 s before Zerops activates the version                                                                                                                                                                                                     | [`provider-zerops/src/execution.ts`](../../packages/provider-zerops/src/execution.ts)                                                                                                                                                                                                                 | Version not activated, run fails                                               | Built; Cloudflare has no equivalent |
 | 20 | IAM schema                                | Written from the approved snapshot, never from the build artifact                                                                                                                                                                                                                           | [`run-lifecycle.ts`](../../packages/control/src/run-lifecycle.ts) (`applyApprovedSchema`)                                                                                                                                                                                                             | Run fails; the new version is already live                                     | Built                               |
 
-Gate 18 guards against mistakes, not a hostile build: on Cloudflare the authored `pipeline.build` runs before it, and a
-tamper-proof build needs a sandboxed runner ([`packages/provider-cloudflare/CLAUDE.md`](../../packages/provider-cloudflare/CLAUDE.md)).
+Gate 18 guards against mistakes, not a hostile build: the authored `pipeline.build` and the application's tests run
+before it in the same build. On Cloudflare that build runs in the runner's build sandbox, as its own user with no
+credential, no secret and no network after the install, and the deploy that holds the account token runs none of its
+code ([ADR-0086](../decisions/0086-a-cloudflare-deploy-builds-without-credentials-and-deploys-without-repository-code.md)).
 The build has no database, so a Postgres-backed application test skips there
 ([backlog 232](../backlog/232-the-platform-build-runs-no-postgres-backed-test.md)).
 
@@ -138,14 +140,14 @@ each keeps the `@fabrika/*` release it pins until it raises the pin and deploys
 
 ## Decided, not built
 
-| What                                                                            | Where it is decided                                                                                    |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| The access diff posted as a GitHub check on a pull request                      | [spec](../specs/access-diff-as-a-github-check.md)                                                      |
-| A release watch window after a deploy, with a manual rollback                   | [spec](../specs/release-watch-window-and-rollback.md)                                                  |
-| Automatic rollback of a suspect release                                         | [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)                               |
-| Browser journeys as a stage gate and production checks                          | [backlog 268](../backlog/268-opice-journeys-as-a-stage-gate-and-production-checks.md)                  |
-| Destructive-change rules for application migrations                             | [backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)                 |
-| A Cloudflare deploy that keeps the account token away from repository code      | [backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md) |
-| A redelivered push webhook that does not create a second run                    | [backlog 204](../backlog/204-a-redelivered-push-webhook-creates-a-second-run.md)                       |
-| An environment's default branch checked like a trigger ref                      | [backlog 297](../backlog/297-control-accepts-any-default-branch.md)                                    |
-| A narrowing applied to IAM when its reconcile fails after the version went live | [backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)                   |
+| What                                                                                 | Where it is decided                                                                                    |
+| ------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| The access diff posted as a GitHub check on a pull request                           | [spec](../specs/access-diff-as-a-github-check.md)                                                      |
+| A release watch window after a deploy, with a manual rollback                        | [spec](../specs/release-watch-window-and-rollback.md)                                                  |
+| Automatic rollback of a suspect release                                              | [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)                               |
+| Browser journeys as a stage gate and production checks                               | [backlog 268](../backlog/268-opice-journeys-as-a-stage-gate-and-production-checks.md)                  |
+| Destructive-change rules for application migrations                                  | [backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)                 |
+| A Cloudflare app that owns its resource names, and a token narrower than the account | [backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md) |
+| A redelivered push webhook that does not create a second run                         | [backlog 204](../backlog/204-a-redelivered-push-webhook-creates-a-second-run.md)                       |
+| An environment's default branch checked like a trigger ref                           | [backlog 297](../backlog/297-control-accepts-any-default-branch.md)                                    |
+| A narrowing applied to IAM when its reconcile fails after the version went live      | [backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)                   |

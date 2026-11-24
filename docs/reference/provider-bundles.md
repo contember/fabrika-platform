@@ -543,7 +543,11 @@ fabrika app deploy --env=<env> [--config=<path>] [--dry-run]
 
 The provider is inferred from the provider-authored config. The
 `fabrika-cloudflare-executor` binary is internal to the runner container; it is
-not an operator surface.
+not an operator surface. In the runner it runs twice: `build` in the build sandbox, as a user of its own with no
+credential, no secret and no network after the install, and `deploy --bundle` on the runner's copy of that build's
+output, which holds the account token and runs none of the repository's code
+([ADR-0086](../decisions/0086-a-cloudflare-deploy-builds-without-credentials-and-deploys-without-repository-code.md)).
+`fabrika app deploy` on a laptop keeps the single process.
 
 Zerops apps import their config surface from `@fabrika/provider-zerops`:
 

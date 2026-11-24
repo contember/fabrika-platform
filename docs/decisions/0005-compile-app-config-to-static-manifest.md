@@ -74,6 +74,10 @@ Worker isolate's memory. The encoding is a storage form; the digest is the same.
 build. Control runs it on the files of each deploy run's pinned commit, which `contractReaderInputs` names
 (work unit B6, [ADR-0050](0050-approved-access.md)).
 
+On Cloudflare the deploy's own hand-off follows the same rule: the config is evaluated in a build sandbox that holds
+no credential, and the process that holds the account token reads the build's manifest without importing anything
+([ADR-0086](0086-a-cloudflare-deploy-builds-without-credentials-and-deploys-without-repository-code.md)).
+
 ## Consequences
 
 - The control plane's input becomes data it can validate, diff, store, and show in
