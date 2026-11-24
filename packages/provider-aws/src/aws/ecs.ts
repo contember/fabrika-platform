@@ -129,6 +129,11 @@ export interface EcsService {
 export interface EcsNetwork {
 	readonly subnets: readonly string[]
 	readonly securityGroups: readonly string[]
+	/**
+	 * Whether a task gets a public address (`assignPublicIp: ENABLED`): the network of a small installation, whose tasks
+	 * reach AWS's endpoints without a NAT gateway. A one-off task takes the service's own setting.
+	 */
+	readonly publicIp: boolean
 }
 
 export interface EcsServiceAddress {
@@ -145,6 +150,11 @@ export interface EcsTaskRun {
 	readonly status: 'pending' | 'running' | 'stopped'
 	readonly exitCode: number | null
 	readonly stopCode: string | null
+	/**
+	 * ECS's words for why it stopped, the task's `stoppedReason` and the container's `reason` (an image that would not
+	 * pull, a secret that would not resolve), each cut at `MAX_REASON_LENGTH`: what the run log says when an init failed.
+	 */
+	readonly reason: string | null
 }
 
 /** What `runTask` starts: one Fargate task of a registered revision, with one container's command overridden. */
@@ -154,8 +164,13 @@ export interface EcsTaskStart {
 	readonly container: string
 	readonly command: readonly string[]
 	readonly network: EcsNetwork
-	/** The idempotency token: a repeat with the same token starts no second task. */
+	/**
+	 * The idempotency token: a repeat with the same token starts no second task, so it is unique per run and command
+	 * (the run's build token and the command's index), and a lost answer is settled by repeating the call.
+	 */
 	readonly clientToken: string
+	/** Who started the task, which `ListTasks` filters by: one value per run, so a recovery finds the run's tasks. */
+	readonly startedBy: string
 }
 
 /** A service deployment's state; a circuit breaker's rollback is a state of the same deployment. */
@@ -229,6 +244,10 @@ const SECURITY_GROUP = /^sg-[0-9a-f]{8,17}$/
 const TASK_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:task\/[A-Za-z0-9_-]{1,255}\/[0-9a-f]{32}$/
 /** A `RunTask` idempotency token. */
 const CLIENT_TOKEN = /^[A-Za-z0-9-]{1,64}$/
+/** `startedBy`: letters, digits, hyphens and underscores, at most 128. */
+const STARTED_BY = /^[A-Za-z0-9_-]{1,128}$/
+/** The longest reason a stopped task reports, per part. */
+const MAX_REASON_LENGTH = 300
 /** A task's states, as ECS writes them; a state ECS may add later is no answer. */
 const TASK_STATUSES: Readonly<Record<string, EcsTaskRun['status']>> = {
 	PROVISIONING: 'pending',
@@ -276,7 +295,8 @@ const taskSchema = z.object({
 	taskArn: z.string().regex(TASK_ARN),
 	lastStatus: z.string(),
 	stopCode: z.string().optional(),
-	containers: z.array(z.object({ name: z.string(), exitCode: z.number().int().optional() })).optional(),
+	stoppedReason: z.string().optional(),
+	containers: z.array(z.object({ name: z.string(), exitCode: z.number().int().optional(), reason: z.string().optional() })).optional(),
 })
 const tasksSchema = z.object({
 	tasks: z.array(taskSchema).optional(),
@@ -398,7 +418,10 @@ function serviceOf(operation: string, raw: z.infer<typeof serviceSchema>): EcsSe
 		currentDeploymentArn: raw.currentServiceDeployment ?? null,
 		network: (() => {
 			const awsvpc = raw.networkConfiguration?.awsvpcConfiguration
-			return awsvpc === undefined ? null : { subnets: awsvpc.subnets, securityGroups: awsvpc.securityGroups ?? [] }
+			// ECS's default is no public address.
+			return awsvpc === undefined
+				? null
+				: { subnets: awsvpc.subnets, securityGroups: awsvpc.securityGroups ?? [], publicIp: awsvpc.assignPublicIp === 'ENABLED' }
 		})(),
 		// ECS's JSON protocol writes a timestamp as seconds since the epoch, fractions included.
 		events: (raw.events ?? []).map((event) => ({ id: event.id, at: new Date(event.createdAt * 1000), message: event.message })),
@@ -534,6 +557,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (!ECS_NAME.test(start.container)) refuse('the container')
 			if (start.command.length === 0) refuse('the command')
 			if (!CLIENT_TOKEN.test(start.clientToken)) refuse('the client token')
+			if (!STARTED_BY.test(start.startedBy)) refuse('the starter')
 			if (start.network.subnets.length === 0 || !start.network.subnets.every((subnet) => SUBNET.test(subnet))) refuse('the subnets')
 			if (!start.network.securityGroups.every((group) => SECURITY_GROUP.test(group))) refuse('the security groups')
 			const operation = 'RunTask'
@@ -545,8 +569,13 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 					launchType: 'FARGATE',
 					count: 1,
 					clientToken: start.clientToken,
+					startedBy: start.startedBy,
 					networkConfiguration: {
-						awsvpcConfiguration: { subnets: [...start.network.subnets], securityGroups: [...start.network.securityGroups], assignPublicIp: 'DISABLED' },
+						awsvpcConfiguration: {
+							subnets: [...start.network.subnets],
+							securityGroups: [...start.network.securityGroups],
+							assignPublicIp: start.network.publicIp ? 'ENABLED' : 'DISABLED',
+						},
 					},
 					overrides: { containerOverrides: [{ name: start.container, command: [...start.command] }] },
 				},
@@ -581,5 +610,15 @@ function taskRunOf(operation: string, task: z.infer<typeof taskSchema>, containe
 	if (status === undefined) throw new AwsError(operation, 'invalid_answer', 200, null, false)
 	const named = (task.containers ?? []).filter((candidate) => candidate.name === container)
 	if (named.length > 1 || (status === 'stopped' && named.length === 0)) throw new AwsError(operation, 'invalid_answer', 200, null, false)
-	return { arn: task.taskArn, status, exitCode: named[0]?.exitCode ?? null, stopCode: task.stopCode ?? null }
+	const reasons: string[] = []
+	for (const reason of [task.stoppedReason, named[0]?.reason]) {
+		if (reason !== undefined && reason !== '') reasons.push(reason)
+	}
+	return {
+		arn: task.taskArn,
+		status,
+		exitCode: named[0]?.exitCode ?? null,
+		stopCode: task.stopCode ?? null,
+		reason: reasons.length === 0 ? null : reasons.map((reason) => reason.slice(0, MAX_REASON_LENGTH)).join('; '),
+	}
 }

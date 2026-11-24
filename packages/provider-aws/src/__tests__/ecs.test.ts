@@ -234,16 +234,34 @@ describe('ecsClient', () => {
 		expect((await ecsClient(options).describeService(address))?.network).toEqual({
 			subnets: ['subnet-0123456789abcdef0'],
 			securityGroups: ['sg-0123456789abcdef0'],
+			publicIp: false,
+		})
+		// A small installation's network gives each task a public address, and a one-off task takes the same.
+		const exposed = {
+			...networked,
+			networkConfiguration: { awsvpcConfiguration: { subnets: ['subnet-0123456789abcdef0'], assignPublicIp: 'ENABLED' } },
+		}
+		const publicNetwork = fakeAws(ECS, { DescribeServices: () => ({ services: [exposed] }) })
+		expect((await ecsClient(publicNetwork.options).describeService(address))?.network).toEqual({
+			subnets: ['subnet-0123456789abcdef0'],
+			securityGroups: [],
+			publicIp: true,
 		})
 	})
 
 	test('runs one Fargate task of a revision with one command overridden, privately, and reads it back', async () => {
 		const TASK = `arn:aws:ecs:eu-central-1:123456789012:task/fabrika-apps/${'a'.repeat(32)}`
-		const network = { subnets: ['subnet-0123456789abcdef0'], securityGroups: ['sg-0123456789abcdef0'] }
+		const network = { subnets: ['subnet-0123456789abcdef0'], securityGroups: ['sg-0123456789abcdef0'], publicIp: false }
 		const { options, calls } = fakeAws(ECS, {
 			RunTask: () => ({ tasks: [{ taskArn: TASK, lastStatus: 'PROVISIONING', containers: [{ name: 'init' }] }], failures: [] }),
 			DescribeTasks: () => ({
-				tasks: [{ taskArn: TASK, lastStatus: 'STOPPED', stopCode: 'EssentialContainerExited', containers: [{ name: 'init', exitCode: 0 }] }],
+				tasks: [{
+					taskArn: TASK,
+					lastStatus: 'STOPPED',
+					stopCode: 'EssentialContainerExited',
+					stoppedReason: 'Essential container in task exited',
+					containers: [{ name: 'init', exitCode: 0, reason: 'x'.repeat(400) }],
+				}],
 			}),
 		})
 		const ecs = ecsClient(options)
@@ -254,23 +272,33 @@ describe('ecsClient', () => {
 			command: ['sh', '/app/fabrika/migrate.generated.sh'],
 			network,
 			clientToken: 'token-init-1',
+			startedBy: 'fabrika-run-token',
 		}
-		expect(await ecs.runTask(start)).toEqual({ arn: TASK, status: 'pending', exitCode: null, stopCode: null })
+		expect(await ecs.runTask(start)).toEqual({ arn: TASK, status: 'pending', exitCode: null, stopCode: null, reason: null })
 		expect(calls[0]?.body).toEqual({
 			cluster: 'fabrika-apps',
 			taskDefinition: TASK_DEFINITION,
 			launchType: 'FARGATE',
 			count: 1,
 			clientToken: 'token-init-1',
-			networkConfiguration: { awsvpcConfiguration: { ...network, assignPublicIp: 'DISABLED' } },
+			startedBy: 'fabrika-run-token',
+			networkConfiguration: {
+				awsvpcConfiguration: { subnets: network.subnets, securityGroups: network.securityGroups, assignPublicIp: 'DISABLED' },
+			},
 			overrides: { containerOverrides: [{ name: 'init', command: ['sh', '/app/fabrika/migrate.generated.sh'] }] },
 		})
+		// Both reasons, each cut at 300 characters.
 		expect(await ecs.describeTask('fabrika-apps', TASK, 'init')).toEqual({
 			arn: TASK,
 			status: 'stopped',
 			exitCode: 0,
 			stopCode: 'EssentialContainerExited',
+			reason: `Essential container in task exited; ${'x'.repeat(300)}`,
 		})
+		// A service with public addresses gives its one-off tasks one too.
+		const exposed = fakeAws(ECS, { RunTask: () => ({ tasks: [{ taskArn: TASK, lastStatus: 'PENDING' }] }) })
+		await ecsClient(exposed.options).runTask({ ...start, network: { ...network, publicIp: true } })
+		expect(JSON.stringify(exposed.calls[0]?.body)).toContain('"assignPublicIp":"ENABLED"')
 		expect(calls[1]?.body).toEqual({ cluster: 'fabrika-apps', tasks: [TASK] })
 
 		const unplaced = fakeAws(ECS, { RunTask: () => ({ tasks: [], failures: [{ arn: TASK_DEFINITION, reason: 'RESOURCE:MEMORY' }] }) })
@@ -287,9 +315,13 @@ describe('ecsClient', () => {
 		const refused = fakeAws(ECS, {})
 		const client = ecsClient(refused.options)
 		for (
-			const change of [{ clientToken: 'x'.repeat(65) }, { command: [] }, { network: { subnets: [], securityGroups: [] } }, {
-				network: { subnets: ['subnet-x'], securityGroups: [] },
-			}]
+			const change of [
+				{ clientToken: 'x'.repeat(65) },
+				{ startedBy: 'has space' },
+				{ command: [] },
+				{ network: { subnets: [], securityGroups: [], publicIp: false } },
+				{ network: { subnets: ['subnet-x'], securityGroups: [], publicIp: false } },
+			]
 		) {
 			await expect(client.runTask({ ...start, ...change })).rejects.toThrow('ECS')
 		}
