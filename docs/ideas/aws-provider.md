@@ -306,10 +306,17 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    a crash deletes it. A cancelled or abandoned run does not stop an init task that is running: the migration runs to
    its end under the application's migration lock, which a later deploy's migration waits for. Not yet
    relayed: the service's own events during the rollout (`describeService` reads them).
-9. **`src/control.ts`**: the `ControlProvider`: `deploy`, `reconcile` (poll the step the checkpoint reached), `cancel`
-   (stop the build; once the service is updated, cancellation never implies rollback), `secrets` (`PutParameter`,
-   `DeleteParameter`), `declaredVariables`, `normalizeRegistration`, `lockfileRefusal`, the `backupBeforeMigrations`
-   snapshot. No `devSandboxes`, `dataOperations` or `authoring` in the first version.
+9. **`src/control.ts`** (built, first part): the `ControlProvider`'s `resolveSource`, `deploy`, `cancel` and
+   `reconcile` (the last two through the shared run). Until step 10 the target names the resources a deploy uses (the
+   sources bucket, the build project, the repository, the parameter path, the log group, the task and execution
+   roles), and a contract with a database, jobs or files is refused before any call, as is a dev environment. The
+   secrets and managed credentials are written to Parameter Store under `<parameterPath>/env/` before the steps and
+   replaced in place, so a task of the running revision that starts before the update reads the new values; a name no
+   longer handed is deleted after a successful rollout. Tasks get fixed sizes (`AWS_TASK_CPU`, `AWS_TASK_MEMORY`), the
+   build has no SPA commands, no source maps and no runtime packages. The build's URL is signed with a fresh read of
+   the container credentials, and a set that expires before it fails the run before the build. Not yet: `secrets`
+   (`PutParameter`, `DeleteParameter` per request), `declaredVariables`, `normalizeRegistration`, `lockfileRefusal`,
+   the `backupBeforeMigrations` snapshot. No `devSandboxes`, `dataOperations` or `authoring` in the first version.
 10. **`src/namespace/`**: the namespace stack (security groups, the Service Connect namespace, the proxy service, the
     ALB rule and certificate; for `full` an RDS instance), the database per application in the shared instance for
     `cheap`, `claimedResources` from the stack, and the proxy manifest carried in the proxy's build as on Zerops
@@ -320,8 +327,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 11. **`src/installation/`**: the CloudFormation template rendered from the installation model (N9), `platform install`,
     `plan`, `deploy`, `upgrade` and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the
     sidecar workflow, and an operator guide.
-12. **`packages/control/src/aws/`**: the composition root over the neutral Bun host (`provider.ts`, the server,
-    maintenance and migration entries), and `entrypoint-isolation.test.ts` extended to it.
+12. **`packages/control/src/aws/`** (built): the composition root over the neutral Bun host (`provider.ts`, the server,
+    maintenance and migration entries), and `entrypoint-isolation.test.ts` extended to it. It reads
+    `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (set by ECS) and `FABRIKA_AWS_BASE_IMAGE` (the pinned Bun image), and
+    reads repositories through the unbound GitHub source. Nothing runs it until step 11 defines Control's task.
 13. **Tests**: the conformance suite over a fake AWS, renderer tests, and a live suite gated on
     `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,

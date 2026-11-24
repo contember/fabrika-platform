@@ -17,7 +17,19 @@ import {
 	isAwsAppConfig,
 } from '..'
 
-const target: AwsAppTarget = { accountId: '123456789012', region: 'eu-central-1', cluster: 'fabrika-apps', service: 'notes-prod' }
+const target: AwsAppTarget = {
+	accountId: '123456789012',
+	region: 'eu-central-1',
+	cluster: 'fabrika-apps',
+	service: 'notes-prod',
+	sourcesBucket: 'fabrika-sources-123456789012',
+	buildProject: 'fabrika-build',
+	repository: 'fabrika/notes-prod',
+	parameterPath: '/fabrika/notes/prod',
+	logGroup: '/fabrika/notes/prod',
+	taskRoleArn: 'arn:aws:iam::123456789012:role/fabrika/notes-prod-task',
+	executionRoleArn: 'arn:aws:iam::123456789012:role/fabrika/notes-prod-execution',
+}
 const artifact: AwsAppArtifact = { contractDigest: `sha256:${'a'.repeat(64)}`, healthPath: '/healthz' }
 const namespace: AwsNamespaceTarget = { accountId: '123456789012', region: 'eu-central-1', stackName: 'fabrika-ns-acme', sizing: 'cheap' }
 const checkpoint: AwsRunCheckpoint = {
@@ -76,6 +88,10 @@ describe('the AWS codecs', () => {
 			{ codec: awsAppTargetCodec, payload: { ...target, accountId: '12345' }, field: 'accountId' },
 			{ codec: awsAppTargetCodec, payload: { ...target, region: 'Frankfurt' }, field: 'region' },
 			{ codec: awsAppTargetCodec, payload: { ...target, cluster: 'a/b' }, field: 'cluster' },
+			{ codec: awsAppTargetCodec, payload: { ...target, sourcesBucket: 'Sources_Bucket' }, field: 'sourcesBucket' },
+			{ codec: awsAppTargetCodec, payload: { ...target, repository: 'Fabrika/Notes' }, field: 'repository' },
+			{ codec: awsAppTargetCodec, payload: { ...target, parameterPath: 'fabrika/notes' }, field: 'parameterPath' },
+			{ codec: awsAppTargetCodec, payload: { ...target, taskRoleArn: 'arn:aws:iam::123456789012:user/notes' }, field: 'taskRoleArn' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, contractDigest: 'a'.repeat(64) }, field: 'contractDigest' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, healthPath: 'healthz' }, field: 'healthPath' },
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, healthPath: '/a/../b' }, field: 'healthPath' },

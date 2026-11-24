@@ -111,7 +111,8 @@ export interface AwsDeployClients {
 export interface AwsDeployInput {
 	readonly appId: string
 	readonly env: string
-	readonly target: AwsAppTarget
+	/** The service's coordinates; the target's resource names arrive below as the step that uses each takes it. */
+	readonly target: Pick<AwsAppTarget, 'accountId' | 'region' | 'cluster' | 'service'>
 	/** The namespace's sources bucket, in the target's region and account. */
 	readonly sourcesBucket: string
 	readonly build: {
