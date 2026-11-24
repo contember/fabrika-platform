@@ -164,17 +164,46 @@ const rebuiltAssets = (assets: unknown): unknown => {
 }
 
 /**
+ * The Worker options a manifest may carry, each checked as oblaka or wrangler reads it. oblaka spreads every option into
+ * the generated config, so a resource key here (`kv_namespaces`, `d1_databases`, `services`, `containers`, …) would
+ * bind by literal name or id whatever `bindings` rebuilt: a resource reaches the deploy only through its own class. A
+ * key that is not listed, or whose value does not parse, fails the deploy before anything is generated.
+ */
+const jsonRecord = z.record(z.string(), z.unknown())
+const WORKER_OPTIONS: Readonly<Record<string, z.ZodTypeAny>> = {
+	compatibility_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+	compatibility_flags: compatibilityFlags,
+	observability: jsonRecord,
+	// An application Worker is never routed; an empty list is what a config that says so writes.
+	routes: z.array(z.unknown()).max(0),
+	workers_dev: z.boolean(),
+	preview_urls: z.boolean(),
+	triggers: jsonRecord,
+	vars: jsonRecord,
+	assets: jsonRecord,
+	deletedDurableObjects: z.array(z.string().min(1).max(255)).max(256),
+	deleteDurableObjectsOnRemoval: z.boolean(),
+}
+
+/**
  * The application Worker of the manifest, in `appDir`, out of this package's classes: its `main` is the bundle, every
  * resource is this package's class, and every other binding replays its recorded entries.
  */
 export const rebuildApplicationWorker = (manifest: BuildManifest, appDir: string): Worker => {
 	const { worker } = manifest
-	const flags = compatibilityFlags.safeParse(worker.options['compatibility_flags'] ?? [])
-	if (!flags.success) throw refused('sets `compatibility_flags` to something that is not a list of flags')
+	const options: Record<string, unknown> = {}
+	for (const [key, value] of Object.entries(worker.options)) {
+		const schema = Object.hasOwn(WORKER_OPTIONS, key) ? WORKER_OPTIONS[key] : undefined
+		if (schema === undefined) throw refused(`sets the Worker option \`${key.slice(0, 64)}\`, which an isolated deploy does not take`)
+		const result = schema.safeParse(value)
+		if (!result.success) throw refused(`sets the Worker option \`${key}\` to something the deploy does not take`)
+		options[key] = result.data
+	}
+	const flags = compatibilityFlags.parse(options['compatibility_flags'] ?? [])
 	const bindings: Record<string, Binding> = {}
 	for (const [name, binding] of Object.entries(worker.bindings)) bindings[name] = rebuildBinding(name, binding)
-	const rebuilt = new Worker({ dir: appDir, name: worker.name, main: worker.main, compatibility_flags: flags.data, bindings })
-	for (const [key, value] of Object.entries(worker.options)) {
+	const rebuilt = new Worker({ dir: appDir, name: worker.name, main: worker.main, compatibility_flags: flags, bindings })
+	for (const [key, value] of Object.entries(options)) {
 		if (key === 'compatibility_flags') continue
 		Reflect.set(rebuilt.options, key, key === 'assets' ? rebuiltAssets(value) : value)
 	}

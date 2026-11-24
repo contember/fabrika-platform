@@ -290,7 +290,17 @@ export interface CloudflareBundleDeployOptions
  */
 export const deployCloudflareBundle = async (options: CloudflareBundleDeployOptions): Promise<CloudflareDeployResult> => {
 	const approved = approvedRun(await readApprovedAccess(environmentValue(APPROVED_ACCESS_FILE_ENV)))
-	const authored = await readDeployValues(environmentValue(DEPLOY_VALUES_FILE_ENV))
+	// The manifest names the secrets and vars the deploy looks up, so they come from the runner's values file and never
+	// from this environment, where a name such as `CLOUDFLARE_API_TOKEN` would find the credential and upload it.
+	const valuesFile = environmentValue(DEPLOY_VALUES_FILE_ENV)
+	if (valuesFile === undefined || valuesFile === '') {
+		throw new Error(`cloudflare: a deploy of a build's output reads its values from ${DEPLOY_VALUES_FILE_ENV}`)
+	}
+	// Only a dry run goes without the access Control approved: it is what pins the application the manifest may name.
+	if (approved.approved === undefined && options.dryRun !== true) {
+		throw new Error(`cloudflare: a deploy of a build's output needs the access Control approved (${APPROVED_ACCESS_FILE_ENV})`)
+	}
+	const authored = await readDeployValues(valuesFile)
 	const prebuilt = await openPrebuiltApplication(resolve(options.bundleDir), options.env)
 	// The application is the one Control approved the contract of (it refuses a contract of another app), whatever the
 	// build's manifest claims: the id names every resource and the IAM identity of the deploy.

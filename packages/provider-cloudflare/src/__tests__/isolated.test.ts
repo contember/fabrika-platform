@@ -18,7 +18,7 @@ import { deployCloudflareBundle } from '../command'
 import { buildCloudflareBundle, parseBuildValues } from '../isolated-build'
 import { openPrebuiltApplication, rebuildApplicationWorker, RecordedBinding } from '../isolated-deploy'
 import { createCloudflareDeployer } from '../provider'
-import { APPROVED_ACCESS_FILE_ENV, buildValuesOf, type RunnerApprovedAccess } from '../runner-protocol'
+import { APPROVED_ACCESS_FILE_ENV, buildValuesOf, DEPLOY_VALUES_FILE_ENV, type RunnerApprovedAccess } from '../runner-protocol'
 
 // The two halves of an isolated deploy (ADR-0086): the build runs the checkout's config and bundles it; the deploy
 // rebuilds the config from the manifest and never imports, evaluates or bundles anything the build produced.
@@ -409,6 +409,76 @@ describe('the deploy of a build', () => {
 		expect(rebuilt.options.dir).toBe('/w')
 	})
 
+	test('takes only the Worker options an authored Worker sets, never a resource by literal name or id', () => {
+		const manifest = (options: Record<string, unknown>): BuildManifest => ({
+			version: 1,
+			appId: 'demo',
+			env: 'stage',
+			configFile: 'fabrika.config.ts',
+			schema: null,
+			pipeline: { secrets: [], vars: [] },
+			worker: { name: 'demo', main: 'bundle/entry.js', options, bindings: {} },
+		})
+		// oblaka spreads every option into the generated config, so each would bind past the classes the deploy rebuilds.
+		const smuggled: Array<Record<string, unknown>> = [
+			{ kv_namespaces: [{ binding: 'STATE', id: 'platform-state-namespace' }] },
+			{ d1_databases: [{ binding: 'DB', database_name: 'stage-demo-db', database_id: 'platform-database' }] },
+			{ r2_buckets: [{ binding: 'B', bucket_name: 'stage-demo-files' }] },
+			{ services: [{ binding: 'S', service: 'stage-demo' }] },
+			{ queues: { producers: [{ binding: 'Q', queue: 'stage-demo-q' }] } },
+			{ durable_objects: { bindings: [{ name: 'D', class_name: 'D', script_name: 'stage-demo' }] } },
+			{ containers: [{ class_name: 'C', image: './Dockerfile' }] },
+			{ workflows: [{ binding: 'W', name: 'w', class_name: 'W' }] },
+			{ tail_consumers: [{ service: 'stage-demo' }] },
+		]
+		for (const options of smuggled) {
+			expect(() => rebuildApplicationWorker(manifest(options), '/w')).toThrow(`sets the Worker option \`${Object.keys(options)[0]}\``)
+		}
+		expect(() => rebuildApplicationWorker(manifest({ routes: [{ pattern: 'example.com/*' }] }), '/w')).toThrow(
+			'sets the Worker option `routes` to something the deploy does not take',
+		)
+		expect(() => rebuildApplicationWorker(manifest({ deletedDurableObjects: 'all' }), '/w')).toThrow(
+			'sets the Worker option `deletedDurableObjects` to something the deploy does not take',
+		)
+		const rebuilt = rebuildApplicationWorker(
+			manifest({ compatibility_date: '2025-10-01', workers_dev: false, preview_urls: false, routes: [], vars: { MODE: 'x' } }),
+			'/w',
+		)
+		expect(rebuilt.options.vars).toEqual({ MODE: 'x' })
+	})
+
+	test("the committed Durable Object history cannot transfer another script's classes into the application", async () => {
+		const fx = await fixture()
+		await runBuild(fx, { approved })
+		const manifest = JSON.parse(await readFile(join(fx.out, BUILD_MANIFEST_FILE), 'utf8'))
+		// A transfer moves the class with every object's storage; the token in the deploy may move it from any script.
+		manifest.worker.migrations = [{ tag: 'v1', transferred_classes: [{ from: 'Control', from_script: 'stage-vozka', to: 'Room' }] }]
+		await rm(join(fx.out, BUILD_MANIFEST_FILE))
+		await writeFile(join(fx.out, BUILD_MANIFEST_FILE), JSON.stringify(manifest))
+		await expect(runDeploy(fx)).rejects.toThrow('binds the Durable Object classes of script `stage-vozka`, which would take over')
+	})
+
+	test('a deploy of a build reads its values only from the values file, and goes without approved access only as a dry run', async () => {
+		const fx = await fixture()
+		await runBuild(fx, { approved })
+		const saved = { values: process.env[DEPLOY_VALUES_FILE_ENV], access: process.env[APPROVED_ACCESS_FILE_ENV] }
+		try {
+			delete process.env[DEPLOY_VALUES_FILE_ENV]
+			delete process.env[APPROVED_ACCESS_FILE_ENV]
+			// Without the file the lookup would read this environment, where the manifest could name the token.
+			await expect(deployCloudflareBundle({ env: 'stage', bundleDir: fx.out })).rejects.toThrow(`reads its values from ${DEPLOY_VALUES_FILE_ENV}`)
+			const valuesFile = join(fx.root, 'values.json')
+			await writeFile(valuesFile, '{}')
+			process.env[DEPLOY_VALUES_FILE_ENV] = valuesFile
+			await expect(deployCloudflareBundle({ env: 'stage', bundleDir: fx.out })).rejects.toThrow('needs the access Control approved')
+		} finally {
+			for (const [name, value] of [[DEPLOY_VALUES_FILE_ENV, saved.values], [APPROVED_ACCESS_FILE_ENV, saved.access]] as const) {
+				if (value === undefined) delete process.env[name]
+				else process.env[name] = value
+			}
+		}
+	})
+
 	test('a recorded binding writes only its own service or AI entry, never a key that steers what wrangler reads or deploys', async () => {
 		// Each would replace what oblaka wrote for the Worker: \`main\` outside the copy makes wrangler read the checkout as
 		// root and upload what its links point at; another \`name\` would bundle the Worker; a D1 entry names its own migrations.
@@ -483,15 +553,20 @@ describe('the deploy of a build', () => {
 		await writeFile(join(fx.out, BUILD_MANIFEST_FILE), JSON.stringify({ ...manifest, appId: 'other' }))
 		const accessFile = join(fx.root, 'access.json')
 		await writeFile(accessFile, JSON.stringify(approved))
-		const previous = process.env[APPROVED_ACCESS_FILE_ENV]
+		const valuesFile = join(fx.root, 'values.json')
+		await writeFile(valuesFile, '{}')
+		const saved = { values: process.env[DEPLOY_VALUES_FILE_ENV], access: process.env[APPROVED_ACCESS_FILE_ENV] }
 		process.env[APPROVED_ACCESS_FILE_ENV] = accessFile
+		process.env[DEPLOY_VALUES_FILE_ENV] = valuesFile
 		try {
 			await expect(deployCloudflareBundle({ env: 'stage', bundleDir: fx.out })).rejects.toThrow(
 				`the build describes application \`other\`, but Control approved \`${notesArtifact.app}\``,
 			)
 		} finally {
-			if (previous === undefined) delete process.env[APPROVED_ACCESS_FILE_ENV]
-			else process.env[APPROVED_ACCESS_FILE_ENV] = previous
+			for (const [name, value] of [[DEPLOY_VALUES_FILE_ENV, saved.values], [APPROVED_ACCESS_FILE_ENV, saved.access]] as const) {
+				if (value === undefined) delete process.env[name]
+				else process.env[name] = value
+			}
 		}
 	})
 })

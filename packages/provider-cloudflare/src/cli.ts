@@ -29,7 +29,8 @@ Options:
 
 \`build\` runs the checkout's code and reads no credential. \`deploy --bundle\` runs none of it.
 Credentials are read only from the environment. Declared secrets and vars are read from the file
-FABRIKA_DEPLOY_VALUES_FILE names when it is set (a runner sets it), and from the environment otherwise.
+FABRIKA_DEPLOY_VALUES_FILE names when it is set (a runner sets it), and from the environment otherwise;
+\`deploy --bundle\` reads them only from that file, and runs without approved access only with --dry-run.
 `
 
 const die = (message: string): never => {
