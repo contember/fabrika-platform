@@ -338,6 +338,17 @@ fails if that stops being true — it is the guard, not documentation of one.
   start there too. So does every write that removes a grant: its first statement moves `principals.grant_revision`
   on (`grantRemovalStatement`, `repositories/grants.ts`) — the admin `grants.revoke`, a membership revoke, a delegated
   revoke and every repository delete. The one exception, an API key's revoke, disables the principal in the same statement.
+- **A GRANT OF SEVERAL SCOPE VALUES IS ONE ROW PER VALUE** (ADR-0085, `repositories/grants.ts`). The rows share
+  `grants.scope_set`, the grant's id; a grant of one value, and every grant before migration 0036, has none. Every
+  reader of grants (resolution, membership, assigners, the unique indexes, deadlines) reads one value per row and
+  needs no change; only the admin API groups rows (`grantSets`, `toGrantDto`) and addresses a grant by
+  `COALESCE(scope_set, id)` (`getGrantSet`). A set is created (`createGrantSet`), replaced (`replaceGrantSet`, guarded
+  by the principal's `grant_revision`, keeping the id and creation time) and revoked (`deleteGrantSet`) in one
+  transaction with one record. Where grants wait (ADR-0083), a change of a set is ONE request: `grant_requests.scope_values`
+  holds every value (`requestScopeValues`), and `applyRequest` writes, replaces or removes the whole set under its id,
+  or nothing. A membership revoke of one value removes that row only, so the set shrinks. A
+  dimension's listed values (`app_scopes.value_list`) are what the console offers; IAM never refuses a value outside
+  them.
 - **MEMBERSHIP IS EVALUATED BY IAM, AGAINST THE CALLER'S LIVE PERMISSIONS (`src/membership.ts`).**
   Every `IamMembershipRpc` operation resolves the caller from its own credential and never grants it
   more than that credential carries: a `px_` key is resolved live and downscoped by its own grants, and

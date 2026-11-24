@@ -93,6 +93,13 @@ export default serve(contract, { database: scoped(tables) })
   application on IAM's sign-in, password and invitation pages and e-mails. The artifact carries each only when it is
   declared, so a contract without them keeps its digest; `schemaFromContract` hands them to IAM, and a change is a line
   the approver reads.
+- A dimension may list its values for the people who grant there: `organization: { values: [{ value: 'acme', label:
+  'Acme' }, …] }` (at most 500, each listed once, a label of at most 120 characters). The artifact carries the list
+  only when declared, sorted by value; IAM stores it with the dimension, and the console offers each value as a checkbox
+  when an administrator grants in that dimension, one grant holding several values
+  ([ADR-0085](../decisions/0085-a-grant-holds-a-set-of-scope-values.md)). It is information, not authorization: IAM
+  grants a value the list does not name, the approval shows a change of it as a neutral line, and a dimension without
+  a list takes free text in the console.
 
 ## Serving surfaces
 
