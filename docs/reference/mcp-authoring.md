@@ -461,7 +461,8 @@ Registering only identity-only clients leaves MCP authoring off: no `/mcp` row i
 is served. It needs `https`, like every client.
 
 **On Cloudflare** the same variable in the installation's GitHub Environment registers the clients; a client that is
-not identity-only turns MCP authoring on ([On Cloudflare](#on-cloudflare)).
+not identity-only is meant to turn MCP authoring on, but the platform stage still refuses one as not supported yet
+([On Cloudflare](#on-cloudflare)).
 The scaffolded `platform.yml` passes it to the IAM stage, which writes it into IAM's `OAUTH_CONFIG`, and to the
 control-plane stage, which reconciles the roles after IAM's own vocabulary. A workflow generated before this release
 does not pass it: bump `fabrika.ref`, regenerate the workflow, then set the variable and run `platform`. Locally, `FABRIKA_LOCAL_MCP_CLIENTS_JSON` takes the same entries and
@@ -492,6 +493,13 @@ Before rolling `iam` back, remove every `identity` entry from the client list an
 ## On Cloudflare
 
 A Cloudflare installation serves the same `/mcp` from the console Worker, with the same tools, OAuth flow and rules.
+
+**Not yet switchable.** Control's side is in place, but two IAM-side steps are still missing, so an installation cannot
+turn MCP authoring on today: `parseCloudflareIdentityClients`
+(`packages/provider-cloudflare/src/installation/identity-clients.ts`) refuses every client that is not identity-only,
+and stops the platform stage before it deploys anything, and IAM's `fabrika.config.ts` writes no `/mcp` resource into
+`OAUTH_CONFIG`. The rest of this section describes the state once both land.
+
 What differs:
 
 - **Turning it on.** Register Claude, ChatGPT or a non-identity external client in
@@ -547,7 +555,8 @@ paved road and need closer review, parked or not.
 
 - An access token stays valid until it expires, at most 300 s after a grant or session is revoked.
   Revocation stops refresh and new code exchanges.
-- Zerops and Cloudflare. On Cloudflare `deploy_stage` waits for the runner's isolated build, and there is no dev
+- Zerops and Cloudflare. On Cloudflare MCP authoring cannot be turned on until IAM's two steps land
+  ([On Cloudflare](#on-cloudflare)), `deploy_stage` waits for the runner's isolated build, and there is no dev
   environment.
 - One authoring environment per app, never protected; it shows one workspace at a time.
 - One dev environment per app, never production or protected, on Zerops only; each workspace gets its own sandbox,

@@ -418,6 +418,7 @@ Invariants:
   deploys the built bundle without running checkout code; until then the declaration carries
   `stageDeployRefusal` and Control refuses `deploy_stage` with it. `cloudflareMcpAuthoringOn`
   (`src/installation/mcp-authoring.ts`) tells Control's config whether the client list turns MCP on, parsed as the
-  platform stage parses it.
+  platform stage parses it. That parser still refuses a client that is not identity-only, and IAM's config writes no
+  `/mcp` resource yet, so it answers `false` or throws until both change.
 - **Scaffold pushes never deploy.** Both initial and refresh commits use `[skip ci]`; init dispatches the
   workflow explicitly only after it writes the target GitHub Environment.

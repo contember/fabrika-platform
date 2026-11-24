@@ -143,8 +143,9 @@ workspace its own running application, where one pinned service could show only 
      converges with no other step. On Zerops the installation's deploy computes it. On Cloudflare IAM's own
      `fabrika.config.ts` does, from the console's origin its stage is handed, and so imports Control's contract: the
      resources are the console's, and IAM's deploy is the only step that writes IAM's variables. That contract depends
-     on `@fabrika/operations-contract` for the Operations actions, one way. IAM's config writes the `/mcp` resource
-     beside them when MCP authoring is on.
+     on `@fabrika/operations-contract` for the Operations actions, one way. IAM's config is to write the `/mcp` resource
+     beside them when MCP authoring is on. Until it does, and until the Cloudflare platform stage accepts a client that
+     is not identity-only (it refuses one today), a Cloudflare installation cannot turn MCP authoring on.
    - On Cloudflare the console Worker serves the table its proxy publishes, by the digest the same config writes beside
      it, as the Bun process does. Control's `fabrika.config.ts` derives the table from the operator's client list
      (`FABRIKA_PLATFORM_MCP_CLIENTS_JSON`), as the Zerops deploy does. With the MCP table the Worker mounts the same
