@@ -6,8 +6,11 @@
 //
 // The file uses no syntax directive and no BuildKit-only form except one secret mount for the source-map bearer, so any
 // builder that reads a Dockerfile builds it. Every command goes to `/bin/sh -c` as written: a Dockerfile substitutes no
-// variable in `RUN`. A line holds one command, so a command or a file line with a line break is refused, and so is one
-// ending in a backslash, which would continue into the next instruction.
+// variable in `RUN`. Every flag and the form of a `RUN` instruction are the platform's, and a line holds one command, so
+// a command is refused when the parser would read more than a shell command out of it: a line break, a trailing
+// backslash (the line continues into the next instruction), a heredoc `<<` (its body spans the following lines), a
+// first character `-` (BuildKit reads each leading `--word` as an instruction flag: a secret, an ssh or a host network
+// mount) or `[` (the JSON exec form).
 
 import { type ContractRecipe, contractRecipe, type ContractRecipeInput } from './build-recipe.js'
 
@@ -22,7 +25,12 @@ const RELATIVE_PATH = /^[A-Za-z0-9._@+-][A-Za-z0-9._@+/-]*$/
 /** A user as `USER` takes it: a name, or a numeric uid and gid. */
 const IMAGE_USER = /^(?:[a-z_][a-z0-9_-]{0,31}|[0-9]{1,10}(?::[0-9]{1,10})?)$/
 
-/** The secret id the build reads the source-map bearer from; the builder mounts it, nothing writes it into a layer. */
+/**
+ * The secret id the build reads the source-map bearer from. The builder mounts it for the upload step alone, so no
+ * platform step and no layer holds it. That is a guarantee against the platform's own steps, not against the
+ * application: its SPA commands and tests run earlier as root and can change what the upload runs (bun's config or
+ * cache), as on Zerops, where every build command sees the bearer. The bearer is the application's own upload key.
+ */
 export const SOURCE_MAP_UPLOAD_SECRET = 'fabrika-source-map-upload-key'
 
 /** The variables `fabrika-source-maps` of `@fabrika/check` reads: the destination and its bearer. */
@@ -58,7 +66,10 @@ export interface ContainerImageInput {
 
 /** The rendered image and how a provider runs it. */
 export interface ContainerImage {
-	/** The `Dockerfile` text; its build context is the application's source archive. */
+	/**
+	 * The `Dockerfile` text. Its build context is the `git archive` of the commit Control uploaded and nothing else: both
+	 * stages copy the whole context, and a checkout's `.git/config` can hold a clone URL with a token.
+	 */
 	readonly dockerfile: string
 	/** Each command the provider runs once before the new version serves (its migration step), as argv, in order. */
 	readonly init: readonly (readonly string[])[]
@@ -86,8 +97,13 @@ const writeFile = (path: string, lines: readonly string[]): string => {
 	return `RUN ${parent === '' ? '' : `mkdir -p ${parent} && `}${write}`
 }
 
-/** One build command as one `RUN`, which hands it to `/bin/sh -c` as written. */
-const runCommand = (command: string, mounts = ''): string => `RUN ${mounts}${oneLine(command, 'a build command')}`
+/** One build command as one `RUN`, which hands it to `/bin/sh -c` as written; `mounts` are the platform's own flags. */
+const runCommand = (command: string, mounts = ''): string => {
+	const line = oneLine(command, 'a build command')
+	if (/^\s*[-[]/.test(line)) throw new Error('a build command must not start with `-` or `[`: RUN would read it as its own flag or form')
+	if (line.includes('<<')) throw new Error('a build command must not hold a heredoc (`<<`): its body would span the following lines')
+	return `RUN ${mounts}${line}`
+}
 
 /**
  * The recipe's source-map step, with the destination as a literal and the bearer read from the mounted secret. Both are
@@ -115,7 +131,8 @@ export function containerImage(input: ContainerImageInput): ContainerImage {
 		throw new Error("an image build runs as root, where the build's throwaway PostgreSQL does not start: use schemaChecks 'init'")
 	}
 	if (!PINNED_IMAGE.test(input.baseImage)) throw new Error('the base image must be pinned by its digest: <name>[:<tag>]@sha256:<64 hex>')
-	if (!IMAGE_USER.test(input.runtimeUser) || input.runtimeUser === 'root' || /^0(?::|$)/.test(input.runtimeUser)) {
+	// `USER` reads the uid as a number, so `00` and `000:1000` are root too.
+	if (!IMAGE_USER.test(input.runtimeUser) || input.runtimeUser === 'root' || /^0+(?::|$)/.test(input.runtimeUser)) {
 		throw new Error('the runtime user must be a user name or a numeric uid, and not root')
 	}
 	if ((input.sourceMapUpload !== null) !== recipeInput.sourceMaps) {
@@ -124,7 +141,18 @@ export function containerImage(input: ContainerImageInput): ContainerImage {
 	for (const name of input.runtimePackages) {
 		if (!APK_PACKAGE.test(name)) throw new Error(`the runtime package ${JSON.stringify(name)} is not an Alpine package name`)
 	}
+	if (recipeInput.scan) {
+		// The scan refuses signatures older than three days, and an image's are as old as its build: a provider that scans
+		// must refresh them at start and daily, as Zerops does with freshclam. Until one does, a scanning kind fails closed.
+		throw new Error('a contract that scans its files needs a signature refresh no container provider supplies yet')
+	}
 	const { sourceRoot, runtimeRoot } = recipeInput
+	// Both go into WORKDIR, COPY and every generated script's `cd`; `/` would copy the whole build filesystem.
+	for (const root of [sourceRoot, runtimeRoot]) {
+		if (!ABSOLUTE_PATH.test(root) || root === '/' || root.split('/').includes('..')) {
+			throw new Error(`the root ${JSON.stringify(root)} must be an absolute directory below / that a shell reads as one word`)
+		}
+	}
 	for (const file of input.runtimeFiles) {
 		if (!ABSOLUTE_PATH.test(file.path) || file.path.split('/').includes('..')) {
 			throw new Error(`the runtime file ${JSON.stringify(file.path)} must be an absolute path a shell reads as one word`)

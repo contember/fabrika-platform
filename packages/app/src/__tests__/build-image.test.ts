@@ -138,7 +138,13 @@ describe('containerImage', () => {
 		refused({ baseImage: `oven/bun:1.4.4-alpine@sha256:${'A'.repeat(64)}` }, /pinned by its digest/)
 		refused({ runtimeUser: 'root' }, /not root/)
 		refused({ runtimeUser: '0:0' }, /not root/)
+		refused({ runtimeUser: '00' }, /not root/)
+		refused({ runtimeUser: '000:1000' }, /not root/)
 		refused({ runtimeUser: 'bun; rm -rf /' }, /not root/)
+		refused({ recipe: { ...input.recipe, scan: true } }, /signature refresh/)
+		refused({ recipe: { ...input.recipe, runtimeRoot: '/' } }, /absolute directory below/)
+		refused({ recipe: { ...input.recipe, runtimeRoot: '/app root' } }, /absolute directory below/)
+		refused({ recipe: { ...input.recipe, runtimeRoot: '/srv/../app' } }, /absolute directory below/)
 		refused({ sourceMapUpload: null }, /exactly when the recipe uploads/)
 		refused({ recipe: { ...input.recipe, sourceMaps: false } }, /exactly when the recipe uploads/)
 		refused({ runtimePackages: ['clamav && curl'] }, /not an Alpine package name/)
@@ -149,5 +155,20 @@ describe('containerImage', () => {
 		refused({ spaCommands: ['bun run build\nrm -rf /'] }, /one line/)
 		refused({ spaCommands: ['bun run build \\'] }, /backslash/)
 		refused({ sourceMapUpload: '{"a":1}\n' }, /one line/)
+	})
+
+	test('refuses an SPA command that RUN would read as its own flag, form or heredoc', () => {
+		const refused = (command: string, message: RegExp): void => {
+			expect(() => containerImage({ ...input, spaCommands: [command] })).toThrow(message)
+		}
+		// A leading --mount would hand the authored command the source-map bearer.
+		refused(`--mount=type=secret,id=${SOURCE_MAP_UPLOAD_SECRET} cp /run/secrets/${SOURCE_MAP_UPLOAD_SECRET} web/dist/k`, /must not start with/)
+		refused('  --network=host bun run build', /must not start with/)
+		refused('--security=insecure bun run build', /must not start with/)
+		refused('["sh", "-c", "bun run build"]', /must not start with/)
+		refused('cat <<EOF > web/dist/version.txt', /heredoc/)
+		refused("cat <<'EOF'", /heredoc/)
+		// A flag later in the command is the shell's, not RUN's.
+		expect(containerImage({ ...input, spaCommands: ['bun run build --minify'] }).dockerfile).toContain('\nRUN bun run build --minify\n')
 	})
 })
