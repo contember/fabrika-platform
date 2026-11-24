@@ -269,7 +269,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
    ([ADR-0081](../decisions/0081-the-aws-provider-calls-aws-without-the-sdk.md)): a SigV4 signer of its own pinned with
    known-answer tests, JSON clients for ECS, CodeBuild, ECR, SSM and Logs, `Bun.S3Client` for S3, and a strict
    minimal XML reader for CloudFormation and RDS.
-5. **`src/source.ts`**: the S3 multipart part writer for N2 and the presigned GET the build reads.
+5. **`src/aws/s3.ts`** (built): the S3 multipart part writer Control's source client takes (N2's `SourcePartWriter`)
+   and the presigned GET the build reads. The bucket that holds the sources, with a lifecycle rule that expires them and
+   aborts incomplete uploads, is the namespace stack's (step 10).
 6. **`src/build.ts`**: `StartBuild` with `NO_SOURCE` and the inline buildspec (fetch, unpack, write the rendered
    `Dockerfile`, build, push, print the digest), the build log relay, `StopBuild` on cancel before activation.
 7. **`src/ecs-task.ts`** (built): the service's definition, the server container alone (image by digest, port, health

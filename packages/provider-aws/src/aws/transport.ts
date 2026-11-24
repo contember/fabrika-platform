@@ -151,16 +151,29 @@ export interface AwsExchange {
 }
 
 /**
- * One signed `POST /` of `body` with `headers` to `service` at `options.origin`, for `operation` (already checked by the
- * caller, which names it in every error). Answers whatever AWS answered, error statuses included, for the protocol to
- * read; throws `AwsError` for everything that is no answer: `aborted`, `credentials`, `invalid_request` (it cannot be
- * signed), `unreachable`, `timeout`, `redirect`, `answer_too_large`.
+ * One request to send: by default a `POST /`, as the JSON and query protocols send. S3 names its object in the path and
+ * its operation in the method and the query, and signs its payload's digest as a header (`bodyDigestHeader`).
+ */
+export interface AwsExchangeRequest {
+	readonly method?: 'GET' | 'POST' | 'PUT' | 'DELETE'
+	readonly path?: string
+	readonly query?: readonly (readonly [string, string])[]
+	readonly headers: Readonly<Record<string, string>>
+	readonly body: string | Uint8Array<ArrayBuffer>
+	readonly bodyDigestHeader?: boolean
+}
+
+/**
+ * One signed request of `request` to `service` at `options.origin`, for `operation` (already checked by the caller, which
+ * names it in every error). Answers whatever AWS answered, error statuses included, for the protocol to read; throws
+ * `AwsError` for everything that is no answer: `aborted`, `credentials`, `invalid_request` (it cannot be signed),
+ * `unreachable`, `timeout`, `redirect`, `answer_too_large`.
  */
 export async function awsExchange(
 	service: string,
 	options: AwsClientOptions,
 	operation: string,
-	request: { readonly headers: Readonly<Record<string, string>>; readonly body: string },
+	request: AwsExchangeRequest,
 	signal: AbortSignal | undefined,
 ): Promise<AwsExchange> {
 	const send = options.fetch ?? ((input: string, init: RequestInit) => fetch(input, init))
@@ -184,22 +197,36 @@ export async function awsExchange(
 	let signed: Awaited<ReturnType<typeof signRequest>>
 	try {
 		signed = await signRequest(
-			{ method: 'POST', origin: options.origin, path: '/', headers: request.headers, body: request.body },
+			{
+				method: request.method ?? 'POST',
+				origin: options.origin,
+				path: request.path ?? '/',
+				query: request.query ?? [],
+				headers: request.headers,
+				body: request.body,
+			},
 			credentials,
 			{ region: options.region, service },
 			(options.now ?? (() => new Date()))(),
-			{ allowInsecureOrigin: options.allowInsecureOrigin === true },
+			{ allowInsecureOrigin: options.allowInsecureOrigin === true, bodyDigestHeader: request.bodyDigestHeader === true },
 		)
 	} catch {
 		throw fail('invalid_request', 0, null, false)
 	}
 	let response: Response
 	try {
-		response = await send(signed.url, { method: 'POST', headers: signed.headers, body: request.body, redirect: 'manual', signal: aborted })
+		response = await send(signed.url, {
+			method: request.method ?? 'POST',
+			headers: signed.headers,
+			body: request.body,
+			redirect: 'manual',
+			signal: aborted,
+		})
 	} catch {
 		throw interrupted(0, null, fail('unreachable', 0, null, true))
 	}
-	const id = response.headers.get('x-amzn-requestid')
+	// The JSON and query protocols name it `x-amzn-RequestId`; S3 names it `x-amz-request-id`.
+	const id = response.headers.get('x-amzn-requestid') ?? response.headers.get('x-amz-request-id')
 	const requestId = id !== null && REQUEST_ID.test(id) ? id : null
 	if (response.status >= 300 && response.status < 400) {
 		await response.body?.cancel().catch(() => {})
