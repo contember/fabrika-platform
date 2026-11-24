@@ -1,15 +1,22 @@
 // The in-container run engine — pure of HTTP, so it's unit-testable with a fake command runner.
 //
-// A `Runner` drives one job through verified checkout → install → `fabrika-cloudflare-executor deploy`, narrating progress and
-// streaming child stdout/stderr line-by-line into an in-memory log buffer. Secret values and
-// credentials are redacted from every line before it lands in the buffer. Credentials reach the executor through its
-// environment; secrets and vars through a values file beside the checkout. Never argv, never a log.
+// A `Runner` drives one job through verified checkout → build → deploy (ADR-0086), narrating progress and streaming
+// child stdout/stderr line-by-line into an in-memory log buffer. Secret values and credentials are redacted from every
+// line before it lands in the buffer.
+//
+// The build (`bun install`, then `fabrika-cloudflare-executor build`) runs every piece of checkout code in the build
+// sandbox: its own user, an environment holding nothing of the runner's, no credential, no secret, and no network after
+// the install. The runner copies its output file by file into a tree of its own (`copyBuildOutput`), and only then runs
+// `fabrika-cloudflare-executor deploy --bundle`, which runs no checkout code. Credentials reach that executor through
+// its environment; secrets and vars through a values file beside the checkout. Never argv, never a log.
 
 import { type ArtifactFetch, collectSourceMaps, type SourceMapCollection, uploadSourceMaps } from '@fabrika/check/source-maps'
 import type { RunLogLine } from '@fabrika/control-contract'
 import {
 	APPLICATION_OBJECTS_ENV,
 	APPROVED_ACCESS_FILE_ENV,
+	BUILD_SOURCE_MAPS_DIR,
+	buildValuesOf,
 	CHECKOUT_INSTALL_ARGS,
 	checkoutRelativeDirectory,
 	type CloudflareRunnerJob,
@@ -18,6 +25,7 @@ import {
 	IAM_SERVICE_ENV,
 	INSTALLATION_APPS_ENV,
 	OPERATIONS_ORIGIN_ENV,
+	readBuildManifest,
 	RUNNER_OUTCOME_FILE_ENV,
 	type RunnerIamReconcile,
 	type RunnerOutcomeFile,
@@ -27,6 +35,8 @@ import {
 import { mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { z } from 'zod'
+import { BuildOutputRefused, copyBuildOutput } from './output'
+import type { BuildSandbox, SandboxCommand } from './sandbox'
 
 /**
  * Upper bound on the in-memory log replay buffer. A pathologically chatty build (verbose installs,
@@ -50,6 +60,12 @@ const HEAD_FAILED = 'git HEAD verification failed'
 const HEAD_TOO_LARGE = 'git HEAD output exceeds the size limit'
 const HEAD_MALFORMED = 'git HEAD output is malformed'
 
+/** The image's executor: `build` in the sandbox, `deploy --bundle` as the runner. */
+const EXECUTOR = 'fabrika-cloudflare-executor'
+
+/** Where the build user finds `bun`, `wrangler` and the executor in the runner image; never a directory of the checkout. */
+export const BUILD_PATH = '/opt/bun/bin:/usr/local/bin:/usr/bin:/bin'
+
 /** A spawned command's outcome plus its (already line-split, redacted) output. */
 export interface SpawnResult {
 	exitCode: number
@@ -67,6 +83,8 @@ export interface SpawnSpec {
 	args: string[]
 	cwd: string
 	env?: Record<string, string>
+	/** The child's environment is exactly `env`; nothing of the runner's is inherited (every step of the build sandbox). */
+	replaceEnv?: boolean
 }
 
 /** Streams child output; settles only after the child stops and both output pumps finish, including on rejection. */
@@ -86,6 +104,10 @@ export interface RunnerEnv {
 	collectSourceMaps?: (cwd: string) => Promise<SourceMapCollection>
 	/** Artifact upload transport. */
 	fetch?: ArtifactFetch
+	/** Runs the build's steps as the build user; a runner without one refuses every run. */
+	sandbox: BuildSandbox
+	/** Copies the build's output into the runner's own tree; production is `copyBuildOutput`. */
+	copyOutput?: (source: string, target: string) => Promise<unknown>
 }
 
 interface GitSource {
@@ -255,7 +277,12 @@ const parseOutcomeFile = (raw: string): RunnerOutcomeFile => {
  */
 export class Runner {
 	private readonly job: CloudflareRunnerJob
-	private readonly env: RunnerEnv & { now: () => number; collectSourceMaps: (cwd: string) => Promise<SourceMapCollection>; fetch: ArtifactFetch }
+	private readonly env: RunnerEnv & {
+		now: () => number
+		collectSourceMaps: (cwd: string) => Promise<SourceMapCollection>
+		fetch: ArtifactFetch
+		copyOutput: (source: string, target: string) => Promise<unknown>
+	}
 	private readonly gitSource: GitSource | null
 	private readonly redactor: Redactor
 	private readonly buffer: RunLogLine[] = []
@@ -277,6 +304,7 @@ export class Runner {
 			now: () => Date.now(),
 			collectSourceMaps: collectSourceMaps,
 			fetch,
+			copyOutput: copyBuildOutput,
 			...env,
 		}
 		this.gitSource = parseGitSource(job.repoUrl)
@@ -302,6 +330,57 @@ export class Runner {
 	/** Where the executor reads the job's secrets, vars and managed values — beside the checkout, never in an environment. */
 	get deployValuesFilePath(): string {
 		return `${this.env.workspace}/${this.job.runId}.values.json`
+	}
+
+	/** The build user's own directory: its home, its temporary files, its output, and the two files it reads. */
+	get buildDir(): string {
+		return `${this.env.workspace}/${this.job.runId}.build`
+	}
+
+	/** Where the build writes its output; the runner reads it only through `copyOutput`. */
+	get buildOutDir(): string {
+		return `${this.buildDir}/out`
+	}
+
+	/** The runner's own copy of the build's output, which the deploy reads. */
+	get bundleDir(): string {
+		return `${this.env.workspace}/${this.job.runId}.bundle`
+	}
+
+	/** The deploy executor's working directory and temporary files: empty, the runner's, outside every tree the build wrote. */
+	get deployDir(): string {
+		return `${this.env.workspace}/${this.job.runId}.deploy`
+	}
+
+	/** The whole environment of a sandboxed step: a path to the image's tools, a home and temporary files of its own. */
+	private sandboxEnv(): Record<string, string> {
+		return { PATH: BUILD_PATH, HOME: `${this.buildDir}/home`, TMPDIR: `${this.buildDir}/tmp`, WRANGLER_SEND_METRICS: 'false' }
+	}
+
+	/** A step of the build sandbox, reaped once it ends, whatever it left running. */
+	private async sandboxStep(spec: Omit<SandboxCommand, 'env'>): Promise<SpawnResult> {
+		try {
+			return await this.step(this.env.sandbox.command({ ...spec, env: this.sandboxEnv() }))
+		} finally {
+			await this.env.sandbox.reap()
+		}
+	}
+
+	/** The build user's directory, its two input files, and the checkout handed to it. Neither file holds a secret. */
+	private async prepareBuild(): Promise<boolean> {
+		try {
+			// Exclusive, as the checkout: never admit bytes an earlier execution with this run ID left.
+			await mkdir(this.buildDir, { mode: 0o700 })
+			for (const sub of ['home', 'tmp', 'out']) await mkdir(`${this.buildDir}/${sub}`, { mode: 0o700 })
+			if (this.job.approvedAccess !== undefined) {
+				await writeFile(`${this.buildDir}/access.json`, JSON.stringify(this.job.approvedAccess), { encoding: 'utf8', flag: 'wx' })
+			}
+			await writeFile(`${this.buildDir}/values.json`, JSON.stringify(buildValuesOf(this.job)), { encoding: 'utf8', flag: 'wx' })
+			await this.env.sandbox.own([this.checkoutDir, this.buildDir])
+			return true
+		} catch {
+			return false
+		}
 	}
 
 	/**
@@ -474,6 +553,8 @@ export class Runner {
 		// Secrets, vars and managed values travel in the values file, never here: their names are the application's, and
 		// in this environment a name such as a runtime's options variable would steer the process that holds the credential.
 		env[DEPLOY_VALUES_FILE_ENV] = this.deployValuesFilePath
+		// Never the shared `/tmp`, where the build user could have left a name for the deploy to write through.
+		env['TMPDIR'] = `${this.deployDir}/tmp`
 		env[RUNNER_OUTCOME_FILE_ENV] = this.outcomeFilePath
 		if (this.job.installationApps === undefined) delete env[INSTALLATION_APPS_ENV]
 		else env[INSTALLATION_APPS_ENV] = JSON.stringify(this.job.installationApps)
@@ -535,6 +616,8 @@ export class Runner {
 		if (/^[0-9a-f]{64}$/i.test(this.job.ref)) return this.refuse('unsupported commit SHA format')
 		const git = this.gitSource
 		if (git === null) return this.refuse('repository URL is invalid')
+		const unavailable = this.env.sandbox.unavailable
+		if (unavailable !== null) return this.refuse(`the runner cannot isolate the build: ${unavailable}`)
 		this.state = 'cloning'
 		if (exact) {
 			try {
@@ -568,12 +651,14 @@ export class Runner {
 			if (clone.exitCode !== 0) return this.refuse(`git clone failed (exit ${clone.exitCode})`)
 		}
 
-		// ── install ──
+		// ── build, in the sandbox ──
 		this.state = 'installing'
+		if (!(await this.prepareBuild())) return this.refuse('could not prepare the build directory')
 		this.emit('meta', `Installing dependencies in ${dir}`)
 		// Frozen, as the Zerops build installs: a `bun.lock` that disagrees with package.json fails it. Without a `bun.lock`
-		// bun installs unpinned versions; Control refuses to approve a contract application's commit without one.
-		const install = await this.step({ command: 'bun', args: [...CHECKOUT_INSTALL_ARGS], cwd: dir })
+		// bun installs unpinned versions; Control refuses to approve a contract application's commit without one. Lifecycle
+		// scripts run here, with network and as the build user, holding nothing of the runner's.
+		const install = await this.sandboxStep({ command: 'bun', args: [...CHECKOUT_INSTALL_ARGS], cwd: dir, network: true })
 		if (install.exitCode !== 0) {
 			this.finish('failed', {
 				error: `bun ${CHECKOUT_INSTALL_ARGS.join(' ')} failed (exit ${install.exitCode}); a bun.lock that does not match package.json fails it`,
@@ -581,20 +666,52 @@ export class Runner {
 			this.emit('meta', `Install failed (exit ${install.exitCode})`)
 			return this.status()
 		}
-
-		// ── deploy ──
-		this.state = 'deploying'
-		const deployArgs = ['deploy', `--env=${this.job.env}`]
-		if (this.job.configPath !== undefined) {
-			deployArgs.push(`--config=${this.job.configPath}`)
+		const access = this.job.approvedAccess === undefined ? [] : [`--access=${this.buildDir}/access.json`]
+		if (this.job.approvedAccess?.checker !== undefined && this.job.dryRun !== true) {
+			// Still with network, and outside the checkout, so no code of it runs: the tools the checks run at pinned releases.
+			const fetched = await this.sandboxStep({
+				command: EXECUTOR,
+				args: ['build', '--fetch-tools', ...access],
+				cwd: `${this.buildDir}/tmp`,
+				network: true,
+			})
+			if (fetched.exitCode !== 0) return this.refuse(`fetching the check tools failed (exit ${fetched.exitCode})`)
 		}
+		this.emit(
+			'meta',
+			this.env.sandbox.isolatesNetwork
+				? 'Build network: none (the build runs in a network namespace of its own)'
+				: 'Build network: open (the container refuses a network namespace; the build holds no credential)',
+		)
+		const buildArgs = ['build', `--env=${this.job.env}`, `--out=${this.buildOutDir}`, `--values=${this.buildDir}/values.json`, ...access]
+		if (this.job.configPath !== undefined) buildArgs.push(`--config=${this.job.configPath}`)
+		if (this.job.domain !== undefined) buildArgs.push(`--domain=${this.job.domain}`)
+		if (this.job.dryRun === true) buildArgs.push('--dry-run')
+		this.emit('meta', `Running in the build sandbox: ${EXECUTOR} ${buildArgs.join(' ')}`)
+		const built = await this.sandboxStep({ command: EXECUTOR, args: buildArgs, cwd: dir, network: false })
+		if (built.exitCode !== 0) {
+			this.finish('failed', { exitCode: built.exitCode, error: `the build failed (exit ${built.exitCode})` })
+			this.emit('meta', `Build failed (exit ${built.exitCode})`)
+			return this.status()
+		}
+		try {
+			await this.env.copyOutput(this.buildOutDir, this.bundleDir)
+			await mkdir(this.deployDir, { mode: 0o700 })
+			await mkdir(`${this.deployDir}/tmp`, { mode: 0o700 })
+		} catch (error) {
+			return this.refuse(error instanceof BuildOutputRefused ? error.message : "could not copy the build's output")
+		}
+
+		// ── deploy: no checkout code from here on ──
+		this.state = 'deploying'
+		const deployArgs = ['deploy', `--env=${this.job.env}`, `--bundle=${this.bundleDir}`]
 		if (this.job.dryRun === true) {
 			deployArgs.push('--dry-run')
 		}
 		for (const name of Object.keys(this.job.managedEnvironment ?? {}).sort()) {
 			deployArgs.push(`--managed-var=${name}`)
 		}
-		this.emit('meta', `Running: fabrika-cloudflare-executor ${deployArgs.join(' ')}`)
+		this.emit('meta', `Running: ${EXECUTOR} ${deployArgs.join(' ')}`)
 		if (!(await this.clearOutcomeFile())) {
 			return this.refuse('could not clear the runner outcome file')
 		}
@@ -608,8 +725,9 @@ export class Runner {
 		let deploy: SpawnResult
 		let outcome: RunnerOutcomeFile | undefined
 		try {
-			deploy = await this.step({ command: 'fabrika-cloudflare-executor', args: deployArgs, cwd: dir, env: this.deployEnv() })
-			this.emit('meta', `fabrika-cloudflare-executor deploy exited with code ${deploy.exitCode}`)
+			// Its working directory is empty and the runner's: Bun reads `bunfig.toml` and `.env` from there, wrangler its config.
+			deploy = await this.step({ command: EXECUTOR, args: deployArgs, cwd: this.deployDir, env: this.deployEnv() })
+			this.emit('meta', `${EXECUTOR} deploy exited with code ${deploy.exitCode}`)
 			try {
 				// A dry run reports nothing to apply; Control may read this status back without knowing it was dry.
 				if (deploy.exitCode === 0 && this.job.dryRun !== true) outcome = await this.readOutcomeFile()
@@ -626,7 +744,7 @@ export class Runner {
 		}
 		if (deploy.exitCode === 0) {
 			this.iamReconcile = outcome?.iamReconcile
-			await this.uploadArtifacts(dir)
+			await this.uploadArtifacts()
 		}
 		this.finish(deploy.exitCode === 0 ? 'succeeded' : 'failed', { exitCode: deploy.exitCode })
 		return this.status()
@@ -683,7 +801,8 @@ export class Runner {
 		}
 	}
 
-	private async uploadArtifacts(cwd: string): Promise<void> {
+	/** The source maps the build copied, from the runner's copy of its output, never from the tree the build wrote. */
+	private async uploadArtifacts(): Promise<void> {
 		const destination = this.job.artifactUpload
 		if (destination === undefined) return
 		if (this.job.dryRun === true) {
@@ -692,7 +811,12 @@ export class Runner {
 		}
 		let uploaded = 0
 		try {
-			const result = await uploadSourceMaps(destination, await this.env.collectSourceMaps(cwd), this.env.fetch)
+			const maps = `${this.bundleDir}/${BUILD_SOURCE_MAPS_DIR}`
+			const present = await stat(maps).then((info) => info.isDirectory(), () => false)
+			const collected = present ? await this.env.collectSourceMaps(maps) : { artifacts: [], incomplete: false }
+			// The build left out a map over Operations' limits.
+			const skipped = (await readBuildManifest(this.bundleDir).catch(() => null))?.sourceMapsIncomplete === true
+			const result = await uploadSourceMaps(destination, { ...collected, incomplete: collected.incomplete || skipped }, this.env.fetch)
 			uploaded = result.uploaded
 			this.artifactState = result.state
 		} catch {

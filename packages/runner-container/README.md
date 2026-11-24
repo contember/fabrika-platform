@@ -1,7 +1,9 @@
 # @fabrika/runner-container
 
-The plain-Bun container server that clones an app repository and runs the baked
-`fabrika-cloudflare-executor deploy` CLI. The Cloudflare host lives in `@fabrika/runner-cloudflare`.
+The plain-Bun container server that clones an app repository, builds it as an unprivileged user with no credential
+(`fabrika-cloudflare-executor build`), and deploys the copied output with the baked
+`fabrika-cloudflare-executor deploy --bundle`, which runs none of the repository's code (ADR-0086). The Cloudflare
+host lives in `@fabrika/runner-cloudflare`.
 
 Build and verify the image from the repository workspace:
 

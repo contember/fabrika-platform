@@ -1,7 +1,7 @@
 // The real `Spawner`: runs a child via Bun, decoding stdout/stderr and streaming each chunk to the
 // caller as it arrives. No shell — argv is passed verbatim — so nothing the job carries can be
-// interpreted as a shell metacharacter. The child's env is the runner's env plus the spec's extras
-// (creds + secret values for the `fabrika` child).
+// interpreted as a shell metacharacter. The child's env is the runner's env plus the spec's extras (the credential for
+// the deploy executor), or exactly the spec's for a step of the build sandbox (`replaceEnv`).
 
 import type { Spawner, SpawnHandlers, SpawnResult, SpawnSpec } from './runner'
 
@@ -70,7 +70,7 @@ export const createSpawner =
 export const bunSpawner: Spawner = createSpawner((spec) =>
 	Bun.spawn([spec.command, ...spec.args], {
 		cwd: spec.cwd,
-		env: { ...process.env, ...spec.env },
+		env: spec.replaceEnv === true ? { ...spec.env } : { ...process.env, ...spec.env },
 		stdout: 'pipe',
 		stderr: 'pipe',
 	})

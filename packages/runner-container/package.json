@@ -15,7 +15,7 @@
 		"test": "bun test",
 		"serve": "bun src/serve.ts",
 		"docker:build": "docker build -f Dockerfile -t fabrika-runner ../..",
-		"docker:smoke": "docker run --rm --entrypoint fabrika-cloudflare-executor fabrika-runner --help && docker run --rm -e CLOUDFLARE_ACCOUNT_ID=smoke-account -e CLOUDFLARE_API_TOKEN=smoke-token --entrypoint fabrika-cloudflare-executor fabrika-runner deploy --env=smoke --config=/opt/fabrika/packages/runner-container/docker/smoke/fabrika.config.ts --dry-run"
+		"docker:smoke": "docker run --rm --entrypoint fabrika-cloudflare-executor fabrika-runner --help && docker run --rm -e CLOUDFLARE_API_TOKEN=smoke-token --entrypoint bun fabrika-runner /opt/fabrika/packages/runner-container/docker/smoke/sandbox-smoke.ts && docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN -e CLOUDFLARE_API_TOKEN=smoke-token -e SMOKE_REQUIRE_NETNS=1 --entrypoint bun fabrika-runner /opt/fabrika/packages/runner-container/docker/smoke/sandbox-smoke.ts"
 	},
 	"dependencies": {
 		"zod": "^3.25.76",
