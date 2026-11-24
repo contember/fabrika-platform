@@ -172,4 +172,5 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [292](292-boot-every-platform-worker-in-workerd.md): Only Control's Worker is booted in workerd by a test; a module-load error only workerd refuses in IAM's, Operations' or the runner's Worker reaches a live deploy.
 - [295](295-any-of-refuses-more-than-the-union.md): An `anyOf` endpoint refuses some work one of its held actions alone may do (several insert path conditions, `ctx.sql.scope`, own-read columns); nothing widens.
 - [297](297-control-accepts-any-default-branch.md): Control stores any string as an application's default branch, so a workspace branch or a name git refuses becomes what Deploy runs.
+- [301](301-framework-secrets-stay-in-the-initial-environment.md): The captured framework variables leave `process.env` but stay in `/proc/self/environ`, which code in the same process can read.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

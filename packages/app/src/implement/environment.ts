@@ -9,7 +9,9 @@ export const FRAMEWORK_PREFIX = 'FABRIKA_'
 /**
  * The container credentials endpoint's variables, which ECS writes into every container: the path holds the task's id,
  * and whoever reads it fetches the task role's credentials, which sign for the application's stored files. They are the
- * framework's too, so application code and its dependencies never read them (`FABRIKA_APP_STORAGE_CREDENTIALS`).
+ * framework's too, so a dependency that copies `process.env` never copies them (`FABRIKA_APP_STORAGE_CREDENTIALS`).
+ * Like every captured variable they stay in the process's initial environment, `/proc/self/environ` on Linux, which
+ * code in the same process can still read (backlog 301).
  */
 export const CONTAINER_CREDENTIAL_VARIABLES: readonly string[] = Object.freeze([
 	'AWS_CONTAINER_CREDENTIALS_RELATIVE_URI',

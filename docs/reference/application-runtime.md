@@ -915,7 +915,10 @@ deal_attachments: {
   once; within five minutes of its expiry one refresh runs in the background, a failed or fruitless one waits 30 s
   before the next, and a set that arrives expired, or lasts no longer than the held one, never replaces it. The
   endpoint's variables (`AWS_CONTAINER_CREDENTIALS_*`, `AWS_CONTAINER_AUTHORIZATION_TOKEN*`) are captured with the
-  `FABRIKA_*` ones and leave the process before the application loads, so no application code reads the task's path.
+  `FABRIKA_*` ones and leave `process.env` before the application loads, so a dependency that copies the environment
+  copies no task path. Like every captured variable (the static key pair included) they stay in the process's initial
+  environment, `/proc/self/environ` on Linux, which code in the same process can still read (measured, backlog 301):
+  the capture stops a copy, not hostile code, so the task role is given the application's own bucket and nothing more.
   An endpoint is an `http(s)://` URL without credentials, a query or a fragment. The parser is `@fabrika/platform-node`'s
   `parseStorageConnection`, which Control's run logs (`FABRIKA_CONTROL_RUN_LOGS_*`) and Operations' payloads
   (`FABRIKA_OPERATIONS_BLOB_*`) read too, each with its own default region (`auto`). An older framework ignores the two
