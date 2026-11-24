@@ -332,13 +332,15 @@ const LOCAL_BASE_PACKAGE = '@fabrika/app'
 /**
  * The version of a local pack: a prerelease of the source version, named after the commit. It names the minor the
  * checkout's code is, so the checker and the platform see the release it belongs to. npm never has it, so nothing
- * resolves it from the registry by accident. The `g` keeps an all-digit abbreviation such as `0123456` from being a
- * numeric identifier, which SemVer refuses with a leading zero.
+ * resolves it from the registry by accident. A prerelease source (`0.9.0-dev.33`) keeps its identifiers and gains the
+ * local ones, so the pack sorts after its source and before the next prerelease. The `g` keeps an all-digit
+ * abbreviation such as `0123456` from being a numeric identifier, which SemVer refuses with a leading zero.
  */
 export const localVersion = (source: string, commit: string): string => {
-	if (!/^\d+\.\d+\.\d+$/.test(source)) throw new Error(`the source version ${JSON.stringify(source)} is not a release`)
+	const match = /^\d+\.\d+\.\d+(-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?$/.exec(source)
+	if (match === null) throw new Error(`the source version ${JSON.stringify(source)} is not a release or a prerelease`)
 	if (!/^[0-9a-f]{7,40}$/.test(commit)) throw new Error(`the commit ${JSON.stringify(commit)} is not a git object name`)
-	return `${source}-local.g${commit}`
+	return match[1] === undefined ? `${source}-local.g${commit}` : `${source}.local.g${commit}`
 }
 
 /** `pack --local`'s version and the published version the skill's example pins keep naming, which npm has. */
