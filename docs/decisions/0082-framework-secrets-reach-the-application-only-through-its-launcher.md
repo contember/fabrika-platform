@@ -50,8 +50,8 @@ holder of `CAP_SYS_PTRACE`.
   capability set has no `CAP_SYS_PTRACE` (UNVERIFIED for Fargate's). ECS writes `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`
   itself.
 - **Cloudflare.** There is no process and no `/proc`. The object receives its bindings and variables as `env`, and
-  `cloudflare:workers` exports that `env` to any module of the Worker (UNVERIFIED here, per Cloudflare's
-  documentation). Under plain `nodejs_compat` with a compatibility date from 2025-04-01, workerd also fills
+  `cloudflare:workers` exports that `env` to any module of the Worker unless `disallow_importable_env` is set, which
+  has no enable date (measured in workerd 1.20260312.1: every binding and secret, at load and at request). Under plain `nodejs_compat` with a compatibility date from 2025-04-01, workerd also fills
   `process.env` with the text variables and secrets at module evaluation, before the object's boot captures anything
   (measured in workerd 1.20260312.1). The provider's default, `nodejs_compat_v2`, leaves it empty; an author's own
   flags and the proxy Worker's did not, which #370 closes for both (item 4).
@@ -93,8 +93,9 @@ Proposed, in this order:
 4. **Cloudflare:** measured in workerd 1.20260312.1, `nodejs_compat_v2` (the provider's default) leaves `process.env`
    empty, while plain `nodejs_compat` from 2025-04-01 fills it. #370 makes the provider always set
    `nodejs_compat_do_not_populate_process_env` on every application Worker and its proxy, and refuse an authored
-   opt-in; #371 sets it on Control's Worker and the runner Worker (both open when this was written).
-   `cloudflare:workers` joins the checker's `env-read` rule for application code.
+   opt-in; #371 sets it on Control's Worker and the runner Worker. #373 does the same for the importable `env` of
+   `cloudflare:workers` (`disallow_importable_env`, an authored `allow_importable_env` refused), on application, proxy
+   and platform Workers, and `env-read` refuses the import in application code (all three open when this was written).
 
 **What this buys, and what it does not.** A careless dependency or a diagnostic dump that reads the environment no
 longer sees a framework secret, and a process of the same uid reads none of them. It is no defence against a hostile
@@ -109,11 +110,11 @@ dependency, on any runtime:
 
 **The limit, per runtime, once this is built:**
 
-| Runtime    | Who can still read a framework secret                                                                                        |
-| ---------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| Zerops     | Code in the process, and the platform's own root tooling. Same uid: no, but only once backlog 198 remedy 2 removes `sudo`    |
-| AWS        | Code in the process. A holder of `CAP_SYS_PTRACE` in the task, which the default set does not grant (UNVERIFIED for Fargate) |
-| Cloudflare | Code in the isolate, through the bindings' `env` (`cloudflare:workers`), which no runtime change hides                       |
+| Runtime    | Who can still read a framework secret                                                                                         |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Zerops     | Code in the process, and the platform's own root tooling. Same uid: no, but only once backlog 198 remedy 2 removes `sudo`     |
+| AWS        | Code in the process. A holder of `CAP_SYS_PTRACE` in the task, which the default set does not grant (UNVERIFIED for Fargate)  |
+| Cloudflare | Code in the isolate that is handed `env`, or reads what the framework captured from it; no module reaches it by import (#373) |
 
 ## Consequences
 
