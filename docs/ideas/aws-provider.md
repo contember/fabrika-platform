@@ -104,11 +104,16 @@ In AWS:
 - **ECS Express Mode (rejected).** Given an image and two roles it creates a Fargate service with canary deploys and
   autoscaling, an ALB with an HTTPS listener and host rules, an ACM certificate, security groups and a log group, at no
   charge of its own; up to 25 services share one ALB per VPC
-  ([how it works](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/express-service-work.html)). It does not
-  fit Fabrika: every Express service gets a public route and URL of its own, while an application must be reachable
-  only from its namespace proxy (ADR-0022); the deployment strategy and the balancer cannot be changed after creation;
-  custom domains are a manual listener change. It could front the platform proxy at most, and that saves one listener
-  rule. Express services keep the full ECS feature set, so nothing here closes the door later.
+  ([how it works](https://docs.aws.amazon.com/AmazonECS/latest/developerguide/express-service-work.html)). With
+  private subnets it provisions an internal ALB and no public task address, so an Express service can be private, and
+  it takes a custom task definition as it is, init containers included. It still does not fit Fabrika: the first Express
+  service in a VPC fixes the balancer's scheme for the VPC, and every Express service is a host rule on that one shared
+  balancer, whose security group admits HTTPS. Whatever reaches the balancer reaches every Express service in the VPC by
+  its `Host` header, across namespaces, while ADR-0022 needs an application reachable only from its own namespace proxy,
+  which plain ECS gives with a security group per proxy. The balancer configuration and the deployment strategy (canary)
+  cannot be changed after creation, and custom domains are a manual listener change. It could front the platform proxy
+  at most, and that saves one listener rule. Express services keep the full ECS feature set, so nothing here closes the
+  door later.
 - **App Runner (rejected).** Closed to new customers
   ([notice](https://docs.aws.amazon.com/apprunner/latest/dg/apprunner-availability-change.html)).
 - **EKS (rejected for this provider).** $0.10 an hour per cluster before any workload, and a Kubernetes control plane to
@@ -291,7 +296,7 @@ build image are Fabrika's to declare.
 
 | Part                                                                                                    |    Parity | First usable |
 | ------------------------------------------------------------------------------------------------------- | --------: | -----------: |
-| Shared prerequisites ([the comparison](cloud-providers.md#effort)), once for every cloud                |     22–35 |        20–25 |
+| Shared prerequisites ([the comparison](cloud-providers.md#effort)), once for every cloud                |     22–35 |        20–33 |
 | Provider skeleton, codecs, `defineApp`, conformance harness over a fake AWS                             |       3–4 |            3 |
 | AWS client layer and fakes                                                                              |       4–6 |            4 |
 | Build: multipart source, CodeBuild, ECR, source maps, log relay                                         |       4–6 |            4 |
@@ -305,8 +310,8 @@ build image are Fabrika's to declare.
 | **AWS package total**                                                                                   | **51–78** |     **≈ 39** |
 
 "First usable" is one installation running one application in a `cheap` namespace, with the ALB hosts, DNS and
-certificates set by hand, mail through an existing adapter and no console form: about 20–25 days of shared
-prerequisites plus about 39 of AWS, two to three calendar months for one person. The shared part is paid once:
+certificates set by hand, mail through an existing adapter and no console form: about 20–33 days of shared
+prerequisites (all but the console form, N10) plus about 39 of AWS, three to four calendar months for one person. The shared part is paid once:
 the second cloud starts from it.
 
 ## Running cost of one small installation

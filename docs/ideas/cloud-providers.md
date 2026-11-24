@@ -10,7 +10,7 @@ This page puts them side by side and lists the provider-neutral work all three n
 | Concern                         | AWS                                                       | Azure                                                   | Google Cloud                                                 |
 | ------------------------------- | --------------------------------------------------------- | ------------------------------------------------------- | ------------------------------------------------------------ |
 | Compute                         | ECS on Fargate (ARM64)                                    | Container Apps, Consumption profile (amd64)             | GKE Autopilot (amd64)                                        |
-| Rejected compute                | Express Mode, App Runner, EKS                             | App Service, AKS, Dedicated profiles                    | Cloud Run (1 vCPU floor, no init containers), GKE Standard   |
+| Rejected compute                | Express Mode, App Runner, EKS                             | Express environments, App Service, AKS                  | Cloud Run (1 vCPU floor, no init containers), GKE Standard   |
 | Smallest always-on unit         | 0.25 vCPU, 0.5 GB                                         | 0.25 vCPU, 0.5 GiB                                      | 0.25 vCPU, 0.5 GiB (50m with bursting)                       |
 | A namespace is                  | A CloudFormation stack, its security groups               | A Container Apps environment in its own subnet          | A Kubernetes namespace with a default-deny NetworkPolicy     |
 | Only the proxy reaches apps     | Security group rules                                      | Internal ingress inside the environment                 | NetworkPolicy                                                |
@@ -27,7 +27,7 @@ This page puts them side by side and lists the provider-neutral work all three n
 | Infrastructure                  | CloudFormation (installation and namespaces)              | Bicep deployment stack; ARM PUTs from Control           | Terraform; Kubernetes and REST APIs from Control             |
 | Pipeline credential             | GitHub OIDC to an IAM role                                | Federated credential on a managed identity              | Workload Identity Federation                                 |
 | Email                           | Existing adapters; SES optional                           | Existing adapters (ACS Email retiring 2028)             | Existing adapters (no Google service)                        |
-| Small installation / month      | ≈ $151                                                    | ≈ $67–160                                               | ≈ $147 (US prices; Frankfurt higher)                         |
+| Small installation / month      | ≈ $151                                                    | ≈ $111–204                                              | ≈ $147 (US prices; Frankfurt higher)                         |
 | Effort after the shared work    | ≈ 39 first usable, 51–78 parity                           | ≈ 39 first usable (blob adapter included), 48–76 parity | ≈ 41 first usable, 53–81 parity                              |
 
 ## The shared prerequisites
@@ -89,7 +89,11 @@ Three places build the S3 client from their own variables: Control's run logs (`
 are already neutral (`BlobStore`, `FileObjectStore`, `packages/platform/src/ports.ts`). Needed: one parser of a storage
 connection (endpoint, region, addressing, credential source) used by the three; a credential source that refreshes (the
 ECS container credentials endpoint, an Entra or Google token); new optional variables beside today's, which stay as
-they are, because the application's are platform protocol (ADR-0062).
+they are, because the application's are platform protocol (ADR-0062). The application's region is the first such
+variable (`FABRIKA_APP_STORAGE_REGION`; without it the store signs for `us-east-1`). An older framework ignores it and
+keeps signing for `us-east-1`, which an S3 bucket in another region refuses, so a provider that writes it must refuse an
+application pinned to a release older than the first one that reads it, as Control already refuses releases outside its
+window.
 
 ### N6. A native object store (M, Azure; Google Cloud later)
 
@@ -163,6 +167,7 @@ is the first live check of each provider.
 | N6 native object store                      |      4–6 each | Azure (Google later) |
 | N11, N12                                    | 1–2 per cloud | each                 |
 
+A first usable installation needs all of it but N10 (its hosts and registrations are set by hand): about 20–33 days.
 The shared part is about a third of the first cloud's cost and none of the second's. With it done, the per-cloud work
 is the package checklists on each page.
 
@@ -199,7 +204,7 @@ outbound traffic a month. List prices, pay-as-you-go, read on 2026-11-24, USD.
 | Zerops, HA (2026-11-11 figure)                                                 |    85–146 | Zerops pricing pages                          |
 | AWS: Fargate ARM, public task addresses, one ALB, RDS `db.t4g.small` Single-AZ |     ≈ 151 | AWS Price List API, eu-central-1              |
 | AWS: one EC2 host running every container, RDS beside it (2026-11-11 figure)   |      ≈ 71 | AWS Price List API, eu-central-1              |
-| Azure: Container Apps Consumption, Flexible Server `B1ms` (`B2s`: about +$44)  |    67–160 | Azure Retail Prices API, Germany West Central |
+| Azure: Container Apps Consumption, Flexible Server `B2s` (`B1ms`: about −$44)  |   111–204 | Azure Retail Prices API, Germany West Central |
 | Google Cloud: GKE Autopilot, one forwarding rule, Cloud SQL `db-custom-1-3840` |     ≈ 147 | Google pricing pages, US prices only          |
 | Google Cloud on Cloud Run instead of Autopilot (compute only)                  |     ≈ 300 | Google pricing pages, US prices only          |
 

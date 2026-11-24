@@ -63,6 +63,12 @@ were not readable.
   authentication beside the proxy secret. Domain mapping is a preview, not in europe-west3
   ([custom domains](https://docs.cloud.google.com/run/docs/mapping-custom-domains)), so a load balancer is needed anyway.
   Images must be `linux/amd64` ([container contract](https://docs.cloud.google.com/run/docs/container-contract)).
+  Newer features were weighed and change none of this: sidecars with a startup order wait for the other container's
+  health check, not for it to exit, so they are no run-to-completion init container; volume mounts and Direct VPC
+  egress do not narrow who reaches an internal-ingress service.
+- **What the Cloud Run figure assumes.** About $300 a month bills all six services instance-based at 1 vCPU. The two
+  Caddy proxies keep no timers and could bill request-based at 1 vCPU, which brings it nearer $200 plus their request
+  time; the conclusion stands.
 - **GKE Autopilot (chosen).** Pods from 50m CPU and 52 MiB with bursting (250m and 512 MiB without), CPU to memory
   between 1:1 and 1:6.5, billed per second on requests
   ([resource requests](https://docs.cloud.google.com/kubernetes-engine/docs/concepts/autopilot-resource-requests)): at
@@ -131,7 +137,9 @@ previous pod template back, which is the circuit breaker ECS has built in. Cance
 - **TLS.** Set `ENCRYPTED_ONLY`. For `verify-full` the server certificate must name the host: the **shared CA** mode puts
   the instance's DNS name in the certificate's subject alternative names, and the installation resolves that name
   privately ([SSL](https://docs.cloud.google.com/sql/docs/postgres/configure-ssl-instance)). The default per-instance
-  CA names no host Fabrika dials. The Auth Proxy sidecar is not needed once the certificate is verified.
+  CA supports the DNS-name check only for an instance configured with Private Service Connect, which this page chooses;
+  the shared CA is kept because it holds on every connectivity type. The Auth Proxy sidecar is not needed once the
+  certificate is verified.
 - **Private IP** through Private Service Connect (recommended over Private Service Access,
   [private IP](https://docs.cloud.google.com/sql/docs/postgres/private-ip)). Reaching it from Autopilot over private IP
   with `verify-full` was not found documented; first live check.
@@ -239,7 +247,7 @@ server CA; N5's store is the S3 one pointed at the XML API with an HMAC key.
 
 | Part                                                                                     |    Parity | First usable |
 | ---------------------------------------------------------------------------------------- | --------: | -----------: |
-| Shared prerequisites ([the comparison](cloud-providers.md#effort)), once for every cloud |     22–35 |        20–25 |
+| Shared prerequisites ([the comparison](cloud-providers.md#effort)), once for every cloud |     22–35 |        20–33 |
 | Kubernetes library: client, renderers, rollout and revert, fake API server               |      8–12 |            7 |
 | Provider skeleton, codecs, `defineApp`, conformance harness                              |       3–4 |            3 |
 | Google REST clients, token source, fakes                                                 |       3–4 |            3 |

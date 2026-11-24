@@ -15,32 +15,32 @@ balancer to pay for. **Worse:** Blob Storage has no S3 API, so the platform and 
 object store implementation (shared prerequisite N6), and Container Apps runs `linux/amd64` only.
 
 Effort: the shared prerequisites (about 22–35 person-days, once for every cloud), then about 39 for a first usable
-Azure provider (the Blob Storage adapter included) and 48–76 for parity. A small installation costs about $70–160 a month,
-depending on how much of the time its containers are idle.
+Azure provider (the Blob Storage adapter included) and 48–76 for parity. A small installation costs about $111–204 a month
+with a `B2s` database, depending on how much of the time its containers are idle.
 
 ## How Azure maps onto the provider contract
 
-| Fabrika concept                           | Zerops today                                                 | Azure                                                                                                    | Rejected                                            |
-| ----------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| Installation (one cloud, ADR-0011)        | One Zerops project for the platform                          | One resource group in one region, a VNet, one Container Apps environment for the platform                | A subscription per installation (later)             |
-| Long-running service                      | Zerops runtime service, `alpine/bun@1.3`                     | A container app on the Consumption profile of a workload-profiles environment                            | App Service, AKS, AKS Automatic, Dedicated profiles |
-| Build (ADR-0003: no runner)               | Zerops build container, triggered over REST                  | ACR Tasks `ScheduleRun` of a `Dockerfile` on an uploaded tar.gz; ACR Basic; deployed by digest           | Container Apps cloud build (preview API only)       |
-| Source transport (ADR-0029)               | Control streams the GitHub tarball to the app version upload | The same stream into the SAS URL `listBuildSourceUploadUrl` returns, as `Put Block` and `Put Block List` | One `Put Blob` (needs a length)                     |
-| Deploy and activation                     | `build-and-deploy`, readiness check gates activation         | PUT the container app; in single revision mode traffic moves only once the new revision's probes pass    |                                                     |
-| Migrations                                | `run.initCommands` on every container start                  | A manual Container Apps job with the new image runs `migrate` once, before the app's PUT                 | An init container (runs per replica and restart)    |
-| Run checkpoint and recovery (ADR-0044)    | `{ appVersionId, triggered }`                                | `{ runId, jobExecution, revisionSuffix }`, each recorded before the call that needs it                   |                                                     |
-| Secrets (ADR-0004)                        | Sensitive service variables                                  | Container app secrets, written by Control into the app resource with each deploy                         | Key Vault references for application secrets        |
-| Managed environment                       | Service variables plus literals in the descriptor            | The container's `env`, literal or `secretRef`, written per run                                           |                                                     |
-| Deployment namespace (ADR-0014)           | One Zerops project with its own proxy                        | One Container Apps environment in its own subnet, its proxy app with external ingress                    | Several namespaces in one environment               |
-| Private network trust (ADR-0022 rule 5)   | Everything in a project reaches every port                   | Applications have internal ingress only: reachable inside their environment, not from outside            |                                                     |
-| Public entry and TLS                      | Project L7 balancer, Zerops subdomain or custom domain       | The proxy app's external ingress, custom domains with free managed certificates                          | Front Door, Application Gateway                     |
-| PostgreSQL                                | Managed `postgresql:single@18` / `ha@18` service             | Azure Database for PostgreSQL Flexible Server 18, Burstable `B1ms`/`B2s`; General Purpose for HA         | Cosmos DB for PostgreSQL, a VM                      |
-| Object storage                            | Zerops object storage (MinIO), static keys                   | Blob Storage (StorageV2, hot, LRS or ZRS) through a native adapter, Entra tokens of the managed identity | NetApp Files object API, an S3 gateway of our own   |
-| Outbound email (ADR-0019)                 | An adapter (Postmark, Resend, …) or Control's relay          | The same adapters unchanged                                                                              | Azure Communication Services Email (retiring)       |
-| Cron (`run.crontab`)                      | Zerops crontab in the container                              | The serving process keeps cron wakes (shared prerequisite N7)                                            | A scheduled job per cron job (fallback)             |
-| Service logs                              | Zerops project log service                                   | Log Analytics (5 GB a month free), the Basic plan for the console log table                              |                                                     |
-| Installation tooling (ADR-0025, ADR-0027) | `platform install/deploy/upgrade --provider=zerops`          | Bicep compiled to an ARM template, applied as a deployment stack with deny settings                      | Terraform (a toolchain in Control)                  |
-| Sidecar pipeline credential               | A Zerops integration token in a GitHub Environment           | A federated credential on a user-assigned managed identity (GitHub OIDC)                                 | A client secret in a GitHub secret                  |
+| Fabrika concept                           | Zerops today                                                 | Azure                                                                                                    | Rejected                                                   |
+| ----------------------------------------- | ------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
+| Installation (one cloud, ADR-0011)        | One Zerops project for the platform                          | One resource group in one region, a VNet, one Container Apps environment for the platform                | A subscription per installation (later)                    |
+| Long-running service                      | Zerops runtime service, `alpine/bun@1.3`                     | A container app on the Consumption profile of a workload-profiles environment                            | Express environments, App Service, AKS, Dedicated profiles |
+| Build (ADR-0003: no runner)               | Zerops build container, triggered over REST                  | ACR Tasks `ScheduleRun` of a `Dockerfile` on an uploaded tar.gz; ACR Basic; deployed by digest           | Container Apps cloud build (preview API only)              |
+| Source transport (ADR-0029)               | Control streams the GitHub tarball to the app version upload | The same stream into the SAS URL `listBuildSourceUploadUrl` returns, as `Put Block` and `Put Block List` | One `Put Blob` (needs a length)                            |
+| Deploy and activation                     | `build-and-deploy`, readiness check gates activation         | PUT the container app; in single revision mode traffic moves only once the new revision's probes pass    |                                                            |
+| Migrations                                | `run.initCommands` on every container start                  | A manual Container Apps job with the new image runs `migrate` once, before the app's PUT                 | An init container (runs per replica and restart)           |
+| Run checkpoint and recovery (ADR-0044)    | `{ appVersionId, triggered }`                                | `{ runId, jobExecution, revisionSuffix }`, each recorded before the call that needs it                   |                                                            |
+| Secrets (ADR-0004)                        | Sensitive service variables                                  | Container app secrets, written by Control into the app resource with each deploy                         | Key Vault references for application secrets               |
+| Managed environment                       | Service variables plus literals in the descriptor            | The container's `env`, literal or `secretRef`, written per run                                           |                                                            |
+| Deployment namespace (ADR-0014)           | One Zerops project with its own proxy                        | One Container Apps environment in its own subnet, its proxy app with external ingress                    | Several namespaces in one environment                      |
+| Private network trust (ADR-0022 rule 5)   | Everything in a project reaches every port                   | Applications have internal ingress only: reachable inside their environment, not from outside            |                                                            |
+| Public entry and TLS                      | Project L7 balancer, Zerops subdomain or custom domain       | The proxy app's external ingress, custom domains with free managed certificates                          | Front Door, Application Gateway                            |
+| PostgreSQL                                | Managed `postgresql:single@18` / `ha@18` service             | Azure Database for PostgreSQL Flexible Server 18, Burstable `B1ms`/`B2s`; General Purpose for HA         | Cosmos DB for PostgreSQL, a VM                             |
+| Object storage                            | Zerops object storage (MinIO), static keys                   | Blob Storage (StorageV2, hot, LRS or ZRS) through a native adapter, Entra tokens of the managed identity | NetApp Files object API, an S3 gateway of our own          |
+| Outbound email (ADR-0019)                 | An adapter (Postmark, Resend, …) or Control's relay          | The same adapters unchanged                                                                              | Azure Communication Services Email (retiring)              |
+| Cron (`run.crontab`)                      | Zerops crontab in the container                              | The serving process keeps cron wakes (shared prerequisite N7)                                            | A scheduled job per cron job (fallback)                    |
+| Service logs                              | Zerops project log service                                   | Log Analytics (5 GB a month free), the Basic plan for the console log table                              |                                                            |
+| Installation tooling (ADR-0025, ADR-0027) | `platform install/deploy/upgrade --provider=zerops`          | Bicep compiled to an ARM template, applied as a deployment stack with deny settings                      | Terraform (a toolchain in Control)                         |
+| Sidecar pipeline credential               | A Zerops integration token in a GitHub Environment           | A federated credential on a user-assigned managed identity (GitHub OIDC)                                 | A client secret in a GitHub secret                         |
 
 ## The service choices
 
@@ -65,6 +65,10 @@ depending on how much of the time its containers are idle.
   before any node ([AKS Automatic](https://learn.microsoft.com/en-us/azure/aks/intro-aks-automatic)), and a cluster
   is a job of its own. If an operator mandates Kubernetes, the answer is a Kubernetes provider shared by AKS, EKS and
   GKE ([the comparison](cloud-providers.md#one-kubernetes-provider-instead)).
+- **Container Apps express environments (rejected).** The newer express mode has no custom domains, no Container Apps
+  jobs, no init containers and no workload profiles
+  ([overview](https://learn.microsoft.com/en-us/azure/container-apps/express-overview)), so it serves neither the
+  proxy's hosts nor the migration job. Microsoft migrates some existing environments to it automatically (see Risks).
 - **App Service (rejected).** Billed per plan, not per container, with no counterpart of an environment's private
   network or of jobs; not researched further.
 - **Dedicated workload profiles (rejected for small installations).** A D4 profile is about $225 a month plus the
@@ -239,7 +243,7 @@ is the Blob adapter itself.
 
 | Part                                                                                           |    Parity | First usable |
 | ---------------------------------------------------------------------------------------------- | --------: | -----------: |
-| Shared prerequisites ([the comparison](cloud-providers.md#effort)), once for every cloud       |     22–35 |        20–25 |
+| Shared prerequisites ([the comparison](cloud-providers.md#effort)), once for every cloud       |     22–35 |        20–33 |
 | The Blob Storage adapter (N6), in the platform and the application runtime                     |       4–6 |            4 |
 | Provider skeleton, codecs, `defineApp`, conformance harness over a fake ARM                    |       3–4 |            3 |
 | ARM client, token source, fakes                                                                |       2–4 |            2 |
@@ -258,22 +262,23 @@ is the Blob adapter itself.
 List prices read on **2026-11-24** from the Azure Retail Prices API, Germany West Central, pay-as-you-go. A month is
 730 hours. The workload is the one of [the comparison](cloud-providers.md#running-cost-of-one-small-installation).
 
-| Item                       | Configuration                                  | Unit price                                |          USD |
-| -------------------------- | ---------------------------------------------- | ----------------------------------------- | -----------: |
-| Container Apps vCPU        | 1.75 vCPU always on, minus 180,000 free vCPU-s | $0.000024/s active, $0.000003/s idle      |       13–106 |
-| Container Apps memory      | 3.5 GiB always on, minus 360,000 free GiB-s    | $0.000003/GiB-s                           |        26.51 |
-| PostgreSQL Flexible Server | `B1ms` (`B2s`: +43.58), 32 GiB storage         | $0.0199/h, $0.137/GB-month                |        18.91 |
-| Blob Storage               | 50 GB hot LRS, operations                      | $0.0196/GB-month                          |         2.00 |
-| ACR Basic and tasks        | one registry, about 10 build minutes a day     | $0.1666/day, $0.0001/vCPU-s after 6,000 s |         6.27 |
-| Log Analytics              | 5 GB                                           | first 5 GB free                           |            0 |
-| Key Vault                  | about 100,000 operations                       | $0.03 per 10,000                          |         0.30 |
-| Outbound traffic           | 20 GB, inside the free 100 GB                  | $0.087/GB beyond                          |            0 |
-| **Total**                  |                                                |                                           | **≈ 67–160** |
+| Item                       | Configuration                                  | Unit price                                |           USD |
+| -------------------------- | ---------------------------------------------- | ----------------------------------------- | ------------: |
+| Container Apps vCPU        | 1.75 vCPU always on, minus 180,000 free vCPU-s | $0.000024/s active, $0.000003/s idle      |        13–106 |
+| Container Apps memory      | 3.5 GiB always on, minus 360,000 free GiB-s    | $0.000003/GiB-s                           |         26.51 |
+| PostgreSQL Flexible Server | `B2s`, 32 GiB storage                          | $0.0796/h, $0.137/GB-month                |         62.49 |
+| Blob Storage               | 50 GB hot LRS, operations                      | $0.0196/GB-month                          |          2.00 |
+| ACR Basic and tasks        | one registry, about 10 build minutes a day     | $0.1666/day, $0.0001/vCPU-s after 6,000 s |          6.27 |
+| Log Analytics              | 5 GB                                           | first 5 GB free                           |             0 |
+| Key Vault                  | about 100,000 operations                       | $0.03 per 10,000                          |          0.30 |
+| Outbound traffic           | 20 GB, inside the free 100 GB                  | $0.087/GB beyond                          |             0 |
+| **Total**                  |                                                |                                           | **≈ 111–204** |
 
 The range is the idle rate: a replica at its minimum that serves no request and uses under 0.01 vCPU is billed at an
 eighth of the active vCPU rate. Whether an idle Bun process with its timers stays under that line is a live
-measurement; the high end assumes it never does. With `B2s` the database is sized for the connections and the total is
-about $110–205. HA (a General Purpose server with a zone-redundant standby, doubled containers) was about $456 a month
+measurement; the high end assumes it never does. The database is `B2s` because `B1ms` gives 50 connections for three
+services and an application, the same reason the AWS page rejects `db.t4g.micro`; with `B1ms` the total is about $44
+less ($67–160). HA (a General Purpose server with a zone-redundant standby, doubled containers) was about $456 a month
 on 2026-11-11 and was not re-priced.
 
 ## Risks
@@ -284,6 +289,11 @@ on 2026-11-11 and was not re-priced.
 - **Burstable in Germany West Central** is unclear (above), and Burstable is not recommended for production.
 - **Managed certificates need a direct CNAME**: an operator who fronts the hosts with another CDN must bring its own
   certificate.
+- **Automatic migration to express environments.** Microsoft migrates some existing environments to the express mode
+  unless their owner opts out, with 25–30 days' notice, choosing them by the features they use
+  ([FAQ](https://learn.microsoft.com/en-us/azure/container-apps/express-faq)). A namespace environment with a custom
+  domain and a migration job should not be chosen, but the FAQ assesses eligibility when the notice goes out, so that is
+  an inference. An installation should opt out of any notice that names its environments.
 - The rest is AWS' list: one more provider to keep current, a new security boundary (Control's role assignments), no
   faithful local emulator, slower feedback.
 
