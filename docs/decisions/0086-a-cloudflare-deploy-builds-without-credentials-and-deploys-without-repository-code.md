@@ -43,7 +43,8 @@ same path as any other.
    run, at the platform's pinned releases) and `fabrika-cloudflare-executor build`: the config, `pipeline.build`, the
    checks, wrangler's bundle (`deploy --dry-run --outdir`, which needs no account), and copies of the assets, the D1
    migrations and the source maps, described by a manifest (`fabrika-build.json`). After each step the runner kills
-   every process of the build user and waits until none is left.
+   every process of the build user, first with one `kill(-1)` as that user, which a process that keeps forking cannot
+   outrun as it can a walk of `/proc`, and waits until none is left.
 2. **The build holds no secret.** It never sees the Cloudflare credential, the clone token, the application's secrets
    or a managed credential. It reads two files: the access Control approved (the contract and two release numbers) and
    the build values, the operator's vars and the managed values that are not credentials (`buildValuesOf`, fail
@@ -72,7 +73,11 @@ same path as any other.
    refused) against a strict schema and rebuilds the application's config from it out of its own oblaka classes: a
    resource from its kind and exactly the options its class takes, a D1 database's migrations only from the copy at
    `migrations/<binding>`, any other binding as the config entries its `configureBinding` wrote in the build, and the
-   bundle as the Worker's `main`. The composition (proxy, IAM identity, object, files bucket, managed values) and the
+   bundle as the Worker's `main`. Those entries are merged after the Worker's own, so a recorded binding may write
+   exactly its own `services` entry or its own `ai` binding: with `main` replaced by a path in the checkout, `wrangler
+   deploy --no-bundle` would read the checkout as root and upload what its links point at (`/proc/self/environ`, the
+   values file), and a renamed Worker would be bundled. Before the first upload every generated config must be the
+   application running the copied bundle or the platform's proxy. The composition (proxy, IAM identity, object, files bucket, managed values) and the
    bounds on the generated configs are the ones every deploy runs. The application Worker is uploaded with `wrangler
    deploy --no-bundle`; the platform's proxy Worker is bundled from the runner image's own source. The application id
    must be the one whose contract Control approved.

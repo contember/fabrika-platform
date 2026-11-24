@@ -23,8 +23,9 @@ bun run docker:smoke    # the real build sandbox: the user switch, /proc, the ne
   `WRANGLER_SEND_METRICS` (`replaceEnv`), owning only the checkout and `<runId>.build`. Only the install and
   `build --fetch-tools` (run outside the checkout) have network; the build gets a network namespace when the container
   allows one, otherwise `FABRIKA_RUNNER_BUILD_NETWORK=auto` builds with network and `isolated` refuses every run. A
-  runner that is not root, or cannot switch users, refuses every run. After each sandboxed step `reap` kills every
-  process of the build user; tini (PID 1 of the image) collects them.
+  runner that is not root, or cannot switch users, refuses every run. After each sandboxed step `reap` runs `kill -KILL -1` as
+  the build user (one pass of the kernel, which a process that keeps forking cannot outrun), then kills what a walk of
+  `/proc` still finds until none is left; tini (PID 1 of the image) collects them.
 - **The build gets no secret.** It reads `<runId>.build/access.json` and `values.json` (`buildValuesOf`: vars and the
   managed values that are not credentials). The deploy's values and access files are written only after the build's
   processes are gone.

@@ -19,9 +19,11 @@ this one import.
   the manifest as JSON against `buildManifestSchema` (a `__proto__` key anywhere is refused), and rebuilds the config
   out of this package's classes: a resource from its kind and exactly its class's options, a D1 database's migrations
   only from `migrations/<binding>`, any other binding as the config entries its `configureBinding` wrote
-  (`RecordedBinding`), and the bundle as `main`. The deployer then runs as for any deploy with `prebuilt`: no build or
-  check step, no SPA staging (the build staged the files), `wrangler deploy --no-bundle` for the application Worker,
-  the platform proxy bundled from this package. The application id must be the approved contract's `app`. Never import,
+  (`RecordedBinding`), which must be exactly its own `services` entry or its own `ai` binding (merged after oblaka wrote
+  the Worker, any other key would replace `main`, `name` or a D1 entry), and the bundle as `main`. The deployer then
+  runs as for any deploy with `prebuilt`: no build or check step, no SPA staging (the build staged the files), `wrangler
+  deploy --no-bundle` for the application Worker, the platform proxy bundled from this package; before the first upload
+  every generated config must be either the application running the copied bundle or that proxy. The application id must be the approved contract's `app`. Never import,
   evaluate or bundle a file of the build's output in the deploy, and never let the deploy run with its working
   directory inside that output. `build` refuses a container binding, a second Worker and an option that is not plain
   data. `deploy --config` (a local deploy, the installation's own components) keeps the single process.
