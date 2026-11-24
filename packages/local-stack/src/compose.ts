@@ -1,6 +1,20 @@
+import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
-import { resolve } from 'node:path'
+import { basename, resolve } from 'node:path'
 import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
+
+/**
+ * The compose project of one checkout: its volumes, networks and containers carry this prefix, so a second worktree's
+ * `local:up` starts from its own empty volumes instead of meeting another worktree's credentials. The path hash keeps two
+ * checkouts with one directory name apart.
+ */
+export function composeProjectName(repoRoot: string): string {
+	const name = basename(repoRoot).toLowerCase().replace(/[^a-z0-9_-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40)
+	const hash = createHash('sha256').update(repoRoot).digest('hex').slice(0, 8)
+	return `fabrika-local-${name === '' ? 'root' : name}-${hash}`
+}
+
+export const COMPOSE_PROJECT = composeProjectName(REPO_ROOT)
 
 export const BROWSER_COMPOSE_FILE = `${import.meta.dir}/../compose.browser.yaml`
 /**
@@ -19,7 +33,7 @@ const composeCommand = (args: string[], browser: boolean): string[] => [
 	'docker',
 	'compose',
 	'--project-name',
-	'fabrika-local',
+	COMPOSE_PROJECT,
 	'--file',
 	COMPOSE_FILE,
 	...(browser ? ['--file', BROWSER_COMPOSE_FILE, ...browserEnvFile()] : []),

@@ -106,8 +106,11 @@ bun run test:browser  # the opice suites in tests/browser/
   reads the DSN, the release and the environment from the framework's `/__fabrika-config.json`. The browser stack recreates `notes` with
   a seeded source's DSN (`FABRIKA_BROWSER_OPERATIONS_DSN`, `compose.browser.yaml`).
 - **`.state/` holds generated local credentials and is disposable**, but only `local:reset` may
-  remove it — it wipes the `fabrika-local` volumes in the same step. Deleting one without the other
+  remove it — it wipes this checkout's compose volumes in the same step. Deleting one without the other
   leaves services holding credentials the databases no longer accept.
+- **A checkout's stack is its own compose project** (`COMPOSE_PROJECT` in `src/compose.ts`: the directory name and a hash
+  of the checkout's path), so its volumes match its own `.state/` and never another worktree's. Every compose call,
+  `smoke.ts`'s included, goes through that name; never pass a fixed `--project-name` again.
 - **Hostnames are load-bearing, not cosmetic.** Services address each other as
   `*.fabrika.localhost` on named networks (`platform`, `apps-prod`) and the smoke test asserts that
   an app container CANNOT reach the private control or Operations networks. Do not flatten the

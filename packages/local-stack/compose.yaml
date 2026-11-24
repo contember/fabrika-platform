@@ -1,4 +1,4 @@
-name: fabrika-local
+# The project name comes from `src/compose.ts` (`COMPOSE_PROJECT`), one per checkout; run this file through `local:*`.
 
 x-bun: &bun
   image: oven/bun:1.4.4-alpine
