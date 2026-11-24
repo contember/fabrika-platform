@@ -70,7 +70,7 @@ import {
 	type SurfaceReach,
 } from '@fabrika/control-contract'
 import type { MigrationDataLoss, MigrationDeviation } from '@fabrika/platform-node/sql'
-import { type AccessSnapshot, compareText, deviationKey } from './snapshot'
+import { type AccessSnapshot, compareText, deviationKey, type SqlStatementEntry } from './snapshot'
 
 /**
  * What one line does to access: `widens` when it can grant access the baseline did not, `narrows` when it can only take
@@ -136,6 +136,7 @@ export function classifyAccess(baseline: AccessSnapshot, candidate: AccessSnapsh
 	compareDatabaseCode(changes, baseline, candidate)
 	compareFileAdoptions(changes, baseline, candidate)
 	compareDataLoss(changes, baseline, candidate)
+	compareSqlStatements(changes, baseline, candidate)
 	// The candidate's row of an endpoint, or the baseline's for a removed one.
 	const rows = new Map([...baseline.contract?.endpoints ?? [], ...candidate.contract?.endpoints ?? []].map((row) => [row.id, row]))
 	const list = changes.list.map((change) => withAudience(change, changes.reaching.get(subjectKey(change.subject)), rows))
@@ -914,6 +915,49 @@ function compareDatabaseCode(changes: Changes, baseline: AccessSnapshot, candida
 			place(to.file, closer('off-road', `${migrationName(to.file)} declares ${declares(to)}, which a new access entry names`))
 		}
 	}
+}
+
+/**
+ * The SQL statements of the server modules, matched by file and text. A site's `sql` declaration says only that it runs
+ * raw SQL; the statements say what, and nothing else checks them, so a new, changed or removed one needs closer review:
+ * a removed one may have been the check that kept a row out. A side without statements recorded (read before they were,
+ * or with no site declaring `sql`, which is its own closer-review line) shows none.
+ */
+function compareSqlStatements(changes: Changes, baseline: AccessSnapshot, candidate: AccessSnapshot): void {
+	const app = candidate.contract?.app
+	if (baseline.sqlStatements === undefined || candidate.sqlStatements === undefined || app === undefined) return
+	const before = byFile(baseline.sqlStatements)
+	const after = byFile(candidate.sqlStatements)
+	for (const file of union([...before.keys()], [...after.keys()])) {
+		const unmatched = [...before.get(file) ?? []]
+		const added: SqlStatementEntry[] = []
+		for (const entry of after.get(file) ?? []) {
+			const index = unmatched.findIndex((was) => was.digest === entry.digest)
+			if (index === -1) added.push(entry)
+			else unmatched.splice(index, 1)
+		}
+		const lines = [
+			...added.map((entry, index) => closer('off-road', `${statementPlace(file, entry)} ${index < unmatched.length ? 'changes' : 'is new'}`)),
+			...unmatched.slice(added.length).map((entry) => closer('off-road', `${statementPlace(file, entry)} is removed`)),
+		]
+		changes.add(subjectOf('application', app), ...ruled('application.sql-statement', lines))
+	}
+}
+
+function statementPlace(file: string, entry: SqlStatementEntry): string {
+	return entry.line === 0
+		? `\`${file}\`, which Control cannot parse for its SQL statements,`
+		: `The tagged template at \`${file}:${entry.line}\`, which may run SQL,`
+}
+
+function byFile(entries: readonly SqlStatementEntry[]): Map<string, SqlStatementEntry[]> {
+	const files = new Map<string, SqlStatementEntry[]>()
+	for (const entry of entries) {
+		const list = files.get(entry.file)
+		if (list === undefined) files.set(entry.file, [entry])
+		else list.push(entry)
+	}
+	return files
 }
 
 /** The views an access entry the candidate adds or changes names: their SQL now decides access it did not decide before. */

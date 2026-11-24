@@ -48,7 +48,8 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 - The migration checksum is the SHA-256 of the file's text, the checksum the application's ledger records;
   every file under `db/migrations/` is listed.
 - The snapshot digest covers the canonical contract (each site's declared reach included) and the migration list,
-  and the database code only when there is some; not the checker version. It keeps the trailing `null` that once
+  and the database code and the SQL statements only when there are some; not the checker version nor a statement's
+  line. It keeps the trailing `null` that once
   stood for artifact access, and the contract's `declared` section is absent for a contract that is not built with
   the staged kit, so a digest an approval recorded stays valid.
 - **Fabrika deploys an application only with a contract.** A commit without `fabrika.contract.ts` fails its
@@ -95,9 +96,10 @@ Built in work unit B6 (`packages/control/src/approval/`). Details the sections b
 Right after a run's commit is pinned, Control reads the application's shell — the contract and the modules it
 imports, `src/db/tables.ts` — and the migration files at that commit. It parses the shell with the static reader of
 [ADR-0005](0005-compile-app-config-to-static-manifest.md), each module as its shell slice: the handlers are removed
-first, so Control never fetches, parses or runs a module that only a handler imports. It classifies the migration
-files with the classifier the runner applies them with ([ADR-0017](0017-service-owned-postgres-migrations.md)). The
-run stores the result as its **snapshot**:
+first, so the contract reader never fetches, parses or runs a module that only a handler imports. It classifies the
+migration files with the classifier the runner applies them with ([ADR-0017](0017-service-owned-postgres-migrations.md)).
+When a site declares `sql`, it also reads the SQL statements of every server module, as text (below). The run stores
+the result as its **snapshot**:
 
 - the parsed contract and table policies, with each site's **declared reach** (`ContractArtifact.declared`): the
   `sql` mode, the `unscoped` tables and their modes, the `connect` imports, the `issues` mount, the `kicks` jobs, the
@@ -106,6 +108,13 @@ run stores the result as its **snapshot**:
 - the migration list with checksums;
 - the **database code** the migrations declare (`databaseCode`): each function, procedure, trigger, view, rule,
   policy, `DO` block and expression that calls database code, by file, kind and object;
+- the **SQL statements** (`sqlStatements`), once a site declares `sql`: each tagged template of a server module under
+  `src/`, by file, line and the SHA-256 of its text as written, since whitespace may stand in a quoted literal or end
+  a comment. A declaration says only that a site runs raw SQL, and since `ctx.sql` does not check where a scope
+  fragment stands ([ADR-0012](0012-fabrika-app-runtime.md)), the statement is the only record of what it reads.
+  Control reads these modules as text and parses them; it never runs them. Every tagged template counts, `String.raw`
+  included: the tag may be held under any name, a member's too, and telling one from the other would take running the
+  code. A template array forged by hand, rather than written as a template, is not seen;
 - the **file adoptions** the migrations make (`fileAdoptions`, [ADR-0061](0061-a-file-is-a-value-in-a-table-column.md)):
   each `INSERT … SELECT` that copies a file collection's files into a table, and each release of a collection. They
   follow from the migration files, so the digest does not cover them beyond the files' checksums. The diff compares
@@ -114,8 +123,8 @@ run stores the result as its **snapshot**:
 - the baseline the candidate was compared with;
 - the approval, when one was needed.
 
-The declared reach and the database code are the snapshot's **deviations**: the steps off the paved road. Nothing
-else of the handler code reaches the snapshot; the checker's structure hints stay checker output.
+The declared reach, the SQL statements and the database code are the snapshot's **deviations**: the steps off the
+paved road. Nothing else of the handler code reaches the snapshot; the checker's structure hints stay checker output.
 
 A migration file the classifier refuses (an escape from the schema, the transaction or the platform) fails the
 read, as the runner would refuse it, except a file the environment's published snapshot holds with the same
@@ -123,7 +132,8 @@ checksum: the runner skips an applied file, so a stricter classifier cannot lock
 the environment's last succeeded run deployed fails the read when its checksum changed, one line per file, as every
 runner refuses an applied file that changed ([ADR-0017](0017-service-owned-postgres-migrations.md)); it is compared
 with that run's stored snapshot, not the published one, because a publication precedes the provider. The read is
-bounded: 256 shell files, and 16 Mi characters of migration text, which the classifier reads at once.
+bounded: 512 shell files, 16 Mi characters of migration text, which the classifier reads at once, and 1000 server
+modules with 16 Mi characters of text and 512 KiB of recorded SQL statements.
 
 Uploads carry no proxy table and no IAM schema. A snapshot comes only from the commit.
 
@@ -232,6 +242,10 @@ covers:
   `siteKey`): shown by name, and a new one widens, because its value reaches anyone who opens a page;
 - each site's declared reach;
 - migrations: any new or changed file, and the database code they declare;
+- **SQL statements**, matched by file and text: a new, changed or removed one needs closer review (`off-road`), since a
+  removed one may have been the check that kept a row out. Moving a statement within its file is no change;
+  re-indenting it is one. A baseline published before Control read statements shows none, and the deploy that publishes over it
+  records them;
 - **file adoptions** in a new or changed migration file: an adoption widens with closer review, because whoever the
   table's policy lets read a row now reads its file, and a release narrows with closer review, because it drops the
   collection with every file no column adopted. A file the baseline holds unchanged has run already, and adds no line.
