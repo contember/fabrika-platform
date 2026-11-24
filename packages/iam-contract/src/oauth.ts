@@ -12,11 +12,25 @@ function isOAuthClientProvider(value: unknown): value is OAuthClientProvider {
 	return OAUTH_CLIENT_PROVIDERS.some((provider) => provider === value)
 }
 
+/**
+ * The one resource an identity-only client is served: its own, outside the installation. A token for it carries the
+ * person's identity and no permission, under `app`, an id no installation service or application holds.
+ */
+export interface OAuthIdentityResource {
+	app: string
+	resource: string
+}
+
+/** The one scope of an identity resource: it names the person and grants nothing. */
+export const OAUTH_IDENTITY_SCOPE = 'identity'
+
 /** Managed CIMD registrations only; public dynamic registration is not part of this contract. */
 export interface OAuthManagedClient {
 	provider: OAuthClientProvider
 	clientId: string
 	redirectUris: string[]
+	/** Present only on an `external` client: it is served this resource alone, never a registered one. */
+	identity?: OAuthIdentityResource
 }
 
 /** RFC 7523 §2.2: the `client_assertion_type` of a JWT client assertion (`private_key_jwt`). */
@@ -189,9 +203,29 @@ export function parseOAuthManagedClient(value: unknown): OAuthManagedClient | nu
 	const provider = field(value, 'provider')
 	const clientId = field(value, 'clientId')
 	const uris = redirectUris(field(value, 'redirectUris'))
-	return isOAuthClientProvider(provider) && isCimdClientId(clientId) && uris !== null
-		? { provider, clientId, redirectUris: uris }
+	const rawIdentity = field(value, 'identity')
+	if (!isOAuthClientProvider(provider) || !isCimdClientId(clientId) || uris === null) return null
+	if (rawIdentity === undefined) return { provider, clientId, redirectUris: uris }
+	const identity = parseOAuthIdentityResource(rawIdentity)
+	// Claude and ChatGPT are authoring clients; only an external application signs people in for itself.
+	return identity === null || provider !== 'external' ? null : { provider, clientId, redirectUris: uris, identity }
+}
+
+const IDENTITY_KEYS = ['app', 'resource']
+/** An app id as every fabrika config writes one; no `@`, so never an application environment's id. */
+const IDENTITY_APP = /^[a-z0-9][a-z0-9-]{0,62}$/
+
+function parseOAuthIdentityResource(value: unknown): OAuthIdentityResource | null {
+	const app = field(value, 'app')
+	const resource = field(value, 'resource')
+	return hasOnlyKeys(value, IDENTITY_KEYS) && typeof app === 'string' && IDENTITY_APP.test(app) && isOAuthResourceUri(resource)
+		? { app, resource }
 		: null
+}
+
+/** The scopes an identity resource's authorization asks for: none, or exactly `identity`. */
+export function resolveOAuthIdentityScopes(scope: string | undefined): string[] | null {
+	return scope === undefined || scope === OAUTH_IDENTITY_SCOPE ? [OAUTH_IDENTITY_SCOPE] : null
 }
 
 /** A fetched document cannot enlarge the managed registration's exact redirect allowlist. */

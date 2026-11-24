@@ -1,6 +1,6 @@
 import type { OAuthResourceDto } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
-import { type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from '../mcp'
+import { mcpAuthoringOn, type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from '../mcp'
 import type { PlatformProxyComposition, PlatformProxyManifestTemplate } from '../proxy-manifest'
 
 const CLAUDE: McpClient = {
@@ -18,6 +18,12 @@ const EXTERNAL: McpClient = {
 	clientId: 'https://ops.example.test/oauth/client.json',
 	redirectUris: ['https://ops.example.test/oauth/callback'],
 	metadataUrl: 'https://ops.example.test/oauth/client.json',
+}
+const OPS_TOOL: McpClient = {
+	provider: 'external',
+	clientId: 'https://ops.example.test/oauth/client.json',
+	redirectUris: ['https://ops.example.test/oauth/callback'],
+	identity: { app: 'ops-tool', resource: 'https://ops.example.test' },
 }
 
 const TABLE = { endpoints: [], reservedPrefixes: [] }
@@ -70,6 +76,19 @@ describe('the MCP client list', () => {
 		)
 	})
 
+	test('accepts an identity-only external client, and refuses the binding on another kind or malformed', () => {
+		expect(parseMcpClientsJson(JSON.stringify([OPS_TOOL]))).toEqual([OPS_TOOL])
+		expect(() => parseMcpClientsJson(JSON.stringify([{ ...OPS_TOOL, provider: 'claude' }]))).toThrow('only on an external client')
+		expect(() => parseMcpClientsJson(JSON.stringify([{ ...OPS_TOOL, identity: { app: 'ops-tool' } }]))).toThrow('identity is')
+		expect(() => parseMcpClientsJson(JSON.stringify([{ ...OPS_TOOL, identity: { app: 'ops@prod', resource: 'https://ops.example.test' } }]))).toThrow()
+	})
+
+	test('only a client that is not identity-only turns MCP authoring on', () => {
+		expect(mcpAuthoringOn(undefined)).toBe(false)
+		expect(mcpAuthoringOn([OPS_TOOL])).toBe(false)
+		expect(mcpAuthoringOn([OPS_TOOL, EXTERNAL])).toBe(true)
+	})
+
 	test('refuses an external client with a non-https metadata URL', () => {
 		expect(() => parseMcpClientsJson(JSON.stringify([{ ...EXTERNAL, metadataUrl: 'http://ops.example.test/c.json' }]))).toThrow('metadataUrl')
 	})
@@ -90,6 +109,17 @@ describe("IAM's OAuth configuration", () => {
 
 	test('without MCP authoring, it names no client and only the command-line resources', () => {
 		expect(platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [])).toEqual({ clients: [], resources: [RPC_RESOURCE] })
+	})
+
+	test('an identity-only client is listed with its binding, and adds no resource', () => {
+		expect(platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [OPS_TOOL])).toEqual({ clients: [OPS_TOOL], resources: [RPC_RESOURCE] })
+	})
+
+	test("an identity resource on a platform host, or under a platform service's app id, is refused", () => {
+		const onConsole = { ...OPS_TOOL, identity: { app: 'ops-tool', resource: 'https://console.example.test/ops' } }
+		expect(() => platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [onConsole])).toThrow("platform service's app id or host")
+		const asConsole = { ...OPS_TOOL, identity: { app: 'vozka', resource: 'https://ops.example.test' } }
+		expect(() => platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [asConsole])).toThrow("platform service's app id or host")
 	})
 
 	test('without an authorization server there is nothing to configure', () => {

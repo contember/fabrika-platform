@@ -1,17 +1,18 @@
-import { DEFAULT_LOCALE } from '@fabrika/auth-core'
+import { DEFAULT_LOCALE, type KeyGrant } from '@fabrika/auth-core'
 import {
 	OAUTH_CLIENT_ASSERTION_ALGORITHMS,
 	OAUTH_DEVICE_CODE_GRANT_TYPE,
 	type OAuthAuthorizationRequest,
 	type OAuthAuthorizationServerMetadata,
 	type OAuthClientCredential,
-	type OAuthResourceDto,
+	type OAuthIdentityResource,
 	parseOAuthAuthorizationAttempt,
 	parseOAuthClientCredential,
 	parseOAuthDeviceAuthorizationRequest,
 	parseOAuthRevocationRequest,
 	parseOAuthTokenRequest,
 	resolveOAuthAuthorizationScopes,
+	resolveOAuthIdentityScopes,
 } from '@fabrika/iam-contract'
 import { decodeJwt } from 'jose'
 import { readForm, redirectHeaders, sameOrigin } from './auth/http'
@@ -20,7 +21,16 @@ import { principalStatus } from './db'
 import type { Env } from './env'
 import { escapeHtml } from './html'
 import { installationBrand } from './installation-brand'
-import { establishClient, exchangeOAuthToken, grantAuthorization, type ManagedClient, revokeOAuthToken, scopeCeiling, servesClient } from './oauth'
+import {
+	type AuthorizationTarget,
+	establishClient,
+	exchangeOAuthToken,
+	grantAuthorization,
+	type ManagedClient,
+	revokeOAuthToken,
+	scopeCeiling,
+	servesClient,
+} from './oauth'
 import { authenticateOAuthClient, authenticateRevokingClient } from './oauth-client-auth'
 import type { OAuthConfig } from './oauth-config'
 import { OAUTH_DEVICE_PATH, redeemDeviceCode, startDeviceAuthorization } from './oauth-device'
@@ -95,7 +105,7 @@ function authorizationServerMetadata(issuer: string): Response {
 type AuthorizationCheck =
 	| { kind: 'refused'; message: string }
 	| { kind: 'redirect'; response: Response }
-	| { kind: 'valid'; request: OAuthAuthorizationRequest; client: ManagedClient; resource: OAuthResourceDto; scopes: string[] }
+	| { kind: 'valid'; request: OAuthAuthorizationRequest; client: ManagedClient; resource: AuthorizationTarget; scopes: string[]; ceiling: KeyGrant[] }
 
 /**
  * Validate an authorization request in the order RFC 6749 §4.1.2.1 requires: until the client and its
@@ -108,12 +118,28 @@ async function checkAuthorization(issuer: string, config: OAuthConfig, input: Re
 	const client = await establishClient(config, coordinates.client_id, coordinates.redirect_uri)
 	if (client === null) return { kind: 'refused', message: 'The client or its redirect URI is not registered.' }
 	if (attempt.kind === 'invalid_scope') return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }
+	const identity = client.registration.identity
+	if (identity !== undefined) return checkIdentityAuthorization(issuer, attempt.request, client, identity)
 	// The command-line client's resources are served through the device grant only, never to a managed client.
 	const resource = config.resources.find((entry) => entry.resource === coordinates.resource && servesClient(entry, false))
 	if (resource === undefined) return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_target' }) }
 	const scopes = resolveOAuthAuthorizationScopes(attempt.request.scope, resource)
-	if (scopes === null) return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }
-	return { kind: 'valid', request: attempt.request, client, resource, scopes }
+	const ceiling = scopes === null ? null : scopeCeiling(resource, scopes)
+	if (scopes === null || ceiling === null) return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }
+	return { kind: 'valid', request: attempt.request, client, resource, scopes, ceiling }
+}
+
+/** An identity-only client is served its own resource alone, with the `identity` scope and no permission. */
+function checkIdentityAuthorization(
+	issuer: string,
+	request: OAuthAuthorizationRequest,
+	client: ManagedClient,
+	identity: OAuthIdentityResource,
+): AuthorizationCheck {
+	if (request.resource !== identity.resource) return { kind: 'redirect', response: clientRedirect(issuer, request, { error: 'invalid_target' }) }
+	const scopes = resolveOAuthIdentityScopes(request.scope)
+	if (scopes === null) return { kind: 'redirect', response: clientRedirect(issuer, request, { error: 'invalid_scope' }) }
+	return { kind: 'valid', request, client, resource: identity, scopes, ceiling: [] }
 }
 
 async function showConsent(request: Request, services: Services, config: OAuthConfig): Promise<Response> {
@@ -228,12 +254,19 @@ function withAssertedClientId(fields: Record<string, string> | null, credential:
 }
 
 async function consentPage(services: Services, check: Extract<AuthorizationCheck, { kind: 'valid' }>, signedInAs: string): Promise<Response> {
-	const { request, client, resource, scopes } = check
+	const { request, client, resource, scopes, ceiling } = check
 	const clientName = client.metadata.client_name ?? client.registration.clientId
-	const permissions = (scopeCeiling(resource, scopes) ?? []).map((permission) => {
+	const permissions = ceiling.map((permission) => {
 		const scope = permission.scope == null ? 'everywhere' : `${permission.scope.type} ${permission.scope.value}`
 		return `<li><code>${escapeHtml(permission.action)}</code> — ${escapeHtml(scope)}</li>`
 	})
+	const asks = client.registration.identity === undefined
+		? `<p><strong>${escapeHtml(clientName)}</strong> asks to act as you in <strong>${escapeHtml(resource.app)}</strong>.</p>`
+		: `<p><strong>${escapeHtml(clientName)}</strong> asks to know who you are. It receives your account and name, and no permission.</p>`
+	const grants = client.registration.identity === undefined
+		? `<p>At most these permissions, and only those you hold yourself:</p>
+		<ul>${permissions.join('')}</ul>`
+		: ''
 	const fields: [string, string | undefined][] = [
 		['response_type', request.response_type],
 		['client_id', request.client_id],
@@ -251,12 +284,11 @@ async function consentPage(services: Services, check: Extract<AuthorizationCheck
 		title: 'Authorize application',
 		content: `<h1>Authorize ${escapeHtml(clientName)}</h1>
 		<p>Signed in as <strong>${escapeHtml(signedInAs)}</strong>.</p>
-		<p><strong>${escapeHtml(clientName)}</strong> asks to act as you in <strong>${escapeHtml(resource.app)}</strong>.</p>
+		${asks}
 		<p>Client: <code>${escapeHtml(client.registration.clientId)}</code></p>
 		<p>Resource: <code>${escapeHtml(resource.resource)}</code></p>
 		<p>Scopes: <code>${escapeHtml(scopes.join(' '))}</code></p>
-		<p>At most these permissions, and only those you hold yourself:</p>
-		<ul>${permissions.join('')}</ul>
+		${grants}
 		<p>Access ends when this sign-in ends or when it is revoked.</p>
 		<form method="post" action="${AUTHORIZE_PATH}">${hidden.join('')}
 		<button name="decision" value="approve">Allow</button>

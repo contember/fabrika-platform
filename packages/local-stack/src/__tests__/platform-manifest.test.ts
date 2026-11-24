@@ -17,6 +17,7 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseOAuthConfig } from '../../../iam/src/oauth-config'
+import { DEFAULT_PLATFORM_AUDIENCES } from '../../../iam/src/services'
 import { localApps } from '../app-registration'
 import { localIamOAuthConfig, localOperationsOAuthResource, localPlatformProxyManifest, readLocalMcpClients } from '../prepare'
 
@@ -92,7 +93,7 @@ describe('OAuth and MCP authoring in the local composition', () => {
 		expect(readLocalMcpClients({})).toBeUndefined()
 		expect(consoleOf()?.endpoints).toEqual(tableOf(false))
 		expect(consoleOf()?.oauthResources?.map((entry) => entry.resource)).toEqual(cliResources(origin))
-		const config = parseOAuthConfig(localIamOAuthConfig(undefined))
+		const config = parseOAuthConfig(localIamOAuthConfig(undefined), DEFAULT_PLATFORM_AUDIENCES)
 		expect(config?.clients).toEqual([])
 		expect(config?.resources.map((resource) => resource.resource)).toEqual(cliResources(origin))
 	})
@@ -119,7 +120,7 @@ describe('OAuth and MCP authoring in the local composition', () => {
 
 	test('MCP turned on, IAM gets a config its own parser accepts, for those same resources', () => {
 		const origin = controlDomain()
-		const config = parseOAuthConfig(localIamOAuthConfig([CLIENT]))
+		const config = parseOAuthConfig(localIamOAuthConfig([CLIENT]), DEFAULT_PLATFORM_AUDIENCES)
 		expect(config?.clients.map((client) => client.clientId)).toEqual([CLIENT.clientId])
 		expect(config?.resources.map((resource) => [resource.app, resource.resource])).toEqual(
 			[...cliResources(origin), controlMcpResource(origin)].map((resource) => ['vozka', resource]),

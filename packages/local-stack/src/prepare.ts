@@ -10,6 +10,7 @@ import {
 } from '@fabrika/auth-core'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import {
+	mcpAuthoringOn,
 	type McpClient,
 	OPERATIONS_OAUTH_RESOURCE_VARIABLE,
 	parseMcpClientsJson,
@@ -278,7 +279,7 @@ const localComposition = (mcpClients: readonly McpClient[] | undefined): Platfor
 	publicPort: LOCAL_PUBLIC_PORT,
 	// Always an authorization server, like an https installation: the command-line client's device grant is served.
 	authorizationServer: IAM_ISSUER,
-	mcp: mcpClients !== undefined,
+	mcp: mcpAuthoringOn(mcpClients),
 })
 
 export const localPlatformProxyManifest = (mcpClients?: readonly McpClient[]): PlatformProxyManifest =>
@@ -416,7 +417,7 @@ export const prepareLocalStack = async (): Promise<void> => {
 	await writeEnv(STATE_DIR, 'operations-oauth.env', { [OPERATIONS_OAUTH_RESOURCE_VARIABLE]: localOperationsOAuthResource() })
 	await generateProxyConfigs(mcpClients)
 	await prepareNotesApplication()
-	console.info(`Local stack prepared for ${IAM_ISSUER}; MCP authoring ${mcpClients === undefined ? 'off' : 'on'}`)
+	console.info(`Local stack prepared for ${IAM_ISSUER}; MCP authoring ${mcpAuthoringOn(mcpClients) ? 'on' : 'off'}`)
 }
 
 if (import.meta.main) {

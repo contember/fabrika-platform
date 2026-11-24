@@ -44,6 +44,7 @@ import {
 	generateVaultKey,
 	IAM_OAUTH_CONFIG_VARIABLE,
 	type IamOAuthConfig,
+	mcpAuthoringOn,
 	OPERATIONS_OAUTH_RESOURCE_VARIABLE,
 	platformIamOAuthConfig,
 	platformOAuthResourceVerifiedBy,
@@ -806,7 +807,7 @@ export const deployPreparedPlatform = async (
 		},
 		// Control reads a bare `FABRIKA_CONTROL_DOMAIN` as https, so on plain http no resource would match its own.
 		...(placement.scheme === 'https' ? { authorizationServer: platformOrigin(placement.scheme, placement.hosts.iam) } : {}),
-		mcp: input.mcpClients !== undefined,
+		mcp: mcpAuthoringOn(input.mcpClients),
 	}
 	const platformManifest = resolvePlatformProxyManifest(PLATFORM_PROXY_MANIFEST_TEMPLATE, composition)
 	const oauthConfig = composition.authorizationServer === undefined
@@ -817,7 +818,10 @@ export const deployPreparedPlatform = async (
 			? 'OAuth: off (plain http), so neither the command line nor MCP clients get tokens'
 			: `OAuth: resource(s) ${oauthConfig.resources.map((entry) => entry.resource).join(', ')}`,
 	)
-	log.info(input.mcpClients === undefined ? 'MCP authoring: off' : `MCP authoring: on, ${input.mcpClients.length} client(s)`)
+	log.info(composition.mcp ? 'MCP authoring: on' : 'MCP authoring: off')
+	log.info(
+		`OAuth clients: ${input.mcpClients?.length ?? 0}, ${input.mcpClients?.filter((client) => client.identity !== undefined).length ?? 0} identity-only`,
+	)
 	log.info(`${platformManifest.apps.length} app(s): ${platformManifest.apps.map((app) => app.id).join(', ')}`)
 
 	log.step('Write the service environment')

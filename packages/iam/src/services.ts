@@ -97,7 +97,7 @@ const APP_ID = /^[a-z0-9][a-z0-9-]*$/
  * empty = no JWT may administer. A malformed entry is REFUSED rather than skipped: an entry no `aud`
  * can ever equal would otherwise read as a registry while admitting nobody.
  */
-function parseAdminAudiences(raw: string | undefined): ReadonlySet<string> {
+export function parseAdminAudiences(raw: string | undefined): ReadonlySet<string> {
 	if (raw === undefined) {
 		return DEFAULT_ADMIN_AUDIENCES
 	}
@@ -152,7 +152,7 @@ export function buildServices(env: Env): Services {
 				oidc: { enabled: oidcEnabled, sessionCapSeconds: parseOidcSessionSeconds(env.OIDC_SESSION_HOURS) },
 				password: { enabled: passwordEnabled, minLengthFloor: passwordMinLengthFloor(passwordCost) },
 			},
-			oauth: parseOAuthConfig(env.OAUTH_CONFIG),
+			oauth: parseOAuthConfig(env.OAUTH_CONFIG, platformAudiencesFor(adminAudiences)),
 			retention: parseRetention({ authLogDays: env.AUTH_LOG_RETENTION_DAYS, auditDays: env.AUDIT_RETENTION_DAYS }),
 			issuer: env.ISSUER,
 		},

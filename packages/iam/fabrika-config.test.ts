@@ -4,6 +4,7 @@ import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import config, { buildIamWorker, iamPipelineSecrets, iamPipelineVars } from './fabrika.config'
 import oblakaDefinition from './oblaka'
 import { parseOAuthConfig } from './src/oauth-config'
+import { DEFAULT_PLATFORM_AUDIENCES } from './src/services'
 
 const REMOTE_SOURCE: Record<string, string> = {
 	FABRIKA_IAM_OIDC_ENABLED: 'true',
@@ -338,7 +339,7 @@ describe('IAM resource graph', () => {
 		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
 		// A value left in the environment is not read: the config is recomputed from the release's own presets.
 		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_IAM_OAUTH_CONFIG: '{"clients":[],"resources":[]}' })
-		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'])
+		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)
 		expect(parsed?.clients).toEqual([])
 		expect(parsed?.resources.map(({ app, resource, client }) => ({ app, resource, client }))).toEqual([
 			{ app: 'vozka', resource: 'https://console.example.com/api/rpc', client: 'cli' },

@@ -7,6 +7,7 @@ import { clientMetadata } from '../oauth-client'
 import { parseOAuthConfig } from '../oauth-config'
 import { handleOAuth } from '../oauth-http'
 import { hashToken } from '../secret'
+import { DEFAULT_PLATFORM_AUDIENCES } from '../services'
 import { getSigner, verifyAccessToken, verifyResourceAccessToken } from '../signing'
 import { createHarness } from './helpers/harness'
 import { ISSUER, oauthFixture, REDIRECT_URI, RESOURCE, SIGNING_ENV, tokenBody } from './helpers/oauth'
@@ -402,23 +403,26 @@ describe('OAUTH_CONFIG', () => {
 	}
 
 	test('absent or empty disables OAuth', () => {
-		expect(parseOAuthConfig(undefined)).toBeNull()
-		expect(parseOAuthConfig('')).toBeNull()
+		expect(parseOAuthConfig(undefined, DEFAULT_PLATFORM_AUDIENCES)).toBeNull()
+		expect(parseOAuthConfig('', DEFAULT_PLATFORM_AUDIENCES)).toBeNull()
 	})
 
 	test('a valid config defaults the metadata URL to the client id', () => {
-		expect(parseOAuthConfig(JSON.stringify(valid))?.clients[0]?.metadataUrl).toBe('https://chatgpt.example.test/cimd')
+		expect(parseOAuthConfig(JSON.stringify(valid), DEFAULT_PLATFORM_AUDIENCES)?.clients[0]?.metadataUrl).toBe('https://chatgpt.example.test/cimd')
 	})
 
 	test('malformed JSON, unknown keys, non-HTTPS metadata and duplicates are refused', () => {
-		expect(() => parseOAuthConfig('{')).toThrow()
-		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, admission: {} }))).toThrow()
-		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, clients: [{ ...valid.clients[0], metadataUrl: 'http://x.test/cimd' }] }))).toThrow()
-		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, resources: [...valid.resources, ...valid.resources] }))).toThrow()
+		expect(() => parseOAuthConfig('{', DEFAULT_PLATFORM_AUDIENCES)).toThrow()
+		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, admission: {} }), DEFAULT_PLATFORM_AUDIENCES)).toThrow()
+		expect(() =>
+			parseOAuthConfig(JSON.stringify({ ...valid, clients: [{ ...valid.clients[0], metadataUrl: 'http://x.test/cimd' }] }), DEFAULT_PLATFORM_AUDIENCES)
+		).toThrow()
+		expect(() => parseOAuthConfig(JSON.stringify({ ...valid, resources: [...valid.resources, ...valid.resources] }), DEFAULT_PLATFORM_AUDIENCES))
+			.toThrow()
 	})
 
 	test("no MCP client is a valid config: the command-line client is IAM's own and never listed", () => {
-		expect(parseOAuthConfig(JSON.stringify({ ...valid, clients: [] }))?.clients).toEqual([])
+		expect(parseOAuthConfig(JSON.stringify({ ...valid, clients: [] }), DEFAULT_PLATFORM_AUDIENCES)?.clients).toEqual([])
 	})
 })
 
