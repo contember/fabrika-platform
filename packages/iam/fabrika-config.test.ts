@@ -1,5 +1,5 @@
 import { builtinEmailProviderVariables } from '@fabrika/email/providers'
-import { D1Database, Worker } from '@fabrika/provider-cloudflare'
+import { D1Database, NO_IMPORTABLE_ENV_FLAG, NO_PROCESS_ENV_FLAG, Worker } from '@fabrika/provider-cloudflare'
 import { afterAll, beforeEach, describe, expect, test } from 'bun:test'
 import config, { buildIamWorker, iamPipelineSecrets, iamPipelineVars } from './fabrika.config'
 import oblakaDefinition from './oblaka'
@@ -151,6 +151,12 @@ describe('IAM resource graph', () => {
 
 		expect(worker.options.vars?.['OIDC_ENABLED']).toBe('true')
 		expect(worker.options.vars?.['PASSWORD_ENABLED']).toBe('false')
+	})
+
+	test('keeps `process.env` and the importable `env` empty', () => {
+		const flags = buildIamWorker({ env: 'stage', domain: REMOTE_DOMAIN }, REMOTE_SOURCE).options.compatibility_flags
+		expect(flags).toContain(NO_PROCESS_ENV_FLAG)
+		expect(flags).toContain(NO_IMPORTABLE_ENV_FLAG)
 	})
 
 	test('omits ADMIN_AUDIENCES unless the deploy var names one', () => {

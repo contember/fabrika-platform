@@ -1,4 +1,4 @@
-import { D1Database, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
+import { D1Database, NO_IMPORTABLE_ENV_FLAG, NO_PROCESS_ENV_FLAG, Queue, R2Bucket, ServiceReference, Worker } from '@fabrika/provider-cloudflare'
 import { describe, expect, test } from 'bun:test'
 import config, { buildOperationsWorker } from '../../fabrika.config'
 
@@ -92,6 +92,12 @@ describe('Operations Cloudflare composition', () => {
 			expect(queue.options.consumer?.deadLetterQueue).toBe(`prod-${dlq}`)
 			expect(remoteService(binding(worker, 'IAM'), 'prod')).toBe(`prod-${iam}`)
 		})
+	})
+
+	test('keeps `process.env` and the importable `env` empty', () => {
+		const flags = buildOperationsWorker({ env: 'stage' }).options.compatibility_flags
+		expect(flags).toContain(NO_PROCESS_ENV_FLAG)
+		expect(flags).toContain(NO_IMPORTABLE_ENV_FLAG)
 	})
 
 	test('the local composition binds IAM too and keeps no public route — there is no local auth mode', () => {

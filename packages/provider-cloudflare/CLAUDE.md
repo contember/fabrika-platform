@@ -232,8 +232,8 @@ this one import.
   bounds require: name `<app>` (remote `<env>-<app>`, the deployment's own prefix), `main`
   `./fabrika/entry.generated.ts`, `routes: []`, `workers_dev` and `preview_urls` off, `IAM` as
   `iamServiceReference()` after the author's `worker.bindings`; only `worker.bindings`, `compatibility_date` and
-  `compatibility_flags` are the author's, the last but for the `process.env` flags the deployer owns (see "No secret
-  reaches `process.env`"). It does so inside the checkout's own package, and the config it returns
+  `compatibility_flags` are the author's, the last but for the `process.env` and importable `env` flags the deployer owns
+  (see "No secret reaches `process.env` or the importable `env`"). It does so inside the checkout's own package, and the config it returns
   always carries `resources`, so `isCloudflareAppConfig` reads it as before. Never move the default into the
   deployer. An executor older than this release still refuses a schema-less contract config (`assertContractSchema`);
   it never meets one, because such an application pins a framework release Control refuses until the platform is at
