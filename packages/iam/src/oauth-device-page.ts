@@ -1,4 +1,5 @@
 import { DEFAULT_LOCALE, narrowPermissions, type PermissionEntry } from '@fabrika/auth-core'
+import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
 import { isOAuthDeviceGrantLifetime, OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS, type OAuthResourceDto } from '@fabrika/iam-contract'
 import { sessionEndsAt } from './auth'
 import { readForm, redirectHeaders, sameOrigin } from './auth/http'
@@ -115,7 +116,7 @@ async function consentPage(
 	const authority = await resolveAuthorityAt(services, principal, attempt.app)
 	const sections = resources.map((resource) => {
 		const permissions = narrowPermissions(authority.permissions, scopeCeiling(resource, request.scopes) ?? [])
-		return `<h2><code>${escapeHtml(resource.resource)}</code></h2>${permissionList(permissions)}`
+		return `<h2>${escapeHtml(resourceLabel(resource))}</h2><p class="uri">${escapeHtml(resource.resource)}</p>${permissionList(permissions)}`
 	})
 	const unbounded = request.scopes.filter((token) => resources.some((resource) => isUnbounded(resource, token)))
 	const warning = unbounded.length === 0
@@ -124,7 +125,7 @@ async function consentPage(
 			unbounded.map((token) => `<code>${escapeHtml(token)}</code>`).join(', ')
 		} is not limited to one scope value: it holds its actions everywhere you hold them.</p>`
 	const lifetimes = OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS.map((seconds, index) =>
-		`<label><input type="radio" name="lifetime" value="${seconds}"${index === 0 ? ' checked' : ''}> ${LIFETIME_LABELS[seconds]}</label>`
+		`<label class="choice"><input type="radio" name="lifetime" value="${seconds}"${index === 0 ? ' checked' : ''}> ${LIFETIME_LABELS[seconds]}</label>`
 	)
 	return page(
 		services,
@@ -134,7 +135,7 @@ async function consentPage(
 		<p>A device asks to act as you in <strong>${escapeHtml(attempt.app)}</strong>. It started this request at
 		<strong>${new Date(attempt.created_at * 1000).toISOString()}</strong> with the code <code>${escapeHtml(formatUserCode(userCode))}</code>.
 		Allow it only if you started it yourself.</p>
-		<p>Scopes: <code>${escapeHtml(request.scopes.join(' '))}</code></p>
+		<p>Scopes: ${request.scopes.map((token) => `<code>${escapeHtml(token)}</code>`).join(' ')}</p>
 		${warning}
 		<p>At most these permissions, and only while you hold them yourself:</p>
 		${sections.join('')}
@@ -142,9 +143,19 @@ async function consentPage(
 		<input type="hidden" name="user_code" value="${escapeHtml(formatUserCode(userCode))}">
 		<fieldset><legend>Access lasts</legend>${lifetimes.join('')}</fieldset>
 		<p>Access also ends when this sign-in ends or when it is revoked.</p>
-		<button name="decision" value="approve">Allow</button>
-		<button name="decision" value="deny">Deny</button></form>`,
+		<div class="actions"><button name="decision" value="approve">Allow</button>
+		<button name="decision" value="deny">Deny</button></div></form>`,
 	)
+}
+
+/**
+ * What a person reads a resource as: the name the console gives its command-line resource (the device grant serves
+ * only those), else the resource's path, which tells two resources of one app apart. The full URI stays under it.
+ */
+function resourceLabel(resource: OAuthResourceDto): string {
+	const path = new URL(resource.resource).pathname
+	const known = resource.app === CONTROL_APP_ID ? CONTROL_CLI_RESOURCES.find((entry) => entry.path === path) : undefined
+	return known?.label ?? path
 }
 
 /** A scope whose actions no parameter narrows and at least one of which names no scope of its own. */
@@ -157,9 +168,9 @@ function permissionList(permissions: readonly PermissionEntry[]): string {
 	if (permissions.length === 0) return '<p>None: you hold none of these permissions yourself.</p>'
 	const items = permissions.map((permission) => {
 		const scope = permission.scope == null ? 'everywhere' : `${permission.scope.type} ${permission.scope.value}`
-		return `<li><code>${escapeHtml(permission.action)}</code> — ${escapeHtml(scope)}</li>`
+		return `<li><code>${escapeHtml(permission.action)}</code> <span>${escapeHtml(scope)}</span></li>`
 	})
-	return `<ul>${items.join('')}</ul>`
+	return `<ul class="rows">${items.join('')}</ul>`
 }
 
 async function page(services: Services, title: string, content: string, status = 200): Promise<Response> {

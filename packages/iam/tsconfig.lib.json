@@ -15,6 +15,7 @@
 		{ "path": "../app/tsconfig.lib.json" },
 		{ "path": "../auth-core/tsconfig.lib.json" },
 		{ "path": "../auth/tsconfig.lib.json" },
+		{ "path": "../control-contract/tsconfig.lib.json" },
 		{ "path": "../email/tsconfig.lib.json" },
 		{ "path": "../iam-contract/tsconfig.lib.json" },
 		{ "path": "../platform-node/tsconfig.lib.json" },
