@@ -3,7 +3,9 @@
 // leases. Only `@fabrika/app` reaches it, through `frameworkTablesOf`. A run owns the wakes due when it took its lease,
 // marked in that transaction (`owned`); a wake written or merged into afterwards is not its. Only the transaction of that
 // run's fenced finish consumes or retries what it owns (`leaseProjection`), so a crash at any point leaves either the wake
-// or a held lease whose expiry is due. Every change runs the runtime's `projectWakes` in its own transaction.
+// or a held lease whose expiry is due. Every change runs the runtime's `projectWakes` in its own transaction. Where no
+// crontab runs, `fabrika_job_schedule` keeps the generation of the deploy whose serving processes keep the cron wakes
+// (ADR-0080).
 
 import { uuidv7 } from '@fabrika/platform'
 import { freeze } from './builtins'
@@ -11,7 +13,7 @@ import type { LeaseFence } from './capability'
 import { type FixedParameter, runFixedStatement, type Session, sessionOf } from './database'
 import { QueryRefusedError } from './errors'
 import type { DialectTexts, JobOutcome, LeaseChange, LeaseProjection } from './job-leases'
-import { JOB_LEASES_TABLE, JOB_WAKES_TABLE } from './migrations'
+import { JOB_LEASES_TABLE, JOB_SCHEDULE_TABLE, JOB_WAKES_TABLE } from './migrations'
 import { SQLITE_NOW_FORMAT } from './migrations-sqlite'
 import { refuseInProduction } from './production'
 import type { DataLayerRuntime } from './store'
@@ -63,11 +65,18 @@ export interface JobWakes {
 	pending(job: string): Promise<readonly Wake[]>
 	/**
 	 * When the scheduler wakes next: the earliest due wake of a job whose lease is free or expired, or the expiry of a
-	 * held lease (its deadman), whichever is earlier; `null` when neither exists. It may be past. Read in `using` when given.
+	 * held lease (its deadman), whichever is earlier; `null` when neither exists. It may be past. Read in `using` when given;
+	 * with `jobs`, of those jobs only, so a wake of a job this process does not run never holds its timer.
 	 */
-	next(using?: Session): Promise<Date | null>
+	next(using?: Session, jobs?: readonly string[]): Promise<Date | null>
 	/** How many milliseconds from the database's now `next` is (0 or less when due), read in `using` when given. */
-	untilNext(using?: Session): Promise<number | null>
+	untilNext(using?: Session, jobs?: readonly string[]): Promise<number | null>
+	/**
+	 * Where no crontab runs (ADR-0080): raises the stored schedule generation to `generation` when that one is higher, in
+	 * byte order, and answers whether `generation` is the stored one, so this process keeps the cron wakes. A lowercase
+	 * UUID; a UUIDv7 of a later deploy sorts later.
+	 */
+	holdsSchedule(generation: string): Promise<boolean>
 	/** The database's clock, read in `using` when given: a wake due now is due by it. */
 	now(using?: Session): Promise<Date>
 	/**
@@ -95,6 +104,7 @@ export interface DeclaredJob {
 
 const W = JOB_WAKES_TABLE
 const L = JOB_LEASES_TABLE
+const S = JOB_SCHEDULE_TABLE
 const COLUMNS = 'job, due_at, reason, attempt, dedupe'
 const SELECTED = `${COLUMNS}, owned`
 const SQLITE_NOW = `strftime('${SQLITE_NOW_FORMAT}', 'now')`
@@ -139,19 +149,35 @@ const SQL_DISOWN: DialectTexts = {
 
 // Two candidates, each one index-ordered or per-job lookup: the earliest wake of a free or expired job walks the due index
 // and stops at the first, and the earliest held expiry reads the lease rows, one per job. Postgres compares by the
-// statement's clock, not the transaction's: `using` may be a transaction that began before a lease expired.
+// statement's clock, not the transaction's: `using` may be a transaction that began before a lease expired. The one
+// parameter is the JSON list of jobs to look at, or null for every job.
 const SQL_NEXT: DialectTexts = {
 	postgres: `select
 		(select w.due_at from ${W} w left join ${L} l on l.job = w.job
-			where l.holder is null or l.expires_at <= clock_timestamp() order by w.due_at limit 1) as wake,
-		(select ${PG_EPOCH_MS('min(expires_at)')} from ${L} where holder is not null) as held,
+			where (l.holder is null or l.expires_at <= clock_timestamp())
+				and ($1::jsonb is null or w.job in (select jsonb_array_elements_text($1::jsonb))) order by w.due_at limit 1) as wake,
+		(select ${PG_EPOCH_MS('min(expires_at)')} from ${L}
+			where holder is not null and ($1::jsonb is null or job in (select jsonb_array_elements_text($1::jsonb)))) as held,
 		${PG_EPOCH_MS('clock_timestamp()')} as now`,
 	sqlite: `select
 		(select w.due_at from ${W} w left join ${L} l on l.job = w.job
-			where l.holder is null or l.expires_at <= ${SQLITE_NOW} order by w.due_at limit 1) as wake,
-		(select ${SQLITE_EPOCH_MS('min(expires_at)')} from ${L} where holder is not null) as held,
+			where (l.holder is null or l.expires_at <= ${SQLITE_NOW})
+				and (?1 is null or w.job in (select value from json_each(?1))) order by w.due_at limit 1) as wake,
+		(select ${SQLITE_EPOCH_MS('min(expires_at)')} from ${L}
+			where holder is not null and (?1 is null or job in (select value from json_each(?1)))) as held,
 		${SQLITE_EPOCH_MS(SQLITE_NOW)} as now`,
 }
+
+// One row; a lower generation leaves it as it is, and the row answers what is stored after the write.
+const SQL_HOLD_SCHEDULE: DialectTexts = {
+	postgres: `insert into ${S} (id, generation) values (1, $1)
+		on conflict (id) do update set generation = greatest(${S}.generation, excluded.generation) returning generation`,
+	sqlite: `insert into ${S} (id, generation) values (1, ?1)
+		on conflict (id) do update set generation = max(${S}.generation, excluded.generation) returning generation`,
+}
+
+/** A schedule generation: a lowercase UUID, whose text order is a UUIDv7's time order. */
+const SCHEDULE_GENERATION = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
 const SQL_CLOCK: DialectTexts = {
 	postgres: `select ${PG_EPOCH_MS('clock_timestamp()')} as now`,
@@ -368,9 +394,23 @@ export async function rearmClaim(runtime: DataLayerRuntime, transaction: Session
 	await runtime.projectWakes?.(transaction)
 }
 
+/** The jobs `next` looks at, as its JSON parameter: `null` for every job. */
+function jobsFilter(jobs: readonly string[] | undefined): FixedParameter {
+	if (jobs === undefined) {
+		return null
+	}
+	if (!Array.isArray(jobs)) {
+		throw new QueryRefusedError('invalid_argument', 'the jobs the next wake is read for are a list of job names')
+	}
+	return JSON.stringify(jobs.map((job: unknown) => nonEmpty(job, 'a job the next wake is read for')))
+}
+
 /** The next wake, in epoch milliseconds, and the database's now as the same statement read it. */
-async function nextAndNow(session: Session): Promise<{ readonly next: number | null; readonly now: () => number }> {
-	const [{ wake = null, held = null, now = null } = {}] = await rows(session, SQL_NEXT, [])
+async function nextAndNow(
+	session: Session,
+	jobs: readonly string[] | undefined,
+): Promise<{ readonly next: number | null; readonly now: () => number }> {
+	const [{ wake = null, held = null, now = null } = {}] = await rows(session, SQL_NEXT, [jobsFilter(jobs)])
 	const candidates = [wake, held].filter((value) => value !== null).map((value) => wholeNumber(value, 'the next wake'))
 	return { next: candidates.length === 0 ? null : Math.min(...candidates), now: () => wholeNumber(now, "the database's now") }
 }
@@ -392,14 +432,25 @@ export function jobWakes(runtime: () => DataLayerRuntime): JobWakes {
 			return freeze((await rows(session(), SQL_PENDING, [job])).map(wakeOf))
 		},
 
-		async next(using?: Session): Promise<Date | null> {
-			const { next } = await nextAndNow(using ?? session())
+		async next(using?: Session, jobs?: readonly string[]): Promise<Date | null> {
+			const { next } = await nextAndNow(using ?? session(), jobs)
 			return next === null ? null : new Date(next)
 		},
 
-		async untilNext(using?: Session): Promise<number | null> {
-			const { next, now } = await nextAndNow(using ?? session())
+		async untilNext(using?: Session, jobs?: readonly string[]): Promise<number | null> {
+			const { next, now } = await nextAndNow(using ?? session(), jobs)
 			return next === null ? null : next - now()
+		},
+
+		async holdsSchedule(generation: string): Promise<boolean> {
+			if (typeof generation !== 'string' || !SCHEDULE_GENERATION.test(generation)) {
+				throw new QueryRefusedError('invalid_argument', 'a schedule generation is a lowercase UUID')
+			}
+			const [{ generation: stored } = {}] = await rows(session(), SQL_HOLD_SCHEDULE, [generation])
+			if (typeof stored !== 'string') {
+				throw new QueryRefusedError('unexpected_row', `${S} came back in another shape than its migration declares`)
+			}
+			return stored === generation
 		},
 
 		async now(using?: Session): Promise<Date> {

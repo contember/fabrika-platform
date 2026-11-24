@@ -226,6 +226,7 @@ describe('the wakes migration', () => {
 			'fabrika/0004_job_wakes_owned.sql',
 			'fabrika/0005_request_receipts.sql',
 			'fabrika/0006_list_cursor_key.sql',
+			'fabrika/0007_job_schedule.sql',
 		])
 		const migrated = frameworkTablesOf(connected(tables, { database: openSqlite(storage), capabilities: new TestAuthority() }).database).wakes
 		const due = at(MINUTE)
@@ -367,6 +368,59 @@ describe('a finish tells the wakes what its run did with them', () => {
 		const until = await wakes.untilNext()
 		expect(until).toBeGreaterThan(MINUTE - 1_000)
 		expect(until).toBeLessThanOrEqual(MINUTE)
+	})
+})
+
+describe('the next wake of some jobs', () => {
+	test('only the named jobs count: a wake or a held lease of another job does not', async () => {
+		const overdue = at(-MINUTE)
+		const soon = at(MINUTE)
+		const later = at(2 * MINUTE)
+		await wakes.schedule({ job: 'removed', reason: 'cron', dueAt: overdue, dedupe: 'cron:removed:* * * * *' })
+		await wakes.schedule({ job: 'digest', reason: 'cron', dueAt: later, dedupe: 'cron:digest:0 * * * *' })
+		await lease('other')
+		expect((await wakes.next())?.getTime()).toBe(overdue.getTime())
+		expect((await wakes.next(undefined, ['digest']))?.getTime()).toBe(later.getTime())
+		await wakes.schedule({ job: 'digest', reason: 'kick', dueAt: soon })
+		expect((await wakes.next(undefined, ['digest', 'absent']))?.getTime()).toBe(soon.getTime())
+		expect(await wakes.next(undefined, [])).toBeNull()
+		expect(await wakes.next(undefined, ['absent'])).toBeNull()
+		const until = await wakes.untilNext(undefined, ['digest'])
+		expect(until).toBeGreaterThan(MINUTE - 1_000)
+		expect(until).toBeLessThanOrEqual(MINUTE)
+	})
+
+	test("a held lease's expiry counts for its own job only", async () => {
+		await lease('digest')
+		const expiry = (await wakes.next(undefined, ['digest']))?.getTime()
+		expect(expiry).toBeGreaterThan(Date.now() + HOUR - MINUTE)
+		expect(await wakes.next(undefined, ['other'])).toBeNull()
+	})
+
+	test('a job name that is not a non-empty string is refused', async () => {
+		await expect(wakes.next(undefined, [''])).rejects.toThrow(QueryRefusedError)
+		await expect(wakes.untilNext(undefined, [''])).rejects.toThrow(QueryRefusedError)
+	})
+})
+
+describe('the schedule generation', () => {
+	const first = '019a0000-0000-7000-8000-000000000001'
+	const second = '019a0000-0000-7000-8000-000000000002'
+
+	test('the first generation holds it, a later one takes it over, and an earlier one never takes it back', async () => {
+		expect(await wakes.holdsSchedule(first)).toBe(true)
+		expect(await wakes.holdsSchedule(first)).toBe(true)
+		expect(await wakes.holdsSchedule(second)).toBe(true)
+		expect(await wakes.holdsSchedule(first)).toBe(false)
+		expect(await wakes.holdsSchedule(second)).toBe(true)
+		expect(db.exec('select id, generation from fabrika_job_schedule')).toEqual([{ id: 1, generation: second }])
+	})
+
+	test('a generation that is not a lowercase UUID is refused and stores nothing', async () => {
+		for (const refused of ['', 'later', first.toUpperCase(), `${first} `, `{${first}}`]) {
+			await expect(wakes.holdsSchedule(refused)).rejects.toThrow(QueryRefusedError)
+		}
+		expect(db.exec('select generation from fabrika_job_schedule')).toEqual([])
 	})
 })
 

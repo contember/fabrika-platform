@@ -373,7 +373,9 @@ describe.skipIf(!hasPostgres)('the next wake on Postgres', () => {
 		const recording = new RecordingDialect()
 		await frameworkTablesOf(connected(tables, { database: Database.fromDialect(recording), capabilities: authority }).database).wakes.next()
 		expect(recording.log).toHaveLength(1)
-		const plan = (await on.query(`explain ${recording.log[0]?.sql}`)).map((row) => String(Object.values(row)[0])).join('\n')
+		// Without a list of jobs the statement's one parameter is null.
+		const text = recording.log[0]?.sql.replaceAll('$1', 'null')
+		const plan = (await on.query(`explain ${text}`)).map((row) => String(Object.values(row)[0])).join('\n')
 		expect(plan).toContain('Index Scan using fabrika_wakes_due on fabrika_wakes')
 		expect(plan).not.toContain('Seq Scan on fabrika_wakes')
 		const earliestFree = await on.epochMs(
@@ -556,6 +558,73 @@ describe.skipIf(!hasPostgres)("hasten, the test kit's, on Postgres", () => {
 		const run = await lease('hasten-owned')
 		expect(await leases.finish(run, 'succeeded')).toBe(true)
 		expect(await dues('hasten-owned')).toEqual([later.dueAt.getTime()])
+	})
+})
+
+describe.skipIf(!hasPostgres)('the next wake of some jobs, and the schedule generation, on Postgres', () => {
+	test('only the named jobs count: a wake or a held lease of another job does not', async () => {
+		const overdue = at(-MINUTE)
+		const later = at(2 * MINUTE)
+		await wakes.schedule({ job: 'pg-removed', reason: 'cron', dueAt: overdue, dedupe: 'cron:pg-removed:* * * * *' })
+		await wakes.schedule({ job: 'pg-digest', reason: 'cron', dueAt: later, dedupe: 'cron:pg-digest:0 * * * *' })
+		await lease('pg-held')
+		expect((await wakes.next(undefined, ['pg-digest']))?.getTime()).toBe(later.getTime())
+		expect((await wakes.next(undefined, ['pg-digest', 'pg-removed']))?.getTime()).toBe(overdue.getTime())
+		expect((await wakes.next(undefined, ['pg-held']))?.getTime()).toBeGreaterThan(Date.now() + HOUR - MINUTE)
+		expect(await wakes.next(undefined, [])).toBeNull()
+		const until = await wakes.untilNext(undefined, ['pg-digest'])
+		expect(until).toBeGreaterThan(2 * MINUTE - 2_000)
+		expect(until).toBeLessThanOrEqual(2 * MINUTE)
+		await expect(wakes.next(undefined, [''])).rejects.toThrow(QueryRefusedError)
+	})
+
+	test('the first generation holds it, a later one takes it over, an earlier one never takes it back', async () => {
+		const first = '019a0000-0000-7000-8000-00000000000a'
+		const second = '019a0000-0000-7000-8000-00000000000b'
+		for (const refused of ['', first.toUpperCase(), `${first} `]) {
+			await expect(wakes.holdsSchedule(refused)).rejects.toThrow(QueryRefusedError)
+		}
+		expect(await wakes.holdsSchedule(first)).toBe(true)
+		expect(await wakes.holdsSchedule(second)).toBe(true)
+		expect(await wakes.holdsSchedule(first)).toBe(false)
+		expect(await wakes.holdsSchedule(second)).toBe(true)
+		const stored = await admin((sql) => sql.unsafe(`select id, generation from ${schema}.fabrika_job_schedule`))
+		expect([...stored]).toEqual([{ id: 1, generation: second }])
+	})
+
+	test('concurrent holders of two generations leave the later one stored', async () => {
+		const older = '019a0000-0000-7000-8000-0000000000f0'
+		const newer = '019a0000-0000-7000-8000-0000000000f1'
+		await admin((sql) => sql.unsafe(`delete from ${schema}.fabrika_job_schedule`))
+		const answers = await Promise.all([older, newer, older, newer, older].map((generation) => wakes.holdsSchedule(generation)))
+		expect(answers.filter((held, index) => held && index % 2 === 1)).toEqual([true, true])
+		expect(await wakes.holdsSchedule(older)).toBe(false)
+		expect(await wakes.holdsSchedule(newer)).toBe(true)
+	})
+})
+
+describe.skipIf(!hasPostgres)('the schedule migration', () => {
+	test('an existing schema applies 0013 alone, and the runtime role holds the schedule', async () => {
+		const appId = `sched-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
+		const earlier = FRAMEWORK_MIGRATIONS.filter((file) => file.name < '0013_job_schedule.sql')
+		expect(earlier).toHaveLength(FRAMEWORK_MIGRATIONS.length - 1)
+		const migrationsOf = (framework: typeof FRAMEWORK_MIGRATIONS) =>
+			definePostgresApplicationMigrations({ appId, directory: '/nonexistent', framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: framework } })
+		try {
+			const app = [{ name: '20261124120000_init.sql', sql: 'CREATE TABLE notes (id TEXT PRIMARY KEY)' }]
+			expect(await migrationsOf(earlier).migrate(url, app)).toEqual([...earlier.map((file) => `fabrika/${file.name}`), `app/${app[0]?.name}`])
+			const after = migrationsOf(FRAMEWORK_MIGRATIONS)
+			expect(await after.migrate(url, app)).toEqual(['fabrika/0013_job_schedule.sql'])
+			const runtime = openPostgres({ url: applicationRuntimeUrl(url, appId), schema: after.schema, max: 1 })
+			try {
+				const migrated = frameworkTablesOf(connected(tables, { database: runtime, capabilities: authority }).database).wakes
+				expect(await migrated.holdsSchedule('019a0000-0000-7000-8000-000000000001')).toBe(true)
+			} finally {
+				await runtime.close()
+			}
+		} finally {
+			await dropApplicationDatabase(url, appId)
+		}
 	})
 })
 

@@ -10,6 +10,7 @@ export const WEBHOOK_DELIVERIES_TABLE = 'fabrika_webhook_deliveries'
 export const JOB_LEASES_TABLE = 'fabrika_job_leases'
 export const JOB_KICKS_TABLE = 'fabrika_job_kicks'
 export const JOB_WAKES_TABLE = 'fabrika_wakes'
+export const JOB_SCHEDULE_TABLE = 'fabrika_job_schedule'
 export const FORM_ADMISSIONS_TABLE = 'fabrika_form_admissions'
 export const FORM_CHALLENGES_TABLE = 'fabrika_form_challenges'
 export const FORM_FILES_TABLE = 'fabrika_form_files'
@@ -309,6 +310,16 @@ CREATE TABLE ${LIST_CURSOR_KEY_TABLE} (
 	secret TEXT NOT NULL
 );
 INSERT INTO ${LIST_CURSOR_KEY_TABLE} (id, secret) VALUES (1, gen_random_uuid()::text || gen_random_uuid()::text);
+`,
+	}),
+	Object.freeze({
+		name: '0013_job_schedule.sql',
+		sql: `-- Which deploy keeps the cron wakes where no crontab runs (ADR-0080): one row, the highest generation a serving process
+-- has seen. A process of that generation reconciles and seeds the wakes; an older one does neither. Compared as bytes.
+CREATE TABLE ${JOB_SCHEDULE_TABLE} (
+	id INTEGER PRIMARY KEY CHECK (id = 1),
+	generation TEXT COLLATE "C" NOT NULL
+);
 `,
 	}),
 ])
