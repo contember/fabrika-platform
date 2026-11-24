@@ -1,6 +1,8 @@
 // The launcher's own protection: a process that holds the provisioning credential marks itself non-dumpable before it
-// starts the application, so a process of the same user, the application among them, cannot read its
-// `/proc/<pid>/environ` or `/proc/<pid>/mem`. Linux only; elsewhere is a development machine.
+// starts the application, so a process of the same user cannot read its `/proc/<pid>/environ` or `/proc/<pid>/mem`.
+// A holder of CAP_SYS_PTRACE still can, and so can the application wherever it has `sudo`: on Zerops it does, so
+// there this protects nothing until the application runs without it (backlog 198, ADR-0082). Linux only; elsewhere
+// is a development machine.
 
 import { dlopen, FFIType } from 'bun:ffi'
 
