@@ -1,4 +1,4 @@
-import { parseJsonStringArray, terminalIdentifyProblem, type WorkloadKind } from '@fabrika/auth-core'
+import { type DimensionValue, parseJsonStringArray, terminalIdentifyProblem, type WorkloadKind } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement } from '@fabrika/platform'
 
 import { type AuditEventInput, auditEventStatement, AuditWriter } from './audit'
@@ -40,6 +40,8 @@ export interface AppScopeRow {
 	members_directory: 'labels' | null
 	/** A JSON array of the actions that look up one member (`findMember`), or null for none. */
 	members_lookup: string | null
+	/** A JSON array of the `{ value, label? }` the console offers for a grant here (ADR-0085), or null for none. */
+	value_list: string | null
 }
 
 /** A share-link mount (the `app_link_mounts` table). `grants` is a JSON array of exact actions. */
@@ -350,6 +352,7 @@ export class AppSchemaRepository {
 			creatorRole?: string | null
 			members?: { manage: string; list: string } | null
 			directory?: 'labels' | null
+			values?: readonly DimensionValue[] | null
 			lookups?: string[] | null
 		}[]
 		actions: { action: string; description?: string | null }[]
@@ -436,8 +439,8 @@ export class AppSchemaRepository {
 			statements.push(
 				this.db
 					.prepare(
-						`INSERT INTO app_scopes (app, scope_type, label, parent_scope, creator_role, members_manage, members_list, members_directory, members_lookup)
-						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+						`INSERT INTO app_scopes (app, scope_type, label, parent_scope, creator_role, members_manage, members_list, members_directory, members_lookup, value_list)
+						VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 						ON CONFLICT (app, scope_type) DO UPDATE SET
 							label = excluded.label,
 							parent_scope = excluded.parent_scope,
@@ -445,7 +448,8 @@ export class AppSchemaRepository {
 							members_manage = excluded.members_manage,
 							members_list = excluded.members_list,
 							members_directory = excluded.members_directory,
-							members_lookup = excluded.members_lookup`,
+							members_lookup = excluded.members_lookup,
+							value_list = excluded.value_list`,
 					)
 					.bind(
 						app,
@@ -457,6 +461,7 @@ export class AppSchemaRepository {
 						scope.members?.list ?? null,
 						scope.directory ?? null,
 						scope.lookups == null || scope.lookups.length === 0 ? null : JSON.stringify(scope.lookups),
+						scope.values == null ? null : JSON.stringify(scope.values),
 					),
 			)
 		}

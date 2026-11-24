@@ -40,6 +40,7 @@ const crossAppAdminGrant = (principalId: string): GrantDto => ({
 	permissions: null,
 	scopeType: null,
 	scopeValue: null,
+	scopeValues: null,
 	app: null,
 	grantedBy: null,
 	expiresAt: null,

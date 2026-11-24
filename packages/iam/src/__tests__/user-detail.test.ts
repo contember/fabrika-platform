@@ -80,7 +80,7 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 			const f = await fixture(backend().repositories)
 			const changes = { id: f.grant.id, roleKey: 'publisher', scopeType: 'workspace', scopeValue: 'beta', expiresAt: future() }
 			const updated = applied(await adminUseCases.updateGrant(f.context, changes))
-			expect(updated).toMatchObject({ ...f.grant, roleKey: 'publisher', scopeValue: 'beta', expiresAt: changes.expiresAt })
+			expect(updated).toMatchObject({ ...f.grant, roleKey: 'publisher', scopeValue: 'beta', scopeValues: ['beta'], expiresAt: changes.expiresAt })
 			expect((await f.repositories.principals.getPrincipalById(f.user.id))?.grant_revision).toBeGreaterThan(f.user.grant_revision)
 			const events = await adminUseCases.listAudit(f.context, { subjectPrincipalId: f.user.id, action: 'iam.grant.update' })
 			expect(events.items).toHaveLength(1)
@@ -127,18 +127,18 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 
 		test('a stale edit cannot overwrite a concurrent edit or fabricate its before-value in history', async () => {
 			const f = await fixture(backend().repositories)
-			const before = await f.repositories.grants.getGrantById(f.grant.id)
+			const before = await f.repositories.grants.getGrantSet(f.grant.id)
 			if (before === null) throw new Error('grant')
-			await adminUseCases.updateGrant(f.context, { id: before.id, roleKey: 'publisher', scopeType: 'workspace', scopeValue: 'alpha' })
-			const stale = await f.repositories.grants.updateGrant(before, {
+			await adminUseCases.updateGrant(f.context, { id: f.grant.id, roleKey: 'publisher', scopeType: 'workspace', scopeValue: 'alpha' })
+			const stale = await f.repositories.grants.replaceGrantSet(before, {
 				principalId: f.user.id,
 				app: APP,
 				roleKey: 'editor',
 				scopeType: 'workspace',
-				scopeValue: 'beta',
-			}, adminEvent(f.context, { action: 'iam.grant.update', resourceType: 'grant', resourceId: before.id, metadata: { principalId: f.user.id } }))
+				scopeValues: ['beta', 'gamma'],
+			}, adminEvent(f.context, { action: 'iam.grant.update', resourceType: 'grant', resourceId: f.grant.id, metadata: { principalId: f.user.id } }))
 			expect(stale).toBeNull()
-			expect((await f.repositories.grants.getGrantById(before.id))?.scope_value).toBe('alpha')
+			expect((await f.repositories.grants.getGrantSet(f.grant.id))?.rows.map((row) => row.scope_value)).toEqual(['alpha'])
 			expect((await adminUseCases.listAudit(f.context, { subjectPrincipalId: f.user.id, action: 'iam.grant.update' })).items).toHaveLength(1)
 		})
 

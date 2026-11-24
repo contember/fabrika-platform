@@ -188,7 +188,7 @@ export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleReques
 				roleKey: role.role_key,
 				permissions: null,
 				scopeType: null,
-				scopeValue: null,
+				scopeValues: null,
 				grantExpiresAt: expiresAt,
 				requestedBy: admin.principal.id,
 			}, (requestId, metadata) =>
@@ -236,7 +236,7 @@ export async function revokeAppRole(ctx: IamAppContext, input: RevokeAppRoleRequ
 			roleKey: role.role_key,
 			permissions: null,
 			scopeType: null,
-			scopeValue: null,
+			scopeValues: null,
 			grantExpiresAt: held.expires_at,
 			requestedBy: admin.principal.id,
 		}, (requestId, metadata) =>

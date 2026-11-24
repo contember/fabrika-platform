@@ -1,5 +1,5 @@
 import { isActionAllowed, isReservedScopeType, parseJsonStringArray, type RoleDef } from '@fabrika/auth-core'
-import { type CreateGrantRequest, type GrantDto } from '@fabrika/iam-contract'
+import { type CreateGrantRequest, type GrantDto, MAX_GRANT_SCOPE_VALUES } from '@fabrika/iam-contract'
 import { type GrantRow, type RoleRow } from '../db'
 import { BUILTIN_ROLES, isKnownRole } from '../roles'
 import { type Services } from '../services'
@@ -44,28 +44,53 @@ export class RoleKnownCache {
 	}
 }
 
-export async function toGrantDto(row: GrantRow, roleCache: RoleKnownCache): Promise<GrantDto> {
+/** The id of the grant a row belongs to: its set's, or its own for a grant of one value (ADR-0085). */
+export function grantIdOf(row: Pick<GrantRow, 'id' | 'scope_set'>): string {
+	return row.scope_set ?? row.id
+}
+
+/** Rows grouped into grants by `grantIdOf`, in the order each grant's first row appears. */
+export function grantSets(rows: readonly GrantRow[]): GrantRow[][] {
+	const sets = new Map<string, GrantRow[]>()
+	for (const row of rows) {
+		const id = grantIdOf(row)
+		const set = sets.get(id)
+		if (set === undefined) sets.set(id, [row])
+		else set.push(row)
+	}
+	return [...sets.values()]
+}
+
+/** One grant's DTO from the rows of its set; a row an assignment renewed may expire later, so the earliest expiry counts. */
+export async function toGrantDto(rows: readonly [GrantRow, ...GrantRow[]], roleCache: RoleKnownCache): Promise<GrantDto> {
+	const [row] = rows
 	const dangling = row.role_key !== null && !(await roleCache.isKnown(row.role_key, row.app))
+	const scopeValues = row.scope_type === null
+		? null
+		: rows.flatMap((each) => each.scope_value === null ? [] : [each.scope_value]).sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
+	const expiries = rows.flatMap((each) => each.expires_at === null ? [] : [each.expires_at])
 	return {
-		id: row.id,
+		id: grantIdOf(row),
 		principalId: row.principal_id,
 		roleKey: row.role_key,
 		permissions: row.permissions === null ? null : rolePermissions(row.permissions),
 		scopeType: row.scope_type,
-		scopeValue: row.scope_value,
+		scopeValue: scopeValues?.[0] ?? null,
+		scopeValues,
 		app: row.app,
 		grantedBy: row.granted_by,
-		expiresAt: row.expires_at,
-		createdAt: row.created_at,
+		expiresAt: expiries.length === 0 ? null : Math.min(...expiries),
+		createdAt: Math.min(...rows.map((each) => each.created_at)),
 		dangling,
 	}
 }
 
-/** Map a list of grant rows to DTOs sharing one role-known cache (one query per app). */
+/** Map grant rows to one DTO per grant, sharing one role-known cache (one query per app). */
 export async function toGrantDtos(rows: GrantRow[], services: Services, cache: RoleKnownCache = new RoleKnownCache(services)): Promise<GrantDto[]> {
 	const out: GrantDto[] = []
-	for (const row of rows) {
-		out.push(await toGrantDto(row, cache))
+	for (const set of grantSets(rows)) {
+		const [first, ...rest] = set
+		if (first !== undefined) out.push(await toGrantDto([first, ...rest], cache))
 	}
 	return out
 }
@@ -119,22 +144,33 @@ async function loadAppRoleMap(c: AdminContext, app: string | null): Promise<Reco
 }
 
 /**
- * Validate the scope coordinate on a grant/key request: `scopeType`/`scopeValue` are
- * both-or-neither (both null = global). A half-set pair is a 400.
+ * Validate the scope coordinate on a grant/key request: `scopeType` with `scopeValue` or `scopeValues` (ADR-0085), or
+ * none of them (global). The values come back sorted, so a set reads the same whatever order the request listed.
  */
 export function parseScope(
-	body: Pick<CreateGrantRequest, 'scopeType' | 'scopeValue'>,
-): { ok: true; scopeType: string | null; scopeValue: string | null } | { ok: false } {
+	body: Pick<CreateGrantRequest, 'scopeType' | 'scopeValue' | 'scopeValues'>,
+): { ok: true; scopeType: string | null; scopeValues: string[] | null } | { ok: false; message: string } {
 	const scopeType = body.scopeType ?? null
-	const scopeValue = body.scopeValue ?? null
-	if ((scopeType === null) !== (scopeValue === null)) {
-		return { ok: false }
+	if (body.scopeValues !== undefined && body.scopeValue != null) {
+		return { ok: false, message: 'give scopeValue or scopeValues, not both' }
+	}
+	const scopeValues = body.scopeValues ?? (body.scopeValue == null ? null : [body.scopeValue])
+	if ((scopeType === null) !== (scopeValues === null)) {
+		return { ok: false, message: 'scopeType and scopeValue must be both set or both omitted' }
 	}
 	// A `~` scope type is IAM's derived pseudo-scope (`~rel`); a stored grant never names one.
 	if (scopeType !== null && isReservedScopeType(scopeType)) {
-		return { ok: false }
+		return { ok: false, message: 'scopeType and scopeValue must be both set or both omitted' }
 	}
-	return { ok: true, scopeType, scopeValue }
+	if (scopeValues === null) return { ok: true, scopeType, scopeValues }
+	if (scopeValues.length === 0 || scopeValues.length > MAX_GRANT_SCOPE_VALUES) {
+		return { ok: false, message: `scopeValues must list 1 to ${MAX_GRANT_SCOPE_VALUES} values` }
+	}
+	if (body.scopeValues !== undefined && scopeValues.includes('')) return { ok: false, message: 'a scope value must not be empty' }
+	const sorted = [...scopeValues].sort((a, b) => a < b ? -1 : a > b ? 1 : 0)
+	const repeated = sorted.find((value, index) => index > 0 && sorted[index - 1] === value)
+	if (repeated !== undefined) return { ok: false, message: `scopeValues lists '${repeated}' twice` }
+	return { ok: true, scopeType, scopeValues: sorted }
 }
 
 /**

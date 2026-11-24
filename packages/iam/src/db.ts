@@ -46,7 +46,7 @@ export { type InstallationBrandImages, InstallationBrandRepository, type Install
 export { type CredentialGrantRow, CredentialRepository, type CredentialRow } from './repositories/credentials'
 export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
 export { type CreateGrantRequestInput, GrantRequestRepository, type GrantRequestRow } from './repositories/grant-requests'
-export { type DelegatedAuthority, ExternalGrantError, GrantRepository, type GrantRow } from './repositories/grants'
+export { type DelegatedAuthority, ExternalGrantError, GrantRepository, type GrantRow, type GrantSetRead } from './repositories/grants'
 export { type AuthCodeRow, HandoffRepository } from './repositories/handoff'
 export {
 	type DelegationGrantRow,
