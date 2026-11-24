@@ -137,6 +137,22 @@ export async function requirePersonToPointTriggerRef(
 }
 
 /**
+ * Naming the public origin of an environment that is protected, or of a new one that starts protected, takes a person,
+ * like its domain: IAM sends an administrator's short-lived key to that origin to ask the application for a dimension's
+ * values (ADR-0085 §4). Clearing it stays open to a key.
+ */
+export async function requirePersonToPointPublicOrigin(
+	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly publicOrigin: string | null },
+): Promise<void> {
+	const { appId, env, existing, publicOrigin } = target
+	if (publicOrigin === null || publicOrigin === existing?.public_origin || isPerson(c.auth)) return
+	if (await startsProtected(c.repositories.registry, appId, env, existing)) {
+		fail(403, `environment \`${env}\` is protected: only a person changes its public origin; an agent, a builder key or a service key cannot`)
+	}
+}
+
+/**
  * Naming the domain of an environment that is protected, or of a new one that starts protected, takes a person
  * (`apps.environments.put`): the domain receives its traffic and, once deployed there, Control's ops key. Clearing it
  * stays open to a key.
