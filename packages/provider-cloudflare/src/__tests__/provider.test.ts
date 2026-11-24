@@ -1595,6 +1595,14 @@ describe("another application's names (ADR-0048)", () => {
 				{ durable_objects: { bindings: [{ name: 'DO', class_name: 'Room', script_name: 'prod-otherapp' }] } },
 				'binds the Durable Object script `prod-otherapp`, a name of application `otherapp`',
 			],
+			[
+				{ migrations: [{ tag: 'v1', transferred_classes: [{ from: 'Room', from_script: 'prod-otherapp', to: 'Room' }] }] },
+				'binds the Durable Object classes of script `prod-otherapp`, a name of application `otherapp`',
+			],
+			[
+				{ migrations: [{ tag: 'v1', transferred_classes: [{ from: 'Control', from_script: 'prod-vozka', to: 'Room' }] }] },
+				'binds the Durable Object classes of script `prod-vozka`, which would take over',
+			],
 		]
 		for (const [extra, message] of probes) {
 			await expect(deploy(rec, config({ resources: () => bindingIam(emitting(extra)) }), { env: 'prod', installationApps })).rejects

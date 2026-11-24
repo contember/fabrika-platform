@@ -323,6 +323,13 @@ const assertResourceBindings = (worker: string, config: WranglerConfig, names: A
 		const script = field(entry, 'script_name')
 		if (script !== undefined) binds('the Durable Object script', script)
 	}
+	// A transfer moves another script's Durable Object class, with every object's storage, into this Worker: the
+	// migration names that script, and only a script of this application may give up its objects.
+	for (const migration of entries(config.migrations, worker, 'migrations')) {
+		for (const transfer of entries(field(migration, 'transferred_classes'), worker, 'migrations.transferred_classes')) {
+			binds('the Durable Object classes of script', field(transfer, 'from_script'))
+		}
+	}
 }
 
 /**
