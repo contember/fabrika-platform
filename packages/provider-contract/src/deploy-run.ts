@@ -28,7 +28,7 @@ export interface RunAttempt<C> {
 	parse(state: JsonValue | undefined): C | null
 	/** The checkpoint as Control stores it; `parse` reads it back. */
 	encode(checkpoint: C): JsonValue
-	/** The run's external id: recorded with the first checkpoint, and every later one must name the same. */
+	/** The run's external id: recorded with the first checkpoint; `record` refuses a later one naming another. */
 	externalId(checkpoint: C): string
 	/** Whether the call that may activate the candidate may have been sent. */
 	submitted(checkpoint: C): boolean
@@ -73,8 +73,8 @@ export interface DeployRunContext<C> {
 	readonly checkpoint: C | undefined
 	/**
 	 * Record `checkpoint` before the call that needs it. The first one also records the run's external id. An
-	 * unsubmitted checkpoint counts at once, because the candidate it names already exists; a submitted one counts
-	 * only once it is stored, because the call it allows is sent only after.
+	 * unsubmitted checkpoint counts at once, because the candidate it names may already exist (`discard` takes an absent
+	 * one as no error); a submitted one counts only once it is stored, because the call it allows is sent only after.
 	 */
 	record(checkpoint: C): Promise<void>
 }
@@ -109,10 +109,13 @@ export const runDeploy = async <C, TStep extends { readonly id: string; readonly
 		},
 		record: async (next) => {
 			const externalId = attempt.externalId(next)
-			const submitted = attempt.submitted(next)
-			if (!submitted) checkpoint = next
-			if (externalId === recordedExternalId) await events.checkpoint(attempt.encode(next))
-			else await events.externalId(externalId, attempt.encode(next))
+			// Recovery matches the stored checkpoint to the run's one external id, so a run never changes it.
+			if (recordedExternalId !== undefined && externalId !== recordedExternalId) {
+				throw new Error(`${attempt.words.provider}: a checkpoint names another external id than the run recorded`)
+			}
+			if (!attempt.submitted(next)) checkpoint = next
+			if (recordedExternalId === undefined) await events.externalId(externalId, attempt.encode(next))
+			else await events.checkpoint(attempt.encode(next))
 			recordedExternalId = externalId
 			checkpoint = next
 		},
@@ -137,7 +140,7 @@ export interface AwaitSettlementInput<C> {
 	readonly events: ProviderRunEvents
 	readonly signal: AbortSignal
 	/** The instant the wait gives up, stopping the candidate's work. */
-	readonly deadlineMs: number
+	readonly giveUpAtMs: number
 	readonly intervalMs: number
 	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>
 	/** One read in the live run; it may relay the build's log. A throw fails the wait. */
@@ -145,8 +148,10 @@ export interface AwaitSettlementInput<C> {
 }
 
 /**
- * Poll a submitted candidate until it is active; any other end throws. A cancel read at a boundary stops the
- * candidate's work and throws `cancel_requested`; a lost lease throws without stopping anything (ADR-0044).
+ * Poll the candidate's work until `observe` answers active; any other end throws. It serves a submitted candidate's
+ * rollout and any wait before submission (a build the activating call needs) alike: a cancel read at a boundary
+ * stops the work and throws `cancel_requested`, the deadline stops it and fails, and a lost lease throws without
+ * stopping anything (ADR-0044). What a failed run does with an unsubmitted candidate is `runDeploy`'s.
  */
 export const awaitSettlement = async <C>(input: AwaitSettlementInput<C>): Promise<void> => {
 	const { attempt, checkpoint, signal } = input
@@ -165,7 +170,7 @@ export const awaitSettlement = async <C>(input: AwaitSettlementInput<C>): Promis
 		}
 		const observed = await input.observe(signal)
 		if (observed.state === 'unobservable') {
-			if (Date.now() > input.deadlineMs) await timedOut()
+			if (Date.now() > input.giveUpAtMs) await timedOut()
 			await input.sleep(input.intervalMs, signal)
 			continue
 		}
@@ -174,7 +179,7 @@ export const awaitSettlement = async <C>(input: AwaitSettlementInput<C>): Promis
 		if (observed.state === 'active') return
 		if (observed.state === 'failed') throw new Error(observed.reason)
 		if (observed.state === 'absent') throw new Error(`${attempt.words.provider}: ${attempt.words.candidate(checkpoint)} no longer exists`)
-		if (Date.now() > input.deadlineMs) await timedOut()
+		if (Date.now() > input.giveUpAtMs) await timedOut()
 		await input.sleep(input.intervalMs, signal)
 	}
 }

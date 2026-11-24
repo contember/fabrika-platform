@@ -493,7 +493,7 @@ const awaitVersion = async (env: StepEnv, checkpoint: ZeropsRunState, processId:
 		checkpoint,
 		events: env.run.events,
 		signal: env.signal,
-		deadlineMs: env.deadlineMs,
+		giveUpAtMs: env.deadlineMs,
 		intervalMs: POLL_INTERVAL_MS,
 		sleep: zerops.sleep,
 		observe,

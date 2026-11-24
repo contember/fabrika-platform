@@ -189,7 +189,7 @@ const deploy = (setup: RunSetup) => {
 						checkpoint,
 						events,
 						signal: controller.signal,
-						deadlineMs: Date.now() + 60_000,
+						giveUpAtMs: Date.now() + 60_000,
 						intervalMs: 1,
 						sleep: async () => {},
 						observe: (signal) => attempt.observe(checkpoint, signal),
@@ -311,6 +311,51 @@ describe('runDeploy', () => {
 		expect(setup.cloud.stoppedBuilds).toEqual(['build-tok1'])
 	})
 
+	test('a checkpoint naming another external id is refused, so recovery still finds the run', async () => {
+		const setup = setupRun()
+		const result = await runDeploy({
+			attempt: attemptOver(setup.cloud),
+			steps: [step('resolve'), step('rename')],
+			options: { appId: 'shop', env: 'prod', dryRun: false, signal: setup.controller.signal, log: (line) => setup.events.log(line) },
+			events: setup.events,
+			runOne: (current, run) => run.record({ buildToken: current.id === 'resolve' ? 'tok1' : 'tok2', buildId: 'build-tok1' }),
+		})
+
+		expect(result.steps.at(-1)).toMatchObject({ status: 'failed', error: 'cloud: a checkpoint names another external id than the run recorded' })
+		expect(setup.events.externalIdValue).toBe('tok1')
+		expect(setup.cloud.timeline).toEqual(['externalId tok1'])
+		expect(setup.cloud.stoppedBuilds).toEqual(['build-tok1'])
+	})
+
+	test('a build waited for before submission is stopped at the deadline, and the failed run discards it', async () => {
+		const setup = setupRun()
+		const attempt = attemptOver(setup.cloud)
+		const result = await runDeploy({
+			attempt,
+			steps: [step('build')],
+			options: { appId: 'shop', env: 'prod', dryRun: false, signal: setup.controller.signal, log: (line) => setup.events.log(line) },
+			events: setup.events,
+			runOne: async (_current, run) => {
+				const built: Checkpoint = { buildToken: 'tok1', buildId: 'build-tok1' }
+				await run.record(built)
+				await awaitSettlement({
+					attempt,
+					checkpoint: built,
+					events: setup.events,
+					signal: setup.controller.signal,
+					giveUpAtMs: Date.now() - 1,
+					intervalMs: 1,
+					sleep: async () => {},
+					observe: async () => ({ state: 'pending', status: 'IN_PROGRESS' }),
+				})
+			},
+		})
+
+		expect(result.steps[0]).toMatchObject({ status: 'failed', error: 'cloud: gave up waiting for build build-tok1 at the run deadline' })
+		expect(setup.cloud.stoppedBuilds).toEqual(['build-tok1'])
+		expect(setup.events.logs).toContain('  stopped build build-tok1')
+	})
+
 	test('a cancelled run leaves its candidate to cancelRun', async () => {
 		const setup = setupRun()
 		setup.controller.abort(new ProviderInvocationAbort('cancel_requested'))
@@ -323,7 +368,7 @@ describe('runDeploy', () => {
 })
 
 describe('awaitSettlement', () => {
-	const waiting = async (setup: RunSetup, deadlineMs = Date.now() + 60_000) => {
+	const waiting = async (setup: RunSetup, giveUpAtMs = Date.now() + 60_000) => {
 		const attempt = attemptOver(setup.cloud)
 		setup.cloud.deployments.set('arn:deployment:1', 'IN_PROGRESS')
 		const checkpoint: Checkpoint = { buildToken: 'tok1', serviceUpdateRequested: true, deploymentArn: 'arn:deployment:1' }
@@ -332,7 +377,7 @@ describe('awaitSettlement', () => {
 			checkpoint,
 			events: setup.events,
 			signal: setup.controller.signal,
-			deadlineMs,
+			giveUpAtMs,
 			intervalMs: 1,
 			sleep: async () => {},
 			observe: (signal) => attempt.observe(checkpoint, signal),
