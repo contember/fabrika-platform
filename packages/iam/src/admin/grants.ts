@@ -1,11 +1,19 @@
-import { type CreateGrantRequest, type GrantDto, type OkResponse, type UpdateGrantInput } from '@fabrika/iam-contract'
+import {
+	type CreateGrantRequest,
+	type GrantChangeResponse,
+	type OkResponse,
+	type PendingGrantChange,
+	type UpdateGrantInput,
+} from '@fabrika/iam-contract'
 import { contractGrantProblem, externalGrantProblem } from '../contract-rules'
 import { ExternalGrantError, type GrantRow } from '../db'
+import { parseStoredPermissions } from '../stored-permissions'
 import { type AdminContext, adminEvent, fail } from './context'
+import { type GrantChangeRequest, grantsWait, requestGrantChange } from './grant-requests'
 import { appField, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } from './grant-support'
 import { requireGrantablePrincipal, requireManagedApp } from './user-admin'
 
-export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): Promise<GrantDto> {
+export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): Promise<GrantChangeResponse> {
 	const principalId = input.principalId
 	if (principalId.trim() === '') return fail(400, 'principalId required')
 	if (await c.services.repositories.grants.isWorkloadPrincipal(principalId)) {
@@ -46,6 +54,26 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	}
 	const values = { principalId, app, scopeType: scope.scopeType, scopeValue: scope.scopeValue, grantedBy: c.admin.id, expiresAt }
 	const roleKey = roleOrInline.roleKey
+	if (app !== null && await grantsWait(c.services, app)) {
+		if (roleKey !== null) {
+			const held = await findHeldRoleGrant(c, { ...values, roleKey })
+			if (held !== undefined && (held.expires_at === null || held.expires_at > Math.floor(Date.now() / 1000))) {
+				return fail(409, `principal ${principalId} already holds this grant: ${held.id}`)
+			}
+		}
+		return await pendingChange(c, {
+			app,
+			kind: 'create',
+			principalId,
+			grantId: null,
+			roleKey,
+			permissions: roleOrInline.permissions,
+			scopeType: scope.scopeType,
+			scopeValue: scope.scopeValue,
+			grantExpiresAt: expiresAt,
+			requestedBy: c.admin.id,
+		})
+	}
 	const record = (grantId: string) =>
 		adminEvent(c, {
 			action: 'iam.grant.create',
@@ -82,7 +110,7 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 	return toGrantDto(grant, cache)
 }
 
-export async function deleteGrantUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse> {
+export async function deleteGrantUseCase(c: AdminContext, input: { id: string }): Promise<OkResponse & Partial<PendingGrantChange>> {
 	const id = input.id
 	const grant = await c.services.repositories.grants.getGrantById(id)
 	if (!grant) {
@@ -94,6 +122,23 @@ export async function deleteGrantUseCase(c: AdminContext, input: { id: string })
 		return fail(404, 'grant not found')
 	}
 	requireGrantablePrincipal(c, principal)
+	if (grant.app !== null && await grantsWait(c.services, grant.app)) {
+		return {
+			ok: true,
+			...await pendingChange(c, {
+				app: grant.app,
+				kind: 'revoke',
+				principalId: grant.principal_id,
+				grantId: grant.id,
+				roleKey: grant.role_key,
+				permissions: grant.permissions === null ? null : parseStoredPermissions(grant.permissions),
+				scopeType: grant.scope_type,
+				scopeValue: grant.scope_value,
+				grantExpiresAt: grant.expires_at,
+				requestedBy: c.admin.id,
+			}),
+		}
+	}
 	await c.services.repositories.grants.deleteGrant(
 		id,
 		adminEvent(c, {
@@ -112,7 +157,7 @@ export async function deleteGrantUseCase(c: AdminContext, input: { id: string })
 }
 
 /** Edit a grant in place within its original application. Both paths use the same role, scope and external-person rules. */
-export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInput): Promise<GrantDto> {
+export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInput): Promise<GrantChangeResponse> {
 	const grant = await c.services.repositories.grants.getGrantById(input.id)
 	if (grant === null) return fail(404, 'grant not found')
 	requireManagedApp(c, grant.app)
@@ -151,6 +196,20 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 		? 'This user already has that role in this scope. Edit the existing access instead.'
 		: 'This key already has that role in this scope. Edit the existing grant instead.'
 	if (await duplicate()) return fail(409, held)
+	if (grant.app !== null && await grantsWait(c.services, grant.app)) {
+		return await pendingChange(c, {
+			app: grant.app,
+			kind: 'update',
+			principalId: principal.id,
+			grantId: grant.id,
+			roleKey: authorization.roleKey,
+			permissions: authorization.permissions,
+			scopeType: scope.scopeType,
+			scopeValue: scope.scopeValue,
+			grantExpiresAt: expiresAt,
+			requestedBy: c.admin.id,
+		})
+	}
 	let updated: GrantRow | null
 	try {
 		updated = await c.services.repositories.grants.updateGrant(
@@ -199,4 +258,14 @@ async function findHeldRoleGrant(
 		&& row.scope_type === candidate.scopeType
 		&& row.scope_value === candidate.scopeValue
 	)
+}
+
+/** Record a grant change at an application whose grants wait (ADR-0083): nothing changes until another administrator approves. */
+async function pendingChange(c: AdminContext, change: GrantChangeRequest): Promise<PendingGrantChange> {
+	const pending = await requestGrantChange(
+		c.services,
+		change,
+		(requestId, metadata) => adminEvent(c, { action: 'iam.grant.request', resourceType: 'grant_request', resourceId: requestId, metadata }),
+	)
+	return { pending }
 }

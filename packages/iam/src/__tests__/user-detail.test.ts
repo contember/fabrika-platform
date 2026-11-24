@@ -4,6 +4,7 @@ import { listConnections, revokeConnection } from '../admin/connections'
 import { type AdminContext, adminEvent } from '../admin/context'
 import { adminUseCases } from '../admin/handlers'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
+import { applied } from './helpers/grants'
 import { createHarness, makeServicesFor, TestSqlDatabase } from './helpers/harness'
 import { APP, membershipFixture, ONBOARDING_SCHEMA } from './helpers/membership'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
@@ -26,13 +27,15 @@ async function fixture(repositories: IamRepositories) {
 		request: new Request(url),
 		ctx: f.ctx,
 	}
-	const grant = await adminUseCases.createGrant(context, {
-		principalId: user.id,
-		app: APP,
-		roleKey: 'editor',
-		scopeType: 'workspace',
-		scopeValue: 'alpha',
-	})
+	const grant = applied(
+		await adminUseCases.createGrant(context, {
+			principalId: user.id,
+			app: APP,
+			roleKey: 'editor',
+			scopeType: 'workspace',
+			scopeValue: 'alpha',
+		}),
+	)
 	const session = (parentSessionId?: string, expiresAt = future()) =>
 		repositories.sessions.createSession({
 			principalId: user.id,
@@ -76,7 +79,7 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 		test('edits access in place, invalidates delegated authority and audits the exact change only once', async () => {
 			const f = await fixture(backend().repositories)
 			const changes = { id: f.grant.id, roleKey: 'publisher', scopeType: 'workspace', scopeValue: 'beta', expiresAt: future() }
-			const updated = await adminUseCases.updateGrant(f.context, changes)
+			const updated = applied(await adminUseCases.updateGrant(f.context, changes))
 			expect(updated).toMatchObject({ ...f.grant, roleKey: 'publisher', scopeValue: 'beta', expiresAt: changes.expiresAt })
 			expect((await f.repositories.principals.getPrincipalById(f.user.id))?.grant_revision).toBeGreaterThan(f.user.grant_revision)
 			const events = await adminUseCases.listAudit(f.context, { subjectPrincipalId: f.user.id, action: 'iam.grant.update' })
@@ -91,13 +94,15 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 
 		test('refuses duplicate, invalid membership and external-role edits without losing the existing access', async () => {
 			const f = await fixture(backend().repositories)
-			const reader = await adminUseCases.createGrant(f.context, {
-				principalId: f.user.id,
-				app: APP,
-				roleKey: 'publisher',
-				scopeType: 'workspace',
-				scopeValue: 'alpha',
-			})
+			const reader = applied(
+				await adminUseCases.createGrant(f.context, {
+					principalId: f.user.id,
+					app: APP,
+					roleKey: 'publisher',
+					scopeType: 'workspace',
+					scopeValue: 'alpha',
+				}),
+			)
 			await expect(adminUseCases.updateGrant(f.context, { id: reader.id, roleKey: 'editor', scopeType: 'workspace', scopeValue: 'alpha' })).rejects
 				.toThrow('already has')
 			await expect(adminUseCases.updateGrant(f.context, { id: reader.id, roleKey: 'publisher' })).rejects.toThrow()
@@ -105,13 +110,15 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 				adminUseCases.updateGrant(f.context, { id: reader.id, roleKey: 'publisher', scopeType: 'workspace', scopeValue: 'alpha', expiresAt: 1 }),
 			).rejects.toThrow('future')
 			const external = await f.repositories.principals.inviteUser(`${crypto.randomUUID()}@partner.test`, 'External', undefined, 'external')
-			const grant = await adminUseCases.createGrant(f.context, {
-				principalId: external.id,
-				app: APP,
-				roleKey: 'partner',
-				scopeType: 'workspace',
-				scopeValue: 'alpha',
-			})
+			const grant = applied(
+				await adminUseCases.createGrant(f.context, {
+					principalId: external.id,
+					app: APP,
+					roleKey: 'partner',
+					scopeType: 'workspace',
+					scopeValue: 'alpha',
+				}),
+			)
 			await expect(adminUseCases.updateGrant(f.context, { id: grant.id, roleKey: 'publisher', scopeType: 'workspace', scopeValue: 'alpha' })).rejects
 				.toThrow()
 			expect((await f.repositories.grants.getGrantById(reader.id))?.role_key).toBe('publisher')

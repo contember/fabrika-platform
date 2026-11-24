@@ -1,5 +1,7 @@
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
+import { z } from 'zod'
 import { type AuditEventInput, AuditWriter, type SqlChange, type SqlDialect } from './audit'
+import type { GrantRequestRow } from './grant-requests'
 import { unixNow } from './sql'
 
 /** A grant written for a workload principal: its authority is its declared actions, never a grant. */
@@ -353,6 +355,83 @@ export class GrantRepository {
 		}
 	}
 
+	/**
+	 * Write the change an approved grant request asks for (ADR-0083), in one transaction with the approval's claim: the
+	 * request moves `pending` → `approved` under `decision.id`, and the change carries a guard on that claim, so of two
+	 * approvals one claims and writes, the other writes nothing. `current` is the grant an `update` edits as the approver's
+	 * checks read it; the edit applies only over it. `claimed` false: decided or lapsed meanwhile. `changed` null with
+	 * `claimed`: the change wrote nothing (a role grant already held, an ineligible grant, a grant gone or edited since).
+	 */
+	async applyRequest(
+		request: GrantRequestRow,
+		current: GrantRow | null,
+		decision: { readonly id: string; readonly by: string; readonly at: number },
+		audit: (grantId: string) => AuditEventInput,
+	): Promise<{ claimed: boolean; changed: GrantRow | null }> {
+		const claim = this.db
+			.prepare(`UPDATE grant_requests SET status = 'approved', decision_id = ?, decided_by = ?, decided_at = ?
+				WHERE id = ? AND status = 'pending' AND expires_at > ? RETURNING id`)
+			.bind(decision.id, decision.by, decision.at, request.id, decision.at)
+		const guard = { sql: 'EXISTS (SELECT 1 FROM grant_requests WHERE id = ? AND decision_id = ?)', binds: [request.id, decision.id] }
+		const input: CreateGrantInput = {
+			principalId: request.principal_id,
+			app: request.app,
+			roleKey: request.role_key,
+			permissions: request.permissions === null ? null : storedActions(request.permissions),
+			scopeType: request.scope_type,
+			scopeValue: request.scope_value,
+			grantedBy: decision.by,
+			expiresAt: request.grant_expires_at,
+		}
+		const grantId = request.grant_id ?? uuidv7()
+		let change: SqlChange
+		const leading: SqlStatement[] = []
+		if (request.kind === 'create') {
+			const conflict = input.roleKey === null
+				? ''
+				: input.scopeValue == null
+				? `ON CONFLICT (principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL DO NOTHING`
+				: `ON CONFLICT (principal_id, role_key, scope_type, scope_value, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NOT NULL DO NOTHING`
+			change = this.grantChange(grantId, input, conflict, guard)
+		} else if (request.kind === 'update') {
+			if (current === null) return { claimed: false, changed: null }
+			leading.push(grantRemovalStatement(this.db, { principalId: request.principal_id }))
+			change = {
+				sql: `UPDATE grants SET role_key = ?, permissions = ?, scope_type = ?, scope_value = ?, expires_at = ?
+					WHERE id = ? AND app = ? AND role_key IS NOT DISTINCT FROM ? AND permissions IS NOT DISTINCT FROM ?
+						AND scope_type IS NOT DISTINCT FROM ? AND scope_value IS NOT DISTINCT FROM ? AND expires_at IS NOT DISTINCT FROM ?
+						AND ${eligibleGrantSql(this.writer.dialect)} AND ${guard.sql} RETURNING *`,
+				binds: [
+					input.roleKey ?? null,
+					request.permissions,
+					input.scopeType ?? null,
+					input.scopeValue ?? null,
+					input.expiresAt ?? null,
+					current.id,
+					request.app,
+					current.role_key,
+					current.permissions,
+					current.scope_type,
+					current.scope_value,
+					current.expires_at,
+					...eligibleGrantBinds(input),
+					...guard.binds,
+				],
+			}
+		} else {
+			leading.push(grantRemovalStatement(this.db, { principalId: request.principal_id }))
+			change = {
+				sql: `DELETE FROM grants WHERE id = ? AND app = ? AND principal_id = ? AND ${guard.sql} RETURNING *`,
+				binds: [grantId, request.app, request.principal_id, ...guard.binds],
+			}
+		}
+		leading.push(claim)
+		const audited = this.writer.changed([change], audit(grantId))
+		const results = await this.db.batch<GrantRow>([...leading, ...audited.statements])
+		const claimed = (results[leading.length - 1]?.results.length ?? 0) > 0
+		return { claimed, changed: audited.rows(results, leading.length)[0] ?? null }
+	}
+
 	/** Keep the audit's before-value true if another administrator edited this grant after it was read. */
 	async updateGrant(grant: GrantRow, input: CreateGrantInput, audit: AuditEventInput): Promise<GrantRow | null> {
 		await this.refuseWorkload(grant.principal_id)
@@ -401,4 +480,11 @@ export class GrantRepository {
 	deleteGrantsForPrincipalChange(principalId: string): SqlChange {
 		return { sql: 'DELETE FROM grants WHERE principal_id = ? RETURNING id', binds: [principalId] }
 	}
+}
+
+const storedActionsSchema = z.array(z.string())
+
+/** A stored inline action set (a JSON array of patterns), read once where it leaves the row. */
+function storedActions(json: string): string[] {
+	return storedActionsSchema.parse(JSON.parse(json))
 }

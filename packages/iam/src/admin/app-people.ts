@@ -32,6 +32,7 @@ import { BUILTIN_ROLES } from '../roles'
 import type { Services } from '../services'
 import { delegatedActions, parseStoredPermissions } from '../stored-permissions'
 import { fail } from './context'
+import { grantsWait, requestGrantChange } from './grant-requests'
 import { IAM_APP } from './router'
 
 /** The person administering, as the console's token names it. */
@@ -113,7 +114,11 @@ async function grantableRole(admin: PeopleAdministrator, administered: Administe
 }
 
 /** The record of a change the administrator made, filed under the application. A user's audit label is its id. */
-function peopleEvent(admin: PeopleAdministrator, app: string, event: { action: string; resourceId: string; metadata: unknown }): AuditEventInput {
+function peopleEvent(
+	admin: PeopleAdministrator,
+	app: string,
+	event: { action: string; resourceId: string; metadata: unknown; resourceType?: string },
+): AuditEventInput {
 	return {
 		requestId: admin.requestId,
 		principalId: admin.principal.id,
@@ -168,6 +173,33 @@ export async function grantAppRole(ctx: IamAppContext, input: GrantAppRoleReques
 			(action): PermissionEntry => ({ action, scope: null, source: 'grant' }),
 		)
 		const expiresAt = authorityDeadline(administered, carried, unixNow())
+		if (await grantsWait(admin.services, administered.app)) {
+			const now = unixNow()
+			const holds = (await grants.listGrants(target.id)).some((grant) =>
+				grant.app === administered.app && grant.role_key === role.role_key && grant.scope_value === null
+				&& (grant.expires_at === null || grant.expires_at > now)
+			)
+			if (holds) return { principalId: target.id, role: role.role_key, granted: false }
+			const pending = await requestGrantChange(admin.services, {
+				app: administered.app,
+				kind: 'create',
+				principalId: target.id,
+				grantId: null,
+				roleKey: role.role_key,
+				permissions: null,
+				scopeType: null,
+				scopeValue: null,
+				grantExpiresAt: expiresAt,
+				requestedBy: admin.principal.id,
+			}, (requestId, metadata) =>
+				peopleEvent(admin, administered.app, {
+					action: 'iam.grant.request',
+					resourceType: 'grant_request',
+					resourceId: requestId,
+					metadata: { ...metadata, delegated: true },
+				}))
+			return { principalId: target.id, role: role.role_key, granted: false, pending }
+		}
 		const granted = await grants.createDelegatedRoleGrant(
 			{ principalId: target.id, roleKey: role.role_key, grantedBy: admin.principal.id, expiresAt },
 			administered.authority,
@@ -195,6 +227,27 @@ export async function revokeAppRole(ctx: IamAppContext, input: RevokeAppRoleRequ
 		grant.app === administered.app && grant.role_key === role.role_key && grant.scope_type === null && grant.scope_value === null
 	)
 	if (held === undefined) return { revoked: false }
+	if (await grantsWait(admin.services, administered.app)) {
+		const pending = await requestGrantChange(admin.services, {
+			app: administered.app,
+			kind: 'revoke',
+			principalId: input.principalId,
+			grantId: held.id,
+			roleKey: role.role_key,
+			permissions: null,
+			scopeType: null,
+			scopeValue: null,
+			grantExpiresAt: held.expires_at,
+			requestedBy: admin.principal.id,
+		}, (requestId, metadata) =>
+			peopleEvent(admin, administered.app, {
+				action: 'iam.grant.request',
+				resourceType: 'grant_request',
+				resourceId: requestId,
+				metadata: { ...metadata, delegated: true },
+			}))
+		return { revoked: false, pending }
+	}
 	const revoked = await grants.deleteDelegatedGrant(
 		held,
 		administered.authority,
