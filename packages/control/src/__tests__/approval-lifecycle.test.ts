@@ -36,7 +36,7 @@ import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot
 import { LIST_FAILED_CODE } from '../data-operations'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import { SourceDescriptorMismatch } from '../github/source/failure'
-import { acquireLease, type LeaseFence, runLeaseKey } from '../lease'
+import { acquireLease, LEASE_TTL_MS, type LeaseFence, runLeaseKey } from '../lease'
 import { type InstallationMail, NO_INSTALLATION_MAIL } from '../mail-transport'
 import { type MembershipKeyIssuer, VaultMembershipTransport } from '../membership-transport'
 import { VaultPlatformTransport } from '../platform-transport'
@@ -2423,19 +2423,25 @@ describe('approval categories', () => {
 		"\t\treader: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] } },\n\t},\n}, (c)",
 	)
 
+	/** IAM's gate as IAM keeps it: a revision older than the stored one changes nothing. */
 	interface GrantGate {
-		readonly calls: Array<[string, boolean]>
+		readonly calls: Array<[string, boolean, number]>
+		state: { required: boolean; revision: number } | null
 		fail: boolean
-		set(app: string, required: boolean): Promise<void>
+		afterSet?: () => void
+		set(app: string, required: boolean, revision: number): Promise<void>
 	}
 
 	function grantGate(): GrantGate {
 		const gate: GrantGate = {
 			calls: [],
+			state: null,
 			fail: false,
-			set: (app, required) => {
+			set: (app, required, revision) => {
 				if (gate.fail) return Promise.reject(new Error('IAM is down'))
-				gate.calls.push([app, required])
+				gate.calls.push([app, required, revision])
+				if (gate.state === null || gate.state.revision <= revision) gate.state = { required, revision }
+				gate.afterSet?.()
 				return Promise.resolve()
 			},
 		}
@@ -2544,16 +2550,19 @@ describe('approval categories', () => {
 	test("choosing `grants` makes IAM hold the environment's grants first; dropping it releases them after Control", async () => {
 		const w = world()
 		await seed(w)
+		const revision = async () => (await w.db.registry.getAppEnv('notes', 'prod'))?.protection_revision ?? -1
 		const gate = grantGate()
+		const start = await revision()
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants'], gate)
-		expect(gate.calls).toEqual([['notes@prod', true]])
+		expect(gate.calls).toEqual([['notes@prod', true, start + 1]])
+		expect(await revision()).toBe(start + 1)
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants', 'csp'], gate)
-		expect(gate.calls).toHaveLength(1)
 		await setEnvironmentProtectionUseCase({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env: 'prod', protected: false })
-		expect(gate.calls).toEqual([['notes@prod', true], ['notes@prod', false]])
+		expect(gate.calls).toEqual([['notes@prod', true, start + 1], ['notes@prod', true, start + 2], ['notes@prod', false, start + 3]])
+		expect(gate.state).toEqual({ required: false, revision: await revision() })
 	})
 
-	test('IAM that does not take the gate leaves Control unchanged; one that does not release it keeps Control released', async () => {
+	test('IAM that does not take the gate leaves Control unchanged; a release IAM missed is made by the next change', async () => {
 		const w = world()
 		await seed(w)
 		const gate = grantGate()
@@ -2566,6 +2575,33 @@ describe('approval categories', () => {
 		gate.fail = true
 		expect(await status(choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate))).toBe(502)
 		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories).toBeNull()
+		expect(gate.state?.required).toBe(true)
+
+		gate.fail = false
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate)
+		expect(gate.state?.required).toBe(false)
+	})
+
+	test('a change that loses its lease after IAM took the gate leaves IAM holding it, and only a later change releases it', async () => {
+		const w = world()
+		await seed(w)
+		let now = Date.now()
+		const clock = { now: () => now, wait: () => Promise.resolve() }
+		const gate = grantGate()
+		gate.afterSet = () => {
+			now += LEASE_TTL_MS
+		}
+		const lost = setEnvironmentProtectionUseCase(
+			{ ...approvals(w, auth()), grantApproval: gate, leaseClock: clock },
+			{ appId: 'notes', env: 'prod', protected: true, categories: [...DEFAULT_APPROVAL_CATEGORIES, 'grants'] },
+		)
+		await expect(lost).rejects.toThrow()
+		expect(gate.calls.map(([, required]) => required)).toEqual([true])
+		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories).toBeNull()
+
+		gate.afterSet = undefined
+		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate)
+		expect(gate.state?.required).toBe(false)
 	})
 
 	test('without a way to reach IAM, `grants` cannot be chosen, and every other category still can', async () => {
@@ -2578,7 +2614,7 @@ describe('approval categories', () => {
 		expect((await withoutIam([...DEFAULT_APPROVAL_CATEGORIES, 'public'])).approvalCategories).toContain('public')
 	})
 
-	test('a refused protection change releases the gate it took in IAM', async () => {
+	test('a change refused while a deployment holds the environment reaches IAM not at all', async () => {
 		const w = world()
 		await seed(w)
 		const gate = grantGate()

@@ -43,7 +43,13 @@ export async function consoleRpc(
 	return bearerRpc(f, await adminTokenFor(f.repositories, principalId, { issuer: ORIGIN }), method, input)
 }
 
-export async function bearerRpc(f: MembershipFixture, bearer: string, method: string, input: unknown): Promise<{ status: number; body: unknown }> {
+export async function bearerRpc(
+	f: MembershipFixture,
+	bearer: string,
+	method: string,
+	input: unknown,
+	env: { readonly FABRIKA_IAM_PROVISIONING_KEY?: string } = {},
+): Promise<{ status: number; body: unknown }> {
 	const response = await createIamApp().fetch(
 		new Request(`${ORIGIN}/admin/rpc`, {
 			method: 'POST',
@@ -65,6 +71,7 @@ export async function bearerRpc(f: MembershipFixture, bearer: string, method: st
 			OIDC_CLIENT_SECRET: 'secret',
 			OIDC_SCOPES: '',
 			OIDC_REQUIRE_VERIFIED_EMAIL: 'true',
+			...env,
 		},
 		f.ctx,
 	)

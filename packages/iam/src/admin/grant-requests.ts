@@ -13,12 +13,15 @@ import {
 	type SetGrantApprovalRequest,
 } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
+import { PROVISIONING_ADMIN_ID } from '../auth'
 import { contractGrantProblem, externalGrantProblem } from '../contract-rules'
-import { type AuditEventInput, type CreateGrantRequestInput, type GrantRequestRow, type GrantRow } from '../db'
+import { type AuditEventInput, auditLabelOf, type CreateGrantRequestInput, type GrantRequestRow, type GrantRow } from '../db'
 import { unixNow } from '../repositories/sql'
 import type { Services } from '../services'
 import { parseStoredPermissions } from '../stored-permissions'
 import { type AdminContext, adminEvent, fail } from './context'
+import { appField, parseRoleOrInline } from './grant-support'
+import type { ResolvedAdmin } from './router'
 import { managesApp, requireGrantablePrincipal } from './user-admin'
 
 /** Whether a grant change at `app` waits; a cross-app grant reaches no application and never does. */
@@ -112,11 +115,49 @@ export async function decideGrantRequestUseCase(c: AdminContext, person: boolean
 		}))
 	if (!applied.claimed) return fail(409, 'the grant request is no longer open')
 	if (applied.changed === null) {
-		await requests.markFailed(request.id, decision.id)
 		return fail(409, 'the change no longer applies: the access changed since the checks; the request is closed as failed')
 	}
 	const decided = await requests.get(request.id)
 	return decided === null ? fail(404, 'grant request not found') : toGrantRequestDto(c.services, decided, now)
+}
+
+/** The caller of a grant request procedure who administers no IAM application: an application's own administrator. */
+export interface GrantRequester {
+	readonly services: Services
+	readonly requestId: string
+	readonly admin: ResolvedAdmin
+}
+
+/** A requester without IAM administration sees only the requests they made (an application administrator's own). */
+export async function listOwnGrantRequestsUseCase(c: GrantRequester, input: ListGrantRequestsInput): Promise<{ items: GrantRequestDto[] }> {
+	const now = unixNow()
+	const rows = (await c.services.repositories.grantRequests.listOpen(now)).filter((row) =>
+		(input.app === undefined || row.app === input.app) && row.requested_by === c.admin.id
+	)
+	return { items: await Promise.all(rows.map((row) => toGrantRequestDto(c.services, row, now))) }
+}
+
+/**
+ * A requester without IAM administration withdraws a request they made, as a person in a signed-in session; any other
+ * request, and approving, is the 404 of an unknown one. The record is filed under the request's application.
+ */
+export async function withdrawOwnGrantRequestUseCase(c: GrantRequester, input: DecideGrantRequestInput): Promise<GrantRequestDto> {
+	const requests = c.services.repositories.grantRequests
+	const request = await requests.get(input.id)
+	if (request === null || request.requested_by !== c.admin.id || input.decision !== 'reject') return fail(404, 'grant request not found')
+	if (c.admin.type !== 'user' || !c.admin.session) return fail(403, 'only a person signed in to the console decides a grant request, never a key')
+	const now = unixNow()
+	const rejected = await requests.reject(request.id, c.admin.id, now, {
+		requestId: c.requestId,
+		principalId: c.admin.id,
+		principalLabel: auditLabelOf(c.admin),
+		app: request.app,
+		action: 'iam.grant.request.reject',
+		resourceType: 'grant_request',
+		resourceId: request.id,
+		metadata: { app: request.app, kind: request.kind, principalId: request.principal_id, requestedBy: request.requested_by },
+	})
+	return rejected === null ? fail(409, 'the grant request is no longer open') : toGrantRequestDto(c.services, rejected, now)
 }
 
 /**
@@ -134,6 +175,13 @@ async function approvable(c: AdminContext, request: GrantRequestRow): Promise<Gr
 		return fail(409, 'the grant is gone; reject the request')
 	}
 	if (request.kind === 'revoke') return current
+	if (!(await appField(c, { app: request.app })).ok) return fail(409, 'the application is no longer registered; reject the request')
+	const parsed = await parseRoleOrInline(
+		c,
+		request.role_key === null ? { permissions: parseStoredPermissions(request.permissions ?? '[]') } : { roleKey: request.role_key },
+		request.app,
+	)
+	if (!parsed.ok) return fail(409, `${parsed.message}; reject the request`)
 	const authorization = {
 		roleKey: request.role_key,
 		permissions: request.permissions === null ? null : parseStoredPermissions(request.permissions),
@@ -154,20 +202,30 @@ async function approvable(c: AdminContext, request: GrantRequestRow): Promise<Gr
 }
 
 /**
- * Make grant changes at `app` wait, or apply at once again (ADR-0083 §4). Control is the caller, with the provisioning
- * key, when an environment chooses or drops the `grants` category; only an application environment id qualifies.
+ * Make grant changes at `app` wait, or apply at once again (ADR-0083 §4). Only Control sets it, with the provisioning
+ * key, when an environment chooses or drops the `grants` category: an installation administrator who could switch it
+ * off could grant past it. Only an application environment id qualifies.
  */
 export async function setGrantApprovalUseCase(c: AdminContext, input: SetGrantApprovalRequest): Promise<SetGrantApprovalRequest> {
+	if (c.admin.id !== PROVISIONING_ADMIN_ID) {
+		return fail(403, 'only Control sets whether grants wait, with the provisioning key')
+	}
 	if (parseAppEnvironmentId(input.app) === null || c.services.config.platformAudiences.has(input.app)) {
 		return fail(400, 'grant approval applies to an application environment id `<app>@<env>`')
 	}
-	await c.services.repositories.grantRequests.setGrantsWait(
+	const stored = await c.services.repositories.grantRequests.setGrantsWait(
 		input.app,
 		input.required,
+		input.revision,
 		unixNow(),
-		adminEvent(c, { action: 'iam.grant_approval.set', resourceType: 'app', resourceId: input.app, metadata: { required: input.required } }),
+		adminEvent(c, {
+			action: 'iam.grant_approval.set',
+			resourceType: 'app',
+			resourceId: input.app,
+			metadata: { required: input.required, revision: input.revision },
+		}),
 	)
-	return { app: input.app, required: input.required }
+	return { app: input.app, ...stored }
 }
 
 async function toGrantRequestDto(services: Services, row: GrantRequestRow, now: number): Promise<GrantRequestDto> {

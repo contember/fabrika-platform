@@ -148,6 +148,8 @@ export interface AuditedChange {
 	readonly statements: SqlStatement[]
 	/** The rows the LAST change returned, read from the results of a batch whose statements start at `offset`. */
 	rows<T>(results: SqlQueryResult<T>[], offset?: number): T[]
+	/** The id of the record, which exists after the batch exactly when the change changed a row; null without a record. */
+	readonly recordId: string | null
 }
 
 /**
@@ -176,6 +178,7 @@ export class AuditWriter {
 			return {
 				statements: changes.map((change) => this.db.prepare(change.sql).bind(...change.binds)),
 				rows: (results, offset = 0) => results[offset + last]?.results ?? [],
+				recordId: null,
 			}
 		}
 		const id = uuidv7()
@@ -188,7 +191,7 @@ export class AuditWriter {
 					INSERT INTO audit_events ${AUDIT_COLUMNS} SELECT ${AUDIT_PLACEHOLDERS} WHERE ${changed} RETURNING id
 				) SELECT * FROM c${changes.length - 1}`)
 				.bind(...changes.flatMap((change) => change.binds), ...values)
-			return { statements: [statement], rows: (results, offset = 0) => results[offset]?.results ?? [] }
+			return { statements: [statement], rows: (results, offset = 0) => results[offset]?.results ?? [], recordId: id }
 		}
 		const statements = changes.flatMap((change) => [
 			this.db.prepare(change.sql).bind(...change.binds),
@@ -198,7 +201,7 @@ export class AuditWriter {
 				.bind(...values, id),
 		])
 		const last = (changes.length - 1) * 2
-		return { statements, rows: (results, offset = 0) => results[offset + last]?.results ?? [] }
+		return { statements, rows: (results, offset = 0) => results[offset + last]?.results ?? [], recordId: id }
 	}
 
 	/** Run one audited group as its own batch and answer the rows its last change returned. */

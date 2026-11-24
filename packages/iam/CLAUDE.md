@@ -385,14 +385,17 @@ fails if that stops being true — it is the guard, not documentation of one.
   user's `grant_revision` and the app's schema revision, read first; principal rows first, then the revision row
   `FOR SHARE` on Postgres); a stale one writes nothing and answers 409.
 - **A CONSOLE GRANT AT AN APPLICATION WHOSE GRANTS WAIT IS A REQUEST, AND A REQUEST GRANTS NOTHING** (ADR-0083,
-  `src/admin/grant-requests.ts`). `app_grant_approvals` names the `<app>@<env>` ids whose grants wait; only Control
-  writes it (`grantApproval.set`, `iam.admin`, the provisioning key). There `grants.create/update/delete` and
+  `src/admin/grant-requests.ts`). `app_grant_approvals` holds whether grants at an `<app>@<env>` id wait; only Control
+  writes it (`grantApproval.set`, refused to every caller but the provisioning key), at Control's protection
+  `revision`, and an older revision changes nothing. There `grants.create/update/delete` and
   `appPeople.grant/revoke` run their checks, then write a `grant_requests` row and `iam.grant.request` and answer
   `pending`; a cross-app grant never waits. Nothing that resolves permissions reads `grant_requests`. An administrator
   of the app (`managesApp`), a person in a session and not the requester, approves (`grantRequests.decide`): the
   original checks run again as the approver, and `GrantRepository.applyRequest` claims the request (`pending` →
   `approved`, a fresh `decision_id`) and writes the guarded change with its own record in one batch; a change that
-  writes nothing closes it `failed`. The requester may reject. A request expires after `GRANT_REQUEST_TTL_SECONDS`.
+  writes nothing closes it `failed` in the same batch (no record exists). The requester may reject: a caller without
+  an administration lists and withdraws its own requests only (`appPeople`), and decides nothing else (404). A request
+  expires after `GRANT_REQUEST_TTL_SECONDS`.
 - **A USER ADMINISTRATOR MANAGES THE PEOPLE OF APPLICATIONS AND STOPS AT THE INSTALLATION** (ADR-0058,
   `src/admin/user-admin.ts`). IAM's vocabulary is `IAM_APP_SCHEMA` (`@fabrika/iam-contract`), reconciled under
   `propustka` beside the console: `iam.admin`, `iam.users.manage` (global, or in `app` values `<app>@<env>`) and the

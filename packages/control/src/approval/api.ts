@@ -28,10 +28,11 @@ import { snapshotSurface } from './surface'
 
 /**
  * IAM's switch for whether an application's console grants wait for a second administrator (ADR-0083 §4), set with the
- * provisioning key on the IAM application id `<app>@<env>`. Control is its only writer.
+ * provisioning key on the IAM application id `<app>@<env>`. Control is its only writer; `revision` is the environment's
+ * protection revision, and IAM ignores one older than it holds.
  */
 export interface GrantApprovalPort {
-	set(app: string, required: boolean): Promise<void>
+	set(app: string, required: boolean, revision: number): Promise<void>
 }
 
 export interface ApprovalUseCaseContext extends ConsoleAdmission {
@@ -113,8 +114,9 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 
 /**
  * Set an environment's `protected` flag and, when given, its approval categories: the same human rule as approving, and
- * audited (ADR-0050 §4, ADR-0083 §2). A change of whether its console grants wait reaches IAM too, the stricter side
- * first, so a failure between the two writes leaves grants waiting rather than not (ADR-0083 §4).
+ * audited (ADR-0050 §4, ADR-0083 §2). IAM's grant gate follows every change, the stricter side first: IAM holds grants
+ * before Control says so and releases them only after, so a failure between the two writes leaves grants waiting rather
+ * than not, and the next change repairs it (ADR-0083 §4).
  */
 export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
 	requireHumanApprover(c.auth, c)
@@ -137,17 +139,12 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 			protected: input.protected ? 1 : 0,
 			approval_categories: categories === undefined ? held.approval_categories : categories,
 		})
-		const grantApproval = grantsWait(held) === grantsAfter
-			? null
-			: c.grantApproval ?? fail(503, 'IAM is not reachable with the provisioning key; console grants cannot wait here')
-		// The stricter side first: IAM holds grants before Control says so, and releases them only after.
-		if (grantApproval !== null && grantsAfter) await setGrantApproval(grantApproval, iamApp, true)
-		try {
-			row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected, categories, lease.fence())
-		} finally {
-			// Nothing changed here, so IAM stops holding what this call started holding; a failure keeps it holding.
-			if (row === null && grantApproval !== null && grantsAfter) await grantApproval.set(iamApp, false).catch(() => undefined)
-		}
+		const grantApproval = c.grantApproval
+			?? (grantsAfter && !grantsWait(held) ? fail(503, 'IAM is not reachable with the provisioning key; console grants cannot wait here') : null)
+		// The write below bumps the revision by one. Nothing reverts IAM when it fails: this call may have lost the lease,
+		// and releasing then could undo its successor's gate.
+		if (grantApproval !== null && grantsAfter) await setGrantApproval(grantApproval, iamApp, true, held.protection_revision + 1)
+		row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected, categories, lease.fence())
 		if (row !== null) {
 			await c.auth.audit({
 				action: 'access.protect',
@@ -162,7 +159,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 					categoriesTo: appEnvCategories(row),
 				},
 			})
-			if (grantApproval !== null && !grantsAfter) await setGrantApproval(grantApproval, iamApp, false)
+			if (grantApproval !== null && !grantsAfter) await setGrantApproval(grantApproval, iamApp, false, row.protection_revision)
 		}
 	} finally {
 		await lease.release()
@@ -176,15 +173,15 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	return toAppEnvDto(row)
 }
 
-async function setGrantApproval(port: GrantApprovalPort, app: string, required: boolean): Promise<void> {
+async function setGrantApproval(port: GrantApprovalPort, app: string, required: boolean, revision: number): Promise<void> {
 	try {
-		await port.set(app, required)
+		await port.set(app, required, revision)
 	} catch {
 		fail(
 			502,
 			required
 				? 'IAM did not take the change, so nothing changed; try again'
-				: 'approvals are saved, but IAM still holds console grants for approval; try again to release them',
+				: 'approvals are saved, but IAM may still hold console grants for approval; save again to release them',
 		)
 	}
 }

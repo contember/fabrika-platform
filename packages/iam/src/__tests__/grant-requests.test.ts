@@ -13,6 +13,7 @@ import { APP, type MembershipFixture, membershipFixture, ORIGIN, type Person } f
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
 
 let seq = 0
+const PROVISIONING_KEY = 'px_provisioning-key-of-this-suite'
 
 interface World {
 	readonly f: MembershipFixture
@@ -23,8 +24,8 @@ interface World {
 	readonly granteeEmail: string
 	readonly db: SqlDatabase
 	call(as: Person, method: string, input: unknown): Promise<{ status: number; body: unknown }>
-	/** Make the application's grants wait, as Control does with the provisioning key. */
-	gate(required: boolean, app?: string): Promise<{ status: number; body: unknown }>
+	/** Make the application's grants wait, as Control does with the provisioning key, at Control's protection revision. */
+	gate(required: boolean, options?: { app?: string; revision?: number }): Promise<{ status: number; body: unknown }>
 	permissions(principalId: string): Promise<string[]>
 }
 
@@ -50,6 +51,7 @@ function grantRequestSuite(backend: () => Backend): void {
 		const ada = await administrator('ada')
 		const bob = await administrator('bob')
 		const grantee = await f.person(`grantee-${seq}`)
+		let revision = 0
 		return {
 			f,
 			ada,
@@ -58,9 +60,10 @@ function grantRequestSuite(backend: () => Backend): void {
 			granteeEmail: `grantee-${seq}@example.test`,
 			db,
 			call: (as, method, input) => consoleRpc(f, as.id, method, input),
-			gate: async (required, app = APP) => {
-				const response = await f.adminRpc('grantApproval.set', { app, required })
-				return { status: response.status, body: await response.json() }
+			gate: async (required, options = {}) => {
+				revision += 1
+				const input = { app: options.app ?? APP, required, revision: options.revision ?? revision }
+				return await bearerRpc(f, PROVISIONING_KEY, 'grantApproval.set', input, { FABRIKA_IAM_PROVISIONING_KEY: PROVISIONING_KEY })
 			},
 			permissions: async (principalId) => {
 				const principal = await f.repositories.principals.getPrincipalById(principalId)
@@ -197,10 +200,101 @@ function grantRequestSuite(backend: () => Backend): void {
 		await w.gate(true)
 		await w.gate(false)
 		expect(prop(result((await w.call(w.ada, 'grants.create', staffGrant(w))).body), 'pending')).toBeUndefined()
-		expect((await w.gate(true, 'vozka')).status).toBe(400)
-		expect((await w.gate(true, 'notes')).status).toBe(400)
-		const stranger = await w.call(w.grantee, 'grantApproval.set', { app: APP, required: true })
-		expect(stranger.status).toBe(403)
+		expect((await w.gate(true, { app: 'vozka' })).status).toBe(400)
+		expect((await w.gate(true, { app: 'notes' })).status).toBe(400)
+	})
+
+	test('only the provisioning key sets the gate: an installation administrator cannot switch it off to grant past it', async () => {
+		const w = await world()
+		await w.gate(true, { revision: 1 })
+		const input = { app: APP, required: false, revision: 2 }
+		const administrator = await w.call(w.ada, 'grantApproval.set', input)
+		expect([administrator.status, errorType(administrator.body)]).toEqual([403, 'forbidden'])
+		expect((await w.call(w.grantee, 'grantApproval.set', input)).status).toBe(403)
+		expect(prop(result((await w.call(w.ada, 'grants.create', staffGrant(w))).body), 'pending')).toBeDefined()
+	})
+
+	test('a gate change older than the one IAM holds changes nothing, so a late release cannot undo a newer gate', async () => {
+		const w = await world()
+		const gateRecords = async () =>
+			(await w.f.repositories.audit.listAuditEvents({ limit: 500 })).filter((event) => event.action === 'iam.grant_approval.set')
+		const earlier = new Set((await gateRecords()).map((event) => event.id))
+		expect(result((await w.gate(true, { revision: 5 })).body)).toEqual({ app: APP, required: true, revision: 5 })
+		expect(result((await w.gate(false, { revision: 4 })).body)).toEqual({ app: APP, required: true, revision: 5 })
+		expect(prop(result((await w.call(w.ada, 'grants.create', staffGrant(w))).body), 'pending')).toBeDefined()
+		expect(result((await w.gate(true, { revision: 6 })).body)).toEqual({ app: APP, required: true, revision: 6 })
+		expect(result((await w.gate(false, { revision: 6 })).body)).toEqual({ app: APP, required: false, revision: 6 })
+		const records = (await gateRecords()).filter((event) => !earlier.has(event.id))
+		expect(records.map((event) => prop(JSON.parse(event.metadata ?? 'null'), 'required'))).toEqual([false, true])
+	})
+
+	test('an approval checks the role again: a request for a role the application no longer declares is refused', async () => {
+		const w = await world()
+		await w.gate(true)
+		const id = pendingId((await w.call(w.ada, 'grants.create', { principalId: w.grantee.id, app: APP, roleKey: 'auditor' })).body)
+		const { auditor: _dropped, ...roles } = PEOPLE_SCHEMA.roles
+		expect((await w.f.putSchema({ ...PEOPLE_SCHEMA, roles })).status).toBe(200)
+		const refused = await w.call(w.bob, 'grantRequests.decide', { id, decision: 'approve' })
+		expect(refused.status).toBe(409)
+		expect(await w.f.repositories.grants.listGrants(w.grantee.id)).toEqual([])
+	})
+
+	test('a claimed request whose change writes nothing ends failed in the same batch, with no grant and no record of one', async () => {
+		const w = await world()
+		await w.gate(true)
+		const first = pendingId((await w.call(w.ada, 'grants.create', staffGrant(w))).body)
+		const second = pendingId((await w.call(w.ada, 'grants.create', staffGrant(w))).body)
+		expect((await w.call(w.bob, 'grantRequests.decide', { id: first, decision: 'approve' })).status).toBe(200)
+		// The approval's own check refuses a held role, so the race it guards against is driven at the repository.
+		const request = await w.f.repositories.grantRequests.get(second)
+		if (request === null) throw new Error('the request is missing')
+		const now = Math.floor(Date.now() / 1000)
+		const applied = await w.f.repositories.grants.applyRequest(request, null, { id: crypto.randomUUID(), by: w.bob.id, at: now }, (grantId) => ({
+			requestId: 'race',
+			principalId: w.bob.id,
+			principalLabel: w.bob.id,
+			app: APP,
+			action: 'iam.grant.create',
+			resourceType: 'grant',
+			resourceId: grantId,
+			metadata: { grantRequestId: second },
+		}))
+		expect(applied).toEqual({ claimed: true, changed: null })
+		expect((await w.f.repositories.grantRequests.get(second))?.status).toBe('failed')
+		expect(await w.f.repositories.grants.listGrants(w.grantee.id)).toHaveLength(1)
+		expect(await actions(w, second)).toEqual(['iam.grant.request'])
+	})
+
+	test('an expired role is renewed in place through an approved appPeople request, as the direct path renews it', async () => {
+		const w = await world()
+		const administrator = await w.f.person(`app-admin-${seq}`)
+		await w.f.repositories.grants.createRoleGrantUnlessHeld({ principalId: administrator.id, app: APP, roleKey: 'administrator' })
+		await w.f.repositories.grants.createRoleGrantUnlessHeld({ principalId: w.grantee.id, app: APP, roleKey: 'staff' })
+		const [expired] = await w.f.repositories.grants.listGrants(w.grantee.id)
+		if (expired === undefined) throw new Error('the grant is missing')
+		await w.db.prepare('UPDATE grants SET expires_at = 1 WHERE id = ?').bind(expired.id).run()
+		expect(await w.permissions(w.grantee.id)).toEqual([])
+		await w.gate(true)
+		const id = pendingId((await w.call(administrator, 'appPeople.grant', { app: APP, role: 'staff', email: w.granteeEmail })).body)
+		expect((await w.call(w.ada, 'grantRequests.decide', { id, decision: 'approve' })).status).toBe(200)
+		expect(await w.permissions(w.grantee.id)).toContain('notes.write')
+		expect((await w.f.repositories.grants.listGrants(w.grantee.id)).map((grant) => grant.id)).toEqual([expired.id])
+	})
+
+	test("an application administrator lists and withdraws its own appPeople request, and decides no one else's", async () => {
+		const w = await world()
+		const administrator = await w.f.person(`app-admin-${seq}`)
+		await w.f.repositories.grants.createRoleGrantUnlessHeld({ principalId: administrator.id, app: APP, roleKey: 'administrator' })
+		await w.gate(true)
+		const own = pendingId((await w.call(administrator, 'appPeople.grant', { app: APP, role: 'staff', email: w.granteeEmail })).body)
+		const other = pendingId((await w.call(w.ada, 'grants.create', { principalId: w.grantee.id, app: APP, roleKey: 'reader' })).body)
+		const listed = prop(result((await w.call(administrator, 'grantRequests.list', {})).body), 'items')
+		expect(Array.isArray(listed) ? listed.map((item: unknown) => prop(item, 'id')) : listed).toEqual([own])
+		expect((await w.call(administrator, 'grantRequests.decide', { id: other, decision: 'reject' })).status).toBe(404)
+		expect((await w.call(administrator, 'grantRequests.decide', { id: own, decision: 'approve' })).status).toBe(404)
+		const withdrawn = await w.call(administrator, 'grantRequests.decide', { id: own, decision: 'reject' })
+		expect(prop(result(withdrawn.body), 'status')).toBe('rejected')
+		expect(await actions(w, own)).toEqual(['iam.grant.request', 'iam.grant.request.reject'])
 	})
 }
 

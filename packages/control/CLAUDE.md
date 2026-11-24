@@ -780,9 +780,11 @@ other environment, before the provider prepares anything, and the write maps a r
 - **An environment's approval categories are stored as their difference from the defaults** (ADR-0083,
   `src/approval/categories.ts`): `app_envs.approval_categories` (and `app_env_protection`), null = the defaults, set
   only through `apps.environments.protect`. A classification stores its categories only when they are not the defaults,
-  so an older Control still reads a default one. Choosing or dropping `grants` (or the flag of an environment that has
-  it) sets IAM's gate for `<app>@<env>` with the provisioning key, under the environment's deployment lease and the
-  stricter side first: IAM before Control when it turns on, Control before IAM when it turns off.
+  so an older Control still reads a default one. Every protection change sets IAM's gate for `<app>@<env>` with the
+  provisioning key when Control can reach IAM (choosing `grants` without it is a 503), under the environment's
+  deployment lease, at the environment's `protection_revision`, the stricter side first: IAM before Control while
+  grants wait, Control before IAM when they stop. A failed Control write never reverts IAM (the caller may have lost
+  the lease); the next protection change repairs it, and IAM ignores an older revision.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the

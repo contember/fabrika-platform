@@ -112,7 +112,7 @@ const INPUTS: Record<string, unknown> = {
 	'grants.delete': { id: 'nobody' },
 	'grants.update': { id: 'nobody', roleKey: 'admin' },
 	'grantRequests.decide': { id: 'nobody', decision: 'approve' },
-	'grantApproval.set': { app: 'nowhere@prod', required: true },
+	'grantApproval.set': { app: 'nowhere@prod', required: true, revision: 1 },
 	'connections.list': { principalId: 'nobody' },
 	'connections.revoke': { id: 'nobody' },
 	'apps.getSchema': { app: 'nowhere' },

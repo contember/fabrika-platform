@@ -8,7 +8,14 @@ import { logError } from '../log'
 import { recordAdminAccess, rpcProcedureOf } from './access'
 import { grantAppRole, listAdministeredApps, listAppPeople, revokeAppRole } from './app-people'
 import { listConnections, revokeConnection } from './connections'
-import { decideGrantRequestUseCase, listGrantRequestsUseCase, setGrantApprovalUseCase } from './grant-requests'
+import {
+	decideGrantRequestUseCase,
+	type GrantRequester,
+	listGrantRequestsUseCase,
+	listOwnGrantRequestsUseCase,
+	setGrantApprovalUseCase,
+	withdrawOwnGrantRequestUseCase,
+} from './grant-requests'
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
 import { ADMIN_ACTION, extractCredentials, IAM_APP, resolveAdmin } from './router'
@@ -100,17 +107,23 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	}),
 	// No `iam.admin` here: an administrator of each request's application decides it (ADR-0083), a person in a session.
 	grantRequests: t.router({
-		list: t.procedure.input(z.object({ app: nonEmpty.optional() }).default({})).query(({ ctx, input }) =>
-			listGrantRequestsUseCase(context(ctx), input)
-		),
+		list: t.procedure.input(z.object({ app: nonEmpty.optional() }).default({})).query(({ ctx, input }) => {
+			const requester = ownRequester(ctx)
+			return requester === null ? listGrantRequestsUseCase(context(ctx), input) : listOwnGrantRequestsUseCase(requester, input)
+		}),
 		decide: t.procedure
 			.input(z.object({ id: nonEmpty, decision: z.enum(['approve', 'reject']) }))
-			.mutation(({ ctx, input }) => decideGrantRequestUseCase(context(ctx), ctx.admin?.type === 'user' && ctx.admin.session, input)),
+			.mutation(({ ctx, input }) => {
+				const requester = ownRequester(ctx)
+				return requester === null
+					? decideGrantRequestUseCase(context(ctx), ctx.admin?.type === 'user' && ctx.admin.session, input)
+					: withdrawOwnGrantRequestUseCase(requester, input)
+			}),
 	}),
 	// Control's, with the provisioning key: whether an application environment's grants wait (ADR-0083).
 	grantApproval: t.router({
 		set: t.procedure
-			.input(z.object({ app: nonEmpty, required: z.boolean() }).strict())
+			.input(z.object({ app: nonEmpty, required: z.boolean(), revision: z.number().int().nonnegative() }).strict())
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => setGrantApprovalUseCase(context(ctx), input)),
 	}),
@@ -386,6 +399,12 @@ function authContext(admin: NonNullable<IamAppContext['admin']>): AuthContext {
 }
 
 /** The context of a caller with an administration; anyone else is refused before the use case runs. */
+/** A caller with no IAM administration reaches only the grant requests it made itself (ADR-0083); null otherwise. */
+function ownRequester(ctx: IamAppContext): GrantRequester | null {
+	if (ctx.admin === null) throw new UnauthorizedError()
+	return administrationOf(ctx.admin) === null ? { services: ctx.services, requestId: ctx.requestId, admin: ctx.admin } : null
+}
+
 function context(ctx: IamAppContext): AdminContext {
 	if (ctx.admin === null) throw new UnauthorizedError()
 	const administration = administrationOf(ctx.admin)

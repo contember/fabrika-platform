@@ -383,16 +383,30 @@ export class GrantRepository {
 			grantedBy: decision.by,
 			expiresAt: request.grant_expires_at,
 		}
-		const grantId = request.grant_id ?? uuidv7()
+		let grantId = request.grant_id ?? uuidv7()
 		let change: SqlChange
 		const leading: SqlStatement[] = []
 		if (request.kind === 'create') {
-			const conflict = input.roleKey === null
-				? ''
-				: input.scopeValue == null
-				? `ON CONFLICT (principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL DO NOTHING`
-				: `ON CONFLICT (principal_id, role_key, scope_type, scope_value, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NOT NULL DO NOTHING`
-			change = this.grantChange(grantId, input, conflict, guard)
+			let conflict = ''
+			const conflictBinds: number[] = []
+			if (input.roleKey !== null && input.scopeValue != null) {
+				conflict =
+					`ON CONFLICT (principal_id, role_key, scope_type, scope_value, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NOT NULL DO NOTHING`
+			} else if (input.roleKey !== null) {
+				// As `createDelegatedRoleGrant`: an expired grant of the role is renewed in place, keeping its id.
+				const expired = await this.db
+					.prepare(`SELECT id FROM grants WHERE principal_id = ? AND role_key = ? AND app = ? AND scope_value IS NULL
+						AND expires_at IS NOT NULL AND expires_at <= ?`)
+					.bind(request.principal_id, input.roleKey, request.app, decision.at)
+					.first<{ id: string }>()
+				grantId = expired?.id ?? grantId
+				conflict = `ON CONFLICT (principal_id, role_key, COALESCE(app, '*')) WHERE role_key IS NOT NULL AND scope_value IS NULL
+					DO UPDATE SET expires_at = excluded.expires_at, granted_by = excluded.granted_by, created_at = excluded.created_at
+					WHERE grants.expires_at IS NOT NULL AND grants.expires_at <= ?`
+				conflictBinds.push(decision.at)
+			}
+			const insert = this.grantChange(grantId, input, conflict, guard)
+			change = { sql: insert.sql, binds: [...insert.binds, ...conflictBinds] }
 		} else if (request.kind === 'update') {
 			if (current === null) return { claimed: false, changed: null }
 			leading.push(grantRemovalStatement(this.db, { principalId: request.principal_id }))
@@ -427,7 +441,12 @@ export class GrantRepository {
 		}
 		leading.push(claim)
 		const audited = this.writer.changed([change], audit(grantId))
-		const results = await this.db.batch<GrantRow>([...leading, ...audited.statements])
+		// A claim whose change wrote nothing (no record) closes the request `failed` in the same transaction.
+		const failed = this.db
+			.prepare(`UPDATE grant_requests SET status = 'failed' WHERE id = ? AND decision_id = ?
+				AND NOT EXISTS (SELECT 1 FROM audit_events WHERE id = ?)`)
+			.bind(request.id, decision.id, audited.recordId)
+		const results = await this.db.batch<GrantRow>([...leading, ...audited.statements, failed])
 		const claimed = (results[leading.length - 1]?.results.length ?? 0) > 0
 		return { claimed, changed: audited.rows(results, leading.length)[0] ?? null }
 	}

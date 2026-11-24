@@ -200,8 +200,8 @@ export function grantApprovalDeps(env: Env): { grantApproval?: GrantApprovalPort
 	const client = iamProvisioningClient({ origin, provisioningKey })
 	return {
 		grantApproval: {
-			async set(app, required) {
-				await client.grantApproval.set({ app, required })
+			async set(app, required, revision) {
+				await client.grantApproval.set({ app, required, revision })
 			},
 		},
 	}

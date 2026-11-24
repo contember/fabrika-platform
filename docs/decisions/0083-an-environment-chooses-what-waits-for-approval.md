@@ -83,11 +83,14 @@ then.
 ### 4. A console grant waits as a grant request
 
 IAM keeps whether an application's grants wait, per IAM application id `<app>@<env>` (`app_grant_approvals`), because
-IAM is where a grant is written. Control is the only writer: when a protection change turns the `grants` category on
-or off for a protected environment (or the flag for an environment that has it chosen), Control sets it with the
-provisioning key (`grantApproval.set`, `iam.admin`). Control writes the stricter side first: turning the gate on writes
-IAM before its own row, turning it off writes its own row before IAM. A failure in between leaves IAM gating while
-the console may say it does not; the console reports the failure and a retry converges. A platform audience is
+IAM is where a grant is written. Control is the only writer, and IAM enforces that: `grantApproval.set` answers only
+the provisioning key, never an installation administrator, who could otherwise switch the gate off, grant, and switch
+it back. Every protection change of an environment sets the gate under the environment's deployment lease, carrying
+the environment's protection revision, and IAM ignores a revision older than the one it holds, so a caller that lost
+the lease cannot undo its successor's gate. Control writes the stricter side first: a change that leaves grants waiting
+writes IAM (at the revision its own write will reach) before its own row, one that releases them writes its own row
+before IAM. Nothing reverts IAM after a failed Control write: a failure in between leaves IAM gating while the console
+may say it does not, the console reports it, and the next protection change converges both. A platform audience is
 refused: no grant at the console or IAM waits.
 
 While an application's grants wait, `grants.create`, `grants.update`, `grants.delete`, `appPeople.grant` and
@@ -102,10 +105,12 @@ console grants.
 - **Who approves.** An IAM administrator of the application (`iam.admin`, or `iam.users.manage` there), as a person in a
   signed-in session (never a `px_` key), who is not the requester. Approving is making the change: IAM runs the
   original use case's checks again with the approver as the administrator, and refuses (409) what the approver could
-  not do now. The requester may withdraw (reject) their own request.
+  not do now, the role and the application included. The requester may withdraw (reject) their own request, also an
+  application's administrator who asked through `appPeople.grant` and administers nothing in IAM.
 - **Atomic.** The approval claims the request (`pending` → `approved`, under a fresh decision id) and writes the grant
   change guarded on that claim in one transaction, so two approvers make one change. A change that writes nothing
-  despite the checks (a concurrent change took its place) closes the request `failed`.
+  despite the checks (a concurrent change took its place) closes the request `failed` in the same transaction. A
+  request that renews an expired role renews it in place, as the direct path does.
 - **Audit.** The request writes `iam.grant.request`; the approval writes the change's own record
   (`iam.grant.create` / `update` / `revoke`) with the request id and the requester, under the approver; a rejection
   writes `iam.grant.request.reject`. Each in its change's own transaction.
@@ -118,8 +123,9 @@ console grants.
 The application's "Access approvals" section lists the categories under each protected environment's switch, the
 defaults marked, with one save for a holder of `access.approve`. Removing a chosen category asks for a confirmation,
 as turning approvals off does. Everyone else reads the chosen categories. The Approvals page lists the open grant
-requests the viewer may decide beside the parked deploys, with approve and reject. A grant form that gets `pending`
-says the change waits for another administrator.
+requests the viewer may decide beside the parked deploys, with approve and reject, each with the expiry of the grant
+it would write, and a requester's own with withdraw. A grant form that gets `pending` says the change waits for another
+administrator.
 
 ## Consequences
 
@@ -128,7 +134,8 @@ says the change waits for another administrator.
 - An environment that chooses permission categories makes a role change in the contract, or a console grant, wait for
   a person. A team can protect `prod` this way and leave `stage` open.
 - The `grants` choice lives in two stores, Control's environment and IAM's application. Control writes both and the
-  stricter one first; a partial failure fails closed and is reported. Nothing else writes IAM's row.
+  stricter one first, under a revision IAM orders by; a partial failure fails closed and is reported, and the next
+  protection change repairs it. Nothing else can write IAM's row.
 - Approving a grant takes a second IAM administrator. An installation with one administrator cannot approve its own
   grants; it turns the category off first, which takes `access.approve` and is audited.
 - Variables, secrets and domains are registry writes with no run to park; they do not wait (section "Alternatives").

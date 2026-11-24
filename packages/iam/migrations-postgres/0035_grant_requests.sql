@@ -1,12 +1,15 @@
 -- A console grant that waits for a second administrator (ADR-0083). Postgres dialect;
 -- `../migrations/0035_grant_requests.sql` states the same outcome.
 --
--- `app_grant_approvals` names each application id (`<app>@<env>`) whose grant changes wait: Control writes it with the
--- provisioning key when an environment chooses the `grants` approval category. No row, as for every application before
--- this file, means a grant change applies at once.
+-- `app_grant_approvals` holds whether grant changes at an application id (`<app>@<env>`) wait (`required`). Only Control
+-- writes it, with the provisioning key, when an environment chooses or drops the `grants` approval category; `revision`
+-- is the environment's protection revision in Control, and an older one never overwrites a newer. No row, as for every
+-- application before this file, means a grant change applies at once.
 CREATE TABLE app_grant_approvals (
 	app        TEXT PRIMARY KEY,
-	created_at INTEGER NOT NULL
+	required   INTEGER NOT NULL CHECK (required IN (0, 1)),
+	revision   INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
 );
 
 -- One requested grant change. Nothing that resolves permissions reads this table: a request has no effect until an

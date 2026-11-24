@@ -241,10 +241,14 @@ export interface DecideGrantRequestInput {
 	decision: 'approve' | 'reject'
 }
 
-/** Whether an application's console grants wait for approval; Control's to set with the provisioning key (ADR-0083). */
+/**
+ * Whether an application's console grants wait for approval; Control's to set with the provisioning key (ADR-0083).
+ * `revision` is the environment's protection revision: IAM ignores one older than it holds, and answers what it holds.
+ */
 export interface SetGrantApprovalRequest {
 	app: string
 	required: boolean
+	revision: number
 }
 
 // ── Apps (read-only; the live registry derived from the schema tables) ────────

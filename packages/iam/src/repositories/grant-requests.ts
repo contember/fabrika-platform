@@ -51,15 +51,36 @@ export class GrantRequestRepository {
 
 	/** Whether a grant change at `app` waits for approval. */
 	async grantsWait(app: string): Promise<boolean> {
-		return (await this.db.prepare('SELECT app FROM app_grant_approvals WHERE app = ?').bind(app).first()) !== null
+		const row = await this.db.prepare('SELECT required FROM app_grant_approvals WHERE app = ?').bind(app).first<{ required: number }>()
+		return row?.required === 1
 	}
 
-	/** Make grant changes at `app` wait, or apply at once again; false when it already was so, and nothing is recorded. */
-	async setGrantsWait(app: string, required: boolean, now: number, audit: AuditEventInput): Promise<boolean> {
-		const change = required
-			? { sql: 'INSERT INTO app_grant_approvals (app, created_at) VALUES (?, ?) ON CONFLICT (app) DO NOTHING RETURNING app', binds: [app, now] }
-			: { sql: 'DELETE FROM app_grant_approvals WHERE app = ? RETURNING app', binds: [app] }
-		return (await this.writer.run([change], audit)).length > 0
+	/**
+	 * Set whether grant changes at `app` wait, as of Control's protection `revision`. An older revision than the stored one
+	 * changes nothing, so a caller that lost the environment's lease cannot undo its successor's gate. The record is written
+	 * only when `required` changes.
+	 */
+	async setGrantsWait(
+		app: string,
+		required: boolean,
+		revision: number,
+		now: number,
+		audit: AuditEventInput,
+	): Promise<{ required: boolean; revision: number }> {
+		const current = this.db
+			.prepare(`INSERT INTO app_grant_approvals (app, required, revision, updated_at) VALUES (?, 0, ?, ?)
+				ON CONFLICT (app) DO UPDATE SET revision = excluded.revision, updated_at = excluded.updated_at
+				WHERE app_grant_approvals.revision <= excluded.revision`)
+			.bind(app, revision, now)
+		const change = this.writer.changed([{
+			sql: 'UPDATE app_grant_approvals SET required = ? WHERE app = ? AND revision = ? AND required <> ? RETURNING app',
+			binds: [required ? 1 : 0, app, revision, required ? 1 : 0],
+		}], audit)
+		const read = this.db.prepare('SELECT required, revision FROM app_grant_approvals WHERE app = ?').bind(app)
+		const results = await this.db.batch<{ required: number; revision: number }>([current, ...change.statements, read])
+		const [stored] = results[results.length - 1]?.results ?? []
+		if (stored === undefined) throw new Error('the grant gate row is missing after its upsert')
+		return { required: stored.required === 1, revision: stored.revision }
 	}
 
 	async create(input: CreateGrantRequestInput, audit: (requestId: string) => AuditEventInput): Promise<GrantRequestRow> {
@@ -109,10 +130,5 @@ export class GrantRequestRepository {
 			binds: [uuidv7(), decidedBy, now, id, now],
 		}], audit)
 		return rejected ?? null
-	}
-
-	/** Close an approval whose change wrote nothing: a concurrent change took its place after the checks. */
-	async markFailed(id: string, decisionId: string): Promise<void> {
-		await this.db.prepare(`UPDATE grant_requests SET status = 'failed' WHERE id = ? AND decision_id = ?`).bind(id, decisionId).run()
 	}
 }
