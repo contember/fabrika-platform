@@ -54,15 +54,26 @@ We will let the Bun serving process keep the schedule when the platform says no 
    framework's own jobs go the same way, since `run` already runs them. `take` takes the lease and the due wakes in one
    step and marks pending only for a wake the holder does not own, so replicas whose timers fire at the same instant run
    one fire once: one wins the lease, and the others leave nothing behind for it. A handler's own kicks (ADR-0060) keep
-   the kick path.
+   the kick path. On SIGTERM the serving process aborts these runs as it aborts its kicks (`stopKicks`) and drains them
+   within the same bound, so a stopped run keeps its wakes for the next container, as a stopped alarm run does on
+   Cloudflare, instead of being killed mid-run and holding its lease until it expires.
 3. **One deploy owns the schedule.** The provider writes `FABRIKA_JOB_SCHEDULE_GENERATION`, a value that rises with
    every deploy of the environment (the deploying run's UUIDv7 id serves). The environment's database keeps the highest
    generation seen. A process whose generation is that one, or higher (it then raises it), reconciles the cron wakes
    against its declared jobs and seeds each job's next fire under `cron:<job>:<expression>`, as `repair` does, on boot
    and on every refresh; the dedupe key makes the seed idempotent across that deploy's containers. A process of an older
    generation neither seeds nor reconciles, so during a rolling update the old revision cannot restore an expression or
-   a job the new one removed. A redeploy of an older release is a new deploy with a higher generation, so a rollback
-   takes the schedule back.
+   a job the new one removed. Its runs finish without scheduling a next fire (`completion`'s `nextCron`, which would
+   write the wake under its own expression); the owner's seed schedules it. A redeploy of an older release is a new
+   deploy with a higher generation, so a rollback takes the schedule back.
+
+   The generation is raised by a container that starts, not by a rollout that succeeds, so every return to an older
+   revision must be a deploy. A provider that writes the variable switches the cloud's own rollback off (the ECS
+   deployment circuit breaker without `rollback`, Container Apps in single revision mode with no reactivation of an
+   older revision, no `kubectl rollout undo`). When a rollout fails, the provider deploys the previous release again as
+   a new deploy with a new generation, and an operator rolls back the same way. Between the failed revision's first boot
+   and that deploy, a job only the older contract declares has no wake: the fires due in that window are skipped, and
+   the redeploy seeds the next one.
 4. **A process waits only for wakes it can run.** `wake` answers the next due wake among the jobs this process
    declares, so a wake of a job it does not declare (the new deploy's, during a rollout) does not hold its timer at the
    one-second retry. The owner's reconcile removes the wakes of jobs no deploy declares any more.
@@ -96,7 +107,10 @@ We will let the Bun serving process keep the schedule when the platform says no 
   next refresh (60 s), and only the first to take the lease runs it. An overdue fire coalesces with the next, as on
   Cloudflare. A crontab fired on the minute.
 - During a rolling update the old revision keeps running the fires of jobs both contracts declare, with its own
-  handler, until its containers stop, as it keeps serving requests; it no longer writes the schedule.
+  handler, until its containers stop, as it keeps serving requests; it no longer writes the schedule, neither by a seed
+  nor by a run's finish.
+- A provider in this mode gives up the cloud's automatic rollback: a failed rollout becomes a new deploy of the
+  previous release, which the provider starts itself (item 3).
 - Jobs share the serving process's database pool and CPU with requests, which on Zerops they did not: a crontab line is
   its own process. `FABRIKA_APP_DATABASE_CONNECTIONS` must be sized for the requests and the jobs a container runs at
   once; the job count `sizeDatabase` reads on Zerops (`zeropsJobProcesses`) becomes a per-container one.
@@ -116,6 +130,10 @@ We will let the Bun serving process keep the schedule when the platform says no 
 - **A crontab inside the image** (a cron daemon beside Bun in the container). It needs a process supervisor in the
   image, every replica fires every line (the lease then turns all but one into no-ops), and a container that restarts
   skips the fires of its downtime. The wake timer already exists and coalesces what it missed.
+- **Control raises the generation once a rollout is healthy**, which would keep the cloud's own rollback. Control
+  reaches an application environment only on Cloudflare (the ops row, ADR-0069); a Bun application has no such path,
+  and adding one for this is a larger change than giving up an automatic rollback the provider can do itself. It
+  stays open once a Bun ops path exists.
 - **One scheduler for the installation** (Control fires every application's jobs over an ops call). It couples every
   application's schedule to Control's availability and gives Control a new path into every application, for work the
   application can do alone.
