@@ -18,6 +18,7 @@
 	"references": [
 		{ "path": "./tsconfig.lib.json" },
 		{ "path": "../app/tsconfig.lib.json" },
+		{ "path": "../auth-core/tsconfig.lib.json" },
 		{ "path": "../provider-contract/tsconfig.lib.json" }
 	]
 }

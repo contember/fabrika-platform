@@ -617,6 +617,7 @@
       "version": "0.9.0-dev.33",
       "dependencies": {
         "@fabrika/app": "workspace:*",
+        "@fabrika/auth-core": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "zod": "^3.25.76",
       },

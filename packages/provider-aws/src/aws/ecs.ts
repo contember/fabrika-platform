@@ -18,7 +18,7 @@ const ROLE_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:iam::\d{12}:role\/[\w+=,.@/-]{1,
 /** A task definition revision's ARN. */
 const TASK_DEFINITION_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:task-definition\/[A-Za-z0-9_-]{1,255}:\d{1,10}$/
 /** An image by digest: `<registry>/<repository>@sha256:<64 hex>`; a tag would let the image change under the revision. */
-const IMAGE_BY_DIGEST = /^[a-z0-9.-]{1,255}\/[a-z0-9._/-]{1,256}@sha256:[0-9a-f]{64}$/
+export const IMAGE_BY_DIGEST = /^[a-z0-9.-]{1,255}\/[a-z0-9._/-]{1,256}@sha256:[0-9a-f]{64}$/
 /**
  * A Parameter Store parameter's ARN, which a container's secret references: `parameter` and the hierarchical name, at
  * most 15 segments of `[A-Za-z0-9_.-]` with no empty one, at most 950 characters (as `ssm.ts` writes them).

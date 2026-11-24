@@ -40,6 +40,11 @@ const CONTRACT_DIGEST = /^sha256:[0-9a-f]{64}$/
 /** The contract's health endpoint: an absolute path the framework serves. */
 const HEALTH_PATH = /^\/[A-Za-z0-9._~/-]{0,255}$/
 
+/** Whether `path` is a contract health endpoint as the artifact holds it: the form above, with no `.` or `..` segment. */
+export function isHealthPath(path: string): boolean {
+	return HEALTH_PATH.test(path) && !path.split('/').some((segment) => segment === '.' || segment === '..')
+}
+
 /** Where one application environment runs: its ECS service in a cluster of one account and region. */
 export interface AwsAppTarget {
 	readonly accountId: string
@@ -98,7 +103,7 @@ const appTargetSchema = z.object({
 
 const appArtifactSchema = z.object({
 	contractDigest: z.string().regex(CONTRACT_DIGEST),
-	healthPath: z.string().regex(HEALTH_PATH).refine((path) => !path.split('/').some((segment) => segment === '.' || segment === '..')),
+	healthPath: z.string().refine(isHealthPath),
 }).strict()
 
 const namespaceTargetSchema = z.object({
