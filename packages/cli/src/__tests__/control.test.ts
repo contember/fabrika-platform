@@ -573,6 +573,29 @@ describe('control apps environments', () => {
 		).rejects.toThrow('--kind must be one of standard, dev')
 	})
 
+	test('--authoring marks or clears the authoring target, and without it the stored flag stays', async () => {
+		const manifest = `${import.meta.dir}/fixtures/manifest.json`
+		const put = async (extra: string[]) => {
+			const captured = captureFetch({ result: { appId: 'notes', env: 'stage', provider: 'cloudflare' } })
+			await captureStdout(() =>
+				runControlCli('apps', ['environments', 'put', '--app=notes', '--env=stage', `--manifest=${manifest}`, ...extra], 'cloudflare', CONTROL_ENV)
+			)
+			const body = captured.calls[0]?.body
+			return typeof body === 'object' && body !== null && 'input' in body ? body.input : null
+		}
+		expect(await put(['--authoring=true'])).toMatchObject({ environment: { authoring: true } })
+		expect(await put(['--authoring=false'])).toMatchObject({ environment: { authoring: false } })
+		expect(JSON.stringify(await put([]))).not.toContain('authoring')
+		await expect(
+			runControlCli(
+				'apps',
+				['environments', 'put', '--app=notes', '--env=stage', `--manifest=${manifest}`, '--authoring=yes'],
+				'cloudflare',
+				CONTROL_ENV,
+			),
+		).rejects.toThrow('--authoring must be true or false')
+	})
+
 	test('list prints the cross origins of each environment, comma-joined, and - for none', () => {
 		const base = { appId: 'notes', env: 'prod', provider: 'zerops', domain: 'notes.example.com' }
 		expect(environmentLine({ ...base, crossOrigins: ['https://a.example', 'https://b.example'] })).toBe(
