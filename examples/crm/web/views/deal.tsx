@@ -8,11 +8,11 @@ import {
 	Columns,
 	DataTable,
 	DateInput,
-	Dialog,
 	Field,
 	FieldList,
 	Form,
 	FormActions,
+	FormDialog,
 	Input,
 	PageHeader,
 	Section,
@@ -21,53 +21,57 @@ import {
 	StatusPill,
 	Textarea,
 	Timeline,
+	useForm,
 } from '@fabrika/ui'
 import { type ReactNode, useState } from 'react'
+import { z } from 'zod/v4'
 import { DEAL_STAGES, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS_PER_DEAL } from '../../src/schemas'
 import { type Activity, api, type Deal, type Member, type Task } from '../api'
-import { dateTime, day, isClosed, money, nextStage, orNull, orOmitted, stageLabel, stageOf, stageTone, text, wholeNumber } from '../format'
+import { dateTime, day, isClosed, money, nextStage, orNull, orOmitted, stageLabel, stageOf, stageTone, text } from '../format'
 import { href } from '../routes'
 import { describe, Loaded, useReport } from './common'
 
 const memberOptions = (members: readonly Member[]) => members.map((member) => ({ value: member.principalId, label: member.label }))
 
+// What the person types, as `deals.edit` takes it: the value as a whole number, an empty source cleared.
+const EditDealForm = z.object({
+	title: z.string().trim().min(1, 'Enter a title').max(200),
+	value: z.string().trim().regex(/^\d+$/, 'Enter a whole number of euros').transform(Number),
+	source: z.string().trim().max(500).transform(orNull),
+})
+
 function EditDeal({ deal, open, onClose }: { readonly deal: Deal; readonly open: boolean; readonly onClose: () => void }) {
 	const edit = useMutation(api.deals.edit)
+	const form = useForm(EditDealForm, { title: deal.title, value: String(deal.value), source: deal.source ?? '' })
 	const report = useReport()
 	const close = () => {
 		edit.reset()
 		onClose()
 	}
-	const submit = async (form: FormData) => {
-		const outcome = await edit.mutate({
-			id: deal.id,
-			title: text(form, 'title'),
-			value: wholeNumber(text(form, 'value')),
-			source: orNull(text(form, 'source')),
-			expectVersion: deal.version,
-		})
-		if (!outcome.ok) return
-		report(outcome, 'Deal saved')
-		close()
-	}
 	return (
-		<Dialog open={open} title="Edit deal" onClose={close}>
-			<Form key={deal.version} onSubmit={(form) => void submit(form)} error={edit.error === null ? null : describe(edit.error)} aria-label="Edit deal">
-				<Field label="Title" name="title" required>
-					<Input name="title" defaultValue={deal.title} />
-				</Field>
-				<Field label="Value (EUR)" name="value" required>
-					<Input name="value" inputMode="numeric" defaultValue={String(deal.value)} />
-				</Field>
-				<Field label="Source" name="source" hint="Leave empty to clear it.">
-					<Input name="source" defaultValue={deal.source ?? ''} />
-				</Field>
-				<FormActions>
-					<Button variant="ghost" onClick={close}>Cancel</Button>
-					<Button type="submit" variant="primary" loading={edit.pending}>Save</Button>
-				</FormActions>
-			</Form>
-		</Dialog>
+		<FormDialog
+			open={open}
+			title="Edit deal"
+			form={form}
+			error={edit.error === null ? null : describe(edit.error)}
+			onClose={close}
+			onSubmit={async (values) => {
+				const outcome = await edit.mutate({ id: deal.id, ...values, expectVersion: deal.version })
+				if (!outcome.ok) return
+				report(outcome, 'Deal saved')
+				close()
+			}}
+		>
+			<Field label="Title" required {...form.field('title')}>
+				<Input />
+			</Field>
+			<Field label="Value (EUR)" required {...form.field('value')}>
+				<Input inputMode="numeric" />
+			</Field>
+			<Field label="Source" hint="Leave empty to clear it." {...form.field('source')}>
+				<Input />
+			</Field>
+		</FormDialog>
 	)
 }
 

@@ -31,13 +31,18 @@ async function press(element: Element | null | undefined): Promise<void> {
 	element.click()
 }
 
-/** Sets a control's value as typing would, so the form's `FormData` reads it. */
+/** Sets a control's value as typing does: past React's value tracking, then the events a form reads it by. */
 function fill(form: Element, name: string, value: string): void {
 	const control = form.querySelector(`[name="${name}"]`)
 	if (!(control instanceof HTMLInputElement || control instanceof HTMLSelectElement || control instanceof HTMLTextAreaElement)) {
 		throw new Error(`no control named ${name}`)
 	}
-	control.value = value
+	control.focus()
+	Reflect.getOwnPropertyDescriptor(Object.getPrototypeOf(control), 'value')?.set?.call(control, value)
+	control.dispatchEvent(new Event('input', { bubbles: true }))
+	control.dispatchEvent(new Event('change', { bubbles: true }))
+	// React reads a text input's change on keyup when it loaded without the input event, as `@fabrika/app/react/testing`'s `type` does.
+	control.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }))
 }
 
 const button = (name: string): HTMLButtonElement | undefined =>
@@ -121,12 +126,13 @@ if (postgres !== null) {
 			if (form === null) throw new Error('no edit form')
 			fill(form, 'title', 'Mine wins')
 			await press(button('Save'))
-			// The conflict refetches the deal, and the form reseeds from its current version.
-			const reseeded = () => document.querySelector('form[aria-label="Edit deal"]')
-			await until(() => reseeded()?.querySelector('[role="alert"]') !== null && reseeded() !== form, 'the conflict')
-			expect(reseeded()?.querySelector('[role="alert"]')?.textContent).toContain('Someone changed it meanwhile')
-			const title = reseeded()?.querySelector('[name="title"]')
-			expect(title instanceof HTMLInputElement ? title.value : null).toBe('Printers, third floor')
+			// The conflict refetches the deal, and the form starts over from its current version.
+			const title = () => {
+				const control = form.querySelector('[name="title"]')
+				return control instanceof HTMLInputElement ? control.value : null
+			}
+			await until(() => form.querySelector('[role="alert"]') !== null && title() === 'Printers, third floor', 'the conflict')
+			expect(form.querySelector('[role="alert"]')?.textContent).toContain('Someone changed it meanwhile')
 			expect((await managerApi.deals.get({ id: seeded.id })).title).toBe('Printers, third floor')
 		})
 
@@ -134,6 +140,32 @@ if (postgres !== null) {
 			open(manager, '/nowhere')
 			await until(() => document.body.textContent?.includes('This address names no screen of the CRM.') === true, 'the not-found screen')
 			expect(document.querySelector('[aria-current="page"]')).toBeNull()
+		})
+	})
+
+	describe('the contacts screen', () => {
+		test('a new contact without a company or a name is refused at its fields before anything is sent, then created', async () => {
+			open(manager, '/contacts')
+			await until(() => button('New contact') !== undefined, 'the create button')
+			await press(button('New contact'))
+			const form = document.querySelector('form[aria-label="New contact"]')
+			if (form === null) throw new Error('no dialog form')
+			await until(() => form.querySelector(`option[value="${company.id}"]`) !== null, 'the company to pick')
+			const before = (await managerApi.contacts.list({})).items.length
+			await press(button('Create contact'))
+			await until(() => form.querySelector('[aria-invalid="true"]') !== null, 'the field errors')
+			const refused = [...form.querySelectorAll('[aria-invalid="true"]')].map((control) => control.getAttribute('name'))
+			expect(refused).toEqual(['companyId', 'name'])
+			expect(document.activeElement?.getAttribute('name')).toBe('companyId')
+			expect(form.textContent).toContain('Enter a name')
+			fill(form, 'companyId', company.id)
+			fill(form, 'name', 'Samir Nagheenanajar')
+			await until(() => form.querySelector('[aria-invalid="true"]') === null, 'the fixed fields to clear')
+			await press(button('Create contact'))
+			await until(() => document.querySelector('form[aria-label="New contact"]') === null, 'the dialog to close')
+			const names = (await managerApi.contacts.list({})).items.map((contact) => contact.name)
+			expect(names).toHaveLength(before + 1)
+			expect(names).toContain('Samir Nagheenanajar')
 		})
 	})
 
