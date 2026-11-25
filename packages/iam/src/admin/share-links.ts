@@ -11,7 +11,7 @@ import {
 import { type CredentialGrantRow, type CredentialRow } from '../db'
 import { issueKey } from '../issue'
 import { resolvePermissionsAt } from '../resolve'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, adminIssuer, fail } from './context'
 import { knownApps } from './grant-support'
 import { cursorOf, groupBy, normalizeLimit } from './pagination'
 
@@ -80,7 +80,7 @@ export async function createShareLinkUseCase(c: AdminContext, input: IssueShareL
 
 	// An admin holding the cross-app `admin` role keeps `*` at every app; an app-scoped admin only
 	// delegates what they hold THERE, which is the whole point of naming the app.
-	const issuer = { id: c.admin.id, permissions: await effectiveIssuerPermissions(c, app) }
+	const issuer = { id: c.admin.id, permissions: await effectiveIssuerPermissions(c, app), person: adminIssuer(c).person }
 	const record = ({ credentialId }: { credentialId: string }) =>
 		adminEvent(c, {
 			action: 'iam.credential.create',
@@ -88,9 +88,11 @@ export async function createShareLinkUseCase(c: AdminContext, input: IssueShareL
 			resourceId: credentialId,
 			metadata: { app, label: label ?? null, grants },
 		})
-	const { result, problem } = await issueKey(c.services, issueInput, issuer, app, record)
+	const { result, problem, refusal } = await issueKey(c.services, issueInput, issuer, app, record)
 	if (!result.ok) {
-		// Admin already gated: a `problem` is a malformed request, anything else the delegation rule.
+		// Admin already gated: a `problem` is a malformed request, a `refusal` the `credentials` mode, anything else the
+		// delegation rule.
+		if (refusal !== undefined) return fail(403, refusal)
 		return problem === undefined ? fail(403, `not allowed: ${result.reason}`) : fail(400, problem)
 	}
 	const issued: IssuedShareLinkResponse = { id: result.id, token: result.token }

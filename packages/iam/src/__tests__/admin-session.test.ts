@@ -49,7 +49,14 @@ describe('administering IAM through the console gateway', () => {
 		const { f, adminId } = await installationAdmin()
 
 		expect((await consoleRpc(f, adminId, 'principals.list', {})).status).toBe(200)
-		expect((await consoleRpc(f, adminId, 'apiKeys.provision', { label: 'ci', type: 'service', roleKey: 'admin' })).status).toBe(200)
+		expect(
+			(await consoleRpc(f, adminId, 'apiKeys.provision', {
+				label: 'ci',
+				type: 'service',
+				roleKey: 'admin',
+				expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+			})).status,
+		).toBe(200)
 	})
 
 	test('a key bound to IAM itself still administers IAM directly', async () => {

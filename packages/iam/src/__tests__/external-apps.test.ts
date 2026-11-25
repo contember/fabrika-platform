@@ -474,7 +474,13 @@ for (const engine of ENGINES) {
 				expect([method, (await f.call(method, input, userAdmin)).status]).toEqual([method, 403])
 			}
 
-			const provisioned = await f.call('apiKeys.provision', { label: 'automation', type: 'service', roleKey: 'admin', app: null })
+			const provisioned = await f.call('apiKeys.provision', {
+				label: 'automation',
+				type: 'service',
+				roleKey: 'admin',
+				app: null,
+				expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+			})
 			expect(provisioned.status).toBe(200)
 			const apiKey = prop(provisioned.result, 'apiKey')
 			if (typeof apiKey !== 'string') throw new Error('no api key')

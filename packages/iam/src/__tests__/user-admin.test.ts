@@ -201,7 +201,13 @@ function userAdministrationSuite(label: string, repositories: () => IamRepositor
 		test("an API key's grants are out of reach at an application it administers: adding and removing one are refused", async () => {
 			const i = await installation(repositories())
 			const admin = await i.userAdmin()
-			const provisioned = await i.f.adminRpc('apiKeys.provision', { label: 'crm-sync', type: 'service', app: CRM, roleKey: 'viewer' })
+			const provisioned = await i.f.adminRpc('apiKeys.provision', {
+				label: 'crm-sync',
+				type: 'service',
+				app: CRM,
+				roleKey: 'viewer',
+				expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+			})
 			const keyId = prop(prop(await provisioned.json(), 'result'), 'principalId')
 			if (typeof keyId !== 'string') throw new Error('no key provisioned')
 			const [held] = await i.f.repositories.grants.listGrants(keyId)

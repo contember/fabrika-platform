@@ -318,7 +318,13 @@ function durableAuditSuite(backend: () => Backend): void {
 			const a = await admin(b)
 			const label = unique('svc')
 			const restore = await b.fault('audit_events', 'action', 'iam.apikey.create')
-			const faulted = await a.call('apiKeys.provision', { label, type: 'service', roleKey: 'admin', app: null }, unique('req'))
+			const faulted = await a.call('apiKeys.provision', {
+				label,
+				type: 'service',
+				roleKey: 'admin',
+				app: null,
+				expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+			}, unique('req'))
 			await restore()
 			expect(faulted.status).toBe(500)
 			const { results } = await b.db.prepare('SELECT id FROM principals WHERE label = ?').bind(label).all()
@@ -461,7 +467,13 @@ function durableAuditSuite(backend: () => Backend): void {
 			const workload = { app: 'notes@prod', kind: 'job', name }
 			expect((await a.call('workloads.issueKey', { ...workload, expiresAt: Math.floor(Date.now() / 1000) + 3600, keep: null }, unique('req'))).status)
 				.toBe(200)
-			const provisioned = await a.call('apiKeys.provision', { label: unique('svc'), type: 'service', roleKey: 'admin', app: null }, unique('req'))
+			const provisioned = await a.call('apiKeys.provision', {
+				label: unique('svc'),
+				type: 'service',
+				roleKey: 'admin',
+				app: null,
+				expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+			}, unique('req'))
 			const apiKeyPrincipal = prop(prop(await provisioned.json(), 'result'), 'principalId')
 			if (typeof apiKeyPrincipal !== 'string') throw new Error('expected a principal id')
 

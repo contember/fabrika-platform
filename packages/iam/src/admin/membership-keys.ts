@@ -3,7 +3,7 @@ import type { IssueMembershipKeyRequest, IssueMembershipKeyResponse } from '@fab
 import { keyExpiryProblem } from '../issue'
 import { unixNow } from '../repositories/sql'
 import { generateToken, hashToken } from '../secret'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 
 /**
  * Issue a fresh membership transport key for one application environment (`src/membership-http.ts`). The key the caller
@@ -19,6 +19,8 @@ export async function issueMembershipKeyUseCase(c: AdminContext, input: IssueMem
 	if (expiryProblem !== null) {
 		return fail(400, expiryProblem)
 	}
+	// Control issues these with the provisioning key, which keeps its rule; any other machine caller meets the mode.
+	await requireCredentialsMode(c, [{ app: input.app, scope: null }])
 	// `px_`, like every key IAM issues, so the redaction of `px_` patterns covers it in every log.
 	const key = `${API_KEY_PREFIX}${generateToken()}`
 	const id = await c.services.repositories.membershipTransport.issue({

@@ -1,3 +1,4 @@
+import { CREDENTIALS_MODES, type CredentialsMode } from '@fabrika/iam-contract'
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { type AuditEventInput, AuditWriter } from './audit'
 
@@ -47,6 +48,32 @@ export interface CreateGrantRequestInput {
 	expiresAt: number
 }
 
+/** What Control sets for an application environment: whether its grants wait, and its `credentials` mode when given. */
+export interface IamGates {
+	readonly required: boolean
+	readonly credentials?: CredentialsMode
+}
+
+/** The gates IAM holds for an application environment, at the protection revision it last took. */
+export interface StoredGates {
+	readonly required: boolean
+	readonly revision: number
+	/** Null until Control writes it; read as `person` (`credentials-gate.ts`). */
+	readonly credentials: CredentialsMode | null
+}
+
+interface GateRow {
+	required: number
+	revision: number
+	credentials: string | null
+}
+
+/** A stored row read once: a mode this release does not know reads as unknown, which the gate takes as `person`. */
+function storedGates(row: GateRow): StoredGates {
+	const credentials = CREDENTIALS_MODES.find((mode) => mode === row.credentials) ?? null
+	return { required: row.required === 1, revision: row.revision, credentials }
+}
+
 export class GrantRequestRepository {
 	constructor(
 		private readonly db: SqlDatabase,
@@ -60,31 +87,35 @@ export class GrantRequestRepository {
 	}
 
 	/**
-	 * Set whether grant changes at `app` wait, as of Control's protection `revision`. An older revision than the stored one
-	 * changes nothing, so a caller that lost the environment's lease cannot undo its successor's gate. The record is written
-	 * only when `required` changes.
+	 * Set an application environment's gates as of Control's protection `revision`: whether its grant changes wait, and,
+	 * when given, its `credentials` mode (ADR-0083 §4, §8). An older revision than the stored one changes nothing, so a
+	 * caller that lost the environment's lease cannot undo its successor's gate. The record is written only when a gate
+	 * changes.
 	 */
-	async setGrantsWait(
-		app: string,
-		required: boolean,
-		revision: number,
-		now: number,
-		audit: AuditEventInput,
-	): Promise<{ required: boolean; revision: number }> {
+	async setGates(app: string, gates: IamGates, revision: number, now: number, audit: AuditEventInput): Promise<StoredGates> {
+		const credentials = gates.credentials ?? null
 		const current = this.db
 			.prepare(`INSERT INTO app_grant_approvals (app, required, revision, updated_at) VALUES (?, 0, ?, ?)
 				ON CONFLICT (app) DO UPDATE SET revision = excluded.revision, updated_at = excluded.updated_at
 				WHERE app_grant_approvals.revision <= excluded.revision`)
 			.bind(app, revision, now)
 		const change = this.writer.changed([{
-			sql: 'UPDATE app_grant_approvals SET required = ? WHERE app = ? AND revision = ? AND required <> ? RETURNING app',
-			binds: [required ? 1 : 0, app, revision, required ? 1 : 0],
+			sql: `UPDATE app_grant_approvals SET required = ?, credentials = COALESCE(?, credentials)
+				WHERE app = ? AND revision = ? AND (required <> ? OR COALESCE(credentials, '') <> COALESCE(?, credentials, ''))
+				RETURNING app`,
+			binds: [gates.required ? 1 : 0, credentials, app, revision, gates.required ? 1 : 0, credentials],
 		}], audit)
-		const read = this.db.prepare('SELECT required, revision FROM app_grant_approvals WHERE app = ?').bind(app)
-		const results = await this.db.batch<{ required: number; revision: number }>([current, ...change.statements, read])
+		const read = this.db.prepare('SELECT required, revision, credentials FROM app_grant_approvals WHERE app = ?').bind(app)
+		const results = await this.db.batch<GateRow>([current, ...change.statements, read])
 		const [stored] = results[results.length - 1]?.results ?? []
 		if (stored === undefined) throw new Error('the grant gate row is missing after its upsert')
-		return { required: stored.required === 1, revision: stored.revision }
+		return storedGates(stored)
+	}
+
+	/** Every application environment's mirrored `credentials` mode; null where Control has not written one yet. */
+	async credentialsModes(): Promise<Map<string, CredentialsMode | null>> {
+		const { results } = await this.db.prepare('SELECT app, required, revision, credentials FROM app_grant_approvals').all<GateRow & { app: string }>()
+		return new Map(results.map((row) => [row.app, storedGates(row).credentials]))
 	}
 
 	async create(input: CreateGrantRequestInput, audit: (requestId: string) => AuditEventInput): Promise<GrantRequestRow> {

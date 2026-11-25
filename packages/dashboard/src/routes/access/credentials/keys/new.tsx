@@ -1,10 +1,11 @@
 import { createPage, Link, useNavigate } from '@buzola/router'
+import { MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
 import type { ProvisionApiKeyRequest, ProvisionApiKeyResponse } from '@fabrika/iam-contract'
 import { useState } from 'react'
 import { GrantComposer, useGrantComposerState } from '../../../../access/components/GrantComposer'
 import { SecretModal } from '../../../../access/components/SecretModal'
 import { api } from '../../../../access/lib/api'
-import { parseDateTimeLocal } from '../../../../access/lib/format'
+import { parseDateTimeLocal, toDateTimeLocal } from '../../../../access/lib/format'
 import { Icon } from '../../../../components/Icon'
 import { ApiError } from '../../../../lib/api'
 
@@ -26,7 +27,8 @@ export default createPage()
 		const navigate = useNavigate()
 		const [label, setLabel] = useState('')
 		const composer = useGrantComposerState()
-		const [expiry, setExpiry] = useState('')
+		// IAM issues a key for at most 30 days, so the form starts at the longest it may ask for.
+		const [expiry, setExpiry] = useState(() => toDateTimeLocal(Math.floor(Date.now() / 1000) + MAX_KEY_LIFETIME_SECONDS - 3600))
 		const [busy, setBusy] = useState(false)
 		const [error, setError] = useState<string | null>(null)
 		const [secret, setSecret] = useState<ProvisionApiKeyResponse | null>(null)
@@ -82,7 +84,7 @@ export default createPage()
 						idPrefix="apikey"
 						expiry={expiry}
 						onExpiryChange={setExpiry}
-						expiryHint="The key and its access expire together. Without a date, the key does not expire."
+						expiryHint="The key and its access expire together, at most 30 days from now."
 					/>
 					{error && <p className="error-text" role="alert">{error}</p>}
 					<div className="form-actions">

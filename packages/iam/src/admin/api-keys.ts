@@ -20,12 +20,14 @@ import {
 } from '@fabrika/iam-contract'
 import { type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod'
+import { PROVISIONING_ADMIN_ID } from '../auth'
 import { contractGrantProblem } from '../contract-rules'
+import type { KeyReach } from '../credentials-gate'
 import { type CredentialRow, type GrantRow, type PrincipalRow, principalStatus, type RequestedApiKeyRow } from '../db'
 import { keyExpiryProblem } from '../issue'
 import { encryptToRecipient } from '../key-delivery'
 import { generateToken, hashToken } from '../secret'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 import { appField, grantAuthorLabels, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
 import { cursorOf, groupBy, normalizeLimit } from './pagination'
 
@@ -112,8 +114,22 @@ async function toApiKeyDto(c: AdminContext, principal: PrincipalRow, grants: Gra
 	}
 }
 
+/**
+ * Provision a key with its service principal and grant. It expires at most 30 days ahead, and a machine caller meets
+ * the `credentials` mode of where it acts (ADR-0083 §8). The provisioning key, which bootstraps the first machine caller
+ * over `POST /admin/api-keys` before any console exists, keeps its rule: no mode and no ceiling.
+ */
 export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionApiKeyRequest): Promise<ProvisionApiKeyResponse> {
+	if (c.admin.id !== PROVISIONING_ADMIN_ID) {
+		const problem = input.expiresAt === undefined || input.expiresAt === null
+			? 'a key expires: expiresAt is required, at most 30 days ahead'
+			: keyExpiryProblem(input.expiresAt, Math.floor(Date.now() / 1000))
+		if (problem !== null) {
+			return fail(400, problem)
+		}
+	}
 	const plan = await planProvision(c, input)
+	await requireCredentialsMode(c, plan.reach)
 	await c.services.repositories.audit.commit(plan.statements)
 	const response: ProvisionApiKeyResponse = { principalId: plan.principalId, apiKey: plan.apiKey }
 	return response
@@ -124,6 +140,8 @@ interface ProvisionPlan {
 	readonly principalId: string
 	readonly apiKey: string
 	readonly statements: SqlStatement[]
+	/** Where the key's grant acts, which the `credentials` mode judges. */
+	readonly reach: KeyReach[]
 }
 
 /**
@@ -208,7 +226,13 @@ async function planProvision(c: AdminContext, input: ProvisionApiKeyRequest, rec
 			},
 		})),
 	]
-	return { principalId, apiKey, statements }
+	return { principalId, apiKey, statements, reach: grantReach(app, scope.scopeType, scope.scopeValues) }
+}
+
+/** Where a grant at `app` acts: globally, or in each of its scope values. */
+function grantReach(app: string | null, scopeType: string | null, scopeValues: readonly string[] | null): KeyReach[] {
+	if (scopeType === null || scopeValues === null) return [{ app, scope: null }]
+	return scopeValues.map((value) => ({ app, scope: { type: scopeType, value } }))
 }
 
 /**
@@ -335,6 +359,21 @@ export async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyIn
 	if (input.expiresAt !== undefined && input.expiresAt !== null && input.expiresAt <= nowSeconds) {
 		return fail(400, 'expiresAt must be in the future')
 	}
+	// A key keeps the expiry it has, so an existing key is untouched; a stated one takes the ceiling provisioning takes.
+	if (input.expiresAt !== undefined && c.admin.id !== PROVISIONING_ADMIN_ID) {
+		const problem = input.expiresAt === null
+			? 'a rotated key keeps its expiry, or takes one at most 30 days ahead; a key is never made to last forever'
+			: keyExpiryProblem(input.expiresAt, nowSeconds)
+		if (problem !== null) {
+			return fail(400, problem)
+		}
+	}
+	// The new secret holds the principal's grants, so a machine caller meets the mode of where they act.
+	const held = await c.services.repositories.grants.listGrants(principalId)
+	await requireCredentialsMode(
+		c,
+		held.flatMap((grant) => grantReach(grant.app, grant.scope_type, grant.scope_value === null ? null : [grant.scope_value])),
+	)
 	// The credential being replaced decides what the replacement inherits: its expiry and its app
 	// binding. `listCredentialsForPrincipal` is newest-first, so this is the live one.
 	const existing = (await c.services.repositories.credentials.listCredentialsForPrincipal(principalId)).find((row) => row.revoked_at === null)

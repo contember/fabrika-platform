@@ -224,9 +224,10 @@ async function heldElsewhere(c: AdminContext, request: GrantRequestRow): Promise
 }
 
 /**
- * Make grant changes at `app` wait, or apply at once again (ADR-0083 §4). Only Control sets it, with the provisioning
- * key, when an environment chooses or drops the `grants` category: an installation administrator who could switch it
- * off could grant past it. Only an application environment id qualifies.
+ * Set an application environment's gates (ADR-0083 §4, §8): whether its grant changes wait, and its `credentials` mode,
+ * which IAM's own key issuance to a machine caller meets. Only Control sets them, with the provisioning key, whenever the
+ * environment's protection changes and on its maintenance pass: an installation administrator who could switch them off
+ * could grant or issue past them. Only an application environment id qualifies.
  */
 export async function setGrantApprovalUseCase(c: AdminContext, input: SetGrantApprovalRequest): Promise<SetGrantApprovalRequest> {
 	if (c.admin.id !== PROVISIONING_ADMIN_ID) {
@@ -235,19 +236,24 @@ export async function setGrantApprovalUseCase(c: AdminContext, input: SetGrantAp
 	if (parseAppEnvironmentId(input.app) === null || c.services.config.platformAudiences.has(input.app)) {
 		return fail(400, 'grant approval applies to an application environment id `<app>@<env>`')
 	}
-	const stored = await c.services.repositories.grantRequests.setGrantsWait(
+	const stored = await c.services.repositories.grantRequests.setGates(
 		input.app,
-		input.required,
+		{ required: input.required, ...(input.credentials === undefined ? {} : { credentials: input.credentials }) },
 		input.revision,
 		unixNow(),
 		adminEvent(c, {
 			action: 'iam.grant_approval.set',
 			resourceType: 'app',
 			resourceId: input.app,
-			metadata: { required: input.required, revision: input.revision },
+			metadata: { required: input.required, revision: input.revision, ...(input.credentials === undefined ? {} : { credentials: input.credentials }) },
 		}),
 	)
-	return { app: input.app, ...stored }
+	return {
+		app: input.app,
+		required: stored.required,
+		revision: stored.revision,
+		...(stored.credentials === null ? {} : { credentials: stored.credentials }),
+	}
 }
 
 async function toGrantRequestDto(services: Services, row: GrantRequestRow, now: number): Promise<GrantRequestDto> {

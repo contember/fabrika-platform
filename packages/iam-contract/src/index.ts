@@ -290,14 +290,22 @@ export interface DecideGrantRequestInput {
 	decision: 'approve' | 'reject'
 }
 
+/** An environment's `credentials` mode as IAM keeps it for its own key issuance to a machine caller (ADR-0083 §8). */
+export const CREDENTIALS_MODES = ['off', 'person', 'refuse'] as const
+
+export type CredentialsMode = (typeof CREDENTIALS_MODES)[number]
+
 /**
- * Whether an application's console grants wait for approval; Control's to set with the provisioning key (ADR-0083).
- * `revision` is the environment's protection revision: IAM ignores one older than it holds, and answers what it holds.
+ * Control's mirror of an application environment's approval gates in IAM, set with the provisioning key (ADR-0083 §4,
+ * §8): whether its console grants wait (`required`), and its `credentials` mode. `revision` is the environment's
+ * protection revision: IAM ignores one older than it holds, and answers what it holds. A request without `credentials`
+ * leaves IAM's mode as it is.
  */
 export interface SetGrantApprovalRequest {
 	app: string
 	required: boolean
 	revision: number
+	credentials?: CredentialsMode
 }
 
 // ── Apps (read-only; the live registry derived from the schema tables) ────────
@@ -920,7 +928,7 @@ export interface IamAdminRpcContract {
 		list: RpcProcedure<ListGrantRequestsInput, ListResponse<GrantRequestDto>>
 		decide: RpcProcedure<DecideGrantRequestInput, GrantRequestDto>
 	}
-	/** Whether an application's console grants wait: an installation administrator's (`iam.admin`), which Control holds. */
+	/** An application environment's approval gates in IAM: the provisioning key's alone, which Control holds. */
 	grantApproval: {
 		set: RpcProcedure<SetGrantApprovalRequest, SetGrantApprovalRequest>
 	}

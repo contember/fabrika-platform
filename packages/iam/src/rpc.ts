@@ -389,7 +389,7 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 				// iam.credential.create, in the key's own transaction — issuer, label, binding + grants; NEVER the
 				// plaintext token. `principalId` is the freshly-created service principal (service mode) or the
 				// self-bound principal; null for an anonymous key.
-				const { result } = await issueKey(services, input, { id: issuer.id, permissions: issuer.permissions }, app, (issued) => ({
+				const { result } = await issueKey(services, input, issuer, app, (issued) => ({
 					requestId: input.requestId,
 					principalId: issuer.id,
 					principalLabel: auditLabelOf({ id: issuer.id, type: issuer.type, label: issuer.label }),

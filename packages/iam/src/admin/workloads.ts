@@ -5,7 +5,7 @@ import { principalStatus } from '../db'
 import { keyExpiryProblem } from '../issue'
 import { unixNow } from '../repositories/sql'
 import { generateToken, hashToken } from '../secret'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 
 /** An `app` workload is the consuming application of an export, named by its id. */
 const APP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/
@@ -32,6 +32,8 @@ export async function issueWorkloadKeyUseCase(c: AdminContext, input: IssueWorkl
 	if (expiryProblem !== null) {
 		return fail(400, expiryProblem)
 	}
+	// Control issues these with the provisioning key, which keeps its rule; any other machine caller meets the mode.
+	await requireCredentialsMode(c, [{ app: input.app, scope: null }])
 	const { workloads, credentials } = c.services.repositories
 	const existing = await workloads.findPrincipal(input.app, input.kind, input.name)
 	if (existing !== null && principalStatus(existing) === 'disabled') {

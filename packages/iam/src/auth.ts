@@ -76,6 +76,8 @@ export interface ResolvedCaller<T extends TokenPrincipalType = PrincipalType> {
 	permissions: PermissionEntry[]
 	/** The terminal of a person's session token asserted on one (ADR-0067): its `terminal` claim's principal id. */
 	terminal?: string
+	/** A person's own session token: a user signed in, through no OAuth client and no link (ADR-0083 §6). Never a key. */
+	person?: true
 }
 
 type CallerRefusal = { ok: false; reason: 'missing_token' | 'invalid_token' | 'unknown_principal' | 'disabled' }
@@ -178,6 +180,7 @@ async function resolveAnyCaller(services: Services, env: CallerEnv, input: Calle
 			label: claims.label,
 			permissions: claims.perms,
 			...(claims.terminal === undefined ? {} : { terminal: claims.terminal.id }),
+			...(claims.session === true && claims.ptype === 'user' && claims.oauth === undefined && claims.link === undefined ? { person: true } : {}),
 		},
 		verifiedApp: claims.aud,
 	}
