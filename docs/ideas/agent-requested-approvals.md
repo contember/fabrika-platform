@@ -37,7 +37,7 @@ key or a builder key. Approvals also require the console itself (`requireHumanAp
 | Which runs park                                                                      | A protected environment, and a line of a category the environment chose (ADR-0083; defaults = ADR-0050's closer-review reasons).                                                      | `waitsForApproval` `packages/control-contract/src/approval-view.ts:56-59`, `changeCategories` `:26-50`                                                                                                    |
 | Protection flag and approval categories                                              | Person in the console, `access.approve`.                                                                                                                                              | `setEnvironmentProtectionUseCase` `approval/api.ts:121-123`                                                                                                                                               |
 | Deleting a protected environment or an app that has one                              | Person in the console, `access.approve`.                                                                                                                                              | `requireHumanForProtectedDelete` `human.ts:34-43`; `registry/apps.ts:93`, `registry/environments.ts:179`                                                                                                  |
-| Trigger ref, domain, public origin of a protected (or starts-protected) environment  | Person; clearing stays open to a key.                                                                                                                                                 | `human.ts:130-171`, called from `registry/environments.ts:49-62`                                                                                                                                          |
+| Trigger ref, domain, public origin of a protected (or starts-protected) environment  | Person; clearing stays open to a key.                                                                                                                                                 | `human.ts:130-169`, called from `registry/environments.ts:49-62`                                                                                                                                          |
 | App source and build fields (`apps.update`) when the app has a protected environment | Person.                                                                                                                                                                               | `requirePersonToRedirect` `human.ts:106-113`, `registry/apps.ts:59-64,134-136`                                                                                                                            |
 | GitHub source connections                                                            | Person.                                                                                                                                                                               | `requireHuman` `packages/control/src/github/connections/context.ts:24-27`                                                                                                                                 |
 | Builder pairing and connection approval                                              | Person.                                                                                                                                                                               | `packages/control/src/api/builder-pairing.ts:22,39`, `builder-connections.ts:23`                                                                                                                          |
@@ -82,7 +82,7 @@ park; they do not wait ... gating them needs a pending registry write of its own
 ### The gaps this draft addresses
 
 1. An agent cannot start a deploy of a protected environment and hand the person a link to approve it (the request
-   behind this draft). It gets a 403 (`human.ts:84-89`).
+   behind this draft). It gets a 403 (`human.ts:72-78`).
 2. Secrets, variables and data operations on a protected environment apply at once for any key that holds the action.
    Nothing can make them wait.
 3. An agent cannot ask for a grant, a key or another credential at all. It has no IAM administration, and it should
@@ -142,7 +142,7 @@ Two shapes, by owner. An ADR-0083 rule already holds here: the service that writ
    `awaiting_approval` **whatever its lines**, with a park reason `requested`, after its snapshot is classified. The
    existing approval page, its digest binding, its lease and its audit row apply unchanged. The page adds who asked
    (the person and the client or agent), the commit, its message and a compare link against the commit the environment
-   runs. A run that does not belong to a person still never deploys a workspace branch (`human.ts:91-92`).
+   runs. A run that does not belong to a person still never deploys a workspace branch (`human.ts:86-91`).
 2. **Any other action is an `approval_requests` row** in the service that writes the change. In Control: secrets and
    variables of a protected environment, its trigger ref, domain and public origin, `apps.update` source fields, and
    data operations. In IAM it extends `grant_requests` (ADR-0083 §4) with a requester that is not an administrator, for
@@ -351,7 +351,7 @@ The deploy categories stay as ADR-0083 defines them. The new ones are actions wi
 | `deploy-request` | A manual run started by a non-person                                                                              | `person`                           |
 | `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey` by a non-person                            | `person`                           |
 | `variables`      | `apps.variables.put/delete` by a non-person                                                                       | `off`                              |
-| `registry`       | Trigger ref, domain, public origin, `apps.update` source fields by a non-person (today a 403, `human.ts:130-171`) | `person`                           |
+| `registry`       | Trigger ref, domain, public origin, `apps.update` source fields by a non-person (today a 403, `human.ts:130-169`) | `person`                           |
 | `data`           | `data.start` (maintenance modes, side restore), `data.recover` by a non-person                                    | `person`                           |
 | `credentials`    | A key or other credential an agent asks for (D4)                                                                  | `person`                           |
 | `grants`         | ADR-0083's existing category, now with modes. `plan` does not apply: a grant has no pull request.                 | `off` (as today)                   |
