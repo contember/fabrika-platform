@@ -8,13 +8,17 @@ import { permits } from '@fabrika/auth-core'
 import { type ApprovalSettings, CONTROL_ACTIONS, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
 import { type DeployLocks, type HttpService, SqlDeployLocks } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
+import type { ControlProvider, ProviderEnvelope } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { adminTokenFor, createHarness as createIamHarness, TEST_SIGNING_KEYS } from '../../../iam/src/__tests__/helpers/harness'
 import { APP, membershipFixture, NOTES_SCHEMA, ORIGIN as IAM_ORIGIN } from '../../../iam/src/__tests__/helpers/membership'
 import { createPostgres as createIamPostgres, hasPostgres as hasIamPostgres } from '../../../iam/src/__tests__/helpers/postgres'
 import { createIamApp } from '../../../iam/src/app'
 import { createPostgresIamRepositories, type IamRepositories } from '../../../iam/src/db'
-import { type ApprovalUseCaseContext, setEnvironmentProtectionUseCase } from '../approval/api'
+import type { RegistryUseCaseContext } from '../api/registry/context'
+import { putAppEnvUseCase } from '../api/registry/environments'
+import { registerAppUseCase } from '../api/registry/registration'
+import { type ApprovalUseCaseContext, type GrantApprovalPort, setEnvironmentProtectionUseCase } from '../approval/api'
 import { storedPolicy, storedSettings } from '../approval/categories'
 import { convergeIamGates } from '../approval/iam-mirror'
 import { type ControlRepositories, createControlRepositories } from '../db'
@@ -30,6 +34,15 @@ const CONSOLE = 'https://console.example.test'
 const PROVISIONING_KEY = 'px_provisioning-key-of-the-credentials-mirror-suite'
 const ENVELOPE = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
 const STAGE = 'notes@stage'
+/** The console's audience in IAM, which a Control key is issued at. */
+const CONSOLE_APP = 'vozka'
+const REGISTRATION: { target: ProviderEnvelope; artifact: ProviderEnvelope } = {
+	target: { provider: 'harbor', version: 1, payload: {} },
+	artifact: { provider: 'harbor', version: 1, payload: {} },
+}
+const PROVIDER: ControlProvider = { id: 'harbor', deploy: () => Promise.resolve({ state: 'succeeded' }) }
+/** IAM down: every write of the mirror fails. */
+const UNREACHABLE: GrantApprovalPort = { set: () => Promise.reject(new Error('IAM is down')) }
 /** No passkey on deciding a key, so a test may release `credentials` without a step-up. */
 const NO_STEP_UP: ApprovalSettings = { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' } }
 
@@ -116,6 +129,8 @@ for (const backend of backends) {
 			const transport = iamTransport(opened.iam)
 			const f = await membershipFixture(opened.iam)
 			expect((await f.putSchema(NOTES_SCHEMA, STAGE)).status).toBe(200)
+			const consoleSchema = { displayName: 'Console', scopes: [{ type: 'app', label: 'App' }], actions: [{ action: 'deploy.read' }], roles: {} }
+			expect((await f.putSchema(consoleSchema, CONSOLE_APP)).status).toBe(200)
 			const ada = await f.person('ada')
 			await opened.iam.grants.createGrant({ principalId: ada.id, roleKey: 'admin' })
 
@@ -184,8 +199,38 @@ for (const backend of backends) {
 				})
 			const converge = () => convergeIamGates({ repositories: db, grantApproval })
 			const adaToken = () => adminTokenFor(opened.iam, ada.id, { issuer: IAM_ORIGIN })
+			/** What IAM answers a Control key reading every environment of `app`, provisioned by `bearer`. */
+			const provisionAtControl = async (bearer: string, app: string): Promise<number> =>
+				(await send(bearer, '/admin/rpc', {
+					method: 'apiKeys.provision',
+					input: {
+						label: 'watcher',
+						type: 'service',
+						app: CONSOLE_APP,
+						permissions: ['deploy.read'],
+						scopeType: 'app',
+						scopeValue: app,
+						expiresAt: Math.floor(Date.now() / 1000) + 3600,
+					},
+				})).status
+			/** An application environment IAM already holds a vocabulary for, mirrored `off`, as a deploy of it leaves it. */
+			const knownToIam = async (app: string): Promise<void> => {
+				expect((await f.putSchema(NOTES_SCHEMA, app)).status).toBe(200)
+				await grantApproval.set(app, { grants: false, credentials: 'off' }, 0)
+			}
+			/** Registration's use cases as the console calls them, with the mirror wired to IAM unless `port` says otherwise. */
+			const registry = (port: GrantApprovalPort | null = grantApproval): RegistryUseCaseContext => ({
+				repositories: db,
+				provider: PROVIDER,
+				auth: approver,
+				signal: new AbortController().signal,
+				...(port === null ? {} : { grantApproval: port }),
+			})
+			const register = (id: string, env: string, port?: GrantApprovalPort | null) =>
+				registerAppUseCase(registry(port), { id, repoUrl: `https://github.com/acme/${id}`, env, ...REGISTRATION })
+			const putEnv = (appId: string, env: string, port?: GrantApprovalPort | null) => putAppEnvUseCase(registry(port), appId, env, REGISTRATION)
 
-			return { machine, provision, setCredentials, converge, adaToken }
+			return { db, machine, provision, provisionAtControl, setCredentials, converge, adaToken, knownToIam, register, putEnv }
 		}
 
 		test('after an upgrade IAM refuses the machine key everywhere until the maintenance pass mirrors each mode', async () => {
@@ -195,6 +240,33 @@ for (const backend of backends) {
 			// The unprotected environment is `off`; the protected one keeps the default, `person`.
 			expect([await w.provision(w.machine, STAGE), await w.provision(w.machine, APP)]).toEqual([200, 403])
 			expect(await w.converge()).toEqual({ written: 0, failed: 0 })
+		})
+
+		test('a new environment reaches IAM before its row: a registered or put `prod` is judged at once', async () => {
+			const w = await world()
+			// Registration: IAM knows shop@stage as `off`; Control registers shop at prod.
+			await w.knownToIam('shop@stage')
+			expect(await w.provisionAtControl(w.machine, 'shop')).toBe(200)
+			await w.register('shop', 'prod')
+			expect(await w.provisionAtControl(w.machine, 'shop')).toBe(403)
+
+			// `apps.environments.put` that creates one.
+			await w.knownToIam('blog@stage')
+			await w.register('blog', 'stage')
+			expect(await w.provisionAtControl(w.machine, 'blog')).toBe(200)
+			await w.putEnv('blog', 'prod')
+			expect(await w.provisionAtControl(w.machine, 'blog')).toBe(403)
+		})
+
+		test('IAM unreachable: an environment that starts protected is not created (503); one that does not is', async () => {
+			const w = await world()
+			await expect(w.register('down', 'prod', UNREACHABLE)).rejects.toMatchObject({ httpStatus: 503 })
+			expect(await w.db.registry.getApp('down')).toBeNull()
+			await w.register('down', 'stage', UNREACHABLE)
+			await expect(w.putEnv('down', 'prod', UNREACHABLE)).rejects.toMatchObject({ httpStatus: 503 })
+			expect(await w.db.registry.getAppEnv('down', 'prod')).toBeNull()
+			// The maintenance pass stays the backstop for the one that was created.
+			expect(await w.converge()).toMatchObject({ failed: 0 })
 		})
 
 		test('a protection change carries the mode to IAM, and a person in the console issues whatever it is', async () => {

@@ -176,10 +176,13 @@ by gate: a change that tightens either gate writes IAM the stricter of before an
 will reach) before its own row, and the looser side after its row, at the row's revision. A failed first write
 changes nothing (502); a failed second write leaves IAM the stricter (502). Nothing reverts IAM after a failed Control
 write: a failure in between leaves IAM stricter while the console may say it is not, the console reports it, and the
-next protection change converges both. Control's maintenance pass writes the gates of every environment IAM has not
-taken at its current protection revision (`iam_gate_mirrors` records what IAM took), so a new environment, a failed
-second write and an installation upgraded to the `credentials` mirror converge with no operator step; until then IAM
-reads an environment it holds no mode for as `person`. A platform audience is refused: no grant at the console or IAM
+next protection change converges both. A new environment's gates reach IAM before its row, as it starts and at its
+starting revision (registration, and an `apps.environments.put` that creates one): a key that acts in every environment
+of an application counts only the environments IAM knows, so a `prod` IAM did not know would not count. One that starts
+protected is not created when IAM does not take them (503). Control's maintenance pass writes the gates of every
+environment IAM has not taken at its current protection revision (`iam_gate_mirrors` records what IAM took), so a new
+environment whose write failed, a failed second write and an installation upgraded to the `credentials` mirror converge
+with no operator step; until then IAM reads an environment it knows and holds no mode for as `person`. A platform audience is refused: no grant at the console or IAM
 waits. `grants` waits when its mode is `person`.
 
 While an application's grants wait, `grants.create`, `grants.update`, `grants.delete`, `appPeople.grant` and

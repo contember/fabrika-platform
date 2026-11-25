@@ -797,9 +797,12 @@ other environment, before the provider prepares anything, and the write maps a r
   `grants` without it is a 503), under the environment's deployment lease, at the environment's `protection_revision`,
   the stricter side first, gate by gate: the stricter of before and after into IAM before Control's row, the looser
   after it. A failed Control write never reverts IAM (the caller may have lost the lease); the next protection change
-  repairs it, and IAM ignores an older revision. The maintenance pass (`convergeIamGates`, `src/approval/iam-mirror.ts`)
-  writes every environment whose `iam_gate_mirrors` row is missing or names another revision, which converges an
-  upgraded installation, a new environment and a failed write after Control's row.
+  repairs it, and IAM ignores an older revision. A new environment's gates reach IAM before its row
+  (`writeNewEnvironmentGates`, from `apps.register` and an `apps.environments.put` that creates one), as it starts
+  (`getStartingProtection`); one that starts protected is not created when IAM does not take them (503). The maintenance
+  pass (`convergeIamGates`, `src/approval/iam-mirror.ts`) writes every environment whose `iam_gate_mirrors` row is
+  missing or names another revision, which converges an upgraded installation, a new environment whose write failed and
+  a failed write after Control's row.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the

@@ -1,5 +1,6 @@
 import type { AuthContext } from '@fabrika/auth'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import type { GrantApprovalPort } from '../../approval/api'
 import type { ConsoleAdmission } from '../../approval/human'
 import { type ControlRepositories } from '../../db'
 import type { CommitSource } from '../../github/source/commit-files'
@@ -16,6 +17,8 @@ export interface RegistryUseCaseContext {
 	readonly admission?: ConsoleAdmission
 	/** Reads GitHub as a deploy does; `register` probes an anonymous source with it. Absent skips the probe. */
 	readonly commits?: CommitSource
+	/** IAM's mirror of the approval gates, which a new environment's reach before its row (ADR-0083 §4). */
+	readonly grantApproval?: GrantApprovalPort
 }
 
 export function notifyCatalogChanged(c: RegistryUseCaseContext): void {

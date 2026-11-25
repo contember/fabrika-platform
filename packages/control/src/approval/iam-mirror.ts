@@ -1,13 +1,39 @@
-// The maintenance pass's half of IAM's mirror of each environment's approval gates (ADR-0083 §4, §8). A protection
-// change writes IAM itself, the stricter side first; this pass writes every environment IAM has not taken at its current
-// protection revision: each one after an upgrade to the mirror (IAM reads a missing `credentials` as `person` until
-// then), a new environment, and a change whose last write to IAM failed.
+// IAM's mirror of each environment's approval gates (ADR-0083 §4, §8), outside a protection change, which writes IAM
+// itself, the stricter side first. A new environment's gates reach IAM before its row; the maintenance pass writes every
+// environment IAM has not taken at its current protection revision: each one after an upgrade to the mirror (IAM reads a
+// missing `credentials` as `person` until then), a new environment whose write failed, and a change whose last write to
+// IAM failed.
 
 import { RpcError } from '@fabrika/app'
 import { appEnvironmentId } from '@fabrika/auth-core'
+import { fail } from '../api/domain'
 import type { ControlRepositories } from '../db'
 import type { GrantApprovalPort } from './api'
 import { iamGatesOf } from './categories'
+
+/**
+ * Write a new environment's gates to IAM, as it starts (`getStartingProtection`), before its row exists: until IAM knows
+ * an environment, a key that acts in every environment of its application does not count it. One that starts protected
+ * is not created when IAM does not take them (503); one that does not is, and the maintenance pass writes them later.
+ * Without the provisioning key there is nothing to write, and IAM reads every environment it knows as `person`.
+ */
+export async function writeNewEnvironmentGates(
+	deps: { readonly repositories: Pick<ControlRepositories, 'registry'>; readonly grantApproval?: GrantApprovalPort },
+	appId: string,
+	env: string,
+): Promise<void> {
+	const port = deps.grantApproval
+	if (port === undefined) return
+	const start = await deps.repositories.registry.getStartingProtection(appId, env)
+	try {
+		await port.set(appEnvironmentId(appId, env), iamGatesOf(start), start.protection_revision)
+	} catch {
+		if (start.protected === 1) {
+			fail(503, `IAM did not take the approval settings of \`${env}\`, which starts protected, so nothing was created; try again`)
+		}
+		console.warn("IAM did not take a new environment's approval gates; the maintenance pass writes them")
+	}
+}
 
 /** The most environments one pass writes; the next pass continues. */
 const PASS_LIMIT = 200

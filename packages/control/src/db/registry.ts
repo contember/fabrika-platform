@@ -671,6 +671,21 @@ export class ControlRegistryRepository {
 			.run()
 	}
 
+	/**
+	 * What a new environment of these coordinates starts from, as `APP_ENV_INSERT_SQL` takes it: the protection a deleted
+	 * one left, else the defaults (ADR-0050).
+	 */
+	async getStartingProtection(
+		appId: string,
+		env: string,
+	): Promise<Pick<AppEnvRow, 'protected' | 'protection_revision' | 'approval_categories' | 'approval_policy'>> {
+		const kept = await this.d1
+			.prepare('SELECT protected, protection_revision, approval_categories, approval_policy FROM app_env_protection WHERE app_id = ? AND env = ?')
+			.bind(appId, env)
+			.first<Pick<AppEnvRow, 'protected' | 'protection_revision' | 'approval_categories' | 'approval_policy'>>()
+		return kept ?? { protected: defaultProtected(env), protection_revision: 0, approval_categories: null, approval_policy: null }
+	}
+
 	/** Every environment an operator marked as an MCP authoring target. */
 	/** The `protected` flag a deleted environment of these coordinates left (ADR-0050), or null when none was deleted. */
 	async getKeptProtection(appId: string, env: string): Promise<number | null> {

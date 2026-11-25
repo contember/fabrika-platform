@@ -7,6 +7,7 @@ import {
 	requirePersonToPointTriggerRef,
 	startsProtected,
 } from '../../approval/human'
+import { writeNewEnvironmentGates } from '../../approval/iam-mirror'
 import {
 	AppEnvChangedError,
 	appEnvCrossOrigins,
@@ -91,6 +92,8 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		const changed = { ...existing, domain: input.domain ?? null }
 		await assertNamespaceHostsFree(c, namespace?.id ?? null, await namespaceMemberRouting(c.repositories, changed, input.artifact))
 	}
+	// Before the provider prepares anything, so an environment IAM could not be told of leaves nothing behind.
+	if (existing === null) await writeNewEnvironmentGates(c, appId, env)
 	const preparation = c.provider.namespaces?.prepareRegistration
 	let registration: ProviderRegistration
 	if (preparation === undefined) {
