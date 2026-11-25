@@ -78,7 +78,7 @@ in the console is their own evidence, as before:
 | `variables`      | `apps.variables.put/delete`, the all-environments layer included                                                                                                             | `person` |
 | `data`           | `data.start` (maintenance modes, side restore), `data.recover`, suspend and resume, the backup schedule                                                                      | `person` |
 | `registry`       | the trigger ref, domain and public origin, `apps.update`'s source and build fields, and `apps.environments.put`'s cross-origin list, provider target, artifact and namespace | `person` |
-| `agent-grants`   | a grant an agent asks for at the application                                                                                                                                 | `person` |
+| `agent-grants`   | a grant an agent asks for at the application environment: one role its approved contract declares, for the agent or another principal, for at most 30 days (§4)              | `person` |
 | `credentials`    | a key an agent asks for, issued to someone other than the agent (§8)                                                                                                         | `person` |
 | `grants`         | a person's own console grant, grant edit or revocation in IAM (§4)                                                                                                           | `off`    |
 
@@ -184,9 +184,23 @@ console grants.
   approved and leaves the list of open requests. A grant request made through `appPeople.grant` keeps the expiry its
   requester's authority allowed (S8).
 
-This gate stays as it is beside the agent's requests: an agent's grant (`agent-grants`) is executed as the approver's
-console grant, so where the application's `grants` waits, IAM opens its grant request for a second administrator on
-top of the request's approval.
+This gate stays as it is beside the agent's requests. **An agent's grant** (`agent-grants`, the request kind
+`iam.grants.create`) is one role at one application environment, for the agent's own principal or another one: an
+agent's own credential comes from the device flow and holds nothing at an application, so asking for itself is the
+common case, and the person sees for whom. The role must be one the environment's approved contract declares (not
+IAM's built-in `admin`, not a custom policy), granted application-wide or in a value of its dimension as the contract
+says, and the grant ends at most 30 days after it is asked for. The requester holds `access.request` at the
+application; the request binds the principal (its label and its grants at the application) and the role as the
+approved contract declares it, so a change of either before the execution closes it `stale`. The application's IAM administrators
+decide it (§8). An approval makes the grant as the approver's own console grant (`grants.create`), through the IAM
+gateway's transport with the approver's console token, so IAM runs every check it runs for the console, and its
+audit row names the Control request and its requester. Where the application's `grants` waits, IAM turns that call
+into its grant request for a second administrator, on top of the request's approval: the request is then `executed`,
+linking IAM's grant request, and is never executed again; IAM's request records the Control request, and its
+approval's record names IAM's request. An execution whose outcome Control did not see is followed through IAM's
+grants and open grant requests, read with the provisioning key. Under `off`, including an unprotected environment,
+there is nothing to approve: an agent's credential grants nothing in IAM, so the request is refused (409) rather
+than executed with the requester's authority (§3).
 
 ### 5. The console
 
@@ -244,7 +258,9 @@ checks the approver as it does today.
   by name and value, IAM's key issuance takes the request id as its idempotency key, and a data operation records its
   own steps (ADR-0069), so `unknown` retries or follows it.
 - **Who approves.** A person in the console with the action's approval right (`access.approve` at the coordinates, the
-  application's IAM administration for an IAM action). The person may approve their own agent's request, grants and keys
+  application's IAM administration for an IAM action: `iam.admin`, or `iam.users.manage` at that application
+  environment, which Control asks IAM's `me` for with the person's console token; `access.approve` alone decides no IAM
+  action). The person may approve their own agent's request, grants and keys
   included. `requesterMayApprove: false` makes someone other than the requester's person decide. A service key's request
   has no human owner, and no verified token names the key's issuer, so there it fails closed: nobody approves it, and
   anyone with the approval right may refuse it. `approvers: 2` takes two different people on the same digest; the item
