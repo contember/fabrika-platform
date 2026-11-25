@@ -1,5 +1,3 @@
-# syntax=docker/dockerfile:1
-#
 # The proxy's container image, as a namespace proxy on AWS is built (`packages/provider-aws/src/proxy-build.ts`).
 #
 # BUILD CONTEXT = the repository root of the pinned commit, with the proxy manifest beside it at `proxy.manifest.json`:
@@ -26,7 +24,8 @@
 # image's.
 #
 # Every base image is pinned by digest (the tag beside it is a label only): a rebuild of the same commit and manifest
-# builds the same layers.
+# builds the same layers. No `# syntax=` line either: it would pull a Dockerfile frontend image of a floating tag on every
+# build, and this recipe needs nothing the builder's own frontend lacks.
 
 FROM golang:1.25-alpine@sha256:1ae0735f00daffa3aaf1363a5184c0d2dc55c78e3db4ec70241cdac97bf84b59 AS caddy
 RUN CGO_ENABLED=0 GOBIN=/out go install github.com/caddyserver/caddy/v2/cmd/caddy@v2.10.2
