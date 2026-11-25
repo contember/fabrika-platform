@@ -1,3 +1,4 @@
+import { RpcError } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
 import { CREDENTIALS_MODES } from '@fabrika/iam-contract'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
@@ -207,11 +208,36 @@ export function grantApprovalDeps(env: Env): { grantApproval?: GrantApprovalPort
 /** What IAM answers a gate write: the revision and the mode it holds; `credentials` absent when it holds none. */
 const heldGatesSchema = z.object({ revision: z.number().int().nonnegative(), credentials: z.enum(CREDENTIALS_MODES).optional() })
 
-/** The mirror's writes over IAM's admin RPC, as the provisioning client reaches it. */
+/** The issues of a refused RPC input, as far as telling an unknown field apart needs them. */
+const inputIssuesSchema = z.array(z.object({ code: z.string(), keys: z.array(z.string()).optional() }))
+
+/** An IAM released before the `credentials` mirror refuses the field as an unknown key of its strict input. */
+function refusesCredentialsField(cause: unknown): boolean {
+	if (!(cause instanceof RpcError) || cause.httpStatus !== 400) return false
+	const issues = inputIssuesSchema.safeParse(cause.issues)
+	return issues.success && issues.data.some((issue) => issue.code === 'unrecognized_keys' && issue.keys?.includes('credentials') === true)
+}
+
+/**
+ * The mirror's writes over IAM's admin RPC, as the provisioning client reaches it. An IAM older than the `credentials`
+ * mirror (rolled back alone, or behind a Control deployed alone) refuses the mode: the grant gate is written again
+ * without it, and the answer carries no mode, so the maintenance pass leaves the environment unmirrored and writes it
+ * again once IAM takes it (ADR-0062).
+ */
 export function grantApprovalPort(client: Pick<ReturnType<typeof iamProvisioningClient>, 'grantApproval'>): GrantApprovalPort {
 	return {
 		async set(app, gates, revision) {
-			const held = heldGatesSchema.parse(await client.grantApproval.set({ app, required: gates.grants, revision, credentials: gates.credentials }))
+			const write = (credentials: boolean) =>
+				client.grantApproval.set({ app, required: gates.grants, revision, ...(credentials ? { credentials: gates.credentials } : {}) })
+			let answer: unknown
+			try {
+				answer = await write(true)
+			} catch (cause) {
+				if (!refusesCredentialsField(cause)) throw cause
+				console.warn(`IAM does not take the credentials mode yet; wrote ${app}'s grant gate without it`)
+				answer = await write(false)
+			}
+			const held = heldGatesSchema.parse(answer)
 			return { revision: held.revision, credentials: held.credentials ?? null }
 		},
 	}

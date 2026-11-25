@@ -3,13 +3,16 @@
 // every environment's, and a protection change writes its own. On SQLite always, and with IAM and Control both on
 // Postgres when FABRIKA_TEST_POSTGRES_URL is set.
 
+import { initRpc } from '@fabrika/app'
+import { dispatchRpcRequest } from '@fabrika/app/service'
 import type { AuthContext } from '@fabrika/auth'
 import { permits } from '@fabrika/auth-core'
 import { type ApprovalSettings, CONTROL_ACTIONS, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
 import { type DeployLocks, type HttpService, SqlDeployLocks } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import type { ControlProvider, ProviderEnvelope } from '@fabrika/provider-contract'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { z } from 'zod'
 import { adminTokenFor, createHarness as createIamHarness, TEST_SIGNING_KEYS } from '../../../iam/src/__tests__/helpers/harness'
 import { APP, membershipFixture, NOTES_SCHEMA, ORIGIN as IAM_ORIGIN } from '../../../iam/src/__tests__/helpers/membership'
 import { createPostgres as createIamPostgres, hasPostgres as hasIamPostgres } from '../../../iam/src/__tests__/helpers/postgres'
@@ -41,6 +44,35 @@ const REGISTRATION: { target: ProviderEnvelope; artifact: ProviderEnvelope } = {
 	artifact: { provider: 'harbor', version: 1, payload: {} },
 }
 const PROVIDER: ControlProvider = { id: 'harbor', deploy: () => Promise.resolve({ state: 'succeeded' }) }
+/**
+ * IAM released before the `credentials` mirror, served by the real RPC dispatcher: its `grantApproval.set` input is
+ * strict and has no `credentials`, and it answers the grant gate it holds.
+ */
+function olderIam(): { readonly port: GrantApprovalPort; readonly writes: unknown[] } {
+	const t = initRpc<Record<string, never>>()
+	const held = new Map<string, { required: boolean; revision: number }>()
+	const writes: unknown[] = []
+	const router = t.router({
+		grantApproval: t.router({
+			set: t.procedure
+				.input(z.object({ app: z.string(), required: z.boolean(), revision: z.number().int().nonnegative() }).strict())
+				.mutation(({ input }) => {
+					writes.push(input)
+					const before = held.get(input.app)
+					const now = before === undefined || before.revision <= input.revision ? { required: input.required, revision: input.revision } : before
+					held.set(input.app, now)
+					return { app: input.app, ...now }
+				}),
+		}),
+	})
+	const port = grantApprovalPort(iamProvisioningClient({
+		origin: IAM_ORIGIN,
+		provisioningKey: PROVISIONING_KEY,
+		fetch: (input, init) => dispatchRpcRequest({ router, ctx: {}, request: new Request(input, init) }),
+	}))
+	return { port, writes }
+}
+
 /** IAM down: every write of the mirror fails. */
 const UNREACHABLE: GrantApprovalPort = { set: () => Promise.reject(new Error('IAM is down')) }
 /** No passkey on deciding a key, so a test may release `credentials` without a step-up. */
@@ -189,15 +221,15 @@ for (const backend of backends) {
 				request: new Request(`${CONSOLE}/api/rpc`, { method: 'POST', headers: { 'Sec-Fetch-Site': 'same-origin' } }),
 				grantApproval,
 			}
-			const setCredentials = (credentials: 'off' | 'person' | 'refuse') =>
-				setEnvironmentProtectionUseCase(inConsole, {
+			const setCredentials = (credentials: 'off' | 'person' | 'refuse', port: GrantApprovalPort = grantApproval) =>
+				setEnvironmentProtectionUseCase({ ...inConsole, grantApproval: port }, {
 					appId: 'notes',
 					env: 'prod',
 					protected: true,
 					policy: { ...STRICT_POLICY, credentials },
 					settings: NO_STEP_UP,
 				})
-			const converge = () => convergeIamGates({ repositories: db, grantApproval })
+			const converge = (port: GrantApprovalPort = grantApproval) => convergeIamGates({ repositories: db, grantApproval: port })
 			const adaToken = () => adminTokenFor(opened.iam, ada.id, { issuer: IAM_ORIGIN })
 			/** What IAM answers a Control key reading every environment of `app`, provisioned by `bearer`. */
 			const provisionAtControl = async (bearer: string, app: string): Promise<number> =>
@@ -250,6 +282,27 @@ for (const backend of backends) {
 			// Not marked, so the next pass writes it again; IAM keeps the stricter mode meanwhile.
 			expect(await w.converge()).toEqual({ written: 0, failed: 1 })
 			expect(await w.provision(w.machine, STAGE)).toBe(403)
+		})
+
+		test('an older IAM that refuses the mode takes the grant gate alone, and the environment stays unmirrored', async () => {
+			const w = await world()
+			const older = olderIam()
+			const warn = spyOn(console, 'warn').mockImplementation(() => {})
+			try {
+				// A protection change no longer fails: the grant gate is written without the mode.
+				await w.setCredentials('refuse', older.port)
+				expect(older.writes.length).toBeGreaterThan(0)
+				expect(older.writes.every((write) => typeof write === 'object' && write !== null && !('credentials' in write))).toBe(true)
+				// The pass writes every environment the same way and records none, so a pass after IAM's upgrade writes them.
+				expect(await w.converge(older.port)).toEqual({ written: 0, failed: 2 })
+				expect(await w.converge(older.port)).toEqual({ written: 0, failed: 2 })
+				expect(warn.mock.calls.length).toBeGreaterThan(0)
+				expect(warn.mock.calls.every((call) => call.length === 1 && typeof call[0] === 'string')).toBe(true)
+			} finally {
+				warn.mockRestore()
+			}
+			expect(await w.converge()).toEqual({ written: 2, failed: 0 })
+			expect(await w.provision(w.machine, APP)).toBe(403)
 		})
 
 		test('a new environment reaches IAM before its row: a registered or put `prod` is judged at once', async () => {

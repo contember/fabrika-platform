@@ -402,7 +402,10 @@ IAM's direct path converges with two additive migrations: IAM's `app_grant_appro
 issues no key at an application environment until Control's maintenance pass (every 5 minutes) writes each
 environment's mode: the window fails closed, and no operator step is needed. One pass writes at most 200 environments,
 so convergence takes one pass per 200 environments; an environment IAM keeps refusing, or answers at a later revision
-than Control's, is not recorded as taken and takes a slot on every pass until it converges. An installation without the provisioning
+than Control's, is not recorded as taken and takes a slot on every pass until it converges. Both upgrade workflows
+deploy IAM before Control, but IAM can still be older than Control: rolled back alone, or with Control deployed alone.
+Such an IAM refuses the `credentials` field as unknown; Control then writes the grant gate without it, logs one line,
+and records nothing, so the pass writes the mode once IAM is upgraded (ADR-0062). An installation without the provisioning
 key cannot write the mirror, and its IAM keeps reading `person`. From then on, `apiKeys.provision` takes an expiry at
 most 30 days ahead; existing keys keep theirs.
 
