@@ -283,7 +283,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 										aria-label={`${option.label}: who decides an agent's request`}
 										onChange={(event) => chooseRequesterMayApprove(option.category, event.target.value === 'yes')}
 									>
-										<option value="yes">The requester's person may decide (default)</option>
+										<option value="yes">Requester may decide (default)</option>
 										<option value="no">Someone else decides</option>
 									</select>
 								)}
