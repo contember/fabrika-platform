@@ -152,7 +152,8 @@ fails, approval being one step on the way, and prints its final row; a refusal o
 
 \`requests get\` reads one approval request: a change an agent or a key asked a person to approve, by the id its
 creation answered. stderr prints the console link while it waits, and why it did not run once it failed, went stale or
-expired. \`--wait\` reads it again until it is refused, expired, executed, failed or stale, and prints its final row.
+expired. \`--wait\` reads it again until it is refused, expired, executed, failed or stale, and prints its final row;
+once a person decided it, it stops with an error after 15 minutes without an outcome.
 
 Namespace placement options, each defaulting to what the preset would choose:
 
@@ -1167,7 +1168,9 @@ const runRequests = async (verb: string | undefined, flags: Flags, env: Readonly
 	const client = controlClient(flags, env)
 	const read = (requestId: string) => client.approvals.requests.get({ id: requestId })
 	const request = await read(id)
-	const result = flags.wait ? await followRequest(read, request, { intervalMs: WAIT_INTERVAL_MS }) : request
+	const result = flags.wait
+		? await followRequest(read, request, { intervalMs: WAIT_INTERVAL_MS, settleTimeoutMs: REQUEST_SETTLE_TIMEOUT_MS })
+		: request
 	const hint = requestHint(result)
 	if (hint !== null && !flags.wait) console.warn(hint)
 	emit(flags, result, () => requestLine(result))
@@ -1196,15 +1199,34 @@ export const requestHint = (request: ApprovalRequestDto): string | null => {
 	}
 }
 
-/** Follow a request until it settles, saying each stage once on stderr; what it ended as is what this answers. */
+/**
+ * How long `requests get --wait` follows a request once a person decided it. Waiting is bounded by the request's deadline,
+ * but an `unknown` outcome lasts until Control settles it, which a Control without the request's kind never does.
+ */
+const REQUEST_SETTLE_TIMEOUT_MS = 15 * 60_000
+
+/**
+ * Follow a request until it settles, saying each stage once on stderr; what it ended as is what this answers. Once it is
+ * no longer pending, it stops with an error after `settleTimeoutMs`.
+ */
 export const followRequest = async (
 	read: (id: string) => Promise<ApprovalRequestDto>,
 	first: ApprovalRequestDto,
-	options: { readonly intervalMs: number },
+	options: { readonly intervalMs: number; readonly settleTimeoutMs: number },
 ): Promise<ApprovalRequestDto> => {
 	let request = first
 	let said: string | null = null
+	let decidedAt: number | null = null
 	while (!isFinalApprovalRequestState(request.state)) {
+		if (request.state !== 'pending') {
+			decidedAt ??= Date.now()
+			if (Date.now() - decidedAt >= options.settleTimeoutMs) {
+				throw new Error(
+					`the request is still ${request.state} after ${Math.round(options.settleTimeoutMs / 60_000)} minutes; Control keeps following it: `
+						+ `fabrika control requests get ${request.id}`,
+				)
+			}
+		}
 		const line = requestHint(request) ?? `the request is ${request.state}`
 		if (line !== said) console.warn(line)
 		said = line

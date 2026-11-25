@@ -1342,7 +1342,7 @@ describe('control requests', () => {
 					return Promise.resolve(next)
 				},
 				pending,
-				{ intervalMs: 0 },
+				{ intervalMs: 0, settleTimeoutMs: 60_000 },
 			)
 		})
 		expect(outcome).toMatchObject({ state: 'executed' })
@@ -1354,9 +1354,27 @@ describe('control requests', () => {
 		])
 
 		const refused = await captureStderr(async () => {
-			outcome = await followRequest(() => Promise.resolve({ ...pending, state: 'rejected' }), pending, { intervalMs: 0 })
+			outcome = await followRequest(() => Promise.resolve({ ...pending, state: 'rejected' }), pending, { intervalMs: 0, settleTimeoutMs: 60_000 })
 		})
 		expect(outcome).toMatchObject({ state: 'rejected' })
 		expect(refused.split('\n').at(-1)).toBe('a person refused this request; nothing changed')
+	})
+
+	test('--wait stops with an error once a decided request has not settled within its bound', async () => {
+		let reads = 0
+		const unknown: ApprovalRequestDto = { ...pending, state: 'unknown', error: 'the execution did not report its outcome' }
+		await captureStderr(async () => {
+			await expect(followRequest(
+				() => {
+					reads++
+					return Promise.resolve(unknown)
+				},
+				pending,
+				{ intervalMs: 0, settleTimeoutMs: 0 },
+			)).rejects.toThrow(
+				'the request is still unknown after 0 minutes; Control keeps following it: fabrika control requests get q1',
+			)
+		})
+		expect(reads).toBe(1)
 	})
 })
