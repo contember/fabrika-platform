@@ -128,10 +128,21 @@ export async function getApprovalRequestUseCase(c: ApprovalRequestReadContext, i
 	return toApprovalRequestDto(c, row)
 }
 
-/** The requests waiting for a decision at coordinates where the caller may decide them, newest first. */
+/**
+ * The requests waiting for a decision at coordinates where the caller may decide them, newest first. It pages through the
+ * pending rows until the page is full, since the newest ones may all be where the caller decides nothing.
+ */
 export async function listApprovalRequestsUseCase(c: ApprovalRequestReadContext): Promise<ListResponse<ApprovalRequestDto>> {
-	const rows = await c.repositories.approvalRequests.listPending(LIST_LIMIT)
-	return { items: await Promise.all(rows.filter((row) => mayDecide(c, row)).map((row) => toApprovalRequestDto(c, row))) }
+	const rows: ApprovalRequestRow[] = []
+	let beforeId: string | undefined
+	while (rows.length < LIST_LIMIT) {
+		const page = await c.repositories.approvalRequests.listPending(LIST_LIMIT, beforeId)
+		rows.push(...page.filter((row) => mayDecide(c, row)).slice(0, LIST_LIMIT - rows.length))
+		const last = page.at(-1)
+		if (page.length < LIST_LIMIT || last === undefined) break
+		beforeId = last.id
+	}
+	return { items: await Promise.all(rows.map((row) => toApprovalRequestDto(c, row))) }
 }
 
 /**

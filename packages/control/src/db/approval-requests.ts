@@ -120,12 +120,16 @@ export class ApprovalRequestRepository {
 		return this.db.prepare('SELECT * FROM approval_requests WHERE id = ?').bind(id).first<ApprovalRequestRow>()
 	}
 
-	/** Requests still waiting for a decision before their deadline, newest first. */
-	async listPending(limit: number): Promise<ApprovalRequestRow[]> {
-		const { results } = await this.db
-			.prepare(`SELECT * FROM approval_requests WHERE state = 'pending' AND deadline > ? ORDER BY id DESC LIMIT ?`)
-			.bind(this.now(), limit)
-			.all<ApprovalRequestRow>()
+	/** Requests still waiting for a decision before their deadline, newest first; older than `beforeId` when given. */
+	async listPending(limit: number, beforeId?: string): Promise<ApprovalRequestRow[]> {
+		const statement = beforeId === undefined
+			? this.db
+				.prepare(`SELECT * FROM approval_requests WHERE state = 'pending' AND deadline > ? ORDER BY id DESC LIMIT ?`)
+				.bind(this.now(), limit)
+			: this.db
+				.prepare(`SELECT * FROM approval_requests WHERE state = 'pending' AND deadline > ? AND id < ? ORDER BY id DESC LIMIT ?`)
+				.bind(this.now(), beforeId, limit)
+		const { results } = await statement.all<ApprovalRequestRow>()
 		return results
 	}
 

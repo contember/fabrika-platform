@@ -6,7 +6,7 @@
 
 import { dispatchRpcRequest } from '@fabrika/app/service'
 import type { AuthContext } from '@fabrika/auth'
-import { type DomainEvent, permits } from '@fabrika/auth-core'
+import { type DomainEvent, permits, type Scope } from '@fabrika/auth-core'
 import { type ApprovalPolicy, type ApprovalSettings, CONTROL_ACTIONS, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
 import { type DeployLocks, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
@@ -26,6 +26,7 @@ import { requestKind, type RequestKindRegistry, type RequestOutcome } from '../a
 import { REFUSED_KINDS } from '../approval/requests/refused'
 import { type ControlRpcContext, controlRpcRouter } from '../control-rpc'
 import { type ControlRepositories, createControlRepositories } from '../db'
+import { envScope } from '../iam'
 import { acquireLease, LEASE_TTL_MS, runLeaseKey } from '../lease'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { authWithActions } from './helpers/iam'
@@ -130,6 +131,8 @@ interface Who {
 	readonly id?: string
 	readonly label?: string
 	readonly actions?: readonly string[]
+	/** Where the actions hold; everywhere when absent. */
+	readonly scope?: Scope
 }
 
 const ADA: Who = { credential: 'console', id: 'p-ada', label: 'ada@example.test' }
@@ -190,7 +193,7 @@ for (const backend of backends) {
 
 		function auth(w: World, who: Who): AuthContext {
 			const actions = who.actions ?? [CONTROL_ACTIONS.ACCESS_APPROVE]
-			const grants = actions.map((action) => ({ action, scope: null, source: 'grant' as const }))
+			const grants = actions.map((action) => ({ action, scope: who.scope ?? null, source: 'grant' as const }))
 			const service = who.credential === 'service'
 			return {
 				ok: true,
@@ -640,6 +643,19 @@ for (const backend of backends) {
 				expect((await listApprovalRequestsUseCase(context(w, stranger))).items).toEqual([])
 				expect((await listApprovalRequestsUseCase(context(w, AGENT))).items).toEqual([])
 				expect((await status(decideApprovalRequestUseCase(context(w, stranger), { id, decision: 'approve', inputDigest: 'x' }))).status).toBe(404)
+			})
+
+			test('list fills its page from the requests the caller may decide, however many newer ones it may not', async () => {
+				const w = await world()
+				const decidable = await ask(w)
+				// The rest are newer by their id's timestamp.
+				await Bun.sleep(2)
+				for (let index = 0; index < 100; index++) await ask(w, AGENT, { appId: 'notes', env: 'stage', name: `note-${index}`, value: '' })
+				const prodOnly: Who = { ...BOB, scope: envScope('prod') }
+				expect((await listApprovalRequestsUseCase(context(w, prodOnly))).items.map((item) => item.id)).toEqual([decidable.id])
+				const everywhere = (await listApprovalRequestsUseCase(context(w, BOB))).items
+				expect(everywhere).toHaveLength(100)
+				expect(everywhere.map((item) => item.id)).not.toContain(decidable.id)
 			})
 
 			test('only a person in the console decides: a key or an agent holding access.approve is refused', async () => {
