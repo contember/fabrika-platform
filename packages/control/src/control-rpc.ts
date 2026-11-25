@@ -98,6 +98,7 @@ import {
 	challengeApprovalRequestUseCase,
 	createApprovalRequestUseCase,
 	decideApprovalRequestUseCase,
+	fetchApprovalRequestKeyUseCase,
 	getApprovalRequestUseCase,
 	listApprovalRequestsUseCase,
 } from './approval/requests/api'
@@ -557,6 +558,9 @@ export function createControlRpcRouter(
 				),
 				challenge: rpc.procedure.input(approvalRequestChallengeInput).mutation(({ ctx, input }) =>
 					controlCall(() => challengeApprovalRequestUseCase(approvalRequestContext(ctx), input))
+				),
+				fetchKey: rpc.procedure.input(approvalRequestId).mutation(({ ctx, input }) =>
+					controlCall(() => fetchApprovalRequestKeyUseCase(approvalRequestContext(ctx), input.id))
 				),
 			}),
 		}),

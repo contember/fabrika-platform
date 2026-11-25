@@ -49,6 +49,7 @@ import type {
 	VerifyPasskeyAssertionRequest,
 } from './passkeys'
 import type { PasswordPolicyDto, SetPasswordPolicyRequest } from './password-policy'
+import type { ProvisionRequestedApiKeyRequest, RequestedApiKey, RequestedApiKeyInput, RequestedApiKeyResponse } from './requested-keys'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
 
@@ -971,6 +972,13 @@ export interface IamAdminRpcContract {
 		list: RpcProcedure<ListApiKeysInput, CursorList<ApiKeyDetail>>
 		get: RpcProcedure<ApiKeyIdInput, GetApiKeyResponse>
 		provision: RpcProcedure<ProvisionApiKeyRequest, ProvisionApiKeyResponse>
+		/**
+		 * A key a person approved in Control for the agent that asked (ADR-0083 §8): a person in a signed-in session only,
+		 * idempotent by the approval request's id, answered encrypted to the agent's public key.
+		 */
+		provisionRequested: RpcProcedure<ProvisionRequestedApiKeyRequest, RequestedApiKey>
+		/** The key an approval request issued, by its id: how Control follows an execution whose outcome it did not see. */
+		requested: RpcProcedure<RequestedApiKeyInput, RequestedApiKeyResponse>
 		rotate: RpcProcedure<RotateApiKeyInput, RotateApiKeyResponse>
 		revoke: RpcProcedure<ApiKeyIdInput, OkResponse>
 	}
@@ -1097,3 +1105,4 @@ export * from './oauth'
 export * from './oauth-registry'
 export * from './passkeys'
 export * from './password-policy'
+export * from './requested-keys'

@@ -10,6 +10,8 @@ import {
 	iamAdministrationScope,
 	type IamAdminRpcContract,
 	type PermissionEntry,
+	type ProvisionRequestedApiKeyRequest,
+	type RequestedApiKey,
 } from '@fabrika/iam-contract'
 import type { HttpService } from '@fabrika/platform'
 import { z } from 'zod'
@@ -124,6 +126,11 @@ export interface IamApprover {
 	administration(): Promise<IamAdministrationScope | null>
 	/** The person's console grant (`grants.create`). IAM's refusal throws as an `RpcError` with its status. */
 	createGrant(input: CreateGrantRequest): Promise<GrantOutcome>
+	/**
+	 * A key the person approved for the agent that asked (`apiKeys.provisionRequested`), encrypted to the agent's public
+	 * key; a repeat under the same request answers the same key. IAM's refusal throws as an `RpcError` with its status.
+	 */
+	provisionRequestedKey(input: ProvisionRequestedApiKeyRequest): Promise<RequestedApiKey>
 }
 
 /** The approver's IAM, over the console's IAM gateway transport; null without a console token on `request`. */
@@ -150,6 +157,35 @@ export function consoleIamApprover(gateway: HttpService, request: Request): IamA
 			return 'pending' in answered
 				? { kind: 'requested', grantRequestId: answered.pending.id, status: answered.pending.status }
 				: { kind: 'granted', grantId: answered.id }
+		},
+		async provisionRequestedKey(input) {
+			return requestedKeySchema.parse(await client.apiKeys.provisionRequested(input))
+		},
+	}
+}
+
+const requestedKeySchema = z.object({ principalId: z.string().min(1), jwe: z.string().min(1), expiresAt: z.number().int() })
+
+/** The keys approval requests issued in IAM, read and revoked with Control's provisioning key. */
+export interface IamRequestedKeys {
+	/** The key the request issued, still encrypted to its requester; null when IAM issued none under it. */
+	requested(approvalRequestId: string): Promise<RequestedApiKey | null>
+	/** Revoke the key of `principalId`; one IAM no longer knows counts as revoked. */
+	revoke(principalId: string): Promise<void>
+}
+
+export function iamRequestedKeys(client: InferRpcClient<IamAdminRpcContract>): IamRequestedKeys {
+	return {
+		async requested(approvalRequestId) {
+			return z.object({ key: requestedKeySchema.nullable() }).parse(await client.apiKeys.requested({ approvalRequestId })).key
+		},
+		async revoke(principalId) {
+			try {
+				await client.apiKeys.revoke({ principalId })
+			} catch (cause) {
+				if (cause instanceof RpcError && cause.httpStatus === 404) return
+				throw cause
+			}
 		},
 	}
 }

@@ -170,6 +170,15 @@ describe('who decides a pending item (ADR-0083 §8)', () => {
 	})
 })
 
+describe('the ceiling of a key an agent asks for (ADR-0083 §2)', () => {
+	test("the requester's own actions by default, in both presets", () => {
+		expect(STRICT_SETTINGS.credentialCeiling).toBe('requester')
+		expect(PERMISSIVE_SETTINGS.credentialCeiling).toBe('requester')
+		expect(approvalSettingsSchema.parse({ ...STRICT_SETTINGS, credentialCeiling: 'approver' }).credentialCeiling).toBe('approver')
+		expect(approvalSettingsSchema.safeParse({ ...STRICT_SETTINGS, credentialCeiling: 'anyone' }).success).toBe(false)
+	})
+})
+
 describe('the step-up on deciding (ADR-0050 §5)', () => {
 	test('the default asks a passkey only for a credential; the permissive preset asks none', () => {
 		expect(APPROVER_CATEGORIES.filter((category) => STRICT_SETTINGS.stepUp[category] === 'webauthn')).toEqual(['credentials'])
@@ -205,6 +214,8 @@ describe('a change of protection that weakens a passkey on deciding (ADR-0050 §
 		const refused = { ...held, policy: { ...STRICT_POLICY, credentials: 'refuse' as const } }
 		expect(weakensStepUp(refused, held)).toEqual(['credentials'])
 		expect(weakensStepUp(held, { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toEqual(['credentials'])
+		// A key no longer bounded by the requester's own actions.
+		expect(weakensStepUp(held, withSettings({ credentialCeiling: 'approver' }))).toEqual(['credentials'])
 	})
 
 	test('a tightening, a change elsewhere and an unprotected environment take none', () => {
@@ -217,6 +228,9 @@ describe('a change of protection that weakens a passkey on deciding (ADR-0050 §
 		expect(weakensStepUp(held, { protected: true, policy: { ...PERMISSIVE_POLICY, credentials: 'person' }, settings: elsewhere })).toEqual([])
 		expect(weakensStepUp(held, withSettings({ requestTtlHours: 168 }))).toEqual([])
 		expect(weakensStepUp(held, withSettings({ deployRequestCommits: 'any' }))).toEqual([])
+		expect(weakensStepUp(withSettings({ credentialCeiling: 'approver' }), held)).toEqual([])
+		const noPasskey = withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' } })
+		expect(weakensStepUp(noPasskey, { ...noPasskey, settings: { ...noPasskey.settings, credentialCeiling: 'approver' } })).toEqual([])
 		const unprotected = { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }
 		expect(weakensStepUp(unprotected, unprotected)).toEqual([])
 		expect(weakensStepUp(unprotected, held)).toEqual([])

@@ -9,6 +9,7 @@
 
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { enqueueUnsettledNamespaces } from './api/namespaces'
+import { sweepUnfetchedKeys, type UnfetchedKeySweepSummary } from './approval/requests/deliveries'
 import { type ApprovalRequestSweepSummary, sweepApprovalRequests } from './approval/requests/execute'
 import type { BackupScheduleSummary } from './backups'
 import type { ControlRegistryRepository } from './db'
@@ -34,6 +35,8 @@ export interface MaintenanceSummary {
 	parked: ParkedRunSweepSummary
 	/** Approval requests expired past their deadline, and interrupted executions settled (ADR-0083 §8). */
 	requests: ApprovalRequestSweepSummary
+	/** Keys approved requests issued that nobody fetched by their deadline: expired, and revoked in IAM (ADR-0083 §8). */
+	requestedKeys: UnfetchedKeySweepSummary
 	/** Full Operations catalog replay, isolated from deploy maintenance success. */
 	operations: OperationsCatalogSyncSummary
 	/** Pending deploy-release projections repaired independently from catalog sync. */
@@ -109,17 +112,22 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (parked.deadlines > 0 || parked.expired > 0) {
 		console.info(`parked runs: deadlines=${parked.deadlines} expired=${parked.expired}`)
 	}
+	const iam = iamGrantsDeps(env)
 	const requests = await sweepApprovalRequests({
 		repositories: persistence,
 		lock: locks(env),
 		vault: () => vault(env),
-		...iamGrantsDeps(env),
+		...iam,
 		...(options.provider === undefined ? {} : { provider: options.provider }),
 	})
 	if (requests.expired > 0 || requests.interrupted > 0 || requests.settled > 0 || requests.orphans > 0) {
 		console.info(
 			`approval requests: expired=${requests.expired} interrupted=${requests.interrupted} settled=${requests.settled} orphans=${requests.orphans}`,
 		)
+	}
+	const requestedKeys = await sweepUnfetchedKeys({ repositories: persistence, ...(iam.iamKeys === undefined ? {} : { iamKeys: iam.iamKeys }) })
+	if (requestedKeys.expired > 0 || requestedKeys.revoked > 0) {
+		console.info(`requested keys: expired=${requestedKeys.expired} revoked=${requestedKeys.revoked}`)
 	}
 	// The sync logs its own outcome line (operations-catalog.ts), so a second warn here would only repeat it.
 	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()
@@ -148,7 +156,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `errored=${backups.errored}`,
 		)
 	}
-	return { poll, reconcile, swept, parked, requests, operations, releases, mail, dev, backups }
+	return { poll, reconcile, swept, parked, requests, requestedKeys, operations, releases, mail, dev, backups }
 }
 
 /**

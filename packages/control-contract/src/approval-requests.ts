@@ -40,6 +40,8 @@ export interface ApprovalRequestDescription {
 	facts: { label: string; value: ApprovalRequestText }[]
 	/** The role a grant gives, as the environment's approved contract declares it and the approval pages show it. */
 	role?: AccessMapRoleDto
+	/** What the person should weigh before approving, which the page sets apart (a key exceeding its requester). */
+	warnings?: ApprovalRequestText[]
 }
 
 /** Who asked: the principal, through which credential, and the person behind it when known. */
@@ -104,6 +106,28 @@ export interface ApprovalRequestDto {
 	result?: JsonValue
 	/** Why it failed, went stale or is unknown, in Fabrika's words. */
 	error?: string
+	/** Where the key an executed `credentials` request issued stands; absent for every other request. */
+	delivery?: ApprovalRequestDeliveryDto
+}
+
+/**
+ * A key a `credentials` request issued (ADR-0083 §8): `waiting` for its requester to fetch it once, `fetched`, or past
+ * its deadline unfetched, `expired` until IAM revoked it and then `revoked`.
+ */
+export const APPROVAL_REQUEST_DELIVERY_STATES = ['waiting', 'fetched', 'expired', 'revoked'] as const
+
+export type ApprovalRequestDeliveryState = (typeof APPROVAL_REQUEST_DELIVERY_STATES)[number]
+
+export interface ApprovalRequestDeliveryDto {
+	state: ApprovalRequestDeliveryState
+	/** Unix seconds: a key not fetched by then is revoked. */
+	deadline: number
+}
+
+/** The key a `credentials` request issued, fetched once by its requester: encrypted to the public key it sent. */
+export interface ApprovalRequestKeyResponse {
+	/** A compact JWE (`ECDH-ES`, `A256GCM`) whose `kid` is the thumbprint of the requester's public key. */
+	jwe: string
 }
 
 /** The requests waiting for the caller to decide. */

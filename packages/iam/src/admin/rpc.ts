@@ -1,5 +1,6 @@
 import { type AuthContext, ForbiddenError, initRpc, type RpcRouterFor, toErrorResponse, UnauthorizedError } from '@fabrika/app'
 import { permits, scopedValues, WORKLOAD_KINDS } from '@fabrika/auth-core'
+import { recipientPublicKeySchema } from '@fabrika/control-contract'
 import { type IamAdminRpcContract, OAUTH_CLIENT_PROVIDERS, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
 import { installationBrandSchema } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
@@ -241,6 +242,23 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.input(z.object({ label: nonEmpty, type: z.literal('service'), ...authorization }))
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.provisionApiKey(context(ctx), input)),
+		provisionRequested: t.procedure
+			.input(z.object({
+				label: nonEmpty.max(200),
+				app: nonEmpty,
+				permissions: z.array(nonEmpty).min(1).max(50),
+				scopeType: z.string().min(1).nullable(),
+				scopeValue: z.string().min(1).nullable(),
+				expiresAt: z.number().int(),
+				recipient: recipientPublicKeySchema,
+				approvalRequest: approvalRequestSchema,
+			}))
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => adminUseCases.provisionRequestedApiKey(context(ctx), input)),
+		requested: t.procedure
+			.input(z.object({ approvalRequestId: nonEmpty.max(200) }))
+			.require(ADMIN_ACTION)
+			.query(({ ctx, input }) => adminUseCases.requestedApiKey(context(ctx), input)),
 		rotate: t.procedure
 			.input(z.object({ principalId: nonEmpty, expiresAt: z.number().finite().nullable().optional() }))
 			.require(ADMIN_ACTION)

@@ -66,6 +66,18 @@ export const CONTROL_ACTIONS = Object.freeze({
 })
 
 /**
+ * The actions Control checks only as a global grant, so a grant or a key scoped to an application never carries them.
+ * Every other action is checked at an application scope, if not always.
+ */
+export const CONTROL_GLOBAL_ACTIONS: readonly string[] = Object.freeze([
+	CONTROL_ACTIONS.NAMESPACE_MANAGE,
+	CONTROL_ACTIONS.SOURCE_CONNECTION_MANAGE,
+	CONTROL_ACTIONS.MAIL_CONTENT_READ,
+	CONTROL_ACTIONS.MAIL_MANAGE,
+	CONTROL_ACTIONS.DATA_CONTENT_READ,
+])
+
+/**
  * The scope dimensions Control authorizes within (flat + independent IAM semantics):
  *  - `app`         — scoped to one registered app (its `id`), across every environment.
  *  - `environment` — scoped to one environment name (e.g. only `stage`), across apps.

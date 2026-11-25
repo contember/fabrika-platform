@@ -34,6 +34,8 @@ const IAM: Readonly<Record<string, Judged>> = {
 	'policies.update': { exempt: `a named policy under \`iam.admin\`: ${INSTALLATION}` },
 	'policies.delete': { exempt: `a named policy under \`iam.admin\`: ${INSTALLATION}` },
 	'apiKeys.provision': { category: 'credentials' },
+	// The execution of a `credentials` request a person approved in Control, by that person in a session (ADR-0083 §8).
+	'apiKeys.provisionRequested': { category: 'credentials' },
 	'apiKeys.rotate': { category: 'credentials' },
 	'apiKeys.revoke': { exempt: NARROWS },
 	// The provisioning key's own issuance (workload, membership and connector keys) keeps its rule (ADR-0083 §8).

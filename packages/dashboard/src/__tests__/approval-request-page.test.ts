@@ -185,6 +185,53 @@ describe('the approval request page', () => {
 		expect(html).not.toContain('It was done.')
 	})
 
+	test("a key an agent asks for shows who asks, the label as the agent's, the thumbprint, and a warning set apart", () => {
+		const html = view({
+			...REQUEST,
+			kind: 'iam.apiKeys.provision',
+			category: 'credentials',
+			env: '*',
+			description: {
+				summary: [{ text: 'Issue a key labelled ', agent: false }, { text: '<b>ci</b>', agent: true }],
+				facts: [
+					{ label: 'Label', value: { text: '<b>ci</b>', agent: true } },
+					{ label: 'Actions', value: { text: 'deploy.trigger, secret.manage (beyond the requester)', agent: false } },
+					{ label: 'Thumbprint', value: { text: 'NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs', agent: false } },
+				],
+				warnings: [{ text: 'The key would hold actions the agent that asks does not hold at intake: secret.manage.', agent: false }],
+			},
+		})
+		expect(html).toContain('<strong>Ana</strong> asks through an agent')
+		expect(html).toContain('<span class="agent-text" title="Written by the agent, not by Fabrika">&lt;b&gt;ci&lt;/b&gt;</span>')
+		expect(html).toContain('secret.manage (beyond the requester)')
+		expect(html).toContain('NzbLsXh8uDCcd-6MNwXF4W_7noWXFZAfHkxZsRGC9Xs')
+		expect(html).toContain('<p class="notice notice-bad">The key would hold actions the agent that asks does not hold at intake: secret.manage.</p>')
+		expect(html).toContain('<strong>every environment</strong>')
+	})
+
+	test('an issued key says where it is, never what it is', () => {
+		const outcome = (delivery: ApprovalRequestDto['delivery']) =>
+			renderToStaticMarkup(
+				createElement(RequestOutcome, {
+					request: {
+						...REQUEST,
+						kind: 'iam.apiKeys.provision',
+						category: 'credentials',
+						state: 'executed',
+						...(delivery === undefined ? {} : { delivery }),
+					},
+				}),
+			)
+		const deadline = NOW + 3600
+		const waiting = outcome({ state: 'waiting', deadline })
+		expect(waiting).toContain('waits for the agent to fetch it once')
+		expect(waiting).toContain(fmtDate(deadline))
+		expect(waiting).not.toContain('It was done.')
+		expect(outcome({ state: 'fetched', deadline })).toContain('the agent fetched it')
+		expect(outcome({ state: 'expired', deadline })).toContain('is revoking it in IAM')
+		expect(outcome({ state: 'revoked', deadline })).toContain('revoked it in IAM')
+	})
+
 	test('a stale request says why it did not run', () => {
 		const html = renderToStaticMarkup(
 			createElement(RequestOutcome, { request: { ...REQUEST, state: 'stale', error: 'what the request acts on changed' } }),

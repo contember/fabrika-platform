@@ -1,10 +1,11 @@
 // The request kinds this release serves (ADR-0083 §8): every direct write a protected environment's `secrets`,
 // `variables`, `data` and `registry` modes judge, Control's own rows and the writes that reach the provider or the
-// environment's object alike, and an agent's grant, which IAM makes.
+// environment's object alike, and an agent's grant and key, which IAM makes.
 
 import type { RequestKindRegistry } from './kind'
 import { recoverDataOperationKind, resumeAppEnvKind, setBackupScheduleKind, startDataOperationKind, suspendAppEnvKind } from './kinds/data'
 import { createGrantKind } from './kinds/grants'
+import { provisionKeyKind } from './kinds/keys'
 import { putEnvironmentKind, updateAppKind } from './kinds/registry'
 import {
 	deleteAppSecretKind,
@@ -34,5 +35,6 @@ export const PRODUCTION_REQUEST_KINDS: RequestKindRegistry = new Map(
 		startDataOperationKind,
 		recoverDataOperationKind,
 		createGrantKind,
+		provisionKeyKind,
 	].map((kind) => [kind.kind, kind]),
 )

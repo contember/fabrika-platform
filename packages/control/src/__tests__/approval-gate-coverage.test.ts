@@ -72,6 +72,9 @@ const CONTROL: Readonly<Record<string, Judged>> = {
 	'approvals.requests.challenge': {
 		exempt: `a passkey challenge for deciding a pending item, which IAM issues and nothing else changes: ${ALWAYS_A_PERSON}`,
 	},
+	'approvals.requests.fetchKey': {
+		exempt: 'request plumbing: hands the requester, once, the key a person approved, encrypted to its own public key; changes nothing else',
+	},
 	'deploy': { category: 'deploy-request' },
 	'register': { category: 'registry' },
 	'mail.messages.release': { exempt: MAIL },
@@ -255,5 +258,8 @@ describe('the mode matrix at the protection API', () => {
 		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, grants: 'webauthn' } })).toBe(400)
 		const { stepUp: _stepUp, ...withoutStepUp } = STRICT_SETTINGS
 		expect(await protect(STRICT_POLICY, withoutStepUp)).toBe(400)
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, credentialCeiling: 'anyone' })).toBe(400)
+		const { credentialCeiling: _ceiling, ...withoutCeiling } = STRICT_SETTINGS
+		expect(await protect(STRICT_POLICY, withoutCeiling)).toBe(400)
 	})
 })

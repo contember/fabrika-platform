@@ -282,6 +282,17 @@ fails if that stops being true — it is the guard, not documentation of one.
   issues a key of at most 30 days, and revokes every other key of the workload except `keep` (the credential id
   Control has recorded). A key issued by an attempt whose record failed is therefore an orphan the next issuance
   revokes, and the running version's key stays valid until Control records its replacement.
+- **A REQUESTED KEY LEAVES IAM ONLY ENCRYPTED TO THE AGENT'S PUBLIC KEY** (ADR-0083 §8, `apiKeys.provisionRequested`,
+  `src/key-delivery.ts`). Control calls it when a person approves an agent's `credentials` request, with that person's
+  console token: a signed-in session only (a key, the provisioning key included, is 403), `iam.admin`, the checks of
+  `apiKeys.provision`, exact actions, an expiry at most 30 days ahead. The plaintext is encrypted before the answer (JWE
+  compact, `ECDH-ES` with `A256GCM`, `kid` the recipient's RFC 7638 thumbprint) and is never stored, logged or audited.
+  The approval request's id is the idempotency key: `requested_api_keys` (written in the issuing transaction) keeps the
+  JWE, so a repeat answers the same key and issues no second, and a repeat that asks for something else (by
+  `input_digest`) is a 409. `apiKeys.requested` answers that row to any `iam.admin` caller (Control uses the provisioning
+  key), which is how Control follows an execution whose outcome it did not see; it revokes an unfetched key with
+  `apiKeys.revoke`. IAM keeps the JWE after Control's copy is fetched or expired; it is useless without the private key. The records
+  (`iam.apikey.create`, `iam.grant.create`) are the approver's and name the request and its requester.
 - **`POST /auth/workload/token` IS PUBLIC, SO ITS COST IS BOUNDED BEFORE ANY LOOKUP** (`src/workload-token.ts`). In
   order: the key's exact format (`px_` + 27 base64url characters; no body is read without it), the body `{ app }`
   read to at most 4 KiB (`readBoundedText`, 413 past it), the per-client bucket of the password and device routes

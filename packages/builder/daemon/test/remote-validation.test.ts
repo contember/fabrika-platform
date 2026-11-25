@@ -96,6 +96,13 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		triggerRef: null,
 		approvalSettings: { ...PERMISSIVE_SETTINGS, requestTtlHours: 48, stepUp: STRICT_SETTINGS.stepUp },
 	}])
+	// A Control older than credentialCeiling keeps every other setting it sends.
+	const { credentialCeiling: __________, ...withoutCeiling } = { ...PERMISSIVE_SETTINGS, requestTtlHours: 48 }
+	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, approvalSettings: withoutCeiling }] })).toEqual([{
+		...environment,
+		triggerRef: null,
+		approvalSettings: { ...PERMISSIVE_SETTINGS, requestTtlHours: 48, credentialCeiling: 'requester' },
+	}])
 	expect(() => parseEnvironments({ items: [{ ...environment, triggerRef: null, target: { ...envelope, payload: { secret: Infinity } } }] }))
 		.toThrow('Invalid stored or upstream data')
 	const run: ReturnType<typeof parseRun> = { id: 'run', appId: 'app', env: 'dev', ref: 'sha', commitSha: null, status: 'running' }

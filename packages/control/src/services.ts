@@ -5,7 +5,7 @@ import type { BuilderPairingIam } from './api/builder-pairing'
 import { type NamespaceProxyChanged, republishNamespace } from './api/namespaces'
 import type { DeployQueue, LogReader } from './api/runs'
 import type { GrantApprovalPort } from './approval/api'
-import { type IamGrantsReader, iamGrantsReader } from './approval/requests/iam'
+import { type IamGrantsReader, iamGrantsReader, type IamRequestedKeys, iamRequestedKeys } from './approval/requests/iam'
 import { httpOpsTransport, type OpsTransport } from './data-operations'
 import type { ControlRepositories, RunRow } from './db'
 import type { Env } from './env'
@@ -211,13 +211,14 @@ export function grantApprovalDeps(env: Env): { grantApproval?: GrantApprovalPort
 /**
  * An application's grants and grant requests, read from IAM with the provisioning key: what an agent's grant request
  * binds and how its unknown execution is followed (ADR-0083 §8). It judges nothing; an installation without the issuer
- * or the key takes no such request.
+ * or the key takes no such request. The keys requests issued are read and revoked the same way.
  */
-export function iamGrantsDeps(env: Env): { iamGrants?: IamGrantsReader } {
+export function iamGrantsDeps(env: Env): { iamGrants?: IamGrantsReader; iamKeys?: IamRequestedKeys } {
 	const origin = env.FABRIKA_IAM_ISSUER?.trim() ?? ''
 	const provisioningKey = env.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
 	if (origin === '' || provisioningKey === '') return {}
-	return { iamGrants: iamGrantsReader(iamProvisioningClient({ origin, provisioningKey })) }
+	const client = iamProvisioningClient({ origin, provisioningKey })
+	return { iamGrants: iamGrantsReader(client), iamKeys: iamRequestedKeys(client) }
 }
 
 /**

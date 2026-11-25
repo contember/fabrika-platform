@@ -15,7 +15,7 @@ import type { ApprovalRequestRow, ControlRepositories } from '../../db'
 import type { Lease } from '../../lease'
 import type { Vault } from '../../vault'
 import type { ConsoleAdmission } from '../human'
-import type { IamApprover, IamGrantsReader } from './iam'
+import type { IamApprover, IamGrantsReader, IamRequestedKeys } from './iam'
 
 /** What a kind reads through in maintenance too: following an execution, or discarding what a request held. */
 export interface RequestKindContext {
@@ -26,6 +26,8 @@ export interface RequestKindContext {
 	readonly iamGrants?: IamGrantsReader
 	/** The installation's provider, which a kind whose effect it keeps reads back; absent, such a request stays unknown. */
 	readonly provider?: ControlProvider
+	/** The keys approval requests issued in IAM, read and revoked with the provisioning key; absent where Control cannot reach IAM. */
+	readonly iamKeys?: IamRequestedKeys
 }
 
 /** What a kind acts through when a request is created or executed: the registry's use-case context, less the caller. */
@@ -67,14 +69,20 @@ export interface RequestCoordinates {
 }
 
 /**
- * What a kind whose agent sends what the row must never store (a secret value) takes when the request is created: the
- * asked input, checked strictly; and `hold`, which seals what it carries under the request's own purpose and answers the
- * input the row stores in its place. `hold` refuses (`fail`) before it seals anything.
+ * What a kind whose row stores other than what the agent sent takes when the request is created: the asked input, checked
+ * strictly; and `hold`, which answers the input the row stores in its place. A secret value is sealed under the request's
+ * own purpose and its fingerprint answered; a key's ask is recorded with what the requester's own token holds (`requester`).
+ * `hold` refuses (`fail`) before it seals anything.
  */
 export interface AskedInput<Asked, Input> {
 	readonly schema: z.ZodType<Asked, z.ZodTypeDef, unknown>
 	coordinates(asked: Asked): RequestCoordinates
-	hold(c: RequestActionContext, asked: Asked, requestId: string): Promise<{ readonly input: Input; readonly fingerprint: string }>
+	hold(
+		c: RequestActionContext,
+		asked: Asked,
+		requestId: string,
+		requester: AuthContext,
+	): Promise<{ readonly input: Input; readonly fingerprint?: string }>
 }
 
 /** One execution of an approved request, under its environment's deployment lease. */
@@ -130,6 +138,11 @@ export interface RequestKindDefinition<Input, Before, Asked = never> {
 	 * with the status to answer). A kind with `asked` checks in `hold` instead.
 	 */
 	readonly admit?: (c: RequestActionContext, input: Input) => Promise<void>
+	/**
+	 * Why the approver may not approve it beyond `approverMayDecide`, or null: a key holds only actions its approver holds
+	 * in Control. Checked before the approval is recorded or a passkey challenge spent on it.
+	 */
+	readonly refuseApprover?: (approver: AuthContext, input: Input) => string | null
 	/**
 	 * Whether a person may decide it. Absent: `access.approve` at the coordinates, Control's own kinds. An IAM kind names
 	 * the application's IAM administration here, and throws `IamUnreachableError` when IAM cannot say.
@@ -190,6 +203,8 @@ export interface RequestAction {
 	execute(c: RequestExecutionContext, execution: RequestExecution): Promise<RequestOutcome>
 	/** `beforeJson` is the stored before-state, which held when the execution started. */
 	follow(c: RequestKindContext, execution: RequestExecution, beforeJson: string): Promise<RequestOutcome | { readonly state: 'unknown' }>
+	/** Why `approver` may not approve it, or null (`RequestKindDefinition.refuseApprover`). */
+	refuseApprover(approver: AuthContext): string | null
 }
 
 /** A request being created: where it acts, and how its kind admits it and holds what it carries. */
@@ -200,7 +215,7 @@ export interface AskedRequest {
 	 * Refuse what the kind cannot execute as a request, or seal what the request carries under its own purpose, and answer
 	 * the action the row stores; `release` drops what was sealed when the row is not written after all.
 	 */
-	hold(c: RequestActionContext, requestId: string): Promise<AskedHold>
+	hold(c: RequestActionContext, requestId: string, requester: AuthContext): Promise<AskedHold>
 }
 
 export interface AskedHold {
@@ -250,6 +265,7 @@ export function requestKind<Input, Before, Asked = never>(definition: RequestKin
 		describe: (beforeJson, full) => definition.describe(input, full ? definition.before.parse(JSON.parse(beforeJson)) : null),
 		execute: (c, execution) => definition.execute(c, input, execution),
 		follow: (c, execution, beforeJson) => definition.follow(c, input, execution, definition.before.parse(JSON.parse(beforeJson))),
+		refuseApprover: (approver) => definition.refuseApprover?.(approver, input) ?? null,
 	})
 	const strictest = typeof requesterAt === 'function' ? 'global' : requesterAt
 	const discard = definition.discard
@@ -284,11 +300,11 @@ export function requestKind<Input, Before, Asked = never>(definition: RequestKin
 					asked: {
 						coordinates: asked.coordinates(value),
 						...(strictest === undefined ? {} : { requesterAt: strictest }),
-						hold: async (c, requestId) => {
-							const held = await asked.hold(c, value, requestId)
+						hold: async (c, requestId, requester) => {
+							const held = await asked.hold(c, value, requestId, requester)
 							return {
 								action: actionOf(held.input),
-								fingerprint: held.fingerprint,
+								...(held.fingerprint === undefined ? {} : { fingerprint: held.fingerprint }),
 								release: () => discard === undefined ? Promise.resolve() : discard(c, held.input, requestId),
 							}
 						},

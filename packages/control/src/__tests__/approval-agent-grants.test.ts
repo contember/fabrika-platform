@@ -621,7 +621,7 @@ for (const backend of backends) {
 			const unseen = {
 				...lost,
 				iamApprover: {
-					administration: () => approver.administration(),
+					...approver,
 					createGrant: async (input: Parameters<typeof approver.createGrant>[0]) => {
 						await approver.createGrant(input)
 						throw new Error('connection reset')
@@ -634,7 +634,7 @@ for (const backend of backends) {
 			const nothing = await w.ask(w.grantInput({ role: 'editor', scope: { type: 'workspace', value: 'ws-9' } }))
 			const neverSent = {
 				...lost,
-				iamApprover: { administration: () => approver.administration(), createGrant: () => Promise.reject(new Error('connection refused')) },
+				iamApprover: { ...approver, createGrant: () => Promise.reject(new Error('connection refused')) },
 			}
 			const readNothing = await getApprovalRequestUseCase(lost, nothing.id)
 			expect((await decideApprovalRequestUseCase(neverSent, { id: nothing.id, decision: 'approve', inputDigest: readNothing.inputDigest })).state).toBe(
@@ -662,7 +662,7 @@ for (const backend of backends) {
 			if (approver === undefined) throw new Error('no IAM approver')
 			const neverSent = {
 				...ada,
-				iamApprover: { administration: () => approver.administration(), createGrant: () => Promise.reject(new Error('connection refused')) },
+				iamApprover: { ...approver, createGrant: () => Promise.reject(new Error('connection refused')) },
 			}
 			const read = await getApprovalRequestUseCase(ada, created.id)
 			expect((await decideApprovalRequestUseCase(neverSent, { id: created.id, decision: 'approve', inputDigest: read.inputDigest })).state).toBe(

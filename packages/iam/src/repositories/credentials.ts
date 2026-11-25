@@ -50,6 +50,17 @@ export interface CredentialGrantRow {
 	scope_value: string | null
 }
 
+/** The key an approval request issued (`requested_api_keys`): the JWE only the agent that asked can open, never the plaintext. */
+export interface RequestedApiKeyRow {
+	approval_request_id: string
+	principal_id: string
+	/** `sha256:<hex>` of what was asked, so a repeat that asks for something else is told apart. */
+	input_digest: string
+	jwe: string
+	expires_at: number
+	created_at: number
+}
+
 export class CredentialRepository {
 	constructor(
 		protected readonly db: SqlDatabase,
@@ -267,6 +278,22 @@ export class CredentialRepository {
 			.bind(...credentialIds)
 			.all<CredentialGrantRow>()
 		return results
+	}
+
+	/**
+	 * The INSERT recording the key an approval request issued, for the batch that issues it: its primary key makes a second
+	 * issuance under the same request id fail the whole batch.
+	 */
+	requestedKeyStatement(row: Omit<RequestedApiKeyRow, 'created_at'>): SqlStatement {
+		return this.db
+			.prepare(`INSERT INTO requested_api_keys (approval_request_id, principal_id, input_digest, jwe, expires_at, created_at)
+				VALUES (?, ?, ?, ?, ?, ?)`)
+			.bind(row.approval_request_id, row.principal_id, row.input_digest, row.jwe, row.expires_at, unixNow())
+	}
+
+	/** The key an approval request issued, or null when it issued none. */
+	async getRequestedKey(approvalRequestId: string): Promise<RequestedApiKeyRow | null> {
+		return this.db.prepare('SELECT * FROM requested_api_keys WHERE approval_request_id = ?').bind(approvalRequestId).first<RequestedApiKeyRow>()
 	}
 
 	/** Revoke a credential by id (idempotent — already-revoked → false). `audit` is written exactly when this call revoked it. */

@@ -3,6 +3,8 @@ import {
 	listApiKeysUseCase,
 	parseProvisionApiKeyRequest,
 	provisionApiKeyUseCase,
+	provisionRequestedApiKeyUseCase,
+	requestedApiKeyUseCase,
 	revokeApiKeyUseCase,
 	rotateApiKeyUseCase,
 } from './api-keys'
@@ -79,6 +81,8 @@ export const adminUseCases = {
 	listApiKeys: listApiKeysUseCase,
 	getApiKey: getApiKeyUseCase,
 	provisionApiKey: provisionApiKeyUseCase,
+	provisionRequestedApiKey: provisionRequestedApiKeyUseCase,
+	requestedApiKey: requestedApiKeyUseCase,
 	rotateApiKey: rotateApiKeyUseCase,
 	revokeApiKey: revokeApiKeyUseCase,
 	listShareLinks: listShareLinksUseCase,

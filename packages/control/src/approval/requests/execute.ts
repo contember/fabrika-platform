@@ -9,7 +9,7 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ApprovalRequestRow, ControlRegistryRepository, ControlRepositories } from '../../db'
 import { acquireLease, acquireLeases, type Lease, type LeaseClock, runLeaseKey } from '../../lease'
 import type { Vault } from '../../vault'
-import type { IamGrantsReader } from './iam'
+import type { IamGrantsReader, IamRequestedKeys } from './iam'
 import type {
 	RequestAction,
 	RequestExecution,
@@ -226,6 +226,8 @@ export interface ApprovalRequestSweepDeps {
 	readonly iamGrants?: IamGrantsReader
 	/** The installation's provider: a request whose effect the provider keeps is settled by reading it back. */
 	readonly provider?: ControlProvider
+	/** The keys approval requests issued in IAM, by which a key kind's unknown execution is followed. */
+	readonly iamKeys?: IamRequestedKeys
 	readonly lock: DeployLocks
 	readonly leaseClock?: LeaseClock
 	readonly kinds?: RequestKindRegistry
