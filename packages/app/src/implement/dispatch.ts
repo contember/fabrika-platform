@@ -130,6 +130,7 @@ import { paramsObject, urlParams } from './params'
 import { globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
+import { pushWorkerResponse } from './push-worker'
 import { answersJson, type KeyedRequest, recorded, replayed, requestIdentity, requestKeyOf, validatedOutput } from './receipts'
 import { type TerminalIdentification, terminalIdentification } from './terminals'
 import type { SignedTokens } from './tokens'
@@ -288,6 +289,8 @@ export type ServedEndpoint =
 		readonly config: BrowserConfig
 		readonly install: InstallableApp
 	}
+	/** The Web Push service worker (ADR-0088): a fixed script of this release, under the row's own access. */
+	| { readonly kind: 'push-worker'; readonly row: CredentialedEndpoint }
 	/** An SPA mount's bare prefix (`/admin`): the proxy admitted it under the mount's access; it redirects to `/admin/`. */
 	| { readonly kind: 'spa-prefix'; readonly row: EndpointRow; readonly prefix: string }
 	/** An SPA anyone opens: anonymous, served without a token. */
@@ -553,6 +556,9 @@ export class ContractRuntime {
 			}
 			case 'public-spa':
 				return await this.#spaFile(served, request, null, null)
+			case 'push-worker':
+				await this.#authorize(served.row, request)
+				return pushWorkerResponse()
 			case 'spa-prefix':
 				return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
 			case 'link-spa':

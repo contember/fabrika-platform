@@ -151,6 +151,15 @@ export function declaredChallengeAction(endpoint: string, declared: unknown): st
 /** Where an ALTCHA challenge is issued: one path per procedure, under its action. */
 export const CHALLENGE_PREFIX = '/__fabrika/challenge'
 
+/**
+ * Web Push (ADR-0088): the reserved prefix of the framework's push rows, which no authored row and no root SPA answers
+ * under, the service worker's row and path, and the scope it registers with, where no page lives.
+ */
+export const PUSH_PREFIX = '/__fabrika/push'
+export const PUSH_WORKER_ROW_ID = '__fabrika.push.worker'
+export const PUSH_WORKER_PATH = `${PUSH_PREFIX}/worker.js`
+export const PUSH_WORKER_SCOPE = `${PUSH_PREFIX}/`
+
 export function challengePath(action: string): string {
 	return `${CHALLENGE_PREFIX}/${action}`
 }

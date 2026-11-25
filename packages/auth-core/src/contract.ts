@@ -75,6 +75,11 @@ export interface ContractArtifact extends EndpointTable {
 	 */
 	readonly terminal?: TerminalArtifact
 	/**
+	 * The application notifies people through Web Push (ADR-0088), so the table holds the framework's push rows under
+	 * `/__fabrika/push`. Absent unless declared, so the digest stays.
+	 */
+	readonly notifications?: true
+	/**
 	 * What each procedure of the staged kit admits and how long it runs, by endpoint id, with every default applied: the
 	 * rules the application applies itself, beside the row the proxy applies. Absent for a contract with no such
 	 * procedure (a `defineContract` one, an older release's), so its digest stays.
@@ -167,10 +172,11 @@ export type EndpointKind = CredentialedEndpointKind | AnonymousEndpointKind
 
 /**
  * The contract entry that declared an endpoint. A `challenge` row is the framework's own: the endpoint that issues the
- * ALTCHA challenge of the public procedure `name`.
+ * ALTCHA challenge of the public procedure `name`. A `push` row is the framework's own too: one of the rows a contract
+ * that declares `notifications` gets under `/__fabrika/push` (ADR-0088), named by its part (`worker`).
  */
 export interface EndpointSource {
-	readonly kind: 'mount' | 'export' | 'files' | 'challenge'
+	readonly kind: 'mount' | 'export' | 'files' | 'challenge' | 'push'
 	readonly name: string
 }
 

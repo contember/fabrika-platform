@@ -120,6 +120,15 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 		])
 	})
 
+	test('notifications: true is read with the service worker row (ADR-0088); false is refused at its value', () => {
+		const artifact = readContractSource(application(edited("app: 'notes',", "app: 'notes',\n\tnotifications: true,")))
+		expect(artifact.notifications).toBe(true)
+		expect(artifact.endpoints.filter((row) => row.source.kind === 'push').map((row) => row.id)).toEqual(['__fabrika.push.worker'])
+		expect(refusal(application(edited("app: 'notes',", "app: 'notes',\n\tnotifications: false,")))).toEqual([
+			'fabrika.contract.ts:7:17 contract notifications is false',
+		])
+	})
+
 	test('an e-mail template is refused at the string it is wrong in, and read when it is right', () => {
 		const mail = (text: string) =>
 			edited("app: 'notes',", `app: 'notes',\n\tmail: { reset: { cs: {\n\t\tsubject: 'Heslo pro {{displayName}}',\n\t\ttext: '${text}',\n\t} } },`)
