@@ -6,7 +6,7 @@
 // - A contract application with no database, no jobs and no files: a contract with table policies, a job or a file
 //   collection is refused, because the namespace stack (checklist step 10) that would provide the database, the
 //   schedule and the bucket is not built. No source maps either: the deploy reports its artifacts `not_applicable`.
-// - The target holds only what the installation shares (account, region, cluster, sources bucket, build project), and
+// - The target holds only what the installation shares (account, region, cluster, sources bucket), and
 //   those come from Control's composition (`installation`), never from a registrant: `normalizeRegistration` replaces a
 //   submitted target with them, and a stored one that differs is refused. Everything of one environment's own (service, repository, parameter path, log group, task and execution roles) is
 //   derived from its application id and environment (`awsEnvironmentResources`), so a registration cannot point a
@@ -83,13 +83,22 @@ export interface AwsEnvironmentResources {
 	readonly logGroup: string
 	readonly taskRoleArn: string
 	readonly executionRoleArn: string
+	/** The environment's own CodeBuild project, its role and its log group: no build reaches another environment's. */
+	readonly buildProject: string
+	readonly buildRoleArn: string
+	readonly buildLogGroup: string
+	/** The CloudFormation stack that holds the environment's resources (`awsEnvironmentStack`). */
+	readonly stackName: string
 }
 
 /**
  * The names of an environment's resources, under the prefixes the installation's policy for Control's role is scoped
  * to (`fabrika/apps/`): an ECS service `<app>_<env>`, a repository `fabrika/apps/<app>/<env>`, the parameter path and
- * log group `/fabrika/apps/<app>/<env>`, the roles `fabrika/apps/<app>_<env>_task` and `…_execution` (ADR-0004's AWS
- * invariant: two roles, never one). An id or name outside `NAME_PART`, or a role name past IAM's 64, is refused.
+ * log group `/fabrika/apps/<app>/<env>` (the build's log group below it, `…/build`), the roles
+ * `fabrika/apps/<app>_<env>_task`, `…_execution` and `…_build` (ADR-0004's AWS invariant: two roles, never one; the
+ * build's a third), the build project `fabrika_<app>_<env>` and the stack `fabrika-app-<length of app>-<app>-<env>`,
+ * whose length keeps a hyphen in the id apart from the one that joins it. An id or name outside `NAME_PART`, or a role
+ * name past IAM's 64, is refused.
  */
 export function awsEnvironmentResources(appId: string, env: string, accountId: string): AwsEnvironmentResources {
 	if (!NAME_PART.test(appId) || !NAME_PART.test(env)) {
@@ -104,6 +113,10 @@ export function awsEnvironmentResources(appId: string, env: string, accountId: s
 		logGroup: `/fabrika/apps/${appId}/${env}`,
 		taskRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_task`,
 		executionRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_execution`,
+		buildProject: `fabrika_${role}`,
+		buildRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_build`,
+		buildLogGroup: `/fabrika/apps/${appId}/${env}/build`,
+		stackName: `fabrika-app-${appId.length}-${appId}-${env}`,
 	}
 }
 
@@ -154,7 +167,7 @@ export interface AwsControlProviderOptions {
 	/** The Bun image both build stages start from, pinned by digest (`containerImage` refuses any other). */
 	readonly baseImage: string
 	/**
-	 * The installation's account, region, cluster, sources bucket and build project: Control's own configuration, which
+	 * The installation's account, region, cluster and sources bucket: Control's own configuration, which
 	 * every environment's target is (a registration's is replaced by it, a stored one that differs is refused).
 	 */
 	readonly installation: AwsAppTarget
@@ -344,7 +357,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 		const attempt = awsRunAttempt({
 			codeBuild: clients.codeBuild,
 			ecs: clients.ecs,
-			buildProject: target.buildProject,
+			buildProject: resources.buildProject,
 			service: { cluster: target.cluster, service: resources.service },
 			sourceUrl: { ssm: clients.ssm, parameter: (token) => awsSourceUrlParameter(urlParameterPath(resources), token) },
 		})
@@ -448,7 +461,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 					target: { accountId: target.accountId, region: target.region, cluster: target.cluster, service: resources.service },
 					sourcesBucket: target.sourcesBucket,
 					build: {
-						project: target.buildProject,
+						project: resources.buildProject,
 						repositoryName: resources.repository,
 						repositoryUri: `${target.accountId}.dkr.ecr.${target.region}.amazonaws.com/${resources.repository}`,
 						repositoryTags: tags,
@@ -533,6 +546,6 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 }
 
 /** The fields of the target, each the installation's own. */
-const AWS_TARGET_FIELDS: readonly (keyof AwsAppTarget)[] = ['accountId', 'region', 'cluster', 'sourcesBucket', 'buildProject']
+const AWS_TARGET_FIELDS: readonly (keyof AwsAppTarget)[] = ['accountId', 'region', 'cluster', 'sourcesBucket']
 /** How long pruning a run's secret parameters may take, apart from the run's own signal. */
 const PRUNE_TIMEOUT_MS = 15_000

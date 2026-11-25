@@ -6,9 +6,9 @@
 // Variables:
 // - `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI`: set by ECS in every task with a task role.
 // - `FABRIKA_AWS_BASE_IMAGE`: the Bun image an application's build starts from, pinned by digest.
-// - `FABRIKA_AWS_ACCOUNT_ID`, `FABRIKA_AWS_REGION`, `FABRIKA_AWS_CLUSTER`, `FABRIKA_AWS_SOURCES_BUCKET`,
-//   `FABRIKA_AWS_BUILD_PROJECT`: the installation's coordinates, every environment's target. They are Control's
-//   configuration, never a registrant's, because each aims Control's signed calls.
+// - `FABRIKA_AWS_ACCOUNT_ID`, `FABRIKA_AWS_REGION`, `FABRIKA_AWS_CLUSTER`, `FABRIKA_AWS_SOURCES_BUCKET`: the
+//   installation's coordinates, every environment's target. They are Control's configuration, never a registrant's,
+//   because each aims Control's signed calls. Each environment builds in its own project (`awsEnvironmentStack`).
 
 import { containerCredentials } from '@fabrika/platform-node'
 import { type AwsSourcePort, createAwsControlProvider } from '@fabrika/provider-aws'
@@ -54,7 +54,6 @@ export function awsControlProvider(source: Record<string, string | undefined>, s
 			region: required(source, 'FABRIKA_AWS_REGION'),
 			cluster: required(source, 'FABRIKA_AWS_CLUSTER'),
 			sourcesBucket: required(source, 'FABRIKA_AWS_SOURCES_BUCKET'),
-			buildProject: required(source, 'FABRIKA_AWS_BUILD_PROJECT'),
 		},
 		source: sourcePort,
 	})
