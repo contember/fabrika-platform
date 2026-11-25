@@ -32,13 +32,13 @@ We will keep the builder and coding agent local. The installed console will auth
 9. **Deploy an explicit remotely available commit.** The builder does not commit or push application code. Repeat updates preserve current environment placement and never silently turn an application-create conflict into replacement. The run snapshots the access data it reads from that commit (ADR-0050). Other registry configuration is not snapshotted; this feature does not claim immutable manifest identity across concurrent registry changes.
 10. **Uploads carry no proxy table and no IAM schema.** The builder's manifest describes resources only. Control reads the access surface from the deployed commit ([ADR-0005](0005-compile-app-config-to-static-manifest.md)).
 11. **The builder key cannot approve.** It is a service principal, and only a human user principal with `access.approve` approves an access change (ADR-0050). Consent never delegates `access.approve`.
-12. **The builder key cannot deploy to a protected environment.** Only a person starts a manual run of one (ADR-0050 §4). The key deploys to an unprotected environment; a commit reaches production through a person's merge into its trigger ref, or a person's own deploy.
+12. **The builder key's deploy of a protected environment follows its `deploy-request` category** ([ADR-0083](0083-an-environment-chooses-what-waits-for-approval.md)). The key is not a person (ADR-0050 §4). By default its manual run of a merged 40-character commit parks for a person, who approves it from the run's link; `off` lets it deploy, `refuse` refuses it. The key deploys to an unprotected environment at once; a commit also reaches production through a person's merge into its trigger ref, or a person's own deploy.
 
 13. **The builder's pairing is not the command-line client's device grant** ([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 2). Both show a code that a person approves in the browser, and they share no state. Pairing yields a separate service principal, whose key outlives the approving session because the daemon keeps deploying after the person leaves. The `fabrika` CLI's grant acts as the person, holds the one preset it was approved for (bound to one application, except `create`), and ends with their IAM session.
 
 Item 11 is built: `approvals.complete` refuses every service principal, key and OAuth token (work unit B6).
-Item 12 is built: a manual run of a protected environment refuses every service principal, the builder key among them,
-and every OAuth token.
+Item 12 is built as a refusal: a manual run of a protected environment refuses every service principal, the builder key
+among them, and every OAuth token, until the parked non-person run of ADR-0083 lands.
 Item 10 holds in effect, not yet in form: a contract application's upload may still carry its endpoint
 table and IAM schema, but no provider publishes them; the access comes from the snapshot of the commit.
 Dropping them from the upload is left to the build (A17).
@@ -53,7 +53,7 @@ Application creation and subsequent changes share one identity without remote co
 
 There is a new credential-establishment protocol and durable state on both IAM and Control. Both database implementations must implement the same lifecycle. Lost-response recovery is explicit because IAM cannot retrieve a stored plaintext key. Consent and revocation need ordinary-user surfaces distinct from IAM administration.
 
-The builder cannot deploy to a protected environment, `prod` by default; a person deploys there. A change needing closer review that reaches a protected environment waits for a human in the dashboard.
+The builder cannot deploy a protected environment, `prod` by default, without a person: its run parks for a person's approval, unless the environment's `deploy-request` category is `off`. A change needing closer review that reaches a protected environment waits for a human in the dashboard.
 
 Approvers need actual IAM-resolved Control grants. A human admitted only by Control's bootstrap override cannot delegate them. Namespace selection initially uses the human's existing namespace-management permission; the daemon never receives it.
 

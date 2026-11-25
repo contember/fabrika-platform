@@ -60,9 +60,10 @@ cannot reach a CI log or a process listing. The control origin is not a credenti
 
 `fabrika app deploy` stays out of scope on Zerops and keeps its existing Cloudflare meaning. This ADR
 moves the operator, not the app author: `control deploy` triggers a run for an app that is already
-registered, through the same authorization the console passes. It authenticates with a key, a service principal, so
-a protected environment refuses it: only a person deploys one by hand, from the console
-([ADR-0050](0050-approved-access.md) §4), and a push to the environment's trigger ref still deploys it.
+registered, through the same authorization the console passes. It authenticates with a key, a service principal, which
+is not a person, so on a protected environment its run follows the environment's `deploy-request` category
+([ADR-0050](0050-approved-access.md) §4, [ADR-0083](0083-an-environment-chooses-what-waits-for-approval.md)): by
+default it parks until a person approves it from its link. A push to the environment's trigger ref still deploys it.
 
 ## Consequences
 

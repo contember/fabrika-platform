@@ -264,8 +264,8 @@ should know it). The console shows the three in their own sections. The rule has
 - **`widening`**, everything else.
 
 The outcome does not decide whether a run waits. **On a protected environment a run waits when a line needs closer
-review** (`waitsForApproval`, `@fabrika/control-contract`, the one predicate Control and the console share), whatever
-the outcome; a plain widening publishes at once and keeps its lines on the run.
+review** in a category whose mode makes it wait (`gate()`, `@fabrika/control-contract`, the one function Control and
+the console share, [ADR-0083](0083-an-environment-chooses-what-waits-for-approval.md) §3), whatever the outcome; a plain widening publishes at once and keeps its lines on the run.
 
 **A migration statement not known to keep every stored value waits.** Before this rule every new migration waited on
 a protected environment, so the data rule fails closed: a list of destructive forms is never complete. The runner's
@@ -489,41 +489,65 @@ both counters, `generation` advanced, to `app_env_protection`. Nothing deletes t
 environment starts from it, else from the default. Deleting a protected environment, or an application
 with one, takes the same human with `access.approve`.
 
-Unprotected environments do not wait. Every environment with `protected = true` requires approval
-for a change that needs closer review, whatever its name or role. Staging is unprotected by default, so a change applies
-there at once. When the same commit is deployed to a protected environment, Control classifies it again against that
-environment's active snapshot.
+Unprotected environments do not wait. On an environment with `protected = true`, whatever its name or role, what
+waits is decided by one gate over a mode per change category that the environment chooses
+([ADR-0083](0083-an-environment-chooses-what-waits-for-approval.md)); by default a change that needs closer review
+waits. Staging is unprotected by default, so a change applies there at once. When the same commit is deployed to a
+protected environment, Control classifies it again against that environment's active snapshot.
 
-The flag also limits who deploys. Only a person starts a manual run of a protected environment: a user principal
-without OAuth or link claims (`isPerson`, `src/approval/human.ts`), which in practice is a person in the console. No
-flow issues a person a bearer of their own: `fabrika control` and the builder's device flow run with service keys. A
-service principal, the builder key ([ADR-0042](0042-connect-local-builders-through-human-consent.md)), an IAM service
-key and an MCP agent are refused with a 403 that names the cause; Control cannot tell the builder key from any other
-service key, so all of them are refused. A push or a poll is unaffected: a person pushed.
+The flag also governs who deploys by hand. **A person** here is a user principal without OAuth or link claims
+(`isPerson`, `src/approval/human.ts`) acting in a console session, a request without an `Authorization` header, the
+rule of approving (section 5). **Every bearer is a non-person**, a person's own `px_` key included, so an agent handed
+that key cannot pass as its owner; so are a service principal, the builder key
+([ADR-0042](0042-connect-local-builders-through-human-consent.md)), an IAM service key, the command-line client's
+device-grant token and an MCP agent. A person's manual run of a protected environment runs as before. A non-person's
+is judged by the environment's `deploy-request` category:
 
-A manual run of a protected environment names a full ref (`refs/heads/…`, `refs/tags/…`) or a 40-character commit
-SHA; any other spelling is refused with a 400 that names the accepted forms. A workspace ref (`refs/heads/fabrika/…`)
-is refused there whoever asks: a workspace reaches a protected environment only after a merge into its trigger ref
-([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 7). The limit: a SHA or a tag is not traced back
-to a workspace, so a person can still deploy a workspace head by its SHA. Only a person gets that far, and the
-console's own redeploy of a run names its commit by SHA.
+- `person`, the default: the run is accepted, its snapshot is classified, and it parks in `awaiting_approval` whatever
+  its lines, with the park reason `requested`. A person approves it from its link, `<console>/approvals/<run id>`, which
+  `runs.get` and the command-line client hand the agent. The page names who asked (the person and the client), the
+  commit, its message (the agent's text, escaped and marked so) and a compare link against the commit the environment
+  runs, beside its access lines.
+- `off`: the run deploys as a person's would, its lines judged by their own categories.
+- `refuse`: the run is refused with a 403 that names the cause.
 
-Control checks the run again when it starts, against the environment as it is then, because the flag may have been
-set after the run was queued: a manual run whose actor is not a person (`user:`), or whose ref is refused as above,
-fails with the same message in its run log and deploys nothing. A restore's own deploy is exempt: it redeploys the
-commit the environment last ran ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §9).
-The exemption comes from the restore's record, which names the run before the run exists, so it holds also for a
-restore's deploy that waited for approval and was queued again once a person approved it.
+A push or a poll is unaffected: a person pushed.
 
-A key cannot redirect what a deploy of a protected environment runs either. `apps.environments.put` that names a
-different trigger ref for one, or creates one with a trigger ref (a new `prod`, or one whose protection was kept), takes
-a person (403), as does `apps.register` of an app whose environment starts protected with a trigger ref. So does
-`apps.update` of an app with a protected environment that changes any field it takes: `repoUrl`, the GitHub source
-binding, `defaultBranch`, `workerDir`, `buildCmd` or `configPath`. Clearing the trigger ref stops push deploys and stays
-open to a key, as does a `null` field, which keeps the stored value. `apps.update` writes only the fields whose value
-differs from what it read, so a value a key sends again never undoes a change made since; a key's write applies only
-while no environment of the app is protected, judged in the write's own statement, so a protection that lands after the
-check still refuses it.
+A non-person's manual run of a protected environment names a 40-character commit SHA, never a ref: a ref names whatever
+its branch holds when the run starts, not what the person approves. Under `deployRequestCommits: merged`, the default,
+the commit must be reachable from the environment's trigger ref, or from the application's default branch when the
+trigger ref is a pattern; Control asks the source when the run is created and refuses (400) a commit it cannot show
+merged. `any` admits an unmerged commit. A person's manual run names a full ref (`refs/heads/…`, `refs/tags/…`) or a
+40-character commit SHA; any other spelling is refused with a 400 that names the accepted forms. A workspace ref
+(`refs/heads/fabrika/…`) is refused there whoever asks: a workspace reaches a protected environment only after a merge
+into its trigger ref ([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 7). The limit: a SHA or a tag
+is not traced back to a workspace, so a person can still deploy a workspace head by its SHA, and so can a non-person
+under `any`, which only a person can choose. The console's own redeploy of a run names its commit by SHA.
+
+**A parked run has an absolute deadline**, `requestTtlHours` (24 by default, 1–168) after it parked. The deadline is
+checked in the decision's own conditional write, so a decision after it changes nothing; a sweep moves a run past its
+deadline to `expired`, which fails it and deploys nothing, and only cleans up. An approval does not expire: an approved run deploys when the queue picks it up. A run
+that parks again, because it was classified again and its digests changed, gets a fresh deadline. A run parked before
+deadlines existed gets one when the sweep first sees it, counted from then.
+
+Control checks the run again when it starts, against the environment as it is then, because the flag or the mode may
+have changed after the run was queued: a manual run whose actor is not a person under `refuse`, or whose ref is refused
+as above, fails with the same message in its run log and deploys nothing; under `person` it parks unless it carries a
+person's approval. A restore's own deploy is exempt: it redeploys the commit the environment last ran
+([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §9). The exemption comes from the
+restore's record, which names the run before the run exists, so it holds also for a restore's deploy that waited for
+approval and was queued again once a person approved it.
+
+A non-person cannot redirect what a deploy of a protected environment runs either. These writes are the `registry`
+category (ADR-0083): `apps.environments.put` that names a different trigger ref for one, or creates one with a trigger
+ref (a new `prod`, or one whose protection was kept); `apps.register` of an app whose environment starts protected with
+a trigger ref; and `apps.update` of an app with a protected environment that changes any field it takes: `repoUrl`, the
+GitHub source binding, `defaultBranch`, `workerDir`, `buildCmd` or `configPath`. The domain and the public origin
+belong there too. Until a non-person's registry write can wait as a request, it is refused (403), whatever the mode.
+Clearing the trigger ref stops push deploys and stays open to a key, as does a `null` field, which keeps the stored
+value. `apps.update` writes only the fields whose value differs from what it read, so a value a key sends again never
+undoes a change made since; a key's write applies only while no environment of the app is protected, judged in the
+write's own statement, so a protection that lands after the check still refuses it.
 
 These are authorization checks in Control's use cases, after `deploy.trigger`, so a caller without it still gets the
 404 of an absent environment. For the same reason an MCP authoring target is never protected:
@@ -550,6 +574,18 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
   vocabulary of ADR-0022.
 - **The approval records the candidate digest and the baseline digest.** It approves one change against
   one baseline.
+- **Who may approve whom.** A person may approve a run their own agent asked for. The environment may require someone
+  other than the requester's person (`requesterMayApprove: false`), or two different people on the same digests
+  (`approvers: 2`), per category; the item stays parked after the first approval, and a rejection by either refuses it.
+- **A second factor on deciding.** `stepUp: webauthn` on a category makes deciding a pending item of it take a fresh
+  WebAuthn assertion: IAM keeps the person's passkeys and mints a console token whose `amr` names `webauthn`, and
+  Control accepts the decision only with such a token at most five minutes old. It is `webauthn` for `credentials` by
+  default and `none` elsewhere. A person with no passkey cannot decide such an item, and the page says how to register
+  one.
+- **Evidence ahead of the deploy.** Under the `plan` mode (ADR-0083) a change is also let through by plan entries a
+  person approved in the console before the deploy, bound to the content of each subject before and after, never to a
+  pull request. A GitHub review counts as such evidence only once the access-diff GitHub check shows the reviewer the
+  lines they approve, and only for a reviewer linked to a person with `access.approve`.
 - **Runs record their actor**, including runs created through MCP. MCP's `get_deployment` reports a
   parked run with the approval link, and names the run's closer-review lines (`deviations`), parked or not.
 - **The environment page lists the published snapshot's deviations**, protected or not, so the steps off the road
@@ -686,8 +722,11 @@ never from the words of a line:
 - Every comparison in `diff.ts` must emit its rule and subject beside its words. A comparison added without them is a
   type error, not an unsorted line.
 - The approval proves a signed-in user with `access.approve`, not a physical human. An agent that drives
-  the approver's own signed-in browser can approve. The skill forbids it; WebAuthn on
-  `approvals.complete` is the next step.
+  the approver's own signed-in browser can approve. The skill forbids it; a category with `stepUp: webauthn` closes it
+  with a passkey assertion on deciding.
+- An agent deploys a protected environment by asking, not by holding a stronger key: under the strict default its
+  manual run parks and the person approves it from one link; under the permissive preset (ADR-0083) it deploys at once.
+  A person's own `px_` key no longer passes as a person, and a parked run no longer waits forever.
 - A rollback that restores removed access is classified like any other change: it waits when it restores a step off
   the road.
 - Approval exists only on protected environments. Staging is unprotected by default, so it must hold
@@ -719,9 +758,10 @@ never from the words of a line:
   fatigue this decision warns about.
 - **Classify a removal by comparing the digests of the rows.** Rejected: the digest covers the path, which differs by
   definition, and it cannot say that one row admits fewer callers than another.
-- **Gate the environment's cross-origin list by approval.** Rejected: the list grants no authority (bearer only, see
-  section 3), it is not part of the contract the approval binds, and a registry write has no run to park. The
-  approval page names it beside each line that opens an endpoint to it.
+- **Gate the environment's cross-origin list through the deploy's approval.** Rejected: the list grants no authority
+  (bearer only, see section 3), it is not part of the contract the approval binds, and a registry write has no run to
+  park. The approval page names it beside each line that opens an endpoint to it. A non-person's write of the list is
+  a `registry` action of its own (ADR-0083), judged by that category's mode; a person's applies at once.
 - **Give each line a severity score.** Rejected: a second judgement beside the effect, set by hand per rule, which can
   disagree with the classification. The page derives its order from effect, review and reach (section 7).
 - **Group the lines in the console by parsing their words.** Rejected: the words are prose and change with wording
@@ -738,5 +778,12 @@ never from the words of a line:
   holds `deploy.trigger`.
 - **Let a service principal, the builder key or an MCP token approve.** Rejected: the agent holds those
   credentials, so it could approve its own widening.
+- **Refuse every non-person's manual run of a protected environment.** Rejected as the default: the agent then asks the
+  person to deploy by hand, outside any record. A parked run with a link records who asked and what was approved;
+  `deploy-request: refuse` keeps the refusal for a team that wants it.
+- **Count a person's own `px_` key as the person.** Rejected: the key is a bearer an agent can be handed, and nothing
+  tells the two apart.
+- **Let a parked run wait forever.** Rejected: an approval given days later approves a commit nobody is watching; an
+  absolute deadline bounds how long the requester's check stays relevant.
 - **Roll back by republishing an older run's snapshot.** Rejected: that snapshot was approved against
   a different baseline. A new deploy is classified against the current one.
