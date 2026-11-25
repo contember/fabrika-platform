@@ -100,6 +100,20 @@ describe('createRpcClient', () => {
 		expect(error.httpStatus).toBe(401)
 	})
 
+	test('RpcError carries the data of an error envelope', async () => {
+		stubFetch(() =>
+			new Response(JSON.stringify({ error: { type: 'approval_requested', message: 'waits', data: { id: 'r1', state: 'pending' } } }), {
+				status: 409,
+				headers: { 'content-type': 'application/json' },
+			})
+		)
+		const client = createRpcClient<AppRouter>({ baseUrl: 'https://x/api/rpc' })
+		const error = await client.echo({ msg: 'hi' }).then(() => null, (err: unknown) => err)
+		if (!(error instanceof RpcError)) throw new Error('expected RpcError')
+		expect(error.type).toBe('approval_requested')
+		expect(error.data).toEqual({ id: 'r1', state: 'pending' })
+	})
+
 	test('throws RpcError(transport) on a non-JSON response', async () => {
 		stubFetch(() => new Response('<html>502</html>', { status: 502, statusText: 'Bad Gateway' }))
 		const client = createRpcClient<AppRouter>({ baseUrl: 'https://x/api/rpc' })

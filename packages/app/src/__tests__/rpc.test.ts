@@ -136,6 +136,9 @@ describe('rpc dispatch — error status from the thrown error httpStatus', () =>
 		teapot: r.procedure.input(z.object({})).handler(() => raise({ httpStatus: 418, type: 'teapot', message: 'short and stout' })),
 		boom: r.procedure.input(z.object({})).handler(() => raise(new Error('kaboom'))),
 		login: r.procedure.input(z.object({})).handler(() => raise(new UnauthorizedError('login required', { loginUrl: 'https://iam.test/auth/login' }))),
+		pending: r.procedure.input(z.object({})).handler(() =>
+			raise({ httpStatus: 409, type: 'approval_requested', message: 'waits for a person', data: { id: 'r1', url: 'https://c/r1' } })
+		),
 	})
 	async function d(method: string) {
 		const res = await dispatchRpcRequest({ router, ctx: { auth: fakeAuth(['*']) }, request: jsonRequest('https://x/rpc', { method, input: {} }) })
@@ -164,6 +167,16 @@ describe('rpc dispatch — error status from the thrown error httpStatus', () =>
 		const { status, body } = await d('login')
 		expect(status).toBe(401)
 		expect(record(record(body)['error'])['loginUrl']).toBe('https://iam.test/auth/login')
+	})
+
+	test('a structural error carries its data in the envelope', async () => {
+		const { status, body } = await d('pending')
+		expect(status).toBe(409)
+		expect(record(body)['error']).toEqual({
+			type: 'approval_requested',
+			message: 'waits for a person',
+			data: { id: 'r1', url: 'https://c/r1' },
+		})
 	})
 })
 
