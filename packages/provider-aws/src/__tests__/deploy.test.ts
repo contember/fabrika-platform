@@ -7,7 +7,7 @@
 import type { DeployStepResult, JsonValue, ProviderRunEvents } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import type { CodeBuildStatus } from '../aws/codebuild'
-import type { EcsService, EcsServiceDeploymentStatus } from '../aws/ecs'
+import type { EcsNetwork, EcsService, EcsServiceDeploymentStatus } from '../aws/ecs'
 import type { S3PartWriter } from '../aws/s3'
 import { AwsError } from '../aws/transport'
 import { awsDeploy, type AwsDeployInput } from '../deploy'
@@ -41,6 +41,10 @@ class FakeAws {
 	/** A hook run on a call, e.g. to cancel the run there. */
 	readonly on: Record<string, () => void> = {}
 	findLost = true
+	/** The environment's service as ECS reads it: `null` while it does not exist. */
+	serviceState: EcsService['status'] | null = 'active'
+	/** The networks a create, an update and each init task were sent. */
+	readonly networks: EcsNetwork[] = []
 	logPages: { readonly message: string; readonly cursor: string; readonly atEnd: boolean }[] = [
 		{ message: 'Step 1/9 : FROM oven/bun\nStep 2/9 : RUN bun install\n', cursor: 'f/2', atEnd: false },
 	]
@@ -91,13 +95,20 @@ class FakeAws {
 				this.registered += 1
 				return { arn: this.registered === 1 ? REVISION : INIT_REVISION, family: definition.family, revision: 42 }
 			},
-			updateService: async (_address, taskDefinitionArn) => {
+			createService: async (create) => {
+				this.hit('createService', `createService ${create.clientToken} ${create.taskDefinitionArn} ${create.desiredCount}`)
+				this.networks.push(create.network)
+				this.serviceState = 'active'
+				return { ...this.service(), taskDefinitionArn: create.taskDefinitionArn, currentDeploymentArn: DEPLOYMENT }
+			},
+			updateService: async (_address, taskDefinitionArn, network) => {
 				this.hit('updateService', `updateService ${taskDefinitionArn}`)
+				this.networks.push(network)
 				return { ...this.service(), taskDefinitionArn, currentDeploymentArn: DEPLOYMENT }
 			},
 			describeService: async () => {
 				this.hit('describeService', 'describeService')
-				return this.service()
+				return this.serviceState === null ? null : { ...this.service(), status: this.serviceState }
 			},
 			describeServiceDeployment: async (arn) => {
 				this.hit('describeServiceDeployment', `describeServiceDeployment ${arn}`)
@@ -108,6 +119,7 @@ class FakeAws {
 				return { arn, taskDefinitionArn: REVISION }
 			},
 			runTask: async (start) => {
+				this.networks.push(start.network)
 				this.hit('runTask', `runTask ${start.clientToken} ${start.command.join(' ')}`)
 				this.tasks += 1
 				return { arn: TASK(this.tasks), status: 'pending', exitCode: null, stopCode: null, reason: null }
@@ -216,6 +228,7 @@ const deploy = (aws: FakeAws, events: Recorder, change: Partial<AwsDeployInput> 
 			log: { group: '/fabrika/apps/notes-prod', region: 'eu-central-1' },
 			tags: { 'fabrika:app': 'notes' },
 		},
+		network: NETWORK,
 		clients: aws.clients,
 		source: { upload: async (parts) => parts.complete({ last: new Uint8Array([1]), parts: 1, bytes: 1 }, new AbortController().signal) },
 		events,
@@ -269,19 +282,83 @@ describe('awsDeploy', () => {
 			`findImage fabrika/notes-prod run-${TOKEN}`,
 			'registerTaskDefinition notes-prod',
 			'registerTaskDefinition notes-prod-init',
-			'describeService',
 			`runTask ${TOKEN}-init-1 sh /app/fabrika/migrate.generated.sh`,
 			`describeTask ${TASK(1)}`,
 			`runTask ${TOKEN}-init-2 sh /app/fabrika/verify.generated.sh`,
 			`describeTask ${TASK(2)}`,
+			'describeService',
 			`updateService ${REVISION}`,
 			`describeServiceDeployment ${DEPLOYMENT}`,
 			`describeServiceDeployment ${DEPLOYMENT}`,
 		])
+		// The init tasks and the update run in the network the deploy was handed, never one read back from the service.
+		expect(aws.networks).toEqual([NETWORK, NETWORK, NETWORK])
 		// The source URL went to its parameter, and the parameter is gone again.
 		expect(aws.parameters.size).toBe(0)
 		expect(events.lines).toContain('  │ Step 1/9 : FROM oven/bun')
 		expect(events.lines).toContain('  │ Step 2/9 : RUN bun install')
+	})
+
+	test("an environment's first run migrates, then creates its service on its revision under the run's token", async () => {
+		const aws = new FakeAws()
+		aws.serviceState = null
+		const events = new Recorder()
+		const result = await deploy(aws, events)
+		expect(result.status).toBe('succeeded')
+		const after = aws.calls.slice(aws.calls.indexOf('registerTaskDefinition notes-prod-init') + 1)
+		expect(after).toEqual([
+			`runTask ${TOKEN}-init-1 sh /app/fabrika/migrate.generated.sh`,
+			`describeTask ${TASK(1)}`,
+			`runTask ${TOKEN}-init-2 sh /app/fabrika/verify.generated.sh`,
+			`describeTask ${TASK(2)}`,
+			'describeService',
+			`createService ${TOKEN} ${REVISION} 1`,
+			`describeServiceDeployment ${DEPLOYMENT}`,
+			`describeServiceDeployment ${DEPLOYMENT}`,
+		])
+		expect(aws.networks).toEqual([NETWORK, NETWORK, NETWORK])
+		// Recorded before the create as before an update: from there the run is settled by polling.
+		expect(events.checkpoints.at(-2)).toEqual({ buildToken: TOKEN, buildId: BUILD_ID, taskDefinitionArn: REVISION, serviceUpdateRequested: true })
+		expect(result.checkpoint).toMatchObject({ deploymentArn: DEPLOYMENT })
+		expect(events.lines).toContain('  created the service notes-prod')
+		// A service ECS keeps as deleted is created again under its name.
+		const deleted = new FakeAws()
+		deleted.serviceState = 'inactive'
+		expect((await deploy(deleted, new Recorder())).status).toBe('succeeded')
+		expect(deleted.calls).toContain(`createService ${TOKEN} ${REVISION} 1`)
+	})
+
+	test('a lost create is sent again under its client token; one never answered is absent to the rollout', async () => {
+		const aws = new FakeAws()
+		aws.serviceState = null
+		aws.failures['createService'] = [lost('CreateService')]
+		expect((await deploy(aws, new Recorder())).status).toBe('succeeded')
+		expect(aws.calls.filter((call) => call === `createService ${TOKEN} ${REVISION} 1`).length).toBe(2)
+
+		const never = new FakeAws()
+		never.serviceState = null
+		never.failures['createService'] = Array.from({ length: 4 }, () => lost('CreateService'))
+		const result = await deploy(never, new Recorder())
+		expect(stepOf(result, 'update')).toMatchObject({ status: 'succeeded' })
+		expect(stepOf(result, 'rollout')).toMatchObject({ status: 'failed' })
+		expect(never.calls.filter((call) => call.startsWith('createService')).length).toBe(4)
+
+		const refused = new FakeAws()
+		refused.serviceState = null
+		refused.failures['createService'] = [new AwsError('CreateService', 'InvalidParameterException', 400, null, false)]
+		expect(stepOf(await deploy(refused, new Recorder()), 'update')).toMatchObject({ status: 'failed' })
+	})
+
+	test('a service being deleted is neither updated nor created: the run fails before it asks for either', async () => {
+		const aws = new FakeAws()
+		aws.serviceState = 'draining'
+		const result = await deploy(aws, new Recorder())
+		expect(stepOf(result, 'update')).toMatchObject({
+			status: 'failed',
+			error: 'aws: the service notes-prod is being deleted; deploy again once it is gone',
+		})
+		expect(aws.calls.some((call) => call.startsWith('updateService') || call.startsWith('createService'))).toBe(false)
+		expect(result.checkpoint).not.toHaveProperty('serviceUpdateRequested')
 	})
 
 	test('the source URL stays valid for the whole queue allowance and the provisioning', async () => {

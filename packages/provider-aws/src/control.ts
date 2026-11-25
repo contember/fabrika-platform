@@ -51,7 +51,7 @@ import { parameterArn, type SsmClient, ssmClient } from './aws/ssm'
 import { type AwsClientOptions, awsServiceOrigin } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppArtifact, awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec } from './codecs'
 import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deploy'
-import { awsEnvironmentStack, ensureEnvironmentStack } from './environment-stack'
+import { awsEnvironmentStack, type AwsInstallationNetwork, checkInstallationNetwork, ensureEnvironmentStack } from './environment-stack'
 import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
 import { AWS_SOURCE_URL_SECONDS, awsRunAttempt, parseAwsCheckpoint } from './run-attempt'
 
@@ -126,6 +126,11 @@ export interface AwsControlProviderOptions {
 	 * every environment's target is (a registration's is replaced by it, a stored one that differs is refused).
 	 */
 	readonly installation: AwsAppTarget
+	/**
+	 * The installation's VPC, the subnets every environment's tasks run in and whether they get a public address:
+	 * Control's own configuration too, read by every deploy and stored by no environment.
+	 */
+	readonly network: AwsInstallationNetwork
 	readonly source: AwsSourcePort
 	readonly fetch?: (input: string, init: RequestInit) => Promise<Response>
 	/** The clients of a target's region; absent, the package's own over `fetch`. Tests pass fakes. */
@@ -264,6 +269,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 	const installationPayload = awsAppTargetCodec.encode(options.installation)
 	const installation = awsAppTargetCodec.decode(installationPayload)
 	const installationTarget = { provider: AWS_PROVIDER, version: awsAppTargetCodec.version, payload: installationPayload }
+	const network = checkInstallationNetwork(options.network)
 	const targetOf = (environment: ProviderEnvironment): AwsAppTarget => {
 		const stored = decodeEnvelope('target', AWS_PROVIDER, environment.target, awsAppTargetCodec)
 		const differs = AWS_TARGET_FIELDS.filter((field) => stored[field] !== installation[field])
@@ -410,7 +416,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			const tags = { 'fabrika:app': input.app.id, 'fabrika:env': input.environment.env }
 			const deployClients: AwsDeployClients = { ...clients, credentials: lastingCredentials() }
 			const commitSha = input.app.source.ref
-			const deployRun = (events: ProviderRunEvents | undefined) =>
+			const deployRun = (events: ProviderRunEvents | undefined, securityGroupId: string | null) =>
 				awsDeploy({
 					appId: input.app.id,
 					env: input.environment.env,
@@ -440,6 +446,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 						log: { group: resources.logGroup, region: target.region },
 						tags,
 					},
+					network: securityGroupId === null ? null : { subnets: network.subnets, securityGroups: [securityGroupId], publicIp: network.publicIp },
 					clients: deployClients,
 					source: {
 						upload: async (parts, signal) => {
@@ -455,12 +462,12 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 					sleep: options.sleep ?? pause,
 				})
 			const log = (line: string): void => input.events.log(line)
-			if (input.dryRun) return { state: (await deployRun(undefined)).status, artifactState: 'not_applicable' }
-			// The environment's own resources first: its repository, log groups, roles and build project. Nothing of the run
+			if (input.dryRun) return { state: (await deployRun(undefined, null)).status, artifactState: 'not_applicable' }
+			// The environment's own resources first: its repository, log groups, roles, build project and security group. Nothing of the run
 			// exists yet, so a stack that does not settle fails the run with nothing to clean up.
-			await ensureEnvironmentStack({
+			const stack = await ensureEnvironmentStack({
 				cloudFormation: clients.cloudFormation,
-				stack: awsEnvironmentStack(input.environment.appId, input.environment.env, target),
+				stack: awsEnvironmentStack(input.environment.appId, input.environment.env, target, network),
 				signal: input.signal,
 				sleep: options.sleep ?? pause,
 				log,
@@ -487,7 +494,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 				for (const name of secretNames) {
 					await clients.ssm.putSecret(awsSecretParameter(resources, input.runId, name), values.secret[name] ?? '', input.signal)
 				}
-				const result = await deployRun(events)
+				const result = await deployRun(events, stack.securityGroupId)
 				succeeded = result.status === 'succeeded'
 				input.signal.throwIfAborted()
 				return { state: result.status, artifactState: 'not_applicable' }

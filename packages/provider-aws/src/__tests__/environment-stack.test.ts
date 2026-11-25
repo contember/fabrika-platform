@@ -4,12 +4,19 @@
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import { MAX_TEMPLATE_BYTES, type StackStatus, type StackSummary } from '../aws/cloudformation'
+import { MAX_TEMPLATE_BYTES, type StackDescription, type StackStatus, type StackSummary } from '../aws/cloudformation'
 import { ecrLifecyclePolicy } from '../aws/ecr'
 import { AwsError } from '../aws/transport'
 import { AWS_BUILDSPEC } from '../build'
 import type { AwsAppTarget } from '../codecs'
-import { AWS_BUILD_IMAGE, AWS_STACK_TIMEOUT_MS, awsAppsPermissionsBoundary, awsEnvironmentStack, ensureEnvironmentStack } from '../environment-stack'
+import {
+	AWS_BUILD_IMAGE,
+	AWS_STACK_TIMEOUT_MS,
+	awsAppsPermissionsBoundary,
+	awsEnvironmentStack,
+	checkInstallationNetwork,
+	ensureEnvironmentStack,
+} from '../environment-stack'
 import { AWS_KEPT_IMAGES } from '../resources'
 
 const installation: AwsAppTarget = {
@@ -18,6 +25,8 @@ const installation: AwsAppTarget = {
 	cluster: 'fabrika-apps',
 	sourcesBucket: 'fabrika-sources-123456789012',
 }
+const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'], publicIp: true }
+const SECURITY_GROUP = 'sg-0123456789abcdef0'
 
 /** `value[key]` of a JSON object, or undefined for anything else. */
 function at(value: JsonValue | undefined, ...keys: readonly (string | number)[]): JsonValue | undefined {
@@ -51,7 +60,7 @@ function grants(
 }
 
 describe('awsEnvironmentStack', () => {
-	const stack = awsEnvironmentStack('notes', 'prod', installation)
+	const stack = awsEnvironmentStack('notes', 'prod', installation, network)
 	const resources = at(stack.template, 'Resources')
 
 	test('its resources carry the names the deploy derives', () => {
@@ -138,8 +147,37 @@ describe('awsEnvironmentStack', () => {
 		expect(at(resources, 'Repository', 'Properties', 'LifecyclePolicy', 'LifecyclePolicyText')).toBe(ecrLifecyclePolicy(AWS_KEPT_IMAGES))
 	})
 
+	test("the tasks' security group is in the installation's VPC, admits nothing and reaches out; the stack names its id", () => {
+		const group = at(resources, 'SecurityGroup', 'Properties')
+		expect(at(resources, 'SecurityGroup', 'Type')).toBe('AWS::EC2::SecurityGroup')
+		expect(at(group, 'VpcId')).toBe('vpc-0123456789abcdef0')
+		// No ingress rule at all: until the namespace stack admits its proxy, nothing reaches the application's port.
+		expect(at(group, 'SecurityGroupIngress')).toBeUndefined()
+		expect(at(group, 'SecurityGroupEgress')).toEqual([{ IpProtocol: '-1', CidrIp: '0.0.0.0/0', Description: 'outbound' }])
+		expect(at(group, 'Tags')).toEqual([{ Key: 'fabrika:app', Value: 'notes' }, { Key: 'fabrika:env', Value: 'prod' }])
+		expect(at(stack.template, 'Outputs', 'SecurityGroupId', 'Value')).toEqual({ 'Fn::GetAtt': ['SecurityGroup', 'GroupId'] })
+		// The service is the deploy's, never the stack's: a stack's revision would be one an update could return to.
+		const types = Object.values(typeof resources === 'object' && resources !== null && !Array.isArray(resources) ? resources : {}).map((resource) =>
+			at(resource, 'Type')
+		)
+		expect(types).not.toContain('AWS::ECS::Service')
+		expect(() => awsEnvironmentStack('notes', 'prod', installation, { vpcId: 'vpc-x' })).toThrow('VPC id')
+	})
+
+	test('the installation network is refused with a VPC, no subnets, too many, one twice or one of another form', () => {
+		expect(checkInstallationNetwork(network)).toEqual(network)
+		const refused = [
+			{ ...network, vpcId: 'subnet-0123456789abcdef0' },
+			{ ...network, subnets: [] },
+			{ ...network, subnets: Array.from({ length: 17 }, (_, index) => `subnet-${String(index).padStart(17, '0')}`) },
+			{ ...network, subnets: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef0'] },
+			{ ...network, subnets: ['subnet-0123456789ABCDEF0'] },
+		]
+		for (const value of refused) expect(() => checkInstallationNetwork(value)).toThrow('aws: the installation network')
+	})
+
 	test("two environments' stacks share no resource and no name", () => {
-		const other = awsEnvironmentStack('notes', 'stage', installation)
+		const other = awsEnvironmentStack('notes', 'stage', installation, network)
 		const scoped = (template: JsonValue) => new Set(grants(template).flatMap((grant) => grant.resources).filter((resource) => resource !== '*'))
 		const mine = scoped(stack.template)
 		for (const resource of scoped(other.template)) expect(mine.has(resource)).toBe(false)
@@ -158,6 +196,7 @@ const STACK_ID = 'arn:aws:cloudformation:eu-central-1:123456789012:stack/fabrika
 class FakeCloudFormation {
 	readonly calls: string[] = []
 	template = ''
+	outputs: Readonly<Record<string, string>> = { SecurityGroupId: SECURITY_GROUP }
 	createError: AwsError | null = null
 	readonly readErrors: AwsError[] = []
 	constructor(private readonly states: (StackStatus | null)[]) {}
@@ -174,9 +213,9 @@ class FakeCloudFormation {
 			const status = this.next('findStack')
 			return status === null ? null : { stackId: STACK_ID, status }
 		},
-		describeStack: async (stackId: string): Promise<{ readonly stackId: string; readonly status: StackStatus | 'DELETE_COMPLETE' }> => {
+		describeStack: async (stackId: string): Promise<StackDescription> => {
 			const status = this.next('describeStack')
-			return { stackId, status: status ?? 'DELETE_COMPLETE' }
+			return { stackId, status: status ?? 'DELETE_COMPLETE', outputs: status === null ? {} : this.outputs }
 		},
 		getTemplate: async (): Promise<string> => {
 			this.calls.push('getTemplate')
@@ -199,7 +238,7 @@ class FakeCloudFormation {
 }
 
 describe('ensureEnvironmentStack', () => {
-	const stack = awsEnvironmentStack('notes', 'prod', installation)
+	const stack = awsEnvironmentStack('notes', 'prod', installation, network)
 	const body = JSON.stringify(stack.template)
 	const ensure = (fake: FakeCloudFormation, change: { now?: () => number } = {}) => {
 		const lines: string[] = []
@@ -218,7 +257,7 @@ describe('ensureEnvironmentStack', () => {
 	test('an absent stack is created with its tags and waited for', async () => {
 		const fake = new FakeCloudFormation([null, 'CREATE_IN_PROGRESS', 'CREATE_COMPLETE'])
 		const { run, lines } = ensure(fake)
-		await run
+		expect(await run).toEqual({ securityGroupId: SECURITY_GROUP })
 		expect(fake.calls).toEqual([
 			'findStack',
 			`createStack fabrika-app-5-notes-prod {"fabrika:app":"notes","fabrika:env":"prod"}`,
@@ -233,8 +272,26 @@ describe('ensureEnvironmentStack', () => {
 	test('a current stack is read and left alone: an unchanged update is never sent', async () => {
 		const fake = new FakeCloudFormation(['UPDATE_COMPLETE'])
 		fake.template = body
-		await ensure(fake).run
-		expect(fake.calls).toEqual(['findStack', 'getTemplate'])
+		expect(await ensure(fake).run).toEqual({ securityGroupId: SECURITY_GROUP })
+		// A read by name lists no outputs: the stack is read once by its id for them.
+		expect(fake.calls).toEqual(['findStack', 'getTemplate', 'describeStack'])
+	})
+
+	test('a stack without the security group output, or with one of another form, is refused', async () => {
+		const outputs: readonly Readonly<Record<string, string>>[] = [{}, { SecurityGroupId: 'vpc-0123456789abcdef0' }]
+		for (const answered of outputs) {
+			const fake = new FakeCloudFormation(['UPDATE_COMPLETE'])
+			fake.template = body
+			fake.outputs = answered
+			await expect(ensure(fake).run).rejects.toThrow('names no security group')
+		}
+	})
+
+	test('a stack that moved between its read by name and its read by id is read again', async () => {
+		const fake = new FakeCloudFormation(['UPDATE_COMPLETE', 'UPDATE_IN_PROGRESS', 'UPDATE_COMPLETE'])
+		fake.template = body
+		expect(await ensure(fake).run).toEqual({ securityGroupId: SECURITY_GROUP })
+		expect(fake.calls).toEqual(['findStack', 'getTemplate', 'describeStack', 'describeStack', 'getTemplate'])
 	})
 
 	test('a stack holding another template is updated and waited for', async () => {
@@ -249,7 +306,7 @@ describe('ensureEnvironmentStack', () => {
 		const reordered = Object.fromEntries(Object.entries(stack.template ?? {}).reverse())
 		fake.template = JSON.stringify(reordered, null, 2)
 		await ensure(fake).run
-		expect(fake.calls).toEqual(['findStack', 'getTemplate'])
+		expect(fake.calls).toEqual(['findStack', 'getTemplate', 'describeStack'])
 		// A body that is not JSON is no match: the stack is updated, never wedged.
 		const odd = new FakeCloudFormation(['UPDATE_COMPLETE'])
 		odd.template = 'Resources: {}'
@@ -262,7 +319,7 @@ describe('ensureEnvironmentStack', () => {
 		fake.template = body
 		fake.readErrors.push(new AwsError('ListStacks', 'Throttling', 400, null, true), new AwsError('ListStacks', 'timeout', 0, null, true))
 		await ensure(fake).run
-		expect(fake.calls).toEqual(['findStack', 'findStack', 'findStack', 'getTemplate'])
+		expect(fake.calls).toEqual(['findStack', 'findStack', 'findStack', 'getTemplate', 'describeStack'])
 		const refused = new FakeCloudFormation(['UPDATE_COMPLETE'])
 		refused.readErrors.push(new AwsError('ListStacks', 'AccessDenied', 403, null, false))
 		await expect(ensure(refused).run).rejects.toMatchObject({ code: 'AccessDenied' })

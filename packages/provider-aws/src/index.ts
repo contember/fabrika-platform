@@ -40,6 +40,9 @@ export {
 	awsAppsPermissionsBoundary,
 	type AwsEnvironmentStack,
 	awsEnvironmentStack,
+	type AwsEnvironmentStackOutputs,
+	type AwsInstallationNetwork,
+	checkInstallationNetwork,
 	ensureEnvironmentStack,
 	type EnsureEnvironmentStackInput,
 } from './environment-stack'

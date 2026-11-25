@@ -49,13 +49,32 @@ describe('cloudFormationClient', () => {
 		const { options, calls } = fakeAwsQuery(CLOUDFORMATION, {
 			DescribeStacks: () => `<Stacks>${member('fabrika-app-5-notes-prod', ID, 'DELETE_COMPLETE')}</Stacks>`,
 		})
-		expect(await cloudFormationClient(options).describeStack(ID)).toEqual({ stackId: ID, status: 'DELETE_COMPLETE' })
+		expect(await cloudFormationClient(options).describeStack(ID)).toEqual({ stackId: ID, status: 'DELETE_COMPLETE', outputs: {} })
 		expect(calls[0]?.parameters).toEqual({ StackName: ID })
 		const other = fakeAwsQuery(CLOUDFORMATION, {
 			DescribeStacks: () => `<Stacks>${member('fabrika-app-5-notes-stage', OTHER, 'CREATE_COMPLETE')}</Stacks>`,
 		})
 		await expect(cloudFormationClient(other.options).describeStack(ID)).rejects.toMatchObject({ code: 'invalid_answer' })
 		await expect(cloudFormationClient(other.options).describeStack('fabrika-app-5-notes-prod')).rejects.toMatchObject({ code: 'invalid_request' })
+	})
+
+	test("reads a stack's outputs by key; a key twice or of another form is an invalid answer", async () => {
+		const output = (key: string, value: string) => `<member><OutputKey>${key}</OutputKey><OutputValue>${value}</OutputValue></member>`
+		const withOutputs = (outputs: string) =>
+			fakeAwsQuery(CLOUDFORMATION, {
+				DescribeStacks: () =>
+					`<Stacks><member><StackId>${ID}</StackId><StackName>fabrika-app-5-notes-prod</StackName><StackStatus>UPDATE_COMPLETE</StackStatus><Outputs>${outputs}</Outputs></member></Stacks>`,
+			})
+		const read = withOutputs(`${output('SecurityGroupId', 'sg-0123456789abcdef0')}${output('Other', '')}`)
+		expect(await cloudFormationClient(read.options).describeStack(ID)).toEqual({
+			stackId: ID,
+			status: 'UPDATE_COMPLETE',
+			outputs: { SecurityGroupId: 'sg-0123456789abcdef0', Other: '' },
+		})
+		const twice = withOutputs(`${output('SecurityGroupId', 'sg-0123456789abcdef0')}${output('SecurityGroupId', 'sg-0123456789abcdef1')}`)
+		await expect(cloudFormationClient(twice.options).describeStack(ID)).rejects.toMatchObject({ code: 'invalid_answer' })
+		const odd = withOutputs(output('Security-Group', 'sg-0123456789abcdef0'))
+		await expect(cloudFormationClient(odd.options).describeStack(ID)).rejects.toMatchObject({ code: 'invalid_answer' })
 	})
 
 	test('reads the template the stack was sent', async () => {

@@ -13,11 +13,15 @@
 //   deleted either way, and by `discard` after a crash.
 // - `register`: the image's digest is read from ECR by the run's tag, and both task definitions are registered; the
 //   service's revision is recorded.
-// - `init`: each init command runs once as a one-off task of the init definition in the service's network, in order,
-//   and must exit 0. A cancelled or abandoned run does not stop an init task that is running: a migration runs to its
-//   end under the application's migration lock, which a later deploy's migration waits for.
-// - `update`: `serviceUpdateRequested` is recorded before `UpdateService`, the only call that activates anything, and
-//   the service deployment it answered after it.
+// - `init`: each init command runs once as a one-off task of the init definition in the service's network (the
+//   installation's subnets, the environment's security group; it exists before the service does), in order, and must
+//   exit 0. A cancelled or abandoned run does not stop an init task that is running: a migration runs to its end under
+//   the application's migration lock, which a later deploy's migration waits for.
+// - `update`: `serviceUpdateRequested` is recorded before the one call that activates anything, and the service
+//   deployment it answered after it. That call is `CreateService` when the environment has no service yet (its first
+//   run, or one after the service was deleted) and `UpdateService` otherwise, with the network each time, so a service
+//   converges on the installation's current one. The deploy owns the service, not the environment stack: it registers
+//   the revision the service runs, and a stack would hold one the next stack update could return to.
 // - `rollout`: the service deployment is polled to its verdict (`awsRunAttempt`'s `observe`).
 //
 // A refusal for rate (`isThrottled`) was not processed, so the call is sent again, with the same idempotency token where
@@ -41,7 +45,7 @@ import {
 } from '@fabrika/provider-contract'
 import type { CodeBuildBuild, CodeBuildClient } from './aws/codebuild'
 import type { EcrClient } from './aws/ecr'
-import type { EcsClient } from './aws/ecs'
+import type { EcsClient, EcsNetwork } from './aws/ecs'
 import type { LogsClient } from './aws/logs'
 import { awsSourceKey, type S3ObjectAddress, type S3PartWriter, s3PresignedGet } from './aws/s3'
 import type { SsmClient } from './aws/ssm'
@@ -53,6 +57,8 @@ import { AWS_RUN_DEADLINE_MS, AWS_SOURCE_URL_SECONDS, awsRunAttempt, type Record
 
 /** How often a build, an init task and the rollout are read while the run waits. */
 export const AWS_POLL_INTERVAL_MS = 10_000
+/** How many tasks an environment's service runs, until an application's size is authored. */
+export const AWS_SERVICE_DESIRED_COUNT = 1
 /** How often a call refused for rate, or a `RunTask` whose answer was lost, is sent in all. */
 export const AWS_CALL_ATTEMPTS = 4
 /** The backoff before the first repeat, doubled for each further one. */
@@ -77,7 +83,7 @@ export const AWS_DEPLOY_STEPS: readonly AwsDeployStep[] = [
 	{ id: 'build', description: 'build and push the image' },
 	{ id: 'register', description: 'register the task definitions of the pushed image' },
 	{ id: 'init', description: 'run the init commands once (the migrations)' },
-	{ id: 'update', description: 'update the service to the new revision' },
+	{ id: 'update', description: 'create the service on the new revision, or update it to it' },
 	{ id: 'rollout', description: 'wait for the service deployment' },
 ]
 
@@ -93,6 +99,7 @@ export interface AwsDeployClients {
 	readonly ecs: Pick<
 		EcsClient,
 		| 'registerTaskDefinition'
+		| 'createService'
 		| 'updateService'
 		| 'describeService'
 		| 'describeServiceDeployment'
@@ -137,6 +144,11 @@ export interface AwsDeployInput {
 	readonly sourceMapKeyParameter: string | null
 	/** The task definitions' inputs besides the image. */
 	readonly task: Omit<AwsTaskDefinitionInput, 'image' | 'rendered'>
+	/**
+	 * The network the service and the init tasks run in: the installation's subnets and the environment stack's
+	 * security group. `null` only in a dry run, which calls nothing.
+	 */
+	readonly network: EcsNetwork | null
 	readonly clients: AwsDeployClients
 	readonly source: AwsSourceUpload
 	readonly events: ProviderRunEvents
@@ -232,6 +244,12 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 		const checkpoint = context.checkpoint
 		if (checkpoint === undefined) throw new Error('aws: a step ran before the run recorded its build token')
 		return checkpoint
+	}
+
+	/** The network of the service and the init tasks; only a dry run, whose steps never run, has none. */
+	const networkOf = (): EcsNetwork => {
+		if (input.network === null) throw new Error('aws: the deploy has no network for its tasks')
+		return input.network
 	}
 
 	/**
@@ -370,10 +388,8 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 				return
 			}
 			const { arn, commands } = init
-			const current = await repeated(() => clients.ecs.describeService(service, signal), isThrottled)
-			if (current === null) throw new Error(`aws: the service ${target.service} does not exist`)
-			const network = current.network
-			if (network === null) throw new Error(`aws: the service ${target.service} has no awsvpc network for the init tasks to run in`)
+			// The service's own network, which exists before the service does: a first run migrates before it creates it.
+			const network = networkOf()
 			for (const [index, command] of commands.entries()) {
 				// Under its client token a repeated start starts no second task, so any retryable failure is repeated.
 				const task = await repeated(
@@ -421,11 +437,36 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 			const checkpoint = recorded(context)
 			const revision = checkpoint.taskDefinitionArn
 			if (revision === undefined) throw new Error('aws: the update ran before a revision was registered')
+			const network = networkOf()
+			// The environment's first run creates its service on its revision; every later one updates it. A service being
+			// deleted is neither: ECS refuses an update of it, and a create of its name until it is gone.
+			const current = await repeated(() => clients.ecs.describeService(service, signal), isThrottled)
+			if (current?.status === 'draining') throw new Error(`aws: the service ${target.service} is being deleted; deploy again once it is gone`)
+			const create = current === null || current.status === 'inactive'
 			// Recorded before the call: from here the run is settled only by polling (ADR-0044).
 			await context.record({ ...checkpoint, serviceUpdateRequested: true })
 			try {
-				// A throttled update was not processed: the same revision is asked for again.
-				const updated = await repeated(() => clients.ecs.updateService(service, revision, signal), isThrottled)
+				const updated = create
+					// Under its client token (the run's) a repeated create creates no second service, so any retryable failure
+					// is repeated. One whose answers were all lost is settled by the rollout: a service that never came is absent.
+					? await repeated(
+						() =>
+							clients.ecs.createService(
+								{
+									...service,
+									taskDefinitionArn: revision,
+									network,
+									desiredCount: AWS_SERVICE_DESIRED_COUNT,
+									clientToken: token,
+									tags: input.task.tags,
+								},
+								signal,
+							),
+						(error) => error instanceof AwsError && error.retryable,
+					)
+					// A throttled update was not processed: the same revision is asked for again.
+					: await repeated(() => clients.ecs.updateService(service, revision, network, signal), isThrottled)
+				if (create) log(`  created the service ${target.service}`)
 				if (updated.currentDeploymentArn !== null) {
 					await context.record({ ...checkpoint, serviceUpdateRequested: true, deploymentArn: updated.currentDeploymentArn }).catch(() => {
 						// The rollout finds the deployment through the service when its ARN is not recorded.

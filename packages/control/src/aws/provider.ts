@@ -9,6 +9,10 @@
 // - `FABRIKA_AWS_ACCOUNT_ID`, `FABRIKA_AWS_REGION`, `FABRIKA_AWS_CLUSTER`, `FABRIKA_AWS_SOURCES_BUCKET`: the
 //   installation's coordinates, every environment's target. They are Control's configuration, never a registrant's,
 //   because each aims Control's signed calls. Each environment builds in its own project (`awsEnvironmentStack`).
+// - `FABRIKA_AWS_VPC_ID`, `FABRIKA_AWS_SUBNETS` (comma-separated subnet ids) and `FABRIKA_AWS_TASK_PUBLIC_IP` (`true`
+//   or `false`): the installation's network. Each environment's security group is created in the VPC, and its service
+//   and init tasks run in the subnets, with a public address only when the variable says `true` (public subnets with
+//   no NAT gateway); there is no default, because a wrong one leaves the tasks without a way out.
 
 import { containerCredentials } from '@fabrika/platform-node'
 import { type AwsSourcePort, createAwsControlProvider } from '@fabrika/provider-aws'
@@ -24,6 +28,13 @@ const required = (source: Record<string, string | undefined>, name: string): str
 	const value = source[name]
 	if (value === undefined || value.trim() === '') throw new Error(`${name} is required by the AWS provider`)
 	return value
+}
+
+/** A variable that must say `true` or `false`. */
+const flag = (source: Record<string, string | undefined>, name: string): boolean => {
+	const value = required(source, name).trim()
+	if (value !== 'true' && value !== 'false') throw new Error(`${name} must be true or false`)
+	return value === 'true'
 }
 
 /**
@@ -54,6 +65,11 @@ export function awsControlProvider(source: Record<string, string | undefined>, s
 			region: required(source, 'FABRIKA_AWS_REGION'),
 			cluster: required(source, 'FABRIKA_AWS_CLUSTER'),
 			sourcesBucket: required(source, 'FABRIKA_AWS_SOURCES_BUCKET'),
+		},
+		network: {
+			vpcId: required(source, 'FABRIKA_AWS_VPC_ID'),
+			subnets: required(source, 'FABRIKA_AWS_SUBNETS').split(',').map((subnet) => subnet.trim()),
+			publicIp: flag(source, 'FABRIKA_AWS_TASK_PUBLIC_IP'),
 		},
 		source: sourcePort,
 	})

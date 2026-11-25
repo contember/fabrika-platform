@@ -13,6 +13,10 @@
 //   stack (Control, which must create roles to do it) can only create roles inside it: Control's own policy (step 11
 //   of the idea doc) allows its role writes only with that boundary and never lets it change or remove it.
 // - The stack owns the repository, its lifecycle policy included (`ecrLifecyclePolicy`, the rule the deploy sends).
+// - The security group of the environment's tasks, in the installation's VPC: outbound only, no ingress rule, so
+//   nothing reaches the application's port until the namespace stack admits its proxy. Its id is the stack's output.
+// - Not the ECS service: its task definition is the deploy's, which registers one per run and creates the service with
+//   the first (`deploy.ts`). A service in the stack would name a revision the next stack update could roll back to.
 //
 // `awsEnvironmentStack` is pure: it renders the template. `ensureEnvironmentStack` applies it through CloudFormation
 // (`aws/cloudformation.ts`), which a deploy runs before its steps.
@@ -22,7 +26,14 @@
 // account. SecureString parameters under the account's default `aws/ssm` key need no `kms:Decrypt` grant of their own.
 
 import type { JsonValue } from '@fabrika/provider-contract'
-import { type CloudFormationClient, MAX_TEMPLATE_BYTES, STACK_STATUSES, type StackStatus } from './aws/cloudformation'
+import {
+	type CloudFormationClient,
+	MAX_TEMPLATE_BYTES,
+	STACK_STATUSES,
+	type StackDescription,
+	type StackStatus,
+	type StackSummary,
+} from './aws/cloudformation'
 import { ecrLifecyclePolicy } from './aws/ecr'
 import { AwsError } from './aws/transport'
 import { AWS_BUILDSPEC } from './build'
@@ -35,6 +46,44 @@ export const AWS_LOG_RETENTION_DAYS = 30
 /** The build's image: Amazon Linux on ARM, because the tasks run on ARM64 (`ecs.ts`). */
 export const AWS_BUILD_IMAGE = 'aws/codebuild/amazonlinux-aarch64-standard:3.0'
 const IAM_PATH = '/fabrika/apps/'
+/** The output that names the environment's security group, whose id EC2 chooses. */
+const SECURITY_GROUP_OUTPUT = 'SecurityGroupId'
+/** A VPC's, a subnet's and a security group's id. */
+const VPC_ID = /^vpc-[0-9a-f]{8,17}$/
+const SUBNET_ID = /^subnet-[0-9a-f]{8,17}$/
+const SECURITY_GROUP_ID = /^sg-[0-9a-f]{8,17}$/
+/** The most subnets an `awsvpc` network takes. */
+const MAX_SUBNETS = 16
+
+/**
+ * The installation's network, Control's own configuration like the rest of the installation's coordinates: the VPC an
+ * environment's security group is created in, the subnets its tasks run in, and whether a task gets a public address
+ * (a small installation's way out without a NAT gateway). No environment stores it; every deploy reads the current one.
+ */
+export interface AwsInstallationNetwork {
+	readonly vpcId: string
+	readonly subnets: readonly string[]
+	readonly publicIp: boolean
+}
+
+/** `network` as given, or an error naming the field of another form (never a value). */
+export function checkInstallationNetwork(network: AwsInstallationNetwork): AwsInstallationNetwork {
+	if (!VPC_ID.test(network.vpcId)) throw new Error('aws: the installation network names a VPC id of another form')
+	const { subnets } = network
+	if (
+		subnets.length === 0 || subnets.length > MAX_SUBNETS || new Set(subnets).size !== subnets.length
+		|| !subnets.every((subnet) => SUBNET_ID.test(subnet))
+	) {
+		throw new Error(`aws: the installation network names no subnets, more than ${MAX_SUBNETS}, one twice or one of another form`)
+	}
+	return { vpcId: network.vpcId, subnets: [...subnets], publicIp: network.publicIp }
+}
+
+/** What the environment's stack created under names AWS chose. */
+export interface AwsEnvironmentStackOutputs {
+	/** The group of the environment's tasks: the service's and the init tasks'. */
+	readonly securityGroupId: string
+}
 
 /** The pieces of one environment's stack: its name and the template CloudFormation takes. */
 export interface AwsEnvironmentStack {
@@ -79,7 +128,13 @@ function allow(actions: readonly string[], resources: readonly string[]): JsonVa
 }
 
 /** The stack of one application environment of `installation`. */
-export function awsEnvironmentStack(appId: string, env: string, installation: AwsAppTarget): AwsEnvironmentStack {
+export function awsEnvironmentStack(
+	appId: string,
+	env: string,
+	installation: AwsAppTarget,
+	network: Pick<AwsInstallationNetwork, 'vpcId'>,
+): AwsEnvironmentStack {
+	if (!VPC_ID.test(network.vpcId)) throw new Error('aws: the VPC id is not one EC2 names a VPC by')
 	const resources = awsEnvironmentResources(appId, env, installation.accountId)
 	const { accountId, region } = installation
 	const repositoryArn = `arn:aws:ecr:${region}:${accountId}:repository/${resources.repository}`
@@ -191,6 +246,21 @@ export function awsEnvironmentStack(appId: string, env: string, installation: Aw
 					Tags: tags,
 				},
 			},
+			SecurityGroup: {
+				Type: 'AWS::EC2::SecurityGroup',
+				Properties: {
+					GroupDescription: `fabrika: the tasks of ${appId}/${env}`,
+					VpcId: network.vpcId,
+					// No ingress rule: nothing reaches the application's port, not even another task of the installation. The
+					// namespace stack admits its proxy's group alone (ADR-0022 rule 5). The tasks reach out: the image pull,
+					// Parameter Store and the logs, and whatever the application itself calls.
+					SecurityGroupEgress: [{ IpProtocol: '-1', CidrIp: '0.0.0.0/0', Description: 'outbound' }],
+					Tags: tags,
+				},
+			},
+		},
+		Outputs: {
+			[SECURITY_GROUP_OUTPUT]: { Value: { 'Fn::GetAtt': ['SecurityGroup', 'GroupId'] } },
 		},
 	}
 	return { stackName: resources.stackName, resources, template, tags: { 'fabrika:app': appId, 'fabrika:env': env } }
@@ -227,7 +297,14 @@ function sameTemplate(answered: string, wanted: string): boolean {
 }
 
 /** A read of the stack: by name (`null` when none is listed) or by id (`DELETE_COMPLETE` once it is deleted). */
-type StackRead = { readonly stackId: string; readonly status: StackStatus | 'DELETE_COMPLETE' } | null
+type StackRead = StackSummary | StackDescription | null
+
+/** The outputs the template declares, each of its form; a stack without them is one this deploy cannot run in. */
+function outputsOf(name: string, outputs: Readonly<Record<string, string>>): AwsEnvironmentStackOutputs {
+	const securityGroupId = outputs[SECURITY_GROUP_OUTPUT] ?? ''
+	if (!SECURITY_GROUP_ID.test(securityGroupId)) throw new Error(`aws: the stack ${name} names no security group of the form EC2 gives one`)
+	return { securityGroupId }
+}
 
 /** What a read that may be sent again answered, or `UNREAD` when AWS asked to read again later. */
 const UNREAD = Symbol('unread')
@@ -263,11 +340,12 @@ export interface EnsureEnvironmentStackInput {
  *   was deleted (`OnFailure=DELETE`), so a create that fails before the first read is reported as failed, not as a
  *   timeout. Absence is decided by `ListStacks` alone (`findStack`).
  * - A read refused for rate or with a lost answer is read again at the next poll; a refused write fails the run.
+ * - Answers the stack's outputs (`AwsEnvironmentStackOutputs`), read by its id once it serves the template.
  * - Refused: a create or an update of its own that failed, a stack an operator must repair (`*_FAILED`,
  *   `ROLLBACK_COMPLETE`, an unexecuted change set), a template past `MAX_TEMPLATE_BYTES` (named, not a bare refusal),
  *   and a wait past `AWS_STACK_TIMEOUT_MS`.
  */
-export async function ensureEnvironmentStack(input: EnsureEnvironmentStackInput): Promise<void> {
+export async function ensureEnvironmentStack(input: EnsureEnvironmentStackInput): Promise<AwsEnvironmentStackOutputs> {
 	const { cloudFormation, stack, signal, sleep, log } = input
 	const now = input.now ?? Date.now
 	const newToken = input.newToken ?? (() => crypto.randomUUID())
@@ -314,8 +392,17 @@ export async function ensureEnvironmentStack(input: EnsureEnvironmentStackInput)
 				const answered = await readAgainLater(() => cloudFormation.getTemplate(name, signal))
 				if (answered !== UNREAD) {
 					if (sameTemplate(answered, wanted)) {
-						log(`aws: the stack ${name} is current`)
-						return
+						// A read by name lists no outputs: the stack is read by its id for them.
+						const settled = found
+						const described = 'outputs' in settled ? settled : await readAgainLater(() => cloudFormation.describeStack(settled.stackId, signal))
+						if (described !== UNREAD && described.status !== 'DELETE_COMPLETE' && SETTLED.has(described.status)) {
+							log(`aws: the stack ${name} is current`)
+							return outputsOf(name, described.outputs)
+						}
+						// Read again at the next poll: the read failed, or the stack moved in between.
+						if (now() >= giveUpAt) throw new Error(`aws: the stack ${name} did not settle within ${AWS_STACK_TIMEOUT_MS / 60_000} minutes`)
+						await sleep(AWS_STACK_POLL_MS, signal)
+						continue
 					}
 					if (sent === 'update') throw new Error(`aws: the stack ${name} holds another template than the update sent`)
 					await cloudFormation.updateStack({ name, templateBody: body, token: newToken() }, signal)
