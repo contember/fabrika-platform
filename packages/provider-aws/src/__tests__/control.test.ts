@@ -118,7 +118,10 @@ class Fake {
 				this.calls.push(`project ${start.project}`)
 				return { id: BUILD_ID, status: 'in_progress', phase: 'QUEUED', log: null }
 			},
-			findBuild: async () => null,
+			findBuild: async (project, token) => {
+				this.calls.push(`findBuild ${project} ${token}`)
+				return null
+			},
 			getBuild: async (id) => ({ id, status: this.buildStatus, phase: 'COMPLETED', log: null }),
 			stopBuild: async (id) => {
 				this.calls.push(`stopBuild ${id}`)
@@ -399,6 +402,21 @@ describe('the AWS control provider', () => {
 		expect(fake.calls).toContain(`deleteSecret /fabrika/apps/notes/prod/builds/${TOKEN}/source-url`)
 		// The discard also deletes the run's own secret parameters, which a crash left behind.
 		expect(fake.calls).toContain(`deleteSecret ${ENV_PATH}/${RUN}.API_TOKEN`)
+	})
+
+	test("a cancel of a run whose start answer was lost looks for its build in the environment's own project", async () => {
+		const fake = new Fake()
+		const providerState: JsonValue = { buildToken: TOKEN }
+		const outcome = await fake.provider().cancel?.({
+			runId: RUN,
+			externalId: TOKEN,
+			environment: environmentOf(),
+			providerState,
+			startedAtMs: Date.now(),
+			signal: new AbortController().signal,
+		})
+		expect(outcome).toEqual({ state: 'settled', outcome: 'failed' })
+		expect(fake.calls).toContain(`findBuild fabrika_notes_prod ${TOKEN}`)
 	})
 
 	test('the task values split managed credentials from public ones and skip a removed one', () => {

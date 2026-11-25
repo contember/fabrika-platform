@@ -4,9 +4,11 @@
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import { ecrLifecyclePolicy } from '../aws/ecr'
 import { AWS_BUILDSPEC } from '../build'
 import type { AwsAppTarget } from '../codecs'
-import { AWS_BUILD_IMAGE, awsEnvironmentStack } from '../environment-stack'
+import { AWS_KEPT_IMAGES } from '../control'
+import { AWS_BUILD_IMAGE, awsAppsPermissionsBoundary, awsEnvironmentStack } from '../environment-stack'
 
 const installation: AwsAppTarget = {
 	accountId: '123456789012',
@@ -102,16 +104,36 @@ describe('awsEnvironmentStack', () => {
 		expect(pushes.map((grant) => grant.role)).toEqual(['BuildRole'])
 	})
 
-	test('each trust policy names its service and this account', () => {
-		const expected = { TaskRole: 'ecs-tasks.amazonaws.com', ExecutionRole: 'ecs-tasks.amazonaws.com', BuildRole: 'codebuild.amazonaws.com' }
-		for (const [role, service] of Object.entries(expected)) {
+	test('each trust policy names its service, this account and the resources that may take it', () => {
+		const ecs = { ArnLike: { 'aws:SourceArn': 'arn:aws:ecs:eu-central-1:123456789012:*' } }
+		const expected = {
+			TaskRole: { service: 'ecs-tasks.amazonaws.com', source: ecs },
+			ExecutionRole: { service: 'ecs-tasks.amazonaws.com', source: ecs },
+			// Only this environment's own project: the role is the build's, not any project's of the account.
+			BuildRole: {
+				service: 'codebuild.amazonaws.com',
+				source: { ArnEquals: { 'aws:SourceArn': 'arn:aws:codebuild:eu-central-1:123456789012:project/fabrika_notes_prod' } },
+			},
+		}
+		for (const [role, { service, source }] of Object.entries(expected)) {
 			expect(list(at(resources, role, 'Properties', 'AssumeRolePolicyDocument', 'Statement'))).toEqual([{
 				Effect: 'Allow',
 				Principal: { Service: service },
 				Action: 'sts:AssumeRole',
-				Condition: { StringEquals: { 'aws:SourceAccount': '123456789012' } },
+				Condition: { StringEquals: { 'aws:SourceAccount': '123456789012' }, ...source },
 			}])
 		}
+	})
+
+	test("every role carries the installation's permissions boundary, so whoever applies the stack creates roles only inside it", () => {
+		for (const role of ['TaskRole', 'ExecutionRole', 'BuildRole']) {
+			expect(at(resources, role, 'Properties', 'PermissionsBoundary')).toBe(awsAppsPermissionsBoundary('123456789012'))
+		}
+		expect(awsAppsPermissionsBoundary('123456789012')).toBe('arn:aws:iam::123456789012:policy/fabrika/fabrika-apps-boundary')
+	})
+
+	test('the stack owns the repository with the lifecycle rule the deploy sends', () => {
+		expect(at(resources, 'Repository', 'Properties', 'LifecyclePolicy', 'LifecyclePolicyText')).toBe(ecrLifecyclePolicy(AWS_KEPT_IMAGES))
 	})
 
 	test("two environments' stacks share no resource and no name", () => {

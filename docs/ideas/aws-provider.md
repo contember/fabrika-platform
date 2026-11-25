@@ -341,9 +341,18 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     `awsEnvironmentStack`: its repository, its two log groups, its task role (no permission yet), its execution role
     (pull its images, write its log group, read its `env/` parameters) and its own build project with a build role
     (push to its repository, read its `builds/` parameters, write its build log group). Every trust policy names its
-    service and the account (`aws:SourceAccount`). The deploy builds in the environment's project, so no application's
-    build steps hold a role that reaches another environment. Not yet: applying the stack (a CloudFormation client,
-    `CreateStack`/`UpdateStack`, deciding absence from `ListStacks`), the service itself, and the network below.
+    service, the account (`aws:SourceAccount`) and who may take it (`aws:SourceArn`: the environment's own project for
+    the build role, ECS in this account and region for the other two). Every role carries the installation's
+    permissions boundary (`awsAppsPermissionsBoundary`, `policy/fabrika/fabrika-apps-boundary`), which step 11 requires
+    on every role Control creates. The stack owns the repository with the lifecycle rule the deploy sends
+    (`ecrLifecyclePolicy`). The deploy builds in the environment's project, so no application's build steps hold a
+    role that reaches another environment.
+    Not yet:
+    - applying the stack (a CloudFormation client, `CreateStack`/`UpdateStack`, deciding absence from `ListStacks`);
+    - with it, the deploy's repository step stops creating the repository and its lifecycle policy, and only checks
+      that the environment's stack is complete, refusing before the upload when it is not. Until then a deploy before
+      the stack creates the repository, and a later `CreateStack` would find it taken;
+    - the service itself, and the network below.
 
     **`src/namespace/`**: the namespace stack (security groups, the Service Connect namespace, the proxy service, the
     ALB rule and certificate; for `full` an RDS instance), the database per application in the shared instance for
@@ -364,8 +373,25 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     - CodeBuild: `StartBuild`, `BatchGetBuilds`, `StopBuild`, `ListBuildsForProject` on `project/fabrika_*`.
     - CloudWatch Logs: the reads on `log-group:/fabrika/apps/*` (the build log groups are below it).
     - S3: `PutObject`, the multipart calls and `GetObject` (the presigned read) on `<bucket>/sources/*`.
-    - CloudFormation, for the environment stacks of step 10: the stack calls on `stack/fabrika-app-*`, and
-      `iam:PassRole` on `role/fabrika/apps/*` to `codebuild.amazonaws.com` too.
+    - CloudFormation, for the environment stacks of step 10: `CreateStack`, `UpdateStack`, `DescribeStacks`,
+      `DescribeStackEvents` and `DeleteStack` on `stack/fabrika-app-*`. Without a service role CloudFormation creates
+      each resource with the caller's credentials, so applying the stack also needs, each on the step 9 prefix:
+      `iam:CreateRole`, `iam:PutRolePolicy`, `iam:DeleteRolePolicy`, `iam:TagRole`, `iam:DeleteRole`,
+      `iam:GetRole` on `role/fabrika/apps/*`; `codebuild:CreateProject`, `UpdateProject`, `DeleteProject` on
+      `project/fabrika_*`; `ecr:CreateRepository`, `PutLifecyclePolicy`, `TagResource`, `DeleteRepository` on
+      `repository/fabrika/apps/*`; `logs:CreateLogGroup`, `PutRetentionPolicy`, `TagResource`, `DeleteLogGroup` on
+      `log-group:/fabrika/apps/*`; and `iam:PassRole` on `role/fabrika/apps/*` with `iam:PassedToService` also
+      `codebuild.amazonaws.com`.
+    - **The boundary.** Role writes would let Control mint a role with any inline policy and run code under it. So
+      `iam:CreateRole` and `iam:PutRolePolicy` are allowed only with the condition `iam:PermissionsBoundary` equal to
+      `policy/fabrika/fabrika-apps-boundary`, which the installation stack creates and which allows only what an
+      environment's roles need (the ECR pull and push calls on `repository/fabrika/apps/*`, the log writes on
+      `log-group:/fabrika/apps/*`, `ssm:GetParameters` on `parameter/fabrika/apps/*`, `ecr:GetAuthorizationToken`).
+      Control's role is denied `iam:DeleteRolePermissionsBoundary` and `iam:PutRolePermissionsBoundary`, and every
+      write to that policy (`iam:CreatePolicyVersion`, `iam:DeletePolicy`, `iam:SetDefaultPolicyVersion`). A
+      CloudFormation service role that Control may only pass is the alternative, if the boundary proves too narrow.
+      UNVERIFIED against an account, like everything here; the caller-credentials behaviour and the boundary
+      conditions are AWS's documented model.
 
     An application's build steps run with its environment's build role (step 10), which reaches only that
     environment's repository, `builds/` parameters and build log group, so no build reaches another application's
@@ -373,7 +399,7 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 12. **`packages/control/src/aws/`** (built): the composition root over the neutral Bun host (`provider.ts`, the server,
     maintenance and migration entries), and `entrypoint-isolation.test.ts` extended to it. It reads
     `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (set by ECS), `FABRIKA_AWS_BASE_IMAGE` (the pinned Bun image) and the
-    five installation coordinates of step 9, and
+    four installation coordinates of step 9, and
     reads repositories through the unbound GitHub source. Nothing runs it until step 11 defines Control's task.
 13. **Tests**: the conformance suite over a fake AWS, renderer tests, and a live suite gated on
     `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack.

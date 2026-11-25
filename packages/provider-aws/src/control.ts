@@ -8,10 +8,11 @@
 //   schedule and the bucket is not built. No source maps either: the deploy reports its artifacts `not_applicable`.
 // - The target holds only what the installation shares (account, region, cluster, sources bucket), and
 //   those come from Control's composition (`installation`), never from a registrant: `normalizeRegistration` replaces a
-//   submitted target with them, and a stored one that differs is refused. Everything of one environment's own (service, repository, parameter path, log group, task and execution roles) is
+//   submitted target with them, and a stored one that differs is refused. Everything of one environment's own
+//   (service, repository, parameter path, log groups, task, execution and build roles, build project, stack) is
 //   derived from its application id and environment (`awsEnvironmentResources`), so a registration cannot point a
-//   deploy, which Control signs with its own role, at another environment's resources. The deploy creates none of
-//   them but the repository.
+//   deploy, which Control signs with its own role, at another environment's resources. The environment's stack
+//   (`awsEnvironmentStack`) declares them; the deploy still ensures the repository until the stack is applied.
 // - The application's secrets and the managed credentials go to Parameter Store as the run's own parameters
 //   (`<parameterPath>/env/<runId>.<NAME>`), written before the steps and read by ECS when a task starts: no write
 //   touches a parameter a live revision reads. A run that does not succeed deletes its own; a successful one deletes

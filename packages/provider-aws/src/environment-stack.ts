@@ -7,8 +7,12 @@
 // - The build project and its role: the build pushes to this environment's repository only, reads only this
 //   environment's source URL parameters and writes only its own log group. An application's own build steps run with
 //   that role, so no application's build reaches another's images or sources (the risk of one shared project).
-// - Every trust policy names its service and this account (`aws:SourceAccount`), so no other account's resource of
-//   that service can take the role.
+// - Every trust policy names its service, this account (`aws:SourceAccount`) and the resources that may take it
+//   (`aws:SourceArn`: the environment's own build project; for the ECS roles, ECS in this account and region).
+// - Every role carries the installation's permissions boundary (`awsAppsPermissionsBoundary`), so whoever applies the
+//   stack (Control, which must create roles to do it) can only create roles inside it: Control's own policy (step 11
+//   of the idea doc) allows its role writes only with that boundary and never lets it change or remove it.
+// - The stack owns the repository, its lifecycle policy included (`ecrLifecyclePolicy`, the rule the deploy sends).
 //
 // Pure: it renders a template; applying it (CreateStack, UpdateStack) is the caller's.
 //
@@ -17,9 +21,10 @@
 // account. SecureString parameters under the account's default `aws/ssm` key need no `kms:Decrypt` grant of their own.
 
 import type { JsonValue } from '@fabrika/provider-contract'
+import { ecrLifecyclePolicy } from './aws/ecr'
 import { AWS_BUILDSPEC } from './build'
 import type { AwsAppTarget } from './codecs'
-import { type AwsEnvironmentResources, awsEnvironmentResources } from './control'
+import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './control'
 import { AWS_BUILD_QUEUED_TIMEOUT_MINUTES, AWS_BUILD_TIMEOUT_MINUTES } from './run-attempt'
 
 /** How long both log groups keep their events (one of CloudWatch Logs' values). */
@@ -40,16 +45,22 @@ function roleName(arn: string): string {
 	return arn.slice(arn.lastIndexOf('/') + 1)
 }
 
-/** A trust policy that lets `service` take the role on behalf of this account only. */
-function trust(service: string, accountId: string): JsonValue {
+/**
+ * The managed policy every application environment's role carries as its permissions boundary: the installation's
+ * (step 11 creates it), at one derived name, so Control's policy can require exactly it on every role write.
+ */
+export function awsAppsPermissionsBoundary(accountId: string): string {
+	return `arn:aws:iam::${accountId}:policy/fabrika/fabrika-apps-boundary`
+}
+
+/** A trust policy that lets `service` take the role on behalf of this account, and only for `sourceArn`. */
+function trust(service: string, accountId: string, sourceArn: { readonly equals: string } | { readonly like: string }): JsonValue {
+	const condition: { [operator: string]: JsonValue } = { StringEquals: { 'aws:SourceAccount': accountId } }
+	if ('equals' in sourceArn) condition['ArnEquals'] = { 'aws:SourceArn': sourceArn.equals }
+	else condition['ArnLike'] = { 'aws:SourceArn': sourceArn.like }
 	return {
 		Version: '2012-10-17',
-		Statement: [{
-			Effect: 'Allow',
-			Principal: { Service: service },
-			Action: 'sts:AssumeRole',
-			Condition: { StringEquals: { 'aws:SourceAccount': accountId } },
-		}],
+		Statement: [{ Effect: 'Allow', Principal: { Service: service }, Action: 'sts:AssumeRole', Condition: condition }],
 	}
 }
 
@@ -72,6 +83,10 @@ export function awsEnvironmentStack(appId: string, env: string, installation: Aw
 	const tags = [{ Key: 'fabrika:app', Value: appId }, { Key: 'fabrika:env', Value: env }]
 	// ECR issues its login token per account; the action takes no resource.
 	const login = allow(['ecr:GetAuthorizationToken'], ['*'])
+	const boundary = awsAppsPermissionsBoundary(accountId)
+	// ECS names the task or the service it takes a role for; any of this account and region, and only of ECS.
+	const ecs = { like: `arn:aws:ecs:${region}:${accountId}:*` }
+	const project = { equals: `arn:aws:codebuild:${region}:${accountId}:project/${resources.buildProject}` }
 
 	const template: JsonValue = {
 		AWSTemplateFormatVersion: '2010-09-09',
@@ -83,6 +98,7 @@ export function awsEnvironmentStack(appId: string, env: string, installation: Aw
 					RepositoryName: resources.repository,
 					ImageTagMutability: 'IMMUTABLE',
 					EncryptionConfiguration: { EncryptionType: 'AES256' },
+					LifecyclePolicy: { LifecyclePolicyText: ecrLifecyclePolicy(AWS_KEPT_IMAGES) },
 					Tags: tags,
 				},
 			},
@@ -99,7 +115,8 @@ export function awsEnvironmentStack(appId: string, env: string, installation: Aw
 				Properties: {
 					RoleName: roleName(resources.taskRoleArn),
 					Path: IAM_PATH,
-					AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', accountId),
+					PermissionsBoundary: boundary,
+					AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', accountId, ecs),
 					Tags: tags,
 				},
 			},
@@ -108,7 +125,8 @@ export function awsEnvironmentStack(appId: string, env: string, installation: Aw
 				Properties: {
 					RoleName: roleName(resources.executionRoleArn),
 					Path: IAM_PATH,
-					AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', accountId),
+					PermissionsBoundary: boundary,
+					AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', accountId, ecs),
 					Policies: [
 						policy('execution', [
 							login,
@@ -125,7 +143,8 @@ export function awsEnvironmentStack(appId: string, env: string, installation: Aw
 				Properties: {
 					RoleName: roleName(resources.buildRoleArn),
 					Path: IAM_PATH,
-					AssumeRolePolicyDocument: trust('codebuild.amazonaws.com', accountId),
+					PermissionsBoundary: boundary,
+					AssumeRolePolicyDocument: trust('codebuild.amazonaws.com', accountId, project),
 					Policies: [
 						policy('build', [
 							login,
