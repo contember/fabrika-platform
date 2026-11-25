@@ -31,11 +31,11 @@ export class AdminUseCaseError extends Error {
 	readonly httpStatus: number
 	readonly type: string
 
-	constructor(httpStatus: number, message: string) {
+	constructor(httpStatus: number, message: string, type?: string) {
 		super(message)
 		this.name = 'AdminUseCaseError'
 		this.httpStatus = httpStatus
-		this.type = httpStatus === 400
+		this.type = type ?? (httpStatus === 400
 			? 'bad_request'
 			: httpStatus === 404
 			? 'not_found'
@@ -43,12 +43,13 @@ export class AdminUseCaseError extends Error {
 			? 'conflict'
 			: httpStatus === 403
 			? 'forbidden'
-			: 'error'
+			: 'error')
 	}
 }
 
-export function fail(status: number, message: string): never {
-	throw new AdminUseCaseError(status, message)
+/** Refuse with `status`; `type` names a refusal a caller must tell apart from others of the same status. */
+export function fail(status: number, message: string, type?: string): never {
+	throw new AdminUseCaseError(status, message, type)
 }
 
 /**

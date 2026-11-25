@@ -8,6 +8,7 @@ import { ForbiddenError, UnauthorizedError } from '@fabrika/app'
 import {
 	type IssuePasskeyChallengeRequest,
 	type ListResponse,
+	NO_PASSKEY_ERROR,
 	type OkResponse,
 	PASSKEY_REGISTRATION_BINDING,
 	type PasskeyAssertion,
@@ -144,7 +145,7 @@ export async function issuePasskeyChallenge(
 ): Promise<PasskeyChallenge<PasskeyRequestOptions>> {
 	const p = await person(ctx)
 	const issued = await issueAssertionChallenge(ctx.services, await relyingParty(p), p.principal.id, input.binding)
-	if (issued === 'no_passkey') return fail(409, 'no passkey is registered; register one under Account → Passkeys')
+	if (issued === 'no_passkey') return fail(409, 'no passkey is registered; register one under Account → Passkeys', NO_PASSKEY_ERROR)
 	if (issued === 'too_many') return fail(429, 'too many open passkey challenges; try again in a few minutes')
 	return issued
 }

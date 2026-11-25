@@ -141,7 +141,22 @@ async function setup() {
 		control.sqlite.close()
 	}
 
-	return { db, ada, eve, authenticator, credentialRequest, context, answer, close }
+	/** IAM forgets the console's origin, so no passkey can be bound to it. */
+	async function forgetConsoleOrigin(): Promise<void> {
+		await iam.repositories.handoff.setReturnOrigins(CONSOLE_APP, [])
+	}
+
+	return { db, ada, eve, authenticator, credentialRequest, context, answer, forgetConsoleOrigin, close }
+}
+
+const refusal = async (promise: Promise<unknown>): Promise<{ status: number; message: string }> => {
+	try {
+		await promise
+		return { status: 200, message: '' }
+	} catch (error) {
+		if (error instanceof ControlApiError) return { status: error.httpStatus, message: error.message }
+		throw error
+	}
 }
 
 const status = async (promise: Promise<unknown>): Promise<number> => {
@@ -188,6 +203,29 @@ describe('the step-up through the real IAM', () => {
 			const decide = { id: x.id, decision: 'reject' as const, inputDigest: x.inputDigest }
 			expect(await challengeApprovalRequestUseCase(await s.context(s.eve), decide)).toEqual({ kind: 'no-passkey' })
 			expect(await status(decideApprovalRequestUseCase(await s.context(s.eve), decide))).toBe(403)
+		} finally {
+			s.close()
+		}
+	})
+
+	test("Control tells IAM's refusals of a challenge apart: no passkey, too many open challenges, no console origin", async () => {
+		const s = await setup()
+		try {
+			const x = await s.credentialRequest()
+			const challenge = { id: x.id, decision: 'reject' as const, inputDigest: x.inputDigest }
+			expect(await challengeApprovalRequestUseCase(await s.context(s.eve), challenge)).toEqual({ kind: 'no-passkey' })
+
+			for (let open = 0; open < 10; open++) expect((await challengeApprovalRequestUseCase(await s.context(s.ada), challenge)).kind).toBe('challenge')
+			expect(await refusal(challengeApprovalRequestUseCase(await s.context(s.ada), challenge))).toEqual({
+				status: 429,
+				message: 'too many open passkey challenges; try again in a few minutes',
+			})
+
+			await s.forgetConsoleOrigin()
+			expect(await refusal(challengeApprovalRequestUseCase(await s.context(s.eve), challenge))).toEqual({
+				status: 409,
+				message: 'the console has no registered origin, so a passkey cannot be bound to it',
+			})
 		} finally {
 			s.close()
 		}

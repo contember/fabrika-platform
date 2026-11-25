@@ -191,7 +191,8 @@ know takes it. `ApprovalDto.stepUp` and `ApprovalRequestDto.stepUp` say which ap
   `control:approval:["run",<id>,<decision>,<candidate digest>,<baseline digest>]` or
   `control:approval:["request",<id>,<decision>,<input digest>]`, and asks IAM's `passkeys.challenge` with the
   approver's console token, over IAM's admin transport (`IAM_ADMIN`, the console's IAM gateway's). A person with no
-  passkey gets `{ kind: 'no-passkey' }`, and the page links Account → Passkeys.
+  passkey gets `{ kind: 'no-passkey' }`, and the page links Account → Passkeys. IAM's other refusals reach the page with
+  their own status and words: 409 when the console has no registered origin, 429 for too many open challenges.
 - **The check.** `approvals.complete` and `approvals.requests.decide` take the answer as `stepUp`. Before anything is
   written, Control rebuilds the binding from the item it decides and asks IAM's `passkeys.verify` with the approver's
   token, then checks that the verified person is the approver. A missing assertion answers 403 ("this decision takes a

@@ -1,11 +1,12 @@
 // A stand-in for IAM's passkey step-up behind Control's IAM transport (`IAM_ADMIN`): it answers `passkeys.challenge` and
 // `passkeys.verify` over `/admin/rpc` the way IAM does (a challenge is single-use, consumed before any comparison, and
-// bound to its binding; a person with no passkey gets a 409), so Control's real client and error mapping run. Unlike IAM,
-// it verifies an assertion whoever calls, so a test can show that Control itself refuses another person's assertion.
-// The console token is `token:<principal id>`.
+// bound to its binding; a person with no passkey gets a 409 of type `no_passkey`), so Control's real client and error
+// mapping run. Unlike IAM, it verifies an assertion whoever calls, so a test can show that Control itself refuses another
+// person's assertion. The console token is `token:<principal id>`.
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import type { ApprovalStepUp, ApprovalStepUpChallenge } from '@fabrika/control-contract'
+import { NO_PASSKEY_ERROR } from '@fabrika/iam-contract'
 import type { HttpService } from '@fabrika/platform'
 import { z } from 'zod'
 
@@ -52,7 +53,9 @@ export function fakePasskeyIam(people: readonly string[] = []): FakePasskeyIam {
 				const { method, input } = call.parse(await request.json())
 				if (method === 'passkeys.challenge') {
 					const { binding } = challengeInput.parse(input)
-					if (!iam.people.has(principalId)) return refusal(409, 'no passkey is registered; register one under Account → Passkeys')
+					if (!iam.people.has(principalId)) {
+						return answer(409, { error: { type: NO_PASSKEY_ERROR, message: 'no passkey is registered; register one under Account → Passkeys' } })
+					}
 					const challengeId = crypto.randomUUID()
 					challenges.set(challengeId, { binding, principalId, used: false })
 					iam.bindings.push(binding)

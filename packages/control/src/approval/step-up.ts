@@ -5,10 +5,16 @@
 import { createRpcClient, RpcError } from '@fabrika/app'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import type { ApprovalDecision, ApprovalStepUp, ApprovalStepUpChallenge, StepUpMode } from '@fabrika/control-contract'
-import type { IamAdminRpcContract, PasskeyChallenge, PasskeyRequestOptions, VerifiedPasskeyAssertion } from '@fabrika/iam-contract'
+import {
+	type IamAdminRpcContract,
+	NO_PASSKEY_ERROR,
+	type PasskeyChallenge,
+	type PasskeyRequestOptions,
+	type VerifiedPasskeyAssertion,
+} from '@fabrika/iam-contract'
 import type { HttpService } from '@fabrika/platform'
 import { z } from 'zod'
-import { fail } from '../api/domain'
+import { ControlApiError, fail } from '../api/domain'
 
 /** What a decision records of its step-up: the passkey that answered (its WebAuthn id) and when IAM verified it. */
 export interface StepUpRecord {
@@ -28,7 +34,8 @@ export function requestStepUpBinding(id: string, decision: ApprovalDecision, inp
 
 /**
  * IAM's passkey step-up for the person the request's console token names. `challenge` answers null when the person has
- * no passkey; `verify` answers null when IAM refused the assertion. Every other failure throws.
+ * no passkey, and throws IAM's other refusals as Control's, with IAM's status and message; `verify` answers null when IAM
+ * refused the assertion. Every other failure throws.
  */
 export interface PasskeyStepUpPort {
 	challenge(binding: string): Promise<PasskeyChallenge<PasskeyRequestOptions> | null>
@@ -92,8 +99,13 @@ export function iamPasskeyStepUp(gateway: HttpService, request: Request): Passke
 			try {
 				return challengeSchema.parse(await client.passkeys.challenge({ binding }))
 			} catch (cause) {
-				// IAM answers 409 to a person with no passkey to answer the challenge with.
-				if (refusalStatus(cause) === 409) return null
+				if (cause instanceof RpcError) {
+					if (cause.type === NO_PASSKEY_ERROR) return null
+					// Any other refusal, such as no console origin to bind a passkey to (409) or too many open challenges (429),
+					// reaches the person in IAM's words.
+					const status = refusalStatus(cause)
+					if (status !== null) fail(status, cause.message)
+				}
 				throw cause
 			}
 		},
@@ -114,7 +126,8 @@ export async function issueStepUpChallenge(port: PasskeyStepUpPort | undefined, 
 	let challenge: PasskeyChallenge<PasskeyRequestOptions> | null
 	try {
 		challenge = await port.challenge(binding)
-	} catch {
+	} catch (cause) {
+		if (cause instanceof ControlApiError) throw cause
 		fail(502, 'IAM did not issue a passkey challenge; try again')
 	}
 	return challenge === null ? { kind: 'no-passkey' } : { kind: 'challenge', challenge }

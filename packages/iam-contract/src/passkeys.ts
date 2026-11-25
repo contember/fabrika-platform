@@ -13,6 +13,9 @@ export const MAX_PASSKEY_BINDING_LENGTH = 512
 /** How many passkeys one person may keep. */
 export const MAX_PASSKEYS_PER_PERSON = 20
 
+/** The error `type` of `passkeys.challenge`'s refusal to a person with no passkey, so a caller tells it from other 409s. */
+export const NO_PASSKEY_ERROR = 'no_passkey'
+
 /** The binding of the assertion that registering another passkey takes, when the person already has one. */
 export const PASSKEY_REGISTRATION_BINDING = 'iam:passkeys.register'
 

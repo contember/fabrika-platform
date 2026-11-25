@@ -4,6 +4,7 @@
 // Postgres runs when FABRIKA_TEST_POSTGRES_URL is set and skips cleanly otherwise.
 
 import {
+	NO_PASSKEY_ERROR,
 	PASSKEY_REGISTRATION_BINDING,
 	type PasskeyAssertion,
 	type PasskeyChallenge,
@@ -340,12 +341,11 @@ for (const { name, engine, skip } of engines) {
 				expect(await verify(await asserted(i, person, authenticator, 'b', { counter: 3 }))).toEqual(NOT_ACCEPTED)
 			})
 
-			test('a person without a passkey gets no challenge', async () => {
+			test('a person without a passkey gets no challenge, a refusal of its own type', async () => {
 				const i = await installation(engine())
-				expect(refusal(await i.as(await i.person(), 'passkeys.challenge', { binding: 'approval:item-x' }))).toEqual([
-					409,
-					'no passkey is registered; register one under Account → Passkeys',
-				])
+				const answer = await i.as(await i.person(), 'passkeys.challenge', { binding: 'approval:item-x' })
+				expect(refusal(answer)).toEqual([409, 'no passkey is registered; register one under Account → Passkeys'])
+				expect(prop(prop(answer.body, 'error'), 'type')).toBe(NO_PASSKEY_ERROR)
 			})
 		})
 
