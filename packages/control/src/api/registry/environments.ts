@@ -28,7 +28,14 @@ import {
 	resolveRegistrationNamespace,
 	toAppEnvDto,
 } from './registration'
-import { assertAppEnvironmentPart, assertCrossOrigins, assertProxyDomain, canonicalOrigin, triggerRefInput } from './validation'
+import {
+	assertAppEnvironmentPart,
+	assertCrossOrigins,
+	assertNewEnvironmentName,
+	assertProxyDomain,
+	canonicalOrigin,
+	triggerRefInput,
+} from './validation'
 
 export async function listAppEnvsUseCase(c: RegistryUseCaseContext, appId: string): Promise<ListResponse<AppEnvDto>> {
 	await requireApp(c, appId)
@@ -41,6 +48,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	assertProxyDomain(input.domain)
 	const triggerRef = triggerRefInput(input.triggerRef)
 	const existing = await c.repositories.registry.getAppEnv(appId, env)
+	if (existing === null) assertNewEnvironmentName(env)
 	// Omitted keeps the stored list, which the new domain may now collide with, so the list in effect is what is judged.
 	assertCrossOrigins(input.crossOrigins ?? (existing === null ? [] : appEnvCrossOrigins(existing)), input.domain ?? null)
 	if (input.kind !== undefined && existing !== null && input.kind !== existing.kind) {

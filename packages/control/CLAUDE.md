@@ -849,7 +849,7 @@ other environment, before the provider prepares anything, and the write maps a r
   closed request held. `PRODUCTION_REQUEST_KINDS` (`production.ts`, kinds in `kinds/`) holds Control's local writes,
   each executing through the use case its procedure runs, as the approver; a write that reaches the provider answers
   400 at creation, and a secret value is sealed under the request's purpose (`kinds/secrets.ts`). The all-environments
-  layer is `env = '*'` (`ALL_ENVIRONMENTS`); `rules.ts` judges it by the strictest protected environment. Its decision and the sweep hold the
+  layer is `env = '*'` (`ALL_ENVIRONMENTS`), a name `put` and `register` refuse to a new environment (`assertNewEnvironmentName`); `rules.ts` judges it by the strictest protected environment. Its decision and the sweep hold the
   lease of every environment it reaches and `<app>:*`, the row's fence, all or none (`acquireRequestLease`). `refused.ts` names the procedures no request may name, with why. Creating is a bearer's
   only (a console person gets 409). Every transition is one conditional update on the state it leaves
   (`ApprovalRequestRepository`), the decision checks the deadline in the same write, and every write from the final

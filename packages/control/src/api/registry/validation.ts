@@ -1,4 +1,5 @@
 import { APP_ENVIRONMENT_SEPARATOR, frameworkVariableReference, isAppEnvironmentPart, isFrameworkVariableName } from '@fabrika/auth-core'
+import { ALL_ENVIRONMENTS } from '@fabrika/control-contract'
 import { isCrossOrigin, MAX_CROSS_ORIGINS } from '@fabrika/proxy-core/headers'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { canonicalPublicOrigin, PublicOriginValidationError } from '../../public-origin'
@@ -36,6 +37,14 @@ export function assertAppEnvironmentPart(kind: 'app id' | 'environment', value: 
 	if (!isAppEnvironmentPart(value)) {
 		fail(400, `${kind} "${value}" must be non-empty and must not contain '${APP_ENVIRONMENT_SEPARATOR}'`)
 	}
+}
+
+/**
+ * `*` names the all-environments layer of an approval request (ADR-0083 §8), so no new environment takes it. An environment
+ * stored under it before this rule keeps working.
+ */
+export function assertNewEnvironmentName(env: string): void {
+	if (env === ALL_ENVIRONMENTS) fail(400, `environment "${env}" names the all-environments layer; give the environment another name`)
 }
 
 /** Keep a variable value one bounded line: the Zerops import document interpolates it as raw text. */

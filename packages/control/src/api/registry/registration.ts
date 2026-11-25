@@ -13,12 +13,20 @@ import { fail } from '../domain'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { sourceBindingFields, toAppDto } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
-import { assertAppEnvironmentPart, assertCrossOrigins, assertProxyDomain, canonicalOrigin, triggerRefInput } from './validation'
+import {
+	assertAppEnvironmentPart,
+	assertCrossOrigins,
+	assertNewEnvironmentName,
+	assertProxyDomain,
+	canonicalOrigin,
+	triggerRefInput,
+} from './validation'
 
 export async function registerAppUseCase(c: RegistryUseCaseContext, input: RegisterAppRequest): Promise<RegisterAppResponse> {
 	const { id, repoUrl, env } = input
 	assertAppEnvironmentPart('app id', id)
 	assertAppEnvironmentPart('environment', env)
+	assertNewEnvironmentName(env)
 	if (await c.repositories.registry.getApp(id)) fail(409, 'an app with this id already exists')
 	assertProxyDomain(input.domain)
 	const triggerRef = triggerRefInput(input.triggerRef)

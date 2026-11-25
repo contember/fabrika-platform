@@ -1123,6 +1123,35 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 		expect(await deps.repositories.registry.listAppEnvs('app')).toEqual([])
 	})
 
+	test('`*` names the all-environments layer, so no new environment takes it; one stored before keeps working', async () => {
+		const { deps } = await seededApp()
+		const put = await rpcResult(rpcRequest('apps.environments.put', { appId: 'app', env: '*', environment: registrationEnvelopes() }), deps)
+		expect(put.status).toBe(400)
+		expect(((await put.json()) as { error: string }).error).toContain('all-environments layer')
+		const registered = await rpcResult(
+			rpcRequest('register', { ...registrationEnvelopes(), id: 'acme', repoUrl: 'https://github.com/acme/app', env: '*' }),
+			deps,
+		)
+		expect(registered.status).toBe(400)
+		expect(await deps.repositories.registry.getApp('acme')).toBeNull()
+		expect(await deps.repositories.registry.listAppEnvs('app')).toEqual([])
+
+		await deps.repositories.registry.upsertAppEnv({
+			appId: 'app',
+			env: '*',
+			namespaceId: null,
+			provider: 'harbor',
+			providerTargetJson: JSON.stringify(registrationEnvelopes().target),
+			providerArtifactJson: JSON.stringify(registrationEnvelopes().artifact),
+		})
+		const kept = await rpcResult(
+			rpcRequest('apps.environments.put', { appId: 'app', env: '*', environment: { ...registrationEnvelopes(), domain: 'all.example.com' } }),
+			deps,
+		)
+		expect(kept.status).toBe(200)
+		expect((await deps.repositories.registry.getAppEnv('app', '*'))?.domain).toBe('all.example.com')
+	})
+
 	const BAD_DOMAINS = ['*', '*.apps.example.com', 'apps.example.com:8080', 'https://apps.example.com', 'apps.example.com/x']
 
 	test('a domain must be a literal host the proxy can route on', async () => {
