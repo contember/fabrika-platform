@@ -31,6 +31,7 @@ const ENV_NAMES = [
 	'FABRIKA_CONTROL_URL',
 	'FABRIKA_IAM_PROVISIONING_KEY',
 	'FABRIKA_PLATFORM_MCP_CLIENTS_JSON',
+	'FABRIKA_PLATFORM_MCP_AUTHORING',
 	...builtinEmailProviderVariables.map((variable) => variable.name),
 ]
 const originalEnvironment = new Map(ENV_NAMES.map((name) => [name, process.env[name]]))
@@ -350,6 +351,27 @@ describe('IAM resource graph', () => {
 		expect(operations).toEqual(['read:app', 'deploy:app', 'operate:app'])
 
 		expect(buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, REMOTE_SOURCE).options.vars?.['OAUTH_CONFIG']).toBe('')
+	})
+
+	test("names the installation's hosts in OAUTH_CONFIG, which IAM checks a registered external application against (ADR-0089)", () => {
+		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
+		const hostsOf = (source: Record<string, string>) =>
+			parseOAuthConfig(buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, source).options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)?.hosts
+		expect(hostsOf(relayed)).toEqual([REMOTE_DOMAIN, 'console.example.com'])
+		// Spelled as IAM's parser takes a hostname, whatever case the operator wrote.
+		expect(hostsOf({ ...relayed, OPERATIONS_HOSTNAME: 'Operations.Example.com' })).toEqual([
+			REMOTE_DOMAIN,
+			'console.example.com',
+			'operations.example.com',
+		])
+	})
+
+	test('refuses MCP authoring switched on, which a Cloudflare installation does not support yet, and a malformed switch', () => {
+		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
+		const build = (value: string) => () => buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_AUTHORING: value })
+		expect(build('on')).toThrow('FABRIKA_PLATFORM_MCP_AUTHORING=on: a Cloudflare installation does not support MCP authoring yet')
+		expect(build('enabled')).toThrow('FABRIKA_PLATFORM_MCP_AUTHORING must be on or off')
+		expect(build('off')().options.vars?.['OAUTH_CONFIG']).not.toBe('')
 	})
 
 	test("registers the operator's identity-bound external clients beside the command-line client's resources (ADR-0084)", () => {

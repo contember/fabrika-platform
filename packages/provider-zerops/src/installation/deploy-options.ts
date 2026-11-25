@@ -12,8 +12,18 @@
 // The command is unattended by construction: nothing here prompts, and a missing required value is an
 // error naming both the flag and the variable that would supply it.
 
-import { describeArgument, type McpClient, parseMcpClientsJson, readEnv, requiredSetting, setting } from '@fabrika/installation-init'
-import { PLATFORM_DEPLOY_ORDER } from './deploy'
+import {
+	describeArgument,
+	MCP_AUTHORING_VARIABLE,
+	type McpClient,
+	parseMcpAuthoring,
+	parseMcpClientsJson,
+	readEnv,
+	readFlag,
+	requiredSetting,
+	setting,
+} from '@fabrika/installation-init'
+import { MCP_CLIENTS_VARIABLE, PLATFORM_DEPLOY_ORDER } from './deploy'
 import { parsePlatformHosts, parsePlatformScheme } from './placement-options'
 import { parsePlainVariables } from './plain-credentials'
 import { readInstallationSourceDir } from './source-options'
@@ -37,9 +47,14 @@ export interface PlatformDeployInput {
 	/** The scheme a browser speaks to this installation. `https` unless a local composition says otherwise. */
 	readonly scheme: 'http' | 'https'
 	readonly sourceDir: string
-	/** The MCP clients this installation trusts. Absent leaves MCP authoring off (ADR-0049). */
+	/**
+	 * The operator's OAuth client list, absent when unset. The deploy imports it into IAM's registry once and still writes
+	 * it into IAM's configuration (ADR-0089, release N).
+	 */
 	readonly mcpClients?: readonly McpClient[]
-	/** IAM-issued `px_` admin key, used only to reconcile the console's schema. Environment only. */
+	/** The MCP authoring switch (ADR-0089 §4); absent when unset, which this release alone infers from `mcpClients`. */
+	readonly mcpAuthoring?: boolean
+	/** IAM-issued `px_` admin key: it reconciles the console's schema and imports the OAuth client list. Environment only. */
 	readonly iamAdminKey: string
 	/**
 	 * Readable service variables, as `<service>/<KEY>`, the operator has checked are not credentials. The deploy refuses
@@ -61,6 +76,7 @@ const FLAGS = [
 	'--scheme',
 	'--source-dir',
 	'--mcp-clients',
+	'--mcp-authoring',
 	'--plain-variables',
 ] as const
 
@@ -120,11 +136,19 @@ export const parsePlatformDeployArgs = (
 	const dryRun = argv.includes('--dry-run')
 	const hosts = readHosts(argv, env)
 	const apiBaseUrl = readEnv(env, 'FABRIKA_ZEROPS_API_URL')
-	const mcpClients = setting(argv, env, '--mcp-clients', 'FABRIKA_PLATFORM_MCP_CLIENTS_JSON')
+	const mcpClients = setting(argv, env, '--mcp-clients', MCP_CLIENTS_VARIABLE)
+	const flagged = readFlag(argv, '--mcp-authoring')
+	const mcpAuthoring = parseMcpAuthoring(
+		flagged ?? readEnv(env, MCP_AUTHORING_VARIABLE),
+		flagged === undefined ? MCP_AUTHORING_VARIABLE : '--mcp-authoring',
+	)
 	const scheme = readScheme(argv, env)
 	// Control reads a bare `FABRIKA_CONTROL_DOMAIN` as https, so an http resource would never match its own.
 	if (mcpClients !== undefined && scheme === 'http') {
 		throw new Error('MCP clients need --scheme=https: an OAuth resource on plain http would not match the one Control serves')
+	}
+	if (mcpAuthoring === true && scheme === 'http') {
+		throw new Error('MCP authoring needs --scheme=https: an OAuth resource on plain http would not match the one Control serves')
 	}
 	return {
 		project: readProject(argv, env),
@@ -142,5 +166,6 @@ export const parsePlatformDeployArgs = (
 		sourceDir,
 		...(apiBaseUrl === undefined ? {} : { apiBaseUrl }),
 		...(mcpClients === undefined ? {} : { mcpClients: parseMcpClientsJson(mcpClients) }),
+		...(mcpAuthoring === undefined ? {} : { mcpAuthoring }),
 	}
 }

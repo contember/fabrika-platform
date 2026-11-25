@@ -5,6 +5,7 @@
 import {
 	action as consoleAction,
 	confirmations,
+	createIamAdminClient,
 	generateInstallationSecrets,
 	IAM_OIDC_CLIENT_SECRET_VARIABLE,
 	info as consoleInfo,
@@ -285,6 +286,7 @@ export const consoleInstallCollaborators = (input: PlatformInstallInput, reconci
 			...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }),
 		}),
 		reconcileSchema,
+		iamAdmin: createIamAdminClient,
 		sleep: defaultSleep,
 		log: {
 			step: (title) => consoleStep(title),

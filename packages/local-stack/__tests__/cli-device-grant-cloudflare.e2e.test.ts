@@ -263,6 +263,7 @@ test('a Cloudflare IAM deploy serves the command-line client the very resources 
 		FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning',
 		FABRIKA_EMAIL_PROVIDER: 'none',
 		FABRIKA_CONTROL_URL: CONSOLE,
+		OPERATIONS_HOSTNAME: 'operations.example.test',
 	})
 	expect(JSON.parse(stringVar(cloudflare, 'OAUTH_CONFIG'))).toEqual(zerops)
 })

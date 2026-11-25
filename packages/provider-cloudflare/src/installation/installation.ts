@@ -7,7 +7,12 @@ import { deployCloudflareConfig } from '../command'
 import { platformNames } from '../platform-names'
 import type { PlatformIamTarget } from '../provider'
 import { defaultReconcileSchema } from '../schema'
-import { MCP_CLIENTS_VARIABLE, parseCloudflareIdentityClients, registerIdentityApps } from './identity-clients'
+import {
+	assertCloudflareMcpAuthoringOff,
+	importCloudflareOAuthClients,
+	MCP_CLIENTS_VARIABLE,
+	parseCloudflareIdentityClients,
+} from './identity-clients'
 import { initCommand } from './init'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')
@@ -70,6 +75,7 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 	const iam = platformIam()
 	// Parsed before any component deploys, so a refused entry stops the stage with nothing written.
 	const identityClients = parseCloudflareIdentityClients(process.env[MCP_CLIENTS_VARIABLE], platformHosts())
+	assertCloudflareMcpAuthoringOff(process.env)
 	const rootCwd = process.cwd()
 	for (const component of platformComponents(args)) {
 		const absolute = resolve(rootCwd, component.configPath)
@@ -100,7 +106,7 @@ const deployPlatform = async (argv: readonly string[], forceDryRun: boolean): Pr
 	// IAM's own vocabulary registers beside the console's (ADR-0058): its own stage cannot, its keys sync after it deploys.
 	if (args.componentConfig === undefined || args.componentConfig === '') {
 		await registerIamVocabulary(iam, args.dryRun)
-		await registerIdentityApps({ iam, clients: identityClients, dryRun: args.dryRun, reconcile: defaultReconcileSchema })
+		await importCloudflareOAuthClients({ iam, clients: identityClients, dryRun: args.dryRun })
 	}
 }
 

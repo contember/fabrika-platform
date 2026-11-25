@@ -158,6 +158,26 @@ describe('MCP authoring', () => {
 		expect(() => parsePlatformDeployArgs([...BASE, '--scheme=http'], env)).toThrow('--scheme=https')
 	})
 
+	test('the switch comes from the environment or a flag, the flag first, and is absent when unset', () => {
+		expect(parsePlatformDeployArgs(BASE, ENV).mcpAuthoring).toBeUndefined()
+		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_AUTHORING: 'on' }).mcpAuthoring).toBe(true)
+		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_AUTHORING: 'off' }).mcpAuthoring).toBe(false)
+		expect(parsePlatformDeployArgs([...BASE, '--mcp-authoring=off'], { ...ENV, FABRIKA_PLATFORM_MCP_AUTHORING: 'on' }).mcpAuthoring).toBe(false)
+		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_AUTHORING: ' ' }).mcpAuthoring).toBeUndefined()
+	})
+
+	test('refuses a switch that is neither on nor off, naming where it came from', () => {
+		expect(() => parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_AUTHORING: 'true' })).toThrow(
+			'FABRIKA_PLATFORM_MCP_AUTHORING must be on or off',
+		)
+		expect(() => parsePlatformDeployArgs([...BASE, '--mcp-authoring=yes'], ENV)).toThrow('--mcp-authoring must be on or off')
+	})
+
+	test('refuses the switch on over plain http', () => {
+		expect(() => parsePlatformDeployArgs([...BASE, '--scheme=http', '--mcp-authoring=on'], ENV)).toThrow('MCP authoring needs --scheme=https')
+		expect(parsePlatformDeployArgs([...BASE, '--scheme=http', '--mcp-authoring=off'], ENV).mcpAuthoring).toBe(false)
+	})
+
 	test('hosts are lowercased, so every origin built from them is the one `URL` writes', () => {
 		const hosts = ['--iam-host=IAM.Example.com', '--console-host=Console.Example.com', '--operations-host=Errors.Example.com']
 		expect(parsePlatformDeployArgs([...BASE, ...hosts], ENV).hosts).toEqual({

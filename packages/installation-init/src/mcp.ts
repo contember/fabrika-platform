@@ -5,7 +5,6 @@
 // is resolved from, so the two cannot disagree: each `oauth` row's registered resource in the manifest, and IAM's
 // `FABRIKA_IAM_OAUTH_CONFIG`, which issues tokens for exactly those resources.
 
-import type { AppSchema, RoleDef } from '@fabrika/auth-core'
 import { IAM_APP_ID, OAUTH_CLIENT_PROVIDERS, type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient } from '@fabrika/iam-contract'
 import { platformOAuthResourceUris, platformOAuthServed, type PlatformProxyComposition, type PlatformProxyManifestTemplate } from './proxy-manifest'
 
@@ -18,6 +17,8 @@ export interface McpClient extends OAuthManagedClient {
 export interface IamOAuthConfig {
 	readonly clients: readonly McpClient[]
 	readonly resources: readonly OAuthResourceDto[]
+	/** The installation's hostnames: IAM refuses an external application whose resource is on one (ADR-0089). */
+	readonly hosts: readonly string[]
 }
 
 const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl', 'identity']
@@ -77,77 +78,65 @@ export const parseMcpClientsJson = (raw: string): readonly McpClient[] => {
 	if (ids.size !== clients.length) {
 		throw new Error('the MCP client list names one client id twice')
 	}
-	identityAppSchemas(clients)
+	assertOneIdentityPerApp(clients)
 	return clients
 }
 
-/** An external application's vocabulary in IAM: its declared roles, each granting no action (ADR-0049). */
-export interface IdentityAppSchema {
-	readonly app: string
-	readonly schema: AppSchema
-}
-
 /**
- * The vocabulary each external application that declares roles reconciles into IAM, once per app. The deploy writes it
- * with the provisioning key it already holds, so the application needs no IAM credential to declare its roles. Two
- * clients of one app must declare the same roles.
+ * IAM's registry holds one resource and one list of roles per external application (ADR-0089), and its import refuses
+ * clients of one app that name different ones. Refused here, before the deploy writes anything.
  */
-export const identityAppSchemas = (clients: readonly McpClient[]): readonly IdentityAppSchema[] => {
+const assertOneIdentityPerApp = (clients: readonly McpClient[]): void => {
 	const declared = new Map<string, string>()
-	const schemas: IdentityAppSchema[] = []
 	for (const { clientId, identity } of clients) {
 		if (identity === undefined) continue
-		const roles = JSON.stringify(identity.roles ?? null)
+		const shape = JSON.stringify({ resource: identity.resource, roles: identity.roles ?? null })
 		const known = declared.get(identity.app)
-		if (known !== undefined && known !== roles) {
-			throw new Error(`MCP client ${clientId}: another client of \`${identity.app}\` declares other roles`)
+		if (known !== undefined && known !== shape) {
+			throw new Error(`MCP client ${clientId}: another client of \`${identity.app}\` names another resource or other roles`)
 		}
-		declared.set(identity.app, roles)
-		if (known !== undefined || identity.roles === undefined) continue
-		const entries = identity.roles.map((role): [string, RoleDef] => [role.key, { name: role.name, permissions: [] }])
-		schemas.push({ app: identity.app, schema: { scopes: [], actions: [], roles: Object.fromEntries(entries) } })
-	}
-	return schemas
-}
-
-/** One write of an external application's roles to IAM's provisioning surface, as `reconcileSchema` of `@fabrika/auth` takes it. */
-export interface IdentityAppReconcileCall {
-	readonly url: string
-	readonly app: string
-	readonly schema: AppSchema
-	readonly adminKey: string
-	readonly signal: AbortSignal
-}
-
-export interface IdentityAppsReconcile {
-	readonly clients: readonly McpClient[]
-	/** IAM's origin. */
-	readonly url: string
-	readonly adminKey: string
-	readonly dryRun: boolean
-	readonly signal: AbortSignal
-	readonly reconcile: (call: IdentityAppReconcileCall) => Promise<void>
-	readonly info: (message: string) => void
-}
-
-/**
- * Reconcile every external application's declared roles into IAM with the provisioning key the deploy holds
- * (ADR-0084). The deploy of every provider calls this one. No return origin: IAM never hands such an application off.
- */
-export const reconcileIdentityApps = async (input: IdentityAppsReconcile): Promise<void> => {
-	for (const { app, schema } of identityAppSchemas(input.clients)) {
-		if (input.dryRun) {
-			input.info(`would reconcile the roles of the external application \`${app}\``)
-			continue
-		}
-		await input.reconcile({ url: input.url, app, schema, adminKey: input.adminKey, signal: input.signal })
-		input.info(`\`${app}\` reconciled: ${Object.keys(schema.roles).join(', ')}`)
+		declared.set(identity.app, shape)
 	}
 }
 
 /** MCP authoring is on when the operator registers a client that is not identity-only: those sign people in, nothing more. */
 export const mcpAuthoringOn = (clients: readonly McpClient[] | undefined): boolean =>
 	clients?.some((client) => client.identity === undefined) ?? false
+
+/** The deploy setting that decides whether MCP authoring is on (ADR-0089 §4). */
+export const MCP_AUTHORING_VARIABLE = 'FABRIKA_PLATFORM_MCP_AUTHORING'
+
+/** The switch as `on` or `off`, absent when unset; any other value is refused, naming where it came from. */
+export const parseMcpAuthoring = (raw: string | undefined, name: string): boolean | undefined => {
+	if (raw === undefined) return undefined
+	if (raw === 'on') return true
+	if (raw === 'off') return false
+	throw new Error(`${name} must be on or off`)
+}
+
+export interface McpAuthoring {
+	readonly on: boolean
+	/** Set when the switch is unset and the client list turned authoring on: the next release needs the switch. */
+	readonly warning?: string
+}
+
+/**
+ * Whether MCP authoring is on: the switch decides when it is set. Unset, this release alone still infers it from an
+ * authoring entry in the client list, and says that the switch must be set before the variable goes.
+ */
+export const resolveMcpAuthoring = (
+	setting: boolean | undefined,
+	clients: readonly McpClient[] | undefined,
+	names: { readonly setting: string; readonly clients: string },
+): McpAuthoring => {
+	if (setting !== undefined) return { on: setting }
+	if (!mcpAuthoringOn(clients)) return { on: false }
+	return {
+		on: true,
+		warning: `MCP authoring is on because ${names.clients} lists an authoring client; set ${names.setting}=on, `
+			+ 'which the next release reads instead',
+	}
+}
 
 /**
  * IAM's OAuth configuration for one placed installation: the MCP clients (none when MCP authoring is off; the
@@ -182,14 +171,15 @@ export const platformIamOAuthConfig = (
 		throw new Error('the platform proxy manifest template declares no OAuth resource on this composition')
 	}
 	// An identity token must never be one a platform service accepts: not its app id, not a resource on its hosts.
-	const platformHosts = Object.values(composition.placement).flatMap((placement) => placement.hosts)
+	const platformHosts = [...new Set(Object.values(composition.placement).flatMap((placement) => placement.hosts))]
 	for (const { clientId, identity } of clients) {
 		if (identity === undefined) continue
-		// IAM's own id is no proxy app's: a roles reconcile under it would rewrite IAM's vocabulary.
+		// IAM's own id is no proxy app's: an external application under it would take IAM's vocabulary.
 		const platformApps = [IAM_APP_ID, ...template.apps.map((app) => app.id)]
 		if (platformApps.includes(identity.app) || platformHosts.includes(new URL(identity.resource).hostname)) {
 			throw new Error(`MCP client ${clientId}: its identity resource names a platform service's app id or host`)
 		}
 	}
-	return { clients, resources }
+	// IAM checks an external application registered at runtime against the same hosts.
+	return { clients, resources, hosts: platformHosts }
 }

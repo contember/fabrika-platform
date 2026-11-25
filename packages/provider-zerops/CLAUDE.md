@@ -467,9 +467,11 @@ Invariants:
   the command-line client's resource token) and registers `oauth.resources`, and `deployedServiceEnvironment` writes
   `FABRIKA_IAM_OAUTH_CONFIG` for the SAME resource URIs (`platformIamOAuthConfig`, no MCP client), and
   `FABRIKA_OPERATIONS_OAUTH_RESOURCE` on `operations` for the resource marked `verifiedBy: 'operations'`
-  (`platformOAuthResourceVerifiedBy`), the only OAuth resource Operations accepts. With
-  `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` / `--mcp-clients` it publishes `oauth.mcp.table` and registers the MCP resource
-  too, and the config lists those clients. On plain http the manifest carries the plain `table`, and both OAuth variables
+  (`platformOAuthResourceVerifiedBy`), the only OAuth resource Operations accepts. With MCP
+  authoring on (`FABRIKA_PLATFORM_MCP_AUTHORING` / `--mcp-authoring=on`; unset, this release alone infers it from an
+  authoring entry in `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` / `--mcp-clients` and warns) it publishes `oauth.mcp.table` and
+  registers the MCP resource too. The config lists the variable's clients, which IAM serves until it has imported them,
+  and the installation's hostnames as `hosts` (ADR-0089). On plain http the manifest carries the plain `table`, and both OAuth variables
   are left untouched, with a warning for each still set (`OAUTH_LEFTOVERS`) — never cleared, because an empty write on
   Zerops is unverified. Control's half is
   `FABRIKA_SERVICE_TABLE_DIGEST`, which `deployedServiceEnvironment` writes from the resolved manifest

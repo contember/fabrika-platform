@@ -137,13 +137,7 @@ describe("the installation's proxy manifest has no gates", () => {
 
 	test('the local platform manifest, with MCP authoring off and on', () => {
 		expectNoGates(localPlatformProxyManifest())
-		expectNoGates(
-			localPlatformProxyManifest([{
-				provider: 'claude',
-				clientId: 'https://client.example/metadata',
-				redirectUris: ['https://client.example/callback'],
-			}]),
-		)
+		expectNoGates(localPlatformProxyManifest(true))
 	})
 
 	test('the manifest each Cloudflare proxy Worker bakes into its bundle', () => {
