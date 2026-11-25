@@ -135,6 +135,15 @@ async function admitEnvironmentPut(c: RequestActionContext, input: PutEnvironmen
 const sameFields = (a: EnvironmentFields, b: EnvironmentFields, field: EnvironmentField): boolean =>
 	canonicalJson(a[field]) === canonicalJson(b[field])
 
+/**
+ * The fields a put changes over what the environment holds: what the page shows before → after, and none for a put
+ * that writes what is there. The target and artifact compare by digest with the stored ones, which the provider
+ * prepared, so a provider that rewrites what the caller sent reads as a change.
+ */
+function changedFields(now: EnvironmentFields, after: EnvironmentFields): readonly EnvironmentField[] {
+	return ENVIRONMENT_FIELDS.filter((field) => !sameFields(now, after, field))
+}
+
 export const putEnvironmentKind = requestKind<PutEnvironmentInput, z.infer<typeof environmentBefore>>({
 	kind: 'apps.environments.put',
 	category: 'registry',
@@ -148,6 +157,7 @@ export const putEnvironmentKind = requestKind<PutEnvironmentInput, z.infer<typeo
 		const appEnv = await requireAppEnv(c, input)
 		return { generation: appEnv.generation, fields: fieldsOf(appEnv) }
 	},
+	unchanged: (input, before) => changedFields(before.fields, writtenBy(input.environment, before.fields)).length === 0,
 	execute: async (c, input, execution) =>
 		outcomeOf(async () => {
 			const row = await putAppEnvUseCase(registryContext(c, execution), input.appId, input.env, input.environment)
@@ -196,7 +206,7 @@ export const putEnvironmentKind = requestKind<PutEnvironmentInput, z.infer<typeo
 			}
 		}
 		const after = writtenBy(body, before.fields)
-		const changed = ENVIRONMENT_FIELDS.filter((field) => !sameFields(before.fields, after, field))
+		const changed = changedFields(before.fields, after)
 		return {
 			summary: [ownText(`Change what a deploy of ${input.appId}@${input.env} runs or where it is reached`)],
 			facts: [
@@ -313,6 +323,14 @@ export const updateAppKind = requestKind<UpdateAppInput, AppBefore>({
 		return Promise.resolve()
 	},
 	captureBefore: appBeforeOf,
+	unchanged: (input, before) => {
+		const patch = input.app
+		// Resolving the binding asks GitHub, so only the request's execution can tell whether it changes anything.
+		return patch.resolveInstallationId !== true
+			&& BUILD_FIELDS.every((field) => patch[field] === undefined || before[field] === patch[field])
+			&& (patch.repoUrl === undefined || before.repoUrl === normalizeRepoUrl(patch.repoUrl))
+			&& (patch.githubInstallationId === undefined || before.github?.installationId === patch.githubInstallationId)
+	},
 	execute: (c, input, execution) =>
 		outcomeOf(async () => {
 			const app = await updateAppUseCase(registryContext(c, execution), input.appId, input.app)

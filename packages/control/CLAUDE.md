@@ -848,7 +848,9 @@ other environment, before the provider prepares anything, and the write maps a r
   Every `secrets`, `variables`, `data` and `registry` mutation of the router runs through `gateDirectWrite` with its
   category and coordinates (the all-environments layer and `apps.update` as `ALL_ENVIRONMENTS`): a person in the
   console, a reach with no protected environment, or `off` everywhere applies; `refuse` anywhere is a 403 naming the
-  category; otherwise `createApprovalRequestUseCase` stores the procedure's input as that kind's request and the call
+  category; a write whose kind's `unchanged` holds over the before-state read now (the environment put, `apps.update`,
+  a variable put; never a secret) applies as under `off`; otherwise `createApprovalRequestUseCase` stores the
+  procedure's input as that kind's request and the call
   answers 409 `approval_requested` (`ControlApiError` with `data` `{ id, url, state, fingerprint? }`, the link in the
   message), never 200. A new environment has no request to wait in: a write whose environment does not exist but
   `startsProtected` (`prod`, or a kept protection) is a 403 for a non-person, and `register` keeps the person rules

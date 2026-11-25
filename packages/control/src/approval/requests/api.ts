@@ -92,7 +92,8 @@ function nowOf(c: ApprovalRequestContext): number {
 	return (c.now ?? (() => Math.floor(Date.now() / 1000)))()
 }
 
-function kindsOf(c: ApprovalRequestReadContext): RequestKindRegistry {
+/** The kinds a Control serves: the context's, or the production registry. */
+export function kindsOf(c: ApprovalRequestReadContext): RequestKindRegistry {
 	return c.kinds ?? PRODUCTION_REQUEST_KINDS
 }
 

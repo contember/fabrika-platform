@@ -221,6 +221,7 @@ for (const backend of backends) {
 
 		test("removing an application's GitHub binding is asked for with its null, which removes it", async () => {
 			const w = await world()
+			await w.db.prepare('UPDATE apps SET github_installation_id = ? WHERE id = ?').bind(7, 'notes').run()
 			const answer = await call(w, 'agent', 'apps.update', { appId: 'notes', app: { githubInstallationId: null, workerDir: null } })
 			expect(answer.status).toBe(409)
 			const created = approvalRequestedSchema.parse(answer.error?.data)
@@ -285,6 +286,55 @@ for (const backend of backends) {
 			const prodVariable = { appId: 'memo', variable: { name: 'REGION', value: 'eu', env: 'prod' } }
 			expect((await call(w, 'person', 'apps.variables.put', prodVariable)).status).toBe(200)
 			expect((await w.repositories.registry.listAppVars('memo')).map((row) => row.env).sort()).toEqual(['prod', 'qa'])
+		})
+
+		test('a write that changes nothing applies at once with no request; one that changes something files one', async () => {
+			const w = await world()
+			const stored = {
+				triggerRef: 'refs/heads/main',
+				target: { provider: 'harbor', version: 1, payload: { kind: 'target' } },
+				artifact: { provider: 'harbor', version: 1, payload: { kind: 'artifact' } },
+			}
+			const put = (environment: JsonValue) => call(w, 'key', 'apps.environments.put', { appId: 'notes', env: 'prod', environment })
+			// The put a builder makes before each deploy: what the environment holds, sent back.
+			expect((await put(stored)).status).toBe(200)
+			expect((await put(stored)).status).toBe(200)
+			expect(await w.repositories.approvalRequests.listPending(10)).toEqual([])
+
+			// A person's put changes the artifact; the key's identical put after it applies with no request.
+			const next = { ...stored, artifact: { provider: 'harbor', version: 1, payload: { kind: 'artifact', build: 2 } } }
+			expect((await call(w, 'person', 'apps.environments.put', { appId: 'notes', env: 'prod', environment: next })).status).toBe(200)
+			expect((await put(next)).status).toBe(200)
+			expect(await w.repositories.approvalRequests.listPending(10)).toEqual([])
+
+			// A put that changes the artifact, and one that clears the trigger ref by leaving it out, each wait as one request.
+			const changed = await put({ ...next, artifact: { provider: 'harbor', version: 1, payload: { kind: 'artifact', build: 3 } } })
+			expect({ status: changed.status, type: changed.error?.type }).toEqual({ status: 409, type: 'approval_requested' })
+			const { triggerRef: _cleared, ...withoutTriggerRef } = next
+			expect((await put(withoutTriggerRef)).status).toBe(409)
+			const pending = await w.repositories.approvalRequests.listPending(10)
+			expect(pending.map((row) => row.kind)).toEqual(['apps.environments.put', 'apps.environments.put'])
+			expect(JSON.parse((await w.repositories.registry.getAppEnv('notes', 'prod'))?.provider_artifact_json ?? 'null')).toEqual(next.artifact)
+
+			// The application's build and a variable: the same value applies, another one waits.
+			expect((await call(w, 'person', 'apps.update', { appId: 'notes', app: { buildCmd: 'bun run build' } })).status).toBe(200)
+			expect((await call(w, 'key', 'apps.update', { appId: 'notes', app: { buildCmd: 'bun run build', workerDir: null } })).status).toBe(200)
+			expect((await call(w, 'key', 'apps.update', { appId: 'notes', app: { buildCmd: 'bun run build:all' } })).status).toBe(409)
+			const variable = (value: string) => ({ appId: 'notes', variable: { name: 'REGION', value, env: 'prod' } })
+			expect((await call(w, 'person', 'apps.variables.put', variable('eu'))).status).toBe(200)
+			expect((await call(w, 'key', 'apps.variables.put', variable('eu'))).status).toBe(200)
+			expect((await call(w, 'key', 'apps.variables.put', variable('us'))).status).toBe(409)
+			expect((await w.repositories.registry.listAppVars('notes')).map((row) => row.value)).toEqual(['eu'])
+			expect((await w.repositories.approvalRequests.listPending(10)).map((row) => row.kind).sort()).toEqual([
+				'apps.environments.put',
+				'apps.environments.put',
+				'apps.update',
+				'apps.variables.put',
+			])
+
+			// A secret is never judged unchanged: telling its value from the stored one would take reading a plaintext.
+			expect((await call(w, 'person', 'apps.secrets.put', putSecret('prod'))).status).toBe(200)
+			expect((await call(w, 'agent', 'apps.secrets.put', putSecret('prod'))).status).toBe(409)
 		})
 
 		test('refuse is a 403 naming the category, and nothing is asked or written', async () => {

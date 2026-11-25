@@ -92,8 +92,10 @@ does not apply, and Control stores it as an approval request with the procedure 
 exactly as `approvals.requests.create` would (§8). The answer is an RPC error, 409, of type `approval_requested`: its
 message names the link, and its data is `{ id, url, state }` with a secret's fingerprint. A write that did not apply
 never answers 200, so a client older than requests shows the message with the link and never mistakes it for an applied
-write; the command-line client prints the request and exits 75, or follows it with `--wait`. A person in the console
-applies directly. An environment that does not exist yet has nowhere for a request to wait, so on one that starts
+write; the command-line client prints the request and exits 75, or follows it with `--wait`. A write that changes
+nothing (every field it names already holds that value, as the request page would show "Changes: none") applies as
+under `off`; a secret is never judged so, since that would take reading a plaintext. A person in the console applies
+directly. An environment that does not exist yet has nowhere for a request to wait, so on one that starts
 protected (`prod`, or one deleted while protected) a non-person's write is refused (403), and so is a registration
 that names its trigger ref, domain or public origin. `apps.environments.put` and `apps.update` bind
 the mode they were judged under to the environment's `generation`, so a stricter mode saved between the check and the

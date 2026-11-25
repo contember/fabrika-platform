@@ -142,6 +142,12 @@ export interface RequestKindDefinition<Input, Before, Asked = never> {
 	 */
 	captureBefore(c: RequestActionContext, input: Input): Promise<Before>
 	/**
+	 * Whether the input writes only what `before` holds: a direct write that changes nothing then applies at once instead
+	 * of waiting as a request whose page would show no change (D8). Absent, every write is a change. A kind with `asked`
+	 * (a secret value) never has one: telling its value from the stored one would take reading a plaintext.
+	 */
+	readonly unchanged?: (input: Input, before: Before) => boolean
+	/**
 	 * Execute with the approver's authority (`auth`), the requester recorded beside them on the row. A refusal of the use
 	 * case it reuses is an outcome (`failed`); any other throw leaves the outcome unknown.
 	 */
@@ -214,6 +220,11 @@ export interface RequestKind {
 	/** Release what a stored request held; a throw is the caller's to log. */
 	readonly discard?: (c: RequestKindContext, request: ApprovalRequestRow) => Promise<void>
 	/**
+	 * Whether a direct write's input changes nothing where it acts now, judged by the kind's `unchanged` over the
+	 * before-state read now; false for an input the kind does not read in full. Absent where the kind cannot tell.
+	 */
+	readonly changesNothing?: (c: RequestActionContext, input: unknown) => Promise<boolean>
+	/**
 	 * Check an input an agent asks with. Refused: one the kind's schema does not read in full (a key it does not take, a
 	 * value it would change), since the row would then store less than what was asked.
 	 */
@@ -243,12 +254,19 @@ export function requestKind<Input, Before, Asked = never>(definition: RequestKin
 	const strictest = typeof requesterAt === 'function' ? 'global' : requesterAt
 	const discard = definition.discard
 	const asked = definition.asked
+	const unchanged = definition.unchanged
 	return {
 		kind: definition.kind,
 		category: definition.category,
 		requesterAction: definition.requesterAction,
 		...(strictest === undefined ? {} : { requesterAt: strictest }),
 		...(definition.approverMayDecide === undefined ? {} : { approverMayDecide: definition.approverMayDecide }),
+		...(unchanged === undefined || asked !== undefined ? {} : {
+			changesNothing: async (c, raw) => {
+				const parsed = read(definition.input, raw)
+				return parsed.ok && unchanged(parsed.value, await definition.captureBefore(c, parsed.value))
+			},
+		}),
 		...(discard === undefined ? {} : {
 			discard: async (c, request) => {
 				const parsed = definition.input.safeParse(JSON.parse(request.input_json))

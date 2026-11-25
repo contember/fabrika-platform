@@ -188,7 +188,12 @@ their reason. Beside them, an agent's grant, which IAM makes (`iam.grants.create
   `approval_requested`, whose message names the link and whose data is `{ id, url, state }` and a secret's fingerprint.
   Nothing applies, and no write that did not apply answers 200. An environment that starts protected but does not
   exist yet (`prod`, or one deleted while protected) has nowhere for a request to wait, so a bearer's write there,
-  `apps.environments.put` creating it included, answers 403 and writes nothing. A person in the console writes directly. The CLI prints the request and exits 75, or follows it with
+  `apps.environments.put` creating it included, answers 403 and writes nothing. A write that would wait but changes
+  nothing applies as under `off`, so a builder's put before each deploy still reaches the deploy: an
+  `apps.environments.put` whose every field equals what the environment holds (the comparison the request page uses
+  for "Changes: none", the target and artifact by digest against the stored ones, which the provider prepared), an
+  `apps.update` naming the values held, and a variable set to its value. A secret is never judged unchanged: telling
+  its value from the stored one would take reading a plaintext. A person in the console writes directly. The CLI prints the request and exits 75, or follows it with
   `--wait`; MCP's `request_change` asks for one. The mode is read when the write arrives: `apps.environments.put` and
   `apps.update` also bind it to the environment's `generation`, so a stricter mode saved in between refuses them; a
   secret, variable or data write under `off` that races a stricter mode applies under `off`.
@@ -270,6 +275,16 @@ their reason. Beside them, an agent's grant, which IAM makes (`iam.grants.create
   only to a reader who also holds the kind's action where it acts, or for a kind with its own decider (an agent's grant)
   only to that decider, though its requester reads the result; anyone else sees the names and lengths and a line saying
   what is not shown, and may still refuse it.
+
+Known limits of the requests above:
+
+- A write the gate judges unchanged applies with the caller's authority through its use case, which reads the
+  environment again. A person's change landing between the two reads is refused there where the use case judges it
+  itself (a put's trigger ref, domain and public origin, any field of `apps.update`), and otherwise overwritten with
+  what the write names (a put's target, artifact, namespace, cross-origin list or authoring flag, a variable's value),
+  as a write under `off` racing a stricter mode is. An `apps.environments.put` judged unchanged still runs the
+  provider's preparation, which may rewrite the target the provider discovers (on Zerops the deploy service's id);
+  that is the provider's own record, not a value the caller names.
 
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval
