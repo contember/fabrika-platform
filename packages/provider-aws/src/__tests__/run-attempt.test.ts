@@ -86,6 +86,10 @@ const signal = new AbortController().signal
 describe('parseAwsCheckpoint', () => {
 	test('reads each checkpoint a run records, in order', () => {
 		for (const checkpoint of [started, built, registered, requested, answered]) expect(parseAwsCheckpoint(checkpoint)).toEqual(checkpoint)
+		// A create is marked beside its submission, with or without the deployment its answer named.
+		for (const marked of [{ ...requested, serviceCreateRequested: true }, { ...answered, serviceCreateRequested: true }]) {
+			expect(parseAwsCheckpoint(marked)).toMatchObject(marked)
+		}
 	})
 
 	test('refuses a checkpoint no run could have recorded', () => {
@@ -97,6 +101,8 @@ describe('parseAwsCheckpoint', () => {
 			{ ...started, taskDefinitionArn: TASK_DEFINITION },
 			{ ...built, serviceUpdateRequested: true },
 			{ ...registered, deploymentArn: DEPLOYMENT },
+			// A create is marked only beside the submission it is.
+			{ ...registered, serviceCreateRequested: true },
 			{ ...started, buildToken: 'not-a-token' },
 		]
 		for (const state of states) expect(parseAwsCheckpoint(state)).toBeNull()
@@ -215,6 +221,9 @@ describe('awsRunAttempt', () => {
 		// Only a service ECS answers MISSING is gone.
 		const gone = new FakeAws()
 		expect(await gone.attempt.observe({ ...requested, serviceUpdateRequested: true }, signal)).toEqual({ state: 'absent' })
+		// After the run's own create, MISSING is a create that does not show yet, or may still land: it waits.
+		const creating = new FakeAws()
+		expect(await creating.attempt.observe({ ...requested, serviceUpdateRequested: true, serviceCreateRequested: true }, signal)).toEqual(unconfirmed)
 	})
 
 	test('a failed read or an answer about another service is unobservable, never a verdict', async () => {

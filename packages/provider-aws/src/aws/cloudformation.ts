@@ -8,7 +8,8 @@
 // - `CAPABILITY_NAMED_IAM`: the environment stack names its roles.
 // - A status CloudFormation may add later is `invalid_answer`, never a guess.
 // - `describeStack` reads one stack by its id (its ARN), which keeps answering `DELETE_COMPLETE` after a delete: how a
-//   caller tells a create of its own that failed (and was deleted) from a stack `ListStacks` does not show yet.
+//   caller tells a create of its own that failed (and was deleted) from a stack `ListStacks` does not show yet. It also
+//   reads the stack's outputs: what a template creates under a name AWS chooses (a security group's id).
 //
 // UNVERIFIED: the actions, their parameters, the answers' element names, `ListStacks`' filter and the statuses follow
 // CloudFormation's API reference; none was checked against an account.
@@ -64,6 +65,17 @@ export interface StackSummary {
 	readonly status: StackStatus
 }
 
+/** A stack read by its id: its status and its outputs by key (none while it is created or once it is deleted). */
+export interface StackDescription {
+	readonly stackId: string
+	readonly status: StackStatus | 'DELETE_COMPLETE'
+	readonly outputs: Readonly<Record<string, string>>
+}
+
+/** The most outputs a template declares (CloudFormation's quota), and an output key's form. */
+const MAX_OUTPUTS = 200
+const OUTPUT_KEY = /^[A-Za-z0-9]{1,255}$/
+
 export interface CloudFormationClient {
 	/** The live stack named `name`, `null` when there is none (or only deleted ones). */
 	findStack(name: string, signal?: AbortSignal): Promise<StackSummary | null>
@@ -71,7 +83,7 @@ export interface CloudFormationClient {
 	 * The stack of `stackId` (an ARN): for a deleted stack `DELETE_COMPLETE`, because a read by id keeps answering one,
 	 * so a stack this caller created and CloudFormation deleted is told apart from one not listed yet.
 	 */
-	describeStack(stackId: string, signal?: AbortSignal): Promise<{ readonly stackId: string; readonly status: StackStatus | 'DELETE_COMPLETE' }>
+	describeStack(stackId: string, signal?: AbortSignal): Promise<StackDescription>
 	/** The template body the stack was last created or updated with. */
 	getTemplate(name: string, signal?: AbortSignal): Promise<string>
 	/** Starts creating `name`; answers its id. */
@@ -159,9 +171,18 @@ export function cloudFormationClient(options: AwsClientOptions): CloudFormationC
 				const status = xmlText(only, 'StackStatus') ?? ''
 				// An answer about another stack is no answer about this one.
 				if (xmlText(only, 'StackId') !== stackId) throw new Error('another stack')
-				if (status === 'DELETE_COMPLETE') return { stackId, status }
-				if (!isStatus(status)) throw new Error('a status of another form')
-				return { stackId, status }
+				if (status !== 'DELETE_COMPLETE' && !isStatus(status)) throw new Error('a status of another form')
+				const listed = xmlOptional(only, 'Outputs')
+				const entries = listed === null ? [] : xmlChildren(listed, 'member')
+				if (entries.length > MAX_OUTPUTS) throw new Error('more outputs than a template declares')
+				const outputs: Record<string, string> = {}
+				for (const entry of entries) {
+					const key = xmlText(entry, 'OutputKey') ?? ''
+					// A key twice is an answer this client cannot read.
+					if (!OUTPUT_KEY.test(key) || key in outputs) throw new Error('an output of another form')
+					outputs[key] = xmlText(entry, 'OutputValue') ?? ''
+				}
+				return { stackId, status, outputs }
 			}, signal)
 		},
 

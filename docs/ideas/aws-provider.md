@@ -358,7 +358,26 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     its lifecycle rule: it finds the stack's repository with the same settings and writes the same rule, so the two
     never disagree. A repository a deploy created before this release would block the stack's create
     (`AlreadyExists`); no installation ran the AWS provider then.
-    Not yet: the service itself, and the network below.
+    **The service** (built): the stack also holds the environment's security group, in the installation's VPC, with
+    no ingress rule and all egress (the image pull, Parameter Store, the logs, whatever the application calls), and
+    names its id as an output, which `ensureEnvironmentStack` reads by the stack's id (`DescribeStacks`) and answers.
+    The ECS service itself is not in the stack: the deploy registers the revision it runs, and an
+    `AWS::ECS::Service` would hold a task definition that the stack's next update could set back, and would need one
+    before the first build. The deploy's `update` step reads the service and sends `CreateService` (Fargate, one task,
+    the circuit breaker, no ECS Exec, tags propagated, the run's build token as its 36-character client token, a lost
+    answer sent again under it) when there is none or ECS keeps it `INACTIVE`, and `UpdateService` otherwise; a
+    `DRAINING` one fails the run before anything is asked. Both send the network (the installation's subnets, the
+    stack's group, the public address setting), so a service converges on the installation's current subnets and
+    public address setting. Not on another VPC: that replaces the group, whose old copy the running tasks hold, so
+    CloudFormation's cleanup fails and the deploy waits on it; moving an installation to another VPC is an operator's
+    step (move each service, then delete the old groups). The init
+    tasks run in the same network, which exists before the service does, so the first run migrates before it creates
+    the service. The installation's network is Control's configuration (`FABRIKA_AWS_VPC_ID`, `FABRIKA_AWS_SUBNETS`,
+    `FABRIKA_AWS_TASK_PUBLIC_IP`), stored by no environment. Tearing an environment down (not built) deletes its
+    service before its stack, whose security group the service's tasks hold. UNVERIFIED: that `CreateService` takes a
+    name ECS keeps `INACTIVE`, and that its answer names `currentServiceDeployment`; a create whose answer never
+    arrived leaves the rollout reading no service, which fails the run.
+    Not yet: the namespace below (an application is reachable from nothing until its proxy is admitted).
 
     **`src/namespace/`**: the namespace stack (security groups, the Service Connect namespace, the proxy service, the
     ALB rule and certificate; for `full` an RDS instance), the database per application in the shared instance for
@@ -371,9 +390,12 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     `plan`, `deploy`, `upgrade` and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the
     sidecar workflow, and an operator guide. Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
-    - ECS: `UpdateService`, `DescribeServices`, the service deployment and revision reads, `RunTask`, `DescribeTasks`
-      on `service/<cluster>/*` and `task/<cluster>/*`; `RegisterTaskDefinition` (no resource scope in ECS), with
-      `iam:PassRole` only on `role/fabrika/apps/*` and the condition `iam:PassedToService = ecs-tasks.amazonaws.com`.
+    - ECS: `CreateService`, `UpdateService`, `DescribeServices`, the service deployment and revision reads, `RunTask`,
+      `DescribeTasks` on `service/<cluster>/*` and `task/<cluster>/*`, and `TagResource` only with the condition
+      `ecs:CreateAction = CreateService` (the tags of a service it creates); `RegisterTaskDefinition` (no resource scope
+      in ECS), with `iam:PassRole` only on `role/fabrika/apps/*` and the condition
+      `iam:PassedToService = ecs-tasks.amazonaws.com`. `CreateService` passes no role: the account's ECS service-linked
+      role, which the installation stack ensures, places the tasks.
     - ECR: the repository calls on `repository/fabrika/apps/*`.
     - SSM: `PutParameter`, `DeleteParameter`, `DescribeParameters` on `parameter/fabrika/apps/*`.
     - CodeBuild: `StartBuild`, `BatchGetBuilds`, `StopBuild`, `ListBuildsForProject` on `project/fabrika_*`.
@@ -390,7 +412,18 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         `PutImageTagMutability`, `TagResource`, `UntagResource`, `DescribeRepositories`, `DeleteRepository`;
       - CloudWatch Logs on `log-group:/fabrika/apps/*`: `CreateLogGroup`, `PutRetentionPolicy`, `TagResource`,
         `UntagResource`, `DescribeLogGroups`, `DeleteLogGroup`;
-      - `iam:PassRole` on `role/fabrika/apps/*` with `iam:PassedToService` also `codebuild.amazonaws.com`.
+      - `iam:PassRole` on `role/fabrika/apps/*` with `iam:PassedToService` also `codebuild.amazonaws.com`;
+      - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
+        `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
+        `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
+        `AuthorizeSecurityGroupEgress`, `RevokeSecurityGroupEgress`, `AuthorizeSecurityGroupIngress`,
+        `RevokeSecurityGroupIngress` and `DeleteSecurityGroup` on `security-group/*` with
+        `aws:ResourceTag/fabrika:env` present; `DescribeSecurityGroups` (no resource scope). The installation's own
+        groups (the database's, the balancer's, Control's) carry no `fabrika:env` tag. No IAM condition sees a rule's
+        source, so an environment's group admitting more than its namespace proxy is a review matter: its tasks may
+        have a public address. UNVERIFIED: both tag conditions assume CloudFormation tags the group in its create
+        call (`TagSpecifications`); if it creates the group untagged and tags it afterwards, both refuse the stack's
+        create. The live check of step 13 settles it before the policy is written.
     - **The boundary.** Role writes would let Control mint a role with any inline policy and run code under it. So
       `iam:CreateRole` and `iam:PutRolePolicy` are allowed only with the condition `iam:PermissionsBoundary` equal to
       `policy/fabrika/fabrika-apps-boundary`, which the installation stack creates and which allows only what an
@@ -408,7 +441,7 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 12. **`packages/control/src/aws/`** (built): the composition root over the neutral Bun host (`provider.ts`, the server,
     maintenance and migration entries), and `entrypoint-isolation.test.ts` extended to it. It reads
     `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (set by ECS), `FABRIKA_AWS_BASE_IMAGE` (the pinned Bun image) and the
-    four installation coordinates of step 9, and
+    four installation coordinates of step 9 and the network of step 10, and
     reads repositories through the unbound GitHub source. Nothing runs it until step 11 defines Control's task.
 13. **Tests**: the conformance suite over a fake AWS, renderer tests, and a live suite gated on
     `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack.

@@ -1,12 +1,14 @@
 // The ECS calls the AWS provider makes (ADR-0081): register a Fargate task definition (ARM64, `awsvpc`, the image by
-// digest, secrets by reference), point a service at it with the circuit breaker on, and read the service back with its
-// deployments and events, which the deploy run observes (#374's `observe`) and relays to the run log.
+// digest, secrets by reference), create a service on it or point one at it with the circuit breaker on, and read the
+// service back with its deployments and events, which the deploy run observes (#374's `observe`) and relays to the run
+// log.
 //
-// A registered revision activates nothing; only `updateService` does. That call is the run's submitting call: the
-// checkpoint's `serviceUpdateRequested` is recorded before it (ADR-0044).
+// A registered revision activates nothing; only `createService` and `updateService` do. One of them is the run's
+// submitting call: the checkpoint's `serviceUpdateRequested` is recorded before it (ADR-0044).
 //
-// UNVERIFIED: the operations' input and answer fields, the Fargate CPU values, the rollout states and the `dependsOn`
-// rules follow ECS's API reference; none was checked against an account.
+// UNVERIFIED: the operations' input and answer fields, the Fargate CPU values, the rollout states, the `dependsOn`
+// rules, `CreateService`'s 36-character client token and that its answer names `currentServiceDeployment` follow
+// ECS's API reference; none was checked against an account.
 
 import { z } from 'zod'
 import { AwsError, awsJsonClient, type AwsJsonClientOptions, ECS } from './json'
@@ -173,6 +175,19 @@ export interface EcsTaskStart {
 	readonly startedBy: string
 }
 
+/**
+ * What `createService` creates: a Fargate service of `desiredCount` tasks of a registered revision in an `awsvpc`
+ * network, rolled by ECS with its circuit breaker on, its tags propagated to its tasks.
+ */
+export interface EcsServiceCreate extends EcsServiceAddress {
+	readonly taskDefinitionArn: string
+	readonly network: EcsNetwork
+	readonly desiredCount: number
+	/** The idempotency token, at most 36 characters: one per run, so a lost answer is settled by repeating the call. */
+	readonly clientToken: string
+	readonly tags: Readonly<Record<string, string>>
+}
+
 /** A service deployment's state; a circuit breaker's rollback is a state of the same deployment. */
 export type EcsServiceDeploymentStatus =
 	| 'pending'
@@ -205,8 +220,16 @@ export interface EcsServiceRevision {
 export interface EcsClient {
 	/** Registers `definition` as a new revision of its family; nothing runs it until a service is updated to it. */
 	registerTaskDefinition(definition: EcsTaskDefinition, signal?: AbortSignal): Promise<EcsTaskDefinitionRevision>
-	/** Points the service at `taskDefinitionArn` with the circuit breaker on: the run's submitting call. */
-	updateService(address: EcsServiceAddress, taskDefinitionArn: string, signal?: AbortSignal): Promise<EcsService>
+	/**
+	 * Creates the service on `taskDefinitionArn`: the submitting call of an environment's first run. A repeat under the
+	 * same client token creates nothing more.
+	 */
+	createService(create: EcsServiceCreate, signal?: AbortSignal): Promise<EcsService>
+	/**
+	 * Points the service at `taskDefinitionArn` in `network` with the circuit breaker on: the submitting call of every
+	 * later run. The network is sent each time, so a service converges on the installation's current one.
+	 */
+	updateService(address: EcsServiceAddress, taskDefinitionArn: string, network: EcsNetwork, signal?: AbortSignal): Promise<EcsService>
 	/** The service, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
 	describeService(address: EcsServiceAddress, signal?: AbortSignal): Promise<EcsService | null>
 	/** The service deployment `arn`, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
@@ -242,8 +265,14 @@ const SUBNET = /^subnet-[0-9a-f]{8,17}$/
 const SECURITY_GROUP = /^sg-[0-9a-f]{8,17}$/
 /** A task's ARN: `…:task/<cluster>/<id>`. */
 const TASK_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:ecs:[a-z0-9-]{1,32}:\d{12}:task\/[A-Za-z0-9_-]{1,255}\/[0-9a-f]{32}$/
-/** A `RunTask` idempotency token. */
+/** A `RunTask` idempotency token, and a `CreateService` one, which takes at most 36 characters. */
 const CLIENT_TOKEN = /^[A-Za-z0-9-]{1,64}$/
+const SERVICE_CLIENT_TOKEN = /^[A-Za-z0-9-]{1,36}$/
+/** The most subnets and security groups an `awsvpc` network takes. */
+const MAX_SUBNETS = 16
+const MAX_SECURITY_GROUPS = 5
+/** The most tasks a service of this provider runs. */
+const MAX_DESIRED_COUNT = 100
 /** `startedBy`: letters, digits, hyphens and underscores, at most 128. */
 const STARTED_BY = /^[A-Za-z0-9_-]{1,128}$/
 /** The longest reason a stopped task reports, per part. */
@@ -443,6 +472,30 @@ function address(where: EcsServiceAddress): EcsServiceAddress {
 	return where
 }
 
+/** The `awsvpcConfiguration` ECS takes, after every id was checked: one subnet at least, at most five groups. */
+function awsvpcOf(network: EcsNetwork): Record<string, unknown> {
+	const { subnets, securityGroups } = network
+	if (subnets.length === 0 || subnets.length > MAX_SUBNETS || !subnets.every((subnet) => SUBNET.test(subnet))) refuse('the subnets')
+	if (securityGroups.length > MAX_SECURITY_GROUPS || !securityGroups.every((group) => SECURITY_GROUP.test(group))) refuse('the security groups')
+	return {
+		awsvpcConfiguration: {
+			subnets: [...subnets],
+			securityGroups: [...securityGroups],
+			assignPublicIp: network.publicIp ? 'ENABLED' : 'DISABLED',
+		},
+	}
+}
+
+/**
+ * How ECS rolls a service: a new task starts before an old one stops (at most twice the desired count, never below it),
+ * and the circuit breaker rolls a deployment whose tasks do not come up back to the last one that did.
+ */
+const DEPLOYMENT_CONFIGURATION = {
+	deploymentCircuitBreaker: { enable: true, rollback: true },
+	maximumPercent: 200,
+	minimumHealthyPercent: 100,
+}
+
 /** ECS at `options.origin`; the client is of the `ECS` service by construction. */
 export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 	const json = awsJsonClient(ECS, options)
@@ -488,16 +541,56 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			return { arn: revision.taskDefinitionArn, family: revision.family, revision: revision.revision }
 		},
 
-		async updateService(where, taskDefinitionArn, signal) {
+		async createService(create, signal) {
+			const { cluster, service } = address(create)
+			if (!TASK_DEFINITION_ARN.test(create.taskDefinitionArn)) refuse('the task definition')
+			if (!SERVICE_CLIENT_TOKEN.test(create.clientToken)) refuse('the client token')
+			if (!Number.isInteger(create.desiredCount) || create.desiredCount < 0 || create.desiredCount > MAX_DESIRED_COUNT) refuse('the desired count')
+			const networkConfiguration = awsvpcOf(create.network)
+			const created = await json.call(
+				'CreateService',
+				{
+					cluster,
+					serviceName: service,
+					taskDefinition: create.taskDefinitionArn,
+					desiredCount: create.desiredCount,
+					launchType: 'FARGATE',
+					platformVersion: 'LATEST',
+					schedulingStrategy: 'REPLICA',
+					deploymentController: { type: 'ECS' },
+					deploymentConfiguration: DEPLOYMENT_CONFIGURATION,
+					networkConfiguration,
+					clientToken: create.clientToken,
+					// No shell into a task: ECS Exec would reach the application's process around the proxy.
+					enableExecuteCommand: false,
+					enableECSManagedTags: true,
+					propagateTags: 'SERVICE',
+					tags: tagsOf(create.tags),
+				},
+				updatedSchema,
+				signal,
+			)
+			// An answer for another service, or one that runs another revision, is no answer to this call.
+			if (created.service.serviceName !== service || created.service.taskDefinition !== create.taskDefinitionArn) {
+				throw new AwsError('CreateService', 'invalid_answer', 200, null, false)
+			}
+			return serviceOf('CreateService', created.service)
+		},
+
+		async updateService(where, taskDefinitionArn, network, signal) {
 			const { cluster, service } = address(where)
 			if (!TASK_DEFINITION_ARN.test(taskDefinitionArn)) refuse('the task definition')
+			const networkConfiguration = awsvpcOf(network)
 			const updated = await json.call(
 				'UpdateService',
 				{
 					cluster,
 					service,
 					taskDefinition: taskDefinitionArn,
-					deploymentConfiguration: { deploymentCircuitBreaker: { enable: true, rollback: true } },
+					deploymentConfiguration: DEPLOYMENT_CONFIGURATION,
+					networkConfiguration,
+					// Sent on every update too: ECS Exec turned on out of band is turned off by the next deploy.
+					enableExecuteCommand: false,
 				},
 				updatedSchema,
 				signal,
@@ -558,8 +651,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (start.command.length === 0) refuse('the command')
 			if (!CLIENT_TOKEN.test(start.clientToken)) refuse('the client token')
 			if (!STARTED_BY.test(start.startedBy)) refuse('the starter')
-			if (start.network.subnets.length === 0 || !start.network.subnets.every((subnet) => SUBNET.test(subnet))) refuse('the subnets')
-			if (!start.network.securityGroups.every((group) => SECURITY_GROUP.test(group))) refuse('the security groups')
+			const networkConfiguration = awsvpcOf(start.network)
 			const operation = 'RunTask'
 			const answered = await json.call(
 				operation,
@@ -570,13 +662,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 					count: 1,
 					clientToken: start.clientToken,
 					startedBy: start.startedBy,
-					networkConfiguration: {
-						awsvpcConfiguration: {
-							subnets: [...start.network.subnets],
-							securityGroups: [...start.network.securityGroups],
-							assignPublicIp: start.network.publicIp ? 'ENABLED' : 'DISABLED',
-						},
-					},
+					networkConfiguration,
 					overrides: { containerOverrides: [{ name: start.container, command: [...start.command] }] },
 				},
 				tasksSchema,

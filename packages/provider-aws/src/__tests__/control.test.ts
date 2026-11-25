@@ -8,11 +8,12 @@ import type { JsonValue, ProviderApprovedAccess, ProviderDeployInput, ProviderEn
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import type { EcsService } from '../aws/ecs'
+import type { EcsNetwork, EcsService } from '../aws/ecs'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec } from '../codecs'
 import {
 	type AwsControlClients,
+	type AwsControlProviderOptions,
 	awsEnvironmentResources,
 	type AwsSourcePort,
 	awsSourceRepository,
@@ -41,6 +42,9 @@ const target: AwsAppTarget = {
 	cluster: 'fabrika-apps',
 	sourcesBucket: 'fabrika-sources-123456789012',
 }
+const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'], publicIp: true }
+/** The security group the environment's stack names as its output. */
+const SECURITY_GROUP = 'sg-0123456789abcdef9'
 /** The notes contract without what this version refuses: a database, jobs, file collections. */
 const contract = { ...notesArtifact, tables: {}, jobs: {}, files: {}, fileKinds: {} }
 const access: ProviderApprovedAccess = { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), checker: '0.9.1' }
@@ -67,6 +71,7 @@ class Recorder implements ProviderRunEvents {
 /** Fakes of every call, each recorded; the parameters Parameter Store holds, three earlier runs' and one of another form. */
 class Fake {
 	readonly calls: string[] = []
+	readonly networks: EcsNetwork[] = []
 	readonly parameters = new Map<string, string>([
 		[`${ENV_PATH}/${OLDEST}.API_TOKEN`, 'oldest'],
 		[`${ENV_PATH}/${OLDER}.API_TOKEN`, 'older'],
@@ -138,8 +143,13 @@ class Fake {
 				this.registered.push({ family: definition.family, environment: server?.environment ?? {}, secrets: server?.secrets ?? {} })
 				return { arn: REVISION, family: definition.family, revision: 42 }
 			},
-			updateService: async (address, taskDefinitionArn) => {
+			createService: async (create) => {
+				this.calls.push(`createService ${create.cluster}/${create.service}`)
+				return { ...this.service(), taskDefinitionArn: create.taskDefinitionArn }
+			},
+			updateService: async (address, taskDefinitionArn, network) => {
 				this.calls.push(`updateService ${address.cluster}/${address.service}`)
+				this.networks.push(network)
 				return { ...this.service(), taskDefinitionArn }
 			},
 			describeService: async () => this.service(),
@@ -178,8 +188,8 @@ class Fake {
 				if (this.stackRefused) throw new AwsError('ListStacks', 'AccessDenied', 403, null, false)
 				return { stackId: `arn:aws:cloudformation:eu-central-1:123456789012:stack/${name}/0f1e2d3c`, status: 'CREATE_COMPLETE' }
 			},
-			describeStack: async (stackId) => ({ stackId, status: 'CREATE_COMPLETE' }),
-			getTemplate: async () => JSON.stringify(awsEnvironmentStack('notes', 'prod', target).template),
+			describeStack: async (stackId) => ({ stackId, status: 'CREATE_COMPLETE', outputs: { SecurityGroupId: SECURITY_GROUP } }),
+			getTemplate: async () => JSON.stringify(awsEnvironmentStack('notes', 'prod', target, network).template),
 			createStack: async () => {
 				throw new Error('the stack exists')
 			},
@@ -190,7 +200,11 @@ class Fake {
 	})
 
 	provider() {
-		return createAwsControlProvider({
+		return createAwsControlProvider(this.options())
+	}
+
+	options(): AwsControlProviderOptions {
+		return {
 			credentials: {
 				current: async () => ({
 					accessKeyId: 'AKIDEXAMPLE',
@@ -200,10 +214,11 @@ class Fake {
 			},
 			baseImage: BASE_IMAGE,
 			installation: target,
+			network,
 			source: this.source,
 			clients: this.clients,
 			sleep: async () => {},
-		})
+		}
 	}
 
 	envParameters(): string[] {
@@ -290,6 +305,16 @@ describe('the AWS control provider', () => {
 		expect(fake.calls).toEqual(['findStack fabrika-app-5-notes-prod'])
 		expect(fake.uploads).toEqual([])
 		expect(fake.envParameters().filter((name) => name.includes(RUN))).toEqual([])
+	})
+
+	test("the service runs in the installation's subnets and the environment stack's security group, and no network is refused late", async () => {
+		const fake = new Fake()
+		expect((await fake.provider().deploy(deployInput())).state).toBe('succeeded')
+		expect(fake.networks).toEqual([{ subnets: network.subnets, securityGroups: [SECURITY_GROUP], publicIp: true }])
+		// A network of another form fails the composition, before any environment is deployed.
+		const broken = new Fake()
+		expect(() => createAwsControlProvider({ ...broken.options(), network: { ...network, subnets: [] } })).toThrow('aws: the installation network')
+		expect(() => createAwsControlProvider({ ...broken.options(), network: { ...network, vpcId: 'vpc-X' } })).toThrow('aws: the installation network')
 	})
 
 	test('a run that throws while writing its secrets deletes what it wrote', async () => {
