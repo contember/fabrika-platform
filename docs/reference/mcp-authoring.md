@@ -43,6 +43,7 @@ deploys a workspace.
 | `apply_changes`       | Commit writes, deletions and exact replacements against a head.     |
 | `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.      |
 | `get_deployment`      | The run's state, a log window, approval link, `deviations`.         |
+| `get_run`             | Any run the user may read: state, approval link and deadline.       |
 | `delete_workspace`    | Abandon a workspace: delete its branch and sandbox, stop listing.   |
 | `create_pull_request` | Open a pull request from the workspace to the default branch.       |
 | `get_app_rules`       | The application rules or one topic, read-only, with a pin warning.  |
@@ -522,6 +523,8 @@ paved road and need closer review, parked or not.
 - One dev environment per app, never production or protected, on Zerops only; each workspace gets its own sandbox,
   and the sandboxes share one IAM application. In a sandbox jobs do not run.
 - Production is a human merge in GitHub followed by the existing Delivery trigger. Control enforces it: only a
-  person starts a manual run of a protected environment, so an MCP token, the builder key and any service key get a
-  `403`, a workspace ref is refused there whoever asks, and a key cannot change the trigger ref, the repository or
-  the build settings that a deploy there runs from.
+  person starts a manual run of a protected environment without approval. An MCP token, the builder key and any
+  service key ask instead: under `deploy-request: person` they name a merged 40-hex commit and the run waits for a
+  person at its approval link (`get_run` answers it as `approvalUrl`), under `refuse` they get a `403`. A workspace
+  ref is refused there whoever asks, and a key cannot change the trigger ref, the repository or the build settings
+  that a deploy there runs from.
