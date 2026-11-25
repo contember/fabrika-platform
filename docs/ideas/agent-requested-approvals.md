@@ -147,8 +147,9 @@ Two shapes, by owner. An ADR-0083 rule already holds here: the service that writ
    runs. A run that does not belong to a person still never deploys a workspace branch (`human.ts:86-91`).
 2. **Any other action is an `approval_requests` row** in the service that writes the change. In Control: secrets and
    variables of a protected environment, its trigger ref, domain and public origin, `apps.update` source fields, and
-   data operations. In IAM it extends `grant_requests` (ADR-0083 §4) with a requester that is not an administrator, for
-   grants, and for keys issued to someone other than the agent ("Credentials for someone else", below). The row holds the kind, the canonical input, its SHA-256, the
+   data operations, and keys issued to someone other than the agent, which Control executes through IAM ("Credentials
+   for someone else", below). In IAM, for grants, it extends `grant_requests` (ADR-0083 §4) with a requester that is not
+   an administrator. The row holds the kind, the canonical input, its SHA-256, the
    coordinates, the requester (principal, OAuth client, task id once `act` exists), `pending | approved | rejected |
    expired | executed | failed`, the result and `expires_at`. A secret value in a request is sealed in the vault under
    the request's own purpose. The page shows its name, never the value. On approval the value moves to the secret's
@@ -381,9 +382,11 @@ The deploy categories stay as ADR-0083 defines them. The new ones are actions wi
 | `credentials`    | A key an agent asks for, issued to someone other than the agent (below)                                           | `person`                           |
 | `grants`         | ADR-0083's existing category: a person's own console grant. `plan` does not apply: a grant has no pull request.   | `off` (as today)                   |
 
-These categories are enforced only from step 5 of the plan, when the requests they wait in exist. Until then a
-non-person's write applies as it does today (the user's decision D8). The hole is closed by routing
-these writes through requests, never by refusing them outright.
+Each category is enforced only from the PR that adds the requests it waits in: `deploy-request` from step 3; `secrets`,
+`variables`, `data` and `registry` from step 5; `agent-grants` from step 6; `credentials` from step 7. Until then
+everything behaves as today: a non-person's secret, variable and data write applies at once, and its registry write is
+refused (the user's decision D8). The hole is closed by routing these writes through requests, never by refusing them
+outright.
 
 A person acting directly in the console is their own evidence for these: their act is the decision, as today. The one
 exception stays as it is: a person's own deploy still shows its lines for approval, because clicking "Deploy" is not
