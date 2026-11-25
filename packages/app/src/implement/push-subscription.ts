@@ -112,6 +112,23 @@ export function pushSubscriptionRequest(body: Uint8Array, currentKey: () => stri
 	}
 }
 
+const inboxSchema = z.strictObject({ endpoint: endpointText })
+
+/** The inbox's body: the endpoint of the worker's subscription, which it reads under the caller (400 `push_inbox` otherwise). */
+export function pushInboxRequest(body: Uint8Array): { readonly endpoint: string } {
+	let json: unknown
+	try {
+		json = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(body))
+	} catch {
+		throw new HttpError(400, 'push_inbox', 'The body is no JSON')
+	}
+	const parsed = inboxSchema.safeParse(json)
+	if (!parsed.success) {
+		throw new HttpError(400, 'push_inbox', 'The body names no endpoint: { endpoint }')
+	}
+	return parsed.data
+}
+
 /** Whether `key` is a VAPID public key as the environment must hand it: an unpadded base64url P-256 point. */
 export function isVapidPublicKey(key: string): boolean {
 	return p256Point.safeParse(key).data === key

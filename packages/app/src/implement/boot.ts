@@ -46,7 +46,7 @@ import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { containersOf } from '../contract/containers'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
-import { challengeRowId, exportBase, PUSH_SUBSCRIPTION_ROW_ID, PUSH_WORKER_ROW_ID, spaPrefixRowId } from '../contract/defaults'
+import { challengeRowId, exportBase, PUSH_INBOX_ROW_ID, PUSH_SUBSCRIPTION_ROW_ID, PUSH_WORKER_ROW_ID, spaPrefixRowId } from '../contract/defaults'
 import type { AnyContract, Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import { schemaFromShape } from '../contract/schema-from-shape'
@@ -1151,6 +1151,15 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		}
 	} else if (artifact.notifications === true) {
 		problems.push('the contract declares notifications, and its artifact has no subscription row')
+	}
+	const pushInbox = rows.get(PUSH_INBOX_ROW_ID)
+	if (isCredentialed(pushInbox) && pushInbox.source.kind === 'push') {
+		const admission = procedureAdmission(pushInbox.id, artifact, admissionOptions(options), problems)
+		if (admission !== null) {
+			endpoints.set(pushInbox.id, { kind: 'push-inbox', row: pushInbox, admission })
+		}
+	} else if (artifact.notifications === true) {
+		problems.push('the contract declares notifications, and its artifact has no inbox row')
 	}
 	undeclaredHandlers(handlers, declared, [], problems)
 	const data = bound?.data ?? null

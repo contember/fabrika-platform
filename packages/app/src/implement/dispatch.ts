@@ -43,7 +43,7 @@ import {
 } from '@fabrika/auth-core'
 import { DatabaseError } from '@fabrika/db'
 import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES, type RelationHold, type WithinGrant } from '@fabrika/db/capability'
-import type { DataAccess, DataHandles, FileBinding, FrameworkTables } from '@fabrika/db/framework'
+import type { DataAccess, DataHandles, FileBinding, FrameworkTables, NotificationAbout } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { uuidv7 } from '@fabrika/platform'
@@ -62,6 +62,7 @@ import {
 	joinPath,
 	PAGE_CALLER_FILE,
 	PROCEDURE_LIMITS,
+	PUSH_INBOX_LIMITS,
 	WEBHOOK_BINDING_PARAMETER,
 } from '../contract/defaults'
 import type { Schema } from '../contract/define'
@@ -131,8 +132,8 @@ import { paramsObject, urlParams } from './params'
 import { globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
-import { type PushSubscriptionAnswer, pushSubscriptionRequest } from './push-subscription'
-import { pushWorkerResponse } from './push-worker'
+import { pushInboxRequest, type PushSubscriptionAnswer, pushSubscriptionRequest } from './push-subscription'
+import { type PushInboxAnswer, pushWorkerResponse } from './push-worker'
 import { answersJson, type KeyedRequest, recorded, replayed, requestIdentity, requestKeyOf, validatedOutput } from './receipts'
 import { type TerminalIdentification, terminalIdentification } from './terminals'
 import type { SignedTokens } from './tokens'
@@ -218,6 +219,7 @@ function invocationKind(served: ServedEndpoint): InvocationKind {
 		case 'public':
 			return served.site.kind === 'mutation' ? 'write' : 'read'
 		case 'push-subscription':
+		case 'push-inbox':
 			return 'write'
 		default:
 			return 'read'
@@ -301,6 +303,8 @@ export type ServedEndpoint =
 	 * the environment holds none, and then nothing is recorded.
 	 */
 	| { readonly kind: 'push-subscription'; readonly row: CredentialedEndpoint; readonly admission: ProcedureAdmission; readonly key: string | null }
+	/** The Web Push inbox row (ADR-0088 §4–§6): the caller's unseen notifications for a subscription, checked as read. */
+	| { readonly kind: 'push-inbox'; readonly row: CredentialedEndpoint; readonly admission: ProcedureAdmission }
 	/** An SPA mount's bare prefix (`/admin`): the proxy admitted it under the mount's access; it redirects to `/admin/`. */
 	| { readonly kind: 'spa-prefix'; readonly row: EndpointRow; readonly prefix: string }
 	/** An SPA anyone opens: anonymous, served without a token. */
@@ -571,6 +575,8 @@ export class ContractRuntime {
 				return pushWorkerResponse()
 			case 'push-subscription':
 				return await this.#pushSubscription(served, request, exec)
+			case 'push-inbox':
+				return await this.#pushInbox(served, request, exec)
 			case 'spa-prefix':
 				return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
 			case 'link-spa':
@@ -1588,6 +1594,80 @@ export class ContractRuntime {
 			frame.end()
 			budget.clear()
 			await invocation.rollback()
+		}
+	}
+
+	/**
+	 * The Web Push inbox (ADR-0088 §4–§7): the worker names its subscription, and gets the caller's notifications written
+	 * after its cursor, at most `PUSH_INBOX_LIMITS.rows`, of which only those the caller may read now. A row about an
+	 * object takes the `on` check of an endpoint of its action on it (`#onRef`: grants on the object and its containers,
+	 * relations, reveals, paths); an application-wide row takes the action as a global grant; an action the contract no
+	 * longer declares reads nothing. The cursor moves past every row read, shown or not, so a row the caller lost stays
+	 * unread. `more` counts the caller's rows after the new cursor, unchecked: a count for the worker's summary, never
+	 * text. A subscription of another principal is deleted and answered as not the caller's, and so is one the table
+	 * does not hold. One transaction under the token's subject.
+	 */
+	async #pushInbox(
+		served: Extract<ServedEndpoint, { kind: 'push-inbox' }>,
+		request: Request,
+		exec: RequestExecutionContext | undefined,
+	): Promise<Response> {
+		const caller = await this.#authorize(served.row, request)
+		await this.#admit(served.row, served.admission, request, caller.subject)
+		const { endpoint } = pushInboxRequest(await readBodyInTime(request, maxBytesOf(served.row)))
+		const framework = this.#framework()
+		const principal = caller.subject
+		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: false, endpoint: served.row.id })
+		const invocation = new Invocation(frame, this.#data(), false)
+		const budget = handlerSignal(request, served.admission.timeoutMs)
+		try {
+			return await enclosedAnswer(invocation, this.#hold(served.row.id, exec), async () => {
+				const session = await invocation.frameworkSite('the push inbox').session()
+				const subscription = await framework.push.inbox(session, principal, endpoint)
+				let answer: PushInboxAnswer = { mine: false, notifications: [], more: 0 }
+				if (subscription !== null) {
+					const now = Date.now()
+					const unseen = await framework.notifications.unseen(session, principal, subscription.cursor, now, PUSH_INBOX_LIMITS.rows)
+					const shown: PushInboxAnswer['notifications'][number][] = []
+					for (const notification of unseen) {
+						if (await runInRequest(frame, () => this.#mayRead(caller, notification.about, frame))) {
+							shown.push({ id: notification.id, title: notification.title, body: notification.body, path: notification.path })
+						}
+					}
+					const last = unseen.at(-1)?.id ?? subscription.cursor
+					if (last !== null && last !== subscription.cursor) {
+						await framework.push.advance(session, principal, endpoint, last)
+					}
+					answer = { mine: true, notifications: shown, more: await framework.notifications.countAfter(session, principal, last, now) }
+				}
+				frame.end()
+				const response = jsonResponse(answer, 200)
+				await commitAnswer(invocation, budget.signal, response)
+				return response
+			})
+		} finally {
+			frame.end()
+			budget.clear()
+			await invocation.rollback()
+		}
+	}
+
+	/** Whether the caller may read a notification about `about` now: the check an endpoint of its action makes. */
+	async #mayRead(caller: Caller, about: NotificationAbout, frame: RequestFrame): Promise<boolean> {
+		if (!this.#parts.actions.includes(about.action)) {
+			return false
+		}
+		if (about.dimension === null) {
+			return permits(caller.perms, about.action)
+		}
+		try {
+			await this.#onRef(caller, about.action, about.dimension, about.value, frame)
+			return true
+		} catch (error) {
+			if (error instanceof NotFoundError) {
+				return false
+			}
+			throw error
 		}
 	}
 

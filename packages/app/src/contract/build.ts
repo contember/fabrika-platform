@@ -123,6 +123,9 @@ import {
 	PROCEDURE_LIMITS,
 	procedurePath,
 	PUBLIC_MUTATION_RATE,
+	PUSH_INBOX_LIMITS,
+	PUSH_INBOX_PATH,
+	PUSH_INBOX_ROW_ID,
 	PUSH_PREFIX,
 	PUSH_SUBSCRIPTION_LIMITS,
 	PUSH_SUBSCRIPTION_PATH,
@@ -371,6 +374,24 @@ class ArtifactBuilder {
 		})
 		this.#procedureRules[PUSH_SUBSCRIPTION_ROW_ID] = {
 			rate: { perClient: null, perCaller: PUSH_SUBSCRIPTION_LIMITS.perCaller, perEndpoint: null, bytesPerHour: null },
+			challenge: null,
+			timeoutMs: PROCEDURE_LIMITS.timeoutMs,
+		}
+		// A POST, because it moves the subscription's cursor; the worker's own request is same-origin.
+		this.#row({
+			id: PUSH_INBOX_ROW_ID,
+			source: { kind: 'push', name: 'inbox' },
+			kind: 'mutation',
+			method: 'POST',
+			path: PUSH_INBOX_PATH,
+			callers: ['human'],
+			requirement: { kind: 'member' },
+			admission: { contentTypes: ['application/json'], maxBytes: PUSH_INBOX_LIMITS.maxBytes },
+			input: null,
+			output: null,
+		})
+		this.#procedureRules[PUSH_INBOX_ROW_ID] = {
+			rate: { perClient: null, perCaller: PUSH_INBOX_LIMITS.perCaller, perEndpoint: null, bytesPerHour: null },
 			challenge: null,
 			timeoutMs: PROCEDURE_LIMITS.timeoutMs,
 		}
