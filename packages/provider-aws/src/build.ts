@@ -29,14 +29,11 @@ export const BUILD_VARIABLES = {
 } satisfies Readonly<Record<string, string>>
 
 /**
- * The buildspec of every application build. The archive has one top-level directory (Control refuses any other), which
- * `--strip-components=1` drops, so the build context is the commit's tree; the `Dockerfile` sits outside it, beside an
- * ignore file of its own that ignores nothing (`<Dockerfile>.dockerignore`, which BuildKit reads before the context's; one
- * comment line, so it cannot read as absent), so the
- * application's own `.dockerignore` filters nothing. The presigned URL is dropped from the shell once the archive is
- * fetched. The login names the registry's own region.
+ * The head of every buildspec, an application's and a namespace proxy's (`proxy-build.ts`): one shell, the registry's
+ * login in its own region, and the archive fetched through its presigned URL (dropped from the shell once fetched) and
+ * unpacked into `/tmp/fabrika-source`, its one top-level directory dropped.
  */
-export const AWS_BUILDSPEC = [
+export const BUILDSPEC_FETCH: readonly string[] = [
 	'version: 0.2',
 	'env:',
 	'  shell: bash',
@@ -49,6 +46,18 @@ export const AWS_BUILDSPEC = [
 	`      - curl --fail --silent --show-error --proto =https --output /tmp/fabrika-source.tar.gz "$${BUILD_VARIABLES.sourceUrl}"`,
 	`      - unset ${BUILD_VARIABLES.sourceUrl}`,
 	'      - tar --extract --gzip --file /tmp/fabrika-source.tar.gz --directory /tmp/fabrika-source --strip-components=1 --no-same-owner',
+]
+
+/**
+ * The buildspec of every application build. The archive has one top-level directory (Control refuses any other), which
+ * `--strip-components=1` drops, so the build context is the commit's tree; the `Dockerfile` sits outside it, beside an
+ * ignore file of its own that ignores nothing (`<Dockerfile>.dockerignore`, which BuildKit reads before the context's; one
+ * comment line, so it cannot read as absent), so the
+ * application's own `.dockerignore` filters nothing. The presigned URL is dropped from the shell once the archive is
+ * fetched. The login names the registry's own region.
+ */
+export const AWS_BUILDSPEC = [
+	...BUILDSPEC_FETCH,
 	`      - printf '%s' "$${BUILD_VARIABLES.dockerfile}" | base64 --decode > /tmp/fabrika-Dockerfile`,
 	// One comment line, so the file cannot read as absent and the context's own ignore file never applies.
 	"      - printf '%s\\n' '# The platform builds the whole archive, so nothing is ignored.' > /tmp/fabrika-Dockerfile.dockerignore",
@@ -67,10 +76,10 @@ export const MAX_DOCKERFILE_BYTES = 32 * 1024
  * An ECR repository's URI: `<account>.dkr.ecr.<region>.amazonaws.com/<name>`, the name in ECR's own form (segments of
  * lower-case letters and digits joined by one `.`, `_` or `-`, separated by `/`), 2 to 256 characters.
  */
-const REPOSITORY_URI =
+export const REPOSITORY_URI =
 	/^(\d{12})\.dkr\.ecr\.([a-z]{2,4}(?:-[a-z]{1,10}){1,3}-\d{1,2})\.amazonaws\.com\/((?=.{2,256}$)(?:[a-z0-9]+(?:[._-][a-z0-9]+)*\/)*[a-z0-9]+(?:[._-][a-z0-9]+)*)$/
 /** A Parameter Store parameter's name, as `startBuild` takes it. */
-const PARAMETER_NAME = /^(?=.{2,950}$)(?:\/[A-Za-z0-9_.-]+){1,15}$/
+export const PARAMETER_NAME = /^(?=.{2,950}$)(?:\/[A-Za-z0-9_.-]+){1,15}$/
 
 /** The image tag of a run: its build token, so a run's image can be found again whatever happened to the build's answer. */
 export function awsImageTag(buildToken: string): string {

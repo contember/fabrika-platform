@@ -97,15 +97,16 @@ function roleName(arn: string): string {
 }
 
 /**
- * The managed policy every application environment's role carries as its permissions boundary: the installation's
- * (step 11 creates it), at one derived name, so Control's policy can require exactly it on every role write.
+ * The managed policy every role Control's stacks create carries as its permissions boundary, an application
+ * environment's and a namespace proxy's (`namespace.ts`): the installation's (step 11 creates it), at one derived name,
+ * so Control's policy can require exactly it on every role write.
  */
 export function awsAppsPermissionsBoundary(accountId: string): string {
 	return `arn:aws:iam::${accountId}:policy/fabrika/fabrika-apps-boundary`
 }
 
 /** A trust policy that lets `service` take the role on behalf of this account, and only for `sourceArn`. */
-function trust(service: string, accountId: string, sourceArn: { readonly equals: string } | { readonly like: string }): JsonValue {
+export function trust(service: string, accountId: string, sourceArn: { readonly equals: string } | { readonly like: string }): JsonValue {
 	const condition: { [operator: string]: JsonValue } = { StringEquals: { 'aws:SourceAccount': accountId } }
 	if ('equals' in sourceArn) condition['ArnEquals'] = { 'aws:SourceArn': sourceArn.equals }
 	else condition['ArnLike'] = { 'aws:SourceArn': sourceArn.like }
@@ -116,11 +117,11 @@ function trust(service: string, accountId: string, sourceArn: { readonly equals:
 }
 
 /** An inline policy of `statements`. */
-function policy(name: string, statements: readonly JsonValue[]): JsonValue {
+export function policy(name: string, statements: readonly JsonValue[]): JsonValue {
 	return { PolicyName: name, PolicyDocument: { Version: '2012-10-17', Statement: [...statements] } }
 }
 
-function allow(actions: readonly string[], resources: readonly string[]): JsonValue {
+export function allow(actions: readonly string[], resources: readonly string[]): JsonValue {
 	return { Effect: 'Allow', Action: [...actions], Resource: [...resources] }
 }
 
