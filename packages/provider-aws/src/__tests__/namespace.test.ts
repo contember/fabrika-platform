@@ -10,8 +10,11 @@ import type { StackDescription, StackSummary } from '../aws/cloudformation'
 import type { EcsService } from '../aws/ecs'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, awsNamespaceTargetCodec } from '../codecs'
+import { awsAppsPermissionsBoundary } from '../environment-stack'
 import { awsNamespaceCapabilities, awsNamespaceResources, awsNamespaceStack, namespaceOutputsOf, readNamespaceOutputs } from '../namespace'
+import { AWS_PROXY_BUILD_IMAGE, AWS_PROXY_BUILDSPEC } from '../proxy-build'
 import { awsNamespaceMemberHosts } from '../proxy-manifest'
+import { awsEnvironmentResources } from '../resources'
 import { AWS_STACK_TIMEOUT_MS } from '../stack'
 
 const installation: AwsAppTarget = {
@@ -113,18 +116,110 @@ describe('awsNamespaceResources', () => {
 		expect(awsNamespaceResources('shared', 'prod')).toEqual({
 			stackName: 'fabrika-ns-6-shared-prod',
 			serviceConnectNamespace: 'fabrika-ns-6-shared-prod',
+			repository: 'fabrika/namespaces/shared/prod/proxy',
+			parameterPath: '/fabrika/namespaces/shared/prod',
+			buildProject: 'fabrika_ns_shared_prod',
+			buildRoleName: 'shared_prod_proxy_build',
+			buildLogGroup: '/fabrika/namespaces/shared/prod/proxy/build',
 		})
 		// `a-b` + `c` and `a` + `b-c` would join to one name without the length.
 		expect(awsNamespaceResources('a-b', 'c').stackName).not.toBe(awsNamespaceResources('a', 'b-c').stackName)
-		for (const [id, env] of [['Shared', 'prod'], ['a_b', 'prod'], ['shared', 'pr.od'], ['x'.repeat(64), 'prod']]) {
+		// A hyphen only between letters or digits: each part is a segment of an ECR repository's name.
+		for (
+			const [id, env] of [['Shared', 'prod'], ['a_b', 'prod'], ['shared', 'pr.od'], ['x'.repeat(64), 'prod'], ['shared-', 'prod'], ['a--b', 'prod']]
+		) {
 			expect(() => awsNamespaceResources(id ?? '', env ?? '')).toThrow('aws: the namespace id')
 		}
+		// The longest role a namespace will hold fits IAM's 64, so adding it never refuses a namespace taken now.
+		expect(awsNamespaceResources('x'.repeat(24), 'y'.repeat(23)).buildRoleName).toBe(`${'x'.repeat(24)}_${'y'.repeat(23)}_proxy_build`)
+		expect(() => awsNamespaceResources('x'.repeat(24), 'y'.repeat(24))).toThrow('too long for an IAM role name')
+	})
+
+	test("no name is an application environment's, whatever the ids", () => {
+		const app = awsEnvironmentResources('ns', 'shared', installation.accountId)
+		const namespace = awsNamespaceResources('shared', 'env')
+		// The application `ns` in `shared` and the namespace `shared` in `env` share no repository, parameter or project.
+		expect(namespace.repository.startsWith('fabrika/namespaces/')).toBe(true)
+		expect(namespace.parameterPath.startsWith(`${app.parameterPath}/`)).toBe(false)
+		expect(namespace.buildProject).not.toBe(app.buildProject)
+		expect(namespace.buildRoleName.split('_')).toHaveLength(4)
+		expect(app.buildRoleArn.slice(app.buildRoleArn.lastIndexOf('/') + 1).split('_')).toHaveLength(3)
 	})
 })
 
 describe('awsNamespaceStack', () => {
-	const stack = awsNamespaceStack(NAMESPACE, network)
+	const stack = awsNamespaceStack(NAMESPACE, installation, network)
 	const resources = at(stack.template, 'Resources')
+
+	test("holds the proxy's build: its repository, log group, a role under the boundary reaching only its own, and an x86 project", () => {
+		expect(at(resources, 'ProxyRepository', 'Type')).toBe('AWS::ECR::Repository')
+		expect(at(resources, 'ProxyRepository', 'Properties')).toMatchObject({
+			RepositoryName: 'fabrika/namespaces/shared/prod/proxy',
+			ImageTagMutability: 'IMMUTABLE',
+			EncryptionConfiguration: { EncryptionType: 'AES256' },
+		})
+		expect(at(resources, 'ProxyBuildLogGroup', 'Properties', 'LogGroupName')).toBe('/fabrika/namespaces/shared/prod/proxy/build')
+
+		const role = at(resources, 'ProxyBuildRole', 'Properties')
+		expect(at(role, 'RoleName')).toBe('shared_prod_proxy_build')
+		expect(at(role, 'Path')).toBe('/fabrika/namespaces/')
+		expect(at(role, 'PermissionsBoundary')).toBe(awsAppsPermissionsBoundary('123456789012'))
+		expect(at(role, 'AssumeRolePolicyDocument')).toEqual({
+			Version: '2012-10-17',
+			Statement: [{
+				Effect: 'Allow',
+				Principal: { Service: 'codebuild.amazonaws.com' },
+				Action: 'sts:AssumeRole',
+				Condition: {
+					StringEquals: { 'aws:SourceAccount': '123456789012' },
+					ArnEquals: { 'aws:SourceArn': 'arn:aws:codebuild:eu-central-1:123456789012:project/fabrika_ns_shared_prod' },
+				},
+			}],
+		})
+		expect(at(role, 'Policies')).toEqual([{
+			PolicyName: 'build',
+			PolicyDocument: {
+				Version: '2012-10-17',
+				Statement: [
+					{ Effect: 'Allow', Action: ['ecr:GetAuthorizationToken'], Resource: ['*'] },
+					{
+						Effect: 'Allow',
+						Action: ['ecr:BatchCheckLayerAvailability', 'ecr:InitiateLayerUpload', 'ecr:UploadLayerPart', 'ecr:CompleteLayerUpload', 'ecr:PutImage'],
+						Resource: ['arn:aws:ecr:eu-central-1:123456789012:repository/fabrika/namespaces/shared/prod/proxy'],
+					},
+					{
+						Effect: 'Allow',
+						Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+						Resource: ['arn:aws:logs:eu-central-1:123456789012:log-group:/fabrika/namespaces/shared/prod/proxy/build:*'],
+					},
+					{
+						Effect: 'Allow',
+						Action: ['ssm:GetParameters'],
+						Resource: ['arn:aws:ssm:eu-central-1:123456789012:parameter/fabrika/namespaces/shared/prod/builds/*'],
+					},
+				],
+			},
+		}])
+
+		const project = at(resources, 'ProxyBuildProject', 'Properties')
+		expect(at(project, 'Name')).toBe('fabrika_ns_shared_prod')
+		expect(at(project, 'ServiceRole')).toEqual({ 'Fn::GetAtt': ['ProxyBuildRole', 'Arn'] })
+		expect(at(project, 'Source')).toEqual({ Type: 'NO_SOURCE', BuildSpec: AWS_PROXY_BUILDSPEC })
+		expect(at(project, 'Environment')).toEqual({
+			Type: 'LINUX_CONTAINER',
+			ComputeType: 'BUILD_GENERAL1_SMALL',
+			Image: AWS_PROXY_BUILD_IMAGE,
+			PrivilegedMode: true,
+		})
+		expect(at(project, 'LogsConfig')).toEqual({ CloudWatchLogs: { Status: 'ENABLED', GroupName: '/fabrika/namespaces/shared/prod/proxy/build' } })
+	})
+
+	test('every role the stack holds carries the boundary', () => {
+		const roles = Object.values(typeof resources === 'object' && resources !== null && !Array.isArray(resources) ? resources : {})
+			.filter((resource) => at(resource, 'Type') === 'AWS::IAM::Role')
+		expect(roles.length).toBeGreaterThan(0)
+		for (const role of roles) expect(at(role, 'Properties', 'PermissionsBoundary')).toBe(awsAppsPermissionsBoundary('123456789012'))
+	})
 
 	test("holds the proxy's group in the installation's VPC, admitting nothing yet, and the Service Connect namespace", () => {
 		expect(stack.stackName).toBe('fabrika-ns-6-shared-prod')

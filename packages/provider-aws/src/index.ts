@@ -52,5 +52,13 @@ export {
 	awsNamespaceResources,
 	awsNamespaceStack,
 } from './namespace'
+export {
+	AWS_PROXY_BUILD_IMAGE,
+	AWS_PROXY_BUILDSPEC,
+	AWS_PROXY_DOCKERFILE,
+	AWS_PROXY_MANIFEST_PATH,
+	type AwsProxyBuildInput,
+	awsProxyBuildStart,
+} from './proxy-build'
 export { awsNamespaceMemberHosts, awsNamespaceProxyManifest, awsProxyUpstream } from './proxy-manifest'
 export { AWS_STACK_POLL_MS, AWS_STACK_TIMEOUT_MS, type AwsStack, ensureStack, type EnsureStackInput } from './stack'

@@ -7,6 +7,10 @@
 //   proxy); each environment's own stack admits the group on the application's port alone, so an application is
 //   reachable from its namespace's proxy and from nothing else (ADR-0022 rule 5). The proxy secret still authenticates
 //   the hop: a security group says which tasks may connect, not which request a proxy sent.
+// - It holds what builds the proxy's image too (`proxy-build.ts`): the proxy's repository, the namespace's own CodeBuild
+//   project, its log group and its role, which carries the installation's permissions boundary as every role Control's
+//   stacks create, and reaches this namespace's repository, `builds/` parameters and build log group alone. Their names
+//   live under `fabrika/namespaces/`, apart from every application environment's (`fabrika/apps/`).
 // - Every name is derived from the namespace's id and environment (`awsNamespaceResources`), never registered, and the
 //   target holds the installation's account and region and the derived stack name, which `normalize` checks.
 // - Claims: a namespace claims its stack; an environment placed in one claims its own stack, its service and its
@@ -14,8 +18,9 @@
 //   (ADR-0014). `claimedResources` reads each of them back, so Control releases a claim only over a resource gone.
 //   fabrika deletes none of them (ADR-0034): an operator does.
 // - Only `cheap` is offered: the namespace shares the installation's database once there is one. `full`, with its own
-//   instance, comes with the database. No entry point follows the members yet: the proxy service, its manifest and the
-//   balancer rule are not built, so there is no `republish`.
+//   instance, comes with the database. No entry point follows the members yet: the proxy's manifest is compiled
+//   (`proxy-manifest.ts`) and its build declared, but nothing starts a build, and the proxy service and the balancer rule
+//   are not built, so there is no `republish`.
 //
 // UNVERIFIED: the resource types, their properties and their outputs follow CloudFormation's resource reference; none
 // was checked against an account.
@@ -32,19 +37,32 @@ import {
 	type ProviderRegistration,
 } from '@fabrika/provider-contract'
 import type { CloudFormationClient } from './aws/cloudformation'
+import { ecrLifecyclePolicy } from './aws/ecr'
 import { type EcsClient, SERVICE_CONNECT_ARN } from './aws/ecs'
 import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
-import type { AwsInstallationNetwork } from './environment-stack'
+import { allow, AWS_LOG_RETENTION_DAYS, awsAppsPermissionsBoundary, type AwsInstallationNetwork, policy, trust } from './environment-stack'
+import { AWS_PROXY_BUILD_IMAGE, AWS_PROXY_BUILDSPEC } from './proxy-build'
 import { awsNamespaceMemberHosts } from './proxy-manifest'
-import { awsEnvironmentResources } from './resources'
+import { AWS_KEPT_IMAGES, awsEnvironmentResources } from './resources'
+import { AWS_BUILD_QUEUED_TIMEOUT_MINUTES, AWS_BUILD_TIMEOUT_MINUTES } from './run-attempt'
 import { type AwsStack, AwsStackPending, ensureStack, readStackOutputs } from './stack'
 
-/** A namespace id or environment name the derived names take: no `_`, `/` or `.`, as an application's. */
-const NAME_PART = /^[a-z0-9][a-z0-9-]{0,62}$/
-/** A CloudFormation stack's name holds at most 128 characters. */
+/**
+ * A namespace id or environment name the derived names take: no `_`, `/` or `.`, as an application's, and hyphens only
+ * between letters or digits, so each is a segment of an ECR repository's name.
+ */
+const NAME_PART = /^(?=.{1,63}$)[a-z0-9]+(?:-[a-z0-9]+)*$/
+/** A CloudFormation stack's name holds at most 128 characters; an IAM role's 64. */
 const MAX_STACK_NAME = 128
+const MAX_ROLE_NAME = 64
+/**
+ * The longest role name a namespace will hold, the proxy task's execution role (with its service), checked now, so
+ * adding that role never refuses a namespace this version takes.
+ */
+const LONGEST_ROLE_SUFFIX = '_proxy_execution'
+const IAM_PATH = '/fabrika/namespaces/'
 /** The outputs of a namespace's stack, and their forms. */
 const PROXY_SECURITY_GROUP_OUTPUT = 'ProxySecurityGroupId'
 const SERVICE_CONNECT_OUTPUT = 'ServiceConnectNamespaceArn'
@@ -58,16 +76,43 @@ export interface AwsNamespaceResources {
 	readonly stackName: string
 	/** The Service Connect (Cloud Map) namespace, named as the stack. */
 	readonly serviceConnectNamespace: string
+	/** The proxy's image repository, `fabrika/namespaces/<id>/<env>/proxy`. */
+	readonly repository: string
+	/** The namespace's parameter path, `/fabrika/namespaces/<id>/<env>`: the proxy build's source URLs under `builds/`. */
+	readonly parameterPath: string
+	/** The proxy's CodeBuild project, `fabrika_ns_<id>_<env>`, its role's name (under `/fabrika/namespaces/`) and its log group. */
+	readonly buildProject: string
+	readonly buildRoleName: string
+	readonly buildLogGroup: string
 }
 
-/** The names of a namespace's resources; an id or environment outside `NAME_PART`, or a name past AWS's bound, is refused. */
+/**
+ * The names of a namespace's resources; an id or environment outside `NAME_PART`, or a name past AWS's bound, is refused.
+ *
+ * None can be an application environment's (`resources.ts`): those live under `fabrika/apps/` (the repository, the
+ * parameters, the log groups and the roles' path), and a role or project name of an application joins exactly two parts
+ * with `_` (`<app>_<env>_build`, `fabrika_<app>_<env>`), where a namespace's joins more (`<id>_<env>_proxy_build`,
+ * `fabrika_ns_<id>_<env>`). No part holds `_`. IAM role names are unique per account, whatever their path.
+ */
 export function awsNamespaceResources(id: string, env: string): AwsNamespaceResources {
 	if (!NAME_PART.test(id) || !NAME_PART.test(env)) {
 		throw new Error('aws: the namespace id or environment name is not one this provider names resources by')
 	}
 	const stackName = `fabrika-ns-${id.length}-${id}-${env}`
 	if (stackName.length > MAX_STACK_NAME) throw new Error('aws: the namespace id and environment name are too long for a stack name')
-	return { stackName, serviceConnectNamespace: stackName }
+	const role = `${id}_${env}`
+	if (`${role}${LONGEST_ROLE_SUFFIX}`.length > MAX_ROLE_NAME) {
+		throw new Error('aws: the namespace id and environment name are too long for an IAM role name')
+	}
+	return {
+		stackName,
+		serviceConnectNamespace: stackName,
+		repository: `fabrika/namespaces/${id}/${env}/proxy`,
+		parameterPath: `/fabrika/namespaces/${id}/${env}`,
+		buildProject: `fabrika_ns_${role}`,
+		buildRoleName: `${role}_proxy_build`,
+		buildLogGroup: `/fabrika/namespaces/${id}/${env}/proxy/build`,
+	}
 }
 
 /** What a namespace's stack created under names AWS chose, which every deploy into the namespace reads. */
@@ -76,13 +121,17 @@ export interface AwsNamespaceOutputs {
 	readonly serviceConnectNamespaceArn: string
 }
 
-/** The stack of one namespace in the installation's VPC. */
+/** The stack of one namespace of `installation`, in the installation's VPC. */
 export function awsNamespaceStack(
 	namespace: Pick<ProviderDeploymentNamespace, 'id' | 'env'>,
+	installation: Pick<AwsAppTarget, 'accountId' | 'region'>,
 	network: Pick<AwsInstallationNetwork, 'vpcId'>,
 ): AwsStack {
 	const resources = awsNamespaceResources(namespace.id, namespace.env)
+	const { accountId, region } = installation
 	const tags = [{ Key: 'fabrika:namespace', Value: namespace.id }, { Key: 'fabrika:env', Value: namespace.env }]
+	const repositoryArn = `arn:aws:ecr:${region}:${accountId}:repository/${resources.repository}`
+	const project = `arn:aws:codebuild:${region}:${accountId}:project/${resources.buildProject}`
 	const template: JsonValue = {
 		AWSTemplateFormatVersion: '2010-09-09',
 		Description: `fabrika: the deployment namespace ${namespace.id}/${namespace.env}`,
@@ -101,6 +150,68 @@ export function awsNamespaceStack(
 			ServiceConnect: {
 				Type: 'AWS::ServiceDiscovery::HttpNamespace',
 				Properties: { Name: resources.serviceConnectNamespace, Description: `fabrika: ${namespace.id}/${namespace.env}`, Tags: tags },
+			},
+			// The proxy's image: built from the namespace's pinned commit and its manifest (`proxy-build.ts`), one per attempt.
+			ProxyRepository: {
+				Type: 'AWS::ECR::Repository',
+				Properties: {
+					RepositoryName: resources.repository,
+					ImageTagMutability: 'IMMUTABLE',
+					EncryptionConfiguration: { EncryptionType: 'AES256' },
+					LifecyclePolicy: { LifecyclePolicyText: ecrLifecyclePolicy(AWS_KEPT_IMAGES) },
+					Tags: tags,
+				},
+			},
+			ProxyBuildLogGroup: {
+				Type: 'AWS::Logs::LogGroup',
+				Properties: { LogGroupName: resources.buildLogGroup, RetentionInDays: AWS_LOG_RETENTION_DAYS, Tags: tags },
+			},
+			// The build's role, under the installation's boundary as every role Control's stacks create: it pushes to this
+			// namespace's repository, reads this namespace's source URL parameters and writes its own log group, nothing else.
+			// Only this namespace's project may take it.
+			ProxyBuildRole: {
+				Type: 'AWS::IAM::Role',
+				Properties: {
+					RoleName: resources.buildRoleName,
+					Path: IAM_PATH,
+					PermissionsBoundary: awsAppsPermissionsBoundary(accountId),
+					AssumeRolePolicyDocument: trust('codebuild.amazonaws.com', accountId, { equals: project }),
+					Policies: [
+						policy('build', [
+							// ECR issues its login token per account; the action takes no resource.
+							allow(['ecr:GetAuthorizationToken'], ['*']),
+							allow(
+								['ecr:BatchCheckLayerAvailability', 'ecr:InitiateLayerUpload', 'ecr:UploadLayerPart', 'ecr:CompleteLayerUpload', 'ecr:PutImage'],
+								[repositoryArn],
+							),
+							allow(['logs:CreateLogStream', 'logs:PutLogEvents'], [`arn:aws:logs:${region}:${accountId}:log-group:${resources.buildLogGroup}:*`]),
+							allow(['ssm:GetParameters'], [`arn:aws:ssm:${region}:${accountId}:parameter${resources.parameterPath}/builds/*`]),
+						]),
+					],
+					Tags: tags,
+				},
+			},
+			// The namespace's own project, so no proxy build reaches another namespace's images; an x86 builder, as the
+			// proxy's binary is an x64 one. Each start sends the same buildspec and its attempt's variables.
+			ProxyBuildProject: {
+				Type: 'AWS::CodeBuild::Project',
+				Properties: {
+					Name: resources.buildProject,
+					ServiceRole: { 'Fn::GetAtt': ['ProxyBuildRole', 'Arn'] },
+					Source: { Type: 'NO_SOURCE', BuildSpec: AWS_PROXY_BUILDSPEC },
+					Artifacts: { Type: 'NO_ARTIFACTS' },
+					Environment: {
+						Type: 'LINUX_CONTAINER',
+						ComputeType: 'BUILD_GENERAL1_SMALL',
+						Image: AWS_PROXY_BUILD_IMAGE,
+						// The build runs Docker to build the image.
+						PrivilegedMode: true,
+					},
+					LogsConfig: { CloudWatchLogs: { Status: 'ENABLED', GroupName: resources.buildLogGroup } },
+					TimeoutInMinutes: AWS_BUILD_TIMEOUT_MINUTES,
+					QueuedTimeoutInMinutes: AWS_BUILD_QUEUED_TIMEOUT_MINUTES,
+					Tags: tags,
+				},
 			},
 		},
 		Outputs: {
@@ -207,7 +318,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 		try {
 			await ensureStack({
 				cloudFormation: clients.cloudFormation,
-				stack: awsNamespaceStack(input.namespace, network),
+				stack: awsNamespaceStack(input.namespace, installation, network),
 				signal: input.signal,
 				sleep: options.sleep,
 				...(options.now === undefined ? {} : { now: options.now }),

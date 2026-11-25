@@ -410,9 +410,21 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     (`servicediscovery:CreateService`, `GetService`) of its own when ECS publishes a service; and whether ECS leaves the
     Cloud Map service it created in the namespace when the ECS service goes, which would stop the namespace stack's
     delete (an `HttpNamespace` that still holds services): the namespace teardown, not built, deletes them first.
-    Not yet: the proxy service (its image built from the pinned proxy source with the manifest carried in its build as
-    on Zerops, ADR-0045, so a running proxy never reads a manifest newer than its image; its ECS service in the Service
-    Connect namespace, on X86_64, because the proxy package builds its binary for `linux-x64-musl` only; `republish`),
+    **The proxy's build** (declared, `src/proxy-build.ts`; nothing starts it yet): the namespace stack holds the proxy's
+    image repository (`fabrika/namespaces/<id>/<env>/proxy`), a CodeBuild project of the namespace's own
+    (`fabrika_ns_<id>_<env>`, an x86 builder, because the proxy package builds its binary for `linux-x64-musl` only), its
+    log group and its role (`role/fabrika/namespaces/<id>_<env>_proxy_build`, under the permissions boundary, taken only
+    by that project, reaching only that repository, the namespace's `builds/` parameters and that log group). A
+    namespace's names live under `fabrika/namespaces/`, apart from every application environment's, and its role and
+    project names join more parts than an application's can, so no namespace and application derive one name; a
+    namespace id or environment is one ECR takes as a segment (hyphens only between letters or digits), and the role
+    name bound is the longest role a namespace will hold (`…_proxy_execution`). The build fetches the archive as an
+    application's does (the namespace's pinned proxy commit plus the manifest at `proxy.manifest.json`, ADR-0045, so a
+    running proxy never reads a manifest newer than its image), requires the manifest, and builds the commit's own
+    recipe, `packages/proxy/Dockerfile`, for `linux/amd64`. The recipe is the commit's, not the provider's: a namespace
+    keeps its pinned source through a Control upgrade, and only the commit knows how its own proxy is built.
+    Not yet: the proxy service (the recipe `packages/proxy/Dockerfile`, the namespace's pinned proxy source, the upload
+    and the build's start with its checkpoints; its ECS service in the Service Connect namespace, on X86_64; `republish`),
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
     application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
@@ -446,6 +458,12 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
       - CloudWatch Logs on `log-group:/fabrika/apps/*`: `CreateLogGroup`, `PutRetentionPolicy`, `TagResource`,
         `UntagResource`, `DescribeLogGroups`, `DeleteLogGroup`;
       - `iam:PassRole` on `role/fabrika/apps/*` with `iam:PassedToService` also `codebuild.amazonaws.com`;
+      - for a namespace's proxy build (step 10), the same grants on the namespace prefix: the IAM role writes above on
+        `role/fabrika/namespaces/*` (with the same boundary condition), the ECR writes on
+        `repository/fabrika/namespaces/*`, the log group writes on `log-group:/fabrika/namespaces/*`, and `iam:PassRole`
+        on `role/fabrika/namespaces/*` with `iam:PassedToService = codebuild.amazonaws.com`; the project is already
+        under `project/fabrika_*`. Running the build adds the SSM calls on `parameter/fabrika/namespaces/*` and the log
+        reads on `log-group:/fabrika/namespaces/*`;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
@@ -467,8 +485,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     - **The boundary.** Role writes would let Control mint a role with any inline policy and run code under it. So
       `iam:CreateRole` and `iam:PutRolePolicy` are allowed only with the condition `iam:PermissionsBoundary` equal to
       `policy/fabrika/fabrika-apps-boundary`, which the installation stack creates and which allows only what an
-      environment's roles need (the ECR pull and push calls on `repository/fabrika/apps/*`, the log writes on
-      `log-group:/fabrika/apps/*`, `ssm:GetParameters` on `parameter/fabrika/apps/*`, `ecr:GetAuthorizationToken`).
+      environment's roles and a namespace proxy's need (the ECR pull and push calls on `repository/fabrika/apps/*` and
+      `repository/fabrika/namespaces/*`, the log writes on `log-group:/fabrika/apps/*` and
+      `log-group:/fabrika/namespaces/*`, `ssm:GetParameters` on `parameter/fabrika/apps/*` and
+      `parameter/fabrika/namespaces/*`, `ecr:GetAuthorizationToken`). A role's own inline policy narrows that to its
+      environment's or its namespace's resources alone; the boundary is the ceiling no role Control creates can pass.
       Control's role is denied `iam:DeleteRolePermissionsBoundary` and `iam:PutRolePermissionsBoundary`, and every
       write to that policy (`iam:CreatePolicyVersion`, `iam:DeletePolicy`, `iam:SetDefaultPolicyVersion`). A
       CloudFormation service role that Control may only pass is the alternative, if the boundary proves too narrow.
