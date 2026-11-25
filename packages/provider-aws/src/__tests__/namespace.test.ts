@@ -9,8 +9,9 @@ import { describe, expect, test } from 'bun:test'
 import type { StackDescription, StackSummary } from '../aws/cloudformation'
 import type { EcsService } from '../aws/ecs'
 import { AwsError } from '../aws/transport'
-import { type AwsAppTarget, awsNamespaceTargetCodec } from '../codecs'
+import { awsAppArtifactCodec, type AwsAppTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsNamespaceCapabilities, awsNamespaceResources, awsNamespaceStack, namespaceOutputsOf, readNamespaceOutputs } from '../namespace'
+import { awsNamespaceMemberHosts } from '../proxy-manifest'
 import { AWS_STACK_TIMEOUT_MS } from '../stack'
 
 const installation: AwsAppTarget = {
@@ -252,6 +253,22 @@ describe('awsNamespaceCapabilities', () => {
 		await expect(
 			fake.capabilities.claimedResources?.({ namespace: NAMESPACE, resourceKeys: ['bucket:x'], signal: new AbortController().signal }),
 		).rejects.toThrow('a claim of a kind')
+	})
+
+	test("memberHosts is the proxy manifest's rule: an approved member's domain, none for one without approved access", () => {
+		const { capabilities } = new Fake()
+		const routing = {
+			appId: 'notes',
+			env: 'prod',
+			domain: 'Notes.Example.com',
+			artifact: {
+				provider: 'aws',
+				version: 1,
+				payload: awsAppArtifactCodec.encode({ contractDigest: `sha256:${'a'.repeat(64)}`, healthPath: '/healthz' }),
+			},
+		}
+		expect(capabilities.memberHosts).toBe(awsNamespaceMemberHosts)
+		expect(capabilities.memberHosts?.(routing)).toEqual([])
 	})
 
 	test('the operator plans a cheap namespace of the installation and refuses any other preset or options', () => {

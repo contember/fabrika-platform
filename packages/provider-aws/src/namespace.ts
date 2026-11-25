@@ -37,6 +37,7 @@ import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
 import type { AwsInstallationNetwork } from './environment-stack'
+import { awsNamespaceMemberHosts } from './proxy-manifest'
 import { awsEnvironmentResources } from './resources'
 import { type AwsStack, AwsStackPending, ensureStack, readStackOutputs } from './stack'
 
@@ -240,6 +241,8 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 			return { ...namespace, target: targetOf(namespace, installation) }
 		},
 		namespaceResourceClaims: (namespace) => [`${STACK_CLAIM}${awsNamespaceResources(namespace.id, namespace.env).stackName}`],
+		// The hosts the proxy will route a member on, by its manifest's rule, so Control refuses two members on one host now.
+		memberHosts: awsNamespaceMemberHosts,
 		registrationResourceClaims: (registration: ProviderRegistration) => {
 			const { appId, env } = registration.environment
 			const resources = awsEnvironmentResources(appId, env, installation.accountId)

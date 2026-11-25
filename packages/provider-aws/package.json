@@ -18,7 +18,8 @@
 		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
-		"@fabrika/provider-contract": "workspace:*"
+		"@fabrika/provider-contract": "workspace:*",
+		"@fabrika/proxy-core": "workspace:*"
 	},
 	"devDependencies": {
 		"@types/bun": "^1.4.3"

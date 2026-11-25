@@ -52,4 +52,5 @@ export {
 	awsNamespaceResources,
 	awsNamespaceStack,
 } from './namespace'
+export { awsNamespaceMemberHosts, awsNamespaceProxyManifest, awsProxyUpstream } from './proxy-manifest'
 export { AWS_STACK_POLL_MS, AWS_STACK_TIMEOUT_MS, type AwsStack, ensureStack, type EnsureStackInput } from './stack'
