@@ -7,7 +7,7 @@ import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { approvalStage } from '../lib/access-changes'
 import type { AccessChangeDto, ApprovalDto, ChangeAudienceDto, DeployRequestDto, RunDto, SurfaceNoteDto } from '../lib/api'
-import { AccessChangeView, DeployRequestView } from '../routes/approvals/detail'
+import { AccessChangeView, Decision, DeployRequestView } from '../routes/approvals/detail'
 
 const anyone: ChangeAudienceDto = { reach: 'anyone', requirement: null }
 const staff: ChangeAudienceDto = { reach: 'human', requirement: 'with `candidates.read` (on `candidate`)' }
@@ -301,5 +301,41 @@ describe('a deploy request', () => {
 		expect(key).toContain('which runs nothing yet.')
 		expect(key).not.toContain('agent-text')
 		expect(key).not.toContain('Compare with')
+	})
+})
+
+// ADR-0050 §4: the decision offers only what Control would accept. A run past its deadline answers 410 until the sweep
+// fails it, and the first of two approvers cannot give the second approval.
+describe('the decision', () => {
+	const NOW = 1_800_000_000
+	const render = (approval: Partial<ApprovalDto>, me: string | null = 'p-ada') =>
+		renderToStaticMarkup(createElement(Decision, { approval: { ...APPROVAL, deadline: NOW + 60, ...approval }, me, now: NOW, onDone: () => {} }))
+
+	test('a waiting run offers approve and refuse before its deadline', () => {
+		const markup = render({})
+		expect(markup).toContain('Approve and deploy')
+		expect(markup).toContain('>Refuse</button>')
+	})
+
+	test('a run past its deadline offers neither, and says it expired', () => {
+		for (const deadline of [NOW, NOW - 60]) {
+			const markup = render({ deadline })
+			expect(markup).not.toContain('Approve and deploy')
+			expect(markup).not.toContain('>Refuse</button>')
+			expect(markup).toContain('expired')
+		}
+	})
+
+	test('the person who gave the first of two approvals waits for a second person, and may still refuse', () => {
+		const partialApproval = { principalId: 'p-ada', label: 'ada@example.test', approvedAt: NOW - 600 }
+		const mine = render({ approvers: 2, partialApproval })
+		expect(mine).not.toContain('Approve and deploy')
+		expect(mine).toContain('Waiting for a second person')
+		expect(mine).toContain('>Refuse</button>')
+
+		const other = render({ approvers: 2, partialApproval }, 'p-bob')
+		expect(other).toContain('Approve and deploy')
+		expect(other).not.toContain('Waiting for a second person')
+		expect(render({ approvers: 2 })).toContain('Approve and deploy')
 	})
 })

@@ -23,6 +23,7 @@ import {
 import { type AccessChangeDto, api, ApiError, type ApprovalDto, type DeployRequestDto, type SurfaceEndpointDto } from '../../lib/api'
 import { changeWaits } from '../../lib/environment-protection'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
+import { consoleSession } from '../../lib/session'
 
 // One access change (ADR-0050 §7): who gains access first, grouped by caller, then what changes in data and runtime,
 // built from the facts each line of the diff carries; every line stays one step away, and the decision follows.
@@ -30,7 +31,10 @@ import { fmtDate, shortRef, shortSha } from '../../lib/format'
 
 export default createPage()
 	.params({ id: 'string' })
-	.loader(async ({ params }) => ({ approval: await api.approvals.get({ runId: params.id }) }))
+	.loader(async ({ params }) => {
+		const [approval, session] = await Promise.all([api.approvals.get({ runId: params.id }), consoleSession()])
+		return { approval, me: session.principal?.id ?? null }
+	})
 	.route('/approvals/:id')
 	.render(({ data, invalidate }) => {
 		const { approval } = data
@@ -110,7 +114,7 @@ export default createPage()
 					</section>
 				)}
 
-				{waiting && <Decision approval={approval} onDone={invalidate} />}
+				{waiting && <Decision approval={approval} me={data.me} now={Math.floor(Date.now() / 1000)} onDone={invalidate} />}
 			</>
 		)
 	})
@@ -558,7 +562,6 @@ function EnvironmentOrigins({ origins }: { origins: readonly string[] }) {
 	)
 }
 
-/** Approve (the page's one constructive step) or refuse. Only a person signed in to the console can do either. */
 /**
  * Who asked for a deploy and what (ADR-0050 §4), read on a phone first: the person and the client, the commit with its
  * message and a compare with what runs now, and the deadline. The message and the client's id are the agent's text:
@@ -609,10 +612,26 @@ export function DeployRequestView({ request, approval }: { request: DeployReques
 	)
 }
 
-function Decision({ approval, onDone }: { approval: ApprovalDto; onDone: () => void }) {
+/**
+ * Approve (the page's one constructive step) or refuse. Only a person signed in to the console can do either. `me` is
+ * the signed-in principal and `now` the time in unix seconds: past the deadline Control refuses both, and the first of
+ * two approvers may refuse but not approve again.
+ */
+export function Decision({ approval, me, now, onDone }: { approval: ApprovalDto; me: string | null; now: number; onDone: () => void }) {
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [rejecting, setRejecting] = useState(false)
+
+	if (approval.deadline !== undefined && approval.deadline <= now) {
+		return (
+			<section>
+				<p className="hint">
+					Nobody decided this deploy before its deadline, {fmtDate(approval.deadline)}, so it expired and deploys nothing. A new deploy asks again.
+				</p>
+			</section>
+		)
+	}
+	const approvedByMe = approval.partialApproval !== undefined && approval.partialApproval.principalId === me
 
 	async function decide(decision: 'approve' | 'reject') {
 		setBusy(true)
@@ -647,9 +666,13 @@ function Decision({ approval, onDone }: { approval: ApprovalDto; onDone: () => v
 					</p>
 				)}
 				<div className="row-actions">
-					<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
-						{busy ? 'Recording…' : 'Approve and deploy'}
-					</button>
+					{approvedByMe
+						? <span className="muted">Waiting for a second person</span>
+						: (
+							<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
+								{busy ? 'Recording…' : 'Approve and deploy'}
+							</button>
+						)}
 				</div>
 				{error && <p className="error-text" role="alert">{error}</p>}
 			</section>
