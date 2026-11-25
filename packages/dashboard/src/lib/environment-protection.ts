@@ -272,7 +272,7 @@ export function requesterBlocks(requesterMayApprove: boolean, personId: string |
 /** Why the viewer has no approve button on an item a request asked for. */
 export function requesterBlockText(blocked: 'nobody' | 'you', item: 'deploy' | 'request'): string {
 	return blocked === 'you'
-		? `It was asked for on your behalf, and this environment lets someone other than the requester's person approve it. You may refuse it.`
+		? `It was asked for on your behalf, and this environment lets only someone other than the requester's person approve it. You may refuse it.`
 		: `A service key asked for this ${item}, and this environment lets only someone other than the key's issuer approve it, whom Control cannot know: `
 			+ 'nobody can approve it. You may refuse it.'
 }

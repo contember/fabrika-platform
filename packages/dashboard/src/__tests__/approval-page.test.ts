@@ -351,7 +351,7 @@ describe('the decision', () => {
 		}
 		const own = render({ request, requesterMayApprove: false })
 		expect(own).not.toContain('Approve and deploy')
-		expect(own).toContain('asked for on your behalf')
+		expect(own).toContain('asked for on your behalf, and this environment lets only someone other than the requester')
 		expect(own).toContain('>Refuse</button>')
 		expect(render({ request, requesterMayApprove: false }, 'p-bob')).toContain('Approve and deploy')
 		expect(render({ request })).toContain('Approve and deploy')
