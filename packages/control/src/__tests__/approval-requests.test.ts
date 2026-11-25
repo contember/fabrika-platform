@@ -54,6 +54,8 @@ interface Notes {
 	execute: 'ok' | 'fail' | 'throw'
 	follow: RequestOutcome | { readonly state: 'unknown' }
 	followed: string[]
+	/** The requests whose held state the kind released, refused or expired. */
+	discarded: string[]
 }
 
 const noteInput = z.object({ appId: z.string().min(1), env: z.string().min(1), name: z.string().min(1), value: z.string() })
@@ -84,6 +86,10 @@ function notesKind(notes: Notes, input: z.ZodType<z.infer<typeof noteInput>, z.Z
 		follow: (_c, _input, execution) => {
 			notes.followed.push(execution.operationId)
 			return Promise.resolve(notes.follow)
+		},
+		discard: (_c, request) => {
+			notes.discarded.push(request.id)
+			return Promise.resolve()
 		},
 		describe: (input, before) => ({
 			summary: [{ text: 'Set the note ', agent: false }, { text: input.name, agent: true }, { text: ` of ${input.appId}@${input.env}`, agent: false }],
@@ -165,7 +171,7 @@ for (const backend of backends) {
 			const clock = { now: T0 }
 			const { repositories, locks, close } = await backend.open(() => clock.now)
 			closing = close
-			const notes: Notes = { values: new Map(), effects: [], execute: 'ok', follow: { state: 'unknown' }, followed: [] }
+			const notes: Notes = { values: new Map(), effects: [], execute: 'ok', follow: { state: 'unknown' }, followed: [], discarded: [] }
 			const w: World = {
 				db: repositories,
 				locks,
@@ -341,6 +347,21 @@ for (const backend of backends) {
 				expect((await status(decide(w, id, 'approve'))).status).toBe(409)
 				expect(w.notes.effects).toEqual([])
 				expect(w.audits.map((event) => event.metadata)).toEqual([expect.objectContaining({ decision: 'reject' })])
+			})
+
+			test('a refusal and an expiry let the kind discard what the request held, once; an approval does not', async () => {
+				const w = await world()
+				const refused = await ask(w)
+				const expiring = await ask(w, AGENT, { appId: 'notes', env: 'prod', name: 'farewell', value: 'bye' })
+				const approved = await ask(w, AGENT, { appId: 'notes', env: 'prod', name: 'welcome', value: 'hi' })
+				await decide(w, refused.id, 'reject', BOB)
+				await decide(w, refused.id, 'reject', BOB)
+				await decide(w, approved.id, 'approve', BOB)
+				expect(w.notes.discarded).toEqual([refused.id])
+				w.now += 24 * HOUR
+				expect((await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).expired).toBe(1)
+				expect((await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).expired).toBe(0)
+				expect(w.notes.discarded).toEqual([refused.id, expiring.id])
 			})
 
 			test('a decision after the deadline is refused, and the sweep expires it', async () => {

@@ -21,7 +21,7 @@ import type { ApprovalRequestRow, ControlRepositories } from '../../db'
 import { jsonValueSchema } from '../../json-value'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../../lease'
 import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOtherThanRequester } from '../human'
-import { actionOf, executeApprovedRequest } from './execute'
+import { actionOf, discardRequest, executeApprovedRequest } from './execute'
 import { PRODUCTION_REQUEST_KINDS, type RequestCoordinates, type RequestKindRegistry } from './kind'
 import { refusedKindReason } from './refused'
 import { deciders, jsonDigest, policyOf, requesterOf, settingsOf } from './rules'
@@ -175,6 +175,7 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 	if (input.decision === 'reject') {
 		if (!(await c.repositories.approvalRequests.reject(row.id, decider))) await lostDecision(c, row.id)
 		await auditDecision(c, row, 'reject', decider.decisionId)
+		await discardRequest(kindsOf(c), c.repositories, row)
 		return toApprovalRequestDto(c, await requireRow(c, row.id))
 	}
 

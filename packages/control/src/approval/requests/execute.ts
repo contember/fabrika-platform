@@ -155,6 +155,20 @@ async function follow(action: RequestAction, repositories: ControlRepositories, 
 	}
 }
 
+/**
+ * Let the request's kind release what the request held, once a person refused it or it expired. That write is done, so a
+ * throw only leaves the held state behind; it is logged without the error, which may carry a secret.
+ */
+export async function discardRequest(kinds: RequestKindRegistry, repositories: ControlRepositories, row: ApprovalRequestRow): Promise<void> {
+	const discard = kinds.get(row.kind)?.discard
+	if (discard === undefined) return
+	try {
+		await discard({ repositories }, row)
+	} catch {
+		console.warn(`approval request ${row.id}: kind ${row.kind} could not discard what the request held`)
+	}
+}
+
 /** What the request sweep did. */
 export interface ApprovalRequestSweepSummary {
 	/** Pending requests past their deadline. */
@@ -185,7 +199,10 @@ export async function sweepApprovalRequests(deps: ApprovalRequestSweepDeps): Pro
 	const summary: ApprovalRequestSweepSummary = { expired: 0, interrupted: 0, settled: 0 }
 	for (const listed of await requests.listToSweep()) {
 		if (listed.state === 'pending') {
-			if (await requests.expire(listed.id)) summary.expired++
+			if (await requests.expire(listed.id)) {
+				summary.expired++
+				await discardRequest(kinds, deps.repositories, listed)
+			}
 			continue
 		}
 		// An unknown request this Control cannot follow (a later release's kind, after a rollback) stays unknown for the

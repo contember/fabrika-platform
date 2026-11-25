@@ -7,7 +7,7 @@ import { canonicalJson } from '@fabrika/auth-core'
 import type { ActionCategory, ApprovalRequestDescription } from '@fabrika/control-contract'
 import type { JsonValue } from '@fabrika/provider-contract'
 import type { z } from 'zod'
-import type { ControlRepositories } from '../../db'
+import type { ApprovalRequestRow, ControlRepositories } from '../../db'
 
 /** What a kind reads and writes through. A kind that needs more (a provider, the vault, IAM) adds it here with its step. */
 export interface RequestKindContext {
@@ -71,6 +71,11 @@ export interface RequestKindDefinition<Input, Before> {
 	follow(c: RequestKindContext, input: Input, execution: RequestExecution): Promise<RequestOutcome | { readonly state: 'unknown' }>
 	/** What the page shows: plain data, with the text the agent wrote marked as such. */
 	describe(input: Input, before: Before): ApprovalRequestDescription
+	/**
+	 * Release what the request held while it waited (a sealed secret), once a person refused it or it expired. Called once,
+	 * after that conditional write; a throw is logged and never retried, and a Control that does not serve the kind skips it.
+	 */
+	readonly discard?: (c: RequestKindContext, request: ApprovalRequestRow) => Promise<void>
 }
 
 /** One checked input of a kind, its types erased. */
@@ -91,6 +96,7 @@ export interface RequestKind {
 	readonly category: ActionCategory
 	readonly requesterAction: string
 	readonly approverMayDecide?: (auth: AuthContext, coordinates: RequestCoordinates) => boolean
+	readonly discard?: (c: RequestKindContext, request: ApprovalRequestRow) => Promise<void>
 	/** Check an input: the action, or why it is refused. */
 	action(input: unknown): { readonly ok: true; readonly action: RequestAction } | { readonly ok: false; readonly error: string }
 }
@@ -104,6 +110,7 @@ export function requestKind<Input, Before>(definition: RequestKindDefinition<Inp
 		category: definition.category,
 		requesterAction: definition.requesterAction,
 		...(definition.approverMayDecide === undefined ? {} : { approverMayDecide: definition.approverMayDecide }),
+		...(definition.discard === undefined ? {} : { discard: definition.discard }),
 		action(raw) {
 			const parsed = definition.input.safeParse(raw)
 			if (!parsed.success) {
