@@ -91,6 +91,24 @@ function repositoryOf(raw: z.infer<typeof repositorySchema>): EcrRepository {
 }
 
 /** ECR at `options.origin`; the client is of the `ECR` service by construction, so it cannot call another one. */
+/**
+ * The lifecycle policy text that keeps a repository's newest `keep` images, counting pushes: what `keepNewestImages`
+ * sends and the environment stack declares, so the two never disagree.
+ */
+export function ecrLifecyclePolicy(keep: number): string {
+	if (!Number.isInteger(keep) || keep < 1 || keep > MAX_KEPT_IMAGES) refuse('the number of images to keep')
+	return JSON.stringify({
+		rules: [
+			{
+				rulePriority: 1,
+				description: `Keep the newest ${keep} images`,
+				selection: { tagStatus: 'any', countType: 'imageCountMoreThan', countNumber: keep },
+				action: { type: 'expire' },
+			},
+		],
+	})
+}
+
 export function ecrClient(options: AwsJsonClientOptions): EcrClient {
 	const json = awsJsonClient(ECR, options)
 	return {
@@ -130,18 +148,7 @@ export function ecrClient(options: AwsJsonClientOptions): EcrClient {
 
 		async keepNewestImages(name, keep, signal) {
 			const repository = repositoryName(name)
-			if (!Number.isInteger(keep) || keep < 1 || keep > MAX_KEPT_IMAGES) refuse('the number of images to keep')
-			const policy = {
-				rules: [
-					{
-						rulePriority: 1,
-						description: `Keep the newest ${keep} images`,
-						selection: { tagStatus: 'any', countType: 'imageCountMoreThan', countNumber: keep },
-						action: { type: 'expire' },
-					},
-				],
-			}
-			await json.call('PutLifecyclePolicy', { repositoryName: repository, lifecyclePolicyText: JSON.stringify(policy) }, policySchema, signal)
+			await json.call('PutLifecyclePolicy', { repositoryName: repository, lifecyclePolicyText: ecrLifecyclePolicy(keep) }, policySchema, signal)
 		},
 
 		async findImage(name, reference, signal) {

@@ -32,3 +32,10 @@ export {
 	awsTaskValues,
 	createAwsControlProvider,
 } from './control'
+export {
+	AWS_BUILD_IMAGE,
+	AWS_LOG_RETENTION_DAYS,
+	awsAppsPermissionsBoundary,
+	type AwsEnvironmentStack,
+	awsEnvironmentStack,
+} from './environment-stack'

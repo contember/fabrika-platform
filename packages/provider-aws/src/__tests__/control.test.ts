@@ -38,7 +38,6 @@ const target: AwsAppTarget = {
 	region: 'eu-central-1',
 	cluster: 'fabrika-apps',
 	sourcesBucket: 'fabrika-sources-123456789012',
-	buildProject: 'fabrika-build',
 }
 /** The notes contract without what this version refuses: a database, jobs, file collections. */
 const contract = { ...notesArtifact, tables: {}, jobs: {}, files: {}, fileKinds: {} }
@@ -114,11 +113,15 @@ class Fake {
 			findImage: async () => ({ digest: `sha256:${'a'.repeat(64)}`, tags: [`run-${TOKEN}`], pushedAt: new Date() }),
 		},
 		codeBuild: {
-			startBuild: async () => {
+			startBuild: async (start) => {
 				this.calls.push('startBuild')
+				this.calls.push(`project ${start.project}`)
 				return { id: BUILD_ID, status: 'in_progress', phase: 'QUEUED', log: null }
 			},
-			findBuild: async () => null,
+			findBuild: async (project, token) => {
+				this.calls.push(`findBuild ${project} ${token}`)
+				return null
+			},
 			getBuild: async (id) => ({ id, status: this.buildStatus, phase: 'COMPLETED', log: null }),
 			stopBuild: async (id) => {
 				this.calls.push(`stopBuild ${id}`)
@@ -241,6 +244,8 @@ describe('the AWS control provider', () => {
 		}])
 		expect(fake.uploads).toEqual([`example/notes@${COMMIT} application`])
 		expect(fake.calls).toContain('ensureRepository fabrika/apps/notes/prod')
+		// The environment's own build project, never one another environment shares.
+		expect(fake.calls).toContain('project fabrika_notes_prod')
 	})
 
 	test('a run that fails before the update deletes its own parameters and leaves every earlier one', async () => {
@@ -280,7 +285,7 @@ describe('the AWS control provider', () => {
 		})
 		const normalized = provider.normalizeRegistration?.({ app: deployInput().app, environment: submitted })
 		expect(normalized?.environment.target).toEqual(environmentOf().target)
-		for (const field of ['accountId', 'region', 'cluster', 'sourcesBucket', 'buildProject']) {
+		for (const field of ['accountId', 'region', 'cluster', 'sourcesBucket']) {
 			const other = { ...target, [field]: field === 'accountId' ? '999999999999' : field === 'region' ? 'us-east-1' : 'other-name' }
 			const fake = new Fake()
 			const stored = environmentOf({ target: { provider: 'aws', version: 1, payload: awsAppTargetCodec.encode(other) } })
@@ -304,11 +309,26 @@ describe('the AWS control provider', () => {
 			logGroup: '/fabrika/apps/notes/prod',
 			taskRoleArn: 'arn:aws:iam::123456789012:role/fabrika/apps/notes_prod_task',
 			executionRoleArn: 'arn:aws:iam::123456789012:role/fabrika/apps/notes_prod_execution',
+			buildProject: 'fabrika_notes_prod',
+			buildRoleArn: 'arn:aws:iam::123456789012:role/fabrika/apps/notes_prod_build',
+			buildLogGroup: '/fabrika/apps/notes/prod/build',
+			stackName: 'fabrika-app-5-notes-prod',
 		})
 		// A hyphen moved between the id and the name derives other names, because `_` and `/` join them.
 		const a = awsEnvironmentResources('a-b', 'c', '123456789012')
 		const b = awsEnvironmentResources('a', 'b-c', '123456789012')
-		const keys: readonly (keyof typeof a)[] = ['service', 'repository', 'parameterPath', 'logGroup', 'taskRoleArn', 'executionRoleArn']
+		const keys: readonly (keyof typeof a)[] = [
+			'service',
+			'repository',
+			'parameterPath',
+			'logGroup',
+			'taskRoleArn',
+			'executionRoleArn',
+			'buildProject',
+			'buildRoleArn',
+			'buildLogGroup',
+			'stackName',
+		]
 		for (const key of keys) {
 			expect(a[key]).not.toBe(b[key])
 		}
@@ -382,6 +402,21 @@ describe('the AWS control provider', () => {
 		expect(fake.calls).toContain(`deleteSecret /fabrika/apps/notes/prod/builds/${TOKEN}/source-url`)
 		// The discard also deletes the run's own secret parameters, which a crash left behind.
 		expect(fake.calls).toContain(`deleteSecret ${ENV_PATH}/${RUN}.API_TOKEN`)
+	})
+
+	test("a cancel of a run whose start answer was lost looks for its build in the environment's own project", async () => {
+		const fake = new Fake()
+		const providerState: JsonValue = { buildToken: TOKEN }
+		const outcome = await fake.provider().cancel?.({
+			runId: RUN,
+			externalId: TOKEN,
+			environment: environmentOf(),
+			providerState,
+			startedAtMs: Date.now(),
+			signal: new AbortController().signal,
+		})
+		expect(outcome).toEqual({ state: 'settled', outcome: 'failed' })
+		expect(fake.calls).toContain(`findBuild fabrika_notes_prod ${TOKEN}`)
 	})
 
 	test('the task values split managed credentials from public ones and skip a removed one', () => {
