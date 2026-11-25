@@ -411,7 +411,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     Cloud Map service it created in the namespace when the ECS service goes, which would stop the namespace stack's
     delete (an `HttpNamespace` that still holds services): the namespace teardown, not built, deletes them first.
     **The proxy's build** (declared, `src/proxy-build.ts`; nothing starts it yet): the namespace stack holds the proxy's
-    image repository (`fabrika/namespaces/<id>/<env>/proxy`), a CodeBuild project of the namespace's own
+    image repository (`fabrika/namespaces/<id>/<env>/proxy`, emptied when the stack is deleted, which CloudFormation
+    otherwise refuses for a repository that holds images; its images are rebuilt from the pinned source), a CodeBuild
+    project of the namespace's own
     (`fabrika_ns_<id>_<env>`, an x86 builder, because the proxy package builds its binary for `linux-x64-musl` only), its
     log group and its role (`role/fabrika/namespaces/<id>_<env>_proxy_build`, under the permissions boundary, taken only
     by that project, reaching only that repository, the namespace's `builds/` parameters and that log group). A

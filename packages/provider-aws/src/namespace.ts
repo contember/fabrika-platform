@@ -152,10 +152,13 @@ export function awsNamespaceStack(
 				Properties: { Name: resources.serviceConnectNamespace, Description: `fabrika: ${namespace.id}/${namespace.env}`, Tags: tags },
 			},
 			// The proxy's image: built from the namespace's pinned commit and its manifest (`proxy-build.ts`), one per attempt.
+			// Emptied when the stack is deleted, which CloudFormation otherwise refuses for a repository that holds images: every
+			// image is derived and rebuilt from the pinned source, so the operator's delete of the stack loses nothing.
 			ProxyRepository: {
 				Type: 'AWS::ECR::Repository',
 				Properties: {
 					RepositoryName: resources.repository,
+					EmptyOnDelete: true,
 					ImageTagMutability: 'IMMUTABLE',
 					EncryptionConfiguration: { EncryptionType: 'AES256' },
 					LifecyclePolicy: { LifecyclePolicyText: ecrLifecyclePolicy(AWS_KEPT_IMAGES) },
@@ -302,9 +305,12 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				{ label: 'Region', value: installation.region },
 				{ label: 'Stack', value: resources.stackName, resource: true },
 				{ label: 'Service Connect namespace', value: resources.serviceConnectNamespace, resource: true },
+				{ label: 'Proxy image repository', value: resources.repository, resource: true },
+				{ label: 'Proxy build project', value: resources.buildProject, resource: true },
 			],
 			instructions: [
 				'Control creates the stack. Removing the namespace leaves it in place: delete the stack when no environment uses it.',
+				"Deleting the stack deletes the proxy's images with their repository: they are rebuilt from the namespace's pinned source.",
 			],
 		}
 	}

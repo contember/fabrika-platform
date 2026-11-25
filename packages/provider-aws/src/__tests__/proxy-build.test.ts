@@ -34,10 +34,12 @@ describe('the proxy build', () => {
 		const spec = buildspecSchema.parse(Bun.YAML.parse(AWS_PROXY_BUILDSPEC))
 		const application = buildspecSchema.parse(Bun.YAML.parse(AWS_BUILDSPEC))
 		expect(spec.version).toBe(0.2)
-		// The same fetch, line for line; then the manifest the proxy is built with, never a rendered Dockerfile.
+		// The same fetch, line for line; then the manifest the proxy is built with and the commit's recipe, each required by
+		// name, never a rendered Dockerfile.
 		expect(spec.phases.pre_build.commands).toEqual([
 			...application.phases.pre_build.commands.slice(0, 6),
 			'test -f /tmp/fabrika-source/proxy.manifest.json',
+			'test -f /tmp/fabrika-source/packages/proxy/Dockerfile',
 		])
 		expect(AWS_PROXY_MANIFEST_PATH).toBe('proxy.manifest.json')
 		expect(spec.phases.build.commands).toEqual([

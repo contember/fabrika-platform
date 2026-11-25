@@ -157,6 +157,8 @@ describe('awsNamespaceStack', () => {
 			RepositoryName: 'fabrika/namespaces/shared/prod/proxy',
 			ImageTagMutability: 'IMMUTABLE',
 			EncryptionConfiguration: { EncryptionType: 'AES256' },
+			// Its images are rebuilt from the pinned source, so the operator's delete of the stack empties it rather than failing.
+			EmptyOnDelete: true,
 		})
 		expect(at(resources, 'ProxyBuildLogGroup', 'Properties', 'LogGroupName')).toBe('/fabrika/namespaces/shared/prod/proxy/build')
 
@@ -371,6 +373,14 @@ describe('awsNamespaceCapabilities', () => {
 		const planned = operator?.plan({ id: 'shared', env: 'prod', preset: 'cheap' })
 		expect(planned?.namespace).toEqual(NAMESPACE)
 		expect(planned?.presentation.facts).toContainEqual({ label: 'Stack', value: 'fabrika-ns-6-shared-prod', resource: true })
+		// The resources an operator meets when the stack goes: the proxy's repository and build project.
+		expect(planned?.presentation.facts).toContainEqual({
+			label: 'Proxy image repository',
+			value: 'fabrika/namespaces/shared/prod/proxy',
+			resource: true,
+		})
+		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy build project', value: 'fabrika_ns_shared_prod', resource: true })
+		expect(planned?.presentation.instructions.join(' ')).toContain("deletes the proxy's images with their repository")
 		expect(() => operator?.plan({ id: 'shared', env: 'prod', preset: 'full' })).toThrow('only the cheap preset')
 		expect(() => operator?.plan({ id: 'shared', env: 'prod', preset: 'cheap', options: { size: 1 } })).toThrow('takes no options')
 	})

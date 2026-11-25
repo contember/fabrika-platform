@@ -36,8 +36,10 @@ export const AWS_PROXY_BUILD_IMAGE = 'aws/codebuild/amazonlinux-x86_64-standard:
  */
 export const AWS_PROXY_BUILDSPEC = [
 	...BUILDSPEC_FETCH,
-	// The archive without its data file is one this build never makes an image of.
+	// The archive without its data file is one this build never makes an image of; a commit without the recipe (one pinned
+	// before the recipe existed) fails here, naming the file, rather than in BuildKit's generic message.
 	`      - test -f /tmp/fabrika-source/${AWS_PROXY_MANIFEST_PATH}`,
+	`      - test -f /tmp/fabrika-source/${AWS_PROXY_DOCKERFILE}`,
 	'  build:',
 	'    commands:',
 	'      - set -euo pipefail',
