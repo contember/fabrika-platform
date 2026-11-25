@@ -122,6 +122,11 @@ export function ApprovalRequestView({ request }: { request: ApprovalRequestDto }
 						Agent <span className="agent-text" title="Written by the agent, not by Fabrika">{requester.clientId}</span>
 					</p>
 				)}
+				{description.warnings?.map((warning, index) => (
+					<p key={index} className="notice notice-bad">
+						<Text part={warning} />
+					</p>
+				))}
 				{description.role !== undefined && <RequestedRole role={description.role} />}
 				{description.facts.length > 0 && (
 					<dl className="request-facts">
@@ -171,6 +176,22 @@ function grantRequestOf(result: ApprovalRequestDto['result']): string | null {
 	return typeof id === 'string' ? id : null
 }
 
+/** Where the key an approved request issued is now; the page never sees the key itself. */
+function deliveryText(delivery: NonNullable<ApprovalRequestDto['delivery']>): string {
+	switch (delivery.state) {
+		case 'waiting':
+			return `IAM issued the key, encrypted to the agent's public key. It waits for the agent to fetch it once, until ${
+				fmtDate(delivery.deadline)
+			}; a key nobody fetched by then is revoked.`
+		case 'fetched':
+			return 'IAM issued the key, and the agent fetched it; Control no longer holds it.'
+		case 'expired':
+			return `Nobody fetched the key by ${fmtDate(delivery.deadline)}, so Control dropped it and is revoking it in IAM.`
+		case 'revoked':
+			return `Nobody fetched the key by ${fmtDate(delivery.deadline)}, so Control dropped it and revoked it in IAM.`
+	}
+}
+
 /** What happened once a person decided: the result, or why it did not run. */
 export function RequestOutcome({ request }: { request: ApprovalRequestDto }) {
 	if (request.state === 'pending' || request.state === 'rejected') return null
@@ -178,9 +199,11 @@ export function RequestOutcome({ request }: { request: ApprovalRequestDto }) {
 		return <p className="hint">Nobody decided this request before {fmtDate(request.deadline)}, so it expired and changed nothing.</p>
 	}
 	const heldByIam = request.state === 'executed' && grantRequestOf(request.result) !== null
+	const delivery = request.delivery
 	return (
 		<section>
-			{request.state === 'executed' && !heldByIam && <p className="hint">It was done.</p>}
+			{request.state === 'executed' && !heldByIam && delivery === undefined && <p className="hint">It was done.</p>}
+			{delivery !== undefined && <p className="hint">{deliveryText(delivery)}</p>}
 			{heldByIam && (
 				<p className="hint">
 					The application's grants wait for approval, so IAM holds this grant until another administrator of the application approves it under{' '}

@@ -156,8 +156,8 @@ export const APPROVAL_CATEGORY_GROUPS: readonly { readonly title: string; readon
 			{
 				category: 'credentials',
 				label: 'A key an agent asks for',
-				hint: 'issued to someone other than the agent, encrypted to the agent',
-				pending: 'Today an agent cannot ask.',
+				hint:
+					'a key for someone else, decided by an IAM installation administrator, encrypted to the agent and fetched by it once; with no approval an agent cannot ask for one',
 			},
 		],
 	},
