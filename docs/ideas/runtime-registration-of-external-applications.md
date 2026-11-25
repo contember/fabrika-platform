@@ -69,9 +69,11 @@ in both migration sets (D1 and Postgres):
 
 Rules, all of ADR-0084's, now checked when the record is written instead of at deploy and boot:
 
-- `app` is lowercase, has no `@` (so it never meets a deployed app's `<app>@<env>`) and is no platform audience. IAM
-  can hold a vocabulary under such an id only from an earlier deploy's reconcile of an external application, so
-  registering the id adopts it, with every grant of its roles.
+- `app` is lowercase, has no `@` (so it never meets a deployed app's `<app>@<env>`) and is no platform audience.
+  Registering an id under which IAM already holds a vocabulary adopts it, with every grant of its roles, only when it
+  has the shape an earlier deploy's reconcile of an external application wrote: roles alone, each granting no action,
+  no scope and no action declared. Any other vocabulary refuses the id, because the provisioning key's schema PUT can
+  write any vocabulary under any id, and adopting one with permissions would let its roles be renamed into a token.
 - `resource` is an `https` URI, is no registered resource, and is on none of the installation's hosts. IAM does not
   know all of them today (Operations' host, alias hosts), so the deploy writes the list its own check reads now into
   `OAUTH_CONFIG` as `hosts`.
@@ -94,7 +96,7 @@ Control keeps no row. Why, and the alternative: [question 1](#q1-where-the-recor
 - **IAM `/admin/rpc`** gains `externalApps.list | get | put | delete` (`iam.admin`) and `oauthClients.list | put |
   delete` (list: `iam.admin`; writes: provisioning key, authoring clients only). `externalApps.put` takes the whole
   aggregate (`app`, `name`, `resource`, `roles` or none, `clients`), is the only writer of a bound client, and replaces
-  it in one transaction with its audit record. A client removed from the list, or a deleted app, has its OAuth grants
+  it in one transaction with its audit record. Each writer refuses a client id the other one owns. A client removed from the list, or a deleted app, has its OAuth grants
   revoked in the same transaction. `apps.list` marks such an app `externalApplication: true` (not `external`, which
   already names ADR-0051's external principals and roles).
 - **Console**: an "External applications" page in the Access section: list, register, edit roles and clients, delete;
@@ -167,6 +169,7 @@ sequenceDiagram
   Note over D,I: Release N+1
   D->>D: variable still set: refuse before deploying anything
   D->>I: OAUTH_CONFIG without clients
+  Note over I: no import, no mark: the registry only, writes always accepted
   Note over D,I: Release N+2
   Note over D: generated workflows no longer pass the variable
 ```
@@ -177,7 +180,8 @@ sequenceDiagram
     fails. Only the provisioning key may call it, like `grantApproval.set`. The first call writes every entry, its
     vocabulary (adopting the roles earlier deploys reconciled under the same app id) and the mark in one transaction.
     Every later call answers `already_imported` and writes nothing; the deploy warns while the variable is set.
-  - Until the mark exists IAM serves the clients of `OAUTH_CONFIG` as before, and refuses registry writes, so an
+  - In release N only, until the mark exists, IAM serves the clients of `OAUTH_CONFIG` as before, and refuses registry
+    writes, so an
     administrator's edit can never land before the import and be overwritten by it, and nothing breaks between IAM's
     deploy and the import.
   - The deploy no longer reconciles external applications' roles.
@@ -188,7 +192,9 @@ sequenceDiagram
   release N, or register the applications in the console (which adopts their roles); set
   `FABRIKA_PLATFORM_MCP_AUTHORING` where MCP authoring was on; then delete the variable". The generated workflows still
   pass the variable, so the refusal sees it even when the operator jumped from N-1 to N+1. `OAUTH_CONFIG` carries no
-  clients; IAM drops the `OAUTH_CONFIG` client path, `parseMcpClientsJson` and `reconcileIdentityApps`.
+  clients. IAM drops the `OAUTH_CONFIG` client path, the import, the mark and the pre-import refusal, so it accepts
+  registry writes whether or not an import ever ran: an installation that skipped release N, or never set the
+  variable, registers its applications in the console. `parseMcpClientsJson` and `reconcileIdentityApps` go too.
 - **Release N+2.** The variable's line leaves both generated workflows.
 - **Why import once and not every deploy:** after the import the registry is the source. Importing again would undo an
   administrator's delete or edit with a stale variable.
@@ -199,8 +205,9 @@ sequenceDiagram
    keep the lines; N+2 drops them. On Zerops `platform upgrade` regenerates the workflow; on Cloudflare re-running
    `platform init` refreshes `platform.yml`. An old line passing an unset variable is harmless.
 2. **Environment variables.** N writes `OAUTH_CONFIG` / `FABRIKA_IAM_OAUTH_CONFIG` with the clients as before and the
-   new `hosts`; N+1 writes it without clients (IAM's own variable, rewritten on every deploy; a rollback is a deploy of
-   the older release, which writes its own shape). The GitHub Environment variable is the operator's: N warns, N+1
+   new `hosts`; N+1 writes it without clients (IAM's own variable, rewritten on every deploy). An older IAM refuses the
+   `hosts` key at boot, so a rollback must be a deploy of the older release, which writes its own shape, never a
+   re-activation of an older service version alone. The GitHub Environment variable is the operator's: N warns, N+1
    refuses, and the operator deletes it once release N is accepted. New: `FABRIKA_PLATFORM_MCP_AUTHORING`, needed only
    where MCP authoring is on; N infers it from the variable when unset and warns.
 3. **Provider state.** IAM migrations add tables only; N-1 ignores them. Roles that earlier deploys reconciled are
@@ -320,7 +327,7 @@ Effort is elapsed agent time, review rounds and CI included.
 | 1  | N       | IAM: migrations (both engines), repository, `externalApps.*` and `oauthClients.*` incl. `importOnce` and the pre-import refusal, table lookup with the pre-import `OAUTH_CONFIG` path, `OAUTH_CONFIG.hosts`, audit, `apps.list` flag; DTOs | ~1,000 lines | 3–4 h  |
 | 2  | N       | Deploys (both clouds) and local stack: import once instead of the roles reconcile, `hosts`, warnings, `FABRIKA_PLATFORM_MCP_AUTHORING`, adapt #408/#409's inference; reference docs                                                        | ~400 lines   | 2–3 h  |
 | 3  | N       | Console Access page and Applications entry, CLI `control external-apps` / `oauth-clients`; before/after screenshots                                                                                                                        | ~700 lines   | 3–4 h  |
-| 4  | N+1     | Refuse a set variable; drop the `OAUTH_CONFIG` client path, `parseMcpClientsJson`, `reconcileIdentityApps`; rename leftovers                                                                                                               | ~−600 lines  | 1–2 h  |
+| 4  | N+1     | Refuse a set variable; drop the `OAUTH_CONFIG` client path, the import, the mark and the pre-import refusal, `parseMcpClientsJson`, `reconcileIdentityApps`; rename leftovers                                                              | ~−600 lines  | 1–2 h  |
 | 5  | N+2     | Remove the variable's line from both generated workflows                                                                                                                                                                                   | ~20 lines    | 0.5 h  |
 
 PRs 2 and 3 depend on 1. PR 4 waits for release N to be tagged, PR 5 for release N+1.
