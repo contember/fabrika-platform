@@ -15,7 +15,7 @@ import { approvedSnapshot } from '../../snapshot'
 import { administers, type GrantOutcome, type HeldGrant, heldGrantSchema, type IamGrantsReader, type OpenGrantRequest } from '../iam'
 import { requestKind, type RequestKindContext, type RequestOutcome } from '../kind'
 import { policyOf } from '../rules'
-import { agentText, appIdField, envField, ownText } from './shared'
+import { agentText, appIdField, envField, ownText, timeText } from './shared'
 
 /** How far ahead an agent may ask a grant to last: as long as a key an agent asks for at most. */
 export const AGENT_GRANT_MAX_SECONDS = 30 * 24 * 3600
@@ -205,12 +205,13 @@ export const createGrantKind = requestKind<GrantInput, GrantBefore>({
 			agentText(input.role),
 			ownText(' to '),
 			...(before?.principal === null || before?.principal === undefined ? [agentText(input.principalId)] : [ownText(before.principal.label)]),
-			ownText(` at ${input.appId}@${input.env}, ${scopeText(input.scope)}, until ${new Date(input.expiresAt * 1000).toISOString()}`),
+			ownText(` at ${input.appId}@${input.env}, ${scopeText(input.scope)}, until `),
+			timeText(input.expiresAt),
 		],
 		facts: [
 			{ label: 'Principal', value: agentText(input.principalId) },
 			{ label: 'Scope', value: input.scope === null ? ownText('application-wide') : agentText(`${input.scope.type} ${input.scope.value}`) },
-			{ label: 'Expires', value: ownText(new Date(input.expiresAt * 1000).toISOString()) },
+			{ label: 'Expires', value: timeText(input.expiresAt) },
 			...(before === null ? [] : [
 				...(before.role === null ? [{ label: 'Role', value: ownText('the approved contract no longer declares it') }] : []),
 				{

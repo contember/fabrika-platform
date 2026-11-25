@@ -522,6 +522,9 @@ for (const backend of backends) {
 			const ada = await w.person(w.ada, 'ada')
 			const shown = await getApprovalRequestUseCase(ada, known.id)
 			expect(shown.description.summary.map((part) => part.text).join('')).toContain('cy@example.test')
+			// The expiry is a time the page formats, in the summary and in its fact.
+			expect(shown.description.summary.filter((part) => part.at === expiresAt)).toHaveLength(1)
+			expect(shown.description.facts.find((fact) => fact.label === 'Expires')?.value).toMatchObject({ at: expiresAt, agent: false })
 			expect(shown.description.facts.find((fact) => fact.label === 'Holds now')?.value.text).toContain('reader')
 			const shownUnknown = await getApprovalRequestUseCase(ada, unknown.id)
 			expect(shownUnknown.description.facts.find((fact) => fact.label === 'Holds now')?.value.text).toBe('IAM knows no such principal')

@@ -7,6 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ApprovalRequestDto } from '../lib/api'
+import { fmtDate } from '../lib/format'
 import { ApprovalRequestView, RequestDecision, RequestOutcome } from '../routes/approvals/requests/detail'
 
 const NOW = 1_800_000_000
@@ -61,6 +62,20 @@ describe('the approval request page', () => {
 		expect(html).not.toContain('<script')
 		expect(html).toContain('<strong>intake</strong> · <strong>prod</strong>')
 		expect(html).toContain('Decide by')
+	})
+
+	test('a time in the description is formatted as the page formats its other dates, in the summary and in a fact', () => {
+		const at = NOW + 7 * 86_400
+		const iso = new Date(at * 1000).toISOString()
+		const html = view({
+			...REQUEST,
+			description: {
+				summary: [{ text: 'Grant role staff until ', agent: false }, { text: iso, agent: false, at }],
+				facts: [{ label: 'Expires', value: { text: iso, agent: false, at } }],
+			},
+		})
+		expect(html).not.toContain(iso)
+		expect(html.split(fmtDate(at)).length - 1).toBe(2)
 	})
 
 	test('a key says so and names no agent', () => {

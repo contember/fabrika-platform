@@ -89,6 +89,11 @@ export function ownText(text: string): { readonly text: string; readonly agent: 
 	return { text, agent: false }
 }
 
+/** A time in Fabrika's own words: ISO 8601 for a reader that shows text as it is, and `at` for the page to format. */
+export function timeText(seconds: number): { readonly text: string; readonly agent: false; readonly at: number } {
+	return { text: new Date(seconds * 1000).toISOString(), agent: false, at: seconds }
+}
+
 /** A stored value as the page shows it: `none` when absent. */
 export function shown(value: string | null): string {
 	return value ?? 'none'

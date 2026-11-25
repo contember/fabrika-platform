@@ -27,6 +27,8 @@ export interface ApprovalRequestText {
 	text: string
 	/** Written by the agent (a name, a message), never by Fabrika. */
 	agent: boolean
+	/** A time, in unix seconds, that `text` states in ISO 8601: the page shows it as it shows its other dates. */
+	at?: number
 }
 
 /** What the request asks for, as its kind describes it: plain data, never markup. */

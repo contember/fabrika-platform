@@ -96,9 +96,10 @@ export function requestCategoryLabel(category: string): string {
 	return known === undefined ? category : categoryLabel(known)
 }
 
-/** One piece of the request's text: the agent's own is set apart and says so. */
+/** One piece of the request's text: the agent's own is set apart and says so; a time is formatted as the page's other dates. */
 function Text({ part }: { part: ApprovalRequestText }) {
-	return part.agent ? <span className="agent-text" title="Written by the agent, not by Fabrika">{part.text}</span> : <>{part.text}</>
+	const text = part.at === undefined ? part.text : fmtDate(part.at)
+	return part.agent ? <span className="agent-text" title="Written by the agent, not by Fabrika">{text}</span> : <>{text}</>
 }
 
 /** The kind's one-sentence summary of what approving does. */
