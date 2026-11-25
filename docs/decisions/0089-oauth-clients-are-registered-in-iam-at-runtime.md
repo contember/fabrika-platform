@@ -26,35 +26,46 @@ it has is IAM's: an app id, a vocabulary of roles, a resource, and OAuth clients
 
 ## Decision
 
-1. **An external application is a record in IAM's database.** It holds the app id, its identity resource, whether a
-   person needs one of its roles to sign in, and its display name (`app_presentation`, as for a contract application).
-   Its roles are its vocabulary in IAM, each granting no action, written by the reconcile IAM already runs for a
-   deploy's schema, in the same transaction as the record. Control keeps no row of it. ADR-0084's rules for the app id
-   and the resource are checked when the record is written: a lowercase id without `@`, no platform audience, no app
-   whose vocabulary IAM holds for another owner; an `https` resource on none of the installation's hosts and no
-   registered resource.
+1. **An external application is a record in IAM's database.** It holds the app id, its identity resource and its
+   display name (`app_presentation`, as for a contract application). Its roles are its vocabulary in IAM, each granting
+   no action, written by the reconcile IAM already runs for a deploy's schema, in the same transaction as the record.
+   An application with roles requires one of them to sign in (ADR-0084 rule 4); one without roles has no vocabulary,
+   and every active user signs in. Control keeps no row of it.
+   - The app id is lowercase, has no `@` and is no platform audience. IAM can hold a vocabulary under such an id only
+     from an earlier deploy's reconcile of an external application, so registering the id adopts that vocabulary.
+   - The resource is `https`, is no registered resource, and is on none of the installation's hosts. The deploy writes
+     those hosts into `OAUTH_CONFIG` (`hosts`), the list its own check reads today, so IAM checks a write against
+     the same list.
 2. **Every managed OAuth client is a row in IAM's database.** A row holds the client id (the URL of its Client ID
    Metadata Document), its label (`claude`, `chatgpt` or `external`, still a label only), its exact redirect URIs, an
    optional metadata URL, and the external application it is bound to. A client bound to an external application is
    served that application's identity resource alone, as ADR-0084 decides. A client bound to none is an MCP authoring
    client, served `/mcp` as ADR-0049 decides. An external application may have several clients and one list of roles.
-   IAM reads the client at each authorization request, code exchange and refresh; nothing else about the flow changes.
-3. **An installation administrator registers them at runtime.** IAM's `/admin/rpc` serves `externalApps.list | get |
-   put | delete` and `oauthClients.list | put | delete`, each requiring `iam.admin`. `externalApps.put` replaces the
-   whole application (record, roles, clients) in one transaction with its audit record. Removing a client, or the
-   application, revokes its OAuth grants in that transaction. The console registers them on a page of its Access
-   section, reached also from the Applications page; the `fabrika` CLI does it with the provisioning key
-   (`fabrika control external-apps`), from a file, idempotently. A user administrator grants the roles, as before, and
+   IAM reads the client at each authorization request, client authentication, code exchange and refresh; nothing else
+   about the flow changes.
+3. **An installation administrator registers external applications at runtime; the operator registers authoring
+   clients.** IAM's `/admin/rpc` serves `externalApps.list | get | put | delete`, each requiring `iam.admin`.
+   `externalApps.put` replaces the whole application (record, roles, bound clients) in one transaction with its audit
+   record, and is the only writer of a bound client. Removing a client, or the application, revokes its OAuth grants in
+   that transaction. `oauthClients.put | delete` writes an authoring client and accepts only the provisioning key,
+   because an authoring client's tokens reach `/mcp`, which only the operator may hand out today. The console
+   registers external applications on a page of its Access section, reached also from the Applications page, and lists
+   authoring clients read-only. The `fabrika` CLI does both with the provisioning key (`fabrika control external-apps`,
+   `fabrika control oauth-clients`), from a file, idempotently. A user administrator grants the roles, as before, and
    registers nothing.
 4. **Whether MCP authoring is on is a deploy setting of its own.** It decides the proxy's `/mcp` row and Control's
    mount, so it is composition: `FABRIKA_PLATFORM_MCP_AUTHORING`. A registered authoring client on an installation
    with authoring off is served no resource.
-5. **The deploy variable is read for one release, then refused.** In the release that introduces the registry, the
-   deploy hands the variable to IAM's `oauthClients.importOnce`, which only the provisioning key may call. IAM writes
-   every entry and an import mark in one transaction, adopting the roles earlier deploys reconciled under the same app
-   ids, and answers every later call `already_imported` without writing. Until the mark exists IAM serves the clients
-   of `OAUTH_CONFIG`; from then on the registry only. From the next release, a deploy that still sets the variable is
-   refused before it deploys anything, and `OAUTH_CONFIG` carries resources only.
+5. **The deploy variable is imported once, then refused.**
+   - In the release that introduces the registry (N), every deploy calls IAM's `oauthClients.importOnce` with the
+     variable's entries, or with none when it is unset, and fails when the call fails. Only the provisioning key may
+     call it. The first call writes every entry, the vocabularies they declare and an import mark in one transaction;
+     every later call answers `already_imported` and writes nothing. Release N's deploy no longer reconciles external
+     applications' roles: the import replaces that step.
+   - Until the mark exists IAM serves the clients of `OAUTH_CONFIG`, as before, and refuses `externalApps.put` and
+     `oauthClients.put`; from then on it serves the registry only.
+   - From release N+1 a deploy that still sets the variable is refused before it deploys anything. The generated
+     workflows keep passing the variable to the deploy through N+1, so the refusal sees it, and drop it in N+2.
 
 Per-application OAuth resources, tokens a deployed application accepts, are not part of this decision: they need
 `oauth` rows on contract application entries in the proxy ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)),
@@ -63,8 +74,8 @@ a caller kind in the framework, and a protocol change an older framework release
 application's approved contract, not runtime data. A client allowed to call an application's API would be one more
 kind of client row.
 
-**Invariant:** IAM reads the OAuth clients it serves from its own database, and only an installation administrator or
-the provisioning key writes them.
+**Invariant:** IAM reads the OAuth clients it serves from its own database. Only an installation administrator writes an
+external application and its clients; only the provisioning key writes an authoring client.
 
 ## Consequences
 
@@ -72,23 +83,31 @@ the provisioning key writes them.
   cap. A change applies to the next authorization request, exchange or refresh; a removed client or a changed resource
   ends the existing sign-ins within one token lifetime (300 s).
 - One external application with several clients has one list of roles; ADR-0084's "two clients of one app must declare
-  the same roles" check goes away.
+  the same roles" check goes away. An application whose roles are dropped loses its vocabulary instead of keeping the
+  last one unnamed.
 - IAM reads a database row per OAuth request instead of its configuration; those requests are rare.
 - The roles reconcile of external applications leaves the deploys; the deploy reconciles only installation and
   application vocabularies.
 - "MCP" names only what is MCP: `/mcp`, its authoring clients and the switch. The code's `McpClient`,
   `parseMcpClientsJson` and `reconcileIdentityApps` are removed with the variable.
 - **Rollout.**
-  - IAM's migrations add tables only; a release before this one ignores them.
-  - In the release that introduces the registry the deploy still writes the variable's clients into `OAUTH_CONFIG`
-    (`FABRIKA_IAM_OAUTH_CONFIG` on Zerops), so rolling IAM back keeps every client, and calls `importOnce` (on
-    Cloudflare in the control-plane stage, where the roles reconcile ran). It warns while the variable is set. MCP
-    authoring is on with the new setting, or, in that release only, with an authoring entry in the variable.
-  - In the next release the deploy refuses a set variable and names both ways out: register the clients in the
-    console, or upgrade through the previous release. `platform upgrade` regenerates Cloudflare's `platform.yml`
-    without the variable's two lines. The operator deletes the GitHub Environment variable.
-  - An installation without the variable has nothing to migrate. Grants of an external application's roles keep
-    working: the import keeps the app id and the role keys.
+  - IAM's migrations add tables only; a release before this one ignores them. `OAUTH_CONFIG` gains `hosts`; a rollback
+    is a deploy of the older release, which writes its own `OAUTH_CONFIG`.
+  - Release N: every deploy imports once (on Cloudflare in the control-plane stage, where the roles reconcile ran; on
+    Zerops in the installation deploy) and warns while the variable is set. It still writes the variable's clients
+    into `OAUTH_CONFIG` (`FABRIKA_IAM_OAUTH_CONFIG` on Zerops). MCP authoring is on with the new setting, or, in
+    release N only, with an authoring entry in the variable.
+  - Rolling back to N-1 serves the variable's clients only while the variable is still set, and N-1's deploy
+    reconciles the variable's roles over whatever the registry holds. So the operator keeps the variable until release N
+    is accepted on the installation, then deletes it; a roll back and forward after an administrator's edit can leave
+    the registry and IAM's roles apart, and the administrator saves the application again.
+  - Release N+1 refuses a set variable and names the ways out: upgrade through release N, or register the
+    applications in the console (which adopts their roles); and set `FABRIKA_PLATFORM_MCP_AUTHORING` where authoring
+    was on. `OAUTH_CONFIG` carries no clients. Release N+2 removes the variable's line from both generated workflows:
+    `platform upgrade` regenerates the Zerops sidecar's, and re-running `platform init` refreshes Cloudflare's
+    `platform.yml`.
+  - An installation without the variable gets an empty import and nothing else. Grants of an external application's
+    roles keep working: the import keeps the app id and the role keys.
 
 ## Alternatives considered
 
