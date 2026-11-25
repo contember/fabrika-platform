@@ -69,6 +69,11 @@ export interface ApprovalRequestDto {
 	url?: string
 	requester: ApprovalRequesterDto
 	description: ApprovalRequestDescription
+	/**
+	 * Whether this Control can say what the request does, from its kind and its stored input. When it cannot (a kind or a
+	 * key it does not know), `description` names the kind and shows the raw input, and the request can only be refused.
+	 */
+	described: boolean
 	/** `sha256:<hex>` of the canonical input: the decision posts it back, so it decides only what the page showed. */
 	inputDigest: string
 	/** How many people decide it, under the environment's settings now. */

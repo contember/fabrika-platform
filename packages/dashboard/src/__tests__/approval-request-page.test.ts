@@ -28,6 +28,7 @@ const REQUEST: ApprovalRequestDto = {
 		summary: [{ text: 'Set the note ', agent: false }, { text: '<img src=x onerror=alert(1)>', agent: true }],
 		facts: [{ label: 'Note', value: { text: '<script>bad()</script>', agent: true } }],
 	},
+	described: true,
 	inputDigest: `sha256:${'a'.repeat(64)}`,
 	approvers: 1,
 	requesterMayApprove: true,
@@ -97,6 +98,14 @@ describe('the approval request page', () => {
 		const html = decision({ ...REQUEST, requesterMayApprove: false }, 'user-ana')
 		expect(html).not.toContain('>Approve</button>')
 		expect(html).toContain('>Refuse</button>')
+	})
+
+	test('a request this Control cannot describe offers only Refuse, and says why', () => {
+		const html = decision({ ...REQUEST, described: false }, 'user-bo')
+		expect(html).not.toContain('>Approve</button>')
+		expect(html).toContain('>Refuse</button>')
+		expect(html).toContain('This Control cannot show what the request does, so it cannot be approved here.')
+		expect(html).not.toContain('Approving carries it out')
 	})
 
 	test('an executed request shows its result, escaped', () => {

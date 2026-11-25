@@ -166,7 +166,7 @@ export function RequestOutcome({ request }: { request: ApprovalRequestDto }) {
 /**
  * Approve or refuse a pending request. `me` is the signed-in principal and `now` the time in unix seconds: past the
  * deadline Control refuses both; the first of two approvers waits for a second person; the requester's own person may
- * only refuse where the environment says so.
+ * only refuse where the environment says so; a request this Control cannot describe may only be refused.
  */
 export function RequestDecision({ request, me, now, onDone }: { request: ApprovalRequestDto; me: string | null; now: number; onDone: () => void }) {
 	const [busy, setBusy] = useState(false)
@@ -194,8 +194,8 @@ export function RequestDecision({ request, me, now, onDone }: { request: Approva
 	return (
 		<>
 			<section>
-				<p className="hint">Approving carries it out now, as you, with the requester recorded beside you.</p>
-				{request.approvers === 2 && (
+				{request.described && <p className="hint">Approving carries it out now, as you, with the requester recorded beside you.</p>}
+				{request.described && request.approvers === 2 && (
 					<p className="hint">
 						{request.partialApproval === undefined
 							? 'Two different people approve this request: the first approval is recorded, and the second carries it out.'
@@ -203,7 +203,9 @@ export function RequestDecision({ request, me, now, onDone }: { request: Approva
 					</p>
 				)}
 				<div className="row-actions">
-					{approvedByMe
+					{!request.described
+						? <span className="muted">This Control cannot show what the request does, so it cannot be approved here.</span>
+						: approvedByMe
 						? <span className="muted">Waiting for a second person</span>
 						: blocked !== null
 						? <span className="muted">{requesterBlockText(blocked, 'request')}</span>

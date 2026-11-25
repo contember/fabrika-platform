@@ -461,6 +461,35 @@ for (const backend of backends) {
 				expect(w.notes.values.has('greeting')).toBe(false)
 			})
 
+			test('a request this Control cannot describe can only be refused: an approval answers 409 and changes nothing', async () => {
+				const w = await world()
+				const newer = new Map([['test.notes.put', notesKind(w.notes, noteInput.extend({ expiresIn: z.number().optional() }))]])
+				const reduced = await createApprovalRequestUseCase(context(w, AGENT, { kinds: newer }), {
+					kind: 'test.notes.put',
+					input: { appId: 'notes', env: 'prod', name: 'greeting', value: 'hello', expiresIn: 60 },
+				})
+				const unserved = await ask(w, AGENT, { appId: 'notes', env: 'prod', name: 'farewell', value: 'bye' })
+				for (const [id, kinds] of [[reduced.id, w.kinds], [unserved.id, new Map()]] as const) {
+					const read = await getApprovalRequestUseCase(context(w, ADA, { kinds }), id)
+					expect(read.described).toBe(false)
+					const refused = await status(
+						decideApprovalRequestUseCase(context(w, ADA, { kinds }), { id, decision: 'approve', inputDigest: read.inputDigest }),
+					)
+					expect(refused.status).toBe(409)
+					expect(refused.message).toContain('cannot show what the request does')
+					expect(await row(w, id)).toMatchObject({ state: 'pending', decided_by_id: null, partial_approver_id: null })
+					expect((await decideApprovalRequestUseCase(context(w, ADA, { kinds }), { id, decision: 'reject', inputDigest: read.inputDigest })).state).toBe(
+						'rejected',
+					)
+				}
+				expect((await getApprovalRequestUseCase(context(w, ADA), unserved.id)).described).toBe(true)
+				expect(w.notes.effects).toEqual([])
+				expect(w.audits.map((event) => event.metadata)).toEqual([
+					expect.objectContaining({ decision: 'reject' }),
+					expect.objectContaining({ decision: 'reject' }),
+				])
+			})
+
 			test('a policy made stricter after the first approval closes it stale at execution: refuse, or the requester now excluded', async () => {
 				const twoPeople = { ...STRICT_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, secrets: 2 as const } }
 				const refused = await world()

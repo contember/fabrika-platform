@@ -162,7 +162,10 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 	}
 
 	const kind = kindsOf(c).get(row.kind)
-	if (kind === undefined) fail(409, `this Control cannot execute kind \`${row.kind}\`, so it cannot approve the request; refuse it or let it expire`)
+	// What the person saw is what executes: a request this Control cannot describe, it cannot approve either.
+	if (kind === undefined || typeof actionOf(kind, row) === 'string') {
+		fail(409, 'this Control cannot show what the request does, so it cannot approve it; refuse it or let it expire')
+	}
 	if (!deciders.requesterMayApprove) requireOtherThanRequester(approver, requesterOf(row), 'request')
 	if (deciders.approvers === 2) {
 		if (row.partial_approver_id === approver.id) return toApprovalRequestDto(c, row)
@@ -262,12 +265,13 @@ function undescribed(row: ApprovalRequestRow): ApprovalRequestDescription {
 	}
 }
 
-function describe(c: ApprovalRequestReadContext, row: ApprovalRequestRow): ApprovalRequestDescription {
+/** What the kind says the request does, or null when this Control cannot read the request well enough to say. */
+function describe(c: ApprovalRequestReadContext, row: ApprovalRequestRow): ApprovalRequestDescription | null {
 	try {
 		const action = actionOf(kindsOf(c).get(row.kind), row)
-		return typeof action === 'string' ? undescribed(row) : action.describe(row.before_json)
+		return typeof action === 'string' ? null : action.describe(row.before_json)
 	} catch {
-		return undescribed(row)
+		return null
 	}
 }
 
@@ -280,6 +284,7 @@ function storedResult(text: string | null): JsonValue | undefined {
 export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: ApprovalRequestRow): Promise<ApprovalRequestDto> {
 	const who = await requestDeciders(c.repositories, row)
 	const result = storedResult(row.result_json)
+	const description = describe(c, row)
 	return {
 		id: row.id,
 		kind: row.kind,
@@ -296,7 +301,8 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 			...(row.requester_issuer_id === null ? {} : { issuerId: row.requester_issuer_id }),
 			personId: requesterOf(row).personId,
 		},
-		description: describe(c, row),
+		description: description ?? undescribed(row),
+		described: description !== null,
 		inputDigest: row.input_digest,
 		approvers: who.approvers,
 		requesterMayApprove: who.requesterMayApprove,

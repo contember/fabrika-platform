@@ -157,7 +157,8 @@ no request may ever name with their reason, every other one as not requestable y
   nothing runs. The operation id is recorded before the kind's first external effect; an execution that throws leaves
   the request `unknown`. A Control whose kind reads the stored input back to another digest (a release rolled back
   under the request, which drops a key it does not know) shows the request as one it cannot describe and closes an
-  approved one `failed`: it never executes less than the person approved.
+  approved one `failed`: it never executes less than the person approved. A request whose kind or input this Control
+  cannot describe can only be refused: the page offers no Approve, and an approval answers 409 and changes nothing.
 - **The lifecycle** is `pending → approved | rejected | expired`, then `executing → executed | failed | unknown`, and
   `stale`. The maintenance sweep expires a pending request past its deadline, closes an approved one whose execution
   never started `failed` (nothing changed; the agent asks again), and follows an `unknown` one through its kind until

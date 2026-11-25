@@ -1289,6 +1289,7 @@ describe('control requests', () => {
 		url,
 		requester: { principal: { id: 'svc', type: 'service', label: 'ci' }, credential: 'key', personId: null },
 		description: { summary: [{ text: 'Set a note', agent: false }], facts: [] },
+		described: true,
 		inputDigest: `sha256:${'a'.repeat(64)}`,
 		approvers: 1,
 		requesterMayApprove: true,
