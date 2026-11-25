@@ -132,7 +132,8 @@ export const createGrantKind = requestKind<GrantInput, GrantBefore>({
 		if (input.expiresAt <= now || input.expiresAt > now + AGENT_GRANT_MAX_SECONDS) {
 			fail(400, `expiresAt must be in the future and at most ${AGENT_GRANT_MAX_SECONDS / 86_400} days ahead`)
 		}
-		if ((await principalOf(c, input)) === null) fail(400, `IAM knows no principal \`${input.principalId}\``)
+		// A principal IAM does not know is not refused here, which would tell it from a known one; the person deciding sees
+		// it, and IAM refuses the grant if it is approved anyway.
 	},
 	captureBefore: async (c, input) => ({ role: await roleOf(c, input), principal: await principalOf(c, input) }),
 	execute: async (c, input, execution): Promise<RequestOutcome> => {

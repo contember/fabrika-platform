@@ -194,7 +194,10 @@ Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category `a
   application environment, for the agent's own principal or another: a role its approved contract declares (never
   IAM's `admin` or a custom policy, 400), application-wide or in a value of the role's dimension, ending at most 30
   days ahead. The requester holds `access.request` at the application. Creating needs Control to reach IAM with the
-  provisioning key (503 otherwise), which reads the principal (an unknown one is a 400) and its grants. An
+  provisioning key (503 otherwise), which reads the principal and its grants. A principal IAM does not know is not
+  refused, which would tell it from a known one: the person deciding sees that IAM knows no such principal, and IAM
+  refuses the grant if it is approved anyway. The requester sees none of what Control read from IAM: the principal's
+  label and grants, and the role as bound, are shown only to an IAM administrator who may decide it. An
   environment whose `agent-grants` is `off`, or that is not protected, refuses it (409): there is nothing to approve,
   since an agent's own credential grants nothing in IAM. The request binds the principal's label and grants at the
   application and the role as the approved contract declares it; a change of any of them before the execution, a
@@ -213,8 +216,9 @@ Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category `a
   credential that asked (the same principal and OAuth client, or no client for a key), so another agent of the same
   person does not; a person who may decide it reads any at those coordinates. What the request acts on now (a
   variable's value, a field before the change), a secret's fingerprint, a variable's new value and the result are shown
-  only to a reader who also holds the kind's action where it acts; anyone else sees the names and lengths and a line
-  saying what is not shown, and may still refuse it.
+  only to a reader who also holds the kind's action where it acts, or for a kind with its own decider (an agent's grant)
+  only to that decider, though its requester reads the result; anyone else sees the names and lengths and a line saying
+  what is not shown, and may still refuse it.
 
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval

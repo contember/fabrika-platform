@@ -191,8 +191,10 @@ common case, and the person sees for whom. The role must be one the environment'
 IAM's built-in `admin`, not a custom policy), granted application-wide or in a value of its dimension as the contract
 says, and the grant ends at most 30 days after it is asked for. The requester holds `access.request` at the
 application; the request binds the principal (its label and its grants at the application) and the role as the
-approved contract declares it, so a change of either before the execution closes it `stale`. The application's IAM administrators
-decide it (§8). An approval makes the grant as the approver's own console grant (`grants.create`), through the IAM
+approved contract declares it, so a change of either before the execution closes it `stale`. Control reads that with
+its provisioning key, so only the deciders see it, never the requester; and a principal IAM does not know is not refused
+when the request is created, so asking tells the agent nothing about which principals exist. The application's IAM
+administrators decide it (§8). An approval makes the grant as the approver's own console grant (`grants.create`), through the IAM
 gateway's transport with the approver's console token, so IAM runs every check it runs for the console, and its
 audit row names the Control request and its requester. Where the application's `grants` waits, IAM turns that call
 into its grant request for a second administrator, on top of the request's approval: the request is then `executed`,

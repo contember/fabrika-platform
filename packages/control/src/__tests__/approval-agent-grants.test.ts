@@ -373,6 +373,8 @@ for (const backend of backends) {
 			expect(more).toEqual([])
 			expect(grant).toMatchObject({ role_key: 'staff', granted_by: w.ada.id, scope_value: null })
 			expect(decided.result).toMatchObject({ grant: { id: expect.any(String) } })
+			// The requester reads the outcome, which repeats what it asked.
+			expect((await getApprovalRequestUseCase(w.agent('kim'), created.id)).result).toEqual(decided.result)
 
 			const [record] = await w.iamAudit('iam.grant.create')
 			expect(record).toEqual({
@@ -473,8 +475,6 @@ for (const backend of backends) {
 			// An expiry in the past, or further than 30 days ahead.
 			expect(await status(w.ask(w.grantInput({ expiresAt: Math.floor(Date.now() / 1000) - 1 })))).toMatchObject({ status: 400 })
 			expect(await status(w.ask(w.grantInput({ expiresAt: Math.floor(Date.now() / 1000) + 31 * DAY })))).toMatchObject({ status: 400 })
-			// A principal IAM does not know.
-			expect(await status(w.ask(w.grantInput({ principalId: 'p-nobody' })))).toMatchObject({ status: 400 })
 			// `refuse` refuses it to an agent at all; `off` (an unprotected environment) has nothing to approve.
 			await w.protect('prod', { ...STRICT_POLICY, 'agent-grants': 'refuse' })
 			expect((await status(w.ask())).status).toBe(403)
@@ -482,6 +482,37 @@ for (const backend of backends) {
 			expect(off.status).toBe(409)
 			expect(off.message).toContain('agent-grants')
 			expect(await w.db.approvalRequests.listPending(100)).toEqual([])
+		})
+
+		test("the requester's own request shows nothing Control read from IAM, and a principal IAM does not know reads the same", async () => {
+			const w = await world()
+			await w.iam.grants.createGrant({ principalId: w.grantee.id, app: APP, roleKey: 'reader' })
+			const expiresAt = Math.floor(Date.now() / 1000) + 7 * DAY
+			const known = await w.ask(w.grantInput({ expiresAt }))
+			// Not refused at creation: a refusal would tell a principal IAM knows from one it does not.
+			const unknown = await w.ask(w.grantInput({ expiresAt, principalId: 'p-nobody' }))
+
+			const kim = w.agent('kim')
+			const own = await getApprovalRequestUseCase(kim, known.id)
+			const ownText = JSON.stringify(own.description)
+			expect(ownText).not.toContain('cy@example.test')
+			expect(ownText).not.toContain('reader')
+			expect(own.description.facts.map((fact) => fact.label)).not.toContain('Holds now')
+			expect(own.description.role).toBeUndefined()
+			const ownUnknown = await getApprovalRequestUseCase(kim, unknown.id)
+			const same = (text: string, principalId: string) => text.replaceAll(principalId, '<principal>')
+			expect(same(JSON.stringify(ownUnknown.description), 'p-nobody')).toBe(same(ownText, w.grantee.id))
+
+			// The administrator who decides sees both as IAM holds them.
+			const ada = await w.person(w.ada, 'ada')
+			const shown = await getApprovalRequestUseCase(ada, known.id)
+			expect(shown.description.summary.map((part) => part.text).join('')).toContain('cy@example.test')
+			expect(shown.description.facts.find((fact) => fact.label === 'Holds now')?.value.text).toContain('reader')
+			const shownUnknown = await getApprovalRequestUseCase(ada, unknown.id)
+			expect(shownUnknown.description.facts.find((fact) => fact.label === 'Holds now')?.value.text).toBe('IAM knows no such principal')
+			// Approved anyway, IAM refuses it and nothing is granted.
+			expect((await w.decide(unknown.id, 'approve', w.ada, 'ada')).state).toBe('failed')
+			expect((await w.grantsAt()).map((grant) => grant.role_key)).toEqual(['reader'])
 		})
 
 		test('only an IAM administrator of the application decides it; access.approve in Control alone does not', async () => {

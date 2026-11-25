@@ -434,9 +434,10 @@ function describe(
 		return null
 	}
 	if (full || kind === undefined) return description
-	const hidden =
-		`you do not hold \`${kind.requesterAction}\` where it acts, so what it acts on now, its value and any fingerprint are not shown to you; `
-		+ 'you may refuse it, and approving it takes that right'
+	const hidden = kind.approverMayDecide === undefined
+		? `you do not hold \`${kind.requesterAction}\` where it acts, so what it acts on now, its value and any fingerprint are not shown to you; `
+			+ 'you may refuse it, and approving it takes that right'
+		: 'what it acts on now is shown only to a person who may decide it'
 	return { ...description, facts: [...description.facts, { label: 'Not shown', value: { text: hidden, agent: false } }] }
 }
 
@@ -461,10 +462,11 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 	const who = await requestDeciders(c.repositories, row)
 	const kind = kindsOf(c).get(row.kind)
 	const coordinates = { appId: row.app_id, env: row.env }
-	// What the request acts on now, a value and a fingerprint are shown to one who may ask for it or carry it out; the
-	// result repeats what it set.
-	const full = kind !== undefined && (holdsKindAction(c.auth, kind, coordinates) || (await mayExecute(approverOf(c), kind, coordinates)))
-	const result = full ? storedResult(row.result_json) : undefined
+	// What the request acts on now, a value and a fingerprint are shown to one who may carry it out: the kind's decider, or
+	// one who holds its action. A kind with a decider bound what Control read with its own key (IAM), which the requester
+	// may not read. The result repeats what was asked and set, so one who may ask for it reads it too.
+	const full = kind !== undefined && (await mayExecute(approverOf(c), kind, coordinates))
+	const result = full || (kind !== undefined && holdsKindAction(c.auth, kind, coordinates)) ? storedResult(row.result_json) : undefined
 	const description = describe(c, row, kind, full)
 	const reached = row.env === ALL_ENVIRONMENTS ? await reachFact(c, row) : null
 	return {
