@@ -2820,16 +2820,18 @@ td {
 }
 
 .approval-mode {
-	display: flex;
-	flex-wrap: wrap;
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 13rem;
 	align-items: center;
-	justify-content: space-between;
 	gap: var(--s-2);
-	max-width: 44rem;
+	max-width: 52rem;
 }
 
-.approval-mode select {
-	flex: 0 0 auto;
+@media (max-width: 700px) {
+	.approval-mode {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 2px;
+	}
 }
 
 /* Two related values in one cell, the second under the first. */
