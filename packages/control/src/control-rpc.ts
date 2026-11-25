@@ -743,25 +743,7 @@ export function createControlRpcRouter(
 	}
 
 	function approvalRequestContext(ctx: ControlRpcContext): ApprovalRequestContext {
-		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
-		const runDeps = deps.runDeps
-		const consoleOrigin = controlPublicOrigin(ctx.env)
-		return {
-			repositories: deps.repositories,
-			provider: deps.provider,
-			auth: ctx.auth,
-			admission: { request: ctx.request },
-			...(deps.vault === undefined ? {} : { vault: deps.vault }),
-			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
-			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
-			...(deps.lock === undefined ? {} : { lock: deps.lock }),
-			...(deps.lock === undefined || deps.opsTransport === undefined ? {} : { maintenance: { lock: deps.lock, ops: deps.opsTransport } }),
-			...(runDeps === undefined ? {} : { deploys: async () => operationDeploys(await runDeps()) }),
-			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
-			...passkeyStepUp(ctx),
-			...iamGrantsDeps(ctx.env),
-			...approverIam(ctx),
-		}
+		return controlApprovalRequestContext(buildDeps(ctx.env, ctx.provider, ctx.auth), ctx)
 	}
 
 	function mailContext(ctx: ControlRpcContext): MailUseCaseContext {
@@ -780,14 +762,42 @@ export function createControlRpcRouter(
 	}
 }
 
+/**
+ * What an approval request is created, read and decided through: the RPC's `approvals.requests.*` and its gated writes,
+ * and MCP's `request_change`, so a kind finds the same data operations, deploys and IAM in both.
+ */
+export function controlApprovalRequestContext(
+	deps: ControlRpcDeps,
+	ctx: Pick<ControlRpcContext, 'env' | 'auth' | 'request'>,
+): ApprovalRequestContext {
+	const runDeps = deps.runDeps
+	const consoleOrigin = controlPublicOrigin(ctx.env)
+	return {
+		repositories: deps.repositories,
+		provider: deps.provider,
+		auth: ctx.auth,
+		admission: { request: ctx.request },
+		...(deps.vault === undefined ? {} : { vault: deps.vault }),
+		...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
+		...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+		...(deps.lock === undefined ? {} : { lock: deps.lock }),
+		...(deps.lock === undefined || deps.opsTransport === undefined ? {} : { maintenance: { lock: deps.lock, ops: deps.opsTransport } }),
+		...(runDeps === undefined ? {} : { deploys: async () => operationDeploys(await runDeps()) }),
+		...(consoleOrigin === undefined ? {} : { consoleOrigin }),
+		...passkeyStepUp(ctx),
+		...iamGrantsDeps(ctx.env),
+		...approverIam(ctx),
+	}
+}
+
 /** The approver's passkey step-up, through IAM's admin transport with the console token this call carries. */
-function passkeyStepUp(ctx: ControlRpcContext): { stepUp?: PasskeyStepUpPort } {
+function passkeyStepUp(ctx: Pick<ControlRpcContext, 'env' | 'request'>): { stepUp?: PasskeyStepUpPort } {
 	const port = ctx.env.IAM_ADMIN === undefined ? null : iamPasskeyStepUp(ctx.env.IAM_ADMIN, ctx.request)
 	return port === null ? {} : { stepUp: port }
 }
 
 /** IAM as the person in the console: what they administer there, and the grant an approved agent's request makes as them. */
-function approverIam(ctx: ControlRpcContext): { iamApprover?: IamApprover } {
+function approverIam(ctx: Pick<ControlRpcContext, 'env' | 'request'>): { iamApprover?: IamApprover } {
 	const approver = ctx.env.IAM_ADMIN === undefined ? null : consoleIamApprover(ctx.env.IAM_ADMIN, ctx.request)
 	return approver === null ? {} : { iamApprover: approver }
 }

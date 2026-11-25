@@ -5,6 +5,7 @@ import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.se
 import { devSandboxRemoval } from '../api/dev-environments'
 import { ControlApiError } from '../api/domain'
 import type { McpRoute } from '../app'
+import { controlApprovalRequestContext } from '../control-rpc'
 import { devSandboxDepsOf } from '../dev/service'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
@@ -30,19 +31,7 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 			return iam.authenticate(request)
 		},
 		resourceMetadata: controlMcpResourceMetadata(publicOrigin),
-		approvalRequests: (auth, request) => {
-			const deps = buildControlRpcDeps(env, provider, auth)
-			return {
-				repositories: deps.repositories,
-				provider,
-				auth,
-				admission: { request },
-				consoleOrigin: publicOrigin,
-				...(deps.vault === undefined ? {} : { vault: deps.vault }),
-				...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
-				...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
-			}
-		},
+		approvalRequests: (auth, request) => controlApprovalRequestContext(buildControlRpcDeps(env, provider, auth), { env, auth, request }),
 		useCases: (auth, signal) => ({
 			repositories: env.REPOSITORIES,
 			source,

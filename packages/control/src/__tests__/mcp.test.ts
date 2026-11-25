@@ -3,20 +3,24 @@
 
 import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import { CONTROL_ACTIONS } from '@fabrika/control-contract'
+import { CONTROL_ACTIONS, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
+import { SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider, ProviderDevSandboxes } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
 import type { DeployQueue } from '../api/runs'
+import { storedPolicy, storedSettings } from '../approval/categories'
 import { controlMcpRoute } from '../bun/mcp'
 import { createFetchHandler } from '../bun/server'
 import { DevSignals } from '../dev/signals'
 import type { Env } from '../env'
-import { createHarness, type Harness } from './helpers/harness'
+import { createHarness, type Harness, harnessDatabase } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
+import { fixtureProtect } from './helpers/lock'
 import { proxiedRequest } from './helpers/proxy'
 import { unusedSourceConnection } from './helpers/source-connection'
-import { adminToken, testIamEnv, testResourceToken } from './helpers/tokens'
+import { adminToken, TEST_ISSUER, testIamEnv, testResourceToken } from './helpers/tokens'
 import { testVaultKey } from './helpers/vault'
 import { AUTHOR_ACTIONS, seedWorkspaceWorld, sha, type WorkspaceWorld, zeropsProvider } from './helpers/workspaces'
 
@@ -31,7 +35,7 @@ afterEach(() => {
 
 async function fixture(
 	queue?: DeployQueue,
-	options: { dev?: boolean; provider?: ControlProvider } = {},
+	options: { dev?: boolean; provider?: ControlProvider; iamProvisioningKey?: string } = {},
 ): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
 	const provider = options.provider ?? zeropsProvider
 	harness = createHarness()
@@ -54,6 +58,7 @@ async function fixture(
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
 		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals() } } : {}),
 		FABRIKA_CONTROL_VAULT_KEY: testVaultKey(),
+		...(options.iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: options.iamProvisioningKey }),
 	}
 	const mcp = controlMcpRoute(env, world.source, provider)
 	const served = createFetchHandler(env, provider, unusedSourceConnection('zerops'), mcp, true)
@@ -345,6 +350,57 @@ describe('the MCP endpoint', () => {
 			'result',
 		)
 		expect(withoutRight).toEqual({ isError: true, content: [{ type: 'text', text: 'app env not found' }] })
+	})
+
+	test('request_change asks for a data operation and an agent grant through the same context as the RPC', async () => {
+		const { fetch, world } = await fixture(undefined, { iamProvisioningKey: 'px_provisioning-key-of-the-mcp-suite' })
+		const repositories = world.repositories
+		await fixtureProtect(
+			repositories.registry,
+			new SqlDeployLocks(harnessDatabase(repositories)),
+			{ appId: 'shop', env: 'prod' },
+			true,
+			Date.now,
+			storedPolicy(STRICT_POLICY),
+			storedSettings(STRICT_SETTINGS),
+		)
+		const snapshot = JSON.stringify({ version: 1, contract: notesArtifact, migrations: [], checker: '0.9.0' })
+		await harnessDatabase(repositories)
+			.prepare('UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ? WHERE app_id = ? AND env = ?')
+			.bind('run-published', snapshot, 'shop', 'prod')
+			.run()
+		// IAM's admin RPC, which the grant kind reads with the provisioning key: it knows no such principal.
+		const iamCalls: string[] = []
+		const passThrough = globalThis.fetch
+		const iam = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const request = new Request(input, init)
+			if (!request.url.startsWith(`${TEST_ISSUER}/admin/rpc`)) return passThrough(request)
+			iamCalls.push(String(field(await request.json(), 'method')))
+			return Response.json({ error: { type: 'not_found', message: 'principal not found' } }, { status: 404 })
+		}
+		const spy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(iam, { preconnect: passThrough.preconnect }))
+		try {
+			const token = await testResourceToken({
+				resource: RESOURCE,
+				label: 'author@acme.test',
+				actions: [...AUTHOR_ACTIONS, CONTROL_ACTIONS.DATA_MANAGE, CONTROL_ACTIONS.ACCESS_REQUEST],
+			})
+			const call = (kind: string, input: object) => rpc(fetch, token, 'tools/call', { name: 'request_change', arguments: { kind, input } })
+
+			const maintenance = toolJson(await call('data.start', { appId: 'shop', env: 'prod', kind: 'maintenance', mode: 'read-only' }))
+			const maintenanceRow = await repositories.approvalRequests.get(String(field(maintenance, 'id')))
+			expect(maintenanceRow).toMatchObject({ kind: 'data.start', category: 'data', app_id: 'shop', env: 'prod', state: 'pending' })
+
+			const expiresAt = Math.floor(Date.now() / 1000) + 3600
+			const grant = toolJson(
+				await call('iam.grants.create', { appId: 'shop', env: 'prod', principalId: 'p-bob', role: 'support', scope: null, expiresAt }),
+			)
+			const grantRow = await repositories.approvalRequests.get(String(field(grant, 'id')))
+			expect(grantRow).toMatchObject({ kind: 'iam.grants.create', category: 'agent-grants', app_id: 'shop', env: 'prod', state: 'pending' })
+			expect(iamCalls).toEqual(['principals.get'])
+		} finally {
+			spy.mockRestore()
+		}
 	})
 
 	test('a refused tool call is a tool error with a short message, and invalid input never reaches Source', async () => {
