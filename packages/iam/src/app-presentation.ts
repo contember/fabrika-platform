@@ -107,7 +107,7 @@ function readerPresentation(presentation: AppPresentation, appLocale: Locale | n
 }
 
 /** The app's first registered return origin that the origin rule still admits, or null. */
-async function registeredLanding(services: Services, app: string): Promise<string | null> {
+export async function registeredLanding(services: Services, app: string): Promise<string | null> {
 	const origins = await services.repositories.handoff.listReturnOrigins(app)
 	// A stored origin is written into a CSP directive and a `Location`; one the rule no longer admits is no landing.
 	return origins.find((origin) => normalizeOrigin(origin) === origin) ?? null

@@ -141,6 +141,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0036_grant_scope_sets.sql' },
 			{ bundle: 'iam', name: '0037_scope_value_sources.sql' },
 			{ bundle: 'iam', name: '0038_oauth_client_registry.sql' },
+			{ bundle: 'iam', name: '0039_passkeys.sql' },
 		])
 	})
 
@@ -200,6 +201,8 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'external_apps',
 				'oauth_clients',
 				'oauth_registry',
+				'passkeys',
+				'passkey_challenges',
 			]
 		) {
 			expect(names).toContain(table)

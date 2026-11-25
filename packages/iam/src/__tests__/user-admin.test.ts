@@ -13,7 +13,7 @@ import { issueSession } from '../auth/sessions'
 import { createPostgresIamRepositories, type IamRepositories, type PrincipalRow } from '../db'
 import { prop } from '../json'
 import { resolvePermissionsAt } from '../resolve'
-import { procedureInput, routerLeaves, USER_ADMINISTRATION } from './helpers/admin-router'
+import { OWN_PASSKEYS, procedureInput, routerLeaves, USER_ADMINISTRATION } from './helpers/admin-router'
 import { bearerRpc, consoleRpc, errorType, result } from './helpers/app-people'
 import { adminTokenFor, CONSOLE_APP, createHarness, TEST_SIGNING_ENV } from './helpers/harness'
 import { APP, CapturingEmail, type MembershipFixture, membershipFixture, ORIGIN } from './helpers/membership'
@@ -361,7 +361,7 @@ function userAdministrationSuite(label: string, repositories: () => IamRepositor
 			const admin = await i.userAdmin()
 			const reached: string[] = []
 			for (const { method } of routerLeaves(adminRpcRouter)) {
-				if (USER_ADMINISTRATION.includes(method) || method.startsWith('appPeople.')) continue
+				if (USER_ADMINISTRATION.includes(method) || method.startsWith('appPeople.') || OWN_PASSKEYS.includes(method)) continue
 				const call = await consoleRpc(i.f, admin.id, method, procedureInput(method))
 				if (call.status !== 403) reached.push(`${method} → ${call.status}`)
 			}
