@@ -16,12 +16,13 @@ import { appEnvSettings } from './categories'
 /** The longest commit message a request keeps; the page shows the agent's text, never all of an arbitrary one. */
 export const MAX_REQUEST_MESSAGE_CHARS = 4096
 
+// Not strict: a key a later release adds is dropped, so a rollback still lists and reads the run.
 const storedRequestSchema = z.object({
-	principal: z.object({ id: z.string(), type: z.string(), label: z.string() }).strict(),
+	principal: z.object({ id: z.string(), type: z.string(), label: z.string() }),
 	credential: z.enum(['oauth', 'key']),
 	clientId: z.string().optional(),
 	commitMessage: z.string().nullable(),
-}).strict()
+})
 
 /** What `runs.request_json` holds: who asked, through which credential, and the commit's message. */
 export type StoredDeployRequest = z.infer<typeof storedRequestSchema>

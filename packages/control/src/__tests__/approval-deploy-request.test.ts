@@ -12,8 +12,15 @@ import type { ControlProvider } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { ControlApiError } from '../api/domain'
 import { getRunUseCase, type RunsUseCaseContext, triggerDeployUseCase } from '../api/runs'
-import { type ApprovalUseCaseContext, completeApprovalUseCase, getApprovalUseCase, setEnvironmentProtectionUseCase } from '../approval/api'
+import {
+	type ApprovalUseCaseContext,
+	completeApprovalUseCase,
+	getApprovalUseCase,
+	listApprovalsUseCase,
+	setEnvironmentProtectionUseCase,
+} from '../approval/api'
 import { parseClassification } from '../approval/publish'
+import { parseDeployRequest } from '../approval/request'
 import type { ControlRepositories, RunRow } from '../db'
 import type { CommitSource, RequestedCommitInput } from '../github/source/commit-files'
 import { SourceFailure } from '../github/source/failure'
@@ -321,6 +328,25 @@ describe("a non-person's deploy of a protected environment under each mode", () 
 		expect(approval.changes).toEqual([])
 		expect(approval.approvers).toBe(1)
 		expect(approval.deadline).toBe(w.now + 24 * HOUR)
+	})
+
+	test('a stored request with a field a later release added still lists and reads, without the field', async () => {
+		const w = await world()
+		await published(w)
+		const parked = await requested(w, 'oauth')
+		const stored = parseDeployRequest((await run(w, parked.runId)).request_json ?? '')
+		const later = JSON.stringify({ ...stored, reviewHint: 'added later', principal: { ...stored.principal, avatar: 'a.png' } })
+		await harnessDatabase(w.db).prepare('UPDATE runs SET request_json = ? WHERE id = ?').bind(later, parked.runId).run()
+
+		const listed = await listApprovalsUseCase(approvals(w))
+		expect(listed.items.find((item) => item.run.id === parked.runId)?.request?.principal).toEqual({
+			id: 'p-ada',
+			type: 'user',
+			label: 'ada@example.test',
+		})
+		const read = await getApprovalUseCase(approvals(w), parked.runId)
+		expect(read.request).toMatchObject({ credential: 'oauth', commitMessage: 'Fix <b>invoice</b> rounding' })
+		expect(read.request).not.toHaveProperty('reviewHint')
 	})
 })
 
