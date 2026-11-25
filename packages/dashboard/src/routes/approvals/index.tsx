@@ -95,9 +95,9 @@ function PendingRequests({ requests }: { requests: readonly ApprovalRequestDto[]
 				isEmpty={false}
 				head={
 					<tr>
-						<th className="grow">Request</th>
 						<th>App</th>
 						<th>Env</th>
+						<th className="grow">Request</th>
 						<th>Asked by</th>
 						<th>Decide by</th>
 					</tr>
@@ -106,19 +106,19 @@ function PendingRequests({ requests }: { requests: readonly ApprovalRequestDto[]
 				{requests.map((request) => (
 					<tr key={request.id}>
 						<td>
-							<Link to="approvals/requests/detail" params={{ id: request.id }}>{requestCategoryLabel(request.category)}</Link>
-							<div className="small">
-								<RequestSummary request={request} />
-							</div>
-						</td>
-						<td>
 							<Link to="apps/detail" params={{ id: request.appId }}>{request.appId}</Link>
 						</td>
 						<td>
 							<Chip>{request.env}</Chip>
 						</td>
-						<td>{request.requester.principal.label}</td>
-						<td className="muted small">{fmtDate(request.deadline)}</td>
+						<td>
+							<Link to="approvals/requests/detail" params={{ id: request.id }}>{requestCategoryLabel(request.category)}</Link>
+							<div className="small">
+								<RequestSummary request={request} />
+							</div>
+						</td>
+						<td className="small nowrap">{request.requester.principal.label}</td>
+						<td className="muted small nowrap">{fmtDate(request.deadline)}</td>
 					</tr>
 				))}
 			</Table>
