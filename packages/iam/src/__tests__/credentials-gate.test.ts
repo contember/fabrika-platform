@@ -5,6 +5,7 @@
 import { type AppSchema, buildAccessClaims, type IssueKeyInput } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { grantIdOf } from '../admin/grant-support'
 import { createIamApp } from '../app'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
@@ -53,6 +54,21 @@ interface Answer {
 	readonly status: number
 	readonly result: unknown
 	readonly message: string
+}
+
+/** `PUT /admin/apps/:app/schema` as `bearer`; its refusal is a plain `{ error }`. */
+async function putSchemaAs(env: Env, bearer: string, app: string, schema: AppSchema): Promise<{ status: number; message: string }> {
+	const response = await createIamApp().fetch(
+		new Request(`${ORIGIN}/admin/apps/${encodeURIComponent(app)}/schema`, {
+			method: 'PUT',
+			headers: { authorization: `Bearer ${bearer}`, 'content-type': 'application/json' },
+			body: JSON.stringify(schema),
+		}),
+		env,
+		{ waitUntil() {} },
+	)
+	const body: { error?: unknown } = await response.json()
+	return { status: response.status, message: typeof body.error === 'string' ? body.error : '' }
 }
 
 for (const backend of backends) {
@@ -329,6 +345,83 @@ for (const backend of backends) {
 			expect((await w.asAda('apiKeys.rotate', { principalId: old.principalId, expiresAt: null })).status).toBe(400)
 			expect((await w.asAda('apiKeys.rotate', { principalId: old.principalId, expiresAt: now() + 31 * DAY })).status).toBe(400)
 			expect((await w.asAda('apiKeys.rotate', { principalId: old.principalId, expiresAt: now() + 7 * DAY })).status).toBe(200)
+		})
+
+		test("a machine caller's grant to a key at a protected environment meets the mode; a person and the provisioning key make it", async () => {
+			const w = await world()
+			await w.mirror(APP, 'off')
+			const issued = w.keyOf(await w.asAda('apiKeys.provision', w.notesKey()))
+			await w.mirror(APP, 'person')
+			const held = async () => (await w.repositories.grants.listGrants(issued.principalId)).map((row) => row.role_key).sort()
+			const [own] = await w.repositories.grants.listGrants(issued.principalId)
+			if (own === undefined) throw new Error('the key holds no grant')
+
+			const widen = { principalId: issued.principalId, app: APP, roleKey: 'staff' }
+			const created = await w.rpc(w.machine, 'grants.create', widen)
+			expect([created.status, created.message.includes('`credentials` mode')]).toEqual([403, true])
+			const updated = await w.rpc(w.machine, 'grants.update', { id: grantIdOf(own), roleKey: 'staff' })
+			expect([updated.status, updated.message.includes('`credentials` mode')]).toEqual([403, true])
+			expect(await held()).toEqual(['support'])
+
+			// Under `refuse` too, and under `off` the machine caller grants as before.
+			await w.mirror(APP, 'refuse')
+			expect((await w.rpc(w.machine, 'grants.create', widen)).message).toContain('`refuse`')
+			await w.mirror(APP, 'off')
+			expect((await w.rpc(w.machine, 'grants.update', { id: grantIdOf(own), roleKey: 'staff' })).status).toBe(200)
+			expect(await held()).toEqual(['staff'])
+
+			await w.mirror(APP, 'person')
+			expect((await w.asAda('grants.create', { ...widen, roleKey: 'starter' })).status).toBe(200)
+			expect((await w.rpc(PROVISIONING_KEY, 'grants.create', { ...widen, roleKey: 'support' })).status).toBe(200)
+			expect(await held()).toEqual(['staff', 'starter', 'support'])
+
+			// A grant to a person is not a key's: the machine caller's grant to Ada keeps its rule.
+			expect((await w.rpc(w.machine, 'grants.create', { principalId: w.ada.id, app: APP, roleKey: 'support' })).status).toBe(200)
+		})
+
+		test("a Control key issued at an unprotected application cannot be widened by a machine caller's grant to a protected one", async () => {
+			const w = await world()
+			await w.mirror(APP, 'person')
+			await w.mirror(STAGE, 'off')
+			expect((await w.f.putSchema(NOTES_SCHEMA, 'sandbox@dev')).status).toBe(200)
+			await w.mirror('sandbox@dev', 'off')
+			const sandbox = w.keyOf(await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeValue: 'sandbox' })))
+			const [own] = await w.repositories.grants.listGrants(sandbox.principalId)
+			if (own === undefined) throw new Error('the key holds no grant')
+			const atNotes = { principalId: sandbox.principalId, app: CONSOLE, permissions: ['deploy.read'], scopeType: 'app', scopeValue: 'notes' }
+
+			const created = await w.rpc(w.machine, 'grants.create', atNotes)
+			expect([created.status, created.message.includes(APP)]).toEqual([403, true])
+			const moved = await w.rpc(w.machine, 'grants.update', { id: grantIdOf(own), permissions: ['deploy.read'], scopeType: 'app', scopeValue: 'notes' })
+			expect(moved.status).toBe(403)
+			expect((await w.repositories.grants.listGrants(sandbox.principalId)).map((row) => row.scope_value)).toEqual(['sandbox'])
+
+			expect((await w.asAda('grants.create', atNotes)).status).toBe(200)
+			expect(
+				(await w.rpc(PROVISIONING_KEY, 'grants.update', { id: grantIdOf(own), permissions: ['deploy.read'], scopeType: 'app', scopeValue: 'notes' }))
+					.status,
+			)
+				.toBe(200)
+		})
+
+		test("changing a role or a policy at a protected environment is refused to a machine caller, and a person's change is not", async () => {
+			const w = await world()
+			await w.mirror(APP, 'person')
+			const policy = { app: APP, key: 'reviewer', policy: { name: 'Reviewer', permissions: ['notes.read'] } }
+			expect((await w.rpc(PROVISIONING_KEY, 'policies.create', { app: APP, policy: { key: 'reviewer', ...policy.policy } })).status).toBe(200)
+			const wider = { ...policy, policy: { name: 'Reviewer', permissions: ['notes.read', 'notes.admin'] } }
+			const refused = await w.rpc(w.machine, 'policies.update', wider)
+			expect([refused.status, refused.message.includes('`credentials` mode')]).toEqual([403, true])
+			const schema = await putSchemaAs(w.env, w.machine, APP, NOTES_SCHEMA)
+			expect([schema.status, schema.message.includes('`credentials` mode')]).toEqual([403, true])
+
+			expect((await w.asAda('policies.update', wider)).status).toBe(200)
+			expect((await putSchemaAs(w.env, PROVISIONING_KEY, APP, NOTES_SCHEMA)).status).toBe(200)
+			await w.mirror(APP, 'off')
+			expect((await w.rpc(w.machine, 'policies.update', policy)).status).toBe(200)
+			expect((await putSchemaAs(w.env, w.machine, APP, NOTES_SCHEMA)).status).toBe(200)
+			// A plain id is no application environment: its vocabulary keeps the installation's rule.
+			expect((await putSchemaAs(w.env, w.machine, 'reports', { scopes: [], actions: [{ action: 'reports.read' }], roles: {} })).status).toBe(200)
 		})
 
 		test("the mirror is Control's alone, fenced by the protection revision, and answers what IAM holds", async () => {

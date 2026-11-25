@@ -1,5 +1,5 @@
 import { type PermissionEntry, type PrincipalType } from '@fabrika/auth-core'
-import { credentialsRefusal, type KeyIssuer, type KeyReach } from '../credentials-gate'
+import { credentialsRefusal, type KeyChange, type KeyIssuer, type KeyReach } from '../credentials-gate'
 import { type AuditEventInput, auditLabelOf } from '../db'
 import { type RequestContext } from '../env'
 import { type Services } from '../services'
@@ -79,8 +79,8 @@ export function adminIssuer(c: AdminContext): KeyIssuer {
 	return { id: c.admin.id, person: c.admin.session && c.admin.type === 'user' }
 }
 
-/** Refuse (403) a key the admin may not issue under the `credentials` mode of where it acts (ADR-0083 §8). */
-export async function requireCredentialsMode(c: AdminContext, reach: readonly KeyReach[]): Promise<void> {
-	const refusal = await credentialsRefusal(c.services, adminIssuer(c), reach)
+/** Refuse (403) a change of what keys hold that the admin may not make under the `credentials` mode of where it acts (ADR-0083 §8). */
+export async function requireCredentialsMode(c: AdminContext, reach: readonly KeyReach[], change: KeyChange = 'issue'): Promise<void> {
+	const refusal = await credentialsRefusal(c.services, adminIssuer(c), reach, change)
 	if (refusal !== null) fail(403, refusal)
 }

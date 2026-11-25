@@ -251,6 +251,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   of its `app` scope's application, or all; a cross-app key all. A missing mode, or an id with no known environment,
   reads as `person`. IAM itself, Operations and plain ids are not judged. A new issuing mutation joins the gate and the
   table in `admin-rpc-approval-categories.test.ts`.
+- **A MACHINE CALLER'S WIDENING OF A KEY MEETS THE SAME MODE.** `grants.create` and `grants.update` to a service
+  principal judge the grant's reach (`requireKeyGrantMode` in `src/admin/grants.ts`) before they apply or wait as a
+  grant request. `policies.update` and `PUT /admin/apps/:app/schema` change what every holder of a role holds; whether
+  the change widens a key is not judged, so a machine caller is refused wherever the application's mode is not `off`.
+  The provisioning key, which every deploy reconciles with, keeps its rule.
 - **A KEY LISTS EXACT ACTIONS OF ITS APP'S CATALOG, NO WILDCARD.** `issueKey` refuses `*` and
   `prefix.*` in every mode and requires each action verbatim in `app_actions`, before delegation —
   so an issuer holding `*` still cannot mint a key for an action the app never declared, and a key

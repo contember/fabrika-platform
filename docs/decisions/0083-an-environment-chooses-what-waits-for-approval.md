@@ -342,6 +342,12 @@ path (`approvals.requests.create` of kind `iam.apiKeys.provision`, or `fabrika c
 `refuse`, 403. A person in the console issues as before. A key at IAM itself or Operations reaches no application and
 keeps the installation's rule (§9). This is authorization in IAM's use cases, not an enforcement decision (ADR-0022).
 
+A machine caller's grant to a key meets `credentials` too, since it widens a live credential as issuing one would:
+`grants.create` and `grants.update` to a service principal judge the grant's reach by the same rules, before the grant
+applies or waits as a grant request (§4). `policies.update` and `PUT /admin/apps/:app/schema` widen every holder of a
+role at once; IAM does not judge whether one widens a key, so a machine caller is refused there wherever the
+application's mode is `person` or `refuse`. A person and the provisioning key keep their rule on all four.
+
 Two issuances keep their rule, both made with the provisioning key, the operator's own credential, which the check
 exempts on every path: Control's own workload, membership and connector keys, which every deploy issues, and the
 bootstrap `POST /admin/api-keys`, which makes the first machine caller before any console or key exists. A
@@ -372,11 +378,13 @@ would deliver production content to the agent), and anything that would return a
 could read. A request of such a kind is refused when it is created (400 naming the kind), not at approval.
 
 Every mutation of Control's router and of IAM's `/admin/rpc` is either gated by a category or listed as exempt with its
-reason. A table test over both routers fails when a new mutation is neither. IAM's table gates every issuing mutation
-by `credentials` (§8) and lists the provisioning key's two exceptions with their reason, and it checks that each gated
-one refuses a machine `iam.admin` key under `person`. No mode applies to the installation's own
+reason. A table test over both routers fails when a new mutation is neither. IAM's table gates every issuing mutation,
+a grant to a key and the change of a role or policy by `credentials` (§8), a grant beside its `grants`, and lists the
+provisioning key's two exceptions with their reason, and it checks that each gated one refuses a machine `iam.admin`
+key under `person`. No mode applies to the installation's own
 resources, which keep their rule: namespaces and the mail gate (`namespace.manage` and `mail.manage`, global, which no
-command-line preset carries), and IAM's named policies and an application's return origins (`iam.admin`).
+command-line preset carries), and IAM's named policies and an application's return origins (`iam.admin`), save that a
+machine caller's edit of a policy meets `credentials` (§8).
 
 ### Rollout
 

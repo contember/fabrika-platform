@@ -22,7 +22,7 @@ import { parsePresentation } from '../app-presentation'
 import { normalizeOrigin } from '../handoff'
 import { BUILTIN_ROLES } from '../roles'
 import { parseStoredPermissions, parseStoredValueList, parseStoredValueSource } from '../stored-permissions'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 import { dbRoleToDef, knownApps } from './grant-support'
 import { error, json, readJson } from './http'
 
@@ -123,6 +123,10 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 		return error(400, appSchemaError(parsed.error.issues))
 	}
 	const schema = parsed.data
+	// A role's holders, keys among them, gain what the role gains at once. Whether this vocabulary widens a key is not
+	// judged: a machine caller other than the provisioning key, which every deploy reconciles with, is refused wherever
+	// the application's `credentials` mode is not `off` (ADR-0083 §8).
+	await requireCredentialsMode(c, [{ app, scope: null }], 'role')
 	// An external application's vocabulary is the registry's (ADR-0089): a deploy that reconciled one would hand its id
 	// actions an administrator never declared, and the registry's next write would wipe them.
 	if ((await c.services.repositories.oauthRegistry.externalApp(app)) !== null) {

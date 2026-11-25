@@ -26,12 +26,23 @@ type Target = { readonly kind: 'env'; readonly id: string } | { readonly kind: '
 const RANK: Readonly<Record<CredentialsMode, number>> = { off: 0, person: 1, refuse: 2 }
 
 /**
- * Why `issuer` may not issue a key holding `reach`, or null when it may. A person and the provisioning key, the
+ * What a machine caller does to what keys hold: issues a key, grants to a key (or edits its grant), or changes a role or
+ * a named policy keys may hold. Each meets the mode the same way (ADR-0083 §8); only the refusal's wording differs.
+ */
+export type KeyChange = 'issue' | 'grant' | 'role'
+
+/**
+ * Why `issuer` may not make `change` reaching `reach`, or null when it may. A person and the provisioning key, the
  * operator's own credential that Control's workload, membership and connector keys and the bootstrap's first machine
  * caller are issued with, keep their rule. Every other caller meets the strictest mode among the environments the key
  * acts in; an environment IAM has no mode for, Control not having written one yet, reads as `person`.
  */
-export async function credentialsRefusal(services: Services, issuer: KeyIssuer, reach: readonly KeyReach[]): Promise<string | null> {
+export async function credentialsRefusal(
+	services: Services,
+	issuer: KeyIssuer,
+	reach: readonly KeyReach[],
+	change: KeyChange = 'issue',
+): Promise<string | null> {
 	if (issuer.person || issuer.id === PROVISIONING_ADMIN_ID) return null
 	const targets = reach.flatMap((grant) => {
 		const target = targetOf(services, grant)
@@ -57,10 +68,18 @@ export async function credentialsRefusal(services: Services, issuer: KeyIssuer, 
 	}
 	if (strictest === 'off') return null
 	const where = [...at].slice(0, 3).join(', ') + (at.size > 3 ? ` and ${at.size - 3} more` : '')
-	return strictest === 'refuse'
-		? `a key is refused to a machine caller at ${where}, whose \`credentials\` mode is \`refuse\``
-		: `a key at ${where} takes a person's approval under its \`credentials\` mode, so a machine caller does not issue it here: `
+	const subject = SUBJECT[change]
+	if (strictest === 'refuse') return `${subject} is refused to a machine caller at ${where}, whose \`credentials\` mode is \`refuse\``
+	return change === 'issue'
+		? `a key at ${where} takes a person's approval under its \`credentials\` mode, so a machine caller does not issue it here: `
 			+ 'ask through Control, with `approvals.requests.create` of kind `iam.apiKeys.provision` or `fabrika control access request-key`'
+		: `${subject} at ${where} takes a person under its \`credentials\` mode, so a machine caller does not make it here: a person makes it in the console`
+}
+
+const SUBJECT: Readonly<Record<KeyChange, string>> = {
+	issue: 'a key',
+	grant: 'a grant to a key',
+	role: 'a change of a role or policy keys may hold',
 }
 
 /**
