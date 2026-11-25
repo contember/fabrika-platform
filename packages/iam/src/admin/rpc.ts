@@ -65,7 +65,11 @@ const policy = {
 	description: z.string().optional(),
 	permissions: z.array(nonEmpty),
 }
-const grantSchema = z.object({ principalId: nonEmpty, ...authorization })
+const approvalRequestSchema = z.object({
+	id: nonEmpty,
+	requester: z.object({ id: nonEmpty, label: z.string(), clientId: nonEmpty.optional() }),
+})
+const grantSchema = z.object({ principalId: nonEmpty, ...authorization, approvalRequest: approvalRequestSchema.optional() })
 const redirectUris = z.array(z.string())
 const metadataUrl = z.string().nullable().optional()
 const shareGrantSchema = z.object({

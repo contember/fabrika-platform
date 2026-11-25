@@ -1,5 +1,6 @@
 import {
 	type CreateGrantRequest,
+	type GrantApprovalRequestRef,
 	type GrantChangeResponse,
 	type GrantDto,
 	type OkResponse,
@@ -75,7 +76,7 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 			scopeValues,
 			grantExpiresAt: expiresAt,
 			requestedBy: c.admin.id,
-		})
+		}, approvalRequestOf(input))
 	}
 	const record = (grantId: string) =>
 		adminEvent(c, {
@@ -90,6 +91,7 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 				scopeValue: scopeValues?.[0] ?? null,
 				...(scopeValues !== null && scopeValues.length > 1 ? { scopeValues } : {}),
 				app,
+				...approvalRequestOf(input),
 			},
 		})
 	const heldMessage = (held: GrantRow | undefined) =>
@@ -319,12 +321,21 @@ async function findHeldRoleGrant(
 	)
 }
 
-/** Record a grant change at an application whose grants wait (ADR-0083): nothing changes until another administrator approves. */
-async function pendingChange(c: AdminContext, change: GrantChangeRequest): Promise<PendingGrantChange> {
+/**
+ * Record a grant change at an application whose grants wait (ADR-0083): nothing changes until another administrator
+ * approves. `recorded` joins the request's own record (the Control approval request a grant carries out).
+ */
+async function pendingChange(c: AdminContext, change: GrantChangeRequest, recorded: Record<string, unknown> = {}): Promise<PendingGrantChange> {
 	const pending = await requestGrantChange(
 		c.services,
 		change,
-		(requestId, metadata) => adminEvent(c, { action: 'iam.grant.request', resourceType: 'grant_request', resourceId: requestId, metadata }),
+		(requestId, metadata) =>
+			adminEvent(c, { action: 'iam.grant.request', resourceType: 'grant_request', resourceId: requestId, metadata: { ...metadata, ...recorded } }),
 	)
 	return { pending }
+}
+
+/** The Control approval request a grant carries out, as its audit rows name it; nothing when it carries out none. */
+function approvalRequestOf(input: CreateGrantRequest): { approvalRequest?: GrantApprovalRequestRef } {
+	return input.approvalRequest === undefined ? {} : { approvalRequest: input.approvalRequest }
 }
