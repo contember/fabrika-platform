@@ -43,7 +43,7 @@ import { buildControlRpcDeps, buildRunDeps } from '../services'
 import { zeropsControlProvider, zeropsGitHubSources } from '../zerops/provider'
 import { contractCommits, memoryCommits } from './helpers/commits'
 import { healthOnly } from './helpers/contracts'
-import { createHarness, queryRows } from './helpers/harness'
+import { createHarness, harnessDatabase, queryRows } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { fixtureCatalogApplied, fixtureProtect, fixtureRuns, heldLeases, makeFakeLock } from './helpers/lock'
 import { createTestVault, fixedProxySecrets, testVaultKey } from './helpers/vault'
@@ -563,9 +563,13 @@ describe('provider-neutral run lifecycle', () => {
 		},
 		{ name: 'its domain, with no trigger to keep', seed: {}, flags: ' --domain=app.example.com' },
 		{ name: 'nothing, with neither a domain nor a trigger', seed: { domain: null }, flags: '' },
-	])('a drifted descriptor fails the run with its digests, both causes, and a put that keeps $name', async ({ seed, flags }) => {
+		{ name: 'its domain, and says a protected environment waits for a person', seed: {}, flags: ' --domain=app.example.com', protect: true },
+	])('a drifted descriptor fails the run with its digests, both causes, and a put that keeps $name', async ({ seed, flags, protect }) => {
 		const { db } = createHarness()
 		const runId = await seedRun(db, seed)
+		if (protect === true) {
+			await harnessDatabase(db).prepare('UPDATE app_envs SET protected = 1 WHERE app_id = ? AND env = ?').bind('app', 'prod').run()
+		}
 		const provider = makeProvider([], { state: 'succeeded' })
 		const detail = { path: 'zerops.yaml', commitSha: 'c'.repeat(40), expectedSha256: 'e'.repeat(64), actualSha256: 'a'.repeat(64) }
 		provider.resolveSource = () => Promise.reject(new SourceDescriptorMismatch('resolve', detail))
@@ -582,7 +586,11 @@ describe('provider-neutral run lifecycle', () => {
 			+ 'and deploy again. '
 			+ `If zerops.yaml changed after the manifest was built, rebuild the manifest from a checkout of commit ${'c'.repeat(40)} `
 			+ '(`fabrika app build --env=prod`), send it with `fabrika control apps environments put --provider=memory --app=app --env=prod '
-			+ `--manifest=fabrika.manifest.json${flags}\`, and deploy again`,
+			+ `--manifest=fabrika.manifest.json${flags}\`, and deploy again`
+			+ (protect !== true
+				? ''
+				: ". Environment `prod` is protected, so with a key that put waits for a person: it prints the approval request's link and "
+					+ 'exits 75; deploy again once a person has approved it in the console'),
 		])
 	})
 

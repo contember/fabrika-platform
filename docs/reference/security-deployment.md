@@ -150,16 +150,17 @@ their reason. Beside them, an agent's grant, which IAM makes (`iam.grants.create
 - **A write that reaches outside Control** is followed by what the provider or the environment's object holds, since
   an interrupted one may have applied or not:
   - **A secret the provider keeps** ([`kinds/secrets.ts`](../../packages/control/src/approval/requests/kinds/secrets.ts))
-    is unsealed at execution and put under the request's operation id. The provider cannot read a sensitive value back,
+    is unsealed at execution and put; the provider takes no idempotency key, and the operation id recorded on the row
+    before the put only marks that an execution started. The provider cannot read a sensitive value back,
     so the request binds the provider's own version of it (`ProviderManagedSecrets.version`, never the value; Zerops
     answers its env record's id and `lastUpdate`), and a provider without one refuses the request with a 400. A request
     is for one environment: the all-environments layer is refused when it is asked for. A version that moved since the
     request closes it `stale`. `follow` settles an interrupted put `failed` when the version did not move (the value did
     not land), and `executed` when it moved and Control's row exists; it never puts again. A version that moved without
     Control's row (the provider took the value, Control's write after it was lost) settles `failed` and the agent asks
-    again; so does a delete the provider applied while Control still lists the secret. A concurrent write at the
-    provider inside the same window reads as the request's (Zerops' `lastUpdate` has one-second resolution). The sweep
-    needs the provider for this: without it a provider-kept request stays `unknown`.
+    again; so does a delete the provider applied while Control still lists the secret. A version names no writer, so
+    the follow can misread a concurrent write or a put in the same second (known limits, below). The sweep needs the
+    provider for this: without it a provider-kept request stays `unknown`.
   - **`apps.environments.put`** ([`kinds/registry.ts`](../../packages/control/src/approval/requests/kinds/registry.ts))
     takes the procedure's whole body, target, artifact and namespace included, and runs `putAppEnvUseCase` as the
     approver, through the provider's `prepareRegistration`. It binds the environment's `generation` and the fields it
@@ -285,6 +286,11 @@ Known limits of the requests above:
   as a write under `off` racing a stricter mode is. An `apps.environments.put` judged unchanged still runs the
   provider's preparation, which may rewrite the target the provider discovers (on Zerops the deploy service's id);
   that is the provider's own record, not a value the caller names.
+- `follow` of a secret the provider keeps reads the provider's version, which names no writer. A concurrent write to
+  the same name between the execution and the follow (another request, a person, the provider's console) reads as the
+  request's put and settles it `executed`. Zerops' version carries `lastUpdate` at one-second resolution, so a put that
+  lands in the same second as the value's previous update leaves the version unchanged and settles `failed` although
+  the value landed; the agent asks again, which writes the same value.
 
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval
