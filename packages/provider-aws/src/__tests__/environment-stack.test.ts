@@ -4,11 +4,13 @@
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import type { StackStatus, StackSummary } from '../aws/cloudformation'
 import { ecrLifecyclePolicy } from '../aws/ecr'
+import { AwsError } from '../aws/transport'
 import { AWS_BUILDSPEC } from '../build'
 import type { AwsAppTarget } from '../codecs'
-import { AWS_KEPT_IMAGES } from '../control'
-import { AWS_BUILD_IMAGE, awsAppsPermissionsBoundary, awsEnvironmentStack } from '../environment-stack'
+import { AWS_BUILD_IMAGE, AWS_STACK_TIMEOUT_MS, awsAppsPermissionsBoundary, awsEnvironmentStack, ensureEnvironmentStack } from '../environment-stack'
+import { AWS_KEPT_IMAGES } from '../resources'
 
 const installation: AwsAppTarget = {
 	accountId: '123456789012',
@@ -143,5 +145,120 @@ describe('awsEnvironmentStack', () => {
 		for (const resource of scoped(other.template)) expect(mine.has(resource)).toBe(false)
 		expect(other.stackName).not.toBe(stack.stackName)
 		expect(at(other.template, 'Resources', 'BuildProject', 'Properties', 'Name')).toBe('fabrika_notes_stage')
+	})
+})
+
+/**
+ * A scripted CloudFormation: each `findStack` answers the next of `states` (the last one repeats; `null` is no stack),
+ * `getTemplate` answers `template`. Every call is recorded.
+ */
+class FakeCloudFormation {
+	readonly calls: string[] = []
+	template = ''
+	createError: AwsError | null = null
+	constructor(private readonly states: (StackStatus | null)[]) {}
+
+	readonly client = {
+		findStack: async (name: string): Promise<StackSummary | null> => {
+			this.calls.push('findStack')
+			const status = this.states.length > 1 ? this.states.shift() : this.states[0]
+			return status === null || status === undefined
+				? null
+				: { stackId: `arn:aws:cloudformation:eu-central-1:123456789012:stack/${name}/0f1e2d3c`, status }
+		},
+		getTemplate: async (): Promise<string> => {
+			this.calls.push('getTemplate')
+			return this.template
+		},
+		createStack: async (
+			input: { readonly name: string; readonly templateBody: string; readonly tags: Readonly<Record<string, string>> },
+		): Promise<string> => {
+			this.calls.push(`createStack ${input.name} ${JSON.stringify(input.tags)}`)
+			if (this.createError !== null) throw this.createError
+			this.template = input.templateBody
+			return 'id'
+		},
+		updateStack: async (input: { readonly templateBody: string }): Promise<string> => {
+			this.calls.push('updateStack')
+			this.template = input.templateBody
+			return 'id'
+		},
+	}
+}
+
+describe('ensureEnvironmentStack', () => {
+	const stack = awsEnvironmentStack('notes', 'prod', installation)
+	const body = JSON.stringify(stack.template)
+	const ensure = (fake: FakeCloudFormation, change: { now?: () => number } = {}) => {
+		const lines: string[] = []
+		const run = ensureEnvironmentStack({
+			cloudFormation: fake.client,
+			stack,
+			signal: new AbortController().signal,
+			sleep: async () => {},
+			log: (line) => lines.push(line),
+			newToken: () => 'token-1',
+			...change,
+		})
+		return { run, lines }
+	}
+
+	test('an absent stack is created with its tags and waited for', async () => {
+		const fake = new FakeCloudFormation([null, 'CREATE_IN_PROGRESS', 'CREATE_COMPLETE'])
+		const { run, lines } = ensure(fake)
+		await run
+		expect(fake.calls).toEqual([
+			'findStack',
+			`createStack fabrika-app-5-notes-prod {"fabrika:app":"notes","fabrika:env":"prod"}`,
+			'findStack',
+			'findStack',
+			'getTemplate',
+		])
+		expect(lines).toEqual(['aws: creating the stack fabrika-app-5-notes-prod', 'aws: the stack fabrika-app-5-notes-prod is current'])
+	})
+
+	test('a current stack is read and left alone: an unchanged update is never sent', async () => {
+		const fake = new FakeCloudFormation(['UPDATE_COMPLETE'])
+		fake.template = body
+		await ensure(fake).run
+		expect(fake.calls).toEqual(['findStack', 'getTemplate'])
+	})
+
+	test('a stack holding another template is updated and waited for', async () => {
+		const fake = new FakeCloudFormation(['CREATE_COMPLETE', 'UPDATE_IN_PROGRESS', 'UPDATE_COMPLETE'])
+		fake.template = '{"older":true}'
+		await ensure(fake).run
+		expect(fake.calls).toEqual(['findStack', 'getTemplate', 'updateStack', 'findStack', 'findStack', 'getTemplate'])
+	})
+
+	test('a stack another creator won is waited for, not created again', async () => {
+		const fake = new FakeCloudFormation([null, 'CREATE_IN_PROGRESS', 'CREATE_COMPLETE'])
+		fake.createError = new AwsError('CreateStack', 'AlreadyExistsException', 400, null, false)
+		fake.template = body
+		await ensure(fake).run
+		expect(fake.calls.filter((call) => call.startsWith('createStack'))).toHaveLength(1)
+	})
+
+	test("the run's own update rolled back, a create that failed, and a stack an operator must repair are refused", async () => {
+		const rolledBack = new FakeCloudFormation(['CREATE_COMPLETE', 'UPDATE_ROLLBACK_IN_PROGRESS', 'UPDATE_ROLLBACK_COMPLETE'])
+		rolledBack.template = '{"older":true}'
+		await expect(ensure(rolledBack).run).rejects.toThrow('rolled it back')
+		const deleted = new FakeCloudFormation([null, 'CREATE_IN_PROGRESS', 'DELETE_IN_PROGRESS', null])
+		await expect(ensure(deleted).run).rejects.toThrow('creating the stack fabrika-app-5-notes-prod failed')
+		for (const status of ['ROLLBACK_COMPLETE', 'UPDATE_ROLLBACK_FAILED', 'DELETE_FAILED', 'REVIEW_IN_PROGRESS'] satisfies StackStatus[]) {
+			const stuck = new FakeCloudFormation([status])
+			await expect(ensure(stuck).run).rejects.toThrow(`is ${status}; an operator must repair or delete it`)
+			expect(stuck.calls).toEqual(['findStack'])
+		}
+	})
+
+	test('a stack that does not settle within the bound fails the wait', async () => {
+		const fake = new FakeCloudFormation(['UPDATE_IN_PROGRESS'])
+		let clock = 0
+		const now = () => {
+			clock += AWS_STACK_TIMEOUT_MS / 4
+			return clock
+		}
+		await expect(ensure(fake, { now }).run).rejects.toThrow('did not settle')
 	})
 })

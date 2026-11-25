@@ -14,17 +14,20 @@
 //   of the idea doc) allows its role writes only with that boundary and never lets it change or remove it.
 // - The stack owns the repository, its lifecycle policy included (`ecrLifecyclePolicy`, the rule the deploy sends).
 //
-// Pure: it renders a template; applying it (CreateStack, UpdateStack) is the caller's.
+// `awsEnvironmentStack` is pure: it renders the template. `ensureEnvironmentStack` applies it through CloudFormation
+// (`aws/cloudformation.ts`), which a deploy runs before its steps.
 //
 // UNVERIFIED: the resource types, their properties, the build image and the IAM actions below follow AWS's published
 // references (CloudFormation's resource reference, the service authorization reference); none was checked against an
 // account. SecureString parameters under the account's default `aws/ssm` key need no `kms:Decrypt` grant of their own.
 
 import type { JsonValue } from '@fabrika/provider-contract'
+import { type CloudFormationClient, STACK_STATUSES, type StackStatus } from './aws/cloudformation'
 import { ecrLifecyclePolicy } from './aws/ecr'
+import { AwsError } from './aws/transport'
 import { AWS_BUILDSPEC } from './build'
 import type { AwsAppTarget } from './codecs'
-import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './control'
+import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
 import { AWS_BUILD_QUEUED_TIMEOUT_MINUTES, AWS_BUILD_TIMEOUT_MINUTES } from './run-attempt'
 
 /** How long both log groups keep their events (one of CloudWatch Logs' values). */
@@ -38,6 +41,8 @@ export interface AwsEnvironmentStack {
 	readonly stackName: string
 	readonly resources: AwsEnvironmentResources
 	readonly template: JsonValue
+	/** The stack's own tags. */
+	readonly tags: Readonly<Record<string, string>>
 }
 
 /** The role's name within its path: the part of its ARN after `role/fabrika/apps/`. */
@@ -188,5 +193,82 @@ export function awsEnvironmentStack(appId: string, env: string, installation: Aw
 			},
 		},
 	}
-	return { stackName: resources.stackName, resources, template }
+	return { stackName: resources.stackName, resources, template, tags: { 'fabrika:app': appId, 'fabrika:env': env } }
+}
+
+/** How often the stack is read while CloudFormation works on it, and how long a deploy waits for it. */
+export const AWS_STACK_POLL_MS = 10_000
+export const AWS_STACK_TIMEOUT_MS = 20 * 60 * 1000
+
+/** The statuses from which the stack serves: its template is the one last applied. */
+const SETTLED: ReadonlySet<StackStatus> = new Set(['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'UPDATE_ROLLBACK_COMPLETE', 'IMPORT_COMPLETE'])
+/** The statuses CloudFormation leaves by itself. `REVIEW_IN_PROGRESS` (an unexecuted change set) never does. */
+const MOVING: ReadonlySet<StackStatus> = new Set(
+	STACK_STATUSES.filter((status) => status.endsWith('_IN_PROGRESS') && status !== 'REVIEW_IN_PROGRESS'),
+)
+
+export interface EnsureEnvironmentStackInput {
+	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'getTemplate' | 'createStack' | 'updateStack'>
+	readonly stack: AwsEnvironmentStack
+	readonly signal: AbortSignal
+	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>
+	readonly log: (line: string) => void
+	readonly now?: () => number
+	/** A `ClientRequestToken`, one per call sent. */
+	readonly newToken?: () => string
+}
+
+/**
+ * Brings the environment's stack to the rendered template and waits until it serves: creates it when absent, updates
+ * it when the template it holds differs (`GetTemplate`, compared as sent, so an unchanged stack is never updated: a
+ * no-op update is refused with a `ValidationError` only its message names), and waits while CloudFormation works.
+ * Refuses a stack its own create or update failed on, one an operator must repair (`*_FAILED`, `ROLLBACK_COMPLETE`, an
+ * unexecuted change set), and a wait past `AWS_STACK_TIMEOUT_MS`.
+ */
+export async function ensureEnvironmentStack(input: EnsureEnvironmentStackInput): Promise<void> {
+	const { cloudFormation, stack, signal, sleep, log } = input
+	const now = input.now ?? Date.now
+	const newToken = input.newToken ?? (() => crypto.randomUUID())
+	const body = JSON.stringify(stack.template)
+	const name = stack.stackName
+	const giveUpAt = now() + AWS_STACK_TIMEOUT_MS
+	let sent: 'create' | 'update' | null = null
+	// Whether a read saw the stack since this call created it: absent after that, its failed create deleted it.
+	let seen = false
+	for (;;) {
+		signal.throwIfAborted()
+		const found = await cloudFormation.findStack(name, signal)
+		if (found === null) {
+			if (sent === 'create' && seen) throw new Error(`aws: creating the stack ${name} failed and CloudFormation deleted it; its events say why`)
+			if (sent === null) {
+				try {
+					await cloudFormation.createStack({ name, templateBody: body, tags: stack.tags, token: newToken() }, signal)
+				} catch (error) {
+					// Another creator won the name; the next read sees its stack.
+					if (!(error instanceof AwsError && error.code === 'AlreadyExistsException')) throw error
+				}
+				sent = 'create'
+				log(`aws: creating the stack ${name}`)
+			}
+		} else {
+			if (sent === 'create') seen = true
+			if (SETTLED.has(found.status)) {
+				if (found.status === 'UPDATE_ROLLBACK_COMPLETE' && sent === 'update') {
+					throw new Error(`aws: updating the stack ${name} failed and CloudFormation rolled it back; its events say why`)
+				}
+				if ((await cloudFormation.getTemplate(name, signal)) === body) {
+					log(`aws: the stack ${name} is current`)
+					return
+				}
+				if (sent === 'update') throw new Error(`aws: the stack ${name} holds another template than the update sent`)
+				await cloudFormation.updateStack({ name, templateBody: body, token: newToken() }, signal)
+				sent = 'update'
+				log(`aws: updating the stack ${name}`)
+			} else if (!MOVING.has(found.status)) {
+				throw new Error(`aws: the stack ${name} is ${found.status}; an operator must repair or delete it before a deploy`)
+			}
+		}
+		if (now() >= giveUpAt) throw new Error(`aws: the stack ${name} did not settle within ${AWS_STACK_TIMEOUT_MS / 60_000} minutes`)
+		await sleep(AWS_STACK_POLL_MS, signal)
+	}
 }

@@ -347,12 +347,18 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     on every role Control creates. The stack owns the repository with the lifecycle rule the deploy sends
     (`ecrLifecyclePolicy`). The deploy builds in the environment's project, so no application's build steps hold a
     role that reaches another environment.
-    Not yet:
-    - applying the stack (a CloudFormation client, `CreateStack`/`UpdateStack`, deciding absence from `ListStacks`);
-    - with it, the deploy's repository step stops creating the repository and its lifecycle policy, and only checks
-      that the environment's stack is complete, refusing before the upload when it is not. Until then a deploy before
-      the stack creates the repository, and a later `CreateStack` would find it taken;
-    - the service itself, and the network below.
+    **Applying it** (built): `aws/cloudformation.ts` finds a stack by name through `ListStacks` (every status but
+    deleted, never a `DescribeStacks` refusal), reads its template as sent (`GetTemplate`), creates one with
+    `OnFailure=DELETE` (a failed create leaves no stack that blocks the next) and `CAPABILITY_NAMED_IAM`, and updates
+    one. `ensureEnvironmentStack` runs in every non-dry deploy before anything of the run is written: it creates the
+    stack when absent, updates it only when the template it holds differs (a no-op update is a `ValidationError` only
+    its message names), waits while CloudFormation works (20 minutes at most), and refuses a create or an update of its
+    own that failed, and a stack an operator must repair (`*_FAILED`, `ROLLBACK_COMPLETE`, an unexecuted change set).
+    The stack is so always in place before the deploy's repository step, which still ensures the repository and sends
+    its lifecycle rule: it finds the stack's repository with the same settings and writes the same rule, so the two
+    never disagree. A repository a deploy created before this release would block the stack's create
+    (`AlreadyExists`); no installation ran the AWS provider then.
+    Not yet: the service itself, and the network below.
 
     **`src/namespace/`**: the namespace stack (security groups, the Service Connect namespace, the proxy service, the
     ALB rule and certificate; for `full` an RDS instance), the database per application in the shared instance for
@@ -373,15 +379,18 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     - CodeBuild: `StartBuild`, `BatchGetBuilds`, `StopBuild`, `ListBuildsForProject` on `project/fabrika_*`.
     - CloudWatch Logs: the reads on `log-group:/fabrika/apps/*` (the build log groups are below it).
     - S3: `PutObject`, the multipart calls and `GetObject` (the presigned read) on `<bucket>/sources/*`.
-    - CloudFormation, for the environment stacks of step 10: `CreateStack`, `UpdateStack`, `DescribeStacks`,
-      `DescribeStackEvents` and `DeleteStack` on `stack/fabrika-app-*`. Without a service role CloudFormation creates
-      each resource with the caller's credentials, so applying the stack also needs, each on the step 9 prefix:
-      `iam:CreateRole`, `iam:PutRolePolicy`, `iam:DeleteRolePolicy`, `iam:TagRole`, `iam:DeleteRole`,
-      `iam:GetRole` on `role/fabrika/apps/*`; `codebuild:CreateProject`, `UpdateProject`, `DeleteProject` on
-      `project/fabrika_*`; `ecr:CreateRepository`, `PutLifecyclePolicy`, `TagResource`, `DeleteRepository` on
-      `repository/fabrika/apps/*`; `logs:CreateLogGroup`, `PutRetentionPolicy`, `TagResource`, `DeleteLogGroup` on
-      `log-group:/fabrika/apps/*`; and `iam:PassRole` on `role/fabrika/apps/*` with `iam:PassedToService` also
-      `codebuild.amazonaws.com`.
+    - CloudFormation, for the environment stacks of step 10: `CreateStack`, `UpdateStack`, `GetTemplate`,
+      `DescribeStacks`, `DescribeStackEvents` and `DeleteStack` on `stack/fabrika-app-*`, and `ListStacks` (which
+      takes no resource). Without a service role CloudFormation creates, updates and reads back each resource with the
+      caller's credentials, so applying the stack also needs, each on the step 9 prefix:
+      - IAM on `role/fabrika/apps/*`: `iam:CreateRole`, `PutRolePolicy`, `DeleteRolePolicy`, `GetRolePolicy`,
+        `UpdateAssumeRolePolicy`, `TagRole`, `UntagRole`, `GetRole`, `DeleteRole`;
+      - CodeBuild on `project/fabrika_*`: `CreateProject`, `UpdateProject`, `DeleteProject`, `BatchGetProjects`;
+      - ECR on `repository/fabrika/apps/*`: `CreateRepository`, `PutLifecyclePolicy`, `GetLifecyclePolicy`,
+        `PutImageTagMutability`, `TagResource`, `UntagResource`, `DescribeRepositories`, `DeleteRepository`;
+      - CloudWatch Logs on `log-group:/fabrika/apps/*`: `CreateLogGroup`, `PutRetentionPolicy`, `TagResource`,
+        `UntagResource`, `DescribeLogGroups`, `DeleteLogGroup`;
+      - `iam:PassRole` on `role/fabrika/apps/*` with `iam:PassedToService` also `codebuild.amazonaws.com`.
     - **The boundary.** Role writes would let Control mint a role with any inline policy and run code under it. So
       `iam:CreateRole` and `iam:PutRolePolicy` are allowed only with the condition `iam:PermissionsBoundary` equal to
       `policy/fabrika/fabrika-apps-boundary`, which the installation stack creates and which allows only what an

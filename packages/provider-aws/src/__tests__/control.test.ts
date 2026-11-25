@@ -18,6 +18,7 @@ import {
 	awsTaskValues,
 	createAwsControlProvider,
 } from '../control'
+import { awsEnvironmentStack } from '../environment-stack'
 
 const COMMIT = 'c'.repeat(40)
 const TOKEN = '0f1e2d3c-4b5a-4968-8776-655443322110'
@@ -167,6 +168,20 @@ class Fake {
 			listNames: async (path) => [...this.parameters.keys()].filter((name) => name.startsWith(`${path}/`)).sort(),
 		},
 		s3PartWriter: () => ({ partBytes: 8 * 1024 * 1024, writePart: async () => {}, complete: async () => {}, abort: async () => {} }),
+		// The environment's stack exists and holds the rendered template: the deploy reads it and changes nothing.
+		cloudFormation: {
+			findStack: async (name) => {
+				this.calls.push(`findStack ${name}`)
+				return { stackId: `arn:aws:cloudformation:eu-central-1:123456789012:stack/${name}/0f1e2d3c`, status: 'CREATE_COMPLETE' }
+			},
+			getTemplate: async () => JSON.stringify(awsEnvironmentStack('notes', 'prod', target).template),
+			createStack: async () => {
+				throw new Error('the stack exists')
+			},
+			updateStack: async () => {
+				throw new Error('the stack is current')
+			},
+		},
 	})
 
 	provider() {
@@ -246,6 +261,8 @@ describe('the AWS control provider', () => {
 		expect(fake.calls).toContain('ensureRepository fabrika/apps/notes/prod')
 		// The environment's own build project, never one another environment shares.
 		expect(fake.calls).toContain('project fabrika_notes_prod')
+		// Its stack is checked before anything of the run is written.
+		expect(fake.calls[0]).toBe('findStack fabrika-app-5-notes-prod')
 	})
 
 	test('a run that fails before the update deletes its own parameters and leaves every earlier one', async () => {
