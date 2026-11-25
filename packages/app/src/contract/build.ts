@@ -123,6 +123,9 @@ import {
 	PROCEDURE_LIMITS,
 	procedurePath,
 	PUBLIC_MUTATION_RATE,
+	PUSH_PREFIX,
+	PUSH_WORKER_PATH,
+	PUSH_WORKER_ROW_ID,
 	spaMountFiles,
 	spaPrefixRowId,
 	WEBHOOK_BINDING_PARAMETER,
@@ -260,6 +263,7 @@ class ArtifactBuilder {
 		const mail = this.#mail()
 		const people = this.#people()
 		const terminal = this.#terminal()
+		const notifications = this.#notifications()
 		const artifact: ContractArtifact = {
 			format: CONTRACT_FORMAT,
 			app: contract.app,
@@ -284,6 +288,7 @@ class ArtifactBuilder {
 			...(mail === null ? {} : { mail }),
 			...people,
 			...(terminal === null ? {} : { terminal }),
+			...(notifications ? { notifications: true } : {}),
 			...(Object.keys(this.#procedureRules).length === 0 ? {} : { procedures: this.#procedureRules }),
 			...(Object.keys(tokens).length === 0 ? {} : { tokens }),
 		}
@@ -322,6 +327,34 @@ class ArtifactBuilder {
 				}
 			}
 		}
+	}
+
+	/**
+	 * `notifications: true` (ADR-0088) gives the contract the framework's push rows under the reserved prefix: in this
+	 * release the service worker's, credentialed like a member SPA (any permission of the application), so the proxy
+	 * decides it like any row. Reserving the prefix keeps a root SPA from answering any other path under it.
+	 */
+	#notifications(): boolean {
+		const declared = this.#contract.notifications
+		if (declared === undefined) return false
+		if (declared !== true) {
+			this.#problem('notifications', `${JSON.stringify(declared) ?? 'a value'} is not true (allowed: notifications: true)`)
+			return false
+		}
+		this.#row({
+			id: PUSH_WORKER_ROW_ID,
+			source: { kind: 'push', name: 'worker' },
+			kind: 'query',
+			method: 'GET',
+			path: PUSH_WORKER_PATH,
+			callers: ['human'],
+			requirement: { kind: 'member' },
+			admission: null,
+			input: null,
+			output: null,
+		})
+		this.#reserve(PUSH_PREFIX)
+		return true
 	}
 
 	/** The terminal's identification page, when its path is one. */

@@ -88,6 +88,7 @@ export function canonicalizeArtifact(artifact: ContractArtifact): ContractArtifa
 		...(artifact.members === undefined ? {} : { members: artifact.members }),
 		...(artifact.directory === undefined ? {} : { directory: artifact.directory }),
 		...(artifact.terminal === undefined ? {} : { terminal: { identify: artifact.terminal.identify } }),
+		...(artifact.notifications === undefined ? {} : { notifications: artifact.notifications }),
 		...(artifact.procedures === undefined
 			? {}
 			: {

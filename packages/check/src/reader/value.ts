@@ -95,6 +95,7 @@ const VOCABULARY_SECTIONS = [
 	'members',
 	'directory',
 	'terminal',
+	'notifications',
 ] as const
 
 const ALLOWED_VALUE = 'object and array literals, strings, numbers, booleans, null, the c.* and z.* builders, and const imports of such values'

@@ -84,6 +84,7 @@ export function describeContract(contract: AnyContract): ContractDeclaration<Sch
 		...(vocabulary.members === undefined ? {} : { members: vocabulary.members }),
 		...(vocabulary.directory === undefined ? {} : { directory: vocabulary.directory }),
 		...(vocabulary.terminal === undefined ? {} : { terminal: { identify: vocabulary.terminal.identify } }),
+		...(vocabulary.notifications === undefined ? {} : { notifications: vocabulary.notifications }),
 	}
 }
 

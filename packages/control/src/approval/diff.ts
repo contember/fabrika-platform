@@ -263,6 +263,7 @@ function compareContracts(changes: Changes, before: ContractArtifact | null, aft
 	changes.add(application, ...presentationChanges(baseline, candidate))
 	changes.add(application, ...peopleChanges(baseline, candidate))
 	changes.add(application, ...terminalChanges(baseline, candidate))
+	changes.add(application, ...notificationsChanges(baseline, candidate))
 	const mountsShown = compareEndpoints(changes, baseline, candidate)
 	changes.add(
 		application,
@@ -2478,6 +2479,23 @@ function terminalChanges(baseline: ContractArtifact, candidate: ContractArtifact
 			'terminal',
 			`The application identifies people at enrolled terminals on \`${after}\` and asserts who signs in there, within each terminal's ceiling`,
 		),
+	])
+}
+
+/**
+ * Web Push (ADR-0088): the declaration gives the application the framework's push rows under `/__fabrika/push`, and
+ * with them the browsers' push services as the places its notifications are announced to.
+ */
+function notificationsChanges(baseline: ContractArtifact, candidate: ContractArtifact): RuledLine[] {
+	const before = baseline.notifications === true
+	const after = candidate.notifications === true
+	if (before === after) return []
+	return ruled('application.notifications', [
+		after
+			? widening(
+				"The application notifies people through Web Push: it gains the push rows under `/__fabrika/push`, and announces notifications through the browsers' push services",
+			)
+			: narrowing('The application no longer notifies people through Web Push'),
 	])
 }
 

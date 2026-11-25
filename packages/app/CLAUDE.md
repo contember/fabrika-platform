@@ -395,7 +395,12 @@ src/
   `POST <prefix>/api/<name>`;
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
   description at `/__fabrika/connect/<export>.v<version>`; a webhook
-  appends `/:bindingId`. No authored path may lie under `/__fabrika`.
+  appends `/:bindingId`; the vocabulary's `notifications: true` (ADR-0088) adds the push rows under the reserved
+  `/__fabrika/push` (`PUSH_PREFIX`), today the service worker's alone, `GET /__fabrika/push/worker.js`
+  (`PUSH_WORKER_ROW_ID`, source `push`, kind `query`, caller `human`, requirement `member`), which `boot` serves as the
+  fixed script of `implement/push-worker.ts`: no `fetch` handler, no cache, no read of a push's payload. The artifact
+  parser admits that row field for field and only beside `notifications: true` and the reserved prefix. No authored
+  path may lie under `/__fabrika`.
 - **The proxy reads the contract's endpoint table**, `contractProxyTable(artifact)` from
   `@fabrika/proxy-core/manifest`; nothing else describes an application to the proxy, and
   the strict manifest parser refuses any other form (ADR-0022 rule 3).

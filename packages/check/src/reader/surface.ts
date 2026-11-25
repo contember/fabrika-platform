@@ -218,6 +218,7 @@ class SurfaceReader {
 			'members',
 			'directory',
 			'terminal',
+			'notifications',
 			'relations',
 		])
 		const relations = fields.get('relations')
@@ -228,6 +229,7 @@ class SurfaceReader {
 		const memberFields = members === undefined ? undefined : strictFields(members, 'the vocabulary members', ['manage', 'list'], [])
 		const directory = fields.get('directory')
 		const terminal = fields.get('terminal')
+		const notifications = fields.get('notifications')
 		return {
 			app: text(fields.get('app'), value, 'app'),
 			...(locale === undefined ? {} : { locale: localeOf(locale, value) }),
@@ -238,6 +240,7 @@ class SurfaceReader {
 				: { members: { manage: text(memberFields.get('manage'), value, 'manage'), list: text(memberFields.get('list'), value, 'list') } }),
 			...(directory === undefined ? {} : { directory: directoryOf(directory, value) }),
 			...(terminal === undefined ? {} : { terminal: terminalOf(terminal) }),
+			...(notifications === undefined ? {} : { notifications: notificationsOf(notifications) }),
 			dimensions: this.#each(entries(fields.get('dimensions'), value, 'dimensions'), (name, dimension) => this.#dimension(name, dimension)),
 			actions: this.#each(entries(fields.get('actions'), value, 'actions'), (_, description) => text(description, description, 'an action description')),
 			roles: this.#each(entries(fields.get('roles'), value, 'roles'), (name, role) => this.#role(name, role)),
@@ -983,6 +986,18 @@ function terminalOf(value: LiteralValue): TerminalDeclaration {
 		throw new Refused(identify?.at ?? value.at, `terminal.identify is '${path}'`, "terminal: { identify: '/identify' }")
 	}
 	return { identify: path }
+}
+
+/** The vocabulary's `notifications: true` (ADR-0088); `false` and every other value are refused here, as the types refuse them. */
+function notificationsOf(value: LiteralValue): true {
+	if (value.kind !== 'boolean' || !value.value) {
+		throw new Refused(
+			value.at,
+			`notifications is ${value.kind === 'boolean' ? 'false' : `a ${describeKind(value)}`}`,
+			'notifications: true, or no notifications field',
+		)
+	}
+	return true
 }
 
 function optionalText(value: LiteralValue | undefined, field: string): string | undefined {

@@ -30,6 +30,8 @@ export interface ContractDeclaration<S> {
 	readonly directory?: string
 	/** The identification page of a terminal; `buildArtifact` refuses a path a public SPA mount does not serve. */
 	readonly terminal?: { readonly identify: string }
+	/** `true`: the application notifies people through Web Push (ADR-0088); `buildArtifact` refuses another value. */
+	readonly notifications?: unknown
 }
 
 /**

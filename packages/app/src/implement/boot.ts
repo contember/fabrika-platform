@@ -46,7 +46,7 @@ import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { containersOf } from '../contract/containers'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
-import { challengeRowId, exportBase, spaPrefixRowId } from '../contract/defaults'
+import { challengeRowId, exportBase, PUSH_WORKER_ROW_ID, spaPrefixRowId } from '../contract/defaults'
 import type { AnyContract, Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import { schemaFromShape } from '../contract/schema-from-shape'
@@ -1124,6 +1124,13 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		if (isCredentialed(row) && description !== null) {
 			endpoints.set(base, { kind: 'description', row, description })
 		}
+	}
+	// The framework's push rows (ADR-0088) are served by the framework, never by a handler.
+	const pushWorker = rows.get(PUSH_WORKER_ROW_ID)
+	if (isCredentialed(pushWorker) && pushWorker.source.kind === 'push') {
+		endpoints.set(pushWorker.id, { kind: 'push-worker', row: pushWorker })
+	} else if (artifact.notifications === true) {
+		problems.push('the contract declares notifications, and its artifact has no service worker row')
 	}
 	undeclaredHandlers(handlers, declared, [], problems)
 	const data = bound?.data ?? null

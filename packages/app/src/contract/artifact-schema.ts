@@ -49,6 +49,9 @@ import {
 	challengeRowId,
 	JOB_LIMITS,
 	PROCEDURE_LIMITS,
+	PUSH_PREFIX,
+	PUSH_WORKER_PATH,
+	PUSH_WORKER_ROW_ID,
 } from './defaults'
 import { TOKEN_MAX_DAYS } from './token'
 import { webhookSchemeSchema } from './webhook-scheme'
@@ -201,7 +204,7 @@ const endpointCacheSchema = z.union([
 function rowBaseOf(shape: z.ZodType<SchemaShape>, output: z.ZodType<OutputShape>) {
 	return {
 		id: name,
-		source: z.strictObject({ kind: z.enum(['mount', 'export', 'files']), name }),
+		source: z.strictObject({ kind: z.enum(['mount', 'export', 'files', 'push']), name }),
 		method: z.enum(['GET', 'POST']),
 		path: z.string().startsWith('/'),
 		admission: z.strictObject({ contentTypes: z.tuple([name], name), maxBytes: z.int().positive().nullable() }).nullable(),
@@ -564,6 +567,7 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 		directory: z.literal('labels').optional(),
 		terminal: z.strictObject({ identify: z.string().refine((path) => terminalIdentifyProblem(path) === null, 'not an identification path') })
 			.optional(),
+		notifications: z.literal(true).optional(),
 		procedures: record(z.strictObject({
 			rate: z.strictObject({
 				perClient: bucket,
@@ -619,10 +623,31 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 		if (issuers.length > 0 && !artifact.reservedPrefixes.includes(CHALLENGE_PREFIX)) {
 			context.addIssue({ code: 'custom', path: ['reservedPrefixes'], message: `an issuer row reserves ${CHALLENGE_PREFIX}` })
 		}
+		// The push rows are the framework's, exactly as the build writes them, and exist exactly when notifications are declared.
+		const pushRows = artifact.endpoints.filter((row) => row.source.kind === 'push')
+		for (const row of pushRows) {
+			if (!isPushWorkerRow(row)) {
+				context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${row.id}' is no push row the framework writes` })
+			}
+		}
+		if ((artifact.notifications === true) !== (pushRows.length === 1)) {
+			context.addIssue({ code: 'custom', path: ['notifications'], message: 'declared notifications have exactly the service worker row' })
+		}
+		if (pushRows.length > 0 && !artifact.reservedPrefixes.includes(PUSH_PREFIX)) {
+			context.addIssue({ code: 'custom', path: ['reservedPrefixes'], message: `a push row reserves ${PUSH_PREFIX}` })
+		}
 		if ((artifact.csp.workerSrc !== undefined) !== issuers.length > 0) {
 			context.addIssue({ code: 'custom', path: ['csp', 'workerSrc'], message: 'workerSrc admits the workers of an ALTCHA challenge, and only those' })
 		}
 	})
+}
+
+/** The service worker's row (ADR-0088), field for field as `buildArtifact` writes it. */
+function isPushWorkerRow(row: EndpointRow): boolean {
+	return row.id === PUSH_WORKER_ROW_ID && row.source.name === 'worker' && row.kind === 'query' && row.method === 'GET'
+		&& row.path === PUSH_WORKER_PATH && row.admission === null && row.input === null && row.output === null
+		&& row.callers.length === 1 && row.callers[0] === 'human' && row.requirement?.kind === 'member'
+		&& row.crossOrigin === undefined && row.response === undefined
 }
 
 export const contractArtifactSchema: z.ZodType<ContractArtifact> = artifactSchemaOf(schemaShapeSchema)

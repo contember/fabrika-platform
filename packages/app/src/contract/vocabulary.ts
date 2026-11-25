@@ -54,6 +54,7 @@ export function defineVocabulary<
 		readonly members?: M
 		readonly directory?: 'labels'
 		readonly terminal?: T
+		readonly notifications?: true
 	},
 ): AppVocabulary<A, D, R, Dims, M, T> {
 	const people = vocabulary.members
@@ -67,5 +68,6 @@ export function defineVocabulary<
 		...(people === undefined ? {} : { members: people }),
 		...(vocabulary.directory === undefined ? {} : { directory: vocabulary.directory }),
 		...(vocabulary.terminal === undefined ? {} : { terminal: vocabulary.terminal }),
+		...(vocabulary.notifications === undefined ? {} : { notifications: vocabulary.notifications }),
 	}
 }

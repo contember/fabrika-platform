@@ -71,8 +71,9 @@ declaration refuses the contract (ADR-0062).
 
 The build reserves `/__fabrika/push` (as it reserves `/__fabrika/challenge`), so no authored row and no root SPA
 answers a path under it, and generates three rows there, each credentialed with caller `human` and requirement `member`
-(any permission of the application), each with its own rate buckets per caller (as the challenge rows have,
-`defaults.ts`):
+(any permission of the application). The subscription and inbox rows each have their own rate buckets per caller (as
+the challenge rows have, `defaults.ts`); the worker's row has none, because it answers one fixed script, reads nothing
+and writes nothing, as an SPA's files do:
 
 - `GET /__fabrika/push/worker.js`: the service worker, a fixed script of the framework release.
 - `POST /__fabrika/push/subscription`: the page records, replaces or removes the caller's subscription of this browser.
