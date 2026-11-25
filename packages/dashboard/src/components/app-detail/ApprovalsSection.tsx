@@ -250,42 +250,44 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 									{` · ${option.hint}.${option.pending === undefined ? '' : ` Not enforced yet. ${option.pending}`}`}
 								</span>
 							</span>
-							<select
-								value={chosen[option.category]}
-								disabled={busy}
-								aria-label={option.label}
-								aria-describedby={`approval-${env.env}-${option.category}`}
-								onChange={(event) => choose(option.category, event.target.value)}
-							>
-								{modesOf(option.category).map((mode) => (
-									<option key={mode} value={mode}>
-										{modeLabel(mode)}
-										{isDefaultMode(option.category, mode) ? ' (default)' : ''}
-									</option>
-								))}
-							</select>
-							{isApproverCategory(option.category) && (
+							<span className="approval-mode-controls">
 								<select
-									value={settings.approvers[option.category]}
+									value={chosen[option.category]}
 									disabled={busy}
-									aria-label={`${option.label}: approvers`}
-									onChange={(event) => chooseApprovers(option.category, event.target.value === '2' ? 2 : 1)}
+									aria-label={option.label}
+									aria-describedby={`approval-${env.env}-${option.category}`}
+									onChange={(event) => choose(option.category, event.target.value)}
 								>
-									<option value="1">One person decides (default)</option>
-									<option value="2">Two people decide</option>
+									{modesOf(option.category).map((mode) => (
+										<option key={mode} value={mode}>
+											{modeLabel(mode)}
+											{isDefaultMode(option.category, mode) ? ' (default)' : ''}
+										</option>
+									))}
 								</select>
-							)}
-							{isApproverCategory(option.category) && (
-								<select
-									value={settings.requesterMayApprove[option.category] ? 'yes' : 'no'}
-									disabled={busy}
-									aria-label={`${option.label}: who decides an agent's request`}
-									onChange={(event) => chooseRequesterMayApprove(option.category, event.target.value === 'yes')}
-								>
-									<option value="yes">The requester's person may decide (default)</option>
-									<option value="no">Someone else decides</option>
-								</select>
-							)}
+								{isApproverCategory(option.category) && (
+									<select
+										value={settings.approvers[option.category]}
+										disabled={busy}
+										aria-label={`${option.label}: approvers`}
+										onChange={(event) => chooseApprovers(option.category, event.target.value === '2' ? 2 : 1)}
+									>
+										<option value="1">One person decides (default)</option>
+										<option value="2">Two people decide</option>
+									</select>
+								)}
+								{isApproverCategory(option.category) && (
+									<select
+										value={settings.requesterMayApprove[option.category] ? 'yes' : 'no'}
+										disabled={busy}
+										aria-label={`${option.label}: who decides an agent's request`}
+										onChange={(event) => chooseRequesterMayApprove(option.category, event.target.value === 'yes')}
+									>
+										<option value="yes">The requester's person may decide (default)</option>
+										<option value="no">Someone else decides</option>
+									</select>
+								)}
+							</span>
 						</label>
 					))}
 				</div>
@@ -300,15 +302,17 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 							chosen.
 						</span>
 					</span>
-					<select
-						value={settings.deployRequestCommits}
-						disabled={busy}
-						aria-label="Commits an agent may ask to deploy"
-						onChange={(event) => setSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
-					>
-						<option value="merged">Merged commits (default)</option>
-						<option value="any">Any commit</option>
-					</select>
+					<span className="approval-mode-controls">
+						<select
+							value={settings.deployRequestCommits}
+							disabled={busy}
+							aria-label="Commits an agent may ask to deploy"
+							onChange={(event) => setSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
+						>
+							<option value="merged">Merged commits (default)</option>
+							<option value="any">Any commit</option>
+						</select>
+					</span>
 				</label>
 				<label className="approval-mode">
 					<span>
@@ -317,16 +321,18 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 							{` · ${REQUEST_TTL_HOURS.min}–${REQUEST_TTL_HOURS.max}, ${REQUEST_TTL_HOURS.default} by default; past it, the request expires.`}
 						</span>
 					</span>
-					<input
-						type="number"
-						min={REQUEST_TTL_HOURS.min}
-						max={REQUEST_TTL_HOURS.max}
-						value={ttlText}
-						disabled={busy}
-						aria-label="Hours a request waits for a decision"
-						aria-invalid={ttl === null}
-						onChange={(event) => chooseTtl(event.target.value)}
-					/>
+					<span className="approval-mode-controls">
+						<input
+							type="number"
+							min={REQUEST_TTL_HOURS.min}
+							max={REQUEST_TTL_HOURS.max}
+							value={ttlText}
+							disabled={busy}
+							aria-label="Hours a request waits for a decision"
+							aria-invalid={ttl === null}
+							onChange={(event) => chooseTtl(event.target.value)}
+						/>
+					</span>
 				</label>
 			</div>
 			<div>

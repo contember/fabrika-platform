@@ -2831,16 +2831,26 @@ td {
 
 .approval-mode {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) repeat(2, 13rem);
+	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: center;
 	gap: var(--s-2);
 	max-width: 66rem;
+}
+
+/* A category's controls, two to a line beside its label, so a third and fourth line up under the first two. */
+.approval-mode-controls {
+	display: grid;
+	grid-template-columns: repeat(2, 13rem);
+	gap: var(--s-1) var(--s-2);
 }
 
 @media (max-width: 700px) {
 	.approval-mode {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 2px;
+	}
+	.approval-mode-controls {
+		grid-template-columns: minmax(0, 1fr);
 	}
 }
 
