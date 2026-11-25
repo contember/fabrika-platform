@@ -239,7 +239,8 @@ Two shapes, by owner. An ADR-0083 rule already holds here: the service that writ
   settings, and a stricter one among a change's categories wins:
   - `requesterMayApprove: false`: someone other than the requester's person decides. Which person stands behind a
     request is known for an OAuth token (its subject) and for a self-bound key (its issuer). A service key's request
-    has no human owner, so `false` there means "any person but the one who issued the key".
+    has no human owner, and no verified token names the key's issuer, so `false` there fails closed (ADR-0083 §8):
+    nobody approves it, and anyone with the approval right may refuse it.
   - `approvers: 2`: two different people decide, each on the same digest. The item stays `pending` after the first
     approval, and a rejection by either closes it. It applies to requests, parked runs and plan entries alike.
 
