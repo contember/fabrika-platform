@@ -577,11 +577,17 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
 - **Who may approve whom.** A person may approve a run their own agent asked for. The environment may require someone
   other than the requester's person (`requesterMayApprove: false`), or two different people on the same digests
   (`approvers: 2`), per category; the item stays parked after the first approval, and a rejection by either refuses it.
-- **A second factor on deciding.** `stepUp: webauthn` on a category makes deciding a pending item of it take a fresh
-  WebAuthn assertion: IAM keeps the person's passkeys and mints a console token whose `amr` names `webauthn`, and
-  Control accepts the decision only with such a token at most five minutes old. It is `webauthn` for `credentials` by
-  default and `none` elsewhere. A person with no passkey cannot decide such an item, and the page says how to register
-  one.
+- **A second factor on deciding.** `stepUp: webauthn` on a category makes deciding a pending item of it take a WebAuthn
+  assertion bound to that decision. IAM keeps the person's passkeys. The approval page asks Control's IAM gateway for a
+  single-use challenge, which IAM issues to the approver bound to the item's kind, id and digest, and posts the
+  assertion with the decision. Control asks IAM, with the approver's console token, to verify it against the binding it
+  builds from the item it decides, and accepts the decision only when IAM verified it: the challenge was issued to the
+  same person with the same binding, unused and unexpired (five minutes). An assertion for one item never decides
+  another, and none decides twice. The step-up travels with the decision, not in the console token: the proxy keeps a
+  minted token for up to five minutes, in each instance's own cache, so a token refreshed after the assertion would
+  reach Control too late, and the token's `amr` claim already names a terminal assertion, whose parser refuses any
+  other value. It is `webauthn` for `credentials` by default and `none` elsewhere. A person with no passkey cannot
+  decide such an item, and the page says how to register one.
 - **Evidence ahead of the deploy.** Under the `plan` mode (ADR-0083) a change is also let through by plan entries a
   person approved in the console before the deploy, bound to the content of each subject before and after, never to a
   pull request. A GitHub review counts as such evidence only once the access-diff GitHub check shows the reviewer the
@@ -723,7 +729,7 @@ never from the words of a line:
   type error, not an unsorted line.
 - The approval proves a signed-in user with `access.approve`, not a physical human. An agent that drives
   the approver's own signed-in browser can approve. The skill forbids it; a category with `stepUp: webauthn` closes it
-  with a passkey assertion on deciding.
+  with a passkey assertion bound to the decision.
 - An agent deploys a protected environment by asking, not by holding a stronger key: under the strict default its
   manual run parks and the person approves it from one link; under the permissive preset (ADR-0083) it deploys at once.
   A person's own `px_` key no longer passes as a person, and a parked run no longer waits forever.
