@@ -343,6 +343,11 @@ export interface ZeropsServiceEnvRecord {
 	serviceStackId?: string
 	/** Record classification, not a sensitivity or ownership guarantee; sensitive records can be USER. */
 	type?: string
+	/**
+	 * When the record was last written, to the second. Measured 2026-11-25: `/env` carries it on sensitive records too, and
+	 * a `PUT /user-data/{id}` moves it (2026-08 rows of `zerops-platform.md`).
+	 */
+	lastUpdate?: string
 }
 
 /** One service-level variable to write. */

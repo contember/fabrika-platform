@@ -236,6 +236,21 @@ describe('Zerops API discovery', () => {
 		expect(records[0]).not.toHaveProperty('content')
 	})
 
+	test("keeps a record's last update, which a secret's version is read from, and drops its content", async () => {
+		const api = createZeropsApi({
+			token: 'secret',
+			baseUrl: 'https://zerops.test',
+			fetchImpl: async () =>
+				jsonResponse({
+					items: [{ id: 'env-1', key: 'TOKEN', content: 'REDACTED', type: 'USER', sensitive: true, lastUpdate: '2026-11-24T13:09:28Z', created: 'x' }],
+				}),
+		})
+
+		expect(await api.listServiceEnv({ serviceId: 'service-1', signal: signal() })).toEqual([
+			{ id: 'env-1', key: 'TOKEN', type: 'USER', sensitive: true, lastUpdate: '2026-11-24T13:09:28Z' },
+		])
+	})
+
 	test('accepts every service environment entry inside the response byte bound', async () => {
 		const items = Array.from({ length: 600 }, (_, index) => ({
 			id: `env-${index}`,

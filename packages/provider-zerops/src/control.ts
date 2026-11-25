@@ -532,6 +532,16 @@ export const createZeropsControlProvider = (options: ZeropsControlProviderOption
 					await api.deleteServiceEnv({ envId: found.id, signal: abortSignal() })
 				}
 			},
+			// The record id moves on a delete and re-create, `lastUpdate` on a write in place; the value is never read.
+			version: async (input) => {
+				const stored = decodeEnvironment(input.environment).target
+				if ('kind' in stored) return null
+				const variables = await api.listServiceEnv({ serviceId: stored.serviceId, signal: abortSignal() })
+				const found = variables.find((variable) => variable.key === input.name)
+				if (found === undefined) return null
+				if (found.lastUpdate === undefined) throw new Error(`zerops: the record of \`${input.name}\` carries no last update, so its version is unknown`)
+				return `${found.id}@${found.lastUpdate}`
+			},
 		},
 		...(namespaceCapabilities === undefined
 			? {}

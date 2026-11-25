@@ -13,6 +13,7 @@ interface RawServiceEnv {
 	readonly content: string
 	readonly serviceStackId?: string | undefined
 	readonly type?: string | undefined
+	readonly lastUpdate?: string | undefined
 	readonly sensitive: boolean
 }
 
@@ -29,6 +30,7 @@ export const withoutSensitiveContent = (raw: RawServiceEnv): ZeropsServiceEnv =>
 		key: raw.key,
 		...(raw.serviceStackId === undefined ? {} : { serviceStackId: raw.serviceStackId }),
 		...(raw.type === undefined ? {} : { type: raw.type }),
+		...(raw.lastUpdate === undefined ? {} : { lastUpdate: raw.lastUpdate }),
 	}
 	return raw.sensitive ? { ...record, sensitive: true } : { ...record, sensitive: false, content: raw.content }
 }
@@ -43,6 +45,7 @@ const serviceEnvEntrySchema = z.object({
 	content: z.string(),
 	serviceStackId: nonemptySchema.optional(),
 	type: nonemptySchema.optional(),
+	lastUpdate: nonemptySchema.optional(),
 	sensitive: z.boolean(),
 }).superRefine((entry, ctx) => {
 	if (Object.values(entry).some((value) => value === undefined)) ctx.addIssue({ code: 'custom', message: 'present fields must have values' })
