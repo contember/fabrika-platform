@@ -1,4 +1,9 @@
 export {
+	ApprovalRequestDeliveryRepository,
+	type ApprovalRequestDeliveryRow,
+	type ApprovalRequestDeliveryState,
+} from './db/approval-request-deliveries'
+export {
 	type ApprovalRequestApprover,
 	type ApprovalRequestDecider,
 	type ApprovalRequestInput,

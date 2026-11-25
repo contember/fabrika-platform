@@ -7,8 +7,10 @@ import {
 	type ActionCategory,
 	ALL_ENVIRONMENTS,
 	type ApprovalRequestChallengeInput,
+	type ApprovalRequestDeliveryDto,
 	type ApprovalRequestDescription,
 	type ApprovalRequestDto,
+	type ApprovalRequestKeyResponse,
 	type ApprovalRequestListResponse,
 	type ApprovalRequestState,
 	type ApprovalStepUpChallenge,
@@ -150,7 +152,7 @@ export async function createApprovalRequestUseCase(
 	if (refusing !== null) fail(403, refusedToNonPerson(refusing.env, kind.category))
 	if (c.consoleOrigin === undefined) fail(503, 'Control knows no console origin, so a request would have no link a person could open')
 	const id = uuidv7()
-	const held = await asked.hold(c, id)
+	const held = await asked.hold(c, id, c.auth)
 	let row: ApprovalRequestRow
 	try {
 		const action = held.action
@@ -194,6 +196,34 @@ export async function getApprovalRequestUseCase(c: ApprovalRequestReadContext, i
 	const row = await c.repositories.approvalRequests.get(id)
 	if (row === null || (!isRequester(c.auth, row) && !(await decides(c, row)))) fail(404, 'approval request not found')
 	return toApprovalRequestDto(c, row)
+}
+
+/**
+ * The key an approved request issued, handed to its requester once (ADR-0083 §8): encrypted to the public key it sent,
+ * deleted as it is handed out. Only the requester reads it (`isRequester`); anyone else is answered as for an absent
+ * request. Refused: a request that has not issued its key yet (409), one that issued none (404), and a key fetched
+ * already or past its deadline (410).
+ */
+export async function fetchApprovalRequestKeyUseCase(c: ApprovalRequestReadContext, id: string): Promise<ApprovalRequestKeyResponse> {
+	const row = await c.repositories.approvalRequests.get(id)
+	if (row === null || !isRequester(c.auth, row)) fail(404, 'approval request not found')
+	const delivery = await c.repositories.approvalRequestDeliveries.get(id)
+	if (delivery === null) {
+		if (row.state === 'pending' || row.state === 'approved' || row.state === 'executing' || row.state === 'unknown') {
+			fail(409, `the request is ${row.state}: no key has been issued for it yet; fetch it once it is executed`)
+		}
+		fail(404, `the request is ${row.state} and issued no key`)
+	}
+	const jwe = await c.repositories.approvalRequestDeliveries.take(id)
+	if (jwe === null) {
+		fail(
+			410,
+			delivery.state === 'fetched'
+				? 'the key was fetched already; it is handed out once, so ask for a new one if it was lost'
+				: 'the key was not fetched before its deadline, so it was dropped and revoked; ask for a new one',
+		)
+	}
+	return { jwe }
 }
 
 /**
@@ -273,6 +303,8 @@ async function approvableKind(c: ApprovalRequestContext, pending: PendingRequest
 		fail(409, 'this Control cannot show what the request does, so it cannot approve it; refuse it or let it expire')
 	}
 	await requireApproverMayExecute(c, requesterOfKind(kind, action.requesterAt), row)
+	const refused = action.refuseApprover(c.auth)
+	if (refused !== null) fail(403, refused)
 	if (!pending.deciders.requesterMayApprove) requireOtherThanRequester(pending.approver, requesterOf(row), 'request')
 	return kind
 }
@@ -373,6 +405,7 @@ function executionContext(c: ApprovalRequestContext): RequestExecutionContext {
 		...(c.catalogChanged === undefined ? {} : { catalogChanged: c.catalogChanged }),
 		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),
 		...(c.iamGrants === undefined ? {} : { iamGrants: c.iamGrants }),
+		...(c.iamKeys === undefined ? {} : { iamKeys: c.iamKeys }),
 		...(c.iamApprover === undefined ? {} : { iamApprover: c.iamApprover }),
 		...(c.maintenance === undefined ? {} : { maintenance: c.maintenance }),
 		...(c.deploys === undefined ? {} : { deploys: c.deploys }),
@@ -530,6 +563,7 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 	const result = full || (requester !== undefined && holdsKindAction(c.auth, requester, coordinates)) ? storedResult(row.result_json) : undefined
 	const description = describe(c, row, kind, full)
 	const reached = row.env === ALL_ENVIRONMENTS ? await reachFact(c, row) : null
+	const delivery = row.state === 'executed' ? await deliveryOf(c, row) : null
 	return {
 		id: row.id,
 		kind: row.kind,
@@ -566,5 +600,12 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 		...(row.operation_id === null ? {} : { operationId: row.operation_id }),
 		...(result === undefined ? {} : { result }),
 		...(row.error === null ? {} : { error: row.error }),
+		...(delivery === null ? {} : { delivery }),
 	}
+}
+
+/** Whether the key an executed request issued still waits for its requester; never the key itself. */
+async function deliveryOf(c: ApprovalRequestReadContext, row: ApprovalRequestRow): Promise<ApprovalRequestDeliveryDto | null> {
+	const delivery = await c.repositories.approvalRequestDeliveries.get(row.id)
+	return delivery === null ? null : { state: delivery.state, deadline: delivery.deadline }
 }

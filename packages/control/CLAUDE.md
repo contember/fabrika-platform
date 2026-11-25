@@ -877,6 +877,13 @@ other environment, before the provider prepares anything, and the write maps a r
   plus an hour. A decider holds `access.approve` at the coordinates, or what the kind's
   `approverMayDecide` seam says (an IAM action); only a reader who also holds the kind's action (or its decider seam) is
   shown the before-state, a value, a fingerprint or the result (`describe` gets `before: null` otherwise); `approval-gate-coverage.test.ts` lists the create and decide procedures as exempt.
+- **A key an agent asks for (`kinds/keys.ts`, `iam.apiKeys.provision`, `credentials`) reaches Control only encrypted to the
+  agent's public key.** IAM's installation administrators decide it; the approver must hold every action of the key in
+  Control (`refuseApprover`), and under `credentialCeiling: requester` the requester too, from its token at creation.
+  IAM issues it as the approver (`apiKeys.provisionRequested`, keyed by the request id, so `follow` reads it back by
+  that id) and answers a JWE. The JWE waits in `approval_request_deliveries` until `fetchKey` hands it to the requester
+  once (`isRequester`) and clears it; `sweepUnfetchedKeys` (cron) clears one past its deadline and revokes the key in
+  IAM. The JWE is never in a DTO, an audit row or a log line.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 

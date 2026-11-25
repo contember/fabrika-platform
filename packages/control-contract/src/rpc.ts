@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type {
 	ApprovalRequestDto,
 	ApprovalRequestIdInput,
+	ApprovalRequestKeyResponse,
 	ApprovalRequestListResponse,
 	CreateApprovalRequestInput,
 	CreateApprovalRequestResponse,
@@ -282,6 +283,8 @@ export interface ControlRpcContract {
 			decide: RpcProcedure<DecideApprovalRequestInput, ApprovalRequestDto>
 			/** A passkey challenge bound to one decision of a request that takes a step-up; the same person and right as `decide`. */
 			challenge: RpcProcedure<ApprovalRequestChallengeInput, ApprovalStepUpChallenge>
+			/** The key an executed `credentials` request issued, to its requester's own principal and client, once. */
+			fetchKey: RpcProcedure<ApprovalRequestIdInput, ApprovalRequestKeyResponse>
 		}
 	}
 	deploy: RpcProcedure<TriggerDeployRequest, RunDto>

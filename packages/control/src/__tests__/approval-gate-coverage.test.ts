@@ -72,6 +72,9 @@ const CONTROL: Readonly<Record<string, Judged>> = {
 	'approvals.requests.challenge': {
 		exempt: `a passkey challenge for deciding a pending item, which IAM issues and nothing else changes: ${ALWAYS_A_PERSON}`,
 	},
+	'approvals.requests.fetchKey': {
+		exempt: 'request plumbing: hands the requester, once, the key a person approved, encrypted to its own public key; changes nothing else',
+	},
 	'deploy': { category: 'deploy-request' },
 	'register': { category: 'registry' },
 	'mail.messages.release': { exempt: MAIL },
