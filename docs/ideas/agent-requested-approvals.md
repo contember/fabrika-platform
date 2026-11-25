@@ -2,15 +2,15 @@
 
 **TLDR.** A coding agent can deploy, write secrets and change an application's registry rows through its own
 credential. The actions that today need a person (a manual deploy of a protected environment, an access change that
-waits, a console grant that waits, issuing keys) have no path where the agent asks and the person answers. The person
-must open the console and act there. This draft compares four designs. Recommended: **(b)**, an explicit one-off
-approval request in Control that opens on one console page, for single actions. Add **(d)**, an approval plan bound to
-content hashes and approved before the deploy, so changes reviewed with their pull request deploy without a click.
-**(a)**, one-action tokens through the device flow (RFC 9396), is not recommended: the person would approve in IAM,
-which cannot show what a deploy changes, and the agent would hold the approval as a bearer. (b) and (d) are not two
-systems: they are two kinds of evidence for one gate. Each environment chooses a mode per change category (`off`,
-`plan`, `person`), and the installation sets defaults and a floor. Defaults keep today's behaviour. Decisions for the
-user are at the end ("Decisions").
+waits, a console grant that waits, issuing keys) have no path where the agent asks and the person answers. Four designs
+were compared. The user chose **(b)**, an explicit one-off approval request in Control that opens on one console page,
+and **(d)**, an approval plan bound to content hashes and approved before the deploy, in the console or by a GitHub
+review of a mapped person. They are two kinds of evidence for one gate. Each environment chooses a mode per change
+category (`off`, `plan`, `person`, and `refuse` for what a non-person may not do at all), plus a few settings of its
+own; there is no installation level yet. **The user's principle: to any customer's approval requirement the answer is
+"yes, it is configurable".** Every decision below is a default, and "Settings" names the setting that makes each
+alternative possible, where it lives and what it costs. The step plan (10 PRs, about 45–55 h of agent time) is at the
+end. Nothing is built yet.
 
 ## Problem
 
@@ -138,7 +138,9 @@ actor and the requester recorded beside them. The agent reads the request's stat
 Two shapes, by owner. An ADR-0083 rule already holds here: the service that writes the change keeps the request.
 
 1. **A deploy is its own request: the run.** On a protected environment, a manual run from a non-person is no longer
-   refused. It must name a 40-hex commit (`createManualRun` already takes `commitSha`, `runs.ts:206-231`). It parks in
+   refused. It must name a 40-hex commit (`createManualRun` already takes `commitSha`, `runs.ts:206-231`) that is
+   **merged**: reachable from the environment's trigger ref, or from the app's default branch when the trigger ref is a
+   pattern (decision D7; the setting `deployRequestCommits` allows any commit). It parks in
    `awaiting_approval` **whatever its lines**, with a park reason `requested`, after its snapshot is classified. The
    existing approval page, its digest binding, its lease and its audit row apply unchanged. The page adds who asked
    (the person and the client or agent), the commit, its message and a compare link against the commit the environment
@@ -146,7 +148,7 @@ Two shapes, by owner. An ADR-0083 rule already holds here: the service that writ
 2. **Any other action is an `approval_requests` row** in the service that writes the change. In Control: secrets and
    variables of a protected environment, its trigger ref, domain and public origin, `apps.update` source fields, and
    data operations. In IAM it extends `grant_requests` (ADR-0083 §4) with a requester that is not an administrator, for
-   grants and, if decided, keys (see "Decisions", D4). The row holds the kind, the canonical input, its SHA-256, the
+   grants, and for keys issued to someone other than the agent ("Credentials for someone else", below). The row holds the kind, the canonical input, its SHA-256, the
    coordinates, the requester (principal, OAuth client, task id once `act` exists), `pending | approved | rejected |
    expired | executed | failed`, the result and `expires_at`. A secret value in a request is sealed in the vault under
    the request's own purpose. The page shows its name, never the value. On approval the value moves to the secret's
@@ -158,11 +160,13 @@ Two shapes, by owner. An ADR-0083 rule already holds here: the service that writ
   change / these lines." Two buttons. For a secret: "asks to set secret `STRIPE_KEY` of `notes@prod` (value hidden)".
 - **Binding.** The approver acts on the stored row and nothing else. The page posts the request id and the digest it
   showed (as `approvals.complete` posts the two digests today, `approval/api.ts:77-79`). A row changed since it was
-  read refuses with 409. Rows are never edited: a different action is a new request. The use case re-checks the
-  **approver's** authority at decision time (as `grantRequests.decide` does), and the **requester's** too. A request
-  never executes more than either of them may.
-- **Expiry.** 24 h by default for a request (decision D3). A parked run gets the same expiry: today it waits forever.
-  An expired request cannot be approved and leaves the list.
+  read refuses with 409. Rows are never edited: a different action is a new request. At decision time the use case
+  re-checks the **requester's right to ask** (the action itself, such as `deploy.trigger` or `secret.manage`, or a new
+  `access.request` at the app for grants and keys, which an agent cannot execute itself) and the **approver's right to
+  execute** (as `grantRequests.decide` does). The action executes with the approver's authority, never more than the
+  approver holds now.
+- **Expiry.** 24 h by default for a request and for a parked run (decision D3; the setting `requestTtlHours`, 1–168).
+  Today a parked run waits forever. An expired request cannot be approved and leaves the list.
 - **Replay.** The decision is one conditional update, `pending` → `approved` under a fresh decision id, with the
   effect written in the same transaction or fenced on the same lease (the pattern of ADR-0083 §4 and
   `approveParkedRun`). A second tap, a second approver or a repeated POST changes nothing.
@@ -175,9 +179,12 @@ Two shapes, by owner. An ADR-0083 rule already holds here: the service that writ
   Fabrika sends no notification: the agent hands the link to the person through its own channel. A later push or
   e-mail from the console is additive (below).
 - **Who may approve whom.** Approving takes a person in the console with the action's approval right
-  (`access.approve` at the coordinates for Control, the app's IAM administration for IAM). Whether the person may
-  approve **their own agent's** request is a decision (D2). ADR-0050 has no four-eyes rule (the person who deploys by
-  hand also approves), while ADR-0083's grant requests do have one.
+  (`access.approve` at the coordinates for Control, the app's IAM administration for IAM). **The person may approve
+  their own agent's request, grants and keys included** (decision D2): the agent asked through a delegated credential,
+  and the person deciding on the page is the step ADR-0083's "not the requester" rule exists to force. ADR-0083's
+  four-eyes rule stays for a person's own console grant. A team that wants a second person for agent requests too sets
+  `requesterMayApprove: false`. IAM reads it from the same row Control already writes for the grant gate
+  (`app_grant_approvals`, ADR-0083 §4), so IAM keeps deciding its own requests.
 - **Effort.** Deploy shape: 3–4 h. Generic Control requests and the page: 5–7 h. IAM requests for agents: 3–4 h. In
   total about 12–15 h, plus a framework-free console change with screenshots.
 
@@ -229,22 +236,34 @@ and the line waits. Nothing the reviewer did not see can ride in on an entry.
 **Plans that add up.** Entries compose as a chain. PR 1 approves `sales: A → B`. PR 2 approves `B → C`. A deploy whose
 baseline holds `A` and whose candidate holds `C` is covered when a chain of approved transitions leads from the
 baseline's fragment to the candidate's. A deploy whose baseline is something else (someone narrowed `sales` on prod in
-between) is not covered, and that line waits. The simpler alternative binds only the after-hash ("`sales` holding `C`
-is approved, whatever it held"). It is easier to build, but it approves a widening relative to a baseline the reviewer
-never saw (decision D6).
+between) is not covered, and that line waits. This transition binding is the default (decision D6). The setting
+`planBinding: after-state` binds only the after-hash instead ("`sales` holding `C` is approved, whatever it held"): it
+covers more deploys, but it approves a widening relative to a baseline the reviewer never saw.
 
 #### Which approvals count
 
 - **A console approval of a plan**, by a person (`requireHumanApprover`) with `access.approve` at the environment.
   Today's approval page, fed from a commit that is not deployed: the same compare the "access diff as a GitHub check"
   spec computes for a pull request head (`docs/specs/access-diff-as-a-github-check.md`). The check run links to it.
-- **A GitHub review**, later and only if decided (D5). It counts only when the review is `APPROVED`, its `commit_id` is
-  the head whose fragments were hashed, its author maps to a fabrika person who holds `access.approve` at the
-  environment, and it is not the pull request's author or a bot or App account. IAM has no mapping of a GitHub account
-  to a principal today, and building one is its own piece of identity work. A review stands only for the fragments
-  computed at its `commit_id`. A later push needs a new review, whatever GitHub's "dismiss stale approvals" setting is.
-- **Never**: an agent's own review, an approval through a delegated token or key (the `isPerson` rule), or an approval
-  by the requester when D2 keeps a four-eyes rule.
+- **A GitHub review of a mapped person** (decision D5; `planEvidence: console` turns it off). It counts only when the
+  review is `APPROVED`, its author's GitHub account is linked to a fabrika person who holds `access.approve` at the
+  environment, and the author is not the pull request's author or a bot or App account. A review stands only for the
+  fragments of the commit it reviewed (`commit_id`). A later push needs a new review, whatever GitHub's "dismiss stale
+  approvals" setting is.
+  - **The mapping.** IAM links a GitHub account to a principal. The person signs in to GitHub once from the console
+    (the App's user authorization), and IAM stores the numeric GitHub user id (a login can be renamed). IAM has no such
+    link today. An unlinked reviewer's approval counts for nothing.
+  - **How Control finds the reviews.** No new webhook is needed. When a deploy of a protected environment carries lines
+    no console entry covers, Control asks GitHub which merged pull requests the deployed range contains, and reads
+    their reviews. It reads the snapshot at each qualifying review's `commit_id` (one archive pass) and turns the review
+    into plan entries before it decides. The App's existing `pull_requests: write` permission covers the reads
+    (`packages/github-app/src/manifest.ts:31`).
+  - **What it costs.** A few authenticated GitHub calls and one archive read per such deploy. It works only for a
+    repository behind a GitHub App connection; an anonymous public source has no reviews to read. Linking needs the
+    App's user-authorization callback URL, which the manifest does not set today (`manifest.ts:22-33`). An existing
+    App gets it once in its GitHub settings, an operator step to document.
+- **Never**: an agent's own review, a review by the pull request's author, an approval through a delegated token or key
+  (the `isPerson` rule).
 
 #### Expiry, revocation, consumption
 
@@ -286,11 +305,11 @@ evidence, but that is not part of (d).
     difference.
 - **Makes (a) unnecessary.** Nothing in (a) is covered by neither (b) nor (d).
 
-- **Effort.** It depends on the GitHub check spec (five PRs, S–M, not built: no `pull_request` handling exists in
-  `packages/control/src/github/triggers/`). (d) itself: plan entries, a fragment-hash function next to
-  `snapshotDigest` (`snapshot.ts:211-219`), coverage in the park decision next to `waitsForApproval`, consumption at
-  publication, and a plan page. About 8–10 h of agent time after the check spec. A console-only plan approved from a
-  commit's compare works without the check spec, at about 6–8 h.
+- **Effort.** Console plans: plan entries, a fragment-hash function next to `snapshotDigest` (`snapshot.ts:211-219`),
+  coverage in the gate, consumption at publication, and a plan page fed from a commit compare. About 6–8 h. GitHub
+  reviews as evidence: account linking in IAM (4–6 h) and the review lookup at deploy (3–4 h). None of it needs the
+  GitHub check spec (not built: no `pull_request` handling exists in `packages/control/src/github/triggers/`). That
+  spec would add the access diff on the pull request itself, so a reviewer sees what they approve.
 
 ## Approval modes as configuration: one gate underneath
 
@@ -310,9 +329,14 @@ accepts.
     A change the plan does not cover waits for the person, and only the uncovered lines are shown.
   - `person`: only a person's decision on this pending item. A plan never counts. This suits `deletes-data`, where the
     effect depends on production rows.
+  - `refuse`: a non-person may not do it at all, not even by asking. This is today's behaviour for a protected
+    environment's manual deploy and registry fields. It applies only to the categories of a non-person's action (the
+    table below), not to deploy lines.
 
-  The modes are ordered `off < plan < person`. A change waits until the evidence satisfies the strictest mode among
-  its categories.
+  The modes are ordered `off < plan < person < refuse`. A change waits until the evidence satisfies the strictest mode
+  among its categories. Under `off`, the action runs with the **requester's** own authority, so `off` never lets an
+  agent do what its credential cannot. For example, `credentials: off` lets a key that already holds `iam.admin` issue
+  keys, and gives an agent without it nothing.
 - **The pending item** is one shape with one lifecycle, link, expiry and audit: `pending → approved | rejected |
   expired`, then `executed | failed`. Control keeps one for what Control writes. For a deploy, the item references the
   parked run, whose digest binding stays as it is. IAM keeps one for grants (ADR-0083's `grant_requests`), because IAM
@@ -321,8 +345,8 @@ accepts.
   pending item. The link only opens it directly.
 - **Who may start a protected deploy** is part of the same configuration, not a separate rule. `deploy-request` is a
   category whose line is "a non-person started this run". With `person` (the default), an agent's run parks and the
-  person gets the link. With `off`, an agent deploys like a person. Refusing the run outright, as today, is the
-  setting `refuse`, kept for teams that want only pushes and people.
+  person gets the link. With `off`, an agent deploys like a person. With `refuse`, the run is refused as today, for
+  teams that want only pushes and people.
 - **One function decides.** It sits in `@fabrika/control-contract`, next to `changeCategories` and replacing
   `waitsForApproval` (`approval-view.ts:56`):
   `gate(changes, policy, plan) → pass | { wait: uncoveredLines, strictest }`. Control's park decision and the request
@@ -348,65 +372,86 @@ The deploy categories stay as ADR-0083 defines them. The new ones are actions wi
 
 | Category         | Covers                                                                                                            | Default on a protected environment |
 | ---------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `deploy-request` | A manual run started by a non-person                                                                              | `person`                           |
-| `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey` by a non-person                            | `person`                           |
-| `variables`      | `apps.variables.put/delete` by a non-person                                                                       | `off`                              |
+| `deploy-request` | A manual run started by a non-person, of a merged commit (`deployRequestCommits`)                                 | `person`                           |
+| `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey` by a non-person                            | `person` (D8)                      |
+| `variables`      | `apps.variables.put/delete` by a non-person                                                                       | `person` (D8)                      |
+| `data`           | `data.start` (maintenance modes, side restore), `data.recover` by a non-person                                    | `person` (D8)                      |
 | `registry`       | Trigger ref, domain, public origin, `apps.update` source fields by a non-person (today a 403, `human.ts:130-169`) | `person`                           |
-| `data`           | `data.start` (maintenance modes, side restore), `data.recover` by a non-person                                    | `person`                           |
-| `credentials`    | A key or other credential an agent asks for (D4)                                                                  | `person`                           |
-| `grants`         | ADR-0083's existing category, now with modes. `plan` does not apply: a grant has no pull request.                 | `off` (as today)                   |
+| `agent-grants`   | A grant an agent asks for at the app                                                                              | `person`                           |
+| `credentials`    | A key an agent asks for, issued to someone other than the agent (below)                                           | `person`                           |
+| `grants`         | ADR-0083's existing category: a person's own console grant. `plan` does not apply: a grant has no pull request.   | `off` (as today)                   |
+
+These categories are enforced only from step 5 of the plan, when the requests they wait in exist. Until then a
+non-person's write applies as it does today (the user's decision D8). The hole is closed by routing
+these writes through requests, never by refusing them outright.
 
 A person acting directly in the console is their own evidence for these: their act is the decision, as today. The one
 exception stays as it is: a person's own deploy still shows its lines for approval, because clicking "Deploy" is not
 reading the diff.
 
-### Two levels: the installation and the environment
+### The environment level, and what an installation level adds later
 
-- **The environment** holds its mode per category. It is stored, like ADR-0083's choice, as its difference from the
-  defaults, so a category a later release adds applies to every environment that did not set it. It changes through
-  `apps.environments.protect` under the same rules: a person in the console, `access.approve`, the deployment lease
-  and an audit row.
-- **The installation** holds two things, set by a person with a global `access.approve` in the console:
-  - **Defaults** for environments that set nothing, separately for protected and unprotected ones.
-  - **A floor per category.** An environment cannot choose a mode below it. When the floor rises, environments below
-    it read as the floor at once, without a rewrite.
+- **The environment** holds its mode per category and the settings below. It is stored, like ADR-0083's choice, as its
+  difference from the defaults, so a category a later release adds applies to every environment that did not set it.
+  It changes through `apps.environments.protect` under the same rules: a person in the console, `access.approve`, the
+  deployment lease and an audit row. The settings live with the protection flag in `app_envs` and in
+  `app_env_protection`, so a recreated environment keeps them, as it keeps the flag (ADR-0050 §4).
+- `protected` stays the master switch. An unprotected environment has every category `off`.
+- **No installation level yet** (decision D9). It would add, later:
+  - **defaults** for environments that set nothing, separately for protected and unprotected ones;
+  - **a floor per category** that no environment can go below, read at once without a rewrite when it rises. A company
+    that requires "credentials always need a person" would set it once, and could gate unprotected environments too.
 
-  A company that requires "credentials always need a person" sets that floor once.
-- `protected` stays the master switch. An unprotected environment has every category `off`, unless the installation's
-  floor says otherwise. That lets a company gate secrets of every environment, for example.
+  Its cost is about 2–3 h: a one-row table in Control, the console's settings, and the floor in `gate()`. Nothing in
+  the environment level has to change for it.
+
+### Settings
+
+Every setting is on the environment, changed only by a person in the console with `access.approve`. Defaults are the
+user's answers. The alternative of each answer is the other value.
+
+| Setting                         | Lives in                                                                | Default                                     | Alternatives                                                                 | Cost                                                                                                            |
+| ------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
+| `protected`                     | `app_envs.protected` (exists)                                           | `prod` protected (ADR-0050 §4)              | any environment                                                              | exists                                                                                                          |
+| Mode per category               | `app_envs.approval_policy`, the successor of `approval_categories`      | the tables above and below                  | `off`, `plan`, `person`, `refuse` per category                               | step 2                                                                                                          |
+| `deployRequestCommits`          | `app_envs`                                                              | `merged` (D7)                               | `any`: an unmerged commit may be requested, still never a workspace ref      | one GitHub compare per request; an anonymous public source spends the shared 60-an-hour limit                   |
+| `requesterMayApprove`           | `app_envs`, mirrored to IAM's `app_grant_approvals` with the grant gate | `true` (D2), grants and keys included       | `false`: a second person decides an agent's request                          | one column each side; IAM keeps its own decision                                                                |
+| `requestTtlHours`               | `app_envs`                                                              | 24 (D3), for requests and parked runs       | 1–168                                                                        | one column and a maintenance sweep                                                                              |
+| `planEvidence`                  | `app_envs`                                                              | `console+github` (D5)                       | `console`                                                                    | account linking in IAM, the review lookup at deploy, the App's callback URL on an existing App                  |
+| `planBinding`                   | `app_envs`                                                              | `transition` (D6)                           | `after-state`                                                                | none beyond (d)                                                                                                 |
+| `planTtlDays`                   | `app_envs`                                                              | 30                                          | 1–365                                                                        | one column                                                                                                      |
+| `credentials` mode and delivery | the mode per category; delivery is fixed                                | `person`, encrypted to the agent's key (D4) | `refuse` (no keys through requests); `off` (only a requester that may issue) | step 7; a sealed-plaintext delivery for agents without a key pair is possible later (about 1 h) but not offered |
 
 ### Composition examples
 
-| Team                                 | `prod`                                                                                                                | `stage`                |
-| ------------------------------------ | --------------------------------------------------------------------------------------------------------------------- | ---------------------- |
-| Deploys by hand and approves (today) | Deploy categories `person`; the rest at the defaults                                                                  | Unprotected: all `off` |
-| Approves in pull requests            | Code and permission categories `plan`; `deletes-data` `person`; `secrets`, `credentials`, `registry`, `data` `person` | `off`                  |
-| Agent-driven, person on a phone      | Deploy categories `plan`; `deploy-request` `person`; everything else `person`; plans approved from the console        | `deploy-request` `off` |
-| No approvals                         | Unprotected, or every category `off`; the installation floor left empty                                               | `off`                  |
+| Team                                        | `prod`                                                                                                                | `stage`                |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| Deploys by hand and approves (today's flow) | Deploy categories `person`; the rest at the defaults                                                                  | Unprotected: all `off` |
+| Approves in pull requests                   | Code and permission categories `plan`; `deletes-data` `person`; `secrets`, `credentials`, `registry`, `data` `person` | `off`                  |
+| Agent-driven, person on a phone             | Deploy categories `plan`; `deploy-request` `person`; everything else `person`; plans approved from the console        | `deploy-request` `off` |
+| No approvals                                | Unprotected, or every category `off`                                                                                  | `off`                  |
 
 The second row is the user's example: plan approval for code and permissions, link approval for credentials.
 
 ### The safe default for a new installation
 
-Behaviour does not change until someone chooses otherwise:
-
 - `prod` is protected (ADR-0050 §4).
 - ADR-0050's seven closer-review categories are `plan`. That is the same as today when no plan exists, because the
   pending item is today's approval.
 - The permission categories and `grants` stay `off` (ADR-0083).
-- `deploy-request`, `secrets`, `registry`, `data` and `credentials` are `person`.
-- The installation floor is empty.
+- `deploy-request`, `secrets`, `variables`, `data`, `registry`, `agent-grants` and `credentials` are `person`.
+- The settings take the defaults in the table above.
 
-One change in behaviour follows from these defaults on an existing installation: an agent's secret write on a protected
-environment, which applies at once today, would wait for a person. That is the gap this draft closes, but it is a
-change. D8 asks whether `secrets` defaults to `person` or to `off`.
+Today an agent's secret, variable or data write on a protected environment applies at once. With these defaults it
+waits for a person, from step 5 on (D8). That is the change in behaviour the user chose. A team that wants today's
+behaviour sets those categories to `off`.
 
 ### Always a person, whatever the mode
 
 These are not categories. No mode, plan or floor applies to them, and no request can name them:
 
-- Changing the approval configuration itself: the protection flag, modes, the installation's defaults and floor. A
-  mode that an agent could set to `off` would gate nothing.
+- Changing the approval configuration itself: the protection flag, the modes and the settings (and, later, the
+  installation's defaults and floor). A mode that an agent could set to `off` would gate nothing.
 - Deciding a pending item, and approving or revoking a plan entry.
 - Deleting a protected environment (`requireHumanForProtectedDelete`).
 - Installation administration in IAM: promotion, `iam.admin` grants, terminals, signing and vault keys, the
@@ -423,13 +468,33 @@ as ADR-0083 already decided.
   `plan` for a closer-review one; a removed category becomes `off`; null stays null, which means the defaults.
 - The old column keeps its meaning, so a Control rolled back reads it as before. A classification stores its policy
   only when it differs from the defaults, as `StoredClassification.categories` does today.
-- The installation's defaults and floor are a new one-row table. Absent means the shipped defaults and no floor.
-- No generated file and no environment variable changes.
+- The settings are new nullable columns; null reads as the default.
+- No generated file and no environment variable changes. One operator step, for `planEvidence: console+github` only:
+  an existing GitHub App gets the user-authorization callback URL in its GitHub settings, which is documented in
+  `docs/reference/`. Without it, reviews count for nothing and console approvals still work.
 
 ### Effort
 
-The policy model, the conversion and the console's settings take about 4–5 h. The installation level adds about
-2–3 h. The gate function replaces `waitsForApproval` in the same PR as the model.
+The policy model, the conversion, the settings and the console's settings page take about 5–6 h. The gate function
+replaces `waitsForApproval` in the same PR as the model. A later installation level adds about 2–3 h.
+
+## Credentials for someone else
+
+The agent's own credential comes from the device flow, which already works from one link. A key for someone else (a CI
+system's `px_` key, for example) goes through a request whose result only the agent can read (decision D4):
+
+1. The agent makes a key pair and sends the public key (a P-256 or X25519 JWK) with the request: the app, the exact
+   actions, the label and the expiry, at most 30 days (`MAX_KEY_LIFETIME_SECONDS`). Its thumbprint is part of the
+   request's digest, and the page shows it, so the agent can print the same value beside the link.
+2. On approval, Control calls IAM's key issuance through its IAM gateway with the approver's console token, so IAM
+   checks the approver's `iam.admin` as it does today. IAM encrypts the plaintext to the public key (JWE, `ECDH-ES` with
+   `A256GCM`) before it answers. The plaintext never leaves IAM in the clear: not to the approver's browser, and not to
+   Control's database.
+3. Control keeps the JWE on the request until the agent fetches it once, or until the request expires. Then it is
+   deleted. IAM's audit row records the key under the approver, naming the request and the requester.
+
+Cost: about 4–5 h (IAM's encryption to a supplied key, the request kind, the agent's fetch, the CLI's key pair).
+`credentials: refuse` turns it off.
 
 ## Actions never approved through a request or a plan
 
@@ -442,83 +507,63 @@ The "always a person" list above holds whatever the mode. Beyond it, no request 
 - Source connections and builder pairing: they need a browser with GitHub or the builder anyway.
 - Namespace removal and claim release: ADR-0034 frees resources that the next app could adopt with their old secrets.
 - Reading data content (`data.content.read`): an approval would deliver production content to the agent.
-- Anything that returns a secret to the agent, unless D4 decides a delivery that keeps it out of Control's storage.
+- Anything that returns a secret to the agent in a form Control could read. A key for someone else goes back only
+  encrypted to the agent's own public key (below).
 
 A request of such a kind is refused when it is created (400 naming the kind), not at approval.
 
 ## Comparison
 
-| Topic                                        | (a) RAR device tokens                                      | (b) Approval request                                                | (c) CIBA                    | (d) Approval plan                                                     |
-| -------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------- | --------------------------------------------------------------------- |
-| On the phone                                 | Code page, then consent in IAM; no access diff of a deploy | One console page with the exact action and the access diff; one tap | A notification, then as (a) | Nothing for covered changes; the parked difference as today otherwise |
-| Binding                                      | Fields signed into a token; each procedure compares them   | Stored row plus its digest; the approver acts on the row            | As (a)                      | Fragment hashes before and after; SQL and migration checksums         |
-| Expiry                                       | 5 min attempt (too short)                                  | 24 h request (D3)                                                   | Set by the server           | 30 days per entry; consumed on publication                            |
-| Replay                                       | A spent-`jti` table in Control                             | A conditional state change in the change's transaction              | As (a)                      | Consumption at publication                                            |
-| Audit                                        | IAM consent plus Control call                              | Request row plus the action's record naming the request             | As (a)                      | Plan write plus publication naming the entries                        |
-| Agent learns                                 | Polls the token, then the call's answer                    | Polls the request or run (already linked)                           | Ping or poll                | The run's status                                                      |
-| Fits `isPerson` and "approve in the console" | No: the approval becomes a bearer credential               | Yes                                                                 | No                          | Yes (console approval); GitHub review only with identity mapping      |
-| Effort (agent hours)                         | 10–14                                                      | 12–15                                                               | (a) plus a channel          | 6–10 (plus the check spec for PR-side)                                |
-| Risk                                         | High: a new token kind; the approval leaves the console    | Low: reuses runs, grant requests and leases                         | High                        | Medium: coverage logic must never cover a line it should not          |
+| Topic                                        | (a) RAR device tokens                                      | (b) Approval request                                                | (c) CIBA                    | (d) Approval plan                                                       |
+| -------------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------- | ----------------------------------------------------------------------- |
+| On the phone                                 | Code page, then consent in IAM; no access diff of a deploy | One console page with the exact action and the access diff; one tap | A notification, then as (a) | Nothing for covered changes; the parked difference as today otherwise   |
+| Binding                                      | Fields signed into a token; each procedure compares them   | Stored row plus its digest; the approver acts on the row            | As (a)                      | Fragment hashes before and after; SQL and migration checksums           |
+| Expiry                                       | 5 min attempt (too short)                                  | 24 h request (D3, configurable)                                     | Set by the server           | 30 days per entry; consumed on publication                              |
+| Replay                                       | A spent-`jti` table in Control                             | A conditional state change in the change's transaction              | As (a)                      | Consumption at publication                                              |
+| Audit                                        | IAM consent plus Control call                              | Request row plus the action's record naming the request             | As (a)                      | Plan write plus publication naming the entries                          |
+| Agent learns                                 | Polls the token, then the call's answer                    | Polls the request or run (already linked)                           | Ping or poll                | The run's status                                                        |
+| Fits `isPerson` and "approve in the console" | No: the approval becomes a bearer credential               | Yes                                                                 | No                          | Yes (console approval); a GitHub review counts only for a linked person |
+| Effort (agent hours)                         | 10–14                                                      | 12–15                                                               | (a) plus a channel          | 6–8 console; 7–10 more for GitHub reviews                               |
+| Risk                                         | High: a new token kind; the approval leaves the console    | Low: reuses runs, grant requests and leases                         | High                        | Medium: coverage logic must never cover a line it should not            |
 
 ## Recommendation and steps
 
-Build **(b)** first, starting with the deploy shape, because it closes the gap behind this draft (an agent starts a
-deploy and sends a link) with the least new machinery. Then build **(d)** console-first, to remove the second click for
-reviewed changes. Do not build (a) or (c). The device flow stays what it is: how an agent gets its own standing,
-narrowed credential, from one link.
+The user chose (b) and (d) on one gate with modes (D1 and the modes decision). (a)
+and (c) are not built. The device flow stays what it is: how an agent gets its own standing, narrowed credential, from
+one link.
 
-Small PRs, each one reviewer round and CI:
+Small PRs, each one reviewer round and CI. Hours are elapsed agent time, mostly review rounds and CI:
 
-1. **ADR.** Rewrite ADR-0050 §4–5 and ADR-0083 in place: the gate with modes per category and the installation's
-   defaults and floor; a non-person's manual run of a protected environment parks; approval requests as the pending
-   registry write ADR-0083 deferred; the always-a-person list. Docs only, about 1 h.
-2. **The policy and the gate.** Modes per category beside `approval_categories` (both migration sets), the conversion,
-   `gate()` replacing `waitsForApproval`, and the console's settings with the installation defaults and floor. With
-   only the existing categories and no plan, behaviour is unchanged. About 6–8 h.
-3. **An agent's deploy of a protected environment parks.** Change `protectedRunCause` and the restart check
-   (`run-lifecycle.ts:730`) so a non-person run with a 40-hex commit is created and parks with reason `requested`.
-   Record the OAuth client on the run. `triggerDeploy`'s answer carries the approval URL. `fabrika control deploy`
-   prints it and `--wait` follows. Parked runs expire. About 3–4 h.
-4. **The approval page for a requested run.** Show who asked (person and client), the commit, its message, the
-   compare link and the access lines, laid out for a phone. Before/after screenshots. About 2–3 h.
-5. **Control approval requests.** `approval_requests` (both migration sets), `approvals.requests.create/get/list/decide`,
-   and the protected-environment registry writes plus data operations routed through them for a non-person caller.
-   Sealed secret values. One page. About 5–7 h.
-6. **IAM requests from an agent.** `grant_requests` gains a requester that is not an administrator, reached through
-   Control's IAM gateway with the agent's credential. Keys only if D4 says so. About 3–4 h.
-7. **(d) console plans.** Plan entries, fragment hashes, coverage in the park decision, consumption, and a plan page
-   fed from a commit compare. About 6–8 h.
-8. **(d) from a pull request.** After the GitHub check spec: the check links to the plan page. A GitHub review counts
-   only if D5 says so.
+| #  | PR                                                                                                                                                                                                                                                                                                                                                                                         | Hours |
+| -- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----- |
+| 1  | **ADR.** Rewrite ADR-0050 §4–5 and ADR-0083 in place: the gate with modes per category and the environment settings; a non-person's manual run of a merged commit parks; approval requests as the pending registry write ADR-0083 deferred; self-approval of an agent's request; the always-a-person list. Docs only.                                                                      | 1     |
+| 2  | **The policy and the gate.** `app_envs.approval_policy` and the settings (both migration sets, and `app_env_protection`), the conversion from `approval_categories`, `gate()` replacing `waitsForApproval`, the four modes, and the console's settings page. The new categories exist but are inert. With no plan, behaviour is unchanged.                                                 | 5–6   |
+| 3  | **An agent's deploy of a protected environment parks.** `protectedRunCause` and the restart check (`run-lifecycle.ts:730`) admit a non-person run of a merged 40-hex commit (`deployRequestCommits`), which parks with reason `requested`. Record the OAuth client on the run. Parked runs expire after `requestTtlHours`. `fabrika control deploy` prints the link, and `--wait` follows. | 4–5   |
+| 4  | **The approval page for a requested run.** Who asked (person and client), the commit, its message, the compare link and the access lines, laid out for a phone. Before/after screenshots.                                                                                                                                                                                                  | 2–3   |
+| 5  | **Control approval requests.** `approval_requests` (both migration sets), `approvals.requests.create/get/list/decide`; a non-person's secret, vault, variable, data and registry write on a protected environment becomes a request. Sealed secret values. One page, its link and the agent's polling. **From this PR on, D8 holds.**                                                      | 6–7   |
+| 6  | **IAM requests from an agent.** `grant_requests` gains a requester that is not an administrator, and `access.request` at the app, reached through Control's IAM gateway with the agent's credential. `requesterMayApprove` is mirrored to IAM.                                                                                                                                             | 3–4   |
+| 7  | **Credentials for someone else.** The request kind, IAM's encryption to the agent's public key, the one-time fetch, and the CLI's key pair.                                                                                                                                                                                                                                                | 4–5   |
+| 8  | **(d) console plans.** Plan entries with the transition binding (and `after-state`), fragment hashes, coverage in the gate, consumption at publication, `planTtlDays`, and a plan page fed from a commit compare.                                                                                                                                                                          | 6–8   |
+| 9  | **GitHub account linking in IAM.** The App's user authorization, the stored GitHub user id, unlinking, and the reference doc's operator step for an existing App.                                                                                                                                                                                                                          | 4–6   |
+| 10 | **GitHub reviews as plan evidence.** The review lookup at deploy, the snapshot at the review's commit, `planEvidence`.                                                                                                                                                                                                                                                                     | 3–4   |
 
-Steps 1–7 take about 30–35 h of agent time in total, mostly review rounds and CI. Steps 2–3 alone close the request
-behind this draft (an agent deploys `prod` with a link). Step 8 follows the GitHub check spec.
+Total: about 38–49 h, call it 45–55 h with the slack of ten review rounds. Steps 2–4 alone deliver the request behind
+this draft: an agent deploys `prod` and sends the person a link. Order: 1 → 2 → 3 → 4, then 5 → 6 → 7, and 8 → 9 → 10.
+The two tracks after step 2 are independent. Optional and not counted: the GitHub check spec, which shows the access
+diff on the pull request; and the installation level (2–3 h).
 
-Waits on the user: the decisions below, and a merge decision for each PR that changes deploy configuration (none of the
-above should).
+Waits on the user: none of these PRs changes deploy configuration, so each merges after an approved round and green
+CI. The App callback URL of step 9 is an operator step on each existing installation that wants GitHub reviews to
+count.
 
-## Decisions
+## Decisions (answered by the user)
 
-- **D1 — Which design.** (b) for single actions and (d) for reviewed changes (recommended); or (b) alone; or (a).
-- **D2 — May a person approve their own agent's request?** Recommended: yes for deploys, registry writes and data
-  operations (ADR-0050 has no four-eyes rule). No for grants and keys at an app whose grants wait (ADR-0083 keeps a
-  second administrator).
-- **D3 — How long a request and a parked run wait.** 24 h (recommended), 7 days like grant requests, or no expiry as
-  today.
-- **D4 — Credentials for something other than the agent itself** (a CI `px_` key, for example). Options:
-  - not through requests at all (recommended for now; the agent's own credential comes from the device flow, which
-    already works from one link);
-  - a request whose result is encrypted to a public key the agent sends with it, so Control never stores the
-    plaintext;
-  - a request whose plaintext Control seals until the agent collects it once.
-- **D5 — Do GitHub reviews count for (d)?** Console approvals only (recommended until IAM maps GitHub accounts to
-  principals); or GitHub `APPROVED` reviews of mapped, non-author, non-bot accounts.
-- **D6 — What a plan entry binds.** A before → after transition, which composes across pull requests (recommended,
-  exact); or the after-state only (simpler, but approves a widening against a baseline nobody saw).
-- **D7 — May an agent start a deploy of a commit not on the trigger ref?** Recommended: yes, as a parked request with a
-  40-hex commit; the person sees the compare. Or: only commits reachable from the trigger ref.
-- **D8 — The default of `secrets` on a protected environment.** `person` (recommended; it closes gap 2, but an agent's
-  secret write on `prod` that applies at once today would wait); or `off`, which keeps today's behaviour until a team
-  opts in.
-- **D9 — The installation level.** Defaults plus a floor per category, set by a global `access.approve` holder
-  (recommended); defaults only; or no installation level, environment settings only.
+| Decision group         | Decision                                                                                                                                      | Default here                                                   | Setting for the alternative                                        |
+| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Path                   | D1: (b) and (d), as recommended                                                                                                               | both, on one gate                                              | modes per category (`off`, `plan`, `person`, `refuse`)             |
+| Path                   | D7: only merged commits may be requested for deploy                                                                                           | `deployRequestCommits: merged`                                 | `any`; `deploy-request: refuse` for no agent deploys at all        |
+| Modes                  | Build `off`, `plan` and `person` now; D9: no installation level yet                                                                           | environment settings only                                      | an installation level later (defaults and floor, 2–3 h)            |
+| Secrets and data       | D8: `person` for secrets, vault and data operations, app variables included; close the hole only with requests; nothing changes before step 5 | `secrets`, `variables`, `data`: `person`, enforced from step 5 | the same categories `off` (today's behaviour) or `refuse`          |
+| Who approves, expiry   | D2: a person may always approve their own agent's request, grants and keys included; D3: 24 h, configurable                                   | `requesterMayApprove: true`, `requestTtlHours: 24`             | `requesterMayApprove: false`; 1–168 h                              |
+| Keys for others        | D4: keys for someone else through a request whose result is encrypted to the agent's public key                                               | `credentials: person`, JWE to the agent's key                  | `credentials: refuse`; `off` for a requester that may issue anyway |
+| Plan and pull requests | D5: a GitHub review of a mapped person also counts; D6: the plan binds the before → after transition; both configurable                       | `planEvidence: console+github`, `planBinding: transition`      | `planEvidence: console`; `planBinding: after-state`                |
