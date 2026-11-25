@@ -375,20 +375,20 @@ describe('IAM resource graph', () => {
 	})
 
 	test("registers the operator's identity-bound external clients beside the command-line client's resources (ADR-0084)", () => {
-		const sonda = {
+		const opsTool = {
 			provider: 'external',
-			clientId: 'https://sonda.contember.com/admin/oauth/client',
-			redirectUris: ['https://sonda.contember.com/admin/oauth/callback'],
+			clientId: 'https://ops-tool.example.com/admin/oauth/client',
+			redirectUris: ['https://ops-tool.example.com/admin/oauth/callback'],
 			identity: {
-				app: 'sonda',
-				resource: 'https://sonda.contember.com/admin',
-				roles: [{ key: 'sonda-admin', name: 'Sonda administrator' }, { key: 'sonda-viewer', name: 'Sonda viewer' }],
+				app: 'ops-tool',
+				resource: 'https://ops-tool.example.com/admin',
+				roles: [{ key: 'ops-admin', name: 'Operations administrator' }, { key: 'ops-viewer', name: 'Operations viewer' }],
 			},
 		}
 		const relayed = { ...REMOTE_SOURCE, FABRIKA_CONTROL_URL: 'https://console.example.com', FABRIKA_IAM_PROVISIONING_KEY: 'px_provisioning' }
-		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([sonda]) })
+		const worker = buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([opsTool]) })
 		const parsed = parseOAuthConfig(worker.options.vars?.['OAUTH_CONFIG'], DEFAULT_PLATFORM_AUDIENCES)
-		expect(parsed?.clients).toEqual([{ ...sonda, provider: 'external', metadataUrl: sonda.clientId }])
+		expect(parsed?.clients).toEqual([{ ...opsTool, provider: 'external', metadataUrl: opsTool.clientId }])
 		expect(parsed?.resources.map(({ resource }) => resource)).toEqual([
 			'https://console.example.com/api/rpc',
 			'https://console.example.com/operations/api/rpc',
@@ -398,35 +398,38 @@ describe('IAM resource graph', () => {
 			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...relayed, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify(clients) })
 		// MCP authoring is not supported on Cloudflare yet.
 		const claude = { provider: 'claude', clientId: 'https://claude.ai/oauth/client', redirectUris: ['https://claude.ai/api/mcp/auth_callback'] }
-		expect(refused([sonda, claude])).toThrow('is not supported on Cloudflare yet')
-		expect(refused([{ ...sonda, identity: undefined }])).toThrow('is not supported on Cloudflare yet')
-		expect(refused([{ ...sonda, identity: { ...sonda.identity, app: 'operations' } }])).toThrow("is a platform service's")
+		expect(refused([opsTool, claude])).toThrow('is not supported on Cloudflare yet')
+		expect(refused([{ ...opsTool, identity: undefined }])).toThrow('is not supported on Cloudflare yet')
+		expect(refused([{ ...opsTool, identity: { ...opsTool.identity, app: 'operations' } }])).toThrow("is a platform service's")
 		// What IAM would refuse to boot with is refused at the deploy: here an admin audience the installation names.
 		expect(() =>
 			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
 				...relayed,
 				FABRIKA_IAM_ADMIN_AUDIENCES: 'vozka,gateway',
-				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{ ...sonda, identity: { ...sonda.identity, app: 'gateway' } }]),
+				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{ ...opsTool, identity: { ...opsTool.identity, app: 'gateway' } }]),
 			})
 		).toThrow("names an installation service's app or resource")
-		expect(refused([{ ...sonda, identity: { ...sonda.identity, resource: `https://${REMOTE_DOMAIN}/x` } }])).toThrow("platform service's host")
+		expect(refused([{ ...opsTool, identity: { ...opsTool.identity, resource: `https://${REMOTE_DOMAIN}/x` } }])).toThrow("platform service's host")
 		expect(() =>
 			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, {
 				...relayed,
 				OPERATIONS_HOSTNAME: 'operations.example.com',
-				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{ ...sonda, identity: { ...sonda.identity, resource: 'https://operations.example.com/x' } }]),
+				FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([{
+					...opsTool,
+					identity: { ...opsTool.identity, resource: 'https://operations.example.com/x' },
+				}]),
 			})
 		).toThrow("platform service's host")
 		// A list that would not fit IAM's Worker variable stops here, not inside wrangler.
 		const many = Array.from({ length: 16 }, (_, index) => ({
-			...sonda,
-			clientId: `https://sonda${index}.example.com/admin/oauth/client`,
-			identity: { ...sonda.identity, app: `sonda-${index}` },
+			...opsTool,
+			clientId: `https://ops-tool${index}.example.com/admin/oauth/client`,
+			identity: { ...opsTool.identity, app: `ops-tool-${index}` },
 		}))
 		expect(refused(many)).toThrow('longer than a Worker variable holds (5120 bytes)')
 		// Without the console's origin IAM serves no OAuth at all.
 		expect(() =>
-			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...REMOTE_SOURCE, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([sonda]) })
+			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...REMOTE_SOURCE, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([opsTool]) })
 		)
 			.toThrow('FABRIKA_PLATFORM_MCP_CLIENTS_JSON needs FABRIKA_CONTROL_URL')
 	})
