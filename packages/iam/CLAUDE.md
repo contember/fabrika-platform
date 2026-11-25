@@ -239,7 +239,18 @@ fails if that stops being true — it is the guard, not documentation of one.
   authority, and neither may outlive the bound either. 30 days is the longest any current caller
   asks for (the builder's device-authorized key; `fabrika control key issue` requires
   `--expires-in`). The device repository caps its keys with the same constant,
-  and an approval caps the key further at the approver's authority deadline (S8).
+  and an approval caps the key further at the approver's authority deadline (S8). `apiKeys.provision` (and
+  `POST /admin/api-keys`) refuses an expiry later than the same bound, or none, except from `provisioning-admin`, whose
+  local-stack machine key does not expire; `apiKeys.rotate` keeps the key's expiry, and a stated one meets the bound.
+- **A MACHINE CALLER'S KEY ISSUANCE MEETS THE ENVIRONMENT'S `credentials` MODE** (ADR-0083 §8,
+  `src/credentials-gate.ts`, `requireCredentialsMode` in `src/admin/context.ts`). Every issuing path
+  (`apiKeys.provision`/`rotate`, `shareLinks.issue`, `workloads.issueKey`, `membershipKeys.issue`, `issueKey` for
+  someone else) asks `credentialsRefusal` before it writes. A person in a signed-in session (`session` claim, `user`,
+  no OAuth or link claims) and `provisioning-admin` pass; anyone else is refused (403) where the strictest environment
+  the key acts in is `person` or `refuse`. An `<app>@<env>` id is one environment; an admin audience every environment
+  of its `app` scope's application, or all; a cross-app key all. A missing mode, or an id with no known environment,
+  reads as `person`. IAM itself, Operations and plain ids are not judged. A new issuing mutation joins the gate and the
+  table in `admin-rpc-approval-categories.test.ts`.
 - **A KEY LISTS EXACT ACTIONS OF ITS APP'S CATALOG, NO WILDCARD.** `issueKey` refuses `*` and
   `prefix.*` in every mode and requires each action verbatim in `app_actions`, before delegation —
   so an issuer holding `*` still cannot mint a key for an action the app never declared, and a key
@@ -415,9 +426,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   user's `grant_revision` and the app's schema revision, read first; principal rows first, then the revision row
   `FOR SHARE` on Postgres); a stale one writes nothing and answers 409.
 - **A CONSOLE GRANT AT AN APPLICATION WHOSE GRANTS WAIT IS A REQUEST, AND A REQUEST GRANTS NOTHING** (ADR-0083,
-  `src/admin/grant-requests.ts`). `app_grant_approvals` holds whether grants at an `<app>@<env>` id wait; only Control
-  writes it (`grantApproval.set`, refused to every caller but the provisioning key), at Control's protection
-  `revision`, and an older revision changes nothing. There `grants.create/update/delete` and
+  `src/admin/grant-requests.ts`). `app_grant_approvals` holds whether grants at an `<app>@<env>` id wait, and its
+  `credentials` mode (null: not yet mirrored, read as `person`); only Control writes it (`grantApproval.set`, refused
+  to every caller but the provisioning key), at Control's protection `revision`, and an older revision changes
+  nothing. A call without `credentials` (an older Control) leaves the mode as it is. There `grants.create/update/delete` and
   `appPeople.grant/revoke` run their checks, then write a `grant_requests` row and `iam.grant.request` and answer
   `pending`; a cross-app grant never waits. Nothing that resolves permissions reads `grant_requests`. An administrator
   of the app (`managesApp`), a person in a session and not the requester, approves (`grantRequests.decide`): the
