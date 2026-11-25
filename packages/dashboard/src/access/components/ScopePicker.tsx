@@ -1,5 +1,7 @@
-import type { AppScopeDef } from '@fabrika/iam-contract'
+import type { AppScopeDef, DimensionValue } from '@fabrika/iam-contract'
 import { MAX_GRANT_SCOPE_VALUES } from '@fabrika/iam-contract'
+import { useState } from 'react'
+import { SearchField } from '../../components/SearchField'
 import { type LiveScopeValues, unavailableReason, useLiveScopeValues } from '../lib/useLiveScopeValues'
 import { Badge } from './Badge'
 
@@ -72,7 +74,14 @@ export function ScopePicker({ app, scopes, value, onChange, idPrefix = 'scope' }
 							{scopes.map((s) => <option key={s.type} value={s.type}>{s.label ? `${s.label} (${s.type})` : s.type}</option>)}
 						</select>
 					</label>
-					<ScopeValuesField app={app} dimension={dimension ?? { type: value.type }} value={value} onChange={onChange} idPrefix={idPrefix} />
+					<ScopeValuesField
+						key={value.type}
+						app={app}
+						dimension={dimension ?? { type: value.type }}
+						value={value}
+						onChange={onChange}
+						idPrefix={idPrefix}
+					/>
 				</>
 			)}
 			{value.kind === 'global' && <p className="hint">Applies to all scopes within the selected application.</p>}
@@ -101,12 +110,14 @@ interface ScopeValuesChoiceProps extends Omit<ScopeValuesFieldProps, 'app'> {
 }
 
 /**
- * A dimension that lists its values offers one checkbox each: the application's answer when it gave one, else the
- * declared list. A value the grant holds that the list does not have stays checked and flagged until it is unchecked.
+ * A dimension that lists its values offers one checkbox each, one per row: the application's answer when it gave one,
+ * else the declared list. Past eight values a filter narrows the rows. A value the grant holds that the list does not
+ * have stays checked and flagged until it is unchecked.
  * With no list at all it takes free text, one value per line, under a warning that nothing checks it. When the
  * application was asked and did not answer, a warning says why and what is shown instead.
  */
 export function ScopeValuesChoice({ dimension, live, value, onChange, idPrefix = 'scope' }: ScopeValuesChoiceProps) {
+	const [query, setQuery] = useState('')
 	const name = dimension.label ?? dimension.type
 	const listed = live.status === 'live' ? live.values : dimension.values ?? []
 	const fallback = live.status === 'unavailable'
@@ -144,6 +155,9 @@ export function ScopeValuesChoice({ dimension, live, value, onChange, idPrefix =
 	const chosen = new Set(value.values)
 	const known = new Set(listed.map((entry) => entry.value))
 	const unlisted = value.values.filter((entry) => !known.has(entry))
+	const filtering = listed.length + unlisted.length > FILTER_ABOVE
+	const shownListed = filtering ? listed.filter((entry) => valueMatches(entry, query)) : listed
+	const shownUnlisted = filtering ? unlisted.filter((entry) => valueMatches({ value: entry }, query)) : unlisted
 	function toggle(entry: string, on: boolean) {
 		const next = on ? [...value.values, entry] : value.values.filter((held) => held !== entry)
 		onChange({ ...value, values: next, text: next.join('\n') })
@@ -152,27 +166,43 @@ export function ScopeValuesChoice({ dimension, live, value, onChange, idPrefix =
 		<fieldset className="scope-picker">
 			<legend>{name} values</legend>
 			{fallback}
-			<div className="action-list">
-				{listed.map((entry) => {
+			{filtering && (
+				<div className="filters">
+					<SearchField label={`Filter ${name} values`} value={query} onChange={setQuery} placeholder="Name or ID" />
+				</div>
+			)}
+			<div className="scope-value-list">
+				{shownListed.map((entry) => {
 					const id = `${idPrefix}-value-${entry.value}`
 					return (
-						<label key={entry.value} htmlFor={id} className="checkbox">
-							<input id={id} type="checkbox" checked={chosen.has(entry.value)} onChange={(event) => toggle(entry.value, event.target.checked)} />
-							{entry.label ?? <code>{entry.value}</code>}
-							{entry.label !== undefined && <span className="muted small">{entry.value}</span>}
+						<label key={entry.value} htmlFor={id} className="checkbox" title={entry.label === undefined ? entry.value : `${entry.label} · ${entry.value}`}>
+							<input
+								id={id}
+								type="checkbox"
+								checked={chosen.has(entry.value)}
+								onChange={(event) =>
+									toggle(entry.value, event.target.checked)}
+							/>
+							{entry.label === undefined ? <code className="truncate">{entry.value}</code> : (
+								<>
+									<span className="truncate">{entry.label}</span>
+									<span className="truncate muted small">{entry.value}</span>
+								</>
+							)}
 						</label>
 					)
 				})}
-				{unlisted.map((entry) => {
+				{shownUnlisted.map((entry) => {
 					const id = `${idPrefix}-value-${entry}`
 					return (
-						<label key={entry} htmlFor={id} className="checkbox">
+						<label key={entry} htmlFor={id} className="checkbox" title={entry}>
 							<input id={id} type="checkbox" checked onChange={(event) => toggle(entry, event.target.checked)} />
-							<code>{entry}</code>
+							<code className="truncate">{entry}</code>
 							<Badge tone="warn" title="The grant holds this value, but the application no longer lists it.">not listed</Badge>
 						</label>
 					)
 				})}
+				{shownListed.length + shownUnlisted.length === 0 && <p className="hint">No value matches “{query.trim()}”.</p>}
 			</div>
 			{unlisted.length > 0 && (
 				<p className="warn-text" role="note">
@@ -183,4 +213,14 @@ export function ScopeValuesChoice({ dimension, live, value, onChange, idPrefix =
 			)}
 		</fieldset>
 	)
+}
+
+/** Past this many values the list offers a filter; this many or fewer fit the box without one. */
+const FILTER_ABOVE = 8
+
+/** Whether a value's label or ID contains the filter, ignoring case; an empty filter matches every value. */
+export function valueMatches(entry: DimensionValue, query: string): boolean {
+	const needle = query.trim().toLowerCase()
+	if (needle === '') return true
+	return entry.value.toLowerCase().includes(needle) || (entry.label?.toLowerCase().includes(needle) ?? false)
 }

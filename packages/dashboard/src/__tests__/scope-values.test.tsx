@@ -4,7 +4,7 @@
 import { MAX_GRANT_SCOPE_VALUES } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { resolveScope, scopedValue, ScopeValuesChoice, ScopeValuesField, valuesFromText } from '../access/components/ScopePicker'
+import { resolveScope, scopedValue, ScopeValuesChoice, ScopeValuesField, valueMatches, valuesFromText } from '../access/components/ScopePicker'
 import { fmtGrantScope } from '../access/lib/format'
 import { type LiveScopeValues, unavailableReason } from '../access/lib/useLiveScopeValues'
 
@@ -109,6 +109,33 @@ describe('the values of a grant', () => {
 		expect(html).toContain('acme\ninitech')
 		expect(html).toContain('you do not hold the permission the application asks for to list them')
 		expect(html).toContain('Enter the IDs by hand.')
+	})
+
+	test('each value is one row: the label and the ID cut with an ellipsis, both in full in its tooltip', () => {
+		const label = 'Globex Corporation Internal Knowledge Base (globex-internal-knowledge-base)'
+		const id = '01a1fdbe-309d-70d5-ab6e-3337262984b4'
+		const html = renderLive({ status: 'live', values: [{ value: id, label }, { value: 'acme' }] }, [])
+		const rows = [...html.matchAll(/<label for="t-value-[^"]+" class="checkbox" title="([^"]*)">(.*?)<\/label>/g)]
+		expect(rows.map((row) => row[1])).toEqual([`${label} · ${id}`, 'acme'])
+		expect(rows[0]?.[2]).toContain(`<span class="truncate">${label}</span><span class="truncate muted small">${id}</span>`)
+		expect(rows[1]?.[2]).toContain('<code class="truncate">acme</code>')
+		expect(html).toContain('<div class="scope-value-list">')
+		const held = renderLive({ status: 'live', values: [{ value: 'acme' }] }, [id])
+		expect(held).toContain(`<label for="t-value-${id}" class="checkbox" title="${id}">`)
+		expect(held).toContain(`<code class="truncate">${id}</code>`)
+	})
+
+	test('past eight values a filter narrows the rows by label or ID; eight or fewer need none', () => {
+		const values = (count: number) => Array.from({ length: count }, (_, index) => ({ value: `w${index}`, label: `Workspace ${index}` }))
+		expect(renderLive({ status: 'live', values: values(8) }, [])).not.toContain('type="search"')
+		expect(renderLive({ status: 'live', values: values(9) }, [])).toContain('type="search"')
+		expect(renderLive({ status: 'live', values: values(8) }, ['gone'])).toContain('type="search"')
+		const entry = { value: '01a1fdbe-309d', label: 'Acme Corporation (acme)' }
+		expect(valueMatches(entry, '')).toBe(true)
+		expect(valueMatches(entry, '  CORPORATION ')).toBe(true)
+		expect(valueMatches(entry, '309d')).toBe(true)
+		expect(valueMatches(entry, 'globex')).toBe(false)
+		expect(valueMatches({ value: 'acme' }, 'corp')).toBe(false)
 	})
 
 	test('every reason reads as a sentence', () => {
