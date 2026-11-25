@@ -8,6 +8,7 @@ import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ApprovalRequestRow, ControlRegistryRepository, ControlRepositories } from '../../db'
 import { acquireLease, acquireLeases, type Lease, type LeaseClock, runLeaseKey } from '../../lease'
 import type { Vault } from '../../vault'
+import type { IamGrantsReader } from './iam'
 import type {
 	RequestAction,
 	RequestExecution,
@@ -206,6 +207,8 @@ export interface ApprovalRequestSweepDeps {
 	readonly repositories: ControlRepositories
 	/** Where a request's sealed secret waits: an expired request's is deleted, an unknown execution's compared. */
 	readonly vault?: () => Promise<Vault>
+	/** IAM's grants and grant requests, which an IAM kind's unknown execution is followed through. */
+	readonly iamGrants?: IamGrantsReader
 	readonly lock: DeployLocks
 	readonly leaseClock?: LeaseClock
 	readonly kinds?: RequestKindRegistry

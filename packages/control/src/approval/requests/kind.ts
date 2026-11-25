@@ -5,18 +5,22 @@
 import type { AuthContext } from '@fabrika/auth'
 import { canonicalJson } from '@fabrika/auth-core'
 import type { ActionCategory, ApprovalRequestDescription } from '@fabrika/control-contract'
+import type { IamAdministrationScope } from '@fabrika/iam-contract'
 import type { ControlProvider, JsonValue } from '@fabrika/provider-contract'
 import type { z } from 'zod'
 import type { NamespaceProxyChanged } from '../../api/namespaces'
 import type { ApprovalRequestRow, ControlRepositories } from '../../db'
 import type { Vault } from '../../vault'
 import type { ConsoleAdmission } from '../human'
+import type { IamApprover, IamGrantsReader } from './iam'
 
 /** What a kind reads through in maintenance too: following an execution, or discarding what a request held. */
 export interface RequestKindContext {
 	readonly repositories: ControlRepositories
 	/** Control's vault, where a request's secret value waits sealed; absent where the installation has none. */
 	readonly vault?: () => Promise<Vault>
+	/** IAM's grants and grant requests, read with the provisioning key; absent where Control cannot reach IAM. */
+	readonly iamGrants?: IamGrantsReader
 }
 
 /** What a kind acts through when a request is created or executed: the registry's use-case context, less the caller. */
@@ -30,6 +34,17 @@ export interface RequestActionContext extends RequestKindContext {
 export interface RequestExecutionContext extends RequestActionContext {
 	readonly auth: AuthContext
 	readonly admission: ConsoleAdmission
+	/** IAM as the approver, with their console token; absent where Control cannot reach IAM as them. */
+	readonly iamApprover?: IamApprover
+}
+
+/**
+ * The person reading or deciding a request: their Control token, and what they administer in IAM, which IAM answers for
+ * their console token (null for nothing, and where Control cannot ask).
+ */
+export interface RequestApprover {
+	readonly auth: AuthContext
+	iamAdministration(): Promise<IamAdministrationScope | null>
 }
 
 /**
@@ -100,7 +115,7 @@ export interface RequestKindDefinition<Input, Before, Asked = never> {
 	 * Whether a person may decide it. Absent: `access.approve` at the coordinates, Control's own kinds. An IAM kind names
 	 * the application's IAM administration here.
 	 */
-	readonly approverMayDecide?: (auth: AuthContext, coordinates: RequestCoordinates) => boolean
+	readonly approverMayDecide?: (approver: RequestApprover, coordinates: RequestCoordinates) => Promise<boolean>
 	/**
 	 * What the action depends on now: a generation, a stored value or its digest, the target it replaces. Captured when
 	 * the request is created and again before it executes, under the lease; the two are compared by the SHA-256 of
@@ -165,7 +180,7 @@ export interface RequestKind {
 	readonly category: ActionCategory
 	readonly requesterAction: string
 	readonly requesterAt?: 'app'
-	readonly approverMayDecide?: (auth: AuthContext, coordinates: RequestCoordinates) => boolean
+	readonly approverMayDecide?: (approver: RequestApprover, coordinates: RequestCoordinates) => Promise<boolean>
 	/** Release what a stored request held; a throw is the caller's to log. */
 	readonly discard?: (c: RequestKindContext, request: ApprovalRequestRow) => Promise<void>
 	/**

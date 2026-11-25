@@ -23,7 +23,7 @@ import type { AppEnvRow, ApprovalRequestRow, ControlRegistryRepository } from '.
 import { appScope } from '../../iam'
 import { appEnvPolicy, appEnvSettings } from '../categories'
 import type { RequesterPerson } from '../human'
-import type { RequestCoordinates, RequestKind } from './kind'
+import type { RequestApprover, RequestCoordinates, RequestKind } from './kind'
 
 /** `sha256:<hex>` of a canonical JSON text. */
 export function jsonDigest(text: string): string {
@@ -135,13 +135,13 @@ export function holdsKindAction(
 }
 
 /** Whether the caller may carry the request out, as approving does: the decider its kind names, or else the kind's action where it acts. */
-export function mayExecute(
-	auth: AuthContext,
+export async function mayExecute(
+	approver: RequestApprover,
 	kind: Pick<RequestKind, 'requesterAction' | 'requesterAt' | 'approverMayDecide'>,
 	coordinates: RequestCoordinates,
-): boolean {
-	if (kind.approverMayDecide !== undefined) return kind.approverMayDecide(auth, coordinates)
-	return holdsKindAction(auth, kind, coordinates)
+): Promise<boolean> {
+	if (kind.approverMayDecide !== undefined) return kind.approverMayDecide(approver, coordinates)
+	return holdsKindAction(approver.auth, kind, coordinates)
 }
 
 /**

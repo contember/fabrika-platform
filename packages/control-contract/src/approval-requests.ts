@@ -4,6 +4,7 @@
 import type { JsonValue } from '@fabrika/provider-contract'
 import type { StepUpMode } from './approval-policy.js'
 import type { ApprovalStepUp } from './approval-step-up.js'
+import type { AccessMapRoleDto } from './index.js'
 
 /**
  * `pending` waits for a decision; `approved`, `rejected` and `expired` follow it. An approved request moves to `executing`
@@ -34,6 +35,8 @@ export interface ApprovalRequestDescription {
 	summary: ApprovalRequestText[]
 	/** The facts beside it, each a label and its value. */
 	facts: { label: string; value: ApprovalRequestText }[]
+	/** The role a grant gives, as the environment's approved contract declares it and the approval pages show it. */
+	role?: AccessMapRoleDto
 }
 
 /** Who asked: the principal, through which credential, and the person behind it when known. */

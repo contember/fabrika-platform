@@ -847,7 +847,9 @@ other environment, before the provider prepares anything, and the write maps a r
   A kind (`kind.ts`, `requestKind`) owns its input and before-state schemas, its coordinates, the action the requester
   must hold to ask, its execution, its `follow` hook, and an optional `discard` hook that releases what a refused or
   closed request held. `PRODUCTION_REQUEST_KINDS` (`production.ts`, kinds in `kinds/`) holds Control's local writes,
-  each executing through the use case its procedure runs, as the approver; a write that reaches the provider answers
+  each executing through the use case its procedure runs, as the approver, and an agent's grant (`kinds/grants.ts`),
+  which IAM's administrators of the application decide and which executes as the approver's console grant over
+  `IAM_ADMIN` with their console token (`requests/iam.ts`; the provisioning key only reads, to bind and to follow); a write that reaches the provider answers
   400 at creation, and a secret value is sealed under the request's purpose (`kinds/secrets.ts`). The all-environments
   layer is `env = '*'` (`ALL_ENVIRONMENTS`), a name `put` and `register` refuse to a new environment (`assertNewEnvironmentName`); `rules.ts` judges it by the strictest protected environment. Its decision and the sweep hold the
   lease of every environment it reaches and `<app>:*`, the row's fence, all or none (`acquireRequestLease`). `refused.ts` names the procedures no request may name, with why. Creating is a bearer's

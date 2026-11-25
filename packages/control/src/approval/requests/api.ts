@@ -15,6 +15,7 @@ import {
 	type DecideApprovalRequestInput,
 	type ListResponse,
 } from '@fabrika/control-contract'
+import type { IamAdministrationScope } from '@fabrika/iam-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { fail } from '../../api/domain'
@@ -24,7 +25,8 @@ import type { LeaseClock } from '../../lease'
 import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOtherThanRequester } from '../human'
 import { issueStepUpChallenge, type PasskeyStepUpPort, requestStepUpBinding, requireStepUp } from '../step-up'
 import { acquireRequestLease, actionOf, discardRequest, executeApprovedRequest } from './execute'
-import type { RequestActionContext, RequestCoordinates, RequestExecutionContext, RequestKind, RequestKindRegistry } from './kind'
+import type { IamApprover } from './iam'
+import type { RequestActionContext, RequestApprover, RequestCoordinates, RequestExecutionContext, RequestKind, RequestKindRegistry } from './kind'
 import { PRODUCTION_REQUEST_KINDS } from './production'
 import { refusedKindReason } from './refused'
 import {
@@ -48,6 +50,8 @@ export interface ApprovalRequestReadContext {
 	readonly consoleOrigin?: string
 	/** The kinds served; the production registry when absent. */
 	readonly kinds?: RequestKindRegistry
+	/** IAM as the caller, with their console token: what they administer there, and the change an IAM kind makes. */
+	readonly iamApprover?: IamApprover
 }
 
 /** Creating and deciding a request act through the registry's context: a kind seals, checks and executes there. */
@@ -76,6 +80,21 @@ function nowOf(c: ApprovalRequestContext): number {
 
 function kindsOf(c: ApprovalRequestReadContext): RequestKindRegistry {
 	return c.kinds ?? PRODUCTION_REQUEST_KINDS
+}
+
+const approvers = new WeakMap<ApprovalRequestReadContext, RequestApprover>()
+
+/** The caller as a decider; IAM is asked what they administer at most once per call. */
+function approverOf(c: ApprovalRequestReadContext): RequestApprover {
+	const known = approvers.get(c)
+	if (known !== undefined) return known
+	let administration: Promise<IamAdministrationScope | null> | undefined
+	const approver: RequestApprover = {
+		auth: c.auth,
+		iamAdministration: () => (administration ??= c.iamApprover?.administration() ?? Promise.resolve(null)),
+	}
+	approvers.set(c, approver)
+	return approver
 }
 
 /**
@@ -220,14 +239,14 @@ async function pendingRequestDecision(
  * What an approval refuses before it is recorded or a passkey challenge is spent on it: a kind this Control cannot
  * execute, an approver who may not carry it out, and the requester's own person where barred.
  */
-function approvableKind(c: ApprovalRequestContext, pending: PendingRequestDecision): RequestKind {
+async function approvableKind(c: ApprovalRequestContext, pending: PendingRequestDecision): Promise<RequestKind> {
 	const { row } = pending
 	const kind = kindsOf(c).get(row.kind)
 	// What the person saw is what executes: a request this Control cannot describe, it cannot approve either.
 	if (kind === undefined || typeof actionOf(kind, row) === 'string') {
 		fail(409, 'this Control cannot show what the request does, so it cannot approve it; refuse it or let it expire')
 	}
-	requireApproverMayExecute(c.auth, kind, row)
+	await requireApproverMayExecute(c, kind, row)
 	if (!pending.deciders.requesterMayApprove) requireOtherThanRequester(pending.approver, requesterOf(row), 'request')
 	return kind
 }
@@ -243,7 +262,7 @@ export async function challengeApprovalRequestUseCase(
 	const pending = await pendingRequestDecision(c, input)
 	if (pending.kind === 'decided') fail(409, `the request is ${pending.row.state}, no longer waiting for a decision; reload it`)
 	if (pending.deciders.stepUp === 'none') fail(409, 'deciding this request takes no passkey')
-	if (input.decision === 'approve') approvableKind(c, pending)
+	if (input.decision === 'approve') await approvableKind(c, pending)
 	return await issueStepUpChallenge(c.stepUp, requestStepUpBinding(pending.row.id, input.decision, pending.row.input_digest))
 }
 
@@ -270,7 +289,7 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 		return toApprovalRequestDto(c, await requireRow(c, row.id))
 	}
 
-	const kind = approvableKind(c, pending)
+	const kind = await approvableKind(c, pending)
 	if (deciders.approvers === 2 && row.partial_approver_id === approver.id) return toApprovalRequestDto(c, row)
 	const stepUp = await requireStepUp(c.stepUp, deciders.stepUp, binding, approver, input.stepUp, 'decision')
 	const decider = { decisionId: uuidv7(), id: approver.id, label: approver.label, stepUp }
@@ -327,6 +346,8 @@ function executionContext(c: ApprovalRequestContext): RequestExecutionContext {
 		...(c.vault === undefined ? {} : { vault: c.vault }),
 		...(c.catalogChanged === undefined ? {} : { catalogChanged: c.catalogChanged }),
 		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),
+		...(c.iamGrants === undefined ? {} : { iamGrants: c.iamGrants }),
+		...(c.iamApprover === undefined ? {} : { iamApprover: c.iamApprover }),
 	}
 }
 
@@ -337,13 +358,13 @@ function executionContext(c: ApprovalRequestContext): RequestExecutionContext {
 async function mayDecide(c: ApprovalRequestReadContext, row: ApprovalRequestRow): Promise<boolean> {
 	const coordinates: RequestCoordinates = { appId: row.app_id, env: row.env }
 	const kind = kindsOf(c).get(row.kind)
-	if (kind?.approverMayDecide !== undefined) return kind.approverMayDecide(c.auth, coordinates)
+	if (kind?.approverMayDecide !== undefined) return kind.approverMayDecide(approverOf(c), coordinates)
 	return holdsAtReach(c.auth, c.repositories.registry, CONTROL_ACTIONS.ACCESS_APPROVE, coordinates)
 }
 
 /** An approval executes as the approver, so they hold the action itself where the request acts, as its route would ask. */
-function requireApproverMayExecute(auth: AuthContext, kind: RequestKind, row: ApprovalRequestRow): void {
-	if (!mayExecute(auth, kind, { appId: row.app_id, env: row.env })) {
+async function requireApproverMayExecute(c: ApprovalRequestReadContext, kind: RequestKind, row: ApprovalRequestRow): Promise<void> {
+	if (!(await mayExecute(approverOf(c), kind, { appId: row.app_id, env: row.env }))) {
 		fail(403, `approving carries the change out as you, and you do not hold \`${kind.requesterAction}\` where it acts; another person decides it`)
 	}
 }
@@ -442,7 +463,7 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 	const coordinates = { appId: row.app_id, env: row.env }
 	// What the request acts on now, a value and a fingerprint are shown to one who may ask for it or carry it out; the
 	// result repeats what it set.
-	const full = kind !== undefined && (holdsKindAction(c.auth, kind, coordinates) || mayExecute(c.auth, kind, coordinates))
+	const full = kind !== undefined && (holdsKindAction(c.auth, kind, coordinates) || (await mayExecute(approverOf(c), kind, coordinates)))
 	const result = full ? storedResult(row.result_json) : undefined
 	const description = describe(c, row, kind, full)
 	const reached = row.env === ALL_ENVIRONMENTS ? await reachFact(c, row) : null
