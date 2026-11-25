@@ -64,6 +64,8 @@ export { MembershipTransportKeyRepository, type MembershipTransportKeyRow } from
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
 export {
 	type AuthoringClientWrite,
+	ExternalAppResourceTaken,
+	type ExternalAppRevocation,
 	type ExternalAppRow,
 	type ExternalAppWrite,
 	type OAuthClientRow,

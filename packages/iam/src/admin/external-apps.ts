@@ -22,7 +22,15 @@ import {
 } from '@fabrika/iam-contract'
 import { parsePresentation } from '../app-presentation'
 import { PROVISIONING_ADMIN_ID } from '../auth'
-import type { AuditEventInput, AuthoringClientWrite, ExternalAppWrite, OAuthClientRow, RegistryEvents } from '../db'
+import {
+	type AuditEventInput,
+	type AuthoringClientWrite,
+	ExternalAppResourceTaken,
+	type ExternalAppRevocation,
+	type ExternalAppWrite,
+	type OAuthClientRow,
+	type RegistryEvents,
+} from '../db'
 import { parseJsonOrNull } from '../json'
 import { type ManagedOAuthClient, type OAuthConfig, parseManagedClientEntry } from '../oauth-config'
 import { type AdminContext, adminEvent, fail } from './context'
@@ -70,10 +78,14 @@ export async function putExternalAppUseCase(c: AdminContext, input: PutExternalA
 		if (clients.some((known) => known.clientId === client.clientId)) return fail(400, `clients[${index}] repeats client id ${client.clientId}`)
 		clients.push(client)
 	}
-	const existing = await registry.externalApp(identity.app)
-	await checkExternalApp(c, config, identity, clients, existing !== null)
+	await checkExternalApp(c, config, identity, clients)
 	const write = externalAppWrite(identity, input.name, clients)
-	await registry.putExternalApp(write, registryEvents(c, 'iam.external_app.put', write))
+	try {
+		await registry.putExternalApp(write, registryEvents(c, 'iam.external_app.put', write))
+	} catch (error) {
+		if (error instanceof ExternalAppResourceTaken) return fail(409, resourceTaken(identity.resource, error.app))
+		throw error
+	}
 	return externalAppDto(c, identity.app)
 }
 
@@ -83,7 +95,7 @@ export async function deleteExternalAppUseCase(c: AdminContext, input: ExternalA
 	if ((await registry.externalApp(input.app)) === null) return fail(404, 'unknown external application')
 	const deleted = await registry.deleteExternalApp(input.app, {
 		change: adminEvent(c, { action: 'iam.external_app.delete', resourceType: 'external_app', resourceId: input.app }),
-		revocation: (clientId) => clientRevocation(c, clientId, input.app),
+		revocation: (reason) => appRevocation(c, input.app, reason),
 	})
 	if (!deleted) return fail(404, 'unknown external application')
 	return { ok: true }
@@ -133,7 +145,12 @@ export async function deleteOAuthClientUseCase(c: AdminContext, input: OAuthClie
 	if (owner.external_app !== null) return fail(409, ownedByExternalApp(input.clientId, owner.external_app))
 	const deleted = await registry.deleteAuthoringClient(input.clientId, {
 		change: adminEvent(c, { action: 'iam.oauth_client.delete', resourceType: 'oauth_client', resourceId: input.clientId }),
-		revocation: (clientId) => clientRevocation(c, clientId, null),
+		revocation: adminEvent(c, {
+			action: 'iam.oauth.grant.revoke',
+			resourceType: 'oauth_client',
+			resourceId: input.clientId,
+			metadata: { reason: 'client_removed' },
+		}),
 	})
 	if (!deleted) return fail(404, 'unknown OAuth client')
 	return { ok: true }
@@ -174,7 +191,7 @@ export async function importOAuthClientsUseCase(c: AdminContext, input: ImportOA
 	for (const { identity, clients } of apps.values()) {
 		if (writes.some((write) => write.resource === identity.resource)) return fail(400, `two applications name the resource ${identity.resource}`)
 		if (clients.length > MAX_EXTERNAL_APP_CLIENTS) return fail(400, `\`${identity.app}\` has more than ${MAX_EXTERNAL_APP_CLIENTS} clients`)
-		await checkExternalApp(c, config, identity, clients, false)
+		await checkExternalApp(c, config, identity, clients)
 		writes.push(externalAppWrite(identity, null, clients))
 	}
 	const authoring = entries.filter((client) => client.identity === undefined).map(authoringClientWrite)
@@ -198,14 +215,13 @@ export async function importOAuthClientsUseCase(c: AdminContext, input: ImportOA
 
 /**
  * The rules of ADR-0089 §1 for an external application, checked against IAM's state; each refusal names what is wrong.
- * `registered`: the id is an external application already, so its vocabulary is its own.
+ * The vocabulary check runs on every write: a deploy may have reconciled a schema under a registered id meanwhile.
  */
 async function checkExternalApp(
 	c: AdminContext,
 	config: OAuthConfig,
 	identity: OAuthIdentityResource,
 	clients: readonly ManagedOAuthClient[],
-	registered: boolean,
 ): Promise<void> {
 	const { app, resource } = identity
 	const { repositories } = c.services
@@ -222,20 +238,18 @@ async function checkExternalApp(
 		return fail(400, `the resource ${resource} is on one of the installation's hosts`)
 	}
 	const sharing = await repositories.oauthRegistry.externalAppWithResource(resource)
-	if (sharing !== null && sharing.app !== app) return fail(409, `the resource ${resource} is the external application \`${sharing.app}\`'s`)
+	if (sharing !== null && sharing.app !== app) return fail(409, resourceTaken(resource, sharing.app))
 	for (const client of clients) {
 		const owner = await repositories.oauthRegistry.client(client.clientId)
 		if (owner !== null && owner.external_app !== app) return fail(409, ownedByExternalApp(client.clientId, owner.external_app))
 	}
-	if (!registered) {
-		const foreign = await repositories.oauthRegistry.foreignVocabulary(app)
-		if (foreign.length > 0) {
-			return fail(
-				409,
-				`IAM holds ${foreign.join(', ')} under \`${app}\`; only an id whose roles grant no action and that declares nothing else `
-					+ 'becomes an external application',
-			)
-		}
+	const foreign = await repositories.oauthRegistry.foreignVocabulary(app)
+	if (foreign.length > 0) {
+		return fail(
+			409,
+			`IAM holds ${foreign.join(', ')} under \`${app}\`; only an id whose roles grant no action and that declares nothing else `
+				+ 'becomes an external application',
+		)
 	}
 	const declared = identity.roles ?? []
 	const custom = (await repositories.appSchema.listRolesByOrigin(app, 'custom')).filter((row) => declared.some((role) => role.key === row.role_key))
@@ -319,17 +333,17 @@ function registryEvents(c: AdminContext, action: string, write: ExternalAppWrite
 				clients: write.clients.map((client) => client.clientId),
 			},
 		}),
-		revocation: (clientId) => clientRevocation(c, clientId, write.app),
+		revocation: (reason) => appRevocation(c, write.app, reason),
 	}
 }
 
-function clientRevocation(c: AdminContext, clientId: string, app: string | null): AuditEventInput {
-	return adminEvent(c, {
-		action: 'iam.oauth.grant.revoke',
-		resourceType: 'oauth_client',
-		resourceId: clientId,
-		metadata: { app, reason: 'client_removed' },
-	})
+/** One record of a bulk revocation: the set of revoked grants is decided inside the change's transaction. */
+function appRevocation(c: AdminContext, app: string, reason: ExternalAppRevocation): AuditEventInput {
+	return adminEvent(c, { action: 'iam.oauth.grant.revoke', resourceType: 'external_app', resourceId: app, metadata: { reason } })
+}
+
+function resourceTaken(resource: string, app: string): string {
+	return `the resource ${resource} is the external application \`${app}\`'s`
 }
 
 function ownedByExternalApp(clientId: string, app: string | null): string {

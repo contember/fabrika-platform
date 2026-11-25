@@ -3,11 +3,12 @@
 // adoption of an earlier deploy's roles, the rules for its id and resource, the two writers that refuse each other's
 // clients, and the grants a removed client loses.
 
+import { IAM_APP_ID } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createIamApp } from '../app'
-import { createIamRepositories, type IamRepositories } from '../db'
+import { type AuditEventInput, createIamRepositories, ExternalAppResourceTaken, type IamRepositories, type RegistryEvents } from '../db'
 import type { Env } from '../env'
 import { prop } from '../json'
 import { registeredClient } from '../oauth-clients'
@@ -48,6 +49,8 @@ const CLAUDE = { clientId: 'https://claude.example.org/oauth/client.json', label
 
 interface Engine {
 	repositories: IamRepositories
+	/** A write past every repository, to store what IAM itself never would. */
+	exec(sql: string, ...binds: string[]): Promise<void>
 	close(): Promise<void>
 }
 
@@ -55,14 +58,25 @@ const ENGINES: { name: string; skip: boolean; open(): Promise<Engine> }[] = [
 	{
 		name: 'SQLite',
 		skip: false,
-		open: () => Promise.resolve({ repositories: createHarness().repositories, close: () => Promise.resolve() }),
+		open: () => {
+			const harness = createHarness()
+			return Promise.resolve({
+				repositories: harness.repositories,
+				exec: (sql, ...binds) => Promise.resolve(void harness.sqlite.prepare(sql).run(...binds)),
+				close: () => Promise.resolve(),
+			})
+		},
 	},
 	{
 		name: 'Postgres',
 		skip: !hasPostgres,
 		open: async () => {
 			const fixture = await createPostgres('iam_registry')
-			return { repositories: createIamRepositories(fixture.db, {}, 'postgres'), close: () => fixture.close() }
+			return {
+				repositories: createIamRepositories(fixture.db, {}, 'postgres'),
+				exec: async (sql, ...binds) => void (await fixture.db.prepare(sql).bind(...binds).run()),
+				close: () => fixture.close(),
+			}
 		},
 	},
 ]
@@ -121,6 +135,25 @@ async function setup(engine: (typeof ENGINES)[number]) {
 		return { status: response.status, result: prop(body, 'result'), error: typeof message === 'string' ? message : null }
 	}
 	const provisioning = (method: string, input: unknown) => call(method, input, PROVISIONING_KEY)
+	/** A deploy's schema reconcile (`PUT /admin/apps/:app/schema`), as the provisioning key sends it. */
+	async function putSchema(appId: string, schema: unknown): Promise<number> {
+		const response = await app.fetch(
+			new Request(`${ORIGIN}/admin/apps/${appId}/schema`, {
+				method: 'PUT',
+				headers: { 'content-type': 'application/json', authorization: `Bearer ${PROVISIONING_KEY}` },
+				body: JSON.stringify(schema),
+			}),
+			env(repositories),
+			{ waitUntil() {} },
+		)
+		return response.status
+	}
+	/** A console bearer of a new person who holds `permissions` at IAM's own app id. */
+	async function personWith(permissions: string[]): Promise<string> {
+		const person = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.com`)
+		await repositories.grants.createGrant({ principalId: person.id, app: IAM_APP_ID, permissions })
+		return adminTokenFor(repositories, person.id, { issuer: ORIGIN })
+	}
 	/** A person signed in with a live OAuth grant of `clientId`. */
 	async function oauthGrant(clientId: string, app: string): Promise<string> {
 		const person = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.com`)
@@ -152,7 +185,20 @@ async function setup(engine: (typeof ENGINES)[number]) {
 	}
 	const revoked = async (grantId: string) => (await repositories.oauth.grant(grantId))?.revoked_at !== null
 	const services = () => makeServicesFor(repositories, { issuer: ORIGIN, oauth: CONFIG })
-	return { repositories, admin, call, provisioning, oauthGrant, revoked, services }
+	return { repositories, exec: opened.exec, admin, call, provisioning, putSchema, personWith, oauthGrant, revoked, services }
+}
+
+/** The records of a registry change written past the use cases. */
+function registryEvents(action: string): RegistryEvents {
+	const event = (name: string): AuditEventInput => ({
+		requestId: uuidv7(),
+		principalId: null,
+		principalLabel: 'test',
+		app: IAM_APP_ID,
+		action: name,
+		resourceType: 'test',
+	})
+	return { change: event(action), revocation: () => event('test.revoke') }
 }
 
 /** An earlier deploy's roles reconcile of an external application (ADR-0084): roles alone, each granting no action. */
@@ -301,10 +347,144 @@ for (const engine of ENGINES) {
 			expect((await f.call('externalApps.put', OPS)).status).toBe(200)
 			expect(await f.revoked(desktop)).toBe(true)
 			expect(await f.revoked(web)).toBe(false)
-			expect(await f.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: DESKTOP.clientId, limit: 5 })).toHaveLength(1)
+			// Unchanged clients revoke nothing, so a put that removes none writes no revocation record.
+			expect((await f.call('externalApps.put', OPS)).status).toBe(200)
 
 			await f.call('externalApps.delete', { app: OPS.app })
 			expect(await f.revoked(web)).toBe(true)
+			const revocations = await f.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: OPS.app, limit: 5 })
+			expect(revocations.map((row) => [row.resource_type, row.metadata])).toEqual([
+				['external_app', JSON.stringify({ reason: 'application_removed' })],
+				['external_app', JSON.stringify({ reason: 'client_removed' })],
+			])
+		})
+
+		test('a delete that finds the application gone writes nothing', async () => {
+			const f = await setup(engine)
+			await f.provisioning('oauthClients.importOnce', { clients: [] })
+			await f.call('externalApps.put', OPS)
+			const events = registryEvents('test.delete')
+			expect(await f.repositories.oauthRegistry.deleteExternalApp(OPS.app, events)).toBe(true)
+			// What a concurrent delete that lost would meet: no record, and a vocabulary written under the id since.
+			await reconciledRoles(f.repositories, OPS.app)
+			expect(await f.repositories.oauthRegistry.deleteExternalApp(OPS.app, events)).toBe(false)
+			expect((await f.repositories.appSchema.listRolesByOrigin(OPS.app, 'app')).map((row) => row.role_key)).toEqual(['operator'])
+			expect(await f.repositories.audit.listAuditEvents({ action: 'test.delete', limit: 5 })).toHaveLength(1)
+		})
+
+		test('a new resource revokes the grants for the earlier one, which stay revoked when it comes back', async () => {
+			const f = await setup(engine)
+			await f.provisioning('oauthClients.importOnce', { clients: [] })
+			await f.call('externalApps.put', OPS)
+			const grant = await f.oauthGrant(OPS.clients[0]?.clientId ?? '', OPS.app)
+			// An authoring client's grant for the application's resource goes as well.
+			const authoring = await f.oauthGrant(CLAUDE.clientId, OPS.app)
+
+			expect((await f.call('externalApps.put', OPS)).status).toBe(200)
+			expect(await f.revoked(grant)).toBe(false)
+			expect((await f.call('externalApps.put', { ...OPS, resource: 'https://ops.example.net/v2' })).status).toBe(200)
+			expect([await f.revoked(grant), await f.revoked(authoring)]).toEqual([true, true])
+			expect((await f.call('externalApps.put', OPS)).status).toBe(200)
+			expect(await f.revoked(grant)).toBe(true)
+			const revocations = await f.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: OPS.app, limit: 5 })
+			expect(revocations.map((row) => row.metadata)).toEqual([JSON.stringify({ reason: 'resource_changed' })])
+		})
+
+		test("a resource another application took meanwhile is the repository's typed refusal, and nothing is written", async () => {
+			const f = await setup(engine)
+			await f.provisioning('oauthClients.importOnce', { clients: [] })
+			await f.call('externalApps.put', OPS)
+			const write = { app: 'other-tool', displayName: null, resource: OPS.resource, roles: [], clients: [] }
+			const events = registryEvents('test.put')
+			await expect(f.repositories.oauthRegistry.putExternalApp(write, events)).rejects.toBeInstanceOf(ExternalAppResourceTaken)
+			expect(await f.repositories.oauthRegistry.externalApp('other-tool')).toBeNull()
+		})
+
+		test('the in-batch guard refuses a client id another writer owns, writing nothing', async () => {
+			const f = await setup(engine)
+			await f.provisioning('oauthClients.importOnce', { clients: [] })
+			expect((await f.provisioning('oauthClients.put', CLAUDE)).status).toBe(200)
+			const write = {
+				app: OPS.app,
+				displayName: null,
+				resource: OPS.resource,
+				roles: [{ key: 'operator', name: 'Operator' }],
+				clients: [{ clientId: CLAUDE.clientId, redirectUris: OPS.clients[0]?.redirectUris ?? [], metadataUrl: null }],
+			}
+			const events = registryEvents('test.put')
+			const refused = await f.repositories.oauthRegistry.putExternalApp(write, events).then(() => null, (error: unknown) => error)
+			expect(refused).toBeInstanceOf(Error)
+			expect(refused).not.toBeInstanceOf(ExternalAppResourceTaken)
+			expect(await f.repositories.oauthRegistry.externalApp(OPS.app)).toBeNull()
+			expect(await f.repositories.appSchema.listRolesByOrigin(OPS.app, 'app')).toEqual([])
+			expect((await f.repositories.oauthRegistry.client(CLAUDE.clientId))?.external_app).toBeNull()
+			expect(await f.repositories.audit.listAuditEvents({ action: 'test.put', limit: 5 })).toEqual([])
+		})
+
+		test('a registry row the client parser refuses is not served', async () => {
+			const f = await setup(engine)
+			await f.provisioning('oauthClients.importOnce', { clients: [] })
+			await f.call('externalApps.put', OPS)
+			const clientId = OPS.clients[0]?.clientId ?? ''
+			expect(await registeredClient(f.services(), CONFIG, clientId)).not.toBeNull()
+
+			// A role key the identity parser refuses (a built-in one), written past the use case.
+			await f.repositories.appSchema.reconcileAppSchema({
+				app: OPS.app,
+				scopes: [],
+				actions: [],
+				roles: [{ roleKey: 'admin', name: 'Admin', permissions: [] }],
+			})
+			expect(await registeredClient(f.services(), CONFIG, clientId)).toBeNull()
+
+			await f.call('externalApps.put', OPS)
+			expect(await registeredClient(f.services(), CONFIG, clientId)).not.toBeNull()
+			await f.exec("UPDATE oauth_clients SET redirect_uris = 'not json' WHERE client_id = ?", clientId)
+			expect(await registeredClient(f.services(), CONFIG, clientId)).toBeNull()
+		})
+
+		test('a deploy cannot reconcile a schema under an external application, nor a registered id keep a foreign one', async () => {
+			const f = await setup(engine)
+			await f.provisioning('oauthClients.importOnce', { clients: [] })
+			await f.call('externalApps.put', OPS)
+			const schema = { scopes: [], actions: [{ action: 'accounts.manage' }], roles: {} }
+			expect(await f.putSchema(OPS.app, schema)).toBe(409)
+			expect(await f.putSchema('notes', schema)).toBe(200)
+			expect((await f.repositories.appSchema.listRolesByOrigin(OPS.app, 'app')).map((row) => row.role_key)).toEqual(['operator', 'viewer'])
+
+			// A vocabulary written under the id past the registry (a deploy of an older release): the next put refuses it.
+			await f.repositories.appSchema.reconcileAppSchema({ app: OPS.app, scopes: [], actions: [{ action: 'accounts.manage' }], roles: [] })
+			const refused = await f.call('externalApps.put', OPS)
+			expect(refused.status).toBe(409)
+			expect(refused.error).toContain('actions')
+		})
+
+		test('a user administrator, and an iam.admin key that is not the provisioning key, are refused', async () => {
+			const f = await setup(engine)
+			await f.provisioning('oauthClients.importOnce', { clients: [] })
+			const userAdmin = await f.personWith(['iam.users.manage'])
+			expect((await f.call('me', null, userAdmin)).status).toBe(200)
+			const calls: [string, unknown][] = [
+				['externalApps.list', null],
+				['externalApps.get', { app: OPS.app }],
+				['externalApps.put', OPS],
+				['externalApps.delete', { app: OPS.app }],
+			]
+			for (const [method, input] of calls) {
+				expect([method, (await f.call(method, input, userAdmin)).status]).toEqual([method, 403])
+			}
+
+			const provisioned = await f.call('apiKeys.provision', { label: 'automation', type: 'service', roleKey: 'admin', app: null })
+			expect(provisioned.status).toBe(200)
+			const apiKey = prop(provisioned.result, 'apiKey')
+			if (typeof apiKey !== 'string') throw new Error('no api key')
+			expect((await f.call('externalApps.list', null, apiKey)).status).toBe(200)
+			const provisioningOnly: [string, unknown][] = [
+				['oauthClients.importOnce', { clients: [] }],
+				['oauthClients.put', CLAUDE],
+				['oauthClients.delete', { clientId: CLAUDE.clientId }],
+			]
+			for (const [method, input] of provisioningOnly) expect([method, (await f.call(method, input, apiKey)).status]).toEqual([method, 403])
 		})
 
 		test('an id is adopted only with roles that grant no action and nothing else declared', async () => {

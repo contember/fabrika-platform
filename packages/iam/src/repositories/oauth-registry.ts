@@ -43,7 +43,19 @@ export interface ExternalAppWrite {
 /** The records of a change: the change's own, and the one of each client whose grants it revokes. */
 export interface RegistryEvents {
 	change: AuditEventInput
-	revocation: (clientId: string) => AuditEventInput
+	/** The record of one bulk revocation of the application's grants, written only when it revoked any. */
+	revocation: (reason: ExternalAppRevocation) => AuditEventInput
+}
+
+/** Why a change of an external application revokes grants: a client it no longer lists, a new resource, or its removal. */
+export type ExternalAppRevocation = 'client_removed' | 'resource_changed' | 'application_removed'
+
+/** Another external application holds the resource: a concurrent write took it after the caller's check. */
+export class ExternalAppResourceTaken extends Error {
+	constructor(readonly app: string) {
+		super(`the resource is the external application ${app}'s`)
+		this.name = 'ExternalAppResourceTaken'
+	}
 }
 
 /** A client lookup: before the deploy variable's import the registry answers nothing (IAM serves `OAUTH_CONFIG`). */
@@ -149,27 +161,48 @@ export class OAuthRegistryRepository {
 	/**
 	 * Replace an external application: its record, its vocabulary (its roles, each granting no action, or none) and name,
 	 * and its clients, with the record of the change, in one transaction. A client it no longer lists is removed and its
-	 * grants revoked. A client id another writer owns rolls the whole change back.
+	 * grants revoked, and so are the grants for an earlier resource. A client id another writer owns rolls the whole change
+	 * back; a resource another application took meanwhile is `ExternalAppResourceTaken`.
 	 */
 	async putExternalApp(write: ExternalAppWrite, events: RegistryEvents): Promise<void> {
-		const removed = (await this.clientsOf(write.app)).map((row) => row.client_id).filter((id) => !write.clients.some((c) => c.clientId === id))
-		await this.db.batch(this.externalAppStatements(write, removed, events))
+		try {
+			await this.db.batch(this.externalAppStatements(write, events))
+		} catch (error) {
+			// The UNIQUE (resource) violation of a concurrent write; anything else is not this method's to name.
+			const holder = await this.externalAppWithResource(write.resource)
+			if (holder !== null && holder.app !== write.app) throw new ExternalAppResourceTaken(holder.app)
+			throw error
+		}
 	}
 
 	/**
 	 * Remove an external application: its clients (their grants revoked), its vocabulary and name, and its record, in one
-	 * transaction. The caller has found the record; the change's record is written exactly when this call removed it.
+	 * transaction. False, writing nothing, when there is no such application, a concurrent delete's win included.
 	 */
 	async deleteExternalApp(app: string, events: RegistryEvents): Promise<boolean> {
-		const clients = await this.clientsOf(app)
-		const remove = this.writer.changed([{ sql: 'DELETE FROM external_apps WHERE app = ? RETURNING app', binds: [app] }], events.change)
 		const statements = [
+			// Hold the record (a row lock on Postgres), then fail the batch when it is gone, so nothing below runs without it.
+			this.db.prepare('UPDATE external_apps SET updated_at = updated_at WHERE app = ?').bind(app),
+			this.db
+				.prepare(`INSERT INTO external_apps (app, resource, created_at, updated_at) SELECT ?, NULL, 0, 0
+					WHERE NOT EXISTS (SELECT 1 FROM external_apps WHERE app = ?)`)
+				.bind(`${app}#removed-meanwhile`, app),
 			...this.appSchema.reconcileStatements({ app, scopes: [], actions: [], roles: [], presentation: { locale: null, displayName: null } }),
-			...clients.flatMap((client) => this.revocationStatements(client.client_id, events)),
+			...this.revocationStatements(
+				'(app = ? OR client_id IN (SELECT client_id FROM oauth_clients WHERE external_app = ?))',
+				[app, app],
+				events.revocation('application_removed'),
+			),
 			this.db.prepare('DELETE FROM oauth_clients WHERE external_app = ?').bind(app),
+			...this.writer.changed([{ sql: 'DELETE FROM external_apps WHERE app = ? RETURNING app', binds: [app] }], events.change).statements,
 		]
-		const results = await this.db.batch([...statements, ...remove.statements])
-		return remove.rows(results, statements.length).length > 0
+		try {
+			await this.db.batch(statements)
+			return true
+		} catch (error) {
+			if ((await this.externalApp(app)) === null) return false
+			throw error
+		}
 	}
 
 	/** Write an MCP authoring client; null, writing nothing, when the id is a client of an external application. */
@@ -179,12 +212,12 @@ export class OAuthRegistryRepository {
 	}
 
 	/** Remove an MCP authoring client and revoke its grants; false, writing nothing, when it is no authoring client. */
-	async deleteAuthoringClient(clientId: string, events: RegistryEvents): Promise<boolean> {
+	async deleteAuthoringClient(clientId: string, events: { change: AuditEventInput; revocation: AuditEventInput }): Promise<boolean> {
 		const authoring = 'EXISTS (SELECT 1 FROM oauth_clients WHERE client_id = ? AND external_app IS NULL)'
 		const revoke = this.writer.changed([{
 			sql: `UPDATE oauth_grants SET revoked_at = ? WHERE client_id = ? AND revoked_at IS NULL AND ${authoring} RETURNING id`,
 			binds: [unixNow(), clientId, clientId],
-		}], events.revocation(clientId))
+		}], events.revocation)
 		const remove = this.writer.changed([{
 			sql: 'DELETE FROM oauth_clients WHERE client_id = ? AND external_app IS NULL RETURNING client_id',
 			binds: [clientId],
@@ -206,7 +239,7 @@ export class OAuthRegistryRepository {
 		const statements: SqlStatement[] = [
 			// Plain INSERT: a concurrent import that marked first makes this one fail and roll back whole.
 			this.db.prepare('INSERT INTO oauth_registry (id, imported_at) VALUES (1, ?)').bind(unixNow()),
-			...apps.flatMap(({ write, events }) => this.externalAppStatements(write, [], events)),
+			...apps.flatMap(({ write, events }) => this.externalAppStatements(write, events)),
 			...authoring.flatMap(({ write, event }) => this.writer.changed([this.authoringClientChange(write)], event).statements),
 			auditEventStatement(this.db, audit),
 		]
@@ -219,7 +252,7 @@ export class OAuthRegistryRepository {
 		}
 	}
 
-	private externalAppStatements(write: ExternalAppWrite, removedClients: readonly string[], events: RegistryEvents): SqlStatement[] {
+	private externalAppStatements(write: ExternalAppWrite, events: RegistryEvents): SqlStatement[] {
 		const now = unixNow()
 		const { app } = write
 		const record = this.writer.changed([{
@@ -237,10 +270,19 @@ export class OAuthRegistryRepository {
 				presentation: { locale: null, displayName: write.displayName },
 			}),
 			...record.statements,
-			...removedClients.flatMap((clientId) => this.revocationStatements(clientId, events)),
+			// Decided in the batch, from the rows it replaces, so a concurrent put cannot leave a removed client's grants live.
+			...this.revocationStatements(
+				`client_id IN (SELECT client_id FROM oauth_clients WHERE external_app = ?${
+					kept.length === 0 ? '' : ` AND client_id NOT IN (${placeholders(kept)})`
+				})`,
+				[app, ...kept],
+				events.revocation('client_removed'),
+			),
+			// A grant names its resource: one for an earlier resource must not come back if the resource does.
+			...this.revocationStatements('app = ? AND resource <> ?', [app, write.resource], events.revocation('resource_changed')),
 			kept.length === 0
 				? this.db.prepare('DELETE FROM oauth_clients WHERE external_app = ?').bind(app)
-				: this.db.prepare(`DELETE FROM oauth_clients WHERE external_app = ? AND client_id NOT IN (${kept.map(() => '?').join(', ')})`)
+				: this.db.prepare(`DELETE FROM oauth_clients WHERE external_app = ? AND client_id NOT IN (${placeholders(kept)})`)
 					.bind(app, ...kept),
 		]
 		for (const client of write.clients) {
@@ -260,7 +302,7 @@ export class OAuthRegistryRepository {
 			statements.push(
 				this.db
 					.prepare(`INSERT INTO external_apps (app, resource, created_at, updated_at) SELECT ?, NULL, 0, 0 WHERE EXISTS (
-						SELECT 1 FROM oauth_clients WHERE client_id IN (${kept.map(() => '?').join(', ')})
+						SELECT 1 FROM oauth_clients WHERE client_id IN (${placeholders(kept)})
 							AND (external_app IS NULL OR external_app <> ?))`)
 					.bind(`${app}#client-owned-elsewhere`, ...kept, app),
 			)
@@ -268,13 +310,13 @@ export class OAuthRegistryRepository {
 		return statements
 	}
 
-	/** Revoke every live grant of a client, recorded once when any was revoked. */
-	private revocationStatements(clientId: string, events: RegistryEvents): SqlStatement[] {
+	/** Revoke every live grant `condition` selects, recorded once when any was revoked. */
+	private revocationStatements(condition: string, binds: readonly unknown[], audit: AuditEventInput): SqlStatement[] {
 		const revoke: SqlChange = {
-			sql: 'UPDATE oauth_grants SET revoked_at = ? WHERE client_id = ? AND revoked_at IS NULL RETURNING id',
-			binds: [unixNow(), clientId],
+			sql: `UPDATE oauth_grants SET revoked_at = ? WHERE revoked_at IS NULL AND ${condition} RETURNING id`,
+			binds: [unixNow(), ...binds],
 		}
-		return this.writer.changed([revoke], events.revocation(clientId)).statements
+		return this.writer.changed([revoke], audit).statements
 	}
 
 	private authoringClientChange(client: AuthoringClientWrite): SqlChange {
@@ -289,4 +331,8 @@ export class OAuthRegistryRepository {
 			binds: [client.clientId, client.label, JSON.stringify(client.redirectUris), client.metadataUrl, now, now],
 		}
 	}
+}
+
+function placeholders(values: readonly unknown[]): string {
+	return values.map(() => '?').join(', ')
 }

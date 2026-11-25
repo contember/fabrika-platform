@@ -123,6 +123,11 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 		return error(400, appSchemaError(parsed.error.issues))
 	}
 	const schema = parsed.data
+	// An external application's vocabulary is the registry's (ADR-0089): a deploy that reconciled one would hand its id
+	// actions an administrator never declared, and the registry's next write would wipe them.
+	if ((await c.services.repositories.oauthRegistry.externalApp(app)) !== null) {
+		return error(409, `\`${app}\` is an external application; its roles are the OAuth client registry's (externalApps.put)`)
+	}
 	// A role key an admin already owns as a custom policy is a CONFLICT, not something to overwrite.
 	// The rule was one-directional: `createPolicyUseCase` 409s on an existing key so an admin can never
 	// clobber an app role, but a deploy silently flipped a custom policy to origin='app' — after which

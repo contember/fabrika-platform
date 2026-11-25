@@ -825,10 +825,13 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **AN EXTERNAL APPLICATION IS WRITTEN WHOLE, BY AN INSTALLATION ADMINISTRATOR; AN AUTHORING CLIENT ONLY BY THE
   PROVISIONING KEY** (`admin/external-apps.ts`, `repositories/oauth-registry.ts`). `externalApps.put` writes the
   record, the name (`app_presentation`), the roles through the schema reconcile's own statements
-  (`reconcileStatements`; no roles clears the vocabulary), the bound clients, the revocation of a removed client's
-  grants and the audit rows in one batch; `delete` removes the same. An id holding any other vocabulary
-  (`foreignVocabulary`: actions, scopes, a role granting an action, a return origin, …) is refused, never adopted. The
-  resource is no registered resource and on no host of `OAUTH_CONFIG.hosts`, the issuer or a registered resource.
+  (`reconcileStatements`; no roles clears the vocabulary), the bound clients and the audit rows in one batch, which also
+  revokes the grants of a client it drops and every grant for an earlier resource (one bulk `iam.oauth.grant.revoke`
+  per reason, under the app: the batch, not the caller, decides the set); `delete` removes the same and fails whole
+  when the record is gone. Every put refuses an id holding any other vocabulary (`foreignVocabulary`: actions, scopes,
+  a role granting an action, a return origin, …), and the deploy's `PUT /admin/apps/:app/schema` refuses an external
+  application's id (409). The resource is no registered resource and on no host of `OAUTH_CONFIG.hosts`, the issuer or
+  a registered resource; a concurrent put that took it is `ExternalAppResourceTaken`, the same 409.
   `oauthClients.put | delete | importOnce` answer 403 to anyone but `provisioning-admin`, like `grantApproval.set`.
   Each writer refuses a client id the other owns (409), and a guard statement rolls a put back if one was written in
   between. Before the import both `put`s are 409, so an administrator's edit cannot land before the import replaces
