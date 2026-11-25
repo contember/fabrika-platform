@@ -212,7 +212,10 @@ export interface CreateGrantRequest {
 	approvalRequest?: GrantApprovalRequestRef
 }
 
-/** The Control approval request a console grant carries out, and who asked for it. */
+/**
+ * The Control approval request a console grant carries out, and who asked for it. IAM refuses ids over 200 characters, a
+ * label over 500 and a client id over 2048.
+ */
 export interface GrantApprovalRequestRef {
 	id: string
 	requester: { id: string; label: string; clientId?: string }

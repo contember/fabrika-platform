@@ -65,9 +65,10 @@ const policy = {
 	description: z.string().optional(),
 	permissions: z.array(nonEmpty),
 }
+// The caller's statement, recorded in the audit row: bounded so a caller cannot fill the row with it.
 const approvalRequestSchema = z.object({
-	id: nonEmpty,
-	requester: z.object({ id: nonEmpty, label: z.string(), clientId: nonEmpty.optional() }),
+	id: nonEmpty.max(200),
+	requester: z.object({ id: nonEmpty.max(200), label: z.string().max(500), clientId: nonEmpty.max(2048).optional() }),
 })
 const grantSchema = z.object({ principalId: nonEmpty, ...authorization, approvalRequest: approvalRequestSchema.optional() })
 const redirectUris = z.array(z.string())
