@@ -473,7 +473,9 @@ decision. The environment page shows the list too.
 
 Each environment has a `protected` flag, a column of Control's `app_envs`. `prod` is protected by
 default; every other environment is not. Changing the flag requires `access.approve` from a human user
-principal, the same rule as approving (section 5). Control's audit log records every change.
+principal, the same rule as approving (section 5), and a passkey when the change weakens a decision that takes one
+(section 5): unprotecting a protected environment takes one, because `credentials` asks for a passkey by default.
+Control's audit log records every change.
 
 The flag changes through `apps.environments.protect`, and its only caller is the console: the application's
 page lists each environment under "Access approvals", with the switch for a caller holding `access.approve`

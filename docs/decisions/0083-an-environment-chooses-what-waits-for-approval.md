@@ -111,7 +111,8 @@ that first uses it:
 | `planTtlDays`          | 30                                             | 1–365                                                                                       |
 
 The policy and the settings are kept in `app_env_protection` with the `protected` flag, so a recreated environment
-starts from the choice its deleted predecessor left (ADR-0050 §4). They apply only while the environment is protected.
+starts from the choice its deleted predecessor left (ADR-0050 §4). They apply only while the environment is protected;
+an unprotected environment's requests are decided under the defaults.
 They change through `apps.environments.protect`, under the rules of the flag: `access.approve` at the coordinates, a
 person in the console, the environment's deployment lease, a refusal while a run is `running`, and one audit row
 (`access.protect`, with the policy and the settings before and after). A change that weakens what deciding takes in a
@@ -330,7 +331,8 @@ provider target, artifact or namespace applies at once, as before. A hole is clo
   changes on an existing installation, each when its requests land: a person's own `px_` key stops passing the
   protected-environment checks and its manual deploy parks; parked runs start to expire, a run parked before the
   upgrade getting its deadline when the sweep first sees it; a non-person's secret, variable, data and registry write
-  on a protected environment waits for a person; deciding a `credentials` item takes a passkey; a machine key holding
+  on a protected environment waits for a person; deciding a `credentials` item takes a passkey, and so does unprotecting
+  an environment or loosening its `credentials` (the first passkey needs only the session); a machine key holding
   `iam.admin` that issues keys meets the `credentials` mode. No generated file and no environment variable changes.
   One operator step, for `planEvidence: console+github` only: an existing GitHub App gets the user-authorization
   callback URL and a client secret in its GitHub settings, documented in `docs/reference/` when that evidence is

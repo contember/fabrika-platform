@@ -514,20 +514,26 @@ export interface ProtectionChoice {
  * The categories whose deciding takes a passkey under `held` that a change to `after` lets more through (ADR-0050 §5):
  * the environment unprotected, the passkey dropped, the mode lowered, fewer approvers, the requester's person let
  * approve, or for `deploy-request` an unmerged commit admitted. Such a change takes a passkey too, so a driven browser
- * cannot loosen the setting and then decide without one. Empty while `held` is not protected.
+ * cannot loosen the setting and then decide without one. An unprotected environment decides requests under
+ * `STRICT_SETTINGS` (ADR-0083 §2), so protecting it with less is a weakening too.
  */
 export function weakensStepUp(held: ProtectionChoice, after: ProtectionChoice): ApproverCategory[] {
-	if (!held.protected) return []
+	const before = decidingSettings(held)
+	const next = decidingSettings(after)
 	return APPROVER_CATEGORIES.filter((category) =>
-		held.settings.stepUp[category] === 'webauthn' && (
-			!after.protected
-			|| after.settings.stepUp[category] === 'none'
-			|| RANK[after.policy[category]] < RANK[held.policy[category]]
-			|| after.settings.approvers[category] < held.settings.approvers[category]
-			|| (after.settings.requesterMayApprove[category] && !held.settings.requesterMayApprove[category])
-			|| (category === 'deploy-request' && held.settings.deployRequestCommits === 'merged' && after.settings.deployRequestCommits === 'any')
+		before.stepUp[category] === 'webauthn' && (
+			next.stepUp[category] === 'none'
+			|| next.approvers[category] < before.approvers[category]
+			|| (next.requesterMayApprove[category] && !before.requesterMayApprove[category])
+			|| (category === 'deploy-request' && before.deployRequestCommits === 'merged' && next.deployRequestCommits === 'any')
+			|| (held.protected && (!after.protected || RANK[after.policy[category]] < RANK[held.policy[category]]))
 		)
 	)
+}
+
+/** The settings a pending item of an environment is decided under: its own while protected, the defaults otherwise. */
+function decidingSettings(choice: ProtectionChoice): ApprovalSettings {
+	return choice.protected ? choice.settings : STRICT_SETTINGS
 }
 
 /**

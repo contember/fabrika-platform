@@ -349,5 +349,24 @@ describe('the step-up through the real IAM', () => {
 				s.close()
 			}
 		})
+
+		test('an unprotected environment decides under the defaults, so protecting it without their passkey takes one', async () => {
+			const s = await setup()
+			try {
+				const unprotect = { ...PROD, protected: false }
+				const stepUp = await s.answer(await challengeProtectionUseCase(await s.protection(s.ada), unprotect))
+				await setEnvironmentProtectionUseCase(await s.protection(s.ada), { ...unprotect, stepUp })
+				const x = await s.credentialRequest()
+				const decide = { id: x.id, decision: 'reject' as const, inputDigest: x.inputDigest }
+				expect(await status(decideApprovalRequestUseCase(await s.context(s.ada), decide))).toBe(403)
+
+				expect((await refusal(setEnvironmentProtectionUseCase(await s.protection(s.ada), weaken))).status).toBe(403)
+				expect((await s.db.registry.getAppEnv('notes', 'prod'))?.protected).toBe(0)
+				expect(await status(decideApprovalRequestUseCase(await s.context(s.ada), decide))).toBe(403)
+				expect((await s.db.approvalRequests.get(x.id))?.state).toBe('pending')
+			} finally {
+				s.close()
+			}
+		})
 	})
 })

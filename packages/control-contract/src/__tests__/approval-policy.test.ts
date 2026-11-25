@@ -217,8 +217,15 @@ describe('a change of protection that weakens a passkey on deciding (ADR-0050 §
 		expect(weakensStepUp(held, { protected: true, policy: { ...PERMISSIVE_POLICY, credentials: 'person' }, settings: elsewhere })).toEqual([])
 		expect(weakensStepUp(held, withSettings({ requestTtlHours: 168 }))).toEqual([])
 		expect(weakensStepUp(held, withSettings({ deployRequestCommits: 'any' }))).toEqual([])
-		const unprotected = { ...held, protected: false }
-		expect(weakensStepUp(unprotected, { protected: true, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toEqual([])
+		const unprotected = { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }
 		expect(weakensStepUp(unprotected, unprotected)).toEqual([])
+		expect(weakensStepUp(unprotected, held)).toEqual([])
+		expect(weakensStepUp(unprotected, { ...unprotected, policy: STRICT_POLICY })).toEqual([])
+	})
+
+	test('an unprotected environment decides under the defaults, so protecting it without their passkey weakens it', () => {
+		const unprotected = { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }
+		expect(weakensStepUp(unprotected, { protected: true, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toEqual(['credentials'])
+		expect(weakensStepUp(unprotected, withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' } }))).toEqual(['credentials'])
 	})
 })

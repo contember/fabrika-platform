@@ -209,8 +209,9 @@ know takes it. `ApprovalDto.stepUp` and `ApprovalRequestDto.stepUp` say which ap
   `control:protect:["env",<app>,<env>,<sha256 of the canonical {protected, policy, settings}>]`, a part left out as
   null. `protect` carries the answer as `stepUp`, and Control judges and verifies it under the environment's lease,
   against the row read there, before IAM's grant gate or the row is written; a missing assertion and a failed check
-  answer the decisions' 403. A tightening, a change to categories without `webauthn`, and any change while the
-  environment is unprotected take none. The `access.protect` audit row carries `stepUp: { credentialId, at }`.
+  answer the decisions' 403. A tightening and a change to categories without `webauthn` take none. An unprotected
+  environment's requests are decided under the defaults, so a change that keeps it unprotected takes none, and
+  protecting it with less than the defaults' passkey takes one. The `access.protect` audit row carries `stepUp: { credentialId, at }`.
 - **The record.** An approval of a run keeps `stepUp: { credentialId, at }` in its approval JSON (the partial one too);
   a request keeps `decided_step_up_credential_id`/`_at` and `partial_step_up_credential_id`/`_at`. The audit row of
   every decision carries the same. A passkey removed later does not touch a decided item. A request approved by its
