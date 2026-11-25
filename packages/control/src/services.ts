@@ -191,19 +191,22 @@ export function workloadCredentialDeps(env: Env): { workloadCredentials?: Worklo
 }
 
 /**
- * Whether an application's console grants wait is IAM's row, which Control writes with the provisioning key (ADR-0083
- * §4); an installation without the issuer or the key cannot make them wait.
+ * Whether an application's console grants wait, and its `credentials` mode, are IAM's row, which Control writes with the
+ * provisioning key (ADR-0083 §4, §8); an installation without the issuer or the key cannot make grants wait, and its IAM
+ * reads every environment's `credentials` as `person`.
  */
 export function grantApprovalDeps(env: Env): { grantApproval?: GrantApprovalPort } {
 	const origin = env.FABRIKA_IAM_ISSUER?.trim() ?? ''
 	const provisioningKey = env.FABRIKA_IAM_PROVISIONING_KEY?.trim() ?? ''
 	if (origin === '' || provisioningKey === '') return {}
-	const client = iamProvisioningClient({ origin, provisioningKey })
+	return { grantApproval: grantApprovalPort(iamProvisioningClient({ origin, provisioningKey })) }
+}
+
+/** The mirror's writes over IAM's admin RPC, as the provisioning client reaches it. */
+export function grantApprovalPort(client: Pick<ReturnType<typeof iamProvisioningClient>, 'grantApproval'>): GrantApprovalPort {
 	return {
-		grantApproval: {
-			async set(app, required, revision) {
-				await client.grantApproval.set({ app, required, revision })
-			},
+		async set(app, gates, revision) {
+			await client.grantApproval.set({ app, required: gates.grants, revision, credentials: gates.credentials })
 		},
 	}
 }

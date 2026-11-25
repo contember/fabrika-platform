@@ -9,6 +9,7 @@
 
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { enqueueUnsettledNamespaces } from './api/namespaces'
+import { convergeIamGates, type IamMirrorSummary } from './approval/iam-mirror'
 import { sweepUnfetchedKeys, type UnfetchedKeySweepSummary } from './approval/requests/deliveries'
 import { type ApprovalRequestSweepSummary, sweepApprovalRequests } from './approval/requests/execute'
 import type { BackupScheduleSummary } from './backups'
@@ -22,7 +23,16 @@ import type { OperationsReleaseProjectionSummary } from './operations-releases'
 import { replayOperationsReleases } from './operations-releases'
 import { type ParkedRunSweepSummary, type ProviderReconcileSummary, sweepParkedRuns, sweepStaleRuns } from './provider-reconcile'
 import { WORKSPACE_REF_PREFIX } from './ref-match'
-import { iamGrantsDeps, locks, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S, vault } from './services'
+import {
+	grantApprovalDeps,
+	iamGrantsDeps,
+	locks,
+	operationsReleaseDeps,
+	replayOperationsCatalogProjection,
+	repositories,
+	STALE_RUN_MAX_AGE_S,
+	vault,
+} from './services'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
@@ -37,6 +47,8 @@ export interface MaintenanceSummary {
 	requests: ApprovalRequestSweepSummary
 	/** Keys approved requests issued that nobody fetched by their deadline: expired, and revoked in IAM (ADR-0083 §8). */
 	requestedKeys: UnfetchedKeySweepSummary
+	/** Environments whose approval gates IAM had not taken at their protection revision, written now (ADR-0083 §4, §8). */
+	iamGates: IamMirrorSummary
 	/** Full Operations catalog replay, isolated from deploy maintenance success. */
 	operations: OperationsCatalogSyncSummary
 	/** Pending deploy-release projections repaired independently from catalog sync. */
@@ -129,6 +141,10 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (requestedKeys.expired > 0 || requestedKeys.revoked > 0) {
 		console.info(`requested keys: expired=${requestedKeys.expired} revoked=${requestedKeys.revoked}`)
 	}
+	const iamGates = await convergeIamGates({ repositories: persistence, ...grantApprovalDeps(env) })
+	if (iamGates.written > 0 || iamGates.failed > 0) {
+		console.info(`IAM approval gates: written=${iamGates.written} failed=${iamGates.failed}`)
+	}
 	// The sync logs its own outcome line (operations-catalog.ts), so a second warn here would only repeat it.
 	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()
 	const releases = await (options.releases ?? (() => replayOperationsReleases(operationsReleaseDeps(env))))()
@@ -156,7 +172,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `errored=${backups.errored}`,
 		)
 	}
-	return { poll, reconcile, swept, parked, requests, requestedKeys, operations, releases, mail, dev, backups }
+	return { poll, reconcile, swept, parked, requests, requestedKeys, iamGates, operations, releases, mail, dev, backups }
 }
 
 /**

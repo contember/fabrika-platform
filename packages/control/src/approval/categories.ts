@@ -3,6 +3,7 @@
 // waiting categories is written beside it, so a Control released before the policy reads the same choice.
 
 import {
+	type ActionMode,
 	APPROVAL_CATEGORIES,
 	type ApprovalCategory,
 	type ApprovalPolicy,
@@ -56,6 +57,31 @@ export function isDefaultCategories(categories: readonly ApprovalCategory[]): bo
 /** Whether IAM holds the environment's console grants for approval: it is protected and `grants` waits for a person. */
 export function grantsWait(row: Pick<AppEnvRow, 'protected' | 'approval_categories' | 'approval_policy'>): boolean {
 	return row.protected === 1 && appEnvPolicy(row).grants === 'person'
+}
+
+/** The environment's gates as IAM mirrors them (ADR-0083 §4, §8): its grant gate, and `credentials`, `off` when unprotected. */
+export function iamGatesOf(row: Pick<AppEnvRow, 'protected' | 'approval_categories' | 'approval_policy'>): IamGates {
+	return { grants: grantsWait(row), credentials: row.protected === 1 ? appEnvPolicy(row).credentials : 'off' }
+}
+
+/** What IAM holds of an environment's approval choice: whether its console grants wait, and its `credentials` mode. */
+export interface IamGates {
+	readonly grants: boolean
+	readonly credentials: ActionMode
+}
+
+const CREDENTIALS_RANK: Readonly<Record<ActionMode, number>> = { off: 0, person: 1, refuse: 2 }
+
+/** Each gate at the stricter of the two. */
+export function stricterGates(a: IamGates, b: IamGates): IamGates {
+	return {
+		grants: a.grants || b.grants,
+		credentials: CREDENTIALS_RANK[b.credentials] > CREDENTIALS_RANK[a.credentials] ? b.credentials : a.credentials,
+	}
+}
+
+export function sameGates(a: IamGates, b: IamGates): boolean {
+	return a.grants === b.grants && a.credentials === b.credentials
 }
 
 /**

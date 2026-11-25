@@ -646,6 +646,31 @@ export class ControlRegistryRepository {
 		return results
 	}
 
+	/**
+	 * Environments whose gates IAM has not taken at their current protection revision (ADR-0083 §4, §8): never mirrored,
+	 * or mirrored at another revision. At most `limit`, by coordinates.
+	 */
+	async listAppEnvsUnmirroredInIam(limit: number): Promise<AppEnvRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT app_envs.* FROM app_envs
+				LEFT JOIN iam_gate_mirrors ON iam_gate_mirrors.app_id = app_envs.app_id AND iam_gate_mirrors.env = app_envs.env
+				WHERE iam_gate_mirrors.revision IS NULL OR iam_gate_mirrors.revision <> app_envs.protection_revision
+				ORDER BY app_envs.app_id, app_envs.env
+				LIMIT ?`)
+			.bind(limit)
+			.all<AppEnvRow>()
+		return results
+	}
+
+	/** Record that IAM took the environment's gates as of its protection `revision`. */
+	async markMirroredInIam(appId: string, env: string, revision: number): Promise<void> {
+		await this.d1
+			.prepare(`INSERT INTO iam_gate_mirrors (app_id, env, revision) VALUES (?, ?, ?)
+				ON CONFLICT (app_id, env) DO UPDATE SET revision = excluded.revision`)
+			.bind(appId, env, revision)
+			.run()
+	}
+
 	/** Every environment an operator marked as an MCP authoring target. */
 	/** The `protected` flag a deleted environment of these coordinates left (ADR-0050), or null when none was deleted. */
 	async getKeptProtection(appId: string, env: string): Promise<number | null> {
