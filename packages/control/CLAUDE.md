@@ -846,8 +846,10 @@ other environment, before the provider prepares anything, and the write maps a r
 - **Every other action of a non-person that waits is an `approval_requests` row (ADR-0083 §8, `src/approval/requests/`).**
   A kind (`kind.ts`, `requestKind`) owns its input and before-state schemas, its coordinates, the action the requester
   must hold to ask, its execution, its `follow` hook, and an optional `discard` hook that releases what a refused or
-  expired request held; `PRODUCTION_REQUEST_KINDS` is empty, so creating answers 400
-  until a step adds one, and `refused.ts` names the procedures no request may name, with why. Creating is a bearer's
+  closed request held. `PRODUCTION_REQUEST_KINDS` (`production.ts`, kinds in `kinds/`) holds Control's local writes,
+  each executing through the use case its procedure runs, as the approver; a write that reaches the provider answers
+  400 at creation, and a secret value is sealed under the request's purpose (`kinds/secrets.ts`). The all-environments
+  layer is `env = '*'` (`ALL_ENVIRONMENTS`); `rules.ts` judges it by the strictest protected environment. `refused.ts` names the procedures no request may name, with why. Creating is a bearer's
   only (a console person gets 409). Every transition is one conditional update on the state it leaves
   (`ApprovalRequestRepository`), the decision checks the deadline in the same write, and every write from the final
   approval on is fenced on the environment's deployment lease, which the decision holds through the execution.
