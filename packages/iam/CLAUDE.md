@@ -696,7 +696,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   challenge is single-use (the DELETE that reads it consumes it, before any comparison), five minutes, bound to its
   principal and to an opaque binding set at issue, at most ten open per person. Registering a passkey while one exists,
   and removing one, take an assertion bound to that change (`PASSKEY_REGISTRATION_BINDING`, `passkeyRemovalBinding`);
-  the first is registered with the session alone. `challenge` and `verify` are the step-up seam Control's gateway uses
+  the first is registered with the session alone. `challenge` and `verify` are the step-up seam Control's IAM client uses
   with the approver's token (ADR-0050 §5); they write no token claim. The counter is stored by compare-and-set. Each
   change writes `iam.passkey.register`/`remove` in its own statement; `passkeys.reset` (`iam.admin`) writes
   `iam.passkey.reset`. Never log a challenge, a credential, a key or a verifier's message (it quotes the challenge).

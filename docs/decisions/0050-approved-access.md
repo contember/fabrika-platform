@@ -578,9 +578,10 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
   other than the requester's person (`requesterMayApprove: false`), or two different people on the same digests
   (`approvers: 2`), per category; the item stays parked after the first approval, and a rejection by either refuses it.
 - **A second factor on deciding.** `stepUp: webauthn` on a category makes deciding a pending item of it take a WebAuthn
-  assertion bound to that decision. IAM keeps the person's passkeys. The approval page asks Control's IAM gateway for a
-  single-use challenge, which IAM issues to the approver bound to the item's kind, id and digest and to the decision,
-  and posts the assertion with the decision. Control asks IAM, with the approver's console token, to verify it against
+  assertion bound to that decision. IAM keeps the person's passkeys. The approval page calls Control's
+  `approvals.challenge` (or `approvals.requests.challenge`), and Control calls IAM over its IAM client for a single-use
+  challenge, which IAM issues to the approver bound to the item's kind, id and digest and to the decision; the page
+  posts the assertion with the decision. Control asks IAM, with the approver's console token, to verify it against
   the binding it builds from the item it decides, and accepts the decision only when IAM verified it: the challenge was
   issued to the same person with the same binding, unused and unexpired (five minutes). An assertion for one item never
   decides another, and none decides twice. The step-up travels with the decision, not in the console token: the proxy
@@ -588,6 +589,14 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
   would reach Control too late, and the token's `amr` claim already names a terminal assertion, whose parser refuses any
   other value. It is `webauthn` for `credentials` by default and `none` elsewhere. A person with no passkey cannot
   decide such an item, and the page says how to register one.
+- **Weakening the second factor takes it too.** On a protected environment, a change of the protection that weakens
+  what deciding a category with `stepUp: webauthn` takes (turning protection off, `stepUp` to `none`, a lower mode, fewer
+  approvers, the requester's person let approve, and for `deploy-request` an unmerged commit admitted) takes a passkey
+  assertion by the person making it, bound to that change (`weakensStepUp`). Otherwise a driven browser would loosen the
+  setting and then decide without a passkey. A tightening, and a change to categories without `webauthn`, take none.
+- **What the step-up does not close.** It stops a driven browser of a person who holds a passkey. A person's first
+  passkey is registered with the session alone, so a driven browser of a person not yet enrolled can enrol an
+  authenticator of its own. The enrolment is audited, and an installation administrator's reset removes it.
 - **Evidence ahead of the deploy.** Under the `plan` mode (ADR-0083) a change is also let through by plan entries a
   person approved in the console before the deploy, bound to the content of each subject before and after, never to a
   pull request. A GitHub review counts as such evidence only once the access-diff GitHub check shows the reviewer the
@@ -729,7 +738,7 @@ never from the words of a line:
   type error, not an unsorted line.
 - The approval proves a signed-in user with `access.approve`, not a physical human. An agent that drives
   the approver's own signed-in browser can approve. The skill forbids it; a category with `stepUp: webauthn` closes it
-  with a passkey assertion bound to the decision.
+  with a passkey assertion bound to the decision, for an approver who holds a passkey (section 5).
 - An agent deploys a protected environment by asking, not by holding a stronger key: under the strict default its
   manual run parks and the person approves it from one link; under the permissive preset (ADR-0083) it deploys at once.
   A person's own `px_` key no longer passes as a person, and a parked run no longer waits forever.

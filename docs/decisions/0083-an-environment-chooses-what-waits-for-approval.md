@@ -114,8 +114,10 @@ The policy and the settings are kept in `app_env_protection` with the `protected
 starts from the choice its deleted predecessor left (ADR-0050 §4). They apply only while the environment is protected.
 They change through `apps.environments.protect`, under the rules of the flag: `access.approve` at the coordinates, a
 person in the console, the environment's deployment lease, a refusal while a run is `running`, and one audit row
-(`access.protect`, with the policy and the settings before and after). The change advances `protection_revision` and `generation`, so a
-run classified under the old choice classifies again. There is no installation level of defaults or floors yet.
+(`access.protect`, with the policy and the settings before and after). A change that weakens what deciding takes in a
+category with `stepUp: webauthn` also takes a passkey assertion bound to the change (ADR-0050 §5), and the audit row
+names the passkey. The change advances `protection_revision` and `generation`, so a run classified under the old
+choice classifies again. There is no installation level of defaults or floors yet.
 
 ### 3. The modes and the gate
 
@@ -247,10 +249,11 @@ checks the approver as it does today.
   anyone with the approval right may refuse it. `approvers: 2` takes two different people on the same digest; the item
   stays `pending` after the first, and a rejection by either closes it. Both apply to parked runs too, and the stricter
   among a change's categories wins. `stepUp: webauthn` makes the decision carry a passkey assertion bound to it: the
-  approval page gets a single-use challenge from IAM through Control's IAM gateway, bound to the item's kind, id and
-  digest and to the decision, and posts the assertion with the decision; Control has IAM verify it with the approver's
-  console token against the binding of the item it decides, and decides nothing otherwise. Neither the console token nor
-  the proxy changes (ADR-0050 §5 says why).
+  approval page calls Control's `approvals.challenge` or `approvals.requests.challenge`, and Control calls IAM over its
+  IAM client for a single-use challenge, bound to the item's kind, id and digest and to the decision; the page posts the
+  assertion with the decision, and Control has IAM verify it with the approver's console token against the binding of
+  the item it decides, and decides nothing otherwise. Changing a `webauthn` category's settings in the weaker direction
+  takes a passkey too (§2). Neither the console token nor the proxy changes (ADR-0050 §5 says why).
 - **Expiry.** Every pending item has an absolute deadline, `requestTtlHours` after it starts waiting: a request when it
   is created, a parked run when it parks. Past it the item is `expired`; a parked run that expires fails and deploys
   nothing. The sweep only cleans up; it authorizes nothing. The final approval executes in the same call, under

@@ -200,6 +200,17 @@ know takes it. `ApprovalDto.stepUp` and `ApprovalRequestDto.stepUp` say which ap
   failed"). Approving and refusing both take it: the binding names the decision, so an assertion for one never makes
   the other, nor decides another item. IAM consumes the challenge on its first use, so an assertion decides once; a
   decision that then fails (the lease busy, another decision first) takes a new one.
+- **Weakening it.** On a protected environment, `apps.environments.protect` takes a passkey too when the change weakens
+  what deciding takes in a category that says `webauthn` under the held settings (`weakensStepUp` in
+  `@fabrika/control-contract`, which the console shares): protection off, that category's `stepUp` to `none`, a lower
+  mode, fewer `approvers`, `requesterMayApprove` from `false` to `true`, or for `deploy-request` `deployRequestCommits`
+  from `merged` to `any`. The console asks `apps.environments.protectChallenge` with the change as it will post it;
+  Control answers 409 to one that takes none, and binds the challenge to
+  `control:protect:["env",<app>,<env>,<sha256 of the canonical {protected, policy, settings}>]`, a part left out as
+  null. `protect` carries the answer as `stepUp`, and Control judges and verifies it under the environment's lease,
+  against the row read there, before IAM's grant gate or the row is written; a missing assertion and a failed check
+  answer the decisions' 403. A tightening, a change to categories without `webauthn`, and any change while the
+  environment is unprotected take none. The `access.protect` audit row carries `stepUp: { credentialId, at }`.
 - **The record.** An approval of a run keeps `stepUp: { credentialId, at }` in its approval JSON (the partial one too);
   a request keeps `decided_step_up_credential_id`/`_at` and `partial_step_up_credential_id`/`_at`. The audit row of
   every decision carries the same. A passkey removed later does not touch a decided item. A request approved by its

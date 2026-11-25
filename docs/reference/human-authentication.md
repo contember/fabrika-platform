@@ -190,8 +190,9 @@ as the passkey's last-used time.
 passkey's WebAuthn credential id, and the time of the verification in epoch seconds. It answers only for a challenge
 issued to the caller with the same binding, unused and unexpired. `challenge` refuses a person with no passkey with a
 409 of type `no_passkey` (`NO_PASSKEY_ERROR`), so a caller tells it from its other 409. Deciding an approval of a
-category with `stepUp: webauthn` (ADR-0050 §5) uses this seam. Control asks for a challenge bound to the decision, and
-verifies the approver's answer with the approver's console token
+category with `stepUp: webauthn` (ADR-0050 §5) uses this seam, and so does a change of an environment's protection that
+weakens it. Control asks for a challenge bound to the decision or the change, and verifies the person's answer with
+their console token
 ([security-deployment.md](./security-deployment.md#a-passkey-on-deciding)). No token carries a step-up claim, and the
 proxy is unchanged.
 
