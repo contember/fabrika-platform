@@ -22,21 +22,22 @@ application. What it needs from IAM is the person, and the person's role in the 
 
 ## Decision
 
-1. **An external client is bound to an identity resource of its own.** The operator registers the client, in the
-   same client list as every managed client, with `identity: { app, resource, roles? }`. `resource` is an `https` URI
-   of the application, never one on a platform host or a registered resource. `app` is an id of the application in IAM:
-   lowercase, no `@`, and not a platform audience or a registered resource's app. The binding lives on the client,
-   so a bound client is served that resource alone, with the one scope `identity`. A grant it held for another
-   resource before it was bound mints nothing. Both clouds read the list from `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`.
-   A Cloudflare installation supports identity-bound external clients. It does not support MCP authoring yet, so its
-   deploy refuses any other entry as not supported yet, before it deploys anything.
+1. **An external client is bound to an identity resource of its own.** An installation administrator registers the
+   application in IAM with its clients, each bound to `{ app, resource, roles? }`
+   ([ADR-0089](0089-oauth-clients-are-registered-in-iam-at-runtime.md); until a deploy imports it, the operator's
+   `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` lists them). `resource` is an `https` URI of the application, never one on a
+   platform host or a registered resource. `app` is an id of the application in IAM: lowercase, no `@`, and not a
+   platform audience or a registered resource's app. The binding lives on the client, so a bound client is served that
+   resource alone, with the one scope `identity`. A grant it held for another resource before it was bound mints
+   nothing. A Cloudflare installation supports identity-bound external clients. It does not support MCP authoring yet,
+   so its deploy refuses any other entry as not supported yet, before it deploys anything.
 2. **Its token names the person and carries no permission.** `sub`, `label`, `ptype: user` and `email`, for
    `aud` = the resource and `app` = the id. `perms` is always empty, at the code exchange and at every refresh. No
    installation service or application accepts the token, because none has its audience.
-3. **The application's roles are IAM's to grant and the token's to name.** `roles` is a list of `{ key, name }`. The
-   deploy reconciles them into IAM as the application's vocabulary, each role granting no action, with the
-   provisioning key it already holds (on Cloudflare, the control-plane stage, after IAM's own vocabulary). So the application needs no IAM credential, and an administrator grants the
-   roles in the console like any application's. The token carries the keys of the roles the person holds globally at
+3. **The application's roles are IAM's to grant and the token's to name.** `roles` is a list of `{ key, name }`. IAM
+   writes them as the application's vocabulary, each role granting no action, with the application's registration
+   (ADR-0089; before its import, the deploy reconciled them with the provisioning key). So the application needs no IAM
+   credential, and an administrator grants the roles in the console like any application's. The token carries the keys of the roles the person holds globally at
    the application (`roles`). The application decides what each role allows.
 4. **With declared roles, no role means no sign-in.** The consent and the code exchange refuse a person holding no
    declared role (`access_denied`, `invalid_grant`). Every refresh resolves the roles again, so a removed role ends

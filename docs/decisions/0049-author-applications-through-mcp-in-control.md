@@ -50,8 +50,10 @@ workspace its own running application, where one pinned service could show only 
    user-facing protocol adapter beside the RPC, like webhooks and auth callbacks; ADR-0041's single
    administrative transport is unchanged. Only the Bun/Zerops composition mounts it.
 2. **IAM is the OAuth 2.1 authorization server.** Authorization code with S256 PKCE, explicit RFC 8707
-   resource, refresh rotation and revocation. Clients are operator-registered Client ID Metadata
-   Documents of kind `claude`, `chatgpt` or `external`; there is no open dynamic registration. A client authenticates at the token
+   resource, refresh rotation and revocation. Clients are registered Client ID Metadata Documents of kind `claude`,
+   `chatgpt` or `external`, held in IAM's database: the operator registers an MCP authoring client with the
+   provisioning key ([ADR-0089](0089-oauth-clients-are-registered-in-iam-at-runtime.md)); there is no open dynamic
+   registration. A client authenticates at the token
    endpoint as its document declares: none (a public client with PKCE) or `private_key_jwt` against the
    document's own-origin key set; a request never chooses a weaker method. Every authorization response
    carries `iss` (RFC 9207). An access token is minted for
@@ -60,7 +62,7 @@ workspace its own running application, where one pinned service could show only 
    The kind is a label (`OAUTH_CLIENT_PROVIDERS` in `@fabrika/iam-contract` is the one list) and changes nothing
    above. An `external` client, such as an operations tool that signs people in through the installation's IAM, gets
    the same flow: authorization code with S256 PKCE, an explicit RFC 8707 resource of a registered app, scopes within
-   that resource's `scopeGrants` ceiling, and the redirect URIs the operator registered, which its document cannot
+   that resource's `scopeGrants` ceiling, and the redirect URIs registered for it, which its document cannot
    widen. It gets no implicit grant, no client secret, no token for an unregistered resource and no scope outside the
    ceiling, and its token is refused where a resource token is: on every native IAM path and by `approvals.complete`
    (rule 8). The only resource an installation serves the managed clients is the console's `/mcp`, so an external
