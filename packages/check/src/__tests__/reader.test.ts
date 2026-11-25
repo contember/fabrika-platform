@@ -120,10 +120,13 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 		])
 	})
 
-	test('notifications: true is read with the service worker row (ADR-0088); false is refused at its value', () => {
+	test('notifications: true is read with the service worker and subscription rows (ADR-0088); false is refused at its value', () => {
 		const artifact = readContractSource(application(edited("app: 'notes',", "app: 'notes',\n\tnotifications: true,")))
 		expect(artifact.notifications).toBe(true)
-		expect(artifact.endpoints.filter((row) => row.source.kind === 'push').map((row) => row.id)).toEqual(['__fabrika.push.worker'])
+		expect(artifact.endpoints.filter((row) => row.source.kind === 'push').map((row) => row.id).sort()).toEqual([
+			'__fabrika.push.subscription',
+			'__fabrika.push.worker',
+		])
 		expect(refusal(application(edited("app: 'notes',", "app: 'notes',\n\tnotifications: false,")))).toEqual([
 			'fabrika.contract.ts:7:17 contract notifications is false',
 		])

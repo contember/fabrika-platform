@@ -46,6 +46,7 @@ import { type CapabilityAuthority, type ContainerGrant, MAX_WITHIN_VALUES, type 
 import type { DataAccess, DataHandles, FileBinding, FrameworkTables } from '@fabrika/db/framework'
 import type { DataKind } from '@fabrika/db/tables'
 import type { TokenVerifier } from '@fabrika/jwks'
+import { uuidv7 } from '@fabrika/platform'
 import { applyAnswerCache, INLINE_FILE_TYPES, inlineFileTypes, withResponseHeaders } from '@fabrika/proxy-core/headers'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { createHash, timingSafeEqual } from 'node:crypto'
@@ -130,6 +131,7 @@ import { paramsObject, urlParams } from './params'
 import { globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
+import { type PushSubscriptionAnswer, pushSubscriptionRequest } from './push-subscription'
 import { pushWorkerResponse } from './push-worker'
 import { answersJson, type KeyedRequest, recorded, replayed, requestIdentity, requestKeyOf, validatedOutput } from './receipts'
 import { type TerminalIdentification, terminalIdentification } from './terminals'
@@ -215,6 +217,8 @@ function invocationKind(served: ServedEndpoint): InvocationKind {
 			return served.site?.kind === 'mutation' && served.readOnly !== true ? 'write' : 'read'
 		case 'public':
 			return served.site.kind === 'mutation' ? 'write' : 'read'
+		case 'push-subscription':
+			return 'write'
 		default:
 			return 'read'
 	}
@@ -291,6 +295,12 @@ export type ServedEndpoint =
 	}
 	/** The Web Push service worker (ADR-0088): a fixed script of this release, under the row's own access. */
 	| { readonly kind: 'push-worker'; readonly row: CredentialedEndpoint }
+	/**
+	 * The Web Push subscription row (ADR-0088 §7): the caller's own subscriptions, behind its bucket per caller. `key` is
+	 * the environment's current VAPID public key, which a recorded subscription must have been made with; `null` where
+	 * the environment holds none, and then nothing is recorded.
+	 */
+	| { readonly kind: 'push-subscription'; readonly row: CredentialedEndpoint; readonly admission: ProcedureAdmission; readonly key: string | null }
 	/** An SPA mount's bare prefix (`/admin`): the proxy admitted it under the mount's access; it redirects to `/admin/`. */
 	| { readonly kind: 'spa-prefix'; readonly row: EndpointRow; readonly prefix: string }
 	/** An SPA anyone opens: anonymous, served without a token. */
@@ -559,6 +569,8 @@ export class ContractRuntime {
 			case 'push-worker':
 				await this.#authorize(served.row, request)
 				return pushWorkerResponse()
+			case 'push-subscription':
+				return await this.#pushSubscription(served, request, exec)
 			case 'spa-prefix':
 				return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
 			case 'link-spa':
@@ -1517,6 +1529,65 @@ export class ContractRuntime {
 			return jsonResponse(await served.issuer.issue(new URL(request.url).hostname), 200)
 		} finally {
 			release()
+		}
+	}
+
+	/**
+	 * The Web Push subscription row (ADR-0088 §7): the caller's token, then a terminal's refusal (a shared browser records
+	 * no subscription), the caller's bucket, the body, and one transaction of the framework's own table under the token's
+	 * subject. A record bound to another principal, or a replacement of an endpoint that was not the caller's, is a 409,
+	 * and the transaction rolls back whatever it already removed.
+	 */
+	async #pushSubscription(
+		served: Extract<ServedEndpoint, { kind: 'push-subscription' }>,
+		request: Request,
+		exec: RequestExecutionContext | undefined,
+	): Promise<Response> {
+		const caller = await this.#authorize(served.row, request)
+		if (caller.principal.kind !== 'user' || caller.principal.terminal !== undefined) {
+			throw new ForbiddenError('A terminal is a shared browser, and records no push subscription')
+		}
+		await this.#admit(served.row, served.admission, request, caller.subject)
+		const asked = pushSubscriptionRequest(await readBodyInTime(request, maxBytesOf(served.row)), () => {
+			if (served.key === null) {
+				throw new ServerFault('push_key_missing', 'the environment holds no VAPID key, so no subscription is recorded', 503)
+			}
+			return served.key
+		})
+		const push = this.#framework().push
+		const principal = caller.subject
+		const frame = new RequestFrame(crypto.randomUUID(), { readOnly: false, endpoint: served.row.id })
+		const invocation = new Invocation(frame, this.#data(), false)
+		const budget = handlerSignal(request, served.admission.timeoutMs)
+		try {
+			return await enclosedAnswer(invocation, this.#hold(served.row.id, exec), async () => {
+				const session = await invocation.frameworkSite('the push subscription').session()
+				let endpoint: string
+				if (asked.op === 'record') {
+					endpoint = asked.subscription.endpoint
+					const outcome = await push.record(session, principal, uuidv7(), asked.subscription, asked.replace, Date.now())
+					if (outcome === 'taken') {
+						throw new HttpError(409, 'push_subscription_taken', 'This subscription is bound to another person; unsubscribe and subscribe again')
+					}
+					if (outcome === 'not_replaceable') {
+						throw new HttpError(409, 'push_replacement_refused', 'The replaced subscription was not yours; subscribe again')
+					}
+				} else {
+					endpoint = asked.endpoint
+					if (asked.op === 'remove') {
+						await push.remove(session, principal, endpoint)
+					}
+				}
+				const answer: PushSubscriptionAnswer = { status: await push.binding(session, principal, endpoint), endpoint }
+				frame.end()
+				const response = jsonResponse(answer, 200)
+				await commitAnswer(invocation, budget.signal, response)
+				return response
+			})
+		} finally {
+			frame.end()
+			budget.clear()
+			await invocation.rollback()
 		}
 	}
 

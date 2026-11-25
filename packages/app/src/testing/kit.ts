@@ -100,6 +100,11 @@ const NO_IDENTIFICATIONS: IamTerminalRpc = Object.freeze({
 	cancelIdentification: noIdentification,
 })
 export { TEST_ENVIRONMENT }
+/**
+ * The kit's VAPID public key: shaped like an uncompressed P-256 point in unpadded base64url, which is all the
+ * subscription row checks. Nothing in the kit sends a push with it.
+ */
+export const TEST_PUSH_KEY = `B${'A'.repeat(86)}`
 const KEY_ID = 'test-key'
 const TOKEN_TTL_SECONDS = 300
 
@@ -128,6 +133,11 @@ export interface TestKitOptions {
 	readonly files?: FileObjectStore
 	/** The scanner of the scan job of `scan: true` file kinds; without it, the job leaves every such file quarantined. */
 	readonly scanner?: FileScanner
+	/**
+	 * The environment's current VAPID public key, which a recorded push subscription must have been made with
+	 * (ADR-0088); `TEST_PUSH_KEY` by default, and none for `null`, as a deployed environment before Control hands one.
+	 */
+	readonly pushKey?: string | null
 	/**
 	 * IAM's membership operations in place of the kit's own stand-in: `boot` asks it as the adapter's transport, and the
 	 * kit's proxy obtains each delegation grant from it. Without it the kit's IAM answers them under IAM's rules.
@@ -529,6 +539,7 @@ export function bootTestKit<C extends AnyContract>(
 		...(options.scanner === undefined ? {} : { scanner: options.scanner }),
 		...(options.challengeFetch === undefined ? {} : { challengeFetch: options.challengeFetch }),
 		challengeWork: MINIMAL_CHALLENGE_WORK,
+		...(options.pushKey === null ? {} : { pushKey: options.pushKey ?? TEST_PUSH_KEY }),
 		...dev,
 		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 		membership,

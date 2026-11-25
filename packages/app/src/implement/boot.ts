@@ -46,7 +46,7 @@ import { compileContract } from '../contract/compile'
 import { exportDescription } from '../contract/connect'
 import { containersOf } from '../contract/containers'
 import { isProcedure, type ProcedureDeclaration, type ProcedureTreeDeclaration, SURFACE_SECTIONS } from '../contract/declaration'
-import { challengeRowId, exportBase, PUSH_WORKER_ROW_ID, spaPrefixRowId } from '../contract/defaults'
+import { challengeRowId, exportBase, PUSH_SUBSCRIPTION_ROW_ID, PUSH_WORKER_ROW_ID, spaPrefixRowId } from '../contract/defaults'
 import type { AnyContract, Schema } from '../contract/define'
 import { kitOriginOf } from '../contract/handled'
 import { schemaFromShape } from '../contract/schema-from-shape'
@@ -83,6 +83,7 @@ import { InstallableApp } from './installable'
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
 import type { ReadDirectory } from './membership'
 import { type AdmissionOptions, InFlightShare, type ProcedureAdmission, procedureAdmission, publicShareOf } from './public'
+import { isVapidPublicKey } from './push-subscription'
 import { readTokenKeys, type RuntimePurpose, SignedTokens } from './tokens'
 import { appUrl, readAppOrigin } from './urls'
 import type { BindableWebhook } from './webhook'
@@ -175,6 +176,12 @@ export interface BootOptions {
 	 * (`MINIMAL_CHALLENGE_WORK`), so a test solves one in milliseconds. A deployed application never sets it.
 	 */
 	readonly challengeWork?: ChallengeWork
+	/**
+	 * The environment's current VAPID public key (ADR-0088 §9), unpadded base64url: the key a subscription must have
+	 * been made with to be recorded. Control's key handoff, a later slice, supplies it; until then a runtime adapter
+	 * passes none, and the subscription row records nothing (503). The test kit passes one.
+	 */
+	readonly pushKey?: string
 	/**
 	 * The author's own run only (`fabrika app dev`, a test that passes it to the kit): what a request's 5xx or a job
 	 * attempt threw, whole, beside the code and reason its log line names: a handler's own error, or a framework failure
@@ -1132,8 +1139,26 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 	} else if (artifact.notifications === true) {
 		problems.push('the contract declares notifications, and its artifact has no service worker row')
 	}
+	const pushSubscription = rows.get(PUSH_SUBSCRIPTION_ROW_ID)
+	if (isCredentialed(pushSubscription) && pushSubscription.source.kind === 'push') {
+		const admission = procedureAdmission(pushSubscription.id, artifact, admissionOptions(options), problems)
+		const key = options.pushKey ?? null
+		if (key !== null && !isVapidPublicKey(key)) {
+			problems.push('the VAPID public key the runtime adapter passes is no unpadded base64url P-256 point')
+		}
+		if (admission !== null) {
+			endpoints.set(pushSubscription.id, { kind: 'push-subscription', row: pushSubscription, admission, key })
+		}
+	} else if (artifact.notifications === true) {
+		problems.push('the contract declares notifications, and its artifact has no subscription row')
+	}
 	undeclaredHandlers(handlers, declared, [], problems)
 	const data = bound?.data ?? null
+	if (artifact.notifications === true && data === null) {
+		problems.push(
+			"the contract declares notifications, whose subscriptions live in the framework's tables on @fabrika/db: pass serve(contract, { database: scoped(tables) })",
+		)
+	}
 	if (data === null && kitOriginOf(app.contract) === 'tableless') {
 		servedWithoutData(endpoints, problems)
 	}

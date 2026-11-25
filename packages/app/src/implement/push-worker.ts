@@ -4,8 +4,9 @@
 // network. It ignores a push's payload (`event.data`): what it shows is only what the inbox answers under the person's
 // session, read through the proxy when the push arrives. Plain script, no module syntax, nothing evaluated from a string.
 //
-// It talks to two rows that later releases of the framework serve: `POST /__fabrika/push/inbox` (answering
-// `PushInboxAnswer`) and `POST /__fabrika/push/subscription`. Until then no push reaches it: nothing sends one.
+// It talks to two rows: `POST /__fabrika/push/subscription` (`implement/push-subscription.ts`), and
+// `POST /__fabrika/push/inbox` (answering `PushInboxAnswer`), which a later release serves. Until then no push reaches
+// it: nothing sends one.
 
 import { PUSH_PREFIX } from '../contract/defaults'
 
@@ -155,15 +156,27 @@ async function open(path) {
 	return self.clients.openWindow(target)
 }
 
+// The VAPID public key a subscription was made with, unpadded base64url as the subscription row compares it.
+function keyOf(subscription) {
+	const key = subscription.options && subscription.options.applicationServerKey
+	if (!key) return null
+	const bytes = new Uint8Array(key)
+	let text = ''
+	for (let index = 0; index < bytes.length; index++) text += String.fromCharCode(bytes[index])
+	return btoa(text).replace(/[+]/g, '-').replace(/[/]/g, '_').replace(/=+$/, '')
+}
+
 // A changed subscription is recorded as a replacement of the old one, which the row accepts only for the person the
 // old one was bound to. Without a session the pair is kept for the page to post at its next load.
 // While a pair is pending, a further change keeps the first old endpoint: only that one is known to the row.
 async function onChange(previous, next) {
 	const current = next || (previous ? await self.registration.pushManager.subscribe(previous.options).catch(function () { return null }) : null)
 	if (!previous || !current) return
+	const key = keyOf(current)
+	if (key === null) return
 	const pending = await stored('replacement')
 	const replace = pending && typeof pending.replace === 'string' ? pending.replace : previous.endpoint
-	const replacement = { replace: replace, subscription: current.toJSON() }
+	const replacement = { op: 'record', replace: replace, subscription: current.toJSON(), key: key }
 	try {
 		const response = await post(SUBSCRIPTION, replacement)
 		if (response.ok) {

@@ -50,6 +50,9 @@ import {
 	JOB_LIMITS,
 	PROCEDURE_LIMITS,
 	PUSH_PREFIX,
+	PUSH_SUBSCRIPTION_LIMITS,
+	PUSH_SUBSCRIPTION_PATH,
+	PUSH_SUBSCRIPTION_ROW_ID,
 	PUSH_WORKER_PATH,
 	PUSH_WORKER_ROW_ID,
 } from './defaults'
@@ -626,12 +629,33 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 		// The push rows are the framework's, exactly as the build writes them, and exist exactly when notifications are declared.
 		const pushRows = artifact.endpoints.filter((row) => row.source.kind === 'push')
 		for (const row of pushRows) {
-			if (!isPushWorkerRow(row)) {
+			if (!isPushWorkerRow(row) && !isPushSubscriptionRow(row)) {
 				context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${row.id}' is no push row the framework writes` })
 			}
 		}
-		if ((artifact.notifications === true) !== (pushRows.length === 1)) {
-			context.addIssue({ code: 'custom', path: ['notifications'], message: 'declared notifications have exactly the service worker row' })
+		const pushIds = new Set(pushRows.map((row) => row.id))
+		const complete = pushRows.length === 2 && pushIds.has(PUSH_WORKER_ROW_ID) && pushIds.has(PUSH_SUBSCRIPTION_ROW_ID)
+		if ((artifact.notifications === true) !== complete || (pushRows.length > 0 && !complete)) {
+			context.addIssue({
+				code: 'custom',
+				path: ['notifications'],
+				message: 'declared notifications have exactly the service worker row and the subscription row',
+			})
+		}
+		const pushRules = artifact.procedures?.[PUSH_SUBSCRIPTION_ROW_ID]
+		if (pushRules !== undefined || pushIds.has(PUSH_SUBSCRIPTION_ROW_ID)) {
+			const rate = pushRules?.rate
+			if (
+				rate?.perClient !== null || rate.perCaller !== PUSH_SUBSCRIPTION_LIMITS.perCaller || rate.perEndpoint !== null
+				|| rate.bytesPerHour !== null || pushRules?.challenge !== null || pushRules.timeoutMs !== PROCEDURE_LIMITS.timeoutMs
+				|| pushRules.query !== undefined || pushRules.changesStateOnGet !== undefined
+			) {
+				context.addIssue({
+					code: 'custom',
+					path: ['procedures', PUSH_SUBSCRIPTION_ROW_ID],
+					message: "the subscription row has the framework's own rules, beside its row",
+				})
+			}
 		}
 		if (pushRows.length > 0 && !artifact.reservedPrefixes.includes(PUSH_PREFIX)) {
 			context.addIssue({ code: 'custom', path: ['reservedPrefixes'], message: `a push row reserves ${PUSH_PREFIX}` })
@@ -646,6 +670,15 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 function isPushWorkerRow(row: EndpointRow): boolean {
 	return row.id === PUSH_WORKER_ROW_ID && row.source.name === 'worker' && row.kind === 'query' && row.method === 'GET'
 		&& row.path === PUSH_WORKER_PATH && row.admission === null && row.input === null && row.output === null
+		&& row.callers.length === 1 && row.callers[0] === 'human' && row.requirement?.kind === 'member'
+		&& row.crossOrigin === undefined && row.response === undefined
+}
+
+/** The subscription row (ADR-0088), field for field as `buildArtifact` writes it. */
+function isPushSubscriptionRow(row: EndpointRow): boolean {
+	return row.id === PUSH_SUBSCRIPTION_ROW_ID && row.source.name === 'subscription' && row.kind === 'mutation' && row.method === 'POST'
+		&& row.path === PUSH_SUBSCRIPTION_PATH && row.admission?.contentTypes.length === 1 && row.admission.contentTypes[0] === 'application/json'
+		&& row.admission.maxBytes === PUSH_SUBSCRIPTION_LIMITS.maxBytes && row.input === null && row.output === null
 		&& row.callers.length === 1 && row.callers[0] === 'human' && row.requirement?.kind === 'member'
 		&& row.crossOrigin === undefined && row.response === undefined
 }
