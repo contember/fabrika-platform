@@ -225,12 +225,12 @@ describe('approval modes', () => {
 		const offered = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options.map((option) => option.category))
 		expect([...offered].sort()).toEqual([...POLICY_CATEGORIES].sort())
 		// A mode per category; a number of approvers, whether the requester's person decides and whether a passkey confirms
-		// the decision per category but `grants`; and the commits a request may name.
-		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length * 3 + 1
+		// the decision per category but `grants`; the commits a request may name; and what bounds a key an agent asks for.
+		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length * 3 + 2
 		expect(markup.match(/<select/g)).toHaveLength(selects)
 		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three; approvers one or two; the
-		// requester's person or someone else; a passkey or none; commits two.
-		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + APPROVER_CATEGORIES.length * 6 + 2)
+		// requester's person or someone else; a passkey or none; commits two; the key's ceiling two.
+		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + APPROVER_CATEGORIES.length * 6 + 2 + 2)
 		expect(markup.match(/selected=""/g)).toHaveLength(selects)
 		expect(markup).toContain('<option value="refuse" selected="">Refused</option>')
 		expect(markup).toContain('<option value="person" selected="">A person approves</option>')
@@ -260,6 +260,15 @@ describe('approval modes', () => {
 		expect(markup).toContain('id="approval-prod-secrets"')
 	})
 
+	test('the ceiling of a key an agent asks for is a setting, the agent’s own by default', () => {
+		const markup = editor(environment('prod', true))
+		expect(markup).toContain('aria-label="Actions a key an agent asks for may hold"')
+		expect(markup).toContain('The agent&#x27;s own (default)')
+		expect(settingsSummary({ ...STRICT_SETTINGS, credentialCeiling: 'approver' })).toContain(
+			'A key an agent asks for may hold any action its approver holds.',
+		)
+	})
+
 	test('a change that loosens any category asks first; one that tightens does not', () => {
 		const strict = { policy: STRICT_POLICY, settings: STRICT_SETTINGS }
 		expect(policyChange(strict, { policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toBe('confirm')
@@ -284,6 +293,11 @@ describe('approval modes', () => {
 		expect(loosenedSettings(passkey, STRICT_SETTINGS)).toEqual(['Secrets (no passkey to decide)'])
 		expect(policyChange(strict, { ...strict, settings: { ...STRICT_SETTINGS, stepUp: PERMISSIVE_SETTINGS.stepUp } })).toBe('confirm')
 		expect(presetOf(STRICT_POLICY, passkey)).toBeNull()
+		// A key bounded by its approver rather than its requester loosens; bounding it by the requester again tightens.
+		const approverCeiling = { ...STRICT_SETTINGS, credentialCeiling: 'approver' as const }
+		expect(loosenedSettings(STRICT_SETTINGS, approverCeiling)).toEqual(['a key an agent asks for may hold actions the agent does not'])
+		expect(policyChange({ ...strict, settings: approverCeiling }, strict)).toBe('apply')
+		expect(presetOf(STRICT_POLICY, approverCeiling)).toBeNull()
 	})
 
 	test("an approve button is withheld from the requester's person, and from everyone when that person is unknown", () => {
@@ -304,7 +318,8 @@ describe('approval modes', () => {
 			'Waits for a person: Migrations that may change stored data; refused to an agent: Where a deploy points.',
 		)
 		expect(settingsSummary(STRICT_SETTINGS)).toBe(
-			`An agent asks to deploy merged commits only. A request waits 24 h for a decision. A passkey confirms deciding: ${categoryLabel('credentials')}.`,
+			'An agent asks to deploy merged commits only. A request waits 24 h for a decision. A key an agent asks for holds only actions the agent holds. '
+				+ `A passkey confirms deciding: ${categoryLabel('credentials')}.`,
 		)
 		expect(settingsSummary(PERMISSIVE_SETTINGS)).not.toContain('passkey')
 		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } })).toContain(

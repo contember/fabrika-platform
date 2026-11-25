@@ -255,5 +255,8 @@ describe('the mode matrix at the protection API', () => {
 		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, grants: 'webauthn' } })).toBe(400)
 		const { stepUp: _stepUp, ...withoutStepUp } = STRICT_SETTINGS
 		expect(await protect(STRICT_POLICY, withoutStepUp)).toBe(400)
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, credentialCeiling: 'anyone' })).toBe(400)
+		const { credentialCeiling: _ceiling, ...withoutCeiling } = STRICT_SETTINGS
+		expect(await protect(STRICT_POLICY, withoutCeiling)).toBe(400)
 	})
 })

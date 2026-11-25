@@ -784,6 +784,7 @@ describe('the settings are stored with the protection', () => {
 		const settings: ApprovalSettings = {
 			deployRequestCommits: 'any',
 			requestTtlHours: 6,
+			credentialCeiling: 'approver',
 			approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2, secrets: 2 },
 			requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, variables: false },
 			stepUp: { ...STRICT_SETTINGS.stepUp, 'deploy-request': 'webauthn', credentials: 'none' },
@@ -793,6 +794,7 @@ describe('the settings are stored with the protection', () => {
 		expect(JSON.parse((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_settings ?? '')).toEqual({
 			deployRequestCommits: 'any',
 			requestTtlHours: 6,
+			credentialCeiling: 'approver',
 			approvers: { 'deploy-request': 2, secrets: 2 },
 			requesterMayApprove: { variables: false },
 			stepUp: { 'deploy-request': 'webauthn', credentials: 'none' },

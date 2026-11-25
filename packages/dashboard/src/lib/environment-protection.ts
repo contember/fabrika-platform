@@ -191,12 +191,16 @@ export function loosened(before: ApprovalPolicy, after: ApprovalPolicy): PolicyC
 }
 
 /**
- * The settings a change loosens, in the console's words: an unmerged commit admitted, one approver where two decided,
- * the requester's own person allowed to approve, or a decision no longer confirmed with a passkey.
+ * The settings a change loosens, in the console's words: an unmerged commit admitted, a key no longer bounded by its
+ * requester, one approver where two decided, the requester's own person allowed to approve, or a decision no longer
+ * confirmed with a passkey.
  */
 export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettings): string[] {
 	return [
 		...(before.deployRequestCommits === 'merged' && after.deployRequestCommits === 'any' ? ['an agent may ask to deploy an unmerged commit'] : []),
+		...(before.credentialCeiling === 'requester' && after.credentialCeiling === 'approver'
+			? ['a key an agent asks for may hold actions the agent does not']
+			: []),
 		...APPROVER_CATEGORIES.filter((category) => after.approvers[category] < before.approvers[category]).map((category) =>
 			`${categoryLabel(category)} (one approver)`
 		),
@@ -230,7 +234,7 @@ export const PRESETS = [
 
 /** Whether two sets of settings say the same. */
 export function sameSettings(a: ApprovalSettings, b: ApprovalSettings): boolean {
-	return a.deployRequestCommits === b.deployRequestCommits && a.requestTtlHours === b.requestTtlHours
+	return a.deployRequestCommits === b.deployRequestCommits && a.requestTtlHours === b.requestTtlHours && a.credentialCeiling === b.credentialCeiling
 		&& APPROVER_CATEGORIES.every((category) =>
 			a.approvers[category] === b.approvers[category] && a.requesterMayApprove[category] === b.requesterMayApprove[category]
 			&& a.stepUp[category] === b.stepUp[category]
@@ -258,6 +262,9 @@ export function settingsSummary(settings: ApprovalSettings): string {
 	return [
 		settings.deployRequestCommits === 'merged' ? 'An agent asks to deploy merged commits only.' : 'An agent may ask to deploy any commit.',
 		`A request waits ${settings.requestTtlHours} h for a decision.`,
+		settings.credentialCeiling === 'requester'
+			? 'A key an agent asks for holds only actions the agent holds.'
+			: 'A key an agent asks for may hold any action its approver holds.',
 		...(two.length === 0 ? [] : [`Two people decide: ${two.join(', ')}.`]),
 		...(others.length === 0 ? [] : [`Someone other than the requester's person decides: ${others.join(', ')}.`]),
 		...(passkey.length === 0 ? [] : [`A passkey confirms deciding: ${passkey.join(', ')}.`]),

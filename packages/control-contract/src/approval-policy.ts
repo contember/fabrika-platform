@@ -289,10 +289,19 @@ export const STEP_UP_MODES = ['none', 'webauthn'] as const
 
 export type StepUpMode = (typeof STEP_UP_MODES)[number]
 
+/**
+ * What bounds a key an agent asks for someone else (ADR-0083 §2): the actions the requester itself holds at the
+ * application, read from its token when it asks, or the approver's own, the page warning which exceed the requester's.
+ */
+export const CREDENTIAL_CEILINGS = ['requester', 'approver'] as const
+
+export type CredentialCeiling = (typeof CREDENTIAL_CEILINGS)[number]
+
 /** An environment's approval settings beside its modes (ADR-0083 §2). */
 export interface ApprovalSettings {
 	readonly deployRequestCommits: DeployRequestCommits
 	readonly requestTtlHours: number
+	readonly credentialCeiling: CredentialCeiling
 	readonly approvers: { readonly [K in ApproverCategory]: ApproverCount }
 	/** `false`: someone other than the requester's person decides a pending item of the category (ADR-0083 §8). */
 	readonly requesterMayApprove: { readonly [K in ApproverCategory]: boolean }
@@ -301,12 +310,14 @@ export interface ApprovalSettings {
 }
 
 /**
- * The strict preset's settings, and the defaults: merged commits only, a day to decide, one approver per category, the
- * requester's own person may decide (D2), and a passkey on deciding a request for a credential.
+ * The strict preset's settings, and the defaults: merged commits only, a day to decide, a key no wider than its
+ * requester, one approver per category, the requester's own person may decide (D2), and a passkey on deciding a request
+ * for a credential.
  */
 export const STRICT_SETTINGS: ApprovalSettings = {
 	deployRequestCommits: 'merged',
 	requestTtlHours: REQUEST_TTL_HOURS.default,
+	credentialCeiling: 'requester',
 	approvers: {
 		'off-road': 1,
 		'anyone-calls': 1,
@@ -476,6 +487,7 @@ const stepUpSchema = z.object({
 export const approvalSettingsSchema = z.object({
 	deployRequestCommits: z.enum(DEPLOY_REQUEST_COMMITS),
 	requestTtlHours: z.number().int().min(REQUEST_TTL_HOURS.min).max(REQUEST_TTL_HOURS.max),
+	credentialCeiling: z.enum(CREDENTIAL_CEILINGS),
 	approvers: approversSchema,
 	requesterMayApprove: requesterMayApproveSchema,
 	stepUp: stepUpSchema,
@@ -513,9 +525,10 @@ export interface ProtectionChoice {
 /**
  * The categories whose deciding takes a passkey under `held` that a change to `after` lets more through (ADR-0050 §5):
  * the environment unprotected, the passkey dropped, the mode lowered, fewer approvers, the requester's person let
- * approve, or for `deploy-request` an unmerged commit admitted. Such a change takes a passkey too, so a driven browser
- * cannot loosen the setting and then decide without one. An unprotected environment decides requests under
- * `STRICT_SETTINGS` (ADR-0083 §2), so protecting it with less is a weakening too.
+ * approve, for `deploy-request` an unmerged commit admitted, or for `credentials` a key no longer bounded by its
+ * requester. Such a change takes a passkey too, so a driven browser cannot loosen the setting and then decide without
+ * one. An unprotected environment decides requests under `STRICT_SETTINGS` (ADR-0083 §2), so protecting it with less is
+ * a weakening too.
  */
 export function weakensStepUp(held: ProtectionChoice, after: ProtectionChoice): ApproverCategory[] {
 	const before = decidingSettings(held)
@@ -526,6 +539,7 @@ export function weakensStepUp(held: ProtectionChoice, after: ProtectionChoice): 
 			|| next.approvers[category] < before.approvers[category]
 			|| (next.requesterMayApprove[category] && !before.requesterMayApprove[category])
 			|| (category === 'deploy-request' && before.deployRequestCommits === 'merged' && next.deployRequestCommits === 'any')
+			|| (category === 'credentials' && before.credentialCeiling === 'requester' && next.credentialCeiling === 'approver')
 			|| (held.protected && (!after.protected || RANK[after.policy[category]] < RANK[held.policy[category]]))
 		)
 	)

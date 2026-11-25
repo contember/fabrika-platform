@@ -358,6 +358,26 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 				</label>
 				<label className="approval-mode">
 					<span>
+						Actions a key an agent asks for may hold
+						<span className="muted small">
+							{' · '}the agent's own means only actions the agent holds at the application when it asks; the approver's means any action the approver holds,
+							and the request page marks those the agent lacks.
+						</span>
+					</span>
+					<span className="approval-mode-controls">
+						<select
+							value={settings.credentialCeiling}
+							disabled={busy}
+							aria-label="Actions a key an agent asks for may hold"
+							onChange={(event) => setSettings({ ...settings, credentialCeiling: event.target.value === 'approver' ? 'approver' : 'requester' })}
+						>
+							<option value="requester">The agent's own (default)</option>
+							<option value="approver">The approver's</option>
+						</select>
+					</span>
+				</label>
+				<label className="approval-mode">
+					<span>
 						Hours a request waits for a decision
 						<span className="muted small">
 							{` · ${REQUEST_TTL_HOURS.min}–${REQUEST_TTL_HOURS.max}, ${REQUEST_TTL_HOURS.default} by default; past it, the request expires.`}
