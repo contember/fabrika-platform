@@ -8,9 +8,10 @@ import {
 	type UpdateGrantInput,
 } from '@fabrika/iam-contract'
 import { contractGrantProblem, externalGrantProblem } from '../contract-rules'
-import { ExternalGrantError, type GrantRow } from '../db'
+import { type KeyReach } from '../credentials-gate'
+import { ExternalGrantError, type GrantRow, type PrincipalRow } from '../db'
 import { parseStoredPermissions } from '../stored-permissions'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 import { type GrantChangeRequest, grantsWait, requestGrantChange } from './grant-requests'
 import { appField, grantIdOf, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } from './grant-support'
 import { requireGrantablePrincipal, requireManagedApp } from './user-admin'
@@ -55,6 +56,7 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 		return fail(409, external)
 	}
 	const { scopeType, scopeValues } = scope
+	await requireKeyGrantMode(c, principal, app, scopeType, scopeValues)
 	const values = { principalId, app, scopeType, grantedBy: c.admin.id, expiresAt }
 	const roleKey = roleOrInline.roleKey
 	if (app !== null && await grantsWait(c.services, app)) {
@@ -235,6 +237,7 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 		? 'This user already has that role in this scope. Edit the existing access instead.'
 		: 'This key already has that role in this scope. Edit the existing grant instead.'
 	if (await duplicate()) return fail(409, held)
+	await requireKeyGrantMode(c, principal, grant.app, scopeType, scopeValues)
 	if (grant.app !== null && await grantsWait(c.services, grant.app)) {
 		return await pendingChange(c, {
 			app: grant.app,
@@ -295,6 +298,24 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 	}
 	if (updated === null) return fail(409, 'The access changed or is no longer allowed. Refresh and try again.')
 	return grantDto(updated, new RoleKnownCache(c.services))
+}
+
+/**
+ * A grant to a key widens what a live credential holds, so a machine caller's grant meets the `credentials` mode of where
+ * it acts, as issuing that key would (ADR-0083 §8), before it applies or waits as a grant request.
+ */
+async function requireKeyGrantMode(
+	c: AdminContext,
+	principal: Pick<PrincipalRow, 'type'>,
+	app: string | null,
+	scopeType: string | null,
+	scopeValues: readonly string[] | null,
+): Promise<void> {
+	if (principal.type !== 'service') return
+	const reach: KeyReach[] = scopeType === null || scopeValues === null
+		? [{ app, scope: null }]
+		: scopeValues.map((value) => ({ app, scope: { type: scopeType, value } }))
+	await requireCredentialsMode(c, reach, 'grant')
 }
 
 /** The sorted values of a grant's rows; null for a global grant. */

@@ -33,10 +33,12 @@ import {
 	type ApprovalUseCaseContext,
 	completeApprovalUseCase,
 	getApprovalUseCase,
+	type IamGatesHeld,
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from '../approval/api'
-import { appEnvCategories, appEnvPolicy, storedCategories } from '../approval/categories'
+import { appEnvCategories, appEnvPolicy, type IamGates, storedCategories } from '../approval/categories'
+import { convergeIamGates } from '../approval/iam-mirror'
 import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot } from '../approval/snapshot'
@@ -1121,7 +1123,10 @@ describe('protection survives the registry', () => {
 		await seed(w)
 		const human = auth({ permissions: [{ action: '*', scope: null }] })
 		const permissive = { appId: 'notes', env: 'stage', protected: true, policy: PERMISSIVE_POLICY }
-		await setEnvironmentProtectionUseCase({ ...approvals(w, human), grantApproval: { set: () => Promise.resolve() } }, permissive)
+		await setEnvironmentProtectionUseCase({
+			...approvals(w, human),
+			grantApproval: { set: (_app, gates, revision) => Promise.resolve({ revision, credentials: gates.credentials }) },
+		}, permissive)
 		await protectAsConsole(approvals(w, human), { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
 
 		for (const env of ['stage', 'prod']) {
@@ -2443,26 +2448,34 @@ describe('approval categories', () => {
 		"\t\treader: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] } },\n\t},\n}, (c)",
 	)
 
-	/** IAM's gate as IAM keeps it: a revision older than the stored one changes nothing. */
+	/** IAM's gates as IAM keeps them: a revision older than the stored one changes nothing. */
 	interface GrantGate {
-		readonly calls: Array<[string, boolean, number]>
-		state: { required: boolean; revision: number } | null
+		readonly calls: Array<[string, IamGates, number]>
+		state: { gates: IamGates; revision: number } | null
 		fail: boolean
+		/** Runs before the write is taken, so a test reads what Control holds at that moment. */
+		beforeSet?: () => Promise<void>
 		afterSet?: () => void
-		set(app: string, required: boolean, revision: number): Promise<void>
+		set(app: string, gates: IamGates, revision: number): Promise<IamGatesHeld>
 	}
 
 	function grantGate(): GrantGate {
+		/** What IAM answers it holds, per application id. `state` is the last write taken, of whichever application. */
+		const held = new Map<string, { gates: IamGates; revision: number }>()
 		const gate: GrantGate = {
 			calls: [],
 			state: null,
 			fail: false,
-			set: (app, required, revision) => {
-				if (gate.fail) return Promise.reject(new Error('IAM is down'))
-				gate.calls.push([app, required, revision])
-				if (gate.state === null || gate.state.revision <= revision) gate.state = { required, revision }
+			set: async (app, gates, revision) => {
+				await gate.beforeSet?.()
+				if (gate.fail) throw new Error('IAM is down')
+				gate.calls.push([app, gates, revision])
+				if (gate.state === null || gate.state.revision <= revision) gate.state = { gates, revision }
+				const before = held.get(app)
+				const now = before === undefined || before.revision <= revision ? { gates, revision } : before
+				held.set(app, now)
 				gate.afterSet?.()
-				return Promise.resolve()
+				return { revision: now.revision, credentials: now.gates.credentials }
 			},
 		}
 		return gate
@@ -2638,7 +2651,7 @@ describe('approval categories', () => {
 		await publishedBase(w)
 		const gate = grantGate()
 		await setPolicy(w, 'prod', PERMISSIVE_POLICY, gate)
-		expect(gate.state?.required).toBe(false)
+		expect(gate.state?.gates).toEqual({ grants: false, credentials: 'off' })
 		w.files = DELETES_NOTES
 		const result = await deploy(w, 'prod')
 		expect(result.status).toBe('succeeded')
@@ -2663,12 +2676,97 @@ describe('approval categories', () => {
 		const gate = grantGate()
 		const start = await revision()
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants'], gate)
-		expect(gate.calls).toEqual([['notes@prod', true, start + 1]])
+		const held: IamGates = { grants: true, credentials: 'person' }
+		expect(gate.calls).toEqual([['notes@prod', held, start + 1]])
 		expect(await revision()).toBe(start + 1)
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants', 'csp'], gate)
 		await protectAsConsole({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
-		expect(gate.calls).toEqual([['notes@prod', true, start + 1], ['notes@prod', true, start + 2], ['notes@prod', false, start + 3]])
-		expect(gate.state).toEqual({ required: false, revision: await revision() })
+		const released: IamGates = { grants: false, credentials: 'off' }
+		expect(gate.calls).toEqual([['notes@prod', held, start + 1], ['notes@prod', held, start + 2], ['notes@prod', released, start + 3]])
+		expect(gate.state).toEqual({ gates: released, revision: await revision() })
+	})
+
+	/** The `credentials` mode Control holds for `env` right now. */
+	async function heldCredentials(w: World, env = 'prod'): Promise<string> {
+		const row = await w.db.registry.getAppEnv('notes', env)
+		if (row === null) throw new Error('no environment')
+		return row.protected === 1 ? appEnvPolicy(row).credentials : 'off'
+	}
+
+	test('`credentials` made stricter reaches IAM before Control holds it, and looser only after', async () => {
+		const w = world()
+		await seed(w)
+		const gate = grantGate()
+		const seen: string[] = []
+		gate.beforeSet = async () => void seen.push(await heldCredentials(w))
+		const revision = async () => (await w.db.registry.getAppEnv('notes', 'prod'))?.protection_revision ?? -1
+		const start = await revision()
+
+		await setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'refuse' }, gate)
+		expect(gate.calls).toEqual([['notes@prod', { grants: false, credentials: 'refuse' }, start + 1]])
+		expect(seen).toEqual(['person'])
+
+		await setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'off' }, gate)
+		expect(gate.calls.slice(1)).toEqual([['notes@prod', { grants: false, credentials: 'off' }, start + 2]])
+		expect(seen).toEqual(['person', 'off'])
+	})
+
+	test('a change that tightens one gate and loosens the other writes each at its stricter side first, then settles', async () => {
+		const w = world()
+		await seed(w)
+		const gate = grantGate()
+		await setPolicy(w, 'prod', { ...STRICT_POLICY, grants: 'person' }, gate)
+		const revision = (await w.db.registry.getAppEnv('notes', 'prod'))?.protection_revision ?? -1
+		gate.calls.length = 0
+		await setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'refuse' }, gate)
+		expect(gate.calls).toEqual([
+			['notes@prod', { grants: true, credentials: 'refuse' }, revision + 1],
+			['notes@prod', { grants: false, credentials: 'refuse' }, revision + 1],
+		])
+	})
+
+	test('IAM that fails a `credentials` write is left the stricter: a tightening changes nothing, a loosening is saved', async () => {
+		const w = world()
+		await seed(w)
+		const gate = grantGate()
+		gate.fail = true
+		expect(await status(setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'refuse' }, gate))).toBe(502)
+		expect(await heldCredentials(w)).toBe('person')
+
+		gate.fail = false
+		await setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'refuse' }, gate)
+		gate.fail = true
+		expect(await status(setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'off' }, gate))).toBe(502)
+		expect(await heldCredentials(w)).toBe('off')
+		expect(gate.state?.gates.credentials).toBe('refuse')
+
+		// The maintenance pass writes what the failed change could not.
+		gate.fail = false
+		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 2, failed: 0 })
+		expect(gate.state?.gates.credentials).toBe('off')
+	})
+
+	test('after an upgrade the maintenance pass writes every environment once, and again only after a change', async () => {
+		const w = world()
+		await seed(w)
+		const gate = grantGate()
+		const revision = async (env: string) => (await w.db.registry.getAppEnv('notes', env))?.protection_revision ?? -1
+		expect(await convergeIamGates({ repositories: w.db })).toEqual({ written: 0, failed: 0 })
+		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 2, failed: 0 })
+		expect(gate.calls).toEqual([
+			['notes@prod', { grants: false, credentials: 'person' }, await revision('prod')],
+			['notes@stage', { grants: false, credentials: 'off' }, await revision('stage')],
+		])
+		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 0, failed: 0 })
+
+		// A change writes IAM itself; the next pass confirms it once at the new revision.
+		await setPolicy(w, 'stage', { ...STRICT_POLICY, credentials: 'refuse' }, gate)
+		gate.calls.length = 0
+		gate.fail = true
+		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 0, failed: 1 })
+		gate.fail = false
+		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 1, failed: 0 })
+		expect(gate.calls).toEqual([['notes@stage', { grants: false, credentials: 'refuse' }, await revision('stage')]])
 	})
 
 	test('IAM that does not take the gate leaves Control unchanged; a release IAM missed is made by the next change', async () => {
@@ -2684,11 +2782,11 @@ describe('approval categories', () => {
 		gate.fail = true
 		expect(await status(choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate))).toBe(502)
 		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories).toBeNull()
-		expect(gate.state?.required).toBe(true)
+		expect(gate.state?.gates.grants).toBe(true)
 
 		gate.fail = false
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate)
-		expect(gate.state?.required).toBe(false)
+		expect(gate.state?.gates.grants).toBe(false)
 	})
 
 	test('a change that loses its lease after IAM took the gate leaves IAM holding it, and only a later change releases it', async () => {
@@ -2705,12 +2803,12 @@ describe('approval categories', () => {
 			{ appId: 'notes', env: 'prod', protected: true, policy: policyFromCategories([...DEFAULT_APPROVAL_CATEGORIES, 'grants']) },
 		)
 		await expect(lost).rejects.toThrow()
-		expect(gate.calls.map(([, required]) => required)).toEqual([true])
+		expect(gate.calls.map(([, gates]) => gates.grants)).toEqual([true])
 		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories).toBeNull()
 
 		gate.afterSet = undefined
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES], gate)
-		expect(gate.state?.required).toBe(false)
+		expect(gate.state?.gates.grants).toBe(false)
 	})
 
 	test('without a way to reach IAM, `grants` cannot be chosen, and every other category still can', async () => {

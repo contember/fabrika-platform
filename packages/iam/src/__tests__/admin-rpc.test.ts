@@ -142,7 +142,7 @@ describe('POST /admin/rpc typed operations', () => {
 		const provision = await call(
 			h,
 			'apiKeys.provision',
-			{ label: 'delivery CI', type: 'service', permissions: ['deploy.run'], app: 'delivery' },
+			{ label: 'delivery CI', type: 'service', permissions: ['deploy.run'], app: 'delivery', expiresAt: Math.floor(Date.now() / 1000) + 86_400 },
 			{ bearer },
 		)
 		const secret = prop(prop(await provision.json(), 'result'), 'apiKey')

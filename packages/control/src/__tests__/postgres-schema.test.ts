@@ -182,6 +182,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0038_approval_requests.sql' },
 			{ bundle: 'control', name: '0039_approval_step_up.sql' },
 			{ bundle: 'control', name: '0040_approval_request_deliveries.sql' },
+			{ bundle: 'control', name: '0041_iam_gate_mirrors.sql' },
 		])
 	})
 

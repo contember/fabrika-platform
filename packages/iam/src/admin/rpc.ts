@@ -1,7 +1,13 @@
 import { type AuthContext, ForbiddenError, initRpc, type RpcRouterFor, toErrorResponse, UnauthorizedError } from '@fabrika/app'
 import { permits, scopedValues, WORKLOAD_KINDS } from '@fabrika/auth-core'
 import { recipientPublicKeySchema } from '@fabrika/control-contract'
-import { type IamAdminRpcContract, OAUTH_CLIENT_PROVIDERS, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
+import {
+	CREDENTIALS_MODES,
+	type IamAdminRpcContract,
+	OAUTH_CLIENT_PROVIDERS,
+	PASSWORD_MAX_LENGTH,
+	PASSWORD_MIN_LENGTH_FLOOR,
+} from '@fabrika/iam-contract'
 import { installationBrandSchema } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
@@ -151,10 +157,13 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 					: withdrawOwnGrantRequestUseCase(requester, input)
 			}),
 	}),
-	// Control's, with the provisioning key: whether an application environment's grants wait (ADR-0083).
+	// Control's, with the provisioning key: an application environment's grant gate and `credentials` mode (ADR-0083).
 	grantApproval: t.router({
 		set: t.procedure
-			.input(z.object({ app: nonEmpty, required: z.boolean(), revision: z.number().int().nonnegative() }).strict())
+			.input(
+				z.object({ app: nonEmpty, required: z.boolean(), revision: z.number().int().nonnegative(), credentials: z.enum(CREDENTIALS_MODES).optional() })
+					.strict(),
+			)
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => setGrantApprovalUseCase(context(ctx), input)),
 	}),

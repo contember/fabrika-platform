@@ -46,7 +46,7 @@ async function fixture({ repositories, db }: Backend) {
 	/** Make the application's grants wait (ADR-0083), or apply at once, as Control does; the Postgres schema is shared. */
 	const gate = async (required = true) => {
 		gateRevision += 1
-		await repositories.grantRequests.setGrantsWait(APP, required, gateRevision, Math.floor(Date.now() / 1000), {
+		await repositories.grantRequests.setGates(APP, { required }, gateRevision, Math.floor(Date.now() / 1000), {
 			requestId: crypto.randomUUID(),
 			principalId: admin.id,
 			principalLabel: admin.label,
@@ -226,6 +226,7 @@ function suite(label: string, backend: () => Backend) {
 				roleKey: 'editor',
 				scopeType: 'workspace',
 				scopeValues: ['beta', 'alpha'],
+				expiresAt: Math.floor(Date.now() / 1000) + 24 * 3600,
 			})
 			const key = await adminUseCases.getApiKey(f.context, { principalId })
 			expect(key.grants.map((each) => each.scopeValues)).toEqual([['alpha', 'beta']])

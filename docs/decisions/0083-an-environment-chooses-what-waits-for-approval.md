@@ -165,16 +165,25 @@ no entry exists, and `plan` waits for a person exactly as `person` does: today's
 
 ### 4. A console grant waits as a grant request
 
-IAM keeps whether an application's grants wait, per IAM application id `<app>@<env>` (`app_grant_approvals`), because
-IAM is where a grant is written. Control is the only writer, and IAM enforces that: `grantApproval.set` answers only
-the provisioning key, never an installation administrator, who could otherwise switch the gate off, grant, and switch
-it back. Every protection change of an environment sets the gate under the environment's deployment lease, carrying
-the environment's protection revision, and IAM ignores a revision older than the one it holds, so a caller that lost
-the lease cannot undo its successor's gate. Control writes the stricter side first: a change that leaves grants waiting
-writes IAM (at the revision its own write will reach) before its own row, one that releases them writes its own row
-before IAM. Nothing reverts IAM after a failed Control write: a failure in between leaves IAM gating while the console
-may say it does not, the console reports it, and the next protection change converges both. A platform audience is
-refused: no grant at the console or IAM waits. `grants` waits when its mode is `person`.
+IAM keeps two gates per IAM application id `<app>@<env>` (`app_grant_approvals`): whether the environment's grants
+wait, because IAM is where a grant is written, and its `credentials` mode (`off` when unprotected), because IAM is
+where a key is issued (§8). Control is the only writer, and IAM enforces that: `grantApproval.set` answers only the
+provisioning key, never an installation administrator, who could otherwise switch a gate off, grant or issue, and
+switch it back. Every protection change of an environment writes both gates in one call under the environment's
+deployment lease, carrying the environment's protection revision, and IAM ignores a revision older than the one it
+holds, so a caller that lost the lease cannot undo its successor's gates. Control writes the stricter side first, gate
+by gate: a change that tightens either gate writes IAM the stricter of before and after (at the revision its own write
+will reach) before its own row, and the looser side after its row, at the row's revision. A failed first write
+changes nothing (502); a failed second write leaves IAM the stricter (502). Nothing reverts IAM after a failed Control
+write: a failure in between leaves IAM stricter while the console may say it is not, the console reports it, and the
+next protection change converges both. A new environment's gates reach IAM before its row, as it starts and at its
+starting revision (registration, and an `apps.environments.put` that creates one): a key that acts in every environment
+of an application counts only the environments IAM knows, so a `prod` IAM did not know would not count. One that starts
+protected is not created when IAM does not take them (503). Control's maintenance pass writes the gates of every
+environment IAM has not taken at its current protection revision (`iam_gate_mirrors` records what IAM took), so a new
+environment whose write failed, a failed second write and an installation upgraded to the `credentials` mirror converge
+with no operator step; until then IAM reads an environment it knows and holds no mode for as `person`. A platform audience is refused: no grant at the console or IAM
+waits. `grants` waits when its mode is `person`.
 
 While an application's grants wait, `grants.create`, `grants.update`, `grants.delete`, `appPeople.grant` and
 `appPeople.revoke` at that application run every check they run today, then write a **grant request**
@@ -323,10 +332,34 @@ the requester (the same principal through the same OAuth client, or through no c
 issued when that is later, the sweep drops an unfetched one and revokes the key in IAM. IAM keeps its own copy of the
 JWE under the request id, readable by `iam.admin` (`apiKeys.requested`) and useless without the private key. No DTO,
 audit row or log line carries the JWE.
-IAM enforces the `credentials` mode on its own key
-issuance for a machine caller too, mirrored from Control stricter side first as the grant gate is, so a `px_` key
-holding `iam.admin` meets the same mode. Two issuances keep their rule: the provisioning key's own (workload,
-membership and connector keys) and the bootstrap `POST /admin/api-keys`.
+
+**IAM's direct path meets the same mode.** A `px_` key holding `iam.admin` issues keys without any person, so IAM's own
+key issuance meets the `credentials` mode Control mirrors (§4) for every caller that is not a person in a signed-in
+session (§6): `apiKeys.provision` and the REST `POST /admin/api-keys`, `apiKeys.rotate` (a new secret for the
+principal's grants), `shareLinks.issue`, `workloads.issueKey`, `membershipKeys.issue`, and `issueKey` for a key for
+someone else (a self-bound key is the caller's own identity). A key at an application environment takes its mode. A key
+at Control's console audience acts in every environment of the application its `app` scope names, or of every
+application under any other scope, and a cross-app key in every environment: such a key takes the strictest mode among
+them. An environment IAM holds no mode for reads as `person`. Under `person` IAM answers 403 naming Control's request
+path (`approvals.requests.create` of kind `iam.apiKeys.provision`, or `fabrika control access request-key`); under
+`refuse`, 403. A person in the console issues as before. A key at IAM itself or Operations reaches no application and
+keeps the installation's rule (§9). This is authorization in IAM's use cases, not an enforcement decision (ADR-0022).
+
+A machine caller's grant to a key meets `credentials` too, since it widens a live credential as issuing one would:
+`grants.create` and `grants.update` to a service principal judge the grant's reach by the same rules, before the grant
+applies or waits as a grant request (§4). `policies.update` and `PUT /admin/apps/:app/schema` widen every holder of a
+role at once; IAM does not judge whether one widens a key, so a machine caller is refused there wherever the
+application's mode is `person` or `refuse`. A person and the provisioning key keep their rule on all four.
+
+Two issuances keep their rule, both made with the provisioning key, the operator's own credential, which the check
+exempts on every path: Control's own workload, membership and connector keys, which every deploy issues, and the
+bootstrap `POST /admin/api-keys`, which makes the first machine caller before any console or key exists. A
+non-provisioning key on that REST path meets the mode like any other caller.
+
+`apiKeys.provision` takes an expiry at most 30 days ahead, as every other issuance does; a later one or none is refused
+(400), not clamped, so the caller sees what it gets. The provisioning key is exempt: the local stack's machine key is
+made with it and does not expire. Control's own workload and membership keys already take at most 30 days. A rotation
+keeps the key's expiry, so an existing key is untouched; one that states a new expiry meets the same ceiling.
 
 ### 9. What no mode and no request reaches
 
@@ -338,7 +371,8 @@ These are not categories, and no mode or plan applies to them. They always take 
 - installation administration in IAM (promotion, `iam.admin` grants, terminals, brand, password policy, bootstrap
   administrators, signing and vault keys, the provisioning key, the second-factor reset), which keeps its rule: a
   session where it needs one, and a `px_` key holding `iam.admin` where it accepts one, because a person chose to give
-  that key `iam.admin`;
+  that key `iam.admin`. Issuing a key is not installation administration where the key acts at an application: there it
+  meets the application's `credentials` mode (§8). A key at IAM itself or Operations keeps this rule;
 - source connections and builder pairing, a browser flow anyway.
 
 No request may name any of them, nor these, which keep the rule they have today: namespace removal and claim release
@@ -347,16 +381,34 @@ would deliver production content to the agent), and anything that would return a
 could read. A request of such a kind is refused when it is created (400 naming the kind), not at approval.
 
 Every mutation of Control's router and of IAM's `/admin/rpc` is either gated by a category or listed as exempt with its
-reason. A table test over both routers fails when a new mutation is neither. No mode applies to the installation's own
+reason. A table test over both routers fails when a new mutation is neither. IAM's table gates every issuing mutation,
+a grant to a key and the change of a role or policy by `credentials` (§8), a grant beside its `grants`, and lists the
+provisioning key's two exceptions with their reason, and it checks that each gated one refuses a machine `iam.admin`
+key under `person`. No mode applies to the installation's own
 resources, which keep their rule: namespaces and the mail gate (`namespace.manage` and `mail.manage`, global, which no
-command-line preset carries), and IAM's named policies and an application's return origins (`iam.admin`).
+command-line preset carries), and IAM's named policies and an application's return origins (`iam.admin`), save that a
+machine caller's edit of a policy meets `credentials` (§8).
 
 ### Rollout
 
 Each category takes effect only from the change that adds the requests it waits in: `deploy-request` with the parked
 non-person run; `secrets`, `variables`, `data` and `registry` together, once their writes with an external effect go
 through requests (decision D8); `agent-grants` with the agent's grant request; `credentials` with keys for others,
-behind the WebAuthn step-up. A hole is closed by routing a write through a request, never by refusing it outright.
+behind the WebAuthn step-up, and on IAM's direct path once the request exists to send a machine caller to. A hole is
+closed by routing a write through a request, never by refusing it outright.
+
+IAM's direct path converges with two additive migrations: IAM's `app_grant_approvals.credentials` (null) and Control's
+`iam_gate_mirrors` (empty). From IAM's upgrade, an environment without a mode reads as `person`, so a machine caller
+issues no key at an application environment until Control's maintenance pass (every 5 minutes) writes each
+environment's mode: the window fails closed, and no operator step is needed. One pass writes at most 200 environments,
+so convergence takes one pass per 200 environments; an environment IAM keeps refusing, or answers at a later revision
+than Control's, is not recorded as taken and takes a slot on every pass until it converges. Both upgrade workflows
+deploy IAM before Control, but IAM can still be older than Control: rolled back alone, or with Control deployed alone.
+Such an IAM refuses the `credentials` field as unknown; Control then writes the grant gate without it, logs one line,
+and records nothing, so the pass writes the mode once IAM is upgraded (ADR-0062). An installation without the provisioning
+key cannot write the mirror, and its IAM keeps reading `person`; an installation with IAM and no Control has the operator
+write it with the provisioning key ([`security-deployment.md`](../reference/security-deployment.md)). From then on, `apiKeys.provision` takes an expiry at
+most 30 days ahead; existing keys keep theirs.
 
 Before D8 a non-person's secret, variable and data write applied at once, its write of the trigger ref, domain, public
 origin or an application's source and build fields was refused, and its write of the cross-origin list, provider
@@ -376,7 +428,10 @@ whose policy is null reads the defaults, `person` for the four, from the upgrade
   agent deploys sets `deploy-request` `refuse`; one that trusts its agents applies the permissive preset.
 - The `grants` choice lives in two stores, Control's environment and IAM's application, and so does `credentials`.
   Control writes both and the stricter one first, under a revision IAM orders by; a partial failure fails closed and is
-  reported, and the next protection change repairs it. Nothing else can write IAM's rows.
+  reported. Control's maintenance pass repairs what IAM missed at Control's revision: a looser write after Control's row,
+  a new environment, an upgrade. It cannot repair IAM left stricter at a later revision than Control's (IAM took the
+  tightening, then Control's own write failed): IAM ignores the older revision, and only the next protection change
+  converges both, the pass retrying meanwhile. Nothing but the provisioning key writes IAM's rows.
 - Approving a console grant takes a second IAM administrator. An installation with one administrator cannot approve its
   own grants; it sets the category `off` first, which takes `access.approve` and is audited.
 - A request records the client that asked, not the task: until agent task keys add an `act` claim, the OAuth client id
@@ -385,19 +440,23 @@ whose policy is null reads the defaults, `person` for the four, from the upgrade
   beside the repository's code (ADR-0048), so code in a deployed commit can still reach the account; the gate does not
   close that.
 - **Rollout.** Every change is additive: the policy and settings columns (null), the request table (empty), IAM's
-  passkeys (empty). An existing environment reads the defaults, converted from the categories it chose. Behaviour that
+  passkeys (empty), IAM's `credentials` column (null) and Control's `iam_gate_mirrors` (empty). An existing environment reads the defaults, converted from the categories it chose. Behaviour that
   changes on an existing installation, each when its requests land: a person's own `px_` key stops passing the
   protected-environment checks and its manual deploy parks; parked runs start to expire, a run parked before the
   upgrade getting its deadline when the sweep first sees it; a non-person's secret, variable, data and registry write
   on a protected environment waits for a person; deciding a `credentials` item takes a passkey, and so does unprotecting
   an environment or loosening its `credentials` (the first passkey needs only the session); a machine key holding
-  `iam.admin` that issues keys meets the `credentials` mode. No generated file and no environment variable changes.
+  `iam.admin` that issues keys meets the `credentials` mode, refused everywhere until Control's first maintenance pass
+  mirrors it, and `apiKeys.provision` takes an expiry at most 30 days ahead. No generated file and no environment variable changes.
   One operator step, for `planEvidence: console+github` only: an existing GitHub App gets the user-authorization
   callback URL and a client secret in its GitHub settings, documented in `docs/reference/` when that evidence is
   built; without it reviews count for nothing and console approvals still work.
   Rolling Control back below the policy reads the old column, and the deploy gate falls back to its categories; a run
   classified under a non-default choice stores it, which an older Control's strict classification reader refuses, so
-  that run classifies again or fails. Rolling IAM back leaves requests unread and grants ungated.
+  that run classifies again or fails. Rolling IAM back leaves requests unread, grants ungated and its key issuance unjudged by `credentials`; rolling
+  Control back leaves IAM's `credentials` as last written until that older Control writes an environment's gates (a
+  protection change), which carries no mode and sets it to null: IAM then reads that environment as `person`, never a
+  looser mode left behind, and a machine caller issues no key there until Control is upgraded again.
 
 ## Alternatives considered
 

@@ -223,9 +223,23 @@ describe('grants at a contract application', () => {
 
 	test('refuses the built-in admin to an api key, which lists exact actions, on provisioning and as a later grant', async () => {
 		const admin = await withContractApp()
-		const provisioned = await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, roleKey: 'admin' })
+		const provisioned = await rpc(admin, 'apiKeys.provision', {
+			label: 'ci',
+			type: 'service',
+			app: NOTES,
+			roleKey: 'admin',
+			expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+		})
 		expect([provisioned.status, provisioned.message]).toEqual([400, expect.stringContaining("role 'admin' is granted only to a person")])
-		expect((await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, permissions: ['note.read'] })).status).toBe(200)
+		expect(
+			(await rpc(admin, 'apiKeys.provision', {
+				label: 'ci',
+				type: 'service',
+				app: NOTES,
+				permissions: ['note.read'],
+				expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+			})).status,
+		).toBe(200)
 		const [key] = await admin.h.repositories.principals.listPrincipals({ type: 'service', limit: 1 })
 		if (key === undefined) throw new Error('no key principal')
 		const granted = await rpc(admin, 'grants.create', { principalId: key.id, app: NOTES, roleKey: 'admin' })
@@ -235,7 +249,15 @@ describe('grants at a contract application', () => {
 	test('a key that held admin before its app became a contract resolves no declared action there', async () => {
 		const admin = await asAdmin()
 		expect((await putSchema(admin, NOTES, { ...CONTRACT_SCHEMA, contract: false })).status).toBe(200)
-		expect((await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, roleKey: 'admin' })).status).toBe(200)
+		expect(
+			(await rpc(admin, 'apiKeys.provision', {
+				label: 'ci',
+				type: 'service',
+				app: NOTES,
+				roleKey: 'admin',
+				expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+			})).status,
+		).toBe(200)
 		expect((await putSchema(admin, NOTES, CONTRACT_SCHEMA)).status).toBe(200)
 		const [key] = await admin.h.repositories.principals.listPrincipals({ type: 'service', limit: 1 })
 		if (key === undefined) throw new Error('no key principal')
@@ -264,14 +286,28 @@ describe('grants at a contract application', () => {
 
 	test('a provisioned api key refuses a wildcard grant', async () => {
 		const admin = await withContractApp()
-		const result = await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, permissions: ['*'] })
+		const result = await rpc(admin, 'apiKeys.provision', {
+			label: 'ci',
+			type: 'service',
+			app: NOTES,
+			permissions: ['*'],
+			expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+		})
 		expect(result.status).toBe(400)
 		expect(result.message).toContain('not the wildcard: *')
 	})
 
 	test('a grant added to a provisioned api key refuses a wildcard, as provisioning does', async () => {
 		const admin = await withContractApp()
-		expect((await rpc(admin, 'apiKeys.provision', { label: 'ci', type: 'service', app: NOTES, permissions: ['note.read'] })).status).toBe(200)
+		expect(
+			(await rpc(admin, 'apiKeys.provision', {
+				label: 'ci',
+				type: 'service',
+				app: NOTES,
+				permissions: ['note.read'],
+				expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+			})).status,
+		).toBe(200)
 		const [key] = await admin.h.repositories.principals.listPrincipals({ type: 'service', limit: 1 })
 		if (key === undefined) throw new Error('no key principal')
 		const wildcard = await rpc(admin, 'grants.create', { principalId: key.id, app: NOTES, permissions: ['*'] })

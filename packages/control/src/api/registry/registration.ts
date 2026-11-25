@@ -5,6 +5,7 @@ import { snapshotAccessMap } from '../../approval/access-map'
 import { appEnvPolicy, appEnvSettings } from '../../approval/categories'
 import { snapshotDeviations } from '../../approval/diff'
 import { requirePersonToPointDomain, requirePersonToPointPublicOrigin, requirePersonToPointTriggerRef } from '../../approval/human'
+import { writeNewEnvironmentGates } from '../../approval/iam-mirror'
 import { approvedSnapshot } from '../../approval/snapshot'
 import { snapshotSurface } from '../../approval/surface'
 import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
@@ -88,6 +89,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 		providerTargetJson: JSON.stringify(registration.environment.target),
 		providerArtifactJson: JSON.stringify(registration.environment.artifact),
 	}
+	await writeNewEnvironmentGates(c, registration.app.id, registration.environment.env)
 	let app: AppRow
 	let appEnv: AppEnvRow
 	try {

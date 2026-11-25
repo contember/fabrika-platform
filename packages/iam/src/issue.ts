@@ -21,6 +21,7 @@ import {
 	type RevokeKeyResult,
 } from '@fabrika/auth-core'
 import { uuidv7 } from '@fabrika/platform'
+import { credentialsRefusal } from './credentials-gate'
 import type { AuditEventInput, CredentialGrantRow } from './db'
 import { issuerAuthority } from './delegation'
 import { unixNow } from './repositories/sql'
@@ -31,17 +32,21 @@ import type { Services } from './services'
 interface Issuer {
 	id: string
 	permissions: PermissionEntry[]
+	/** A person's own session token; absent or false, the issuer is a machine caller, which meets the `credentials` mode. */
+	person?: boolean
 }
 
 /**
  * What `issueKey` decided. A refusal with a `problem` was a malformed request (expiry, catalog), not a
- * lack of authority: the admin path answers it with a 400 that names the problem, and the RPC still
- * answers `not_allowed`, its only refusal reason.
+ * lack of authority: the admin path answers it with a 400 that names the problem. One with a `refusal` is the
+ * environment's `credentials` mode, which the admin path answers with a 403 that names it. The RPC answers both
+ * `not_allowed`, its only refusal reason.
  */
 export interface IssueOutcome {
 	result: IssueKeyResult
 	auditLabel?: string
 	problem?: string
+	refusal?: string
 }
 
 /** The record of an issued key, given the ids the issuance generated; written in the key's own transaction. */
@@ -151,6 +156,10 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 		if (findUncoveredGrant(issuer.permissions, grants) !== null) {
 			return NOT_ALLOWED
 		}
+		const refusal = await credentialsRefusal(services, { id: issuer.id, person: issuer.person === true }, [{ app, scope: svc.scope ?? null }])
+		if (refusal !== null) {
+			return { ...NOT_ALLOWED, refusal }
+		}
 		const expiresAt = await delegatedExpiry(services, issuer, app, grants, input.expiresAt)
 		if (expiresAt === null) {
 			return NOT_ALLOWED
@@ -201,6 +210,14 @@ export async function issueKey(services: Services, input: IssueKeyInput, issuer:
 	// Delegation: the issuer must hold every inline grant (trivially true for a self-bound downscope).
 	if (findUncoveredGrant(issuer.permissions, grants) !== null) {
 		return NOT_ALLOWED
+	}
+	// A self-bound key is the issuer's own identity, so only a key for someone else (a share link) meets the mode.
+	if (!selfBound) {
+		const reach = grants.map((grant) => ({ app, scope: grant.scope ?? null }))
+		const refusal = await credentialsRefusal(services, { id: issuer.id, person: issuer.person === true }, reach)
+		if (refusal !== null) {
+			return { ...NOT_ALLOWED, refusal }
+		}
 	}
 	// A self-bound key resolves its principal live at every mint; an anonymous one freezes what the issuer delegates.
 	const expiresAt = input.principalId === undefined ? await delegatedExpiry(services, issuer, app, grants, input.expiresAt) : input.expiresAt

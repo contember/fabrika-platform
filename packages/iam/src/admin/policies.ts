@@ -4,7 +4,7 @@ import { type AppInput, type CreatePolicyInput, type OkResponse, type PolicyDto,
 import { contractPatternsProblem } from '../contract-rules'
 import { type RoleRow } from '../db'
 import { BUILTIN_ROLES } from '../roles'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 import { knownApps, rolePermissions } from './grant-support'
 
 function toPolicyDto(row: RoleRow): PolicyDto {
@@ -105,6 +105,9 @@ export async function updatePolicyUseCase(c: AdminContext, input: UpdatePolicyIn
 	if (!parsed.ok) {
 		return fail(400, parsed.message)
 	}
+	// The policy's holders, keys among them, gain what it gains at once. Whether this edit widens a key is not judged:
+	// a machine caller is refused wherever the application's `credentials` mode is not `off` (ADR-0083 §8).
+	await requireCredentialsMode(c, [{ app, scope: null }], 'role')
 	const row = await c.services.repositories.appSchema.upsertRole(
 		{ app, roleKey: key, name: parsed.name, description: parsed.description, permissions: parsed.permissions, origin: 'custom' },
 		adminEvent(c, {

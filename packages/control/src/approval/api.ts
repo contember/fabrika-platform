@@ -26,6 +26,7 @@ import {
 	requiredStepUp,
 	weakensStepUp,
 } from '@fabrika/control-contract'
+import type { CredentialsMode } from '@fabrika/iam-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
@@ -33,7 +34,17 @@ import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
 import { appEnvCrossOrigins, type AppEnvRow, type ControlRepositories, type RunRow } from '../db'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { snapshotAccessMap } from './access-map'
-import { appEnvPolicy, appEnvSettings, grantsWait, storedPolicy, storedSettings } from './categories'
+import {
+	appEnvPolicy,
+	appEnvSettings,
+	grantsWait,
+	type IamGates,
+	iamGatesOf,
+	sameGates,
+	storedPolicy,
+	storedSettings,
+	stricterGates,
+} from './categories'
 import { type ConsoleAdmission, requireHumanApprover, requireOtherThanRequester } from './human'
 import {
 	classificationCategories,
@@ -49,12 +60,20 @@ import { issueStepUpChallenge, type PasskeyStepUpPort, protectionStepUpBinding, 
 import { snapshotSurface } from './surface'
 
 /**
- * IAM's switch for whether an application's console grants wait for a second administrator (ADR-0083 §4), set with the
- * provisioning key on the IAM application id `<app>@<env>`. Control is its only writer; `revision` is the environment's
- * protection revision, and IAM ignores one older than it holds.
+ * IAM's mirror of an environment's approval gates, set with the provisioning key on the IAM application id
+ * `<app>@<env>`: whether its console grants wait for a second administrator (ADR-0083 §4), and its `credentials` mode,
+ * which IAM's own key issuance to a machine caller meets (§8). Control is its only writer; `revision` is the
+ * environment's protection revision, and IAM ignores one older than it holds.
  */
 export interface GrantApprovalPort {
-	set(app: string, required: boolean, revision: number): Promise<void>
+	/** Answers what IAM holds after the write, which is not what was sent when IAM held a later revision. */
+	set(app: string, gates: IamGates, revision: number): Promise<IamGatesHeld>
+}
+
+/** What IAM answers it holds of an environment: its protection revision and its `credentials` mode, null for none. */
+export interface IamGatesHeld {
+	readonly revision: number
+	readonly credentials: CredentialsMode | null
 }
 
 export interface ApprovalUseCaseContext extends ConsoleAdmission {
@@ -301,9 +320,10 @@ export async function challengeProtectionUseCase(c: ApprovalUseCaseContext, inpu
 /**
  * Set an environment's `protected` flag and, when given, its approval policy: the same human rule as approving, and
  * audited (ADR-0050 §4, ADR-0083 §2). A change that weakens a passkey on deciding carries an assertion bound to it, which
- * IAM verifies before anything is written (ADR-0050 §5). IAM's grant gate follows every change, the stricter side first:
- * IAM holds grants before Control says so and releases them only after, so a failure between the two writes leaves
- * grants waiting rather than not, and the next change repairs it (ADR-0083 §4).
+ * IAM verifies before anything is written (ADR-0050 §5). IAM's mirror of the grant gate and the `credentials` mode
+ * follows every change, the stricter side first: IAM is made stricter before Control's row and looser only after it, so
+ * a failure between the two writes leaves IAM the stricter, and the next change or the maintenance pass repairs it
+ * (ADR-0083 §4, §8).
  */
 export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
 	const { person } = await requireProtectionChange(c, input)
@@ -318,16 +338,20 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	try {
 		const held = await c.repositories.registry.getAppEnv(input.appId, input.env) ?? fail(404, 'app env not found')
 		const stepUp = await requireStepUp(c.stepUp, protectionStepUp(held, input), protectionStepUpBinding(input), person, input.stepUp, 'change')
-		const grantsAfter = grantsWait({
+		const before = iamGatesOf(held)
+		const after = iamGatesOf({
 			protected: input.protected ? 1 : 0,
 			approval_categories: policy === undefined ? held.approval_categories : policy.categories,
 			approval_policy: policy === undefined ? held.approval_policy : policy.policy,
 		})
+		// Without the provisioning key IAM reads every environment's `credentials` as `person`, which no write could raise.
 		const grantApproval = c.grantApproval
-			?? (grantsAfter && !grantsWait(held) ? fail(503, 'IAM is not reachable with the provisioning key; console grants cannot wait here') : null)
+			?? (after.grants && !grantsWait(held) ? fail(503, 'IAM is not reachable with the provisioning key; console grants cannot wait here') : null)
 		// The write below bumps the revision by one. Nothing reverts IAM when it fails: this call may have lost the lease,
-		// and releasing then could undo its successor's gate.
-		if (grantApproval !== null && grantsAfter) await setGrantApproval(grantApproval, iamApp, true, held.protection_revision + 1)
+		// and loosening then could undo its successor's gates.
+		const stricter = stricterGates(before, after)
+		const tightens = !sameGates(stricter, before)
+		if (grantApproval !== null && tightens) await setIamGates(grantApproval, iamApp, stricter, held.protection_revision + 1, 'tighten')
 		row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected, policy, settings, lease.fence())
 		if (row !== null) {
 			await c.auth.audit({
@@ -346,7 +370,10 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 					...(stepUp === null ? {} : { stepUp: { credentialId: stepUp.credentialId, at: stepUp.at } }),
 				},
 			})
-			if (grantApproval !== null && !grantsAfter) await setGrantApproval(grantApproval, iamApp, false, row.protection_revision)
+			// Also when nothing tightened, so every change writes IAM at least once and converges a mirror it never had.
+			if (grantApproval !== null && (!tightens || !sameGates(stricter, after))) {
+				await setIamGates(grantApproval, iamApp, after, row.protection_revision, 'settle')
+			}
 		}
 	} finally {
 		await lease.release()
@@ -360,15 +387,15 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	return toAppEnvDto(row)
 }
 
-async function setGrantApproval(port: GrantApprovalPort, app: string, required: boolean, revision: number): Promise<void> {
+async function setIamGates(port: GrantApprovalPort, app: string, gates: IamGates, revision: number, step: 'tighten' | 'settle'): Promise<void> {
 	try {
-		await port.set(app, required, revision)
+		await port.set(app, gates, revision)
 	} catch {
 		fail(
 			502,
-			required
+			step === 'tighten'
 				? 'IAM did not take the change, so nothing changed; try again'
-				: 'approvals are saved, but IAM may still hold console grants for approval; save again to release them',
+				: 'approvals are saved, but IAM may still hold the stricter setting for console grants or keys; save again to release it',
 		)
 	}
 }

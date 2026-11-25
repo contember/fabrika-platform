@@ -691,6 +691,7 @@ export function createControlRpcRouter(
 			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
 			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
 			...(deps.commits === undefined ? {} : { commits: deps.commits }),
+			...(deps.grantApproval === undefined ? {} : { grantApproval: deps.grantApproval }),
 			admission: { request: ctx.request },
 		}
 	}

@@ -105,11 +105,14 @@ async function resolveKey(h: Harness, key: string) {
 	return { claims: parseAccessClaims(payload) }
 }
 
+/** A provisioned key expires at most 30 days ahead (ADR-0083 §8). */
+const KEY_EXPIRY = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
+
 async function provision(h: Harness, token: string): Promise<ProvisionApiKeyResponse> {
 	seedAppAction(h.sqlite, 'opice', 'report.write') // registers 'opice' + the inline grants validate against its catalog
 	const res = await run(
 		h,
-		req('/admin/api-keys', 'POST', token, { label: 'opice CI', type: 'service', permissions: ['report.write'], app: 'opice' }),
+		req('/admin/api-keys', 'POST', token, { label: 'opice CI', type: 'service', permissions: ['report.write'], app: 'opice', expiresAt: KEY_EXPIRY }),
 	)
 	expect(res.status).toBe(201)
 	return res.json()
@@ -152,7 +155,7 @@ describe('rotate / revoke invalidate the native key', () => {
 		const h = createHarness()
 		const token = await asAdmin(h)
 		seedAppAction(h.sqlite, 'opice', 'report.write')
-		const expiresAt = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60
+		const expiresAt = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60
 		const provisioned: ProvisionApiKeyResponse = await (await run(
 			h,
 			req('/admin/api-keys', 'POST', token, { label: 'expiring', type: 'service', permissions: ['report.write'], app: 'opice', expiresAt }),
@@ -169,8 +172,9 @@ describe('rotate / revoke invalidate the native key', () => {
 		const restated = (await h.repositories.credentials.listCredentialsForPrincipal(provisioned.principalId)).find((row) => row.revoked_at === null)
 		expect(restated?.expires_at).toBe(later)
 
-		// A past expiry is refused exactly as provisioning refuses one.
+		// A past expiry, or one past 30 days, is refused exactly as provisioning refuses one.
 		expect((await rotate(h, token, provisioned.principalId, 1)).status).toBe(400)
+		expect((await rotate(h, token, provisioned.principalId, Math.floor(Date.now() / 1000) + 31 * 24 * 60 * 60)).status).toBe(400)
 	})
 
 	test('rotate refuses a DISABLED principal', async () => {
@@ -228,7 +232,7 @@ describe("an issued key's grants are edited in place", () => {
 
 		const detail = await adminRpc(h, token, 'apiKeys.get', { principalId: key.principalId })
 		expect(detail.status).toBe(200)
-		expect(prop(detail.result, 'credential')).toEqual({ app: 'opice', expiresAt: null })
+		expect(prop(detail.result, 'credential')).toEqual({ app: 'opice', expiresAt: KEY_EXPIRY })
 		const grants = prop(detail.result, 'grants')
 		expect(Array.isArray(grants) ? grants.map((grant: unknown) => prop(grant, 'id')).sort() : null).toEqual([original.id, addedId].sort())
 
@@ -272,7 +276,7 @@ describe("an issued key's grants are edited in place", () => {
 		expect(event?.action).toBe('iam.grant.update')
 		expect(prop(JSON.parse(event?.metadata ?? 'null'), 'principalId')).toBe(key.principalId)
 		expect(JSON.parse(event?.diff ?? 'null')).toEqual({
-			before: { roleKey: null, permissions: ['report.write'], scopeType: null, scopeValue: null, expiresAt: null },
+			before: { roleKey: null, permissions: ['report.write'], scopeType: null, scopeValue: null, expiresAt: KEY_EXPIRY },
 			after: { roleKey: null, permissions: ['secret.manage'], scopeType: 'project', scopeValue: 'p1', expiresAt },
 		})
 	})
