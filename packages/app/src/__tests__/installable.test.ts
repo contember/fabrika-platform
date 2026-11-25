@@ -1,4 +1,4 @@
-// An SPA mount as an installable application (ADR-0086): its manifest and icons are served under the mount's own
+// An SPA mount as an installable application (ADR-0087): its manifest and icons are served under the mount's own
 // access, behind the production proxy decision, and its pages link them with the session.
 
 import { compileContract, defineContract } from '@fabrika/app/contract'

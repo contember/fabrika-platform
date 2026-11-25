@@ -387,7 +387,7 @@ src/
   (`APP_MANIFEST_FILE`) and `<prefix>/__fabrika-icon-<180|192|512>.png` (`appIconFile`) itself, the manifest derived
   from the artifact and the icon drawn by `implement/installable.ts`, and every HTML answer of it gets their links after
   `<head>` (`injectIntoHead` in `implement/html.ts`, the one injection the share bootstrap uses too); the manifest link is
-  `crossorigin="use-credentials"`, without which a browser fetches it without the session (ADR-0086). They add no row:
+  `crossorigin="use-credentials"`, without which a browser fetches it without the session (ADR-0087). They add no row:
   never make them public or let a service worker cache an answer; no SPA or link mount serves a path ending in `.map` (404: the platform
   build uploads source maps to Operations, and a map holds the source); a link mount serves `GET <prefix>/*` (anonymous) and its procedures at
   `POST <prefix>/api/<name>`;

@@ -1,11 +1,11 @@
 ---
-id: 0086
+id: 0087
 title: An SPA mount is installable as an application, under its own access
 status: proposed
 date: 2026-11-25
 ---
 
-# 0086: An SPA mount is installable as an application, under its own access
+# 0087: An SPA mount is installable as an application, under its own access
 
 ## Context
 

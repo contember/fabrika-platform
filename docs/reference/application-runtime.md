@@ -2270,7 +2270,7 @@ forwards no token to an anonymous kind. The test kit serves it for a test caller
 ## Installing an SPA as an application
 
 Every credentialed SPA mount (access `member`, an action or `app`) can be installed by a browser as an application in
-its own window ([ADR-0086](../decisions/0086-an-spa-mount-is-installable-under-its-own-access.md)). The framework serves,
+its own window ([ADR-0087](../decisions/0087-an-spa-mount-is-installable-under-its-own-access.md)). The framework serves,
 under the mount's own access and before the asset server:
 
 - `<prefix>/__fabrika-app.webmanifest`, the web app manifest, as `application/manifest+json`: `name` is the contract's

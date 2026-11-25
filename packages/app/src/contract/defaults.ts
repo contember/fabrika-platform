@@ -239,7 +239,7 @@ export const PAGE_CALLER_FILE = '__fabrika-me.json'
 
 /**
  * What every credentialed `c.spa` mount serves under its prefix so a browser can install it as an application: the web
- * app manifest and its icons, under the mount's own access (ADR-0086). The page links the manifest with
+ * app manifest and its icons, under the mount's own access (ADR-0087). The page links the manifest with
  * `crossorigin="use-credentials"`, without which a browser fetches it without the session.
  */
 export const APP_MANIFEST_FILE = '__fabrika-app.webmanifest'

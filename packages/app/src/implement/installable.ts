@@ -1,4 +1,4 @@
-// An SPA mount as an installable application (ADR-0086): the web app manifest the framework derives from the contract,
+// An SPA mount as an installable application (ADR-0087): the web app manifest the framework derives from the contract,
 // the icon it draws, and the links it adds to the mount's pages. Everything here is served under the mount's own
 // access, like `__fabrika-config.json`; nothing is public and nothing is cached by a service worker. Runtime-neutral:
 // the icon is encoded with `CompressionStream`, which Bun and workerd both have.

@@ -279,7 +279,7 @@ export type ServedEndpoint =
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
-	/** A credentialed SPA mount, installable as an application under its own access (ADR-0086). */
+	/** A credentialed SPA mount, installable as an application under its own access (ADR-0087). */
 	| {
 		readonly kind: 'spa'
 		readonly row: CredentialedEndpoint
