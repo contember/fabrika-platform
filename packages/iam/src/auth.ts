@@ -1,4 +1,11 @@
-import { API_KEY_PREFIX, isWorkloadKind, type PermissionEntry, type PrincipalType, type TokenPrincipalType } from '@fabrika/auth-core'
+import {
+	type AccessTokenClaims,
+	API_KEY_PREFIX,
+	isWorkloadKind,
+	type PermissionEntry,
+	type PrincipalType,
+	type TokenPrincipalType,
+} from '@fabrika/auth-core'
 import type { SignedInSessionRow } from './db'
 import type { Env } from './env'
 import { hashToken, timingSafeEqualHex } from './secret'
@@ -76,7 +83,10 @@ export interface ResolvedCaller<T extends TokenPrincipalType = PrincipalType> {
 	permissions: PermissionEntry[]
 	/** The terminal of a person's session token asserted on one (ADR-0067): its `terminal` claim's principal id. */
 	terminal?: string
-	/** A person's own session token: a user signed in, through no OAuth client and no link (ADR-0083 §6). Never a key. */
+	/**
+	 * A person's own session token at a console audience, as the admin path counts one (ADR-0083 §6): a user signed in,
+	 * through no OAuth client, no link and no terminal. Never a key.
+	 */
 	person?: true
 }
 
@@ -180,10 +190,19 @@ async function resolveAnyCaller(services: Services, env: CallerEnv, input: Calle
 			label: claims.label,
 			permissions: claims.perms,
 			...(claims.terminal === undefined ? {} : { terminal: claims.terminal.id }),
-			...(claims.session === true && claims.ptype === 'user' && claims.oauth === undefined && claims.link === undefined ? { person: true } : {}),
+			...(isConsolePerson(services, claims) ? { person: true } : {}),
 		},
 		verifiedApp: claims.aud,
 	}
+}
+
+/**
+ * Whether a verified token is a person acting in the console: the admin path's rule (`resolveAdmin`), a session token at
+ * a registered admin audience with no terminal, plus no OAuth or link claims.
+ */
+function isConsolePerson(services: Services, claims: AccessTokenClaims): boolean {
+	return claims.session === true && claims.ptype === 'user' && claims.oauth === undefined && claims.link === undefined
+		&& claims.terminal === undefined && services.config.adminAudiences.has(claims.aud)
 }
 
 /** A request authenticated before its token expired may finish, and audit, after it; one hour covers that. */

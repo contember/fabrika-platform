@@ -7,6 +7,7 @@ import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { grantIdOf } from '../admin/grant-support'
 import { createIamApp } from '../app'
+import { resolveCaller } from '../auth'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
 import { resolvePermissionsAt } from '../resolve'
@@ -309,19 +310,35 @@ for (const backend of backends) {
 			// A person signed in at Control issues the same key.
 			const person = await w.repositories.principals.getPrincipalById(w.ada.id)
 			if (person === null) throw new Error('no person')
-			const issuedAt = now()
-			const session = await (await getSigner(TEST_SIGNING_ENV)).sign(buildAccessClaims({
-				iss: ORIGIN,
-				app: CONSOLE,
-				subject: person.id,
-				type: 'user',
-				label: person.label,
-				session: true,
-				permissions: await resolvePermissionsAt(w.f.services, person, CONSOLE),
-				issuedAt,
-				expiresAt: issuedAt + 300,
-			}))
-			expect(await rpc.issueKey(ask(session, service))).toMatchObject({ ok: true })
+			const sessionAt = async (app: string, terminal?: { id: string; label: string }) => {
+				const issuedAt = now()
+				return (await getSigner(TEST_SIGNING_ENV)).sign(buildAccessClaims({
+					iss: ORIGIN,
+					app,
+					subject: person.id,
+					type: 'user',
+					label: person.label,
+					session: true,
+					...(terminal === undefined ? {} : { terminal }),
+					permissions: await resolvePermissionsAt(w.f.services, person, app),
+					issuedAt,
+					expiresAt: issuedAt + 300,
+				}))
+			}
+			expect(await rpc.issueKey(ask(await sessionAt(CONSOLE), service))).toMatchObject({ ok: true })
+
+			// Counted as a person only as the admin path counts one: never at a terminal, never at an application's audience.
+			expect(await rpc.issueKey(ask(await sessionAt(CONSOLE, { id: 'terminal-1', label: 'Front desk' }), service))).toEqual({
+				ok: false,
+				reason: 'not_allowed',
+			})
+			const personAt = async (app: string, credential: string) => {
+				const resolved = await resolveCaller(w.f.services, w.env, { app, credential, requestId: 'r' })
+				return resolved.ok ? resolved.caller.person === true : null
+			}
+			expect(await personAt(CONSOLE, await sessionAt(CONSOLE))).toBe(true)
+			expect(await personAt(CONSOLE, await sessionAt(CONSOLE, { id: 'terminal-1', label: 'Front desk' }))).toBe(false)
+			expect(await personAt(APP, await sessionAt(APP))).toBe(false)
 
 			await w.mirror(APP, 'off')
 			expect(await rpc.issueKey(ask(holder.apiKey, service))).toMatchObject({ ok: true })

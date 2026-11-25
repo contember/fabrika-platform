@@ -246,7 +246,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   `src/credentials-gate.ts`, `requireCredentialsMode` in `src/admin/context.ts`). Every issuing path
   (`apiKeys.provision`/`rotate`, `shareLinks.issue`, `workloads.issueKey`, `membershipKeys.issue`, `issueKey` for
   someone else) asks `credentialsRefusal` before it writes. A person in a signed-in session (`session` claim, `user`,
-  no OAuth or link claims) and `provisioning-admin` pass; anyone else is refused (403) where the strictest environment
+  no OAuth, link or terminal claim, at a registered admin audience, as `resolveAdmin` counts one; `ResolvedCaller.person`
+  on the RPC path) and `provisioning-admin` pass; anyone else is refused (403) where the strictest environment
   the key acts in is `person` or `refuse`. An `<app>@<env>` id is one environment; an admin audience every environment
   of its `app` scope's application, or all; a cross-app key all. A missing mode, or an id with no known environment,
   reads as `person`. IAM itself, Operations and plain ids are not judged. A new issuing mutation joins the gate and the
