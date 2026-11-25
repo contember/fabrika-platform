@@ -1,5 +1,6 @@
-import type { ExternalAppDto } from '@fabrika/iam-contract'
+import type { ExternalAppDto, PutExternalAppRequest } from '@fabrika/iam-contract'
 import { type ReactNode, useState } from 'react'
+import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { ApiError } from '../../lib/api'
 import { api } from '../lib/api'
@@ -12,6 +13,7 @@ import {
 	type ExternalAppDraft,
 	externalAppRequest,
 	registryNotImported,
+	revocationsToConfirm,
 	type RoleDraft,
 } from '../lib/external-apps'
 
@@ -21,28 +23,37 @@ type SaveFailure = { readonly kind: 'not-imported' } | { readonly kind: 'refused
  * An external application as one form: the record, its roles and its clients, saved whole with `externalApps.put`.
  * `original` is null when registering a new one; its id is fixed once it exists.
  */
-export function ExternalAppForm({ original, onSaved, onCancel }: {
+export function ExternalAppForm({ original, onSaved, onCancel, onEdit }: {
 	original: ExternalAppDto | null
 	onSaved: (saved: ExternalAppDto) => void
 	onCancel: () => void
+	/** Each change to the draft, so the page can drop what it said about the last save. */
+	onEdit?: () => void
 }) {
 	const [draft, setDraft] = useState<ExternalAppDraft>(() => original === null ? emptyDraft() : draftOf(original))
 	const [problems, setProblems] = useState<ReadonlyMap<string, string>>(new Map())
 	const [failure, setFailure] = useState<SaveFailure | null>(null)
 	const [busy, setBusy] = useState(false)
+	/** A checked request whose save ends sign-ins, waiting for the person to confirm it. */
+	const [confirming, setConfirming] = useState<{ request: PutExternalAppRequest; lines: string[] } | null>(null)
 	const consequences = draftConsequences(original, draft)
 	const creating = original === null
 
+	function edit(update: (current: ExternalAppDraft) => ExternalAppDraft) {
+		setDraft(update)
+		onEdit?.()
+	}
+
 	function change(next: Partial<ExternalAppDraft>) {
-		setDraft((current) => ({ ...current, ...next }))
+		edit((current) => ({ ...current, ...next }))
 	}
 
 	function changeRole(index: number, next: Partial<RoleDraft>) {
-		setDraft((current) => ({ ...current, roles: current.roles.map((role, at) => at === index ? { ...role, ...next } : role) }))
+		edit((current) => ({ ...current, roles: current.roles.map((role, at) => at === index ? { ...role, ...next } : role) }))
 	}
 
 	function changeClient(index: number, next: Partial<ClientDraft>) {
-		setDraft((current) => ({ ...current, clients: current.clients.map((client, at) => at === index ? { ...client, ...next } : client) }))
+		edit((current) => ({ ...current, clients: current.clients.map((client, at) => at === index ? { ...client, ...next } : client) }))
 	}
 
 	async function submit(event: React.FormEvent) {
@@ -54,9 +65,19 @@ export function ExternalAppForm({ original, onSaved, onCancel }: {
 			return
 		}
 		setProblems(new Map())
+		const lines = creating ? [] : revocationsToConfirm(consequences)
+		if (lines.length > 0) {
+			setConfirming({ request: checked.request, lines })
+			return
+		}
+		await save(checked.request)
+	}
+
+	/** Sends the save; a refusal is shown in the form, never thrown, so a confirmation closes either way. */
+	async function save(request: PutExternalAppRequest) {
 		setBusy(true)
 		try {
-			onSaved(await api.externalApps.put(checked.request))
+			onSaved(await api.externalApps.put(request))
 		} catch (cause) {
 			setFailure(
 				registryNotImported(cause)
@@ -291,6 +312,22 @@ export function ExternalAppForm({ original, onSaved, onCancel }: {
 				</button>
 				<button type="button" onClick={onCancel} disabled={busy}>Cancel</button>
 			</div>
+			{confirming !== null && (
+				<ConfirmDialog
+					title="Save and end sign-ins"
+					confirmLabel="Save changes"
+					body={
+						<>
+							<p>This save takes effect at once:</p>
+							<ul>
+								{confirming.lines.map((line) => <li key={line}>{line}</li>)}
+							</ul>
+						</>
+					}
+					onConfirm={() => save(confirming.request)}
+					onClose={() => setConfirming(null)}
+				/>
+			)}
 		</form>
 	)
 }

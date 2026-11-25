@@ -50,6 +50,7 @@ export default createPage()
 						invalidate()
 					}}
 					onCancel={() => navigate('access/external-apps')}
+					onEdit={() => setSaved(false)}
 				/>
 
 				<div className="danger-zone">

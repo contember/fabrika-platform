@@ -32,15 +32,15 @@ export default createPage()
 							<h1>Applications</h1>
 							<p className="hint">Every source repository fabrika knows how to build and release.</p>
 						</div>
+						<Link to="apps/new" className="btn primary">
+							<Icon name="plus" />
+							New app
+						</Link>
 						{data.external && (
 							<Link to="access/external-apps/new" className="btn" title="An application outside this installation that signs people in through IAM">
 								Add external application (no deploy)
 							</Link>
 						)}
-						<Link to="apps/new" className="btn primary">
-							<Icon name="plus" />
-							New app
-						</Link>
 					</div>
 				</div>
 
