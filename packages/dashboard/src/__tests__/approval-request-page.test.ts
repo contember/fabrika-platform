@@ -166,6 +166,8 @@ describe('the approval request page', () => {
 		const html = renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(RequestOutcome, { request })))
 		expect(html).toContain('another administrator of the application approves it')
 		expect(html).toContain('href="/approvals"')
+		// Nothing is granted yet, so the page does not also say it was done.
+		expect(html).not.toContain('It was done.')
 	})
 
 	test('a stale request says why it did not run', () => {

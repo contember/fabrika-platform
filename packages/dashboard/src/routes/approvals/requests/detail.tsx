@@ -176,10 +176,11 @@ export function RequestOutcome({ request }: { request: ApprovalRequestDto }) {
 	if (request.state === 'expired') {
 		return <p className="hint">Nobody decided this request before {fmtDate(request.deadline)}, so it expired and changed nothing.</p>
 	}
+	const heldByIam = request.state === 'executed' && grantRequestOf(request.result) !== null
 	return (
 		<section>
-			{request.state === 'executed' && <p className="hint">It was done.</p>}
-			{request.state === 'executed' && grantRequestOf(request.result) !== null && (
+			{request.state === 'executed' && !heldByIam && <p className="hint">It was done.</p>}
+			{heldByIam && (
 				<p className="hint">
 					The application's grants wait for approval, so IAM holds this grant until another administrator of the application approves it under{' '}
 					<Link to="approvals">Approvals</Link>; nothing is granted until then.
