@@ -207,8 +207,8 @@ an agent's grants (not protected, or \`agent-grants\` off) refuses it: there is 
 the request's id, state and link; \`--wait\` follows it as \`requests get --wait\` does.
 
 Without \`--request\`, a write by \`FABRIKA_CONTROL_KEY\` or a device grant on a protected environment meets that
-environment's approval policy (ADR-0083): \`apps secrets\`, \`apps variables\` and \`apps environments put|suspend|resume\`
-are \`secrets\`, \`variables\` and \`registry\` writes.
+environment's approval policy (ADR-0083): \`apps secrets\` and \`apps variables\` are \`secrets\` and \`variables\` writes,
+\`apps environments put\` is a \`registry\` write, and \`apps environments suspend|resume\` are \`data\` writes.
 A category set to \`off\` applies the write; \`refuse\` refuses it; \`person\` does not make the change but stores it as a
 request, exactly as \`--request\` does: stdout prints its id, state and link, stderr the fingerprint of a secret, and the
 command exits 75. Hand the person the link; nothing changes until they approve it. \`--wait\` follows the request
