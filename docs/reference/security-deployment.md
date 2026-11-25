@@ -307,7 +307,24 @@ their reason. Beside them, an agent's grant and a key an agent asks for, which I
   application its `app` scope names, or of every application; a cross-app key everywhere. A key at IAM or Operations is
   installation administration and keeps its rule. The provisioning key is exempt, which keeps Control's own workload,
   membership and connector keys and the bootstrap's first machine caller. `apiKeys.provision` refuses an expiry later
-  than 30 days ahead, or none, except from the provisioning key; a rotation keeps the key's expiry.
+  than 30 days ahead, or none, except from the provisioning key; a rotation keeps the key's expiry. A machine caller's
+  grant to a key (`grants.create`, `grants.update` to a service principal) meets the mode with the grant's reach, before
+  it applies or waits; `policies.update` and `PUT /admin/apps/:app/schema` refuse a machine caller wherever the
+  application's mode is not `off`, without judging whether the change widens a key.
+- **An installation with IAM and no Control** has nothing that writes the mode, so IAM reads every application
+  environment it knows as `person` and a machine caller issues no key there; a person in the console still does. To let
+  a machine caller issue at an environment, the operator writes its gates once with the provisioning key, with a
+  revision above any written before (IAM ignores an older one and answers what it holds):
+
+  ```bash
+  curl --fail-with-body -X POST "$FABRIKA_IAM_ISSUER/admin/rpc" \
+  	-H "authorization: Bearer $FABRIKA_IAM_PROVISIONING_KEY" -H 'content-type: application/json' \
+  	--data '{"method":"grantApproval.set","input":{"app":"notes@stage","required":false,"revision":1,"credentials":"off"}}'
+  ```
+
+  `credentials` is `off`, `person` or `refuse`; `required: true` makes the environment's console grants wait. A write
+  without `credentials` sets it back to `person`. curl follows no redirect by default, which keeps the key from being
+  re-sent elsewhere.
 - **Reading it.** The agent reads the state with `approvals.requests.get`, `fabrika control requests get <id> [--wait]`
   or the MCP tool `get_approval_request`; the person decides at `<console>/approvals/requests/<id>`, where text the
   agent wrote is escaped and marked. Fabrika sends no notification. The requester reads its request only through the

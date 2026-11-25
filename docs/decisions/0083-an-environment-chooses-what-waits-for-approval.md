@@ -406,7 +406,8 @@ than Control's, is not recorded as taken and takes a slot on every pass until it
 deploy IAM before Control, but IAM can still be older than Control: rolled back alone, or with Control deployed alone.
 Such an IAM refuses the `credentials` field as unknown; Control then writes the grant gate without it, logs one line,
 and records nothing, so the pass writes the mode once IAM is upgraded (ADR-0062). An installation without the provisioning
-key cannot write the mirror, and its IAM keeps reading `person`. From then on, `apiKeys.provision` takes an expiry at
+key cannot write the mirror, and its IAM keeps reading `person`; an installation with IAM and no Control has the operator
+write it with the provisioning key ([`security-deployment.md`](../reference/security-deployment.md)). From then on, `apiKeys.provision` takes an expiry at
 most 30 days ahead; existing keys keep theirs.
 
 Before D8 a non-person's secret, variable and data write applied at once, its write of the trigger ref, domain, public
@@ -427,7 +428,10 @@ whose policy is null reads the defaults, `person` for the four, from the upgrade
   agent deploys sets `deploy-request` `refuse`; one that trusts its agents applies the permissive preset.
 - The `grants` choice lives in two stores, Control's environment and IAM's application, and so does `credentials`.
   Control writes both and the stricter one first, under a revision IAM orders by; a partial failure fails closed and is
-  reported, and the next protection change or Control's maintenance pass repairs it. Nothing else can write IAM's rows.
+  reported. Control's maintenance pass repairs what IAM missed at Control's revision: a looser write after Control's row,
+  a new environment, an upgrade. It cannot repair IAM left stricter at a later revision than Control's (IAM took the
+  tightening, then Control's own write failed): IAM ignores the older revision, and only the next protection change
+  converges both, the pass retrying meanwhile. Nothing but the provisioning key writes IAM's rows.
 - Approving a console grant takes a second IAM administrator. An installation with one administrator cannot approve its
   own grants; it sets the category `off` first, which takes `access.approve` and is audited.
 - A request records the client that asked, not the task: until agent task keys add an `act` claim, the OAuth client id

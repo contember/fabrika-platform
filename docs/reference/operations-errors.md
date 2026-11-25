@@ -63,8 +63,8 @@ The command prints them as data: control characters removed and each cell kept o
    alerts or health checks, or deploy.
 4. **Scope**: an **App** with the application's id reads that application only; an **Environment** reads that
    environment of every application; no scope reads everything.
-5. **Expires**: a few days out. The form does not require a date, so set one: without it the key never expires. The
-   key and its access end together, and Credentials revokes it sooner.
+5. **Expires**: a few days out. IAM issues a key for at most 30 days, and the form starts at that limit, so shorten
+   it. The key and its access end together, and Credentials revokes it sooner.
 6. Copy the key from the dialog; it is shown once. Hand it over through a secret channel, never chat or a ticket.
 
 On the support person's machine, with the `fabrika` CLI installed (`bun add -d @fabrika/cli`, or run it with `bunx`):
