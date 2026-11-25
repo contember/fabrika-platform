@@ -4,6 +4,7 @@
 
 import type { AuthContext } from '@fabrika/auth'
 import {
+	ALL_ENVIRONMENTS,
 	type ApprovalRequestChallengeInput,
 	type ApprovalRequestDescription,
 	type ApprovalRequestDto,
@@ -12,22 +13,32 @@ import {
 	CONTROL_ACTIONS,
 	type CreateApprovalRequestResponse,
 	type DecideApprovalRequestInput,
-	gate,
 	type ListResponse,
 } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { fail } from '../../api/domain'
-import { canAtCoordinates } from '../../api/runs'
 import type { ApprovalRequestDecider, ApprovalRequestRow, ControlRepositories } from '../../db'
 import { jsonValueSchema } from '../../json-value'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../../lease'
 import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOtherThanRequester } from '../human'
 import { issueStepUpChallenge, type PasskeyStepUpPort, requestStepUpBinding, requireStepUp } from '../step-up'
 import { actionOf, discardRequest, executeApprovedRequest } from './execute'
-import { PRODUCTION_REQUEST_KINDS, type RequestCoordinates, type RequestKind, type RequestKindRegistry } from './kind'
+import type { RequestActionContext, RequestCoordinates, RequestExecutionContext, RequestKind, RequestKindRegistry } from './kind'
+import { PRODUCTION_REQUEST_KINDS } from './production'
 import { refusedKindReason } from './refused'
-import { deciders, jsonDigest, policyOf, type RequestDeciders, requesterOf, settingsOf } from './rules'
+import {
+	decidersOf,
+	holdsAtReach,
+	holdsKindAction,
+	jsonDigest,
+	judging,
+	reachOf,
+	refusingEnvironment,
+	type RequestDeciders,
+	requesterOf,
+	requestTtlHoursOf,
+} from './rules'
 
 export interface ApprovalRequestReadContext {
 	readonly repositories: ControlRepositories
@@ -38,7 +49,8 @@ export interface ApprovalRequestReadContext {
 	readonly kinds?: RequestKindRegistry
 }
 
-export interface ApprovalRequestContext extends ApprovalRequestReadContext {
+/** Creating and deciding a request act through the registry's context: a kind seals, checks and executes there. */
+export interface ApprovalRequestContext extends ApprovalRequestReadContext, RequestActionContext {
 	/** The request the call arrived on: a person in the console is told apart from a bearer by it. */
 	readonly admission: ConsoleAdmission
 	/** Absent where Control holds no deployment lock: deciding is then unavailable. */
@@ -69,7 +81,8 @@ function kindsOf(c: ApprovalRequestReadContext): RequestKindRegistry {
  * Store a non-person's request for a person's approval (ADR-0083 §8). Refused: a person in the console (409: they act
  * directly), a kind no request may name (400, naming why), a kind this release does not route through a request (400),
  * an input its kind refuses (400), a requester whose own token lacks the kind's right to ask at the coordinates (404, as
- * an absent environment answers), and an action the environment refuses to a non-person (403).
+ * an absent environment answers), and an action an environment it reaches refuses to a non-person (403). A secret value
+ * is sealed under the request's own purpose before the row is written, and its fingerprint answered.
  */
 export async function createApprovalRequestUseCase(
 	c: ApprovalRequestContext,
@@ -83,51 +96,66 @@ export async function createApprovalRequestUseCase(
 	const refused = refusedKindReason(body.kind)
 	if (refused !== null) fail(400, `kind \`${body.kind}\` can never be requested: ${refused}`)
 	const kind = kindsOf(c).get(body.kind)
-	if (kind === undefined) fail(400, `kind \`${body.kind}\` is not requestable yet: no change goes through an approval request in this release`)
-	const checked = kind.action(body.input)
+	if (kind === undefined) fail(400, `kind \`${body.kind}\` is not requestable yet: this release does not route it through an approval request`)
+	const checked = kind.ask(body.input)
 	if (!checked.ok) fail(400, `kind \`${body.kind}\`: ${checked.error}`)
-	const action = checked.action
-	const { appId, env } = action.coordinates
-	if (!canAtCoordinates(c.auth, kind.requesterAction, appId, env)) fail(404, 'app env not found')
-	const appEnv = await c.repositories.registry.getAppEnv(appId, env)
-	if (appEnv === null) fail(404, 'app env not found')
-	if (gate({ lines: [], actions: [kind.category] }, policyOf(appEnv)).kind === 'refuse') {
+	const asked = checked.asked
+	const { appId, env } = asked.coordinates
+	if (!holdsKindAction(c.auth, kind, asked.coordinates)) fail(404, env === ALL_ENVIRONMENTS ? 'app not found' : 'app env not found')
+	const reach = await reachOf(c.repositories.registry, asked.coordinates)
+	if (reach === null) fail(404, env === ALL_ENVIRONMENTS ? 'app not found' : 'app env not found')
+	const refusing = refusingEnvironment(reach, kind.category)
+	if (refusing !== null) {
 		fail(
 			403,
-			`environment \`${env}\` refuses this to an agent or a key (${kind.category}: refuse): only a person makes the change, in the console`,
+			`environment \`${refusing.env}\` refuses this to an agent or a key (${kind.category}: refuse): only a person makes the change, in the console`,
 		)
 	}
 	if (c.consoleOrigin === undefined) fail(503, 'Control knows no console origin, so a request would have no link a person could open')
-	const beforeJson = await action.captureBefore(c)
-	const row = await c.repositories.approvalRequests.create({
-		id: uuidv7(),
-		kind: kind.kind,
-		inputJson: action.inputJson,
-		inputDigest: jsonDigest(action.inputJson),
-		appId,
-		env,
-		category: kind.category,
-		requester: {
-			id: principal.id,
-			type: principal.type,
-			label: principal.label,
-			credential: c.auth.oauth === undefined ? 'key' : 'oauth',
-			clientId: c.auth.oauth?.clientId ?? null,
-			grantId: c.auth.oauth?.grantId ?? null,
-			// The verified token names no issuer of the key it was minted from; a later auth context that does fills it.
-			issuerId: null,
-		},
-		beforeJson,
-		beforeDigest: jsonDigest(beforeJson),
-		ttlSeconds: settingsOf(appEnv).requestTtlHours * 3600,
-	})
-	return { id: row.id, url: approvalRequestUrl(c.consoleOrigin, row.id), state: 'pending' }
+	const id = uuidv7()
+	const held = await asked.hold(c, id)
+	let row: ApprovalRequestRow
+	try {
+		const action = held.action
+		const beforeJson = await action.captureBefore(c)
+		row = await c.repositories.approvalRequests.create({
+			id,
+			kind: kind.kind,
+			inputJson: action.inputJson,
+			inputDigest: jsonDigest(action.inputJson),
+			appId,
+			env,
+			category: kind.category,
+			requester: {
+				id: principal.id,
+				type: principal.type,
+				label: principal.label,
+				credential: c.auth.oauth === undefined ? 'key' : 'oauth',
+				clientId: c.auth.oauth?.clientId ?? null,
+				grantId: c.auth.oauth?.grantId ?? null,
+				// The verified token names no issuer of the key it was minted from; a later auth context that does fills it.
+				issuerId: null,
+			},
+			beforeJson,
+			beforeDigest: jsonDigest(beforeJson),
+			ttlSeconds: requestTtlHoursOf(reach) * 3600,
+		})
+	} catch (cause) {
+		await held.release().catch(() => console.warn(`approval request ${id}: kind ${kind.kind} could not release what it sealed`))
+		throw cause
+	}
+	return {
+		id: row.id,
+		url: approvalRequestUrl(c.consoleOrigin, row.id),
+		state: 'pending',
+		...(held.fingerprint === undefined ? {} : { fingerprint: held.fingerprint }),
+	}
 }
 
 /** One request: the requester's own, or any at coordinates where the caller may decide it. */
 export async function getApprovalRequestUseCase(c: ApprovalRequestReadContext, id: string): Promise<ApprovalRequestDto> {
 	const row = await c.repositories.approvalRequests.get(id)
-	if (row === null || (!isRequester(c.auth, row) && !mayDecide(c, row))) fail(404, 'approval request not found')
+	if (row === null || (!isRequester(c.auth, row) && !(await mayDecide(c, row)))) fail(404, 'approval request not found')
 	return toApprovalRequestDto(c, row)
 }
 
@@ -148,7 +176,9 @@ export async function listApprovalRequestsUseCase(c: ApprovalRequestReadContext)
 	let beforeId: string | undefined
 	while (rows.length < LIST_LIMIT) {
 		const page = await c.repositories.approvalRequests.listPending(LIST_LIMIT, beforeId)
-		rows.push(...page.filter((row) => mayDecide(c, row)).slice(0, LIST_LIMIT - rows.length))
+		for (const row of page) {
+			if (rows.length < LIST_LIMIT && (await mayDecide(c, row))) rows.push(row)
+		}
 		const last = page.at(-1)
 		if (page.length < LIST_LIMIT || last === undefined) break
 		beforeId = last.id
@@ -174,7 +204,7 @@ async function pendingRequestDecision(
 ): Promise<PendingRequestDecision | { readonly kind: 'decided'; readonly row: ApprovalRequestRow }> {
 	const approver = requireHumanApprover(c.auth, c.admission)
 	const row = await c.repositories.approvalRequests.get(input.id)
-	if (row === null || !mayDecide(c, row)) fail(404, 'approval request not found')
+	if (row === null || !(await mayDecide(c, row))) fail(404, 'approval request not found')
 	if (row.state !== 'pending') {
 		if (row.decided_by_id === approver.id && decisionOf(row.state) === input.decision) return { kind: 'decided', row }
 		if (row.state === 'expired') fail(410, expiredMessage(row))
@@ -185,7 +215,10 @@ async function pendingRequestDecision(
 	return { kind: 'pending', approver, row, deciders: await requestDeciders(c.repositories, row) }
 }
 
-/** What an approval refuses before it is recorded: a kind this Control cannot execute, and the requester's own person where barred. */
+/**
+ * What an approval refuses before it is recorded or a passkey challenge is spent on it: a kind this Control cannot
+ * execute, an approver who may not carry it out, and the requester's own person where barred.
+ */
 function approvableKind(c: ApprovalRequestContext, pending: PendingRequestDecision): RequestKind {
 	const { row } = pending
 	const kind = kindsOf(c).get(row.kind)
@@ -193,6 +226,7 @@ function approvableKind(c: ApprovalRequestContext, pending: PendingRequestDecisi
 	if (kind === undefined || typeof actionOf(kind, row) === 'string') {
 		fail(409, 'this Control cannot show what the request does, so it cannot approve it; refuse it or let it expire')
 	}
+	requireApproverMayExecute(c.auth, kind, row)
 	if (!pending.deciders.requesterMayApprove) requireOtherThanRequester(pending.approver, requesterOf(row), 'request')
 	return kind
 }
@@ -231,7 +265,7 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 		const decider = { decisionId: uuidv7(), id: approver.id, label: approver.label, stepUp }
 		if (!(await c.repositories.approvalRequests.reject(row.id, decider))) await lostDecision(c, row.id)
 		await auditDecision(c, row, 'reject', decider)
-		await discardRequest(kindsOf(c), c.repositories, row)
+		await discardRequest(kindsOf(c).get(row.kind), c, row)
 		return toApprovalRequestDto(c, await requireRow(c, row.id))
 	}
 
@@ -251,7 +285,7 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 	try {
 		if (!(await c.repositories.approvalRequests.approve(row.id, decider, row.partial_approver_id, lease.fence()))) await lostDecision(c, row.id)
 		await auditDecision(c, row, 'approve', decider)
-		await executeApprovedRequest({ repositories: c.repositories, auth: c.auth }, kind, await requireRow(c, row.id), lease)
+		await executeApprovedRequest(executionContext(c), kind, await requireRow(c, row.id), lease)
 	} finally {
 		await lease.release()
 	}
@@ -282,16 +316,40 @@ async function requireRow(c: ApprovalRequestReadContext, id: string): Promise<Ap
 	return (await c.repositories.approvalRequests.get(id)) ?? fail(404, 'approval request not found')
 }
 
-/** The approver's right at the request's coordinates: its kind's, or `access.approve` for Control's own kinds. */
-function mayDecide(c: ApprovalRequestReadContext, row: ApprovalRequestRow): boolean {
+/** What an approved request executes through: the approver's own authority, from the console. */
+function executionContext(c: ApprovalRequestContext): RequestExecutionContext {
+	return {
+		repositories: c.repositories,
+		provider: c.provider,
+		auth: c.auth,
+		admission: c.admission,
+		...(c.vault === undefined ? {} : { vault: c.vault }),
+		...(c.catalogChanged === undefined ? {} : { catalogChanged: c.catalogChanged }),
+		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),
+	}
+}
+
+/**
+ * The approver's right at the request's coordinates: its kind's, or `access.approve` for Control's own kinds, at every
+ * protected environment a request of `ALL_ENVIRONMENTS` reaches.
+ */
+async function mayDecide(c: ApprovalRequestReadContext, row: ApprovalRequestRow): Promise<boolean> {
 	const coordinates: RequestCoordinates = { appId: row.app_id, env: row.env }
 	const kind = kindsOf(c).get(row.kind)
 	if (kind?.approverMayDecide !== undefined) return kind.approverMayDecide(c.auth, coordinates)
-	return canAtCoordinates(c.auth, CONTROL_ACTIONS.ACCESS_APPROVE, row.app_id, row.env)
+	return holdsAtReach(c.auth, c.repositories.registry, CONTROL_ACTIONS.ACCESS_APPROVE, coordinates)
+}
+
+/** An approval executes as the approver, so they hold the action itself where the request acts, as its route would ask. */
+function requireApproverMayExecute(auth: AuthContext, kind: RequestKind, row: ApprovalRequestRow): void {
+	if (kind.approverMayDecide !== undefined) return
+	if (!holdsKindAction(auth, kind, { appId: row.app_id, env: row.env })) {
+		fail(403, `approving carries the change out as you, and you do not hold \`${kind.requesterAction}\` where it acts; another person decides it`)
+	}
 }
 
 async function requestDeciders(repositories: Pick<ControlRepositories, 'registry'>, row: ApprovalRequestRow): Promise<RequestDeciders> {
-	return deciders(settingsOf(await repositories.registry.getAppEnv(row.app_id, row.env)), row)
+	return decidersOf((await reachOf(repositories.registry, { appId: row.app_id, env: row.env })) ?? [], row)
 }
 
 async function auditDecision(
@@ -343,6 +401,17 @@ function describe(c: ApprovalRequestReadContext, row: ApprovalRequestRow): Appro
 	}
 }
 
+/** Which environments a request of `ALL_ENVIRONMENTS` reaches now, and which of them are protected and judge it. */
+async function reachFact(c: ApprovalRequestReadContext, row: ApprovalRequestRow): Promise<ApprovalRequestDescription['facts'][number]> {
+	const reach = (await reachOf(c.repositories.registry, { appId: row.app_id, env: row.env })) ?? []
+	const names = (envs: readonly { readonly env: string }[]) => envs.map((appEnv) => appEnv.env).join(', ')
+	const protectedEnvs = judging(reach)
+	const text = reach.length === 0
+		? `every environment of ${row.app_id}; it has none yet`
+		: `every environment of ${row.app_id}: ${names(reach)}; ${protectedEnvs.length === 0 ? 'none is protected' : `protected: ${names(protectedEnvs)}`}`
+	return { label: 'Environments', value: { text, agent: false } }
+}
+
 function storedResult(text: string | null): JsonValue | undefined {
 	if (text === null) return undefined
 	const parsed = jsonValueSchema.safeParse(JSON.parse(text))
@@ -353,6 +422,7 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 	const who = await requestDeciders(c.repositories, row)
 	const result = storedResult(row.result_json)
 	const description = describe(c, row)
+	const reached = row.env === ALL_ENVIRONMENTS ? await reachFact(c, row) : null
 	return {
 		id: row.id,
 		kind: row.kind,
@@ -369,7 +439,9 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 			...(row.requester_issuer_id === null ? {} : { issuerId: row.requester_issuer_id }),
 			personId: requesterOf(row).personId,
 		},
-		description: description ?? undescribed(row),
+		description: reached === null || description === null
+			? (description ?? undescribed(row))
+			: { ...description, facts: [...description.facts, reached] },
 		described: description !== null,
 		inputDigest: row.input_digest,
 		approvers: who.approvers,

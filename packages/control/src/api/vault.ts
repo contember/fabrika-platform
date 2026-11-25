@@ -187,7 +187,7 @@ async function requireApp(c: VaultUseCaseContext, appId: string): Promise<void> 
 	if (!(await c.repositories.registry.getApp(appId))) fail(404, 'app not found')
 }
 
-async function findAppSecretRef(repositories: ControlRepositories, appId: string, env: string | null, name: string): Promise<string | null> {
+export async function findAppSecretRef(repositories: ControlRepositories, appId: string, env: string | null, name: string): Promise<string | null> {
 	const match = (await repositories.registry.listAppSecrets(appId)).find((row) => row.name === name && row.env === env)
 	return match?.value_ref ?? null
 }
@@ -196,11 +196,16 @@ async function deletePriorVaultEntry(vault: Vault, priorRef: string): Promise<vo
 	if (parseVaultRef(priorRef) !== null) await vault.delete(priorRef)
 }
 
-type SecretTarget =
+export type SecretTarget =
 	| { kind: 'vault' }
 	| { kind: 'provider'; appEnv: AppEnvRow; secrets: ProviderManagedSecrets }
 
-async function secretTarget(c: VaultUseCaseContext, appId: string, env: string | null): Promise<SecretTarget> {
+/** Where the environment's app secret values are kept: Control's vault, or the provider's own secret store. */
+export async function secretTarget(
+	c: Pick<VaultUseCaseContext, 'provider' | 'repositories'>,
+	appId: string,
+	env: string | null,
+): Promise<SecretTarget> {
 	const secrets = c.provider.secrets
 	if (secrets === undefined) return { kind: 'vault' }
 	if (env === null) fail(400, 'provider-managed secret values require an explicit env')
@@ -211,7 +216,7 @@ async function secretTarget(c: VaultUseCaseContext, appId: string, env: string |
 	return { kind: 'provider', appEnv, secrets }
 }
 
-async function requireVault(c: VaultUseCaseContext): Promise<Vault> {
+export async function requireVault(c: Pick<VaultUseCaseContext, 'vault'>): Promise<Vault> {
 	if (c.vault === undefined) fail(500, 'vault not configured (FABRIKA_CONTROL_VAULT_KEY missing)')
 	try {
 		return await c.vault()

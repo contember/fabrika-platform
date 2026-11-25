@@ -111,7 +111,18 @@ export interface CreateApprovalRequestResponse {
 	id: string
 	url: string
 	state: ApprovalRequestState
+	/**
+	 * For a request that carries a secret value: the first 8 hex characters of the value's SHA-256, which the page shows.
+	 * The agent prints it beside the link, so the person can tell the value they approve is the one the agent sent.
+	 */
+	fingerprint?: string
 }
+
+/**
+ * The coordinates of a request for the all-environments layer (`env: null` of a secret or a variable) and of an
+ * application-wide write (`apps.update`): it reaches every environment of the application.
+ */
+export const ALL_ENVIRONMENTS = '*'
 
 export interface ApprovalRequestIdInput {
 	id: string

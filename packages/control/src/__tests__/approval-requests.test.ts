@@ -97,8 +97,8 @@ function notesKind(notes: Notes, input: z.ZodType<z.infer<typeof noteInput>, z.Z
 			notes.followed.push(execution.operationId)
 			return Promise.resolve(notes.follow)
 		},
-		discard: (_c, request) => {
-			notes.discarded.push(request.id)
+		discard: (_c, _input, requestId) => {
+			notes.discarded.push(requestId)
 			return Promise.resolve()
 		},
 		describe: (input, before) => ({
@@ -213,7 +213,8 @@ for (const backend of backends) {
 		}
 
 		function auth(w: World, who: Who): AuthContext {
-			const actions = who.actions ?? [CONTROL_ACTIONS.ACCESS_APPROVE]
+			// An approver holds the action too: an approval executes as them.
+			const actions = who.actions ?? [CONTROL_ACTIONS.ACCESS_APPROVE, CONTROL_ACTIONS.SECRET_MANAGE]
 			const grants = actions.map((action) => ({ action, scope: who.scope ?? null, source: 'grant' as const }))
 			const service = who.credential === 'service'
 			return {
@@ -247,6 +248,7 @@ for (const backend of backends) {
 			const stepUp = iamPasskeyStepUp(w.iam.gateway, request)
 			return {
 				repositories: w.db,
+				provider: fakeControlProvider,
 				auth: auth(w, who),
 				admission: { request },
 				lock: w.locks,
@@ -365,7 +367,7 @@ for (const backend of backends) {
 				expect(w.audits.map((event) => event.metadata)).toEqual([expect.objectContaining({ decision: 'reject' })])
 			})
 
-			test('a refusal and an expiry let the kind discard what the request held, once; an approval does not', async () => {
+			test('a refusal, an expiry and an execution let the kind discard what the request held, once each', async () => {
 				const w = await world()
 				const refused = await ask(w)
 				const expiring = await ask(w, AGENT, { appId: 'notes', env: 'prod', name: 'farewell', value: 'bye' })
@@ -373,11 +375,11 @@ for (const backend of backends) {
 				await decide(w, refused.id, 'reject', BOB)
 				await decide(w, refused.id, 'reject', BOB)
 				await decide(w, approved.id, 'approve', BOB)
-				expect(w.notes.discarded).toEqual([refused.id])
+				expect(w.notes.discarded).toEqual([refused.id, approved.id])
 				w.now += 24 * HOUR
 				expect((await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).expired).toBe(1)
 				expect((await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).expired).toBe(0)
-				expect(w.notes.discarded).toEqual([refused.id, expiring.id])
+				expect(w.notes.discarded).toEqual([refused.id, approved.id, expiring.id])
 			})
 
 			test('a decision after the deadline is refused, and the sweep expires it', async () => {
@@ -530,7 +532,8 @@ for (const backend of backends) {
 					expect(await w.db.approvalRequests.approve(id, { decisionId: uuidv7(), id: 'p-ada', label: 'ada' }, null, lease.fence())).toBe(true)
 					const kind = w.kinds.get('test.notes.put')
 					if (kind === undefined) throw new Error('no test kind')
-					await executeApprovedRequest({ repositories: w.db, auth: auth(w, ADA) }, kind, await row(w, id), lease)
+					const admission = { request: new Request(`${ORIGIN}/api/rpc`, { method: 'POST' }) }
+					await executeApprovedRequest({ repositories: w.db, provider: fakeControlProvider, auth: auth(w, ADA), admission }, kind, await row(w, id), lease)
 				} finally {
 					await lease.release()
 				}
@@ -840,11 +843,11 @@ for (const backend of backends) {
 					expect(refused.status).toBe(400)
 					expect(refused.message).toStartWith(`kind \`${kind}\` can never be requested: `)
 				}
-				// The production registry serves no kind in this release.
+				// The production registry serves only the kinds this release routes through a request.
 				const production = await status(createApprovalRequestUseCase(context(w, AGENT, { kinds: null }), { kind: 'test.notes.put', input: {} }))
 				expect(production).toEqual({
 					status: 400,
-					message: 'kind `test.notes.put` is not requestable yet: no change goes through an approval request in this release',
+					message: 'kind `test.notes.put` is not requestable yet: this release does not route it through an approval request',
 				})
 				expect((await status(createApprovalRequestUseCase(context(w, AGENT), { kind: 'apps.secrets.put', input: {} }))).status).toBe(400)
 				// A refused kind is refused even where a registry would serve it.
@@ -970,10 +973,10 @@ describe('the RPC edge', () => {
 		return { status: response.status, body: JSON.stringify(body) }
 	}
 
-	test('a create names a kind and a JSON input, nothing more; this release routes no kind through it', async () => {
+	test('a create names a kind and a JSON input, nothing more; a write with an external effect is not requestable yet', async () => {
 		expect((await call('approvals.requests.create', { kind: 'apps.secrets.put', input: {}, extra: 1 }, true)).status).toBe(400)
 		expect((await call('approvals.requests.create', { input: {} }, true)).status).toBe(400)
-		const notYet = await call('approvals.requests.create', { kind: 'apps.secrets.put', input: { appId: 'notes' } }, true)
+		const notYet = await call('approvals.requests.create', { kind: 'apps.environments.suspend', input: { appId: 'notes', env: 'prod' } }, true)
 		expect(notYet.status).toBe(400)
 		expect(notYet.body).toContain('not requestable yet')
 		const refused = await call('approvals.requests.create', { kind: 'apps.environments.protect', input: {} }, true)

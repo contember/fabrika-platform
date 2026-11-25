@@ -294,6 +294,16 @@ export class Vault {
 		return open(this.masterKey, { ciphertext: row.ciphertext, valueIv: row.value_iv, wrappedDek: row.wrapped_dek, dekIv: row.dek_iv })
 	}
 
+	/**
+	 * Which value the ref holds now, without opening it: the value's IV, fresh at every seal and rotation and kept by a
+	 * master-key rotation. Null when the ref names no row, or one sealed under another purpose.
+	 */
+	async sealedVersion(ref: string, purpose: VaultSecretPurpose): Promise<string | null> {
+		const row = await this.d1.prepare('SELECT scope, label, value_iv FROM vault WHERE id = ?').bind(this.idOrThrow(ref))
+			.first<Pick<VaultRow, 'scope' | 'label' | 'value_iv'>>()
+		return row === null || row.scope !== purpose.scope || row.label !== purpose.label ? null : row.value_iv
+	}
+
 	/** Re-encrypt the value at `ref` with a fresh DEK + IVs. Stamps `rotated_at`. Throws if missing. */
 	async rotate(ref: string, newValue: string): Promise<void> {
 		const id = this.idOrThrow(ref)
