@@ -94,7 +94,9 @@ It handles three events:
 - `push`: post the subscription's endpoint to the inbox and show what it answers (below).
 - `notificationclick`: open or focus the notification's path, which must be a same-origin path of an SPA mount.
 - `pushsubscriptionchange`: record the browser's new subscription through the subscription row, which replaces the old
-  one only for the person it was bound to.
+  one only for the person it was bound to. Without a session the row cannot be asked, and the old endpoint is already
+  dead; so the worker keeps the pair (old endpoint, new subscription) in IndexedDB, and the page posts it as a
+  replacement on its next load, under the same rule. Until then the person gets no push; the inbox still holds the text.
 
 ### 4. A push carries no payload, and the inbox decides what is shown
 
@@ -107,7 +109,9 @@ as it decides any request. Then:
   notification instead of the rest ("N more in <application>").
 - **200 with nothing visible** (the rows were filtered out, section 6, or a race left nothing unseen): the worker shows
   the fixed notice, "<application>: open to see what is new", in the stored locale, whose click opens the start URL.
-  Section 5 makes this rare, and it is still a notification, so the permission stays.
+  Section 5 makes this rare, and it is still a notification, so the permission stays. The fixed notice always carries
+  one `tag` and no `renotify`, so each one replaces the last instead of stacking: a session that expired while
+  notifications keep coming (the cursor does not move on a 401) shows one notice, not one per push.
 - **200 saying the subscription is not the caller's** (section 7): the worker unsubscribes the browser and shows the
   fixed notice.
 - **401** (no session): the worker closes every notification of the application it showed (`getNotifications()`, then
@@ -126,10 +130,14 @@ one. A burst of `ctx.notify` for one person therefore becomes one push per devic
 
 `ctx.notify(person, { title, body, path }, about)` in a handler or a job writes a row in the framework's notification
 table, in the invocation's transaction, and kicks the sending job after the commit
-([ADR-0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md)). `about` is the capability the handler already
-holds for the action the notification concerns: a `Ref` of this invocation (the object), or an `AppCapability` (the
-whole application). The row stores that action and the object's dimension and key, or the application. `title` and
-`body` are bounded plain text; `path` is a literal path of one of the application's SPA mounts. A row lives 7 days.
+([ADR-0060](0060-a-handler-kicks-a-declared-job-after-its-commit.md); section 8). `about` names what the **recipient**
+must hold to read the text: an action the contract declares, and the object it applies to (a dimension and its key) or
+the whole application. It is the reader's action, not the sender's: a customer who submits an order
+(`orders.submit`) notifies staff about it with `{ action: 'orders.read', on: { order: id } }`. The sender needs no grant
+of that action, because `about` grants nothing: it only narrows who may read the text the sender already wrote. The
+types and the runtime refuse an action the contract does not declare and a dimension the action does not apply to. The
+row stores the action and the object's dimension and key, or the application. `title` and `body` are bounded plain
+text; `path` is a literal path of one of the application's SPA mounts. A row lives 7 days.
 
 The inbox answers only the caller's own rows, and of those only the ones the caller may still read now: it checks
 each row's action on its object (or its containers) against the caller's current claims, the same check an `on`
@@ -143,7 +151,11 @@ once.
 
 A subscription row holds the caller's principal id (from the verified token, never from the body), the endpoint, the
 subscription's keys, the VAPID key it was made for, and its cursor. At most 10 per person: an eleventh replaces the
-oldest. A push service's 404 or 410 deletes the row, and so does a 403 after a key rotation (section 9).
+oldest. A push service's 404 or 410 deletes the row.
+
+The subscription row also answers which person a browser's subscription is bound to (`{ status, endpoint }`: the
+caller's, another person's, or unknown). The `@fabrika/ui` control shows notifications as on only when it is the
+caller's, so person B never sees "on" for a subscription that still wakes for person A.
 
 When the inbox is asked for an endpoint whose row names another principal than the caller, it deletes the row and
 answers that the subscription is not the caller's; the worker unsubscribes (section 4). So a browser where person A
@@ -156,10 +168,20 @@ A caller on a terminal (a token with the `terminal` claim, ADR-0067) cannot reco
 
 ### 8. The platform sends, only to the push services
 
-The sender is a **framework job** (`FrameworkJob`, the reserved name `fabrika-push`, as the file scan job is), kicked
-after the commit that wrote a notification and scheduled every minute as its recovery. It runs where every job of the
-application runs: on Bun (Zerops, AWS) in the serving process's wake timer and kick path, on Cloudflare in the
-environment object's alarm. It holds no IAM key: it reads only the framework's own tables.
+The sender is a **framework job** (`FrameworkJob`, the reserved name `fabrika-push`, as the file scan job is). It holds
+no IAM key: it reads only the framework's own tables. It runs two ways:
+
+- **Kicked after the commit** that wrote a notification, in the process that committed it. Today the kick path resolves
+  only contract jobs (`bound.get(name)` in `jobs/runner.ts`), so this is new code: the kick path learns the one
+  framework job, under the same lease and coalescing as a contract job's kick. Without it a notification would wait up
+  to a minute, which is the recovery's delay, not the design's.
+- **Scheduled every minute** as the recovery, where the framework's jobs are scheduled today: a crontab entry
+  (`fabrika job run`, `build-recipe.ts`) on Zerops, the serving process's schedule where no crontab runs
+  ([ADR-0080](0080-the-serving-process-keeps-the-job-schedule-where-no-crontab-runs.md)), the environment object's
+  alarm on Cloudflare.
+
+A framework job runs one attempt per run, so retries are per row, not per job: a row the push service refused for now
+keeps a `next_attempt_at`, and the next run that finds it due sends it again.
 
 An endpoint is recorded, and sent to, only when it passes the egress guard of `implement/egress.ts` with a fixed origin
 list in the framework: `https://fcm.googleapis.com`, `https://updates.push.services.mozilla.com`,
@@ -168,15 +190,16 @@ send is a framework facility (`platformFacility`), outside every site's egress, 
 
 Each send is one `POST` with `redirect: 'manual'` (a 3xx is a failure), bounded in time and size, carrying:
 
-- `Authorization: vapid t=<JWT>, k=<public key>`, the JWT signed ES256 with `aud` the push service's origin, `exp` 12
+- `Authorization: vapid t=<JWT>, k=<public key>`, signed with the key the row was made for (section 9), the JWT
+  signed ES256 with `aud` the push service's origin, `exp` 12
   hours ahead (RFC 8292 allows at most 24) and `sub` the environment's public origin (`FABRIKA_APP_ORIGIN`; Apple
   requires a `sub`). An environment without a public origin cannot notify, and the deploy says so.
 - `TTL: 86400`: a push older than a day is dropped by the service, and the inbox still holds the text for 7 days.
 - `Urgency: normal` and the subscription's `Topic` (section 5).
 
-A 201 moves on; 404 and 410 delete the row; a 403 for a row made with a retired key deletes it; 429 and 5xx retry with
-the answer's `Retry-After` (at most an hour), within the job's retries, and leave the row. Anything else is a logged
-failure code, never the answer's body.
+A 201 moves on; 404 and 410 delete the row; 429 and 5xx set the row's `next_attempt_at` from the answer's
+`Retry-After` (at least a minute, at most an hour) and leave it. A 403 is a logged failure code like any other answer,
+never the answer's body: the row was signed with its own key, so a 403 says nothing a deletion would fix.
 
 **Bounds.** A person gets at most 30 pushes an hour across their devices; notifications beyond that are stored and
 shown in the next push's inbox read, so none is lost. The inbox answers at most 20 rows per read.
@@ -185,8 +208,12 @@ shown in the next push's inbox read, so none is lost. The inbox answers at most 
 
 For an environment whose approved contract notifies, Control generates one P-256 VAPID key pair, seals the private key
 in the vault and hands it as a framework variable, like the token keys; the public key reaches the page in the mount's
-`__fabrika-config.json`. A rotation is an operation on one environment: the next deploy hands the new key, and every
-subscription made for the old one is replaced or deleted.
+`__fabrika-config.json`. A rotation is an operation on one environment, and it works as the token keys' does: the next
+deploy hands the new key first and each retired key after it. A subscription is created only with the current key, but
+the sender signs each row with the key the row was made for, so a rotation drops no subscription. The page replaces an
+old-key subscription at its next load (section 10), and a retired key leaves the variable once no row names it, or 30
+days after its retirement: a browser that has not opened the application in 30 days subscribes again through the
+control.
 
 **The private key is in the application's environment, as the token keys are, so code in the application's process can
 read it.** With it, the application's code could send a push of its own, with a payload, to its own subscriptions. "A
@@ -202,7 +229,9 @@ must be on the Home Screen first. No page asks for the permission on load.
 On load, where the permission is already granted and the browser's subscription was made for an older key, the page
 replaces it without asking: it unsubscribes, subscribes with the current key and posts the replacement naming the old
 endpoint. The row accepts a replacement only when the old endpoint's row belongs to the caller, so a key rotation never
-binds a shared browser to whoever is signed in now.
+binds a shared browser to whoever is signed in now. The old row still exists then, because the sender kept signing it
+with its retired key (section 9). The page posts a replacement the worker kept from a `pushsubscriptionchange` the same
+way (section 3).
 
 ## Consequences
 
@@ -245,6 +274,13 @@ binds a shared browser to whoever is signed in now.
 - **Send to every subscription of the person on every notification.** Simpler, and wrong under fact 2: a coalesced run,
   an inbox already read or another person's subscription would push with nothing to show, and Safari would revoke the
   permission. The per-subscription cursor and the principal check send only where there is something to see.
+- **`about` as the sender's capability** (the previous draft). The inbox would check the reader for the sender's
+  action, and the two usually differ: a customer submits an order (`orders.submit`), staff read it (`orders.read`), and
+  staff would get only the fixed notice. Authors would then grant senders the reader's action just to make
+  notifications work, which widens access. Rejected for a declared action the recipient must hold.
+- **Delete a subscription on the push service's 403 after a key rotation** (the previous draft). The page's
+  replacement on its next load names the old row, which the next send had already deleted, so the replacement was
+  refused and the subscription lost. Rejected for signing each row with its own key until it is replaced.
 - **Subscriptions in IAM.** IAM knows people across applications and could delete a subscription when a membership
   ends. Rejected for now: a subscription is bound to one application's origin anyway, the inbox read already enforces
   revocation, and IAM is the installation's most sensitive service; a person-wide notification centre would be its own
@@ -272,7 +308,7 @@ binds a shared browser to whoever is signed in now.
 - **A click in an installed application.** Does `clients.openWindow` of a path inside the manifest's scope open in the
   installed window on each platform, or in a browser tab?
 - **The API's exact form**: the declaration's place (the vocabulary, `defineApp`'s options or the contract), the name
-  `ctx.notify`, the bounds of `title` and `body`, and how a job, which holds no `Ref` of a request, names what a
-  notification is about.
+  `ctx.notify`, the bounds of `title` and `body`, and the shape of `about`. Because `about` names a declared action and
+  a key rather than a capability (Decision 6), a job names what a notification is about the same way a handler does.
 - **The runtimes.** ES256 signing through WebCrypto (`crypto.subtle`, P-256) on Bun and workerd, and an empty push
   without `aes128gcm` content encoding accepted by each push service, need a test against each before the sending code.
