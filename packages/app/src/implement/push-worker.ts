@@ -49,8 +49,19 @@ function inStore(mode, work) {
 function stored(key) { return inStore('readonly', function (state) { return state.get(key) }).catch(function () { return undefined }) }
 function store(key, value) { return inStore('readwrite', function (state) { return state.put(value, key) }) }
 
+// A same-origin path: no control character (the URL parser drops tab and newlines, so '/<TAB>/x' would read as '//x'),
+// no backslash, no scheme-relative start, and it must resolve to this origin.
 function isPath(path) {
-	return typeof path === 'string' && path.charAt(0) === '/' && path.charAt(1) !== '/' && path.indexOf('\\\\') === -1
+	if (typeof path !== 'string' || path.charAt(0) !== '/' || path.charAt(1) === '/' || path.indexOf('\\\\') !== -1) return false
+	for (let index = 0; index < path.length; index++) {
+		const code = path.charCodeAt(index)
+		if (code < 0x20 || code === 0x7f) return false
+	}
+	try {
+		return new URL(path, self.location.origin).origin === self.location.origin
+	} catch (failure) {
+		return false
+	}
 }
 function isNotification(value) {
 	return value !== null && typeof value === 'object' && typeof value.id === 'string' && typeof value.title === 'string'
@@ -85,7 +96,20 @@ function post(path, body) {
 	})
 }
 
+function unsubscribe(subscription) {
+	return subscription.unsubscribe().catch(function () { return false })
+}
+
+// Every push shows a notification, whatever fails on the way: a push that shows none costs the permission.
 async function onPush() {
+	try {
+		await readInbox()
+	} catch (failure) {
+		await showNotice().catch(function () {})
+	}
+}
+
+async function readInbox() {
 	const subscription = await self.registration.pushManager.getSubscription()
 	if (subscription === null) return showNotice()
 	let response
@@ -100,20 +124,20 @@ async function onPush() {
 	}
 	if (response.status === 403) {
 		await closeShown()
-		await subscription.unsubscribe()
+		await unsubscribe(subscription)
 		return showNotice()
 	}
 	const answer = response.ok ? await response.json().catch(function () { return null }) : null
 	if (answer === null || typeof answer !== 'object') return showNotice()
 	if (answer.mine === false) {
-		await subscription.unsubscribe()
+		await unsubscribe(subscription)
 		return showNotice()
 	}
 	const unseen = Array.isArray(answer.notifications) ? answer.notifications.filter(isNotification) : []
 	if (unseen.length === 0) return showNotice()
 	const shown = unseen.slice(0, SHOWN)
 	for (const notification of shown) {
-		await self.registration.showNotification(notification.title, { body: notification.body, tag: 'fabrika-' + notification.id, data: { path: notification.path } })
+		await self.registration.showNotification(notification.title, { body: notification.body, tag: 'fabrika-n-' + notification.id, data: { path: notification.path } })
 	}
 	const more = unseen.length - shown.length + (typeof answer.more === 'number' && answer.more > 0 ? answer.more : 0)
 	if (more > 0) {
@@ -133,13 +157,19 @@ async function open(path) {
 
 // A changed subscription is recorded as a replacement of the old one, which the row accepts only for the person the
 // old one was bound to. Without a session the pair is kept for the page to post at its next load.
+// While a pair is pending, a further change keeps the first old endpoint: only that one is known to the row.
 async function onChange(previous, next) {
 	const current = next || (previous ? await self.registration.pushManager.subscribe(previous.options).catch(function () { return null }) : null)
 	if (!previous || !current) return
-	const replacement = { replace: previous.endpoint, subscription: current.toJSON() }
+	const pending = await stored('replacement')
+	const replace = pending && typeof pending.replace === 'string' ? pending.replace : previous.endpoint
+	const replacement = { replace: replace, subscription: current.toJSON() }
 	try {
 		const response = await post(SUBSCRIPTION, replacement)
-		if (response.ok) return
+		if (response.ok) {
+			await inStore('readwrite', function (state) { return state.delete('replacement') }).catch(function () {})
+			return
+		}
 	} catch (failure) {}
 	await store('replacement', replacement)
 }
