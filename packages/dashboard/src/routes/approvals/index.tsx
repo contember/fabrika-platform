@@ -19,11 +19,17 @@ export default createPage()
 	.loader(async () => {
 		const [approvals, requests, grantRequests, session] = await Promise.all([
 			api.approvals.list().then((list) => list.items),
-			api.approvals.requests.list().then((list) => list.items),
+			api.approvals.requests.list(),
 			quietIamClient(fetch).grantRequests.list({}).then((list) => list.items, () => null),
 			consoleSession(),
 		])
-		return { approvals, requests, grantRequests, me: session.principal?.id ?? null }
+		return {
+			approvals,
+			requests: requests.items,
+			requestsIamUnreachable: requests.iamUnreachable === true,
+			grantRequests,
+			me: session.principal?.id ?? null,
+		}
 	})
 	.route('/approvals')
 	.render(({ data }) => (
@@ -80,6 +86,11 @@ export default createPage()
 			</Table>
 
 			{data.requests.length > 0 && <PendingRequests requests={data.requests} />}
+			{data.requestsIamUnreachable && (
+				<p className="hint">
+					Control could not reach IAM, so a request that an IAM administrator decides, such as an agent's grant, may be missing here. Reload to try again.
+				</p>
+			)}
 
 			{data.grantRequests !== null && <GrantRequests initial={data.grantRequests} viewerId={data.me} />}
 		</>

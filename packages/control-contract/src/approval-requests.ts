@@ -4,6 +4,7 @@
 import type { JsonValue } from '@fabrika/provider-contract'
 import type { StepUpMode } from './approval-policy.js'
 import type { ApprovalStepUp } from './approval-step-up.js'
+import type { AccessMapRoleDto, ListResponse } from './index.js'
 
 /**
  * `pending` waits for a decision; `approved`, `rejected` and `expired` follow it. An approved request moves to `executing`
@@ -26,6 +27,8 @@ export interface ApprovalRequestText {
 	text: string
 	/** Written by the agent (a name, a message), never by Fabrika. */
 	agent: boolean
+	/** A time, in unix seconds, that `text` states in ISO 8601: the page shows it as it shows its other dates. */
+	at?: number
 }
 
 /** What the request asks for, as its kind describes it: plain data, never markup. */
@@ -34,6 +37,8 @@ export interface ApprovalRequestDescription {
 	summary: ApprovalRequestText[]
 	/** The facts beside it, each a label and its value. */
 	facts: { label: string; value: ApprovalRequestText }[]
+	/** The role a grant gives, as the environment's approved contract declares it and the approval pages show it. */
+	role?: AccessMapRoleDto
 }
 
 /** Who asked: the principal, through which credential, and the person behind it when known. */
@@ -98,6 +103,12 @@ export interface ApprovalRequestDto {
 	result?: JsonValue
 	/** Why it failed, went stale or is unknown, in Fabrika's words. */
 	error?: string
+}
+
+/** The requests waiting for the caller to decide. */
+export interface ApprovalRequestListResponse extends ListResponse<ApprovalRequestDto> {
+	/** Control could not ask IAM what the caller administers, so a request an IAM administrator decides may be left out. */
+	iamUnreachable?: true
 }
 
 /** Ask a person to approve one action. `input` is the action's own, checked by its kind. */

@@ -101,6 +101,7 @@ import {
 	getApprovalRequestUseCase,
 	listApprovalRequestsUseCase,
 } from './approval/requests/api'
+import { consoleIamApprover, type IamApprover } from './approval/requests/iam'
 import { iamPasskeyStepUp, type PasskeyStepUpPort, stepUpAssertionSchema } from './approval/step-up'
 import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
@@ -132,7 +133,7 @@ import { appScope, controlPublicOrigin } from './iam'
 import { jsonValueSchema } from './json-value'
 import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
 import { operationDeploys, type RunDeps } from './run-lifecycle'
-import { buildControlRpcDeps, type ControlRpcDeps } from './services'
+import { buildControlRpcDeps, type ControlRpcDeps, iamGrantsDeps } from './services'
 
 export interface ControlRpcContext {
 	readonly env: Env
@@ -662,6 +663,8 @@ export function createControlRpcRouter(
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
 			...passkeyStepUp(ctx),
+			...iamGrantsDeps(ctx.env),
+			...approverIam(ctx),
 		}
 	}
 
@@ -685,6 +688,12 @@ export function createControlRpcRouter(
 function passkeyStepUp(ctx: ControlRpcContext): { stepUp?: PasskeyStepUpPort } {
 	const port = ctx.env.IAM_ADMIN === undefined ? null : iamPasskeyStepUp(ctx.env.IAM_ADMIN, ctx.request)
 	return port === null ? {} : { stepUp: port }
+}
+
+/** IAM as the person in the console: what they administer there, and the grant an approved agent's request makes as them. */
+function approverIam(ctx: ControlRpcContext): { iamApprover?: IamApprover } {
+	const approver = ctx.env.IAM_ADMIN === undefined ? null : consoleIamApprover(ctx.env.IAM_ADMIN, ctx.request)
+	return approver === null ? {} : { iamApprover: approver }
 }
 
 function sourceConnectionContext(ctx: ControlRpcContext) {

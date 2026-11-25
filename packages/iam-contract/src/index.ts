@@ -204,10 +204,25 @@ export interface CreateGrantRequest {
 	/** App id (a registered app id); null / omitted = all apps (cross-app). */
 	app?: string | null
 	expiresAt?: number | null
+	/**
+	 * The approval request in Control this grant carries out (ADR-0083 §8): an agent's grant, approved by the caller.
+	 * IAM records it in the change's audit row, and in its grant request's where the application's grants wait. It is
+	 * the caller's statement, recorded under the caller; it authorizes nothing.
+	 */
+	approvalRequest?: GrantApprovalRequestRef
+}
+
+/**
+ * The Control approval request a console grant carries out, and who asked for it. IAM refuses ids over 200 characters, a
+ * label over 500 and a client id over 2048.
+ */
+export interface GrantApprovalRequestRef {
+	id: string
+	requester: { id: string; label: string; clientId?: string }
 }
 
 /** Change access within its original application, preserving the grant's identity and author. */
-export interface UpdateGrantInput extends Omit<CreateGrantRequest, 'principalId' | 'app'> {
+export interface UpdateGrantInput extends Omit<CreateGrantRequest, 'principalId' | 'app' | 'approvalRequest'> {
 	id: string
 }
 

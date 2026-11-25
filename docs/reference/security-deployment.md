@@ -144,6 +144,7 @@ public origin and cross-origins of `apps.environments.put`, an `apps.update` pat
 non-person's write into a request yet. A write that reaches the provider is not requestable yet (400): a secret the
 provider keeps, an environment write on a provider that prepares its registrations, a target, artifact or namespace,
 suspension and resumption, a data operation. The procedures no request may ever name are refused with their reason.
+Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category `agent-grants`, below).
 
 - **A secret value** is sealed in the vault under the request's own purpose and never stored in the row; the row holds
   the name, a reference to the sealed value, its length and its fingerprint (the first 8 hex characters of its SHA-256),
@@ -178,8 +179,9 @@ suspension and resumption, a data operation. The procedures no request may ever 
 - **Execution** follows the final approval in the same call, under the environment's deployment lease (409 while
   it is busy), with the approver's authority and the requester recorded beside them. Control judges the policy as it
   stands now and the before-state again; a stricter policy or a changed before-state closes the request `stale` and
-  nothing runs. The operation id is recorded before the kind's first external effect; an execution that throws leaves
-  the request `unknown`. A Control whose kind reads the stored input back to another digest (a release rolled back
+  nothing runs, and a before-state Control cannot read (IAM not answering) closes it `failed`, saying so. The
+  operation id is recorded before the kind's first external effect; an execution that throws leaves the request
+  `unknown`. A Control whose kind reads the stored input back to another digest (a release rolled back
   under the request, which drops a key it does not know) shows the request as one it cannot describe and closes an
   approved one `failed`: it never executes less than the person approved. A request whose kind or input this Control
   cannot describe can only be refused: the page offers no Approve, and an approval answers 409 and changes nothing.
@@ -189,14 +191,36 @@ suspension and resumption, a data operation. The procedures no request may ever 
   it settles. It decides and executes nothing anew.
 - **Audit.** A decision writes `auth.audit` (`access.approve` on the request, with the decision) under the person;
   an execution writes the kind's action with its outcome, the operation id and the requester.
+- **An agent's grant** (`iam.grants.create`, `fabrika control access request-grant`) asks for one role at one
+  application environment, for the agent's own principal or another: a role its approved contract declares (never
+  IAM's `admin` or a custom policy, 400), application-wide or in a value of the role's dimension, ending at most 30
+  days ahead. The requester holds `access.request` at the application. Creating needs Control to reach IAM with the
+  provisioning key (503 otherwise), which reads the principal and its grants. A principal IAM does not know is not
+  refused, which would tell it from a known one: the person deciding sees that IAM knows no such principal, and IAM
+  refuses the grant if it is approved anyway. The requester sees none of what Control read from IAM: the principal's
+  label and grants, and the role as bound, are shown only to an IAM administrator who may decide it. An
+  environment whose `agent-grants` is `off`, or that is not protected, refuses it (409): there is nothing to approve,
+  since an agent's own credential grants nothing in IAM. The request binds the principal's label and grants at the
+  application and the role as the approved contract declares it; a change of any of them before the execution, a
+  deploy that changes the role included, closes it `stale`. It is decided by an IAM administrator of the application (`iam.admin`, or
+  `iam.users.manage` there, read from IAM's `me` with the person's console token), not by `access.approve`. When IAM
+  cannot be asked, reading or deciding it answers 503, and the list of requests leaves it out and says IAM could not
+  be reached (`iamUnreachable`). The page shows the role as the access map summarizes it and what the principal holds now. Approving makes the grant as the
+  approver's console grant through `IAM_ADMIN` with their console token, so IAM checks them as for the console and
+  writes `iam.grant.create` under them, naming the request and its requester; an IAM refusal closes the request
+  `failed` with IAM's reason. Where the application's grants wait (`grants: person`), IAM opens its own grant request
+  instead (`iam.grant.request`, naming the Control request): the Control request is `executed` with a link to it, and
+  nothing is granted until a second IAM administrator approves it on the Approvals page. An `unknown` execution is
+  settled by the sweep from IAM's grants and open grant requests, read with the provisioning key.
 - **Reading it.** The agent reads the state with `approvals.requests.get`, `fabrika control requests get <id> [--wait]`
   or the MCP tool `get_approval_request`; the person decides at `<console>/approvals/requests/<id>`, where text the
   agent wrote is escaped and marked. Fabrika sends no notification. The requester reads its request only through the
   credential that asked (the same principal and OAuth client, or no client for a key), so another agent of the same
   person does not; a person who may decide it reads any at those coordinates. What the request acts on now (a
   variable's value, a field before the change), a secret's fingerprint, a variable's new value and the result are shown
-  only to a reader who also holds the kind's action where it acts; anyone else sees the names and lengths and a line
-  saying what is not shown, and may still refuse it.
+  only to a reader who also holds the kind's action where it acts, or for a kind with its own decider (an agent's grant)
+  only to that decider, though its requester reads the result; anyone else sees the names and lengths and a line saying
+  what is not shown, and may still refuse it.
 
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval

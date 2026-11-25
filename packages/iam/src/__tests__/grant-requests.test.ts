@@ -126,6 +126,42 @@ function grantRequestSuite(backend: () => Backend): void {
 		expect(await w.f.repositories.grants.listGrants(w.grantee.id)).toHaveLength(1)
 	})
 
+	test('the Control approval request a console grant carries is recorded, bounded, and changes neither who may grant nor the gate', async () => {
+		const w = await world()
+		const approvalRequest = { id: 'req-1', requester: { id: 'kim', label: 'kim via agent', clientId: 'https://agent.example.test/client.json' } }
+		const oversized = [
+			{ ...approvalRequest, id: 'r'.repeat(201) },
+			{ ...approvalRequest, requester: { ...approvalRequest.requester, id: 'k'.repeat(201) } },
+			{ ...approvalRequest, requester: { ...approvalRequest.requester, label: 'l'.repeat(501) } },
+			{ ...approvalRequest, requester: { ...approvalRequest.requester, clientId: `https://agent.example.test/${'c'.repeat(2048)}` } },
+		]
+		for (const field of oversized) {
+			const refused = await w.call(w.ada, 'grants.create', { ...staffGrant(w), approvalRequest: field })
+			expect([refused.status, errorType(refused.body)]).toEqual([400, 'validation'])
+		}
+		expect(await w.f.repositories.grants.listGrants(w.grantee.id)).toEqual([])
+		// Who may grant is unchanged: a person who administers nothing is refused with it as without it.
+		expect((await w.call(w.grantee, 'grants.create', { ...staffGrant(w), approvalRequest })).status).toBe(403)
+
+		const created = await w.call(w.ada, 'grants.create', { ...staffGrant(w), approvalRequest })
+		expect(created.status).toBe(200)
+		const grantId = prop(result(created.body), 'id')
+		const events = await w.f.repositories.audit.listAuditEvents({ limit: 200 })
+		const record = events.find((event) => event.action === 'iam.grant.create' && event.resource_id === grantId)
+		expect(record?.principal_id).toBe(w.ada.id)
+		expect(prop(JSON.parse(record?.metadata ?? 'null'), 'approvalRequest')).toEqual(approvalRequest)
+
+		// The gate is unchanged: with the application's grants waiting, it becomes a request, which records it too.
+		expect((await w.gate(true)).status).toBe(200)
+		const waiting = await w.call(w.ada, 'grants.create', { principalId: w.grantee.id, app: APP, roleKey: 'reader', approvalRequest })
+		const id = pendingId(waiting.body)
+		expect((await w.f.repositories.grants.listGrants(w.grantee.id)).map((grant) => grant.role_key)).toEqual(['staff'])
+		const requested = (await w.f.repositories.audit.listAuditEvents({ limit: 200 })).find((event) =>
+			event.action === 'iam.grant.request' && event.resource_id === id
+		)
+		expect(prop(JSON.parse(requested?.metadata ?? 'null'), 'approvalRequest')).toEqual(approvalRequest)
+	})
+
 	test('the requester withdraws a request, which then grants nothing and cannot be approved', async () => {
 		const w = await world()
 		await w.gate(true)

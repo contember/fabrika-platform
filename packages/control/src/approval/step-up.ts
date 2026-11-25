@@ -3,20 +3,14 @@
 // applies, IAM issues the challenge and verifies the answer, each with the person's own console token, and Control goes
 // on only when IAM verified an assertion of that person against that binding.
 
-import { createRpcClient, RpcError } from '@fabrika/app'
-import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
+import { RpcError } from '@fabrika/app'
 import { canonicalJson, sha256Hex } from '@fabrika/auth-core'
 import type { ApprovalDecision, ApprovalStepUp, ApprovalStepUpChallenge, ProtectionChallengeInput, StepUpMode } from '@fabrika/control-contract'
-import {
-	type IamAdminRpcContract,
-	NO_PASSKEY_ERROR,
-	type PasskeyChallenge,
-	type PasskeyRequestOptions,
-	type VerifiedPasskeyAssertion,
-} from '@fabrika/iam-contract'
+import { NO_PASSKEY_ERROR, type PasskeyChallenge, type PasskeyRequestOptions, type VerifiedPasskeyAssertion } from '@fabrika/iam-contract'
 import type { HttpService } from '@fabrika/platform'
 import { z } from 'zod'
 import { ControlApiError, fail } from '../api/domain'
+import { consoleIamClient } from './console-iam'
 
 /** What a decision records of its step-up: the passkey that answered (its WebAuthn id) and when IAM verified it. */
 export interface StepUpRecord {
@@ -93,18 +87,8 @@ function refusalStatus(cause: unknown): number | null {
  * approver's console token as the bearer, the one the proxy injected and Control verified. Null without that token.
  */
 export function iamPasskeyStepUp(gateway: HttpService, request: Request): PasskeyStepUpPort | null {
-	const token = request.headers.get(PROXY_TOKEN_HEADER)?.trim() ?? ''
-	if (token === '') return null
-	const client = createRpcClient<IamAdminRpcContract>({
-		baseUrl: new URL('/admin/rpc', request.url).toString(),
-		bounceOnAuth: false,
-		fetch: (input, init) => {
-			const headers = new Headers(init?.headers)
-			headers.set('authorization', `Bearer ${token}`)
-			// The token must never reach a redirect target; the client reads a 3xx as a failed call.
-			return gateway.fetch(new Request(input, { method: init?.method ?? 'POST', headers, body: init?.body ?? null, redirect: 'manual' }))
-		},
-	})
+	const client = consoleIamClient(gateway, request)
+	if (client === null) return null
 	return {
 		async challenge(binding) {
 			try {

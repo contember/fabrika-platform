@@ -1,11 +1,12 @@
 import { createPage, Link } from '@buzola/router'
 import { ACTION_CATEGORIES, ALL_ENVIRONMENTS, type ApprovalRequestState, isFinalApprovalRequestState } from '@fabrika/control-contract'
 import { useState } from 'react'
+import { roleSummary } from '../../../components/AccessMap'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 import { DecisionFailureNotice, StepUpHint } from '../../../components/DecisionFailureNotice'
 import { Icon } from '../../../components/Icon'
 import { Chip, type Lamp, Status } from '../../../components/Status'
-import { api, type ApprovalRequestDto, type ApprovalRequestText } from '../../../lib/api'
+import { type AccessMapRoleDto, api, type ApprovalRequestDto, type ApprovalRequestText } from '../../../lib/api'
 import { type DecisionFailure, decisionFailure, postDecision } from '../../../lib/decision-step-up'
 import { categoryLabel, requesterBlocks, requesterBlockText } from '../../../lib/environment-protection'
 import { fmtDate } from '../../../lib/format'
@@ -95,9 +96,10 @@ export function requestCategoryLabel(category: string): string {
 	return known === undefined ? category : categoryLabel(known)
 }
 
-/** One piece of the request's text: the agent's own is set apart and says so. */
+/** One piece of the request's text: the agent's own is set apart and says so; a time is formatted as the page's other dates. */
 function Text({ part }: { part: ApprovalRequestText }) {
-	return part.agent ? <span className="agent-text" title="Written by the agent, not by Fabrika">{part.text}</span> : <>{part.text}</>
+	const text = part.at === undefined ? part.text : fmtDate(part.at)
+	return part.agent ? <span className="agent-text" title="Written by the agent, not by Fabrika">{text}</span> : <>{text}</>
 }
 
 /** The kind's one-sentence summary of what approving does. */
@@ -120,6 +122,7 @@ export function ApprovalRequestView({ request }: { request: ApprovalRequestDto }
 						Agent <span className="agent-text" title="Written by the agent, not by Fabrika">{requester.clientId}</span>
 					</p>
 				)}
+				{description.role !== undefined && <RequestedRole role={description.role} />}
 				{description.facts.length > 0 && (
 					<dl className="request-facts">
 						{description.facts.map((fact, index) => (
@@ -148,15 +151,42 @@ export function ApprovalRequestView({ request }: { request: ApprovalRequestDto }
 	)
 }
 
+/** The role a grant gives, summarized as the access map summarizes it, with every action it holds. */
+function RequestedRole({ role }: { role: AccessMapRoleDto }) {
+	const held = [...role.actions, ...role.via.flatMap((via) => via.actions.map((action) => `${action} through ${via.relation}`))]
+	return (
+		<div className="request-role">
+			<p>
+				<Chip>{role.role}</Chip> <span className="small">{roleSummary(role)}</span>
+			</p>
+			{held.length > 0 && <p className="muted small">{held.join(', ')}</p>}
+		</div>
+	)
+}
+
+/** IAM's own grant request an agent's approved grant became, where the application's grants wait (ADR-0083 §4). */
+function grantRequestOf(result: ApprovalRequestDto['result']): string | null {
+	const linked = typeof result === 'object' && result !== null && !Array.isArray(result) ? result['grantRequest'] : undefined
+	const id = typeof linked === 'object' && linked !== null && !Array.isArray(linked) ? linked['id'] : undefined
+	return typeof id === 'string' ? id : null
+}
+
 /** What happened once a person decided: the result, or why it did not run. */
 export function RequestOutcome({ request }: { request: ApprovalRequestDto }) {
 	if (request.state === 'pending' || request.state === 'rejected') return null
 	if (request.state === 'expired') {
 		return <p className="hint">Nobody decided this request before {fmtDate(request.deadline)}, so it expired and changed nothing.</p>
 	}
+	const heldByIam = request.state === 'executed' && grantRequestOf(request.result) !== null
 	return (
 		<section>
-			{request.state === 'executed' && <p className="hint">It was done.</p>}
+			{request.state === 'executed' && !heldByIam && <p className="hint">It was done.</p>}
+			{heldByIam && (
+				<p className="hint">
+					The application's grants wait for approval, so IAM holds this grant until another administrator of the application approves it under{' '}
+					<Link to="approvals">Approvals</Link>; nothing is granted until then.
+				</p>
+			)}
 			{(request.state === 'approved' || request.state === 'executing') && <p className="hint">It is being carried out.</p>}
 			{request.state === 'unknown' && <p className="hint">Control did not see how it ended and follows it; this page shows the outcome once known.</p>}
 			{request.state === 'stale' && <p className="hint">It was not carried out; the agent asks again.</p>}

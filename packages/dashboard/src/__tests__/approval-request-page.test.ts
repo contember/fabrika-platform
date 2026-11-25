@@ -1,10 +1,13 @@
 // The approval request page (ADR-0083 §8): who asks and through what, the kind's description with the agent's text
 // escaped and marked, and buttons only while a person can still decide.
 
+import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
+import { BuzolaProvider } from '@buzola/router/react'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ApprovalRequestDto } from '../lib/api'
+import { fmtDate } from '../lib/format'
 import { ApprovalRequestView, RequestDecision, RequestOutcome } from '../routes/approvals/requests/detail'
 
 const NOW = 1_800_000_000
@@ -59,6 +62,20 @@ describe('the approval request page', () => {
 		expect(html).not.toContain('<script')
 		expect(html).toContain('<strong>intake</strong> · <strong>prod</strong>')
 		expect(html).toContain('Decide by')
+	})
+
+	test('a time in the description is formatted as the page formats its other dates, in the summary and in a fact', () => {
+		const at = NOW + 7 * 86_400
+		const iso = new Date(at * 1000).toISOString()
+		const html = view({
+			...REQUEST,
+			description: {
+				summary: [{ text: 'Grant role staff until ', agent: false }, { text: iso, agent: false, at }],
+				facts: [{ label: 'Expires', value: { text: iso, agent: false, at } }],
+			},
+		})
+		expect(html).not.toContain(iso)
+		expect(html.split(fmtDate(at)).length - 1).toBe(2)
 	})
 
 	test('a key says so and names no agent', () => {
@@ -123,6 +140,49 @@ describe('the approval request page', () => {
 		expect(html).toContain('It was done.')
 		expect(html).toContain('&lt;i&gt;x&lt;/i&gt;')
 		expect(html).toContain('op-1')
+	})
+
+	test("an agent's grant shows the role with what it holds, as the approval pages summarize a role", () => {
+		const html = view({
+			...REQUEST,
+			kind: 'iam.grants.create',
+			category: 'agent-grants',
+			description: {
+				...REQUEST.description,
+				role: {
+					role: 'editor',
+					scope: 'workspace',
+					assignableBy: ['owner'],
+					creatorOf: [],
+					external: false,
+					actions: ['notes.read', 'notes.write'],
+					via: [{ relation: 'author', dimension: 'note', actions: ['notes.delete'], conferredBy: [] }],
+				},
+			},
+		})
+		expect(html).toContain('editor')
+		expect(html).toContain('in each workspace, assigned by owner · 3 actions')
+		expect(html).toContain('notes.read, notes.write')
+		expect(html).toContain('notes.delete through author')
+	})
+
+	test("an agent's grant that IAM holds for a second administrator says so", () => {
+		const router = new Router({
+			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+			adapter: createMemoryNavigationAdapter(),
+			pageRegistry: { approvals: '/approvals' },
+		})
+		const request: ApprovalRequestDto = {
+			...REQUEST,
+			kind: 'iam.grants.create',
+			state: 'executed',
+			result: { grantRequest: { id: 'gr-1', status: 'pending' } },
+		}
+		const html = renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(RequestOutcome, { request })))
+		expect(html).toContain('another administrator of the application approves it')
+		expect(html).toContain('href="/approvals"')
+		// Nothing is granted yet, so the page does not also say it was done.
+		expect(html).not.toContain('It was done.')
 	})
 
 	test('a stale request says why it did not run', () => {
