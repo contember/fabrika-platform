@@ -424,13 +424,27 @@ for (const backend of backends) {
 				expect(w.notes.effects).toEqual([])
 			})
 
-			test('a kind this Control does not serve stays unknown for the release that does', async () => {
+			test('a kind this Control does not serve stays unknown for the release that does, and the sweep takes no lease for it', async () => {
 				const w = await world()
 				w.notes.execute = 'throw'
 				const { id } = await ask(w)
 				await decide(w, id, 'approve')
-				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: new Map() })).toEqual({ expired: 0, interrupted: 0, settled: 0 })
+				const taken: string[] = []
+				const counting: DeployLocks = {
+					acquire: (key, holder, ttlMs) => {
+						taken.push(key)
+						return w.locks.acquire(key, holder, ttlMs)
+					},
+					renew: (key, holder, ttlMs) => w.locks.renew(key, holder, ttlMs),
+					release: (key, holder) => w.locks.release(key, holder),
+				}
+				expect(await sweepApprovalRequests({ repositories: w.db, lock: counting, kinds: new Map() })).toEqual({ expired: 0, interrupted: 0, settled: 0 })
+				expect(taken).toEqual([])
 				expect((await row(w, id)).state).toBe('unknown')
+				// The release that serves it takes the lease and follows it.
+				expect(await sweepApprovalRequests({ repositories: w.db, lock: counting, kinds: w.kinds })).toEqual({ expired: 0, interrupted: 0, settled: 0 })
+				expect(taken).toEqual([runLeaseKey('notes', 'prod')])
+				expect(w.notes.followed).toHaveLength(1)
 				expect((await getApprovalRequestUseCase(context(w, ADA, { kinds: new Map() }), id)).description.summary[0]?.text).toContain(
 					'which this Control cannot describe',
 				)

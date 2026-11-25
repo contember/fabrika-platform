@@ -189,6 +189,9 @@ export async function sweepApprovalRequests(deps: ApprovalRequestSweepDeps): Pro
 			if (await requests.expire(listed.id)) summary.expired++
 			continue
 		}
+		// An unknown request this Control cannot follow (a later release's kind, after a rollback) stays unknown for the
+		// release that can; its kind and input never change, so the sweep need not take the environment's lease to see it.
+		if (listed.state === 'unknown' && typeof actionOf(kinds.get(listed.kind), listed) === 'string') continue
 		const lease = await acquireLease(deps.lock, runLeaseKey(listed.app_id, listed.env), deps.leaseClock)
 		if (lease === null) continue
 		try {
@@ -203,7 +206,6 @@ export async function sweepApprovalRequests(deps: ApprovalRequestSweepDeps): Pro
 			const operationId = row.operation_id
 			if (row.state === 'executing' && !(await requests.markUnknown(row.id, operationId, UNKNOWN_OUTCOME, lease.fence()))) continue
 			const action = actionOf(kinds.get(row.kind), row)
-			// A kind this Control does not serve (a later release's, after a rollback) stays unknown for the release that does.
 			if (typeof action === 'string') continue
 			const followed = await follow(action, deps.repositories, { requestId: row.id, operationId, signal: lease.signal })
 			if (followed === null) continue
