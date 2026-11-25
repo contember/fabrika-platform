@@ -299,7 +299,7 @@ export type CredentialsMode = (typeof CREDENTIALS_MODES)[number]
  * Control's mirror of an application environment's approval gates in IAM, set with the provisioning key (ADR-0083 §4,
  * §8): whether its console grants wait (`required`), and its `credentials` mode. `revision` is the environment's
  * protection revision: IAM ignores one older than it holds, and answers what it holds. A request without `credentials`
- * leaves IAM's mode as it is.
+ * (an older Control's) clears IAM's mode, which then reads as `person`.
  */
 export interface SetGrantApprovalRequest {
 	app: string

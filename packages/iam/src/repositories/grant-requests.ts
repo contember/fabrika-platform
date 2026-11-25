@@ -87,10 +87,11 @@ export class GrantRequestRepository {
 	}
 
 	/**
-	 * Set an application environment's gates as of Control's protection `revision`: whether its grant changes wait, and,
-	 * when given, its `credentials` mode (ADR-0083 §4, §8). An older revision than the stored one changes nothing, so a
-	 * caller that lost the environment's lease cannot undo its successor's gate. The record is written only when a gate
-	 * changes.
+	 * Set an application environment's gates as of Control's protection `revision`: whether its grant changes wait, and its
+	 * `credentials` mode, null when not given (ADR-0083 §4, §8). An older revision than the stored one changes nothing, so a
+	 * caller that lost the environment's lease cannot undo its successor's gate. A write without a mode, an older
+	 * Control's, clears it, so IAM reads `person` rather than keep a looser mode that Control no longer states. The record
+	 * is written only when a gate changes.
 	 */
 	async setGates(app: string, gates: IamGates, revision: number, now: number, audit: AuditEventInput): Promise<StoredGates> {
 		const credentials = gates.credentials ?? null
@@ -100,8 +101,8 @@ export class GrantRequestRepository {
 				WHERE app_grant_approvals.revision <= excluded.revision`)
 			.bind(app, revision, now)
 		const change = this.writer.changed([{
-			sql: `UPDATE app_grant_approvals SET required = ?, credentials = COALESCE(?, credentials)
-				WHERE app = ? AND revision = ? AND (required <> ? OR COALESCE(credentials, '') <> COALESCE(?, credentials, ''))
+			sql: `UPDATE app_grant_approvals SET required = ?, credentials = ?
+				WHERE app = ? AND revision = ? AND (required <> ? OR COALESCE(credentials, '') <> COALESCE(?, ''))
 				RETURNING app`,
 			binds: [gates.required ? 1 : 0, credentials, app, revision, gates.required ? 1 : 0, credentials],
 		}], audit)

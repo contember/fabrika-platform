@@ -434,18 +434,17 @@ for (const backend of backends) {
 				revision: 3,
 				credentials: 'person',
 			})
-			// An older revision changes nothing; one without a mode keeps the mode.
+			// An older revision changes nothing.
 			expect((await set(PROVISIONING_KEY, { revision: 2, credentials: 'off' })).result).toMatchObject({ revision: 3, credentials: 'person' })
-			expect((await set(PROVISIONING_KEY, { revision: 4, required: true })).result).toEqual({
-				app: APP,
-				required: true,
-				revision: 4,
-				credentials: 'person',
-			})
-			expect((await set(PROVISIONING_KEY, { revision: 5, credentials: 'sometimes' })).status).toBe(400)
+			// One without a mode, an older Control's, clears it: IAM reads `person`, never a looser mode left behind.
+			expect((await set(PROVISIONING_KEY, { revision: 4, credentials: 'off' })).result).toMatchObject({ revision: 4, credentials: 'off' })
+			expect((await set(PROVISIONING_KEY, { revision: 5, required: true })).result).toEqual({ app: APP, required: true, revision: 5 })
+			expect((await w.rpc(w.machine, 'apiKeys.provision', w.notesKey())).status).toBe(403)
+			expect((await set(PROVISIONING_KEY, { revision: 6, credentials: 'sometimes' })).status).toBe(400)
 			const records = (await w.repositories.audit.listAuditEvents({ limit: 50 })).filter((row) => row.action === 'iam.grant_approval.set')
 			expect(records.map((row) => JSON.parse(row.metadata ?? 'null'))).toEqual([
-				{ required: true, revision: 4 },
+				{ required: true, revision: 5 },
+				{ required: false, revision: 4, credentials: 'off' },
 				{ required: false, revision: 3, credentials: 'person' },
 			])
 		})

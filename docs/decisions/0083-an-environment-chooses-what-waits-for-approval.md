@@ -445,7 +445,9 @@ whose policy is null reads the defaults, `person` for the four, from the upgrade
   Rolling Control back below the policy reads the old column, and the deploy gate falls back to its categories; a run
   classified under a non-default choice stores it, which an older Control's strict classification reader refuses, so
   that run classifies again or fails. Rolling IAM back leaves requests unread, grants ungated and its key issuance unjudged by `credentials`; rolling
-  Control back leaves IAM's `credentials` as last written, since an older Control's write carries no mode.
+  Control back leaves IAM's `credentials` as last written until that older Control writes an environment's gates (a
+  protection change), which carries no mode and sets it to null: IAM then reads that environment as `person`, never a
+  looser mode left behind, and a machine caller issues no key there until Control is upgraded again.
 
 ## Alternatives considered
 

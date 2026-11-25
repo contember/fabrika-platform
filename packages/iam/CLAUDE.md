@@ -434,7 +434,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   `src/admin/grant-requests.ts`). `app_grant_approvals` holds whether grants at an `<app>@<env>` id wait, and its
   `credentials` mode (null: not yet mirrored, read as `person`); only Control writes it (`grantApproval.set`, refused
   to every caller but the provisioning key), at Control's protection `revision`, and an older revision changes
-  nothing. A call without `credentials` (an older Control) leaves the mode as it is. There `grants.create/update/delete` and
+  nothing. A call without `credentials` (an older Control) clears the mode, which then reads as `person`. There `grants.create/update/delete` and
   `appPeople.grant/revoke` run their checks, then write a `grant_requests` row and `iam.grant.request` and answer
   `pending`; a cross-app grant never waits. Nothing that resolves permissions reads `grant_requests`. An administrator
   of the app (`managesApp`), a person in a session and not the requester, approves (`grantRequests.decide`): the
