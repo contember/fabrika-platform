@@ -393,6 +393,37 @@ describe('a requested commit must be merged by default', () => {
 	})
 })
 
+describe('a request deploys the commit that passed the check', () => {
+	test('the run records the requested commit when it is created, and the source must resolve that commit', async () => {
+		const w = await world()
+		await published(w)
+		const created = await triggerDeployUseCase(runs(w, 'oauth'), { appId: 'notes', env: 'prod', ref: COMMIT })
+		expect(created.commitSha).toBe(COMMIT)
+		expect(await run(w, created.id)).toMatchObject({ status: 'pending', ref: COMMIT, commit_sha: COMMIT })
+
+		const expected: (string | undefined)[] = []
+		const other = 'd'.repeat(40)
+		const moved: RunDeps = {
+			...deps(w),
+			provider: {
+				...provider(w),
+				resolveSource: (input) => {
+					expected.push(input.expectedCommitSha)
+					return Promise.resolve({ commitSha: other })
+				},
+			},
+		}
+		expect((await executeDeploy(moved, { runId: created.id })).status).toBe('failed')
+		expect(expected).toEqual([COMMIT])
+		expect(w.logs.get(`runs/${created.id}/logs.ndjson`)).toContain('does not match the recorded commit')
+		expect(w.deploys).toBe(0)
+
+		// A person's run of a ref records no commit until the source resolves it.
+		const person = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: 'refs/heads/main' })
+		expect((await run(w, person.id)).commit_sha).toBeNull()
+	})
+})
+
 describe('the restart check judges the environment as it is when the run starts', () => {
 	async function queued(w: World): Promise<string> {
 		await published(w)

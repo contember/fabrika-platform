@@ -227,7 +227,8 @@ export async function triggerDeployUseCase(c: RunsUseCaseContext, input: Trigger
  * Write a `pending` manual run, then enqueue it, then audit. The caller has already authorized
  * `deploy.trigger` at the coordinates, so a protected environment's refusal names nothing it cannot see.
  * A `commitSha` pins the run to that exact commit of `ref`. A non-person's run of a protected environment is a request
- * (ADR-0050 §4): it records who asked and the commit's message, and parks for a person once classified.
+ * (ADR-0050 §4): it records who asked and the commit's message, pins the commit it names, and parks for a person once
+ * classified.
  */
 export async function createManualRun(
 	c: RunTriggerContext,
@@ -236,6 +237,8 @@ export async function createManualRun(
 	const { appEnv, ref } = input
 	const { byPerson, decision } = protectedDeployOf(c.auth, c.admission, appEnv, ref)
 	const request = decision.kind === 'request' ? await deployRequestOf(c, appEnv, ref) : null
+	// A request's ref is the SHA the merged check passed; pinning it makes the deploy refuse any other commit the source resolves.
+	const commitSha = request === null ? input.commitSha : ref
 	const appId = appEnv.app_id
 	const env = appEnv.env
 	const run = await c.repositories.runs.createRun({
@@ -243,7 +246,7 @@ export async function createManualRun(
 		appId,
 		env,
 		ref,
-		...(input.commitSha === undefined ? {} : { commitSha: input.commitSha }),
+		...(commitSha === undefined ? {} : { commitSha }),
 		trigger: 'manual',
 		actor: runActor(c.auth),
 		lane: input.lane ?? null,
@@ -259,7 +262,7 @@ export async function createManualRun(
 			appId,
 			env,
 			ref,
-			...(input.commitSha === undefined ? {} : { commitSha: input.commitSha }),
+			...(commitSha === undefined ? {} : { commitSha }),
 			trigger: 'manual',
 			...(request === null ? {} : { requested: true }),
 		},
