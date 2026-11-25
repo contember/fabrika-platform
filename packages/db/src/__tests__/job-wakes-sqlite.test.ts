@@ -228,6 +228,7 @@ describe('the wakes migration', () => {
 			'fabrika/0006_list_cursor_key.sql',
 			'fabrika/0007_job_schedule.sql',
 			'fabrika/0008_job_schedule_declared.sql',
+			'fabrika/0009_push_subscriptions.sql',
 		])
 		const migrated = frameworkTablesOf(connected(tables, { database: openSqlite(storage), capabilities: new TestAuthority() }).database).wakes
 		const due = at(MINUTE)

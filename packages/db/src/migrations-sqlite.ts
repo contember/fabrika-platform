@@ -20,6 +20,7 @@ import {
 	JOB_SCHEDULE_TABLE,
 	JOB_WAKES_TABLE,
 	LIST_CURSOR_KEY_TABLE,
+	PUSH_SUBSCRIPTIONS_TABLE,
 	REQUEST_RECEIPTS_TABLE,
 	WEBHOOK_BINDINGS_TABLE,
 	WEBHOOK_DELIVERIES_TABLE,
@@ -205,6 +206,30 @@ CREATE TABLE ${JOB_SCHEDULE_TABLE} (
 		name: '0008_job_schedule_declared.sql',
 		sql: `-- The cron keys the stored generation's deploy declares, as a JSON array (see the Postgres bundle's 0014).
 ALTER TABLE ${JOB_SCHEDULE_TABLE} ADD COLUMN declared TEXT NOT NULL DEFAULT '[]';
+`,
+	}),
+	Object.freeze({
+		name: '0009_push_subscriptions.sql',
+		sql: `-- A browser's Web Push subscription (ADR-0088), bound to the principal who recorded it; a row whose gone_at is set is a
+-- tombstone (see the Postgres bundle's 0015). Times are epoch milliseconds.
+CREATE TABLE ${PUSH_SUBSCRIPTIONS_TABLE} (
+	id TEXT PRIMARY KEY,
+	principal TEXT NOT NULL,
+	endpoint TEXT NOT NULL UNIQUE,
+	p256dh TEXT,
+	auth TEXT,
+	vapid_key TEXT,
+	cursor TEXT,
+	next_attempt_at INTEGER,
+	recorded_at INTEGER NOT NULL,
+	gone_at INTEGER,
+	CONSTRAINT ${PUSH_SUBSCRIPTIONS_TABLE}_tombstone CHECK (
+		(gone_at IS NULL AND p256dh IS NOT NULL AND auth IS NOT NULL AND vapid_key IS NOT NULL)
+		OR (gone_at IS NOT NULL AND p256dh IS NULL AND auth IS NULL AND vapid_key IS NULL AND next_attempt_at IS NULL)
+	)
+) STRICT;
+CREATE INDEX ${PUSH_SUBSCRIPTIONS_TABLE}_principal ON ${PUSH_SUBSCRIPTIONS_TABLE} (principal, recorded_at) WHERE gone_at IS NULL;
+CREATE INDEX ${PUSH_SUBSCRIPTIONS_TABLE}_gone_at ON ${PUSH_SUBSCRIPTIONS_TABLE} (gone_at) WHERE gone_at IS NOT NULL;
 `,
 	}),
 ])

@@ -765,13 +765,14 @@ describe.skipIf(!hasPostgres)('the schedule migration', () => {
 	test('an existing schema applies 0013 and 0014 alone, and the runtime role holds the schedule', async () => {
 		const appId = `sched-${Bun.randomUUIDv7().replaceAll('-', '').slice(-12)}`
 		const earlier = FRAMEWORK_MIGRATIONS.filter((file) => file.name < '0013_job_schedule.sql')
-		expect(earlier).toHaveLength(FRAMEWORK_MIGRATIONS.length - 2)
+		const through = FRAMEWORK_MIGRATIONS.filter((file) => file.name <= '0014_job_schedule_declared.sql')
+		expect(earlier).toHaveLength(through.length - 2)
 		const migrationsOf = (framework: typeof FRAMEWORK_MIGRATIONS) =>
 			definePostgresApplicationMigrations({ appId, directory: '/nonexistent', framework: { bundle: FRAMEWORK_MIGRATION_BUNDLE, migrations: framework } })
 		try {
 			const app = [{ name: '20261124120000_init.sql', sql: 'CREATE TABLE notes (id TEXT PRIMARY KEY)' }]
 			expect(await migrationsOf(earlier).migrate(url, app)).toEqual([...earlier.map((file) => `fabrika/${file.name}`), `app/${app[0]?.name}`])
-			const after = migrationsOf(FRAMEWORK_MIGRATIONS)
+			const after = migrationsOf(through)
 			expect(await after.migrate(url, app)).toEqual(['fabrika/0013_job_schedule.sql', 'fabrika/0014_job_schedule_declared.sql'])
 			const runtime = openPostgres({ url: applicationRuntimeUrl(url, appId), schema: after.schema, max: 1 })
 			try {
