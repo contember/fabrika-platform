@@ -6,7 +6,7 @@
 import { defineApp, WebhookSecret } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { TEST_PUSH_KEY, testKit } from '@fabrika/app/testing'
-import { applicationSchema, type Database, scoped } from '@fabrika/db'
+import { applicationSchema, type Database, DatabaseError, scoped } from '@fabrika/db'
 import type { NewNotification, Notifications, Session } from '@fabrika/db/framework'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
@@ -124,21 +124,14 @@ describe('the validation of ctx.notify', () => {
 	})
 
 	test('a key the table cannot read is refused as ctx.notify, and any other database failure passes through', async () => {
-		const failing = (sqlState: string | null) =>
-			notifier({
-				...rules,
-				locate: () => {
-					const error = new Error('the database refused the statement')
-					error.name = 'DatabaseError'
-					Reflect.set(error, 'sqlState', sqlState)
-					return Promise.reject(error)
-				},
-			}, site)
-		await expect(failing('22P02')('alice', text, { action: 'notes.read', on: { note: 'x' } })).rejects.toMatchObject({
-			reason: 'refused_notification',
-		})
-		await expect(failing(null)('alice', text, { action: 'notes.read', on: { note: 'x' } })).rejects.toMatchObject({ name: 'DatabaseError' })
-		await expect(failing('40001')('alice', text, { action: 'notes.read', on: { note: 'x' } })).rejects.toMatchObject({ name: 'DatabaseError' })
+		const failing = (error: Error) => notifier({ ...rules, locate: () => Promise.reject(error) }, site)
+		const aboutNote = { action: 'notes.read', on: { note: 'x' } }
+		await expect(failing(new DatabaseError('22P02'))('alice', text, aboutNote)).rejects.toMatchObject({ reason: 'refused_notification' })
+		await expect(failing(new DatabaseError(null))('alice', text, aboutNote)).rejects.toBeInstanceOf(DatabaseError)
+		await expect(failing(new DatabaseError('40001'))('alice', text, aboutNote)).rejects.toBeInstanceOf(DatabaseError)
+		// A look-alike that only borrows the name and the state is not the data layer's, and passes through as it is.
+		const lookAlike = Object.assign(new Error('a look-alike'), { name: 'DatabaseError', sqlState: '22P02' })
+		await expect(failing(lookAlike)('alice', text, aboutNote)).rejects.toBe(lookAlike)
 		expect(written).toEqual([])
 	})
 

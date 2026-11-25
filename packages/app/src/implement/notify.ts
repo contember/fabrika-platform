@@ -6,6 +6,7 @@
 // could not check would fail every read of the person's inbox until it expired.
 
 import { isCanonicalPath } from '@fabrika/auth-core'
+import { DatabaseError } from '@fabrika/db'
 import type { Notifications, Session } from '@fabrika/db/framework'
 import { uuidv7 } from '@fabrika/platform'
 import { NOTIFY_LIMITS } from '../contract/defaults'
@@ -91,13 +92,12 @@ function refused(site: string, message: string): CapabilityRefusedError {
 	return new CapabilityRefusedError('refused_notification', `${site}: ctx.notify: ${message}`)
 }
 
-/** `@fabrika/db`'s `DatabaseError` of a Postgres data exception (SQLSTATE class 22, a value the column cannot read), read by its fields. */
+/**
+ * A Postgres data exception (SQLSTATE class 22, a value the column cannot read), as `@fabrika/db`'s own class: by
+ * `instanceof`, never by `name`, which any thrown value can set (`failures.ts` chooses the same way).
+ */
 function isDataException(error: unknown): boolean {
-	if (!(error instanceof Error) || error.name !== 'DatabaseError') {
-		return false
-	}
-	const state: unknown = Reflect.get(error, 'sqlState')
-	return typeof state === 'string' && state.startsWith('22')
+	return error instanceof DatabaseError && error.sqlState?.startsWith('22') === true
 }
 
 /**
