@@ -3,6 +3,7 @@
 
 import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderDevSandboxes } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
@@ -33,7 +34,6 @@ async function fixture(
 	options: { dev?: boolean; provider?: ControlProvider } = {},
 ): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
 	const provider = options.provider ?? zeropsProvider
-	const sandboxes = provider.devSandboxes !== undefined
 	harness = createHarness()
 	const world = await seedWorkspaceWorld(harness.repositories, harness.d1)
 	// The world's queue and log reader stand in for the process ports.
@@ -53,7 +53,7 @@ async function fixture(
 		ENVIRONMENT: 'stage',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
 		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals() } } : {}),
-		...(sandboxes ? { FABRIKA_CONTROL_VAULT_KEY: testVaultKey() } : {}),
+		FABRIKA_CONTROL_VAULT_KEY: testVaultKey(),
 	}
 	const mcp = controlMcpRoute(env, world.source, provider)
 	const served = createFetchHandler(env, provider, unusedSourceConnection('zerops'), mcp, true)
@@ -186,6 +186,7 @@ describe('the MCP endpoint', () => {
 			get_deployment: read,
 			get_run: read,
 			get_approval_request: read,
+			request_change: write(false, false),
 			bind_dev: write(true, false),
 			get_dev_status: read,
 			run_checks: write(false, false),
@@ -218,6 +219,7 @@ describe('the MCP endpoint', () => {
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'request_change',
 			'reset_dev',
 			'run_checks',
 			'search_files',
@@ -304,6 +306,45 @@ describe('the MCP endpoint', () => {
 			const foreign = await rpc(fetch, token, 'tools/call', { name: 'get_approval_request', arguments: { id } })
 			expect(field(foreign, 'result')).toEqual({ isError: true, content: [{ type: 'text', text: 'approval request not found' }] })
 		}
+	})
+
+	test('request_change stores the change as an approval request and answers its link; it never makes the change', async () => {
+		const { fetch, world } = await fixture()
+		const token = await testResourceToken({
+			resource: RESOURCE,
+			label: 'author@acme.test',
+			actions: [...AUTHOR_ACTIONS, CONTROL_ACTIONS.APP_MANAGE, CONTROL_ACTIONS.SECRET_MANAGE],
+		})
+		const tools = field(field(await rpc(fetch, token, 'tools/list', {}), 'result'), 'tools')
+		const tool = Array.isArray(tools) ? tools.find((entry) => field(entry, 'name') === 'request_change') : undefined
+		const description = String(field(tool, 'description'))
+		expect(description).toContain('hand the person the url')
+		expect(description).toContain('Never loosen')
+
+		const call = (args: object) => rpc(fetch, token, 'tools/call', { name: 'request_change', arguments: args })
+		const variable = { appId: 'shop', variable: { env: 'stage', name: 'GREETING', value: 'hello' } }
+		const asked = toolJson(await call({ kind: 'apps.variables.put', input: variable }))
+		const id = String(field(asked, 'id'))
+		expect(asked).toEqual({ id, url: `${ORIGIN}/approvals/requests/${id}`, state: 'pending' })
+		const row = await world.repositories.approvalRequests.get(id)
+		expect(row).toMatchObject({ kind: 'apps.variables.put', app_id: 'shop', env: 'stage', category: 'variables', requester_credential: 'oauth' })
+		expect(await world.repositories.registry.listAppVars('shop')).toEqual([])
+
+		const secret = 'n0t-for-any-log'
+		const sealed = toolJson(
+			await call({ kind: 'apps.secrets.put', input: { appId: 'shop', secret: { env: 'stage', name: 'API_KEY', value: secret } } }),
+		)
+		expect(field(sealed, 'fingerprint')).toBe(new Bun.CryptoHasher('sha256').update(secret).digest('hex').slice(0, 8))
+
+		const unknownKind = field(await call({ kind: 'apps.deleteEverything', input: {} }), 'result')
+		expect(field(unknownKind, 'isError')).toBe(true)
+		expect(JSON.stringify(unknownKind)).toContain('is not requestable yet')
+		const authorOnly = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const withoutRight = field(
+			await rpc(fetch, authorOnly, 'tools/call', { name: 'request_change', arguments: { kind: 'apps.variables.put', input: variable } }),
+			'result',
+		)
+		expect(withoutRight).toEqual({ isError: true, content: [{ type: 'text', text: 'app env not found' }] })
 	})
 
 	test('a refused tool call is a tool error with a short message, and invalid input never reaches Source', async () => {

@@ -45,6 +45,7 @@ deploys a workspace.
 | `get_deployment`       | The run's state, a log window, approval link, `deviations`.         |
 | `get_run`              | Any run the user may read: state, approval link and deadline.       |
 | `get_approval_request` | An approval request the user made: state, link, result or error.    |
+| `request_change`       | Ask a person to approve a secret, variable, registry or data write. |
 | `delete_workspace`     | Abandon a workspace: delete its branch and sandbox, stop listing.   |
 | `create_pull_request`  | Open a pull request from the workspace to the default branch.       |
 | `get_app_rules`        | The application rules or one topic, read-only, with a pin warning.  |
@@ -58,6 +59,13 @@ does not ask the user to confirm it. A writing tool states `destructiveHint` (it
 what the stage environment runs) and `idempotentHint` (a repeated call has no further effect). No tool has
 `openWorldHint`: every tool reaches only the target's repository and Control. The annotations are hints for the client;
 Control authorizes every call.
+
+`request_change` stores a change of a secret, a variable, an environment's registration, the app's settings or a data
+setting as an approval request (ADR-0083 §8), with the kind and input `approvals.requests.create` takes, and answers its
+id, its link and, for a secret, the value's fingerprint. It makes no change: the agent hands the person the link and
+follows it with `get_approval_request`. Its text tells the agent never to loosen a protection, a policy, a role or a
+test to get around a request or a refusal. The token is a non-person's (an MCP token never is a person in the console),
+so the request needs the kind's own right and meets the environment's `refuse` as `approvals.requests.create` does.
 
 `apply_changes` takes two kinds of change. `{ path, content }` writes the whole file, and `content: null` deletes it.
 `{ path, oldString, newString }` replaces `oldString` in the file as it is at `expectedHeadSha`. Control refuses the

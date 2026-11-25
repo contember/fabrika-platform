@@ -9,6 +9,7 @@ import { devSandboxDepsOf } from '../dev/service'
 import type { Env } from '../env'
 import { controlPublicOrigin } from '../iam'
 import { createControlMcpHandler } from '../mcp/handler'
+import { buildControlRpcDeps } from '../services'
 import type { WorkspaceSourcePort } from '../workspace-source-port'
 
 /**
@@ -29,6 +30,19 @@ export function controlMcpRoute(env: Env, source: WorkspaceSourcePort, provider:
 			return iam.authenticate(request)
 		},
 		resourceMetadata: controlMcpResourceMetadata(publicOrigin),
+		approvalRequests: (auth, request) => {
+			const deps = buildControlRpcDeps(env, provider, auth)
+			return {
+				repositories: deps.repositories,
+				provider,
+				auth,
+				admission: { request },
+				consoleOrigin: publicOrigin,
+				...(deps.vault === undefined ? {} : { vault: deps.vault }),
+				...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
+				...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+			}
+		},
 		useCases: (auth, signal) => ({
 			repositories: env.REPOSITORIES,
 			source,

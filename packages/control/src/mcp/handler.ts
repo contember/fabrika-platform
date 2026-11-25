@@ -51,8 +51,10 @@ import {
 	WORKSPACE_FILE_MAX_BYTES,
 	type WorkspaceUseCaseContext,
 } from '../api/workspaces'
-import { getApprovalRequestUseCase } from '../approval/requests/api'
+import { type ApprovalRequestContext, createApprovalRequestUseCase, getApprovalRequestUseCase } from '../approval/requests/api'
+import { PRODUCTION_REQUEST_KINDS } from '../approval/requests/production'
 import { logFailure } from '../error-label'
+import { jsonValueSchema } from '../json-value'
 
 const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
 /** Room left in the commit-message bound for the Fabrika trailers. */
@@ -85,11 +87,14 @@ export interface ControlMcpOptions {
 	/** RFC 9728 metadata URL named in every bearer challenge. */
 	readonly resourceMetadata: string
 	readonly useCases: (auth: AuthContext, signal: AbortSignal) => DevUseCaseContext
+	/** What `request_change` creates a request through: the RPC's own context, with the MCP request as its admission. */
+	readonly approvalRequests: (auth: AuthContext, request: Request) => ApprovalRequestContext
 }
 
 interface Caller {
 	readonly auth: AuthContext
 	readonly signal: AbortSignal
+	readonly request: Request
 }
 
 /**
@@ -112,7 +117,7 @@ export function createControlMcpHandler(options: ControlMcpOptions): (request: R
 		handler ??= createMcpHandler((context) => {
 			const caller = context.authInfo === undefined ? undefined : callers.get(context.authInfo)
 			if (caller === undefined) throw new Error('mcp request reached the server without an authenticated caller')
-			return controlMcpServer(options.useCases(caller.auth, caller.signal))
+			return controlMcpServer(options.useCases(caller.auth, caller.signal), () => options.approvalRequests(caller.auth, caller.request))
 		}, {
 			// The tools emit no mid-call notifications, so one JSON response loses nothing.
 			responseMode: 'json',
@@ -120,7 +125,7 @@ export function createControlMcpHandler(options: ControlMcpOptions): (request: R
 			onerror: () => console.error('mcp request failed'),
 		})
 		const authInfo: AuthInfo = { token: '', clientId: auth.oauth.clientId, scopes: [...auth.oauth.scopes] }
-		callers.set(authInfo, { auth, signal: request.signal })
+		callers.set(authInfo, { auth, signal: request.signal, request })
 		return handler.fetch(request, { authInfo })
 	}
 }
@@ -191,6 +196,7 @@ const toolInputs = {
 	}).strict(),
 	getRun: z.object({ runId: identifier }).strict(),
 	getApprovalRequest: z.object({ id: identifier }).strict(),
+	requestChange: z.object({ kind: identifier, input: z.record(z.string(), z.unknown()) }).strict(),
 	bindDev: workspaceInput,
 	getDevStatus: workspaceInput.extend({
 		logLines: z.number().int().min(0).max(DEV_REPORT_MAX_LINES).default(DEPLOYMENT_LOG_DEFAULT_LINES),
@@ -217,7 +223,7 @@ function toolInput<T extends z.ZodType>(schema: T): StandardSchemaWithJSON<z.inp
 	}
 }
 
-function controlMcpServer(c: DevUseCaseContext): McpServer {
+function controlMcpServer(c: DevUseCaseContext, approvals: () => ApprovalRequestContext): McpServer {
 	const server = new McpServer({ name: 'fabrika', version: '0.1.0' }, { instructions: CONTROL_MCP_INSTRUCTIONS })
 	server.registerTool('get_app_rules', {
 		description: 'Read the rules for writing and changing a Fabrika application: the paved road, the declared steps off it, '
@@ -379,6 +385,24 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 				auth: c.auth,
 				...(c.consoleOrigin === undefined ? {} : { consoleOrigin: c.consoleOrigin }),
 			}, id)))
+	server.registerTool('request_change', {
+		description: "Ask a person to approve a change you may not make yourself: a secret, a variable, an environment's "
+			+ "registration, the app's settings or a data setting of an environment a person protects. Nothing changes now: Control "
+			+ 'stores the change, inert, and answers its id, state pending and url; hand the person the url, where they approve or '
+			+ "refuse it, and follow it with get_approval_request. For a secret the answer carries the value's fingerprint, the first "
+			+ '8 hex characters of its SHA-256, which the person sees on the page; Control seals the value and never shows it. '
+			+ `kind is one of ${[...PRODUCTION_REQUEST_KINDS.keys()].join(', ')}, and input is that procedure's input as the `
+			+ 'fabrika control RPC takes it, e.g. apps.secrets.put { appId, secret: { env, name, value } } or apps.variables.put '
+			+ '{ appId, variable: { env, name, value } }; env null is every environment of the app. A refusal names why. '
+			+ 'Never loosen a protection, a policy, a role or a test to get around a request or a refusal: tell the person what you need.',
+		inputSchema: toolInput(toolInputs.requestChange),
+		annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
+	}, ({ kind, input }) =>
+		run('request_change', () => {
+			const parsed = jsonValueSchema.safeParse(input)
+			if (!parsed.success) throw new ControlApiError(400, 'input is not JSON')
+			return createApprovalRequestUseCase(approvals(), { kind, input: parsed.data })
+		}))
 	server.registerTool('bind_dev', {
 		description: "Give the workspace its own dev sandbox in its application's dev environment, served at the workspace's own URL "
 			+ '(url), or wake the one it has. Afterwards each apply_changes reaches it in seconds, without a run: the launcher writes '

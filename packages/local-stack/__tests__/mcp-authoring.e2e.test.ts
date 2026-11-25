@@ -89,6 +89,7 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'request_change',
 			'reset_dev',
 			'run_checks',
 			'search_files',
