@@ -2946,6 +2946,13 @@ td.empty:hover {
 	white-space: nowrap;
 }
 
+/* Why a decision is not offered, in place of its button: a sentence, so it wraps on a phone. */
+.row-actions > .decision-note {
+	min-width: 0;
+	white-space: normal;
+	text-align: right;
+}
+
 /* As a table cell the cluster stays a cell, or the row's hairline and height stop short of it; its controls line up
    inline at the right instead. */
 td.row-actions {

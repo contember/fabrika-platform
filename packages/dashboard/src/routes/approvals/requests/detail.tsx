@@ -204,11 +204,11 @@ export function RequestDecision({ request, me, now, onDone }: { request: Approva
 				)}
 				<div className="row-actions">
 					{!request.described
-						? <span className="muted">This Control cannot show what the request does, so it cannot be approved here.</span>
+						? <span className="muted decision-note">This Control cannot show what the request does, so it cannot be approved here.</span>
 						: approvedByMe
-						? <span className="muted">Waiting for a second person</span>
+						? <span className="muted decision-note">Waiting for a second person</span>
 						: blocked !== null
-						? <span className="muted">{requesterBlockText(blocked, 'request')}</span>
+						? <span className="muted decision-note">{requesterBlockText(blocked, 'request')}</span>
 						: (
 							<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
 								{busy ? 'Recording…' : 'Approve'}

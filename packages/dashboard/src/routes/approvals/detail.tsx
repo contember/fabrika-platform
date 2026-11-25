@@ -670,9 +670,9 @@ export function Decision({ approval, me, now, onDone }: { approval: ApprovalDto;
 				)}
 				<div className="row-actions">
 					{approvedByMe
-						? <span className="muted">Waiting for a second person</span>
+						? <span className="muted decision-note">Waiting for a second person</span>
 						: blocked !== null
-						? <span className="muted">{requesterBlockText(blocked, 'deploy')}</span>
+						? <span className="muted decision-note">{requesterBlockText(blocked, 'deploy')}</span>
 						: (
 							<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
 								{busy ? 'Recording…' : 'Approve and deploy'}
