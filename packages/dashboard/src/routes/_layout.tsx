@@ -576,8 +576,8 @@ function NotAvailable() {
 }
 
 /**
- * Everything that belongs to the person rather than to the page: who is signed in, their builder connections, the
- * theme and sign-out. Behind the avatar at the rail's foot, so the workspace holds only the page. The
+ * Everything that belongs to the person rather than to the page: who is signed in, their builder connections, their
+ * passkeys, the theme and sign-out. Behind the avatar at the rail's foot, so the workspace holds only the page. The
  * panel is always rendered and hidden while closed, so it costs the page nothing to find its links.
  */
 function AccountMenu({ session }: { session: ConsoleSession | null }) {
@@ -620,6 +620,10 @@ function AccountMenu({ session }: { session: ConsoleSession | null }) {
 				<Link to="builder/authorize" className="account-item" onClick={() => setOpen(false)}>
 					<Icon name="terminal" />
 					Your builder connections
+				</Link>
+				<Link to="account/passkeys" className="account-item" onClick={() => setOpen(false)}>
+					<Icon name="lock" />
+					Passkeys
 				</Link>
 				{session !== null && <SecondFactor session={session} />}
 				<ThemeToggle />
