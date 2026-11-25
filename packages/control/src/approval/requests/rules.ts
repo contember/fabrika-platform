@@ -134,6 +134,16 @@ export function holdsKindAction(
 	return canAtCoordinates(auth, kind.requesterAction, coordinates.appId, coordinates.env)
 }
 
+/** Whether the caller may carry the request out, as approving does: the decider its kind names, or else the kind's action where it acts. */
+export function mayExecute(
+	auth: AuthContext,
+	kind: Pick<RequestKind, 'requesterAction' | 'requesterAt' | 'approverMayDecide'>,
+	coordinates: RequestCoordinates,
+): boolean {
+	if (kind.approverMayDecide !== undefined) return kind.approverMayDecide(auth, coordinates)
+	return holdsKindAction(auth, kind, coordinates)
+}
+
 /**
  * Whether the caller holds `action` at a request's coordinates: at its environment, or under `ALL_ENVIRONMENTS` at every
  * protected environment the request reaches, and at the application when none is protected.

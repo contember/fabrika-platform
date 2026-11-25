@@ -152,9 +152,9 @@ async function discardSealed(c: RequestKindContext, input: SealedSecretInput): P
 	await vault.delete(input.sealed.ref)
 }
 
-/** The value as the page shows it: never the value, its length and fingerprint. */
-function valueText(input: SealedSecretInput): string {
-	return `${input.sealed.length} characters, fingerprint ${input.sealed.fingerprint}`
+/** The value as the page shows it: never the value; its length, and its fingerprint to a reader who may see it. */
+function valueText(input: SealedSecretInput, fingerprint: boolean): string {
+	return fingerprint ? `${input.sealed.length} characters, fingerprint ${input.sealed.fingerprint}` : `${input.sealed.length} characters`
 }
 
 interface ValueKindOptions<Asked> {
@@ -206,12 +206,12 @@ function secretValueKind<Asked>(options: ValueKindOptions<Asked>): RequestKind {
 			summary: [
 				ownText(`${options.verb} secret `),
 				agentText(input.name),
-				ownText(` of ${layerName(input.appId, input.env)}, ${valueText(input)}`),
+				ownText(` of ${layerName(input.appId, input.env)}, ${valueText(input, before !== null)}`),
 			],
 			facts: [
 				{ label: 'Secret', value: agentText(input.name) },
-				{ label: 'New value', value: ownText(valueText(input)) },
-				{ label: 'Now', value: ownText(before.ref === null ? 'not set' : 'set; approving replaces its value') },
+				{ label: 'New value', value: ownText(valueText(input, before !== null)) },
+				...(before === null ? [] : [{ label: 'Now', value: ownText(before.ref === null ? 'not set' : 'set; approving replaces its value') }]),
 			],
 		}),
 	})
@@ -332,6 +332,8 @@ export const rotateTokenKeyKind = requestKind<TokenKeyInput, TokenKeyBefore>({
 	},
 	describe: (input, before) => ({
 		summary: [ownText(`Rotate the token signing key of ${input.appId}@${input.env} at its next deploy`)],
-		facts: [{ label: 'Now', value: ownText(before.keyId === null ? 'no signing key yet: nothing to rotate' : `signing with key ${before.keyId}`) }],
+		facts: before === null
+			? []
+			: [{ label: 'Now', value: ownText(before.keyId === null ? 'no signing key yet: nothing to rotate' : `signing with key ${before.keyId}`) }],
 	}),
 })

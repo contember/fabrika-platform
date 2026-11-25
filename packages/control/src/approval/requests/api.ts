@@ -33,6 +33,7 @@ import {
 	holdsKindAction,
 	jsonDigest,
 	judging,
+	mayExecute,
 	reachOf,
 	refusingEnvironment,
 	type RequestDeciders,
@@ -342,8 +343,7 @@ async function mayDecide(c: ApprovalRequestReadContext, row: ApprovalRequestRow)
 
 /** An approval executes as the approver, so they hold the action itself where the request acts, as its route would ask. */
 function requireApproverMayExecute(auth: AuthContext, kind: RequestKind, row: ApprovalRequestRow): void {
-	if (kind.approverMayDecide !== undefined) return
-	if (!holdsKindAction(auth, kind, { appId: row.app_id, env: row.env })) {
+	if (!mayExecute(auth, kind, { appId: row.app_id, env: row.env })) {
 		fail(403, `approving carries the change out as you, and you do not hold \`${kind.requesterAction}\` where it acts; another person decides it`)
 	}
 }
@@ -383,22 +383,40 @@ async function auditDecision(
 	})
 }
 
-/** What the page shows of a request whose kind this Control does not know or cannot read: its name and its input. */
-function undescribed(row: ApprovalRequestRow): ApprovalRequestDescription {
+/**
+ * What the page shows of a request whose kind this Control does not know or cannot read: its name, and its input to a
+ * reader who holds the kind's right. The input may hold a value or a fingerprint; an unknown kind names no right.
+ */
+function undescribed(row: ApprovalRequestRow, full: boolean): ApprovalRequestDescription {
 	return {
 		summary: [{ text: `A change of kind ${row.kind}, which this Control cannot describe`, agent: false }],
-		facts: [{ label: 'Input', value: { text: row.input_json, agent: true } }],
+		facts: full ? [{ label: 'Input', value: { text: row.input_json, agent: true } }] : [],
 	}
 }
 
-/** What the kind says the request does, or null when this Control cannot read the request well enough to say. */
-function describe(c: ApprovalRequestReadContext, row: ApprovalRequestRow): ApprovalRequestDescription | null {
+/**
+ * What the kind says the request does, or null when this Control cannot read the request well enough to say. A reader who
+ * may not execute it is told what changes and that more is not shown to them.
+ */
+function describe(
+	c: ApprovalRequestReadContext,
+	row: ApprovalRequestRow,
+	kind: RequestKind | undefined,
+	full: boolean,
+): ApprovalRequestDescription | null {
+	let description: ApprovalRequestDescription
 	try {
-		const action = actionOf(kindsOf(c).get(row.kind), row)
-		return typeof action === 'string' ? null : action.describe(row.before_json)
+		const action = actionOf(kind, row)
+		if (typeof action === 'string') return null
+		description = action.describe(row.before_json, full)
 	} catch {
 		return null
 	}
+	if (full || kind === undefined) return description
+	const hidden =
+		`you do not hold \`${kind.requesterAction}\` where it acts, so what it acts on now, its value and any fingerprint are not shown to you; `
+		+ 'you may refuse it, and approving it takes that right'
+	return { ...description, facts: [...description.facts, { label: 'Not shown', value: { text: hidden, agent: false } }] }
 }
 
 /** Which environments a request of `ALL_ENVIRONMENTS` reaches now, and which of them are protected and judge it. */
@@ -420,8 +438,13 @@ function storedResult(text: string | null): JsonValue | undefined {
 
 export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: ApprovalRequestRow): Promise<ApprovalRequestDto> {
 	const who = await requestDeciders(c.repositories, row)
-	const result = storedResult(row.result_json)
-	const description = describe(c, row)
+	const kind = kindsOf(c).get(row.kind)
+	const coordinates = { appId: row.app_id, env: row.env }
+	// What the request acts on now, a value and a fingerprint are shown to one who may ask for it or carry it out; the
+	// result repeats what it set.
+	const full = kind !== undefined && (holdsKindAction(c.auth, kind, coordinates) || mayExecute(c.auth, kind, coordinates))
+	const result = full ? storedResult(row.result_json) : undefined
+	const description = describe(c, row, kind, full)
 	const reached = row.env === ALL_ENVIRONMENTS ? await reachFact(c, row) : null
 	return {
 		id: row.id,
@@ -440,7 +463,7 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 			personId: requesterOf(row).personId,
 		},
 		description: reached === null || description === null
-			? (description ?? undescribed(row))
+			? (description ?? undescribed(row, full))
 			: { ...description, facts: [...description.facts, reached] },
 		described: description !== null,
 		inputDigest: row.input_digest,

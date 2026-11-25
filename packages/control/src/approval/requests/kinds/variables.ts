@@ -68,12 +68,16 @@ export const putAppVariableKind = requestKind<PutVariableInput, VariableBefore>(
 		summary: [
 			ownText('Set variable '),
 			agentText(input.variable.name),
-			ownText(` of ${layerName(input.appId, input.variable.env ?? null)} to `),
-			agentText(input.variable.value),
+			...(before === null
+				? [ownText(` of ${layerName(input.appId, input.variable.env ?? null)}`)]
+				: [ownText(` of ${layerName(input.appId, input.variable.env ?? null)} to `), agentText(input.variable.value)]),
 		],
 		facts: [
 			{ label: 'Variable', value: agentText(input.variable.name) },
-			{ label: 'Before → after', value: agentText(`${shown(before.value)} → ${input.variable.value}`) },
+			// Once set, the new value is what the variable holds, so it is shown only where the value now is.
+			before === null
+				? { label: 'New value', value: ownText(`${[...input.variable.value].length} characters`) }
+				: { label: 'Before → after', value: agentText(`${shown(before.value)} → ${input.variable.value}`) },
 			...(input.variable.notSecret === true
 				? [{ label: 'Not a secret', value: ownText('the agent says the value is not a credential, which Control would otherwise refuse') }]
 				: []),
@@ -102,6 +106,6 @@ export const deleteAppVariableKind = requestKind<VariableNameInput, VariableBefo
 		observed((await storedVariable(c, input.appId, input.env ?? null, input.name)) === null, { name: input.name, env: input.env ?? null }),
 	describe: (input, before) => ({
 		summary: [ownText('Delete variable '), agentText(input.name), ownText(` of ${layerName(input.appId, input.env ?? null)}`)],
-		facts: [{ label: 'Variable', value: agentText(input.name) }, { label: 'Now', value: agentText(shown(before.value)) }],
+		facts: [{ label: 'Variable', value: agentText(input.name) }, ...(before === null ? [] : [{ label: 'Now', value: agentText(shown(before.value)) }])],
 	}),
 })

@@ -26,6 +26,7 @@ import {
 	createApprovalRequestUseCase,
 	decideApprovalRequestUseCase,
 	getApprovalRequestUseCase,
+	listApprovalRequestsUseCase,
 } from '../approval/requests/api'
 import { sweepApprovalRequests } from '../approval/requests/execute'
 import { requestSecretPurpose } from '../approval/requests/kinds/secrets'
@@ -669,6 +670,34 @@ for (const backend of backends) {
 				const atApp: Who = { ...AGENT, scope: appScope('notes') }
 				expect((await ask(w, 'apps.secrets.put', putSecret(null), atApp)).state).toBe('pending')
 				expect(await w.vault.sealedVersion('vault:00000000-0000-7000-8000-000000000000', requestSecretPurpose('x'))).toBeNull()
+			})
+
+			test("a reader without the kind's action sees a name and a length, never a fingerprint or a value", async () => {
+				const w = await world()
+				const fingerprint = sha256Hex(SECRET).slice(0, 8)
+				const secret = await ask(w, 'apps.secrets.put', putSecret('prod'))
+				await w.db.registry.upsertAppVar({ appId: 'notes', env: 'prod', name: 'GREETING', value: 'current-greeting' })
+				const variable = await ask(w, 'apps.variables.put', { appId: 'notes', variable: { name: 'GREETING', value: 'next-greeting', env: 'prod' } })
+				const approveOnly: Who = { ...BOB, id: 'p-cy', actions: [CONTROL_ACTIONS.ACCESS_APPROVE] }
+				const hidden = { label: 'Not shown', value: { text: expect.stringContaining('`secret.manage`'), agent: false } }
+
+				const page = await getApprovalRequestUseCase(context(w, approveOnly), secret.id)
+				expect(JSON.stringify(page)).not.toContain(fingerprint)
+				expect(page.description.summary.map((part) => part.text).join('')).toBe(`Set secret API_KEY of notes@prod, ${SECRET.length} characters`)
+				expect(page.description.facts).toContainEqual(hidden)
+				const variablePage = await getApprovalRequestUseCase(context(w, approveOnly), variable.id)
+				expect(JSON.stringify(variablePage)).not.toContain('greeting')
+				expect(variablePage.description.facts).toContainEqual({ label: 'New value', value: { text: '13 characters', agent: false } })
+				const listed = JSON.stringify(await listApprovalRequestsUseCase(context(w, approveOnly)))
+				expect(listed).not.toContain(fingerprint)
+				expect(listed).not.toContain('greeting')
+
+				// One who holds the action sees them; one who does not may still refuse.
+				expect(JSON.stringify(await getApprovalRequestUseCase(context(w, BOB), secret.id))).toContain(fingerprint)
+				expect(JSON.stringify(await getApprovalRequestUseCase(context(w, BOB), variable.id))).toContain('current-greeting')
+				expect((await decide(w, secret.id, 'reject', approveOnly)).state).toBe('rejected')
+				expect((await decide(w, variable.id, 'approve')).state).toBe('executed')
+				expect(JSON.stringify(await getApprovalRequestUseCase(context(w, approveOnly), variable.id))).not.toContain('greeting')
 			})
 
 			test('an approver who does not hold the action cannot approve, since the change executes as them', async () => {

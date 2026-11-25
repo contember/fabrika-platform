@@ -103,7 +103,7 @@ function notesKind(notes: Notes, input: z.ZodType<z.infer<typeof noteInput>, z.Z
 		},
 		describe: (input, before) => ({
 			summary: [{ text: 'Set the note ', agent: false }, { text: input.name, agent: true }, { text: ` of ${input.appId}@${input.env}`, agent: false }],
-			facts: [{ label: 'Before', value: { text: before.value ?? 'none', agent: before.value !== null } }],
+			facts: before === null ? [] : [{ label: 'Before', value: { text: before.value ?? 'none', agent: before.value !== null } }],
 		}),
 	})
 }

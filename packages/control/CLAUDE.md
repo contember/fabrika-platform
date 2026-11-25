@@ -860,7 +860,8 @@ other environment, before the provider prepares anything, and the write maps a r
   follows `unknown` ones through the kind, and deletes a request's sealed copy
   (`platform:approval-request:<id>` in the vault) whose request is closed or absent, once older than the longest wait
   plus an hour. A decider holds `access.approve` at the coordinates, or what the kind's
-  `approverMayDecide` seam says (an IAM action); `approval-gate-coverage.test.ts` lists the create and decide procedures as exempt.
+  `approverMayDecide` seam says (an IAM action); only a reader who also holds the kind's action (or its decider seam) is
+  shown the before-state, a value, a fingerprint or the result (`describe` gets `before: null` otherwise); `approval-gate-coverage.test.ts` lists the create and decide procedures as exempt.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 

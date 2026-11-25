@@ -189,7 +189,10 @@ suspension and resumption, a data operation. The procedures no request may ever 
   or the MCP tool `get_approval_request`; the person decides at `<console>/approvals/requests/<id>`, where text the
   agent wrote is escaped and marked. Fabrika sends no notification. The requester reads its request only through the
   credential that asked (the same principal and OAuth client, or no client for a key), so another agent of the same
-  person does not; a person who may decide it reads any at those coordinates.
+  person does not; a person who may decide it reads any at those coordinates. What the request acts on now (a
+  variable's value, a field before the change), a secret's fingerprint, a variable's new value and the result are shown
+  only to a reader who also holds the kind's action where it acts; anyone else sees the names and lengths and a line
+  saying what is not shown, and may still refuse it.
 
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval

@@ -137,7 +137,8 @@ export const putEnvironmentKind = requestKind<PutEnvironmentInput, EnvironmentBe
 		facts: ENVIRONMENT_FIELDS.flatMap((field) => {
 			const after = input.environment[field]
 			if (after === undefined) return []
-			return [{ label: ENVIRONMENT_FIELD_LABELS[field], value: agentText(`${fieldText(before.fields[field])} → ${fieldText(after)}`) }]
+			const text = before === null ? fieldText(after) : `${fieldText(before.fields[field])} → ${fieldText(after)}`
+			return [{ label: ENVIRONMENT_FIELD_LABELS[field], value: agentText(text) }]
 		}),
 	}),
 })
@@ -234,7 +235,7 @@ export const updateAppKind = requestKind<UpdateAppInput, AppBefore>({
 		facts: APP_FIELDS.flatMap((field) => {
 			const after = input.app[field]
 			if (after === undefined) return []
-			return [{ label: APP_FIELD_LABELS[field], value: agentText(`${shown(before[field] ?? null)} → ${after}`) }]
+			return [{ label: APP_FIELD_LABELS[field], value: agentText(before === null ? after : `${shown(before[field] ?? null)} → ${after}`) }]
 		}),
 	}),
 })

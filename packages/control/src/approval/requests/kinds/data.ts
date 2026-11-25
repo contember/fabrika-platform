@@ -40,7 +40,7 @@ export const setBackupScheduleKind = requestKind<ScheduleInput, ScheduleBefore>(
 	describe: (input, before) => ({
 		summary: [ownText(`${input.daily ? 'Take' : 'Stop taking'} daily backups of ${input.appId}@${input.env}`)],
 		facts: [
-			{ label: 'Now', value: ownText(before.daily ? 'daily backups on' : 'daily backups off') },
+			...(before === null ? [] : [{ label: 'Now', value: ownText(before.daily ? 'daily backups on' : 'daily backups off') }]),
 			...(input.daily ? [] : [{ label: 'Kept', value: ownText('the backup before each migration still runs') }]),
 		],
 	}),

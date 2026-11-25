@@ -117,8 +117,11 @@ export interface RequestKindDefinition<Input, Before, Asked = never> {
 	 * where its effect is idempotent. Runs in maintenance, with no person's token; it decides nothing new.
 	 */
 	follow(c: RequestKindContext, input: Input, execution: RequestExecution): Promise<RequestOutcome | { readonly state: 'unknown' }>
-	/** What the page shows: plain data, with the text the agent wrote marked as such. */
-	describe(input: Input, before: Before): ApprovalRequestDescription
+	/**
+	 * What the page shows: plain data, with the text the agent wrote marked as such. `before` is null for a reader who may
+	 * not execute the request (`mayExecute`): it shows what changes, never what is there now, a value or a fingerprint.
+	 */
+	describe(input: Input, before: Before | null): ApprovalRequestDescription
 	/**
 	 * Release what the request held while it waited (a sealed secret) once it is closed: refused, expired, stale, failed or
 	 * executed (the use case moved the value), never while its outcome is unknown. Called once, after that conditional
@@ -134,7 +137,8 @@ export interface RequestAction {
 	readonly inputJson: string
 	/** The before-state now, in canonical JSON. */
 	captureBefore(c: RequestKindContext): Promise<string>
-	describe(beforeJson: string): ApprovalRequestDescription
+	/** `full` for a reader who may execute the request; any other sees no before-state, value or fingerprint. */
+	describe(beforeJson: string, full: boolean): ApprovalRequestDescription
 	execute(c: RequestExecutionContext, execution: RequestExecution): Promise<RequestOutcome>
 	follow(c: RequestKindContext, execution: RequestExecution): Promise<RequestOutcome | { readonly state: 'unknown' }>
 }
@@ -181,7 +185,7 @@ export function requestKind<Input, Before, Asked = never>(definition: RequestKin
 		coordinates: definition.coordinates(input),
 		inputJson: canonicalJson(input),
 		captureBefore: async (c) => canonicalJson(await definition.captureBefore(c, input)),
-		describe: (beforeJson) => definition.describe(input, definition.before.parse(JSON.parse(beforeJson))),
+		describe: (beforeJson, full) => definition.describe(input, full ? definition.before.parse(JSON.parse(beforeJson)) : null),
 		execute: (c, execution) => definition.execute(c, input, execution),
 		follow: (c, execution) => definition.follow(c, input, execution),
 	})
