@@ -1,6 +1,13 @@
 import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
 import { BuzolaProvider } from '@buzola/router/react'
-import { PERMISSIVE_POLICY, POLICY_CATEGORIES, STRICT_POLICY } from '@fabrika/control-contract'
+import {
+	APPROVER_CATEGORIES,
+	PERMISSIVE_POLICY,
+	PERMISSIVE_SETTINGS,
+	POLICY_CATEGORIES,
+	STRICT_POLICY,
+	STRICT_SETTINGS,
+} from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
@@ -10,12 +17,15 @@ import { ConsoleAccessContext } from '../lib/console-caller'
 import {
 	APPROVAL_CATEGORY_GROUPS,
 	loosened,
+	loosenedSettings,
 	parkedRunsAt,
 	policyChange,
 	presetOf,
 	protectionFailure,
 	protectionToggle,
+	requestTtl,
 	setEnvironmentProtection,
+	settingsSummary,
 	waitingSummary,
 } from '../lib/environment-protection'
 
@@ -29,6 +39,7 @@ const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	protected: isProtected,
 	approvalCategories: ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'],
 	approvalPolicy: STRICT_POLICY,
+	approvalSettings: STRICT_SETTINGS,
 	publishedRunId: null,
 	deviationSubjects: [],
 	surface: [],
@@ -65,6 +76,7 @@ const parkedRun = (id: string, appId: string, env: string): ApprovalDto => ({
 	protected: true,
 	categories: ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'],
 	approval: null,
+	approvers: 1,
 })
 
 const withRouter = (element: ReactElement): ReactElement =>
@@ -196,10 +208,12 @@ describe('approval modes', () => {
 		const markup = editor({ ...environment('prod', true), approvalPolicy: { ...STRICT_POLICY, grants: 'person', secrets: 'refuse' } })
 		const offered = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options.map((option) => option.category))
 		expect([...offered].sort()).toEqual([...POLICY_CATEGORIES].sort())
-		expect(markup.match(/<select/g)).toHaveLength(POLICY_CATEGORIES.length)
-		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three.
-		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3)
-		expect(markup.match(/selected=""/g)).toHaveLength(POLICY_CATEGORIES.length)
+		// A mode per category, a number of approvers per category but `grants`, and the commits a request may name.
+		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length + 1
+		expect(markup.match(/<select/g)).toHaveLength(selects)
+		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three; approvers one or two; commits two.
+		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + APPROVER_CATEGORIES.length * 2 + 2)
+		expect(markup.match(/selected=""/g)).toHaveLength(selects)
 		expect(markup).toContain('<option value="refuse" selected="">Refused</option>')
 		expect(markup).toContain('<option value="person" selected="">A person approves</option>')
 		expect(markup).toContain('<option value="person" selected="">A person approves (default)</option>')
@@ -208,12 +222,16 @@ describe('approval modes', () => {
 
 	test('the presets are offered, the stored one pressed', () => {
 		expect(editor(environment('prod', true))).toContain('aria-pressed="true" title="a person approves what an agent asks for; the default"')
-		expect(editor({ ...environment('prod', true), approvalPolicy: PERMISSIVE_POLICY })).toContain(
-			'aria-pressed="true" title="an agent configures and deploys with no approval"',
+		expect(editor({ ...environment('prod', true), approvalPolicy: PERMISSIVE_POLICY, approvalSettings: PERMISSIVE_SETTINGS })).toContain(
+			'aria-pressed="true" title="an agent configures and deploys any commit with no approval"',
 		)
-		expect(presetOf(STRICT_POLICY)).toBe('strict')
-		expect(presetOf(PERMISSIVE_POLICY)).toBe('permissive')
-		expect(presetOf({ ...STRICT_POLICY, csp: 'plan' })).toBeNull()
+		expect(presetOf(STRICT_POLICY, STRICT_SETTINGS)).toBe('strict')
+		expect(presetOf(PERMISSIVE_POLICY, PERMISSIVE_SETTINGS)).toBe('permissive')
+		expect(PERMISSIVE_SETTINGS.deployRequestCommits).toBe('any')
+		// The permissive modes with merged commits only, or two approvers anywhere, are no preset.
+		expect(presetOf(PERMISSIVE_POLICY, STRICT_SETTINGS)).toBeNull()
+		expect(presetOf(STRICT_POLICY, { ...STRICT_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, secrets: 2 } })).toBeNull()
+		expect(presetOf({ ...STRICT_POLICY, csp: 'plan' }, STRICT_SETTINGS)).toBeNull()
 	})
 
 	test('an action no request routes yet says what applies today', () => {
@@ -224,9 +242,23 @@ describe('approval modes', () => {
 	})
 
 	test('a change that loosens any category asks first; one that tightens does not', () => {
-		expect(policyChange(STRICT_POLICY, PERMISSIVE_POLICY)).toBe('confirm')
-		expect(policyChange(STRICT_POLICY, { ...STRICT_POLICY, 'off-road': 'person', csp: 'plan', secrets: 'refuse' })).toBe('apply')
+		const strict = { policy: STRICT_POLICY, settings: STRICT_SETTINGS }
+		expect(policyChange(strict, { policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toBe('confirm')
+		expect(policyChange(strict, { ...strict, policy: { ...STRICT_POLICY, 'off-road': 'person', csp: 'plan', secrets: 'refuse' } })).toBe('apply')
+		const two = { ...STRICT_SETTINGS, requestTtlHours: 2, approvers: { ...STRICT_SETTINGS.approvers, secrets: 2 } }
+		// Two approvers and a shorter wait tighten; an unmerged commit or one approver where two decided loosens.
+		expect(policyChange(strict, { ...strict, settings: two })).toBe('apply')
+		expect(policyChange({ ...strict, settings: two }, strict)).toBe('confirm')
+		expect(loosenedSettings(two, { ...STRICT_SETTINGS, deployRequestCommits: 'any' })).toEqual([
+			'an agent may ask to deploy an unmerged commit',
+			'Secrets (one approver)',
+		])
 		expect(loosened(STRICT_POLICY, { ...STRICT_POLICY, 'deletes-data': 'plan', 'deploy-request': 'off' })).toEqual(['deletes-data', 'deploy-request'])
+	})
+
+	test('the hours a request waits take a whole number within their bounds', () => {
+		expect(['1', '24', '168'].map(requestTtl)).toEqual([1, 24, 168])
+		expect(['0', '169', '1.5', '', 'x'].map(requestTtl)).toEqual([null, null, null, null, null])
 	})
 
 	test('a reader who cannot change the policy reads what waits', () => {
@@ -234,19 +266,26 @@ describe('approval modes', () => {
 		expect(waitingSummary({ ...PERMISSIVE_POLICY, 'deletes-data': 'person', registry: 'refuse' })).toBe(
 			'Waits for a person: Migrations that may change stored data; refused to an agent: Where a deploy points.',
 		)
+		expect(settingsSummary(STRICT_SETTINGS)).toBe('An agent asks to deploy merged commits only. A request waits 24 h for a decision.')
+		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } })).toContain(
+			'An agent may ask to deploy any commit.',
+		)
 	})
 
-	test('the protection call sends the policy only when given', async () => {
+	test('the protection call sends the policy and settings only when given', async () => {
 		const sent: unknown[] = []
 		const fetch: ControlFetch = (_input, init) => {
 			sent.push(JSON.parse(String(init?.body)))
 			return Promise.resolve(Response.json({ result: environment('prod', true) }))
 		}
 		const client = createControlClient(fetch)
-		await setEnvironmentProtection(client, 'notes', 'prod', true, PERMISSIVE_POLICY)
+		await setEnvironmentProtection(client, 'notes', 'prod', true, { policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })
 		await setEnvironmentProtection(client, 'notes', 'prod', true)
 		expect(sent).toEqual([
-			{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true, policy: PERMISSIVE_POLICY } },
+			{
+				method: 'apps.environments.protect',
+				input: { appId: 'notes', env: 'prod', protected: true, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS },
+			},
 			{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true } },
 		])
 	})

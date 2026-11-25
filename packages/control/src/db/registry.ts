@@ -45,11 +45,11 @@ export function isUnconfirmedNamespaceUpdate(row: Pick<DeploymentNamespaceRow, '
 const APP_ENV_INSERT_SQL = `INSERT INTO app_envs (
 		app_id, env, domain, public_origin, cross_origins_json, trigger_ref, namespace_id, provider,
 		provider_target_json, provider_artifact_json, authoring, kind, protected, generation, protection_revision, approval_categories,
-		approval_policy
+		approval_policy, approval_settings
 	)
 	SELECT ?, ?, ?, ?, COALESCE(?, '[]'), ?, ?, ?, ?, ?, COALESCE(?, 0), ?,
 		COALESCE(kept.protected, ?), COALESCE(kept.generation, 0), COALESCE(kept.protection_revision, 0), kept.approval_categories,
-		kept.approval_policy
+		kept.approval_policy, kept.approval_settings
 	FROM (SELECT 1 AS one) AS fresh
 	LEFT JOIN app_env_protection AS kept ON kept.app_id = ? AND kept.env = ?
 	WHERE true`
@@ -77,12 +77,13 @@ const appEnvInsertValues = (input: AppEnvInput): (string | number | null)[] => [
  * read: a run that classified against it then loses its compare-and-swap against a recreated one.
  */
 const appEnvTombstoneSql = `INSERT INTO app_env_protection (app_id, env, protected, generation, protection_revision, approval_categories,
-		approval_policy)
-	SELECT app_id, env, protected, generation + 1, protection_revision, approval_categories, approval_policy FROM app_envs`
+		approval_policy, approval_settings)
+	SELECT app_id, env, protected, generation + 1, protection_revision, approval_categories, approval_policy, approval_settings FROM app_envs`
 
 const APP_ENV_TOMBSTONE_CONFLICT = `ON CONFLICT (app_id, env) DO UPDATE SET
 	protected = excluded.protected, generation = excluded.generation, protection_revision = excluded.protection_revision,
-	approval_categories = excluded.approval_categories, approval_policy = excluded.approval_policy`
+	approval_categories = excluded.approval_categories, approval_policy = excluded.approval_policy,
+	approval_settings = excluded.approval_settings`
 
 const claimRows = (
 	results: readonly { readonly results: readonly (AppRow | AppEnvRow | NamespaceResourceClaimRow)[] }[],
@@ -928,8 +929,8 @@ export class ControlRegistryRepository {
 	}
 
 	/**
-	 * Change an environment's `protected` flag (ADR-0050) and, unless `categories` is undefined, its approval categories
-	 * (ADR-0083, the stored difference from the defaults, null for the defaults); the caller has authorized a human with
+	 * Change an environment's `protected` flag (ADR-0050) and, unless `policy` or `settings` is undefined, its approval
+	 * policy or settings (ADR-0083, the stored difference from the defaults, null for the defaults); the caller has authorized a human with
 	 * `access.approve`. The change advances `generation`, so a run that classified under the old setting loses its
 	 * publication, and the setting is kept for these coordinates beyond the environment's deletion. It is fenced on the
 	 * environment's deployment lease and refused while a run is `running`: that run's job applies what the old setting
@@ -941,6 +942,7 @@ export class ControlRegistryRepository {
 		env: string,
 		value: boolean,
 		policy: { readonly policy: string | null; readonly categories: string | null } | undefined,
+		settings: { readonly settings: string | null } | undefined,
 		fence: LeaseFence,
 	): Promise<AppEnvRow | null> {
 		const key = runLeaseKey(appId, env)
@@ -956,7 +958,8 @@ export class ControlRegistryRepository {
 			...leading,
 			this.d1.prepare(`UPDATE app_envs SET protected = ?, protection_revision = protection_revision + 1, generation = generation + 1,
 					approval_categories = CASE WHEN ? = 1 THEN ? ELSE approval_categories END,
-					approval_policy = CASE WHEN ? = 1 THEN ? ELSE approval_policy END
+					approval_policy = CASE WHEN ? = 1 THEN ? ELSE approval_policy END,
+					approval_settings = CASE WHEN ? = 1 THEN ? ELSE approval_settings END
 				WHERE app_id = ? AND env = ?
 					AND EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 					AND NOT EXISTS (SELECT 1 FROM runs WHERE runs.app_id = app_envs.app_id AND runs.env = app_envs.env AND runs.status = 'running')
@@ -967,6 +970,8 @@ export class ControlRegistryRepository {
 				policy?.categories ?? null,
 				policy === undefined ? 0 : 1,
 				policy?.policy ?? null,
+				settings === undefined ? 0 : 1,
+				settings?.settings ?? null,
 				appId,
 				env,
 				key,

@@ -2176,8 +2176,9 @@ describe('a dev environment', () => {
 })
 
 describe('a protected environment is checked again when its run starts', () => {
-	const NOT_A_PERSON = 'environment `stage` is protected: only a person deploys it by hand, from the console; an agent, a builder key or a '
-		+ "service key cannot. A push to the environment's trigger ref still deploys it"
+	// Under `deploy-request: person` a non-person's run is a request, which names a commit SHA; a branch ref is refused.
+	const NOT_A_PERSON = 'environment `stage` is protected: a deploy an agent or a key asks for names a 40-character commit SHA, not '
+		+ '`refs/heads/main`, and waits for a person to approve it'
 
 	/**
 	 * A run queued on the unprotected `stage`, which a person then protects before the run starts. `stage` already runs

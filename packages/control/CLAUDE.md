@@ -156,7 +156,8 @@ other environment, before the provider prepares anything, and the write maps a r
 - **With `cli` on, `/api/rpc` accepts the command-line client's resource token** for `<FABRIKA_CONTROL_DOMAIN>/api/rpc`
   beside native tokens (`controlAuthenticator` → `createIam(…, { oauthResource })`), so `FABRIKA_CONTROL_DOMAIN` is
   required. Its permissions are the grant's, never more than the person's. **`isPerson` (`src/iam.ts`) is the ONE
-  "a person acting directly" predicate**: a user, no `oauth` claims, no delegation link. Every human-only flow
+  "a person acting directly" predicate**: a user, no `oauth` claims, no delegation link. A manual deploy of a
+  protected environment also needs the request to carry no bearer (`isConsolePerson`, `src/approval/human.ts`). Every human-only flow
   (approval and protected-environment changes, source connections, builder pairing and connections, an app's source
   change without a key's approval) and the
   `FABRIKA_CONTROL_BOOTSTRAP_ADMINS` elevation check it; a delegated token is never elevated.
@@ -802,13 +803,23 @@ other environment, before the provider prepares anything, and the write maps a r
   proxy admitted the session's POST from the console itself. The decision is written under the run lease
   (a busy environment answers 409); it is never an unfenced run write. Runs record their actor (`runActor`).
   Deleting a protected environment, or an app with one, takes the same human (`requireHumanForProtectedDelete`,
-  over `RegistryUseCaseContext.admission`). A manual run of a protected environment takes a person too
-  (`protectedRunRefusal`): `isPerson`, a user principal without OAuth or link claims (a bearer is not refused, though
-  no flow issues a person one), and a full ref or a 40-hex SHA that is not a workspace ref. `createManualRun` checks
-  it (`requirePersonForProtectedDeploy`, so `triggerDeploy` and `deploy_stage` share it) after `deploy.trigger`, so a
-  caller without it still gets the 404; `deployUnder` checks it again when a manual run starts, from the run's actor,
-  and fails the run into its log. A restore's own deploy is exempt: it redeploys the running commit, and the restore's
-  record names the run (`RestoreRepository.namesRun`), so an approved restore deploy queued again stays exempt.
+  over `RegistryUseCaseContext.admission`). A manual run of a protected environment is a person's only from the
+  console (`isConsolePerson`: `isPerson` and no `Authorization` header); every bearer, a person's own `px_` key
+  included, is a non-person, judged by `deploy-request` (`protectedRunDecision`): `refuse` is a 403, `off` runs, and
+  `person` takes a 40-hex SHA and makes the run a request (`src/approval/request.ts`: who asked and the commit message
+  in `runs.request_json`; under `deployRequestCommits: merged` the source must show the commit reachable from the
+  trigger ref, or the default branch for a pattern, and a source error is a 400). A workspace ref is refused to
+  everyone. `createManualRun` decides it (`protectedDeployOf`, shared by `triggerDeploy` and `deploy_stage`) after
+  `deploy.trigger`, so a caller without it still gets the 404, and records `runs.by_person`; `deployUnder` decides it
+  again when a manual run starts, from `startedByPerson` (the column, or the actor's `user:` prefix on an older row),
+  and fails the run into its log. A request parks whatever its lines (`park_reason = 'requested'`). A park sets
+  `approval_deadline` (`requestTtlHours`); approve and reject check it in their own conditional write (410 past it), and
+  `sweepParkedRuns` in the maintenance cron fails a run past it (`failure_cause = 'expired'`) and gives a run parked
+  before the column its deadline. `approvers: 2` on any waiting category (`waitingCategoriesOf`) makes the first
+  approval partial (`partial_approval_json`) and a different person's complete it. A restore's own deploy is exempt:
+  it redeploys the running commit, and the restore's record names the run (`RestoreRepository.namesRun`), so an
+  approved restore deploy queued again stays exempt. The settings (`approval_settings`, their difference from
+  `STRICT_SETTINGS`) live beside `approval_policy`, on `app_envs` and in the `app_env_protection` tombstone.
   `requirePersonToPointTriggerRef` keeps a key from naming a protected environment's trigger ref (also on a new one that
   starts protected, through `put` or `register`), `requirePersonToPointDomain` from naming its domain (`put`; clearing
   it stays open), `requirePersonToPointPublicOrigin` from changing its public origin (`put` and `register`; IAM sends a

@@ -5,12 +5,17 @@ import {
 	type ApprovalDto,
 	type ApprovalMode,
 	type ApprovalPolicy,
+	type ApprovalSettings,
+	APPROVER_CATEGORIES,
 	gate,
 	PERMISSIVE_POLICY,
+	PERMISSIVE_SETTINGS,
 	POLICY_CATEGORIES,
 	type PolicyCategory,
 	policyFromCategories,
+	REQUEST_TTL_HOURS,
 	STRICT_POLICY,
+	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
 import type { createControlClient } from './api'
 
@@ -25,16 +30,17 @@ export function protectionToggle(next: boolean): ProtectionToggle {
 
 /**
  * Control's `apps.environments.protect`: `access.approve` from a person in the console, audited (ADR-0050 §4). With
- * `policy`, also the mode of each category (ADR-0083); without, the stored choice stays.
+ * `policy` and `settings`, also the mode of each category and the settings beside them (ADR-0083); without, the stored
+ * choice stays.
  */
 export function setEnvironmentProtection(
 	client: ControlClient,
 	appId: string,
 	env: string,
 	value: boolean,
-	policy?: ApprovalPolicy,
+	choice?: { readonly policy: ApprovalPolicy; readonly settings: ApprovalSettings },
 ): Promise<AppEnvDto> {
-	return client.apps.environments.protect({ appId, env, protected: value, ...(policy === undefined ? {} : { policy }) })
+	return client.apps.environments.protect({ appId, env, protected: value, ...(choice === undefined ? {} : choice) })
 }
 
 export interface CategoryOption {
@@ -85,8 +91,7 @@ export const APPROVAL_CATEGORY_GROUPS: readonly { readonly title: string; readon
 			{
 				category: 'deploy-request',
 				label: 'A deploy started by an agent or a key',
-				hint: 'a manual run of a merged commit by anyone but a person in the console',
-				pending: 'Today such a deploy is refused here.',
+				hint: 'a manual run by anyone but a person in the console, of a commit it names by SHA',
 			},
 			{
 				category: 'secrets',
@@ -150,19 +155,62 @@ export function loosened(before: ApprovalPolicy, after: ApprovalPolicy): PolicyC
 	return POLICY_CATEGORIES.filter((category) => APPROVAL_MODES.indexOf(after[category]) < APPROVAL_MODES.indexOf(before[category]))
 }
 
-/** Saving a policy that loosens a category waits for an explicit confirmation, as turning approvals off does. */
-export function policyChange(before: ApprovalPolicy, after: ApprovalPolicy): ProtectionToggle {
-	return loosened(before, after).length > 0 ? 'confirm' : 'apply'
+/** The settings a change loosens, in the console's words: an unmerged commit admitted, or one approver where two decided. */
+export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettings): string[] {
+	return [
+		...(before.deployRequestCommits === 'merged' && after.deployRequestCommits === 'any' ? ['an agent may ask to deploy an unmerged commit'] : []),
+		...APPROVER_CATEGORIES.filter((category) => after.approvers[category] < before.approvers[category]).map((category) =>
+			`${categoryLabel(category)} (one approver)`
+		),
+	]
+}
+
+/** Saving a choice that loosens a category or a setting waits for an explicit confirmation, as turning approvals off does. */
+export function policyChange(
+	before: { readonly policy: ApprovalPolicy; readonly settings: ApprovalSettings },
+	after: { readonly policy: ApprovalPolicy; readonly settings: ApprovalSettings },
+): ProtectionToggle {
+	return loosened(before.policy, after.policy).length > 0 || loosenedSettings(before.settings, after.settings).length > 0 ? 'confirm' : 'apply'
 }
 
 export const PRESETS = [
-	{ name: 'strict', label: 'Strict', hint: 'a person approves what an agent asks for; the default', policy: STRICT_POLICY },
-	{ name: 'permissive', label: 'Permissive', hint: 'an agent configures and deploys with no approval', policy: PERMISSIVE_POLICY },
+	{ name: 'strict', label: 'Strict', hint: 'a person approves what an agent asks for; the default', policy: STRICT_POLICY, settings: STRICT_SETTINGS },
+	{
+		name: 'permissive',
+		label: 'Permissive',
+		hint: 'an agent configures and deploys any commit with no approval',
+		policy: PERMISSIVE_POLICY,
+		settings: PERMISSIVE_SETTINGS,
+	},
 ] as const
 
-/** The preset a policy is, if any. */
-export function presetOf(policy: ApprovalPolicy): (typeof PRESETS)[number]['name'] | null {
-	return PRESETS.find((preset) => POLICY_CATEGORIES.every((category) => preset.policy[category] === policy[category]))?.name ?? null
+/** Whether two sets of settings say the same. */
+export function sameSettings(a: ApprovalSettings, b: ApprovalSettings): boolean {
+	return a.deployRequestCommits === b.deployRequestCommits && a.requestTtlHours === b.requestTtlHours
+		&& APPROVER_CATEGORIES.every((category) => a.approvers[category] === b.approvers[category])
+}
+
+/** The preset a choice is, if any. */
+export function presetOf(policy: ApprovalPolicy, settings: ApprovalSettings): (typeof PRESETS)[number]['name'] | null {
+	return PRESETS.find((preset) =>
+		POLICY_CATEGORIES.every((category) => preset.policy[category] === policy[category]) && sameSettings(preset.settings, settings)
+	)?.name ?? null
+}
+
+/** A number of hours a request waits, or null for one outside `requestTtlHours`'s bounds. */
+export function requestTtl(text: string): number | null {
+	const hours = Number(text)
+	return Number.isInteger(hours) && hours >= REQUEST_TTL_HOURS.min && hours <= REQUEST_TTL_HOURS.max ? hours : null
+}
+
+/** The settings in the console's words, for a reader who cannot change them. */
+export function settingsSummary(settings: ApprovalSettings): string {
+	const two = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] === 2).map(categoryLabel)
+	return [
+		settings.deployRequestCommits === 'merged' ? 'An agent asks to deploy merged commits only.' : 'An agent may ask to deploy any commit.',
+		`A request waits ${settings.requestTtlHours} h for a decision.`,
+		...(two.length === 0 ? [] : [`Two people decide: ${two.join(', ')}.`]),
+	].join(' ')
 }
 
 /** Whether a run's change waits for a person under the categories it was classified under (ADR-0083 §3). */

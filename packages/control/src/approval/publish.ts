@@ -27,7 +27,7 @@ import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { mailCustodyRefusal } from '../mail-transport'
-import { appEnvPolicy, isDefaultCategories } from './categories'
+import { appEnvPolicy, appEnvSettings, isDefaultCategories } from './categories'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { relationGrantsRefusal } from './enforcement'
 import { AppliedMigrationsChanged, ContractMissing, readAccessSnapshot, readLockfile, snapshotReads, SnapshotRefused } from './read'
@@ -182,6 +182,11 @@ export interface PublicationInput {
 	/** Why the build cannot install from the commit's `bun.lock` (`ControlProvider.lockfileRefusal`), or null. */
 	lockfileRefusal?(lockfile: string): string | null
 	log(line: string): void
+	/**
+	 * A non-person asked for the run on a protected environment under `deploy-request: person` (ADR-0050 §4): it parks
+	 * whatever its lines, with the reason `requested`, unless a person's approval covers its digests.
+	 */
+	readonly requested?: boolean
 }
 
 export type PublicationResult =
@@ -238,12 +243,22 @@ export async function publishRunSnapshot(
 		const classification = classify(active, candidate, appEnv)
 		logClassification(input.log, classification, appEnv.env)
 		const serialized = JSON.stringify(classification)
+		const requested = classification.protected && input.requested === true
 		if (
-			classification.protected && gate({ lines: classification.changes }, classificationPolicy(classification)).kind !== 'pass'
+			classification.protected && (requested || gate({ lines: classification.changes }, classificationPolicy(classification)).kind !== 'pass')
 			&& !approves(run, classification)
 		) {
-			await invocation.write((fence) => runs.parkRunForApproval(run.id, serialized, fence))
-			input.log(`access: waiting for a human with access.approve to approve this change on \`${appEnv.env}\``)
+			// Each park waits afresh: a run classified again with other digests is a new item for the person (ADR-0050 §4).
+			const park: { readonly reason: 'requested' | null; readonly ttlSeconds: number } = {
+				reason: requested ? 'requested' : null,
+				ttlSeconds: appEnvSettings(appEnv).requestTtlHours * 3600,
+			}
+			await invocation.write((fence) => runs.parkRunForApproval(run.id, serialized, park, fence))
+			input.log(
+				requested
+					? `access: an agent or a key asked for this deploy; waiting for a person with access.approve to approve it on \`${appEnv.env}\``
+					: `access: waiting for a human with access.approve to approve this change on \`${appEnv.env}\``,
+			)
 			return { kind: 'parked', classification }
 		}
 		await invocation.write((fence) => runs.recordRunClassification(run.id, serialized, fence))

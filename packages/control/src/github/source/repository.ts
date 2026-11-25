@@ -1,5 +1,6 @@
 import type { GitHubSourceCredentials } from '../connections/credentials'
 import { type ArchiveSummary, createTarRewrite, type FileCollection, type SourceBytes } from './archive'
+import { readRequestedCommit, type RequestedCommit } from './commit-files'
 import { atStage, cancelled, rateLimitFailure, SourceFailure, throwIfAborted } from './failure'
 import type { GitHubMetadataClient } from './metadata'
 import { pullThrough } from './streams'
@@ -160,6 +161,20 @@ export class TarballRepositorySource {
 	): Promise<Uint8Array> {
 		const token = await this.token(input.repository, input.privateBinding, input.signal, 'resolve')
 		return await this.metadata.readFileAtCommit(input.repository, path, maxBytes, input.commitSha, token, input.signal, 'resolve')
+	}
+
+	/** A commit a non-person asks to deploy, through the same token as its archive (`CommitSource.requestedCommit`). */
+	async requestedCommit(
+		input: {
+			readonly repository: SourceRepository
+			readonly commitSha: string
+			readonly privateBinding?: SourcePrivateBinding
+			readonly mergedInto: string | null
+			readonly signal: AbortSignal
+		},
+	): Promise<RequestedCommit> {
+		const token = await this.token(input.repository, input.privateBinding, input.signal, 'resolve')
+		return await readRequestedCommit(this.metadata, input.repository, token, input)
 	}
 
 	async archive(input: RepositoryArchiveInput): Promise<RepositoryArchive> {

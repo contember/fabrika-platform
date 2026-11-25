@@ -177,6 +177,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0034_app_env_suspension.sql' },
 			{ bundle: 'control', name: '0035_approval_categories.sql' },
 			{ bundle: 'control', name: '0036_approval_policy.sql' },
+			{ bundle: 'control', name: '0037_deploy_requests.sql' },
 		])
 	})
 
@@ -647,6 +648,63 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		await db.runs.requestRunCancellation(fourth.id)
 		expect(await owned.finishCancellation(fourth.id, 'failed')).toBe(true)
 		expect(await db.runs.getRun(fourth.id)).toMatchObject({ status: 'failed', approval_json: '{"by":"ada"}' })
+	})
+
+	test('deploy requests: who started a run, a deadline in the decision, two approvers, expiry, and the settings tombstone', async () => {
+		await reset()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		const owned = fixtureRuns(db.runs, new SqlDeployLocks(raw))
+		const request = JSON.stringify({ principal: { id: 'p', type: 'user', label: 'ada' }, credential: 'key', commitMessage: null })
+		const asked = await db.runs.createRun({
+			id: uuidv7(),
+			appId: 'acme',
+			env: 'prod',
+			ref: 'c'.repeat(40),
+			trigger: 'manual',
+			actor: 'user:p',
+			byPerson: false,
+			requestJson: request,
+		})
+		const legacy = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'main', trigger: 'manual', actor: 'user:p' })
+		expect(asked).toMatchObject({ by_person: 0, request_json: request, approval_deadline: null, failure_cause: null })
+		expect(legacy).toMatchObject({ by_person: null, request_json: null })
+
+		// The first of two approvals is partial and conditional on the one it read; the second completes only that one.
+		await owned.start(asked.id, 'logs')
+		const before = Math.floor(Date.now() / 1000)
+		expect(await owned.park(asked.id, '{"a":1}', { reason: 'requested', ttlSeconds: 3600 })).toBe(true)
+		const parked = await db.runs.getRun(asked.id)
+		expect(parked).toMatchObject({ park_reason: 'requested', partial_approval_json: null })
+		expect(parked?.approval_deadline).toBeGreaterThanOrEqual(before + 3600)
+		expect(await owned.partial(asked.id, { classification: '{"a":1}', partial: null }, '{"by":"ada"}')).toBe(true)
+		expect(await owned.partial(asked.id, { classification: '{"a":1}', partial: null }, '{"by":"bob"}')).toBe(false)
+		expect(await owned.completeAfter(asked.id, { classification: '{"a":1}', partial: null }, '{"by":"bob"}')).toBe(false)
+		expect(await owned.completeAfter(asked.id, { classification: '{"a":1}', partial: '{"by":"ada"}' }, '{"by":"bob"}')).toBe(true)
+		expect(await db.runs.getRun(asked.id)).toMatchObject({ status: 'pending', approval_json: '{"by":"bob"}' })
+
+		// A run past its deadline takes no decision; the sweep lists and expires it, and backfills one with none.
+		await owned.start(legacy.id, 'logs')
+		await owned.park(legacy.id, '{"b":1}', { reason: null, ttlSeconds: 0 })
+		expect(await owned.completeAfter(legacy.id, { classification: '{"b":1}', partial: null }, '{}')).toBe(false)
+		expect(await owned.reject(legacy.id, '{"b":1}')).toBe(false)
+		await raw.prepare('UPDATE runs SET approval_deadline = NULL WHERE id = ?').bind(legacy.id).run()
+		expect((await db.runs.listParkedRunsToSweep()).map((row) => row.id)).toEqual([legacy.id])
+		expect(await owned.expire(legacy.id)).toBe(false)
+		expect(await owned.backfill(legacy.id, 0)).toBe(true)
+		expect(await owned.backfill(legacy.id, 0)).toBe(false)
+		expect(await owned.expire(legacy.id)).toBe(true)
+		expect(await db.runs.getRun(legacy.id)).toMatchObject({ status: 'failed', failure_cause: 'expired', approval_json: null })
+		expect(await db.runs.listParkedRunsToSweep()).toEqual([])
+
+		// The settings outlive the row, as the policy does.
+		const settings = JSON.stringify({ requestTtlHours: 6 })
+		await fixtureProtect(db.registry, new SqlDeployLocks(raw), { appId: 'acme', env: 'prod' }, true, Date.now, undefined, { settings })
+		expect(await db.registry.getAppEnv('acme', 'prod')).toMatchObject({ approval_settings: settings })
+		expect(await db.registry.deleteAppEnv('acme', 'prod')).toBe(true)
+		expect(await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))).toMatchObject({ approval_settings: settings })
+		await fixtureProtect(db.registry, new SqlDeployLocks(raw), { appId: 'acme', env: 'prod' }, true, Date.now, undefined, { settings: null })
+		expect(await db.registry.getAppEnv('acme', 'prod')).toMatchObject({ approval_settings: null })
 	})
 
 	test('approved access: stale registry writes and a stale publication lose to a protection change', async () => {

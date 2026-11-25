@@ -1,3 +1,5 @@
+import { appEnvSettings } from './approval/categories'
+import { acquireLease, runLeaseKey } from './lease'
 import { logSettlement, type RunDeps, RunInvocation, type RunSettleDeps, settleUnfinishedRun } from './run-lifecycle'
 
 export interface ProviderReconcileSummary {
@@ -65,4 +67,41 @@ export async function sweepStaleRuns(
 		}
 	}
 	return swept
+}
+
+/** What the parked-run sweep did: deadlines given to runs parked before deadlines existed, and runs expired. */
+export interface ParkedRunSweepSummary {
+	deadlines: number
+	expired: number
+}
+
+/**
+ * Settle parked runs by their absolute deadline (ADR-0050 §4). A run parked before deadlines existed gets one now plus
+ * its environment's `requestTtlHours`, so nothing parked earlier expires at once; a run past its deadline fails with
+ * the cause `expired` under its environment's lease and deploys nothing. It only cleans up: a decision checks the
+ * deadline in its own write, so a run this pass did not reach still cannot be approved.
+ */
+export async function sweepParkedRuns(deps: Pick<RunDeps, 'repositories' | 'lock' | 'leaseClock' | 'runLogs'>): Promise<ParkedRunSweepSummary> {
+	const summary: ParkedRunSweepSummary = { deadlines: 0, expired: 0 }
+	for (const run of await deps.repositories.runs.listParkedRunsToSweep()) {
+		const lease = await acquireLease(deps.lock, runLeaseKey(run.app_id, run.env), deps.leaseClock)
+		if (lease === null) continue
+		try {
+			if (run.approval_deadline === null) {
+				const appEnv = await deps.repositories.registry.getAppEnv(run.app_id, run.env)
+				const hours = appEnvSettings(appEnv ?? { approval_settings: null }).requestTtlHours
+				if (await deps.repositories.runs.backfillApprovalDeadline(run.id, hours * 3600, lease.fence())) summary.deadlines++
+			} else if (await deps.repositories.runs.expireParkedRun(run.id, lease.fence())) {
+				summary.expired++
+				await logSettlement(
+					deps,
+					run,
+					`deploy failed: nobody approved or refused it before its deadline (${new Date(run.approval_deadline * 1000).toISOString()}), so it expired`,
+				)
+			}
+		} finally {
+			await lease.release()
+		}
+	}
+	return summary
 }

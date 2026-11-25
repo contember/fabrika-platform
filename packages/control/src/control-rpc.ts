@@ -4,6 +4,7 @@ import { type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabri
 import {
 	APP_ENV_KINDS,
 	approvalPolicySchema,
+	approvalSettingsSchema,
 	BUILDER_APPROVAL_VERIFIER,
 	BUILDER_CONNECTION_ATTEMPT_ID,
 	BUILDER_CONNECTION_IDENTIFIER,
@@ -116,7 +117,7 @@ import {
 } from './github/connections/manifest'
 import type { SourceConnectionPort } from './github/connections/port'
 import { sourceConnectionList } from './github/connections/status'
-import { appScope } from './iam'
+import { appScope, controlPublicOrigin } from './iam'
 import { jsonValueSchema } from './json-value'
 import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
 import { operationDeploys, type RunDeps } from './run-lifecycle'
@@ -184,6 +185,7 @@ const protectEnvironmentInput = z.object({
 	env: nonEmpty,
 	protected: z.boolean(),
 	policy: approvalPolicySchema.strict().optional(),
+	settings: approvalSettingsSchema.extend({ approvers: approvalSettingsSchema.shape.approvers.strict() }).strict().optional(),
 }).strict()
 const accessDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
 const completeApprovalInput = z.object({
@@ -574,12 +576,17 @@ export function createControlRpcRouter(
 
 	function runsContext(ctx: ControlRpcContext): RunsUseCaseContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		const consoleOrigin = controlPublicOrigin(ctx.env)
 		return {
 			repositories: deps.repositories,
 			queue: deps.queue,
 			logs: deps.logs,
 			cancel: deps.cancelRun,
 			auth: ctx.auth,
+			admission: { request: ctx.request },
+			signal: ctx.request.signal,
+			...(deps.commits === undefined ? {} : { commits: deps.commits }),
+			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
 		}
 	}
 

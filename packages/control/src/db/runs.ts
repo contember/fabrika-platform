@@ -50,6 +50,21 @@ export interface RunRow {
 	migration_barrier: number | null
 	/** The workspace id of a dev bootstrap run: only a newer succeeded run of the same lane supersedes it. NULL otherwise. */
 	lane: string | null
+	/**
+	 * Whether a person in the console started the manual run (1) or a bearer did (0), ADR-0050 §4. NULL for a push or poll
+	 * run, a restore's deploy, and a manual run created before the column; `startedByPerson` reads it.
+	 */
+	by_person: number | null
+	/** A non-person's manual run of a protected environment: who asked and the commit's message (`src/approval/request.ts`). */
+	request_json: string | null
+	/** `requested` while the run waits because a non-person asked for it; NULL when its lines decided, or it never parked. */
+	park_reason: 'requested' | null
+	/** When the parked run expires unless decided (unix seconds); NULL until it parks, and before maintenance backfills it. */
+	approval_deadline: number | null
+	/** The first of two approvals (`approvers: 2`), bound to its digests like `approval_json`. */
+	partial_approval_json: string | null
+	/** Why the run failed without deploying: a person refused it, or nobody decided it before its deadline. */
+	failure_cause: 'rejected' | 'expired' | null
 	// `pending_access_json` is no longer read or written; the column stays until a later migration release drops it.
 }
 
@@ -174,12 +189,27 @@ export class RunRepository {
 		trigger: RunTrigger
 		actor: string
 		lane?: string | null
+		/** A manual run only: whether a person in the console started it. */
+		byPerson?: boolean
+		requestJson?: string | null
 	}): Promise<RunRow> {
+		const byPerson = input.byPerson === undefined ? null : input.byPerson ? 1 : 0
 		return firstRow<RunRow>(
 			this.d1
-				.prepare(`INSERT INTO runs (id, app_id, env, ref, commit_sha, trigger, status, actor, lane)
-					VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?) RETURNING *`)
-				.bind(input.id, input.appId, input.env, input.ref, input.commitSha ?? null, input.trigger, input.actor, input.lane ?? null),
+				.prepare(`INSERT INTO runs (id, app_id, env, ref, commit_sha, trigger, status, actor, lane, by_person, request_json)
+					VALUES (?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?) RETURNING *`)
+				.bind(
+					input.id,
+					input.appId,
+					input.env,
+					input.ref,
+					input.commitSha ?? null,
+					input.trigger,
+					input.actor,
+					input.lane ?? null,
+					byPerson,
+					input.requestJson ?? null,
+				),
 		)
 	}
 
@@ -398,45 +428,121 @@ export class RunRepository {
 	}
 
 	/**
-	 * Park a running run whose change waits for a human (ADR-0050), with the classification the approver reads. An
-	 * approval the run held stays: it names the digests it approved, so it approves nothing this classification shows,
-	 * and the approval page says it lapsed.
+	 * Park a running run whose change waits for a human (ADR-0050), with the classification the approver reads, why it
+	 * waits and its absolute deadline: a run that parks again gets a fresh one, and a first approval of two lapses with
+	 * the digests it named. An approval the run held stays: it names the digests it approved, so it approves nothing this
+	 * classification shows, and the approval page says it lapsed.
 	 */
-	async parkRunForApproval(id: string, classificationJson: string, fence: LeaseFence): Promise<boolean> {
+	async parkRunForApproval(
+		id: string,
+		classificationJson: string,
+		park: { readonly reason: 'requested' | null; readonly ttlSeconds: number },
+		fence: LeaseFence,
+	): Promise<boolean> {
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET status = 'awaiting_approval', classification_json = ?
+			`UPDATE runs SET status = 'awaiting_approval', classification_json = ?, park_reason = ?, approval_deadline = ?,
+				partial_approval_json = NULL
 			WHERE id = ? AND status = 'running' AND cancel_requested_at IS NULL`,
-			[await this.storedDocument(classificationJson), id],
+			[await this.storedDocument(classificationJson), park.reason, this.now() + park.ttlSeconds, id],
 			fence,
 		)
 	}
 
 	/**
 	 * Record a human approval of a parked run and queue it again, only while it still shows the classification the
-	 * approver read: `storedClassification` is the row's `classification_json` as read, the reference or the text.
-	 * Executed under the run's lease, like every lifecycle write.
+	 * approver read (`storedClassification`, the row's `classification_json` as read, the reference or the text), its
+	 * deadline has not passed, and it still holds the first approval the decision read (`partial`, null for none): a
+	 * second approver completes only the first one's approval. Executed under the run's lease, like every lifecycle write.
 	 */
-	async approveParkedRun(id: string, storedClassification: string, approvalJson: string, fence: LeaseFence): Promise<boolean> {
+	async approveParkedRun(
+		id: string,
+		expected: { readonly classification: string; readonly partial: string | null },
+		approvalJson: string,
+		fence: LeaseFence,
+	): Promise<boolean> {
 		return this.mutateRun(
 			id,
 			`UPDATE runs SET status = 'pending', approval_json = ?
-			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?`,
-			[approvalJson, id, storedClassification],
+			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?
+				AND (approval_deadline IS NULL OR approval_deadline > ?) AND partial_approval_json IS NOT DISTINCT FROM ?`,
+			[approvalJson, id, expected.classification, this.now(), expected.partial],
 			fence,
 		)
 	}
 
-	/** Refuse a parked run: it fails without touching the provider. `storedClassification` as in `approveParkedRun`. */
-	async rejectParkedRun(id: string, storedClassification: string, fence: LeaseFence): Promise<boolean> {
-		// A refusal decides the run: an approval that lapsed before it approved nothing this run ran with.
+	/**
+	 * Record the first of two approvals of a parked run: it stays parked for a second person. Conditional as
+	 * `approveParkedRun`, on the first approval the decision read (`expected.partial`).
+	 */
+	async recordPartialApproval(
+		id: string,
+		expected: { readonly classification: string; readonly partial: string | null },
+		approvalJson: string,
+		fence: LeaseFence,
+	): Promise<boolean> {
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET status = 'failed', finished_at = ?, approval_json = NULL
-			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?`,
-			[this.now(), id, storedClassification],
+			`UPDATE runs SET partial_approval_json = ?
+			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?
+				AND (approval_deadline IS NULL OR approval_deadline > ?) AND partial_approval_json IS NOT DISTINCT FROM ?`,
+			[approvalJson, id, expected.classification, this.now(), expected.partial],
 			fence,
 		)
+	}
+
+	/**
+	 * Refuse a parked run before its deadline: it fails without touching the provider. `storedClassification` as in
+	 * `approveParkedRun`.
+	 */
+	async rejectParkedRun(id: string, storedClassification: string, fence: LeaseFence): Promise<boolean> {
+		// A refusal decides the run: an approval that lapsed before it approved nothing this run ran with.
+		const now = this.now()
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'failed', finished_at = ?, approval_json = NULL, failure_cause = 'rejected'
+			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL AND classification_json = ?
+				AND (approval_deadline IS NULL OR approval_deadline > ?)`,
+			[now, id, storedClassification, now],
+			fence,
+		)
+	}
+
+	/**
+	 * Give a run parked before deadlines existed its deadline, counted from when maintenance first sees it, so nothing
+	 * parked earlier expires at once (ADR-0050 §4).
+	 */
+	async backfillApprovalDeadline(id: string, ttlSeconds: number, fence: LeaseFence): Promise<boolean> {
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET approval_deadline = ?
+			WHERE id = ? AND status = 'awaiting_approval' AND approval_deadline IS NULL`,
+			[this.now() + ttlSeconds, id],
+			fence,
+		)
+	}
+
+	/** Fail a parked run past its deadline: nobody decided it, and it deploys nothing. */
+	async expireParkedRun(id: string, fence: LeaseFence): Promise<boolean> {
+		const now = this.now()
+		return this.mutateRun(
+			id,
+			`UPDATE runs SET status = 'failed', finished_at = ?, approval_json = NULL, failure_cause = 'expired'
+			WHERE id = ? AND status = 'awaiting_approval' AND cancel_requested_at IS NULL
+				AND approval_deadline IS NOT NULL AND approval_deadline <= ?`,
+			[now, id, now],
+			fence,
+		)
+	}
+
+	/** Parked runs with no deadline yet, or whose deadline has passed: what the maintenance sweep settles. */
+	async listParkedRunsToSweep(): Promise<RunRow[]> {
+		const { results } = await this.d1
+			.prepare(`SELECT * FROM runs WHERE status = 'awaiting_approval' AND cancel_requested_at IS NULL
+				AND (approval_deadline IS NULL OR approval_deadline <= ?) ORDER BY id`)
+			.bind(this.now())
+			.all<RunRow>()
+		return results
 	}
 
 	/** Runs parked for approval, newest first. */

@@ -7,10 +7,14 @@ import {
 	type ApprovalCategory,
 	type ApprovalPolicy,
 	approvalPolicySchema,
+	type ApprovalSettings,
+	approvalSettingsSchema,
+	APPROVER_CATEGORIES,
 	DEFAULT_APPROVAL_CATEGORIES,
 	POLICY_CATEGORIES,
 	policyFromCategories,
 	STRICT_POLICY,
+	STRICT_SETTINGS,
 	waitingCategories,
 } from '@fabrika/control-contract'
 import { z } from 'zod'
@@ -87,4 +91,37 @@ export function storedPolicy(policy: ApprovalPolicy): { readonly policy: string 
 		policy: changed.length === 0 ? null : JSON.stringify(Object.fromEntries(changed.map((category) => [category, policy[category]]))),
 		categories: storedCategories(waitingCategories(policy)),
 	}
+}
+
+const storedSettingsSchema = z.object({
+	deployRequestCommits: approvalSettingsSchema.shape.deployRequestCommits.optional(),
+	requestTtlHours: approvalSettingsSchema.shape.requestTtlHours.optional(),
+	approvers: approvalSettingsSchema.shape.approvers.partial().optional(),
+})
+
+/**
+ * The settings an environment's row holds (ADR-0083 §2): the defaults, with what it set over them. An unknown key (a
+ * newer release's, after a rollback) is dropped, and a stored form this release cannot read reads as the defaults.
+ */
+export function appEnvSettings(row: Pick<AppEnvRow, 'approval_settings'>): ApprovalSettings {
+	if (row.approval_settings === null) return STRICT_SETTINGS
+	const parsed = storedSettingsSchema.safeParse(JSON.parse(row.approval_settings))
+	if (!parsed.success) return STRICT_SETTINGS
+	const stored = parsed.data
+	return {
+		deployRequestCommits: stored.deployRequestCommits ?? STRICT_SETTINGS.deployRequestCommits,
+		requestTtlHours: stored.requestTtlHours ?? STRICT_SETTINGS.requestTtlHours,
+		approvers: { ...STRICT_SETTINGS.approvers, ...stored.approvers },
+	}
+}
+
+/** The stored form of settings: what differs from the defaults, null when nothing does. */
+export function storedSettings(settings: ApprovalSettings): { readonly settings: string | null } {
+	const approvers = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] !== STRICT_SETTINGS.approvers[category])
+	const stored = {
+		...(settings.deployRequestCommits === STRICT_SETTINGS.deployRequestCommits ? {} : { deployRequestCommits: settings.deployRequestCommits }),
+		...(settings.requestTtlHours === STRICT_SETTINGS.requestTtlHours ? {} : { requestTtlHours: settings.requestTtlHours }),
+		...(approvers.length === 0 ? {} : { approvers: Object.fromEntries(approvers.map((category) => [category, settings.approvers[category]])) }),
+	}
+	return { settings: Object.keys(stored).length === 0 ? null : JSON.stringify(stored) }
 }

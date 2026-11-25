@@ -53,6 +53,8 @@ export interface AppEnvRow {
 	approval_categories: string | null
 	/** The mode per category that differs from the defaults (ADR-0083 §2), written beside `approval_categories`; read through `appEnvPolicy`. */
 	approval_policy: string | null
+	/** The approval settings that differ from the defaults (ADR-0083 §2), as JSON; read through `appEnvSettings`. */
+	approval_settings: string | null
 	/** The contract digest IAM last received for the environment; NULL until Control writes its schema. */
 	iam_digest: string | null
 	/** When Control took the environment offline (`apps.environments.suspend`); NULL while it serves. */

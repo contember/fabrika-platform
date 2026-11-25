@@ -42,13 +42,20 @@ export function fixtureRuns(runs: RunRepository, locks: DeployLocks, now: () => 
 		finish: (id: string, status: 'succeeded' | 'failed', exitCode: number | null = null) =>
 			owned(id, (fence) => runs.markRunFinished(id, status, exitCode, fence)),
 		finishCancellation: (id: string, status: 'succeeded' | 'failed') => owned(id, (fence) => runs.markRunCancellationFinished(id, status, fence)),
-		park: (id: string, classificationJson: string) => owned(id, (fence) => runs.parkRunForApproval(id, classificationJson, fence)),
+		park: (id: string, classificationJson: string, park: Parameters<RunRepository['parkRunForApproval']>[2] = { reason: null, ttlSeconds: 86_400 }) =>
+			owned(id, (fence) => runs.parkRunForApproval(id, classificationJson, park, fence)),
 		snapshot: (id: string, snapshotJson: string) => owned(id, (fence) => runs.recordRunSnapshot(id, snapshotJson, fence)),
 		publish: (id: string, expected: Parameters<RunRepository['publishRunSnapshot']>[1], snapshotJson: string) =>
 			owned(id, (fence) => runs.publishRunSnapshot(id, expected, snapshotJson, fence)),
 		approve: (id: string, classificationJson: string, approvalJson: string) =>
-			owned(id, (fence) => runs.approveParkedRun(id, classificationJson, approvalJson, fence)),
+			owned(id, (fence) => runs.approveParkedRun(id, { classification: classificationJson, partial: null }, approvalJson, fence)),
 		reject: (id: string, classificationJson: string) => owned(id, (fence) => runs.rejectParkedRun(id, classificationJson, fence)),
+		partial: (id: string, expected: Parameters<RunRepository['recordPartialApproval']>[1], approvalJson: string) =>
+			owned(id, (fence) => runs.recordPartialApproval(id, expected, approvalJson, fence)),
+		completeAfter: (id: string, expected: Parameters<RunRepository['approveParkedRun']>[1], approvalJson: string) =>
+			owned(id, (fence) => runs.approveParkedRun(id, expected, approvalJson, fence)),
+		backfill: (id: string, ttlSeconds: number) => owned(id, (fence) => runs.backfillApprovalDeadline(id, ttlSeconds, fence)),
+		expire: (id: string) => owned(id, (fence) => runs.expireParkedRun(id, fence)),
 		supersede: (id: string, by: string) => owned(id, (fence) => runs.markRunSuperseded(id, by, fence)),
 	}
 }
@@ -61,12 +68,13 @@ export async function fixtureProtect(
 	value: boolean,
 	now: () => number = Date.now,
 	policy?: { readonly policy: string | null; readonly categories: string | null },
+	settings?: { readonly settings: string | null },
 ): Promise<AppEnvRow | null> {
 	const key = runLeaseKey(coordinates.appId, coordinates.env)
 	const holder = `fixture-protect-${key}`
 	if (!(await locks.acquire(key, holder, LEASE_TTL_MS))) throw new Error(`fixture lease ${key} is held`)
 	try {
-		return await registry.setAppEnvProtected(coordinates.appId, coordinates.env, value, policy, { holder, nowMs: now() })
+		return await registry.setAppEnvProtected(coordinates.appId, coordinates.env, value, policy, settings, { holder, nowMs: now() })
 	} finally {
 		await locks.release(key, holder)
 	}

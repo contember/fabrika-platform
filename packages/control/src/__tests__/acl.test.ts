@@ -117,15 +117,15 @@ describe('ACL enforcement (resolved auth context)', () => {
 		expect(queue).toEqual([{ runId }])
 	})
 
-	test('only a person deploys to a protected environment by hand, and never a workspace branch', async () => {
+	test("a non-person's deploy of a protected environment is a request for a commit SHA, and a workspace branch is refused to all", async () => {
 		const deployer = authWithActions(['deploy.*'], 'op@fabrika.test')
 		const service: AuthContext = { ...deployer, principal: { id: 'svc', type: 'service', label: 'builder' } }
 		const agent: AuthContext = {
 			...deployer,
 			oauth: { app: 'vozka', clientId: 'https://claude.ai/oauth/client.json', scopes: ['authoring'], grantId: 'g', tokenId: 't' },
 		}
-		const person = 'environment `prod` is protected: only a person deploys it by hand, from the console; an agent, a builder key or a '
-			+ "service key cannot. A push to the environment's trigger ref still deploys it"
+		const notSha = 'environment `prod` is protected: a deploy an agent or a key asks for names a 40-character commit SHA, not '
+			+ '`refs/heads/main`, and waits for a person to approve it'
 		const workspace = "environment `prod` is protected: a workspace branch reaches it only after it is merged into the environment's trigger ref"
 		for (const auth of [service, agent]) {
 			const { deps, queue } = makeDeps(auth)
@@ -133,8 +133,8 @@ describe('ACL enforcement (resolved auth context)', () => {
 			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'prod'))
 			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'stage'))
 			const refused = await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'prod' }), deps)
-			expect(refused.status).toBe(403)
-			expect(await refused.text()).toContain(person)
+			expect(refused.status).toBe(400)
+			expect(await refused.text()).toContain(notSha)
 			// An unprotected environment still takes a key or an agent.
 			expect((await rpcResult(rpcRequest('deploy', { appId: 'app', env: 'stage' }), deps)).status).toBe(200)
 			expect(queue).toHaveLength(1)

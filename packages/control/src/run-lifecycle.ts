@@ -47,7 +47,7 @@ import {
 } from './api/namespaces'
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { dataLossBeyond } from './approval/diff'
-import { protectedRunRefusal } from './approval/human'
+import { protectedRunDecision, startedByPerson } from './approval/human'
 import { appliedMigrations, type PublicationInput, type PublishedCandidate, publishRunSnapshot, rereadDataLoss } from './approval/publish'
 import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
@@ -724,12 +724,18 @@ async function deployUnder(
 				`configured provider "${deps.provider.id}" cannot deploy ${app.id}/${appEnv.env} owned by "${appEnv.provider}"`,
 			)
 		}
-		// The environment may have been protected since the run was queued. A restore's own deploy is exempt: it redeploys
-		// the commit the environment already ran, so it brings no new code (ADR-0070 §9). The restore's record names the run,
-		// so the exemption holds also when the run parked for approval and an approval queued it again.
-		const refusal = run.trigger === 'manual' ? protectedRunRefusal(appEnv, { byPerson: run.actor?.startsWith('user:') === true, ref: run.ref }) : null
+		// The environment, or its `deploy-request` mode, may have changed since the run was queued (ADR-0050 §4). A restore's
+		// own deploy is exempt: it redeploys the commit the environment already ran, so it brings no new code (ADR-0070 §9).
+		// The restore's record names the run, so the exemption holds also when the run parked and an approval queued it again.
 		const restoreDeploy = await deps.repositories.restores.namesRun(run.app_id, run.env, run.id)
-		if (refusal !== null && !restoreDeploy) throw new Error(refusal.message)
+		const decision = run.trigger === 'manual' && !restoreDeploy
+			? protectedRunDecision(appEnv, { byPerson: startedByPerson(run), ref: run.ref })
+			: null
+		if (decision?.kind === 'refuse') throw new Error(decision.message)
+		// A request parks once its commit is classified; a provider that resolves no commit cannot classify it.
+		if (decision?.kind === 'request' && !dryRun && deps.provider.resolveSource === undefined) {
+			throw new Error('this deploy waits for a person, and the provider resolves no commit to classify for the approval')
+		}
 		const sandbox = await devBootstrapSandbox(deps, appEnv, run, dryRun)
 		// Read under the lease every data operation holds, so no transition moves while this deploy runs.
 		const maintenance = operationDeploy ? 'open' : await recordedMaintenance(deps, { appId: app.id, env: appEnv.env })
@@ -816,6 +822,7 @@ async function deployUnder(
 					lockfileRefusal: (lockfile: string) => deps.provider.lockfileRefusal?.({ environment: registration.environment, lockfile }) ?? null,
 				}),
 				log: (line) => runLogs.log(line),
+				requested: decision?.kind === 'request',
 			}
 			const publication = await publishRunSnapshot({ repositories: deps.repositories, commits }, {
 				signal: invocation.work.signal,

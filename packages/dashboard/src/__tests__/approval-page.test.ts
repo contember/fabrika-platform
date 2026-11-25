@@ -6,8 +6,8 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { approvalStage } from '../lib/access-changes'
-import type { AccessChangeDto, ApprovalDto, ChangeAudienceDto, RunDto, SurfaceNoteDto } from '../lib/api'
-import { AccessChangeView } from '../routes/approvals/detail'
+import type { AccessChangeDto, ApprovalDto, ChangeAudienceDto, DeployRequestDto, RunDto, SurfaceNoteDto } from '../lib/api'
+import { AccessChangeView, DeployRequestView } from '../routes/approvals/detail'
 
 const anyone: ChangeAudienceDto = { reach: 'anyone', requirement: null }
 const staff: ChangeAudienceDto = { reach: 'human', requirement: 'with `candidates.read` (on `candidate`)' }
@@ -92,6 +92,7 @@ const APPROVAL: ApprovalDto = {
 		},
 	],
 	approval: null,
+	approvers: 1,
 }
 
 const render = (approval: ApprovalDto) => renderToStaticMarkup(createElement(AccessChangeView, { view: approvalView(approval.changes), approval }))
@@ -243,5 +244,53 @@ describe('where a run stands', () => {
 			text: 'Approved, then superseded: a newer run published first, so this one did not deploy',
 		})
 		expect(stage({ outcome: 'no-widening', supersededBy: 'run-2' }).text).toBe('Superseded: a newer run published first, so this one did not deploy')
+	})
+})
+
+// ADR-0050 §4: a request an agent or a key made shows who asked, the commit and its message as the agent wrote it.
+describe('a deploy request', () => {
+	const REQUEST: DeployRequestDto = {
+		principal: { id: 'p-ada', type: 'user', label: 'ada@example.test' },
+		credential: 'oauth',
+		clientId: 'https://agent.example.test/<i>client</i>.json',
+		commitSha: 'c'.repeat(40),
+		commitMessage: 'Approve me <script>alert(1)</script>\n\n<a href="https://evil.test">safe</a>',
+		runningCommitSha: 'b'.repeat(40),
+		compareUrl: `https://github.com/acme/notes/compare/${'b'.repeat(40)}...${'c'.repeat(40)}`,
+	}
+	const render = (request: DeployRequestDto, approval: Partial<ApprovalDto> = {}) =>
+		renderToStaticMarkup(
+			createElement(DeployRequestView, {
+				request,
+				approval: { ...APPROVAL, changes: [], deadline: 1_800_000_000, ...approval, run: { ...RUN, trigger: 'manual', commitSha: request.commitSha } },
+			}),
+		)
+
+	test("the agent's text is escaped and marked as the agent's", () => {
+		const markup = render(REQUEST)
+		expect(markup).not.toContain('<script>')
+		expect(markup).not.toContain('<a href="https://evil.test">')
+		expect(markup).not.toContain('<i>client</i>')
+		expect(markup).toContain(
+			'<pre class="agent-text">Approve me &lt;script&gt;alert(1)&lt;/script&gt;\n\n&lt;a href=&quot;https://evil.test&quot;&gt;safe&lt;/a&gt;</pre>',
+		)
+		expect(markup).toContain('Commit message, written by the agent')
+		expect(markup).toContain('title="Written by the agent, not by Fabrika">https://agent.example.test/&lt;i&gt;client&lt;/i&gt;.json</span>')
+	})
+
+	test('who asked, the commit beside what runs, a compare link, and the deadline', () => {
+		const markup = render(REQUEST)
+		expect(markup).toContain('<strong>ada@example.test</strong> asks through an agent to deploy <code>ccccccc</code>')
+		expect(markup).toContain('which runs <code>bbbbbbb</code>')
+		expect(markup).toContain(`<code>${'c'.repeat(40)}</code>`)
+		expect(markup).toContain(`href="${REQUEST.compareUrl}" target="_blank" rel="noreferrer noopener">Compare with what runs now</a>`)
+		expect(markup).toContain('the request expires and deploys nothing')
+
+		const { clientId: _, ...withoutClient } = REQUEST
+		const key = render({ ...withoutClient, credential: 'key', commitMessage: null, runningCommitSha: null, compareUrl: null })
+		expect(key).toContain('asks with a key to deploy')
+		expect(key).toContain('which runs nothing yet.')
+		expect(key).not.toContain('agent-text')
+		expect(key).not.toContain('Compare with')
 	})
 })

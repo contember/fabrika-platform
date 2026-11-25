@@ -2796,7 +2796,10 @@ td {
 	padding-right: 0;
 }
 
-/* What lets each kind of change through on an environment (ADR-0083): the presets, then one row per category with its mode. */
+/*
+ * What lets each kind of change through on an environment (ADR-0083): the presets, then one row per category with its
+ * mode and how many people decide, then the request settings.
+ */
 .approval-categories {
 	display: flex;
 	flex-direction: column;
@@ -2821,10 +2824,10 @@ td {
 
 .approval-mode {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) 13rem;
+	grid-template-columns: minmax(0, 1fr) repeat(2, 13rem);
 	align-items: center;
 	gap: var(--s-2);
-	max-width: 52rem;
+	max-width: 66rem;
 }
 
 @media (max-width: 700px) {
@@ -4643,4 +4646,30 @@ th.numeric {
 .deviation-subjects .change-list {
 	margin-top: var(--s-1);
 	color: var(--ink-2);
+}
+
+/* A deploy an agent asked for (ADR-0050 §4): who asked and what, then the agent's own text, set apart from Fabrika's. */
+.deploy-request-lead {
+	margin: 0 0 var(--s-2);
+	overflow-wrap: anywhere;
+}
+
+.agent-text-block {
+	margin: 0 0 var(--s-2);
+}
+
+.agent-text {
+	font-family: var(--font-mono);
+	overflow-wrap: anywhere;
+}
+
+pre.agent-text {
+	margin: 2px 0 0;
+	padding: var(--s-2) var(--s-3);
+	border-left: 3px solid var(--lamp-run);
+	border-radius: var(--r-2);
+	background: var(--tile);
+	white-space: pre-wrap;
+	max-height: 16rem;
+	overflow: auto;
 }

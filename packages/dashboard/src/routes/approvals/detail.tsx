@@ -20,7 +20,7 @@ import {
 	SUBJECT_TITLES,
 	surfaceNotes,
 } from '../../lib/access-changes'
-import { type AccessChangeDto, api, ApiError, type ApprovalDto, type SurfaceEndpointDto } from '../../lib/api'
+import { type AccessChangeDto, api, ApiError, type ApprovalDto, type DeployRequestDto, type SurfaceEndpointDto } from '../../lib/api'
 import { changeWaits } from '../../lib/environment-protection'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
 
@@ -66,6 +66,8 @@ export default createPage()
 						</div>
 					</div>
 				</div>
+
+				{approval.request !== undefined && <DeployRequestView request={approval.request} approval={approval} />}
 
 				<section>
 					<div className="detail-grid">
@@ -245,6 +247,11 @@ function endpointSentence({ added, changed, removed }: ApprovalView['summary']):
  */
 function outcomeSentence(approval: ApprovalDto): string {
 	const waits = changeWaits(approval)
+	if (approval.request !== undefined) {
+		const what = approval.outcome === 'widening' ? 'It widens access' : 'It only narrows access or leaves it unchanged'
+		if (approval.run.status === 'awaiting_approval') return `${what}. An agent or a key asked for this deploy, so it waits for your approval.`
+		return `${what}. An agent or a key asked for this deploy, so it waited for approval.`
+	}
 	const what = approval.outcome === 'widening' ? 'It widens access' : 'It only narrows access or leaves it unchanged'
 	const closer = waits ? ', and a line needs approval on this environment' : ''
 	if (approval.run.status === 'awaiting_approval') return `${what}${closer}, so it waits for your approval.`
@@ -552,6 +559,56 @@ function EnvironmentOrigins({ origins }: { origins: readonly string[] }) {
 }
 
 /** Approve (the page's one constructive step) or refuse. Only a person signed in to the console can do either. */
+/**
+ * Who asked for a deploy and what (ADR-0050 §4), read on a phone first: the person and the client, the commit with its
+ * message and a compare with what runs now, and the deadline. The message and the client's id are the agent's text:
+ * rendered as text, never as markup, and marked so.
+ */
+export function DeployRequestView({ request, approval }: { request: DeployRequestDto; approval: ApprovalDto }) {
+	const { run } = approval
+	const via = request.credential === 'oauth' ? 'through an agent' : 'with a key'
+	return (
+		<section className="card deploy-request">
+			<div className="card-body">
+				<p className="deploy-request-lead">
+					<strong>{request.principal.label}</strong> asks {via} to deploy <code>{shortSha(request.commitSha)}</code> to <strong>{run.appId}</strong> ·{' '}
+					<strong>{run.env}</strong>
+					{request.runningCommitSha === null
+						? ', which runs nothing yet.'
+						: (
+							<>
+								, which runs <code>{shortSha(request.runningCommitSha)}</code>.
+							</>
+						)}
+				</p>
+				{request.clientId !== undefined && (
+					<p className="small">
+						Agent <span className="agent-text" title="Written by the agent, not by Fabrika">{request.clientId}</span>
+					</p>
+				)}
+				{request.commitMessage !== null && (
+					<figure className="agent-text-block">
+						<figcaption className="muted small">Commit message, written by the agent</figcaption>
+						<pre className="agent-text">{request.commitMessage}</pre>
+					</figure>
+				)}
+				<p className="small">
+					Commit <code>{request.commitSha}</code>
+					{request.compareUrl !== null && (
+						<>
+							{' · '}
+							<a href={request.compareUrl} target="_blank" rel="noreferrer noopener">Compare with what runs now</a>
+						</>
+					)}
+				</p>
+				{approval.deadline !== undefined && run.status === 'awaiting_approval' && (
+					<p className="muted small">Decide by {fmtDate(approval.deadline)}; after that the request expires and deploys nothing.</p>
+				)}
+			</div>
+		</section>
+	)
+}
+
 function Decision({ approval, onDone }: { approval: ApprovalDto; onDone: () => void }) {
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
@@ -582,6 +639,13 @@ function Decision({ approval, onDone }: { approval: ApprovalDto; onDone: () => v
 					<strong>{approval.run.env}</strong>. It holds only for the lines above: if an older run publishes another change first, this one waits again, and
 					once a newer run publishes, this one does not deploy.
 				</p>
+				{approval.approvers === 2 && (
+					<p className="hint">
+						{approval.partialApproval === undefined
+							? 'Two different people approve this deploy: the first approval is recorded, and the second deploys it.'
+							: `${approval.partialApproval.label} approved it ${fmtDate(approval.partialApproval.approvedAt)}; a second, different person deploys it.`}
+					</p>
+				)}
 				<div className="row-actions">
 					<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
 						{busy ? 'Recording…' : 'Approve and deploy'}
