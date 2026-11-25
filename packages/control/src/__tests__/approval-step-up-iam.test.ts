@@ -29,6 +29,7 @@ import { jsonDigest } from '../approval/requests/rules'
 import { iamPasskeyStepUp } from '../approval/step-up'
 import type { ControlRepositories } from '../db'
 import { createHarness, harnessDatabase } from './helpers/harness'
+import { fakeControlProvider } from './helpers/provider'
 
 const ISSUER = 'https://iam.example.test'
 const CONSOLE = 'https://console.example.test'
@@ -144,7 +145,7 @@ async function setup() {
 
 	async function context(principalId: string): Promise<ApprovalRequestContext> {
 		const { request, ...call } = await consoleCall(principalId)
-		return { repositories: db, admission: { request }, lock: locks, ...call }
+		return { repositories: db, provider: fakeControlProvider, admission: { request }, lock: locks, ...call }
 	}
 
 	/** The same console call, as `apps.environments.protect` and its challenge read it. */

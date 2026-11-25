@@ -20,12 +20,8 @@ export async function listAppVarsUseCase(c: RegistryUseCaseContext, appId: strin
 
 export async function putAppVarUseCase(c: RegistryUseCaseContext, appId: string, input: PutAppVarRequest): Promise<AppVarDto> {
 	await requireApp(c, appId)
-	assertUnmanagedName('variable', input.name)
-	assertAppVarValue(input.value)
-	assertNoFrameworkReference('variable', input.value)
-	if (input.notSecret !== true) assertNotACredential(appId, input.name, input.value)
+	await assertAppVarWritable(c, appId, input)
 	const env = input.env ?? null
-	await assertDeclaredVariable(c, appId, env, input.name)
 	const row = await c.repositories.registry.upsertAppVar({ appId, env, name: input.name, value: input.value })
 	await c.auth.audit({
 		action: 'app.var.upsert',
@@ -34,6 +30,19 @@ export async function putAppVarUseCase(c: RegistryUseCaseContext, appId: string,
 		metadata: { name: input.name, env },
 	})
 	return toAppVarDto(row)
+}
+
+/** Refuse a variable the application could not use or should not hold in clear, naming why; an approval request asks it too. */
+export async function assertAppVarWritable(
+	c: Pick<RegistryUseCaseContext, 'provider' | 'repositories'>,
+	appId: string,
+	input: PutAppVarRequest,
+): Promise<void> {
+	assertUnmanagedName('variable', input.name)
+	assertAppVarValue(input.value)
+	assertNoFrameworkReference('variable', input.value)
+	if (input.notSecret !== true) assertNotACredential(appId, input.name, input.value)
+	await assertDeclaredVariable(c, appId, input.env ?? null, input.name)
 }
 
 /**
@@ -66,7 +75,12 @@ function assertNotACredential(appId: string, name: string, value: string): void 
  * app registered in no environment yet has nothing to check against, and refusing there would break
  * setting a value before the first registration.
  */
-async function assertDeclaredVariable(c: RegistryUseCaseContext, appId: string, env: string | null, name: string): Promise<void> {
+async function assertDeclaredVariable(
+	c: Pick<RegistryUseCaseContext, 'provider' | 'repositories'>,
+	appId: string,
+	env: string | null,
+	name: string,
+): Promise<void> {
 	const declaredVariables = c.provider.declaredVariables
 	if (declaredVariables === undefined) return
 	const rows = (await c.repositories.registry.listAppEnvs(appId)).filter((row) => row.provider === c.provider.id && (env === null || row.env === env))

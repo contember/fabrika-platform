@@ -846,16 +846,22 @@ other environment, before the provider prepares anything, and the write maps a r
 - **Every other action of a non-person that waits is an `approval_requests` row (ADR-0083 §8, `src/approval/requests/`).**
   A kind (`kind.ts`, `requestKind`) owns its input and before-state schemas, its coordinates, the action the requester
   must hold to ask, its execution, its `follow` hook, and an optional `discard` hook that releases what a refused or
-  expired request held; `PRODUCTION_REQUEST_KINDS` is empty, so creating answers 400
-  until a step adds one, and `refused.ts` names the procedures no request may name, with why. Creating is a bearer's
+  closed request held. `PRODUCTION_REQUEST_KINDS` (`production.ts`, kinds in `kinds/`) holds Control's local writes,
+  each executing through the use case its procedure runs, as the approver; a write that reaches the provider answers
+  400 at creation, and a secret value is sealed under the request's purpose (`kinds/secrets.ts`). The all-environments
+  layer is `env = '*'` (`ALL_ENVIRONMENTS`), a name `put` and `register` refuse to a new environment (`assertNewEnvironmentName`); `rules.ts` judges it by the strictest protected environment. Its decision and the sweep hold the
+  lease of every environment it reaches and `<app>:*`, the row's fence, all or none (`acquireRequestLease`). `refused.ts` names the procedures no request may name, with why. Creating is a bearer's
   only (a console person gets 409). Every transition is one conditional update on the state it leaves
   (`ApprovalRequestRepository`), the decision checks the deadline in the same write, and every write from the final
   approval on is fenced on the environment's deployment lease, which the decision holds through the execution.
   `executeApprovedRequest` judges the policy and the before-state again (either closes it `stale`), records the
   operation id before the kind acts, and leaves a throw `unknown`; `sweepApprovalRequests` (cron, after
   `sweepParkedRuns`) expires pending rows past their deadline, closes an approved row that never started `failed`,
-  and follows `unknown` ones through the kind. A decider holds `access.approve` at the coordinates, or what the kind's
-  `approverMayDecide` seam says (an IAM action); `approval-gate-coverage.test.ts` lists the create and decide procedures as exempt.
+  follows `unknown` ones through the kind, and deletes a request's sealed copy
+  (`platform:approval-request:<id>` in the vault) whose request is closed or absent, once older than the longest wait
+  plus an hour. A decider holds `access.approve` at the coordinates, or what the kind's
+  `approverMayDecide` seam says (an IAM action); only a reader who also holds the kind's action (or its decider seam) is
+  shown the before-state, a value, a fingerprint or the result (`describe` gets `before: null` otherwise); `approval-gate-coverage.test.ts` lists the create and decide procedures as exempt.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 

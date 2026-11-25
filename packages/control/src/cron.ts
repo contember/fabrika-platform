@@ -20,7 +20,7 @@ import type { OperationsReleaseProjectionSummary } from './operations-releases'
 import { replayOperationsReleases } from './operations-releases'
 import { type ParkedRunSweepSummary, type ProviderReconcileSummary, sweepParkedRuns, sweepStaleRuns } from './provider-reconcile'
 import { WORKSPACE_REF_PREFIX } from './ref-match'
-import { locks, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
+import { locks, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S, vault } from './services'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
@@ -106,9 +106,11 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (parked.deadlines > 0 || parked.expired > 0) {
 		console.info(`parked runs: deadlines=${parked.deadlines} expired=${parked.expired}`)
 	}
-	const requests = await sweepApprovalRequests({ repositories: persistence, lock: locks(env) })
-	if (requests.expired > 0 || requests.interrupted > 0 || requests.settled > 0) {
-		console.info(`approval requests: expired=${requests.expired} interrupted=${requests.interrupted} settled=${requests.settled}`)
+	const requests = await sweepApprovalRequests({ repositories: persistence, lock: locks(env), vault: () => vault(env) })
+	if (requests.expired > 0 || requests.interrupted > 0 || requests.settled > 0 || requests.orphans > 0) {
+		console.info(
+			`approval requests: expired=${requests.expired} interrupted=${requests.interrupted} settled=${requests.settled} orphans=${requests.orphans}`,
+		)
 	}
 	// The sync logs its own outcome line (operations-catalog.ts), so a second warn here would only repeat it.
 	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()

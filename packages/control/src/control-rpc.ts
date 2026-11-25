@@ -24,7 +24,6 @@ import {
 	type MailRuleDto,
 	type RecoverDataOperationInput,
 	recoverDataOperationInputSchema,
-	type SetDataBackupScheduleInput,
 	type StartDataOperationInput,
 	startDataOperationInputSchema,
 } from '@fabrika/control-contract'
@@ -33,6 +32,7 @@ import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
+import { requireDataEnvironment, setBackupScheduleUseCase } from './api/backup-schedule'
 import { createBuilderConnectionReceipt, getBuilderConnectionReceipt } from './api/builder-connections'
 import {
 	approveBuilderPairing,
@@ -653,8 +653,12 @@ export function createControlRpcRouter(
 		const consoleOrigin = controlPublicOrigin(ctx.env)
 		return {
 			repositories: deps.repositories,
+			provider: deps.provider,
 			auth: ctx.auth,
 			admission: { request: ctx.request },
+			...(deps.vault === undefined ? {} : { vault: deps.vault }),
+			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
+			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
 			...passkeyStepUp(ctx),
@@ -829,13 +833,6 @@ interface DataUseCaseContext {
 	readonly runDeps?: () => Promise<RunDeps>
 }
 
-/** An environment the caller may act on with `action`; any other, existing or not, is the same 404. */
-async function requireDataEnvironment(c: DataUseCaseContext, action: string, appId: string, env: string): Promise<void> {
-	if (!canAtCoordinates(c.auth, action, appId, env) || (await c.repositories.registry.getAppEnv(appId, env)) === null) {
-		fail(404, 'app env not found')
-	}
-}
-
 async function listDataOperationsUseCase(c: DataUseCaseContext, input: DataOperationListInput): Promise<CursorList<DataOperationDto>> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
 	const limit = input.limit ?? DATA_OPERATION_MAX_PAGE_SIZE
@@ -856,19 +853,6 @@ async function listBackupsUseCase(c: DataUseCaseContext, input: DataOperationLis
 async function readBackupScheduleUseCase(c: DataUseCaseContext, input: { appId: string; env: string }): Promise<DataBackupScheduleDto> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
 	return toBackupScheduleDto(input, await c.repositories.backups.getSchedule(input.appId, input.env))
-}
-
-/** Opting out stops the daily backup only; the pre-migration backup always runs (ADR-0070 §8). */
-async function setBackupScheduleUseCase(c: DataUseCaseContext, input: SetDataBackupScheduleInput): Promise<DataBackupScheduleDto> {
-	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	const schedule = await c.repositories.backups.setSchedule(input.appId, input.env, input.daily, runActor(c.auth))
-	await c.auth.audit({
-		action: 'data.backups.schedule',
-		resourceType: 'app_env',
-		resourceId: `${input.appId}/${input.env}`,
-		metadata: { appId: input.appId, env: input.env, daily: input.daily },
-	})
-	return toBackupScheduleDto(input, schedule)
 }
 
 async function getDataOperationUseCase(c: DataUseCaseContext, id: string): Promise<DataOperationDto> {

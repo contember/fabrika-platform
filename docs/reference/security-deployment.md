@@ -135,22 +135,46 @@ A non-person's manual deploy of a protected environment is its own approval requ
 
 Any other action of a non-person that waits for a person is an **approval request**
 ([ADR-0083 §8](../decisions/0083-an-environment-chooses-what-waits-for-approval.md#8-an-approval-request-is-the-pending-registry-write),
-[`approval/requests/`](../../packages/control/src/approval/requests/)). **Built:** the store, its decision and its
-execution. No action goes through one yet: every kind is refused when a request is created (400), the procedures that
-no request may ever name with their reason, every other one as not requestable yet.
+[`approval/requests/`](../../packages/control/src/approval/requests/)). **Built:** the store, its decision, its
+execution, and the kinds of the writes Control makes itself
+([`production.ts`](../../packages/control/src/approval/requests/production.ts)): `apps.secrets.put/delete`,
+`vault.set/rotate/delete`, `apps.environments.rotateTokenKey`, `apps.variables.put/delete`, the trigger ref, domain,
+public origin and cross-origins of `apps.environments.put`, an `apps.update` patch of the build fields, and
+`data.backups.setSchedule`. They can be asked for, but the direct procedures still write without one: nothing routes a
+non-person's write into a request yet. A write that reaches the provider is not requestable yet (400): a secret the
+provider keeps, an environment write on a provider that prepares its registrations, a target, artifact or namespace,
+suspension and resumption, a data operation. The procedures no request may ever name are refused with their reason.
 
+- **A secret value** is sealed in the vault under the request's own purpose and never stored in the row; the row holds
+  the name, a reference to the sealed value, its length and its fingerprint (the first 8 hex characters of its SHA-256),
+  which creating answers and the page shows. On execution the value moves to the secret's own purpose; once the request
+  is closed (refused, expired, stale, failed or executed) the sealed copy is deleted. A copy left behind (a crash between sealing
+  and the row, or between closing and the deletion, or a release without request kinds that closed it) is deleted by
+  the maintenance sweep once it is older than the longest wait plus an hour and its request is closed or absent.
+- **A deploy closes a pending request `stale`.** A secret, variable, token-key or backup-schedule request binds its
+  environment's `generation` beside the stored value, because only the generation tells a recreated environment from
+  the one asked about (`app_envs` has no row id). Every publication bumps it, so a deploy of that environment before
+  the decision closes the request `stale`, and the agent asks again.
+- **The all-environments layer** (`env: null`) is a request at the coordinates `<app>@*`, a name no new environment may take. Its decision and the sweep
+  hold the deployment lease of every environment it reaches and `<app>:*`, which fences the row, taken in sorted order
+  and all or none, so a deploy of any of them makes deciding answer 409. Its before-state binds every environment's `generation`, so a new or changed environment closes it
+  `stale`. The strictest of the protected environments decides: any `refuse` refuses it, the most approvers, the
+  shortest deadline, `requesterMayApprove` only where every one allows it, and a passkey on deciding (`stepUp`) where
+  any asks for one. Deciding needs `access.approve` at every protected environment (at the application when none is),
+  and the page names them all. An `apps.update` patch acts on the same coordinates.
 - **Only a non-person asks.** `approvals.requests.create` takes a bearer (an agent's OAuth token or a key); a person in
-  the console gets 409 and makes the change directly. The requester must hold the kind's action at the application,
-  or `access.request` where the kind is one the requester cannot execute itself (only `admin` holds it, and no
-  command-line preset carries it). The environment's mode for the kind's category is checked when the request is
-  created: `refuse` answers 403.
+  the console gets 409 and makes the change directly. The requester must hold the kind's action where its procedure
+  takes it (at the application for secrets, variables and registry writes), or `access.request` where the kind is
+  one the requester cannot execute itself (only `admin` holds it, and no command-line preset carries it). The
+  environment's mode for the kind's category is checked when the request is created: `refuse` answers 403.
 - **Inert and exact.** The row holds the kind, the canonical input and its SHA-256, the coordinates, the requester
   (principal, credential, OAuth client and grant id from the verified token), the before-state the action depends on
   with its digest, and an absolute deadline `requestTtlHours` after creation. Nothing reads a pending row as authority.
 - **The decision** (`approvals.requests.decide`) is a person's in the console with `access.approve` at the
   coordinates (or the IAM administration the kind names), posting the input digest the page showed (409 when it is
   not the stored one, 410 past the deadline). It is one conditional update on `pending`, so a second tap changes
-  nothing. `requesterMayApprove` and `approvers` apply as they do to a parked deploy request.
+  nothing. `requesterMayApprove` and `approvers` apply as they do to a parked deploy request. Approving also needs
+  the kind's own action where it acts, since the change executes as the approver (403 otherwise); refusing does not.
 - **Execution** follows the final approval in the same call, under the environment's deployment lease (409 while
   it is busy), with the approver's authority and the requester recorded beside them. Control judges the policy as it
   stands now and the before-state again; a stricter policy or a changed before-state closes the request `stale` and
@@ -169,7 +193,10 @@ no request may ever name with their reason, every other one as not requestable y
   or the MCP tool `get_approval_request`; the person decides at `<console>/approvals/requests/<id>`, where text the
   agent wrote is escaped and marked. Fabrika sends no notification. The requester reads its request only through the
   credential that asked (the same principal and OAuth client, or no client for a key), so another agent of the same
-  person does not; a person who may decide it reads any at those coordinates.
+  person does not; a person who may decide it reads any at those coordinates. What the request acts on now (a
+  variable's value, a field before the change), a secret's fingerprint, a variable's new value and the result are shown
+  only to a reader who also holds the kind's action where it acts; anyone else sees the names and lengths and a line
+  saying what is not shown, and may still refuse it.
 
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval

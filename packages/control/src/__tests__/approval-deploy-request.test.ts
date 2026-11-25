@@ -694,7 +694,14 @@ describe('the step-up on a parked run (ADR-0050 §5)', () => {
 	function requestContext(w: World) {
 		const console = request('console', 'p-ada')
 		const stepUp = iamPasskeyStepUp(w.iam.gateway, console)
-		return { repositories: w.db, auth: ada(), admission: { request: console }, lock: makeFakeLock(w.db), ...(stepUp === null ? {} : { stepUp }) }
+		return {
+			repositories: w.db,
+			provider: provider(w),
+			auth: ada(),
+			admission: { request: console },
+			lock: makeFakeLock(w.db),
+			...(stepUp === null ? {} : { stepUp }),
+		}
 	}
 
 	test('approving takes an assertion bound to the run and its digests, and the approval records the passkey', async () => {

@@ -294,6 +294,33 @@ export class Vault {
 		return open(this.masterKey, { ciphertext: row.ciphertext, valueIv: row.value_iv, wrappedDek: row.wrapped_dek, dekIv: row.dek_iv })
 	}
 
+	/**
+	 * Which value the ref holds now, without opening it: the value's IV, fresh at every seal and rotation and kept by a
+	 * master-key rotation. Null when the ref names no row, or one sealed under another purpose.
+	 */
+	async sealedVersion(ref: string, purpose: VaultSecretPurpose): Promise<string | null> {
+		const row = await this.d1.prepare('SELECT scope, label, value_iv FROM vault WHERE id = ?').bind(this.idOrThrow(ref))
+			.first<Pick<VaultRow, 'scope' | 'label' | 'value_iv'>>()
+		return row === null || row.scope !== purpose.scope || row.label !== purpose.label ? null : row.value_iv
+	}
+
+	/**
+	 * The rows sealed under `scope` whose label starts with `labelPrefix`, created at or before `createdBefore` (unix
+	 * seconds): their refs and labels, never a value. SQLite's LIKE ignores case, so the prefix is compared again here.
+	 */
+	async listSealed(
+		scope: SecretScope,
+		labelPrefix: string,
+		createdBefore: number,
+	): Promise<{ readonly ref: string; readonly label: string }[]> {
+		if (/[%_\\]/.test(labelPrefix)) throw new Error('a label prefix holds no LIKE wildcard')
+		const { results } = await this.d1
+			.prepare('SELECT id, label FROM vault WHERE scope = ? AND label LIKE ? AND created_at <= ? ORDER BY id')
+			.bind(scope, `${labelPrefix}%`, createdBefore)
+			.all<{ id: string; label: string }>()
+		return results.filter((row) => row.label.startsWith(labelPrefix)).map((row) => ({ ref: vaultRef(row.id), label: row.label }))
+	}
+
 	/** Re-encrypt the value at `ref` with a fresh DEK + IVs. Stamps `rotated_at`. Throws if missing. */
 	async rotate(ref: string, newValue: string): Promise<void> {
 		const id = this.idOrThrow(ref)

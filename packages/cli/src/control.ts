@@ -17,6 +17,7 @@ import {
 	type IssueKeyInput,
 	type IssueKeyResult,
 	MAX_KEY_LIFETIME_SECONDS,
+	sha256Hex,
 } from '@fabrika/auth-core'
 import { APP_ENV_KINDS, type ApprovalRequestDto, CONTROL_CLI_PRESETS, isFinalApprovalRequestState } from '@fabrika/control-contract'
 import type {
@@ -25,6 +26,7 @@ import type {
 	AppEnvKind,
 	AppSecretDto,
 	ControlRpcContract,
+	CreateApprovalRequestResponse,
 	DeploymentNamespaceDetailDto,
 	DeploymentNamespaceDto,
 	JsonValue,
@@ -94,11 +96,11 @@ Usage:
   fabrika control apps environments suspend --app=<id> --env=<name>
   fabrika control apps environments resume  --app=<id> --env=<name>
   fabrika control apps variables list --app=<id>
-  fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>] [--not-secret]
-  fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>]
+  fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>] [--not-secret] [--request [--wait]]
+  fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>] [--request [--wait]]
   fabrika control apps secrets list --app=<id>
-  fabrika control apps secrets put --app=<id> --name=<name> [--env=<name>]    (the value on stdin)
-  fabrika control apps secrets delete --app=<id> --name=<name> [--env=<name>]
+  fabrika control apps secrets put --app=<id> --name=<name> [--env=<name>] [--request [--wait]]    (the value on stdin)
+  fabrika control apps secrets delete --app=<id> --name=<name> [--env=<name>] [--request [--wait]]
   fabrika control register --provider=<name> --app=<id> --repo=<url> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                            [--namespace=<id>] [--installation-id=<n|none>] [--cross-origin=<origin> ...]
@@ -177,6 +179,15 @@ fails, approval being one step on the way, and prints its final row; a refusal o
 creation answered. stderr prints the console link while it waits, and why it did not run once it failed, went stale or
 expired. \`--wait\` reads it again until it is refused, expired, executed, failed or stale, and prints its final row;
 once a person decided it, it stops with an error after 15 minutes without an outcome.
+
+\`--request\` on \`apps secrets put|delete\` and \`apps variables put|delete\` does not make the change: it asks a person
+to approve it. Every other verb refuses it. Control stores the request, inert, and stderr prints the console link the person opens; for a secret it
+also prints the value's fingerprint (the first 8 hex characters of its SHA-256, computed here), which the page shows
+beside the value's length, so the person can tell it is the value you sent; when Control's answer names another
+fingerprint, the command fails and says to refuse the request. Control seals the value and stores only that. stdout
+prints the request's id, state and link; \`--wait\` follows it as \`requests get --wait\` does. Without \`--env\` the request
+is for every environment of the app, and every protected one judges it. A secret the provider keeps (a Zerops
+environment) cannot be requested yet.
 
 Namespace placement options, each defaulting to what the preset would choose:
 
@@ -292,10 +303,15 @@ interface Flags {
 	readonly notSecret: boolean
 	/** `--wait`: `deploy` follows the run until it succeeds or fails; `requests get` follows the request until it settles. */
 	readonly wait: boolean
+	/** `--request`: a secret or variable write asks a person to approve it instead of making it (ADR-0083 §8). */
+	readonly request: boolean
 	readonly positional: readonly string[]
 }
 
-/** Split `--key=value` options from positional words; `--json` is the one flag every verb shares, `--not-secret` and `--wait` the other bare ones. */
+/**
+ * Split `--key=value` options from positional words; `--json` is the one flag every verb shares, `--not-secret`, `--wait`
+ * and `--request` the other bare ones.
+ */
 export const parseControlFlags = (argv: readonly string[]): Flags => {
 	const values = new Map<string, string>()
 	const repeated = new Map<string, string[]>()
@@ -303,6 +319,7 @@ export const parseControlFlags = (argv: readonly string[]): Flags => {
 	let json = false
 	let notSecret = false
 	let wait = false
+	let request = false
 	for (const arg of argv) {
 		if (arg === '--json') {
 			json = true
@@ -310,6 +327,8 @@ export const parseControlFlags = (argv: readonly string[]): Flags => {
 			notSecret = true
 		} else if (arg === '--wait') {
 			wait = true
+		} else if (arg === '--request') {
+			request = true
 		} else if (arg.startsWith('--')) {
 			const eq = arg.indexOf('=')
 			if (eq === -1) {
@@ -323,7 +342,7 @@ export const parseControlFlags = (argv: readonly string[]): Flags => {
 			positional.push(arg)
 		}
 	}
-	return { values, repeated, json, notSecret, wait, positional }
+	return { values, repeated, json, notSecret, wait, request, positional }
 }
 
 const required = (flags: Flags, name: string): string => {
@@ -862,12 +881,21 @@ const runVariables = async (verb: string | undefined, flags: Flags, env: Readonl
 			...(scope === undefined ? {} : { env: scope }),
 			...(flags.notSecret ? { notSecret: true } : {}),
 		}
+		if (flags.request) {
+			await requestChange(client, flags, 'apps.variables.put', { appId, variable: { ...variable } })
+			return
+		}
 		const result = await client.apps.variables.put({ appId, variable })
 		emit(flags, result, () => `${result.env ?? '*'}\t${result.name}\t${result.value}`)
 		return
 	}
 	if (verb === 'delete') {
-		const result = await client.apps.variables.delete({ appId, name: required(flags, 'name'), ...(scope === undefined ? {} : { env: scope }) })
+		const target = { appId, name: required(flags, 'name'), ...(scope === undefined ? {} : { env: scope }) }
+		if (flags.request) {
+			await requestChange(client, flags, 'apps.variables.delete', target)
+			return
+		}
+		const result = await client.apps.variables.delete(target)
 		emit(flags, result, () => (result.ok ? 'deleted' : 'not deleted'))
 		return
 	}
@@ -925,6 +953,10 @@ const runSecrets = async (
 		const name = required(flags, 'name')
 		const value = await readSecretValue(input, appId, name)
 		const secret: PutAppSecretRequest = { name, value, ...(scope === undefined ? {} : { env: scope }) }
+		if (flags.request) {
+			await requestChange(client, flags, 'apps.secrets.put', { appId, secret: { ...secret } }, value)
+			return
+		}
 		let result: AppSecretDto
 		try {
 			result = await client.apps.secrets.put({ appId, secret })
@@ -935,7 +967,12 @@ const runSecrets = async (
 		return
 	}
 	if (verb === 'delete') {
-		const result = await client.apps.secrets.delete({ appId, name: required(flags, 'name'), ...(scope === undefined ? {} : { env: scope }) })
+		const target = { appId, name: required(flags, 'name'), ...(scope === undefined ? {} : { env: scope }) }
+		if (flags.request) {
+			await requestChange(client, flags, 'apps.secrets.delete', target)
+			return
+		}
+		const result = await client.apps.secrets.delete(target)
 		emit(flags, result, () => (result.ok ? 'deleted' : 'not deleted'))
 		return
 	}
@@ -1435,6 +1472,40 @@ export const followRun = async (
 	return run
 }
 
+/**
+ * Ask a person to approve a write instead of making it (ADR-0083 §8): stderr says where they decide it and, for a
+ * secret, the value's fingerprint, computed here and compared with Control's; stdout prints the request. `secretValue`
+ * is cut out of any failure that quotes it.
+ */
+const requestChange = async (client: ControlClient, flags: Flags, kind: string, input: JsonValue, secretValue?: string): Promise<void> => {
+	let created: CreateApprovalRequestResponse
+	try {
+		created = await client.approvals.requests.create({ kind, input })
+	} catch (error) {
+		if (secretValue === undefined) throw error
+		throw new Error(failureMessage(error, secretValue, 'secret value'))
+	}
+	if (secretValue !== undefined) {
+		// The first 8 hex characters of the value's SHA-256, as the page shows them: the CLI's own, not an echo of Control's.
+		const fingerprint = sha256Hex(secretValue).slice(0, 8)
+		if (created.fingerprint !== fingerprint) {
+			throw new Error(
+				`Control answered the fingerprint ${created.fingerprint ?? '(none)'}, but the value sent has ${fingerprint}: `
+					+ `refuse the request at ${created.url}, since what it holds is not the value you sent`,
+			)
+		}
+		console.warn(`the value's fingerprint is ${fingerprint}: the person sees the same one beside the value's length on the page`)
+	}
+	if (flags.wait) {
+		const read = (id: string) => client.approvals.requests.get({ id })
+		const result = await followRequest(read, await read(created.id), { intervalMs: WAIT_INTERVAL_MS, settleTimeoutMs: REQUEST_SETTLE_TIMEOUT_MS })
+		emit(flags, result, () => requestLine(result))
+		return
+	}
+	console.warn(`a person approves or refuses this request at ${created.url}`)
+	emit(flags, created, () => `${created.id}\t${created.state}\t${created.url}`)
+}
+
 const runRequests = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	if (verb !== 'get') throw new Error(`Unknown \`control requests\` verb: ${verb ?? '(missing)'}`)
 	const id = flags.positional[1]
@@ -1516,6 +1587,10 @@ export const followRequest = async (
  * `command` is the group (`key`, `apps`, `runs`, `requests`, `register`, `deploy`); the verb, where a group has
  * one, is the first positional word after it. `provider` reaches here only to label an envelope.
  */
+/** Whether a command takes `--request`: only the writes it routes through an approval request. */
+const takesRequest = (command: string | undefined, positional: readonly string[]): boolean =>
+	command === 'apps' && (positional[0] === 'secrets' || positional[0] === 'variables') && (positional[1] === 'put' || positional[1] === 'delete')
+
 export const runControlCli = async (
 	command: string | undefined,
 	argv: readonly string[],
@@ -1526,6 +1601,11 @@ export const runControlCli = async (
 	try {
 		const flags = parseControlFlags(argv)
 		const verb = flags.positional[0]
+		if (flags.request && !takesRequest(command, flags.positional)) {
+			throw new Error(
+				'--request is taken only by apps secrets put|delete and apps variables put|delete; anywhere else it would be ignored and the write made directly',
+			)
+		}
 		switch (command) {
 			case undefined:
 				console.info(USAGE)
