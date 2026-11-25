@@ -45,6 +45,67 @@ export async function acquireLease(store: DeployLocks, key: string, clock: Lease
 	return new HeldLease(store, key, holder, clock, acquiredAt)
 }
 
+/**
+ * Take every key in `keys`, in sorted order so two callers never wait on each other, or none: `null` while any is live
+ * elsewhere, with what was taken released. The answer is one lease fenced on `fenceKey`, one of `keys`, whose signal
+ * aborts once any of them is lost and whose release frees them all.
+ */
+export async function acquireLeases(
+	store: DeployLocks,
+	keys: readonly string[],
+	fenceKey: string,
+	clock: LeaseClock = systemClock,
+): Promise<Lease | null> {
+	if (!keys.includes(fenceKey)) throw new Error(`the fence key ${fenceKey} is not among the keys taken`)
+	const held: Lease[] = []
+	for (const key of [...new Set(keys)].sort()) {
+		const lease = await acquireLease(store, key, clock)
+		if (lease === null) {
+			await Promise.all(held.map((taken) => taken.release()))
+			return null
+		}
+		held.push(lease)
+	}
+	const fence = held.find((lease) => lease.key === fenceKey)
+	if (fence === undefined) throw new Error(`the fence key ${fenceKey} is not among the keys taken`)
+	return new LeaseSet(fence, held)
+}
+
+class LeaseSet implements Lease {
+	readonly signal: AbortSignal
+
+	constructor(private readonly fenced: Lease, private readonly held: readonly Lease[]) {
+		this.signal = AbortSignal.any(held.map((lease) => lease.signal))
+	}
+
+	get key(): string {
+		return this.fenced.key
+	}
+
+	assertHeld(): void {
+		for (const lease of this.held) lease.assertHeld()
+	}
+
+	fence(): LeaseFence {
+		this.assertHeld()
+		return this.fenced.fence()
+	}
+
+	assertWritten(changed: boolean): void {
+		if (changed) return
+		this.abandon()
+		throw new ProviderInvocationAbort('lease_lost')
+	}
+
+	abandon(): void {
+		for (const lease of this.held) lease.abandon()
+	}
+
+	async release(): Promise<void> {
+		await Promise.all(this.held.map((lease) => lease.release()))
+	}
+}
+
 // The local deadline ends one renew period before the stored expiry, so a holder stops before a takeover can start.
 const LOCAL_TTL_MS = LEASE_TTL_MS - LEASE_RENEW_MS
 

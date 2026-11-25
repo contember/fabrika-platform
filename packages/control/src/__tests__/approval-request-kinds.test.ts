@@ -469,6 +469,35 @@ for (const backend of backends) {
 				expect(await secretValue(w, null, 'API_KEY')).toBe(SECRET)
 			})
 
+			test('a deploy of an environment it reaches holds the layer off: the decision answers 409, the sweep waits, nothing is recorded', async () => {
+				const w = await world()
+				const { id } = await ask(w, 'apps.secrets.put', putSecret(null))
+				const deploy = uuidv7()
+				expect(await w.locks.acquire(runLeaseKey('notes', 'prod'), deploy, LEASE_TTL_MS)).toBe(true)
+				expect((await status(decide(w, id, 'approve'))).status).toBe(409)
+				expect(await row(w, id)).toMatchObject({ state: 'pending', decided_by_id: null, operation_id: null })
+				expect(await secretValue(w, null, 'API_KEY')).toBeNull()
+
+				// Approved, and stopped before its execution started: the sweep closes it only once it holds every lease.
+				const fence = uuidv7()
+				expect(await w.locks.acquire(runLeaseKey('notes', ALL_ENVIRONMENTS), fence, LEASE_TTL_MS)).toBe(true)
+				expect(await w.db.approvalRequests.approve(id, { decisionId: uuidv7(), id: 'p-bob', label: 'bob' }, null, { holder: fence, nowMs: Date.now() }))
+					.toBe(true)
+				await w.locks.release(runLeaseKey('notes', ALL_ENVIRONMENTS), fence)
+				const sweep = () => sweepApprovalRequests({ repositories: w.db, lock: w.locks, vault: () => Promise.resolve(w.vault) })
+				expect((await sweep()).interrupted).toBe(0)
+				expect((await row(w, id)).state).toBe('approved')
+				// What the layer took before it met the busy lease, it released.
+				for (const env of [ALL_ENVIRONMENTS, 'stage']) {
+					const probe = uuidv7()
+					expect(await w.locks.acquire(runLeaseKey('notes', env), probe, LEASE_TTL_MS)).toBe(true)
+					await w.locks.release(runLeaseKey('notes', env), probe)
+				}
+				await w.locks.release(runLeaseKey('notes', 'prod'), deploy)
+				expect((await sweep()).interrupted).toBe(1)
+				expect((await row(w, id)).state).toBe('failed')
+			})
+
 			test('`*` is the layer, never an environment name', async () => {
 				const w = await world()
 				const refused = await status(ask(w, 'apps.secrets.put', putSecret(ALL_ENVIRONMENTS)))

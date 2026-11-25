@@ -20,10 +20,10 @@ import type { JsonValue } from '@fabrika/provider-contract'
 import { fail } from '../../api/domain'
 import type { ApprovalRequestDecider, ApprovalRequestRow, ControlRepositories } from '../../db'
 import { jsonValueSchema } from '../../json-value'
-import { acquireLease, type LeaseClock, runLeaseKey } from '../../lease'
+import type { LeaseClock } from '../../lease'
 import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOtherThanRequester } from '../human'
 import { issueStepUpChallenge, type PasskeyStepUpPort, requestStepUpBinding, requireStepUp } from '../step-up'
-import { actionOf, discardRequest, executeApprovedRequest } from './execute'
+import { acquireRequestLease, actionOf, discardRequest, executeApprovedRequest } from './execute'
 import type { RequestActionContext, RequestCoordinates, RequestExecutionContext, RequestKind, RequestKindRegistry } from './kind'
 import { PRODUCTION_REQUEST_KINDS } from './production'
 import { refusedKindReason } from './refused'
@@ -280,8 +280,8 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 	}
 
 	if (c.lock === undefined) fail(503, 'approvals unavailable')
-	const lease = await acquireLease(c.lock, runLeaseKey(row.app_id, row.env), c.leaseClock)
-	if (lease === null) fail(409, 'the environment is deploying; nothing was decided, try again in a moment')
+	const lease = await acquireRequestLease(c.lock, c.repositories.registry, row, c.leaseClock)
+	if (lease === null) fail(409, 'the environment, or one the request reaches, is deploying; nothing was decided, try again in a moment')
 	try {
 		if (!(await c.repositories.approvalRequests.approve(row.id, decider, row.partial_approver_id, lease.fence()))) await lostDecision(c, row.id)
 		await auditDecision(c, row, 'approve', decider)

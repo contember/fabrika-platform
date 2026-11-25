@@ -149,8 +149,9 @@ suspension and resumption, a data operation. The procedures no request may ever 
   the name, a reference to the sealed value, its length and its fingerprint (the first 8 hex characters of its SHA-256),
   which creating answers and the page shows. On execution the value moves to the secret's own purpose; once the request
   is closed (refused, expired, stale, failed or executed) the sealed copy is deleted.
-- **The all-environments layer** (`env: null`) is a request at the coordinates `<app>@*`, under the deployment lease
-  `<app>:*`. Its before-state binds every environment's `generation`, so a new or changed environment closes it
+- **The all-environments layer** (`env: null`) is a request at the coordinates `<app>@*`. Its decision and the sweep
+  hold the deployment lease of every environment it reaches and `<app>:*`, which fences the row, taken in sorted order
+  and all or none, so a deploy of any of them makes deciding answer 409. Its before-state binds every environment's `generation`, so a new or changed environment closes it
   `stale`. The strictest of the protected environments decides: any `refuse` refuses it, the most approvers, the
   shortest deadline, `requesterMayApprove` only where every one allows it, and a passkey on deciding (`stepUp`) where
   any asks for one. Deciding needs `access.approve` at every protected environment (at the application when none is),

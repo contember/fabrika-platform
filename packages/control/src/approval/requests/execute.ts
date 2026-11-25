@@ -5,8 +5,8 @@
 import type { AuthContext } from '@fabrika/auth'
 import { ALL_ENVIRONMENTS } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
-import type { ApprovalRequestRow, ControlRepositories } from '../../db'
-import { acquireLease, type Lease, type LeaseClock, runLeaseKey } from '../../lease'
+import type { ApprovalRequestRow, ControlRegistryRepository, ControlRepositories } from '../../db'
+import { acquireLease, acquireLeases, type Lease, type LeaseClock, runLeaseKey } from '../../lease'
 import type { Vault } from '../../vault'
 import type {
 	RequestAction,
@@ -70,6 +70,23 @@ export function actionOf(
 		return "this Control reads the request's input without part of it (a later release's), so what it would execute is not the input that was approved"
 	}
 	return checked.action
+}
+
+/**
+ * The leases an execution of the request holds: its environment's deployment lease, or for `ALL_ENVIRONMENTS` the lease
+ * of every environment the layer reaches and `<app>:*`, the row's own fence, all or none. Null while any is held
+ * elsewhere: a deploy of one environment the layer reaches holds the whole layer off.
+ */
+export async function acquireRequestLease(
+	lock: DeployLocks,
+	registry: Pick<ControlRegistryRepository, 'listAppEnvs'>,
+	row: Pick<ApprovalRequestRow, 'app_id' | 'env'>,
+	clock?: LeaseClock,
+): Promise<Lease | null> {
+	const own = runLeaseKey(row.app_id, row.env)
+	if (row.env !== ALL_ENVIRONMENTS) return acquireLease(lock, own, clock)
+	const reach = await registry.listAppEnvs(row.app_id)
+	return acquireLeases(lock, [own, ...reach.map((appEnv) => runLeaseKey(appEnv.app_id, appEnv.env))], own, clock)
 }
 
 /**
@@ -213,7 +230,7 @@ export async function sweepApprovalRequests(deps: ApprovalRequestSweepDeps): Pro
 		// An unknown request this Control cannot follow (a later release's kind, after a rollback) stays unknown for the
 		// release that can; its kind and input never change, so the sweep need not take the environment's lease to see it.
 		if (listed.state === 'unknown' && typeof actionOf(kinds.get(listed.kind), listed) === 'string') continue
-		const lease = await acquireLease(deps.lock, runLeaseKey(listed.app_id, listed.env), deps.leaseClock)
+		const lease = await acquireRequestLease(deps.lock, deps.repositories.registry, listed, deps.leaseClock)
 		if (lease === null) continue
 		try {
 			const row = await requests.get(listed.id)
