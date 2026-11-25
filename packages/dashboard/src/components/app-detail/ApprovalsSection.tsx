@@ -280,7 +280,10 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 				<label className="approval-mode">
 					<span>
 						Commits an agent may ask to deploy
-						<span className="muted small">{' · '}never a workspace branch, whichever is chosen.</span>
+						<span className="muted small">
+							{' · '}merged means reachable from the trigger branch, or the default branch when it is a pattern; never a workspace branch, whichever is
+							chosen.
+						</span>
 					</span>
 					<select
 						value={settings.deployRequestCommits}
@@ -288,7 +291,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 						aria-label="Commits an agent may ask to deploy"
 						onChange={(event) => setSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
 					>
-						<option value="merged">Merged into the trigger branch (default)</option>
+						<option value="merged">Merged commits (default)</option>
 						<option value="any">Any commit</option>
 					</select>
 				</label>

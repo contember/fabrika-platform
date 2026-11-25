@@ -755,6 +755,13 @@ button.account-item:hover:not(:disabled) {
 	min-width: 0;
 }
 
+/* On a phone the title keeps the width; the status and actions wrap under it. */
+@media (max-width: 700px) {
+	.page-head-row {
+		flex-wrap: wrap;
+	}
+}
+
 /* The way back out of a detail or a form: above the title, at the left, where a reader starts. */
 .back-link {
 	display: inline-flex;
