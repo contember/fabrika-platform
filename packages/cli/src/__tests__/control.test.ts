@@ -1,6 +1,7 @@
+import { RpcError } from '@fabrika/app'
 import type { ApprovalRequestDto, RunDto } from '@fabrika/control-contract'
 import { recipientKeyThumbprint, type RecipientPublicKey } from '@fabrika/iam-contract'
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { CompactEncrypt, importJWK } from 'jose'
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -1642,6 +1643,26 @@ describe('control access request-key', () => {
 		expect(asked.calls.map((call) => Reflect.get(Object(call.body), 'method'))).not.toContain('approvals.requests.fetchKey')
 	})
 
+	test('a request that does not settle in time says the key cannot be fetched elsewhere and is revoked unfetched', async () => {
+		const asked = control('unknown')
+		// Each reading of the clock is 16 minutes on, so the 15-minute bound on a decided request passes at once.
+		let now = Date.now()
+		const clock = spyOn(Date, 'now').mockImplementation(() => (now += 16 * 60_000))
+		let failure: unknown
+		try {
+			await captureStderr(async () => {
+				failure = await runControlCli('access', [...args, '--wait'], undefined, CONTROL_ENV).catch((error: unknown) => error)
+			})
+		} finally {
+			clock.mockRestore()
+		}
+		expect(String(failure)).toContain('the request is still unknown after 15 minutes')
+		expect(String(failure)).toContain('no other process can fetch the key')
+		expect(String(failure)).toContain('revoked')
+		expect(String(failure)).not.toContain('Control keeps following it')
+		expect(asked.calls.map((call) => Reflect.get(Object(call.body), 'method'))).not.toContain('approvals.requests.fetchKey')
+	})
+
 	test('an action and an expiry are required before anything is sent', async () => {
 		const asked = control()
 		await expect(runControlCli('access', ['request-key', '--app=notes', '--label=x', '--expires-in=60', '--wait'], undefined, CONTROL_ENV)).rejects
@@ -1741,6 +1762,53 @@ describe('control requests', () => {
 		})
 		expect(outcome).toMatchObject({ state: 'rejected' })
 		expect(refused.split('\n').at(-1)).toBe('a person refused this request; nothing changed')
+	})
+
+	test('--wait reads again after a network error or a 5xx, and stops at once on any other failure', async () => {
+		const future = Math.floor(Date.now() / 1000) + 3600
+		const waiting: ApprovalRequestDto = { ...pending, deadline: future }
+		const answers: (ApprovalRequestDto | RpcError)[] = [
+			new RpcError({ type: 'transport', message: 'Network request failed', httpStatus: 0 }),
+			new RpcError({ type: 'error', message: 'upstream unavailable', httpStatus: 503 }),
+			{ ...waiting, state: 'executed', result: { ok: true } },
+		]
+		const reads = (list: (ApprovalRequestDto | RpcError)[]) => () => {
+			const next = list.shift()
+			if (next === undefined) throw new Error('read past the outcome')
+			return next instanceof RpcError ? Promise.reject(next) : Promise.resolve(next)
+		}
+		let outcome: ApprovalRequestDto | null = null
+		const err = await captureStderr(async () => {
+			outcome = await followRequest(reads(answers), waiting, { intervalMs: 0, settleTimeoutMs: 60_000 })
+		})
+		expect(outcome).toMatchObject({ state: 'executed' })
+		expect(answers).toEqual([])
+		expect(err).toContain('could not read the request (a network error); reading it again')
+		expect(err).toContain('could not read the request (HTTP 503); reading it again')
+
+		const forbidden = new RpcError({ type: 'forbidden', message: 'not authorized', httpStatus: 403 })
+		const refused: (ApprovalRequestDto | RpcError)[] = [forbidden, { ...waiting, state: 'executed' }]
+		await captureStderr(async () => {
+			await expect(followRequest(reads(refused), waiting, { intervalMs: 0, settleTimeoutMs: 60_000 })).rejects.toBe(forbidden)
+		})
+		expect(refused).toHaveLength(1)
+	})
+
+	test('--wait stops reading again once the request is past its deadline', async () => {
+		const unavailable = new RpcError({ type: 'error', message: 'upstream unavailable', httpStatus: 503 })
+		const late: ApprovalRequestDto = { ...pending, deadline: Math.floor(Date.now() / 1000) - 1 }
+		let reads = 0
+		await captureStderr(async () => {
+			await expect(followRequest(
+				() => {
+					reads++
+					return Promise.reject(unavailable)
+				},
+				late,
+				{ intervalMs: 0, settleTimeoutMs: 60_000 },
+			)).rejects.toBe(unavailable)
+		})
+		expect(reads).toBe(1)
 	})
 
 	test('--wait stops with an error once a decided request has not settled within its bound', async () => {

@@ -1700,7 +1700,13 @@ const requestKey = async (flags: Flags, env: Readonly<Record<string, string | un
 	console.warn(`a person approves or refuses this request at ${created.url}`)
 	console.warn(`the public key's thumbprint is ${recipientKeyThumbprint(publicKey)}: the person sees the same one on the page`)
 	const read = (id: string) => client.approvals.requests.get({ id })
-	const settled = await followRequest(read, await read(created.id), { intervalMs: WAIT_INTERVAL_MS, settleTimeoutMs: REQUEST_SETTLE_TIMEOUT_MS })
+	const settled = await followRequest(read, await read(created.id), {
+		intervalMs: WAIT_INTERVAL_MS,
+		settleTimeoutMs: REQUEST_SETTLE_TIMEOUT_MS,
+		unsettled: (request, minutes) =>
+			`the request is still ${request.state} after ${minutes} minutes, and this process stops waiting: no other process can fetch the key, `
+			+ 'since the private key that opens it lived only here; a key nobody fetched is revoked at its delivery deadline, so ask again',
+	})
 	if (settled.state !== 'executed') throw new Error(requestHint(settled) ?? `the request is ${settled.state}`)
 	const { jwe } = await client.approvals.requests.fetchKey({ id: created.id })
 	const { plaintext } = await compactDecrypt(jwe, pair.privateKey, {
@@ -1740,14 +1746,27 @@ export const requestHint = (request: ApprovalRequestDto): string | null => {
  */
 const REQUEST_SETTLE_TIMEOUT_MS = 15 * 60_000
 
+/** A failed read worth repeating: the request never arrived, or Control or a hop before it failed (5xx). */
+const transientFailure = (error: unknown): string | null => {
+	if (!(error instanceof RpcError) || error.httpStatus === undefined) return null
+	if (error.httpStatus === 0) return 'a network error'
+	return error.httpStatus >= 500 ? `HTTP ${error.httpStatus}` : null
+}
+
 /**
  * Follow a request until it settles, saying each stage once on stderr; what it ended as is what this answers. Once it is
- * no longer pending, it stops with an error after `settleTimeoutMs`.
+ * no longer pending, it stops with an error after `settleTimeoutMs`, which `unsettled` words. A read that fails on the way
+ * or with a 5xx is repeated at the next interval while the wait lasts: until the deadline of a pending request, and
+ * until `settleTimeoutMs` of a decided one.
  */
 export const followRequest = async (
 	read: (id: string) => Promise<ApprovalRequestDto>,
 	first: ApprovalRequestDto,
-	options: { readonly intervalMs: number; readonly settleTimeoutMs: number },
+	options: {
+		readonly intervalMs: number
+		readonly settleTimeoutMs: number
+		readonly unsettled?: (request: ApprovalRequestDto, minutes: number) => string
+	},
 ): Promise<ApprovalRequestDto> => {
 	let request = first
 	let said: string | null = null
@@ -1756,9 +1775,10 @@ export const followRequest = async (
 		if (request.state !== 'pending') {
 			decidedAt ??= Date.now()
 			if (Date.now() - decidedAt >= options.settleTimeoutMs) {
+				const minutes = Math.round(options.settleTimeoutMs / 60_000)
 				throw new Error(
-					`the request is still ${request.state} after ${Math.round(options.settleTimeoutMs / 60_000)} minutes; Control keeps following it: `
-						+ `fabrika control requests get ${request.id}`,
+					options.unsettled?.(request, minutes)
+						?? `the request is still ${request.state} after ${minutes} minutes; Control keeps following it: fabrika control requests get ${request.id}`,
 				)
 			}
 		}
@@ -1766,7 +1786,14 @@ export const followRequest = async (
 		if (line !== said) console.warn(line)
 		said = line
 		await Bun.sleep(options.intervalMs)
-		request = await read(request.id)
+		try {
+			request = await read(request.id)
+		} catch (error) {
+			const transient = transientFailure(error)
+			const waitEndsAt = decidedAt === null ? request.deadline * 1000 : decidedAt + options.settleTimeoutMs
+			if (transient === null || Date.now() >= waitEndsAt) throw error
+			console.warn(`could not read the request (${transient}); reading it again`)
+		}
 	}
 	const hint = requestHint(request)
 	if (hint !== null) console.warn(hint)
