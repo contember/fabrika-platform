@@ -102,9 +102,17 @@ const meSchema = z.object({
 	permissions: z.array(z.object({ action: z.string(), scope: z.object({ type: z.string(), value: z.string() }).nullable() })),
 })
 
+/** IAM could not be asked, or did not answer what it was asked: it said neither yes nor no. */
+export class IamUnreachableError extends Error {
+	constructor() {
+		super('IAM could not be reached')
+		this.name = 'IamUnreachableError'
+	}
+}
+
 /** IAM as the person deciding a request in the console, with their console token. */
 export interface IamApprover {
-	/** What the person administers in IAM; null for nothing, and when IAM cannot say. */
+	/** What the person administers in IAM; null for nothing. Throws `IamUnreachableError` when IAM cannot say. */
 	administration(): Promise<IamAdministrationScope | null>
 	/** The person's console grant (`grants.create`). IAM's refusal throws as an `RpcError` with its status. */
 	createGrant(input: CreateGrantRequest): Promise<GrantOutcome>
@@ -116,14 +124,18 @@ export function consoleIamApprover(gateway: HttpService, request: Request): IamA
 	if (client === null) return null
 	return {
 		async administration() {
+			let answered: unknown
 			try {
-				const me = meSchema.parse(await client.me())
-				const permissions: PermissionEntry[] = me.permissions.map((entry) => ({ action: entry.action, scope: entry.scope, source: 'grant' }))
-				return iamAdministrationScope(permissions)
-			} catch {
-				// A person IAM gives no administration is refused `me`; either way they administer nothing Control may rely on.
-				return null
+				answered = await client.me()
+			} catch (cause) {
+				// A person IAM gives no administration is refused `me`; anything else is IAM not answering.
+				if (cause instanceof RpcError && (cause.httpStatus === 401 || cause.httpStatus === 403)) return null
+				throw new IamUnreachableError()
 			}
+			const me = meSchema.safeParse(answered)
+			if (!me.success) throw new IamUnreachableError()
+			const permissions: PermissionEntry[] = me.data.permissions.map((entry) => ({ action: entry.action, scope: entry.scope, source: 'grant' }))
+			return iamAdministrationScope(permissions)
 		},
 		async createGrant(input) {
 			const answered = grantChangeSchema.parse(await client.grants.create(input))

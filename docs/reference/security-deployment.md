@@ -202,8 +202,9 @@ Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category `a
   since an agent's own credential grants nothing in IAM. The request binds the principal's label and grants at the
   application and the role as the approved contract declares it; a change of any of them before the execution, a
   deploy that changes the role included, closes it `stale`. It is decided by an IAM administrator of the application (`iam.admin`, or
-  `iam.users.manage` there, read from IAM's `me` with the person's console token), not by `access.approve`; the page
-  shows the role as the access map summarizes it and what the principal holds now. Approving makes the grant as the
+  `iam.users.manage` there, read from IAM's `me` with the person's console token), not by `access.approve`. When IAM
+  cannot be asked, reading or deciding it answers 503, and the list of requests leaves it out and says IAM could not
+  be reached (`iamUnreachable`). The page shows the role as the access map summarizes it and what the principal holds now. Approving makes the grant as the
   approver's console grant through `IAM_ADMIN` with their console token, so IAM checks them as for the console and
   writes `iam.grant.create` under them, naming the request and its requester; an IAM refusal closes the request
   `failed` with IAM's reason. Where the application's grants wait (`grants: person`), IAM opens its own grant request

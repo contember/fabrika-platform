@@ -4,6 +4,7 @@ import { z } from 'zod'
 import type {
 	ApprovalRequestDto,
 	ApprovalRequestIdInput,
+	ApprovalRequestListResponse,
 	CreateApprovalRequestInput,
 	CreateApprovalRequestResponse,
 	DecideApprovalRequestInput,
@@ -276,7 +277,7 @@ export interface ControlRpcContract {
 			/** The requester's own, or any at coordinates where the caller holds `access.approve`. */
 			get: RpcProcedure<ApprovalRequestIdInput, ApprovalRequestDto>
 			/** The open requests at coordinates where the caller holds `access.approve`. */
-			list: RpcProcedure<void, ListResponse<ApprovalRequestDto>>
+			list: RpcProcedure<void, ApprovalRequestListResponse>
 			/** A person in the console with `access.approve` at the request's coordinates. */
 			decide: RpcProcedure<DecideApprovalRequestInput, ApprovalRequestDto>
 			/** A passkey challenge bound to one decision of a request that takes a step-up; the same person and right as `decide`. */

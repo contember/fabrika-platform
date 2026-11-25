@@ -524,6 +524,44 @@ for (const backend of backends) {
 			expect((await listApprovalRequestsUseCase(await w.person(w.bob, 'bob'))).items.map((item) => item.id)).toEqual([created.id])
 		})
 
+		test('an administrator IAM cannot be asked about is told so (503), never that the request does not exist', async () => {
+			const w = await world()
+			const created = await w.ask()
+			const unreachable = async (transport: HttpService): Promise<ApprovalRequestContext> => {
+				const ada = await w.person(w.ada, 'ada')
+				const iamApprover = consoleIamApprover(transport, ada.admission.request)
+				if (iamApprover === null) throw new Error('no console token')
+				return { ...ada, iamApprover }
+			}
+			const outages: HttpService[] = [
+				{ fetch: () => Promise.reject(new Error('connection refused')) },
+				{ fetch: () => Promise.resolve(new Response('upstream unavailable', { status: 502 })) },
+			]
+			for (const outage of outages) {
+				const read = await status(getApprovalRequestUseCase(await unreachable(outage), created.id))
+				expect(read.status).toBe(503)
+				expect(read.message).toContain('IAM')
+				const decision = {
+					id: created.id,
+					decision: 'approve' as const,
+					inputDigest: (await getApprovalRequestUseCase(await w.person(w.ada, 'ada'), created.id)).inputDigest,
+				}
+				expect((await status(decideApprovalRequestUseCase(await unreachable(outage), decision))).status).toBe(503)
+				// The list leaves the request out, and says why.
+				expect(await listApprovalRequestsUseCase(await unreachable(outage))).toEqual({ items: [], iamUnreachable: true })
+				// The requester reads its own request still, shown no more than without IAM.
+				const agentToken = new Request(`${CONSOLE}/api/rpc`, { method: 'POST', headers: { 'X-Fabrika-Token': 'agent-token' } })
+				const agentIam = consoleIamApprover(outage, agentToken)
+				if (agentIam === null) throw new Error('no token')
+				const own = await getApprovalRequestUseCase({ ...w.agent('kim'), iamApprover: agentIam }, created.id)
+				expect(own.description.facts.map((fact) => fact.label)).not.toContain('Holds now')
+			}
+			expect((await w.db.approvalRequests.get(created.id))?.state).toBe('pending')
+			// A person IAM answers administers nothing still reads it as absent, with no word of IAM.
+			expect(await status(getApprovalRequestUseCase(await w.person(w.eve, 'eve'), created.id))).toMatchObject({ status: 404 })
+			expect(await listApprovalRequestsUseCase(await w.person(w.eve, 'eve'))).toEqual({ items: [] })
+		})
+
 		test("requesterMayApprove: false keeps the requester's own person from approving their agent's grant", async () => {
 			const w = await world()
 			await w.protect('prod', STRICT_POLICY, {

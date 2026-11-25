@@ -4,7 +4,7 @@
 import type { JsonValue } from '@fabrika/provider-contract'
 import type { StepUpMode } from './approval-policy.js'
 import type { ApprovalStepUp } from './approval-step-up.js'
-import type { AccessMapRoleDto } from './index.js'
+import type { AccessMapRoleDto, ListResponse } from './index.js'
 
 /**
  * `pending` waits for a decision; `approved`, `rejected` and `expired` follow it. An approved request moves to `executing`
@@ -101,6 +101,12 @@ export interface ApprovalRequestDto {
 	result?: JsonValue
 	/** Why it failed, went stale or is unknown, in Fabrika's words. */
 	error?: string
+}
+
+/** The requests waiting for the caller to decide. */
+export interface ApprovalRequestListResponse extends ListResponse<ApprovalRequestDto> {
+	/** Control could not ask IAM what the caller administers, so a request an IAM administrator decides may be left out. */
+	iamUnreachable?: true
 }
 
 /** Ask a person to approve one action. `input` is the action's own, checked by its kind. */

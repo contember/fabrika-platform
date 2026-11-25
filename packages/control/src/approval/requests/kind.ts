@@ -40,7 +40,8 @@ export interface RequestExecutionContext extends RequestActionContext {
 
 /**
  * The person reading or deciding a request: their Control token, and what they administer in IAM, which IAM answers for
- * their console token (null for nothing, and where Control cannot ask).
+ * their console token (null for nothing, and where Control has no IAM to ask as them; `IamUnreachableError` when IAM
+ * does not answer).
  */
 export interface RequestApprover {
 	readonly auth: AuthContext
@@ -113,7 +114,7 @@ export interface RequestKindDefinition<Input, Before, Asked = never> {
 	readonly admit?: (c: RequestActionContext, input: Input) => Promise<void>
 	/**
 	 * Whether a person may decide it. Absent: `access.approve` at the coordinates, Control's own kinds. An IAM kind names
-	 * the application's IAM administration here.
+	 * the application's IAM administration here, and throws `IamUnreachableError` when IAM cannot say.
 	 */
 	readonly approverMayDecide?: (approver: RequestApprover, coordinates: RequestCoordinates) => Promise<boolean>
 	/**
