@@ -651,7 +651,7 @@ for (const backend of backends) {
 				expect(await w.db.registry.getApp('notes')).toMatchObject({ build_cmd: 'bun run build', default_branch: 'trunk' })
 
 				const stale = await ask(w, 'apps.update', { appId: 'notes', app: { buildCmd: 'bun run build:prod' } })
-				await w.db.registry.updateApp('notes', { buildCmd: 'make' }, { unlessProtected: false })
+				await w.db.registry.updateApp('notes', { buildCmd: 'make' })
 				expect((await decide(w, stale.id, 'approve')).state).toBe('stale')
 				expect((await w.db.registry.getApp('notes'))?.build_cmd).toBe('make')
 

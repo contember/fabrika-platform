@@ -4,6 +4,7 @@
 
 import type { AuthContext } from '@fabrika/auth'
 import {
+	type ActionCategory,
 	ALL_ENVIRONMENTS,
 	type ApprovalRequestChallengeInput,
 	type ApprovalRequestDescription,
@@ -74,6 +75,11 @@ export function approvalRequestUrl(consoleOrigin: string, id: string): string {
 	return `${consoleOrigin}/approvals/requests/${encodeURIComponent(id)}`
 }
 
+/** Why an environment's `refuse` keeps a non-person from a change, asked for or made directly (ADR-0083 §3). */
+export function refusedToNonPerson(env: string, category: ActionCategory): string {
+	return `environment \`${env}\` refuses this to an agent or a key (${category}: refuse): only a person makes the change, in the console`
+}
+
 function nowOf(c: ApprovalRequestContext): number {
 	return (c.now ?? (() => Math.floor(Date.now() / 1000)))()
 }
@@ -125,12 +131,7 @@ export async function createApprovalRequestUseCase(
 	const reach = await reachOf(c.repositories.registry, asked.coordinates)
 	if (reach === null) fail(404, env === ALL_ENVIRONMENTS ? 'app not found' : 'app env not found')
 	const refusing = refusingEnvironment(reach, kind.category)
-	if (refusing !== null) {
-		fail(
-			403,
-			`environment \`${refusing.env}\` refuses this to an agent or a key (${kind.category}: refuse): only a person makes the change, in the console`,
-		)
-	}
+	if (refusing !== null) fail(403, refusedToNonPerson(refusing.env, kind.category))
 	if (c.consoleOrigin === undefined) fail(503, 'Control knows no console origin, so a request would have no link a person could open')
 	const id = uuidv7()
 	const held = await asked.hold(c, id)

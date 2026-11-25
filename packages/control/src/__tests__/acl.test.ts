@@ -11,6 +11,8 @@ import { rpcRequest, rpcResult } from './helpers/rpc'
 // ACL enforcement at the API boundary, exercised with resolved dev contexts. Each context carries a
 // permissions array that `can()` checks against the requested action and scope.
 
+const ORIGIN = 'https://control.test'
+
 /** In-memory deps for the router: real Db over sqlite, a recording queue, an empty R2 reader. */
 function makeDeps(auth: AuthContext): { deps: ControlRpcDeps; queue: ControlJobMessage[]; sqlite: ReturnType<typeof createHarness>['sqlite'] } {
 	const { db, sqlite } = createHarness()
@@ -169,7 +171,7 @@ describe('ACL enforcement (resolved auth context)', () => {
 		expect(queue).toHaveLength(3)
 	})
 
-	test('only a person changes what a deploy of a protected environment runs', async () => {
+	test("a non-person's change of what a deploy of a protected environment runs never applies directly", async () => {
 		const manager = authWithActions(['app.manage'], 'op@fabrika.test')
 		const service: AuthContext = { ...manager, principal: { id: 'svc', type: 'service', label: 'builder' } }
 		const envelopes = {
@@ -187,20 +189,18 @@ describe('ACL enforcement (resolved auth context)', () => {
 		}
 
 		const update = (app: Record<string, string | null>) => rpcRequest('apps.update', { appId: 'app', app })
-		const refusal = (env: string, change: string) =>
-			`environment \`${env}\` is protected: only a person changes ${change}, which decides what a deploy there runs; `
-			+ 'an agent, a builder key or a service key cannot'
 
+		// A key's put of a protected environment goes to the gate whole (ADR-0083 §1, D8). This release's request of it takes
+		// no provider envelope, so the put is refused and nothing changes.
 		const key = await seeded(service)
-		const redirected = await rpcResult(put('prod', 'refs/heads/unreviewed'), key)
-		expect(redirected.status).toBe(403)
-		expect(await redirected.text()).toContain(refusal('prod', 'its trigger ref'))
+		const redirected = await rpcResult(put('prod', 'refs/heads/unreviewed'), key, { consoleOrigin: ORIGIN })
+		expect(redirected.status).toBe(400)
 		expect((await key.repositories.registry.getAppEnv('app', 'prod'))?.trigger_ref).toBe('refs/heads/main')
-		// The same trigger ref is no change, and an unprotected environment takes a key.
-		expect((await rpcResult(put('prod', 'main'), key)).status).toBe(200)
+		// An unprotected environment takes a key.
 		expect((await rpcResult(put('stage', 'refs/heads/feature'), key)).status).toBe(200)
 
-		// Every field of the app decides what its deploys run.
+		// Every field of the app decides what its deploys run, so a key's change of any waits for a person; the repository
+		// needs global app.manage, which this release's request does not take.
 		const fields: Array<[string, string]> = [
 			['repoUrl', 'github.com/other/app'],
 			['defaultBranch', 'release'],
@@ -209,9 +209,8 @@ describe('ACL enforcement (resolved auth context)', () => {
 			['configPath', 'deploy/fabrika.config.ts'],
 		]
 		for (const [field, value] of fields) {
-			const moved = await rpcResult(update({ [field]: value }), key)
-			expect(moved.status).toBe(403)
-			expect(await moved.text()).toContain(refusal('prod', `its application's ${field}`))
+			const moved = await rpcResult(update({ [field]: value }), key, { consoleOrigin: ORIGIN })
+			expect({ field, status: moved.status }).toEqual({ field, status: field === 'repoUrl' ? 400 : 409 })
 		}
 		expect(await key.repositories.registry.getApp('app')).toMatchObject({
 			repo_url: 'github.com/acme/app',
@@ -220,8 +219,6 @@ describe('ACL enforcement (resolved auth context)', () => {
 			build_cmd: null,
 			config_path: null,
 		})
-		// A stored value named again, or a null (which keeps the stored value), changes nothing.
-		expect((await rpcResult(update({ defaultBranch: 'main', buildCmd: null }), key)).status).toBe(200)
 
 		const person = await seeded(manager)
 		expect((await rpcResult(put('prod', 'refs/heads/release'), person)).status).toBe(200)
@@ -285,22 +282,22 @@ describe('ACL enforcement (resolved auth context)', () => {
 		const refusal = 'environment `prod` is protected: only a person changes its domain; an agent, a builder key or a service key cannot'
 
 		for (const caller of [service, agent]) {
+			// The put of a protected environment goes to the gate, and nothing changes.
 			const deps = await seeded(caller)
-			const moved = await rpcResult(put('prod', 'app.attacker.example'), deps)
-			expect(moved.status).toBe(403)
-			expect(await moved.text()).toContain(refusal)
+			expect((await rpcResult(put('prod', 'app.attacker.example'), deps)).status).toBe(400)
+			expect((await rpcResult(put('prod', null), deps)).status).toBe(400)
 			expect((await deps.repositories.registry.getAppEnv('app', 'prod'))?.domain).toBe('app.example.com')
-			// A new environment that starts protected takes a person for its first domain too.
+			// A new environment that starts protected has no request to wait in, so its first domain takes a person.
 			await deps.repositories.registry.deleteAppEnv('app', 'prod')
 			const created = await rpcResult(put('prod', 'app.attacker.example'), deps)
 			expect(created.status).toBe(403)
+			expect(await created.text()).toContain(refusal)
 			expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
-			// The same domain is no change, an unprotected environment takes a key, and clearing a domain stays open.
-			expect((await rpcResult(put('prod', 'app.example.com'), await seeded(caller))).status).toBe(200)
+			// An unprotected environment takes a key, a cleared domain included.
 			const other = await seeded(caller)
 			expect((await rpcResult(put('stage', 'next.example.com'), other)).status).toBe(200)
-			expect((await rpcResult(put('prod', null), other)).status).toBe(200)
-			expect((await other.repositories.registry.getAppEnv('app', 'prod'))?.domain).toBeNull()
+			expect((await rpcResult(put('stage', null), other)).status).toBe(200)
+			expect((await other.repositories.registry.getAppEnv('app', 'stage'))?.domain).toBeNull()
 		}
 
 		const person = await seeded(manager)
@@ -336,21 +333,21 @@ describe('ACL enforcement (resolved auth context)', () => {
 		const refusal = 'environment `prod` is protected: only a person changes its public origin; an agent, a builder key or a service key cannot'
 
 		for (const caller of [service, agent]) {
+			// The put of a protected environment goes to the gate, and nothing changes.
 			const deps = await seeded(caller)
-			const moved = await rpcResult(put('prod', 'https://attacker.example'), deps)
-			expect(moved.status).toBe(403)
-			expect(await moved.text()).toContain(refusal)
+			expect((await rpcResult(put('prod', 'https://attacker.example'), deps)).status).toBe(400)
 			expect((await deps.repositories.registry.getAppEnv('app', 'prod'))?.public_origin).toBe('https://app.example.com')
-			// A new environment that starts protected takes a person for its first public origin too.
+			// A new environment that starts protected has no request to wait in, so its first public origin takes a person.
 			await deps.repositories.registry.deleteAppEnv('app', 'prod')
-			expect((await rpcResult(put('prod', 'https://attacker.example'), deps)).status).toBe(403)
+			const created = await rpcResult(put('prod', 'https://attacker.example'), deps)
+			expect(created.status).toBe(403)
+			expect(await created.text()).toContain(refusal)
 			expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
-			// The same origin is no change, an unprotected environment takes a key, and clearing an origin stays open.
-			expect((await rpcResult(put('prod', 'https://app.example.com'), await seeded(caller))).status).toBe(200)
+			// An unprotected environment takes a key, a cleared origin included.
 			const other = await seeded(caller)
 			expect((await rpcResult(put('stage', 'https://next.example.com'), other)).status).toBe(200)
-			expect((await rpcResult(put('prod', null), other)).status).toBe(200)
-			expect((await other.repositories.registry.getAppEnv('app', 'prod'))?.public_origin).toBeNull()
+			expect((await rpcResult(put('stage', null), other)).status).toBe(200)
+			expect((await other.repositories.registry.getAppEnv('app', 'stage'))?.public_origin).toBeNull()
 		}
 
 		const person = await seeded(manager)
