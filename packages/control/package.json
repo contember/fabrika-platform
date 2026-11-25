@@ -1,6 +1,6 @@
 {
 	"name": "@fabrika/control",
-	"version": "0.9.0-dev.42",
+	"version": "0.9.0-dev.43",
 	"private": true,
 	"type": "module",
 	"exports": {

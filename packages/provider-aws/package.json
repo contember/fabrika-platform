@@ -1,7 +1,7 @@
 {
 	"name": "@fabrika/provider-aws",
 	"private": true,
-	"version": "0.9.0-dev.42",
+	"version": "0.9.0-dev.43",
 	"type": "module",
 	"exports": {
 		".": {

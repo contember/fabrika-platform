@@ -7,7 +7,7 @@ provides: [authentication, authorization, proxy-enforcement]
 requires: [cloudflare]
 recommends: []
 conflicts: [fabrika-iam, cloudflare-access, auth-password-kv, zerops-fabrika-auth]
-npm: ["@fabrika/app@0.9.0-dev.42", "@fabrika/db@0.9.0-dev.42", "@fabrika/ui@0.9.0-dev.42", "@fabrika/provider-cloudflare@0.9.0-dev.42", "@fabrika/check@0.9.0-dev.42", "@fabrika/cli@0.9.0-dev.42", "zod@^3.25.76"]
+npm: ["@fabrika/app@0.9.0-dev.43", "@fabrika/db@0.9.0-dev.43", "@fabrika/ui@0.9.0-dev.43", "@fabrika/provider-cloudflare@0.9.0-dev.43", "@fabrika/check@0.9.0-dev.43", "@fabrika/cli@0.9.0-dev.43", "zod@^3.25.76"]
 status: wip
 sources:
   - where: "packages/app/skill/SKILL.md in fabrika-platform (the `fabrika-app` skill)"
