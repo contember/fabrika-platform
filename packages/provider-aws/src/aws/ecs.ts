@@ -196,7 +196,7 @@ export const ECS_PORT_NAME = 'http'
 
 /**
  * A service in a Service Connect namespace as a server: its port (`ECS_PORT_NAME`) published under `discoveryName`,
- * which the namespace's other services (its proxy) reach at `http://<discoveryName>:<port>`. Reachable only from what
+ * which the namespace's other services (its proxy) dial at `<discoveryName>:<port>`. Reachable only from what
  * the task's security group admits.
  */
 export interface EcsServiceConnect {

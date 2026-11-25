@@ -5,9 +5,10 @@
 //
 // - The entry's id is the environment's IAM application id (`appEnvironmentId`, ADR-0022 rule 6), its table the
 //   approved contract's alone (ADR-0050): a member without approved access is not routed.
-// - Its upstream is the service's discovery name on the application's port, `http://<discovery name>:3000`, derived
-//   from the application id and environment (`awsEnvironmentResources`), never read from a registration, so no member
-//   can aim the proxy at another environment's service. Only the proxy's security group reaches that port.
+// - Its upstream is the service's discovery name on the application's port, `<discovery name>:3000`: a Caddy dial
+//   address (`host:port`, no scheme, which `reverse_proxy` would refuse as an unknown network), derived from the
+//   application id and environment (`awsDiscoveryName`), never read from a registration, so no member can aim the proxy
+//   at another environment's service. Only the proxy's security group reaches that port.
 // - The scheme is `https`: the installation's balancer terminates TLS, and the proxy is reached over plain HTTP behind
 //   it.
 // - A member needs a domain to be routed; two members on one host, or a dev member (no sandbox host on AWS), are
@@ -23,11 +24,11 @@ import {
 import { contractProxyEntry, contractProxyTable, type ProxyManifest } from '@fabrika/proxy-core/manifest'
 import { AWS_PROVIDER, awsAppArtifactCodec } from './codecs'
 import { AWS_APPLICATION_PORT } from './ecs-task'
-import { awsEnvironmentResources } from './resources'
+import { awsDiscoveryName } from './resources'
 
-/** The address the namespace's proxy reaches one environment's service at, in its Service Connect namespace. */
-export function awsProxyUpstream(appId: string, env: string, accountId: string): string {
-	return `http://${awsEnvironmentResources(appId, env, accountId).discoveryName}:${AWS_APPLICATION_PORT}`
+/** The dial address (`host:port`) the namespace's proxy reaches one environment's service at, in Service Connect. */
+export function awsProxyUpstream(appId: string, env: string): string {
+	return `${awsDiscoveryName(appId, env)}:${AWS_APPLICATION_PORT}`
 }
 
 /** A member the proxy routes: on its domain, lower-cased, with its approved access; undefined for one it does not. */
@@ -45,7 +46,7 @@ function routed(
 }
 
 /** Compile every routed member of one namespace into its strict proxy manifest. */
-export function awsNamespaceProxyManifest(namespaceId: string, members: readonly ProviderNamespaceMember[], accountId: string): ProxyManifest {
+export function awsNamespaceProxyManifest(namespaceId: string, members: readonly ProviderNamespaceMember[]): ProxyManifest {
 	const apps: ProxyManifest['apps'] = []
 	const ids = new Set<string>()
 	const hosts = new Set<string>()
@@ -60,7 +61,7 @@ export function awsNamespaceProxyManifest(namespaceId: string, members: readonly
 		apps.push(contractProxyEntry({
 			id,
 			hosts: [entry.host],
-			upstream: awsProxyUpstream(member.appId, member.env, accountId),
+			upstream: awsProxyUpstream(member.appId, member.env),
 			scheme: 'https',
 			suspended: member.suspended === true,
 			table: contractProxyTable(entry.access.contract, entry.access.contractDigest),

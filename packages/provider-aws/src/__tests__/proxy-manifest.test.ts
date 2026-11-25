@@ -11,7 +11,6 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import { awsAppArtifactCodec } from '../codecs'
 import { awsNamespaceMemberHosts, awsNamespaceProxyManifest, awsProxyUpstream } from '../proxy-manifest'
 
-const ACCOUNT = '123456789012'
 const contract = { ...notesArtifact, tables: {}, jobs: {}, files: {}, fileKinds: {} }
 const access: ProviderApprovedAccess = { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), checker: '0.9.1' }
 
@@ -26,13 +25,13 @@ const member = (change: Partial<ProviderNamespaceMember> = {}): ProviderNamespac
 
 describe('awsNamespaceProxyManifest', () => {
 	test("routes a member on its domain to its service's discovery name, with the approved contract's table", () => {
-		const manifest = awsNamespaceProxyManifest('shared', [member({ operationsOrigin: 'https://ops.example.com' })], ACCOUNT)
+		const manifest = awsNamespaceProxyManifest('shared', [member({ operationsOrigin: 'https://ops.example.com' })])
 		expect(manifest.apps).toHaveLength(1)
 		const [entry] = manifest.apps
 		expect(entry).toMatchObject({
 			id: 'notes@prod',
 			hosts: ['notes.example.com'],
-			upstream: 'http://e5-notes-prod:3000',
+			upstream: 'e5-notes-prod:3000',
 			// The balancer terminates TLS: the browser speaks https.
 			scheme: 'https',
 			operationsOrigin: 'https://ops.example.com',
@@ -44,26 +43,28 @@ describe('awsNamespaceProxyManifest', () => {
 	})
 
 	test('the upstream is derived from the application id and environment, never read from the member', () => {
-		expect(awsProxyUpstream('notes', 'stage', ACCOUNT)).toBe('http://e5-notes-stage:3000')
-		const manifest = awsNamespaceProxyManifest('shared', [member(), member({ env: 'stage', domain: 'stage.example.com' })], ACCOUNT)
-		expect(manifest.apps.map((app) => app.upstream)).toEqual(['http://e5-notes-prod:3000', 'http://e5-notes-stage:3000'])
+		expect(awsProxyUpstream('notes', 'stage')).toBe('e5-notes-stage:3000')
+		const manifest = awsNamespaceProxyManifest('shared', [member(), member({ env: 'stage', domain: 'stage.example.com' })])
+		expect(manifest.apps.map((app) => app.upstream)).toEqual(['e5-notes-prod:3000', 'e5-notes-stage:3000'])
+		// A dial address, as Caddy's `reverse_proxy` takes it: `host:port`, never a URL, whose scheme it reads as a network.
+		for (const app of manifest.apps) expect(app.upstream).toMatch(/^[a-z][a-z0-9-]*:\d+$/)
 	})
 
 	test('a member without approved access is not routed; a suspended one is routed to answer 503', () => {
 		const { access: _none, ...unapproved } = member()
-		expect(awsNamespaceProxyManifest('shared', [unapproved], ACCOUNT).apps).toEqual([])
+		expect(awsNamespaceProxyManifest('shared', [unapproved]).apps).toEqual([])
 		expect(awsNamespaceMemberHosts(unapproved)).toEqual([])
-		expect(awsNamespaceProxyManifest('shared', [member({ suspended: true })], ACCOUNT).apps[0]).toMatchObject({ suspended: true })
+		expect(awsNamespaceProxyManifest('shared', [member({ suspended: true })]).apps[0]).toMatchObject({ suspended: true })
 	})
 
 	test('a routed member without a domain, two on one host, a dev member or one of another provider is refused', () => {
-		expect(() => awsNamespaceProxyManifest('shared', [member({ domain: '' })], ACCOUNT)).toThrow('has no domain for its proxy to route')
-		expect(() => awsNamespaceProxyManifest('shared', [member(), member({ env: 'stage', domain: 'notes.example.com' })], ACCOUNT)).toThrow(
+		expect(() => awsNamespaceProxyManifest('shared', [member({ domain: '' })])).toThrow('has no domain for its proxy to route')
+		expect(() => awsNamespaceProxyManifest('shared', [member(), member({ env: 'stage', domain: 'notes.example.com' })])).toThrow(
 			'are routed on notes.example.com',
 		)
-		expect(() => awsNamespaceProxyManifest('shared', [member(), member()], ACCOUNT)).toThrow('holds notes@prod twice')
-		expect(() => awsNamespaceProxyManifest('shared', [member({ devSandboxes: [] })], ACCOUNT)).toThrow('a dev environment')
-		expect(() => awsNamespaceProxyManifest('shared', [member({ artifact: { provider: 'zerops', version: 1, payload: {} } })], ACCOUNT)).toThrow()
+		expect(() => awsNamespaceProxyManifest('shared', [member(), member()])).toThrow('holds notes@prod twice')
+		expect(() => awsNamespaceProxyManifest('shared', [member({ devSandboxes: [] })])).toThrow('a dev environment')
+		expect(() => awsNamespaceProxyManifest('shared', [member({ artifact: { provider: 'zerops', version: 1, payload: {} } })])).toThrow()
 	})
 
 	test('memberHosts answers the host the manifest routes a member on, lower-cased', () => {

@@ -43,11 +43,7 @@ export interface AwsEnvironmentResources {
  * name past IAM's 64, is refused.
  */
 export function awsEnvironmentResources(appId: string, env: string, accountId: string): AwsEnvironmentResources {
-	if (!NAME_PART.test(appId) || !NAME_PART.test(env)) {
-		throw new Error('aws: the application id or environment name is not one this provider names resources by')
-	}
-	const role = `${appId}_${env}`
-	if (`${role}_execution`.length > MAX_ROLE_NAME) throw new Error('aws: the application id and environment name are too long for an IAM role name')
+	const role = checkedRoleName(appId, env)
 	return {
 		service: role,
 		repository: `fabrika/apps/${appId}/${env}`,
@@ -59,7 +55,25 @@ export function awsEnvironmentResources(appId: string, env: string, accountId: s
 		buildRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_build`,
 		buildLogGroup: `/fabrika/apps/${appId}/${env}/build`,
 		stackName: `fabrika-app-${appId.length}-${appId}-${env}`,
-		// The role name's bound above keeps it within a DNS label's 63 characters.
-		discoveryName: `e${appId.length}-${appId}-${env}`,
+		discoveryName: awsDiscoveryName(appId, env),
 	}
+}
+
+/** `<app>_<env>`, once both are names this provider takes and every role name built on it fits IAM's bound. */
+function checkedRoleName(appId: string, env: string): string {
+	if (!NAME_PART.test(appId) || !NAME_PART.test(env)) {
+		throw new Error('aws: the application id or environment name is not one this provider names resources by')
+	}
+	const role = `${appId}_${env}`
+	if (`${role}_execution`.length > MAX_ROLE_NAME) throw new Error('aws: the application id and environment name are too long for an IAM role name')
+	return role
+}
+
+/**
+ * The service's name in its namespace's Service Connect namespace, `e<length of app>-<app>-<env>`, which no account
+ * changes. The role name's bound keeps it within a DNS label's 63 characters.
+ */
+export function awsDiscoveryName(appId: string, env: string): string {
+	checkedRoleName(appId, env)
+	return `e${appId.length}-${appId}-${env}`
 }

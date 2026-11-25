@@ -398,7 +398,7 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     namespace, its server port named `http` (no `appProtocol`, so proxied as TCP: an HTTP port would get a 15 s
     per-request timeout by default, which a long upload or download outlives), under the discovery name
     `e<length of app>-<app>-<env>` (a DNS label; the service's own name holds `_`), with a client alias of that name on
-    the application's port. The proxy reaches an application at `http://<discovery name>:3000`, through its group's
+    the application's port. The proxy dials an application at `<discovery name>:3000`, through its group's
     ingress rule alone. Sent on every update, so a service moved to another namespace is published in the new one.
     **The proxy manifest** (built, `src/proxy-manifest.ts`): one contract entry per member with approved access
     (ADR-0050), its id the environment's IAM application id, routed on its domain (lower-cased; a routed member without
