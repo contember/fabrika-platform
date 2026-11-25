@@ -193,7 +193,8 @@ describe('Postgres', () => {
 				const rows: Record<string, unknown>[] = await sql.unsafe(
 					`select id::text as id, principal, endpoint, p256dh, auth, vapid_key, cursor from ${schema}.${PUSH_SUBSCRIPTIONS_TABLE} where ${where} order by endpoint`,
 				)
-				return rows
+				// Bun.SQL answers an array with fields of its own (count, command); compare plain rows.
+				return rows.map((row) => ({ ...row }))
 			}),
 		exec: async (statement) => {
 			await admin((sql) => sql.unsafe(`set search_path to ${schema}; ${statement}`))
