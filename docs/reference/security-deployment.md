@@ -151,6 +151,10 @@ suspension and resumption, a data operation. The procedures no request may ever 
   is closed (refused, expired, stale, failed or executed) the sealed copy is deleted. A copy left behind (a crash between sealing
   and the row, or between closing and the deletion, or a release without request kinds that closed it) is deleted by
   the maintenance sweep once it is older than the longest wait plus an hour and its request is closed or absent.
+- **A deploy closes a pending request `stale`.** A secret, variable, token-key or backup-schedule request binds its
+  environment's `generation` beside the stored value, because only the generation tells a recreated environment from
+  the one asked about (`app_envs` has no row id). Every publication bumps it, so a deploy of that environment before
+  the decision closes the request `stale`, and the agent asks again.
 - **The all-environments layer** (`env: null`) is a request at the coordinates `<app>@*`, a name no new environment may take. Its decision and the sweep
   hold the deployment lease of every environment it reaches and `<app>:*`, which fences the row, taken in sorted order
   and all or none, so a deploy of any of them makes deciding answer 409. Its before-state binds every environment's `generation`, so a new or changed environment closes it
