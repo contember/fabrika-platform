@@ -20,6 +20,7 @@ import {
 	JOB_SCHEDULE_TABLE,
 	JOB_WAKES_TABLE,
 	LIST_CURSOR_KEY_TABLE,
+	NOTIFICATIONS_TABLE,
 	PUSH_SUBSCRIPTIONS_TABLE,
 	REQUEST_RECEIPTS_TABLE,
 	WEBHOOK_BINDINGS_TABLE,
@@ -230,6 +231,26 @@ CREATE TABLE ${PUSH_SUBSCRIPTIONS_TABLE} (
 ) STRICT;
 CREATE INDEX ${PUSH_SUBSCRIPTIONS_TABLE}_principal ON ${PUSH_SUBSCRIPTIONS_TABLE} (principal, recorded_at) WHERE gone_at IS NULL;
 CREATE INDEX ${PUSH_SUBSCRIPTIONS_TABLE}_gone_at ON ${PUSH_SUBSCRIPTIONS_TABLE} (gone_at) WHERE gone_at IS NOT NULL;
+`,
+	}),
+	Object.freeze({
+		name: '0010_notifications.sql',
+		sql: `-- A notification for one principal (ADR-0088 §6); see the Postgres bundle's 0016. The id is a UUIDv7 as lowercase
+-- text, so text order is the order written.
+CREATE TABLE ${NOTIFICATIONS_TABLE} (
+	id TEXT PRIMARY KEY,
+	principal TEXT NOT NULL,
+	title TEXT NOT NULL,
+	body TEXT NOT NULL,
+	path TEXT NOT NULL,
+	action TEXT NOT NULL,
+	dimension TEXT,
+	scope_value TEXT,
+	created_at INTEGER NOT NULL,
+	CONSTRAINT ${NOTIFICATIONS_TABLE}_about CHECK ((dimension IS NULL) = (scope_value IS NULL))
+) STRICT;
+CREATE INDEX ${NOTIFICATIONS_TABLE}_principal ON ${NOTIFICATIONS_TABLE} (principal, id);
+CREATE INDEX ${NOTIFICATIONS_TABLE}_created_at ON ${NOTIFICATIONS_TABLE} (created_at);
 `,
 	}),
 ])

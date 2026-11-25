@@ -8,7 +8,8 @@ import { openPostgres } from '@fabrika/db/postgres'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { type Database, type Session, sessionOf } from '../database'
-import { FRAMEWORK_MIGRATIONS, PUSH_SUBSCRIPTIONS_TABLE } from '../migrations'
+import { FRAMEWORK_MIGRATIONS, NOTIFICATIONS_TABLE, PUSH_SUBSCRIPTIONS_TABLE } from '../migrations'
+import { NOTIFICATION_LIMITS, type NotificationAbout, notifications } from '../notifications'
 import { PUSH_SUBSCRIPTION_LIMITS, type PushSubscriptionKeys, pushSubscriptions } from '../push-subscriptions'
 import { sqliteFramework } from './fixtures/sqlite-framework'
 
@@ -130,8 +131,54 @@ function suite(name: string, backend: () => Backend, skip: boolean): void {
 			expect(await push.remove(session, ALICE, endpoint('e1'))).toBe(false)
 			expect((await backend().rows()).length).toBe(0)
 		})
+
+		test("the inbox reads the caller's subscription and its cursor, and deletes another principal's", async () => {
+			const session = backend().session()
+			await push.record(session, ALICE, id(1), keys('e1'), null, NOW)
+			expect(await push.inbox(session, ALICE, endpoint('e1'))).toEqual({ cursor: null })
+			expect(await push.inbox(session, ALICE, endpoint('nobody'))).toBeNull()
+			expect(await push.inbox(session, BOB, endpoint('e1'))).toBeNull()
+			expect(await push.binding(session, ALICE, endpoint('e1'))).toBe('unknown')
+		})
+
+		test("a cursor moves forward only, and only on the caller's live row", async () => {
+			const session = backend().session()
+			await push.record(session, ALICE, id(1), keys('e1'), null, NOW)
+			await push.advance(session, ALICE, endpoint('e1'), id(20))
+			await push.advance(session, ALICE, endpoint('e1'), id(10))
+			await push.advance(session, BOB, endpoint('e1'), id(30))
+			expect(await push.inbox(session, ALICE, endpoint('e1'))).toEqual({ cursor: id(20) })
+		})
+
+		test("notifications are read after a cursor, oldest first, the principal's own, within seven days", async () => {
+			const session = backend().session()
+			const about: NotificationAbout = { action: 'notes.read', dimension: 'workspace', value: 'w1' }
+			const write = (n: number, principal: string, createdAt: number) =>
+				table.record(session, { id: id(n), principal, title: `t${n}`, body: 'b', path: '/', about, createdAt })
+			await write(3, ALICE, NOW)
+			await write(1, ALICE, NOW)
+			await write(2, BOB, NOW)
+			await write(4, ALICE, NOW - NOTIFICATION_LIMITS.retentionMs - 1)
+			await table.record(session, {
+				id: id(5),
+				principal: ALICE,
+				title: 't5',
+				body: 'b',
+				path: '/',
+				about: { action: 'notes.read', dimension: null, value: null },
+				createdAt: NOW,
+			})
+			const all = await table.unseen(session, ALICE, null, NOW, 10)
+			expect(all.map((row) => row.id)).toEqual([id(1), id(3), id(5)])
+			expect(all[2]?.about).toEqual({ action: 'notes.read', dimension: null, value: null })
+			expect((await table.unseen(session, ALICE, id(1), NOW, 1)).map((row) => row.id)).toEqual([id(3)])
+			expect(await table.countAfter(session, ALICE, id(1), NOW)).toBe(2)
+			expect(await table.countAfter(session, ALICE, null, NOW)).toBe(3)
+		})
 	})
 }
+
+const table = notifications()
 
 // ── SQLite ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -173,7 +220,7 @@ describe('Postgres', () => {
 	})
 	beforeEach(async () => {
 		if (!hasPostgres) return
-		await admin((sql) => sql.unsafe(`delete from ${schema}.${PUSH_SUBSCRIPTIONS_TABLE}`))
+		await admin((sql) => sql.unsafe(`delete from ${schema}.${PUSH_SUBSCRIPTIONS_TABLE}; delete from ${schema}.${NOTIFICATIONS_TABLE}`))
 	})
 	afterAll(async () => {
 		if (!hasPostgres) return

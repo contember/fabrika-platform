@@ -41,6 +41,9 @@ export interface PushSubscriptionKeys {
 /** Whose a browser's endpoint is, as the caller may learn it: its own live row, another principal's, or none (a tombstone included). */
 export type PushBinding = 'mine' | 'other' | 'unknown'
 
+/** The caller's live subscription and the newest notification the inbox answered for it, or `null` when it is not theirs. */
+export type PushInboxSubscription = { readonly cursor: string | null } | null
+
 /** `recorded`, or why not: the endpoint is bound to another principal, or the replaced endpoint is not the caller's. */
 export type PushRecordOutcome = 'recorded' | 'taken' | 'not_replaceable'
 
@@ -61,6 +64,13 @@ export interface PushSubscriptions {
 		replace: string | null,
 		now: number,
 	): Promise<PushRecordOutcome>
+	/**
+	 * What the inbox reads `endpoint` as for `principal`: the caller's live subscription and its cursor, or none. A live row
+	 * of another principal is deleted here (§7): the browser it wakes is someone else's now, and stops waking for them.
+	 */
+	inbox(session: Session, principal: string, endpoint: string): Promise<PushInboxSubscription>
+	/** Moves the cursor of `principal`'s live `endpoint` forward to `cursor`, never back. */
+	advance(session: Session, principal: string, endpoint: string, cursor: string): Promise<void>
 	/** Removes `principal`'s own row (or tombstone) of `endpoint`; `false` when it has none. */
 	remove(session: Session, principal: string, endpoint: string): Promise<boolean>
 	/** The push service called `endpoint` gone: its live row becomes a tombstone at `now`. `false` when it had none. */
@@ -138,6 +148,21 @@ const SQL_TRIM: DialectTexts = {
 const SQL_BINDING: DialectTexts = {
 	postgres: `select principal from ${T} where endpoint = $1 and gone_at is null`,
 	sqlite: `select principal from ${T} where endpoint = ?1 and gone_at is null`,
+}
+
+const SQL_INBOX: DialectTexts = {
+	postgres: `select principal, cursor from ${T} where endpoint = $1 and gone_at is null for update`,
+	sqlite: `select principal, cursor from ${T} where endpoint = ?1 and gone_at is null`,
+}
+
+const SQL_DROP_OTHER: DialectTexts = {
+	postgres: `delete from ${T} where endpoint = $1 and principal <> $2 and gone_at is null`,
+	sqlite: `delete from ${T} where endpoint = ?1 and principal <> ?2 and gone_at is null`,
+}
+
+const SQL_ADVANCE: DialectTexts = {
+	postgres: `update ${T} set cursor = $3 where endpoint = $1 and principal = $2 and gone_at is null and (cursor is null or cursor::uuid < $3::uuid)`,
+	sqlite: `update ${T} set cursor = ?3 where endpoint = ?1 and principal = ?2 and gone_at is null and (cursor is null or cursor < ?3)`,
 }
 
 const SQL_REMOVE: DialectTexts = {
@@ -230,6 +255,22 @@ export function pushSubscriptions(): PushSubscriptions {
 				await runFixedStatement(transaction, SQL_TRIM[dialect], [principal])
 				return 'recorded'
 			})
+		},
+
+		async inbox(session: Session, principal: string, endpoint: string): Promise<PushInboxSubscription> {
+			const [row] = await runFixedStatement(session, SQL_INBOX[session.dialect], [endpoint])
+			if (row === undefined) {
+				return null
+			}
+			if (nullableText(row, 'principal') !== principal) {
+				await runFixedStatement(session, SQL_DROP_OTHER[session.dialect], [endpoint, principal])
+				return null
+			}
+			return { cursor: nullableText(row, 'cursor') }
+		},
+
+		async advance(session: Session, principal: string, endpoint: string, cursor: string): Promise<void> {
+			await runFixedStatement(session, SQL_ADVANCE[session.dialect], [endpoint, principal, cursor])
 		},
 
 		async remove(session: Session, principal: string, endpoint: string): Promise<boolean> {
