@@ -55,7 +55,7 @@ function flow(options: { issued?: ApprovalStepUpChallenge; get?: () => Promise<u
 describe('the decision', () => {
 	test('under webauthn the prompt runs first, on a challenge for this decision, and the decision carries its answer', async () => {
 		const f = flow()
-		await postDecision('webauthn', f.credentials, f.challenge, f.post)
+		await postDecision('webauthn', f.credentials, f.challenge, f.post, 'decision')
 		expect(f.steps).toEqual(['challenge', 'passkey', 'decision'])
 		expect(f.posted[0]?.challengeId).toBe('challenge-1')
 		expect(f.posted[0]?.credential).toMatchObject({ id: '-_8', type: 'public-key' })
@@ -63,14 +63,14 @@ describe('the decision', () => {
 
 	test('under none it is posted as it is, with no prompt', async () => {
 		const f = flow()
-		await postDecision('none', f.credentials, f.challenge, f.post)
+		await postDecision('none', f.credentials, f.challenge, f.post, 'decision')
 		expect(f.steps).toEqual(['decision'])
 		expect(f.posted).toEqual([undefined])
 	})
 
 	test('a person without a passkey is told so and where to register one, and nothing is posted', async () => {
 		const f = flow({ issued: { kind: 'no-passkey' } })
-		const cause = await postDecision('webauthn', f.credentials, f.challenge, f.post).catch((error: unknown) => error)
+		const cause = await postDecision('webauthn', f.credentials, f.challenge, f.post, 'decision').catch((error: unknown) => error)
 		expect(cause).toBeInstanceOf(NoPasskeyError)
 		expect(f.steps).toEqual(['challenge'])
 		const failure = decisionFailure(cause)
@@ -88,12 +88,14 @@ describe('the decision', () => {
 
 	test('a cancelled prompt, or a browser without passkeys, posts nothing and says why', async () => {
 		const cancelled = flow({ get: () => Promise.reject(new DOMException('cancelled', 'NotAllowedError')) })
-		const cause = await postDecision('webauthn', cancelled.credentials, cancelled.challenge, cancelled.post).catch((error: unknown) => error)
+		const cause = await postDecision('webauthn', cancelled.credentials, cancelled.challenge, cancelled.post, 'decision').catch((error: unknown) =>
+			error
+		)
 		expect(decisionFailure(cause)).toEqual({ message: 'The passkey prompt was cancelled or timed out. Try again.', noPasskey: false })
 		expect(cancelled.posted).toEqual([])
 
 		const none = flow()
-		const unsupported = await postDecision('webauthn', null, none.challenge, none.post).catch((error: unknown) => error)
+		const unsupported = await postDecision('webauthn', null, none.challenge, none.post, 'decision').catch((error: unknown) => error)
 		expect(decisionFailure(unsupported).message).toBe('This browser cannot use passkeys, so this decision cannot be confirmed here.')
 		expect(none.steps).toEqual([])
 	})

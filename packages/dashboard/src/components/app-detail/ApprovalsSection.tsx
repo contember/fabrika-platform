@@ -17,6 +17,7 @@ import { useState } from 'react'
 import { api, type AppEnvDto, type ApprovalDto } from '../../lib/api'
 import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
+import type { DecisionFailure } from '../../lib/decision-step-up'
 import {
 	APPROVAL_CATEGORY_GROUPS,
 	categoryLabel,
@@ -28,7 +29,9 @@ import {
 	policyChange,
 	presetOf,
 	PRESETS,
+	protectionChangeFailure,
 	protectionFailure,
+	protectionStepUp,
 	protectionToggle,
 	requestTtl,
 	sameSettings,
@@ -36,7 +39,9 @@ import {
 	settingsSummary,
 	waitingSummary,
 } from '../../lib/environment-protection'
+import { browserCredentials, type PasskeyCredentials } from '../../lib/webauthn'
 import { ConfirmDialog } from '../ConfirmDialog'
+import { DecisionFailureText } from '../DecisionFailureNotice'
 import { Icon } from '../Icon'
 import { Chip } from '../Status'
 import { Table } from '../Table'
@@ -73,7 +78,12 @@ export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs:
 }
 
 /** Holders of `access.approve` at the environment get the switch; everyone else reads the setting. */
-export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
+export function ProtectionRow({ appId, env, onDone, credentials = browserCredentials() }: {
+	appId: string
+	env: AppEnvDto
+	onDone: () => void
+	credentials?: PasskeyCredentials | null
+}) {
 	const access = useConsoleAccess()
 	const approver = mayDo(access, CONTROL_ACTIONS.ACCESS_APPROVE, { app: appId, env: env.env })
 	const [busy, setBusy] = useState(false)
@@ -85,7 +95,7 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 	async function protect() {
 		setBusy(true)
 		try {
-			await setEnvironmentProtection(api, appId, env.env, true)
+			await setEnvironmentProtection(api, env, true, undefined, credentials)
 			onDone()
 		} catch (cause) {
 			setError(protectionFailure(cause, env.env))
@@ -109,9 +119,11 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 	}
 
 	async function unprotect() {
-		await setEnvironmentProtection(api, appId, env.env, false)
+		await setEnvironmentProtection(api, env, false, undefined, credentials)
 		onDone()
 	}
+
+	const unprotectStepUp = protectionStepUp(env, false)
 
 	return (
 		<tr>
@@ -135,17 +147,17 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 					</span>
 					{error && <div className="error-text small" role="alert">{error}</div>}
 					{env.protected && (approver
-						? <PolicyEditor appId={appId} env={env} onDone={onDone} />
+						? <PolicyEditor appId={appId} env={env} onDone={onDone} credentials={credentials} />
 						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings)}</span>)}
 				</div>
 				{confirming && (
 					<ConfirmDialog
 						title="Turn off approvals"
 						confirmLabel="Turn off approvals"
-						body={<UnprotectConsequences appId={appId} env={env.env} parked={parked} />}
+						body={<UnprotectConsequences appId={appId} env={env.env} parked={parked} stepUp={unprotectStepUp} />}
 						onConfirm={unprotect}
 						onClose={() => setConfirming(false)}
-						describeError={(cause) => protectionFailure(cause, env.env)}
+						describeError={(cause) => <DecisionFailureText failure={protectionChangeFailure(cause, env.env, unprotectStepUp)} />}
 					/>
 				)}
 			</td>
@@ -156,14 +168,19 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 /**
  * What lets a change of each category through on a protected environment (ADR-0083), for a holder of `access.approve`:
  * a mode and a number of approvers per category, the settings beside them, the strict and permissive presets, one save,
- * and a confirmation first when it loosens any.
+ * and a confirmation first when it loosens any. A save that weakens a passkey on deciding runs the passkey prompt first.
  */
-export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
+export function PolicyEditor({ appId, env, onDone, credentials = browserCredentials() }: {
+	appId: string
+	env: AppEnvDto
+	onDone: () => void
+	credentials?: PasskeyCredentials | null
+}) {
 	const [chosen, setChosen] = useState<ApprovalPolicy>(env.approvalPolicy)
 	const [settings, setSettings] = useState<ApprovalSettings>(env.approvalSettings)
 	const [ttlText, setTtlText] = useState(String(env.approvalSettings.requestTtlHours))
 	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
+	const [error, setError] = useState<DecisionFailure | null>(null)
 	const [confirming, setConfirming] = useState(false)
 	const ttl = requestTtl(ttlText)
 	const changed = POLICY_CATEGORIES.some((category) => chosen[category] !== env.approvalPolicy[category])
@@ -171,6 +188,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 	const preset = presetOf(chosen, settings)
 	const before = { policy: env.approvalPolicy, settings: env.approvalSettings }
 	const after = { policy: chosen, settings }
+	const stepUp = protectionStepUp(env, true, after)
 
 	function choose(category: PolicyCategory, mode: string) {
 		const parsed = approvalPolicySchema.safeParse({ ...chosen, [category]: mode })
@@ -202,7 +220,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 	}
 
 	async function save() {
-		await setEnvironmentProtection(api, appId, env.env, true, after)
+		await setEnvironmentProtection(api, env, true, after, credentials)
 		onDone()
 	}
 
@@ -216,7 +234,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 		try {
 			await save()
 		} catch (cause) {
-			setError(protectionFailure(cause, env.env))
+			setError(protectionChangeFailure(cause, env.env, stepUp))
 		} finally {
 			setBusy(false)
 		}
@@ -361,7 +379,11 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 					Save approvals
 				</button>
 			</div>
-			{error && <div className="error-text small" role="alert">{error}</div>}
+			{error !== null && (
+				<div className="error-text small" role="alert">
+					<DecisionFailureText failure={error} />
+				</div>
+			)}
 			{confirming && (
 				<ConfirmDialog
 					title="Approve less"
@@ -372,19 +394,31 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 								On <strong>{env.env}</strong>, these will need less to go through: {looser.join(', ')}.
 							</p>
 							<p>The audit log records this change. A deploy or grant that already waits keeps waiting until a person decides it.</p>
+							<StepUpNote stepUp={stepUp} />
 						</>
 					}
 					onConfirm={save}
 					onClose={() => setConfirming(false)}
-					describeError={(cause) => protectionFailure(cause, env.env)}
+					describeError={(cause) => <DecisionFailureText failure={protectionChangeFailure(cause, env.env, stepUp)} />}
 				/>
 			)}
 		</fieldset>
 	)
 }
 
+/** What a confirmation says before a change that takes one of the person's passkeys. */
+function StepUpNote({ stepUp }: { stepUp: StepUpMode }) {
+	if (stepUp === 'none') return null
+	return <p>A passkey confirms deciding here, so this change takes one of your passkeys: your browser asks for it when you confirm.</p>
+}
+
 /** What turning approvals off means, read before it happens. `parked` is null while unknown. */
-export function UnprotectConsequences({ appId, env, parked }: { appId: string; env: string; parked: readonly ApprovalDto[] | null }) {
+export function UnprotectConsequences({ appId, env, parked, stepUp }: {
+	appId: string
+	env: string
+	parked: readonly ApprovalDto[] | null
+	stepUp: StepUpMode
+}) {
 	return (
 		<>
 			<p>
@@ -403,6 +437,7 @@ export function UnprotectConsequences({ appId, env, parked }: { appId: string; e
 					</p>
 				)
 				: parked.length > 0 && <ParkedRuns env={env} parked={parked} />}
+			<StepUpNote stepUp={stepUp} />
 		</>
 	)
 }

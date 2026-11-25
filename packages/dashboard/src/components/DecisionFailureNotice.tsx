@@ -6,6 +6,15 @@ import type { DecisionFailure } from '../lib/decision-step-up'
 export function DecisionFailureNotice({ failure }: { failure: DecisionFailure }) {
 	return (
 		<p className="error-text" role="alert">
+			<DecisionFailureText failure={failure} />
+		</p>
+	)
+}
+
+/** The words of a failure, with the link to Account → Passkeys for a person without a passkey, for an alert of its caller. */
+export function DecisionFailureText({ failure }: { failure: DecisionFailure }) {
+	return (
+		<>
 			{failure.message}
 			{failure.noPasskey && (
 				<>
@@ -13,7 +22,7 @@ export function DecisionFailureNotice({ failure }: { failure: DecisionFailure })
 					<Link to="account/passkeys">Account → Passkeys</Link>
 				</>
 			)}
-		</p>
+		</>
 	)
 }
 

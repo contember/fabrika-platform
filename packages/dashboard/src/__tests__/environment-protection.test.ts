@@ -1,6 +1,8 @@
 import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
 import { BuzolaProvider } from '@buzola/router/react'
+import { RpcError } from '@fabrika/app'
 import {
+	type ApprovalStepUpChallenge,
 	APPROVER_CATEGORIES,
 	PERMISSIVE_POLICY,
 	PERMISSIVE_SETTINGS,
@@ -12,6 +14,7 @@ import { describe, expect, test } from 'bun:test'
 import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { PolicyEditor, ProtectionRow, UnprotectConsequences } from '../components/app-detail/ApprovalsSection'
+import { DecisionFailureText } from '../components/DecisionFailureNotice'
 import { type AppEnvDto, type ApprovalDto, type ConsoleAccessDto, type ControlFetch, createControlClient } from '../lib/api'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import {
@@ -22,6 +25,7 @@ import {
 	parkedRunsAt,
 	policyChange,
 	presetOf,
+	protectionChangeFailure,
 	protectionFailure,
 	protectionToggle,
 	requesterBlocks,
@@ -30,6 +34,7 @@ import {
 	settingsSummary,
 	waitingSummary,
 } from '../lib/environment-protection'
+import { type PasskeyCredentials, toBase64Url } from '../lib/webauthn'
 
 const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	appId: 'notes',
@@ -148,11 +153,16 @@ describe('turning approvals on and off for an environment', () => {
 	})
 
 	test('the confirmation says what turning approvals off means', () => {
-		const markup = renderToStaticMarkup(withRouter(createElement(UnprotectConsequences, { appId: 'notes', env: 'prod', parked: [] })))
+		const markup = renderToStaticMarkup(withRouter(createElement(UnprotectConsequences, { appId: 'notes', env: 'prod', parked: [], stepUp: 'none' })))
 		expect(markup).toContain('publishes at once, without a person&#x27;s approval')
 		expect(markup).toContain('The audit log records this change')
 		expect(markup).toContain('Turning approvals back on applies from the next deploy')
 		expect(markup).not.toContain('waits for approval')
+		expect(markup).not.toContain('passkey')
+		const passkey = renderToStaticMarkup(
+			withRouter(createElement(UnprotectConsequences, { appId: 'notes', env: 'prod', parked: [], stepUp: 'webauthn' })),
+		)
+		expect(passkey).toContain('this change takes one of your passkeys: your browser asks for it when you confirm')
 	})
 
 	test('a deploy parked on the environment stays parked: the confirmation names it and says it still needs a decision', () => {
@@ -167,19 +177,21 @@ describe('turning approvals on and off for an environment', () => {
 		)
 		expect(parked.map((approval) => approval.run.id)).toEqual(['01a144a6-0001'])
 
-		const markup = renderToStaticMarkup(withRouter(createElement(UnprotectConsequences, { appId: 'notes', env: 'prod', parked })))
+		const markup = renderToStaticMarkup(withRouter(createElement(UnprotectConsequences, { appId: 'notes', env: 'prod', parked, stepUp: 'none' })))
 		expect(markup).toContain('1 deploy of prod waits for approval: <span><a href="/approvals/01a144a6-0001">run <code>01a144a6</code></a></span>')
 		expect(markup).toContain('Turning approvals off does not approve it.')
 		expect(markup).toContain('until a person approves, rejects or cancels it')
 
-		const unknown = renderToStaticMarkup(withRouter(createElement(UnprotectConsequences, { appId: 'notes', env: 'prod', parked: null })))
+		const unknown = renderToStaticMarkup(
+			withRouter(createElement(UnprotectConsequences, { appId: 'notes', env: 'prod', parked: null, stepUp: 'none' })),
+		)
 		expect(unknown).toContain('keeps waiting until a person approves, rejects or cancels it: turning approvals off approves nothing')
 	})
 
 	test('the change calls apps.environments.protect with the environment and the new value', async () => {
 		const calls: { method: string; input: unknown }[] = []
 		const client = createControlClient(respondingFetch(calls, Response.json({ result: environment('prod', false) })))
-		const changed = await setEnvironmentProtection(client, 'notes', 'prod', false)
+		const changed = await setEnvironmentProtection(client, environment('prod', false), false, undefined, null)
 		expect(changed.protected).toBe(false)
 		expect(calls).toEqual([{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: false } }])
 	})
@@ -188,7 +200,7 @@ describe('turning approvals on and off for an environment', () => {
 		const refused = async (status: number, message: string): Promise<string> => {
 			const client = createControlClient(respondingFetch([], Response.json({ error: { type: 'error', message } }, { status })))
 			try {
-				await setEnvironmentProtection(client, 'notes', 'prod', false)
+				await setEnvironmentProtection(client, environment('prod', true), true, undefined, null)
 			} catch (cause) {
 				return protectionFailure(cause, 'prod')
 			}
@@ -309,14 +321,123 @@ describe('approval modes', () => {
 			return Promise.resolve(Response.json({ result: environment('prod', true) }))
 		}
 		const client = createControlClient(fetch)
-		await setEnvironmentProtection(client, 'notes', 'prod', true, { policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })
-		await setEnvironmentProtection(client, 'notes', 'prod', true)
+		const permissive = { ...STRICT_SETTINGS, ...PERMISSIVE_SETTINGS, stepUp: STRICT_SETTINGS.stepUp }
+		await setEnvironmentProtection(client, environment('prod', true), true, {
+			policy: { ...PERMISSIVE_POLICY, credentials: 'person' },
+			settings: permissive,
+		}, null)
+		await setEnvironmentProtection(client, environment('prod', true), true, undefined, null)
 		expect(sent).toEqual([
 			{
 				method: 'apps.environments.protect',
-				input: { appId: 'notes', env: 'prod', protected: true, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS },
+				input: { appId: 'notes', env: 'prod', protected: true, policy: { ...PERMISSIVE_POLICY, credentials: 'person' }, settings: permissive },
 			},
 			{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true } },
 		])
+	})
+})
+
+// ADR-0050 §5: a change that weakens what deciding takes where a passkey confirms it takes a passkey too.
+describe('a change that weakens a passkey on deciding', () => {
+	const bytes = (...values: number[]) => Uint8Array.from(values).buffer
+	const ISSUED: ApprovalStepUpChallenge = {
+		kind: 'challenge',
+		challenge: {
+			challengeId: 'challenge-1',
+			expiresAt: 0,
+			options: {
+				challenge: toBase64Url(bytes(4, 5, 6)),
+				rpId: 'console.example.test',
+				timeout: 300_000,
+				allowCredentials: [{ type: 'public-key', id: toBase64Url(bytes(7, 7)) }],
+				userVerification: 'required',
+			},
+		},
+	}
+
+	/** A Control and a browser that record, in order, what each was asked; the challenge answers `issued`. */
+	function console(issued: ApprovalStepUpChallenge = ISSUED) {
+		const steps: string[] = []
+		const sent: { method: string; input: unknown }[] = []
+		const fetch: ControlFetch = (_input, init) => {
+			const body: { method: string; input: unknown } = JSON.parse(String(init?.body))
+			steps.push(body.method)
+			sent.push(body)
+			return Promise.resolve(Response.json({ result: body.method === 'apps.environments.protectChallenge' ? issued : environment('prod', true) }))
+		}
+		const credentials: PasskeyCredentials = {
+			create: () => Promise.reject(new Error('not asked')),
+			get: () => {
+				steps.push('passkey')
+				return Promise.resolve({
+					type: 'public-key',
+					rawId: bytes(0xfb, 0xff),
+					response: { clientDataJSON: bytes(1), authenticatorData: bytes(2), signature: bytes(3), userHandle: null },
+				})
+			},
+		}
+		return { steps, sent, client: createControlClient(fetch), credentials }
+	}
+
+	test('unprotecting, or dropping the passkey, runs the prompt first on a challenge for that change, which carries its answer', async () => {
+		const off = console()
+		await setEnvironmentProtection(off.client, environment('prod', true), false, undefined, off.credentials)
+		expect(off.steps).toEqual(['apps.environments.protectChallenge', 'passkey', 'apps.environments.protect'])
+		expect(off.sent[0]).toEqual({ method: 'apps.environments.protectChallenge', input: { appId: 'notes', env: 'prod', protected: false } })
+		expect(off.sent[1]?.input).toMatchObject({ appId: 'notes', env: 'prod', protected: false, stepUp: { challengeId: 'challenge-1' } })
+
+		const dropped = console()
+		const settings = { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' as const } }
+		await setEnvironmentProtection(dropped.client, environment('prod', true), true, { policy: STRICT_POLICY, settings }, dropped.credentials)
+		expect(dropped.steps).toEqual(['apps.environments.protectChallenge', 'passkey', 'apps.environments.protect'])
+		expect(dropped.sent[0]?.input).toEqual({ appId: 'notes', env: 'prod', protected: true, policy: STRICT_POLICY, settings })
+	})
+
+	test('a tightening, a change elsewhere and an unprotected environment are sent as they are', async () => {
+		const c = console()
+		const tighter = { ...STRICT_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, credentials: 2 as const } }
+		await setEnvironmentProtection(c.client, environment('prod', true), true, { policy: STRICT_POLICY, settings: tighter }, c.credentials)
+		await setEnvironmentProtection(c.client, environment('prod', true), true, {
+			policy: { ...STRICT_POLICY, secrets: 'off' },
+			settings: STRICT_SETTINGS,
+		}, c.credentials)
+		await setEnvironmentProtection(
+			c.client,
+			environment('stage', false),
+			false,
+			{ policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS },
+			c.credentials,
+		)
+		expect(c.steps).toEqual(['apps.environments.protect', 'apps.environments.protect', 'apps.environments.protect'])
+	})
+
+	test('a person without a passkey is told so and where to register one, and nothing changes', async () => {
+		const c = console({ kind: 'no-passkey' })
+		const cause = await setEnvironmentProtection(c.client, environment('prod', true), false, undefined, c.credentials).catch((error: unknown) => error)
+		expect(c.steps).toEqual(['apps.environments.protectChallenge'])
+		const failure = protectionChangeFailure(cause, 'prod', 'webauthn')
+		expect(failure).toEqual({
+			message: 'You have no passkey, and this change takes one. Register one under Account → Passkeys, then save again.',
+			noPasskey: true,
+		})
+		const router = new Router({
+			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+			adapter: createMemoryNavigationAdapter(),
+			pageRegistry: { 'account/passkeys': '/account/passkeys' },
+		})
+		const markup = renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(DecisionFailureText, { failure })))
+		expect(markup).toContain('<a href="/account/passkeys">Account → Passkeys</a>')
+	})
+
+	test("Control's refusal of a change that took a passkey reads in Control's words", () => {
+		const refusal = (message: string) => new RpcError({ type: 'forbidden', message, httpStatus: 403 })
+		expect(protectionChangeFailure(refusal('the passkey check failed, so nothing was changed; try again'), 'prod', 'webauthn')).toEqual({
+			message: 'the passkey check failed, so nothing was changed; try again',
+			noPasskey: false,
+		})
+		expect(protectionChangeFailure(refusal('an access change is approved in the console, not with a key'), 'prod', 'none')).toEqual({
+			message: 'Only a person signed in to the console changes approvals, never a key or an agent.',
+			noPasskey: false,
+		})
 	})
 })

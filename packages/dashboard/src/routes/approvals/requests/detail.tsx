@@ -200,6 +200,7 @@ export function RequestDecision({ request, me, now, onDone, credentials = browse
 				async (stepUp) => {
 					await api.approvals.requests.decide(stepUp === undefined ? item : { ...item, stepUp })
 				},
+				'decision',
 			)
 			onDone()
 		} catch (cause) {

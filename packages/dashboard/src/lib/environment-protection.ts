@@ -14,10 +14,14 @@ import {
 	type PolicyCategory,
 	policyFromCategories,
 	REQUEST_TTL_HOURS,
+	type StepUpMode,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
+	weakensStepUp,
 } from '@fabrika/control-contract'
 import type { createControlClient } from './api'
+import { type DecisionFailure, decisionFailure, NoPasskeyError, postDecision } from './decision-step-up'
+import { PasskeyCeremonyError, type PasskeyCredentials } from './webauthn'
 
 type ControlClient = ReturnType<typeof createControlClient>
 
@@ -28,19 +32,46 @@ export function protectionToggle(next: boolean): ProtectionToggle {
 	return next ? 'apply' : 'confirm'
 }
 
+/** An environment as it holds its protection, which a change is judged against. */
+export type HeldProtection = Pick<AppEnvDto, 'appId' | 'env' | 'protected' | 'approvalPolicy' | 'approvalSettings'>
+
+/** A new choice of modes and settings. */
+export interface ProtectionChoiceInput {
+	readonly policy: ApprovalPolicy
+	readonly settings: ApprovalSettings
+}
+
+/**
+ * What a change of protection takes (ADR-0050 §5): a passkey when it weakens what deciding takes in a category where a
+ * passkey confirms deciding under what the environment holds (`weakensStepUp`). Control judges it again.
+ */
+export function protectionStepUp(held: HeldProtection, value: boolean, choice?: ProtectionChoiceInput): StepUpMode {
+	const before = { protected: held.protected, policy: held.approvalPolicy, settings: held.approvalSettings }
+	const after = { protected: value, policy: choice?.policy ?? held.approvalPolicy, settings: choice?.settings ?? held.approvalSettings }
+	return weakensStepUp(before, after).length > 0 ? 'webauthn' : 'none'
+}
+
 /**
  * Control's `apps.environments.protect`: `access.approve` from a person in the console, audited (ADR-0050 §4). With
  * `policy` and `settings`, also the mode of each category and the settings beside them (ADR-0083); without, the stored
- * choice stays.
+ * choice stays. A change that takes a passkey runs the prompt first, on a challenge bound to it
+ * (`protectChallenge`), and carries its answer; nothing is sent when the prompt fails.
  */
 export function setEnvironmentProtection(
 	client: ControlClient,
-	appId: string,
-	env: string,
+	held: HeldProtection,
 	value: boolean,
-	choice?: { readonly policy: ApprovalPolicy; readonly settings: ApprovalSettings },
+	choice: ProtectionChoiceInput | undefined,
+	credentials: PasskeyCredentials | null,
 ): Promise<AppEnvDto> {
-	return client.apps.environments.protect({ appId, env, protected: value, ...(choice === undefined ? {} : choice) })
+	const change = { appId: held.appId, env: held.env, protected: value, ...(choice === undefined ? {} : choice) }
+	return postDecision(
+		protectionStepUp(held, value, choice),
+		credentials,
+		() => client.apps.environments.protectChallenge(change),
+		(stepUp) => client.apps.environments.protect(stepUp === undefined ? change : { ...change, stepUp }),
+		'change',
+	)
 }
 
 export interface CategoryOption {
@@ -249,6 +280,16 @@ export function waitingSummary(policy: ApprovalPolicy): string {
 /** The deploys of one environment that wait for a person; turning approvals off decides none of them. */
 export function parkedRunsAt(approvals: readonly ApprovalDto[], appId: string, env: string): ApprovalDto[] {
 	return approvals.filter((approval) => approval.run.appId === appId && approval.run.env === env)
+}
+
+/**
+ * Why a change of protection was not saved: a passkey prompt's failure as the approval pages say it, a refusal of a change
+ * that took a passkey in Control's words (the passkey check is what refused it), and any other in the console's.
+ */
+export function protectionChangeFailure(cause: unknown, env: string, stepUp: StepUpMode): DecisionFailure {
+	if (cause instanceof NoPasskeyError || cause instanceof PasskeyCeremonyError || cause instanceof DOMException) return decisionFailure(cause)
+	if (stepUp === 'webauthn' && cause instanceof RpcError && cause.httpStatus === 403) return { message: cause.message, noPasskey: false }
+	return { message: protectionFailure(cause, env), noPasskey: false }
 }
 
 export function protectionFailure(cause: unknown, env: string): string {

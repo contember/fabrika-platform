@@ -657,6 +657,7 @@ export function Decision({ approval, me, now, onDone, credentials = browserCrede
 				async (stepUp) => {
 					await api.approvals.complete(stepUp === undefined ? item : { ...item, stepUp })
 				},
+				'decision',
 			)
 			onDone()
 		} catch (cause) {

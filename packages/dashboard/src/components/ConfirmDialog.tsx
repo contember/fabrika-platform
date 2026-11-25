@@ -11,13 +11,13 @@ interface ConfirmDialogProps {
 	onConfirm: () => Promise<void>
 	onClose: () => void
 	/** The message a failed confirm shows; by default an RPC error's own. */
-	describeError?: (cause: unknown) => string
+	describeError?: (cause: unknown) => ReactNode
 }
 
 /** A small confirm dialog for revoke / disable / destructive actions. */
 export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', onConfirm, onClose, describeError = rpcErrorMessage }: ConfirmDialogProps) {
 	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
+	const [error, setError] = useState<ReactNode>(null)
 
 	async function confirm() {
 		setBusy(true)
@@ -34,7 +34,7 @@ export function ConfirmDialog({ title, body, confirmLabel = 'Confirm', onConfirm
 	return (
 		<Modal title={title} onClose={busy ? undefined : onClose}>
 			<div className="confirm-body">{body}</div>
-			{error && <p className="error-text" role="alert">{error}</p>}
+			{error !== null && <p className="error-text" role="alert">{error}</p>}
 			<div className="modal-actions">
 				<button type="button" onClick={onClose} disabled={busy}>Cancel</button>
 				<button type="button" className="danger strong" onClick={confirm} disabled={busy}>
