@@ -72,7 +72,8 @@ Rules, all of ADR-0084's, now checked when the record is written instead of at d
 - `app` is lowercase, has no `@` (so it never meets a deployed app's `<app>@<env>`) and is no platform audience.
   Registering an id under which IAM already holds a vocabulary adopts it, with every grant of its roles, only when it
   has the shape an earlier deploy's reconcile of an external application wrote: roles alone, each granting no action,
-  no scope and no action declared. Any other vocabulary refuses the id, because the provisioning key's schema PUT can
+  no scope and no action declared, and no registered return origin (IAM hands people off to such an app, so it is no
+  external application). Any other vocabulary refuses the id, because the provisioning key's schema PUT can
   write any vocabulary under any id, and adopting one with permissions would let its roles be renamed into a token.
 - `resource` is an `https` URI, is no registered resource, and is on none of the installation's hosts. IAM does not
   know all of them today (Operations' host, alias hosts), so the deploy writes the list its own check reads now into
@@ -96,8 +97,8 @@ Control keeps no row. Why, and the alternative: [question 1](#q1-where-the-recor
 - **IAM `/admin/rpc`** gains `externalApps.list | get | put | delete` (`iam.admin`) and `oauthClients.list | put |
   delete` (list: `iam.admin`; writes: provisioning key, authoring clients only). `externalApps.put` takes the whole
   aggregate (`app`, `name`, `resource`, `roles` or none, `clients`), is the only writer of a bound client, and replaces
-  it in one transaction with its audit record. Each writer refuses a client id the other one owns. A client removed from the list, or a deleted app, has its OAuth grants
-  revoked in the same transaction. `apps.list` marks such an app `externalApplication: true` (not `external`, which
+  it in one transaction with its audit record. Each writer refuses a client id the other one owns. A client removed
+  from the list, or a deleted app, has its OAuth grants revoked in the same transaction. `apps.list` marks such an app `externalApplication: true` (not `external`, which
   already names ADR-0051's external principals and roles).
 - **Console**: an "External applications" page in the Access section: list, register, edit roles and clients, delete;
   authoring clients listed read-only. The Applications page gets an "Add external application (no deploy)" entry that
@@ -181,16 +182,16 @@ sequenceDiagram
     vocabulary (adopting the roles earlier deploys reconciled under the same app id) and the mark in one transaction.
     Every later call answers `already_imported` and writes nothing; the deploy warns while the variable is set.
   - In release N only, until the mark exists, IAM serves the clients of `OAUTH_CONFIG` as before, and refuses registry
-    writes, so an
-    administrator's edit can never land before the import and be overwritten by it, and nothing breaks between IAM's
-    deploy and the import.
+    writes, so an administrator's edit can never land before the import and be overwritten by it, and nothing breaks
+    between IAM's deploy and the import.
   - The deploy no longer reconciles external applications' roles.
   - The deploy keeps writing the variable's clients into `OAUTH_CONFIG`, so rolling IAM back to N-1 serves them while
     the variable is still set.
   - MCP authoring is on with the new switch, or (N only) with an authoring entry in the variable.
 - **Release N+1.** The deploy refuses while the variable is set, before it deploys anything, with: "upgrade through
-  release N, or register the applications in the console (which adopts their roles); set
-  `FABRIKA_PLATFORM_MCP_AUTHORING` where MCP authoring was on; then delete the variable". The generated workflows still
+  release N first; or delete the variable, deploy this release and register the applications in the console (which
+  adopts their roles), and know that their sign-ins fail until then; set `FABRIKA_PLATFORM_MCP_AUTHORING` where MCP
+  authoring was on". The generated workflows still
   pass the variable, so the refusal sees it even when the operator jumped from N-1 to N+1. `OAUTH_CONFIG` carries no
   clients. IAM drops the `OAUTH_CONFIG` client path, the import, the mark and the pre-import refusal, so it accepts
   registry writes whether or not an import ever ran: an installation that skipped release N, or never set the

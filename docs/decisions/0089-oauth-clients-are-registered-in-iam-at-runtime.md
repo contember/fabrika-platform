@@ -33,7 +33,7 @@ it has is IAM's: an app id, a vocabulary of roles, a resource, and OAuth clients
    and every active user signs in. Control keeps no row of it.
    - The app id is lowercase, has no `@` and is no platform audience. Registering an id under which IAM already holds a
      vocabulary adopts it only when it has the shape an earlier deploy's reconcile of an external application wrote:
-     roles alone, each granting no action, no scope and no action declared. Any other vocabulary refuses the id.
+     roles alone, each granting no action, no scope and no action declared, and no registered return origin. Any other vocabulary refuses the id.
    - The resource is `https`, is no registered resource, and is on none of the installation's hosts. The deploy writes
      those hosts into `OAUTH_CONFIG` (`hosts`), the list its own check reads today, so IAM checks a write against
      the same list.
@@ -107,9 +107,9 @@ external application and its clients; only the provisioning key writes an author
     reconciles the variable's roles over whatever the registry holds. So the operator keeps the variable until release N
     is accepted on the installation, then deletes it; a roll back and forward after an administrator's edit can leave
     the registry and IAM's roles apart, and the administrator saves the application again.
-  - Release N+1 refuses a set variable and names the ways out: upgrade through release N, or register the
-    applications in the console (which adopts their roles); and set `FABRIKA_PLATFORM_MCP_AUTHORING` where authoring
-    was on. `OAUTH_CONFIG` carries no clients. Release N+2 removes the variable's line from both generated workflows:
+  - Release N+1 refuses a set variable and names the ways out: upgrade through release N first; or delete the
+    variable, deploy N+1 and register the applications in the console (which adopts their roles), with their sign-ins
+    failing until then; and set `FABRIKA_PLATFORM_MCP_AUTHORING` where authoring was on. `OAUTH_CONFIG` carries no clients. Release N+2 removes the variable's line from both generated workflows:
     `platform upgrade` regenerates the Zerops sidecar's, and re-running `platform init` refreshes Cloudflare's
     `platform.yml`.
   - An installation without the variable gets an empty import and nothing else. Grants of an external application's
