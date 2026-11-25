@@ -1,5 +1,6 @@
 import type { BlobStore, SqlDatabase } from '@fabrika/platform'
 import { GitHubConnectionStore } from '../github/connections/store'
+import { ApprovalRequestRepository } from './approval-requests'
 import { BackupRepository } from './backups'
 import { BuilderConnectionRepository } from './builder-connections'
 import { DataOperationRepository } from './data-operations'
@@ -21,6 +22,7 @@ import { WorkspaceRepository } from './workspaces'
 
 /** Control-plane persistence capabilities selected together by a runtime composition root. */
 export interface ControlRepositories {
+	approvalRequests: ApprovalRequestRepository
 	builderConnections: BuilderConnectionRepository
 	registry: ControlRegistryRepository
 	runs: RunRepository
@@ -55,6 +57,7 @@ export interface ControlRepositoryOptions {
 export function createControlRepositories(db: SqlDatabase, options: ControlRepositoryOptions = {}): ControlRepositories {
 	const now = options.now ?? (() => Math.floor(Date.now() / 1000))
 	return {
+		approvalRequests: new ApprovalRequestRepository(db, now),
 		builderConnections: new BuilderConnectionRepository(db, now),
 		registry: new ControlRegistryRepository(db, now),
 		runs: new RunRepository(db, now, options.runDocuments ?? null),

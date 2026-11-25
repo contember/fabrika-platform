@@ -91,6 +91,13 @@ import {
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from './approval/api'
+import {
+	type ApprovalRequestContext,
+	createApprovalRequestUseCase,
+	decideApprovalRequestUseCase,
+	getApprovalRequestUseCase,
+	listApprovalRequestsUseCase,
+} from './approval/requests/api'
 import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
@@ -197,6 +204,9 @@ const completeApprovalInput = z.object({
 	candidateDigest: accessDigest,
 	baselineDigest: accessDigest,
 }).strict()
+const createApprovalRequestInput = z.object({ kind: nonEmpty, input: jsonValueSchema }).strict()
+const approvalRequestId = z.object({ id: nonEmpty }).strict()
+const decideApprovalRequestInput = z.object({ id: nonEmpty, decision: z.enum(['approve', 'reject']), inputDigest: accessDigest }).strict()
 const secretBody = z.object({
 	name: nonEmpty,
 	value: z.string(),
@@ -451,6 +461,19 @@ export function createControlRpcRouter(
 			complete: rpc.procedure.input(completeApprovalInput).mutation(({ ctx, input }) =>
 				controlCall(() => completeApprovalUseCase(approvalContext(ctx), input))
 			),
+			// The right to ask, to read and to decide is checked inside, per request kind and at its coordinates (ADR-0083 §8).
+			requests: rpc.router({
+				create: rpc.procedure.input(createApprovalRequestInput).mutation(({ ctx, input }) =>
+					controlCall(() => createApprovalRequestUseCase(approvalRequestContext(ctx), input))
+				),
+				get: rpc.procedure.input(approvalRequestId).query(({ ctx, input }) =>
+					controlCall(() => getApprovalRequestUseCase(approvalRequestContext(ctx), input.id))
+				),
+				list: rpc.procedure.query(({ ctx }) => controlCall(() => listApprovalRequestsUseCase(approvalRequestContext(ctx)))),
+				decide: rpc.procedure.input(decideApprovalRequestInput).mutation(({ ctx, input }) =>
+					controlCall(() => decideApprovalRequestUseCase(approvalRequestContext(ctx), input))
+				),
+			}),
 		}),
 		deploy: rpc.procedure.input(deployInput).mutation(({ ctx, input }) => controlCall(() => triggerDeployUseCase(runsContext(ctx), input))),
 		register: rpc.procedure.input(registerInput).require(CONTROL_ACTIONS.APP_MANAGE).mutation(({ ctx, input }) =>
@@ -603,6 +626,18 @@ export function createControlRpcRouter(
 			lock: deps.lock,
 			request: ctx.request,
 			...(deps.grantApproval === undefined ? {} : { grantApproval: deps.grantApproval }),
+		}
+	}
+
+	function approvalRequestContext(ctx: ControlRpcContext): ApprovalRequestContext {
+		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		const consoleOrigin = controlPublicOrigin(ctx.env)
+		return {
+			repositories: deps.repositories,
+			auth: ctx.auth,
+			admission: { request: ctx.request },
+			...(deps.lock === undefined ? {} : { lock: deps.lock }),
+			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
 		}
 	}
 

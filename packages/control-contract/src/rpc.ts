@@ -1,6 +1,13 @@
 import type { RpcProcedureContract } from '@fabrika/app'
 import type { ExportDescription, OpsContentView, OpsView } from '@fabrika/auth-core'
 import { z } from 'zod'
+import type {
+	ApprovalRequestDto,
+	ApprovalRequestIdInput,
+	CreateApprovalRequestInput,
+	CreateApprovalRequestResponse,
+	DecideApprovalRequestInput,
+} from './approval-requests.js'
 import type { BuilderConnectionReceiptDto, CreateBuilderConnectionReceiptRequest, GetBuilderConnectionReceiptRequest } from './builder-connections.js'
 import type {
 	ApproveDeviceAuthorizationResult,
@@ -257,6 +264,17 @@ export interface ControlRpcContract {
 		get: RpcProcedure<RunIdInput, ApprovalDto>
 		/** A human user principal, from the console's own origin; no key, service or OAuth token completes one. */
 		complete: RpcProcedure<CompleteApprovalRequest, ApprovalDto>
+		/** A non-person's action that waits for a person, stored inert and exact (ADR-0083 §8). */
+		requests: {
+			/** A non-person only, holding the kind's right to ask; a person in the console acts directly. */
+			create: RpcProcedure<CreateApprovalRequestInput, CreateApprovalRequestResponse>
+			/** The requester's own, or any at coordinates where the caller holds `access.approve`. */
+			get: RpcProcedure<ApprovalRequestIdInput, ApprovalRequestDto>
+			/** The open requests at coordinates where the caller holds `access.approve`. */
+			list: RpcProcedure<void, ListResponse<ApprovalRequestDto>>
+			/** A person in the console with `access.approve` at the request's coordinates. */
+			decide: RpcProcedure<DecideApprovalRequestInput, ApprovalRequestDto>
+		}
 	}
 	deploy: RpcProcedure<TriggerDeployRequest, RunDto>
 	register: RpcProcedure<RegisterAppRequest, RegisterAppResponse>

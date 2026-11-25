@@ -55,6 +55,10 @@ const CONTROL: Readonly<Record<string, Judged>> = {
 	'namespaces.releaseClaims': { exempt: 'never requested (ADR-0034 frees resources); keeps its rule' },
 	'runs.cancel': { exempt: 'stops a run; deploys nothing' },
 	'approvals.complete': { exempt: `deciding a pending item: ${ALWAYS_A_PERSON}` },
+	'approvals.requests.create': {
+		exempt: "request plumbing: stores an inert request; its change runs only on a person's approval, judged by its kind's category",
+	},
+	'approvals.requests.decide': { exempt: `deciding a pending item: ${ALWAYS_A_PERSON}` },
 	'deploy': { category: 'deploy-request' },
 	'register': { category: 'registry' },
 	'mail.messages.release': { exempt: MAIL },

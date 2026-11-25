@@ -871,6 +871,7 @@ export interface RunLogResponse {
 
 export { OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/auth-core'
 export * from './approval-policy.js'
+export * from './approval-requests.js'
 export * from './approval-view.js'
 export type {
 	AdoptNamespaceInput,

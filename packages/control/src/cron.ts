@@ -8,6 +8,7 @@
 // sha, and the sweep is a guarded UPDATE by age.
 
 import { enqueueUnsettledNamespaces } from './api/namespaces'
+import { type ApprovalRequestSweepSummary, sweepApprovalRequests } from './approval/requests/execute'
 import type { BackupScheduleSummary } from './backups'
 import type { ControlRegistryRepository } from './db'
 import type { DevMaintenanceSummary } from './dev/service'
@@ -30,6 +31,8 @@ export interface MaintenanceSummary {
 	swept: number
 	/** Parked runs given a deadline, and parked runs expired past theirs (ADR-0050 §4). */
 	parked: ParkedRunSweepSummary
+	/** Approval requests expired past their deadline, and interrupted executions settled (ADR-0083 §8). */
+	requests: ApprovalRequestSweepSummary
 	/** Full Operations catalog replay, isolated from deploy maintenance success. */
 	operations: OperationsCatalogSyncSummary
 	/** Pending deploy-release projections repaired independently from catalog sync. */
@@ -103,6 +106,10 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (parked.deadlines > 0 || parked.expired > 0) {
 		console.info(`parked runs: deadlines=${parked.deadlines} expired=${parked.expired}`)
 	}
+	const requests = await sweepApprovalRequests({ repositories: persistence, lock: locks(env) })
+	if (requests.expired > 0 || requests.interrupted > 0 || requests.settled > 0) {
+		console.info(`approval requests: expired=${requests.expired} interrupted=${requests.interrupted} settled=${requests.settled}`)
+	}
 	// The sync logs its own outcome line (operations-catalog.ts), so a second warn here would only repeat it.
 	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()
 	const releases = await (options.releases ?? (() => replayOperationsReleases(operationsReleaseDeps(env))))()
@@ -130,7 +137,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `errored=${backups.errored}`,
 		)
 	}
-	return { poll, reconcile, swept, parked, operations, releases, mail, dev, backups }
+	return { poll, reconcile, swept, parked, requests, operations, releases, mail, dev, backups }
 }
 
 /**

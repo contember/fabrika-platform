@@ -65,6 +65,7 @@ afterAll(async () => {
 async function reset(): Promise<void> {
 	for (
 		const table of [
+			'approval_requests',
 			'github_source_connections_keyed',
 			'github_source_setup_attempts',
 			'namespace_resource_claims',
@@ -178,6 +179,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0035_approval_categories.sql' },
 			{ bundle: 'control', name: '0036_approval_policy.sql' },
 			{ bundle: 'control', name: '0037_deploy_requests.sql' },
+			{ bundle: 'control', name: '0038_approval_requests.sql' },
 		])
 	})
 
@@ -216,6 +218,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'app_env_backup_schedules',
 				'app_env_application_objects',
 				'app_env_restores',
+				'approval_requests',
 			]
 		) {
 			expect(names).toContain(table)
@@ -242,6 +245,17 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 		for (const column of results) {
 			expect(`${column.table_name}.${column.column_name}:${column.data_type}`).toBe(`${column.table_name}.${column.column_name}:integer`)
 		}
+	})
+
+	test("an approval request's seconds-valued columns are int4", async () => {
+		const { results } = await raw
+			.prepare(`SELECT column_name, data_type FROM information_schema.columns
+				WHERE table_schema = ? AND table_name = 'approval_requests' AND data_type <> 'text' ORDER BY column_name`)
+			.bind(fixture?.schema ?? '')
+			.all<{ column_name: string; data_type: string }>()
+		expect(results).toEqual(
+			['created_at', 'deadline', 'decided_at', 'partial_approved_at', 'updated_at'].map((column_name) => ({ column_name, data_type: 'integer' })),
+		)
 	})
 
 	test('the MILLISECOND columns are the only bigints, and no row shape reads one', async () => {
