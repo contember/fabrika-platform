@@ -1,4 +1,4 @@
-import { type ComponentProps, type ReactNode, useEffect, useSyncExternalStore } from 'react'
+import { type ComponentProps, type ReactNode, useEffect, useMemo, useSyncExternalStore } from 'react'
 
 type ParamNames<P extends string> = P extends `${string}:${infer Name}/${infer Rest}` ? Name | ParamNames<`/${Rest}`>
 	: P extends `${string}:${infer Name}` ? Name
@@ -24,13 +24,20 @@ export interface RouterOptions {
 	readonly base?: string
 }
 
-export interface NavigateOptions {
+/** A URL query: an `undefined` value leaves its key out, an array repeats the key once per value. */
+export type QueryInit = Readonly<Record<string, string | readonly string[] | undefined>>
+
+export interface HrefOptions {
+	readonly query?: QueryInit
+}
+
+export interface NavigateOptions extends HrefOptions {
 	readonly replace?: boolean
 }
 
 export type LinkProps<R extends RouteTable, Name extends RouteName<R>> =
 	& Readonly<Omit<ComponentProps<'a'>, 'href'>>
-	& { readonly to: Name }
+	& { readonly to: Name; readonly query?: QueryInit }
 	& ([ParamNames<R[Name]>] extends [never] ? { readonly params?: undefined } : { readonly params: ParamsOf<R[Name]> })
 
 export interface RouterProps {
@@ -41,7 +48,9 @@ export interface CreatedRouter<R extends RouteTable> {
 	readonly Router: (props: RouterProps) => ReactNode
 	readonly Link: <Name extends RouteName<R>>(props: LinkProps<R, Name>) => ReactNode
 	readonly useRoute: () => RouteMatch<R> | null
-	readonly href: <Name extends RouteName<R>>(name: Name, ...params: ParamsArgs<R[Name]>) => string
+	/** The current URL's query; a new instance when the query changes. Read it, and change it through `navigate`. */
+	readonly useSearchParams: () => URLSearchParams
+	readonly href: <Name extends RouteName<R>>(name: Name, ...args: [...ParamsArgs<R[Name]>, options?: HrefOptions]) => string
 	readonly navigate: <Name extends RouteName<R>>(name: Name, ...args: [...ParamsArgs<R[Name]>, options?: NavigateOptions]) => void
 }
 
@@ -54,7 +63,11 @@ interface CompiledRoute {
 
 interface LocationSnapshot {
 	readonly pathname: string
-	/** Set by a navigation this router made, so the page scrolls to the top and focus moves to its heading. */
+	readonly search: string
+	/**
+	 * Set by a navigation this router made to another path, or to the same URL again, so the page scrolls to the top and
+	 * focus moves to its heading. A navigation that changes only the query (a filter) keeps both.
+	 */
 	readonly announce: boolean
 }
 
@@ -125,6 +138,16 @@ function isNavigateOptions(value: unknown): value is NavigateOptions {
 	return typeof value === 'object' && value !== null
 }
 
+function searchOf(query: QueryInit | undefined): string {
+	const search = new URLSearchParams()
+	for (const [name, value] of Object.entries(query ?? {})) {
+		if (value === undefined) continue
+		for (const item of typeof value === 'string' ? [value] : value) search.append(name, item)
+	}
+	const text = search.toString()
+	return text === '' ? '' : `?${text}`
+}
+
 /**
  * A typed History API router over a route table. Every function it answers is typed from `routes`, and `Router` turns
  * every plain same-origin `<a href>` under `base` into an in-app navigation.
@@ -162,7 +185,7 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 		return null
 	}
 
-	function buildHref(name: string, params: unknown): string {
+	function buildHref(name: string, params: unknown, query?: QueryInit): string {
 		const route = byName.get(name)
 		if (route === undefined) throw new Error(`unknown route ${JSON.stringify(name)}`)
 		const values = isStringRecord(params) ? params : {}
@@ -172,7 +195,7 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 			if (value === undefined) throw new Error(`route ${name}: missing param ${segment.name}`)
 			return encodeURIComponent(value)
 		})
-		return `${base}/${path.join('/')}`
+		return `${base}/${path.join('/')}${searchOf(query)}`
 	}
 
 	function hasParams(name: string): boolean {
@@ -180,13 +203,13 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 	}
 
 	function getSnapshot(): LocationSnapshot {
-		const pathname = window.location.pathname
-		if (snapshot === undefined || snapshot.pathname !== pathname) snapshot = { pathname, announce: false }
+		const { pathname, search } = window.location
+		if (snapshot === undefined || snapshot.pathname !== pathname || snapshot.search !== search) snapshot = { pathname, search, announce: false }
 		return snapshot
 	}
 
 	function notify(announce: boolean): void {
-		snapshot = { pathname: window.location.pathname, announce }
+		snapshot = { pathname: window.location.pathname, search: window.location.search, announce }
 		for (const listener of listeners) listener()
 	}
 
@@ -201,9 +224,11 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 	}
 
 	function go(url: string, replace: boolean): void {
+		const before = window.location.href
+		const path = window.location.pathname
 		if (replace) window.history.replaceState(null, '', url)
 		else window.history.pushState(null, '', url)
-		notify(true)
+		notify(window.location.pathname !== path || window.location.href === before)
 	}
 
 	function useLocation(): LocationSnapshot {
@@ -252,22 +277,35 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 		return match(useLocation().pathname)
 	}
 
-	function href<Name extends RouteName<R>>(name: Name, ...params: ParamsArgs<R[Name]>): string {
-		return buildHref(name, params[0])
+	function useSearchParams(): URLSearchParams {
+		const { search } = useLocation()
+		// One instance per query, so an effect that depends on it reruns only when the query changes.
+		return useMemo(() => new URLSearchParams(search), [search])
+	}
+
+	/** Splits the rest arguments of `href` and `navigate`: the params when the route has any, then the options. */
+	function splitArgs(name: string, args: readonly unknown[]): { readonly params: unknown; readonly options: NavigateOptions } {
+		const params = hasParams(name) ? args[0] : undefined
+		const options = args[hasParams(name) ? 1 : 0]
+		return { params, options: isNavigateOptions(options) ? options : {} }
+	}
+
+	function href<Name extends RouteName<R>>(name: Name, ...args: [...ParamsArgs<R[Name]>, options?: HrefOptions]): string {
+		const { params, options } = splitArgs(name, args)
+		return buildHref(name, params, options.query)
 	}
 
 	function navigate<Name extends RouteName<R>>(name: Name, ...args: [...ParamsArgs<R[Name]>, options?: NavigateOptions]): void {
-		const list: readonly unknown[] = args
-		const params = hasParams(name) ? list[0] : undefined
-		const options = list[hasParams(name) ? 1 : 0]
-		go(buildHref(name, params), isNavigateOptions(options) && options.replace === true)
+		const { params, options } = splitArgs(name, args)
+		go(buildHref(name, params, options.query), options.replace === true)
 	}
 
 	function Link<Name extends RouteName<R>>(props: LinkProps<R, Name>): ReactNode {
-		const { to, params, children, ...rest } = props
+		const { to, params, query, children, ...rest } = props
 		const location = useLocation()
-		const target = buildHref(to, params)
-		const current = splitPath(location.pathname).join('/') === splitPath(target).join('/')
+		const target = buildHref(to, params, query)
+		// Current by path alone: a navigation item stays current whatever query (filters) the page carries.
+		const current = splitPath(location.pathname).join('/') === splitPath(new URL(target, window.location.origin).pathname).join('/')
 		return (
 			<a {...rest} href={target} aria-current={current ? 'page' : rest['aria-current']}>
 				{children}
@@ -275,5 +313,5 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 		)
 	}
 
-	return { Router, Link, useRoute, href, navigate }
+	return { Router, Link, useRoute, useSearchParams, href, navigate }
 }
