@@ -47,7 +47,11 @@ fabrika builder deploy --wait --timeout=600 --json
 
 The daemon compiles the configuration in a separate process without platform credentials, updates the selected environment through Control, and triggers the immutable commit SHA. First environment creation uses the connection receipt's placement. Later updates read and preserve the current registry's domain, public origin, namespace and trigger settings.
 
-A failed update does not trigger deployment. A saved run can be inspected after daemon restart. A successful run reports the configured application URL; that result does not establish independent HTTP reachability. The existing Control executor reads current registration when it starts a run, so this flow does not snapshot the manifest against concurrent registry edits.
+A failed update does not trigger deployment. On a protected environment an update that changes something (a new
+artifact, a changed placement) waits for a person: Control keeps it as an approval request, the deployment stops with
+`failed` and a message naming the request's link, and nothing retries it; deploy again once a person has approved it.
+An update that changes nothing, the usual put before a redeploy, goes through. The builder key cannot create an
+environment that starts protected (`prod`, or one deleted while protected): a person registers it in the console first. A saved run can be inspected after daemon restart. A successful run reports the configured application URL; that result does not establish independent HTTP reachability. The existing Control executor reads current registration when it starts a run, so this flow does not snapshot the manifest against concurrent registry edits.
 
 ## Credential custody and recovery
 

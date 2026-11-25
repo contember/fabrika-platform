@@ -64,6 +64,7 @@ export function fixture() {
 	}
 	let environments: unknown[] = []
 	let refusePut = false
+	let approvalRequested: { url: string; fingerprint?: string } | null = null
 	let runStatus = 'succeeded'
 	let runSha: string | null = null
 	let requestedSha = ''
@@ -144,6 +145,15 @@ export function fixture() {
 						return Response.json({ result: { items: environments } })
 					case 'apps.environments.put': {
 						if (refusePut) return Response.json({ error: { message: TOKEN } }, { status: 500 })
+						if (approvalRequested !== null) {
+							return Response.json({
+								error: {
+									type: 'approval_requested',
+									message: `the change was not made: ${TOKEN}`,
+									data: { id: 'request-1', state: 'pending', ...approvalRequested },
+								},
+							}, { status: 409 })
+						}
 						const environment = {
 							authoring: false,
 							protected: false,
@@ -237,6 +247,9 @@ export function fixture() {
 		},
 		set refusePut(value: boolean) {
 			refusePut = value
+		},
+		set approvalRequested(value: { url: string; fingerprint?: string } | null) {
+			approvalRequested = value
 		},
 		set runStatus(value: string) {
 			runStatus = value

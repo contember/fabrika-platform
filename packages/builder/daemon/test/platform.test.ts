@@ -339,6 +339,33 @@ describe('exact-source deployment', () => {
 		expect(JSON.stringify(f.platform.status(f.id))).not.toContain(TOKEN)
 	}, 15_000)
 
+	test('a put a protected environment keeps for a person stops the deploy with the link; it never deploys or asks again', async () => {
+		const f = setup()
+		source(f)
+		await f.connect()
+		const url = `${f.origin}/approvals/requests/request-1`
+		f.approvalRequested = { url, fingerprint: '0a1b2c3d' }
+		f.platform.deploy(f.id)
+		await until(() => f.platform.status(f.id).deployment?.status === 'failed')
+		const deployment = f.platform.status(f.id).deployment
+		expect(deployment?.message).toContain(url)
+		expect(deployment?.message).toContain('0a1b2c3d')
+		expect(deployment?.message).toContain('waits for a person')
+		expect(JSON.stringify(f.platform.status(f.id))).not.toContain(TOKEN)
+		const writes = () => f.calls.filter((call) => call.method === 'apps.environments.put' || call.method === 'deploy').map((call) => call.method)
+		expect(writes()).toEqual(['apps.environments.put'])
+		// Nothing retries on its own: the target is free again, and only an explicit deploy puts once more.
+		await Bun.sleep(50)
+		expect(writes()).toEqual(['apps.environments.put'])
+
+		// A link Control names on another origin is not shown.
+		f.approvalRequested = { url: 'https://elsewhere.example.test/approvals/requests/request-1' }
+		f.platform.deploy(f.id)
+		await until(() => writes().length === 2 && f.platform.status(f.id).deployment?.status === 'failed')
+		expect(f.platform.status(f.id).deployment?.message).not.toContain('elsewhere.example.test')
+		expect(writes()).toEqual(['apps.environments.put', 'apps.environments.put'])
+	}, 15_000)
+
 	test('provider and external source changes fail before environment writes', async () => {
 		const f = setup()
 		source(f)
