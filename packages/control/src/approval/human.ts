@@ -154,8 +154,13 @@ export function startedByPerson(run: Pick<RunRow, 'by_person' | 'actor'>): boole
  * person too, or a key would redirect the environment it cannot deploy by hand. `protectedEnv` names the protected
  * environment the change reaches, null when none.
  */
-export function requirePersonToRedirect(auth: AuthContext, protectedEnv: string | null, change: string): void {
-	if (protectedEnv === null || isPerson(auth)) return
+export function requirePersonToRedirect(
+	auth: AuthContext,
+	admission: ConsoleAdmission | undefined,
+	protectedEnv: string | null,
+	change: string,
+): void {
+	if (protectedEnv === null || isConsolePerson(auth, admission)) return
 	fail(
 		403,
 		`environment \`${protectedEnv}\` is protected: only a person changes ${change}, which decides what a deploy there runs; `
@@ -179,12 +184,12 @@ export async function startsProtected(
  * (`apps.environments.put`, `apps.register`). Clearing it stops push deploys and stays open to a key.
  */
 export async function requirePersonToPointTriggerRef(
-	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	c: { readonly auth: AuthContext; readonly admission?: ConsoleAdmission; readonly repositories: Pick<ControlRepositories, 'registry'> },
 	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly triggerRef: string | null },
 ): Promise<void> {
 	const { appId, env, existing, triggerRef } = target
-	if (triggerRef === null || triggerRef === existing?.trigger_ref || isPerson(c.auth)) return
-	if (await startsProtected(c.repositories.registry, appId, env, existing)) requirePersonToRedirect(c.auth, env, 'its trigger ref')
+	if (triggerRef === null || triggerRef === existing?.trigger_ref || isConsolePerson(c.auth, c.admission)) return
+	if (await startsProtected(c.repositories.registry, appId, env, existing)) requirePersonToRedirect(c.auth, c.admission, env, 'its trigger ref')
 }
 
 /**
@@ -193,11 +198,11 @@ export async function requirePersonToPointTriggerRef(
  * values (ADR-0085 §4). Clearing it stays open to a key.
  */
 export async function requirePersonToPointPublicOrigin(
-	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	c: { readonly auth: AuthContext; readonly admission?: ConsoleAdmission; readonly repositories: Pick<ControlRepositories, 'registry'> },
 	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly publicOrigin: string | null },
 ): Promise<void> {
 	const { appId, env, existing, publicOrigin } = target
-	if (publicOrigin === null || publicOrigin === existing?.public_origin || isPerson(c.auth)) return
+	if (publicOrigin === null || publicOrigin === existing?.public_origin || isConsolePerson(c.auth, c.admission)) return
 	if (await startsProtected(c.repositories.registry, appId, env, existing)) {
 		fail(403, `environment \`${env}\` is protected: only a person changes its public origin; an agent, a builder key or a service key cannot`)
 	}
@@ -209,11 +214,11 @@ export async function requirePersonToPointPublicOrigin(
  * stays open to a key.
  */
 export async function requirePersonToPointDomain(
-	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	c: { readonly auth: AuthContext; readonly admission?: ConsoleAdmission; readonly repositories: Pick<ControlRepositories, 'registry'> },
 	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly domain: string | null },
 ): Promise<void> {
 	const { appId, env, existing, domain } = target
-	if (domain === null || domain === existing?.domain || isPerson(c.auth)) return
+	if (domain === null || domain === existing?.domain || isConsolePerson(c.auth, c.admission)) return
 	if (await startsProtected(c.repositories.registry, appId, env, existing)) {
 		fail(403, `environment \`${env}\` is protected: only a person changes its domain; an agent, a builder key or a service key cannot`)
 	}
