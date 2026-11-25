@@ -11,6 +11,7 @@ import {
 	type ApprovalRequestText,
 	CONTROL_ACTIONS,
 	CONTROL_APP_ID,
+	CONTROL_GLOBAL_ACTIONS,
 	type CredentialCeiling,
 	gate,
 	recipientPublicKeySchema,
@@ -27,14 +28,25 @@ import { requestKind, type RequestKindContext, type RequestOutcome } from '../ki
 import { judging, policyOf, reachOf, settingsOf } from '../rules'
 import { agentText, appIdField, ownText, timeText } from './shared'
 
-const KEY_ACTIONS: ReadonlySet<string> = new Set(Object.values(CONTROL_ACTIONS))
+/** Why a key an agent asks for never holds an action of Control, by the action. */
+const REFUSED_KEY_ACTIONS: ReadonlyMap<string, string> = new Map([
+	[CONTROL_ACTIONS.ACCESS_APPROVE, 'approves access, and an agent never asks for approval rights'],
+	...CONTROL_GLOBAL_ACTIONS.map((action): [string, string] => [action, 'held only globally, and a key holds its actions at one application']),
+])
+
+/** The actions a key an agent asks for may hold: those of Control held at an application, approval rights aside. */
+const KEY_ACTIONS: ReadonlySet<string> = new Set(Object.values(CONTROL_ACTIONS).filter((action) => !REFUSED_KEY_ACTIONS.has(action)))
 
 const actionsField = z
 	.array(z.string().min(1))
 	.min(1)
 	.max(50)
 	.superRefine((actions, ctx) => {
-		const unknown = actions.filter((action) => !KEY_ACTIONS.has(action))
+		for (const action of actions) {
+			const refused = REFUSED_KEY_ACTIONS.get(action)
+			if (refused !== undefined) ctx.addIssue({ code: 'custom', message: `${action}: ${refused}` })
+		}
+		const unknown = actions.filter((action) => !KEY_ACTIONS.has(action) && !REFUSED_KEY_ACTIONS.has(action))
 		if (unknown.length > 0) {
 			ctx.addIssue({ code: 'custom', message: `${unknown.join(', ')}: not an action of Control; a key holds exact Control actions, no wildcard` })
 		}

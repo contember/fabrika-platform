@@ -587,6 +587,13 @@ for (const backend of backends) {
 			expect(await status(w.ask(w.keyInput({ publicKey: { kty: 'EC', crv: 'P-384', x: 'a', y: 'b' } })))).toMatchObject({ status: 400 })
 			expect(await status(w.ask(w.keyInput({ actions: ['deploy.*'] })))).toMatchObject({ status: 400 })
 			expect(await status(w.ask(w.keyInput({ actions: ['nothing.of.control'] })))).toMatchObject({ status: 400 })
+			// A key never holds approval rights, nor an action Control checks only as a global grant: a key holds its actions at one app.
+			const approving = await status(w.ask(w.keyInput({ actions: [CONTROL_ACTIONS.DEPLOY_TRIGGER, CONTROL_ACTIONS.ACCESS_APPROVE] })))
+			expect(approving.status).toBe(400)
+			expect(approving.message).toContain(CONTROL_ACTIONS.ACCESS_APPROVE)
+			const global = await status(w.ask(w.keyInput({ actions: [CONTROL_ACTIONS.NAMESPACE_MANAGE] })))
+			expect(global.status).toBe(400)
+			expect(global.message).toContain(CONTROL_ACTIONS.NAMESPACE_MANAGE)
 			// Without `access.request` at the application: as an absent application answers.
 			expect(await status(w.ask(w.keyInput(), w.agent('kim', [CONTROL_ACTIONS.DEPLOY_TRIGGER])))).toMatchObject({ status: 404 })
 			// `refuse` refuses it to an agent at all; with no environment gating it there is nothing to approve.

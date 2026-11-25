@@ -305,7 +305,7 @@ checks the approver as it does today.
   `<console>/approvals/<run id>`). The agent reads the request's state; Fabrika sends no notification.
 
 A key for someone else (`credentials`, the kind `iam.apiKeys.provision`) holds exact Control actions at one application,
-scoped to it, so it acts in every environment of the application and the strictest protected one judges it; where none
+scoped to it, never `access.approve` or an action Control checks only as a global grant (400, naming it), so it acts in every environment of the application and the strictest protected one judges it; where none
 gates `credentials` (none is protected, or it is `off`) the request is refused (409), since an agent's credential issues
 nothing in IAM. The agent sends the application, the actions, a label, an expiry at most 30 days ahead and a public
 P-256 or X25519 JWK (a private one, another curve or a later expiry is 400). The stored input adds the key's RFC 7638
