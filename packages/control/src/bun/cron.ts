@@ -24,6 +24,7 @@ async function main(createRuntime: () => Runtime): Promise<void> {
 	const sandboxes = devSandboxDepsOf(runtime.env, runtime.provider)
 	try {
 		await runMaintenance(runtime.env, {
+			provider: runtime.provider,
 			// The same pass as the Worker's, for a provider that serves the data operations and a Control that holds ops keys.
 			...(opsTransport === undefined || runtime.provider.dataOperations === undefined ? {} : {
 				backups: async () =>

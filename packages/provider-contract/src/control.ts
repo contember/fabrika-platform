@@ -313,6 +313,12 @@ export interface ProviderSecretPutResult {
 export interface ProviderManagedSecrets {
 	put(input: ProviderSecretPutInput): Promise<ProviderSecretPutResult>
 	delete(input: ProviderSecretDeleteInput): Promise<void>
+	/**
+	 * The provider's own version of the value it holds under the name, which moves on every write of it; null when it holds
+	 * none. Never the value or a digest of it. Absent, an approval request of a provider-kept secret is refused, since an
+	 * interrupted execution could not be told apart from one that landed (ADR-0083 §8).
+	 */
+	version?(input: ProviderSecretDeleteInput): Promise<string | null>
 }
 
 /**

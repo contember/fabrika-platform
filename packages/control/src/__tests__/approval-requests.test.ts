@@ -1003,10 +1003,10 @@ describe('the RPC edge', () => {
 		return { status: response.status, body: JSON.stringify(body) }
 	}
 
-	test('a create names a kind and a JSON input, nothing more; a write with an external effect is not requestable yet', async () => {
+	test('a create names a kind and a JSON input, nothing more; a kind this release does not serve is not requestable yet', async () => {
 		expect((await call('approvals.requests.create', { kind: 'apps.secrets.put', input: {}, extra: 1 }, true)).status).toBe(400)
 		expect((await call('approvals.requests.create', { input: {} }, true)).status).toBe(400)
-		const notYet = await call('approvals.requests.create', { kind: 'apps.environments.suspend', input: { appId: 'notes', env: 'prod' } }, true)
+		const notYet = await call('approvals.requests.create', { kind: 'apps.deleteEverything', input: { appId: 'notes' } }, true)
 		expect(notYet.status).toBe(400)
 		expect(notYet.body).toContain('not requestable yet')
 		const refused = await call('approvals.requests.create', { kind: 'apps.environments.protect', input: {} }, true)

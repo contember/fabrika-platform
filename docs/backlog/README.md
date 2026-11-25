@@ -173,4 +173,5 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [297](297-control-accepts-any-default-branch.md): Control stores any string as an application's default branch, so a workspace branch or a name git refuses becomes what Deploy runs.
 - [301](301-framework-secrets-stay-in-the-initial-environment.md): The captured framework variables leave `process.env` but stay in `/proc/self/environ`, which code in the same process can read.
 - [302](302-scope-value-keys-pile-up-unbounded.md): Each scope-value call writes a 60-second key that is never pruned, and nothing bounds how often an administrator asks.
+- [303](303-approval-request-follow-and-exactness-edges.md): Approval requests after D8: follows that misread an interrupted put or suspension, per-input edges, an app-wide write before `prod` exists, and coverage-table gaps.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

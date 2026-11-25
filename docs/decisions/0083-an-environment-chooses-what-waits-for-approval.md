@@ -71,19 +71,36 @@ strictest of their modes. The mapping is one pure function in `@fabrika/control-
 The other categories are actions with no deploy line. Each judges an action of a **non-person** (§6); a person acting
 in the console is their own evidence, as before:
 
-| Category         | Covers                                                                                                                                                                       | Default  |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
-| `deploy-request` | a manual run of the environment started by a non-person (ADR-0050 §4)                                                                                                        | `person` |
-| `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey`, the all-environments layer included                                                                  | `person` |
-| `variables`      | `apps.variables.put/delete`, the all-environments layer included                                                                                                             | `person` |
-| `data`           | `data.start` (maintenance modes, side restore), `data.recover`, suspend and resume, the backup schedule                                                                      | `person` |
-| `registry`       | the trigger ref, domain and public origin, `apps.update`'s source and build fields, and `apps.environments.put`'s cross-origin list, provider target, artifact and namespace | `person` |
-| `agent-grants`   | a grant an agent asks for at the application environment: one role its approved contract declares, for the agent or another principal, for at most 30 days (§4)              | `person` |
-| `credentials`    | a key an agent asks for, issued to someone other than the agent (§8)                                                                                                         | `person` |
-| `grants`         | a person's own console grant, grant edit or revocation in IAM (§4)                                                                                                           | `off`    |
+| Category         | Covers                                                                                                                                                                                                        | Default  |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------- |
+| `deploy-request` | a manual run of the environment started by a non-person (ADR-0050 §4)                                                                                                                                         | `person` |
+| `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey`, the all-environments layer included                                                                                                   | `person` |
+| `variables`      | `apps.variables.put/delete`, the all-environments layer included                                                                                                                                              | `person` |
+| `data`           | `data.start` (maintenance modes, side restore), `data.recover`, suspend and resume, the backup schedule                                                                                                       | `person` |
+| `registry`       | `apps.update` and `apps.environments.put`, every field of each: the trigger ref, domain, public origin, cross-origin list, provider target, artifact and namespace, the application's source and build fields | `person` |
+| `agent-grants`   | a grant an agent asks for at the application environment: one role its approved contract declares, for the agent or another principal, for at most 30 days (§4)                                               | `person` |
+| `credentials`    | a key an agent asks for, issued to someone other than the agent (§8)                                                                                                                                          | `person` |
+| `grants`         | a person's own console grant, grant edit or revocation in IAM (§4)                                                                                                                                            | `off`    |
 
 A write to the all-environments layer (`env: null`) is a write to every protected environment of the application, and
-the strictest of their modes applies; the request names them all.
+the strictest of their modes applies; the request names them all. An `apps.update` reaches every environment of the
+application the same way.
+
+Each action category holds on every direct write of the procedures it covers. The write meets the gate before it runs:
+under `off` it applies with the requester's authority; under `refuse` it is a 403 naming the category; under `person` it
+does not apply, and Control stores it as an approval request with the procedure as its kind and its input as asked,
+exactly as `approvals.requests.create` would (§8). The answer is an RPC error, 409, of type `approval_requested`: its
+message names the link, and its data is `{ id, url, state }` with a secret's fingerprint. A write that did not apply
+never answers 200, so a client older than requests shows the message with the link and never mistakes it for an applied
+write; the command-line client prints the request and exits 75, or follows it with `--wait`. A write that changes
+nothing (every field it names already holds that value, as the request page would show "Changes: none") applies as
+under `off`; a secret is never judged so, since that would take reading a plaintext. A person in the console applies
+directly. An environment that does not exist yet has nowhere for a request to wait, so on one that starts
+protected (`prod`, or one deleted while protected) a non-person's write is refused (403), and so is a registration
+that names its trigger ref, domain or public origin. `apps.environments.put` and `apps.update` bind
+the mode they were judged under to the environment's `generation`, so a stricter mode saved between the check and the
+write refuses the write. A table test lists every mutation of Control's router with its category or the reason it is
+exempt (§9).
 
 ### 2. The choice and its settings are stored with the environment
 
@@ -256,9 +273,11 @@ checks the approver as it does today.
   the requester recorded beside them. At execution, under the environment's lease, Control compares the bound
   before-state with the current one; a mismatch closes the request `stale`, and the agent asks again.
 - **The lifecycle** is `pending → approved | rejected | expired`, then `executing (operation id) → executed | failed |
-  unknown`, and `stale`. The operation id is recorded before any external effect: a provider secret put is idempotent
-  by name and value, IAM's key issuance takes the request id as its idempotency key, and a data operation records its
-  own steps (ADR-0069), so `unknown` retries or follows it.
+  unknown`, and `stale`. The operation id is recorded before any external effect: a secret the provider keeps binds
+  the provider's own version of it (never the value, which a sensitive provider variable does not return), IAM's key
+  issuance takes the request id as its idempotency key, and a data operation records its own steps (ADR-0069) under the
+  request's operation id, so `unknown` retries or follows it. A provider secret is followed, never put again: an
+  unchanged version says the value did not land, a moved one that it did.
 - **Who approves.** A person in the console with the action's approval right (`access.approve` at the coordinates, the
   application's IAM administration for an IAM action: `iam.admin`, or `iam.users.manage` at that application
   environment, which Control asks IAM's `me` for with the person's console token; `access.approve` alone decides no IAM
@@ -319,11 +338,16 @@ command-line preset carries), and IAM's named policies and an application's retu
 ### Rollout
 
 Each category takes effect only from the change that adds the requests it waits in: `deploy-request` with the parked
-non-person run; `secrets`, `variables`, `data` and `registry` once their writes with an external effect go through
-requests; `agent-grants` with the agent's grant request; `credentials` with keys for others, behind the WebAuthn
-step-up. Until then a non-person's secret, variable and data write applies at once, its write of the trigger ref,
-domain, public origin or an application's source and build fields is refused, and its write of the cross-origin list,
-provider target, artifact or namespace applies at once, as before. A hole is closed by routing a write through a request, never by refusing it outright.
+non-person run; `secrets`, `variables`, `data` and `registry` together, once their writes with an external effect go
+through requests (decision D8); `agent-grants` with the agent's grant request; `credentials` with keys for others,
+behind the WebAuthn step-up. A hole is closed by routing a write through a request, never by refusing it outright.
+
+Before D8 a non-person's secret, variable and data write applied at once, its write of the trigger ref, domain, public
+origin or an application's source and build fields was refused, and its write of the cross-origin list, provider
+target, artifact or namespace applied at once. From D8 on, an agent's secret, variable, data or registry write on a
+protected environment waits for a person; setting those categories to `off` restores the earlier behaviour, and also
+lets a non-person write the fields it was refused. An existing installation converges with no migration: an environment
+whose policy is null reads the defaults, `person` for the four, from the upgrade on.
 
 ## Consequences
 

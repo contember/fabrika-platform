@@ -347,6 +347,13 @@ read the lockfile and name the one to use. A deploy checks the committed `bun.lo
      the namespace cannot list, add `--public-origin=https://<domain>`.
    - `register` CREATES and refuses a second registration. A changed manifest goes through
      `control apps environments put` with the same placement flags. `put` derives no public origin.
+   - `prod` is protected from the start, and so is an environment that was protected when it was deleted. There a
+     key is not a person: `register` with a domain, a trigger ref or a public origin (a namespace host sets one)
+     answers 403, so a person registers that environment in the console. Once it exists, a key's
+     `control apps environments put` or `control apps secrets put` that changes something is not made: the command
+     prints the approval request's link (and a secret's fingerprint) and exits 75. Hand the link to a person, who
+     approves it in the console or makes the change there; `--wait` follows the request until it is decided. A put
+     that changes nothing applies at once.
    - Without `--trigger-ref` the environment deploys only on `control deploy`. With it, a push deploys it:
      `--trigger-ref=deploy/prod` is a branch, stored as `refs/heads/deploy/prod`. A tag needs the full form,
      `--trigger-ref=refs/tags/v1.2.0`, or a glob, `--trigger-ref='refs/tags/v*'` (quote it for the shell). A push
@@ -381,7 +388,8 @@ read the lockfile and name the one to use. A deploy checks the committed `bun.lo
      app uses another config), send it with `control apps environments put`, and deploy again.
 
    The log line prints the `put` command with the environment's stored domain and trigger ref: `put` clears
-   either one when the flag is left out.
+   either one when the flag is left out. On a protected environment that `put` with a key exits 75 with the
+   approval request's link (step 2); deploy again once a person has approved it.
 
    On an environment named `prod`, a change that widens access waits for a person to approve it in the
    console before it deploys.

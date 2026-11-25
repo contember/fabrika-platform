@@ -152,7 +152,10 @@ const makeApi = (
 	status: () => ZeropsAppVersionStatus | undefined = () => 'ACTIVE',
 	freshService = false,
 ): ZeropsApi => {
-	const records: ZeropsServiceEnv[] = [{ id: 'env-1', key: 'TOKEN', sensitive: true }]
+	const records: ZeropsServiceEnv[] = [
+		{ id: 'env-1', key: 'TOKEN', sensitive: true, lastUpdate: '2026-11-24T13:09:28Z' },
+		{ id: 'env-2', key: 'UNDATED', sensitive: true },
+	]
 	const deleted = new Set<string>()
 	return {
 		importServices: async ({ projectId, yaml }) => {
@@ -2026,6 +2029,22 @@ describe('Zerops ControlProvider lifecycle', () => {
 		expect(stored).toEqual({ valueRef: 'zerops:service-1/TOKEN' })
 		expect(recorded.envWrites).toEqual([{ serviceId: 'service-1', key: 'TOKEN', value: 'secret-value', sensitive: true }])
 		expect(recorded.envDeletes).toEqual(['env-1'])
+	})
+
+	test("a secret's version is its record and the time it was last written, never its value; none when the service holds none", async () => {
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const version = control.secrets?.version
+		if (version === undefined) throw new Error('expected Zerops managed secrets to report a version')
+		expect(await version({ environment: environment(), name: 'TOKEN' })).toBe('env-1@2026-11-24T13:09:28Z')
+		expect(await version({ environment: environment(), name: 'ABSENT' })).toBeNull()
+		expect(recorded.envWrites).toEqual([])
+	})
+
+	test('a record without its last update reports no version rather than one that might not move', async () => {
+		const control = createTestControlProvider({ accessToken: 'zt-secret', api: makeApi(recorded) })
+		const version = control.secrets?.version
+		if (version === undefined) throw new Error('expected Zerops managed secrets to report a version')
+		await expect(version({ environment: environment(), name: 'UNDATED' })).rejects.toThrow('last update')
 	})
 
 	test('deleting a secret the service no longer holds succeeds without a platform delete', async () => {

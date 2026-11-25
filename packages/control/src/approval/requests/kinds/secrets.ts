@@ -1,12 +1,14 @@
 // The `secrets` kinds (ADR-0083 §1, §8): an application secret's value set, rotated or deleted, and an environment's
-// token key rotated, where the write is Control's own. The value an agent sends is sealed in Control's vault under the
-// request's own purpose and never stored in the row, which holds its reference, its length and its fingerprint (the
-// first 8 hex characters of its SHA-256). On approval the value moves to the secret's own purpose through the use case
-// the procedure runs; once the request is closed, the sealed copy is deleted. A secret the provider keeps (on Zerops
-// `secretTarget` answers `provider`) is written outside Control, so it is not requestable in this release.
+// token key rotated. The value an agent sends is sealed in Control's vault under the request's own purpose and never
+// stored in the row, which holds its reference, its length and its fingerprint (the first 8 hex characters of its
+// SHA-256). On approval the use case the procedure runs moves the value to the secret's own purpose, or puts it to the
+// provider where the provider keeps the environment's values (on Zerops `secretTarget` answers `provider`); once the
+// request is closed, the sealed copy is deleted. A provider-kept secret binds the provider's own version of the value,
+// which settles an interrupted execution: the provider holds what it held before (nothing landed) or something newer.
 
 import { sha256Hex } from '@fabrika/auth-core'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
+import type { JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { fail } from '../../../api/domain'
 import { rotateTokenKeyUseCase } from '../../../api/registry/environments'
@@ -21,6 +23,7 @@ import {
 	setAppSecretValueUseCase,
 	type VaultUseCaseContext,
 } from '../../../api/vault'
+import { providerEnvironment } from '../../../run-lifecycle'
 import { appSecretPurpose } from '../../../secret-resolver'
 import { parseVaultRef, type Vault, VaultSecretNotFoundError, type VaultSecretPurpose } from '../../../vault'
 import {
@@ -59,18 +62,30 @@ export function secretFingerprint(value: string): string {
 	return sha256Hex(value).slice(0, 8)
 }
 
-const NOT_REQUESTABLE = 'is not requestable yet'
-
-/** Refuse a secret write that reaches outside Control: the provider keeps the environment's values (5b). */
-async function requireLocalSecret(c: RequestActionContext, appId: string, env: string | null): Promise<void> {
+/**
+ * Refuse a secret write the request could not follow: the use case's own refusals of where it goes (`secretTarget`), and
+ * a provider that keeps the values but reports no version, so an interrupted put could not be told from one that landed.
+ */
+async function requireFollowableSecret(c: RequestActionContext, appId: string, env: string | null): Promise<void> {
 	const target = await secretTarget(c, appId, env)
-	if (target.kind === 'provider') {
+	if (target.kind === 'provider' && target.secrets.version === undefined) {
 		fail(
 			400,
-			`a secret of ${appId}@${target.appEnv.env} ${NOT_REQUESTABLE}: the ${c.provider.id} provider keeps this environment's secret values, so `
-				+ 'the write reaches outside Control, and this release routes only writes Control makes itself through a request',
+			`a secret of ${appId}@${target.appEnv.env} cannot be requested: the ${c.provider.id} provider keeps this environment's values and reports `
+				+ 'no version of them, so an interrupted execution could not be followed',
 		)
 	}
+}
+
+/** The provider's version of the value it keeps for the secret, or undefined where Control's vault keeps the value. */
+async function providerVersion(c: RequestKindContext, secret: SecretName): Promise<string | null | undefined> {
+	const provider = c.provider
+	if (provider === undefined || secret.env === null) return undefined
+	const target = await secretTarget({ provider, repositories: c.repositories }, secret.appId, secret.env)
+	if (target.kind !== 'provider') return undefined
+	const version = target.secrets.version
+	if (version === undefined) throw new Error('the provider reports no version of the secrets it keeps')
+	return await version({ environment: await providerEnvironment(c.repositories, target.appEnv), name: secret.name })
 }
 
 /** One secret, by its coordinates. */
@@ -94,13 +109,23 @@ type SealedSecretInput = z.infer<typeof sealedSecretInput>
 const secretNameInput = z.object({ appId: appIdField, name: z.string().min(1), env: layerField })
 type SecretNameInput = z.infer<typeof secretNameInput>
 
-/** What a secret write binds: the environments it reaches, and the value stored now, by its ref and the version it holds. */
-const secretBefore = z.object({ generations: generationsField, ref: z.string().nullable(), version: z.string().nullable() })
+/**
+ * What a secret write binds: the environments it reaches, and the value stored now, by its ref and the version it holds:
+ * the vault's, or the provider's own where the provider keeps it.
+ */
+const secretBefore = z.object({
+	generations: generationsField,
+	ref: z.string().nullable(),
+	version: z.string().nullable(),
+	keptBy: z.literal('provider').optional(),
+})
 type SecretBefore = z.infer<typeof secretBefore>
 
-async function secretBeforeOf(c: RequestKindContext, secret: SecretName): Promise<SecretBefore> {
+async function secretBeforeOf(c: RequestActionContext, secret: SecretName): Promise<SecretBefore> {
 	const generations = await generationsOf(c, secret.appId, secret.env)
 	const ref = await findAppSecretRef(c.repositories, secret.appId, secret.env, secret.name)
+	const provided = await providerVersion(c, secret)
+	if (provided !== undefined) return { generations, ref, version: provided, keptBy: 'provider' }
 	if (ref === null || parseVaultRef(ref) === null) return { generations, ref, version: null }
 	const vault = await requireVault(c)
 	return { generations, ref, version: await vault.sealedVersion(ref, appSecretPurpose(secret.appId, secret.env, secret.name)) }
@@ -134,7 +159,7 @@ async function holdSecret(
 ): Promise<{ readonly input: SealedSecretInput; readonly fingerprint: string }> {
 	assertUnmanagedName('secret', secret.name)
 	assertNoFrameworkReference('secret', secret.value)
-	await requireLocalSecret(c, secret.appId, secret.env)
+	await requireFollowableSecret(c, secret.appId, secret.env)
 	if (mustExist && (await findAppSecretRef(c.repositories, secret.appId, secret.env, secret.name)) === null) fail(404, 'secret not found')
 	const vault = await requireVault(c)
 	const purpose = requestSecretPurpose(requestId)
@@ -144,6 +169,30 @@ async function holdSecret(
 		input: { appId: secret.appId, env: secret.env, name: secret.name, sealed: { ref, length: [...secret.value].length, fingerprint } },
 		fingerprint,
 	}
+}
+
+/**
+ * Settle an interrupted put of a value the provider keeps, which it never hands back: by its version, which held at
+ * `before` when the execution started and moves on every write. Unmoved, nothing landed; moved, the put landed, unless a
+ * write in the same window replaced it, which this reads as the put's (the sweep runs a minute or so after it). Never a
+ * retry: a person approved one execution, and asking again is cheap.
+ */
+async function followProviderPut(
+	c: RequestKindContext,
+	input: SealedSecretInput,
+	before: SecretBefore,
+	result: JsonValue,
+): Promise<RequestOutcome | { readonly state: 'unknown' }> {
+	const now = await providerVersion(c, input)
+	if (now === undefined) return { state: 'unknown' }
+	if (now === before.version) {
+		return { state: 'failed', error: 'the value did not land: the provider holds what it held when the execution started; ask again' }
+	}
+	if (now === null) return { state: 'failed', error: 'the provider holds no value under the name: it did not land, or a delete since removed it' }
+	if ((await findAppSecretRef(c.repositories, input.appId, input.env, input.name)) === null) {
+		return { state: 'failed', error: 'the provider took the value, but Control did not record the secret; ask again to record it' }
+	}
+	return { state: 'executed', result }
 }
 
 /** Delete the sealed copy once the request is closed; one already gone is not an error. */
@@ -194,12 +243,14 @@ function secretValueKind<Asked>(options: ValueKindOptions<Asked>): RequestKind {
 				return { name: input.name, env: input.env, fingerprint: input.sealed.fingerprint }
 			})
 		},
-		follow: async (c, input, execution) => {
+		follow: async (c, input, execution, before) => {
 			const vault = await requireVault(c)
 			const value = await sealedValue(vault, input, execution.requestId)
 			// The sealed copy is deleted only once the request is closed, so a lost one leaves nothing to compare.
 			if (value === null) return { state: 'unknown' }
-			return observed((await storedValue(c, vault, input)) === value, { name: input.name, env: input.env, fingerprint: input.sealed.fingerprint })
+			const result = { name: input.name, env: input.env, fingerprint: input.sealed.fingerprint }
+			if (before.keptBy !== 'provider') return observed((await storedValue(c, vault, input)) === value, result)
+			return await followProviderPut(c, input, before, result)
 		},
 		discard: (c, input) => discardSealed(c, input),
 		describe: (input, before) => ({
@@ -256,15 +307,15 @@ export const rotateVaultSecretKind = secretValueKind({
 })
 
 /**
- * Whether deleting the secret stays in Control: its value is in the vault, or it is a row that holds its value itself;
- * one the provider keeps is deleted there first (`deleteAppSecretUseCase`).
+ * A delete of a secret that exists. One the provider keeps is deleted there first, then its row
+ * (`deleteAppSecretUseCase`), so the provider must report a version for an interrupted delete to be followed.
  */
-async function requireLocalDelete(c: RequestActionContext, input: SecretNameInput): Promise<void> {
+async function admitDelete(c: RequestActionContext, input: SecretNameInput): Promise<void> {
 	const env = input.env ?? null
 	const ref = await findAppSecretRef(c.repositories, input.appId, env, input.name)
 	if (ref === null) fail(404, 'secret not found')
 	if (parseVaultRef(ref) !== null || c.provider.secrets === undefined || env === null) return
-	await requireLocalSecret(c, input.appId, env)
+	await requireFollowableSecret(c, input.appId, env)
 }
 
 function deleteSecretKind(kind: 'apps.secrets.delete' | 'vault.delete'): RequestKind {
@@ -276,16 +327,27 @@ function deleteSecretKind(kind: 'apps.secrets.delete' | 'vault.delete'): Request
 		coordinates: (input) => layerCoordinates(input.appId, input.env),
 		requesterAction: CONTROL_ACTIONS.SECRET_MANAGE,
 		requesterAt: 'app',
-		admit: requireLocalDelete,
+		admit: admitDelete,
 		captureBefore: (c, input) => secretBeforeOf(c, { appId: input.appId, env: input.env ?? null, name: input.name }),
 		execute: (c, input) =>
 			outcomeOf(async () => {
 				await deleteAppSecretUseCase(c, input.appId, input.name, input.env ?? null)
 				return { name: input.name, env: input.env ?? null }
 			}),
-		follow: async (c, input) => {
-			const ref = await findAppSecretRef(c.repositories, input.appId, input.env ?? null, input.name)
-			return observed(ref === null, { name: input.name, env: input.env ?? null })
+		follow: async (c, input, _execution, before) => {
+			const secret = { appId: input.appId, env: input.env ?? null, name: input.name }
+			// The row goes last, so without it the value is gone too.
+			if ((await findAppSecretRef(c.repositories, secret.appId, secret.env, secret.name)) === null) {
+				return { state: 'executed', result: { name: secret.name, env: secret.env } }
+			}
+			if (before.keptBy === 'provider') {
+				const now = await providerVersion(c, secret)
+				if (now === undefined) return { state: 'unknown' }
+				if (now === null) {
+					return { state: 'failed', error: 'the provider no longer holds the value, but Control still lists the secret; ask again to finish deleting it' }
+				}
+			}
+			return observed(false, { name: secret.name, env: secret.env })
 		},
 		describe: (input) => ({
 			summary: [ownText('Delete secret '), agentText(input.name), ownText(` of ${layerName(input.appId, input.env ?? null)}`)],

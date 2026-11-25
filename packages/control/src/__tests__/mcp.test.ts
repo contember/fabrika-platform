@@ -3,19 +3,24 @@
 
 import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
+import { CONTROL_ACTIONS, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
+import { SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider, ProviderDevSandboxes } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
 import type { DeployQueue } from '../api/runs'
+import { storedPolicy, storedSettings } from '../approval/categories'
 import { controlMcpRoute } from '../bun/mcp'
 import { createFetchHandler } from '../bun/server'
 import { DevSignals } from '../dev/signals'
 import type { Env } from '../env'
-import { createHarness, type Harness } from './helpers/harness'
+import { createHarness, type Harness, harnessDatabase } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
+import { fixtureProtect } from './helpers/lock'
 import { proxiedRequest } from './helpers/proxy'
 import { unusedSourceConnection } from './helpers/source-connection'
-import { adminToken, testIamEnv, testResourceToken } from './helpers/tokens'
+import { adminToken, TEST_ISSUER, testIamEnv, testResourceToken } from './helpers/tokens'
 import { testVaultKey } from './helpers/vault'
 import { AUTHOR_ACTIONS, seedWorkspaceWorld, sha, type WorkspaceWorld, zeropsProvider } from './helpers/workspaces'
 
@@ -30,10 +35,9 @@ afterEach(() => {
 
 async function fixture(
 	queue?: DeployQueue,
-	options: { dev?: boolean; provider?: ControlProvider } = {},
+	options: { dev?: boolean; provider?: ControlProvider; iamProvisioningKey?: string } = {},
 ): Promise<{ world: WorkspaceWorld; fetch: (request: Request) => Promise<Response> }> {
 	const provider = options.provider ?? zeropsProvider
-	const sandboxes = provider.devSandboxes !== undefined
 	harness = createHarness()
 	const world = await seedWorkspaceWorld(harness.repositories, harness.d1)
 	// The world's queue and log reader stand in for the process ports.
@@ -53,7 +57,8 @@ async function fixture(
 		ENVIRONMENT: 'stage',
 		FABRIKA_CONTROL_DOMAIN: ORIGIN,
 		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals() } } : {}),
-		...(sandboxes ? { FABRIKA_CONTROL_VAULT_KEY: testVaultKey() } : {}),
+		FABRIKA_CONTROL_VAULT_KEY: testVaultKey(),
+		...(options.iamProvisioningKey === undefined ? {} : { FABRIKA_IAM_PROVISIONING_KEY: options.iamProvisioningKey }),
 	}
 	const mcp = controlMcpRoute(env, world.source, provider)
 	const served = createFetchHandler(env, provider, unusedSourceConnection('zerops'), mcp, true)
@@ -186,6 +191,7 @@ describe('the MCP endpoint', () => {
 			get_deployment: read,
 			get_run: read,
 			get_approval_request: read,
+			request_change: write(false, false),
 			bind_dev: write(true, false),
 			get_dev_status: read,
 			run_checks: write(false, false),
@@ -218,6 +224,7 @@ describe('the MCP endpoint', () => {
 			'list_targets',
 			'list_workspaces',
 			'read_files',
+			'request_change',
 			'reset_dev',
 			'run_checks',
 			'search_files',
@@ -303,6 +310,96 @@ describe('the MCP endpoint', () => {
 		for (const id of ['01900000-0000-7000-8000-00000000a002', '01900000-0000-7000-8000-00000000a003']) {
 			const foreign = await rpc(fetch, token, 'tools/call', { name: 'get_approval_request', arguments: { id } })
 			expect(field(foreign, 'result')).toEqual({ isError: true, content: [{ type: 'text', text: 'approval request not found' }] })
+		}
+	})
+
+	test('request_change stores the change as an approval request and answers its link; it never makes the change', async () => {
+		const { fetch, world } = await fixture()
+		const token = await testResourceToken({
+			resource: RESOURCE,
+			label: 'author@acme.test',
+			actions: [...AUTHOR_ACTIONS, CONTROL_ACTIONS.APP_MANAGE, CONTROL_ACTIONS.SECRET_MANAGE],
+		})
+		const tools = field(field(await rpc(fetch, token, 'tools/list', {}), 'result'), 'tools')
+		const tool = Array.isArray(tools) ? tools.find((entry) => field(entry, 'name') === 'request_change') : undefined
+		const description = String(field(tool, 'description'))
+		expect(description).toContain('hand the person the url')
+		expect(description).toContain('Never loosen')
+
+		const call = (args: object) => rpc(fetch, token, 'tools/call', { name: 'request_change', arguments: args })
+		const variable = { appId: 'shop', variable: { env: 'stage', name: 'GREETING', value: 'hello' } }
+		const asked = toolJson(await call({ kind: 'apps.variables.put', input: variable }))
+		const id = String(field(asked, 'id'))
+		expect(asked).toEqual({ id, url: `${ORIGIN}/approvals/requests/${id}`, state: 'pending' })
+		const row = await world.repositories.approvalRequests.get(id)
+		expect(row).toMatchObject({ kind: 'apps.variables.put', app_id: 'shop', env: 'stage', category: 'variables', requester_credential: 'oauth' })
+		expect(await world.repositories.registry.listAppVars('shop')).toEqual([])
+
+		const secret = 'n0t-for-any-log'
+		const sealed = toolJson(
+			await call({ kind: 'apps.secrets.put', input: { appId: 'shop', secret: { env: 'stage', name: 'API_KEY', value: secret } } }),
+		)
+		expect(field(sealed, 'fingerprint')).toBe(new Bun.CryptoHasher('sha256').update(secret).digest('hex').slice(0, 8))
+
+		const unknownKind = field(await call({ kind: 'apps.deleteEverything', input: {} }), 'result')
+		expect(field(unknownKind, 'isError')).toBe(true)
+		expect(JSON.stringify(unknownKind)).toContain('is not requestable yet')
+		const authorOnly = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
+		const withoutRight = field(
+			await rpc(fetch, authorOnly, 'tools/call', { name: 'request_change', arguments: { kind: 'apps.variables.put', input: variable } }),
+			'result',
+		)
+		expect(withoutRight).toEqual({ isError: true, content: [{ type: 'text', text: 'app env not found' }] })
+	})
+
+	test('request_change asks for a data operation and an agent grant through the same context as the RPC', async () => {
+		const { fetch, world } = await fixture(undefined, { iamProvisioningKey: 'px_provisioning-key-of-the-mcp-suite' })
+		const repositories = world.repositories
+		await fixtureProtect(
+			repositories.registry,
+			new SqlDeployLocks(harnessDatabase(repositories)),
+			{ appId: 'shop', env: 'prod' },
+			true,
+			Date.now,
+			storedPolicy(STRICT_POLICY),
+			storedSettings(STRICT_SETTINGS),
+		)
+		const snapshot = JSON.stringify({ version: 1, contract: notesArtifact, migrations: [], checker: '0.9.0' })
+		await harnessDatabase(repositories)
+			.prepare('UPDATE app_envs SET published_run_id = ?, published_snapshot_json = ? WHERE app_id = ? AND env = ?')
+			.bind('run-published', snapshot, 'shop', 'prod')
+			.run()
+		// IAM's admin RPC, which the grant kind reads with the provisioning key: it knows no such principal.
+		const iamCalls: string[] = []
+		const passThrough = globalThis.fetch
+		const iam = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+			const request = new Request(input, init)
+			if (!request.url.startsWith(`${TEST_ISSUER}/admin/rpc`)) return passThrough(request)
+			iamCalls.push(String(field(await request.json(), 'method')))
+			return Response.json({ error: { type: 'not_found', message: 'principal not found' } }, { status: 404 })
+		}
+		const spy = spyOn(globalThis, 'fetch').mockImplementation(Object.assign(iam, { preconnect: passThrough.preconnect }))
+		try {
+			const token = await testResourceToken({
+				resource: RESOURCE,
+				label: 'author@acme.test',
+				actions: [...AUTHOR_ACTIONS, CONTROL_ACTIONS.DATA_MANAGE, CONTROL_ACTIONS.ACCESS_REQUEST],
+			})
+			const call = (kind: string, input: object) => rpc(fetch, token, 'tools/call', { name: 'request_change', arguments: { kind, input } })
+
+			const maintenance = toolJson(await call('data.start', { appId: 'shop', env: 'prod', kind: 'maintenance', mode: 'read-only' }))
+			const maintenanceRow = await repositories.approvalRequests.get(String(field(maintenance, 'id')))
+			expect(maintenanceRow).toMatchObject({ kind: 'data.start', category: 'data', app_id: 'shop', env: 'prod', state: 'pending' })
+
+			const expiresAt = Math.floor(Date.now() / 1000) + 3600
+			const grant = toolJson(
+				await call('iam.grants.create', { appId: 'shop', env: 'prod', principalId: 'p-bob', role: 'support', scope: null, expiresAt }),
+			)
+			const grantRow = await repositories.approvalRequests.get(String(field(grant, 'id')))
+			expect(grantRow).toMatchObject({ kind: 'iam.grants.create', category: 'agent-grants', app_id: 'shop', env: 'prod', state: 'pending' })
+			expect(iamCalls).toEqual(['principals.get'])
+		} finally {
+			spy.mockRestore()
 		}
 	})
 

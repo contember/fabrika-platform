@@ -1972,7 +1972,7 @@ const shared = createClient(contract, 'shared', { key }) // POST /s/api/<procedu
   carries the session cookie.
 - An input that does not serialize rejects with an `RpcError`.
 - An error envelope, or a proxy denial, is an `RpcError` with `type`, `httpStatus`,
-  `issues` and `loginUrl`. `bounceOnAuth` sends the browser to sign in on a 401 that
+  `issues`, `loginUrl` and `data` (what the caller acts on beside the message, unparsed). `bounceOnAuth` sends the browser to sign in on a 401 that
   carries a login URL, as `createRpcClient` does.
 - **The HTTP shape.** A procedure whose `http` declares `GET` (or a query that answers a file or declares `cache`) is
   called with `GET`, its input in the URL. The client sends no `http.query`: such a procedure is for a native form or

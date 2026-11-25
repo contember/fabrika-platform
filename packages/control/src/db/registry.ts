@@ -208,8 +208,9 @@ export class ControlRegistryRepository {
 	}
 
 	/**
-	 * With `unlessProtected`, the update applies only while no environment of the app is protected, judged in the same
-	 * statement. Null when the app is missing or, with it, when one is protected.
+	 * With `protectedAt`, the update applies only while every protected environment of the app is one it names, at the
+	 * generation it names (a protection or a mode change advances it), judged in the same statement; `[]` while none is
+	 * protected. Null when the app is missing or, with it, when that no longer holds.
 	 */
 	async updateApp(id: string, patch: {
 		repoUrl?: string
@@ -219,10 +220,14 @@ export class ControlRegistryRepository {
 		configPath?: string | null
 		githubConnectionId?: string | null
 		githubInstallationId?: number | null
-	}, options: { readonly unlessProtected?: boolean } = {}): Promise<AppRow | null> {
-		const unprotected = options.unlessProtected === true
-			? ' AND NOT EXISTS (SELECT 1 FROM app_envs WHERE app_envs.app_id = apps.id AND app_envs.protected = 1)'
-			: ''
+	}, options: { readonly protectedAt?: readonly { readonly env: string; readonly generation: number }[] } = {}): Promise<AppRow | null> {
+		const judged = options.protectedAt ?? null
+		const known = judged === null || judged.length === 0
+			? ''
+			: ` AND NOT (${judged.map(() => '(app_envs.env = ? AND app_envs.generation = ?)').join(' OR ')})`
+		const unprotected = judged === null
+			? ''
+			: ` AND NOT EXISTS (SELECT 1 FROM app_envs WHERE app_envs.app_id = apps.id AND app_envs.protected = 1${known})`
 		return this.d1
 			.prepare(`UPDATE apps SET
 				repo_url = COALESCE(?, repo_url),
@@ -244,6 +249,7 @@ export class ControlRegistryRepository {
 				patch.githubInstallationId === undefined ? 0 : 1,
 				patch.githubInstallationId ?? null,
 				id,
+				...(judged ?? []).flatMap((appEnv) => [appEnv.env, appEnv.generation]),
 			)
 			.first<AppRow>()
 	}

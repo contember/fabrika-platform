@@ -7,6 +7,7 @@
 // overlapping run — the poll is a conditional GET whose only mutation is guarded by a changed head
 // sha, and the sweep is a guarded UPDATE by age.
 
+import type { ControlProvider } from '@fabrika/provider-contract'
 import { enqueueUnsettledNamespaces } from './api/namespaces'
 import { type ApprovalRequestSweepSummary, sweepApprovalRequests } from './approval/requests/execute'
 import type { BackupScheduleSummary } from './backups'
@@ -61,6 +62,8 @@ export interface MaintenanceOptions {
 	devIdle?: () => Promise<DevMaintenanceSummary>
 	/** A composition root whose provider serves the ops channel injects the data operations' pass (`runBackupSchedule`). */
 	backups?: () => Promise<BackupScheduleSummary>
+	/** The installation's provider: an approval request whose effect it keeps (a secret) is settled by reading it back. */
+	provider?: ControlProvider
 }
 
 /**
@@ -106,7 +109,13 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (parked.deadlines > 0 || parked.expired > 0) {
 		console.info(`parked runs: deadlines=${parked.deadlines} expired=${parked.expired}`)
 	}
-	const requests = await sweepApprovalRequests({ repositories: persistence, lock: locks(env), vault: () => vault(env), ...iamGrantsDeps(env) })
+	const requests = await sweepApprovalRequests({
+		repositories: persistence,
+		lock: locks(env),
+		vault: () => vault(env),
+		...iamGrantsDeps(env),
+		...(options.provider === undefined ? {} : { provider: options.provider }),
+	})
 	if (requests.expired > 0 || requests.interrupted > 0 || requests.settled > 0 || requests.orphans > 0) {
 		console.info(
 			`approval requests: expired=${requests.expired} interrupted=${requests.interrupted} settled=${requests.settled} orphans=${requests.orphans}`,

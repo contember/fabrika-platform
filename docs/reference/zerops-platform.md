@@ -191,7 +191,7 @@ over prose. The endpoints fabrika's Zerops provider uses, all confirmed there:
 | Poll a version                         | `GET /app-version/{id}`                                              | `{ id, status, sequence, serviceStackId, build{…} }`                                             |
 | List versions                          | `GET /service-stack/{id}/app-version`                                | `{ list[], total }`, `limit`/`offset`/`statuses`                                                 |
 | Cancel a build                         | `PUT /app-version/{id}/cancel-build`                                 | → `{ success }`                                                                                  |
-| Read a service's env vars              | `GET /service-stack/{id}/env`                                        | → `{ items[] }`, each `{ id, key, content, type, sensitive }`                                    |
+| Read a service's env vars              | `GET /service-stack/{id}/env`                                        | → `{ items[] }`, each `{ id, key, content, type, sensitive, created, lastUpdate }`               |
 | Write a service-level env var          | `POST /service-stack/{id}/user-data`, `PUT`/`DELETE /user-data/{id}` | `{ key, content }` — `PUT` needs BOTH fields                                                     |
 | Project-level env vars                 | `POST /project/{id}/env`, `PUT /project-env/{id}`                    | `{ key, content, sensitive }` — **fabrika never calls these** (ADR-0004)                         |
 | Log access                             | `GET /project/{id}/log`                                              | `{ accessToken, expiration, url, urlPlain, urlInfo, urlUi }`                                     |
@@ -859,6 +859,13 @@ Measured live 2026-10-15 with an installation's integration token (not in sudo m
 project: `POST /service-stack/{id}/user-data` with `sensitive: true` answered 200; `GET /service-stack/{id}/env` read
 the record as `sensitive: true`, content `REDACTED`; `DELETE /user-data/{id}` answered 200; a re-read listed no record
 of that key. **Deleting a sensitive variable needs no sudo mode.**
+
+Read on 2026-11-25 with an installation's integration token, read-only, on the services of a test installation (no
+content printed): every `/env` record carries `created` and `lastUpdate` (ISO 8601, one-second resolution), a
+sensitive one included. Sensitive records the installation rewrote in place keep their `id` and `created` and show a
+later `lastUpdate`, as a `PUT /user-data/{id}` moves it (2026-08-05 above). A provider-kept secret's approval request reads `<id>@<lastUpdate>` as the provider's version of
+the value, since the value itself reads `REDACTED` (`secrets.version` in `control.ts`). **Not measured:** whether a
+`PUT` that writes the same content moves `lastUpdate`, and whether two writes inside one second can be told apart.
 
 ### Verified live (2026-10-15, account `prg1`) — a service variable value over ~32 KB is a bare 500
 

@@ -2,6 +2,7 @@
 // and decided from one console link, `<console>/approvals/requests/<id>`. These are its wire shapes.
 
 import type { JsonValue } from '@fabrika/provider-contract'
+import { z } from 'zod'
 import type { StepUpMode } from './approval-policy.js'
 import type { ApprovalStepUp } from './approval-step-up.js'
 import type { AccessMapRoleDto, ListResponse } from './index.js'
@@ -128,6 +129,22 @@ export interface CreateApprovalRequestResponse {
 	 */
 	fingerprint?: string
 }
+
+/**
+ * The error type of a write a non-person made directly that did not apply: an environment it reaches waits for a person
+ * (ADR-0083 §3, `person`), so Control stored it as an approval request instead. Answered with 409; the error's message
+ * names the link, so a client that does not know this type still shows it, and its `data` is the created request
+ * (`approvalRequestedSchema`).
+ */
+export const APPROVAL_REQUESTED = 'approval_requested'
+
+/** The `data` of an `approval_requested` error, as a client parses it: not strict, so a later key is read past. */
+export const approvalRequestedSchema = z.object({
+	id: z.string().min(1),
+	url: z.string().min(1),
+	state: z.enum(APPROVAL_REQUEST_STATES),
+	fingerprint: z.string().regex(/^[0-9a-f]{8}$/).optional(),
+})
 
 /**
  * The coordinates of a request for the all-environments layer (`env: null` of a secret or a variable) and of an

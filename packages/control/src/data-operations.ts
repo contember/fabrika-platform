@@ -274,12 +274,22 @@ const ATTEMPTS = 3
 /** One request's bound: a transition drains for 25 s plus a job's 60 s abort grace before it answers. */
 const OPS_REQUEST_TIMEOUT_MS = 120_000
 
+/**
+ * An operation an approved request executes (ADR-0083 §8): it is recorded under the request's operation id, which the
+ * request's `follow` reads it back by, and runs under the environment's lease the execution already holds.
+ */
+export interface HeldOperation {
+	readonly id: string
+	readonly lease: Lease
+}
+
 export interface StartMaintenanceInput {
 	readonly appId: string
 	readonly env: string
 	readonly mode: OpsMode
 	/** An opaque principal id (`runActor`). */
 	readonly actor: string
+	readonly held?: HeldOperation
 }
 
 /** Put the environment's object into `mode` under a fresh generation, and drive the transition to its acknowledgement. */
@@ -289,7 +299,7 @@ export async function startMaintenance(deps: DataOperationDeps, input: StartMain
 		if (refusal !== null) return refusal
 		const generation = await deps.repositories.dataOperations.allocateGeneration(input.appId, input.env)
 		const created = await driver.create({
-			id: uuidv7(),
+			id: input.held?.id ?? uuidv7(),
 			appId: input.appId,
 			env: input.env,
 			kind: 'maintenance',
@@ -385,6 +395,7 @@ export interface StartRestoreInput {
 	readonly actor: string
 	/** The current time in milliseconds; the target time must lie before it. */
 	readonly now?: number
+	readonly held?: HeldOperation
 }
 
 /**
@@ -409,7 +420,7 @@ export async function startRestore(deps: DataOperationDeps, input: StartRestoreI
 		const probe = await driver.inspect()
 		if (probe.kind !== 'ok') return { kind: 'refused', reason: probe.reason }
 		const generation = await deps.repositories.dataOperations.allocateGeneration(input.appId, input.env)
-		const id = uuidv7()
+		const id = input.held?.id ?? uuidv7()
 		const created = await driver.create({
 			id,
 			appId: input.appId,
@@ -481,6 +492,7 @@ export interface StartRecoveryInput {
 	readonly operationId: string
 	readonly resolution: DataOperationResolution
 	readonly actor: string
+	readonly held?: HeldOperation
 }
 
 /**
@@ -498,7 +510,7 @@ export async function startRecovery(deps: DataOperationDeps, input: StartRecover
 		if (latest !== null && latest.id !== interrupted.id && latest.state === 'running') return { kind: 'refused', reason: 'operation_running' }
 		const generation = await deps.repositories.dataOperations.allocateGeneration(input.appId, input.env)
 		const created = await driver.create({
-			id: uuidv7(),
+			id: input.held?.id ?? uuidv7(),
 			appId: input.appId,
 			env: input.env,
 			kind: 'recovery',
@@ -605,9 +617,15 @@ async function refuseStart(deps: DataOperationDeps, driver: OperationDriver, tar
 
 async function underLease(
 	deps: DataOperationDeps,
-	target: OpsTarget,
+	target: OpsTarget & { readonly held?: HeldOperation },
 	work: (driver: OperationDriver) => Promise<DataOperationOutcome>,
 ): Promise<DataOperationOutcome> {
+	const held = target.held
+	// The execution that holds the lease keeps it, and a loss of it is that execution's to report: its outcome is unknown.
+	if (held !== undefined) {
+		if (held.lease.key !== runLeaseKey(target.appId, target.env)) throw new Error("the held lease is not the environment's")
+		return await work(new OperationDriver(deps, held.lease, target))
+	}
 	const lease = await acquireLease(deps.lock, runLeaseKey(target.appId, target.env), deps.leaseClock)
 	if (lease === null) return { kind: 'busy' }
 	try {

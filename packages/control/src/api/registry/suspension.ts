@@ -2,7 +2,7 @@ import type { OpsMode } from '@fabrika/auth-core'
 import type { AppEnvDto } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { ProviderNamespaceError } from '@fabrika/provider-contract'
-import { type OpsTransport, recordedMaintenance, startMaintenance } from '../../data-operations'
+import { type HeldOperation, type OpsTransport, recordedMaintenance, startMaintenance } from '../../data-operations'
 import type { AppEnvRow } from '../../db'
 import { dataOperationResult } from '../data-operation-result'
 import { fail } from '../domain'
@@ -17,6 +17,8 @@ export interface SuspensionUseCaseContext extends RegistryUseCaseContext {
 	 * and its ops channel. Absent, such a provider cannot suspend.
 	 */
 	readonly maintenance?: { readonly lock: DeployLocks; readonly ops: OpsTransport }
+	/** An approved request's execution: the object's transition is its operation, under the lease it holds. */
+	readonly held?: HeldOperation
 }
 
 /**
@@ -97,7 +99,7 @@ async function suspendObject(c: SuspensionUseCaseContext, row: AppEnvRow, now: n
 	} else if (mode === 'closed') {
 		return row
 	}
-	const outcome = await startMaintenance(deps, { ...target, mode: 'closed', actor: runActor(c.auth) })
+	const outcome = await startMaintenance(deps, { ...target, mode: 'closed', actor: runActor(c.auth), ...heldOf(c) })
 	if (outcome.kind === 'busy' || outcome.kind === 'refused') {
 		// Nothing changed the object: the call that wrote the record removes it; a concurrent one's stays with its close.
 		if (owned) await clearSuspension(c, recorded)
@@ -121,7 +123,7 @@ async function resumeObject(c: SuspensionUseCaseContext, row: AppEnvRow): Promis
 	const restored: OpsMode = row.suspended_from_mode ?? 'open'
 	const operation = (await recordedMaintenance(deps, target)) === restored
 		? null
-		: dataOperationResult(await startMaintenance(deps, { ...target, mode: restored, actor: runActor(c.auth) }))
+		: dataOperationResult(await startMaintenance(deps, { ...target, mode: restored, actor: runActor(c.auth), ...heldOf(c) }))
 	await c.auth.audit({
 		action: 'app.env.resume',
 		resourceType: 'app_env',
@@ -138,6 +140,10 @@ function maintenanceDeps(
 ): { repositories: SuspensionUseCaseContext['repositories']; lock: DeployLocks; ops: OpsTransport } {
 	if (c.maintenance === undefined) fail(409, `a ${c.provider.id} environment cannot be taken offline from Control here`)
 	return { repositories: c.repositories, lock: c.maintenance.lock, ops: c.maintenance.ops }
+}
+
+function heldOf(c: SuspensionUseCaseContext): { readonly held?: HeldOperation } {
+	return c.held === undefined ? {} : { held: c.held }
 }
 
 /** Only an object that serves can be suspended; `resume` returns it to exactly this mode. */

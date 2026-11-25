@@ -6,10 +6,13 @@ import type { AuthContext } from '@fabrika/auth'
 import { canonicalJson } from '@fabrika/auth-core'
 import type { ActionCategory, ApprovalRequestDescription } from '@fabrika/control-contract'
 import type { IamAdministrationScope } from '@fabrika/iam-contract'
+import type { DeployLocks } from '@fabrika/platform'
 import type { ControlProvider, JsonValue } from '@fabrika/provider-contract'
 import type { z } from 'zod'
 import type { NamespaceProxyChanged } from '../../api/namespaces'
+import type { OperationDeploys, OpsTransport } from '../../data-operations'
 import type { ApprovalRequestRow, ControlRepositories } from '../../db'
+import type { Lease } from '../../lease'
 import type { Vault } from '../../vault'
 import type { ConsoleAdmission } from '../human'
 import type { IamApprover, IamGrantsReader } from './iam'
@@ -21,6 +24,8 @@ export interface RequestKindContext {
 	readonly vault?: () => Promise<Vault>
 	/** IAM's grants and grant requests, read with the provisioning key; absent where Control cannot reach IAM. */
 	readonly iamGrants?: IamGrantsReader
+	/** The installation's provider, which a kind whose effect it keeps reads back; absent, such a request stays unknown. */
+	readonly provider?: ControlProvider
 }
 
 /** What a kind acts through when a request is created or executed: the registry's use-case context, less the caller. */
@@ -28,6 +33,10 @@ export interface RequestActionContext extends RequestKindContext {
 	readonly provider: ControlProvider
 	readonly catalogChanged?: () => void
 	readonly namespaceProxyChanged?: NamespaceProxyChanged
+	/** The environment's object (ADR-0069): its deploy locks and its ops channel; absent, a data operation answers 503. */
+	readonly maintenance?: { readonly lock: DeployLocks; readonly ops: OpsTransport }
+	/** A restore's own deploys; absent, a restore is refused. */
+	readonly deploys?: () => Promise<OperationDeploys>
 }
 
 /** An execution acts as the approver, a person in the console, under the environment's lease (`RequestExecution.signal`). */
@@ -75,10 +84,18 @@ export interface RequestExecution {
 	readonly operationId: string
 	/** Aborts once the environment's lease is lost: stop before the next external effect. */
 	readonly signal: AbortSignal
+	/** The environment's lease the execution holds, which a data operation runs under rather than taking its own. */
+	readonly lease: Lease
 }
 
 /** What an execution observed. A throw is neither: the outcome is unknown, and the sweep follows it. */
 export type RequestOutcome = { readonly state: 'executed'; readonly result: JsonValue } | { readonly state: 'failed'; readonly error: string }
+
+/**
+ * Where a requester holds `requesterAction`: at the application, as the procedure's route requires it, or unscoped
+ * (`global`), as the procedure's use case requires it for some inputs.
+ */
+export type RequesterAt = 'app' | 'global'
 
 export interface RequestKindDefinition<Input, Before, Asked = never> {
 	/** The name an agent asks by: the Control procedure the request stands for, or `iam.<procedure>` for IAM's. */
@@ -101,10 +118,11 @@ export interface RequestKindDefinition<Input, Before, Asked = never> {
 	 */
 	readonly requesterAction: string
 	/**
-	 * Where `requesterAction` must be held: at the application, as the procedure's own route requires it, or at the
-	 * coordinates (the application or the environment) when absent. A request of `ALL_ENVIRONMENTS` takes the application.
+	 * Where `requesterAction` must be held: at the application, as the procedure's own route requires it, unscoped where
+	 * its use case requires that, or at the coordinates (the application or the environment) when absent. A request of
+	 * `ALL_ENVIRONMENTS` takes the application at least. A function decides it per input.
 	 */
-	readonly requesterAt?: 'app'
+	readonly requesterAt?: RequesterAt | ((input: Input) => RequesterAt | undefined)
 	/** Set when the asked input differs from the stored one (it carries a secret value); absent, the input is asked as stored. */
 	readonly asked?: AskedInput<Asked, Input>
 	/**
@@ -122,17 +140,29 @@ export interface RequestKindDefinition<Input, Before, Asked = never> {
 	 * the request is created and again before it executes, under the lease; the two are compared by the SHA-256 of
 	 * their canonical JSON, and a difference closes the request `stale`.
 	 */
-	captureBefore(c: RequestKindContext, input: Input): Promise<Before>
+	captureBefore(c: RequestActionContext, input: Input): Promise<Before>
+	/**
+	 * Whether the input writes only what `before` holds: a direct write that changes nothing then applies at once instead
+	 * of waiting as a request whose page would show no change (D8). Absent, every write is a change. A kind with `asked`
+	 * (a secret value) never has one: telling its value from the stored one would take reading a plaintext.
+	 */
+	readonly unchanged?: (input: Input, before: Before) => boolean
 	/**
 	 * Execute with the approver's authority (`auth`), the requester recorded beside them on the row. A refusal of the use
 	 * case it reuses is an outcome (`failed`); any other throw leaves the outcome unknown.
 	 */
 	execute(c: RequestExecutionContext, input: Input, execution: RequestExecution): Promise<RequestOutcome>
 	/**
-	 * Settle an `unknown` execution of the same operation: follow it (a data operation records its own steps) or retry it
-	 * where its effect is idempotent. Runs in maintenance, with no person's token; it decides nothing new.
+	 * Settle an `unknown` execution of the same operation by observing what it left: a data operation records its own
+	 * steps, a provider's state is compared with `before`, which held when the execution started. Runs in maintenance,
+	 * with no person's token; it decides nothing new.
 	 */
-	follow(c: RequestKindContext, input: Input, execution: RequestExecution): Promise<RequestOutcome | { readonly state: 'unknown' }>
+	follow(
+		c: RequestKindContext,
+		input: Input,
+		execution: RequestExecution,
+		before: Before,
+	): Promise<RequestOutcome | { readonly state: 'unknown' }>
 	/**
 	 * What the page shows: plain data, with the text the agent wrote marked as such. `before` is null for a reader who may
 	 * not execute the request (`mayExecute`): it shows what changes, never what is there now, a value or a fingerprint.
@@ -151,17 +181,21 @@ export interface RequestAction {
 	readonly coordinates: RequestCoordinates
 	/** The input in canonical JSON (keys sorted): what the row stores and its digest is taken over. */
 	readonly inputJson: string
+	/** Where the requester, and the approver who executes it, hold the kind's action for this input. */
+	readonly requesterAt?: RequesterAt
 	/** The before-state now, in canonical JSON. */
-	captureBefore(c: RequestKindContext): Promise<string>
+	captureBefore(c: RequestActionContext): Promise<string>
 	/** `full` for a reader who may execute the request; any other sees no before-state, value or fingerprint. */
 	describe(beforeJson: string, full: boolean): ApprovalRequestDescription
 	execute(c: RequestExecutionContext, execution: RequestExecution): Promise<RequestOutcome>
-	follow(c: RequestKindContext, execution: RequestExecution): Promise<RequestOutcome | { readonly state: 'unknown' }>
+	/** `beforeJson` is the stored before-state, which held when the execution started. */
+	follow(c: RequestKindContext, execution: RequestExecution, beforeJson: string): Promise<RequestOutcome | { readonly state: 'unknown' }>
 }
 
 /** A request being created: where it acts, and how its kind admits it and holds what it carries. */
 export interface AskedRequest {
 	readonly coordinates: RequestCoordinates
+	readonly requesterAt?: RequesterAt
 	/**
 	 * Refuse what the kind cannot execute as a request, or seal what the request carries under its own purpose, and answer
 	 * the action the row stores; `release` drops what was sealed when the row is not written after all.
@@ -180,10 +214,16 @@ export interface RequestKind {
 	readonly kind: string
 	readonly category: ActionCategory
 	readonly requesterAction: string
-	readonly requesterAt?: 'app'
+	/** The strictest scope any input of the kind takes; an action names the one its input does. */
+	readonly requesterAt?: RequesterAt
 	readonly approverMayDecide?: (approver: RequestApprover, coordinates: RequestCoordinates) => Promise<boolean>
 	/** Release what a stored request held; a throw is the caller's to log. */
 	readonly discard?: (c: RequestKindContext, request: ApprovalRequestRow) => Promise<void>
+	/**
+	 * Whether a direct write's input changes nothing where it acts now, judged by the kind's `unchanged` over the
+	 * before-state read now; false for an input the kind does not read in full. Absent where the kind cannot tell.
+	 */
+	readonly changesNothing?: (c: RequestActionContext, input: unknown) => Promise<boolean>
 	/**
 	 * Check an input an agent asks with. Refused: one the kind's schema does not read in full (a key it does not take, a
 	 * value it would change), since the row would then store less than what was asked.
@@ -197,22 +237,36 @@ export interface RequestKind {
 export type RequestKindRegistry = ReadonlyMap<string, RequestKind>
 
 export function requestKind<Input, Before, Asked = never>(definition: RequestKindDefinition<Input, Before, Asked>): RequestKind {
+	const requesterAt = definition.requesterAt
+	const requesterAtOf = (input: Input): { readonly requesterAt?: RequesterAt } => {
+		const at = typeof requesterAt === 'function' ? requesterAt(input) : requesterAt
+		return at === undefined ? {} : { requesterAt: at }
+	}
 	const actionOf = (input: Input): RequestAction => ({
 		coordinates: definition.coordinates(input),
 		inputJson: canonicalJson(input),
+		...requesterAtOf(input),
 		captureBefore: async (c) => canonicalJson(await definition.captureBefore(c, input)),
 		describe: (beforeJson, full) => definition.describe(input, full ? definition.before.parse(JSON.parse(beforeJson)) : null),
 		execute: (c, execution) => definition.execute(c, input, execution),
-		follow: (c, execution) => definition.follow(c, input, execution),
+		follow: (c, execution, beforeJson) => definition.follow(c, input, execution, definition.before.parse(JSON.parse(beforeJson))),
 	})
+	const strictest = typeof requesterAt === 'function' ? 'global' : requesterAt
 	const discard = definition.discard
 	const asked = definition.asked
+	const unchanged = definition.unchanged
 	return {
 		kind: definition.kind,
 		category: definition.category,
 		requesterAction: definition.requesterAction,
-		...(definition.requesterAt === undefined ? {} : { requesterAt: definition.requesterAt }),
+		...(strictest === undefined ? {} : { requesterAt: strictest }),
 		...(definition.approverMayDecide === undefined ? {} : { approverMayDecide: definition.approverMayDecide }),
+		...(unchanged === undefined || asked !== undefined ? {} : {
+			changesNothing: async (c, raw) => {
+				const parsed = read(definition.input, raw)
+				return parsed.ok && unchanged(parsed.value, await definition.captureBefore(c, parsed.value))
+			},
+		}),
 		...(discard === undefined ? {} : {
 			discard: async (c, request) => {
 				const parsed = definition.input.safeParse(JSON.parse(request.input_json))
@@ -229,6 +283,7 @@ export function requestKind<Input, Before, Asked = never>(definition: RequestKin
 					ok: true,
 					asked: {
 						coordinates: asked.coordinates(value),
+						...(strictest === undefined ? {} : { requesterAt: strictest }),
 						hold: async (c, requestId) => {
 							const held = await asked.hold(c, value, requestId)
 							return {
@@ -248,6 +303,7 @@ export function requestKind<Input, Before, Asked = never>(definition: RequestKin
 				ok: true,
 				asked: {
 					coordinates: definition.coordinates(input),
+					...requesterAtOf(input),
 					hold: async (c) => {
 						if (admit !== undefined) await admit(c, input)
 						return { action: actionOf(input), release: () => Promise.resolve() }

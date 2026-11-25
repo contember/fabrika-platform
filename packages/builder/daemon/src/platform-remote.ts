@@ -1,10 +1,12 @@
-import { createRpcClient, type RpcFetch } from '@fabrika/app'
+import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import {
 	APP_ENV_KINDS,
 	type AppEnvDto,
 	APPROVAL_CATEGORIES,
+	APPROVAL_REQUESTED,
 	type ApprovalCategory,
 	approvalPolicySchema,
+	approvalRequestedSchema,
 	approvalSettingsSchema,
 	type ControlRpcContract,
 	DEFAULT_APPROVAL_CATEGORIES,
@@ -111,6 +113,10 @@ export async function boundedJson(response: Response): Promise<unknown> {
 		await response.body?.cancel()
 		throw new PlatformError(`Platform request failed (HTTP ${response.status})`)
 	}
+	return await readBoundedJson(response)
+}
+
+async function readBoundedJson(response: Response): Promise<unknown> {
 	const reader = response.body?.getReader()
 	if (!reader) throw new PlatformError('Platform response is empty')
 	let size = 0
@@ -178,12 +184,37 @@ export class PlatformRemote {
 					redirect: 'error',
 					signal: AbortSignal.any([this.signal, AbortSignal.timeout(30_000)]),
 				})
+				// A write a protected environment keeps for a person reaches the caller as its request, never Control's message.
+				if (response.status === 409) {
+					const routed = approvalRequestedEnvelopeSchema.safeParse(await readBoundedJson(response))
+					if (!routed.success) throw new PlatformError('Platform request failed (HTTP 409)')
+					return Response.json({ error: { type: APPROVAL_REQUESTED, message: 'approval requested', data: routed.data.error.data } }, { status: 409 })
+				}
 				const data = rpcResultSchema.safeParse(await boundedJson(response))
 				if (!data.success) throw new PlatformError('Control refused the request')
 				return Response.json({ result: data.data.result })
 			},
 		})
 	}
+}
+
+const approvalRequestedEnvelopeSchema = z.object({ error: z.object({ type: z.literal(APPROVAL_REQUESTED), data: z.unknown() }) })
+
+/**
+ * A write Control did not make because a protected environment keeps it for a person (`approval_requested`), as the
+ * message the builder shows: the request's link on Control's own origin, and a secret's fingerprint. Null for any other
+ * failure.
+ */
+export function approvalRequestedError(error: unknown, controlOrigin: string): PlatformError | null {
+	if (!(error instanceof RpcError) || error.type !== APPROVAL_REQUESTED) return null
+	const request = approvalRequestedSchema.safeParse(error.data)
+	const lead = 'The environment is protected, so Control did not make the environment change this deployment needs: it waits for a person'
+	const tail = 'Nothing was deployed; start the deployment again once it is approved.'
+	if (!request.success || !URL.canParse(request.data.url) || new URL(request.data.url).origin !== controlOrigin) {
+		return new PlatformError(`${lead}, who approves it on the Approvals page of the platform console. ${tail}`)
+	}
+	const fingerprint = request.data.fingerprint === undefined ? '' : ` (fingerprint ${request.data.fingerprint})`
+	return new PlatformError(`${lead}, who approves it at ${request.data.url}${fingerprint}. ${tail}`)
 }
 
 export function parseEnvironments(value: unknown): AppEnvDto[] {

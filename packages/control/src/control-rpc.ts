@@ -2,6 +2,7 @@ import { HttpError, initRpc, isStructuralError, type RpcRouterFor } from '@fabri
 import type { AuthContext } from '@fabrika/auth'
 import { type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabrika/auth-core'
 import {
+	ALL_ENVIRONMENTS,
 	APP_ENV_KINDS,
 	approvalPolicySchema,
 	approvalSettingsSchema,
@@ -22,14 +23,12 @@ import {
 	type MailMessageDetailDto,
 	type MailMessageDto,
 	type MailRuleDto,
-	type RecoverDataOperationInput,
 	recoverDataOperationInputSchema,
-	type StartDataOperationInput,
 	startDataOperationInputSchema,
 } from '@fabrika/control-contract'
 import { parsePlatformMailRequest } from '@fabrika/email/platform'
-import { type DeployLocks, uuidv7 } from '@fabrika/platform'
-import type { ControlProvider } from '@fabrika/provider-contract'
+import { uuidv7 } from '@fabrika/platform'
+import type { ControlProvider, JsonValue } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
 import { requireDataEnvironment, setBackupScheduleUseCase } from './api/backup-schedule'
@@ -42,7 +41,8 @@ import {
 	listOwnBuilderPairings,
 	revokeBuilderPairing,
 } from './api/builder-pairing'
-import { dataOperationResult, failUnavailable } from './api/data-operation-result'
+import { failUnavailable } from './api/data-operation-result'
+import { type DataUseCaseContext, recoverDataOperationUseCase, startDataOperationUseCase } from './api/data-operations'
 import { fail } from './api/domain'
 import {
 	adoptNamespaceUseCase,
@@ -102,21 +102,13 @@ import {
 	listApprovalRequestsUseCase,
 } from './approval/requests/api'
 import { consoleIamApprover, type IamApprover } from './approval/requests/iam'
+import { layerCoordinates } from './approval/requests/kinds/shared'
+import { type DirectWrite, gateDirectWrite } from './approval/requests/route'
 import { iamPasskeyStepUp, type PasskeyStepUpPort, stepUpAssertionSchema } from './approval/step-up'
 import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
-import {
-	type DataOperationDeps,
-	listDataOperations,
-	type OpsInspection,
-	type OpsTransport,
-	recordedObjects,
-	startMaintenance,
-	startRecovery,
-	startRestore,
-	toDataOperationDto,
-} from './data-operations'
+import { listDataOperations, type OpsInspection, recordedObjects, toDataOperationDto } from './data-operations'
 import type { ControlRepositories, MailMessageRepository, MailMessageRow, MailRuleRow } from './db'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
@@ -132,7 +124,7 @@ import { sourceConnectionList } from './github/connections/status'
 import { appScope, controlPublicOrigin } from './iam'
 import { jsonValueSchema } from './json-value'
 import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
-import { operationDeploys, type RunDeps } from './run-lifecycle'
+import { operationDeploys } from './run-lifecycle'
 import { buildControlRpcDeps, type ControlRpcDeps, iamGrantsDeps } from './services'
 
 export interface ControlRpcContext {
@@ -362,7 +354,13 @@ export function createControlRpcRouter(
 				controlCall(() => createAppUseCase(registryContext(ctx), input))
 			),
 			update: rpc.procedure.input(updateAppInput).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => updateAppUseCase(registryContext(ctx), input.appId, input.app))
+				controlCall(() =>
+					gated(
+						ctx,
+						{ kind: 'apps.update', category: 'registry', coordinates: { appId: input.appId, env: ALL_ENVIRONMENTS }, input: askedAppUpdate(input) },
+						() => updateAppUseCase(registryContext(ctx), input.appId, input.app),
+					)
+				)
 			),
 			delete: rpc.procedure.input(appId).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
 				controlCall(() => deleteAppUseCase(registryContext(ctx), input.appId))
@@ -372,7 +370,13 @@ export function createControlRpcRouter(
 					controlCall(() => listAppEnvsUseCase(registryContext(ctx), input.appId))
 				),
 				put: rpc.procedure.input(putEnvironmentInput).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => putAppEnvUseCase(registryContext(ctx), input.appId, input.env, input.environment))
+					controlCall(() =>
+						gated(
+							ctx,
+							{ kind: 'apps.environments.put', category: 'registry', coordinates: { appId: input.appId, env: input.env }, input },
+							() => putAppEnvUseCase(registryContext(ctx), input.appId, input.env, input.environment),
+						)
+					)
 				),
 				delete: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
 					controlCall(() => deleteAppEnvUseCase(registryContext(ctx), input.appId, input.env))
@@ -386,12 +390,32 @@ export function createControlRpcRouter(
 				),
 				rotateTokenKey: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation((
 					{ ctx, input },
-				) => controlCall(() => rotateTokenKeyUseCase(registryContext(ctx), input.appId, input.env, Math.floor(Date.now() / 1000)))),
+				) =>
+					controlCall(() =>
+						gated(
+							ctx,
+							{ kind: 'apps.environments.rotateTokenKey', category: 'secrets', coordinates: input, input },
+							() => rotateTokenKeyUseCase(registryContext(ctx), input.appId, input.env, nowSeconds()),
+						)
+					)
+				),
 				suspend: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => suspendAppEnvUseCase(suspensionContext(ctx), input.appId, input.env, nowSeconds()))
+					controlCall(() =>
+						gated(
+							ctx,
+							{ kind: 'apps.environments.suspend', category: 'data', coordinates: input, input },
+							() => suspendAppEnvUseCase(suspensionContext(ctx), input.appId, input.env, nowSeconds()),
+						)
+					)
 				),
 				resume: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => resumeAppEnvUseCase(suspensionContext(ctx), input.appId, input.env))
+					controlCall(() =>
+						gated(
+							ctx,
+							{ kind: 'apps.environments.resume', category: 'data', coordinates: input, input },
+							() => resumeAppEnvUseCase(suspensionContext(ctx), input.appId, input.env),
+						)
+					)
 				),
 			}),
 			secrets: rpc.router({
@@ -399,10 +423,22 @@ export function createControlRpcRouter(
 					controlCall(() => listAppSecretsUseCase(registryContext(ctx), input.appId))
 				),
 				put: rpc.procedure.input(putSecretInput).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => putAppSecretUseCase(vaultContext(ctx), input.appId, input.secret))
+					controlCall(() =>
+						gated(
+							ctx,
+							{ kind: 'apps.secrets.put', category: 'secrets', coordinates: layerCoordinates(input.appId, input.secret.env), input },
+							() => putAppSecretUseCase(vaultContext(ctx), input.appId, input.secret),
+						)
+					)
 				),
 				delete: rpc.procedure.input(appNamedValue).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => deleteAppSecretUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null))
+					controlCall(() =>
+						gated(
+							ctx,
+							{ kind: 'apps.secrets.delete', category: 'secrets', coordinates: layerCoordinates(input.appId, input.env), input },
+							() => deleteAppSecretUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null),
+						)
+					)
 				),
 			}),
 			variables: rpc.router({
@@ -410,22 +446,52 @@ export function createControlRpcRouter(
 					controlCall(() => listAppVarsUseCase(registryContext(ctx), input.appId))
 				),
 				put: rpc.procedure.input(putVariableInput).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => putAppVarUseCase(registryContext(ctx), input.appId, input.variable))
+					controlCall(() =>
+						gated(
+							ctx,
+							{ kind: 'apps.variables.put', category: 'variables', coordinates: layerCoordinates(input.appId, input.variable.env), input },
+							() => putAppVarUseCase(registryContext(ctx), input.appId, input.variable),
+						)
+					)
 				),
 				delete: rpc.procedure.input(appNamedValue).require(CONTROL_ACTIONS.APP_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-					controlCall(() => deleteAppVarUseCase(registryContext(ctx), input.appId, input.name, input.env ?? null))
+					controlCall(() =>
+						gated(
+							ctx,
+							{ kind: 'apps.variables.delete', category: 'variables', coordinates: layerCoordinates(input.appId, input.env), input },
+							() => deleteAppVarUseCase(registryContext(ctx), input.appId, input.name, input.env ?? null),
+						)
+					)
 				),
 			}),
 		}),
 		vault: rpc.router({
 			set: rpc.procedure.input(secretValueInput).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => setAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }))
+				controlCall(() =>
+					gated(
+						ctx,
+						{ kind: 'vault.set', category: 'secrets', coordinates: layerCoordinates(input.appId, input.env), input },
+						() => setAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }),
+					)
+				)
 			),
 			rotate: rpc.procedure.input(secretValueInput).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => rotateAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }))
+				controlCall(() =>
+					gated(
+						ctx,
+						{ kind: 'vault.rotate', category: 'secrets', coordinates: layerCoordinates(input.appId, input.env), input },
+						() => rotateAppSecretValueUseCase(vaultContext(ctx), input.appId, input.name, { value: input.value, env: input.env ?? null }),
+					)
+				)
 			),
 			delete: rpc.procedure.input(appNamedValue).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation(({ ctx, input }) =>
-				controlCall(() => deleteAppSecretUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null))
+				controlCall(() =>
+					gated(
+						ctx,
+						{ kind: 'vault.delete', category: 'secrets', coordinates: layerCoordinates(input.appId, input.env), input },
+						() => deleteAppSecretUseCase(vaultContext(ctx), input.appId, input.name, input.env ?? null),
+					)
+				)
 			),
 		}),
 		namespaces: rpc.router({
@@ -551,29 +617,56 @@ export function createControlRpcRouter(
 			view: rpc.procedure.input(dataEnvironment).query(({ ctx, input }) => controlCall(() => readDataViewUseCase(dataContext(ctx), input))),
 			content: rpc.procedure.input(dataEnvironment).query(({ ctx, input }) => controlCall(() => readDataContentUseCase(dataContext(ctx), input))),
 			start: rpc.procedure.input(startDataOperationInputSchema).mutation(({ ctx, input }) =>
-				controlCall(() => startDataOperationUseCase(dataContext(ctx), input))
+				controlCall(async () => {
+					await requireDataEnvironment(dataContext(ctx), CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+					return gated(
+						ctx,
+						{ kind: 'data.start', category: 'data', coordinates: { appId: input.appId, env: input.env }, input },
+						() => startDataOperationUseCase(dataContext(ctx), input),
+					)
+				})
 			),
 			recover: rpc.procedure.input(recoverDataOperationInputSchema).mutation(({ ctx, input }) =>
-				controlCall(() => recoverDataOperationUseCase(dataContext(ctx), input))
+				controlCall(async () => {
+					await requireDataEnvironment(dataContext(ctx), CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+					return gated(
+						ctx,
+						{ kind: 'data.recover', category: 'data', coordinates: { appId: input.appId, env: input.env }, input },
+						() => recoverDataOperationUseCase(dataContext(ctx), input),
+					)
+				})
 			),
 			backups: rpc.router({
 				list: rpc.procedure.input(dataOperationListInputSchema).query(({ ctx, input }) => controlCall(() => listBackupsUseCase(dataContext(ctx), input))),
 				schedule: rpc.procedure.input(dataEnvironment).query(({ ctx, input }) => controlCall(() => readBackupScheduleUseCase(dataContext(ctx), input))),
 				setSchedule: rpc.procedure.input(setBackupScheduleInput).mutation(({ ctx, input }) =>
-					controlCall(() => setBackupScheduleUseCase(dataContext(ctx), input))
+					controlCall(async () => {
+						await requireDataEnvironment(dataContext(ctx), CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
+						return gated(
+							ctx,
+							{ kind: 'data.backups.setSchedule', category: 'data', coordinates: { appId: input.appId, env: input.env }, input },
+							() => setBackupScheduleUseCase(dataContext(ctx), input),
+						)
+					})
 				),
 			}),
 		}),
 	})
 
+	/** A non-person's write of a category a protected environment judges meets the gate first (ADR-0083 §3, D8). */
+	function gated<T>(ctx: ControlRpcContext, write: DirectWrite, apply: () => Promise<T>): Promise<T> {
+		return gateDirectWrite(approvalRequestContext(ctx), write, apply)
+	}
+
 	function dataContext(ctx: ControlRpcContext): DataUseCaseContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		const runDeps = deps.runDeps
 		return {
 			repositories: deps.repositories,
 			auth: ctx.auth,
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(deps.opsTransport === undefined ? {} : { ops: deps.opsTransport }),
-			...(deps.runDeps === undefined ? {} : { runDeps: deps.runDeps }),
+			...(runDeps === undefined ? {} : { deploys: async () => operationDeploys(await runDeps()) }),
 		}
 	}
 
@@ -650,22 +743,7 @@ export function createControlRpcRouter(
 	}
 
 	function approvalRequestContext(ctx: ControlRpcContext): ApprovalRequestContext {
-		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
-		const consoleOrigin = controlPublicOrigin(ctx.env)
-		return {
-			repositories: deps.repositories,
-			provider: deps.provider,
-			auth: ctx.auth,
-			admission: { request: ctx.request },
-			...(deps.vault === undefined ? {} : { vault: deps.vault }),
-			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
-			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
-			...(deps.lock === undefined ? {} : { lock: deps.lock }),
-			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
-			...passkeyStepUp(ctx),
-			...iamGrantsDeps(ctx.env),
-			...approverIam(ctx),
-		}
+		return controlApprovalRequestContext(buildDeps(ctx.env, ctx.provider, ctx.auth), ctx)
 	}
 
 	function mailContext(ctx: ControlRpcContext): MailUseCaseContext {
@@ -684,20 +762,62 @@ export function createControlRpcRouter(
 	}
 }
 
+/**
+ * What an approval request is created, read and decided through: the RPC's `approvals.requests.*` and its gated writes,
+ * and MCP's `request_change`, so a kind finds the same data operations, deploys and IAM in both.
+ */
+export function controlApprovalRequestContext(
+	deps: ControlRpcDeps,
+	ctx: Pick<ControlRpcContext, 'env' | 'auth' | 'request'>,
+): ApprovalRequestContext {
+	const runDeps = deps.runDeps
+	const consoleOrigin = controlPublicOrigin(ctx.env)
+	return {
+		repositories: deps.repositories,
+		provider: deps.provider,
+		auth: ctx.auth,
+		admission: { request: ctx.request },
+		...(deps.vault === undefined ? {} : { vault: deps.vault }),
+		...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
+		...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
+		...(deps.lock === undefined ? {} : { lock: deps.lock }),
+		...(deps.lock === undefined || deps.opsTransport === undefined ? {} : { maintenance: { lock: deps.lock, ops: deps.opsTransport } }),
+		...(runDeps === undefined ? {} : { deploys: async () => operationDeploys(await runDeps()) }),
+		...(consoleOrigin === undefined ? {} : { consoleOrigin }),
+		...passkeyStepUp(ctx),
+		...iamGrantsDeps(ctx.env),
+		...approverIam(ctx),
+	}
+}
+
 /** The approver's passkey step-up, through IAM's admin transport with the console token this call carries. */
-function passkeyStepUp(ctx: ControlRpcContext): { stepUp?: PasskeyStepUpPort } {
+function passkeyStepUp(ctx: Pick<ControlRpcContext, 'env' | 'request'>): { stepUp?: PasskeyStepUpPort } {
 	const port = ctx.env.IAM_ADMIN === undefined ? null : iamPasskeyStepUp(ctx.env.IAM_ADMIN, ctx.request)
 	return port === null ? {} : { stepUp: port }
 }
 
 /** IAM as the person in the console: what they administer there, and the grant an approved agent's request makes as them. */
-function approverIam(ctx: ControlRpcContext): { iamApprover?: IamApprover } {
+function approverIam(ctx: Pick<ControlRpcContext, 'env' | 'request'>): { iamApprover?: IamApprover } {
 	const approver = ctx.env.IAM_ADMIN === undefined ? null : consoleIamApprover(ctx.env.IAM_ADMIN, ctx.request)
 	return approver === null ? {} : { iamApprover: approver }
 }
 
 function sourceConnectionContext(ctx: ControlRpcContext) {
 	return { env: ctx.env, source: ctx.sourceConnection, auth: ctx.auth, request: ctx.request }
+}
+
+/**
+ * An `apps.update` as its request asks for it: a `null` keeps the stored value, as an absent field does, so it is left
+ * out rather than stored as a value the request kind does not take.
+ */
+function askedAppUpdate(input: z.infer<typeof updateAppInput>): JsonValue {
+	const app: Record<string, JsonValue> = {}
+	for (const [field, value] of Object.entries(input.app)) {
+		// A `null` build field keeps it, so the request leaves it out; a `null` binding removes the binding.
+		if (value === undefined || (value === null && field !== 'githubInstallationId')) continue
+		app[field] = value
+	}
+	return { appId: input.appId, app }
 }
 
 /** Apply domain value constraints at the RPC input boundary. */
@@ -831,17 +951,6 @@ async function setMailRule(c: MailUseCaseContext, input: z.infer<typeof setMailR
 	return toMailRuleDto(await c.repositories.mailRules.upsert({ id: uuidv7(), ...input }, nowSeconds()))
 }
 
-interface DataUseCaseContext {
-	readonly repositories: ControlRepositories
-	readonly auth: AuthContext
-	/** The environment's deploy lease every operation runs under; absent, operations answer 503. */
-	readonly lock?: DeployLocks
-	/** The ops channel; absent, the views and operations answer 503. */
-	readonly ops?: OpsTransport
-	/** What a restore's own deploys run with; absent, a restore is refused. */
-	readonly runDeps?: () => Promise<RunDeps>
-}
-
 async function listDataOperationsUseCase(c: DataUseCaseContext, input: DataOperationListInput): Promise<CursorList<DataOperationDto>> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
 	const limit = input.limit ?? DATA_OPERATION_MAX_PAGE_SIZE
@@ -894,37 +1003,6 @@ async function inspectData(c: DataUseCaseContext, target: { appId: string; env: 
 	const answer = await c.ops.inspect(target, { object, content }, AbortSignal.timeout(DATA_VIEW_TIMEOUT_MS))
 	if (answer.kind === 'unavailable') failUnavailable(answer.reason)
 	return answer.value
-}
-
-async function startDataOperationUseCase(c: DataUseCaseContext, input: StartDataOperationInput): Promise<DataOperationDto> {
-	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	if (input.kind === 'backup') fail(501, 'backups are not available in this release')
-	if (input.kind === 'restore') {
-		const deps = await restoreDeps(c)
-		return dataOperationResult(
-			await startRestore(deps, { appId: input.appId, env: input.env, at: new Date(input.at).toISOString(), actor: runActor(c.auth) }),
-		)
-	}
-	const outcome = await startMaintenance(operationDeps(c), { appId: input.appId, env: input.env, mode: input.mode, actor: runActor(c.auth) })
-	return dataOperationResult(outcome)
-}
-
-/** A recovery may resume a restore, which deploys, so it carries the restore's deploys where the composition has them. */
-async function recoverDataOperationUseCase(c: DataUseCaseContext, input: RecoverDataOperationInput): Promise<DataOperationDto> {
-	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	const deps = c.runDeps === undefined ? operationDeps(c) : await restoreDeps(c)
-	return dataOperationResult(await startRecovery(deps, { ...input, actor: runActor(c.auth) }))
-}
-
-function operationDeps(c: DataUseCaseContext): { repositories: ControlRepositories; lock: DeployLocks; ops: OpsTransport } {
-	if (c.lock === undefined || c.ops === undefined) fail(503, 'data operations unavailable')
-	return { repositories: c.repositories, lock: c.lock, ops: c.ops }
-}
-
-async function restoreDeps(c: DataUseCaseContext): Promise<DataOperationDeps> {
-	const deps = operationDeps(c)
-	if (c.runDeps === undefined) fail(503, 'restores are unavailable: this composition does not deploy from a data operation')
-	return { ...deps, deploys: operationDeploys(await c.runDeps()) }
 }
 
 function toMailMessageDto(row: MailMessageRow): MailMessageDto {

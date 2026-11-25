@@ -54,6 +54,7 @@ export const putAppVariableKind = requestKind<PutVariableInput, VariableBefore>(
 	requesterAt: 'app',
 	admit: (c, input) => assertAppVarWritable(c, input.appId, input.variable),
 	captureBefore: (c, input) => variableBeforeOf(c, input.appId, input.variable.env ?? null, input.variable.name),
+	unchanged: (input, before) => before.value === input.variable.value,
 	execute: (c, input, execution) =>
 		outcomeOf(async () => {
 			const row = await putAppVarUseCase(registryContext(c, execution), input.appId, input.variable)

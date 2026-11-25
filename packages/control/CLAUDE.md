@@ -821,11 +821,12 @@ other environment, before the provider prepares anything, and the write maps a r
   approved restore deploy queued again stays exempt. The settings (`approval_settings`, their difference from
   `STRICT_SETTINGS`) live beside `approval_policy`, on `app_envs` and in the `app_env_protection` tombstone.
   `requirePersonToPointTriggerRef` keeps a key from naming a protected environment's trigger ref (also on a new one that
-  starts protected, through `put` or `register`), `requirePersonToPointDomain` from naming its domain (`put`; clearing
-  it stays open), `requirePersonToPointPublicOrigin` from changing its public origin (`put` and `register`; IAM sends a
+  starts protected, through `put` or `register`), `requirePersonToPointDomain` from naming its domain (`put` and `register`;
+  clearing it stays open), `requirePersonToPointPublicOrigin` from changing its public origin (`put` and `register`; IAM sends a
   scope-value key there, ADR-0085 §4), and `requirePersonToRedirect` from changing any field of `apps.update`
-  on its app (ADR-0050 §4). `apps.update` writes only the fields that change, and a key's write is conditional in SQL
-  on no protected environment (`updateApp` with `unlessProtected`). The flag and the counters outlive the row in `app_env_protection`; a
+  on its app (ADR-0050 §4); each lets an existing environment whose `registry` mode is `off` through (`gatePasses`), as
+  the gate did. `apps.update` writes only the fields that change, and a key's write is conditional in SQL on the
+  protected environments it judged, at their generations (`updateApp` with `protectedAt`). The flag and the counters outlive the row in `app_env_protection`; a
   change of the flag bumps `protection_revision` and `generation`, and a registry write bumps `generation`, so an
   in-flight publication loses. Registry put and delete apply only at the generation they read (409 otherwise), and
   every write of an environment takes its coordinate lock first (`DATABASE.md`). `apps.environments.protect` takes
@@ -843,6 +844,18 @@ other environment, before the provider prepares anything, and the write maps a r
   `weakensStepUp` (against the row read under the lease) takes one too: `apps.environments.protectChallenge` issues it on
   `protectionStepUpBinding` (the environment and the digest of the change as asked), and `protect` runs `requireStepUp`
   before IAM's grant gate and the row are written, recording the passkey in the `access.protect` audit row.
+- **A non-person's direct write meets the gate before its use case (D8, ADR-0083 §3, `src/approval/requests/route.ts`).**
+  Every `secrets`, `variables`, `data` and `registry` mutation of the router runs through `gateDirectWrite` with its
+  category and coordinates (the all-environments layer and `apps.update` as `ALL_ENVIRONMENTS`): a person in the
+  console, a reach with no protected environment, or `off` everywhere applies; `refuse` anywhere is a 403 naming the
+  category; a write whose kind's `unchanged` holds over the before-state read now (the environment put, `apps.update`,
+  a variable put; never a secret) applies as under `off`; otherwise `createApprovalRequestUseCase` stores the
+  procedure's input as that kind's request and the call
+  answers 409 `approval_requested` (`ControlApiError` with `data` `{ id, url, state, fingerprint? }`, the link in the
+  message), never 200. A new environment has no request to wait in: a write whose environment does not exist but
+  `startsProtected` (`prod`, or a kept protection) is a 403 for a non-person, and `register` keeps the person rules
+  above. Anything else the write names that does not exist goes to its use case, which answers the 404.
+  `approval-gate-coverage.test.ts` dispatches each judged mutation under `refuse`.
 - **Every other action of a non-person that waits is an `approval_requests` row (ADR-0083 §8, `src/approval/requests/`).**
   A kind (`kind.ts`, `requestKind`) owns its input and before-state schemas, its coordinates, the action the requester
   must hold to ask, its execution, its `follow` hook, and an optional `discard` hook that releases what a refused or

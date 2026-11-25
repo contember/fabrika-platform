@@ -15,7 +15,7 @@ import { join, resolve } from 'node:path'
 import { setTimeout } from 'node:timers/promises'
 import { type BuilderPairingState, type BuilderPlatformStatus, parseBuilderOrigin, parseBuilderPreviewUrl } from '../../shared'
 import { DATA_DIR } from './paths'
-import { parseEnvironments, parseRun, PlatformRemote } from './platform-remote'
+import { approvalRequestedError, parseEnvironments, parseRun, PlatformRemote } from './platform-remote'
 import { compileProject, repositoryIdentity, verifySource } from './platform-source'
 import { PlatformError, PlatformStorage, type ProjectRecord, type StoredCredential } from './platform-storage'
 
@@ -396,22 +396,22 @@ export class BuilderPlatform {
 		const placement = current ?? receipt.environment
 		if (!placement.namespaceId) throw new PlatformError('Select a deployment namespace in the platform console before deploying')
 		signal.throwIfAborted()
-		const updated = parseEnvironments({
-			items: [
-				await client.apps.environments.put({
-					appId: app.id,
-					env,
-					environment: {
-						namespaceId: placement.namespaceId,
-						domain: placement.domain,
-						publicOrigin: placement.publicOrigin,
-						triggerRef: placement.triggerRef,
-						target: current?.target ?? { provider: 'zerops', version: zeropsStoredTargetCodec.version, payload: {} },
-						artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
-					},
-				}),
-			],
-		})[0]
+		// On a protected environment a put that changes something waits for a person: the deploy stops, and nothing retries it.
+		const put = await client.apps.environments.put({
+			appId: app.id,
+			env,
+			environment: {
+				namespaceId: placement.namespaceId,
+				domain: placement.domain,
+				publicOrigin: placement.publicOrigin,
+				triggerRef: placement.triggerRef,
+				target: current?.target ?? { provider: 'zerops', version: zeropsStoredTargetCodec.version, payload: {} },
+				artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
+			},
+		}).catch((error: unknown) => {
+			throw approvalRequestedError(error, credential.connection.controlOrigin) ?? error
+		})
+		const updated = parseEnvironments({ items: [put] })[0]
 		if (!updated || updated.appId !== app.id || updated.env !== env || updated.provider !== 'zerops') {
 			throw new PlatformError('Control returned a mismatched environment')
 		}

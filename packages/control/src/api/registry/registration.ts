@@ -4,7 +4,7 @@ import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, Provide
 import { snapshotAccessMap } from '../../approval/access-map'
 import { appEnvPolicy, appEnvSettings } from '../../approval/categories'
 import { snapshotDeviations } from '../../approval/diff'
-import { requirePersonToPointPublicOrigin, requirePersonToPointTriggerRef } from '../../approval/human'
+import { requirePersonToPointDomain, requirePersonToPointPublicOrigin, requirePersonToPointTriggerRef } from '../../approval/human'
 import { approvedSnapshot } from '../../approval/snapshot'
 import { snapshotSurface } from '../../approval/surface'
 import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
@@ -31,6 +31,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	assertProxyDomain(input.domain)
 	const triggerRef = triggerRefInput(input.triggerRef)
 	await requirePersonToPointTriggerRef(c, { appId: id, env, existing: null, triggerRef })
+	await requirePersonToPointDomain(c, { appId: id, env, existing: null, domain: input.domain ?? null })
 	const crossOrigins = input.crossOrigins ?? []
 	assertCrossOrigins(crossOrigins, input.domain ?? null)
 	const normalized = normalizeRepoUrl(repoUrl)

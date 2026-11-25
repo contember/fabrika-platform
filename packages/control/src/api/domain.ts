@@ -1,12 +1,17 @@
+import type { JsonValue } from '@fabrika/provider-contract'
+
 export class ControlApiError extends Error {
 	readonly httpStatus: number
 	readonly type: string
+	/** What the caller acts on beside the message; the RPC envelope carries it as `data`. */
+	readonly data?: JsonValue
 
-	constructor(httpStatus: number, message: string) {
+	constructor(httpStatus: number, message: string, options?: { readonly type: string; readonly data: JsonValue }) {
 		super(message)
 		this.name = 'ControlApiError'
 		this.httpStatus = httpStatus
-		this.type = errorType(httpStatus)
+		this.type = options?.type ?? errorType(httpStatus)
+		if (options !== undefined) this.data = options.data
 	}
 }
 

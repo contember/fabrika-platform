@@ -10,13 +10,16 @@ export class RpcError extends Error {
 	readonly issues?: unknown
 	readonly loginUrl?: string
 	readonly httpStatus?: number
-	constructor(payload: { type: string; message: string; issues?: unknown; loginUrl?: string; httpStatus?: number }) {
+	/** What the caller acts on beside the message (a link, an id), as the server sent it: unparsed. */
+	readonly data?: unknown
+	constructor(payload: { type: string; message: string; issues?: unknown; loginUrl?: string; httpStatus?: number; data?: unknown }) {
 		super(payload.message)
 		this.name = 'RpcError'
 		this.type = payload.type
 		if (payload.issues !== undefined) this.issues = payload.issues
 		if (payload.loginUrl !== undefined) this.loginUrl = payload.loginUrl
 		if (payload.httpStatus !== undefined) this.httpStatus = payload.httpStatus
+		if (payload.data !== undefined) this.data = payload.data
 	}
 }
 
@@ -64,7 +67,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function normalizeError(
 	raw: unknown,
 	httpStatus: number,
-): { type: string; message: string; issues?: unknown; loginUrl?: string; httpStatus: number } {
+): { type: string; message: string; issues?: unknown; loginUrl?: string; httpStatus: number; data?: unknown } {
 	if (typeof raw === 'string') {
 		return { type: httpStatus === 401 ? 'auth' : 'error', message: raw, httpStatus }
 	}
@@ -73,7 +76,15 @@ function normalizeError(
 		const message = typeof raw['message'] === 'string' ? raw['message'] : 'Unknown error'
 		const issues = raw['issues']
 		const loginUrl = typeof raw['loginUrl'] === 'string' ? raw['loginUrl'] : undefined
-		return { type, message, httpStatus, ...(issues !== undefined ? { issues } : {}), ...(loginUrl !== undefined ? { loginUrl } : {}) }
+		const data = raw['data']
+		return {
+			type,
+			message,
+			httpStatus,
+			...(issues !== undefined ? { issues } : {}),
+			...(loginUrl !== undefined ? { loginUrl } : {}),
+			...(data !== undefined ? { data } : {}),
+		}
 	}
 	return { type: 'error', message: `HTTP ${httpStatus}`, httpStatus }
 }

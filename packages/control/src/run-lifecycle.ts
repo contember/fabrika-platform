@@ -1369,10 +1369,15 @@ function descriptorMismatchRemedy(providerId: string, appEnv: AppEnvRow, detail:
 		...(appEnv.domain === null || appEnv.domain === '' ? [] : [`--domain=${shellWord(appEnv.domain)}`]),
 		...(appEnv.trigger_ref === null ? [] : [`--trigger-ref=${shellWord(appEnv.trigger_ref)}`]),
 	].join(' ')
+	// On a protected environment a key's put that changes the manifest waits for a person (D8, ADR-0083 §1).
+	const waits = appEnv.protected === 1
+		? `. Environment \`${env}\` is protected, so with a key that put waits for a person: it prints the approval request's link and exits 75; `
+			+ 'deploy again once a person has approved it in the console'
+		: ''
 	return `the manifest registered for ${appEnv.app_id}/${env} expects that sha256. `
 		+ `If the manifest was built from a ${detail.path} change that is not pushed yet, commit and push the change (or deploy the ref that has it) and deploy again. `
 		+ `If ${detail.path} changed after the manifest was built, rebuild the manifest from a checkout of commit ${detail.commitSha} `
-		+ `(\`fabrika app build --env=${env}\`), send it with \`${put}\`, and deploy again`
+		+ `(\`fabrika app build --env=${env}\`), send it with \`${put}\`, and deploy again${waits}`
 }
 
 /** A value as one shell word: as it is when it needs no quoting, else single-quoted (a trigger ref may be a glob). */

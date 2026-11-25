@@ -4,6 +4,7 @@
 
 import type { AuthContext } from '@fabrika/auth'
 import {
+	type ActionCategory,
 	ALL_ENVIRONMENTS,
 	type ApprovalRequestChallengeInput,
 	type ApprovalRequestDescription,
@@ -26,7 +27,15 @@ import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOt
 import { issueStepUpChallenge, type PasskeyStepUpPort, requestStepUpBinding, requireStepUp } from '../step-up'
 import { acquireRequestLease, actionOf, discardRequest, executeApprovedRequest } from './execute'
 import { type IamApprover, IamUnreachableError } from './iam'
-import type { RequestActionContext, RequestApprover, RequestCoordinates, RequestExecutionContext, RequestKind, RequestKindRegistry } from './kind'
+import type {
+	RequestActionContext,
+	RequestApprover,
+	RequestCoordinates,
+	RequesterAt,
+	RequestExecutionContext,
+	RequestKind,
+	RequestKindRegistry,
+} from './kind'
 import { PRODUCTION_REQUEST_KINDS } from './production'
 import { refusedKindReason } from './refused'
 import {
@@ -74,11 +83,17 @@ export function approvalRequestUrl(consoleOrigin: string, id: string): string {
 	return `${consoleOrigin}/approvals/requests/${encodeURIComponent(id)}`
 }
 
+/** Why an environment's `refuse` keeps a non-person from a change, asked for or made directly (ADR-0083 §3). */
+export function refusedToNonPerson(env: string, category: ActionCategory): string {
+	return `environment \`${env}\` refuses this to an agent or a key (${category}: refuse): only a person makes the change, in the console`
+}
+
 function nowOf(c: ApprovalRequestContext): number {
 	return (c.now ?? (() => Math.floor(Date.now() / 1000)))()
 }
 
-function kindsOf(c: ApprovalRequestReadContext): RequestKindRegistry {
+/** The kinds a Control serves: the context's, or the production registry. */
+export function kindsOf(c: ApprovalRequestReadContext): RequestKindRegistry {
 	return c.kinds ?? PRODUCTION_REQUEST_KINDS
 }
 
@@ -121,16 +136,18 @@ export async function createApprovalRequestUseCase(
 	if (!checked.ok) fail(400, `kind \`${body.kind}\`: ${checked.error}`)
 	const asked = checked.asked
 	const { appId, env } = asked.coordinates
-	if (!holdsKindAction(c.auth, kind, asked.coordinates)) fail(404, env === ALL_ENVIRONMENTS ? 'app not found' : 'app env not found')
+	const requester = requesterOfKind(kind, asked.requesterAt)
+	if (!holdsKindAction(c.auth, requester, asked.coordinates)) {
+		// One who holds the action at the application sees it exist; only this input takes it unscoped.
+		if (requester.requesterAt === 'global' && holdsKindAction(c.auth, { ...requester, requesterAt: 'app' }, asked.coordinates)) {
+			fail(403, `not authorized: this change needs global ${kind.requesterAction}, which the person who approves it must hold too`)
+		}
+		fail(404, env === ALL_ENVIRONMENTS ? 'app not found' : 'app env not found')
+	}
 	const reach = await reachOf(c.repositories.registry, asked.coordinates)
 	if (reach === null) fail(404, env === ALL_ENVIRONMENTS ? 'app not found' : 'app env not found')
 	const refusing = refusingEnvironment(reach, kind.category)
-	if (refusing !== null) {
-		fail(
-			403,
-			`environment \`${refusing.env}\` refuses this to an agent or a key (${kind.category}: refuse): only a person makes the change, in the console`,
-		)
-	}
+	if (refusing !== null) fail(403, refusedToNonPerson(refusing.env, kind.category))
 	if (c.consoleOrigin === undefined) fail(503, 'Control knows no console origin, so a request would have no link a person could open')
 	const id = uuidv7()
 	const held = await asked.hold(c, id)
@@ -250,11 +267,12 @@ async function pendingRequestDecision(
 async function approvableKind(c: ApprovalRequestContext, pending: PendingRequestDecision): Promise<RequestKind> {
 	const { row } = pending
 	const kind = kindsOf(c).get(row.kind)
+	const action = actionOf(kind, row)
 	// What the person saw is what executes: a request this Control cannot describe, it cannot approve either.
-	if (kind === undefined || typeof actionOf(kind, row) === 'string') {
+	if (kind === undefined || typeof action === 'string') {
 		fail(409, 'this Control cannot show what the request does, so it cannot approve it; refuse it or let it expire')
 	}
-	await requireApproverMayExecute(c, kind, row)
+	await requireApproverMayExecute(c, requesterOfKind(kind, action.requesterAt), row)
 	if (!pending.deciders.requesterMayApprove) requireOtherThanRequester(pending.approver, requesterOf(row), 'request')
 	return kind
 }
@@ -356,6 +374,19 @@ function executionContext(c: ApprovalRequestContext): RequestExecutionContext {
 		...(c.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: c.namespaceProxyChanged }),
 		...(c.iamGrants === undefined ? {} : { iamGrants: c.iamGrants }),
 		...(c.iamApprover === undefined ? {} : { iamApprover: c.iamApprover }),
+		...(c.maintenance === undefined ? {} : { maintenance: c.maintenance }),
+		...(c.deploys === undefined ? {} : { deploys: c.deploys }),
+	}
+}
+
+/** Who may ask for, and carry out, a request of `kind` with an input that takes the kind's action at `requesterAt`. */
+type KindRequester = Pick<RequestKind, 'requesterAction' | 'requesterAt' | 'approverMayDecide'>
+
+function requesterOfKind(kind: RequestKind, requesterAt: RequesterAt | undefined): KindRequester {
+	return {
+		requesterAction: kind.requesterAction,
+		...(requesterAt === undefined ? {} : { requesterAt }),
+		...(kind.approverMayDecide === undefined ? {} : { approverMayDecide: kind.approverMayDecide }),
 	}
 }
 
@@ -388,8 +419,8 @@ async function decides(c: ApprovalRequestReadContext, row: ApprovalRequestRow): 
 	}
 }
 
-/** An approval executes as the approver, so they hold the action itself where the request acts, as its route would ask. */
-async function requireApproverMayExecute(c: ApprovalRequestReadContext, kind: RequestKind, row: ApprovalRequestRow): Promise<void> {
+/** An approval executes as the approver, so they hold the action itself where the request acts, as its use case would ask. */
+async function requireApproverMayExecute(c: ApprovalRequestReadContext, kind: KindRequester, row: ApprovalRequestRow): Promise<void> {
 	if (!(await mayExecute(approverOf(c), kind, { appId: row.app_id, env: row.env }))) {
 		fail(403, `approving carries the change out as you, and you do not hold \`${kind.requesterAction}\` where it acts; another person decides it`)
 	}
@@ -487,12 +518,16 @@ function storedResult(text: string | null): JsonValue | undefined {
 export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: ApprovalRequestRow): Promise<ApprovalRequestDto> {
 	const who = await requestDeciders(c.repositories, row)
 	const kind = kindsOf(c).get(row.kind)
+	const action = actionOf(kind, row)
+	// A request whose input this Control cannot read takes the kind's strictest scope.
+	const requester = kind === undefined || typeof action === 'string' ? kind : requesterOfKind(kind, action.requesterAt)
 	const coordinates = { appId: row.app_id, env: row.env }
 	// What the request acts on now, a value and a fingerprint are shown to one who may carry it out: the kind's decider, or
-	// one who holds its action. A kind with a decider bound what Control read with its own key (IAM), which the requester
-	// may not read. The result repeats what was asked and set, so one who may ask for it reads it too.
-	const full = kind !== undefined && (await mayExecute(approverOf(c), kind, coordinates).catch(unlessIamUnreachable))
-	const result = full || (kind !== undefined && holdsKindAction(c.auth, kind, coordinates)) ? storedResult(row.result_json) : undefined
+	// one who holds its action where this input takes it. A kind with a decider bound what Control read with its own key
+	// (IAM), which the requester may not read. The result repeats what was asked and set, so one who may ask for it reads
+	// it too.
+	const full = requester !== undefined && (await mayExecute(approverOf(c), requester, coordinates).catch(unlessIamUnreachable))
+	const result = full || (requester !== undefined && holdsKindAction(c.auth, requester, coordinates)) ? storedResult(row.result_json) : undefined
 	const description = describe(c, row, kind, full)
 	const reached = row.env === ALL_ENVIRONMENTS ? await reachFact(c, row) : null
 	return {

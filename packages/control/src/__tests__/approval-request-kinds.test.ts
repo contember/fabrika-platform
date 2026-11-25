@@ -47,6 +47,8 @@ if (!hasPostgres) console.warn(`approval-request-kinds.test.ts Postgres half ${s
 
 const ORIGIN = 'https://console.example.test'
 const ENVELOPE = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
+/** The registration a put of an existing environment sends, unchanged. */
+const REGISTRATION = { target: { provider: 'harbor', version: 1, payload: {} }, artifact: { provider: 'harbor', version: 1, payload: {} } }
 const T0 = 1_800_000_000
 const HOUR = 3600
 const SECRET = 'sk_live_very-secret-value-1234567890'
@@ -379,12 +381,12 @@ for (const backend of backends) {
 				expect(await secretValue(w, 'prod', 'API_KEY')).toBe(SECRET)
 			})
 
-			test('a secret the provider keeps reaches outside Control, so it is not requestable yet', async () => {
+			test('a secret kept by a provider that reports no version is refused, since an interrupted put could not be followed', async () => {
 				const w = await world()
 				w.provider = { ...fakeControlProvider, secrets: { put: () => Promise.resolve({ valueRef: 'provider' }), delete: () => Promise.resolve() } }
 				const refused = await status(ask(w, 'apps.secrets.put', putSecret('prod')))
 				expect(refused.status).toBe(400)
-				expect(refused.message).toContain('not requestable yet')
+				expect(refused.message).toContain('reports no version')
 				expect((await w.db.approvalRequests.listPending(10)).length).toBe(0)
 			})
 
@@ -567,12 +569,12 @@ for (const backend of backends) {
 		})
 
 		describe('registry', () => {
-			test("an environment's trigger ref and domain, shown before → after; the target is not requestable", async () => {
+			test("an environment's trigger ref and domain, shown before → after; a target change is named", async () => {
 				const w = await world()
 				const { id } = await ask(w, 'apps.environments.put', {
 					appId: 'notes',
 					env: 'prod',
-					environment: { triggerRef: 'release', domain: 'notes.example.com' },
+					environment: { ...REGISTRATION, triggerRef: 'release', domain: 'notes.example.com' },
 				})
 				const page = await getApprovalRequestUseCase(context(w, BOB), id)
 				expect(page.description.facts).toEqual([
@@ -586,20 +588,28 @@ for (const backend of backends) {
 					provider_target_json: ENVELOPE,
 				})
 
-				const target = await status(ask(w, 'apps.environments.put', {
+				const target = await ask(w, 'apps.environments.put', {
 					appId: 'notes',
 					env: 'prod',
-					environment: { triggerRef: 'main', target: { provider: 'harbor', version: 1, payload: {} } },
-				}))
-				expect(target.status).toBe(400)
-				expect(target.message).toContain('does not take')
+					environment: {
+						...REGISTRATION,
+						triggerRef: 'release',
+						domain: 'notes.example.com',
+						target: { provider: 'harbor', version: 1, payload: { moved: true } },
+					},
+				})
+				const facts = (await getApprovalRequestUseCase(context(w, BOB), target.id)).description.facts
+				expect(facts.find((fact) => fact.label === 'Target')?.value.text).toContain('→')
+				expect(facts.find((fact) => fact.label === 'Trigger ref')).toBeUndefined()
 			})
 
 			test("the put's own checks of a trigger ref and a dev environment refuse it when it is asked for", async () => {
 				const w = await world()
-				const held = await ask(w, 'apps.environments.put', { appId: 'notes', env: 'stage', environment: { triggerRef: 'main' } })
+				const held = await ask(w, 'apps.environments.put', { appId: 'notes', env: 'stage', environment: { ...REGISTRATION, triggerRef: 'main' } })
 				expect((await decide(w, held.id, 'approve')).state).toBe('executed')
-				const taken = await status(ask(w, 'apps.environments.put', { appId: 'notes', env: 'prod', environment: { triggerRef: 'refs/heads/main' } }))
+				const taken = await status(
+					ask(w, 'apps.environments.put', { appId: 'notes', env: 'prod', environment: { ...REGISTRATION, triggerRef: 'refs/heads/main' } }),
+				)
 				expect(taken).toEqual({ status: 409, message: expect.stringContaining('stage') })
 
 				await w.db.registry.upsertAppEnv({
@@ -611,14 +621,20 @@ for (const backend of backends) {
 					providerTargetJson: ENVELOPE,
 					providerArtifactJson: ENVELOPE,
 				})
-				const dev = await status(ask(w, 'apps.environments.put', { appId: 'notes', env: 'dev', environment: { domain: 'dev.example.com' } }))
+				const dev = await status(
+					ask(w, 'apps.environments.put', { appId: 'notes', env: 'dev', environment: { ...REGISTRATION, domain: 'dev.example.com' } }),
+				)
 				expect(dev).toEqual({ status: 409, message: expect.stringContaining('runs no dev environment') })
 				expect((await w.db.approvalRequests.listPending(10)).length).toBe(0)
 			})
 
-			test('a changed environment closes it stale; a provider that prepares registrations cannot take it yet', async () => {
+			test('a changed environment closes it stale; a provider that prepares registrations takes it too', async () => {
 				const w = await world()
-				const { id } = await ask(w, 'apps.environments.put', { appId: 'notes', env: 'prod', environment: { crossOrigins: ['https://app.example.com'] } })
+				const { id } = await ask(w, 'apps.environments.put', {
+					appId: 'notes',
+					env: 'prod',
+					environment: { ...REGISTRATION, crossOrigins: ['https://app.example.com'] },
+				})
 				await protect(w, 'prod')
 				expect((await decide(w, id, 'approve')).state).toBe('stale')
 
@@ -633,9 +649,9 @@ for (const backend of backends) {
 						reconcile: (input) => Promise.resolve(input.namespace),
 					},
 				}
-				const refused = await status(ask(w, 'apps.environments.put', { appId: 'notes', env: 'prod', environment: { triggerRef: 'main' } }))
-				expect(refused.status).toBe(400)
-				expect(refused.message).toContain('not requestable yet')
+				expect((await ask(w, 'apps.environments.put', { appId: 'notes', env: 'prod', environment: { ...REGISTRATION, triggerRef: 'main' } })).state).toBe(
+					'pending',
+				)
 			})
 
 			test('an application patch shows each field before → after and goes stale when a before-value changed', async () => {
@@ -651,11 +667,14 @@ for (const backend of backends) {
 				expect(await w.db.registry.getApp('notes')).toMatchObject({ build_cmd: 'bun run build', default_branch: 'trunk' })
 
 				const stale = await ask(w, 'apps.update', { appId: 'notes', app: { buildCmd: 'bun run build:prod' } })
-				await w.db.registry.updateApp('notes', { buildCmd: 'make' }, { unlessProtected: false })
+				await w.db.registry.updateApp('notes', { buildCmd: 'make' })
 				expect((await decide(w, stale.id, 'approve')).state).toBe('stale')
 				expect((await w.db.registry.getApp('notes'))?.build_cmd).toBe('make')
 
-				expect((await status(ask(w, 'apps.update', { appId: 'notes', app: { repoUrl: 'github.com/evil/notes' } }))).status).toBe(400)
+				// The repository is global `app.manage`'s, which an application-scoped requester does not hold.
+				const atApp: Who = { ...AGENT, scope: appScope('notes') }
+				const source = await status(ask(w, 'apps.update', { appId: 'notes', app: { repoUrl: 'github.com/evil/notes' } }, atApp))
+				expect(source).toEqual({ status: 403, message: expect.stringContaining('global app.manage') })
 			})
 		})
 
@@ -671,10 +690,9 @@ for (const backend of backends) {
 				expect((await w.db.backups.getSchedule('notes', 'prod'))?.daily).toBe(0)
 			})
 
-			test('suspension reaches the environment itself, so it is not requestable yet', async () => {
+			test('a suspension is asked for and waits', async () => {
 				const w = await world()
-				const refused = await status(ask(w, 'apps.environments.suspend', { appId: 'notes', env: 'prod' }))
-				expect(refused).toEqual({ status: 400, message: expect.stringContaining('not requestable yet') })
+				expect((await ask(w, 'apps.environments.suspend', { appId: 'notes', env: 'prod' })).state).toBe('pending')
 			})
 		})
 

@@ -136,6 +136,15 @@ describe('rpc dispatch — error status from the thrown error httpStatus', () =>
 		teapot: r.procedure.input(z.object({})).handler(() => raise({ httpStatus: 418, type: 'teapot', message: 'short and stout' })),
 		boom: r.procedure.input(z.object({})).handler(() => raise(new Error('kaboom'))),
 		login: r.procedure.input(z.object({})).handler(() => raise(new UnauthorizedError('login required', { loginUrl: 'https://iam.test/auth/login' }))),
+		pending: r.procedure.input(z.object({})).handler(() =>
+			raise({ httpStatus: 409, type: 'approval_requested', message: 'waits for a person', data: { id: 'r1', url: 'https://c/r1' } })
+		),
+		library: r.procedure.input(z.object({})).handler(() =>
+			raise(Object.assign(new Error('upstream failed'), { status: 502, data: { query: 'SELECT secret FROM vault', token: 'tok_internal' } }))
+		),
+		halfStructural: r.procedure.input(z.object({})).handler(() =>
+			raise(Object.assign(new Error('half'), { httpStatus: 503, data: { internal: true } }))
+		),
 	})
 	async function d(method: string) {
 		const res = await dispatchRpcRequest({ router, ctx: { auth: fakeAuth(['*']) }, request: jsonRequest('https://x/rpc', { method, input: {} }) })
@@ -164,6 +173,27 @@ describe('rpc dispatch — error status from the thrown error httpStatus', () =>
 		const { status, body } = await d('login')
 		expect(status).toBe(401)
 		expect(record(record(body)['error'])['loginUrl']).toBe('https://iam.test/auth/login')
+	})
+
+	test("a thrown library error's data never reaches the envelope", async () => {
+		const library = await d('library')
+		expect(library.status).toBe(500)
+		expect(record(library.body)['error']).toEqual({ type: 'internal', message: 'upstream failed' })
+		expect(JSON.stringify(library.body)).not.toContain('tok_internal')
+		// A status without a type is not an error the framework produced either.
+		const half = await d('halfStructural')
+		expect(half.status).toBe(503)
+		expect(record(record(half.body)['error'])['data']).toBeUndefined()
+	})
+
+	test('a structural error carries its data in the envelope', async () => {
+		const { status, body } = await d('pending')
+		expect(status).toBe(409)
+		expect(record(body)['error']).toEqual({
+			type: 'approval_requested',
+			message: 'waits for a person',
+			data: { id: 'r1', url: 'https://c/r1' },
+		})
 	})
 })
 

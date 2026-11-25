@@ -3,12 +3,15 @@
 // The app framework never relies on cross-package `instanceof`. The error contract is purely
 // STRUCTURAL: any thrown value MAY expose `httpStatus` / `type` / `message` /
 // `issues` / `loginUrl`, and the mapper below reads those fields off whatever it
-// is handed. The classes here are a convenience for framework code (and apps
-// that want them) — they are not a requirement for interop.
+// is handed. `data` carries what a caller acts on beside the message (a link, an id); a client
+// that does not know it reads the message alone. It is read only off a structural error (`isStructuralError`, every
+// `HttpError` among them), never off any thrown value, whose `data` may be a library's internals. The classes here are
+// a convenience for framework code (and apps that want them) — they are not a requirement for interop.
 
 interface ErrorOptions {
 	readonly issues?: unknown
 	readonly loginUrl?: string
+	readonly data?: unknown
 }
 
 export class HttpError extends Error {
@@ -16,6 +19,7 @@ export class HttpError extends Error {
 	readonly type: string
 	readonly issues?: unknown
 	readonly loginUrl?: string
+	readonly data?: unknown
 
 	constructor(httpStatus: number, type: string, message: string, options?: ErrorOptions) {
 		super(message)
@@ -24,6 +28,7 @@ export class HttpError extends Error {
 		this.type = type
 		if (options?.issues !== undefined) this.issues = options.issues
 		if (options?.loginUrl !== undefined) this.loginUrl = options.loginUrl
+		if (options?.data !== undefined) this.data = options.data
 	}
 }
 
@@ -65,6 +70,7 @@ export interface StructuralError {
 	readonly message: string
 	readonly issues?: unknown
 	readonly loginUrl?: string
+	readonly data?: unknown
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -94,12 +100,15 @@ export function readStructuralError(err: unknown): StructuralError {
 		: 'Internal error'
 	const issues = record['issues']
 	const loginUrl = typeof record['loginUrl'] === 'string' ? record['loginUrl'] : undefined
+	// A library error may carry its own `data` (a query, a response body); only an error meant for the caller passes it on.
+	const data = isStructuralError(err) ? record['data'] : undefined
 	return {
 		httpStatus,
 		type,
 		message,
 		...(issues !== undefined ? { issues } : {}),
 		...(loginUrl !== undefined ? { loginUrl } : {}),
+		...(data !== undefined ? { data } : {}),
 	}
 }
 
@@ -112,12 +121,13 @@ export function jsonResponse(body: unknown, status: number): Response {
 
 /** Map any thrown value to a JSON `Response` per the structural error contract. */
 export function toErrorResponse(err: unknown): Response {
-	const { httpStatus, type, message, issues, loginUrl } = readStructuralError(err)
+	const { httpStatus, type, message, issues, loginUrl, data } = readStructuralError(err)
 	const error = {
 		type,
 		message,
 		...(issues !== undefined ? { issues } : {}),
 		...(loginUrl !== undefined ? { loginUrl } : {}),
+		...(data !== undefined ? { data } : {}),
 	}
 	return jsonResponse({ error }, httpStatus)
 }

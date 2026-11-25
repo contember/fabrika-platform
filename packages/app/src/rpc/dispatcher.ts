@@ -16,7 +16,7 @@ interface SingleCall {
 
 interface SingleResult {
 	result?: unknown
-	error?: { type: string; message: string; issues?: unknown; loginUrl?: string }
+	error?: { type: string; message: string; issues?: unknown; loginUrl?: string; data?: unknown }
 }
 
 interface DispatchOutcome {
@@ -105,9 +105,17 @@ async function dispatchOne(router: AnyRouter, ctx: unknown, call: SingleCall): P
 		// HTTP status comes from the error's OWN structural httpStatus (ForbiddenError → 403,
 		// BadRequestError → 400, a custom `{ httpStatus: 503 }` → 503, a plain Error → 500) — not a
 		// hardcoded type table — so every error maps correctly without the dispatcher knowing its type.
-		const { httpStatus, type, message, issues, loginUrl } = readStructuralError(err)
+		const { httpStatus, type, message, issues, loginUrl, data } = readStructuralError(err)
 		return {
-			body: { error: { type, message, ...(issues !== undefined ? { issues } : {}), ...(loginUrl !== undefined ? { loginUrl } : {}) } },
+			body: {
+				error: {
+					type,
+					message,
+					...(issues !== undefined ? { issues } : {}),
+					...(loginUrl !== undefined ? { loginUrl } : {}),
+					...(data !== undefined ? { data } : {}),
+				},
+			},
 			status: httpStatus,
 		}
 	}

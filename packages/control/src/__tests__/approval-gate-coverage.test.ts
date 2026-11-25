@@ -3,12 +3,18 @@
 // misses writes, and each miss is a way around the gate.
 
 import { dispatchRpcRequest } from '@fabrika/app/service'
-import { ACTION_CATEGORIES, type PolicyCategory, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
+import type { AuthContext } from '@fabrika/auth'
+import { ACTION_CATEGORIES, type ApprovalPolicy, type PolicyCategory, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
+import type { JsonValue } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import { storedPolicy } from '../approval/categories'
+import { PRODUCTION_REQUEST_KINDS } from '../approval/requests/production'
 import { type ControlRpcContext, controlRpcRouter } from '../control-rpc'
 import { createHarness } from './helpers/harness'
-import { authWithActions } from './helpers/iam'
-import { fakeControlProvider } from './helpers/provider'
+import { allowAllAuth, authWithActions } from './helpers/iam'
+import { fixtureProtect, makeFakeLock } from './helpers/lock'
+import { fakeControlProvider, providerEnvironment } from './helpers/provider'
+import { rpcRequest, rpcResult } from './helpers/rpc'
 import { unusedSourceConnection } from './helpers/source-connection'
 
 type Judged = { readonly category: PolicyCategory } | { readonly exempt: string }
@@ -18,7 +24,7 @@ const NARROWS = 'takes access away; nothing to approve'
 const NAMESPACE = 'an installation resource under the global `namespace.manage`, which no command-line preset carries (ADR-0083 §9)'
 const MAIL = "the installation's mail gate under the global `mail.manage`, which no command-line preset carries (ADR-0083 §9)"
 
-/** Control's mutations. A non-person's action of a category waits or is refused by its mode, from the step that adds its requests. */
+/** Control's mutations. A non-person's action of a category waits or is refused by its mode (`gateDirectWrite`, D8). */
 const CONTROL: Readonly<Record<string, Judged>> = {
 	'builderPairing.approve': { exempt: `builder pairing: ${ALWAYS_A_PERSON}` },
 	'builderPairing.deny': { exempt: `builder pairing: ${ALWAYS_A_PERSON}` },
@@ -98,6 +104,100 @@ describe('every Control mutation is judged by an approval category or exempt wit
 		const judged = new Set(Object.values(CONTROL).flatMap((entry) => 'category' in entry ? [entry.category] : []))
 		// `grants` and `credentials` judge IAM's mutations; `agent-grants` judges a request, which no router mutation is yet.
 		expect(ACTION_CATEGORIES.filter((category) => !judged.has(category))).toEqual(['agent-grants', 'credentials'])
+	})
+})
+
+/**
+ * A valid input of each mutation the table judges by a category a non-person's write meets, against `notes@prod`. The
+ * gate runs before the use case, so each is refused under `refuse` whatever it would do. `register` creates its
+ * environment, which no request can wait in: a new one that starts protected keeps the person rule
+ * (`protected-redirect.test.ts`).
+ */
+const ENVELOPE = { provider: 'harbor', version: 1, payload: {} }
+const GATED_INPUTS: Readonly<Record<string, JsonValue>> = {
+	'apps.update': { appId: 'notes', app: { buildCmd: 'bun run build' } },
+	'apps.environments.put': { appId: 'notes', env: 'prod', environment: { triggerRef: 'refs/heads/other', target: ENVELOPE, artifact: ENVELOPE } },
+	'apps.environments.rotateTokenKey': { appId: 'notes', env: 'prod' },
+	'apps.environments.suspend': { appId: 'notes', env: 'prod' },
+	'apps.environments.resume': { appId: 'notes', env: 'prod' },
+	'apps.secrets.put': { appId: 'notes', secret: { name: 'API_KEY', value: 'value', env: 'prod' } },
+	'apps.secrets.delete': { appId: 'notes', name: 'API_KEY', env: 'prod' },
+	'apps.variables.put': { appId: 'notes', variable: { name: 'REGION', value: 'eu', env: 'prod' } },
+	'apps.variables.delete': { appId: 'notes', name: 'REGION', env: 'prod' },
+	'vault.set': { appId: 'notes', name: 'API_KEY', value: 'value', env: 'prod' },
+	'vault.rotate': { appId: 'notes', name: 'API_KEY', value: 'value', env: 'prod' },
+	'vault.delete': { appId: 'notes', name: 'API_KEY', env: 'prod' },
+	'deploy': { appId: 'notes', env: 'prod', ref: 'a'.repeat(40) },
+	'data.start': { appId: 'notes', env: 'prod', kind: 'maintenance', mode: 'read-only' },
+	'data.recover': { appId: 'notes', env: 'prod', operationId: 'op-1', resolution: 'open' },
+	'data.backups.setSchedule': { appId: 'notes', env: 'prod', daily: false },
+}
+
+describe("every mutation judged by a category meets the gate on a non-person's write", () => {
+	test('the inputs name every judged mutation but register', () => {
+		const judged = Object.entries(CONTROL).flatMap(([method, entry]) => 'category' in entry && method !== 'register' ? [method] : [])
+		expect(Object.keys(GATED_INPUTS).sort()).toEqual(judged.sort())
+	})
+
+	test('every judged mutation but register and deploy becomes a request kind this release serves', () => {
+		// A deploy waits as a parked run (`deploy-request`); register creates its environment, which no request can wait in.
+		const unserved = Object.keys(GATED_INPUTS).filter((method) => method !== 'deploy' && PRODUCTION_REQUEST_KINDS.get(method) === undefined)
+		expect(unserved).toEqual([])
+	})
+
+	test('a request kind that a mutation becomes is judged by the same category', () => {
+		for (const [method, entry] of Object.entries(CONTROL)) {
+			const kind = PRODUCTION_REQUEST_KINDS.get(method)
+			const judgedBy: string | null = 'category' in entry ? entry.category : null
+			const kindCategory: string | null = kind?.category ?? null
+			if (kind !== undefined) expect({ method, category: kindCategory }).toEqual({ method, category: judgedBy })
+		}
+	})
+
+	test('under refuse each is a 403 naming its category, before its use case runs', async () => {
+		const harness = createHarness()
+		await harness.repositories.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes', defaultBranch: 'main' })
+		await harness.repositories.registry.upsertAppEnv(providerEnvironment('notes', 'prod', { triggerRef: 'refs/heads/main' }))
+		const refused: ApprovalPolicy = {
+			...STRICT_POLICY,
+			'deploy-request': 'refuse',
+			secrets: 'refuse',
+			variables: 'refuse',
+			data: 'refuse',
+			registry: 'refuse',
+		}
+		await fixtureProtect(
+			harness.repositories.registry,
+			makeFakeLock(harness.repositories),
+			{ appId: 'notes', env: 'prod' },
+			true,
+			Date.now,
+			storedPolicy(refused),
+		)
+		const agent: AuthContext = {
+			...allowAllAuth(),
+			oauth: { app: 'vozka', clientId: 'https://agent.example.test/client.json', scopes: ['operate'], grantId: 'g', tokenId: 't' },
+		}
+		for (const [method, input] of Object.entries(GATED_INPUTS)) {
+			const entry = CONTROL[method]
+			const category = entry !== undefined && 'category' in entry ? entry.category : 'none'
+			const request = rpcRequest(method, input)
+			request.headers.set('Authorization', 'Bearer px_test')
+			const response = await rpcResult(request, {
+				repositories: harness.repositories,
+				auth: agent,
+				queue: { send: () => Promise.reject(new Error('nothing may be queued')) },
+				logs: { get: () => Promise.resolve(null) },
+				provider: fakeControlProvider,
+				cancelRun: () => Promise.resolve(),
+				lock: makeFakeLock(harness.repositories),
+			})
+			expect({ method, status: response.status, message: await response.text() }).toEqual({
+				method,
+				status: 403,
+				message: expect.stringContaining(`(${category}: refuse)`),
+			})
+		}
 	})
 })
 
