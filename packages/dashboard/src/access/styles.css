@@ -574,3 +574,98 @@ button.link-btn:hover:not(:disabled) {
 	padding-left: var(--s-4);
 	border-left: 1px solid var(--rule);
 }
+
+/* ── External application form ─────────────────────────────────────────────── */
+
+.registry-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	margin: 0;
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+
+.registry-group > legend {
+	margin-bottom: var(--s-2);
+	padding: 0;
+	font-size: var(--t-md);
+	font-weight: 600;
+	color: var(--ink);
+}
+
+.registry-group > .hint {
+	margin: 0;
+}
+
+.registry-group > label,
+.registry-group > .notice,
+.registry-form > .notice {
+	max-width: 34rem;
+}
+
+.registry-rows {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-2);
+	max-width: 34rem;
+}
+
+.registry-rows-head,
+.registry-row {
+	display: grid;
+	grid-template-columns: 1fr 1.4fr 2rem;
+	gap: var(--s-2);
+	align-items: start;
+}
+
+.registry-row > button {
+	min-height: 2rem;
+}
+
+.registry-rows-head > *,
+.registry-row > * {
+	min-width: 0;
+}
+
+.registry-rows-head {
+	font-size: var(--t-xxs);
+	font-weight: 600;
+	text-transform: uppercase;
+	letter-spacing: 0.085em;
+	color: var(--engrave);
+}
+
+.registry-cell {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-1);
+}
+
+.registry-client {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-3);
+	max-width: 34rem;
+	padding: var(--s-3);
+	border: 1px solid var(--rule);
+	border-radius: var(--r-1);
+}
+
+.registry-client-head {
+	display: flex;
+	align-items: center;
+	gap: var(--s-2);
+	font-size: var(--t-sm);
+}
+
+.registry-client-head .spacer {
+	flex: 1;
+}
+
+.form label.invalid input,
+.form label.invalid textarea,
+.registry-cell input[aria-invalid='true'] {
+	border-color: var(--lamp-stop);
+}

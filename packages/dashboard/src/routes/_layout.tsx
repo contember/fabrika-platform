@@ -85,6 +85,13 @@ const NAV: NavSection[] = [
 			{ to: 'access/users', label: 'Users', description: 'People who can sign in', icon: 'users', match: '/access/users' },
 			{ to: 'access/credentials', label: 'Credentials', description: 'API keys and share links', icon: 'key', match: '/access/credentials' },
 			{ to: 'access/permissions', label: 'Permissions', description: 'Roles, actions and scopes', icon: 'schema', match: '/access/permissions' },
+			{
+				to: 'access/external-apps',
+				label: 'External applications',
+				description: 'Applications outside the installation that sign people in',
+				icon: 'external',
+				match: '/access/external-apps',
+			},
 			{ to: 'access/audit', label: 'Audit', description: 'Changes and sign-in decisions', icon: 'history', match: '/access/audit' },
 		],
 	},

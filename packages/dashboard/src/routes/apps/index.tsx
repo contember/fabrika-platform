@@ -5,15 +5,18 @@ import { SearchField } from '../../components/SearchField'
 import { Chip } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api } from '../../lib/api'
+import { mayOpen } from '../../lib/console-access'
 import { fmtAgo, fmtDate, shortRef } from '../../lib/format'
+import { consoleSession } from '../../lib/session'
 
 // Apps: every registered app. The detail page (apps/:id) holds its envs, secrets, and per-env Deploy.
-// New apps are onboarded at /apps/new; this is the registry view.
+// New apps are onboarded at /apps/new; this is the registry view. An application with no deploy target signs people in
+// through IAM and is registered in Access (ADR-0089), so adding one starts here too, for the caller who may open that page.
 
 export default createPage()
 	.loader(async () => {
-		const apps = await api.apps.list()
-		return { apps: apps.items }
+		const [apps, session] = await Promise.all([api.apps.list(), consoleSession()])
+		return { apps: apps.items, external: mayOpen(session, 'access/external-apps') }
 	})
 	.route('/apps')
 	.render(({ data }) => {
@@ -29,6 +32,11 @@ export default createPage()
 							<h1>Applications</h1>
 							<p className="hint">Every source repository fabrika knows how to build and release.</p>
 						</div>
+						{data.external && (
+							<Link to="access/external-apps/new" className="btn" title="An application outside this installation that signs people in through IAM">
+								Add external application (no deploy)
+							</Link>
+						)}
 						<Link to="apps/new" className="btn primary">
 							<Icon name="plus" />
 							New app

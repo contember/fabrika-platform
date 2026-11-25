@@ -51,9 +51,32 @@ const ACTION_LABELS = new Map<string, string>([
 	['iam.workload.key.revoke', 'Workload key revoked'],
 	['iam.membership-key.issue', 'Membership transport key issued'],
 	['iam.brand.update', 'Installation branding updated'],
+	['iam.external_app.put', 'External application saved'],
+	['iam.external_app.delete', 'External application deleted'],
+	['iam.oauth_client.put', 'Authoring client saved'],
+	['iam.oauth_client.delete', 'Authoring client removed'],
+	['iam.oauth_registry.import', 'OAuth client list imported'],
 ])
 
+/** Why IAM revoked OAuth grants in bulk: a change to the client registry (ADR-0089). */
+const REVOCATION_LABELS = new Map<string, string>([
+	['client_removed', 'Sign-ins revoked: client removed'],
+	['resource_changed', 'Sign-ins revoked: resource changed'],
+	['application_removed', 'Sign-ins revoked: application deleted'],
+])
+
+function metadataReason(metadata: unknown): string | null {
+	if (typeof metadata !== 'object' || metadata === null) return null
+	const reason: unknown = Reflect.get(metadata, 'reason')
+	return typeof reason === 'string' ? reason : null
+}
+
 /** Audit actions are open-ended. Preserve an unknown code so it can still be found in the audit log. */
-export function auditActionLabel(action: string): string {
+export function auditActionLabel(action: string, metadata?: unknown): string {
+	if (action === 'iam.oauth.grant.revoke') {
+		const reason = metadataReason(metadata)
+		const label = reason === null ? undefined : REVOCATION_LABELS.get(reason)
+		if (label !== undefined) return label
+	}
 	return ACTION_LABELS.get(action) ?? action
 }
