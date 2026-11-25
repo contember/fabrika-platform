@@ -117,6 +117,8 @@ Usage:
   fabrika control runs get --run=<id>
   fabrika control runs log --run=<id>
   fabrika control requests get <id> [--wait]
+  fabrika control access request-grant --app=<id> --env=<name> --principal=<id> --role=<role>
+                           [--scope=<dimension>:<value>] --expires-in=<seconds> [--wait]
   fabrika control external-apps list | get <app> | put --file=<app.json> | delete <app>   [--iam-url=<origin>]
   fabrika control oauth-clients list | put --file=<client.json> | delete <client id>   [--iam-url=<origin>]
 
@@ -188,6 +190,14 @@ fingerprint, the command fails and says to refuse the request. Control seals the
 prints the request's id, state and link; \`--wait\` follows it as \`requests get --wait\` does. Without \`--env\` the request
 is for every environment of the app, and every protected one judges it. A secret the provider keeps (a Zerops
 environment) cannot be requested yet.
+
+\`access request-grant\` asks a person to give a principal (this agent's own, or another) one role of an application
+environment. It needs \`access.request\` at the app, the role must be one the environment's approved contract declares,
+a membership role takes \`--scope\` with a value of its dimension, and \`--expires-in\` is at most 30 days. An IAM
+administrator of the application approves it at the console link stderr prints; the grant is then theirs, and where
+the application's grants wait for approval, IAM holds it for a second administrator. An environment that does not gate
+an agent's grants (not protected, or \`agent-grants\` off) refuses it: there is nothing to approve there. stdout prints
+the request's id, state and link; \`--wait\` follows it as \`requests get --wait\` does.
 
 Namespace placement options, each defaulting to what the preset would choose:
 
@@ -1521,6 +1531,27 @@ const runRequests = async (verb: string | undefined, flags: Flags, env: Readonly
 	emit(flags, result, () => requestLine(result))
 }
 
+/** `access request-grant`: ask a person to give a principal one role of an application environment (ADR-0083 §8). */
+const runAccess = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	if (verb !== 'request-grant') throw new Error(`Unknown \`control access\` verb: ${verb ?? '(missing)'}`)
+	const expiresIn = Number(required(flags, 'expires-in'))
+	if (!Number.isSafeInteger(expiresIn) || expiresIn <= 0) throw new Error('--expires-in must be a positive whole number of seconds')
+	const scope = optional(flags, 'scope')
+	const separator = scope?.indexOf(':') ?? -1
+	if (scope !== undefined && (separator <= 0 || separator === scope.length - 1)) {
+		throw new Error("--scope names a value of the role's dimension: --scope=<dimension>:<value>")
+	}
+	const input: JsonValue = {
+		appId: required(flags, 'app'),
+		env: required(flags, 'env'),
+		principalId: required(flags, 'principal'),
+		role: required(flags, 'role'),
+		scope: scope === undefined ? null : { type: scope.slice(0, separator), value: scope.slice(separator + 1) },
+		expiresAt: Math.floor(Date.now() / 1000) + expiresIn,
+	}
+	await requestChange(controlClient(flags, env), flags, 'iam.grants.create', input)
+}
+
 const requestLine = (request: ApprovalRequestDto): string => `${request.id}\t${request.kind}\t${request.appId}\t${request.env}\t${request.state}`
 
 /** What stderr says about a request beside its row: where a person decides it, or why it did not run. */
@@ -1629,6 +1660,9 @@ export const runControlCli = async (
 				return
 			case 'requests':
 				await runRequests(verb, flags, env)
+				return
+			case 'access':
+				await runAccess(verb, flags, env)
 				return
 			case 'register':
 				await runRegister(flags, provider, env)

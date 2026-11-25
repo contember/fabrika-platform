@@ -25,7 +25,7 @@ Usage:
                        [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                        [--namespace=<id>] [--installation-id=<n|none>] [--url=<origin>] [--json]
   fabrika namespace <plan|create|adopt|reconcile> --provider=zerops [provider options]
-  fabrika control <key|apps|namespaces|register|deploy|runs|external-apps|oauth-clients> [options]
+  fabrika control <key|apps|namespaces|register|deploy|runs|access|external-apps|oauth-clients> [options]
   fabrika env <inspect|maintenance|operations|recover|backups|restore> <app> <env> [arguments] [--json]
   fabrika operations <issues|issue|releases|health> [options] [--json]
   fabrika builder <init|next|advance|gate|ensure-daemon|induce|build> [options]

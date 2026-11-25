@@ -1342,6 +1342,64 @@ describe('control register source binding', () => {
 	})
 })
 
+describe('control access request-grant', () => {
+	test('asks a person for one role of an environment, and prints the request and the link', async () => {
+		const url = 'https://console.example.test/approvals/requests/g1'
+		const asked = captureFetch({ result: { id: 'g1', url, state: 'pending' } })
+		const before = Math.floor(Date.now() / 1000)
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() =>
+				runControlCli(
+					'access',
+					['request-grant', '--app=notes', '--env=prod', '--principal=p-cy', '--role=editor', '--scope=workspace:ws:1', '--expires-in=86400'],
+					undefined,
+					CONTROL_ENV,
+				)
+			)
+		})
+		const [call] = asked.calls
+		expect(call?.body).toMatchObject({
+			method: 'approvals.requests.create',
+			input: {
+				kind: 'iam.grants.create',
+				input: { appId: 'notes', env: 'prod', principalId: 'p-cy', role: 'editor', scope: { type: 'workspace', value: 'ws:1' } },
+			},
+		})
+		const expiresAt = Reflect.get(Reflect.get(Reflect.get(Object(call?.body), 'input'), 'input'), 'expiresAt')
+		expect(expiresAt).toBeGreaterThanOrEqual(before + 86_400)
+		expect(expiresAt).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 86_400)
+		expect(out).toBe(`g1\tpending\t${url}`)
+		expect(err).toContain(`a person approves or refuses this request at ${url}`)
+		expect(CONTROL_USAGE).toContain('fabrika control access request-grant')
+	})
+
+	test('an application-wide role takes no scope; a malformed scope or expiry is refused before anything is sent', async () => {
+		const asked = captureFetch({ result: { id: 'g2', url: 'https://console.example.test/approvals/requests/g2', state: 'pending' } })
+		await captureStderr(async () => {
+			await captureStdout(() =>
+				runControlCli(
+					'access',
+					['request-grant', '--app=notes', '--env=prod', '--principal=p-cy', '--role=staff', '--expires-in=3600'],
+					undefined,
+					CONTROL_ENV,
+				)
+			)
+		})
+		expect(asked.calls[0]?.body).toMatchObject({ input: { input: { role: 'staff', scope: null } } })
+
+		const refused = captureFetch({ result: { ok: true } })
+		const base = ['request-grant', '--app=notes', '--env=prod', '--principal=p-cy', '--role=editor']
+		await expect(runControlCli('access', [...base, '--scope=workspace', '--expires-in=60'], undefined, CONTROL_ENV)).rejects.toThrow(
+			'--scope=<dimension>:<value>',
+		)
+		await expect(runControlCli('access', [...base, '--expires-in=soon'], undefined, CONTROL_ENV)).rejects.toThrow('--expires-in')
+		await expect(runControlCli('access', [...base], undefined, CONTROL_ENV)).rejects.toThrow('--expires-in is required')
+		await expect(runControlCli('access', ['grant', '--app=notes'], undefined, CONTROL_ENV)).rejects.toThrow('Unknown `control access` verb: grant')
+		expect(refused.calls).toEqual([])
+	})
+})
+
 describe('control requests', () => {
 	const url = 'https://console.example.test/approvals/requests/q1'
 	const pending: ApprovalRequestDto = {
