@@ -23,13 +23,11 @@ import {
 	type MailMessageDetailDto,
 	type MailMessageDto,
 	type MailRuleDto,
-	type RecoverDataOperationInput,
 	recoverDataOperationInputSchema,
-	type StartDataOperationInput,
 	startDataOperationInputSchema,
 } from '@fabrika/control-contract'
 import { parsePlatformMailRequest } from '@fabrika/email/platform'
-import { type DeployLocks, uuidv7 } from '@fabrika/platform'
+import { uuidv7 } from '@fabrika/platform'
 import type { ControlProvider, JsonValue } from '@fabrika/provider-contract'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { z } from 'zod'
@@ -43,7 +41,8 @@ import {
 	listOwnBuilderPairings,
 	revokeBuilderPairing,
 } from './api/builder-pairing'
-import { dataOperationResult, failUnavailable } from './api/data-operation-result'
+import { failUnavailable } from './api/data-operation-result'
+import { type DataUseCaseContext, recoverDataOperationUseCase, startDataOperationUseCase } from './api/data-operations'
 import { fail } from './api/domain'
 import {
 	adoptNamespaceUseCase,
@@ -109,17 +108,7 @@ import { iamPasskeyStepUp, type PasskeyStepUpPort, stepUpAssertionSchema } from 
 import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
-import {
-	type DataOperationDeps,
-	listDataOperations,
-	type OpsInspection,
-	type OpsTransport,
-	recordedObjects,
-	startMaintenance,
-	startRecovery,
-	startRestore,
-	toDataOperationDto,
-} from './data-operations'
+import { listDataOperations, type OpsInspection, recordedObjects, toDataOperationDto } from './data-operations'
 import type { ControlRepositories, MailMessageRepository, MailMessageRow, MailRuleRow } from './db'
 import type { Env } from './env'
 import { reconcileSourceConnection, repairSourceConnection, verifySourceInstallation } from './github/connections/installation'
@@ -135,7 +124,7 @@ import { sourceConnectionList } from './github/connections/status'
 import { appScope, controlPublicOrigin } from './iam'
 import { jsonValueSchema } from './json-value'
 import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessage, requeueMailMessage } from './mail-relay/queue'
-import { operationDeploys, type RunDeps } from './run-lifecycle'
+import { operationDeploys } from './run-lifecycle'
 import { buildControlRpcDeps, type ControlRpcDeps, iamGrantsDeps } from './services'
 
 export interface ControlRpcContext {
@@ -671,12 +660,13 @@ export function createControlRpcRouter(
 
 	function dataContext(ctx: ControlRpcContext): DataUseCaseContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		const runDeps = deps.runDeps
 		return {
 			repositories: deps.repositories,
 			auth: ctx.auth,
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(deps.opsTransport === undefined ? {} : { ops: deps.opsTransport }),
-			...(deps.runDeps === undefined ? {} : { runDeps: deps.runDeps }),
+			...(runDeps === undefined ? {} : { deploys: async () => operationDeploys(await runDeps()) }),
 		}
 	}
 
@@ -946,17 +936,6 @@ async function setMailRule(c: MailUseCaseContext, input: z.infer<typeof setMailR
 	return toMailRuleDto(await c.repositories.mailRules.upsert({ id: uuidv7(), ...input }, nowSeconds()))
 }
 
-interface DataUseCaseContext {
-	readonly repositories: ControlRepositories
-	readonly auth: AuthContext
-	/** The environment's deploy lease every operation runs under; absent, operations answer 503. */
-	readonly lock?: DeployLocks
-	/** The ops channel; absent, the views and operations answer 503. */
-	readonly ops?: OpsTransport
-	/** What a restore's own deploys run with; absent, a restore is refused. */
-	readonly runDeps?: () => Promise<RunDeps>
-}
-
 async function listDataOperationsUseCase(c: DataUseCaseContext, input: DataOperationListInput): Promise<CursorList<DataOperationDto>> {
 	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_READ, input.appId, input.env)
 	const limit = input.limit ?? DATA_OPERATION_MAX_PAGE_SIZE
@@ -1009,37 +988,6 @@ async function inspectData(c: DataUseCaseContext, target: { appId: string; env: 
 	const answer = await c.ops.inspect(target, { object, content }, AbortSignal.timeout(DATA_VIEW_TIMEOUT_MS))
 	if (answer.kind === 'unavailable') failUnavailable(answer.reason)
 	return answer.value
-}
-
-async function startDataOperationUseCase(c: DataUseCaseContext, input: StartDataOperationInput): Promise<DataOperationDto> {
-	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	if (input.kind === 'backup') fail(501, 'backups are not available in this release')
-	if (input.kind === 'restore') {
-		const deps = await restoreDeps(c)
-		return dataOperationResult(
-			await startRestore(deps, { appId: input.appId, env: input.env, at: new Date(input.at).toISOString(), actor: runActor(c.auth) }),
-		)
-	}
-	const outcome = await startMaintenance(operationDeps(c), { appId: input.appId, env: input.env, mode: input.mode, actor: runActor(c.auth) })
-	return dataOperationResult(outcome)
-}
-
-/** A recovery may resume a restore, which deploys, so it carries the restore's deploys where the composition has them. */
-async function recoverDataOperationUseCase(c: DataUseCaseContext, input: RecoverDataOperationInput): Promise<DataOperationDto> {
-	await requireDataEnvironment(c, CONTROL_ACTIONS.DATA_MANAGE, input.appId, input.env)
-	const deps = c.runDeps === undefined ? operationDeps(c) : await restoreDeps(c)
-	return dataOperationResult(await startRecovery(deps, { ...input, actor: runActor(c.auth) }))
-}
-
-function operationDeps(c: DataUseCaseContext): { repositories: ControlRepositories; lock: DeployLocks; ops: OpsTransport } {
-	if (c.lock === undefined || c.ops === undefined) fail(503, 'data operations unavailable')
-	return { repositories: c.repositories, lock: c.lock, ops: c.ops }
-}
-
-async function restoreDeps(c: DataUseCaseContext): Promise<DataOperationDeps> {
-	const deps = operationDeps(c)
-	if (c.runDeps === undefined) fail(503, 'restores are unavailable: this composition does not deploy from a data operation')
-	return { ...deps, deploys: operationDeploys(await c.runDeps()) }
 }
 
 function toMailMessageDto(row: MailMessageRow): MailMessageDto {
