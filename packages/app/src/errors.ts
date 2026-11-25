@@ -4,8 +4,9 @@
 // STRUCTURAL: any thrown value MAY expose `httpStatus` / `type` / `message` /
 // `issues` / `loginUrl`, and the mapper below reads those fields off whatever it
 // is handed. `data` carries what a caller acts on beside the message (a link, an id); a client
-// that does not know it reads the message alone. The classes here are a convenience for framework code (and apps
-// that want them) — they are not a requirement for interop.
+// that does not know it reads the message alone. It is read only off a structural error (`isStructuralError`, every
+// `HttpError` among them), never off any thrown value, whose `data` may be a library's internals. The classes here are
+// a convenience for framework code (and apps that want them) — they are not a requirement for interop.
 
 interface ErrorOptions {
 	readonly issues?: unknown
@@ -99,7 +100,8 @@ export function readStructuralError(err: unknown): StructuralError {
 		: 'Internal error'
 	const issues = record['issues']
 	const loginUrl = typeof record['loginUrl'] === 'string' ? record['loginUrl'] : undefined
-	const data = record['data']
+	// A library error may carry its own `data` (a query, a response body); only an error meant for the caller passes it on.
+	const data = isStructuralError(err) ? record['data'] : undefined
 	return {
 		httpStatus,
 		type,
