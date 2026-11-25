@@ -272,8 +272,8 @@ their reason. Beside them, an agent's grant and a key an agent asks for, which I
   Control actions at one application (`app:<app>` at Control's IAM application, no wildcard), expiring at most 30 days
   ahead. It never holds `access.approve` or an action Control checks only as a global grant (`CONTROL_GLOBAL_ACTIONS`):
   either is 400, naming the action. Its coordinates are `<app>@*`, so the strictest protected environment judges it; where none gates `credentials`
-  it is refused (409). The agent sends a public P-256 or X25519 JWK with it; a private JWK, another curve or a later
-  expiry is 400. The row stores the key's RFC 7638 thumbprint, which the page shows and the CLI prints, and the actions
+  it is refused (409). The agent sends a public P-256 or X25519 JWK with it; a private JWK, another curve, a point no
+  key agreement works with (off the P-256 curve, or of low order on X25519) or a later expiry is 400. The row stores the key's RFC 7638 thumbprint, which the page shows and the CLI prints, and the actions
   the requester's token lacked at the application: `credentialCeiling: requester` (the default) refuses those when the
   request is created (403); `approver` admits them, and the page warns of each. A ceiling turned back to `requester`
   before the decision closes such a request `stale`. Only an IAM installation administrator (`iam.admin`) decides it,

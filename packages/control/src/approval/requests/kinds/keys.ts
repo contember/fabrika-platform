@@ -17,7 +17,7 @@ import {
 	recipientPublicKeySchema,
 	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
-import { recipientKeyThumbprint } from '@fabrika/iam-contract'
+import { recipientKeyThumbprint, type RecipientPublicKey } from '@fabrika/iam-contract'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { fail } from '../../../api/domain'
@@ -93,6 +93,23 @@ type KeyBefore = z.infer<typeof keyBefore>
 
 const nowSeconds = (): number => Math.floor(Date.now() / 1000)
 
+/**
+ * Whether a key agreement with `key` works, as IAM's encryption to it runs one: WebCrypto refuses a P-256 point off the
+ * curve when importing it, and an X25519 point of low order only when deriving, since the shared secret is then zero.
+ */
+async function agreesWith(key: RecipientPublicKey): Promise<boolean> {
+	const algorithm = key.kty === 'EC' ? { name: 'ECDH', namedCurve: 'P-256' } : { name: 'X25519' }
+	try {
+		const recipient = await crypto.subtle.importKey('jwk', { ...key }, algorithm, false, [])
+		const ephemeral = await crypto.subtle.generateKey(algorithm, false, ['deriveBits'])
+		if (!('privateKey' in ephemeral)) return false
+		await crypto.subtle.deriveBits({ name: algorithm.name, public: recipient }, ephemeral.privateKey, 256)
+		return true
+	} catch {
+		return false
+	}
+}
+
 /** The ceiling the protected environments of the application set together: `requester` where any sets it. */
 function ceilingOf(judges: readonly AppEnvRow[]): CredentialCeiling {
 	if (judges.length === 0) return STRICT_SETTINGS.credentialCeiling
@@ -143,6 +160,12 @@ export const provisionKeyKind = requestKind<KeyInput, KeyBefore, AskedKey>({
 		schema: askedKey,
 		coordinates: (asked) => ({ appId: asked.appId, env: ALL_ENVIRONMENTS }),
 		hold: async (c, asked, _requestId, requester) => {
+			if (!(await agreesWith(asked.publicKey))) {
+				fail(
+					400,
+					`publicKey: no key agreement works with this ${asked.publicKey.crv} key (a point off the curve or of low order); send the public half of a key pair made for ECDH-ES`,
+				)
+			}
 			const reach = await reachOf(c.repositories.registry, { appId: asked.appId, env: ALL_ENVIRONMENTS })
 			if (reach === null) fail(404, 'app not found')
 			const judges = judging(reach)

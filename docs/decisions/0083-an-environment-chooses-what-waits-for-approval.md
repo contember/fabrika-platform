@@ -308,7 +308,7 @@ A key for someone else (`credentials`, the kind `iam.apiKeys.provision`) holds e
 scoped to it, never `access.approve` or an action Control checks only as a global grant (400, naming it), so it acts in every environment of the application and the strictest protected one judges it; where none
 gates `credentials` (none is protected, or it is `off`) the request is refused (409), since an agent's credential issues
 nothing in IAM. The agent sends the application, the actions, a label, an expiry at most 30 days ahead and a public
-P-256 or X25519 JWK (a private one, another curve or a later expiry is 400). The stored input adds the key's RFC 7638
+P-256 or X25519 JWK (a private one, another curve, a point no key agreement works with or a later expiry is 400). The stored input adds the key's RFC 7638
 thumbprint, which the page shows and the agent prints beside the link, and the actions the requester's own token lacks
 at the application: under `credentialCeiling: requester` such an action is refused when the request is created (403),
 under `approver` the page warns of each. An IAM installation administrator decides it, since only `iam.admin` issues a

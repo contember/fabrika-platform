@@ -585,6 +585,14 @@ for (const backend of backends) {
 			expect(secret.status).toBe(400)
 			expect(secret.message).toContain('private key')
 			expect(await status(w.ask(w.keyInput({ publicKey: { kty: 'EC', crv: 'P-384', x: 'a', y: 'b' } })))).toMatchObject({ status: 400 })
+			// Well-formed JWKs no key agreement works with: refused before a person spends a passkey on them.
+			const bytes = (fill: number) => Buffer.alloc(32, fill).toString('base64url')
+			const offCurve = await status(w.ask(w.keyInput({ publicKey: { kty: 'EC', crv: 'P-256', x: bytes(1), y: bytes(2) } })))
+			expect(offCurve).toMatchObject({ status: 400 })
+			expect(offCurve.message).toContain('P-256')
+			const lowOrder = await status(w.ask(w.keyInput({ publicKey: { kty: 'OKP', crv: 'X25519', x: bytes(0) } })))
+			expect(lowOrder).toMatchObject({ status: 400 })
+			expect(lowOrder.message).toContain('X25519')
 			expect(await status(w.ask(w.keyInput({ actions: ['deploy.*'] })))).toMatchObject({ status: 400 })
 			expect(await status(w.ask(w.keyInput({ actions: ['nothing.of.control'] })))).toMatchObject({ status: 400 })
 			// A key never holds approval rights, nor an action Control checks only as a global grant: a key holds its actions at one app.
