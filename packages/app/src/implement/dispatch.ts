@@ -1671,8 +1671,10 @@ export class ContractRuntime {
 	/**
 	 * Whether the caller may read a notification about `about` now: the check an endpoint of its action makes. Any
 	 * failure but "not found" fails the whole read, so the cursor stays and every later push answers 500 until the row
-	 * expires. `ctx.notify` keeps that from happening: it writes only a declared action and dimension, and locates a key
-	 * of a dimension a table owns in the writer's transaction, so a value Postgres cannot cast fails the writer, not here.
+	 * expires. `ctx.notify` keeps that from happening under the contract it ran under: it writes only a declared action
+	 * and dimension, and locates a key of a dimension a table owns in the writer's transaction, so a value Postgres cannot
+	 * cast fails the writer, not here. A row lives seven days, though, and a later deploy within them that gives a
+	 * dimension an owning table (a bare scope value now keyed by a `uuid`) can still make an older row fail here.
 	 */
 	async #mayRead(caller: Caller, about: NotificationAbout, frame: RequestFrame): Promise<boolean> {
 		if (!this.#parts.actions.includes(about.action)) {

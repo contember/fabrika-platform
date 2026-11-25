@@ -59,9 +59,20 @@ export function notifier(rules: NotifyRules, site: NotifySite): Notify {
 		const session = await site.session()
 		if (stored.dimension !== null) {
 			// On Postgres a key the owning table cannot read (a UUID column handed another text) fails this statement, in
-			// the writer's transaction, instead of every inbox read of the recipient. A missing object is still written:
-			// the inbox shows nothing about it, and refusing it here would answer whether the object exists.
-			await rules.locate(stored.dimension, stored.value, session)
+			// the writer's transaction, instead of every inbox read of the recipient. The data layer has no savepoint, so
+			// the transaction is failed then and commits nothing, whether the handler catches this or not. A missing
+			// object is still written: the inbox shows nothing about it, and refusing it would answer whether it exists.
+			try {
+				await rules.locate(stored.dimension, stored.value, session)
+			} catch (error) {
+				if (isDataException(error)) {
+					throw refused(
+						site.site,
+						`the key of '${stored.dimension}' is not one its table can read, so this transaction is failed and commits nothing, caught or not`,
+					)
+				}
+				throw error
+			}
 		}
 		site.check()
 		await site.tables().record(session, {
@@ -80,6 +91,23 @@ function refused(site: string, message: string): CapabilityRefusedError {
 	return new CapabilityRefusedError('refused_notification', `${site}: ctx.notify: ${message}`)
 }
 
+/** `@fabrika/db`'s `DatabaseError` of a Postgres data exception (SQLSTATE class 22, a value the column cannot read), read by its fields. */
+function isDataException(error: unknown): boolean {
+	if (!(error instanceof Error) || error.name !== 'DatabaseError') {
+		return false
+	}
+	const state: unknown = Reflect.get(error, 'sqlState')
+	return typeof state === 'string' && state.startsWith('22')
+}
+
+/**
+ * Bidirectional controls: on a lock screen, text another person typed could reorder how the rest of the line reads.
+ * Other format characters stay, as emoji sequences and some scripts need them (U+200C, U+200D, the tag characters).
+ */
+function isBidiControl(code: number): boolean {
+	return code === 0x061c || code === 0x200e || code === 0x200f || (code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)
+}
+
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -89,8 +117,8 @@ function hasOnly(value: Readonly<Record<string, unknown>>, keys: readonly string
 }
 
 /**
- * Plain text the device shows as it is: non-empty, well formed, at most `max` characters, and no control character
- * (a body's line breaks apart, as `\n`).
+ * Plain text the device shows as it is: non-empty, well formed, at most `max` characters, no control character (a
+ * body's line breaks apart, as `\n`) and no bidirectional control.
  */
 function textOf(site: string, what: string, value: unknown, max: number, lines: boolean): string {
 	if (typeof value !== 'string' || value.trim().length === 0) {
@@ -106,6 +134,9 @@ function textOf(site: string, what: string, value: unknown, max: number, lines: 
 		// A lone surrogate is no character: the database would store a replacement for it, or refuse it.
 		if (code >= 0xd800 && code <= 0xdfff) {
 			throw refused(site, `${what} is not well-formed text`)
+		}
+		if (isBidiControl(code)) {
+			throw refused(site, `${what} holds a bidirectional control character`)
 		}
 	}
 	if (characters > max) {

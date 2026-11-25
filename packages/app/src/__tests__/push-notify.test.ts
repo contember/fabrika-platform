@@ -3,7 +3,7 @@
 // with the untyped values the types refuse; then a mutation and a job through the test kit, on SQLite (the object's
 // storage) always and on Postgres when FABRIKA_TEST_POSTGRES_URL is set. Nothing here sends a push.
 
-import { defineApp } from '@fabrika/app/contract'
+import { defineApp, WebhookSecret } from '@fabrika/app/contract'
 import { serve } from '@fabrika/app/implement'
 import { TEST_PUSH_KEY, testKit } from '@fabrika/app/testing'
 import { applicationSchema, type Database, scoped } from '@fabrika/db'
@@ -105,12 +105,41 @@ describe('the validation of ctx.notify', () => {
 		['a key past its bound', 'alice', text, { action: 'notes.read', on: { note: 'n'.repeat(257) } }],
 		['both an object and the application', 'alice', text, { action: 'notes.read', on: { note: 'n1' }, app: true }],
 		['app that is not true', 'alice', text, { action: 'notes.read', app: 'yes' }],
+		['a right-to-left override in the body', 'alice', { ...text, body: 'paid ‮01 EUR' }, { action: 'notes.read', app: true }],
+		['a bidirectional isolate in the title', 'alice', { ...text, title: 'a ⁧b⁩' }, { action: 'notes.read', app: true }],
+		['a right-to-left mark in the title', 'alice', { ...text, title: 'a‏b' }, { action: 'notes.read', app: true }],
 	])('refuses %s, and writes nothing', async (_name, person, notification, about) => {
 		const refusal = await notify(person, notification, about).then(() => null, (error: unknown) => error)
 		expect(refusal).toBeInstanceOf(CapabilityRefusedError)
 		expect(refusal).toMatchObject({ reason: 'refused_notification' })
 		expect(written).toEqual([])
 		expect(located).toEqual([])
+	})
+
+	test('keeps the format characters emoji sequences and scripts need', async () => {
+		// A family (joined by U+200D), a subdivision flag (tag characters), and a word with a non-joiner (U+200C).
+		const title = '\u{1f468}‍\u{1f469}‍\u{1f467} \u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f} می‌خواهم'
+		await notify('alice', { ...text, title }, { action: 'notes.read', app: true })
+		expect(written.map((row) => row.title)).toEqual([title])
+	})
+
+	test('a key the table cannot read is refused as ctx.notify, and any other database failure passes through', async () => {
+		const failing = (sqlState: string | null) =>
+			notifier({
+				...rules,
+				locate: () => {
+					const error = new Error('the database refused the statement')
+					error.name = 'DatabaseError'
+					Reflect.set(error, 'sqlState', sqlState)
+					return Promise.reject(error)
+				},
+			}, site)
+		await expect(failing('22P02')('alice', text, { action: 'notes.read', on: { note: 'x' } })).rejects.toMatchObject({
+			reason: 'refused_notification',
+		})
+		await expect(failing(null)('alice', text, { action: 'notes.read', on: { note: 'x' } })).rejects.toMatchObject({ name: 'DatabaseError' })
+		await expect(failing('40001')('alice', text, { action: 'notes.read', on: { note: 'x' } })).rejects.toMatchObject({ name: 'DatabaseError' })
+		expect(written).toEqual([])
 	})
 
 	test('a contract that declares no notifications only refuses', async () => {
@@ -137,6 +166,10 @@ const app = defineApp(vocabulary, tables)
 
 const rooted = (path: string): path is `/${string}` => path.startsWith('/')
 
+const Holds = z.strictObject({ notify: z.boolean() })
+const InWorkspace = z.strictObject({ workspaceId: z.string().min(1) })
+const Question = z.strictObject({ question: z.string().min(1) })
+
 const notes = app.group({ callers: ['human'] }, (r) => ({
 	add: r.mutation({
 		input: z.strictObject({
@@ -146,6 +179,7 @@ const notes = app.group({ callers: ['human'] }, (r) => ({
 			path: z.string(),
 			noteKey: z.string().optional(),
 			fail: z.boolean(),
+			catchNotify: z.boolean().optional(),
 		}),
 		output: z.strictObject({ id: z.string() }),
 		access: { action: 'notes.write', in: 'workspace', from: 'workspaceId' },
@@ -154,7 +188,12 @@ const notes = app.group({ callers: ['human'] }, (r) => ({
 			const { id } = await ctx.db.target.notes.insert({ title: input.title })
 			const path = rooted(input.path) ? input.path : '/'
 			// A reader's action, which the writer need not hold: the note's readers.
-			await ctx.notify(input.person, { title: 'A new note', body: input.title, path }, { action: 'notes.read', on: { note: input.noteKey ?? id } })
+			const notified = ctx.notify(input.person, { title: 'A new note', body: input.title, path }, {
+				action: 'notes.read',
+				on: { note: input.noteKey ?? id },
+			})
+			// A handler that treats its notification as best effort.
+			await (input.catchNotify === true ? notified.catch(() => undefined) : notified)
 			if (input.fail) {
 				throw new Error('the handler failed after it notified')
 			}
@@ -169,7 +208,61 @@ const notes = app.group({ callers: ['human'] }, (r) => ({
 			await ctx.notify(input.person, { title: 'For everyone', body: 'Application-wide', path: '/' }, { action: 'notes.read', app: true })
 			return { ok: true }
 		}),
+	connectAlerts: r.mutation({
+		input: z.strictObject({ account: z.string() }),
+		output: WebhookSecret,
+		access: { action: 'notes.write', app: true },
+		binds: 'alerts',
+	}).handle(({ input, ctx }) => ctx.webhooks('alerts').bind(ctx.app, input.account)),
+	// What a query's handler holds at run time: no notify, as its type says.
+	peek: r.query({ output: Holds, access: { action: 'notes.read', in: 'workspace', from: 'workspaceId' }, input: InWorkspace })
+		.handle(({ ctx }) => ({ notify: 'notify' in ctx })),
 }))
+
+/** A visitor asks; staff of w1 hear of it. A public query reads and notifies no one. */
+const visitors = app.group({}, (r) => ({
+	ask: r.mutation({
+		input: Question,
+		output: Holds,
+		access: { public: true },
+		actions: ['notes.write'],
+		admission: { rate: { perClient: null, perEndpoint: null } },
+	})
+		.handle(async ({ input, ctx }) => {
+			await ctx.notify('alice', { title: 'A visitor asked', body: input.question, path: '/' }, { action: 'notes.read', on: { workspace: 'w1' } })
+			return { notify: true }
+		}),
+	look: r.query({ output: Holds, access: { public: true }, actions: ['notes.read'], admission: { rate: { perClient: null, perEndpoint: null } } })
+		.handle(({ ctx }) => ({ notify: 'notify' in ctx })),
+}))
+
+/** A share link's holder annotates its note; the note's readers hear of it. */
+const shared = app.link('/s', {
+	spa: 'dist/share',
+	dimension: 'note',
+	grants: ['notes.write'],
+	issuedBy: 'notes.write',
+	maxDays: 7,
+	procedures: (l) => ({
+		annotate: l.mutation({ output: Holds, access: { action: 'notes.write' } }).handle(async ({ ctx }) => {
+			await ctx.notify('alice', { title: 'Annotated', body: 'A link holder annotated a note', path: '/' }, {
+				action: 'notes.read',
+				on: { note: ctx.target.value },
+			})
+			return { notify: true }
+		}),
+	}),
+})
+
+/** A monitoring service posts an alert; staff of w1 hear of it. */
+const alerts = app.webhook('/hooks/alerts', {
+	boundTo: 'app',
+	actions: ['notes.write'],
+	scheme: { bearer: true },
+	input: z.strictObject({ text: z.string().min(1) }),
+}).handle(async ({ input, ctx }) => {
+	await ctx.notify('alice', { title: 'Alert', body: input.text, path: '/' }, { action: 'notes.read', on: { workspace: 'w1' } })
+})
 
 const digest = app.cron(dailyAhead(12), { actions: ['notes.read'] }).handle(async ({ ctx }) => {
 	await ctx.transaction(async (tx) => {
@@ -180,7 +273,9 @@ const digest = app.cron(dailyAhead(12), { actions: ['notes.read'] }).handle(asyn
 const contract = app.contract((c) => ({
 	web: c.spa('/', { dir: 'dist/web', access: { member: true } }),
 	identify: c.spa('/identify', { dir: 'dist/identify', access: { public: true } }),
-	api: c.rpc('/api', { notes }),
+	api: c.rpc('/api', { notes, visitors }),
+	shared,
+	alerts,
 	health: c.health('/healthz'),
 	jobs: { digest },
 }))
@@ -274,7 +369,14 @@ for (const driver of drivers) {
 
 		const add = (
 			caller: TestCaller,
-			input: { readonly workspaceId: string; readonly person: string; readonly noteKey?: string; readonly fail?: boolean; readonly path?: string },
+			input: {
+				readonly workspaceId: string
+				readonly person: string
+				readonly noteKey?: string
+				readonly fail?: boolean
+				readonly path?: string
+				readonly catchNotify?: boolean
+			},
 		) => post(caller, '/api/notes.add', { title: 'Buy milk', path: '/notes/', fail: false, ...input })
 
 		/** What the inbox answers `caller` for its own subscription `name`: the titles, oldest first. */
@@ -346,5 +448,67 @@ for (const driver of drivers) {
 			expect(await kit.runJob('digest')).toMatchObject({ status: 'succeeded' })
 			expect(await inboxTitles(alice(), 'alice')).toEqual(['Daily digest: Your notes of today (/)'])
 		})
+
+		test('a webhook delivery notifies in its transaction', async () => {
+			await post(alice(), '/__fabrika/push/subscription', record('alice'))
+			const connected = await post(admin(), '/api/notes.connectAlerts', { account: 'monitoring' })
+			const { url: hook, secret } = z.strictObject({ result: z.strictObject({ id: z.string(), url: z.string(), secret: z.string() }) })
+				.parse(connected.body).result
+			const delivered = await kit.fetch(hook, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${secret}` },
+				body: JSON.stringify({ text: 'Disk almost full' }),
+			})
+			expect(delivered.status).toBe(200)
+			expect(await inboxTitles(alice(), 'alice')).toEqual(['Alert: Disk almost full (/)'])
+		})
+
+		test("a share link's holder notifies about the link's note, which its readers then read", async () => {
+			await post(alice(), '/__fabrika/push/subscription', record('alice'))
+			await post(bob(), '/__fabrika/push/subscription', record('bob'))
+			const added = await add(alice(), { workspaceId: 'w1', person: 'nobody' })
+			const { id } = z.strictObject({ result: z.strictObject({ id: z.string() }) }).parse(added.body).result
+			const note = { type: 'note', value: id } as const
+			const holder = kit.testCaller([{ action: 'notes.write', scope: note }], {
+				kind: 'link',
+				link: { mount: 'shared', chain: [note, { type: 'workspace', value: 'w1' }] },
+			})
+			const annotated = await kit.fetch('/s/api/annotate', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${holder.key}` },
+				body: '{}',
+			})
+			expect(annotated.status).toBe(200)
+			expect(await inboxTitles(alice(), 'alice')).toEqual(['Annotated: A link holder annotated a note (/)'])
+			expect(await inboxTitles(bob(), 'bob')).toEqual([])
+		})
+
+		test('a public mutation notifies as its own workload; a public query and a group query hold no notify', async () => {
+			await post(alice(), '/__fabrika/push/subscription', record('alice'))
+			const anyone = (path: string, body: unknown) =>
+				kit.fetch(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+			expect((await anyone('/api/visitors.ask', { question: 'Are you open on Sunday?' })).status).toBe(200)
+			expect(await inboxTitles(alice(), 'alice')).toEqual(['A visitor asked: Are you open on Sunday? (/)'])
+			expect(await (await anyone('/api/visitors.look', {})).json()).toEqual({ result: { notify: false } })
+			expect(await post(alice(), '/api/notes.peek', { workspaceId: 'w1' })).toEqual({ status: 200, body: { result: { notify: false } } })
+		})
+
+		test("a path of the public SPA mount opens; one of the link mount, whose page needs the link's key, does not", async () => {
+			expect(await add(alice(), { workspaceId: 'w1', person: 'alice', path: '/identify' })).toMatchObject({ status: 200 })
+			expect(await add(alice(), { workspaceId: 'w1', person: 'alice', path: '/identify/welcome' })).toMatchObject({ status: 200 })
+			expect(await add(alice(), { workspaceId: 'w1', person: 'alice', path: '/s/' })).toMatchObject({ status: 500 })
+			expect(await rows()).toEqual([{ principal: 'alice', title: 'A new note' }, { principal: 'alice', title: 'A new note' }])
+		})
+
+		test(
+			driver.name === 'Postgres'
+				? 'a handler that catches the refusal of a key its table cannot read still fails, and keeps nothing'
+				: 'a handler that catches nothing has nothing to catch for a key no note has',
+			async () => {
+				const answer = await add(alice(), { workspaceId: 'w1', person: 'alice', noteKey: 'not-a-note', catchNotify: true })
+				expect(answer.status).toBe(driver.name === 'Postgres' ? 500 : 200)
+				expect((await rows()).length).toBe(driver.name === 'Postgres' ? 0 : 1)
+			},
+		)
 	})
 }

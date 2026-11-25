@@ -498,7 +498,9 @@ export interface NotificationText {
 /**
  * `ctx.notify(person, { title, body, path }, about)` of a writing site in a vocabulary that declares notifications:
  * one row of the person's inbox, written in the site's transaction, so a rollback writes none. `person` is a principal
- * id (`ctx.principal.id` of a person, a member's id from `ctx.members`). It sends nothing itself.
+ * id (`ctx.principal.id` of a person, a member's id from `ctx.members`). It sends nothing itself. Every refusal is one
+ * the handler may catch and go on after, but one: an object's key must be one its table can read. On Postgres a key
+ * its column cannot read (other text for a `uuid` key) fails the whole transaction, caught or not; SQLite writes it.
  */
 export type NotifyContext<K extends KitTypes> = K['notifications'] extends true
 	? { notify(person: string, notification: NotificationText, about: NotifyAbout<K>): Promise<void> }
@@ -548,6 +550,7 @@ export type ExportContext<K extends KitTypes, Acc, D extends Declared<'read', un
 	& CapabilityContext<Acc>
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& { readonly db: DataOf<K['index'], EndpointData<K['index'], 'query', Acc, Of<D, 'unscoped'>>> }
+	& { readonly notify: Unavailable<'an export only reads, so it notifies no one: notify from a mutation'> }
 	& NoMail
 
 /**

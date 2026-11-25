@@ -811,11 +811,15 @@ vocabulary (`packages/db/CLAUDE.md`).
   or `{ action, app: true }`, the **recipient's** action, which grants nothing and the writer need not hold. Everything
   the inbox's `#mayRead` will read is checked before the row exists, because a row it cannot check fails every read of
   that person's inbox: the person, the plain-text title and body (`NOTIFY_LIMITS`, no control character but a body's
-  `\n`, no lone surrogate), a path whose `GET` plans to an SPA mount's row (canonical, an optional query, no fragment),
-  a declared action and dimension, and, for a dimension a table owns, the key located in the site's own transaction, so
-  a key the table cannot read (a UUID column handed other text) fails the writer there. A missing object is written all
-  the same: refusing it would tell the handler's caller whether it exists, and the inbox shows nothing about it. Every
-  refusal is `refused_notification`. Nothing kicks a sender yet: the sending job is a later slice.
+  `\n`, no lone surrogate, no bidirectional control), a path whose `GET` plans to a `spa` or `public-spa` row
+  (canonical, an optional query, no fragment; a link SPA needs its key, so none), a declared action and dimension, and,
+  for a dimension a table owns, the key located in the site's own transaction, so a key the table cannot read (a UUID
+  column handed other text) fails the writer there. That one refusal cannot be caught and gone on after: the data layer
+  has no savepoint, so on Postgres the statement fails the whole transaction, while SQLite writes the row. A missing
+  object is written all the same: refusing it would tell the handler's caller whether it exists, and the inbox shows
+  nothing about it. Every refusal is `refused_notification`. The check covers the contract the writer ran under: a
+  deploy within a row's seven days that gives a dimension an owning table can still make an older row fail the inbox.
+  Nothing kicks a sender yet: the sending job is a later slice.
 - **A public procedure's challenge is verified after its buckets and its body, before its handler, and recorded once it
   passed** (`challenge.ts`). The provider list is closed (`turnstile`, `altcha`) and each one's browser sources are
   fixed (`CHALLENGE_ORIGINS`: Turnstile's origin, which `buildArtifact` adds to `scriptSrc`/`frameSrc`; ALTCHA's

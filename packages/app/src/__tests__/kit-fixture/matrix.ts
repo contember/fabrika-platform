@@ -9,6 +9,7 @@ import type {
 	Declared,
 	Endpoint,
 	EndpointContext,
+	ExportContext,
 	JobKitContext,
 	KitTypes,
 	NotificationText,
@@ -310,6 +311,8 @@ export type Notify = [
 		Equal<Parameters<Parameters<JobCtx['transaction']>[0]>[0]['notify'], NotifyContext<K>['notify']>
 	>,
 	Expect<Equal<HookCtx['notify'], Unavailable<'the vocabulary declares no notifications: add notifications: true to defineVocabulary'>>>,
+	// An export only reads, whatever the vocabulary declares.
+	Expect<Equal<ExportContext<K, OnDeal, None>['notify'], Unavailable<'an export only reads, so it notifies no one: notify from a mutation'>>>,
 ]
 type OnDeal = { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }
 
