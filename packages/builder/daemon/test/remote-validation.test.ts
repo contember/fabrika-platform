@@ -82,6 +82,13 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		triggerRef: null,
 		approvalPolicy: policyFromCategories(['off-road', 'grants']),
 	}])
+	// A Control older than requesterMayApprove keeps every other setting it sends.
+	const { requesterMayApprove: ________, ...withoutRequester } = PERMISSIVE_SETTINGS
+	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, approvalSettings: withoutRequester }] })).toEqual([{
+		...environment,
+		triggerRef: null,
+		approvalSettings: { ...PERMISSIVE_SETTINGS, requesterMayApprove: STRICT_SETTINGS.requesterMayApprove },
+	}])
 	expect(() => parseEnvironments({ items: [{ ...environment, triggerRef: null, target: { ...envelope, payload: { secret: Infinity } } }] }))
 		.toThrow('Invalid stored or upstream data')
 	const run: ReturnType<typeof parseRun> = { id: 'run', appId: 'app', env: 'dev', ref: 'sha', commitSha: null, status: 'running' }
