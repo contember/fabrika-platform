@@ -38,7 +38,7 @@ import { AwsError } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
 import type { AwsInstallationNetwork } from './environment-stack'
 import { awsEnvironmentResources } from './resources'
-import { type AwsStack, ensureStack, readStackOutputs } from './stack'
+import { type AwsStack, AwsStackPending, ensureStack, readStackOutputs } from './stack'
 
 /** A namespace id or environment name the derived names take: no `_`, `/` or `.`, as an application's. */
 const NAME_PART = /^[a-z0-9][a-z0-9-]{0,62}$/
@@ -134,6 +134,7 @@ export interface AwsNamespaceOptions {
 	readonly network: AwsInstallationNetwork
 	readonly clients: AwsNamespaceClients
 	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>
+	readonly now?: () => number
 }
 
 /** The claim keys, by kind: `stack:<name>`, `service:<cluster>/<service>`, `parameters:<path>`. */
@@ -164,9 +165,14 @@ function targetOf(namespace: Pick<ProviderDeploymentNamespace, 'id' | 'env'>, in
 	return { provider: AWS_PROVIDER, version: awsNamespaceTargetCodec.version, payload: awsNamespaceTargetCodec.encode(target) }
 }
 
-/** A lifecycle failure as Control records it: a stable code, the summary, never an error object. */
+/**
+ * A lifecycle failure as Control records it: a stable code, the summary, never an error object. A stack CloudFormation
+ * is still working on is retryable (`awsStackPending`), so Control leaves the namespace provisioning and a later
+ * reconcile settles it; `awsStack` is a stack only an operator or a new template repairs.
+ */
 function namespaceFailure(error: unknown): ProviderNamespaceError {
 	if (error instanceof ProviderNamespaceError) return error
+	if (error instanceof AwsStackPending) return new ProviderNamespaceError(error.message, 'awsStackPending', true)
 	if (error instanceof AwsError) return new ProviderNamespaceError(`aws: ${error.operation} failed (${error.code})`, 'awsCall', error.retryable)
 	const message = error instanceof Error ? error.message : 'aws: the namespace stack could not be applied'
 	return new ProviderNamespaceError(message, 'awsStack', false)
@@ -193,13 +199,18 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 	}
 
 	const apply = async (input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace> => {
-		checkNamespaceTarget(input.namespace, installation)
+		try {
+			checkNamespaceTarget(input.namespace, installation)
+		} catch (error) {
+			throw new ProviderNamespaceError(error instanceof Error ? error.message : 'aws: the namespace target is refused', 'awsTarget', false)
+		}
 		try {
 			await ensureStack({
 				cloudFormation: clients.cloudFormation,
 				stack: awsNamespaceStack(input.namespace, network),
 				signal: input.signal,
 				sleep: options.sleep,
+				...(options.now === undefined ? {} : { now: options.now }),
 				log: () => {},
 			})
 		} catch (error) {
@@ -225,7 +236,6 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 
 	return {
 		normalize: (namespace) => {
-			awsNamespaceResources(namespace.id, namespace.env)
 			// A target is the installation's, never a caller's: one of another form or for another account is refused.
 			checkNamespaceTarget(namespace, installation)
 			return { ...namespace, target: targetOf(namespace, installation) }
@@ -281,7 +291,16 @@ export async function readNamespaceOutputs(
 	signal: AbortSignal,
 ): Promise<AwsNamespaceOutputs> {
 	const target = checkNamespaceTarget(namespace, installation)
-	const outputs = await readStackOutputs(cloudFormation, target.stackName, signal)
+	let outputs: Readonly<Record<string, string>> | null
+	try {
+		outputs = await readStackOutputs(cloudFormation, target.stackName, signal)
+	} catch (error) {
+		// A deploy takes no namespace lease, so it may meet a reconcile at work on the stack: it says so and what to do.
+		if (error instanceof AwsStackPending) {
+			throw new Error(`aws: the namespace ${namespace.id}'s stack is being created or updated (a reconcile is at work); deploy again once it serves`)
+		}
+		throw error
+	}
 	if (outputs === null) throw new Error(`aws: the namespace ${namespace.id} has no stack yet; reconcile the namespace, then deploy again`)
 	return namespaceOutputsOf(target.stackName, outputs)
 }

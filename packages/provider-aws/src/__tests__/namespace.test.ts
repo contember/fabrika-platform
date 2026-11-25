@@ -11,6 +11,7 @@ import type { EcsService } from '../aws/ecs'
 import { AwsError } from '../aws/transport'
 import { type AwsAppTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsNamespaceCapabilities, awsNamespaceResources, awsNamespaceStack, namespaceOutputsOf, readNamespaceOutputs } from '../namespace'
+import { AWS_STACK_TIMEOUT_MS } from '../stack'
 
 const installation: AwsAppTarget = {
 	accountId: '123456789012',
@@ -183,7 +184,33 @@ describe('awsNamespaceCapabilities', () => {
 		const failure = await fake.capabilities.provision(mutation()).catch((error: unknown) => error)
 		expect(failure).toBeInstanceOf(ProviderNamespaceError)
 		expect(failure).toMatchObject({ code: 'awsCall', retryable: false, message: 'aws: ListStacks failed (AccessDenied)' })
-		await expect(fake.capabilities.provision(mutation({ ...NAMESPACE, target: target({ sizing: 'full' }) }))).rejects.toThrow('only a cheap namespace')
+		// A target of another account or size keeps its class too.
+		const refused = await fake.capabilities.provision(mutation({ ...NAMESPACE, target: target({ sizing: 'full' }) })).catch((error: unknown) => error)
+		expect(refused).toBeInstanceOf(ProviderNamespaceError)
+		expect(refused).toMatchObject({ code: 'awsTarget', retryable: false, message: 'aws: only a cheap namespace is provisioned on AWS yet' })
+	})
+
+	test('a stack CloudFormation is still working on when the wait ends is retryable: a later reconcile settles it', async () => {
+		const fake = new Fake()
+		fake.stack = 'serving'
+		fake.clients.cloudFormation.describeStack = async (stackId) => ({ stackId, status: 'CREATE_IN_PROGRESS', outputs: {} })
+		fake.clients.cloudFormation.findStack = async () => ({ stackId: STACK_ID, status: 'CREATE_IN_PROGRESS' })
+		let clock = 0
+		const capabilities = awsNamespaceCapabilities({
+			installation,
+			network,
+			clients: fake.clients,
+			sleep: async () => {
+				clock += AWS_STACK_TIMEOUT_MS
+			},
+			now: () => clock,
+		})
+		const failure = await capabilities.provision(mutation()).catch((error: unknown) => error)
+		expect(failure).toBeInstanceOf(ProviderNamespaceError)
+		expect(failure).toMatchObject({ code: 'awsStackPending', retryable: true })
+		// A stack an operator must repair stays a failure no reconcile settles.
+		fake.clients.cloudFormation.findStack = async () => ({ stackId: STACK_ID, status: 'ROLLBACK_COMPLETE' })
+		expect(await capabilities.provision(mutation()).catch((error: unknown) => error)).toMatchObject({ code: 'awsStack', retryable: false })
 	})
 
 	test('a namespace claims its stack; an environment placed in one, its stack, service and parameter path', () => {
@@ -215,6 +242,9 @@ describe('awsNamespaceCapabilities', () => {
 		fake.service = 'active'
 		fake.parameters = ['/fabrika/apps/notes/prod/env/01900000-0000-7000-8000-000000000001.API_TOKEN']
 		expect(await read()).toEqual(keys.map((resourceKey) => ({ resourceKey, exists: true })))
+		// A service ECS is still deleting holds its name: it exists.
+		fake.service = 'draining'
+		expect((await read())?.[1]).toEqual({ resourceKey: 'service:fabrika-apps/notes_prod', exists: true })
 		// A service ECS keeps as deleted is gone.
 		fake.service = 'inactive'
 		expect((await read())?.[1]).toEqual({ resourceKey: 'service:fabrika-apps/notes_prod', exists: false })
@@ -246,8 +276,15 @@ describe('readNamespaceOutputs', () => {
 			proxySecurityGroupId: OUTPUTS.ProxySecurityGroupId,
 			serviceConnectNamespaceArn: OUTPUTS.ServiceConnectNamespaceArn,
 		})
-		// A stack that is still moving does not serve.
+		// A stack a reconcile is still at work on does not serve yet, and the deploy is told to run again.
 		fake.clients.cloudFormation.describeStack = async (stackId) => ({ stackId, status: 'UPDATE_IN_PROGRESS', outputs: {} })
-		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, signal)).rejects.toThrow('is UPDATE_IN_PROGRESS')
+		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, signal)).rejects.toThrow(
+			"the namespace shared's stack is being created or updated (a reconcile is at work); deploy again once it serves",
+		)
+		// One an operator must repair says so.
+		fake.clients.cloudFormation.describeStack = async (stackId) => ({ stackId, status: 'UPDATE_ROLLBACK_FAILED', outputs: {} })
+		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, signal)).rejects.toThrow(
+			'is UPDATE_ROLLBACK_FAILED; an operator must repair or delete it',
+		)
 	})
 })

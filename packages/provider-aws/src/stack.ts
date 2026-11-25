@@ -19,6 +19,17 @@ import { AwsError } from './aws/transport'
 export const AWS_STACK_POLL_MS = 10_000
 export const AWS_STACK_TIMEOUT_MS = 20 * 60 * 1000
 
+/**
+ * A stack CloudFormation is still creating or updating when the caller stops waiting: nothing is wrong with it, and a
+ * later call settles it. Every other refusal of `ensureStack` is one only an operator or a new template repairs.
+ */
+export class AwsStackPending extends Error {
+	override readonly name = 'AwsStackPending'
+	constructor(readonly stackName: string, message: string) {
+		super(message)
+	}
+}
+
 /** One stack as the provider renders it: its name, its template and its own tags. */
 export interface AwsStack {
 	readonly stackName: string
@@ -29,7 +40,7 @@ export interface AwsStack {
 /** The statuses from which a stack serves: its template is the one last applied. */
 export const SETTLED: ReadonlySet<StackStatus> = new Set(['CREATE_COMPLETE', 'UPDATE_COMPLETE', 'UPDATE_ROLLBACK_COMPLETE', 'IMPORT_COMPLETE'])
 /** The statuses CloudFormation leaves by itself. `REVIEW_IN_PROGRESS` (an unexecuted change set) never does. */
-const MOVING: ReadonlySet<StackStatus> = new Set(
+export const MOVING: ReadonlySet<StackStatus> = new Set(
 	STACK_STATUSES.filter((status) => status.endsWith('_IN_PROGRESS') && status !== 'REVIEW_IN_PROGRESS'),
 )
 
@@ -90,9 +101,10 @@ export interface EnsureStackInput {
  *   was deleted (`OnFailure=DELETE`), so a create that fails before the first read is reported as failed, not as a
  *   timeout. Absence is decided by `ListStacks` alone (`findStack`).
  * - A read refused for rate or with a lost answer is read again at the next poll; a refused write fails the call.
- * - Refused: a create or an update of its own that failed, a stack an operator must repair (`*_FAILED`,
- *   `ROLLBACK_COMPLETE`, an unexecuted change set), a template past `MAX_TEMPLATE_BYTES` (named, not a bare refusal),
- *   and a wait past `AWS_STACK_TIMEOUT_MS`.
+ * - Refused: a stack still moving when the wait ends (`AwsStackPending`, which a later call settles), a create or
+ *   an update of its own that failed, a stack an operator must repair (`*_FAILED`,
+ *   `ROLLBACK_COMPLETE`, an unexecuted change set), and a template past `MAX_TEMPLATE_BYTES` (named, not a bare
+ *   refusal).
  */
 export async function ensureStack(input: EnsureStackInput): Promise<Readonly<Record<string, string>>> {
 	const { cloudFormation, stack, signal, sleep, log } = input
@@ -149,7 +161,7 @@ export async function ensureStack(input: EnsureStackInput): Promise<Readonly<Rec
 							return described.outputs
 						}
 						// Read again at the next poll: the read failed, or the stack moved in between.
-						if (now() >= giveUpAt) throw new Error(`aws: the stack ${name} did not settle within ${AWS_STACK_TIMEOUT_MS / 60_000} minutes`)
+						if (now() >= giveUpAt) throw new AwsStackPending(name, `aws: the stack ${name} did not settle within ${AWS_STACK_TIMEOUT_MS / 60_000} minutes`)
 						await sleep(AWS_STACK_POLL_MS, signal)
 						continue
 					}
@@ -162,7 +174,7 @@ export async function ensureStack(input: EnsureStackInput): Promise<Readonly<Rec
 				throw new Error(`aws: the stack ${name} is ${found.status}; an operator must repair or delete it before a deploy`)
 			}
 		}
-		if (now() >= giveUpAt) throw new Error(`aws: the stack ${name} did not settle within ${AWS_STACK_TIMEOUT_MS / 60_000} minutes`)
+		if (now() >= giveUpAt) throw new AwsStackPending(name, `aws: the stack ${name} did not settle within ${AWS_STACK_TIMEOUT_MS / 60_000} minutes`)
 		await sleep(AWS_STACK_POLL_MS, signal)
 	}
 }
@@ -181,6 +193,12 @@ export async function readStackOutputs(
 	if (found === null) return null
 	const described = await cloudFormation.describeStack(found.stackId, signal)
 	if (described.status === 'DELETE_COMPLETE') return null
-	if (!SETTLED.has(described.status)) throw new Error(`aws: the stack ${name} is ${described.status}, not serving`)
+	if (MOVING.has(described.status)) {
+		throw new AwsStackPending(
+			name,
+			`aws: the stack ${name} is ${described.status}: CloudFormation is still working on it; run this again once it serves`,
+		)
+	}
+	if (!SETTLED.has(described.status)) throw new Error(`aws: the stack ${name} is ${described.status}; an operator must repair or delete it`)
 	return described.outputs
 }

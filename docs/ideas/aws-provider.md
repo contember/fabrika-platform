@@ -383,7 +383,7 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     requires one of a provider with namespaces). Its stack, `fabrika-ns-<length of id>-<id>-<env>`, holds the proxy's
     security group in the installation's VPC (outbound; no ingress until the balancer's group is admitted with the proxy
     service) and a Service Connect HTTP namespace of the same name, and names both as outputs. Control creates it on
-    `provision` and brings it to the template on `reconcile`, through the same apply as an environment's stack
+    `provision` and brings it to the template on `reconcile`, through the same apply as an environment's stack (a stack still moving when the wait ends is a retryable `awsStackPending`, which leaves the namespace provisioning for a later reconcile)
     (`src/stack.ts`). Every deploy reads the namespace stack's outputs first (a namespace without a serving stack is
     refused, naming the reconcile) and renders the environment's stack with one ingress rule: the proxy's group, TCP on
     the application's port, as a resource of its own, so a move to another namespace replaces the rule and never the
