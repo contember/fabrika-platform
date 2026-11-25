@@ -237,6 +237,15 @@ describe('where a run stands', () => {
 		expect(stage({ status: 'failed' }, { protected: false })).toBe('Failed without waiting for approval')
 	})
 
+	test('a run a person refused, or that nobody decided before its deadline, says so whatever its lines', () => {
+		const stage = (failureCause: 'rejected' | 'expired', rest: Partial<ApprovalDto> = {}) =>
+			approvalStage({ ...APPROVAL, ...rest, run: { ...RUN, status: 'failed', failureCause } })
+		expect(stage('rejected')).toEqual({ lamp: 'stop', text: 'Refused by a person' })
+		expect(stage('rejected', { outcome: 'no-widening', changes: [] }).text).toBe('Refused by a person')
+		expect(stage('expired')).toEqual({ lamp: 'stop', text: 'Expired: nobody decided before the deadline' })
+		expect(stage('expired', { outcome: 'none', changes: [] }).text).toBe('Expired: nobody decided before the deadline')
+	})
+
 	test('a run a newer run superseded says so, approved or not', () => {
 		const stage = (rest: Partial<ApprovalDto>) => approvalStage({ ...APPROVAL, ...rest, run: { ...RUN, status: 'failed' } })
 		expect(stage({ approval: approved, supersededBy: 'run-2' })).toEqual({

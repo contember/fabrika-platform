@@ -130,6 +130,9 @@ export function reviewReason(change: AccessChangeDto): string | null {
 /** Where a run stands: approval and publication are two steps, and a refused or cancelled run says so (ADR-0050 §2). */
 export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
 	const { run } = approval
+	// Control records why a run failed without deploying; a run decided before it did falls through to the lines below.
+	if (run.failureCause === 'rejected') return { lamp: 'stop', text: 'Refused by a person' }
+	if (run.failureCause === 'expired') return { lamp: 'stop', text: 'Expired: nobody decided before the deadline' }
 	const approved = approval.approval !== null
 	if (run.cancelRequestedAt !== null) {
 		if (run.status === 'failed') return { lamp: 'stop', text: approved ? 'Approved, then cancelled' : 'Cancelled' }
@@ -160,8 +163,9 @@ export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; rea
 }
 
 /**
- * A run without an approval: one that waited and was refused (a refusal is the only way out of waiting without an
- * approval or a cancellation), or one that never waited, because its change narrows or its environment is unprotected.
+ * A run without an approval: one that waited and was refused before Control recorded a failure cause (a refusal is the
+ * only way out of waiting without an approval or a cancellation), or one that never waited, because its change narrows
+ * or its environment is unprotected.
  */
 function unapproved(approval: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
 	const { run, protected: guarded } = approval
