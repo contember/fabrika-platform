@@ -209,6 +209,19 @@ publish it for an application pinned to an earlier release, which would ignore i
 A webhook's `bind`, `unbind` and `setSecret` now refuse a `Ref` held through a relation, a member reveal or a secondary
 path (`conditional_binding`): bind with a `Ref` an IAM grant holds.
 
+From the release after `0.9.0-dev.41`, every credentialed SPA mount is installable as an application
+([ADR-0087](../decisions/0087-an-spa-mount-is-installable-under-its-own-access.md)): it serves
+`<prefix>/__fabrika-app.webmanifest` and `<prefix>/__fabrika-icon-<180|192|512>.png` itself, and its pages get the
+manifest and touch icon links at the start of their head. Two things can change for an application that raises its pin:
+
+- **A manifest of its own no longer wins.** The platform's link comes first in the head, and a browser uses the first
+  manifest a page links. Delete the page's own `<link rel="manifest">`, its `apple-touch-icon` links and any service
+  worker it registers; set `displayName` in `defineVocabulary` for the name people see.
+- **The contract build refuses an endpoint on one of a mount's own files.** Another endpoint whose `GET` would take
+  `<prefix>/__fabrika-config.json`, `<prefix>/__fabrika-me.json` or, on a credentialed mount, the manifest or an icon
+  path (a health check, a webhook, a public procedure's `http.path` under the root SPA) is refused, naming the path and
+  the endpoint. Move that endpoint to another path. Before, it silently answered there in the mount's place.
+
 ## 0.7 → 0.8
 
 0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public
