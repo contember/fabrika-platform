@@ -37,6 +37,12 @@ export const CONTROL_ACTIONS = Object.freeze({
 	 */
 	ACCESS_APPROVE: 'access.approve',
 	/**
+	 * Ask a person to approve a change the caller cannot make itself, such as a grant or a key (ADR-0083 §8): only the
+	 * right to create the request, checked on the requester's own token. Outside `deploy.*` and `access.approve`, so no
+	 * role but `admin` holds it and no command-line preset carries it. Scoped by app/environment.
+	 */
+	ACCESS_REQUEST: 'access.request',
+	/**
 	 * List relayed mail and read its metadata. Scoped by app/environment for an application's messages; an installation
 	 * sender's messages need a global grant.
 	 */
