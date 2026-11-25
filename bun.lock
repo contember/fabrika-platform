@@ -623,6 +623,7 @@
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
+        "@fabrika/proxy-core": "workspace:*",
         "zod": "^3.25.76",
       },
       "devDependencies": {

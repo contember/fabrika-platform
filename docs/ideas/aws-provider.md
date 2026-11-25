@@ -395,10 +395,17 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     active, no parameter under `env/`), so a later registration of the same coordinates never inherits an earlier one's
     secrets or images; fabrika deletes none of them (ADR-0034).
     **Service Connect** (built): every create and update publishes the service in its namespace's Service Connect
-    namespace, its server port named `http` (no `appProtocol`, so proxied as TCP: an HTTP port would get a 15 s per-request timeout by default, which a long upload or download outlives), under the discovery name
+    namespace, its server port named `http` (no `appProtocol`, so proxied as TCP: an HTTP port would get a 15 s
+    per-request timeout by default, which a long upload or download outlives), under the discovery name
     `e<length of app>-<app>-<env>` (a DNS label; the service's own name holds `_`), with a client alias of that name on
-    the application's port. The proxy will reach an application at `http://<discovery name>:3000`, through its group's
+    the application's port. The proxy reaches an application at `http://<discovery name>:3000`, through its group's
     ingress rule alone. Sent on every update, so a service moved to another namespace is published in the new one.
+    **The proxy manifest** (built, `src/proxy-manifest.ts`): one contract entry per member with approved access
+    (ADR-0050), its id the environment's IAM application id, routed on its domain (lower-cased; a routed member without
+    one, two members on one host and a dev member are refused) to its derived upstream, never one a registration names,
+    with `scheme: https` behind the balancer's TLS. `memberHosts` answers the same rule, so Control refuses two members on
+    one host before any proxy is built. The proxy secret is not in the manifest: the proxy's task will hold it per
+    application.
     UNVERIFIED: the configuration's fields and rules, and whether Control's role needs Cloud Map service calls
     (`servicediscovery:CreateService`, `GetService`) of its own when ECS publishes a service; and whether ECS leaves the
     Cloud Map service it created in the namespace when the ECS service goes, which would stop the namespace stack's
@@ -406,8 +413,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     Not yet: the proxy service (its image built from the pinned proxy source with the manifest carried in its build as
     on Zerops, ADR-0045, so a running proxy never reads a manifest newer than its image; its ECS service in the Service
     Connect namespace, on X86_64, because the proxy package builds its binary for `linux-x64-musl` only; `republish`),
-    the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per application; an instance per `full`
-    namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
+    the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
+    application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
     a message: a stack's absence is decided from `ListStacks` (or a `DescribeStacks` by the stack's id, which keeps
     answering a deleted stack), never from that error.
