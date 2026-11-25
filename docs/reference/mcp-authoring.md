@@ -30,27 +30,28 @@ deploys a workspace.
 
 ## Tools
 
-| Tool                  | What it does                                                        |
-| --------------------- | ------------------------------------------------------------------- |
-| `list_targets`        | App environments the user may author.                               |
-| `create_workspace`    | Create a workspace branch from the default branch.                  |
-| `list_workspaces`     | The user's workspaces, each with head, latest run and pull request. |
-| `get_workspace`       | One workspace, with its head, latest run and pull request.          |
-| `get_workspace_diff`  | Files changed since the workspace base, optionally with patches.    |
-| `list_files`          | A page of paths in the workspace, optionally to a depth.            |
-| `read_files`          | File contents at the workspace head; an unread file says why.       |
-| `search_files`        | Paths by glob, or lines holding a literal text, within bounds.      |
-| `apply_changes`       | Commit writes, deletions and exact replacements against a head.     |
-| `deploy_stage`        | Start an ordinary run for the workspace head in the stage env.      |
-| `get_deployment`      | The run's state, a log window, approval link, `deviations`.         |
-| `get_run`             | Any run the user may read: state, approval link and deadline.       |
-| `delete_workspace`    | Abandon a workspace: delete its branch and sandbox, stop listing.   |
-| `create_pull_request` | Open a pull request from the workspace to the default branch.       |
-| `get_app_rules`       | The application rules or one topic, read-only, with a pin warning.  |
-| `bind_dev`            | Create or wake the workspace's dev sandbox; bootstrap if due.       |
-| `get_dev_status`      | The dev sandbox's state, URL, served head, checks and a log window. |
-| `run_checks`          | Run tests, `tsc` and `fabrika-check` in the dev sandbox; report.    |
-| `reset_dev`           | Drop the sandbox's schema and roles, and migrate from scratch.      |
+| Tool                   | What it does                                                        |
+| ---------------------- | ------------------------------------------------------------------- |
+| `list_targets`         | App environments the user may author.                               |
+| `create_workspace`     | Create a workspace branch from the default branch.                  |
+| `list_workspaces`      | The user's workspaces, each with head, latest run and pull request. |
+| `get_workspace`        | One workspace, with its head, latest run and pull request.          |
+| `get_workspace_diff`   | Files changed since the workspace base, optionally with patches.    |
+| `list_files`           | A page of paths in the workspace, optionally to a depth.            |
+| `read_files`           | File contents at the workspace head; an unread file says why.       |
+| `search_files`         | Paths by glob, or lines holding a literal text, within bounds.      |
+| `apply_changes`        | Commit writes, deletions and exact replacements against a head.     |
+| `deploy_stage`         | Start an ordinary run for the workspace head in the stage env.      |
+| `get_deployment`       | The run's state, a log window, approval link, `deviations`.         |
+| `get_run`              | Any run the user may read: state, approval link and deadline.       |
+| `get_approval_request` | An approval request the user made: state, link, result or error.    |
+| `delete_workspace`     | Abandon a workspace: delete its branch and sandbox, stop listing.   |
+| `create_pull_request`  | Open a pull request from the workspace to the default branch.       |
+| `get_app_rules`        | The application rules or one topic, read-only, with a pin warning.  |
+| `bind_dev`             | Create or wake the workspace's dev sandbox; bootstrap if due.       |
+| `get_dev_status`       | The dev sandbox's state, URL, served head, checks and a log window. |
+| `run_checks`           | Run tests, `tsc` and `fabrika-check` in the dev sandbox; report.    |
+| `reset_dev`            | Drop the sandbox's schema and roles, and migrate from scratch.      |
 
 Every tool carries MCP tool annotations. A tool that only reads has `readOnlyHint: true`, so a client such as ChatGPT
 does not ask the user to confirm it. A writing tool states `destructiveHint` (it can overwrite or delete files, or replace
