@@ -522,9 +522,13 @@ A client added to the variable after the import is never read: register it in th
 ### Upgrading to the client registry
 
 The release that imports the client list is the last that reads `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`; the next one
-refuses a deploy that still sets it. On each installation:
+refuses a deploy that still sets it. A fresh installation of this release gets an empty import on its first deploy, so
+the variable is never read there: it registers its clients in the console, or with `fabrika control external-apps` and
+`fabrika control oauth-clients`, not through the variable. On each existing installation:
 
-1. Deploy this release. Its first deploy imports the list; the deploy log says `IAM imported the OAuth client list`.
+1. Deploy this release. Before it deploys anything, the deploy checks the list against the rules IAM's import applies
+   (one resource and one list of roles per application, no resource under two applications) and refuses a list that
+   breaks them. Its first deploy imports the list; the deploy log says `IAM imported the OAuth client list`.
 2. Where MCP authoring is on, set `FABRIKA_PLATFORM_MCP_AUTHORING=on`. Until then this release infers it from the
    list and warns; without the switch, the next release turns MCP authoring off.
 3. Once this release is accepted on the installation, delete `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` from the GitHub
@@ -532,9 +536,16 @@ refuses a deploy that still sets it. On each installation:
    that release's deploy reconciles the list's roles over whatever the registry holds. After a rollback and a roll
    forward, an administrator saves each edited application again.
 
+On Cloudflare, `OAUTH_CONFIG` is a Worker variable of at most 5,120 bytes, and it now carries the installation's hosts
+beside the list, so a list that fitted before may not: the IAM stage refuses it before it deploys. Dropping a client
+from the variable to make it fit means that client is never imported; register it in the console instead.
+
 `FABRIKA_IAM_OAUTH_CONFIG` (Cloudflare: IAM's `OAUTH_CONFIG`) now carries `hosts`, which an IAM before this release
 refuses at boot. Roll back by deploying the older release, which writes its own configuration, never by reactivating
-an older IAM version alone.
+an older IAM version alone. On Zerops the deploy writes every service's variables before it deploys any service, so
+after an upgrade that failed during the deploy, an older IAM restarted against the new `FABRIKA_IAM_OAUTH_CONFIG`
+refuses to boot until the next deploy: re-run the deploy, or deploy the older release, rather than restart the
+service.
 
 #### Registering an external application
 
