@@ -251,7 +251,7 @@ export async function requirePersonToPointPublicOrigin(
 
 /**
  * Naming the domain of an environment that is protected, or of a new one that starts protected, takes a person
- * (`apps.environments.put`): the domain receives its traffic and, once deployed there, Control's ops key. Clearing it
+ * (`apps.environments.put`, `apps.register`): the domain receives its traffic and, once deployed there, Control's ops key. Clearing it
  * stays open to a key, and so does an existing one whose `registry` mode is `off`, as the gate did.
  */
 export async function requirePersonToPointDomain(

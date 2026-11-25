@@ -245,6 +245,48 @@ for (const backend of backends) {
 			expect((await w.repositories.registry.getAppEnv('notes', 'prod'))?.suspended_at).toBeNull()
 		})
 
+		test('an environment that starts protected but does not exist takes a person: a deleted protected prod and an unregistered one', async () => {
+			const w = await world()
+			await policy(w, 'prod', STRICT_POLICY)
+			const prod = await w.repositories.registry.getAppEnv('notes', 'prod')
+			if (prod === null) throw new Error('the world has no prod')
+			expect(await w.repositories.registry.deleteAppEnv('notes', 'prod', prod.generation)).toBe(true)
+			await w.repositories.registry.createApp({ id: 'memo', repoUrl: 'github.com/acme/memo', defaultBranch: 'main' })
+			const registration = {
+				target: { provider: 'harbor', version: 1, payload: {} },
+				artifact: { provider: 'harbor', version: 1, payload: {} },
+			}
+			for (const appId of ['notes', 'memo']) {
+				const writes: readonly [string, JsonValue][] = [
+					['apps.variables.put', { appId, variable: { name: 'REGION', value: 'eu', env: 'prod' } }],
+					['apps.variables.delete', { appId, name: 'REGION', env: 'prod' }],
+					['apps.secrets.put', { appId, secret: { name: 'API_KEY', value: SECRET, env: 'prod' } }],
+					['vault.set', { appId, name: 'API_KEY', value: SECRET, env: 'prod' }],
+					['vault.rotate', { appId, name: 'API_KEY', value: SECRET, env: 'prod' }],
+					['apps.environments.put', { appId, env: 'prod', environment: registration }],
+				]
+				for (const caller of ['agent', 'key'] as const) {
+					for (const [method, input] of writes) {
+						const answer = await call(w, caller, method, input)
+						expect({ appId, caller, method, status: answer.status }).toEqual({ appId, caller, method, status: 403 })
+						expect(answer.error?.message).toContain('environment `prod` starts protected')
+						expect(JSON.stringify(answer)).not.toContain(SECRET)
+					}
+				}
+				expect(await w.repositories.registry.listAppVars(appId)).toEqual([])
+				expect(await w.repositories.registry.listAppSecrets(appId)).toEqual([])
+				expect(await w.repositories.registry.getAppEnv(appId, 'prod')).toBeNull()
+			}
+			expect(await w.repositories.approvalRequests.listPending(10)).toEqual([])
+
+			// An absent environment that does not start protected stays open to a key, and a person in the console writes either.
+			const qa = { appId: 'memo', variable: { name: 'REGION', value: 'eu', env: 'qa' } }
+			expect((await call(w, 'key', 'apps.variables.put', qa)).status).toBe(200)
+			const prodVariable = { appId: 'memo', variable: { name: 'REGION', value: 'eu', env: 'prod' } }
+			expect((await call(w, 'person', 'apps.variables.put', prodVariable)).status).toBe(200)
+			expect((await w.repositories.registry.listAppVars('memo')).map((row) => row.env).sort()).toEqual(['prod', 'qa'])
+		})
+
 		test('refuse is a 403 naming the category, and nothing is asked or written', async () => {
 			const w = await world()
 			await policy(w, 'prod', { ...STRICT_POLICY, data: 'refuse' })

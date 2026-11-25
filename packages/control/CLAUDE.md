@@ -821,8 +821,8 @@ other environment, before the provider prepares anything, and the write maps a r
   approved restore deploy queued again stays exempt. The settings (`approval_settings`, their difference from
   `STRICT_SETTINGS`) live beside `approval_policy`, on `app_envs` and in the `app_env_protection` tombstone.
   `requirePersonToPointTriggerRef` keeps a key from naming a protected environment's trigger ref (also on a new one that
-  starts protected, through `put` or `register`), `requirePersonToPointDomain` from naming its domain (`put`; clearing
-  it stays open), `requirePersonToPointPublicOrigin` from changing its public origin (`put` and `register`; IAM sends a
+  starts protected, through `put` or `register`), `requirePersonToPointDomain` from naming its domain (`put` and `register`;
+  clearing it stays open), `requirePersonToPointPublicOrigin` from changing its public origin (`put` and `register`; IAM sends a
   scope-value key there, ADR-0085 §4), and `requirePersonToRedirect` from changing any field of `apps.update`
   on its app (ADR-0050 §4); each lets an existing environment whose `registry` mode is `off` through (`gatePasses`), as
   the gate did. `apps.update` writes only the fields that change, and a key's write is conditional in SQL on the
@@ -850,8 +850,9 @@ other environment, before the provider prepares anything, and the write maps a r
   console, a reach with no protected environment, or `off` everywhere applies; `refuse` anywhere is a 403 naming the
   category; otherwise `createApprovalRequestUseCase` stores the procedure's input as that kind's request and the call
   answers 409 `approval_requested` (`ControlApiError` with `data` `{ id, url, state, fingerprint? }`, the link in the
-  message), never 200. A write naming what does not exist goes to its use case, which answers the 404. A new
-  environment has no request to wait in, so `register` and a `put` that creates one keep the person rules above.
+  message), never 200. A new environment has no request to wait in: a write whose environment does not exist but
+  `startsProtected` (`prod`, or a kept protection) is a 403 for a non-person, and `register` keeps the person rules
+  above. Anything else the write names that does not exist goes to its use case, which answers the 404.
   `approval-gate-coverage.test.ts` dispatches each judged mutation under `refuse`.
 - **Every other action of a non-person that waits is an `approval_requests` row (ADR-0083 §8, `src/approval/requests/`).**
   A kind (`kind.ts`, `requestKind`) owns its input and before-state schemas, its coordinates, the action the requester

@@ -150,13 +150,26 @@ for (const backend of backends) {
 			expect(await f.registry.getApp('app')).toMatchObject({ build_cmd: 'bun run build:all', config_path: 'deploy/fabrika.config.ts' })
 		})
 
-		test('only a person registers an app whose environment starts protected with a trigger ref', async () => {
+		test('only a person registers an app whose environment starts protected with a trigger ref or a domain', async () => {
 			const f = await open()
-			const register = (auth: AuthContext, env: string, triggerRef: string | null) =>
-				rpcResult(rpcRequest('register', { id: 'app', repoUrl: 'github.com/acme/app', env, triggerRef, ...envelopes }), f.as(auth))
+			const register = (auth: AuthContext, env: string, triggerRef: string | null, domain?: string) =>
+				rpcResult(
+					rpcRequest('register', {
+						id: 'app',
+						repoUrl: 'github.com/acme/app',
+						env,
+						triggerRef,
+						...(domain === undefined ? {} : { domain }),
+						...envelopes,
+					}),
+					f.as(auth),
+				)
 			const refused = await register(key, 'prod', 'refs/heads/unreviewed')
 			expect(refused.status).toBe(403)
 			expect(await refused.text()).toContain(refusal('prod', 'its trigger ref'))
+			const withDomain = await register(key, 'prod', null, 'app.example.com')
+			expect(withDomain.status).toBe(403)
+			expect(await withDomain.text()).toContain('environment `prod` is protected: only a person changes its domain')
 			expect(await f.registry.getApp('app')).toBeNull()
 			expect(await f.registry.getAppEnv('app', 'prod')).toBeNull()
 
