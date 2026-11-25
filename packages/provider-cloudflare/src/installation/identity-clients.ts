@@ -5,6 +5,7 @@ import {
 	type IamAdminConnection,
 	importOAuthClientsOnce,
 	MCP_AUTHORING_VARIABLE,
+	MCP_CLIENTS_VARIABLE,
 	type McpClient,
 	type OAuthClientImportApi,
 	parseMcpAuthoring,
@@ -13,9 +14,6 @@ import {
 } from '@fabrika/installation-init'
 import { OPERATIONS_APP_ID } from '@fabrika/operations-contract'
 import type { PlatformIamTarget } from '../provider'
-
-/** The GitHub Environment variable the operator registered OAuth clients in, the same name as on Zerops. */
-export const MCP_CLIENTS_VARIABLE = 'FABRIKA_PLATFORM_MCP_CLIENTS_JSON'
 
 /** IAM's own vocabulary and every platform service's: no external application may take one. */
 const PLATFORM_APPS: readonly string[] = [IAM_APP_ID, CONTROL_APP_ID, OPERATIONS_APP_ID]

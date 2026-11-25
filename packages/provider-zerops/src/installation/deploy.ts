@@ -47,6 +47,7 @@ import {
 	type IamOAuthConfig,
 	importOAuthClientsOnce,
 	MCP_AUTHORING_VARIABLE,
+	MCP_CLIENTS_VARIABLE,
 	type OAuthClientImportApi,
 	OPERATIONS_OAUTH_RESOURCE_VARIABLE,
 	platformIamOAuthConfig,
@@ -118,9 +119,6 @@ const OAUTH_LEFTOVERS: ReadonlyMap<PlatformDeployService, { readonly variable: s
 ])
 
 export type PlatformDeployService = (typeof PLATFORM_DEPLOY_ORDER)[number]
-
-/** The operator's OAuth client list (`--mcp-clients`), read by this release only to import it once (ADR-0089). */
-export const MCP_CLIENTS_VARIABLE = 'FABRIKA_PLATFORM_MCP_CLIENTS_JSON'
 
 /**
  * The two services built AT ONCE, because nothing orders them against each other.

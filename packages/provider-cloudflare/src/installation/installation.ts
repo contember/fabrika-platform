@@ -1,5 +1,6 @@
 import { builtinEmailProviders, builtinEmailProviderVariables } from '@fabrika/email/providers'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
+import { MCP_CLIENTS_VARIABLE } from '@fabrika/installation-init'
 import type { InstallationCli, InstallationCommand } from '@fabrika/provider-contract/installation'
 import { resolve } from 'node:path'
 import { parseCloudflareArgs, platformComponents } from '../cli-args'
@@ -7,12 +8,7 @@ import { deployCloudflareConfig } from '../command'
 import { platformNames } from '../platform-names'
 import type { PlatformIamTarget } from '../provider'
 import { defaultReconcileSchema } from '../schema'
-import {
-	assertCloudflareMcpAuthoringOff,
-	importCloudflareOAuthClients,
-	MCP_CLIENTS_VARIABLE,
-	parseCloudflareIdentityClients,
-} from './identity-clients'
+import { assertCloudflareMcpAuthoringOff, importCloudflareOAuthClients, parseCloudflareIdentityClients } from './identity-clients'
 import { initCommand } from './init'
 
 const EMAIL_PROVIDERS = Object.keys(builtinEmailProviders).join(', ')

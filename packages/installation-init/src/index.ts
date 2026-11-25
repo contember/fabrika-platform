@@ -39,6 +39,7 @@ export { action, detail, fail, info, ok, step, url, warn } from './log'
 export {
 	type IamOAuthConfig,
 	MCP_AUTHORING_VARIABLE,
+	MCP_CLIENTS_VARIABLE,
 	type McpAuthoring,
 	mcpAuthoringOn,
 	type McpClient,

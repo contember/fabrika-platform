@@ -15,6 +15,7 @@
 import {
 	describeArgument,
 	MCP_AUTHORING_VARIABLE,
+	MCP_CLIENTS_VARIABLE,
 	type McpClient,
 	parseMcpAuthoring,
 	parseMcpClientsJson,
@@ -23,7 +24,7 @@ import {
 	requiredSetting,
 	setting,
 } from '@fabrika/installation-init'
-import { MCP_CLIENTS_VARIABLE, PLATFORM_DEPLOY_ORDER } from './deploy'
+import { PLATFORM_DEPLOY_ORDER } from './deploy'
 import { parsePlatformHosts, parsePlatformScheme } from './placement-options'
 import { parsePlainVariables } from './plain-credentials'
 import { readInstallationSourceDir } from './source-options'

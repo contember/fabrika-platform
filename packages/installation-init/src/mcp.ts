@@ -109,6 +109,9 @@ const assertOneIdentityPerApp = (clients: readonly McpClient[]): void => {
 export const mcpAuthoringOn = (clients: readonly McpClient[] | undefined): boolean =>
 	clients?.some((client) => client.identity === undefined) ?? false
 
+/** The operator's OAuth client list, read by this release only to import it into IAM's registry once (ADR-0089). */
+export const MCP_CLIENTS_VARIABLE = 'FABRIKA_PLATFORM_MCP_CLIENTS_JSON'
+
 /** The deploy setting that decides whether MCP authoring is on (ADR-0089 §4). */
 export const MCP_AUTHORING_VARIABLE = 'FABRIKA_PLATFORM_MCP_AUTHORING'
 
