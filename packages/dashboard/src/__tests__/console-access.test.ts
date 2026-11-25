@@ -55,7 +55,7 @@ describe('the console shows what its caller may use', () => {
 		expect(rail(caller({ global: EVERYTHING }, { iam: { kind: 'installation' } }))).toEqual([
 			'Overview',
 			'Delivery: Applications, Namespaces, Deploy runs, Approvals, Mail, Source connection, Branding, Passwords',
-			'Access: Overview, Users, Credentials, Permissions, Audit',
+			'Access: Overview, Users, Credentials, Permissions, External applications, Audit',
 			'Operations: Overview, Errors, Sources, Releases, Health',
 		])
 	})
@@ -85,7 +85,7 @@ describe('the console shows what its caller may use', () => {
 	test('an IAM administrator with no console role sees Access, Approvals (its grant requests), Branding and Passwords, and an application administrator sees People and Approvals (its own requests)', () => {
 		expect(rail(caller({}, { iam: { kind: 'installation' } }))).toEqual([
 			'Delivery: Approvals, Branding, Passwords',
-			'Access: Overview, Users, Credentials, Permissions, Audit',
+			'Access: Overview, Users, Credentials, Permissions, External applications, Audit',
 		])
 		expect(rail(caller({}, { administersPeople: true }))).toEqual(['Delivery: Approvals', 'Your applications: People'])
 	})
@@ -94,6 +94,7 @@ describe('the console shows what its caller may use', () => {
 		for (const scope of [{ kind: 'users', apps: null }, { kind: 'users', apps: ['crm@prod'] }] as const) {
 			expect(rail(caller({}, { iam: scope }))).toEqual(['Delivery: Approvals', 'Access: Users'])
 			expect(mayOpen(caller({}, { iam: scope }), 'access/credentials')).toBe(false)
+			expect(mayOpen(caller({}, { iam: scope }), 'access/external-apps')).toBe(false)
 		}
 	})
 

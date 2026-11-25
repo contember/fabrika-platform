@@ -230,12 +230,32 @@ const IDENTITY_APP = /^[a-z0-9][a-z0-9-]{0,62}$/
 /** A role key; never a built-in one (`admin` means every action of an application). */
 const IDENTITY_ROLE_KEY = /^[a-z0-9][a-z0-9-]{0,62}$/
 
+/** An HTTPS URL without credentials or a fragment, where IAM may fetch a client's metadata document. */
+export function isHttpsDocumentUrl(value: string): boolean {
+	try {
+		const url = new URL(value)
+		return url.protocol === 'https:' && url.username === '' && url.password === '' && url.hash === ''
+	} catch {
+		return false
+	}
+}
+
+/** An external application's id: lowercase, without `@`, at most 63 characters. */
+export function isOAuthIdentityAppId(value: unknown): value is string {
+	return typeof value === 'string' && IDENTITY_APP.test(value)
+}
+
+/** A role key an external application may declare: lowercase like an app id, and no built-in role key. */
+export function isOAuthIdentityRoleKey(value: unknown): value is string {
+	return typeof value === 'string' && IDENTITY_ROLE_KEY.test(value) && !BUILTIN_ROLE_KEYS.includes(value)
+}
+
 /** An identity resource binding `{ app, resource, roles? }`, or null when it is not one; unknown keys are refused. */
 export function parseOAuthIdentityResource(value: unknown): OAuthIdentityResource | null {
 	const app = field(value, 'app')
 	const resource = field(value, 'resource')
 	const rawRoles = field(value, 'roles')
-	if (!hasOnlyKeys(value, IDENTITY_KEYS) || typeof app !== 'string' || !IDENTITY_APP.test(app) || !isOAuthResourceUri(resource)) return null
+	if (!hasOnlyKeys(value, IDENTITY_KEYS) || !isOAuthIdentityAppId(app) || !isOAuthResourceUri(resource)) return null
 	if (rawRoles === undefined) return { app, resource }
 	const roles = parseOAuthIdentityRoles(rawRoles)
 	return roles === null ? null : { app, resource, roles }
@@ -248,8 +268,7 @@ function parseOAuthIdentityRoles(value: unknown): OAuthIdentityRole[] | null {
 		const key = field(entry, 'key')
 		const name = field(entry, 'name')
 		if (
-			!hasOnlyKeys(entry, ROLE_KEYS) || typeof key !== 'string' || !IDENTITY_ROLE_KEY.test(key) || BUILTIN_ROLE_KEYS.includes(key)
-			|| !isNonemptyText(name)
+			!hasOnlyKeys(entry, ROLE_KEYS) || !isOAuthIdentityRoleKey(key) || !isNonemptyText(name)
 			|| name.length > 100 || roles.some((role) => role.key === key)
 		) return null
 		roles.push({ key, name })

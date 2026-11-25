@@ -91,7 +91,9 @@ export function RecentChanges({ data }: { data: OverviewData }) {
 			id: `audit:${event.id}`,
 			time: event.createdAt,
 			icon: 'shield',
-			title: <Link to="access/audit" params={{ requestId: event.requestId }} title={event.action}>{auditActionLabel(event.action)}</Link>,
+			title: (
+				<Link to="access/audit" params={{ requestId: event.requestId }} title={event.action}>{auditActionLabel(event.action, event.metadata)}</Link>
+			),
 			note: `${auditActorLabel(event, data.auditActors)} · ${event.resourceId ?? event.resourceType}`,
 		})
 	}

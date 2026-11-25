@@ -42,7 +42,7 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   `iamAdministrationScope` of its permissions says whether of the installation or of some applications' people,
   ADR-0058) and `appPeople.apps`. `mayOpen` gives each rail page the rule its LOADER needs, so a page in the rail loads: the
   overview needs `app.manage`, `namespace.manage` and `deploy.read` globally, Applications `app.manage` globally,
-  Deploy runs `deploy.read` in any scope, Operations `operations.read` in any scope, Access's Users any IAM administration, every other Access page and
+  Deploy runs `deploy.read` in any scope, Operations `operations.read` in any scope, Access's Users any IAM administration, every other Access page (External applications included) and
   Settings → Branding and Passwords the installation's. The root layout drops the rest,
   answers a hidden page reached by URL with "not available", and shows the no-access page when nothing is left. A
   part no service answered is `null` and reads as usable, so an outage still shows its own page. Controls use
@@ -83,10 +83,10 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
 - **The Operations layout keeps its own outage screen** ("Operations is unavailable" / "Retry
   connection"), not `RouteError`: an Operations outage must read as bounded to its plane
   (`tests/browser/operations-outage-isolation.test.ts`).
-- **The Access rail is five items and stays five: Overview · Users · Credentials · Permissions · Audit.**
-  Each answers a different question: what is the state of access, who are the people, what gets in
-  without a person, what does a grant mean, what happened. It was seven pages that cut the same
-  material three ways; don't add a sixth without retiring one.
+- **The Access rail is six items and stays six: Overview · Users · Credentials · Permissions · External applications ·
+  Audit.** Each answers a different question: what is the state of access, who are the people, what gets in
+  without a person, what does a grant mean, which applications outside the installation receive people's identity,
+  what happened. It was seven pages that cut the same material three ways; don't add a seventh without retiring one.
   - **Users are people.** A service principal's page is its API key's, under Credentials
     (`credentials/keys/:id`, `apiKeys.get`), which edits its grants through `grants.*`; `apiKeys.list` returns every
     one of them, so Credentials is the complete machine list and the Users list filters to `?type=user`. The key's grant
@@ -96,6 +96,14 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   - **Permissions is one page for roles, actions and scope dimensions**, with a policy edited inline in
     the roles table it belongs to. `roles.list({ app })` already returns custom roles; the page drops them and
     renders the policy rows instead, which carry what it takes to edit them.
+- **External applications (`/access/external-apps`) is the installation administrator's (ADR-0089).** It lists
+  `externalApps.list` and, read-only, the authoring clients of `oauthClients.list`, which only the provisioning key
+  writes. One form (`access/components/ExternalAppForm.tsx`) registers and edits the whole application with
+  `externalApps.put`: the id is fixed once created, and `access/lib/external-apps.ts` checks the draft with the contract's
+  own predicates and names what a save ends (a client's or the resource's sign-ins, a removed role, roles added to an
+  application that had none). Before the deploy imported its client list IAM refuses the write with
+  `OAUTH_REGISTRY_NOT_IMPORTED` (409); the form says so instead of showing the conflict. The Applications page links to
+  it for a caller who may open it.
 - **People (`/people`) is outside the Access rail on purpose.** It serves an application's own administrator, who holds
   the application's `members.manage` and is no IAM administrator, so the Access layout's gate would refuse
   them. It only asks IAM's `appPeople.*`; IAM decides which applications and roles it lists and audits each change.

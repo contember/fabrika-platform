@@ -507,6 +507,52 @@ Until a deploy calls `oauthClients.importOnce` with this variable's entries, IAM
 transaction; from then on IAM serves the registry alone, and every later import answers `already_imported` and writes
 nothing. No deploy calls the import yet, so on this release the variable stays the source of every client.
 
+#### Registering an external application
+
+**In the console** an installation administrator (`iam.admin`) opens **Access → External applications**, also reached
+from **Applications → Add external application (no deploy)**, and registers the application in one form: its app id
+(fixed once created), name and resource, its roles (optional) and its clients, each a client id, its exact redirect
+URIs and, only when the document is served elsewhere, a metadata URL. A save replaces the whole application and takes
+effect at the next authorization request, code exchange or refresh. Before saving, the form says what the change ends:
+removing a client or changing the resource revokes the sign-ins through it, removing a role takes it from everyone it
+is granted to, and adding roles to an application that had none refuses everyone until a role is granted in Users.
+Deleting the application revokes its clients' sign-ins and removes its roles. The page lists the authoring clients
+read-only. Until the import ran, IAM refuses the save and the form says so: deploy the platform first.
+
+**With the CLI** the operator does the same with the provisioning key, from a file and idempotently:
+
+```bash
+export FABRIKA_IAM_RPC_URL=https://<IAM's public origin>
+export FABRIKA_IAM_PROVISIONING_KEY=<the installation's provisioning key>
+fabrika control external-apps put --file=ops-tool.json
+fabrika control external-apps list
+fabrika control external-apps get ops-tool > ops-tool.json   # the same file, to edit and put back
+fabrika control external-apps delete ops-tool
+fabrika control oauth-clients put --file=claude.json         # an authoring client: the provisioning key's alone
+fabrika control oauth-clients list
+fabrika control oauth-clients delete https://claude.ai/oauth/mcp-oauth-client-metadata
+```
+
+```json
+{
+	"app": "ops-tool",
+	"name": "Ops tool",
+	"resource": "https://ops.example.com",
+	"roles": [{ "key": "viewer", "name": "Viewer" }],
+	"clients": [
+		{
+			"clientId": "https://ops.example.com/oauth/client.json",
+			"redirectUris": ["https://ops.example.com/oauth/callback"],
+			"metadataUrl": null
+		}
+	]
+}
+```
+
+An authoring client's file is `{ "clientId", "label", "redirectUris", "metadataUrl"? }`, with `label` `claude`,
+`chatgpt` or `external`. `put` checks the file before sending it; IAM checks it again. The CLI follows no redirect and
+never prints the key. A user administrator grants an external application's roles in Users, as before.
+
 ## Locally
 
 The local stack runs MCP off, and serves the command-line client's device grant always. Set

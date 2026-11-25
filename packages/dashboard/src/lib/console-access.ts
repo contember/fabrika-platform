@@ -17,6 +17,7 @@ export type NavPage =
 	| 'access/users'
 	| 'access/credentials'
 	| 'access/permissions'
+	| 'access/external-apps'
 	| 'access/audit'
 	| 'operations'
 	| 'operations/errors'
@@ -113,6 +114,8 @@ export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
 		case 'access':
 		case 'access/credentials':
 		case 'access/permissions':
+		// Where IAM sends people's identity is an installation administrator's decision (ADR-0089).
+		case 'access/external-apps':
 		case 'access/audit':
 			return caller.iam === null || (caller.iam !== false && caller.iam.kind === 'installation')
 		case 'operations':

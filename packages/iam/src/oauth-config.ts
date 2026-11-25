@@ -1,4 +1,10 @@
-import { type OAuthManagedClient, type OAuthResourceDto, parseOAuthManagedClient, parseOAuthResourceDto } from '@fabrika/iam-contract'
+import {
+	isHttpsDocumentUrl,
+	type OAuthManagedClient,
+	type OAuthResourceDto,
+	parseOAuthManagedClient,
+	parseOAuthResourceDto,
+} from '@fabrika/iam-contract'
 import { parseJsonOrNull, prop } from './json'
 
 /** An operator-registered MCP client: its CIMD identity plus where IAM fetches that document. */
@@ -103,14 +109,4 @@ function isHostname(value: unknown): value is string {
 
 function hasOnlyKeys(value: unknown, allowed: readonly string[]): boolean {
 	return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).every((key) => allowed.includes(key))
-}
-
-/** An HTTPS URL without credentials or a fragment, where IAM may fetch a client's document. */
-export function isHttpsDocumentUrl(value: string): boolean {
-	try {
-		const url = new URL(value)
-		return url.protocol === 'https:' && url.username === '' && url.password === '' && url.hash === ''
-	} catch {
-		return false
-	}
 }

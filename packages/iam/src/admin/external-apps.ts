@@ -12,6 +12,7 @@ import {
 	type ImportOAuthClientsResponse,
 	type ListResponse,
 	MAX_EXTERNAL_APP_CLIENTS,
+	OAUTH_REGISTRY_NOT_IMPORTED,
 	type OAuthClientDto,
 	type OAuthClientInput,
 	type OAuthIdentityResource,
@@ -35,9 +36,6 @@ import { parseJsonOrNull } from '../json'
 import { type ManagedOAuthClient, type OAuthConfig, parseManagedClientEntry } from '../oauth-config'
 import { type AdminContext, adminEvent, fail } from './context'
 
-const NOT_IMPORTED = 'IAM takes registry writes once a deploy of this release has imported the OAuth client list '
-	+ '(oauthClients.importOnce); until then it serves the clients of its OAUTH_CONFIG. Deploy the platform first.'
-
 export async function listExternalAppsUseCase(c: AdminContext): Promise<ListResponse<ExternalAppDto>> {
 	const rows = await c.services.repositories.oauthRegistry.listExternalApps()
 	return { items: await Promise.all(rows.map((row) => externalAppDto(c, row.app))) }
@@ -51,7 +49,7 @@ export async function getExternalAppUseCase(c: AdminContext, input: ExternalAppI
 export async function putExternalAppUseCase(c: AdminContext, input: PutExternalAppRequest): Promise<ExternalAppDto> {
 	const config = requireOAuth(c)
 	const registry = c.services.repositories.oauthRegistry
-	if (!(await registry.imported())) return fail(409, NOT_IMPORTED)
+	if (!(await registry.imported())) return fail(409, OAUTH_REGISTRY_NOT_IMPORTED)
 	const nameProblem = displayNameProblem(input.name)
 	if (nameProblem !== null) return fail(400, `name ${nameProblem}`)
 	const roles = input.roles ?? []
@@ -110,7 +108,7 @@ export async function putOAuthClientUseCase(c: AdminContext, input: PutOAuthClie
 	requireProvisioningKey(c, 'writes an MCP authoring client')
 	requireOAuth(c)
 	const registry = c.services.repositories.oauthRegistry
-	if (!(await registry.imported())) return fail(409, NOT_IMPORTED)
+	if (!(await registry.imported())) return fail(409, OAUTH_REGISTRY_NOT_IMPORTED)
 	const client = parseManagedClientEntry({
 		provider: input.label,
 		clientId: input.clientId,

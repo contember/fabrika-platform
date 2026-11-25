@@ -4,6 +4,13 @@
 
 import type { OAuthClientProvider, OAuthIdentityRole } from './oauth'
 
+/**
+ * IAM's refusal of a registry write before the deploy imported its client list (release N of ADR-0089), answered with
+ * HTTP 409. The console and the CLI match it to say what to do instead of showing a generic conflict.
+ */
+export const OAUTH_REGISTRY_NOT_IMPORTED = 'IAM takes registry writes once a deploy of this release has imported the OAuth client list '
+	+ '(oauthClients.importOnce); until then it serves the clients of its OAUTH_CONFIG. Deploy the platform first.'
+
 /** How many clients one external application has. */
 export const MAX_EXTERNAL_APP_CLIENTS = 16
 

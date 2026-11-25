@@ -377,7 +377,7 @@ function AuditRow({ event, actors }: { event: AuditEventDto; actors: ReadonlyMap
 		<Link to="access/audit" params={{ requestId: event.requestId }} className="feed-row">
 			<span className="feed-main">
 				<span className="feed-title">
-					<span className="truncate" title={event.action}>{auditActionLabel(event.action)}</span>
+					<span className="truncate" title={event.action}>{auditActionLabel(event.action, event.metadata)}</span>
 				</span>
 				<span className="feed-meta">
 					<span className="truncate">{auditActorLabel(event, actors)}</span>

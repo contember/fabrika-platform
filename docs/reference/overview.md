@@ -199,6 +199,12 @@ never acts on a person who holds a grant there
 An application's own `members.manage` holder administers that application's
 global roles through `appPeople.*`, bounded by what it holds.
 
+An installation administrator also registers external applications, which
+sign people in through IAM without a deploy target, under Access → External
+applications (`externalApps.*`, [ADR-0089](../decisions/0089-oauth-clients-are-registered-in-iam-at-runtime.md));
+the operator does the same with `fabrika control external-apps` and the
+provisioning key ([`mcp-authoring.md`](mcp-authoring.md#registering-an-external-application)).
+
 Each registered application environment may carry an explicit canonical
 `publicOrigin`. It is independent of the provider routing domain and is the only
 origin Operations uses for active HTTP health checks. Control does not infer it
