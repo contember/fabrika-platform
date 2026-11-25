@@ -148,7 +148,11 @@ export const APPROVAL_CATEGORY_GROUPS: readonly { readonly title: string; readon
 				hint: 'the trigger ref, domain, public origin, source and build, cross-origins, target, artifact and namespace',
 				pending: 'Today the trigger ref, domain, public origin and source are refused, and the rest applies at once.',
 			},
-			{ category: 'agent-grants', label: 'A grant an agent asks for', hint: 'a role at this application', pending: 'Today an agent cannot ask.' },
+			{
+				category: 'agent-grants',
+				label: 'A grant an agent asks for',
+				hint: 'a role at this application, decided by its IAM administrators; with no approval an agent cannot ask for one',
+			},
 			{
 				category: 'credentials',
 				label: 'A key an agent asks for',
