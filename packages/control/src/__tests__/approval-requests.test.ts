@@ -394,6 +394,22 @@ for (const backend of backends) {
 		})
 
 		describe('execution', () => {
+			test('an approval while a deploy holds the environment answers 409, and nothing is recorded', async () => {
+				const w = await world()
+				const { id } = await ask(w)
+				const fresh = await row(w, id)
+				const deploy = uuidv7()
+				expect(await w.locks.acquire(runLeaseKey('notes', 'prod'), deploy, LEASE_TTL_MS)).toBe(true)
+				const busy = await status(decide(w, id, 'approve'))
+				expect(busy.status).toBe(409)
+				expect(busy.message).toContain('nothing was decided')
+				expect(await row(w, id)).toEqual(fresh)
+				expect(w.audits).toEqual([])
+				expect(w.notes.effects).toEqual([])
+				await w.locks.release(runLeaseKey('notes', 'prod'), deploy)
+				expect((await decide(w, id, 'approve')).state).toBe('executed')
+			})
+
 			test('a changed before-state closes the request stale, and nothing executes', async () => {
 				const w = await world()
 				const { id } = await ask(w)
