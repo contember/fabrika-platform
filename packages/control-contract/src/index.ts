@@ -881,6 +881,7 @@ export * from './approval-policy.js'
 export * from './approval-requests.js'
 export * from './approval-step-up.js'
 export * from './approval-view.js'
+export * from './requested-keys.js'
 export type {
 	AdoptNamespaceInput,
 	AppEnvironmentInput,

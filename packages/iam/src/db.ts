@@ -45,7 +45,7 @@ export {
 	type SqlDialect,
 } from './repositories/audit'
 export { type InstallationBrandImages, InstallationBrandRepository, type InstallationBrandRow } from './repositories/brand'
-export { type CredentialGrantRow, CredentialRepository, type CredentialRow } from './repositories/credentials'
+export { type CredentialGrantRow, CredentialRepository, type CredentialRow, type RequestedApiKeyRow } from './repositories/credentials'
 export { DeviceAuthorizationRepository, type DeviceAuthorizationRow, type DeviceReceiptRow } from './repositories/device'
 export { type CreateGrantRequestInput, GrantRequestRepository, type GrantRequestRow } from './repositories/grant-requests'
 export { type DelegatedAuthority, ExternalGrantError, GrantRepository, type GrantRow, type GrantSetRead } from './repositories/grants'

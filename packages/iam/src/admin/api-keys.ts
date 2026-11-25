@@ -1,4 +1,4 @@
-import { API_KEY_PREFIX } from '@fabrika/auth-core'
+import { API_KEY_PREFIX, canonicalJson, sha256Hex } from '@fabrika/auth-core'
 
 import {
 	type ApiKeyDetail,
@@ -10,13 +10,20 @@ import {
 	type OkResponse,
 	type ProvisionApiKeyRequest,
 	type ProvisionApiKeyResponse,
+	type ProvisionRequestedApiKeyRequest,
+	recipientKeyThumbprint,
+	type RequestedApiKey,
+	type RequestedApiKeyInput,
+	type RequestedApiKeyResponse,
 	type RotateApiKeyInput,
 	type RotateApiKeyResponse,
 } from '@fabrika/iam-contract'
-import { uuidv7 } from '@fabrika/platform'
+import { type SqlStatement, uuidv7 } from '@fabrika/platform'
 import { z } from 'zod'
 import { contractGrantProblem } from '../contract-rules'
-import { type CredentialRow, type GrantRow, type PrincipalRow, principalStatus } from '../db'
+import { type CredentialRow, type GrantRow, type PrincipalRow, principalStatus, type RequestedApiKeyRow } from '../db'
+import { keyExpiryProblem } from '../issue'
+import { encryptToRecipient } from '../key-delivery'
 import { generateToken, hashToken } from '../secret'
 import { type AdminContext, adminEvent, fail } from './context'
 import { appField, grantAuthorLabels, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDtos } from './grant-support'
@@ -106,6 +113,24 @@ async function toApiKeyDto(c: AdminContext, principal: PrincipalRow, grants: Gra
 }
 
 export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionApiKeyRequest): Promise<ProvisionApiKeyResponse> {
+	const plan = await planProvision(c, input)
+	await c.services.repositories.audit.commit(plan.statements)
+	const response: ProvisionApiKeyResponse = { principalId: plan.principalId, apiKey: plan.apiKey }
+	return response
+}
+
+/** A key with its service principal and grant, checked and written as statements of one transaction, with their records. */
+interface ProvisionPlan {
+	readonly principalId: string
+	readonly apiKey: string
+	readonly statements: SqlStatement[]
+}
+
+/**
+ * Check what a key is provisioned with, as the console's key issuance does, and plan the writes: the service principal,
+ * its grant, the bound credential and their records. `record` is added to both records' metadata.
+ */
+async function planProvision(c: AdminContext, input: ProvisionApiKeyRequest, record: Record<string, unknown> = {}): Promise<ProvisionPlan> {
 	const { label, type } = input
 	if (label.trim() === '' || type !== 'service') return fail(400, 'label and type=service required')
 	const appResult = await appField(c, input)
@@ -137,7 +162,7 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 	const grantId = uuidv7()
 	const apiKey = `${API_KEY_PREFIX}${generateToken()}`
 	const { principals, grants, credentials, audit } = c.services.repositories
-	await audit.commit([
+	const statements = [
 		principals.createServiceStatement(principalId, label),
 		...grants.grantSetStatements(grantId, {
 			principalId,
@@ -165,7 +190,7 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 			action: 'iam.apikey.create',
 			resourceType: 'principal',
 			resourceId: principalId,
-			metadata: { label, roleKey: roleOrInline.roleKey, permissions: roleOrInline.permissions, app },
+			metadata: { label, roleKey: roleOrInline.roleKey, permissions: roleOrInline.permissions, app, ...record },
 		})),
 		audit.eventStatement(adminEvent(c, {
 			action: 'iam.grant.create',
@@ -179,12 +204,92 @@ export async function provisionApiKeyUseCase(c: AdminContext, input: ProvisionAp
 				scopeValue: scope.scopeValues?.[0] ?? null,
 				...(scope.scopeValues !== null && scope.scopeValues.length > 1 ? { scopeValues: scope.scopeValues } : {}),
 				app,
+				...record,
 			},
 		})),
-	])
+	]
+	return { principalId, apiKey, statements }
+}
 
-	const response: ProvisionApiKeyResponse = { principalId, apiKey }
-	return response
+/**
+ * Issue the key a person approved in Control for the agent that asked (ADR-0083 §8), as that person: a signed-in session
+ * only, never a key, so no machine caller issues a requested key around the approval. The key is checked as the
+ * console's key issuance checks it, holds exact actions only and expires at most 30 days ahead. The approval request's id
+ * is the idempotency key: a repeat answers the key the first issued, and one that asks for something else is a 409. The
+ * plaintext leaves this function only encrypted to the agent's public key; the records name the request and its requester.
+ */
+export async function provisionRequestedApiKeyUseCase(c: AdminContext, input: ProvisionRequestedApiKeyRequest): Promise<RequestedApiKey> {
+	if (!c.admin.session) {
+		return fail(403, 'a requested key is issued only by the person who approves it, in a signed-in session')
+	}
+	const digest = requestedKeyDigest(input)
+	const issued = await c.services.repositories.credentials.getRequestedKey(input.approvalRequest.id)
+	if (issued !== null) return sameRequestedKey(issued, digest)
+	const expiryProblem = keyExpiryProblem(input.expiresAt, Math.floor(Date.now() / 1000))
+	if (expiryProblem !== null) {
+		return fail(400, expiryProblem)
+	}
+	const wildcard = input.permissions.find((action) => action.includes('*'))
+	if (wildcard !== undefined) {
+		return fail(400, `a requested key lists exact actions, not the wildcard: ${wildcard}`)
+	}
+	const plan = await planProvision(c, {
+		label: input.label,
+		type: 'service',
+		permissions: input.permissions,
+		scopeType: input.scopeType,
+		scopeValue: input.scopeValue,
+		app: input.app,
+		expiresAt: input.expiresAt,
+	}, { approvalRequest: input.approvalRequest })
+	const jwe = await encryptToRecipient(plan.apiKey, input.recipient)
+	const { credentials, audit } = c.services.repositories
+	try {
+		await audit.commit([
+			...plan.statements,
+			credentials.requestedKeyStatement({
+				approval_request_id: input.approvalRequest.id,
+				principal_id: plan.principalId,
+				input_digest: digest,
+				jwe,
+				expires_at: input.expiresAt,
+			}),
+		])
+	} catch (cause) {
+		// A concurrent repeat committed first; its key is this request's, and nothing of this attempt was written.
+		const raced = await credentials.getRequestedKey(input.approvalRequest.id)
+		if (raced === null) throw cause
+		return sameRequestedKey(raced, digest)
+	}
+	return { principalId: plan.principalId, jwe, expiresAt: input.expiresAt }
+}
+
+/** The key an approval request issued, for Control's follow of an execution it did not see end. */
+export async function requestedApiKeyUseCase(c: AdminContext, input: RequestedApiKeyInput): Promise<RequestedApiKeyResponse> {
+	const issued = await c.services.repositories.credentials.getRequestedKey(input.approvalRequestId)
+	return { key: issued === null ? null : { principalId: issued.principal_id, jwe: issued.jwe, expiresAt: issued.expires_at } }
+}
+
+/** What a requested key binds, so a repeat under the same request id is told apart from a different ask. */
+function requestedKeyDigest(input: ProvisionRequestedApiKeyRequest): string {
+	return `sha256:${
+		sha256Hex(canonicalJson({
+			label: input.label,
+			app: input.app,
+			permissions: [...input.permissions].sort(),
+			scopeType: input.scopeType,
+			scopeValue: input.scopeValue,
+			expiresAt: input.expiresAt,
+			recipient: recipientKeyThumbprint(input.recipient),
+		}))
+	}`
+}
+
+function sameRequestedKey(issued: RequestedApiKeyRow, digest: string): RequestedApiKey {
+	if (issued.input_digest !== digest) {
+		return fail(409, 'this approval request already issued a key for a different ask; nothing was issued')
+	}
+	return { principalId: issued.principal_id, jwe: issued.jwe, expiresAt: issued.expires_at }
 }
 
 export async function revokeApiKeyUseCase(c: AdminContext, input: { principalId: string }): Promise<OkResponse> {
