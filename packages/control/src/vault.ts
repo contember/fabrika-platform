@@ -304,6 +304,23 @@ export class Vault {
 		return row === null || row.scope !== purpose.scope || row.label !== purpose.label ? null : row.value_iv
 	}
 
+	/**
+	 * The rows sealed under `scope` whose label starts with `labelPrefix`, created at or before `createdBefore` (unix
+	 * seconds): their refs and labels, never a value. SQLite's LIKE ignores case, so the prefix is compared again here.
+	 */
+	async listSealed(
+		scope: SecretScope,
+		labelPrefix: string,
+		createdBefore: number,
+	): Promise<{ readonly ref: string; readonly label: string }[]> {
+		if (/[%_\\]/.test(labelPrefix)) throw new Error('a label prefix holds no LIKE wildcard')
+		const { results } = await this.d1
+			.prepare('SELECT id, label FROM vault WHERE scope = ? AND label LIKE ? AND created_at <= ? ORDER BY id')
+			.bind(scope, `${labelPrefix}%`, createdBefore)
+			.all<{ id: string; label: string }>()
+		return results.filter((row) => row.label.startsWith(labelPrefix)).map((row) => ({ ref: vaultRef(row.id), label: row.label }))
+	}
+
 	/** Re-encrypt the value at `ref` with a fresh DEK + IVs. Stamps `rotated_at`. Throws if missing. */
 	async rotate(ref: string, newValue: string): Promise<void> {
 		const id = this.idOrThrow(ref)

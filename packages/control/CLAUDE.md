@@ -857,7 +857,9 @@ other environment, before the provider prepares anything, and the write maps a r
   `executeApprovedRequest` judges the policy and the before-state again (either closes it `stale`), records the
   operation id before the kind acts, and leaves a throw `unknown`; `sweepApprovalRequests` (cron, after
   `sweepParkedRuns`) expires pending rows past their deadline, closes an approved row that never started `failed`,
-  and follows `unknown` ones through the kind. A decider holds `access.approve` at the coordinates, or what the kind's
+  follows `unknown` ones through the kind, and deletes a request's sealed copy
+  (`platform:approval-request:<id>` in the vault) whose request is closed or absent, once older than the longest wait
+  plus an hour. A decider holds `access.approve` at the coordinates, or what the kind's
   `approverMayDecide` seam says (an IAM action); `approval-gate-coverage.test.ts` lists the create and decide procedures as exempt.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).

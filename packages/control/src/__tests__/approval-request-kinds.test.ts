@@ -319,6 +319,40 @@ for (const backend of backends) {
 				expect(await secretValue(w, 'stage', 'API_KEY')).toBeNull()
 			})
 
+			test('the sweep deletes a sealed copy left behind once it is older than the longest wait, unless its request may still need it', async () => {
+				const w = await world()
+				// Sealed, and the row never written: Control stopped between the two.
+				const neverWritten = requestSecretPurpose(uuidv7())
+				const orphan = await w.vault.putSecret(neverWritten.scope, neverWritten.label, SECRET)
+				// Refused, and the discard never ran: Control stopped after the refusal, or a release without kinds refused it.
+				const refused = await ask(w, 'apps.secrets.put', putSecret('prod'))
+				expect(await w.db.approvalRequests.reject(refused.id, { decisionId: uuidv7(), id: 'p-bob', label: 'bob' })).toBe(true)
+				// Its outcome unknown: the kind's follow compares against the copy.
+				const unknown = await ask(w, 'apps.secrets.put', putSecret('stage'))
+				const holder = uuidv7()
+				expect(await w.locks.acquire(runLeaseKey('notes', 'stage'), holder, LEASE_TTL_MS)).toBe(true)
+				const fence = { holder, nowMs: Date.now() }
+				expect(await w.db.approvalRequests.approve(unknown.id, { decisionId: uuidv7(), id: 'p-bob', label: 'bob' }, null, fence)).toBe(true)
+				expect(await w.db.approvalRequests.startExecution(unknown.id, 'op-stage', fence)).toBe(true)
+				expect(await w.db.approvalRequests.markUnknown(unknown.id, 'op-stage', 'lost', fence)).toBe(true)
+				// Kept held, so the sweep leaves the unknown request to the next pass rather than settling it.
+				const waiting = await ask(w, 'apps.secrets.put', putSecret(null))
+
+				const sweep = (now: number) => sweepApprovalRequests({ repositories: w.db, lock: w.locks, vault: () => Promise.resolve(w.vault), now: () => now })
+				const sealedNow = Math.floor(Date.now() / 1000)
+				expect((await sweep(sealedNow + 168 * HOUR)).orphans).toBe(0)
+				expect(await w.vault.sealedVersion(orphan, neverWritten)).not.toBeNull()
+				expect(await sealedExists(w, refused.id)).toBe(true)
+
+				expect((await sweep(sealedNow + 170 * HOUR)).orphans).toBe(2)
+				expect(await w.vault.sealedVersion(orphan, neverWritten)).toBeNull()
+				expect(await sealedExists(w, refused.id)).toBe(false)
+				expect(await sealedExists(w, unknown.id)).toBe(true)
+				expect(await sealedExists(w, waiting.id)).toBe(true)
+				expect((await row(w, unknown.id)).state).toBe('unknown')
+				await w.locks.release(runLeaseKey('notes', 'stage'), holder)
+			})
+
 			test('a rotation replaces the value of a secret that exists; one that does not is refused at creation', async () => {
 				const w = await world()
 				expect((await status(ask(w, 'vault.rotate', { appId: 'notes', name: 'API_KEY', env: 'prod', value: SECRET }))).status).toBe(404)

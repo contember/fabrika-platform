@@ -3,7 +3,7 @@
 // expires pending requests past their deadline and settles what an interrupted execution left; it authorizes nothing.
 
 import type { AuthContext } from '@fabrika/auth'
-import { ALL_ENVIRONMENTS } from '@fabrika/control-contract'
+import { ALL_ENVIRONMENTS, isFinalApprovalRequestState, REQUEST_TTL_HOURS } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ApprovalRequestRow, ControlRegistryRepository, ControlRepositories } from '../../db'
 import { acquireLease, acquireLeases, type Lease, type LeaseClock, runLeaseKey } from '../../lease'
@@ -17,6 +17,7 @@ import type {
 	RequestKindRegistry,
 	RequestOutcome,
 } from './kind'
+import { REQUEST_SECRET_LABEL_PREFIX } from './kinds/secrets'
 import { PRODUCTION_REQUEST_KINDS } from './production'
 import { decidersOf, jsonDigest, judging, reachOf, refusingEnvironment, requestCategory, requesterOf } from './rules'
 
@@ -197,6 +198,8 @@ export interface ApprovalRequestSweepSummary {
 	interrupted: number
 	/** Unknown executions the kind settled as executed or failed. */
 	settled: number
+	/** Sealed copies deleted that no open request held: its request was closed, or never written. */
+	orphans: number
 }
 
 export interface ApprovalRequestSweepDeps {
@@ -206,6 +209,8 @@ export interface ApprovalRequestSweepDeps {
 	readonly lock: DeployLocks
 	readonly leaseClock?: LeaseClock
 	readonly kinds?: RequestKindRegistry
+	/** Unix seconds; the system clock when absent. */
+	readonly now?: () => number
 }
 
 /**
@@ -218,7 +223,7 @@ export interface ApprovalRequestSweepDeps {
 export async function sweepApprovalRequests(deps: ApprovalRequestSweepDeps): Promise<ApprovalRequestSweepSummary> {
 	const requests = deps.repositories.approvalRequests
 	const kinds = deps.kinds ?? PRODUCTION_REQUEST_KINDS
-	const summary: ApprovalRequestSweepSummary = { expired: 0, interrupted: 0, settled: 0 }
+	const summary: ApprovalRequestSweepSummary = { expired: 0, interrupted: 0, settled: 0, orphans: 0 }
 	for (const listed of await requests.listToSweep()) {
 		if (listed.state === 'pending') {
 			if (await requests.expire(listed.id)) {
@@ -258,5 +263,38 @@ export async function sweepApprovalRequests(deps: ApprovalRequestSweepDeps): Pro
 			await lease.release()
 		}
 	}
+	summary.orphans = await deleteOrphanedCopies(deps)
 	return summary
+}
+
+/**
+ * How old a sealed copy must be before the sweep judges it: past the longest a request waits, and an hour more, since a
+ * value is sealed before its request is written.
+ */
+const ORPHAN_AGE_SECONDS = (REQUEST_TTL_HOURS.max + 1) * 3600
+
+/**
+ * Delete the sealed copies no request may still need: its request closed (refused, expired, stale, failed or executed)
+ * or never written, once older than `ORPHAN_AGE_SECONDS`. They are left by a crash between sealing and the row's insert
+ * or between closing and the discard, by a discard that threw, and by a release without request kinds that closed one.
+ * A copy of an open or `unknown` request stays: its kind compares against it.
+ */
+async function deleteOrphanedCopies(deps: ApprovalRequestSweepDeps): Promise<number> {
+	if (deps.vault === undefined) return 0
+	let vault: Vault
+	try {
+		vault = await deps.vault()
+	} catch {
+		// Without a vault nothing was sealed.
+		return 0
+	}
+	const now = deps.now?.() ?? Math.floor(Date.now() / 1000)
+	let deleted = 0
+	for (const sealed of await vault.listSealed('platform', REQUEST_SECRET_LABEL_PREFIX, now - ORPHAN_AGE_SECONDS)) {
+		const requestId = sealed.label.slice(REQUEST_SECRET_LABEL_PREFIX.length)
+		const request = await deps.repositories.approvalRequests.get(requestId)
+		if (request !== null && !isFinalApprovalRequestState(request.state)) continue
+		if (await vault.delete(sealed.ref)) deleted++
+	}
+	return deleted
 }

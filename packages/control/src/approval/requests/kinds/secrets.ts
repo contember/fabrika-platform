@@ -46,9 +46,12 @@ import {
 	registryContext,
 } from './shared'
 
+/** The label of a request's sealed value, before its request id. */
+export const REQUEST_SECRET_LABEL_PREFIX = 'platform:approval-request:'
+
 /** The purpose a request's secret value is sealed under while it waits: the request's own, never the secret's. */
 export function requestSecretPurpose(requestId: string): VaultSecretPurpose {
-	return { scope: 'platform', label: `platform:approval-request:${requestId}` }
+	return { scope: 'platform', label: `${REQUEST_SECRET_LABEL_PREFIX}${requestId}` }
 }
 
 /** The fingerprint the page shows and the agent prints: the first 8 hex characters of the value's SHA-256. */

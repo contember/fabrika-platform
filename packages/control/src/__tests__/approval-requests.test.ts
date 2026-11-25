@@ -391,10 +391,20 @@ for (const backend of backends) {
 				expect(late.message).toContain('expired')
 				expect((await status(decide(w, id, 'reject'))).status).toBe(410)
 				expect((await row(w, id)).state).toBe('pending')
-				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).toEqual({ expired: 1, interrupted: 0, settled: 0 })
+				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).toEqual({
+					expired: 1,
+					interrupted: 0,
+					settled: 0,
+					orphans: 0,
+				})
 				expect((await getApprovalRequestUseCase(context(w, AGENT), id)).state).toBe('expired')
 				expect((await status(decide(w, id, 'approve'))).status).toBe(410)
-				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).toEqual({ expired: 0, interrupted: 0, settled: 0 })
+				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).toEqual({
+					expired: 0,
+					interrupted: 0,
+					settled: 0,
+					orphans: 0,
+				})
 				expect(w.notes.effects).toEqual([])
 			})
 
@@ -457,10 +467,10 @@ for (const backend of backends) {
 				expect(w.audits.at(-1)?.metadata).toMatchObject({ state: 'unknown', operationId })
 
 				const sweep = () => sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })
-				expect(await sweep()).toEqual({ expired: 0, interrupted: 0, settled: 0 })
+				expect(await sweep()).toEqual({ expired: 0, interrupted: 0, settled: 0, orphans: 0 })
 				expect((await row(w, id)).state).toBe('unknown')
 				w.notes.follow = { state: 'executed', result: { retried: true } }
-				expect(await sweep()).toEqual({ expired: 0, interrupted: 0, settled: 1 })
+				expect(await sweep()).toEqual({ expired: 0, interrupted: 0, settled: 1, orphans: 0 })
 				expect(w.notes.followed).toEqual([operationId, operationId])
 				expect(await getApprovalRequestUseCase(context(w, AGENT), id)).toMatchObject({ state: 'executed', operationId, result: { retried: true } })
 			})
@@ -477,11 +487,21 @@ for (const backend of backends) {
 				expect(await w.db.approvalRequests.startExecution(executing.id, 'op-1', fence)).toBe(true)
 				expect(await w.db.approvalRequests.approve(approvedOnly.id, decider('p-ada'), null, fence)).toBe(true)
 				// While the executor holds the lease, the sweep leaves both alone.
-				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).toEqual({ expired: 0, interrupted: 0, settled: 0 })
+				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).toEqual({
+					expired: 0,
+					interrupted: 0,
+					settled: 0,
+					orphans: 0,
+				})
 				await w.locks.release(runLeaseKey('notes', 'prod'), holder)
 
 				w.notes.follow = { state: 'failed', error: 'the provider holds no such note' }
-				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).toEqual({ expired: 0, interrupted: 1, settled: 1 })
+				expect(await sweepApprovalRequests({ repositories: w.db, lock: w.locks, kinds: w.kinds })).toEqual({
+					expired: 0,
+					interrupted: 1,
+					settled: 1,
+					orphans: 0,
+				})
 				expect(w.notes.followed).toEqual(['op-1'])
 				expect(await row(w, executing.id)).toMatchObject({ state: 'failed', operation_id: 'op-1', error: 'the provider holds no such note' })
 				expect(await row(w, approvedOnly.id)).toMatchObject({ state: 'failed', operation_id: null })
@@ -503,11 +523,21 @@ for (const backend of backends) {
 					renew: (key, holder, ttlMs) => w.locks.renew(key, holder, ttlMs),
 					release: (key, holder) => w.locks.release(key, holder),
 				}
-				expect(await sweepApprovalRequests({ repositories: w.db, lock: counting, kinds: new Map() })).toEqual({ expired: 0, interrupted: 0, settled: 0 })
+				expect(await sweepApprovalRequests({ repositories: w.db, lock: counting, kinds: new Map() })).toEqual({
+					expired: 0,
+					interrupted: 0,
+					settled: 0,
+					orphans: 0,
+				})
 				expect(taken).toEqual([])
 				expect((await row(w, id)).state).toBe('unknown')
 				// The release that serves it takes the lease and follows it.
-				expect(await sweepApprovalRequests({ repositories: w.db, lock: counting, kinds: w.kinds })).toEqual({ expired: 0, interrupted: 0, settled: 0 })
+				expect(await sweepApprovalRequests({ repositories: w.db, lock: counting, kinds: w.kinds })).toEqual({
+					expired: 0,
+					interrupted: 0,
+					settled: 0,
+					orphans: 0,
+				})
 				expect(taken).toEqual([runLeaseKey('notes', 'prod')])
 				expect(w.notes.followed).toHaveLength(1)
 				expect((await getApprovalRequestUseCase(context(w, ADA, { kinds: new Map() }), id)).description.summary[0]?.text).toContain(

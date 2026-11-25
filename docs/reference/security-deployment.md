@@ -148,7 +148,9 @@ suspension and resumption, a data operation. The procedures no request may ever 
 - **A secret value** is sealed in the vault under the request's own purpose and never stored in the row; the row holds
   the name, a reference to the sealed value, its length and its fingerprint (the first 8 hex characters of its SHA-256),
   which creating answers and the page shows. On execution the value moves to the secret's own purpose; once the request
-  is closed (refused, expired, stale, failed or executed) the sealed copy is deleted.
+  is closed (refused, expired, stale, failed or executed) the sealed copy is deleted. A copy left behind (a crash between sealing
+  and the row, or between closing and the deletion, or a release without request kinds that closed it) is deleted by
+  the maintenance sweep once it is older than the longest wait plus an hour and its request is closed or absent.
 - **The all-environments layer** (`env: null`) is a request at the coordinates `<app>@*`, a name no new environment may take. Its decision and the sweep
   hold the deployment lease of every environment it reaches and `<app>:*`, which fences the row, taken in sorted order
   and all or none, so a deploy of any of them makes deciding answer 409. Its before-state binds every environment's `generation`, so a new or changed environment closes it

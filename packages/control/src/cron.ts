@@ -107,8 +107,10 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 		console.info(`parked runs: deadlines=${parked.deadlines} expired=${parked.expired}`)
 	}
 	const requests = await sweepApprovalRequests({ repositories: persistence, lock: locks(env), vault: () => vault(env) })
-	if (requests.expired > 0 || requests.interrupted > 0 || requests.settled > 0) {
-		console.info(`approval requests: expired=${requests.expired} interrupted=${requests.interrupted} settled=${requests.settled}`)
+	if (requests.expired > 0 || requests.interrupted > 0 || requests.settled > 0 || requests.orphans > 0) {
+		console.info(
+			`approval requests: expired=${requests.expired} interrupted=${requests.interrupted} settled=${requests.settled} orphans=${requests.orphans}`,
+		)
 	}
 	// The sync logs its own outcome line (operations-catalog.ts), so a second warn here would only repeat it.
 	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()
