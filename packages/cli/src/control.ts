@@ -181,7 +181,7 @@ expired. \`--wait\` reads it again until it is refused, expired, executed, faile
 once a person decided it, it stops with an error after 15 minutes without an outcome.
 
 \`--request\` on \`apps secrets put|delete\` and \`apps variables put|delete\` does not make the change: it asks a person
-to approve it. Control stores the request, inert, and stderr prints the console link the person opens; for a secret it
+to approve it. Every other verb refuses it. Control stores the request, inert, and stderr prints the console link the person opens; for a secret it
 also prints the value's fingerprint (the first 8 hex characters of its SHA-256, computed here), which the page shows
 beside the value's length, so the person can tell it is the value you sent; when Control's answer names another
 fingerprint, the command fails and says to refuse the request. Control seals the value and stores only that. stdout
@@ -1587,6 +1587,10 @@ export const followRequest = async (
  * `command` is the group (`key`, `apps`, `runs`, `requests`, `register`, `deploy`); the verb, where a group has
  * one, is the first positional word after it. `provider` reaches here only to label an envelope.
  */
+/** Whether a command takes `--request`: only the writes it routes through an approval request. */
+const takesRequest = (command: string | undefined, positional: readonly string[]): boolean =>
+	command === 'apps' && (positional[0] === 'secrets' || positional[0] === 'variables') && (positional[1] === 'put' || positional[1] === 'delete')
+
 export const runControlCli = async (
 	command: string | undefined,
 	argv: readonly string[],
@@ -1597,6 +1601,11 @@ export const runControlCli = async (
 	try {
 		const flags = parseControlFlags(argv)
 		const verb = flags.positional[0]
+		if (flags.request && !takesRequest(command, flags.positional)) {
+			throw new Error(
+				'--request is taken only by apps secrets put|delete and apps variables put|delete; anywhere else it would be ignored and the write made directly',
+			)
+		}
 		switch (command) {
 			case undefined:
 				console.info(USAGE)

@@ -659,6 +659,26 @@ describe('control apps secrets', () => {
 	})
 })
 
+describe('--request', () => {
+	test('a verb that does not take it refuses it, rather than making the write directly', async () => {
+		for (
+			const argv of [
+				['apps', 'secrets', 'list', '--app=notes', '--request'],
+				['apps', 'environments', 'put', '--app=notes', '--env=prod', '--trigger-ref=main', '--request'],
+				['deploy', '--app=notes', '--env=prod', '--request'],
+				['runs', 'list', '--request'],
+			]
+		) {
+			const fetched = captureFetch({ result: { ok: true } })
+			const [command, ...rest] = argv
+			await expect(runControlCli(command, rest, undefined, CONTROL_ENV)).rejects.toThrow(
+				'--request is taken only by apps secrets put|delete and apps variables put|delete',
+			)
+			expect(fetched.calls).toEqual([])
+		}
+	})
+})
+
 describe('control apps environments', () => {
 	test('put re-registers a changed manifest against an app that already exists', async () => {
 		const captured = captureFetch({ result: { appId: 'notes', env: 'prod', provider: 'zerops' } })
