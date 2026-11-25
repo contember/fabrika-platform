@@ -98,6 +98,7 @@ const storedSettingsSchema = z.object({
 	requestTtlHours: approvalSettingsSchema.shape.requestTtlHours.optional(),
 	approvers: approvalSettingsSchema.shape.approvers.partial().optional(),
 	requesterMayApprove: approvalSettingsSchema.shape.requesterMayApprove.partial().optional(),
+	stepUp: approvalSettingsSchema.shape.stepUp.partial().optional(),
 })
 
 /**
@@ -114,6 +115,7 @@ export function appEnvSettings(row: Pick<AppEnvRow, 'approval_settings'>): Appro
 		requestTtlHours: stored.requestTtlHours ?? STRICT_SETTINGS.requestTtlHours,
 		approvers: { ...STRICT_SETTINGS.approvers, ...stored.approvers },
 		requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, ...stored.requesterMayApprove },
+		stepUp: { ...STRICT_SETTINGS.stepUp, ...stored.stepUp },
 	}
 }
 
@@ -121,6 +123,7 @@ export function appEnvSettings(row: Pick<AppEnvRow, 'approval_settings'>): Appro
 export function storedSettings(settings: ApprovalSettings): { readonly settings: string | null } {
 	const approvers = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] !== STRICT_SETTINGS.approvers[category])
 	const mayApprove = APPROVER_CATEGORIES.filter((category) => settings.requesterMayApprove[category] !== STRICT_SETTINGS.requesterMayApprove[category])
+	const stepUp = APPROVER_CATEGORIES.filter((category) => settings.stepUp[category] !== STRICT_SETTINGS.stepUp[category])
 	const stored = {
 		...(settings.deployRequestCommits === STRICT_SETTINGS.deployRequestCommits ? {} : { deployRequestCommits: settings.deployRequestCommits }),
 		...(settings.requestTtlHours === STRICT_SETTINGS.requestTtlHours ? {} : { requestTtlHours: settings.requestTtlHours }),
@@ -128,6 +131,7 @@ export function storedSettings(settings: ApprovalSettings): { readonly settings:
 		...(mayApprove.length === 0
 			? {}
 			: { requesterMayApprove: Object.fromEntries(mayApprove.map((category) => [category, settings.requesterMayApprove[category]])) }),
+		...(stepUp.length === 0 ? {} : { stepUp: Object.fromEntries(stepUp.map((category) => [category, settings.stepUp[category]])) }),
 	}
 	return { settings: Object.keys(stored).length === 0 ? null : JSON.stringify(stored) }
 }

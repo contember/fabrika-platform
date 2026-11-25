@@ -10,6 +10,8 @@ import {
 	requesterMayApprove,
 	requesterPersonId,
 	requiredApprovers,
+	requiredStepUp,
+	type StepUpMode,
 	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
 import type { AppEnvRow, ApprovalRequestRow } from '../../db'
@@ -44,10 +46,24 @@ export function requestCategory(row: Pick<ApprovalRequestRow, 'category'>): Acti
 	return ACTION_CATEGORIES.find((category) => category === row.category) ?? null
 }
 
-/** Who decides a request under its environment's settings now: how many people, and whether the requester's person may. */
-export function deciders(settings: ApprovalSettings, row: Pick<ApprovalRequestRow, 'category'>): { approvers: 1 | 2; requesterMayApprove: boolean } {
+/** Who decides a request, and what deciding it takes. */
+export interface RequestDeciders {
+	readonly approvers: 1 | 2
+	readonly requesterMayApprove: boolean
+	readonly stepUp: StepUpMode
+}
+
+/**
+ * Who decides a request under its environment's settings now: how many people, whether the requester's person may, and
+ * whether deciding takes a passkey.
+ */
+export function deciders(settings: ApprovalSettings, row: Pick<ApprovalRequestRow, 'category'>): RequestDeciders {
 	const category = requestCategory(row)
 	// A category this release does not know takes the strictest reading.
-	if (category === null) return { approvers: 2, requesterMayApprove: false }
-	return { approvers: requiredApprovers(settings, [category]), requesterMayApprove: requesterMayApprove(settings, [category]) }
+	if (category === null) return { approvers: 2, requesterMayApprove: false, stepUp: 'webauthn' }
+	return {
+		approvers: requiredApprovers(settings, [category]),
+		requesterMayApprove: requesterMayApprove(settings, [category]),
+		stepUp: requiredStepUp(settings, [category]),
+	}
 }

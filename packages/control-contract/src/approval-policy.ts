@@ -284,6 +284,11 @@ export type ApproverCount = 1 | 2
 /** The bounds of `requestTtlHours`: the absolute deadline of a pending item, counted from when it starts waiting. */
 export const REQUEST_TTL_HOURS = { min: 1, max: 168, default: 24 } as const
 
+/** What deciding a pending item takes beyond the session: nothing, or a passkey assertion bound to the decision. */
+export const STEP_UP_MODES = ['none', 'webauthn'] as const
+
+export type StepUpMode = (typeof STEP_UP_MODES)[number]
+
 /** An environment's approval settings beside its modes (ADR-0083 §2). */
 export interface ApprovalSettings {
 	readonly deployRequestCommits: DeployRequestCommits
@@ -291,11 +296,13 @@ export interface ApprovalSettings {
 	readonly approvers: { readonly [K in ApproverCategory]: ApproverCount }
 	/** `false`: someone other than the requester's person decides a pending item of the category (ADR-0083 §8). */
 	readonly requesterMayApprove: { readonly [K in ApproverCategory]: boolean }
+	/** `webauthn`: deciding a pending item of the category takes a passkey assertion bound to the decision (ADR-0050 §5). */
+	readonly stepUp: { readonly [K in ApproverCategory]: StepUpMode }
 }
 
 /**
- * The strict preset's settings, and the defaults: merged commits only, a day to decide, one approver per category, and
- * the requester's own person may decide (D2).
+ * The strict preset's settings, and the defaults: merged commits only, a day to decide, one approver per category, the
+ * requester's own person may decide (D2), and a passkey on deciding a request for a credential.
  */
 export const STRICT_SETTINGS: ApprovalSettings = {
 	deployRequestCommits: 'merged',
@@ -342,10 +349,58 @@ export const STRICT_SETTINGS: ApprovalSettings = {
 		'agent-grants': true,
 		credentials: true,
 	},
+	stepUp: {
+		'off-road': 'none',
+		'anyone-calls': 'none',
+		'get-mutation': 'none',
+		people: 'none',
+		adoption: 'none',
+		terminal: 'none',
+		'deletes-data': 'none',
+		'role-actions': 'none',
+		'role-external': 'none',
+		'role-added': 'none',
+		public: 'none',
+		csp: 'none',
+		'deploy-request': 'none',
+		secrets: 'none',
+		variables: 'none',
+		data: 'none',
+		registry: 'none',
+		'agent-grants': 'none',
+		credentials: 'webauthn',
+	},
 }
 
-/** The permissive preset's settings (ADR-0083 §7): an agent may ask for any commit that is not a workspace branch. */
-export const PERMISSIVE_SETTINGS: ApprovalSettings = { ...STRICT_SETTINGS, deployRequestCommits: 'any' }
+/**
+ * The permissive preset's settings (ADR-0083 §7): an agent may ask for any commit that is not a workspace branch, and no
+ * decision takes a passkey.
+ */
+export const PERMISSIVE_SETTINGS: ApprovalSettings = {
+	...STRICT_SETTINGS,
+	deployRequestCommits: 'any',
+	stepUp: {
+		'off-road': 'none',
+		'anyone-calls': 'none',
+		'get-mutation': 'none',
+		people: 'none',
+		adoption: 'none',
+		terminal: 'none',
+		'deletes-data': 'none',
+		'role-actions': 'none',
+		'role-external': 'none',
+		'role-added': 'none',
+		public: 'none',
+		csp: 'none',
+		'deploy-request': 'none',
+		secrets: 'none',
+		variables: 'none',
+		data: 'none',
+		registry: 'none',
+		'agent-grants': 'none',
+		credentials: 'none',
+	},
+}
 
 const approverCount = z.union([z.literal(1), z.literal(2)])
 
@@ -393,12 +448,37 @@ const requesterMayApproveSchema = z.object({
 	credentials: z.boolean(),
 })
 
+const stepUpMode = z.enum(STEP_UP_MODES)
+
+const stepUpSchema = z.object({
+	'off-road': stepUpMode,
+	'anyone-calls': stepUpMode,
+	'get-mutation': stepUpMode,
+	people: stepUpMode,
+	adoption: stepUpMode,
+	terminal: stepUpMode,
+	'deletes-data': stepUpMode,
+	'role-actions': stepUpMode,
+	'role-external': stepUpMode,
+	'role-added': stepUpMode,
+	public: stepUpMode,
+	csp: stepUpMode,
+	'deploy-request': stepUpMode,
+	secrets: stepUpMode,
+	variables: stepUpMode,
+	data: stepUpMode,
+	registry: stepUpMode,
+	'agent-grants': stepUpMode,
+	credentials: stepUpMode,
+})
+
 /** Settings checked against their bounds; a category or a setting this release does not know (a newer one's) is dropped. */
 export const approvalSettingsSchema = z.object({
 	deployRequestCommits: z.enum(DEPLOY_REQUEST_COMMITS),
 	requestTtlHours: z.number().int().min(REQUEST_TTL_HOURS.min).max(REQUEST_TTL_HOURS.max),
 	approvers: approversSchema,
 	requesterMayApprove: requesterMayApproveSchema,
+	stepUp: stepUpSchema,
 }) satisfies z.ZodType<ApprovalSettings, z.ZodTypeDef, unknown>
 
 /**
@@ -410,6 +490,17 @@ export function requiredApprovers(settings: ApprovalSettings, categories: Iterab
 		if (isApproverCategory(category) && settings.approvers[category] === 2) return 2
 	}
 	return 1
+}
+
+/**
+ * What deciding a pending item takes: a passkey when any of its waiting categories says `webauthn`, so the strictest
+ * wins (ADR-0083 §8). `grants` is decided in IAM and counts as `none` here.
+ */
+export function requiredStepUp(settings: ApprovalSettings, categories: Iterable<PolicyCategory>): StepUpMode {
+	for (const category of categories) {
+		if (isApproverCategory(category) && settings.stepUp[category] === 'webauthn') return 'webauthn'
+	}
+	return 'none'
 }
 
 /**

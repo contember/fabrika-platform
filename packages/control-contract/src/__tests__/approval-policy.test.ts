@@ -3,15 +3,19 @@ import {
 	ACTION_CATEGORIES,
 	APPROVAL_CATEGORIES,
 	type ApprovalPolicy,
+	approvalSettingsSchema,
+	APPROVER_CATEGORIES,
 	type CategorizedChange,
 	DEFAULT_APPROVAL_CATEGORIES,
 	gate,
 	modesOf,
 	PERMISSIVE_POLICY,
+	PERMISSIVE_SETTINGS,
 	POLICY_CATEGORIES,
 	policyFromCategories,
 	requesterMayApprove,
 	requesterPersonId,
+	requiredStepUp,
 	REVIEW_REASONS,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
@@ -162,5 +166,21 @@ describe('who decides a pending item (ADR-0083 §8)', () => {
 		expect(requesterPersonId({ id: 'svc', type: 'service' }, 'p-bob')).toBe('p-bob')
 		expect(requesterPersonId({ id: 'svc', type: 'service' })).toBeNull()
 		expect(requesterPersonId({ id: 'svc', type: 'service' }, null)).toBeNull()
+	})
+})
+
+describe('the step-up on deciding (ADR-0050 §5)', () => {
+	test('the default asks a passkey only for a credential; the permissive preset asks none', () => {
+		expect(APPROVER_CATEGORIES.filter((category) => STRICT_SETTINGS.stepUp[category] === 'webauthn')).toEqual(['credentials'])
+		expect(APPROVER_CATEGORIES.filter((category) => PERMISSIVE_SETTINGS.stepUp[category] !== 'none')).toEqual([])
+		expect(approvalSettingsSchema.parse(PERMISSIVE_SETTINGS)).toEqual(PERMISSIVE_SETTINGS)
+	})
+
+	test("any waiting category asking for a passkey makes the decision take one; grants keep IAM's rule", () => {
+		expect(requiredStepUp(STRICT_SETTINGS, ['secrets', 'deploy-request'])).toBe('none')
+		expect(requiredStepUp(STRICT_SETTINGS, ['secrets', 'credentials'])).toBe('webauthn')
+		expect(requiredStepUp({ ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, 'off-road': 'webauthn' } }, ['off-road'])).toBe('webauthn')
+		expect(requiredStepUp(STRICT_SETTINGS, ['grants'])).toBe('none')
+		expect(requiredStepUp(STRICT_SETTINGS, [])).toBe('none')
 	})
 })

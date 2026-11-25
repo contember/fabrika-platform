@@ -7,7 +7,14 @@
 import { dispatchRpcRequest } from '@fabrika/app/service'
 import type { AuthContext } from '@fabrika/auth'
 import { type DomainEvent, permits, type Scope } from '@fabrika/auth-core'
-import { type ApprovalPolicy, type ApprovalSettings, CONTROL_ACTIONS, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
+import {
+	type ApprovalPolicy,
+	type ApprovalSettings,
+	type ApprovalStepUp,
+	CONTROL_ACTIONS,
+	STRICT_POLICY,
+	STRICT_SETTINGS,
+} from '@fabrika/control-contract'
 import { type DeployLocks, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -16,6 +23,7 @@ import { ControlApiError } from '../api/domain'
 import { storedPolicy, storedSettings } from '../approval/categories'
 import {
 	type ApprovalRequestContext,
+	challengeApprovalRequestUseCase,
 	createApprovalRequestUseCase,
 	decideApprovalRequestUseCase,
 	getApprovalRequestUseCase,
@@ -24,6 +32,7 @@ import {
 import { executeApprovedRequest, sweepApprovalRequests } from '../approval/requests/execute'
 import { requestKind, type RequestKindRegistry, type RequestOutcome } from '../approval/requests/kind'
 import { REFUSED_KINDS } from '../approval/requests/refused'
+import { iamPasskeyStepUp, requestStepUpBinding } from '../approval/step-up'
 import { type ControlRpcContext, controlRpcRouter } from '../control-rpc'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import { envScope } from '../iam'
@@ -31,6 +40,7 @@ import { acquireLease, LEASE_TTL_MS, runLeaseKey } from '../lease'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { authWithActions } from './helpers/iam'
 import { fixtureProtect } from './helpers/lock'
+import { answerChallenge, consoleTokenHeaders, type FakePasskeyIam, fakePasskeyIam } from './helpers/passkeys'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
 import { fakeControlProvider } from './helpers/provider'
 import { unusedSourceConnection } from './helpers/source-connection'
@@ -164,6 +174,8 @@ for (const backend of backends) {
 			readonly notes: Notes
 			readonly kinds: RequestKindRegistry
 			readonly audits: DomainEvent[]
+			/** IAM's passkey step-up behind Control's transport; ada and bob hold a passkey. */
+			readonly iam: FakePasskeyIam
 			now: number
 		}
 
@@ -178,6 +190,7 @@ for (const backend of backends) {
 				notes,
 				kinds: new Map([['test.notes.put', notesKind(notes)]]),
 				audits: [],
+				iam: fakePasskeyIam(['p-ada', 'p-bob']),
 				get now() {
 					return clock.now
 				},
@@ -228,13 +241,16 @@ for (const backend of backends) {
 
 		/** `kinds: null` serves the production registry. */
 		function context(w: World, who: Who, options: { kinds?: RequestKindRegistry | null; consoleOrigin?: string | null } = {}): ApprovalRequestContext {
-			const headers: Record<string, string> = { 'Sec-Fetch-Site': 'same-origin' }
+			const headers: Record<string, string> = { 'Sec-Fetch-Site': 'same-origin', ...consoleTokenHeaders(who.id ?? 'p-ada') }
 			if (who.credential !== 'console') headers.Authorization = 'Bearer px_test'
+			const request = new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers })
+			const stepUp = iamPasskeyStepUp(w.iam.gateway, request)
 			return {
 				repositories: w.db,
 				auth: auth(w, who),
-				admission: { request: new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers }) },
+				admission: { request },
 				lock: w.locks,
+				...(stepUp === null ? {} : { stepUp }),
 				...(options.kinds === null ? {} : { kinds: options.kinds ?? w.kinds }),
 				...(options.consoleOrigin === null ? {} : { consoleOrigin: options.consoleOrigin ?? ORIGIN }),
 				now: () => w.now,
@@ -664,6 +680,129 @@ for (const backend of backends) {
 					expect(w.notes.effects).toEqual([])
 					await closeWorld()
 				}
+			})
+		})
+
+		describe('the step-up (ADR-0050 §5)', () => {
+			const passkey = { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, secrets: 'webauthn' as const } }
+
+			/** Ask IAM, through Control, for a challenge bound to one decision of `id`, and answer it with `who`'s passkey. */
+			async function stepUp(w: World, id: string, decision: 'approve' | 'reject', who: Who = ADA) {
+				const { inputDigest } = await getApprovalRequestUseCase(context(w, who), id)
+				return answerChallenge(await challengeApprovalRequestUseCase(context(w, who), { id, decision, inputDigest }), who.id ?? 'p-ada')
+			}
+
+			async function decideWith(w: World, id: string, decision: 'approve' | 'reject', assertion: ApprovalStepUp | undefined, who: Who = ADA) {
+				const { inputDigest } = await getApprovalRequestUseCase(context(w, who), id)
+				return decideApprovalRequestUseCase(context(w, who), { id, decision, inputDigest, ...(assertion === undefined ? {} : { stepUp: assertion }) })
+			}
+
+			test('under webauthn a decision without an assertion is refused, approve and reject alike, and nothing is decided', async () => {
+				const w = await world()
+				await choose(w, STRICT_POLICY, passkey)
+				const { id } = await ask(w)
+				expect((await getApprovalRequestUseCase(context(w, ADA), id)).stepUp).toBe('webauthn')
+				for (const decision of ['approve', 'reject'] as const) {
+					expect(await status(decide(w, id, decision))).toEqual({
+						status: 403,
+						message: 'this decision takes a passkey: confirm it with one of your passkeys',
+					})
+				}
+				expect(await row(w, id)).toMatchObject({ state: 'pending', decided_by_id: null })
+				expect(w.iam.verifications).toBe(0)
+				expect(w.notes.effects).toEqual([])
+			})
+
+			test('a verified assertion bound to the decision decides it, and the decision records the passkey', async () => {
+				const w = await world()
+				await choose(w, STRICT_POLICY, passkey)
+				const { id } = await ask(w)
+				const assertion = await stepUp(w, id, 'approve', BOB)
+				expect(w.iam.bindings).toEqual([requestStepUpBinding(id, 'approve', (await row(w, id)).input_digest)])
+				expect(await decideWith(w, id, 'approve', assertion, BOB)).toMatchObject({ state: 'executed', decision: { principalId: 'p-bob' } })
+				expect(await row(w, id)).toMatchObject({ decided_step_up_credential_id: 'cred-p-bob', decided_step_up_at: expect.any(Number) })
+				expect(w.audits[0]?.metadata).toMatchObject({ decision: 'approve', stepUp: { credentialId: 'cred-p-bob' } })
+				expect(w.notes.effects).toHaveLength(1)
+
+				const { id: refused } = await ask(w)
+				expect(await decideWith(w, refused, 'reject', await stepUp(w, refused, 'reject'))).toMatchObject({ state: 'rejected' })
+				expect((await row(w, refused)).decided_step_up_credential_id).toBe('cred-p-ada')
+			})
+
+			test('each of two approvers confirms with a passkey, and the first one is recorded too', async () => {
+				const w = await world()
+				await choose(w, STRICT_POLICY, { ...passkey, approvers: { ...STRICT_SETTINGS.approvers, secrets: 2 } })
+				const { id } = await ask(w)
+				expect((await decideWith(w, id, 'approve', await stepUp(w, id, 'approve', ADA), ADA)).state).toBe('pending')
+				expect((await status(decideWith(w, id, 'approve', undefined, BOB))).status).toBe(403)
+				expect((await decideWith(w, id, 'approve', await stepUp(w, id, 'approve', BOB), BOB)).state).toBe('executed')
+				expect(await row(w, id)).toMatchObject({ partial_step_up_credential_id: 'cred-p-ada', decided_step_up_credential_id: 'cred-p-bob' })
+			})
+
+			test('one step-up cannot decide another request, nor the other decision of the same one', async () => {
+				const w = await world()
+				await choose(w, STRICT_POLICY, passkey)
+				const x = await ask(w)
+				const y = await ask(w, AGENT, { appId: 'notes', env: 'prod', name: 'farewell', value: 'bye' })
+				const refused = await status(decideWith(w, y.id, 'approve', await stepUp(w, x.id, 'approve')))
+				expect(refused).toEqual({ status: 403, message: 'the passkey check failed, so nothing was decided; try again' })
+				expect((await status(decideWith(w, x.id, 'approve', await stepUp(w, x.id, 'reject')))).status).toBe(403)
+				expect((await row(w, x.id)).state).toBe('pending')
+				expect((await row(w, y.id)).state).toBe('pending')
+				expect(w.notes.effects).toEqual([])
+			})
+
+			test("another person's assertion is refused, even when IAM would verify it", async () => {
+				const w = await world()
+				await choose(w, STRICT_POLICY, passkey)
+				const { id } = await ask(w)
+				const ada = await stepUp(w, id, 'approve', ADA)
+				expect((await status(decideWith(w, id, 'approve', ada, BOB))).status).toBe(403)
+				expect(w.iam.verifications).toBe(1)
+				expect((await row(w, id)).state).toBe('pending')
+			})
+
+			test('a replayed assertion is refused: IAM consumed it on the first decision, which lost the lease', async () => {
+				const w = await world()
+				await choose(w, STRICT_POLICY, passkey)
+				const { id } = await ask(w)
+				const assertion = await stepUp(w, id, 'approve')
+				const holder = uuidv7()
+				expect(await w.locks.acquire(runLeaseKey('notes', 'prod'), holder, LEASE_TTL_MS)).toBe(true)
+				expect((await status(decideWith(w, id, 'approve', assertion))).status).toBe(409)
+				await w.locks.release(runLeaseKey('notes', 'prod'), holder)
+				expect((await status(decideWith(w, id, 'approve', assertion))).status).toBe(403)
+				expect((await row(w, id)).state).toBe('pending')
+				expect((await decideWith(w, id, 'approve', await stepUp(w, id, 'approve'))).state).toBe('executed')
+			})
+
+			test('none needs nothing and issues no challenge; a person without a passkey is told so', async () => {
+				const w = await world()
+				const { id } = await ask(w)
+				const read = await getApprovalRequestUseCase(context(w, ADA), id)
+				expect(read.stepUp).toBe('none')
+				const challenge = await status(challengeApprovalRequestUseCase(context(w, ADA), { id, decision: 'approve', inputDigest: read.inputDigest }))
+				expect(challenge).toEqual({ status: 409, message: 'deciding this request takes no passkey' })
+				expect((await decideWith(w, id, 'approve', undefined)).state).toBe('executed')
+
+				await choose(w, STRICT_POLICY, passkey)
+				const { id: other } = await ask(w)
+				const eve: Who = { credential: 'console', id: 'p-eve', label: 'eve@example.test' }
+				const inputDigest = (await row(w, other)).input_digest
+				expect(await challengeApprovalRequestUseCase(context(w, eve), { id: other, decision: 'approve', inputDigest })).toEqual({ kind: 'no-passkey' })
+			})
+
+			test('a stepUp made stricter after the first approval closes the request stale at execution', async () => {
+				const w = await world()
+				const twoPeople = { ...STRICT_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, secrets: 2 as const } }
+				await choose(w, STRICT_POLICY, twoPeople)
+				const { id } = await ask(w)
+				await decide(w, id, 'approve', ADA)
+				await choose(w, STRICT_POLICY, { ...twoPeople, stepUp: passkey.stepUp })
+				const stale = await decideWith(w, id, 'approve', await stepUp(w, id, 'approve', BOB), BOB)
+				expect(stale.state).toBe('stale')
+				expect(stale.error).toContain('now takes a passkey')
+				expect(w.notes.effects).toEqual([])
 			})
 		})
 

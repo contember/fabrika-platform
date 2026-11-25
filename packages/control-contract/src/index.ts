@@ -1,7 +1,8 @@
 import type { EndpointKind, EndpointMethod } from '@fabrika/auth-core'
 import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
 import { z } from 'zod'
-import type { ApprovalCategory, ApprovalPolicy, ApprovalSettings, ReviewReason } from './approval-policy.js'
+import type { ApprovalCategory, ApprovalPolicy, ApprovalSettings, ReviewReason, StepUpMode } from './approval-policy.js'
+import type { ApprovalStepUp } from './approval-step-up.js'
 
 export * from './access.js'
 export * from './builder-bootstrap.js'
@@ -803,6 +804,8 @@ export interface ApprovalDto {
 	 * (ADR-0083 §8), and then `requesterPersonId` of the request names who may not, or, when null, that nobody may.
 	 */
 	requesterMayApprove: boolean
+	/** What deciding the run takes beyond the session: a passkey when a waiting category says `webauthn` (ADR-0050 §5). */
+	stepUp: StepUpMode
 	/** When the parked run expires unless decided; absent once decided, and for a run parked before deadlines existed until maintenance sets one. */
 	deadline?: number
 	/** A non-person asked for the deploy (ADR-0050 §4): who, and the commit. Absent for any other run. */
@@ -838,6 +841,8 @@ export interface CompleteApprovalRequest {
 	decision: 'approve' | 'reject'
 	candidateDigest: string
 	baselineDigest: string
+	/** The assertion bound to this decision, when deciding the run takes a step-up (`ApprovalDto.stepUp`). */
+	stepUp?: ApprovalStepUp
 }
 
 /** Change whether, and with which mode per category, a change waits for approval on one environment (ADR-0050 §4, ADR-0083). */
@@ -872,6 +877,7 @@ export interface RunLogResponse {
 export { OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/auth-core'
 export * from './approval-policy.js'
 export * from './approval-requests.js'
+export * from './approval-step-up.js'
 export * from './approval-view.js'
 export type {
 	AdoptNamespaceInput,

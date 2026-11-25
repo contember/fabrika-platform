@@ -43,6 +43,7 @@ import {
 	serializeSnapshot,
 	snapshotDigest,
 } from './snapshot'
+import type { StepUpRecord } from './step-up'
 
 /**
  * What a run stores after classification: the diff, and the two digests an approval is bound to. A line classified
@@ -83,6 +84,8 @@ export interface StoredApproval {
 	readonly approvedAt: number
 	readonly candidateDigest: string
 	readonly baselineDigest: string
+	/** The passkey assertion the approval carried, when deciding the run took one (ADR-0050 §5). */
+	readonly stepUp?: StepUpRecord
 }
 
 const digest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
@@ -151,6 +154,7 @@ const approvalSchema = z.object({
 	approvedAt: z.number().int(),
 	candidateDigest: digest,
 	baselineDigest: digest,
+	stepUp: z.object({ credentialId: z.string().min(1), at: z.number().int() }).optional(),
 }) satisfies z.ZodType<StoredApproval>
 
 export const parseClassification = (raw: string): StoredClassification => classificationSchema.parse(JSON.parse(raw))

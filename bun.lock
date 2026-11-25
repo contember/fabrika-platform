@@ -378,6 +378,7 @@
       "dependencies": {
         "@fabrika/app": "workspace:*",
         "@fabrika/auth-core": "workspace:*",
+        "@fabrika/iam-contract": "workspace:*",
         "@fabrika/operations-contract": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
         "zod": "^3.25.76",

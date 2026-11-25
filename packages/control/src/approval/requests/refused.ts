@@ -17,6 +17,8 @@ const REFUSED: Readonly<Record<string, string>> = {
 	'iam.grantApproval.set': CONFIGURATION,
 	'approvals.complete': DECIDING,
 	'approvals.requests.decide': DECIDING,
+	'approvals.challenge': DECIDING,
+	'approvals.requests.challenge': DECIDING,
 	'iam.grantRequests.decide': DECIDING,
 	'apps.environments.delete': PROTECTED_DELETE,
 	'apps.delete': PROTECTED_DELETE,

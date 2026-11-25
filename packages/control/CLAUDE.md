@@ -833,6 +833,13 @@ other environment, before the provider prepares anything, and the write maps a r
   `requesterMayApprove: false` on any waiting category (`requesterMayApprove` in the contract) keeps the requester's
   person from approving a parked deploy request (`requireOtherThanRequester`); where that person is unknown (a service
   key's issuer, which no token names) nobody approves it, and anyone may refuse it.
+- **A decision under `stepUp: webauthn` carries a passkey assertion IAM verified (ADR-0050 §5, `src/approval/step-up.ts`).**
+  `requiredStepUp` on the waiting categories decides it, beside `requiredApprovers`. Control builds the binding from the
+  stored item and the decision (`runStepUpBinding`, `requestStepUpBinding`), never from the input, and calls IAM's
+  `passkeys.challenge`/`verify` over `IAM_ADMIN` with the caller's `X-Fabrika-Token` (`iamPasskeyStepUp`), no other
+  credential. `requireStepUp` runs before any decision write and refuses (403) a missing assertion, any IAM refusal or
+  failure, and a verified person other than the approver. The passkey is recorded on the decision (the run's approval
+  JSON, the request's `*_step_up_*` columns) and in its audit row. Never log an assertion.
 - **Every other action of a non-person that waits is an `approval_requests` row (ADR-0083 §8, `src/approval/requests/`).**
   A kind (`kind.ts`, `requestKind`) owns its input and before-state schemas, its coordinates, the action the requester
   must hold to ask, its execution, its `follow` hook, and an optional `discard` hook that releases what a refused or

@@ -43,6 +43,8 @@ async function stricterPolicy(repositories: Pick<ControlRepositories, 'registry'
 			return `environment \`${row.env}\` now lets only someone other than the requester's person approve it`
 		}
 	}
+	const confirmed = row.decided_step_up_credential_id !== null && (row.partial_approver_id === null || row.partial_step_up_credential_id !== null)
+	if (who.stepUp === 'webauthn' && !confirmed) return `environment \`${row.env}\` now takes a passkey to decide it`
 	return null
 }
 

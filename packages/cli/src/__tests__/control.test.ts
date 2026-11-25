@@ -1293,6 +1293,7 @@ describe('control requests', () => {
 		inputDigest: `sha256:${'a'.repeat(64)}`,
 		approvers: 1,
 		requesterMayApprove: true,
+		stepUp: 'none',
 		deadline: 2,
 		createdAt: 1,
 		updatedAt: 1,

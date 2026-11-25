@@ -55,10 +55,14 @@ const CONTROL: Readonly<Record<string, Judged>> = {
 	'namespaces.releaseClaims': { exempt: 'never requested (ADR-0034 frees resources); keeps its rule' },
 	'runs.cancel': { exempt: 'stops a run; deploys nothing' },
 	'approvals.complete': { exempt: `deciding a pending item: ${ALWAYS_A_PERSON}` },
+	'approvals.challenge': { exempt: `a passkey challenge for deciding a pending item, which IAM issues and nothing else changes: ${ALWAYS_A_PERSON}` },
 	'approvals.requests.create': {
 		exempt: "request plumbing: stores an inert request; its change runs only on a person's approval, judged by its kind's category",
 	},
 	'approvals.requests.decide': { exempt: `deciding a pending item: ${ALWAYS_A_PERSON}` },
+	'approvals.requests.challenge': {
+		exempt: `a passkey challenge for deciding a pending item, which IAM issues and nothing else changes: ${ALWAYS_A_PERSON}`,
+	},
 	'deploy': { category: 'deploy-request' },
 	'register': { category: 'registry' },
 	'mail.messages.release': { exempt: MAIL },
@@ -144,5 +148,9 @@ describe('the mode matrix at the protection API', () => {
 		const { secrets: _, ...missing } = approvers
 		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, approvers: missing })).toBe(400)
 		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, stepUp: true })).toBe(400)
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, secrets: 'totp' } })).toBe(400)
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, grants: 'webauthn' } })).toBe(400)
+		const { stepUp: _stepUp, ...withoutStepUp } = STRICT_SETTINGS
+		expect(await protect(STRICT_POLICY, withoutStepUp)).toBe(400)
 	})
 })

@@ -5,7 +5,14 @@
 
 import type { AuthContext } from '@fabrika/auth'
 import { permits } from '@fabrika/auth-core'
-import { type ApprovalPolicy, type ApprovalSettings, PERMISSIVE_POLICY, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
+import {
+	type ApprovalPolicy,
+	type ApprovalSettings,
+	type ApprovalStepUp,
+	PERMISSIVE_POLICY,
+	STRICT_POLICY,
+	STRICT_SETTINGS,
+} from '@fabrika/control-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
@@ -14,13 +21,17 @@ import { ControlApiError } from '../api/domain'
 import { getRunUseCase, type RunsUseCaseContext, triggerDeployUseCase } from '../api/runs'
 import {
 	type ApprovalUseCaseContext,
+	challengeApprovalUseCase,
 	completeApprovalUseCase,
 	getApprovalUseCase,
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from '../approval/api'
-import { parseClassification } from '../approval/publish'
+import { parseApproval, parseClassification } from '../approval/publish'
 import { parseDeployRequest } from '../approval/request'
+import { challengeApprovalRequestUseCase, decideApprovalRequestUseCase } from '../approval/requests/api'
+import { jsonDigest } from '../approval/requests/rules'
+import { iamPasskeyStepUp, runStepUpBinding } from '../approval/step-up'
 import type { ControlRepositories, RunRow } from '../db'
 import type { CommitSource, RequestedCommitInput } from '../github/source/commit-files'
 import { SourceFailure } from '../github/source/failure'
@@ -31,6 +42,7 @@ import { memoryCommits } from './helpers/commits'
 import { BASE, WITH_EXPORT } from './helpers/contracts'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { fixtureProtect, makeFakeLock } from './helpers/lock'
+import { answerChallenge, consoleTokenHeaders, type FakePasskeyIam, fakePasskeyIam } from './helpers/passkeys'
 
 const COMMIT = 'c'.repeat(40)
 const ORIGIN = 'https://console.example.test'
@@ -48,6 +60,8 @@ interface World {
 	/** The contract the next deploy's commit holds. */
 	contract: string
 	deploys: number
+	/** IAM's passkey step-up behind Control's transport; ada and bob hold a passkey. */
+	readonly iam: FakePasskeyIam
 	/** The repositories' clock, in unix seconds. */
 	now: number
 }
@@ -63,6 +77,7 @@ async function world(): Promise<World> {
 		answer: (input) => Promise.resolve({ message: 'Fix <b>invoice</b> rounding', merged: input.mergedInto === null ? null : true }),
 		contract: BASE,
 		deploys: 0,
+		iam: fakePasskeyIam(['p-ada', 'p-bob']),
 		get now() {
 			return clock.now
 		},
@@ -168,8 +183,8 @@ function caller(kind: Caller, id = 'p-ada', label = 'ada@example.test'): AuthCon
 }
 
 /** A console request, or one with a bearer: a person's own `px_` key, an agent's token, a service key. */
-function request(kind: Caller): Request {
-	const headers: Record<string, string> = { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin' }
+function request(kind: Caller, principalId = 'p-ada'): Request {
+	const headers: Record<string, string> = { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin', ...consoleTokenHeaders(principalId) }
 	if (kind !== 'console') headers.Authorization = 'Bearer px_test'
 	return new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers })
 }
@@ -188,13 +203,16 @@ function runs(w: World, kind: Caller): RunsUseCaseContext {
 }
 
 function approvals(w: World, auth: AuthContext = caller('console')): ApprovalUseCaseContext {
+	const console = request('console', auth.principal?.id)
+	const stepUp = iamPasskeyStepUp(w.iam.gateway, console)
 	return {
 		repositories: w.db,
 		auth,
 		queue: queue(w),
 		lock: makeFakeLock(w.db),
-		request: request('console'),
+		request: console,
 		now: () => w.now,
+		...(stepUp === null ? {} : { stepUp }),
 	}
 }
 
@@ -631,6 +649,128 @@ describe('requesterMayApprove: false on a parked deploy request', () => {
 	})
 })
 
+describe('the step-up on a parked run (ADR-0050 §5)', () => {
+	const ada = () => caller('console', 'p-ada', 'ada@example.test')
+	const passkey = { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, 'deploy-request': 'webauthn' as const } }
+
+	async function digests(w: World, runId: string) {
+		const classification = parseClassification(await w.db.runs.document((await run(w, runId)).classification_json ?? ''))
+		return { candidateDigest: classification.candidateDigest, baselineDigest: classification.baselineDigest }
+	}
+
+	/** Ask IAM, through Control, for a challenge bound to one decision of the run, and answer it with ada's passkey. */
+	async function stepUp(w: World, runId: string, decision: 'approve' | 'reject') {
+		return answerChallenge(await challengeApprovalUseCase(approvals(w, ada()), { runId, decision, ...await digests(w, runId) }), 'p-ada')
+	}
+
+	async function decideWith(w: World, runId: string, decision: 'approve' | 'reject', assertion?: ApprovalStepUp) {
+		return completeApprovalUseCase(approvals(w, ada()), {
+			runId,
+			decision,
+			...await digests(w, runId),
+			...(assertion === undefined ? {} : { stepUp: assertion }),
+		})
+	}
+
+	/** A request by an agent for a credential, which takes a passkey by default, waiting beside the run. */
+	async function credentialRequest(w: World): Promise<{ id: string; inputDigest: string }> {
+		const inputJson = '{"name":"ci"}'
+		const row = await w.db.approvalRequests.create({
+			id: uuidv7(),
+			kind: 'test.credentials.issue',
+			inputJson,
+			inputDigest: jsonDigest(inputJson),
+			appId: 'notes',
+			env: 'prod',
+			category: 'credentials',
+			requester: { id: 'p-ada', type: 'user', label: 'ada', credential: 'oauth', clientId: null, grantId: null, issuerId: null },
+			beforeJson: '{}',
+			beforeDigest: jsonDigest('{}'),
+			ttlSeconds: HOUR,
+		})
+		return { id: row.id, inputDigest: row.input_digest }
+	}
+
+	function requestContext(w: World) {
+		const console = request('console', 'p-ada')
+		const stepUp = iamPasskeyStepUp(w.iam.gateway, console)
+		return { repositories: w.db, auth: ada(), admission: { request: console }, lock: makeFakeLock(w.db), ...(stepUp === null ? {} : { stepUp }) }
+	}
+
+	test('approving takes an assertion bound to the run and its digests, and the approval records the passkey', async () => {
+		const w = await world()
+		await published(w)
+		await choose(w, 'prod', STRICT_POLICY, passkey)
+		const { runId } = await requested(w)
+		expect((await getApprovalUseCase(approvals(w), runId)).stepUp).toBe('webauthn')
+		expect(await status(decideWith(w, runId, 'approve'))).toEqual({
+			status: 403,
+			message: 'this decision takes a passkey: confirm it with one of your passkeys',
+		})
+		expect(await run(w, runId)).toMatchObject({ status: 'awaiting_approval', approval_json: null })
+
+		const assertion = await stepUp(w, runId, 'approve')
+		const { candidateDigest, baselineDigest } = await digests(w, runId)
+		expect(w.iam.bindings).toEqual([runStepUpBinding(runId, 'approve', candidateDigest, baselineDigest)])
+		expect((await decideWith(w, runId, 'approve', assertion)).run.status).toBe('pending')
+		expect(parseApproval((await run(w, runId)).approval_json ?? '').stepUp).toEqual({ credentialId: 'cred-p-ada', at: expect.any(Number) })
+		// Created, then queued again by the approval.
+		expect(sends(w, runId)).toBe(2)
+	})
+
+	test('refusing takes one too, and a replayed assertion is refused', async () => {
+		const w = await world()
+		await published(w)
+		await choose(w, 'prod', STRICT_POLICY, passkey)
+		const { runId } = await requested(w)
+		expect((await status(decideWith(w, runId, 'reject'))).status).toBe(403)
+		const assertion = await stepUp(w, runId, 'reject')
+		expect((await decideWith(w, runId, 'reject', assertion)).run).toMatchObject({ status: 'failed', failureCause: 'rejected' })
+
+		const { runId: next } = await requested(w)
+		const spent = await stepUp(w, next, 'approve')
+		expect((await decideWith(w, next, 'approve', spent)).run.status).toBe('pending')
+		await choose(w, 'prod', STRICT_POLICY, { ...passkey, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } })
+		const { runId: third } = await requested(w)
+		const first = await stepUp(w, third, 'approve')
+		expect((await decideWith(w, third, 'approve', first)).partialApproval?.principalId).toBe('p-ada')
+		expect(parseApproval((await run(w, third)).partial_approval_json ?? '').stepUp?.credentialId).toBe('cred-p-ada')
+		expect((await status(decideWith(w, third, 'reject', first))).status).toBe(403)
+	})
+
+	test("a run's step-up cannot decide a request, nor a request's step-up the run", async () => {
+		const w = await world()
+		await published(w)
+		await choose(w, 'prod', STRICT_POLICY, passkey)
+		const { runId } = await requested(w)
+		const asked = await credentialRequest(w)
+		const forRun = await stepUp(w, runId, 'reject')
+		const decideRequest = { id: asked.id, decision: 'reject' as const, inputDigest: asked.inputDigest }
+		expect(await status(decideApprovalRequestUseCase(requestContext(w), { ...decideRequest, stepUp: forRun }))).toEqual({
+			status: 403,
+			message: 'the passkey check failed, so nothing was decided; try again',
+		})
+		const forRequest = answerChallenge(await challengeApprovalRequestUseCase(requestContext(w), decideRequest), 'p-ada')
+		expect((await status(decideWith(w, runId, 'reject', forRequest))).status).toBe(403)
+		expect((await run(w, runId)).status).toBe('awaiting_approval')
+		expect((await w.db.approvalRequests.get(asked.id))?.state).toBe('pending')
+	})
+
+	test('none needs nothing and issues no challenge', async () => {
+		const w = await world()
+		await published(w)
+		const { runId } = await requested(w)
+		expect((await getApprovalUseCase(approvals(w), runId)).stepUp).toBe('none')
+		expect(await status(challengeApprovalUseCase(approvals(w), { runId, decision: 'approve', ...await digests(w, runId) }))).toEqual({
+			status: 409,
+			message: 'deciding this run takes no passkey',
+		})
+		expect((await decideWith(w, runId, 'approve')).run.status).toBe('pending')
+		expect(parseApproval((await run(w, runId)).approval_json ?? '').stepUp).toBeUndefined()
+		expect(w.iam.bindings).toEqual([])
+	})
+})
+
 describe('the settings are stored with the protection', () => {
 	test('stored as their difference from the defaults, kept beyond the deletion of the environment', async () => {
 		const w = await world()
@@ -639,6 +779,7 @@ describe('the settings are stored with the protection', () => {
 			requestTtlHours: 6,
 			approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2, secrets: 2 },
 			requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, variables: false },
+			stepUp: { ...STRICT_SETTINGS.stepUp, 'deploy-request': 'webauthn', credentials: 'none' },
 		}
 		const dto = await setEnvironmentProtectionUseCase(approvals(w), { appId: 'notes', env: 'prod', protected: true, settings })
 		expect(dto.approvalSettings).toEqual(settings)
@@ -647,6 +788,7 @@ describe('the settings are stored with the protection', () => {
 			requestTtlHours: 6,
 			approvers: { 'deploy-request': 2, secrets: 2 },
 			requesterMayApprove: { variables: false },
+			stepUp: { 'deploy-request': 'webauthn', credentials: 'none' },
 		})
 		// Omitted keeps them; the defaults store nothing.
 		expect((await setEnvironmentProtectionUseCase(approvals(w), { appId: 'notes', env: 'prod', protected: true })).approvalSettings).toEqual(settings)
