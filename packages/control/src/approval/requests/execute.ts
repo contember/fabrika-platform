@@ -93,8 +93,9 @@ export async function acquireRequestLease(
 
 /**
  * Execute an approved request with the approver's authority (`c.auth`), under `lease`. The policy as it stands now and
- * the before-state are checked first; either closes the request `stale`. The operation id is recorded before the kind
- * acts, and a throw leaves the request `unknown` for the sweep to follow.
+ * the before-state are checked first; either closes the request `stale`, and a before-state that cannot be read closes
+ * it `failed`. The operation id is recorded before the kind acts, and a throw leaves the request `unknown` for the sweep
+ * to follow.
  */
 export async function executeApprovedRequest(c: RequestExecutionContext, kind: RequestKind, row: ApprovalRequestRow, lease: Lease): Promise<void> {
 	const requests = c.repositories.approvalRequests
@@ -112,7 +113,15 @@ export async function executeApprovedRequest(c: RequestExecutionContext, kind: R
 		await close('stale', `${stricter} since it was approved, so it was not executed; ask again`)
 		return
 	}
-	if (jsonDigest(await action.captureBefore(c)) !== row.before_digest) {
+	let before: string
+	try {
+		before = await action.captureBefore(c)
+	} catch {
+		// Never the error itself, which may carry a secret; the kind reads IAM or Control's own store.
+		await close('failed', 'Control could not read what the request acts on now (IAM, or the store its kind reads), so nothing was done; ask again')
+		return
+	}
+	if (jsonDigest(before) !== row.before_digest) {
 		await close('stale', 'what the request acts on changed since it was asked for, so it was not executed; ask again')
 		return
 	}

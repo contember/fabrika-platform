@@ -179,8 +179,9 @@ Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category `a
 - **Execution** follows the final approval in the same call, under the environment's deployment lease (409 while
   it is busy), with the approver's authority and the requester recorded beside them. Control judges the policy as it
   stands now and the before-state again; a stricter policy or a changed before-state closes the request `stale` and
-  nothing runs. The operation id is recorded before the kind's first external effect; an execution that throws leaves
-  the request `unknown`. A Control whose kind reads the stored input back to another digest (a release rolled back
+  nothing runs, and a before-state Control cannot read (IAM not answering) closes it `failed`, saying so. The
+  operation id is recorded before the kind's first external effect; an execution that throws leaves the request
+  `unknown`. A Control whose kind reads the stored input back to another digest (a release rolled back
   under the request, which drops a key it does not know) shows the request as one it cannot describe and closes an
   approved one `failed`: it never executes less than the person approved. A request whose kind or input this Control
   cannot describe can only be refused: the page offers no Approve, and an approval answers 409 and changes nothing.

@@ -441,6 +441,21 @@ for (const backend of backends) {
 			expect((await w.grantsAt()).map((grant) => grant.role_key)).toEqual(['reader'])
 		})
 
+		test('IAM not answering when the approval executes closes the request failed, saying it could not be read and nothing was done', async () => {
+			const w = await world()
+			const created = await w.ask()
+			const ada = await w.person(w.ada, 'ada')
+			const read = await getApprovalRequestUseCase(ada, created.id)
+			const down = () => Promise.reject(new Error('IAM is down'))
+			const blind = { ...ada, iamGrants: { principalAt: down, openGrantRequests: down } }
+			const decided = await decideApprovalRequestUseCase(blind, { id: created.id, decision: 'approve', inputDigest: read.inputDigest })
+			expect(decided.state).toBe('failed')
+			expect(decided.error).toContain('could not read what the request acts on now')
+			expect(decided.error).toContain('nothing was done')
+			expect(decided.error).not.toContain('IAM is down')
+			expect(await w.grantsAt()).toEqual([])
+		})
+
 		test('a refusal and an expiry grant nothing', async () => {
 			const w = await world()
 			const refused = await w.ask()
