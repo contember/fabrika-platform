@@ -6,6 +6,7 @@ import { RpcError } from '@fabrika/app'
 import { displayNameProblem, isCimdClientId, isOAuthResourceUri } from '@fabrika/auth-core'
 import {
 	type ExternalAppDto,
+	isHttpsDocumentUrl,
 	isOAuthIdentityAppId,
 	isOAuthIdentityRoleKey,
 	MAX_EXTERNAL_APP_CLIENTS,
@@ -75,14 +76,6 @@ function lines(text: string): string[] {
 	return text.split('\n').map((line) => line.trim()).filter((line) => line !== '')
 }
 
-function isHttpsUrl(value: string): boolean {
-	try {
-		return new URL(value).protocol === 'https:'
-	} catch {
-		return false
-	}
-}
-
 /** The request `externalApps.put` takes for the draft, or each field IAM would refuse and why. */
 export function externalAppRequest(draft: ExternalAppDraft): DraftRequest {
 	const problems = new Map<string, string>()
@@ -124,12 +117,14 @@ export function externalAppRequest(draft: ExternalAppDraft): DraftRequest {
 		if (redirectUris.length === 0 || redirectUris.length > 32) {
 			problems.set(`clients.${index}.redirectUris`, 'List 1 to 32 redirect URIs, one per line.')
 		} else if (!redirectUris.every((uri) => isOAuthResourceUri(uri))) {
-			problems.set(`clients.${index}.redirectUris`, 'Each redirect URI is an exact https URL without a fragment.')
+			problems.set(`clients.${index}.redirectUris`, 'Each redirect URI is an exact https URL (loopback http for local development) without a fragment.')
 		} else if (new Set(redirectUris).size !== redirectUris.length) {
 			problems.set(`clients.${index}.redirectUris`, 'A redirect URI is listed twice.')
 		}
 		const metadataUrl = client.metadataUrl.trim()
-		if (metadataUrl !== '' && !isHttpsUrl(metadataUrl)) problems.set(`clients.${index}.metadataUrl`, 'An https URL, or leave it empty.')
+		if (metadataUrl !== '' && !isHttpsDocumentUrl(metadataUrl)) {
+			problems.set(`clients.${index}.metadataUrl`, 'An https URL without credentials or a fragment, or leave it empty.')
+		}
 		return { clientId, redirectUris, metadataUrl: metadataUrl === '' ? null : metadataUrl }
 	})
 
@@ -163,6 +158,23 @@ export function draftConsequences(original: ExternalAppDto | null, draft: Extern
 		removedClients: (original?.clients ?? []).map((client) => client.clientId).filter((id) => !clients.includes(id)),
 		resourceChanged: original !== null && original.resource !== draft.resource.trim(),
 	}
+}
+
+/**
+ * What a save of an existing application ends, one sentence each, for the confirmation before it is sent; empty when
+ * the save ends nothing. A new application ends nobody's sign-in, so it needs none.
+ */
+export function revocationsToConfirm(consequences: DraftConsequences): string[] {
+	const lines: string[] = []
+	const clients = consequences.removedClients.length
+	if (clients > 0) lines.push(`${clients === 1 ? 'A removed client loses' : `${clients} removed clients lose`} every sign-in through it.`)
+	if (consequences.resourceChanged) lines.push("The new resource revokes every sign-in of the application's clients.")
+	if (consequences.removedRoles.length > 0) {
+		lines.push(`${consequences.removedRoles.map((key) => `'${key}'`).join(', ')} is taken from everyone it is granted to.`)
+	}
+	if (consequences.rolesDropped) lines.push('Without roles, every active user of the installation can sign in.')
+	if (consequences.rolesIntroduced) lines.push('Everyone is refused at their next sign-in or token refresh until you grant one of the new roles.')
+	return lines
 }
 
 /** IAM refuses every registry write until a deploy of this release imported the deploy variable's client list. */

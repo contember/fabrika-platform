@@ -230,6 +230,16 @@ const IDENTITY_APP = /^[a-z0-9][a-z0-9-]{0,62}$/
 /** A role key; never a built-in one (`admin` means every action of an application). */
 const IDENTITY_ROLE_KEY = /^[a-z0-9][a-z0-9-]{0,62}$/
 
+/** An HTTPS URL without credentials or a fragment, where IAM may fetch a client's metadata document. */
+export function isHttpsDocumentUrl(value: string): boolean {
+	try {
+		const url = new URL(value)
+		return url.protocol === 'https:' && url.username === '' && url.password === '' && url.hash === ''
+	} catch {
+		return false
+	}
+}
+
 /** An external application's id: lowercase, without `@`, at most 63 characters. */
 export function isOAuthIdentityAppId(value: unknown): value is string {
 	return typeof value === 'string' && IDENTITY_APP.test(value)

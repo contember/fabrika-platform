@@ -40,6 +40,7 @@ import type {
 import {
 	type ExternalAppDto,
 	type IamAdminRpcContract,
+	isHttpsDocumentUrl,
 	isOAuthIdentityAppId,
 	isOAuthIdentityRoleKey,
 	MAX_EXTERNAL_APP_CLIENTS,
@@ -251,7 +252,7 @@ control service. It is NOT the private hostname the services use between themsel
 resolves inside the provider's project and nowhere else, so from here it only ever fails to connect.
 
 \`external-apps\` and \`oauth-clients\` manage the OAuth clients IAM serves (ADR-0089). They call IAM's admin API
-with the same two variables as \`key issue\`, and nothing else: FABRIKA_IAM_RPC_URL (or --iam-url), IAM's PUBLIC origin,
+with two of the variables \`key issue\` reads, and nothing else: FABRIKA_IAM_RPC_URL (or --iam-url), IAM's PUBLIC origin,
 and FABRIKA_IAM_PROVISIONING_KEY, the bearer. An external application is an application outside this installation that
 signs people in through IAM; \`put\` replaces it whole from a file (record, roles and clients) and is idempotent:
 
@@ -1221,23 +1222,17 @@ const oauthClientFileSchema = z.object({
 	metadataUrl: z.string().nullable().optional(),
 }).strict()
 
-const isHttpsUrl = (value: string): boolean => {
-	try {
-		return new URL(value).protocol === 'https:'
-	} catch {
-		return false
-	}
-}
-
 /** What IAM refuses of one client's coordinates, checked with the contract's own predicates. */
 const clientProblems = (at: string, client: { clientId: string; redirectUris: string[]; metadataUrl?: string | null | undefined }): string[] => {
 	const problems: string[] = []
 	if (!isCimdClientId(client.clientId)) problems.push(`${at}.clientId must be the https URL of the client's metadata document, with a path`)
 	const uris = client.redirectUris
 	if (uris.length === 0 || uris.length > 32 || !uris.every((uri) => isOAuthResourceUri(uri)) || new Set(uris).size !== uris.length) {
-		problems.push(`${at}.redirectUris must list 1 to 32 distinct exact https URLs without a fragment`)
+		problems.push(`${at}.redirectUris must list 1 to 32 distinct exact https URLs (loopback http locally) without a fragment`)
 	}
-	if (client.metadataUrl != null && !isHttpsUrl(client.metadataUrl)) problems.push(`${at}.metadataUrl must be an https URL, or null`)
+	if (client.metadataUrl != null && !isHttpsDocumentUrl(client.metadataUrl)) {
+		problems.push(`${at}.metadataUrl must be an https URL without credentials or a fragment, or null`)
+	}
 	return problems
 }
 
@@ -1342,6 +1337,7 @@ const runExternalApps = async (verb: string | undefined, flags: Flags, env: Read
 		return
 	}
 	if (verb === 'list') {
+		if (flags.positional.length > 1) throw new Error('`control external-apps list` takes no argument')
 		const result = await iamAdminClient(flags.values.get('iam-url'), env).externalApps.list()
 		emitList(flags, result, externalAppLine, 'no external applications registered')
 		return
@@ -1370,6 +1366,7 @@ const runOAuthClients = async (verb: string | undefined, flags: Flags, env: Read
 		return
 	}
 	if (verb === 'list') {
+		if (flags.positional.length > 1) throw new Error('`control oauth-clients list` takes no argument')
 		const result = await iamAdminClient(flags.values.get('iam-url'), env).oauthClients.list()
 		emitList(flags, result, oauthClientLine, 'no OAuth clients registered')
 		return

@@ -2,7 +2,15 @@ import { RpcError } from '@fabrika/app'
 import { type ExternalAppDto, OAUTH_REGISTRY_NOT_IMPORTED } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { auditActionLabel } from '../access/lib/audit-labels'
-import { draftConsequences, draftOf, emptyDraft, type ExternalAppDraft, externalAppRequest, registryNotImported } from '../access/lib/external-apps'
+import {
+	draftConsequences,
+	draftOf,
+	emptyDraft,
+	type ExternalAppDraft,
+	externalAppRequest,
+	registryNotImported,
+	revocationsToConfirm,
+} from '../access/lib/external-apps'
 
 const WEB_CLIENT = 'https://ops.example.com/oauth/client.json'
 
@@ -69,6 +77,7 @@ describe('the external application form', () => {
 				{ clientId: 'https://ops.example.com', redirectUris: '', metadataUrl: 'http://ops.example.com/doc' },
 				{ clientId: 'https://ops.example.com/c.json', redirectUris: 'https://x.example/cb#frag', metadataUrl: '' },
 				{ clientId: 'https://ops.example.com/c.json', redirectUris: 'https://x.example/cb\nhttps://x.example/cb', metadataUrl: '' },
+				{ clientId: 'https://ops.example.com/d.json', redirectUris: 'http://localhost:8765/cb', metadataUrl: 'https://user:pw@ops.example.com/doc#x' },
 			],
 		})
 		expect(checked.ok).toBe(false)
@@ -80,6 +89,7 @@ describe('the external application form', () => {
 			'clients.1.redirectUris',
 			'clients.2.clientId',
 			'clients.2.redirectUris',
+			'clients.3.metadataUrl',
 			'name',
 			'resource',
 			'roles.0.key',
@@ -112,6 +122,26 @@ describe('what a save would change', () => {
 		expect(draftConsequences(STORED, draft({ roles: [] }))).toMatchObject({ rolesDropped: true, removedRoles: [] })
 		expect(draftConsequences(STORED, draft({ clients: draftOf(STORED).clients.slice(1) })).removedClients).toEqual([WEB_CLIENT])
 		expect(draftConsequences(STORED, draft({ resource: 'https://new.example.com' })).resourceChanged).toBe(true)
+	})
+})
+
+describe('the confirmation before a save that ends sign-ins', () => {
+	test('lists each thing the save ends, and nothing for an unchanged application', () => {
+		expect(revocationsToConfirm(draftConsequences(STORED, draftOf(STORED)))).toEqual([])
+		const lines = revocationsToConfirm(
+			draftConsequences(
+				STORED,
+				draft({ resource: 'https://new.example.com', roles: [{ key: 'viewer', name: 'Viewer' }], clients: draftOf(STORED).clients.slice(1) }),
+			),
+		)
+		expect(lines).toEqual([
+			'A removed client loses every sign-in through it.',
+			"The new resource revokes every sign-in of the application's clients.",
+			"'editor' is taken from everyone it is granted to.",
+		])
+		expect(revocationsToConfirm(draftConsequences(STORED, draft({ roles: [] })))).toEqual([
+			'Without roles, every active user of the installation can sign in.',
+		])
 	})
 })
 

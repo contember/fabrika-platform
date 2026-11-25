@@ -131,6 +131,8 @@ describe('control external-apps', () => {
 		await expect(runControlCli('external-apps', ['delete', 'a', 'b'], undefined, ENV)).rejects.toThrow('takes only an app id')
 		await expect(runControlCli('external-apps', ['put'], undefined, ENV)).rejects.toThrow('--file is required')
 		await expect(runControlCli('external-apps', ['remove', 'a'], undefined, ENV)).rejects.toThrow('Unknown `control external-apps` verb: remove')
+		await expect(runControlCli('external-apps', ['list', 'ops-tool'], undefined, ENV)).rejects.toThrow('`control external-apps list` takes no argument')
+		await expect(runControlCli('oauth-clients', ['list', 'x'], undefined, ENV)).rejects.toThrow('`control oauth-clients list` takes no argument')
 		expect(sent).toEqual([])
 	})
 
@@ -205,6 +207,10 @@ describe('control oauth-clients', () => {
 		const sent = fakeIam(answering(STORED_CLIENT))
 		const label = await file('label.json', { ...CLIENT_FILE, label: 'copilot' })
 		await expect(runControlCli('oauth-clients', ['put', `--file=${label}`], undefined, ENV)).rejects.toThrow('label:')
+		const metadata = await file('metadata.json', { ...CLIENT_FILE, metadataUrl: 'https://user:pw@claude.ai/doc.json' })
+		await expect(runControlCli('oauth-clients', ['put', `--file=${metadata}`], undefined, ENV)).rejects.toThrow(
+			'metadataUrl must be an https URL without credentials',
+		)
 		const id = await file('id.json', { ...CLIENT_FILE, clientId: 'https://claude.ai' })
 		await expect(runControlCli('oauth-clients', ['put', `--file=${id}`], undefined, ENV)).rejects.toThrow('clientId must be the https URL')
 		expect(sent).toEqual([])
