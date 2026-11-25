@@ -12,8 +12,9 @@ import {
 import { type PrincipalRow, principalStatus } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import { resolvePermissionsAt } from '../resolve'
+import { heldReach } from './api-keys'
 import { listRolesUseCase } from './app-schema'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 import { grantAuthorLabels, toGrantDtos } from './grant-support'
 import { cursorOf, normalizeLimit } from './pagination'
 import { canManagePrincipal, managesApp, requireActableTarget, requireInvitableMailbox } from './user-admin'
@@ -177,6 +178,8 @@ export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrinc
 			adminEvent(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id }),
 		)
 	} else {
+		// Re-enabling a key gives back its grants; disabling narrows and is never judged (ADR-0083 §8).
+		if (row.type === 'service' && row.disabled_at !== null) await requireCredentialsMode(c, await heldReach(c, id))
 		await c.services.repositories.principals.enablePrincipal(
 			id,
 			adminEvent(c, { action: 'iam.principal.enable', resourceType: 'principal', resourceId: id }),

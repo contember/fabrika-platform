@@ -257,7 +257,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   grant request. `policies.create`, `policies.update` and `PUT /admin/apps/:app/schema` change what every holder of a role
   holds (a grant names its role by key alone, so a policy created under a deleted role's key reaches the keys still naming
   it); whether the change widens a key is not judged, so a machine caller is refused wherever the application's mode is
-  not `off`.
+  not `off`. `principals.update` re-enabling a disabled service principal gives back its grants, so it judges their reach
+  as `apiKeys.rotate` does; disabling narrows and is not judged.
   The provisioning key, which every deploy reconciles with, keeps its rule.
 - **A KEY LISTS EXACT ACTIONS OF ITS APP'S CATALOG, NO WILDCARD.** `issueKey` refuses `*` and
   `prefix.*` in every mode and requires each action verbatim in `app_actions`, before delegation —

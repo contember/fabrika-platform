@@ -350,8 +350,9 @@ A machine caller's grant to a key meets `credentials` too, since it widens a liv
 applies or waits as a grant request (§4). `policies.create`, `policies.update` and `PUT /admin/apps/:app/schema` widen
 every holder of a role at once: a grant names its role by key alone, so a policy created under the key of a role deleted
 or dropped by a reconcile reaches every key still naming it. IAM does not judge whether one widens a key, so a machine
-caller is refused there wherever the application's mode is `person` or `refuse`. A person and the provisioning key keep
-their rule on all five.
+caller is refused there wherever the application's mode is `person` or `refuse`. Re-enabling a disabled key
+(`principals.update`) gives back its grants, so it judges their reach as a rotation does; disabling one narrows and is
+not judged. A person and the provisioning key keep their rule on all six.
 
 Two issuances keep their rule, both made with the provisioning key, the operator's own credential, which the check
 exempts on every path: Control's own workload, membership and connector keys, which every deploy issues, and the

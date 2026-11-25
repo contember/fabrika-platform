@@ -507,6 +507,39 @@ for (const backend of backends) {
 			expect(await actionsAt(w, issued.principalId, CONSOLE)).toEqual([])
 		})
 
+		test('re-enabling a disabled key meets the mode of where its grants act; disabling one does not', async () => {
+			const w = await world()
+			await w.mirror(APP, 'off')
+			const issued = w.keyOf(await w.asAda('apiKeys.provision', w.notesKey()))
+			await w.mirror(APP, 'person')
+			const resolves = async () => (await resolveCaller(w.f.services, w.env, { app: APP, credential: issued.apiKey, requestId: 'r' })).ok
+			const disable = { principalId: issued.principalId, disabled: true }
+			const enable = { principalId: issued.principalId, disabled: false }
+
+			expect((await w.asAda('principals.update', disable)).status).toBe(200)
+			const refused = await w.rpc(w.machine, 'principals.update', enable)
+			expect([refused.status, refused.message.includes('`credentials` mode')]).toEqual([403, true])
+			expect(await resolves()).toBe(false)
+
+			// A person and the provisioning key re-enable it; a machine caller disables it, and re-enables it under `off`.
+			expect((await w.asAda('principals.update', enable)).status).toBe(200)
+			expect(await resolves()).toBe(true)
+			expect((await w.rpc(w.machine, 'principals.update', disable)).status).toBe(200)
+			expect((await w.rpc(PROVISIONING_KEY, 'principals.update', enable)).status).toBe(200)
+			expect((await w.rpc(w.machine, 'principals.update', disable)).status).toBe(200)
+			await w.mirror(APP, 'off')
+			expect((await w.rpc(w.machine, 'principals.update', enable)).status).toBe(200)
+			expect(await resolves()).toBe(true)
+
+			// A Control key reading every environment of notes takes the strictest of them.
+			await w.mirror(STAGE, 'off')
+			const watcher = w.keyOf(await w.asAda('apiKeys.provision', w.controlKey()))
+			expect((await w.asAda('principals.update', { principalId: watcher.principalId, disabled: true })).status).toBe(200)
+			await w.mirror(APP, 'refuse')
+			const atControl = await w.rpc(w.machine, 'principals.update', { principalId: watcher.principalId, disabled: false })
+			expect([atControl.status, atControl.message.includes('`refuse`')]).toEqual([403, true])
+		})
+
 		test("the mirror is Control's alone, fenced by the protection revision, and answers what IAM holds", async () => {
 			const w = await world()
 			const set = (bearer: string, input: Record<string, unknown>) => w.rpc(bearer, 'grantApproval.set', { app: APP, required: false, ...input })

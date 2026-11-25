@@ -235,6 +235,12 @@ function grantReach(app: string | null, scopeType: string | null, scopeValues: r
 	return scopeValues.map((value) => ({ app, scope: { type: scopeType, value } }))
 }
 
+/** Where the grants a principal holds act: what a new secret for it, or its re-enabling, gives a key (ADR-0083 §8). */
+export async function heldReach(c: AdminContext, principalId: string): Promise<KeyReach[]> {
+	const held = await c.services.repositories.grants.listGrants(principalId)
+	return held.flatMap((grant) => grantReach(grant.app, grant.scope_type, grant.scope_value === null ? null : [grant.scope_value]))
+}
+
 /**
  * Issue the key a person approved in Control for the agent that asked (ADR-0083 §8), as that person: a signed-in session
  * only, never a key, so no machine caller issues a requested key around the approval. The key is checked as the
@@ -369,11 +375,7 @@ export async function rotateApiKeyUseCase(c: AdminContext, input: RotateApiKeyIn
 		}
 	}
 	// The new secret holds the principal's grants, so a machine caller meets the mode of where they act.
-	const held = await c.services.repositories.grants.listGrants(principalId)
-	await requireCredentialsMode(
-		c,
-		held.flatMap((grant) => grantReach(grant.app, grant.scope_type, grant.scope_value === null ? null : [grant.scope_value])),
-	)
+	await requireCredentialsMode(c, await heldReach(c, principalId))
 	// The credential being replaced decides what the replacement inherits: its expiry and its app
 	// binding. `listCredentialsForPrincipal` is newest-first, so this is the live one.
 	const existing = (await c.services.repositories.credentials.listCredentialsForPrincipal(principalId)).find((row) => row.revoked_at === null)

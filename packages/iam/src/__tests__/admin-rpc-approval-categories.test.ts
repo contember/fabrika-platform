@@ -26,7 +26,9 @@ const INSTALLATION = 'installation administration keeps its rule (ADR-0083 §9)'
 
 const IAM: Readonly<Record<string, Judged>> = {
 	'principals.invite': { exempt: INSTALLATION },
-	'principals.update': { exempt: INSTALLATION },
+	// Re-enabling a disabled key gives back its grants, so a machine caller meets the mode of where they act; disabling
+	// narrows, and a user keeps the installation's rule.
+	'principals.update': { category: 'credentials' },
 	'principals.promote': { exempt: INSTALLATION },
 	'sessions.revoke': { exempt: NARROWS },
 	'sessions.revokeAll': { exempt: NARROWS },
@@ -166,6 +168,11 @@ describe('every IAM administration mutation is judged by an approval category or
 			JSON.parse((await send(provisioningKey, '/admin/api-keys', { label: 'export', type: 'service', app: APP, roleKey: 'support' })).message)
 				.principalId,
 		)
+		const dormant = String(
+			JSON.parse((await send(provisioningKey, '/admin/api-keys', { label: 'dormant', type: 'service', app: APP, roleKey: 'support' })).message)
+				.principalId,
+		)
+		expect((await rpc(provisioningKey, 'principals.update', { principalId: dormant, disabled: true })).status).toBe(200)
 		const [existingGrant] = await h.repositories.grants.listGrants(existing)
 		if (existingGrant === undefined) throw new Error('the key holds no grant')
 		const policy = { key: 'reviewer', name: 'Reviewer', permissions: ['notes.read'] }
@@ -193,6 +200,7 @@ describe('every IAM administration mutation is judged by an approval category or
 			'grants.update': { id: grantIdOf(existingGrant), roleKey: 'staff' },
 			'policies.update': { app: APP, key: policy.key, policy: { name: policy.name, permissions: ['notes.read', 'notes.admin'] } },
 			'policies.create': { app: APP, policy: { key: 'auditor', name: 'Auditor', permissions: ['notes.read'] } },
+			'principals.update': { principalId: dormant, disabled: false },
 		}
 		const credentials = MUTATIONS.filter((method) => meets(IAM[method], 'credentials'))
 		const admitted: string[] = []
