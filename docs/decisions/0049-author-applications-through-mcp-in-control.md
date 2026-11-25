@@ -124,9 +124,10 @@ workspace its own running application, where one pinned service could show only 
 7. **Production is not an MCP operation.** The tool opens a pull request. A human reviews and merges
    in GitHub, and the existing Delivery trigger deploys the merged commit. When that commit carries
    a change that needs closer review on a protected environment, the run waits for approval. Control enforces it in its use cases
-   (authorization, not the proxy's enforcement decision): only a person (`isPerson`: a user principal without OAuth or
-   link claims) starts a manual run of a protected environment, so `deploy_stage` and any other agent or key
-   is refused there with a 403, and a workspace ref is refused there whoever asks. The ref must be a full ref or a
+   (authorization, not the proxy's enforcement decision): a manual run of a protected environment by anyone but a person
+   in the console follows the environment's `deploy-request` category
+   ([ADR-0083](0083-an-environment-chooses-what-waits-for-approval.md)), parking for a person's approval by default, and
+   a workspace ref is refused there whoever asks. The ref must be a full ref or a
    commit SHA, so no short spelling of a workspace branch passes, and Control checks the run again when it starts
    (ADR-0050 §4). `apps.environments.put`
    refuses `authoring: true` on a protected environment (`prod` starts protected), and

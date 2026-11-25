@@ -264,8 +264,8 @@ should know it). The console shows the three in their own sections. The rule has
 - **`widening`**, everything else.
 
 The outcome does not decide whether a run waits. **On a protected environment a run waits when a line needs closer
-review** (`waitsForApproval`, `@fabrika/control-contract`, the one predicate Control and the console share), whatever
-the outcome; a plain widening publishes at once and keeps its lines on the run.
+review** in a category whose mode makes it wait (`gate()`, `@fabrika/control-contract`, the one function Control and
+the console share, [ADR-0083](0083-an-environment-chooses-what-waits-for-approval.md) §3), whatever the outcome; a plain widening publishes at once and keeps its lines on the run.
 
 **A migration statement not known to keep every stored value waits.** Before this rule every new migration waited on
 a protected environment, so the data rule fails closed: a list of destructive forms is never complete. The runner's
@@ -525,8 +525,8 @@ is not traced back to a workspace, so a person can still deploy a workspace head
 under `any`, which only a person can choose. The console's own redeploy of a run names its commit by SHA.
 
 **A parked run has an absolute deadline**, `requestTtlHours` (24 by default, 1–168) after it parked. The deadline is
-checked in the decision's own conditional write, so a decision after it changes nothing; a sweep fails a run past its
-deadline, which only cleans up. An approval does not expire: an approved run deploys when the queue picks it up. A run
+checked in the decision's own conditional write, so a decision after it changes nothing; a sweep moves a run past its
+deadline to `expired`, which fails it and deploys nothing, and only cleans up. An approval does not expire: an approved run deploys when the queue picks it up. A run
 that parks again, because it was classified again and its digests changed, gets a fresh deadline. A run parked before
 deadlines existed gets one when the sweep first sees it, counted from then.
 
@@ -758,9 +758,10 @@ never from the words of a line:
   fatigue this decision warns about.
 - **Classify a removal by comparing the digests of the rows.** Rejected: the digest covers the path, which differs by
   definition, and it cannot say that one row admits fewer callers than another.
-- **Gate the environment's cross-origin list by approval.** Rejected: the list grants no authority (bearer only, see
-  section 3), it is not part of the contract the approval binds, and a registry write has no run to park. The
-  approval page names it beside each line that opens an endpoint to it.
+- **Gate the environment's cross-origin list through the deploy's approval.** Rejected: the list grants no authority
+  (bearer only, see section 3), it is not part of the contract the approval binds, and a registry write has no run to
+  park. The approval page names it beside each line that opens an endpoint to it. A non-person's write of the list is
+  a `registry` action of its own (ADR-0083), judged by that category's mode; a person's applies at once.
 - **Give each line a severity score.** Rejected: a second judgement beside the effect, set by hand per rule, which can
   disagree with the classification. The page derives its order from effect, review and reach (section 7).
 - **Group the lines in the console by parsing their words.** Rejected: the words are prose and change with wording
