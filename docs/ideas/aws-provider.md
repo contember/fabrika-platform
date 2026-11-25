@@ -375,16 +375,32 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the service. The installation's network is Control's configuration (`FABRIKA_AWS_VPC_ID`, `FABRIKA_AWS_SUBNETS`,
     `FABRIKA_AWS_TASK_PUBLIC_IP`), stored by no environment. Tearing an environment down (not built) deletes its
     service before its stack, whose security group the service's tasks hold. UNVERIFIED: that `CreateService` takes a
-    name ECS keeps `INACTIVE`, and that its answer names `currentServiceDeployment`; a create whose answer never
-    arrived leaves the rollout reading no service, which fails the run.
-    Not yet: the namespace below (an application is reachable from nothing until its proxy is admitted).
+    name ECS keeps `INACTIVE`, and that its answer names `currentServiceDeployment`. The checkpoint marks a create
+    (`serviceCreateRequested`), so a service ECS does not show yet after one is no verdict: a create whose answer never
+    arrived waits for the run's deadline.
 
-    **`src/namespace/`**: the namespace stack (security groups, the Service Connect namespace, the proxy service, the
-    ALB rule and certificate; for `full` an RDS instance), the database per application in the shared instance for
-    `cheap`, `claimedResources` from the stack, and the proxy manifest carried in the proxy's build as on Zerops
-    (ADR-0045), so a running proxy never reads a manifest newer than its image. CloudFormation answers a missing stack
+    **The namespace** (built, its stack; `src/namespace.ts`): every environment is placed in a namespace (Control
+    requires one of a provider with namespaces). Its stack, `fabrika-ns-<length of id>-<id>-<env>`, holds the proxy's
+    security group in the installation's VPC (outbound; no ingress until the balancer's group is admitted with the proxy
+    service) and a Service Connect HTTP namespace of the same name, and names both as outputs. Control creates it on
+    `provision` and brings it to the template on `reconcile`, through the same apply as an environment's stack
+    (`src/stack.ts`). Every deploy reads the namespace stack's outputs first (a namespace without a serving stack is
+    refused, naming the reconcile) and renders the environment's stack with one ingress rule: the proxy's group, TCP on
+    the application's port, as a resource of its own, so a move to another namespace replaces the rule and never the
+    group the tasks hold. The proxy secret still authenticates the hop (ADR-0022 rule 5): a group says which tasks may
+    connect, not which request a proxy sent. The target is the installation's account and region, the derived stack
+    name and the sizing; `normalize` refuses one that differs and writes it in its canonical form. Only `cheap` is offered; `full`
+    comes with its database instance. Claims: a namespace claims its stack; an environment placed in one claims its
+    stack, its service and its parameter path, and `claimedResources` reads each back (no stack, no service ECS shows
+    active, no parameter under `env/`), so a later registration of the same coordinates never inherits an earlier one's
+    secrets or images; fabrika deletes none of them (ADR-0034).
+    Not yet: the proxy service (its image built from the pinned proxy source with the manifest carried in its build as
+    on Zerops, ADR-0045, so a running proxy never reads a manifest newer than its image; its ECS service in the Service
+    Connect namespace; `republish`), the balancer's host rules and certificates, the applications joining Service
+    Connect, and the database (one instance for `cheap` namespaces, a database per application; an instance per `full`
+    namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
-    a message: decide a stack's absence from `ListStacks` (or a `DescribeStacks` by the stack's id, which keeps
+    a message: a stack's absence is decided from `ListStacks` (or a `DescribeStacks` by the stack's id, which keeps
     answering a deleted stack), never from that error.
 11. **`src/installation/`**: the CloudFormation template rendered from the installation model (N9), `platform install`,
     `plan`, `deploy`, `upgrade` and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the
@@ -401,8 +417,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     - CodeBuild: `StartBuild`, `BatchGetBuilds`, `StopBuild`, `ListBuildsForProject` on `project/fabrika_*`.
     - CloudWatch Logs: the reads on `log-group:/fabrika/apps/*` (the build log groups are below it).
     - S3: `PutObject`, the multipart calls and `GetObject` (the presigned read) on `<bucket>/sources/*`.
-    - CloudFormation, for the environment stacks of step 10: `CreateStack`, `UpdateStack`, `GetTemplate`,
-      `DescribeStacks`, `DescribeStackEvents` and `DeleteStack` on `stack/fabrika-app-*`, and `ListStacks` (which
+    - CloudFormation, for the environment and namespace stacks of step 10: `CreateStack`, `UpdateStack`, `GetTemplate`,
+      `DescribeStacks`, `DescribeStackEvents` and `DeleteStack` on `stack/fabrika-app-*` and `stack/fabrika-ns-*`, and
+      `ListStacks` (which
       takes no resource). Without a service role CloudFormation creates, updates and reads back each resource with the
       caller's credentials, so applying the stack also needs, each on the step 9 prefix:
       - IAM on `role/fabrika/apps/*`: `iam:CreateRole`, `PutRolePolicy`, `DeleteRolePolicy`, `GetRolePolicy`,
@@ -423,7 +440,14 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         source, so an environment's group admitting more than its namespace proxy is a review matter: its tasks may
         have a public address. UNVERIFIED: both tag conditions assume CloudFormation tags the group in its create
         call (`TagSpecifications`); if it creates the group untagged and tags it afterwards, both refuse the stack's
-        create. The live check of step 13 settles it before the policy is written.
+        create. The live check of step 13 settles it before the policy is written. A namespace's proxy group carries
+        `fabrika:env` too (the namespace's), so the same grants cover it, and an environment's `ProxyIngress` rule is
+        an `AuthorizeSecurityGroupIngress` on the environment's own group;
+      - Cloud Map, for a namespace's Service Connect namespace: `servicediscovery:CreateHttpNamespace` and
+        `TagResource` with `aws:RequestTag/fabrika:namespace` present, and `GetNamespace`, `GetOperation`,
+        `UpdateHttpNamespace`, `ListTagsForResource`, `UntagResource` and `DeleteNamespace` on `namespace/*` with
+        `aws:ResourceTag/fabrika:namespace` present. UNVERIFIED: which of these Cloud Map scopes by resource and which
+        by tag only.
     - **The boundary.** Role writes would let Control mint a role with any inline policy and run code under it. So
       `iam:CreateRole` and `iam:PutRolePolicy` are allowed only with the condition `iam:PermissionsBoundary` equal to
       `policy/fabrika/fabrika-apps-boundary`, which the installation stack creates and which allows only what an

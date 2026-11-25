@@ -11,13 +11,13 @@ import { AWS_BUILDSPEC } from '../build'
 import type { AwsAppTarget } from '../codecs'
 import {
 	AWS_BUILD_IMAGE,
-	AWS_STACK_TIMEOUT_MS,
 	awsAppsPermissionsBoundary,
 	awsEnvironmentStack,
 	checkInstallationNetwork,
 	ensureEnvironmentStack,
 } from '../environment-stack'
 import { AWS_KEPT_IMAGES } from '../resources'
+import { AWS_STACK_TIMEOUT_MS } from '../stack'
 
 const installation: AwsAppTarget = {
 	accountId: '123456789012',
@@ -27,6 +27,8 @@ const installation: AwsAppTarget = {
 }
 const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'], publicIp: true }
 const SECURITY_GROUP = 'sg-0123456789abcdef0'
+/** The namespace proxy's group, which the environment's group admits. */
+const proxy = { securityGroupId: 'sg-0123456789abcdef7' }
 
 /** `value[key]` of a JSON object, or undefined for anything else. */
 function at(value: JsonValue | undefined, ...keys: readonly (string | number)[]): JsonValue | undefined {
@@ -60,7 +62,7 @@ function grants(
 }
 
 describe('awsEnvironmentStack', () => {
-	const stack = awsEnvironmentStack('notes', 'prod', installation, network)
+	const stack = awsEnvironmentStack('notes', 'prod', installation, network, proxy)
 	const resources = at(stack.template, 'Resources')
 
 	test('its resources carry the names the deploy derives', () => {
@@ -147,11 +149,29 @@ describe('awsEnvironmentStack', () => {
 		expect(at(resources, 'Repository', 'Properties', 'LifecyclePolicy', 'LifecyclePolicyText')).toBe(ecrLifecyclePolicy(AWS_KEPT_IMAGES))
 	})
 
-	test("the tasks' security group is in the installation's VPC, admits nothing and reaches out; the stack names its id", () => {
+	test("the tasks' security group admits its namespace proxy's group alone, on the application's port", () => {
+		// One rule, of its own resource: the proxy's group, TCP on the application's port, nothing else.
+		const ingress = Object.entries(typeof resources === 'object' && resources !== null && !Array.isArray(resources) ? resources : {})
+			.filter(([, resource]) => at(resource, 'Type') === 'AWS::EC2::SecurityGroupIngress')
+		expect(ingress.map(([name, resource]) => [name, at(resource, 'Properties')])).toEqual([['ProxyIngress', {
+			GroupId: { 'Fn::GetAtt': ['SecurityGroup', 'GroupId'] },
+			IpProtocol: 'tcp',
+			FromPort: 3000,
+			ToPort: 3000,
+			SourceSecurityGroupId: 'sg-0123456789abcdef7',
+			Description: 'the namespace proxy',
+		}]])
+		// Without a proxy the group admits nothing at all.
+		const alone = awsEnvironmentStack('notes', 'prod', installation, network, null)
+		expect(at(alone.template, 'Resources', 'ProxyIngress')).toBeUndefined()
+		expect(() => awsEnvironmentStack('notes', 'prod', installation, network, { securityGroupId: 'sg-X' })).toThrow('namespace proxy')
+	})
+
+	test("the tasks' security group is in the installation's VPC, admits nothing itself and reaches out; the stack names its id", () => {
 		const group = at(resources, 'SecurityGroup', 'Properties')
 		expect(at(resources, 'SecurityGroup', 'Type')).toBe('AWS::EC2::SecurityGroup')
 		expect(at(group, 'VpcId')).toBe('vpc-0123456789abcdef0')
-		// No ingress rule at all: until the namespace stack admits its proxy, nothing reaches the application's port.
+		// No ingress rule in the group: only its namespace proxy's rule (above) reaches the application's port.
 		expect(at(group, 'SecurityGroupIngress')).toBeUndefined()
 		expect(at(group, 'SecurityGroupEgress')).toEqual([{ IpProtocol: '-1', CidrIp: '0.0.0.0/0', Description: 'outbound' }])
 		expect(at(group, 'Tags')).toEqual([{ Key: 'fabrika:app', Value: 'notes' }, { Key: 'fabrika:env', Value: 'prod' }])
@@ -161,7 +181,7 @@ describe('awsEnvironmentStack', () => {
 			at(resource, 'Type')
 		)
 		expect(types).not.toContain('AWS::ECS::Service')
-		expect(() => awsEnvironmentStack('notes', 'prod', installation, { vpcId: 'vpc-x' })).toThrow('VPC id')
+		expect(() => awsEnvironmentStack('notes', 'prod', installation, { vpcId: 'vpc-x' }, proxy)).toThrow('VPC id')
 	})
 
 	test('the installation network is refused with a VPC, no subnets, too many, one twice or one of another form', () => {
@@ -177,7 +197,7 @@ describe('awsEnvironmentStack', () => {
 	})
 
 	test("two environments' stacks share no resource and no name", () => {
-		const other = awsEnvironmentStack('notes', 'stage', installation, network)
+		const other = awsEnvironmentStack('notes', 'stage', installation, network, proxy)
 		const scoped = (template: JsonValue) => new Set(grants(template).flatMap((grant) => grant.resources).filter((resource) => resource !== '*'))
 		const mine = scoped(stack.template)
 		for (const resource of scoped(other.template)) expect(mine.has(resource)).toBe(false)
@@ -238,7 +258,7 @@ class FakeCloudFormation {
 }
 
 describe('ensureEnvironmentStack', () => {
-	const stack = awsEnvironmentStack('notes', 'prod', installation, network)
+	const stack = awsEnvironmentStack('notes', 'prod', installation, network, proxy)
 	const body = JSON.stringify(stack.template)
 	const ensure = (fake: FakeCloudFormation, change: { now?: () => number } = {}) => {
 		const lines: string[] = []
