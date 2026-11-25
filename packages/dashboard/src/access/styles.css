@@ -72,6 +72,40 @@
 	gap: var(--s-2);
 }
 
+/* A fieldset is as wide as its content by default; a long scope value must not widen the form. */
+.scope-picker {
+	min-width: 0;
+}
+
+.scope-picker > .filters {
+	margin: 0;
+}
+
+/* One scope value per row: the label, then its ID, each cut with an ellipsis (the row's title holds both in full). */
+.scope-value-list {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-1);
+	max-height: 20rem;
+	overflow-y: auto;
+	scrollbar-width: thin;
+}
+
+.scope-value-list > label.checkbox {
+	min-width: 0;
+	font-size: var(--t-sm);
+}
+
+.scope-value-list > label.checkbox > input {
+	flex: none;
+}
+
+/* The ID gives way before the label, down to a few characters that still tell two values apart. */
+.scope-value-list > label.checkbox > .muted {
+	flex-shrink: 1000;
+	min-width: 8ch;
+}
+
 .grant-mode {
 	flex-direction: row;
 	flex-wrap: wrap;
