@@ -1,9 +1,11 @@
 export {
+	type ApprovalRequestApprover,
 	type ApprovalRequestDecider,
 	type ApprovalRequestInput,
 	ApprovalRequestRepository,
 	type ApprovalRequestRow,
 	type ApprovalRequestRowState,
+	type ApprovalRequestStepUp,
 } from './db/approval-requests'
 export {
 	type BackupCheckpoint,

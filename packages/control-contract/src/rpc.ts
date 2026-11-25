@@ -8,6 +8,7 @@ import type {
 	CreateApprovalRequestResponse,
 	DecideApprovalRequestInput,
 } from './approval-requests.js'
+import type { ApprovalChallengeInput, ApprovalRequestChallengeInput, ApprovalStepUpChallenge, ProtectionChallengeInput } from './approval-step-up.js'
 import type { BuilderConnectionReceiptDto, CreateBuilderConnectionReceiptRequest, GetBuilderConnectionReceiptRequest } from './builder-connections.js'
 import type {
 	ApproveDeviceAuthorizationResult,
@@ -199,6 +200,8 @@ export interface ControlRpcContract {
 			delete: RpcProcedure<AppEnvironmentInput, OkResponse>
 			/** Human user principals with `access.approve` only, from the console (ADR-0050 §4). */
 			protect: RpcProcedure<SetEnvironmentProtectionRequest, AppEnvDto>
+			/** A passkey challenge bound to one change that weakens a passkey on deciding; the same person and right as `protect`. */
+			protectChallenge: RpcProcedure<ProtectionChallengeInput, ApprovalStepUpChallenge>
 			/** The environment's next deploy retires the key its signed tokens are signed with and signs with a new one. */
 			rotateTokenKey: RpcProcedure<AppEnvironmentInput, RotateTokenKeyResponse>
 			/**
@@ -264,6 +267,8 @@ export interface ControlRpcContract {
 		get: RpcProcedure<RunIdInput, ApprovalDto>
 		/** A human user principal, from the console's own origin; no key, service or OAuth token completes one. */
 		complete: RpcProcedure<CompleteApprovalRequest, ApprovalDto>
+		/** A passkey challenge bound to one decision of a run that takes a step-up; the same person and right as `complete`. */
+		challenge: RpcProcedure<ApprovalChallengeInput, ApprovalStepUpChallenge>
 		/** A non-person's action that waits for a person, stored inert and exact (ADR-0083 §8). */
 		requests: {
 			/** A non-person only, holding the kind's right to ask; a person in the console acts directly. */
@@ -274,6 +279,8 @@ export interface ControlRpcContract {
 			list: RpcProcedure<void, ListResponse<ApprovalRequestDto>>
 			/** A person in the console with `access.approve` at the request's coordinates. */
 			decide: RpcProcedure<DecideApprovalRequestInput, ApprovalRequestDto>
+			/** A passkey challenge bound to one decision of a request that takes a step-up; the same person and right as `decide`. */
+			challenge: RpcProcedure<ApprovalRequestChallengeInput, ApprovalStepUpChallenge>
 		}
 	}
 	deploy: RpcProcedure<TriggerDeployRequest, RunDto>

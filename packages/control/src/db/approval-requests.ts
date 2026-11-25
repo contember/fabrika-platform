@@ -29,11 +29,17 @@ export interface ApprovalRequestRow {
 	partial_approver_id: string | null
 	partial_approver_label: string | null
 	partial_approved_at: number | null
+	/** The passkey the first of two approvals was confirmed with (its WebAuthn id) and when IAM verified it; null without one. */
+	partial_step_up_credential_id: string | null
+	partial_step_up_at: number | null
 	/** Fresh per decision, so a second tap that lost the race is told apart from the one that won. */
 	decision_id: string | null
 	decided_by_id: string | null
 	decided_by_label: string | null
 	decided_at: number | null
+	/** The passkey the decision was confirmed with (its WebAuthn id) and when IAM verified it; null without one. */
+	decided_step_up_credential_id: string | null
+	decided_step_up_at: number | null
 	operation_id: string | null
 	result_json: string | null
 	error: string | null
@@ -65,11 +71,27 @@ export interface ApprovalRequestInput {
 	ttlSeconds: number
 }
 
-/** A person deciding: who, under a fresh decision id. */
-export interface ApprovalRequestDecider {
-	readonly decisionId: string
+/** The passkey a decision was confirmed with, as IAM verified it (ADR-0050 §5). */
+export interface ApprovalRequestStepUp {
+	readonly credentialId: string
+	readonly at: number
+}
+
+/** A person approving: who, and the passkey they confirmed it with when it took one. */
+export interface ApprovalRequestApprover {
 	readonly id: string
 	readonly label: string
+	readonly stepUp?: ApprovalRequestStepUp | null
+}
+
+/** A person deciding: who, under a fresh decision id, and the passkey they confirmed it with when it took one. */
+export interface ApprovalRequestDecider extends ApprovalRequestApprover {
+	readonly decisionId: string
+}
+
+/** The decision columns a decider fills, in the order the decision writes name them. */
+function decided(decider: ApprovalRequestDecider, now: number): (string | number | null)[] {
+	return [decider.decisionId, decider.id, decider.label, now, decider.stepUp?.credentialId ?? null, decider.stepUp?.at ?? null]
 }
 
 /**
@@ -134,12 +156,13 @@ export class ApprovalRequestRepository {
 	}
 
 	/** Record the first of two approvals; only while none is recorded, before the deadline. */
-	async recordPartialApproval(id: string, approver: { readonly id: string; readonly label: string }): Promise<boolean> {
+	async recordPartialApproval(id: string, approver: ApprovalRequestApprover): Promise<boolean> {
 		const now = this.now()
 		return this.changed(
-			`UPDATE approval_requests SET partial_approver_id = ?, partial_approver_label = ?, partial_approved_at = ?, updated_at = ?
+			`UPDATE approval_requests SET partial_approver_id = ?, partial_approver_label = ?, partial_approved_at = ?,
+				partial_step_up_credential_id = ?, partial_step_up_at = ?, updated_at = ?
 			WHERE id = ? AND state = 'pending' AND deadline > ? AND partial_approver_id IS NULL`,
-			[approver.id, approver.label, now, now, id, now],
+			[approver.id, approver.label, now, approver.stepUp?.credentialId ?? null, approver.stepUp?.at ?? null, now, id, now],
 		)
 	}
 
@@ -152,9 +175,10 @@ export class ApprovalRequestRepository {
 		const now = this.now()
 		return this.fenced(
 			id,
-			`UPDATE approval_requests SET state = 'approved', decision_id = ?, decided_by_id = ?, decided_by_label = ?, decided_at = ?, updated_at = ?
+			`UPDATE approval_requests SET state = 'approved', decision_id = ?, decided_by_id = ?, decided_by_label = ?, decided_at = ?,
+				decided_step_up_credential_id = ?, decided_step_up_at = ?, updated_at = ?
 			WHERE id = ? AND state = 'pending' AND deadline > ? AND partial_approver_id IS NOT DISTINCT FROM ?`,
-			[decider.decisionId, decider.id, decider.label, now, now, id, now, partialApproverId],
+			[...decided(decider, now), now, id, now, partialApproverId],
 			fence,
 		)
 	}
@@ -163,9 +187,10 @@ export class ApprovalRequestRepository {
 	async reject(id: string, decider: ApprovalRequestDecider): Promise<boolean> {
 		const now = this.now()
 		return this.changed(
-			`UPDATE approval_requests SET state = 'rejected', decision_id = ?, decided_by_id = ?, decided_by_label = ?, decided_at = ?, updated_at = ?
+			`UPDATE approval_requests SET state = 'rejected', decision_id = ?, decided_by_id = ?, decided_by_label = ?, decided_at = ?,
+				decided_step_up_credential_id = ?, decided_step_up_at = ?, updated_at = ?
 			WHERE id = ? AND state = 'pending' AND deadline > ?`,
-			[decider.decisionId, decider.id, decider.label, now, now, id, now],
+			[...decided(decider, now), now, id, now],
 		)
 	}
 

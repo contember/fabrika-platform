@@ -12,6 +12,7 @@ import { MembershipRepository } from './repositories/membership'
 import { MembershipTransportKeyRepository } from './repositories/membership-transport'
 import { OAuthRepository } from './repositories/oauth'
 import { OAuthRegistryRepository } from './repositories/oauth-registry'
+import { PasskeyRepository } from './repositories/passkeys'
 import { PasswordPolicyRepository } from './repositories/password-policy'
 import { PrincipalRepository } from './repositories/principals'
 import { SecondFactorRepository } from './repositories/second-factors'
@@ -72,6 +73,7 @@ export {
 	OAuthRegistryRepository,
 	type RegistryEvents,
 } from './repositories/oauth-registry'
+export { PasskeyRepository, type PasskeyRow } from './repositories/passkeys'
 export { PasswordPolicyRepository, type PasswordPolicyRow } from './repositories/password-policy'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { SecondFactorRepository, type SecondFactorRow, type SecondFactorStatus } from './repositories/second-factors'
@@ -115,6 +117,7 @@ export interface IamRepositories {
 	brand: InstallationBrandRepository
 	passwordPolicy: PasswordPolicyRepository
 	secondFactors: SecondFactorRepository
+	passkeys: PasskeyRepository
 }
 
 /**
@@ -148,6 +151,7 @@ export function createIamRepositories(
 		brand: replacements.brand ?? new InstallationBrandRepository(db, writer),
 		passwordPolicy: replacements.passwordPolicy ?? new PasswordPolicyRepository(db, writer),
 		secondFactors: replacements.secondFactors ?? new SecondFactorRepository(db, writer),
+		passkeys: replacements.passkeys ?? new PasskeyRepository(db, writer),
 	}
 }
 

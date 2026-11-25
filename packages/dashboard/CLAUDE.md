@@ -57,6 +57,20 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   IAM's `passwordPolicy.get` / `.set`; `lib/password-policy.ts` holds a typed value to the range IAM answers with
   (`minLengthFloor`–`maxLength`) and words the risk: a note below the default, a `notice-bad` warning below 8. IAM checks
   the value again.
+- **Account → Passkeys is the person's own, and the console runs only the browser half** (`routes/account/passkeys.tsx`,
+  `lib/webauthn.ts`). IAM issues every challenge and verifies every answer (`passkeys.*` of `/admin/rpc`); the console
+  turns IAM's JSON options into `navigator.credentials` calls and the answer back, with no WebAuthn library. Adding a
+  passkey beside one, and removing one, first takes a step-up bound to that change. `components/StepUpPrompt.tsx` is
+  the step-up control: it takes a challenge-fetching function (the caller decides the binding) and hands the assertion
+  to its caller, who sends it with the change it guards. The user page's Sign-in tab lets an installation administrator
+  remove every passkey of a person (`passkeys.reset`).
+- **A decision that takes a passkey runs the prompt first** (`lib/decision-step-up.ts` `postDecision`, both approval
+  pages). Under `stepUp: webauthn` the page asks Control's `approvals.challenge` / `approvals.requests.challenge` for a
+  challenge bound to that one decision, the browser answers it, and the decision is posted with the answer; nothing is
+  posted when the prompt fails. `{ kind: 'no-passkey' }` is announced with a link to Account → Passkeys
+  (`components/DecisionFailureNotice.tsx`). Saving or turning off an environment's approvals goes the same way when
+  `weakensStepUp` says the change takes a passkey (`lib/environment-protection.ts` `setEnvironmentProtection`, on
+  `apps.environments.protectChallenge`): the prompt runs when the loosening is confirmed, before anything is sent.
 - **An application's page offers an IAM administrator "Grant me Admin" per environment** (`lib/self-admin.ts`,
   `components/app-detail/AdminAccessSection.tsx`): an ordinary `grants.create` of the built-in `admin` to the caller,
   no expiry by default (8 hours or 7 days selectable). It is offered where IAM knows the environment, it is not an

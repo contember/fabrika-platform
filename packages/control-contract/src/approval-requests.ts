@@ -2,6 +2,8 @@
 // and decided from one console link, `<console>/approvals/requests/<id>`. These are its wire shapes.
 
 import type { JsonValue } from '@fabrika/provider-contract'
+import type { StepUpMode } from './approval-policy.js'
+import type { ApprovalStepUp } from './approval-step-up.js'
 
 /**
  * `pending` waits for a decision; `approved`, `rejected` and `expired` follow it. An approved request moves to `executing`
@@ -80,6 +82,8 @@ export interface ApprovalRequestDto {
 	approvers: 1 | 2
 	/** Whether the requester's person may approve it, under the environment's settings now. */
 	requesterMayApprove: boolean
+	/** What deciding it takes beyond the session, under the environment's settings now (ADR-0050 §5). */
+	stepUp: StepUpMode
 	/** The first of two approvals, while the second is awaited. */
 	partialApproval?: ApprovalRequestDecisionDto
 	/** Who approved or refused it, once a person did. */
@@ -118,4 +122,6 @@ export interface DecideApprovalRequestInput {
 	id: string
 	decision: 'approve' | 'reject'
 	inputDigest: string
+	/** The assertion bound to this decision, when deciding it takes a step-up (`ApprovalRequestDto.stepUp`). */
+	stepUp?: ApprovalStepUp
 }

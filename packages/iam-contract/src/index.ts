@@ -36,6 +36,18 @@ import type {
 	PutExternalAppRequest,
 	PutOAuthClientRequest,
 } from './oauth-registry'
+import type {
+	IssuePasskeyChallengeRequest,
+	PasskeyChallenge,
+	PasskeyCreationOptions,
+	PasskeyDto,
+	PasskeyRequestOptions,
+	PasskeyResetResponse,
+	RegisterPasskeyRequest,
+	RemovePasskeyRequest,
+	VerifiedPasskeyAssertion,
+	VerifyPasskeyAssertionRequest,
+} from './passkeys'
 import type { PasswordPolicyDto, SetPasswordPolicyRequest } from './password-policy'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
@@ -1010,6 +1022,23 @@ export interface IamAdminRpcContract {
 		get: RpcProcedure<PrincipalIdInput, SecondFactorDto>
 		reset: RpcProcedure<PrincipalIdInput, SecondFactorDto>
 	}
+	/**
+	 * A person's passkeys. The first six are the caller's own and need a person in a signed-in session, never a `px_` key:
+	 * the console runs the browser half of each ceremony. Registering another passkey while one exists, and removing one,
+	 * take an assertion by one of the person's passkeys bound to that change. `challenge` and `verify` are the step-up
+	 * seam: a challenge bound to an opaque string, and its verification against the same string. `listOf` and `reset`
+	 * are an installation administrator's (`iam.admin`); the reset removes every passkey and writes `iam.passkey.reset`.
+	 */
+	passkeys: {
+		list: RpcProcedure<void, ListResponse<PasskeyDto>>
+		registrationOptions: RpcProcedure<void, PasskeyChallenge<PasskeyCreationOptions>>
+		register: RpcProcedure<RegisterPasskeyRequest, PasskeyDto>
+		remove: RpcProcedure<RemovePasskeyRequest, OkResponse>
+		challenge: RpcProcedure<IssuePasskeyChallengeRequest, PasskeyChallenge<PasskeyRequestOptions>>
+		verify: RpcProcedure<VerifyPasskeyAssertionRequest, VerifiedPasskeyAssertion>
+		listOf: RpcProcedure<PrincipalIdInput, ListResponse<PasskeyDto>>
+		reset: RpcProcedure<PrincipalIdInput, PasskeyResetResponse>
+	}
 }
 
 /** Where a signed-in administrator enrols an authenticator app, on IAM's own origin. */
@@ -1051,4 +1080,5 @@ export type {
 export * from './access'
 export * from './oauth'
 export * from './oauth-registry'
+export * from './passkeys'
 export * from './password-policy'

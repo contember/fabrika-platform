@@ -4,9 +4,11 @@
 
 import type { AuthContext } from '@fabrika/auth'
 import {
+	type ApprovalRequestChallengeInput,
 	type ApprovalRequestDescription,
 	type ApprovalRequestDto,
 	type ApprovalRequestState,
+	type ApprovalStepUpChallenge,
 	CONTROL_ACTIONS,
 	type CreateApprovalRequestResponse,
 	type DecideApprovalRequestInput,
@@ -17,14 +19,15 @@ import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { fail } from '../../api/domain'
 import { canAtCoordinates } from '../../api/runs'
-import type { ApprovalRequestRow, ControlRepositories } from '../../db'
+import type { ApprovalRequestDecider, ApprovalRequestRow, ControlRepositories } from '../../db'
 import { jsonValueSchema } from '../../json-value'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../../lease'
 import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOtherThanRequester } from '../human'
+import { issueStepUpChallenge, type PasskeyStepUpPort, requestStepUpBinding, requireStepUp } from '../step-up'
 import { actionOf, discardRequest, executeApprovedRequest } from './execute'
-import { PRODUCTION_REQUEST_KINDS, type RequestCoordinates, type RequestKindRegistry } from './kind'
+import { PRODUCTION_REQUEST_KINDS, type RequestCoordinates, type RequestKind, type RequestKindRegistry } from './kind'
 import { refusedKindReason } from './refused'
-import { deciders, jsonDigest, policyOf, requesterOf, settingsOf } from './rules'
+import { deciders, jsonDigest, policyOf, type RequestDeciders, requesterOf, settingsOf } from './rules'
 
 export interface ApprovalRequestReadContext {
 	readonly repositories: ControlRepositories
@@ -41,6 +44,8 @@ export interface ApprovalRequestContext extends ApprovalRequestReadContext {
 	/** Absent where Control holds no deployment lock: deciding is then unavailable. */
 	readonly lock?: DeployLocks
 	readonly leaseClock?: LeaseClock
+	/** The approver's passkey step-up in IAM; absent, a decision that takes one is refused. */
+	readonly stepUp?: PasskeyStepUpPort
 	/** Unix seconds; the repositories' own clock in a test. */
 	readonly now?: () => number
 }
@@ -151,47 +156,93 @@ export async function listApprovalRequestsUseCase(c: ApprovalRequestReadContext)
 	return { items: await Promise.all(rows.map((row) => toApprovalRequestDto(c, row))) }
 }
 
+/** A request as a decision reads it: still pending, the one the page showed, before its deadline. */
+interface PendingRequestDecision {
+	readonly kind: 'pending'
+	readonly approver: { readonly id: string; readonly label: string }
+	readonly row: ApprovalRequestRow
+	readonly deciders: RequestDeciders
+}
+
 /**
- * Approve or refuse one request: a person in the console with the approver's right at its coordinates, checked now,
- * posting the input digest the page showed. Every decision is one conditional write on `pending` before the deadline, so
- * a second tap or a repeated POST changes nothing. Under `approvers: 2` the first approval is partial and a different
- * person completes it; either may refuse. Under `requesterMayApprove: false` the requester's person may only refuse. A
- * completing approval executes at once, under the environment's deployment lease.
+ * The checks every decision of a request passes first: a person in the console with the approver's right at its
+ * coordinates, on the input digest the page showed, before the deadline. A request already decided answers its state.
  */
-export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, input: DecideApprovalRequestInput): Promise<ApprovalRequestDto> {
+async function pendingRequestDecision(
+	c: ApprovalRequestContext,
+	input: ApprovalRequestChallengeInput,
+): Promise<PendingRequestDecision | { readonly kind: 'decided'; readonly row: ApprovalRequestRow }> {
 	const approver = requireHumanApprover(c.auth, c.admission)
 	const row = await c.repositories.approvalRequests.get(input.id)
 	if (row === null || !mayDecide(c, row)) fail(404, 'approval request not found')
 	if (row.state !== 'pending') {
-		if (row.decided_by_id === approver.id && decisionOf(row.state) === input.decision) return toApprovalRequestDto(c, row)
+		if (row.decided_by_id === approver.id && decisionOf(row.state) === input.decision) return { kind: 'decided', row }
 		if (row.state === 'expired') fail(410, expiredMessage(row))
 		fail(409, `the request is ${row.state}, no longer waiting for a decision; reload it`)
 	}
 	if (row.input_digest !== input.inputDigest) fail(409, 'the request is not the one the page showed; reload it and decide again')
 	if (row.deadline <= nowOf(c)) fail(410, expiredMessage(row))
-	const deciders = await requestDeciders(c.repositories, row)
-	const decider = { decisionId: uuidv7(), id: approver.id, label: approver.label }
+	return { kind: 'pending', approver, row, deciders: await requestDeciders(c.repositories, row) }
+}
 
-	if (input.decision === 'reject') {
-		if (!(await c.repositories.approvalRequests.reject(row.id, decider))) await lostDecision(c, row.id)
-		await auditDecision(c, row, 'reject', decider.decisionId)
-		await discardRequest(kindsOf(c), c.repositories, row)
-		return toApprovalRequestDto(c, await requireRow(c, row.id))
-	}
-
+/** What an approval refuses before it is recorded: a kind this Control cannot execute, and the requester's own person where barred. */
+function approvableKind(c: ApprovalRequestContext, pending: PendingRequestDecision): RequestKind {
+	const { row } = pending
 	const kind = kindsOf(c).get(row.kind)
 	// What the person saw is what executes: a request this Control cannot describe, it cannot approve either.
 	if (kind === undefined || typeof actionOf(kind, row) === 'string') {
 		fail(409, 'this Control cannot show what the request does, so it cannot approve it; refuse it or let it expire')
 	}
-	if (!deciders.requesterMayApprove) requireOtherThanRequester(approver, requesterOf(row), 'request')
-	if (deciders.approvers === 2) {
-		if (row.partial_approver_id === approver.id) return toApprovalRequestDto(c, row)
-		if (row.partial_approver_id === null) {
-			if (!(await c.repositories.approvalRequests.recordPartialApproval(row.id, approver))) await lostDecision(c, row.id)
-			await auditDecision(c, row, 'approve', decider.decisionId, true)
-			return toApprovalRequestDto(c, await requireRow(c, row.id))
-		}
+	if (!pending.deciders.requesterMayApprove) requireOtherThanRequester(pending.approver, requesterOf(row), 'request')
+	return kind
+}
+
+/**
+ * A single-use passkey challenge bound to one decision of a request whose deciding takes a step-up (ADR-0050 §5): the
+ * same person, right and checks as the decision, so nobody is asked for a passkey for a decision Control refuses.
+ */
+export async function challengeApprovalRequestUseCase(
+	c: ApprovalRequestContext,
+	input: ApprovalRequestChallengeInput,
+): Promise<ApprovalStepUpChallenge> {
+	const pending = await pendingRequestDecision(c, input)
+	if (pending.kind === 'decided') fail(409, `the request is ${pending.row.state}, no longer waiting for a decision; reload it`)
+	if (pending.deciders.stepUp === 'none') fail(409, 'deciding this request takes no passkey')
+	if (input.decision === 'approve') approvableKind(c, pending)
+	return await issueStepUpChallenge(c.stepUp, requestStepUpBinding(pending.row.id, input.decision, pending.row.input_digest))
+}
+
+/**
+ * Approve or refuse one request: a person in the console with the approver's right at its coordinates, checked now,
+ * posting the input digest the page showed. Every decision is one conditional write on `pending` before the deadline, so
+ * a second tap or a repeated POST changes nothing. Under `approvers: 2` the first approval is partial and a different
+ * person completes it; either may refuse. Under `requesterMayApprove: false` the requester's person may only refuse.
+ * Under `stepUp: webauthn` either decision carries a passkey assertion bound to it, which IAM verifies before anything is
+ * written (ADR-0050 §5). A completing approval executes at once, under the environment's deployment lease.
+ */
+export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, input: DecideApprovalRequestInput): Promise<ApprovalRequestDto> {
+	const pending = await pendingRequestDecision(c, input)
+	if (pending.kind === 'decided') return toApprovalRequestDto(c, pending.row)
+	const { approver, row, deciders } = pending
+	const binding = requestStepUpBinding(row.id, input.decision, row.input_digest)
+
+	if (input.decision === 'reject') {
+		const stepUp = await requireStepUp(c.stepUp, deciders.stepUp, binding, approver, input.stepUp, 'decision')
+		const decider = { decisionId: uuidv7(), id: approver.id, label: approver.label, stepUp }
+		if (!(await c.repositories.approvalRequests.reject(row.id, decider))) await lostDecision(c, row.id)
+		await auditDecision(c, row, 'reject', decider)
+		await discardRequest(kindsOf(c), c.repositories, row)
+		return toApprovalRequestDto(c, await requireRow(c, row.id))
+	}
+
+	const kind = approvableKind(c, pending)
+	if (deciders.approvers === 2 && row.partial_approver_id === approver.id) return toApprovalRequestDto(c, row)
+	const stepUp = await requireStepUp(c.stepUp, deciders.stepUp, binding, approver, input.stepUp, 'decision')
+	const decider = { decisionId: uuidv7(), id: approver.id, label: approver.label, stepUp }
+	if (deciders.approvers === 2 && row.partial_approver_id === null) {
+		if (!(await c.repositories.approvalRequests.recordPartialApproval(row.id, decider))) await lostDecision(c, row.id)
+		await auditDecision(c, row, 'approve', decider, true)
+		return toApprovalRequestDto(c, await requireRow(c, row.id))
 	}
 
 	if (c.lock === undefined) fail(503, 'approvals unavailable')
@@ -199,7 +250,7 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 	if (lease === null) fail(409, 'the environment is deploying; nothing was decided, try again in a moment')
 	try {
 		if (!(await c.repositories.approvalRequests.approve(row.id, decider, row.partial_approver_id, lease.fence()))) await lostDecision(c, row.id)
-		await auditDecision(c, row, 'approve', decider.decisionId)
+		await auditDecision(c, row, 'approve', decider)
 		await executeApprovedRequest({ repositories: c.repositories, auth: c.auth }, kind, await requireRow(c, row.id), lease)
 	} finally {
 		await lease.release()
@@ -239,10 +290,7 @@ function mayDecide(c: ApprovalRequestReadContext, row: ApprovalRequestRow): bool
 	return canAtCoordinates(c.auth, CONTROL_ACTIONS.ACCESS_APPROVE, row.app_id, row.env)
 }
 
-async function requestDeciders(
-	repositories: Pick<ControlRepositories, 'registry'>,
-	row: ApprovalRequestRow,
-): Promise<{ approvers: 1 | 2; requesterMayApprove: boolean }> {
+async function requestDeciders(repositories: Pick<ControlRepositories, 'registry'>, row: ApprovalRequestRow): Promise<RequestDeciders> {
 	return deciders(settingsOf(await repositories.registry.getAppEnv(row.app_id, row.env)), row)
 }
 
@@ -250,7 +298,7 @@ async function auditDecision(
 	c: ApprovalRequestReadContext,
 	row: ApprovalRequestRow,
 	decision: 'approve' | 'reject',
-	decisionId: string,
+	decider: ApprovalRequestDecider,
 	partial = false,
 ): Promise<void> {
 	await c.auth.audit({
@@ -263,7 +311,10 @@ async function auditDecision(
 			kind: row.kind,
 			category: row.category,
 			decision,
-			...(partial ? { partial: true } : { decisionId }),
+			...(partial ? { partial: true } : { decisionId: decider.decisionId }),
+			...(decider.stepUp === null || decider.stepUp === undefined
+				? {}
+				: { stepUp: { credentialId: decider.stepUp.credentialId, at: decider.stepUp.at } }),
 			inputDigest: row.input_digest,
 			requester: {
 				id: row.requester_id,
@@ -323,6 +374,7 @@ export async function toApprovalRequestDto(c: ApprovalRequestReadContext, row: A
 		inputDigest: row.input_digest,
 		approvers: who.approvers,
 		requesterMayApprove: who.requesterMayApprove,
+		stepUp: who.stepUp,
 		...(row.state === 'pending' && row.partial_approver_id !== null && row.partial_approver_label !== null && row.partial_approved_at !== null
 			? { partialApproval: { principalId: row.partial_approver_id, label: row.partial_approver_label, at: row.partial_approved_at } }
 			: {}),

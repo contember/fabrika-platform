@@ -180,6 +180,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0036_approval_policy.sql' },
 			{ bundle: 'control', name: '0037_deploy_requests.sql' },
 			{ bundle: 'control', name: '0038_approval_requests.sql' },
+			{ bundle: 'control', name: '0039_approval_step_up.sql' },
 		])
 	})
 
@@ -254,7 +255,10 @@ describe.skipIf(!hasPostgres)('the Postgres schema — column types the row shap
 			.bind(fixture?.schema ?? '')
 			.all<{ column_name: string; data_type: string }>()
 		expect(results).toEqual(
-			['created_at', 'deadline', 'decided_at', 'partial_approved_at', 'updated_at'].map((column_name) => ({ column_name, data_type: 'integer' })),
+			['created_at', 'deadline', 'decided_at', 'decided_step_up_at', 'partial_approved_at', 'partial_step_up_at', 'updated_at'].map((column_name) => ({
+				column_name,
+				data_type: 'integer',
+			})),
 		)
 	})
 

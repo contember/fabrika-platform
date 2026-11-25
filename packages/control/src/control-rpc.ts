@@ -86,6 +86,8 @@ import {
 } from './api/vault'
 import {
 	type ApprovalUseCaseContext,
+	challengeApprovalUseCase,
+	challengeProtectionUseCase,
 	completeApprovalUseCase,
 	getApprovalUseCase,
 	listApprovalsUseCase,
@@ -93,11 +95,13 @@ import {
 } from './approval/api'
 import {
 	type ApprovalRequestContext,
+	challengeApprovalRequestUseCase,
 	createApprovalRequestUseCase,
 	decideApprovalRequestUseCase,
 	getApprovalRequestUseCase,
 	listApprovalRequestsUseCase,
 } from './approval/requests/api'
+import { iamPasskeyStepUp, type PasskeyStepUpPort, stepUpAssertionSchema } from './approval/step-up'
 import { listBackups, toBackupScheduleDto } from './backups'
 import { describeConnector } from './connectors'
 import { consoleAccess } from './console-access'
@@ -187,7 +191,7 @@ const appEnvironmentBody = z.object({
 	artifact: providerEnvelopeSchema,
 })
 const putEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, environment: appEnvironmentBody })
-const protectEnvironmentInput = z.object({
+const protectionChallengeInput = z.object({
 	appId: nonEmpty,
 	env: nonEmpty,
 	protected: z.boolean(),
@@ -195,18 +199,23 @@ const protectEnvironmentInput = z.object({
 	settings: approvalSettingsSchema.extend({
 		approvers: approvalSettingsSchema.shape.approvers.strict(),
 		requesterMayApprove: approvalSettingsSchema.shape.requesterMayApprove.strict(),
+		stepUp: approvalSettingsSchema.shape.stepUp.strict(),
 	}).strict().optional(),
 }).strict()
+const protectEnvironmentInput = protectionChallengeInput.extend({ stepUp: stepUpAssertionSchema.optional() }).strict()
 const accessDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
-const completeApprovalInput = z.object({
+const approvalDecision = z.enum(['approve', 'reject'])
+const approvalChallengeInput = z.object({
 	runId: nonEmpty,
-	decision: z.enum(['approve', 'reject']),
+	decision: approvalDecision,
 	candidateDigest: accessDigest,
 	baselineDigest: accessDigest,
 }).strict()
+const completeApprovalInput = approvalChallengeInput.extend({ stepUp: stepUpAssertionSchema.optional() }).strict()
 const createApprovalRequestInput = z.object({ kind: nonEmpty, input: jsonValueSchema }).strict()
 const approvalRequestId = z.object({ id: nonEmpty }).strict()
-const decideApprovalRequestInput = z.object({ id: nonEmpty, decision: z.enum(['approve', 'reject']), inputDigest: accessDigest }).strict()
+const approvalRequestChallengeInput = z.object({ id: nonEmpty, decision: approvalDecision, inputDigest: accessDigest }).strict()
+const decideApprovalRequestInput = approvalRequestChallengeInput.extend({ stepUp: stepUpAssertionSchema.optional() }).strict()
 const secretBody = z.object({
 	name: nonEmpty,
 	value: z.string(),
@@ -371,6 +380,9 @@ export function createControlRpcRouter(
 				protect: rpc.procedure.input(protectEnvironmentInput).mutation(({ ctx, input }) =>
 					controlCall(() => setEnvironmentProtectionUseCase(approvalContext(ctx), input))
 				),
+				protectChallenge: rpc.procedure.input(protectionChallengeInput).mutation(({ ctx, input }) =>
+					controlCall(() => challengeProtectionUseCase(approvalContext(ctx), input))
+				),
 				rotateTokenKey: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation((
 					{ ctx, input },
 				) => controlCall(() => rotateTokenKeyUseCase(registryContext(ctx), input.appId, input.env, Math.floor(Date.now() / 1000)))),
@@ -461,6 +473,9 @@ export function createControlRpcRouter(
 			complete: rpc.procedure.input(completeApprovalInput).mutation(({ ctx, input }) =>
 				controlCall(() => completeApprovalUseCase(approvalContext(ctx), input))
 			),
+			challenge: rpc.procedure.input(approvalChallengeInput).mutation(({ ctx, input }) =>
+				controlCall(() => challengeApprovalUseCase(approvalContext(ctx), input))
+			),
 			// The right to ask, to read and to decide is checked inside, per request kind and at its coordinates (ADR-0083 §8).
 			requests: rpc.router({
 				create: rpc.procedure.input(createApprovalRequestInput).mutation(({ ctx, input }) =>
@@ -472,6 +487,9 @@ export function createControlRpcRouter(
 				list: rpc.procedure.query(({ ctx }) => controlCall(() => listApprovalRequestsUseCase(approvalRequestContext(ctx)))),
 				decide: rpc.procedure.input(decideApprovalRequestInput).mutation(({ ctx, input }) =>
 					controlCall(() => decideApprovalRequestUseCase(approvalRequestContext(ctx), input))
+				),
+				challenge: rpc.procedure.input(approvalRequestChallengeInput).mutation(({ ctx, input }) =>
+					controlCall(() => challengeApprovalRequestUseCase(approvalRequestContext(ctx), input))
 				),
 			}),
 		}),
@@ -626,6 +644,7 @@ export function createControlRpcRouter(
 			lock: deps.lock,
 			request: ctx.request,
 			...(deps.grantApproval === undefined ? {} : { grantApproval: deps.grantApproval }),
+			...passkeyStepUp(ctx),
 		}
 	}
 
@@ -638,6 +657,7 @@ export function createControlRpcRouter(
 			admission: { request: ctx.request },
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
 			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
+			...passkeyStepUp(ctx),
 		}
 	}
 
@@ -655,6 +675,12 @@ export function createControlRpcRouter(
 			...(deps.vault === undefined ? {} : { vault: deps.vault }),
 		}
 	}
+}
+
+/** The approver's passkey step-up, through IAM's admin transport with the console token this call carries. */
+function passkeyStepUp(ctx: ControlRpcContext): { stepUp?: PasskeyStepUpPort } {
+	const port = ctx.env.IAM_ADMIN === undefined ? null : iamPasskeyStepUp(ctx.env.IAM_ADMIN, ctx.request)
+	return port === null ? {} : { stepUp: port }
 }
 
 function sourceConnectionContext(ctx: ControlRpcContext) {

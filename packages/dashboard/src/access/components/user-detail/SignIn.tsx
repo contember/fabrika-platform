@@ -1,6 +1,7 @@
 import { Link } from '@buzola/router'
 import type {
 	CursorList,
+	PasskeyDto,
 	PasswordActionDelivery,
 	PrincipalDetail,
 	SecondFactorDto,
@@ -28,10 +29,12 @@ const sessionReasons = {
 	method_disabled: 'Sign-in method disabled',
 }
 
-export function UserSignIn({ principal, secondFactor, sessions, connections, before, connectionsBefore, onDone }: {
+export function UserSignIn({ principal, secondFactor, passkeys, sessions, connections, before, connectionsBefore, onDone }: {
 	principal: PrincipalDetail
 	/** Null for a caller who is no installation administrator: only one reads or resets a second factor. */
 	secondFactor: SecondFactorDto | null
+	/** Null for a caller who is no installation administrator, as for `secondFactor`. */
+	passkeys: PasskeyDto[] | null
 	sessions: SessionList
 	connections: CursorList<UserConnectionDto> | null
 	before: string | undefined
@@ -49,6 +52,7 @@ export function UserSignIn({ principal, secondFactor, sessions, connections, bef
 			)}
 			<Authentication principal={principal} onDone={onDone} />
 			{secondFactor && <SecondFactor principal={principal} secondFactor={secondFactor} onDone={onDone} />}
+			{passkeys && <Passkeys principal={principal} passkeys={passkeys} onDone={onDone} />}
 			<section>
 				<div className="section-head">
 					<h2>Browser sign-ins</h2>
@@ -338,6 +342,59 @@ function SecondFactor({ principal, secondFactor, onDone }: { principal: Principa
 					onConfirm={async () => {
 						await api.secondFactor.reset({ principalId: principal.id })
 						setNotice('Two-step sign-in was reset. The person can enrol a new authenticator app.')
+						onDone()
+					}}
+				/>
+			)}
+		</section>
+	)
+}
+
+function Passkeys({ principal, passkeys, onDone }: { principal: PrincipalDetail; passkeys: PasskeyDto[]; onDone: () => void }) {
+	const [confirmReset, setConfirmReset] = useState(false)
+	const [notice, setNotice] = useState<string | null>(null)
+	return (
+		<section>
+			<div className="section-head">
+				<h2>Passkeys</h2>
+			</div>
+			<div className="authentication-grid">
+				<div className="authentication-method">
+					<div>
+						<strong>{passkeys.length === 0 ? 'No passkey' : passkeys.map((passkey) => passkey.label).join(', ')}</strong>
+						<p>
+							{passkeys.length === 0
+								? 'The person adds one from the account menu, under Passkeys.'
+								: 'They confirm sensitive steps in the console, such as deciding an approval that asks for a passkey.'}
+						</p>
+					</div>
+					<Status lamp={passkeys.length > 0 ? 'ok' : 'idle'}>{passkeys.length === 0 ? 'None' : `${passkeys.length} registered`}</Status>
+				</div>
+			</div>
+			{passkeys.length > 0 && (
+				<div className="user-password-actions">
+					<div className="user-item-actions">
+						<button type="button" className="danger" onClick={() => setConfirmReset(true)}>Remove all passkeys</button>
+					</div>
+					<p className="hint">For a person who lost every passkey: they add a new one from the account menu.</p>
+				</div>
+			)}
+			{notice && <p className="notice" role="status">{notice}</p>}
+			{confirmReset && (
+				<ConfirmDialog
+					title="Remove all passkeys"
+					confirmLabel="Remove all"
+					body={
+						<p>
+							Remove every passkey of{' '}
+							<strong>{principal.label}</strong>? Until they add a new one, they cannot confirm a step that asks for a passkey, and the first one they add
+							needs no other passkey. Confirm who is asking before you do this. The removal is recorded in the audit log.
+						</p>
+					}
+					onClose={() => setConfirmReset(false)}
+					onConfirm={async () => {
+						const { removed } = await api.passkeys.reset({ principalId: principal.id })
+						setNotice(removed === 0 ? 'There was no passkey left to remove.' : 'Every passkey was removed. The person can add a new one.')
 						onDone()
 					}}
 				/>

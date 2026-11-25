@@ -13,7 +13,8 @@ describe('a stored run approval', () => {
 			approvedAt: 1_700_000_000,
 			candidateDigest: digest('a'),
 			baselineDigest: digest('b'),
-			stepUp: { credentialId: 'cred-1', at: 1_700_000_000 },
+			stepUp: { credentialId: 'cred-1', at: 1_700_000_000, attestation: 'later' },
+			reviewNote: 'a field this release does not know',
 		})
 		expect(parseApproval(raw)).toEqual({
 			principalId: 'user-1',
@@ -21,6 +22,7 @@ describe('a stored run approval', () => {
 			approvedAt: 1_700_000_000,
 			candidateDigest: digest('a'),
 			baselineDigest: digest('b'),
+			stepUp: { credentialId: 'cred-1', at: 1_700_000_000 },
 		})
 	})
 

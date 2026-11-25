@@ -11,5 +11,6 @@ two OAuth resources (`CONTROL_CLI_RESOURCES`), which every provider registers an
 
 Keep this package safe for browser and plain-Bun consumers. It may depend on
 provider-neutral envelope types, the runtime-neutral `@fabrika/app` RPC
-contract types and `@fabrika/operations-contract`'s actions (one way: that package never imports this one), but never on `@fabrika/control`, Cloudflare bindings, database
+contract types, `@fabrika/operations-contract`'s actions and `@fabrika/iam-contract`'s passkey wire shapes (one way: neither
+package imports this one), but never on `@fabrika/control`, Cloudflare bindings, database
 code, or runner implementations.

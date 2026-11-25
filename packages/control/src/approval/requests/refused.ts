@@ -14,9 +14,12 @@ const RETURNS_SECRET = 'it would return a secret to the agent in a form Control 
 
 const REFUSED: Readonly<Record<string, string>> = {
 	'apps.environments.protect': CONFIGURATION,
+	'apps.environments.protectChallenge': CONFIGURATION,
 	'iam.grantApproval.set': CONFIGURATION,
 	'approvals.complete': DECIDING,
 	'approvals.requests.decide': DECIDING,
+	'approvals.challenge': DECIDING,
+	'approvals.requests.challenge': DECIDING,
 	'iam.grantRequests.decide': DECIDING,
 	'apps.environments.delete': PROTECTED_DELETE,
 	'apps.delete': PROTECTED_DELETE,

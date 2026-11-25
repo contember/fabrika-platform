@@ -3,19 +3,24 @@ import {
 	ACTION_CATEGORIES,
 	APPROVAL_CATEGORIES,
 	type ApprovalPolicy,
+	approvalSettingsSchema,
+	APPROVER_CATEGORIES,
 	type CategorizedChange,
 	DEFAULT_APPROVAL_CATEGORIES,
 	gate,
 	modesOf,
 	PERMISSIVE_POLICY,
+	PERMISSIVE_SETTINGS,
 	POLICY_CATEGORIES,
 	policyFromCategories,
 	requesterMayApprove,
 	requesterPersonId,
+	requiredStepUp,
 	REVIEW_REASONS,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 	waitingCategories,
+	weakensStepUp,
 } from '../index.js'
 
 const offRoad: CategorizedChange = { effect: 'widens', review: 'closer', reason: 'off-road', rule: 'endpoint.sql' }
@@ -162,5 +167,65 @@ describe('who decides a pending item (ADR-0083 §8)', () => {
 		expect(requesterPersonId({ id: 'svc', type: 'service' }, 'p-bob')).toBe('p-bob')
 		expect(requesterPersonId({ id: 'svc', type: 'service' })).toBeNull()
 		expect(requesterPersonId({ id: 'svc', type: 'service' }, null)).toBeNull()
+	})
+})
+
+describe('the step-up on deciding (ADR-0050 §5)', () => {
+	test('the default asks a passkey only for a credential; the permissive preset asks none', () => {
+		expect(APPROVER_CATEGORIES.filter((category) => STRICT_SETTINGS.stepUp[category] === 'webauthn')).toEqual(['credentials'])
+		expect(APPROVER_CATEGORIES.filter((category) => PERMISSIVE_SETTINGS.stepUp[category] !== 'none')).toEqual([])
+		expect(approvalSettingsSchema.parse(PERMISSIVE_SETTINGS)).toEqual(PERMISSIVE_SETTINGS)
+	})
+
+	test("any waiting category asking for a passkey makes the decision take one; grants keep IAM's rule", () => {
+		expect(requiredStepUp(STRICT_SETTINGS, ['secrets', 'deploy-request'])).toBe('none')
+		expect(requiredStepUp(STRICT_SETTINGS, ['secrets', 'credentials'])).toBe('webauthn')
+		expect(requiredStepUp({ ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, 'off-road': 'webauthn' } }, ['off-road'])).toBe('webauthn')
+		expect(requiredStepUp(STRICT_SETTINGS, ['grants'])).toBe('none')
+		expect(requiredStepUp(STRICT_SETTINGS, [])).toBe('none')
+	})
+})
+
+describe('a change of protection that weakens a passkey on deciding (ADR-0050 §5)', () => {
+	const held = { protected: true, policy: STRICT_POLICY, settings: STRICT_SETTINGS }
+	const withSettings = (settings: Partial<typeof STRICT_SETTINGS>) => ({ ...held, settings: { ...STRICT_SETTINGS, ...settings } })
+	const deployPasskey = withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, 'deploy-request': 'webauthn' } })
+
+	test('each weakening of a webauthn category names it', () => {
+		expect(weakensStepUp(held, { ...held, protected: false })).toEqual(['credentials'])
+		expect(weakensStepUp(held, withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' } }))).toEqual(['credentials'])
+		expect(weakensStepUp(held, { ...held, policy: { ...STRICT_POLICY, credentials: 'off' } })).toEqual(['credentials'])
+		const twoPeople = withSettings({ approvers: { ...STRICT_SETTINGS.approvers, credentials: 2 } })
+		expect(weakensStepUp(twoPeople, held)).toEqual(['credentials'])
+		const someoneElse = withSettings({ requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, credentials: false } })
+		expect(weakensStepUp(someoneElse, held)).toEqual(['credentials'])
+		expect(weakensStepUp(deployPasskey, { ...deployPasskey, settings: { ...deployPasskey.settings, deployRequestCommits: 'any' } })).toEqual([
+			'deploy-request',
+		])
+		const refused = { ...held, policy: { ...STRICT_POLICY, credentials: 'refuse' as const } }
+		expect(weakensStepUp(refused, held)).toEqual(['credentials'])
+		expect(weakensStepUp(held, { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toEqual(['credentials'])
+	})
+
+	test('a tightening, a change elsewhere and an unprotected environment take none', () => {
+		expect(weakensStepUp(held, held)).toEqual([])
+		expect(weakensStepUp(held, deployPasskey)).toEqual([])
+		expect(weakensStepUp(held, withSettings({ approvers: { ...STRICT_SETTINGS.approvers, credentials: 2 } }))).toEqual([])
+		expect(weakensStepUp(held, { ...held, policy: { ...STRICT_POLICY, credentials: 'refuse' } })).toEqual([])
+		// Categories without a passkey, and settings that decide nobody's decision, loosen freely.
+		const elsewhere = { ...PERMISSIVE_SETTINGS, stepUp: STRICT_SETTINGS.stepUp }
+		expect(weakensStepUp(held, { protected: true, policy: { ...PERMISSIVE_POLICY, credentials: 'person' }, settings: elsewhere })).toEqual([])
+		expect(weakensStepUp(held, withSettings({ requestTtlHours: 168 }))).toEqual([])
+		expect(weakensStepUp(held, withSettings({ deployRequestCommits: 'any' }))).toEqual([])
+		const unprotected = { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }
+		expect(weakensStepUp(unprotected, unprotected)).toEqual([])
+		expect(weakensStepUp(unprotected, held)).toEqual([])
+		expect(weakensStepUp(unprotected, { ...unprotected, policy: STRICT_POLICY })).toEqual([])
+	})
+
+	test('an unprotected environment decides under the defaults, so protecting it without their passkey weakens it', () => {
+		const unprotected = { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }
+		expect(weakensStepUp(unprotected, { protected: true, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toEqual(['credentials'])
+		expect(weakensStepUp(unprotected, withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' } }))).toEqual(['credentials'])
 	})
 })

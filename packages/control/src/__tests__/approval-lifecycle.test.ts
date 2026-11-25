@@ -40,6 +40,7 @@ import { appEnvCategories, appEnvPolicy, storedCategories } from '../approval/ca
 import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot } from '../approval/snapshot'
+import { iamPasskeyStepUp } from '../approval/step-up'
 import { LIST_FAILED_CODE } from '../data-operations'
 import type { AppEnvRow, ControlRepositories, RunRow } from '../db'
 import { SourceDescriptorMismatch } from '../github/source/failure'
@@ -58,6 +59,7 @@ import { BASE, edited, largeContract, WITH_EXPORT, WITHOUT_REMOVE } from './help
 import { createHarness, harnessDatabase, queryRows } from './helpers/harness'
 import { kitFiles } from './helpers/kit-contract'
 import { fixtureProtect, makeFakeLock } from './helpers/lock'
+import { consoleTokenHeaders, type FakePasskeyIam, fakePasskeyIam, protectAsConsole } from './helpers/passkeys'
 import { protectionRaceScenario } from './helpers/protection-race'
 import { refusedClaimScenario } from './helpers/refused-claims'
 import { fixedProxySecrets } from './helpers/vault'
@@ -80,6 +82,8 @@ interface World {
 	files: Record<string, string>
 	/** What the provider answers the next deploy; it succeeds otherwise. */
 	nextOutcome?: ProviderDeployOutcome
+	/** IAM's passkey step-up, where the console's person, `p-ada`, holds a passkey. */
+	readonly passkeys: FakePasskeyIam
 }
 
 /**
@@ -89,7 +93,7 @@ interface World {
 function world(options: { readonly documents?: BlobStore } = {}): World {
 	const { db, sqlite } = createHarness(undefined, options.documents === undefined ? {} : { runDocuments: options.documents })
 	if (options.documents !== undefined) withD1RunRowLimit(sqlite)
-	return { db, sqlite, deploys: [], republished: [], queued: [], logs: new Map(), contract: BASE, files: {} }
+	return { db, sqlite, deploys: [], republished: [], queued: [], logs: new Map(), contract: BASE, files: {}, passkeys: fakePasskeyIam(['p-ada']) }
 }
 
 const D1_ROW_LIMIT_BYTES = 2_000_000
@@ -243,16 +247,21 @@ function auth(
 }
 
 function consoleRequest(headers: Record<string, string> = {}): Request {
-	return new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers: { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin', ...headers } })
+	return new Request(`${ORIGIN}/api/rpc`, {
+		method: 'POST',
+		headers: { Origin: ORIGIN, 'Sec-Fetch-Site': 'same-origin', ...consoleTokenHeaders('p-ada'), ...headers },
+	})
 }
 
 function approvals(w: World, caller: AuthContext, request = consoleRequest()): ApprovalUseCaseContext {
+	const stepUp = iamPasskeyStepUp(w.passkeys.gateway, request)
 	return {
 		repositories: w.db,
 		auth: caller,
 		queue: { send: (message) => Promise.resolve(void w.queued.push(message)) },
 		lock: makeFakeLock(w.db),
 		request,
+		...(stepUp === null ? {} : { stepUp }),
 	}
 }
 
@@ -1021,7 +1030,7 @@ describe('approved access through the run lifecycle', () => {
 		const parked = await deploy(w, 'prod')
 		expect(parked.status).toBe('awaiting_approval')
 
-		await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false })
+		await protectAsConsole(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
 		expect((await run(w, parked.runId)).status).toBe('awaiting_approval')
 		expect(w.queued).toEqual([])
 
@@ -1046,7 +1055,7 @@ describe('approved access through the run lifecycle', () => {
 		await seed(w)
 		w.files = DELETES_NOTES
 		const parked = await deploy(w, 'prod')
-		await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false })
+		await protectAsConsole(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
 		const stage = await deploy(w, 'stage')
 		expect(stage.status).toBe('succeeded')
 
@@ -1113,7 +1122,7 @@ describe('protection survives the registry', () => {
 		const human = auth({ permissions: [{ action: '*', scope: null }] })
 		const permissive = { appId: 'notes', env: 'stage', protected: true, policy: PERMISSIVE_POLICY }
 		await setEnvironmentProtectionUseCase({ ...approvals(w, human), grantApproval: { set: () => Promise.resolve() } }, permissive)
-		await setEnvironmentProtectionUseCase(approvals(w, human), { appId: 'notes', env: 'prod', protected: false })
+		await protectAsConsole(approvals(w, human), { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
 
 		for (const env of ['stage', 'prod']) {
 			expect(await deleteAppEnvUseCase(registry(w, human), 'notes', env)).toEqual({ ok: true })
@@ -2516,7 +2525,7 @@ describe('approval categories', () => {
 		const stage = world()
 		await seed(stage)
 		await choose(stage, 'stage', ['role-added'])
-		await setEnvironmentProtectionUseCase(approvals(stage, auth()), { appId: 'notes', env: 'stage', protected: false })
+		await protectAsConsole(approvals(stage, auth()), { appId: 'notes', env: 'stage', protected: false }, 'p-ada')
 		stage.contract = WITH_READER
 		expect((await deploy(stage, 'stage')).status).toBe('succeeded')
 	})
@@ -2553,7 +2562,7 @@ describe('approval categories', () => {
 		const w = world()
 		await seed(w)
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'csp'])
-		await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false })
+		await protectAsConsole(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
 		const dto = await setEnvironmentProtectionUseCase(approvals(w, auth()), { appId: 'notes', env: 'prod', protected: true })
 		expect(dto.approvalCategories).toContain('csp')
 	})
@@ -2564,7 +2573,7 @@ describe('approval categories', () => {
 	})
 
 	function setPolicy(w: World, env: string, policy: ApprovalPolicy, gate: GrantGate = grantGate()) {
-		return setEnvironmentProtectionUseCase({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env, protected: true, policy })
+		return protectAsConsole({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env, protected: true, policy }, 'p-ada')
 	}
 
 	test('a policy is stored as its modes that differ from the defaults, with the waiting categories beside it', async () => {
@@ -2657,7 +2666,7 @@ describe('approval categories', () => {
 		expect(gate.calls).toEqual([['notes@prod', true, start + 1]])
 		expect(await revision()).toBe(start + 1)
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants', 'csp'], gate)
-		await setEnvironmentProtectionUseCase({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env: 'prod', protected: false })
+		await protectAsConsole({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
 		expect(gate.calls).toEqual([['notes@prod', true, start + 1], ['notes@prod', true, start + 2], ['notes@prod', false, start + 3]])
 		expect(gate.state).toEqual({ required: false, revision: await revision() })
 	})

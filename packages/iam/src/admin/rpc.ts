@@ -5,6 +5,7 @@ import { installationBrandSchema } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
 import { logError } from '../log'
+import { assertionSchema, passkeyBindingSchema, passkeyLabelSchema, registrationCredentialSchema } from '../passkeys'
 import { recordAdminAccess, rpcProcedureOf } from './access'
 import { grantAppRole, listAdministeredApps, listAppPeople, revokeAppRole } from './app-people'
 import { listConnections, revokeConnection } from './connections'
@@ -28,6 +29,16 @@ import {
 } from './grant-requests'
 import type { AdminContext } from './handlers'
 import { adminUseCases } from './handlers'
+import {
+	beginPasskeyRegistration,
+	issuePasskeyChallenge,
+	listOwnPasskeys,
+	listPasskeysOf,
+	registerPasskey,
+	removePasskey,
+	resetPasskeys,
+	verifyPasskeyChallenge,
+} from './passkeys'
 import { ADMIN_ACTION, extractCredentials, IAM_APP, resolveAdmin } from './router'
 import { listScopeValuesUseCase } from './scope-values'
 import { administrationOf } from './user-admin'
@@ -346,6 +357,30 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => adminUseCases.resetSecondFactor(context(ctx), input)),
 	}),
+	// The person's own passkeys: no `iam.admin`, a person in a signed-in session only (`admin/passkeys.ts`). `challenge`
+	// and `verify` are the step-up seam Control's gateway reaches with the approver's console token. `listOf` and
+	// `reset` are an installation administrator's, the reset being the path for a person who lost every passkey.
+	passkeys: t.router({
+		list: t.procedure.query(({ ctx }) => listOwnPasskeys(ctx)),
+		registrationOptions: t.procedure.mutation(({ ctx }) => beginPasskeyRegistration(ctx)),
+		register: t.procedure
+			.input(
+				z.object({ challengeId: nonEmpty, label: passkeyLabelSchema, credential: registrationCredentialSchema, stepUp: assertionSchema.optional() }),
+			)
+			.mutation(({ ctx, input }) => registerPasskey(ctx, input)),
+		remove: t.procedure
+			.input(z.object({ passkeyId: nonEmpty, stepUp: assertionSchema }))
+			.mutation(({ ctx, input }) => removePasskey(ctx, input)),
+		challenge: t.procedure.input(z.object({ binding: passkeyBindingSchema })).mutation(({ ctx, input }) => issuePasskeyChallenge(ctx, input)),
+		verify: t.procedure
+			.input(z.object({ binding: passkeyBindingSchema, assertion: assertionSchema }))
+			.mutation(({ ctx, input }) => verifyPasskeyChallenge(ctx, input)),
+		listOf: t.procedure.input(principalIdInput).require(ADMIN_ACTION).query(({ ctx, input }) => listPasskeysOf(context(ctx), input)),
+		reset: t.procedure
+			.input(principalIdInput)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => resetPasskeys(context(ctx), input)),
+	}),
 })
 
 /** Resolve the admin behind an `/admin/rpc` request, then run `next` with it on `ctx`; anyone else is refused. */
@@ -364,7 +399,7 @@ export const adminRpcAuth = async (request: Request, ctx: IamAppContext, next: (
 		ctx.admin = resolution.admin
 		ctx.auth = authContext(resolution.admin)
 		// Every request of an administrator is recorded before it runs, reads included. A caller without an administration
-		// reaches no procedure but `appPeople.*`, so it used no privileged access.
+		// reaches no procedure but `appPeople.*`, its own grant requests and its own passkeys, so it used no privileged access.
 		if (administrationOf(resolution.admin) !== null) {
 			const access = { method: request.method, route: '/admin/rpc', procedure: await rpcProcedureOf(request) }
 			try {

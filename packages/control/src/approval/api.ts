@@ -7,12 +7,25 @@ import { appEnvironmentId } from '@fabrika/auth-core'
 import type {
 	AccessChangeDto,
 	AppEnvDto,
+	ApprovalChallengeInput,
 	ApprovalDto,
+	ApprovalStepUpChallenge,
 	CompleteApprovalRequest,
 	ListResponse,
+	ProtectionChallengeInput,
 	SetEnvironmentProtectionRequest,
+	StepUpMode,
 } from '@fabrika/control-contract'
-import { changeCategories, CONTROL_ACTIONS, gate, type PolicyCategory, requesterMayApprove, requiredApprovers } from '@fabrika/control-contract'
+import {
+	changeCategories,
+	CONTROL_ACTIONS,
+	gate,
+	type PolicyCategory,
+	requesterMayApprove,
+	requiredApprovers,
+	requiredStepUp,
+	weakensStepUp,
+} from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
@@ -32,6 +45,7 @@ import {
 } from './publish'
 import { deployRequester, parseDeployRequest, toDeployRequestDto } from './request'
 import { type AccessSnapshot, parseSnapshot } from './snapshot'
+import { issueStepUpChallenge, type PasskeyStepUpPort, protectionStepUpBinding, requireStepUp, runStepUpBinding } from './step-up'
 import { snapshotSurface } from './surface'
 
 /**
@@ -50,6 +64,8 @@ export interface ApprovalUseCaseContext extends ConsoleAdmission {
 	readonly lock: DeployLocks
 	/** Absent on an installation without IAM's issuer or provisioning key: choosing `grants` there is refused. */
 	readonly grantApproval?: GrantApprovalPort
+	/** The approver's passkey step-up in IAM; absent, a decision that takes one is refused. */
+	readonly stepUp?: PasskeyStepUpPort
 	readonly leaseClock?: LeaseClock
 	readonly now?: () => number
 }
@@ -78,14 +94,19 @@ export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: strin
 	}
 }
 
-/**
- * Approve or refuse one parked run. Only a human user principal, on a console request from its own origin, holding
- * `access.approve` at the run's coordinates; the approval names the two digests the approver read, so a run that was
- * classified again since refuses it. An approved run is queued again and classified once more before it publishes. A
- * decision after the run's deadline changes nothing (ADR-0050 §4). Where two people decide (`approvers: 2`), the first
- * approval is recorded on the digests and the run keeps waiting; the same person approving again changes nothing.
- */
-export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: CompleteApprovalRequest): Promise<ApprovalDto> {
+/** A parked run as a decision reads it: still waiting, on the digests the page showed, before its deadline. */
+interface PendingRunDecision {
+	readonly approver: { readonly id: string; readonly label: string }
+	readonly run: RunRow
+	readonly storedClassification: string
+	readonly classification: StoredClassification
+	readonly now: number
+	readonly deciders: RunDeciders
+	readonly partial: StoredApproval | null
+}
+
+/** The checks every decision of a parked run passes first, and the passkey challenge for one before it is posted. */
+async function pendingRunDecision(c: ApprovalUseCaseContext, input: ApprovalChallengeInput): Promise<PendingRunDecision> {
 	const approver = requireHumanApprover(c.auth, c)
 	const run = await requireClassifiedRun(c, input.runId)
 	if (run.failure_cause === 'expired') fail(410, expiredMessage(run))
@@ -97,14 +118,48 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 	}
 	const now = (c.now ?? (() => Math.floor(Date.now() / 1000)))()
 	if (run.approval_deadline !== null && run.approval_deadline <= now) fail(410, expiredMessage(run))
-	const { approvers, requesterMayApprove } = await runDeciders(c.repositories, run, classification)
-	const partial = heldPartialApproval(run, classification)
+	const deciders = await runDeciders(c.repositories, run, classification)
+	return { approver, run, storedClassification, classification, now, deciders, partial: heldPartialApproval(run, classification) }
+}
+
+/** What a decision of a run is bound to when it takes a step-up: the run, the decision and the digests it was read on. */
+function runBinding(pending: PendingRunDecision, decision: CompleteApprovalRequest['decision']): string {
+	return runStepUpBinding(pending.run.id, decision, pending.classification.candidateDigest, pending.classification.baselineDigest)
+}
+
+/**
+ * A single-use passkey challenge bound to one decision of a parked run whose deciding takes a step-up (ADR-0050 §5):
+ * the same person, right and checks as the decision, so nobody is asked for a passkey for a decision Control refuses.
+ */
+export async function challengeApprovalUseCase(c: ApprovalUseCaseContext, input: ApprovalChallengeInput): Promise<ApprovalStepUpChallenge> {
+	const pending = await pendingRunDecision(c, input)
+	if (pending.deciders.stepUp === 'none') fail(409, 'deciding this run takes no passkey')
+	if (input.decision === 'approve' && !pending.deciders.requesterMayApprove && pending.run.request_json !== null) {
+		requireOtherThanRequester(pending.approver, deployRequester(parseDeployRequest(pending.run.request_json)), 'deploy')
+	}
+	return await issueStepUpChallenge(c.stepUp, runBinding(pending, input.decision))
+}
+
+/**
+ * Approve or refuse one parked run. Only a human user principal, on a console request from its own origin, holding
+ * `access.approve` at the run's coordinates; the approval names the two digests the approver read, so a run that was
+ * classified again since refuses it. An approved run is queued again and classified once more before it publishes. A
+ * decision after the run's deadline changes nothing (ADR-0050 §4). Where two people decide (`approvers: 2`), the first
+ * approval is recorded on the digests and the run keeps waiting; the same person approving again changes nothing.
+ * Under `stepUp: webauthn` either decision carries a passkey assertion bound to it, which IAM verifies before anything
+ * is written (ADR-0050 §5).
+ */
+export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: CompleteApprovalRequest): Promise<ApprovalDto> {
+	const pending = await pendingRunDecision(c, input)
+	const { approver, run, storedClassification, classification, now, partial } = pending
+	const { approvers, requesterMayApprove, stepUp: stepUpMode } = pending.deciders
 	if (input.decision === 'approve' && approvers === 2 && partial?.principalId === approver.id) {
 		return await toApprovalDto(c.repositories, run)
 	}
 	if (input.decision === 'approve' && !requesterMayApprove && run.request_json !== null) {
 		requireOtherThanRequester(approver, deployRequester(parseDeployRequest(run.request_json)), 'deploy')
 	}
+	const stepUp = await requireStepUp(c.stepUp, stepUpMode, runBinding(pending, input.decision), approver, input.stepUp, 'decision')
 	const lease = await acquireLease(c.lock, runLeaseKey(run.app_id, run.env), c.leaseClock)
 	if (lease === null) fail(409, 'the environment is deploying; try again in a moment')
 	const completes = input.decision === 'approve' && (approvers === 1 || partial !== null)
@@ -116,6 +171,7 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 			approvedAt: now,
 			candidateDigest: classification.candidateDigest,
 			baselineDigest: classification.baselineDigest,
+			...(stepUp === null ? {} : { stepUp }),
 		}
 		const expected = { classification: storedClassification, partial: run.partial_approval_json }
 		const changed = input.decision === 'reject'
@@ -142,6 +198,7 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 			...(input.decision === 'approve' && !completes ? { partial: true } : {}),
 			candidateDigest: classification.candidateDigest,
 			baselineDigest: classification.baselineDigest,
+			...(stepUp === null ? {} : { stepUp: { credentialId: stepUp.credentialId, at: stepUp.at } }),
 		},
 	})
 	if (completes) await c.queue.send({ runId: run.id })
@@ -164,19 +221,31 @@ export function waitingCategoriesOf(run: Pick<RunRow, 'park_reason'>, classifica
 	return run.park_reason === 'requested' ? [...lines, 'deploy-request'] : lines
 }
 
+/** Who decides a parked run, and what deciding it takes, under its environment's settings now. */
+interface RunDeciders {
+	readonly approvers: 1 | 2
+	readonly requesterMayApprove: boolean
+	readonly stepUp: StepUpMode
+}
+
 /**
- * Who decides a parked run: how many people, the most any of its waiting categories asks for, and whether the
- * requester's own person may be one of them, which no waiting category may refuse (ADR-0083 §8).
+ * Who decides a parked run: how many people, the most any of its waiting categories asks for, whether the requester's
+ * own person may be one of them, which no waiting category may refuse, and whether deciding takes a passkey, which any
+ * waiting category may ask for (ADR-0083 §8).
  */
 async function runDeciders(
 	repositories: Pick<ControlRepositories, 'registry'>,
 	run: RunRow,
 	classification: StoredClassification,
-): Promise<{ readonly approvers: 1 | 2; readonly requesterMayApprove: boolean }> {
+): Promise<RunDeciders> {
 	const appEnv = await repositories.registry.getAppEnv(run.app_id, run.env)
 	const settings = appEnvSettings(appEnv ?? { approval_settings: null })
 	const categories = waitingCategoriesOf(run, classification)
-	return { approvers: requiredApprovers(settings, categories), requesterMayApprove: requesterMayApprove(settings, categories) }
+	return {
+		approvers: requiredApprovers(settings, categories),
+		requesterMayApprove: requesterMayApprove(settings, categories),
+		stepUp: requiredStepUp(settings, categories),
+	}
 }
 
 /** The first of two approvals, while it names the digests the run shows now; a run that parked again dropped it. */
@@ -187,19 +256,57 @@ function heldPartialApproval(run: RunRow, classification: StoredClassification):
 }
 
 /**
- * Set an environment's `protected` flag and, when given, its approval policy: the same human rule as approving, and
- * audited (ADR-0050 §4, ADR-0083 §2). IAM's grant gate follows every change, the stricter side first: IAM holds grants
- * before Control says so and releases them only after, so a failure between the two writes leaves grants waiting rather
- * than not, and the next change repairs it (ADR-0083 §4).
+ * The checks every change of protection passes first: a person in the console with `access.approve` at an environment
+ * that may take the change. Answers the person and the environment as read before the lease.
  */
-export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
-	requireHumanApprover(c.auth, c)
+async function requireProtectionChange(
+	c: ApprovalUseCaseContext,
+	input: ProtectionChallengeInput,
+): Promise<{ readonly person: { readonly id: string; readonly label: string }; readonly before: AppEnvRow }> {
+	const person = requireHumanApprover(c.auth, c)
 	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
 	const before = await c.repositories.registry.getAppEnv(input.appId, input.env)
 	if (before === null) fail(404, 'app env not found')
 	// ADR-0050: a dev environment runs unreviewed workspace heads, and approval never applies to it.
 	if (before.kind === 'dev' && input.protected) fail(409, 'a dev environment is never protected')
 	if (before.authoring === 1 && input.protected) fail(409, authoringNeverProtected(input.env))
+	return { person, before }
+}
+
+/**
+ * What a change of protection takes beyond the session (ADR-0050 §5): a passkey when it weakens what deciding an item of
+ * a category takes where that category takes one under what the environment holds, so a driven browser cannot loosen
+ * the setting and then decide without one.
+ */
+function protectionStepUp(held: AppEnvRow, input: ProtectionChallengeInput): StepUpMode {
+	const policy = appEnvPolicy(held)
+	const settings = appEnvSettings(held)
+	const weakened = weakensStepUp(
+		{ protected: held.protected === 1, policy, settings },
+		{ protected: input.protected, policy: input.policy ?? policy, settings: input.settings ?? settings },
+	)
+	return weakened.length > 0 ? 'webauthn' : 'none'
+}
+
+/**
+ * A single-use passkey challenge bound to one change of protection that takes a step-up: the same person, right and
+ * checks as the change, judged against what the environment holds now.
+ */
+export async function challengeProtectionUseCase(c: ApprovalUseCaseContext, input: ProtectionChallengeInput): Promise<ApprovalStepUpChallenge> {
+	const { before } = await requireProtectionChange(c, input)
+	if (protectionStepUp(before, input) === 'none') fail(409, 'this change takes no passkey')
+	return await issueStepUpChallenge(c.stepUp, protectionStepUpBinding(input))
+}
+
+/**
+ * Set an environment's `protected` flag and, when given, its approval policy: the same human rule as approving, and
+ * audited (ADR-0050 §4, ADR-0083 §2). A change that weakens a passkey on deciding carries an assertion bound to it, which
+ * IAM verifies before anything is written (ADR-0050 §5). IAM's grant gate follows every change, the stricter side first:
+ * IAM holds grants before Control says so and releases them only after, so a failure between the two writes leaves
+ * grants waiting rather than not, and the next change repairs it (ADR-0083 §4).
+ */
+export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
+	const { person } = await requireProtectionChange(c, input)
 	const policy = input.policy === undefined ? undefined : storedPolicy(input.policy)
 	const settings = input.settings === undefined ? undefined : storedSettings(input.settings)
 	const iamApp = appEnvironmentId(input.appId, input.env)
@@ -210,6 +317,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	let row: AppEnvRow | null = null
 	try {
 		const held = await c.repositories.registry.getAppEnv(input.appId, input.env) ?? fail(404, 'app env not found')
+		const stepUp = await requireStepUp(c.stepUp, protectionStepUp(held, input), protectionStepUpBinding(input), person, input.stepUp, 'change')
 		const grantsAfter = grantsWait({
 			protected: input.protected ? 1 : 0,
 			approval_categories: policy === undefined ? held.approval_categories : policy.categories,
@@ -235,6 +343,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 					policyTo: appEnvPolicy(row),
 					settingsFrom: appEnvSettings(held),
 					settingsTo: appEnvSettings(row),
+					...(stepUp === null ? {} : { stepUp: { credentialId: stepUp.credentialId, at: stepUp.at } }),
 				},
 			})
 			if (grantApproval !== null && !grantsAfter) await setGrantApproval(grantApproval, iamApp, false, row.protection_revision)

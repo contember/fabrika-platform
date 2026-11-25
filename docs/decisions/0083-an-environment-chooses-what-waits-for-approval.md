@@ -98,24 +98,27 @@ The settings are one nullable column beside it, `approval_settings`, holding the
 `approvers` takes every category but `grants`, whose two-person rule IAM keeps (§4). Each setting lands with the step
 that first uses it:
 
-| Setting                | Default                                        | Alternative                                                                     |
-| ---------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------- |
-| `deployRequestCommits` | `merged`                                       | `any`: an unmerged commit may be requested, still never a workspace ref         |
-| `requestTtlHours`      | 24, for requests and parked runs               | 1–168                                                                           |
-| `requesterMayApprove`  | `true`, per category, grants and keys included | `false`: someone other than the requester's person decides                      |
-| `approvers`            | 1, per category                                | 2: two different people decide, each on the same digest                         |
-| `stepUp`               | `webauthn` for `credentials`, `none` elsewhere | `webauthn` or `none` for any category                                           |
-| `credentialCeiling`    | `requester`                                    | `approver`: up to the approver's own rights, the page warning what exceeds them |
-| `planEvidence`         | `console`                                      | `console+github`, once the access-diff GitHub check is built                    |
-| `planBinding`          | `transition`                                   | `after-state`                                                                   |
-| `planTtlDays`          | 30                                             | 1–365                                                                           |
+| Setting                | Default                                        | Alternative                                                                                 |
+| ---------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `deployRequestCommits` | `merged`                                       | `any`: an unmerged commit may be requested, still never a workspace ref                     |
+| `requestTtlHours`      | 24, for requests and parked runs               | 1–168                                                                                       |
+| `requesterMayApprove`  | `true`, per category, grants and keys included | `false`: someone other than the requester's person decides                                  |
+| `approvers`            | 1, per category                                | 2: two different people decide, each on the same digest                                     |
+| `stepUp`               | `webauthn` for `credentials`, `none` elsewhere | `webauthn` (a passkey assertion bound to the decision) or `none`, any category but `grants` |
+| `credentialCeiling`    | `requester`                                    | `approver`: up to the approver's own rights, the page warning what exceeds them             |
+| `planEvidence`         | `console`                                      | `console+github`, once the access-diff GitHub check is built                                |
+| `planBinding`          | `transition`                                   | `after-state`                                                                               |
+| `planTtlDays`          | 30                                             | 1–365                                                                                       |
 
 The policy and the settings are kept in `app_env_protection` with the `protected` flag, so a recreated environment
-starts from the choice its deleted predecessor left (ADR-0050 §4). They apply only while the environment is protected.
+starts from the choice its deleted predecessor left (ADR-0050 §4). They apply only while the environment is protected;
+an unprotected environment's requests are decided under the defaults.
 They change through `apps.environments.protect`, under the rules of the flag: `access.approve` at the coordinates, a
 person in the console, the environment's deployment lease, a refusal while a run is `running`, and one audit row
-(`access.protect`, with the policy and the settings before and after). The change advances `protection_revision` and `generation`, so a
-run classified under the old choice classifies again. There is no installation level of defaults or floors yet.
+(`access.protect`, with the policy and the settings before and after). A change that weakens what deciding takes in a
+category with `stepUp: webauthn` also takes a passkey assertion bound to the change (ADR-0050 §5), and the audit row
+names the passkey. The change advances `protection_revision` and `generation`, so a run classified under the old
+choice classifies again. There is no installation level of defaults or floors yet.
 
 ### 3. The modes and the gate
 
@@ -241,13 +244,17 @@ checks the approver as it does today.
   by name and value, IAM's key issuance takes the request id as its idempotency key, and a data operation records its
   own steps (ADR-0069), so `unknown` retries or follows it.
 - **Who approves.** A person in the console with the action's approval right (`access.approve` at the coordinates, the
-  application's IAM administration for an IAM action). The person may approve their own agent's request, grants and
-  keys included. `requesterMayApprove: false` makes someone other than the requester's person decide. A service key's
-  request has no human owner, and no verified token names the key's issuer, so there it fails closed: nobody approves
-  it, and anyone with the approval right may refuse it. `approvers: 2` takes two different people
-  on the same digest; the item stays `pending` after the first, and a rejection by either closes it. Both apply to
-  parked runs too, and the stricter among a change's categories wins. `stepUp: webauthn` makes the decision take a
-  console token whose `amr` names `webauthn`, at most five minutes old.
+  application's IAM administration for an IAM action). The person may approve their own agent's request, grants and keys
+  included. `requesterMayApprove: false` makes someone other than the requester's person decide. A service key's request
+  has no human owner, and no verified token names the key's issuer, so there it fails closed: nobody approves it, and
+  anyone with the approval right may refuse it. `approvers: 2` takes two different people on the same digest; the item
+  stays `pending` after the first, and a rejection by either closes it. Both apply to parked runs too, and the stricter
+  among a change's categories wins. `stepUp: webauthn` makes the decision carry a passkey assertion bound to it: the
+  approval page calls Control's `approvals.challenge` or `approvals.requests.challenge`, and Control calls IAM over its
+  IAM client for a single-use challenge, bound to the item's kind, id and digest and to the decision; the page posts the
+  assertion with the decision, and Control has IAM verify it with the approver's console token against the binding of
+  the item it decides, and decides nothing otherwise. Changing a `webauthn` category's settings in the weaker direction
+  takes a passkey too (§2). Neither the console token nor the proxy changes (ADR-0050 §5 says why).
 - **Expiry.** Every pending item has an absolute deadline, `requestTtlHours` after it starts waiting: a request when it
   is created, a parked run when it parks. Past it the item is `expired`; a parked run that expires fails and deploys
   nothing. The sweep only cleans up; it authorizes nothing. The final approval executes in the same call, under
@@ -324,7 +331,8 @@ provider target, artifact or namespace applies at once, as before. A hole is clo
   changes on an existing installation, each when its requests land: a person's own `px_` key stops passing the
   protected-environment checks and its manual deploy parks; parked runs start to expire, a run parked before the
   upgrade getting its deadline when the sweep first sees it; a non-person's secret, variable, data and registry write
-  on a protected environment waits for a person; deciding a `credentials` item takes a passkey; a machine key holding
+  on a protected environment waits for a person; deciding a `credentials` item takes a passkey, and so does unprotecting
+  an environment or loosening its `credentials` (the first passkey needs only the session); a machine key holding
   `iam.admin` that issues keys meets the `credentials` mode. No generated file and no environment variable changes.
   One operator step, for `planEvidence: console+github` only: an existing GitHub App gets the user-authorization
   callback URL and a client secret in its GitHub settings, documented in `docs/reference/` when that evidence is

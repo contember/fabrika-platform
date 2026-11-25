@@ -41,6 +41,7 @@ const SWEPT_TABLES = [
 	'delegation_grants',
 	'membership_invitations',
 	'terminal_identifications',
+	'passkey_challenges',
 ] as const
 
 function counts(sqlite: Database): Record<string, number> {
@@ -252,6 +253,11 @@ async function seedBothSides(h: Harness): Promise<string> {
 		})
 	}
 
+	// passkey_challenges — an expired challenge goes; an open one stays.
+	for (const [binding, expiresAt] of [['old', NOW - 1], ['live', NOW + 60]] as const) {
+		await h.repositories.passkeys.issueChallenge({ principalId: principal, kind: 'assertion', challenge: 'c', binding, now: NOW - 300, expiresAt }, 10)
+	}
+
 	return principal
 }
 
@@ -284,6 +290,7 @@ describe('runIamMaintenance', () => {
 			delegation_grants: 2,
 			membership_invitations: 2,
 			terminal_identifications: 2,
+			passkey_challenges: 2,
 		})
 
 		const settled: Promise<unknown>[] = []
@@ -308,6 +315,7 @@ describe('runIamMaintenance', () => {
 			delegation_grants: 1,
 			membership_invitations: 1,
 			terminal_identifications: 1,
+			passkey_challenges: 1,
 		})
 	})
 
@@ -336,6 +344,7 @@ describe('runIamMaintenance', () => {
 			delegation_grants: 1,
 			membership_invitations: 1,
 			terminal_identifications: 1,
+			passkey_challenges: 1,
 		})
 	})
 })

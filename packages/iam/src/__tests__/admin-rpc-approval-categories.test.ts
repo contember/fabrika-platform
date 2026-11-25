@@ -55,6 +55,13 @@ const IAM: Readonly<Record<string, Judged>> = {
 	'oauthClients.put': { exempt: "the operator's MCP authoring client, the provisioning key only" },
 	'oauthClients.delete': { exempt: NARROWS },
 	'oauthClients.importOnce': { exempt: "the deploy's one import of its client list, the provisioning key only" },
+	// A person's own passkeys, in a signed-in session only: a key never reaches them, so nothing is left to wait.
+	'passkeys.registrationOptions': { exempt: `the caller's own passkey: ${ALWAYS_A_PERSON}` },
+	'passkeys.register': { exempt: `the caller's own passkey, after a step-up once one exists: ${ALWAYS_A_PERSON}` },
+	'passkeys.remove': { exempt: `the caller's own passkey, after a step-up: ${ALWAYS_A_PERSON}` },
+	'passkeys.challenge': { exempt: `a step-up challenge; grants nothing: ${ALWAYS_A_PERSON}` },
+	'passkeys.verify': { exempt: `verifies a step-up; grants nothing: ${ALWAYS_A_PERSON}` },
+	'passkeys.reset': { exempt: `removes a person's passkeys under \`iam.admin\`: ${ALWAYS_A_PERSON}` },
 }
 
 describe('every IAM administration mutation is judged by an approval category or exempt with its reason', () => {

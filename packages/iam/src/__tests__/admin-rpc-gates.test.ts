@@ -13,7 +13,8 @@
  *      method is added to the contract and forgotten here, which is the point: the list of methods is
  *      derived from the contract's own shape, not typed out.
  *
- * Two exceptions are named here. `appPeople.*`, which an application's own administrator calls, authorizes the
+ * Three exceptions are named here. A person's own `passkeys.*` (all but `listOf` and `reset`) need a signed-in session
+ * and act on the caller's passkeys only (`passkeys.test.ts`). `appPeople.*`, which an application's own administrator calls, authorizes the
  * application's `members.manage` held globally there in its use case, and answers a stranger nothing. The user
  * administration procedures (ADR-0058) carry no `.require`: `context` admits only a caller with an administration,
  * `iam.admin` or `iam.users.manage`, and `user-admin.test.ts` proves a user administrator reaches nothing else. Among
@@ -26,7 +27,7 @@ import { adminRpcRouter } from '../admin/rpc'
 import { createIamApp } from '../app'
 import type { Env } from '../env'
 import { prop } from '../json'
-import { procedureInput, routerLeaves, USER_ADMINISTRATION } from './helpers/admin-router'
+import { OWN_PASSKEYS, procedureInput, routerLeaves, USER_ADMINISTRATION } from './helpers/admin-router'
 import { createHarness, type Harness, seedGrant, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
@@ -61,7 +62,7 @@ describe('every admin RPC procedure is gated', () => {
 	test('the shipped router declares at least one authz requirement on every leaf', () => {
 		expect(ROUTER_METHODS.length).toBeGreaterThan(20)
 		expect(ROUTER_METHODS.filter((leaf) => leaf.requirements === 0).map((leaf) => leaf.method).sort()).toEqual(
-			[...DELEGATED, ...USER_ADMINISTRATION].sort(),
+			[...DELEGATED, ...USER_ADMINISTRATION, ...OWN_PASSKEYS].sort(),
 		)
 	})
 
@@ -86,7 +87,7 @@ describe('every admin RPC procedure is gated', () => {
 			)
 		const admitted: string[] = []
 		for (const { method } of ROUTER_METHODS) {
-			if (DELEGATED.includes(method) || OWN_REQUESTS.includes(method)) continue
+			if (DELEGATED.includes(method) || OWN_REQUESTS.includes(method) || OWN_PASSKEYS.includes(method)) continue
 			const response = await call(method)
 			const type = prop(prop(await response.json(), 'error'), 'type')
 			if (response.status !== 403 || type !== 'forbidden') {
@@ -106,5 +107,8 @@ describe('every admin RPC procedure is gated', () => {
 		expect(await (await call('grantRequests.list')).json()).toEqual({ result: { items: [] } })
 		const decide = await call('grantRequests.decide')
 		expect([decide.status, prop(prop(await decide.json(), 'error'), 'type')]).toEqual([404, 'not_found'])
+		// Its passkeys are its own: it has none. With no console origin registered here, a ceremony cannot start.
+		expect(await (await call('passkeys.list')).json()).toEqual({ result: { items: [] } })
+		expect((await call('passkeys.registrationOptions')).status).toBe(409)
 	})
 })
