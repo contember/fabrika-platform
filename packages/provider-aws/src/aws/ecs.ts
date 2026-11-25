@@ -8,7 +8,8 @@
 //
 // UNVERIFIED: the operations' input and answer fields, the Fargate CPU values, the rollout states, the `dependsOn`
 // rules, `CreateService`'s 36-character client token and that its answer names `currentServiceDeployment`, and the
-// Service Connect configuration (a named port, its discovery name a DNS label, a client alias of the same name) follow
+// Service Connect configuration (a named port, its discovery name a DNS label, a client alias of the same name, a port
+// without `appProtocol` proxied as TCP with no per-request timeout) follow
 // ECS's API reference; none was checked against an account.
 
 import { z } from 'zod'
@@ -426,8 +427,9 @@ function containerOf(container: EcsContainer, names: ReadonlySet<string>): Recor
 		image: container.image,
 		essential: container.essential,
 		...(container.port === undefined ? {} : {
-			// Named, so Service Connect can publish it; HTTP, so its proxy speaks HTTP to it.
-			portMappings: [{ name: ECS_PORT_NAME, containerPort: container.port, protocol: 'tcp', appProtocol: 'http' }],
+			// Named, so Service Connect can publish it. No `appProtocol`: Service Connect then proxies TCP, and puts no
+			// per-request timeout (15 s by default for an HTTP port) on a long upload or download between proxy and app.
+			portMappings: [{ name: ECS_PORT_NAME, containerPort: container.port, protocol: 'tcp' }],
 		}),
 		...(container.command === undefined ? {} : { command: [...container.command] }),
 		environment: environment.map(([name, value]) => ({ name, value })),
@@ -514,7 +516,7 @@ function awsvpcOf(network: EcsNetwork): Record<string, unknown> {
 }
 
 /** A Service Connect namespace's ARN, and a discovery name: a DNS label. */
-const SERVICE_CONNECT_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:servicediscovery:[a-z0-9-]{1,32}:\d{12}:namespace\/ns-[a-z0-9]{1,64}$/
+export const SERVICE_CONNECT_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:servicediscovery:[a-z0-9-]{1,32}:\d{12}:namespace\/ns-[a-z0-9]{1,64}$/
 const DISCOVERY_NAME = /^[a-z][a-z0-9-]{0,62}$/
 
 /**

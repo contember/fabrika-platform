@@ -605,6 +605,14 @@ describe('awsDeploy', () => {
 		expect(result.checkpoint).toMatchObject({ serviceUpdateRequested: true, deploymentArn: DEPLOYMENT })
 	})
 
+	test('a run handed no Service Connect namespace fails its update before it records the submission', async () => {
+		const aws = new FakeAws()
+		const result = await deploy(aws, new Recorder(), { serviceConnect: null })
+		expect(stepOf(result, 'update')).toMatchObject({ status: 'failed', error: 'aws: the deploy has no Service Connect namespace for its service' })
+		expect(aws.calls.some((call) => call.startsWith('updateService') || call.startsWith('createService'))).toBe(false)
+		expect(result.checkpoint).not.toHaveProperty('serviceUpdateRequested')
+	})
+
 	test('a dry run calls nothing', async () => {
 		const aws = new FakeAws()
 		const events = new Recorder()

@@ -465,6 +465,10 @@ describe('the AWS control provider', () => {
 		}
 		expect(() => awsEnvironmentResources('notes', 'prod_x', '123456789012')).toThrow('not one this provider names')
 		expect(() => awsEnvironmentResources('notes/x', 'prod', '123456789012')).toThrow('not one this provider names')
+		// A hyphen at either end would end the discovery name with one, which no DNS label does: refused where names are derived.
+		expect(() => awsEnvironmentResources('notes', 'prod-', '123456789012')).toThrow('not one this provider names')
+		expect(() => awsEnvironmentResources('-notes', 'prod', '123456789012')).toThrow('not one this provider names')
+		expect(awsEnvironmentResources('n', 'p', '123456789012').discoveryName).toBe('e1-n-p')
 		expect(() => awsEnvironmentResources('n'.repeat(30), 'p'.repeat(30), '123456789012')).toThrow('too long')
 	})
 

@@ -395,12 +395,14 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     active, no parameter under `env/`), so a later registration of the same coordinates never inherits an earlier one's
     secrets or images; fabrika deletes none of them (ADR-0034).
     **Service Connect** (built): every create and update publishes the service in its namespace's Service Connect
-    namespace, its server port named `http` (`appProtocol: http`), under the discovery name
+    namespace, its server port named `http` (no `appProtocol`, so proxied as TCP: an HTTP port would get a 15 s per-request timeout by default, which a long upload or download outlives), under the discovery name
     `e<length of app>-<app>-<env>` (a DNS label; the service's own name holds `_`), with a client alias of that name on
     the application's port. The proxy will reach an application at `http://<discovery name>:3000`, through its group's
     ingress rule alone. Sent on every update, so a service moved to another namespace is published in the new one.
     UNVERIFIED: the configuration's fields and rules, and whether Control's role needs Cloud Map service calls
-    (`servicediscovery:CreateService`, `GetService`) of its own when ECS publishes a service.
+    (`servicediscovery:CreateService`, `GetService`) of its own when ECS publishes a service; and whether ECS leaves the
+    Cloud Map service it created in the namespace when the ECS service goes, which would stop the namespace stack's
+    delete (an `HttpNamespace` that still holds services): the namespace teardown, not built, deletes them first.
     Not yet: the proxy service (its image built from the pinned proxy source with the manifest carried in its build as
     on Zerops, ADR-0045, so a running proxy never reads a manifest newer than its image; its ECS service in the Service
     Connect namespace, on X86_64, because the proxy package builds its binary for `linux-x64-musl` only; `republish`),

@@ -150,7 +150,7 @@ describe('ecsClient', () => {
 							name: 'server',
 							image: IMAGE,
 							essential: true,
-							portMappings: [{ name: 'http', containerPort: 3000, protocol: 'tcp', appProtocol: 'http' }],
+							portMappings: [{ name: 'http', containerPort: 3000, protocol: 'tcp' }],
 							environment: [{ name: 'FABRIKA_APP_ID', value: 'notes' }],
 							secrets: [{ name: 'FABRIKA_TOKEN_KEYS', valueFrom: server.secrets?.['FABRIKA_TOKEN_KEYS'] }],
 							healthCheck: { command: ['CMD', 'bun', 'fabrika/health.ts'], interval: 10, timeout: 5, retries: 3, startPeriod: 30 },
