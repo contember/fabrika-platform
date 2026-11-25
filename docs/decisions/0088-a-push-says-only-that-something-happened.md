@@ -96,7 +96,9 @@ It handles three events:
 - `pushsubscriptionchange`: record the browser's new subscription through the subscription row, which replaces the old
   one only for the person it was bound to. Without a session the row cannot be asked, and the old endpoint is already
   dead; so the worker keeps the pair (old endpoint, new subscription) in IndexedDB, and the page posts it as a
-  replacement on its next load, under the same rule. Until then the person gets no push; the inbox still holds the text.
+  replacement on its next load, under the same rule. The old endpoint's row may be gone by then (the next send got a
+  404 or 410), so the replacement also matches the row's tombstone (section 7). Until then the person gets no push; the
+  inbox still holds the text.
 
 ### 4. A push carries no payload, and the inbox decides what is shown
 
@@ -151,7 +153,9 @@ once.
 
 A subscription row holds the caller's principal id (from the verified token, never from the body), the endpoint, the
 subscription's keys, the VAPID key it was made for, and its cursor. At most 10 per person: an eleventh replaces the
-oldest. A push service's 404 or 410 deletes the row.
+oldest. A push service's 404 or 410 deletes the row and leaves a tombstone of it (the principal and the old endpoint)
+for 30 days, so a replacement the page posts later for a subscription the browser changed (section 3) still finds
+whose it was. A tombstone sends nothing and answers nothing else.
 
 The subscription row also answers which person a browser's subscription is bound to (`{ status, endpoint }`: the
 caller's, another person's, or unknown). The `@fabrika/ui` control shows notifications as on only when it is the
@@ -211,9 +215,11 @@ in the vault and hands it as a framework variable, like the token keys; the publ
 `__fabrika-config.json`. A rotation is an operation on one environment, and it works as the token keys' does: the next
 deploy hands the new key first and each retired key after it. A subscription is created only with the current key, but
 the sender signs each row with the key the row was made for, so a rotation drops no subscription. The page replaces an
-old-key subscription at its next load (section 10), and a retired key leaves the variable once no row names it, or 30
-days after its retirement: a browser that has not opened the application in 30 days subscribes again through the
-control.
+old-key subscription at its next load (section 10). A retired key leaves the variable 30 days after its retirement, on
+that timer alone: the rows live in the application's database, which Control does not read, and Control retires the
+token keys from its own records the same way (`control/src/token-keys.ts`). The sender deletes a row whose key the
+variable no longer holds, without sending: a browser that has not opened the application in the 30 days subscribes
+again through the control.
 
 **The private key is in the application's environment, as the token keys are, so code in the application's process can
 read it.** With it, the application's code could send a push of its own, with a payload, to its own subscriptions. "A
@@ -228,10 +234,10 @@ must be on the Home Screen first. No page asks for the permission on load.
 
 On load, where the permission is already granted and the browser's subscription was made for an older key, the page
 replaces it without asking: it unsubscribes, subscribes with the current key and posts the replacement naming the old
-endpoint. The row accepts a replacement only when the old endpoint's row belongs to the caller, so a key rotation never
-binds a shared browser to whoever is signed in now. The old row still exists then, because the sender kept signing it
-with its retired key (section 9). The page posts a replacement the worker kept from a `pushsubscriptionchange` the same
-way (section 3).
+endpoint. The row accepts a replacement only when the old endpoint's row, or its tombstone (section 7), belongs to the
+caller, so a key rotation never binds a shared browser to whoever is signed in now. The old row still exists then,
+because the sender kept signing it with its retired key (section 9). The page posts a replacement the worker kept from a
+`pushsubscriptionchange` the same way (section 3), which usually finds the tombstone.
 
 ## Consequences
 
@@ -304,7 +310,8 @@ way (section 3).
 - **Safari on iOS** (the gate above): does Apple's service deliver an empty push to a Home Screen application, and does
   the worker reach the inbox with the application's own cookie jar before it must show the notification? If an empty
   push is not delivered, the push carries an encrypted payload holding only an opaque notification id, and the text is
-  still read under the session.
+  still read under the session. The same check covers whether WebKit counts a tagged notification that replaces an
+  earlier one (the fixed notice, Decision 4) as shown, so the permission stays.
 - **A click in an installed application.** Does `clients.openWindow` of a path inside the manifest's scope open in the
   installed window on each platform, or in a browser tab?
 - **The API's exact form**: the declaration's place (the vocabulary, `defineApp`'s options or the contract), the name
