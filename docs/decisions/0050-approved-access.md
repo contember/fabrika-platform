@@ -579,13 +579,13 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
   (`approvers: 2`), per category; the item stays parked after the first approval, and a rejection by either refuses it.
 - **A second factor on deciding.** `stepUp: webauthn` on a category makes deciding a pending item of it take a WebAuthn
   assertion bound to that decision. IAM keeps the person's passkeys. The approval page asks Control's IAM gateway for a
-  single-use challenge, which IAM issues to the approver bound to the item's kind, id and digest, and posts the
-  assertion with the decision. Control asks IAM, with the approver's console token, to verify it against the binding it
-  builds from the item it decides, and accepts the decision only when IAM verified it: the challenge was issued to the
-  same person with the same binding, unused and unexpired (five minutes). An assertion for one item never decides
-  another, and none decides twice. The step-up travels with the decision, not in the console token: the proxy keeps a
-  minted token for up to five minutes, in each instance's own cache, so a token refreshed after the assertion would
-  reach Control too late, and the token's `amr` claim already names a terminal assertion, whose parser refuses any
+  single-use challenge, which IAM issues to the approver bound to the item's kind, id and digest and to the decision,
+  and posts the assertion with the decision. Control asks IAM, with the approver's console token, to verify it against
+  the binding it builds from the item it decides, and accepts the decision only when IAM verified it: the challenge was
+  issued to the same person with the same binding, unused and unexpired (five minutes). An assertion for one item never
+  decides another, and none decides twice. The step-up travels with the decision, not in the console token: the proxy
+  keeps a minted token for up to five minutes, in each instance's own cache, so a token refreshed after the assertion
+  would reach Control too late, and the token's `amr` claim already names a terminal assertion, whose parser refuses any
   other value. It is `webauthn` for `credentials` by default and `none` elsewhere. A person with no passkey cannot
   decide such an item, and the page says how to register one.
 - **Evidence ahead of the deploy.** Under the `plan` mode (ADR-0083) a change is also let through by plan entries a

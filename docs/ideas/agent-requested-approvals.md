@@ -249,12 +249,12 @@ Two shapes, by owner. An ADR-0083 rule already holds here: the service that writ
 - **A second factor on deciding.** ADR-0050 names the gap: the approval proves a signed-in user, and an agent that
   drives the person's signed-in browser can approve. The setting `stepUp` per category (`none` or `webauthn`) makes the
   decision carry a WebAuthn assertion bound to it. IAM keeps the person's passkeys. The approval page gets a single-use
-  challenge from IAM through Control's IAM gateway, bound to the item's kind, id and digest, and posts the assertion
-  with the decision; Control has IAM verify it with the approver's console token and accepts the decision only when it
-  verifies (ADR-0050 §5). No console token claim and no proxy change: the proxy's token cache would deliver a refreshed
-  token late, and the `amr` claim's parser refuses any value but a terminal's. It is `webauthn` for `credentials` by
-  default and `none` elsewhere. A person with no passkey cannot decide such an item, and the page says how to register
-  one.
+  challenge from IAM through Control's IAM gateway, bound to the item's kind, id and digest and to the decision, and
+  posts the assertion with the decision; Control has IAM verify it with the approver's console token and accepts the
+  decision only when it verifies (ADR-0050 §5). No console token claim and no proxy change: the proxy's token cache
+  would deliver a refreshed token late, and the `amr` claim's parser refuses any value but a terminal's. It is
+  `webauthn` for `credentials` by default and `none` elsewhere. A person with no passkey cannot decide such an item, and
+  the page says how to register one.
 - **Effort.** See the step plan; its per-step breakdown replaces the earlier 11–15 h.
 
 ### What the gate must cover: every write path, not a list of fields

@@ -189,9 +189,10 @@ as the passkey's last-used time.
 **The step-up seam** is `challenge` and `verify`. `verify` answers `{ principalId, credentialId, at }`: the person, the
 passkey's WebAuthn credential id, and the time of the verification in epoch seconds. It answers only for a challenge
 issued to the caller with the same binding, unused and unexpired. Deciding an approval of a category with
-`stepUp: webauthn` (ADR-0050 §5) uses this seam. Control asks for a challenge bound to the item, and verifies the
-approver's answer with the approver's console token. That decision check is not built yet. No token carries a
-step-up claim, and the proxy is unchanged.
+`stepUp: webauthn` (ADR-0050 §5) uses this seam. Control asks for a challenge bound to the decision, and verifies the
+approver's answer with the approver's console token
+([security-deployment.md](./security-deployment.md#a-passkey-on-deciding)). No token carries a step-up claim, and the
+proxy is unchanged.
 
 **Storage.** Two tables, in both migration sets (`0038_passkeys.sql`). `passkeys` holds the credential id, the COSE
 public key, the counter, the transports and a label. `passkey_challenges` holds the open challenges and their bindings.
