@@ -116,6 +116,9 @@ A non-person's manual deploy of a protected environment is its own approval requ
 - **The commit must be merged by default.** Under `deployRequestCommits: merged` Control asks GitHub's compare whether
   the commit is reachable from the trigger branch or tag, or from the default branch when the trigger ref is a
   pattern or absent, and answers 400 when it cannot show it, a source error included. `any` admits any commit.
+  The compare also carries the changed files with their patches (up to 300) between the commit and the branch, and
+  Control reads at most 7 MiB of it. A commit far enough behind the branch exceeds that and is refused as a source that
+  did not answer (`archive_rejected`): a person deploys it from the console, or the environment chooses `any`.
 - **It expires.** The run's `approval_deadline` is its park time plus `requestTtlHours` (1–168, 24 by default), and
   every park sets a fresh one. A decision past it answers 410; the maintenance sweep fails the run with
   `failure_cause = 'expired'` and deploys nothing. A run parked before the column gets its deadline at the first
