@@ -1,9 +1,8 @@
 import type { AppDto, AppOptionalFields, CreateAppRequest, ListResponse, OkResponse, UpdateAppRequest } from '@fabrika/control-contract'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { requireHumanForProtectedDelete, requirePersonToRedirect } from '../../approval/human'
+import { isConsolePerson, requireHumanForProtectedDelete, requirePersonToRedirect } from '../../approval/human'
 import { AppEnvChangedError, type AppEnvRow, type AppRow, type NamespaceResourceClaimRow } from '../../db'
 import { normalizeRepoUrl, parseGitHubRepo } from '../../github/triggers/push-event'
-import { isPerson } from '../../iam'
 import { fail } from '../domain'
 import { syncChangedNamespaceProxies } from '../namespaces'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
@@ -56,7 +55,7 @@ export async function updateAppUseCase(c: RegistryUseCaseContext, id: string, in
 	const patch = { ...(repoUrlChanged ? { repoUrl } : {}), ...fields, ...(bindingChanged ? sourceBinding : {}) }
 	// Every field the update takes decides what a deploy of the app runs, or where it comes from.
 	const changed = [...(repoUrlChanged ? ['repoUrl'] : []), ...(bindingChanged ? ['GitHub source binding'] : []), ...Object.keys(fields)]
-	const byKey = changed.length > 0 && !isPerson(c.auth)
+	const byKey = changed.length > 0 && !isConsolePerson(c.auth, c.admission)
 	if (byKey) await requirePersonToChangeSource(c, id, changed)
 	// A key's write applies only while no environment is protected, in the same statement, so a protect after the check holds.
 	const row = await c.repositories.registry.updateApp(id, patch, { unlessProtected: byKey })
@@ -133,7 +132,7 @@ export function toAppDto(row: AppRow): AppDto {
 /** Changing what a deploy of an app with a protected environment runs, or where it comes from, takes a person. */
 async function requirePersonToChangeSource(c: RegistryUseCaseContext, appId: string, changed: readonly string[]): Promise<void> {
 	const guarded = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.protected === 1)
-	requirePersonToRedirect(c.auth, guarded?.env ?? null, `its application's ${changed.join(', ')}`)
+	requirePersonToRedirect(c.auth, c.admission, guarded?.env ?? null, `its application's ${changed.join(', ')}`)
 }
 
 /** The fields of `appFields` whose value differs from the stored one. A `null` keeps the stored value (`updateApp`). */

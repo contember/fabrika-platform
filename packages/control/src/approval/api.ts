@@ -12,7 +12,7 @@ import type {
 	ListResponse,
 	SetEnvironmentProtectionRequest,
 } from '@fabrika/control-contract'
-import { CONTROL_ACTIONS } from '@fabrika/control-contract'
+import { changeCategories, CONTROL_ACTIONS, gate, type PolicyCategory, requiredApprovers } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
@@ -20,9 +20,17 @@ import { canAtCoordinates, type DeployQueue, toRunDto } from '../api/runs'
 import { appEnvCrossOrigins, type AppEnvRow, type ControlRepositories, type RunRow } from '../db'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { snapshotAccessMap } from './access-map'
-import { appEnvPolicy, grantsWait, storedPolicy } from './categories'
+import { appEnvPolicy, appEnvSettings, grantsWait, storedPolicy, storedSettings } from './categories'
 import { type ConsoleAdmission, requireHumanApprover } from './human'
-import { classificationCategories, parseApproval, parseClassification, type StoredApproval } from './publish'
+import {
+	classificationCategories,
+	classificationPolicy,
+	parseApproval,
+	parseClassification,
+	type StoredApproval,
+	type StoredClassification,
+} from './publish'
+import { toDeployRequestDto } from './request'
 import { type AccessSnapshot, parseSnapshot } from './snapshot'
 import { snapshotSurface } from './surface'
 
@@ -50,13 +58,18 @@ const LIST_LIMIT = 100
 
 export async function listApprovalsUseCase(c: ApprovalUseCaseContext): Promise<ListResponse<ApprovalDto>> {
 	const rows = await c.repositories.runs.listRunsAwaitingApproval(LIST_LIMIT)
-	const runs = c.repositories.runs
-	return { items: await Promise.all(rows.filter((row) => mayApprove(c.auth, row)).map((row) => toApprovalDto(runs, row, 'list'))) }
+	return { items: await Promise.all(rows.filter((row) => mayApprove(c.auth, row)).map((row) => toApprovalDto(c.repositories, row, 'list'))) }
 }
 
 export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: string): Promise<ApprovalDto> {
+	const pending = await c.repositories.runs.getRun(runId)
+	// A request's link is handed out when the run is created; it parks once its commit is classified.
+	if (
+		pending !== null && pending.classification_json === null && pending.request_json !== null && mayApprove(c.auth, pending)
+		&& (pending.status === 'pending' || pending.status === 'running')
+	) fail(409, 'the deploy is still being classified; open this page again in a minute')
 	const run = await requireClassifiedRun(c, runId)
-	const approval = await toApprovalDto(c.repositories.runs, run)
+	const approval = await toApprovalDto(c.repositories, run)
 	const crossOrigins = await pendingCrossOrigins(c, approval)
 	return {
 		...approval,
@@ -68,31 +81,50 @@ export async function getApprovalUseCase(c: ApprovalUseCaseContext, runId: strin
 /**
  * Approve or refuse one parked run. Only a human user principal, on a console request from its own origin, holding
  * `access.approve` at the run's coordinates; the approval names the two digests the approver read, so a run that was
- * classified again since refuses it. An approved run is queued again and classified once more before it publishes.
+ * classified again since refuses it. An approved run is queued again and classified once more before it publishes. A
+ * decision after the run's deadline changes nothing (ADR-0050 §4). Where two people decide (`approvers: 2`), the first
+ * approval is recorded on the digests and the run keeps waiting; the same person approving again changes nothing.
  */
 export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: CompleteApprovalRequest): Promise<ApprovalDto> {
 	const approver = requireHumanApprover(c.auth, c)
 	const run = await requireClassifiedRun(c, input.runId)
+	if (run.failure_cause === 'expired') fail(410, expiredMessage(run))
 	if (run.status !== 'awaiting_approval' || run.classification_json === null) fail(409, 'the run is not waiting for approval')
-	const classification = parseClassification(await c.repositories.runs.document(run.classification_json))
+	const storedClassification = run.classification_json
+	const classification = parseClassification(await c.repositories.runs.document(storedClassification))
 	if (classification.candidateDigest !== input.candidateDigest || classification.baselineDigest !== input.baselineDigest) {
 		fail(409, 'the change was classified again since it was read; reload it and decide again')
 	}
+	const now = (c.now ?? (() => Math.floor(Date.now() / 1000)))()
+	if (run.approval_deadline !== null && run.approval_deadline <= now) fail(410, expiredMessage(run))
+	const approvers = await runApprovers(c.repositories, run, classification)
+	const partial = heldPartialApproval(run, classification)
+	if (input.decision === 'approve' && approvers === 2 && partial?.principalId === approver.id) {
+		return await toApprovalDto(c.repositories, run)
+	}
 	const lease = await acquireLease(c.lock, runLeaseKey(run.app_id, run.env), c.leaseClock)
 	if (lease === null) fail(409, 'the environment is deploying; try again in a moment')
+	const completes = input.decision === 'approve' && (approvers === 1 || partial !== null)
 	try {
 		const fence = lease.fence()
 		const approval: StoredApproval = {
 			principalId: approver.id,
 			label: approver.label,
-			approvedAt: (c.now ?? (() => Math.floor(Date.now() / 1000)))(),
+			approvedAt: now,
 			candidateDigest: classification.candidateDigest,
 			baselineDigest: classification.baselineDigest,
 		}
-		const changed = input.decision === 'approve'
-			? await c.repositories.runs.approveParkedRun(run.id, run.classification_json, JSON.stringify(approval), fence)
-			: await c.repositories.runs.rejectParkedRun(run.id, run.classification_json, fence)
-		if (!changed) fail(409, 'the run is not waiting for approval')
+		const expected = { classification: storedClassification, partial: run.partial_approval_json }
+		const changed = input.decision === 'reject'
+			? await c.repositories.runs.rejectParkedRun(run.id, storedClassification, fence)
+			: completes
+			? await c.repositories.runs.approveParkedRun(run.id, expected, JSON.stringify(approval), fence)
+			: await c.repositories.runs.recordPartialApproval(run.id, expected, JSON.stringify(approval), fence)
+		if (!changed) {
+			const latest = await c.repositories.runs.getRun(run.id)
+			if (latest !== null && latest.approval_deadline !== null && latest.approval_deadline <= now) fail(410, expiredMessage(latest))
+			fail(409, 'the run is not waiting for approval, or another decision landed first; reload it')
+		}
 	} finally {
 		await lease.release()
 	}
@@ -104,12 +136,45 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 			appId: run.app_id,
 			env: run.env,
 			decision: input.decision,
+			...(input.decision === 'approve' && !completes ? { partial: true } : {}),
 			candidateDigest: classification.candidateDigest,
 			baselineDigest: classification.baselineDigest,
 		},
 	})
-	if (input.decision === 'approve') await c.queue.send({ runId: run.id })
-	return await toApprovalDto(c.repositories.runs, await requireClassifiedRun(c, run.id))
+	if (completes) await c.queue.send({ runId: run.id })
+	return await toApprovalDto(c.repositories, await requireClassifiedRun(c, run.id))
+}
+
+function expiredMessage(run: Pick<RunRow, 'approval_deadline'>): string {
+	const at = run.approval_deadline === null ? '' : ` at ${new Date(run.approval_deadline * 1000).toISOString()}`
+	return `nobody decided this deploy before its deadline${at}, so it expired and deploys nothing; a new deploy asks again`
+}
+
+/**
+ * The categories a parked run waits for: those of the lines no evidence lets through, and `deploy-request` when a
+ * non-person asked for it. Each takes the environment's `approvers`, and the most among them decide it (ADR-0083 §8).
+ */
+export function waitingCategoriesOf(run: Pick<RunRow, 'park_reason'>, classification: StoredClassification): PolicyCategory[] {
+	const policy = classificationPolicy(classification)
+	const outcome = gate({ lines: classification.changes }, policy)
+	const lines = outcome.kind === 'wait' ? outcome.lines.flatMap((line) => changeCategories(line).filter((category) => policy[category] !== 'off')) : []
+	return run.park_reason === 'requested' ? [...lines, 'deploy-request'] : lines
+}
+
+async function runApprovers(
+	repositories: Pick<ControlRepositories, 'registry'>,
+	run: RunRow,
+	classification: StoredClassification,
+): Promise<1 | 2> {
+	const appEnv = await repositories.registry.getAppEnv(run.app_id, run.env)
+	return requiredApprovers(appEnvSettings(appEnv ?? { approval_settings: null }), waitingCategoriesOf(run, classification))
+}
+
+/** The first of two approvals, while it names the digests the run shows now; a run that parked again dropped it. */
+function heldPartialApproval(run: RunRow, classification: StoredClassification): StoredApproval | null {
+	if (run.partial_approval_json === null) return null
+	const partial = parseApproval(run.partial_approval_json)
+	return partial.candidateDigest === classification.candidateDigest && partial.baselineDigest === classification.baselineDigest ? partial : null
 }
 
 /**
@@ -127,6 +192,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	if (before.kind === 'dev' && input.protected) fail(409, 'a dev environment is never protected')
 	if (before.authoring === 1 && input.protected) fail(409, authoringNeverProtected(input.env))
 	const policy = input.policy === undefined ? undefined : storedPolicy(input.policy)
+	const settings = input.settings === undefined ? undefined : storedSettings(input.settings)
 	const iamApp = appEnvironmentId(input.appId, input.env)
 	// A job started under the old setting would still apply what it allowed, so the change waits for the deployment. The
 	// lease also serializes the two stores of the `grants` choice, so IAM's is written against what Control holds.
@@ -145,7 +211,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 		// The write below bumps the revision by one. Nothing reverts IAM when it fails: this call may have lost the lease,
 		// and releasing then could undo its successor's gate.
 		if (grantApproval !== null && grantsAfter) await setGrantApproval(grantApproval, iamApp, true, held.protection_revision + 1)
-		row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected, policy, lease.fence())
+		row = await c.repositories.registry.setAppEnvProtected(input.appId, input.env, input.protected, policy, settings, lease.fence())
 		if (row !== null) {
 			await c.auth.audit({
 				action: 'access.protect',
@@ -158,6 +224,8 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 					to: input.protected,
 					policyFrom: appEnvPolicy(held),
 					policyTo: appEnvPolicy(row),
+					settingsFrom: appEnvSettings(held),
+					settingsTo: appEnvSettings(row),
 				},
 			})
 			if (grantApproval !== null && !grantsAfter) await setGrantApproval(grantApproval, iamApp, false, row.protection_revision)
@@ -226,11 +294,19 @@ function namedEndpoints(snapshot: AccessSnapshot | null, changes: readonly Acces
  * The approval as the console reads it. The list reads no snapshot: it shows no endpoint, and one stored snapshot that
  * no longer parses must not take the whole list down with it.
  */
-async function toApprovalDto(runs: ControlRepositories['runs'], run: RunRow, view: 'list' | 'detail' = 'detail'): Promise<ApprovalDto> {
+async function toApprovalDto(
+	repositories: Pick<ControlRepositories, 'registry' | 'runs'>,
+	run: RunRow,
+	view: 'list' | 'detail' = 'detail',
+): Promise<ApprovalDto> {
+	const runs = repositories.runs
 	if (run.classification_json === null) throw new Error(`run ${run.id} has no classification`)
 	const classification = parseClassification(await runs.document(run.classification_json))
 	const approval = run.approval_json === null ? null : parseApproval(run.approval_json)
 	const snapshot = view === 'list' || run.snapshot_json === null ? null : parseSnapshot(await runs.document(run.snapshot_json))
+	const waiting = run.status === 'awaiting_approval'
+	const partial = waiting ? heldPartialApproval(run, classification) : null
+	const request = await toDeployRequestDto(repositories, run)
 	return {
 		run: toRunDto(run),
 		outcome: classification.outcome,
@@ -242,6 +318,10 @@ async function toApprovalDto(runs: ControlRepositories['runs'], run: RunRow, vie
 		baselineRunId: classification.baselineRunId,
 		protected: classification.protected,
 		categories: [...classificationCategories(classification)],
+		approvers: await runApprovers(repositories, run, classification),
+		...(partial === null ? {} : { partialApproval: { principalId: partial.principalId, label: partial.label, approvedAt: partial.approvedAt } }),
+		...(waiting && run.approval_deadline !== null ? { deadline: run.approval_deadline } : {}),
+		...(request === undefined ? {} : { request }),
 		approval: approval === null ? null : {
 			principalId: approval.principalId,
 			label: approval.label,

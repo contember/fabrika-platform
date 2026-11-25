@@ -25,6 +25,8 @@ export const CONSOLE_ORIGIN = `https://${CONSOLE_HOST}`
 export interface ProxyIam {
 	readonly session?: string
 	readonly keys?: Readonly<Record<string, string>>
+	/** What IAM answers for a sign-in code at the handoff callback; omitted refuses every code. */
+	readonly exchangeAuthCode?: () => ExchangeAuthCodeResult
 }
 
 export interface ConsoleProxyOptions {
@@ -57,7 +59,7 @@ export function consoleBehindProxy(options: ConsoleProxyOptions): (request: Requ
 			const token = iam.keys?.[input.key]
 			return Promise.resolve(token === undefined ? { ok: false, reason: 'invalid_key' } : { ok: true, token, expiresAt: future() })
 		},
-		exchangeAuthCode: (): Promise<ExchangeAuthCodeResult> => Promise.resolve({ ok: false, reason: 'invalid_code' }),
+		exchangeAuthCode: (): Promise<ExchangeAuthCodeResult> => Promise.resolve(iam.exchangeAuthCode?.() ?? { ok: false, reason: 'invalid_code' }),
 		getJwks: () => testIamBinding.getJwks(),
 	}
 	return createCloudflareProxyHandler({

@@ -59,6 +59,14 @@ export function archiveCommitSource(source: TarballRepositorySource, metadata: G
 			}
 		},
 		anonymousReadability: (input) => anonymousReadability(metadata, input),
+		requestedCommit: (input) =>
+			source.requestedCommit({
+				repository: repositoryOf(input.repoUrl),
+				...(input.sourceBinding === undefined ? {} : { privateBinding: input.sourceBinding }),
+				commitSha: input.commitSha,
+				mergedInto: input.mergedInto,
+				signal: input.signal,
+			}),
 	}
 }
 

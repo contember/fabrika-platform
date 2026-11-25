@@ -525,8 +525,8 @@ is not traced back to a workspace, so a person can still deploy a workspace head
 under `any`, which only a person can choose. The console's own redeploy of a run names its commit by SHA.
 
 **A parked run has an absolute deadline**, `requestTtlHours` (24 by default, 1–168) after it parked. The deadline is
-checked in the decision's own conditional write, so a decision after it changes nothing; a sweep moves a run past its
-deadline to `expired`, which fails it and deploys nothing, and only cleans up. An approval does not expire: an approved run deploys when the queue picks it up. A run
+checked in the decision's own conditional write, so a decision after it changes nothing; a sweep fails a run past its
+deadline with the cause `expired` (status `failed`), deploys nothing, and only cleans up. An approval does not expire: an approved run deploys when the queue picks it up. A run
 that parks again, because it was classified again and its digests changed, gets a fresh deadline. A run parked before
 deadlines existed gets one when the sweep first sees it, counted from then.
 

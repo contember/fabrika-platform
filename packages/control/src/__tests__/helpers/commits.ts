@@ -1,5 +1,5 @@
 import { CHECKER_VERSION } from '@fabrika/check/contract'
-import type { AnonymousReadability, CommitFilesInput, CommitSource } from '../../github/source/commit-files'
+import type { AnonymousReadability, CommitFilesInput, CommitSource, RequestedCommitInput } from '../../github/source/commit-files'
 import { healthOnly } from './contracts'
 
 /** A `bun.lock` that resolves `@fabrika/app` from the npm registry at `release`, as `bun install` writes it. */
@@ -39,6 +39,7 @@ export function memoryCommits(
 	return {
 		opened,
 		anonymousReadability: () => Promise.resolve(readability),
+		requestedCommit: (input: RequestedCommitInput) => Promise.resolve({ message: 'Test commit', merged: input.mergedInto === null ? null : true }),
 		open: (input) => {
 			opened.push(input)
 			return Promise.resolve({

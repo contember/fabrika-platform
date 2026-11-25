@@ -553,22 +553,23 @@ reading the diff.
 
 Every setting is on the environment, changed only by a person in the console with `access.approve`. Defaults are the
 decided answers. The alternative of each answer is the other value. Each setting lands with the step that first uses
-it, never ahead of it.
+it, never ahead of it. Every setting but `protected` and the modes is a key of one JSON column,
+`app_envs.approval_settings`, so a new setting adds a key, not a column.
 
 | Setting                         | Lives in                                                              | Default                                        | Alternatives                                                                 | Cost                                                                                                             |
 | ------------------------------- | --------------------------------------------------------------------- | ---------------------------------------------- | ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
 | `protected`                     | `app_envs.protected` (exists)                                         | `prod` protected (ADR-0050 §4)                 | any environment                                                              | exists                                                                                                           |
 | Mode per category               | `app_envs.approval_policy`, the successor of `approval_categories`    | the tables above and below                     | `off`, `plan`, `person`, `refuse` per category                               | step 2                                                                                                           |
 | `deployRequestCommits`          | `app_envs`                                                            | `merged` (D7)                                  | `any`: an unmerged commit may be requested, still never a workspace ref      | one GitHub compare per request; an anonymous public source spends the shared 60-an-hour limit                    |
-| `requesterMayApprove`           | `app_envs`, per category; Control enforces it when an item is decided | `true` (D2), grants and keys included          | `false`: someone other than the requester's person decides                   | one column (step 4)                                                                                              |
-| `requestTtlHours`               | `app_envs`                                                            | 24 (D3), for requests and parked runs          | 1–168                                                                        | one column and a maintenance sweep                                                                               |
+| `requesterMayApprove`           | `app_envs`, per category; Control enforces it when an item is decided | `true` (D2), grants and keys included          | `false`: someone other than the requester's person decides                   | a key (step 4)                                                                                                   |
+| `requestTtlHours`               | `app_envs`                                                            | 24 (D3), for requests and parked runs          | 1–168                                                                        | a key and a maintenance sweep                                                                                    |
 | `planEvidence`                  | `app_envs`                                                            | `console` (D5)                                 | `console+github`, once steps 10–11 are built                                 | steps 10–11 after the access-diff check; the App's callback URL and client secret on an existing App             |
 | `approvers`                     | `app_envs`, per category                                              | 1                                              | 2: two different people decide                                               | partial approvals on requests (step 4), parked runs (step 3) and plan entries (step 9)                           |
 | `stepUp`                        | `app_envs`, per category                                              | `webauthn` for `credentials`, `none` elsewhere | `webauthn` or `none` for any category                                        | step 7a: passkeys in IAM and the claim Control checks                                                            |
 | `planBinding`                   | `app_envs`                                                            | `transition` (D6)                              | `after-state`                                                                | none beyond (d)                                                                                                  |
-| `planTtlDays`                   | `app_envs`                                                            | 30                                             | 1–365                                                                        | one column                                                                                                       |
+| `planTtlDays`                   | `app_envs`                                                            | 30                                             | 1–365                                                                        | a key                                                                                                            |
 | `credentials` mode and delivery | the mode per category; delivery is fixed                              | `person`, encrypted to the agent's key (D4)    | `refuse` (no keys through requests); `off` (only a requester that may issue) | step 7b; a sealed-plaintext delivery for agents without a key pair is possible later (about 1 h) but not offered |
-| `credentialCeiling`             | `app_envs`                                                            | `requester`                                    | `approver`: up to the approver's own rights, with a warning on the page      | one column (step 7b)                                                                                             |
+| `credentialCeiling`             | `app_envs`                                                            | `requester`                                    | `approver`: up to the approver's own rights, with a warning on the page      | a key (step 7b)                                                                                                  |
 
 ### Composition examples
 
@@ -641,7 +642,8 @@ environments.
   means the defaults.
 - The old column keeps its meaning, so a Control rolled back reads it as before. A classification stores its policy
   only when it differs from the defaults, as `StoredClassification.categories` does today.
-- The settings are new nullable columns; null reads as the default.
+- The settings are one nullable JSON column, `app_envs.approval_settings`, holding only what differs from the defaults;
+  null reads as the defaults.
 - **Parked runs start to expire** (step 3). A run parked before the upgrade gets its expiry when the sweep first sees
   it (that time plus `requestTtlHours`), so nothing parked earlier expires at the first sweep. This is a chosen change
   in behaviour, beside D8.

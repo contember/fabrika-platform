@@ -2,24 +2,29 @@
 // three JSON mounts, the GitHub connection mutations and the approvals, and who refuses the rest. A session needs
 // `Sec-Fetch-Site: same-origin` at the proxy; a bearer is explicit authority, which the browser never attaches itself.
 
-import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { AUTH_CALLBACK_PATH, HANDOFF_COOKIE_PREFIX, SESSION_COOKIE } from '@fabrika/auth-core'
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
 import { controlServiceContract } from '../../fabrika.service'
 import { controlApp } from '../app'
 import type { Env } from '../env'
-import { createHarness } from './helpers/harness'
+import { createHarness, type Harness, harnessDatabase } from './helpers/harness'
 import { fakeControlProvider } from './helpers/provider'
-import { CONSOLE_ORIGIN, consoleBehindProxy } from './helpers/proxy'
+import { CONSOLE_ORIGIN, consoleBehindProxy, type ProxyIam } from './helpers/proxy'
 import { unusedSourceConnection } from './helpers/source-connection'
-import { adminToken, testIamEnv } from './helpers/tokens'
+import { adminToken, TEST_ISSUER, testIamEnv } from './helpers/tokens'
 
 const SIBLING_ORIGIN = 'https://evil.control.test'
 
 /** Who answered a request: the proxy before Control was asked, or Control with its status. */
 type Outcome = `proxy ${number}` | `control ${number}`
 
-function admissionFixture(): (request: Request) => Promise<Outcome> {
+interface ConsoleFixture {
+	readonly harness: Harness
+	readonly fetch: (request: Request) => Promise<{ readonly outcome: Outcome; readonly response: Response }>
+}
+
+function consoleFixture(iam: ProxyIam = { session: adminToken, keys: { px_admin: adminToken } }): ConsoleFixture {
 	const harness = createHarness()
 	const upstreamOk = () => Promise.resolve(Response.json({ result: null }))
 	const env: Env = {
@@ -38,17 +43,25 @@ function admissionFixture(): (request: Request) => Promise<Outcome> {
 	let reached = false
 	const fetch = consoleBehindProxy({
 		table: serviceProxyTable(controlServiceContract({ mcp: false, cli: false }), { oauth: false }),
-		iam: { session: adminToken, keys: { px_admin: adminToken } },
+		iam,
 		upstream: (request) => {
 			reached = true
 			return controlApp.fetch(request, { env, provider: fakeControlProvider, sourceConnection: unusedSourceConnection('harbor') }, { waitUntil() {} })
 		},
 	})
-	return async (request) => {
-		reached = false
-		const response = await fetch(request)
-		return reached ? `control ${response.status}` : `proxy ${response.status}`
+	return {
+		harness,
+		fetch: async (request) => {
+			reached = false
+			const response = await fetch(request)
+			return { outcome: reached ? `control ${response.status}` : `proxy ${response.status}`, response }
+		},
 	}
+}
+
+function admissionFixture(): (request: Request) => Promise<Outcome> {
+	const { fetch } = consoleFixture()
+	return async (request) => (await fetch(request)).outcome
 }
 
 type Credential = 'same-origin session' | 'cross-site session' | 'same-site session' | 'bearer' | 'bearer and cookie'
@@ -177,5 +190,82 @@ describe("an organization owner's browser has no console session", () => {
 		) {
 			expect(await get(path)).toStartWith('proxy ')
 		}
+	})
+})
+
+// ADR-0050 §4: the link a deploy request prints is `<console>/approvals/<run id>`. Opening it signs a person in and
+// shows the run; only the console's own same-origin POST decides it.
+describe('the approval link', () => {
+	const RUN_ID = '01a15abc-0000-7000-8000-000000000000'
+	const LINK = `${CONSOLE_ORIGIN}/approvals/${RUN_ID}`
+	const navigate = { 'sec-fetch-mode': 'navigate', 'sec-fetch-site': 'none' }
+
+	test('opened without a session, it goes through IAM sign-in and returns to the same approval', async () => {
+		// IAM keeps the return URL the bounce named and answers it with the session; `signedIn` stands in for that.
+		let signedIn: string | null = null
+		const { fetch } = consoleFixture({
+			session: adminToken,
+			exchangeAuthCode: () =>
+				signedIn === null
+					? { ok: false, reason: 'invalid_code' }
+					: { ok: true, session: 'app-session', returnUrl: signedIn, expiresAt: Math.floor(Date.now() / 1000) + 300 },
+		})
+
+		const bounce = await fetch(new Request(LINK, { headers: navigate }))
+		expect(bounce.outcome).toBe('proxy 302')
+		const login = new URL(bounce.response.headers.get('location') ?? '')
+		expect(`${login.origin}${login.pathname}`).toBe(`${TEST_ISSUER}/auth/login`)
+		expect(login.searchParams.get('redirect')).toBe(LINK)
+
+		signedIn = login.searchParams.get('redirect')
+		const state = login.searchParams.get('state') ?? ''
+		const handoff = bounce.response.headers.getSetCookie().find((cookie) => cookie.startsWith(`${HANDOFF_COOKIE_PREFIX}${state}=`))
+		const back = await fetch(
+			new Request(`${CONSOLE_ORIGIN}${AUTH_CALLBACK_PATH}?code=one-time&state=${state}`, {
+				headers: { ...navigate, cookie: handoff?.split(';')[0] ?? '' },
+			}),
+		)
+		expect(back.outcome).toBe('proxy 302')
+		expect(back.response.headers.get('location')).toBe(LINK)
+		expect(back.response.headers.getSetCookie().some((cookie) => cookie.startsWith(`${SESSION_COOKIE}=app-session`))).toBe(true)
+
+		const page = await fetch(new Request(LINK, { headers: { ...navigate, cookie: `${SESSION_COOKIE}=app-session` } }))
+		expect(page.outcome).toBe('control 200')
+		expect(await page.response.text()).toBe('dashboard')
+	})
+
+	test('opening it changes no run state, and a cross-site POST of the decision is refused before Control', async () => {
+		const { fetch, harness } = consoleFixture()
+		const envelope = JSON.stringify({ provider: 'harbor', version: 1, payload: {} })
+		await harness.repositories.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes', defaultBranch: 'main' })
+		await harness.repositories.registry.upsertAppEnv({
+			appId: 'notes',
+			env: 'prod',
+			namespaceId: null,
+			provider: 'harbor',
+			providerTargetJson: envelope,
+			providerArtifactJson: envelope,
+		})
+		await harness.repositories.runs.createRun({ id: RUN_ID, appId: 'notes', env: 'prod', ref: 'c'.repeat(40), trigger: 'manual', actor: 'service:svc' })
+		await harnessDatabase(harness.repositories)
+			.prepare(`UPDATE runs SET status = 'awaiting_approval', approval_deadline = ? WHERE id = ?`)
+			.bind(Math.floor(Date.now() / 1000) + 3600, RUN_ID)
+			.run()
+		const before = await harness.repositories.runs.getRun(RUN_ID)
+		expect(before?.status).toBe('awaiting_approval')
+
+		// A link scanner without a session is bounced; a person's browser gets the console's page, which reads the run.
+		expect((await fetch(new Request(LINK, { headers: navigate }))).outcome).toBe('proxy 302')
+		expect((await fetch(new Request(LINK, { headers: { ...navigate, cookie: `${SESSION_COOKIE}=s` } }))).outcome).toBe('control 200')
+		for (const decision of ['approve', 'reject'] as const) {
+			const complete = rpc('approvals.complete', {
+				runId: RUN_ID,
+				decision,
+				candidateDigest: `sha256:${'a'.repeat(64)}`,
+				baselineDigest: `sha256:${'b'.repeat(64)}`,
+			})
+			expect((await fetch(call(complete, 'cross-site session'))).outcome).toBe('proxy 403')
+		}
+		expect(await harness.repositories.runs.getRun(RUN_ID)).toEqual(before)
 	})
 })

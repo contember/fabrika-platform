@@ -5,6 +5,7 @@ import {
 	APPROVAL_CATEGORIES,
 	type ApprovalCategory,
 	approvalPolicySchema,
+	approvalSettingsSchema,
 	type ControlRpcContract,
 	DEFAULT_APPROVAL_CATEGORIES,
 	type JsonValue,
@@ -12,6 +13,7 @@ import {
 	type ProviderEnvelopeDto,
 	type RunStatus,
 	STRICT_POLICY,
+	STRICT_SETTINGS,
 	SURFACE_REACHES,
 	type SurfaceEndpointDto,
 } from '@fabrika/control-contract'
@@ -69,6 +71,8 @@ const environmentsSchema = z.object({
 			),
 			// A Control older than the field, or one whose policy this release cannot read, stands for its categories.
 			approvalPolicy: approvalPolicySchema.partial().optional().catch(undefined),
+			// A Control older than the field, or one whose settings this release cannot read, has the defaults.
+			approvalSettings: approvalSettingsSchema.optional().catch(undefined).transform((settings) => settings ?? STRICT_SETTINGS),
 			publishedRunId: storedTextSchema.nullable(),
 			// A Control older than the field lists none.
 			deviationSubjects: z.array(z.object({ subject: storedTextSchema, steps: z.array(storedTextSchema) })).default([]),

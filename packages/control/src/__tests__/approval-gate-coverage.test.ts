@@ -3,7 +3,7 @@
 // misses writes, and each miss is a way around the gate.
 
 import { dispatchRpcRequest } from '@fabrika/app/service'
-import { ACTION_CATEGORIES, type PolicyCategory, STRICT_POLICY } from '@fabrika/control-contract'
+import { ACTION_CATEGORIES, type PolicyCategory, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { type ControlRpcContext, controlRpcRouter } from '../control-rpc'
 import { createHarness } from './helpers/harness'
@@ -110,11 +110,12 @@ describe('the mode matrix at the protection API', () => {
 			request,
 		}
 	}
-	const protect = async (policy: unknown) => {
+	const protect = async (policy: unknown, settings?: unknown) => {
+		const input = { appId: 'notes', env: 'prod', protected: true, policy, ...(settings === undefined ? {} : { settings }) }
 		const request = new Request('https://control.test/api/rpc', {
 			method: 'POST',
 			headers: { 'content-type': 'application/json' },
-			body: JSON.stringify({ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true, policy } }),
+			body: JSON.stringify({ method: 'apps.environments.protect', input }),
 		})
 		return (await dispatchRpcRequest({ router: controlRpcRouter, ctx: ctx(request), request })).status
 	}
@@ -126,5 +127,18 @@ describe('the mode matrix at the protection API', () => {
 		expect(await protect({ ...STRICT_POLICY, credentials: 'sometimes' })).toBe(400)
 		const { secrets: _, ...missing } = STRICT_POLICY
 		expect(await protect(missing)).toBe(400)
+	})
+
+	test('settings out of their range are refused with a 400 before anything runs', async () => {
+		const approvers = { ...STRICT_SETTINGS.approvers }
+		// A valid input passes validation and stops past it: the environment does not exist.
+		expect(await protect(STRICT_POLICY, STRICT_SETTINGS)).toBe(404)
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, deployRequestCommits: 'unmerged' })).toBe(400)
+		for (const requestTtlHours of [0, 169, 1.5]) expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, requestTtlHours })).toBe(400)
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, approvers: { ...approvers, secrets: 3 } })).toBe(400)
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, approvers: { ...approvers, grants: 2 } })).toBe(400)
+		const { secrets: _, ...missing } = approvers
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, approvers: missing })).toBe(400)
+		expect(await protect(STRICT_POLICY, { ...STRICT_SETTINGS, stepUp: true })).toBe(400)
 	})
 })

@@ -263,3 +263,102 @@ export function gate<T extends CategorizedChange>(change: GatedChange<T>, policy
 	if (mode === 'off') return { kind: 'pass' }
 	return { kind: 'wait', mode: mode === 'plan' ? 'plan' : 'person', lines, actions: waiting }
 }
+
+/** Which commit a non-person may ask to deploy to a protected environment (ADR-0050 §4): a merged one, or any. */
+export const DEPLOY_REQUEST_COMMITS = ['merged', 'any'] as const
+
+export type DeployRequestCommits = (typeof DEPLOY_REQUEST_COMMITS)[number]
+
+/** The categories whose pending items take one or two approvers (ADR-0083 §2). `grants` waits in IAM, under IAM's own rule. */
+export type ApproverCategory = Exclude<PolicyCategory, 'grants'>
+
+export function isApproverCategory(category: PolicyCategory): category is ApproverCategory {
+	return category !== 'grants'
+}
+
+export const APPROVER_CATEGORIES: readonly ApproverCategory[] = POLICY_CATEGORIES.filter(isApproverCategory)
+
+/** How many different people decide a pending item of a category. */
+export type ApproverCount = 1 | 2
+
+/** The bounds of `requestTtlHours`: the absolute deadline of a pending item, counted from when it starts waiting. */
+export const REQUEST_TTL_HOURS = { min: 1, max: 168, default: 24 } as const
+
+/** An environment's approval settings beside its modes (ADR-0083 §2). */
+export interface ApprovalSettings {
+	readonly deployRequestCommits: DeployRequestCommits
+	readonly requestTtlHours: number
+	readonly approvers: { readonly [K in ApproverCategory]: ApproverCount }
+}
+
+/** The strict preset's settings, and the defaults: merged commits only, a day to decide, one approver per category. */
+export const STRICT_SETTINGS: ApprovalSettings = {
+	deployRequestCommits: 'merged',
+	requestTtlHours: REQUEST_TTL_HOURS.default,
+	approvers: {
+		'off-road': 1,
+		'anyone-calls': 1,
+		'get-mutation': 1,
+		people: 1,
+		adoption: 1,
+		terminal: 1,
+		'deletes-data': 1,
+		'role-actions': 1,
+		'role-external': 1,
+		'role-added': 1,
+		public: 1,
+		csp: 1,
+		'deploy-request': 1,
+		secrets: 1,
+		variables: 1,
+		data: 1,
+		registry: 1,
+		'agent-grants': 1,
+		credentials: 1,
+	},
+}
+
+/** The permissive preset's settings (ADR-0083 §7): an agent may ask for any commit that is not a workspace branch. */
+export const PERMISSIVE_SETTINGS: ApprovalSettings = { ...STRICT_SETTINGS, deployRequestCommits: 'any' }
+
+const approverCount = z.union([z.literal(1), z.literal(2)])
+
+const approversSchema = z.object({
+	'off-road': approverCount,
+	'anyone-calls': approverCount,
+	'get-mutation': approverCount,
+	people: approverCount,
+	adoption: approverCount,
+	terminal: approverCount,
+	'deletes-data': approverCount,
+	'role-actions': approverCount,
+	'role-external': approverCount,
+	'role-added': approverCount,
+	public: approverCount,
+	csp: approverCount,
+	'deploy-request': approverCount,
+	secrets: approverCount,
+	variables: approverCount,
+	data: approverCount,
+	registry: approverCount,
+	'agent-grants': approverCount,
+	credentials: approverCount,
+})
+
+/** Settings checked against their bounds; a category or a setting this release does not know (a newer one's) is dropped. */
+export const approvalSettingsSchema = z.object({
+	deployRequestCommits: z.enum(DEPLOY_REQUEST_COMMITS),
+	requestTtlHours: z.number().int().min(REQUEST_TTL_HOURS.min).max(REQUEST_TTL_HOURS.max),
+	approvers: approversSchema,
+}) satisfies z.ZodType<ApprovalSettings, z.ZodTypeDef, unknown>
+
+/**
+ * How many people decide a pending item: the most any of its waiting categories asks for, so the strictest wins
+ * (ADR-0083 §8). `grants` takes IAM's own rule and counts as one here.
+ */
+export function requiredApprovers(settings: ApprovalSettings, categories: Iterable<PolicyCategory>): ApproverCount {
+	for (const category of categories) {
+		if (isApproverCategory(category) && settings.approvers[category] === 2) return 2
+	}
+	return 1
+}

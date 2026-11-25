@@ -17,7 +17,7 @@ import { type MailMaintenanceSummary, runMailMaintenance } from './mail-relay/ma
 import type { OperationsCatalogSyncSummary } from './operations-catalog'
 import type { OperationsReleaseProjectionSummary } from './operations-releases'
 import { replayOperationsReleases } from './operations-releases'
-import { type ProviderReconcileSummary, sweepStaleRuns } from './provider-reconcile'
+import { type ParkedRunSweepSummary, type ProviderReconcileSummary, sweepParkedRuns, sweepStaleRuns } from './provider-reconcile'
 import { WORKSPACE_REF_PREFIX } from './ref-match'
 import { locks, operationsReleaseDeps, replayOperationsCatalogProjection, repositories, STALE_RUN_MAX_AGE_S } from './services'
 
@@ -28,6 +28,8 @@ export interface MaintenanceSummary {
 	reconcile: ProviderReconcileSummary
 	/** Orphaned runs marked failed by the sweep. */
 	swept: number
+	/** Parked runs given a deadline, and parked runs expired past theirs (ADR-0050 §4). */
+	parked: ParkedRunSweepSummary
 	/** Full Operations catalog replay, isolated from deploy maintenance success. */
 	operations: OperationsCatalogSyncSummary
 	/** Pending deploy-release projections repaired independently from catalog sync. */
@@ -97,6 +99,10 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (swept > 0) {
 		console.warn(`run sweep: marked ${swept} stale run(s) failed (> ${STALE_RUN_MAX_AGE_S}s in pending/running)`)
 	}
+	const parked = await sweepParkedRuns({ repositories: persistence, lock: locks(env), runLogs: env.RUN_LOGS })
+	if (parked.deadlines > 0 || parked.expired > 0) {
+		console.info(`parked runs: deadlines=${parked.deadlines} expired=${parked.expired}`)
+	}
 	// The sync logs its own outcome line (operations-catalog.ts), so a second warn here would only repeat it.
 	const operations = await (options.operations ?? (() => replayOperationsCatalogProjection(env)))()
 	const releases = await (options.releases ?? (() => replayOperationsReleases(operationsReleaseDeps(env))))()
@@ -124,7 +130,7 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `errored=${backups.errored}`,
 		)
 	}
-	return { poll, reconcile, swept, operations, releases, mail, dev, backups }
+	return { poll, reconcile, swept, parked, operations, releases, mail, dev, backups }
 }
 
 /**

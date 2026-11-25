@@ -81,6 +81,7 @@ describe('MCP authoring through IAM, the proxy and Control', () => {
 			'get_app_rules',
 			'get_deployment',
 			'get_dev_status',
+			'get_run',
 			'get_workspace',
 			'get_workspace_diff',
 			'list_files',

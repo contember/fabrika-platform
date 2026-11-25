@@ -1,8 +1,9 @@
+import type { RunDto } from '@fabrika/control-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CONTROL_USAGE, environmentLine, parseControlFlags, runControlCli, type SecretValueInput } from '../control.js'
+import { CONTROL_USAGE, environmentLine, followRun, parseControlFlags, runControlCli, runHint, type SecretValueInput } from '../control.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
 
@@ -250,6 +251,99 @@ describe('control output contract', () => {
 
 		captureFetch({ result: { ...run, status: 'succeeded' } })
 		expect(await captureStderr(() => runControlCli('runs', ['get', '--run=r1'], undefined, CONTROL_ENV).then(() => {}))).toBe('')
+	})
+
+	test('a deploy a person approves prints the link on stderr, the row on stdout', async () => {
+		const url = 'https://console.example.test/approvals/r1'
+		const captured = captureFetch({ result: { id: 'r1', appId: 'notes', env: 'prod', status: 'pending', ref: 'c'.repeat(40), approvalUrl: url } })
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() => runControlCli('deploy', ['--app=notes', '--env=prod', `--ref=${'c'.repeat(40)}`], undefined, CONTROL_ENV))
+		})
+		expect(captured.calls.map((call) => call.body)).toEqual([{ method: 'deploy', input: { appId: 'notes', env: 'prod', ref: 'c'.repeat(40) } }])
+		expect(out).toBe(`r1\tnotes\tprod\tpending\t${'c'.repeat(40)}`)
+		expect(err).toBe(`a person approves or refuses this deploy at ${url}`)
+		expect(parseControlFlags(['--app=notes', '--wait']).wait).toBe(true)
+	})
+
+	test('a refused or expired run says so instead of pointing at its log', () => {
+		const run: RunDto = {
+			id: 'r1',
+			appId: 'notes',
+			env: 'prod',
+			ref: 'c'.repeat(40),
+			commitSha: null,
+			trigger: 'manual',
+			actor: 'user:p-ada',
+			status: 'failed',
+			exitCode: null,
+			externalRunId: null,
+			logKey: null,
+			createdAt: 1,
+			startedAt: null,
+			finishedAt: 2,
+			cancelRequestedAt: null,
+		}
+		expect(runHint(run)).toBe('why it failed: fabrika control runs log --run=r1')
+		expect(runHint({ ...run, failureCause: 'rejected' })).toBe('a person refused this deploy; nothing was deployed')
+		expect(runHint({ ...run, failureCause: 'expired' })).toContain('before its deadline, so it expired')
+		expect(runHint({ ...run, status: 'succeeded' })).toBeNull()
+	})
+
+	test('--wait follows the run through its approval to its outcome, saying each stage once', async () => {
+		const base: RunDto = {
+			id: 'r1',
+			appId: 'notes',
+			env: 'prod',
+			ref: 'c'.repeat(40),
+			commitSha: null,
+			trigger: 'manual',
+			actor: 'service:svc',
+			status: 'pending',
+			exitCode: null,
+			externalRunId: null,
+			logKey: null,
+			createdAt: 1,
+			startedAt: null,
+			finishedAt: null,
+			cancelRequestedAt: null,
+		}
+		const url = 'https://console.example.test/approvals/r1'
+		const stages: RunDto[] = [
+			{ ...base, status: 'running' },
+			{ ...base, status: 'awaiting_approval', approvalUrl: url },
+			{ ...base, status: 'awaiting_approval', approvalUrl: url },
+			{ ...base, status: 'pending' },
+			{ ...base, status: 'succeeded' },
+		]
+		const reads: string[] = []
+		let outcome: RunDto | null = null
+		const err = await captureStderr(async () => {
+			outcome = await followRun(
+				(runId) => {
+					reads.push(runId)
+					const next = stages.shift()
+					if (next === undefined) throw new Error('read past the outcome')
+					return Promise.resolve(next)
+				},
+				{ ...base, approvalUrl: url },
+				{ intervalMs: 0 },
+			)
+		})
+		expect(outcome).toMatchObject({ status: 'succeeded' })
+		expect(reads).toHaveLength(5)
+		expect(err.split('\n')).toEqual([
+			`a person approves or refuses this deploy at ${url}`,
+			'the run is running',
+			`a person approves or refuses this deploy at ${url}`,
+			'the run is pending',
+		])
+
+		const expired = await captureStderr(async () => {
+			outcome = await followRun(() => Promise.resolve({ ...base, status: 'failed', failureCause: 'expired' }), base, { intervalMs: 0 })
+		})
+		expect(outcome).toMatchObject({ status: 'failed', failureCause: 'expired' })
+		expect(expired).toContain('so it expired')
 	})
 
 	test('an RPC denial keeps its type so a caller can tell it from an outage', async () => {

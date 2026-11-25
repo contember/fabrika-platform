@@ -2,10 +2,14 @@ import { Link } from '@buzola/router'
 import {
 	type ApprovalPolicy,
 	approvalPolicySchema,
+	type ApprovalSettings,
+	type ApproverCount,
 	CONTROL_ACTIONS,
+	isApproverCategory,
 	modesOf,
 	POLICY_CATEGORIES,
 	type PolicyCategory,
+	REQUEST_TTL_HOURS,
 } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { api, type AppEnvDto, type ApprovalDto } from '../../lib/api'
@@ -16,6 +20,7 @@ import {
 	categoryLabel,
 	isDefaultMode,
 	loosened,
+	loosenedSettings,
 	modeLabel,
 	parkedRunsAt,
 	policyChange,
@@ -23,7 +28,10 @@ import {
 	PRESETS,
 	protectionFailure,
 	protectionToggle,
+	requestTtl,
+	sameSettings,
 	setEnvironmentProtection,
+	settingsSummary,
 	waitingSummary,
 } from '../../lib/environment-protection'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -126,7 +134,7 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 					{error && <div className="error-text small" role="alert">{error}</div>}
 					{env.protected && (approver
 						? <PolicyEditor appId={appId} env={env} onDone={onDone} />
-						: <span className="muted small">{waitingSummary(env.approvalPolicy)}</span>)}
+						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings)}</span>)}
 				</div>
 				{confirming && (
 					<ConfirmDialog
@@ -145,29 +153,52 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 
 /**
  * What lets a change of each category through on a protected environment (ADR-0083), for a holder of `access.approve`:
- * a mode per category, the strict and permissive presets, one save, and a confirmation first when it loosens any.
+ * a mode and a number of approvers per category, the settings beside them, the strict and permissive presets, one save,
+ * and a confirmation first when it loosens any.
  */
 export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
 	const [chosen, setChosen] = useState<ApprovalPolicy>(env.approvalPolicy)
+	const [settings, setSettings] = useState<ApprovalSettings>(env.approvalSettings)
+	const [ttlText, setTtlText] = useState(String(env.approvalSettings.requestTtlHours))
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [confirming, setConfirming] = useState(false)
+	const ttl = requestTtl(ttlText)
 	const changed = POLICY_CATEGORIES.some((category) => chosen[category] !== env.approvalPolicy[category])
-	const preset = presetOf(chosen)
+		|| !sameSettings(settings, env.approvalSettings)
+	const preset = presetOf(chosen, settings)
+	const before = { policy: env.approvalPolicy, settings: env.approvalSettings }
+	const after = { policy: chosen, settings }
 
 	function choose(category: PolicyCategory, mode: string) {
 		const parsed = approvalPolicySchema.safeParse({ ...chosen, [category]: mode })
 		if (parsed.success) setChosen(parsed.data)
 	}
 
+	function chooseApprovers(category: PolicyCategory, count: ApproverCount) {
+		if (isApproverCategory(category)) setSettings({ ...settings, approvers: { ...settings.approvers, [category]: count } })
+	}
+
+	function chooseTtl(text: string) {
+		setTtlText(text)
+		const hours = requestTtl(text)
+		if (hours !== null) setSettings({ ...settings, requestTtlHours: hours })
+	}
+
+	function choosePreset(option: (typeof PRESETS)[number]) {
+		setChosen(option.policy)
+		setSettings(option.settings)
+		setTtlText(String(option.settings.requestTtlHours))
+	}
+
 	async function save() {
-		await setEnvironmentProtection(api, appId, env.env, true, chosen)
+		await setEnvironmentProtection(api, appId, env.env, true, after)
 		onDone()
 	}
 
 	async function apply() {
 		setError(null)
-		if (policyChange(env.approvalPolicy, chosen) === 'confirm') {
+		if (policyChange(before, after) === 'confirm') {
 			setConfirming(true)
 			return
 		}
@@ -181,7 +212,10 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 		}
 	}
 
-	const looser = loosened(env.approvalPolicy, chosen)
+	const looser = [
+		...loosened(env.approvalPolicy, chosen).map((category) => `${categoryLabel(category)} (${modeLabel(chosen[category]).toLowerCase()})`),
+		...loosenedSettings(env.approvalSettings, settings),
+	]
 	return (
 		<fieldset className="approval-categories">
 			<legend className="small">What lets a change through on {env.env}</legend>
@@ -194,7 +228,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 						aria-pressed={preset === option.name}
 						title={option.hint}
 						disabled={busy}
-						onClick={() => setChosen(option.policy)}
+						onClick={() => choosePreset(option)}
 					>
 						{option.label}
 					</button>
@@ -226,12 +260,64 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 									</option>
 								))}
 							</select>
+							{isApproverCategory(option.category) && (
+								<select
+									value={settings.approvers[option.category]}
+									disabled={busy}
+									aria-label={`${option.label}: approvers`}
+									onChange={(event) => chooseApprovers(option.category, event.target.value === '2' ? 2 : 1)}
+								>
+									<option value="1">One person decides (default)</option>
+									<option value="2">Two people decide</option>
+								</select>
+							)}
 						</label>
 					))}
 				</div>
 			))}
+			<div className="approval-category-group">
+				<div className="muted small">Requests</div>
+				<label className="approval-mode">
+					<span>
+						Commits an agent may ask to deploy
+						<span className="muted small">
+							{' · '}merged means reachable from the trigger branch, or the default branch when it is a pattern; never a workspace branch, whichever is
+							chosen.
+						</span>
+					</span>
+					<select
+						value={settings.deployRequestCommits}
+						disabled={busy}
+						aria-label="Commits an agent may ask to deploy"
+						onChange={(event) => setSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
+					>
+						<option value="merged">Merged commits (default)</option>
+						<option value="any">Any commit</option>
+					</select>
+				</label>
+				<label className="approval-mode">
+					<span>
+						Hours a request waits for a decision
+						<span className="muted small">
+							{` · ${REQUEST_TTL_HOURS.min}–${REQUEST_TTL_HOURS.max}, ${REQUEST_TTL_HOURS.default} by default; past it, the request expires.`}
+						</span>
+					</span>
+					<input
+						type="number"
+						min={REQUEST_TTL_HOURS.min}
+						max={REQUEST_TTL_HOURS.max}
+						value={ttlText}
+						disabled={busy}
+						aria-label="Hours a request waits for a decision"
+						aria-invalid={ttl === null}
+						onChange={(event) => chooseTtl(event.target.value)}
+					/>
+				</label>
+			</div>
 			<div>
-				<button type="button" className="btn small" disabled={!changed || busy} onClick={() => void apply()}>Save approvals</button>
+				<button type="button" className="btn small" disabled={!changed || ttl === null || busy} onClick={() => void apply()}>
+					Save approvals
+				</button>
 			</div>
 			{error && <div className="error-text small" role="alert">{error}</div>}
 			{confirming && (
@@ -241,8 +327,7 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 					body={
 						<>
 							<p>
-								On <strong>{env.env}</strong>, these will need less to go through:{' '}
-								{looser.map((category) => `${categoryLabel(category)} (${modeLabel(chosen[category]).toLowerCase()})`).join(', ')}.
+								On <strong>{env.env}</strong>, these will need less to go through: {looser.join(', ')}.
 							</p>
 							<p>The audit log records this change. A deploy or grant that already waits keeps waiting until a person decides it.</p>
 						</>

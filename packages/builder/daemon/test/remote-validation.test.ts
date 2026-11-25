@@ -1,4 +1,11 @@
-import { DEFAULT_APPROVAL_CATEGORIES, policyFromCategories, STRICT_POLICY, type SurfaceEndpointDto } from '@fabrika/control-contract'
+import {
+	DEFAULT_APPROVAL_CATEGORIES,
+	PERMISSIVE_SETTINGS,
+	policyFromCategories,
+	STRICT_POLICY,
+	STRICT_SETTINGS,
+	type SurfaceEndpointDto,
+} from '@fabrika/control-contract'
 import { expect, test } from 'bun:test'
 import { parseEnvironments, parseRun, PlatformRemote } from '../src/platform-remote'
 import { PlatformError } from '../src/platform-storage'
@@ -27,6 +34,7 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		protected: false,
 		approvalCategories: ['off-road' as const, 'grants' as const],
 		approvalPolicy: { ...policyFromCategories(['off-road', 'grants']), secrets: 'off' as const },
+		approvalSettings: PERMISSIVE_SETTINGS,
 		publishedRunId: null,
 		deviationSubjects: [{ subject: 'Endpoint `api.notes.summary`', steps: ['declares raw SQL (`read`)'] }],
 		surface: [health],
@@ -39,11 +47,19 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 	expect(() => parseEnvironments({ items: [environment] })).toThrow(PlatformError)
 	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, ignored: true }], cursor: 'next' }))
 		.toEqual([{ ...environment, triggerRef: null }])
-	const { deviationSubjects: _, crossOrigins: __, surface: ___, kind: ____, approvalCategories: _____, approvalPolicy: ______, ...fromOlderControl } =
-		{
-			...environment,
-			triggerRef: null,
-		}
+	const {
+		deviationSubjects: _,
+		crossOrigins: __,
+		surface: ___,
+		kind: ____,
+		approvalCategories: _____,
+		approvalPolicy: ______,
+		approvalSettings: _______,
+		...fromOlderControl
+	} = {
+		...environment,
+		triggerRef: null,
+	}
 	expect(parseEnvironments({ items: [fromOlderControl] })).toEqual([
 		{
 			...environment,
@@ -53,6 +69,7 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 			surface: [],
 			approvalCategories: [...DEFAULT_APPROVAL_CATEGORIES],
 			approvalPolicy: STRICT_POLICY,
+			approvalSettings: STRICT_SETTINGS,
 		},
 	])
 	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, approvalCategories: ['grants', 'from-a-newer-control'] }] })).toEqual([

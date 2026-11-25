@@ -3,12 +3,13 @@
 // admission keeps another site's page out (ADR-0022).
 
 import type { AuthContext } from '@fabrika/auth'
-import { CONTROL_ACTIONS } from '@fabrika/control-contract'
+import { CONTROL_ACTIONS, gate } from '@fabrika/control-contract'
 import { fail } from '../api/domain'
 import { canAtCoordinates } from '../api/runs'
-import { type AppEnvRow, type ControlRepositories, defaultProtected } from '../db'
+import { type AppEnvRow, type ControlRepositories, defaultProtected, type RunRow } from '../db'
 import { isPerson } from '../iam'
 import { isWorkspaceRef } from '../ref-match'
+import { appEnvPolicy } from './categories'
 
 /** The request a console call arrived on. */
 export interface ConsoleAdmission {
@@ -42,60 +43,110 @@ export function requireHumanForProtectedDelete(auth: AuthContext, admission: Con
 	}
 }
 
+/**
+ * A person in the console (ADR-0083 §6): a person (`isPerson`) on a request without an `Authorization` header. Every
+ * bearer is a non-person, a person's own `px_` key included, so an agent handed that key cannot pass as its owner.
+ */
+export function isConsolePerson(auth: AuthContext, admission: ConsoleAdmission | undefined): boolean {
+	return isPerson(auth) && admission !== undefined && admission.request.headers.get('Authorization') === null
+}
+
 /** Why a manual run of a protected environment is refused: the HTTP status its creation answers, and the message. */
 export interface ProtectedRunRefusal {
+	readonly kind: 'refuse'
 	readonly status: 400 | 403
 	readonly message: string
 }
 
+/**
+ * What a manual run of an environment does (ADR-0050 §4): it runs, it is a non-person's request that parks for a person
+ * whatever its lines (`deploy-request: person`), or it is refused.
+ */
+export type ProtectedRunDecision = { readonly kind: 'run' } | { readonly kind: 'request' } | ProtectedRunRefusal
+
 /** The refs a protected environment's manual run names: a full branch or tag ref, or a commit SHA. */
 const PROTECTED_REF = /^(?:refs\/(?:heads|tags)\/[^/].*|[0-9a-f]{40})$/
+const COMMIT_SHA = /^[0-9a-f]{40}$/
 
 /**
- * A manual run of a protected environment: only a person starts one (ADR-0050 §4), and it names a full ref or a commit
- * SHA, never a workspace branch (ADR-0049 rules 4 and 7). A SHA or a tag is not traced back to a workspace. Checked when
- * the run is created and again when it starts, since the flag may have been set in between. Null when it may run.
+ * A manual run of a protected environment (ADR-0050 §4): a person's names a full ref or a commit SHA, never a workspace
+ * branch (ADR-0049 rules 4 and 7); a non-person's is judged by the environment's `deploy-request` mode through `gate`,
+ * and one that asks names a commit SHA. A SHA or a tag is not traced back to a workspace. Decided when the run is
+ * created and again when it starts, since the flag or the mode may have changed in between.
  */
-export function protectedRunRefusal(appEnv: AppEnvRow, run: { readonly byPerson: boolean; readonly ref: string }): ProtectedRunRefusal | null {
-	if (appEnv.protected !== 1) return null
-	const refusal = protectedRunCause(appEnv.env, run)
-	if (refusal === null || appEnv.authoring !== 1) return refusal
+export function protectedRunDecision(appEnv: AppEnvRow, run: { readonly byPerson: boolean; readonly ref: string }): ProtectedRunDecision {
+	if (appEnv.protected !== 1) return { kind: 'run' }
+	const decision = protectedRunCause(appEnv, run)
+	if (decision.kind !== 'refuse' || appEnv.authoring !== 1) return decision
 	// Both flags predate ADR-0049 rule 7, which now keeps them apart; only an operator can clear one.
 	return {
-		status: refusal.status,
-		message: `${refusal.message}. It is also the app's authoring target, which a protected environment no longer is: an operator `
+		...decision,
+		message: `${decision.message}. It is also the app's authoring target, which a protected environment no longer is: an operator `
 			+ 'clears its authoring flag (apps.environments.put with authoring: false) or its protection',
 	}
 }
 
-function protectedRunCause(env: string, run: { readonly byPerson: boolean; readonly ref: string }): ProtectedRunRefusal | null {
-	if (!run.byPerson) {
+function protectedRunCause(appEnv: AppEnvRow, run: { readonly byPerson: boolean; readonly ref: string }): ProtectedRunDecision {
+	const env = appEnv.env
+	if (isWorkspaceRef(run.ref)) {
 		return {
+			kind: 'refuse',
 			status: 403,
-			message: `environment \`${env}\` is protected: only a person deploys it by hand, from the console; an agent, a builder key or a `
-				+ "service key cannot. A push to the environment's trigger ref still deploys it",
+			message: `environment \`${env}\` is protected: a workspace branch reaches it only after it is merged into the environment's trigger ref`,
+		}
+	}
+	const outcome = run.byPerson ? null : gate({ lines: [], actions: ['deploy-request'] }, appEnvPolicy(appEnv))
+	if (outcome?.kind === 'refuse') {
+		return {
+			kind: 'refuse',
+			status: 403,
+			message: `environment \`${env}\` is protected and refuses a deploy a non-person asks for (deploy-request: refuse): only a person `
+				+ "deploys it by hand, from the console; an agent, a builder key or an API key cannot. A push to the environment's trigger ref "
+				+ 'still deploys it',
+		}
+	}
+	if (outcome?.kind === 'wait') {
+		if (COMMIT_SHA.test(run.ref)) return { kind: 'request' }
+		return {
+			kind: 'refuse',
+			status: 400,
+			message: `environment \`${env}\` is protected: a deploy an agent or a key asks for names a 40-character commit SHA, not \`${run.ref}\`, `
+				+ 'and waits for a person to approve it',
 		}
 	}
 	if (!PROTECTED_REF.test(run.ref)) {
 		return {
+			kind: 'refuse',
 			status: 400,
 			message: `environment \`${env}\` is protected: ref \`${run.ref}\` must be a full ref (refs/heads/<branch>, refs/tags/<tag>) `
 				+ 'or a 40-character commit SHA',
 		}
 	}
-	if (isWorkspaceRef(run.ref)) {
-		return {
-			status: 403,
-			message: `environment \`${env}\` is protected: a workspace branch reaches it only after it is merged into the environment's trigger ref`,
-		}
-	}
-	return null
+	return { kind: 'run' }
 }
 
-/** `protectedRunRefusal` for a caller creating a manual run; a bearer counts, since `isPerson` reads no header. */
-export function requirePersonForProtectedDeploy(auth: AuthContext, appEnv: AppEnvRow, ref: string): void {
-	const refusal = protectedRunRefusal(appEnv, { byPerson: isPerson(auth), ref })
-	if (refusal !== null) fail(refusal.status, refusal.message)
+/**
+ * `protectedRunDecision` for a caller creating a manual run, which is a person only in the console (`isConsolePerson`).
+ * A refusal answers its status; otherwise the decision and whether a person started the run, which the run records.
+ */
+export function protectedDeployOf(
+	auth: AuthContext,
+	admission: ConsoleAdmission | undefined,
+	appEnv: AppEnvRow,
+	ref: string,
+): { readonly byPerson: boolean; readonly decision: Exclude<ProtectedRunDecision, ProtectedRunRefusal> } {
+	const byPerson = isConsolePerson(auth, admission)
+	const decision = protectedRunDecision(appEnv, { byPerson, ref })
+	if (decision.kind === 'refuse') fail(decision.status, decision.message)
+	return { byPerson, decision }
+}
+
+/**
+ * Whether a person started a manual run, as it recorded. A run created before the record reads as its actor did then:
+ * a `user:` actor was a person, so a run admitted under the earlier rule is judged by it again, never refused anew.
+ */
+export function startedByPerson(run: Pick<RunRow, 'by_person' | 'actor'>): boolean {
+	return run.by_person === null ? run.actor?.startsWith('user:') === true : run.by_person === 1
 }
 
 /**
@@ -103,8 +154,13 @@ export function requirePersonForProtectedDeploy(auth: AuthContext, appEnv: AppEn
  * person too, or a key would redirect the environment it cannot deploy by hand. `protectedEnv` names the protected
  * environment the change reaches, null when none.
  */
-export function requirePersonToRedirect(auth: AuthContext, protectedEnv: string | null, change: string): void {
-	if (protectedEnv === null || isPerson(auth)) return
+export function requirePersonToRedirect(
+	auth: AuthContext,
+	admission: ConsoleAdmission | undefined,
+	protectedEnv: string | null,
+	change: string,
+): void {
+	if (protectedEnv === null || isConsolePerson(auth, admission)) return
 	fail(
 		403,
 		`environment \`${protectedEnv}\` is protected: only a person changes ${change}, which decides what a deploy there runs; `
@@ -128,12 +184,12 @@ export async function startsProtected(
  * (`apps.environments.put`, `apps.register`). Clearing it stops push deploys and stays open to a key.
  */
 export async function requirePersonToPointTriggerRef(
-	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	c: { readonly auth: AuthContext; readonly admission?: ConsoleAdmission; readonly repositories: Pick<ControlRepositories, 'registry'> },
 	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly triggerRef: string | null },
 ): Promise<void> {
 	const { appId, env, existing, triggerRef } = target
-	if (triggerRef === null || triggerRef === existing?.trigger_ref || isPerson(c.auth)) return
-	if (await startsProtected(c.repositories.registry, appId, env, existing)) requirePersonToRedirect(c.auth, env, 'its trigger ref')
+	if (triggerRef === null || triggerRef === existing?.trigger_ref || isConsolePerson(c.auth, c.admission)) return
+	if (await startsProtected(c.repositories.registry, appId, env, existing)) requirePersonToRedirect(c.auth, c.admission, env, 'its trigger ref')
 }
 
 /**
@@ -142,11 +198,11 @@ export async function requirePersonToPointTriggerRef(
  * values (ADR-0085 §4). Clearing it stays open to a key.
  */
 export async function requirePersonToPointPublicOrigin(
-	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	c: { readonly auth: AuthContext; readonly admission?: ConsoleAdmission; readonly repositories: Pick<ControlRepositories, 'registry'> },
 	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly publicOrigin: string | null },
 ): Promise<void> {
 	const { appId, env, existing, publicOrigin } = target
-	if (publicOrigin === null || publicOrigin === existing?.public_origin || isPerson(c.auth)) return
+	if (publicOrigin === null || publicOrigin === existing?.public_origin || isConsolePerson(c.auth, c.admission)) return
 	if (await startsProtected(c.repositories.registry, appId, env, existing)) {
 		fail(403, `environment \`${env}\` is protected: only a person changes its public origin; an agent, a builder key or a service key cannot`)
 	}
@@ -158,11 +214,11 @@ export async function requirePersonToPointPublicOrigin(
  * stays open to a key.
  */
 export async function requirePersonToPointDomain(
-	c: { readonly auth: AuthContext; readonly repositories: Pick<ControlRepositories, 'registry'> },
+	c: { readonly auth: AuthContext; readonly admission?: ConsoleAdmission; readonly repositories: Pick<ControlRepositories, 'registry'> },
 	target: { readonly appId: string; readonly env: string; readonly existing: AppEnvRow | null; readonly domain: string | null },
 ): Promise<void> {
 	const { appId, env, existing, domain } = target
-	if (domain === null || domain === existing?.domain || isPerson(c.auth)) return
+	if (domain === null || domain === existing?.domain || isConsolePerson(c.auth, c.admission)) return
 	if (await startsProtected(c.repositories.registry, appId, env, existing)) {
 		fail(403, `environment \`${env}\` is protected: only a person changes its domain; an agent, a builder key or a service key cannot`)
 	}

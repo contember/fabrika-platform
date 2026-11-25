@@ -53,8 +53,9 @@ writes it to both sides.
    A failure between the two leaves an unreferenced vault row, which harms nothing; delete it when you can.
 
 4. **Deploy the environment at once:** `fabrika control deploy --app=<app> --env=<env> --ref=<commit from step 2>`, or
-   **Deploy** on the environment in the console. A protected environment takes the console: a manual deploy there
-   needs a person. Follow it with `fabrika control runs get --run=<id>` until it is `succeeded`.
+   **Deploy** on the environment in the console. On a protected environment the command is a request: it names a
+   merged commit and prints the link a person approves it at. `--wait` follows the run until it succeeds or fails, or
+   follow it with `fabrika control runs get --run=<id>` until it is `succeeded`.
 
    - **On Zerops** the deploy first republishes the namespace proxy with the new secret, then builds the application
      with it. Between the two the application refuses every proxied request, for as long as its build and activation

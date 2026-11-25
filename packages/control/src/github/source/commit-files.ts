@@ -27,6 +27,23 @@ export interface CommitFiles {
 	read(path: string, maxBytes: number): Promise<string>
 }
 
+/** A commit a non-person asks to deploy to a protected environment (ADR-0050 §4). */
+export interface RequestedCommitInput {
+	readonly repoUrl: string
+	readonly commitSha: string
+	/** Absent for a public repository (ADR-0029). */
+	readonly sourceBinding?: ProviderSourceBinding
+	/** The branch or tag (its short name) that must hold the commit; null when any commit may be asked for. */
+	readonly mergedInto: string | null
+	readonly signal: AbortSignal
+}
+
+/** The requested commit's message, and whether `mergedInto` holds it (null when none was named). */
+export interface RequestedCommit {
+	readonly message: string
+	readonly merged: boolean | null
+}
+
 /** What one anonymous read of a repository answered: GitHub hides a private repository as a 404, as it does a missing one. */
 export type AnonymousReadability = 'readable' | 'unreadable' | 'unknown'
 
@@ -37,6 +54,8 @@ export interface CommitSource {
 	 * deploy's source resolution makes first. Only a 404 is `unreadable`; any other failure is `unknown`, not a verdict.
 	 */
 	anonymousReadability(input: { readonly repoUrl: string; readonly signal: AbortSignal }): Promise<AnonymousReadability>
+	/** The requested commit, read through the same credentials as its files; a failure is a `SourceFailure`. */
+	requestedCommit(input: RequestedCommitInput): Promise<RequestedCommit>
 }
 
 /** A commit's files through one connection's repository token, minted once per opened commit. */
@@ -67,7 +86,32 @@ export function gitHubCommitSource(metadata: GitHubMetadataClient, credentials: 
 			}
 		},
 		anonymousReadability: (input) => anonymousReadability(metadata, input),
+		async requestedCommit(input) {
+			const repository = repositoryOf(input.repoUrl)
+			const binding = input.sourceBinding
+			const token = binding === undefined
+				? await credentials.ownerConnectionToken({ repository, signal: input.signal })
+				: await credentials.repositoryToken({
+					connectionId: binding.connectionId,
+					installationId: binding.installationId,
+					repository,
+					signal: input.signal,
+				})
+			return await readRequestedCommit(metadata, repository, token, input)
+		},
 	}
+}
+
+/** One read for a requested commit: a compare against the branch that must hold it, or the commit alone. */
+export async function readRequestedCommit(
+	metadata: GitHubMetadataClient,
+	repository: SourceRepository,
+	token: string | undefined,
+	input: Pick<RequestedCommitInput, 'commitSha' | 'mergedInto' | 'signal'>,
+): Promise<RequestedCommit> {
+	if (input.mergedInto === null) return { message: await metadata.commitMessage(repository, input.commitSha, token, input.signal), merged: null }
+	const compared = await metadata.reachableFrom(repository, input.commitSha, input.mergedInto, token, input.signal)
+	return { message: compared.message, merged: compared.reachable }
 }
 
 /** One resolution of `HEAD` without a token: only a 404 is a verdict, because GitHub hides a private repository so. */

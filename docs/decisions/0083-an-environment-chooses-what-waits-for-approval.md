@@ -93,7 +93,10 @@ release adds applies to every environment that did not set it. Null is the defau
 a Control rolled back reads it as before: an added category converts to `person`, or `plan` for a closer-review one
 other than `deletes-data`; a removed one to `off`; null stays null.
 
-The settings are nullable columns beside it, null reading as the default. Each lands with the step that first uses it:
+The settings are one nullable column beside it, `approval_settings`, holding their difference from the defaults as
+`approval_policy` does, so a setting a later step adds needs no migration; null and an absent key read as the default.
+`approvers` takes every category but `grants`, whose two-person rule IAM keeps (§4). Each setting lands with the step
+that first uses it:
 
 | Setting                | Default                                        | Alternative                                                                     |
 | ---------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------- |
@@ -111,7 +114,7 @@ The policy and the settings are kept in `app_env_protection` with the `protected
 starts from the choice its deleted predecessor left (ADR-0050 §4). They apply only while the environment is protected.
 They change through `apps.environments.protect`, under the rules of the flag: `access.approve` at the coordinates, a
 person in the console, the environment's deployment lease, a refusal while a run is `running`, and one audit row
-(`access.protect`, with the policy before and after). The change advances `protection_revision` and `generation`, so a
+(`access.protect`, with the policy and the settings before and after). The change advances `protection_revision` and `generation`, so a
 run classified under the old choice classifies again. There is no installation level of defaults or floors yet.
 
 ### 3. The modes and the gate

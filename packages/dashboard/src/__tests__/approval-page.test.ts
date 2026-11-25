@@ -6,8 +6,8 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { approvalStage } from '../lib/access-changes'
-import type { AccessChangeDto, ApprovalDto, ChangeAudienceDto, RunDto, SurfaceNoteDto } from '../lib/api'
-import { AccessChangeView } from '../routes/approvals/detail'
+import type { AccessChangeDto, ApprovalDto, ChangeAudienceDto, DeployRequestDto, RunDto, SurfaceNoteDto } from '../lib/api'
+import { AccessChangeView, Decision, DeployRequestView } from '../routes/approvals/detail'
 
 const anyone: ChangeAudienceDto = { reach: 'anyone', requirement: null }
 const staff: ChangeAudienceDto = { reach: 'human', requirement: 'with `candidates.read` (on `candidate`)' }
@@ -92,6 +92,7 @@ const APPROVAL: ApprovalDto = {
 		},
 	],
 	approval: null,
+	approvers: 1,
 }
 
 const render = (approval: ApprovalDto) => renderToStaticMarkup(createElement(AccessChangeView, { view: approvalView(approval.changes), approval }))
@@ -236,6 +237,15 @@ describe('where a run stands', () => {
 		expect(stage({ status: 'failed' }, { protected: false })).toBe('Failed without waiting for approval')
 	})
 
+	test('a run a person refused, or that nobody decided before its deadline, says so whatever its lines', () => {
+		const stage = (failureCause: 'rejected' | 'expired', rest: Partial<ApprovalDto> = {}) =>
+			approvalStage({ ...APPROVAL, ...rest, run: { ...RUN, status: 'failed', failureCause } })
+		expect(stage('rejected')).toEqual({ lamp: 'stop', text: 'Refused by a person' })
+		expect(stage('rejected', { outcome: 'no-widening', changes: [] }).text).toBe('Refused by a person')
+		expect(stage('expired')).toEqual({ lamp: 'stop', text: 'Expired: nobody decided before the deadline' })
+		expect(stage('expired', { outcome: 'none', changes: [] }).text).toBe('Expired: nobody decided before the deadline')
+	})
+
 	test('a run a newer run superseded says so, approved or not', () => {
 		const stage = (rest: Partial<ApprovalDto>) => approvalStage({ ...APPROVAL, ...rest, run: { ...RUN, status: 'failed' } })
 		expect(stage({ approval: approved, supersededBy: 'run-2' })).toEqual({
@@ -243,5 +253,89 @@ describe('where a run stands', () => {
 			text: 'Approved, then superseded: a newer run published first, so this one did not deploy',
 		})
 		expect(stage({ outcome: 'no-widening', supersededBy: 'run-2' }).text).toBe('Superseded: a newer run published first, so this one did not deploy')
+	})
+})
+
+// ADR-0050 §4: a request an agent or a key made shows who asked, the commit and its message as the agent wrote it.
+describe('a deploy request', () => {
+	const REQUEST: DeployRequestDto = {
+		principal: { id: 'p-ada', type: 'user', label: 'ada@example.test' },
+		credential: 'oauth',
+		clientId: 'https://agent.example.test/<i>client</i>.json',
+		commitSha: 'c'.repeat(40),
+		commitMessage: 'Approve me <script>alert(1)</script>\n\n<a href="https://evil.test">safe</a>',
+		runningCommitSha: 'b'.repeat(40),
+		compareUrl: `https://github.com/acme/notes/compare/${'b'.repeat(40)}...${'c'.repeat(40)}`,
+	}
+	const render = (request: DeployRequestDto, approval: Partial<ApprovalDto> = {}) =>
+		renderToStaticMarkup(
+			createElement(DeployRequestView, {
+				request,
+				approval: { ...APPROVAL, changes: [], deadline: 1_800_000_000, ...approval, run: { ...RUN, trigger: 'manual', commitSha: request.commitSha } },
+			}),
+		)
+
+	test("the agent's text is escaped and marked as the agent's", () => {
+		const markup = render(REQUEST)
+		expect(markup).not.toContain('<script>')
+		expect(markup).not.toContain('<a href="https://evil.test">')
+		expect(markup).not.toContain('<i>client</i>')
+		expect(markup).toContain(
+			'<pre class="agent-text">Approve me &lt;script&gt;alert(1)&lt;/script&gt;\n\n&lt;a href=&quot;https://evil.test&quot;&gt;safe&lt;/a&gt;</pre>',
+		)
+		expect(markup).toContain('Commit message, written by the agent')
+		expect(markup).toContain('title="Written by the agent, not by Fabrika">https://agent.example.test/&lt;i&gt;client&lt;/i&gt;.json</span>')
+	})
+
+	test('who asked, the commit beside what runs, a compare link, and the deadline', () => {
+		const markup = render(REQUEST)
+		expect(markup).toContain('<strong>ada@example.test</strong> asks through an agent to deploy <code>ccccccc</code>')
+		expect(markup).toContain('which runs <code>bbbbbbb</code>')
+		expect(markup).toContain(`<code>${'c'.repeat(40)}</code>`)
+		expect(markup).toContain(`href="${REQUEST.compareUrl}" target="_blank" rel="noreferrer noopener">Compare with what runs now</a>`)
+		expect(markup).toContain('the request expires and deploys nothing')
+
+		const { clientId: _, ...withoutClient } = REQUEST
+		const key = render({ ...withoutClient, credential: 'key', commitMessage: null, runningCommitSha: null, compareUrl: null })
+		expect(key).toContain('asks with a key to deploy')
+		expect(key).toContain('which runs nothing yet.')
+		expect(key).not.toContain('agent-text')
+		expect(key).not.toContain('Compare with')
+	})
+})
+
+// ADR-0050 §4: the decision offers only what Control would accept. A run past its deadline answers 410 until the sweep
+// fails it, and the first of two approvers cannot give the second approval.
+describe('the decision', () => {
+	const NOW = 1_800_000_000
+	const render = (approval: Partial<ApprovalDto>, me: string | null = 'p-ada') =>
+		renderToStaticMarkup(createElement(Decision, { approval: { ...APPROVAL, deadline: NOW + 60, ...approval }, me, now: NOW, onDone: () => {} }))
+
+	test('a waiting run offers approve and refuse before its deadline', () => {
+		const markup = render({})
+		expect(markup).toContain('Approve and deploy')
+		expect(markup).toContain('>Refuse</button>')
+	})
+
+	test('a run past its deadline offers neither, and says it expired', () => {
+		for (const deadline of [NOW, NOW - 60]) {
+			const markup = render({ deadline })
+			expect(markup).not.toContain('Approve and deploy')
+			expect(markup).not.toContain('>Refuse</button>')
+			expect(markup).toContain('expired')
+		}
+	})
+
+	test('the person who gave the first of two approvals waits for a second person, and may still refuse', () => {
+		const partialApproval = { principalId: 'p-ada', label: 'ada@example.test', approvedAt: NOW - 600 }
+		const mine = render({ approvers: 2, partialApproval })
+		expect(mine).not.toContain('Approve and deploy')
+		expect(mine).toContain('Waiting for a second person')
+		expect(mine).toContain('>Refuse</button>')
+
+		const other = render({ approvers: 2, partialApproval }, 'p-bob')
+		expect(other).toContain('Approve and deploy')
+		expect(other).not.toContain('Waiting for a second person')
+		expect(render({ approvers: 2 })).toContain('Approve and deploy')
 	})
 })

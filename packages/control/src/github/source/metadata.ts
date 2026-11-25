@@ -20,6 +20,8 @@ const commitSchema = z.object({
 	// Ref resolution needs only the commit; platform archive admission separately requires its tree.
 	commit: z.object({ tree: z.object({ sha: objectIdSchema }) }).optional().catch(undefined),
 })
+const messageCommitSchema = z.object({ sha: objectIdSchema, commit: z.object({ message: z.string() }) })
+const compareSchema = z.object({ status: z.enum(['identical', 'ahead', 'behind', 'diverged']), base_commit: messageCommitSchema })
 const treeResponseSchema = z.object({ sha: z.string(), truncated: z.literal(false), tree: z.array(z.unknown()) })
 const treeEntrySchema = z.object({
 	path: z.string(),
@@ -74,6 +76,42 @@ export class GitHubMetadataClient {
 		stage: GitHubMetadataStage,
 	): Promise<string> {
 		return (await this.readCommit(repository, ref, token, signal, stage)).sha
+	}
+
+	/** The message of an exact commit. */
+	async commitMessage(repository: SourceRepository, commitSha: string, token: string | undefined, signal: AbortSignal): Promise<string> {
+		if (!OBJECT_ID_PATTERN.test(commitSha)) throw rejected('resolve')
+		const parsed = messageCommitSchema.safeParse(
+			await this.requestJson(`${prefix(repository)}/commits/${commitSha}`, token, signal, 'resolve', GITHUB_COMMIT_MAX_RESPONSE_BYTES),
+		)
+		if (!parsed.success || parsed.data.sha !== commitSha) throw rejected('resolve')
+		return parsed.data.commit.message
+	}
+
+	/**
+	 * Whether an exact commit is reachable from a branch or tag (its short name), with the commit's message: one compare of
+	 * the commit with the branch, which is ahead of it or identical exactly when it holds the commit.
+	 */
+	async reachableFrom(
+		repository: SourceRepository,
+		commitSha: string,
+		head: string,
+		token: string | undefined,
+		signal: AbortSignal,
+	): Promise<{ readonly reachable: boolean; readonly message: string }> {
+		if (!OBJECT_ID_PATTERN.test(commitSha) || !safeRefName(head)) throw rejected('resolve')
+		// One commit per page: only the status and the base commit are read. The files still come, so the bound is the tree's.
+		const parsed = compareSchema.safeParse(
+			await this.requestJson(
+				`${prefix(repository)}/compare/${commitSha}...${head.split('/').map(encodeURIComponent).join('/')}?per_page=1`,
+				token,
+				signal,
+				'resolve',
+				GITHUB_TREE_MAX_RESPONSE_BYTES,
+			),
+		)
+		if (!parsed.success || parsed.data.base_commit.sha !== commitSha) throw rejected('resolve')
+		return { reachable: parsed.data.status === 'ahead' || parsed.data.status === 'identical', message: parsed.data.base_commit.commit.message }
 	}
 
 	/**
@@ -340,4 +378,9 @@ function linkedController(...signals: AbortSignal[]): AbortController {
 
 function rejected(stage: GitHubMetadataStage): SourceFailure {
 	return new SourceFailure('archive_rejected', stage)
+}
+
+/** A branch or tag name as a compare path takes it: no empty, `.` or `..` segment, and no `...` that would split the range. */
+function safeRefName(name: string): boolean {
+	return name !== '' && !name.includes('...') && name.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..')
 }

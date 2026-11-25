@@ -1,7 +1,7 @@
 import type { EndpointKind, EndpointMethod } from '@fabrika/auth-core'
 import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
 import { z } from 'zod'
-import type { ApprovalCategory, ApprovalPolicy, ReviewReason } from './approval-policy.js'
+import type { ApprovalCategory, ApprovalPolicy, ApprovalSettings, ReviewReason } from './approval-policy.js'
 
 export * from './access.js'
 export * from './builder-bootstrap.js'
@@ -271,6 +271,8 @@ export interface AppEnvDto {
 	approvalCategories: ApprovalCategory[]
 	/** What lets a change of each category through while the environment is protected (ADR-0083 §3); `STRICT_POLICY` unless someone chose otherwise. */
 	approvalPolicy: ApprovalPolicy
+	/** The settings beside the modes (ADR-0083 §2); `STRICT_SETTINGS` unless someone chose otherwise. */
+	approvalSettings: ApprovalSettings
 	/** The run whose snapshot is this environment's active access; null until a run publishes one. */
 	publishedRunId: string | null
 	/**
@@ -655,7 +657,19 @@ export interface RunDto {
 	finishedAt: number | null
 	/** When someone asked to cancel the run; a run that finished with it set was cancelled, unless it succeeded first. */
 	cancelRequestedAt: number | null
+	/**
+	 * Where a person decides the run, `<console>/approvals/<run id>`: while it waits for approval, and from its creation for
+	 * a non-person's run of a protected environment, which parks there once classified (ADR-0050 §4). Absent otherwise, and
+	 * where Control knows no console origin.
+	 */
+	approvalUrl?: string
+	/** When a parked run expires unless a person decided it (ADR-0050 §4); absent when it waits for no decision. */
+	approvalDeadline?: number
+	/** Why a run failed without deploying: a person refused it, or nobody decided it before its deadline. */
+	failureCause?: RunFailureCause
 }
+
+export type RunFailureCause = 'rejected' | 'expired'
 
 /** What a change line is about (ADR-0050 §3). */
 export const CHANGE_SUBJECT_KINDS = [
@@ -778,10 +792,39 @@ export interface ApprovalDto {
 	 */
 	approval: { principalId: string; label: string; approvedAt: number; holds: boolean } | null
 	/**
+	 * Two different people decide the run (`approvers: 2`): the first one's approval, on these digests, while the run waits
+	 * for the second. Absent otherwise.
+	 */
+	partialApproval?: { principalId: string; label: string; approvedAt: number }
+	/** How many people decide the run: the most any of its waiting categories asks for (ADR-0083 §8). */
+	approvers: 1 | 2
+	/** When the parked run expires unless decided; absent once decided, and for a run parked before deadlines existed until maintenance sets one. */
+	deadline?: number
+	/** A non-person asked for the deploy (ADR-0050 §4): who, and the commit. Absent for any other run. */
+	request?: DeployRequestDto
+	/**
 	 * The newer run of the environment whose success stopped this one before it started: an older run never deploys over
 	 * a newer one (ADR-0050 §6). Only on one approval read, of a run that failed without starting.
 	 */
 	supersededBy?: string
+}
+
+/** Who asked to deploy a protected environment, and what (ADR-0050 §4). Text the agent wrote is marked so by its field. */
+export interface DeployRequestDto {
+	/** The person the credential acts for, or the service principal that holds it. */
+	principal: { id: string; type: string; label: string }
+	/** `oauth`: an OAuth client acting for the person (`clientId`); `key`: an API key or another bearer. */
+	credential: 'oauth' | 'key'
+	/** The OAuth client's id (its metadata URL); the client wrote it, so it is the agent's text. */
+	clientId?: string
+	/** The commit asked for: always a 40-character SHA. */
+	commitSha: string
+	/** The commit's message as the source answered it, cut to 4096 characters: the agent's text. Null when it was not read. */
+	commitMessage: string | null
+	/** The commit the environment runs now, from its last succeeded run; null when none ran. */
+	runningCommitSha: string | null
+	/** A compare of the running commit with the requested one, on the source's own site; null when there is nothing to compare. */
+	compareUrl: string | null
 }
 
 /** Approve or refuse one parked run. The digests are the ones the approver read; a reclassified run refuses them. */
@@ -799,6 +842,8 @@ export interface SetEnvironmentProtectionRequest {
 	protected: boolean
 	/** The mode of each category while protected; omitted keeps the stored choice. A mode the category does not take is a 400. */
 	policy?: ApprovalPolicy
+	/** The settings beside the modes; omitted keeps the stored ones. A value out of its bounds is a 400. */
+	settings?: ApprovalSettings
 }
 
 export interface TriggerDeployRequest {
