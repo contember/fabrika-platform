@@ -15,7 +15,7 @@ import type {
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import type { EcsNetwork, EcsService } from '../aws/ecs'
+import type { EcsNetwork, EcsService, EcsServiceConnect } from '../aws/ecs'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec, awsNamespaceTargetCodec } from '../codecs'
 import {
@@ -97,6 +97,7 @@ class Recorder implements ProviderRunEvents {
 class Fake {
 	readonly calls: string[] = []
 	readonly networks: EcsNetwork[] = []
+	readonly connects: EcsServiceConnect[] = []
 	readonly parameters = new Map<string, string>([
 		[`${ENV_PATH}/${OLDEST}.API_TOKEN`, 'oldest'],
 		[`${ENV_PATH}/${OLDER}.API_TOKEN`, 'older'],
@@ -174,9 +175,10 @@ class Fake {
 				this.calls.push(`createService ${create.cluster}/${create.service}`)
 				return { ...this.service(), taskDefinitionArn: create.taskDefinitionArn }
 			},
-			updateService: async (address, taskDefinitionArn, network) => {
+			updateService: async (address, taskDefinitionArn, network, serviceConnect) => {
 				this.calls.push(`updateService ${address.cluster}/${address.service}`)
 				this.networks.push(network)
+				this.connects.push(serviceConnect)
 				return { ...this.service(), taskDefinitionArn }
 			},
 			describeService: async () => this.service(),
@@ -380,6 +382,8 @@ describe('the AWS control provider', () => {
 		const fake = new Fake()
 		expect((await fake.provider().deploy(deployInput())).state).toBe('succeeded')
 		expect(fake.networks).toEqual([{ subnets: network.subnets, securityGroups: [SECURITY_GROUP], publicIp: true }])
+		// Published in its namespace's Service Connect namespace under its derived discovery name, for the proxy.
+		expect(fake.connects).toEqual([{ namespaceArn: SERVICE_CONNECT, discoveryName: 'e5-notes-prod', port: 3000 }])
 		// A network of another form fails the composition, before any environment is deployed.
 		const broken = new Fake()
 		expect(() => createAwsControlProvider({ ...broken.options(), network: { ...network, subnets: [] } })).toThrow('aws: the installation network')
@@ -438,6 +442,7 @@ describe('the AWS control provider', () => {
 			buildRoleArn: 'arn:aws:iam::123456789012:role/fabrika/apps/notes_prod_build',
 			buildLogGroup: '/fabrika/apps/notes/prod/build',
 			stackName: 'fabrika-app-5-notes-prod',
+			discoveryName: 'e5-notes-prod',
 		})
 		// A hyphen moved between the id and the name derives other names, because `_` and `/` join them.
 		const a = awsEnvironmentResources('a-b', 'c', '123456789012')
@@ -453,12 +458,17 @@ describe('the AWS control provider', () => {
 			'buildRoleArn',
 			'buildLogGroup',
 			'stackName',
+			'discoveryName',
 		]
 		for (const key of keys) {
 			expect(a[key]).not.toBe(b[key])
 		}
 		expect(() => awsEnvironmentResources('notes', 'prod_x', '123456789012')).toThrow('not one this provider names')
 		expect(() => awsEnvironmentResources('notes/x', 'prod', '123456789012')).toThrow('not one this provider names')
+		// A hyphen at either end would end the discovery name with one, which no DNS label does: refused where names are derived.
+		expect(() => awsEnvironmentResources('notes', 'prod-', '123456789012')).toThrow('not one this provider names')
+		expect(() => awsEnvironmentResources('-notes', 'prod', '123456789012')).toThrow('not one this provider names')
+		expect(awsEnvironmentResources('n', 'p', '123456789012').discoveryName).toBe('e1-n-p')
 		expect(() => awsEnvironmentResources('n'.repeat(30), 'p'.repeat(30), '123456789012')).toThrow('too long')
 	})
 

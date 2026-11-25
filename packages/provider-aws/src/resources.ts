@@ -6,9 +6,9 @@
 export const AWS_KEPT_IMAGES = 20
 /**
  * An application id or environment name the derived names take: no `_`, `/` or `.`, which the names join them with,
- * so no two environments derive one name.
+ * so no two environments derive one name, and no `-` at either end, so the discovery name it ends is a DNS label.
  */
-const NAME_PART = /^[a-z0-9][a-z0-9-]{0,62}$/
+const NAME_PART = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
 /** An IAM role's name holds at most 64 characters. */
 const MAX_ROLE_NAME = 64
 
@@ -26,6 +26,11 @@ export interface AwsEnvironmentResources {
 	readonly buildLogGroup: string
 	/** The CloudFormation stack that holds the environment's resources (`awsEnvironmentStack`). */
 	readonly stackName: string
+	/**
+	 * The name the service is published under in its namespace's Service Connect namespace, and the host its proxy
+	 * reaches it at: `e<length of app>-<app>-<env>`, a DNS label (the service's own name holds `_`, which none does).
+	 */
+	readonly discoveryName: string
 }
 
 /**
@@ -54,5 +59,7 @@ export function awsEnvironmentResources(appId: string, env: string, accountId: s
 		buildRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_build`,
 		buildLogGroup: `/fabrika/apps/${appId}/${env}/build`,
 		stackName: `fabrika-app-${appId.length}-${appId}-${env}`,
+		// The role name's bound above keeps it within a DNS label's 63 characters.
+		discoveryName: `e${appId.length}-${appId}-${env}`,
 	}
 }

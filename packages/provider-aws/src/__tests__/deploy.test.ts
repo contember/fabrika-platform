@@ -7,7 +7,7 @@
 import type { DeployStepResult, JsonValue, ProviderRunEvents } from '@fabrika/provider-contract'
 import { describe, expect, setSystemTime, test } from 'bun:test'
 import type { CodeBuildStatus } from '../aws/codebuild'
-import type { EcsNetwork, EcsService, EcsServiceDeploymentStatus } from '../aws/ecs'
+import type { EcsNetwork, EcsService, EcsServiceConnect, EcsServiceDeploymentStatus } from '../aws/ecs'
 import type { S3PartWriter } from '../aws/s3'
 import { AwsError } from '../aws/transport'
 import { awsDeploy, type AwsDeployInput } from '../deploy'
@@ -24,6 +24,11 @@ const REPOSITORY_URI = '123456789012.dkr.ecr.eu-central-1.amazonaws.com/fabrika/
 const DIGEST = `sha256:${'a'.repeat(64)}`
 const TASK = (n: number) => `arn:aws:ecs:eu-central-1:123456789012:task/fabrika-apps/${String(n).repeat(32)}`
 const NETWORK = { subnets: ['subnet-0123456789abcdef0'], securityGroups: ['sg-0123456789abcdef0'], publicIp: false }
+const CONNECT = {
+	namespaceArn: 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-abcdefghij123456',
+	discoveryName: 'e5-notes-prod',
+	port: 3000,
+}
 const PARAMETER = `/fabrika/main/builds/${TOKEN}/source-url`
 
 const throttled = (operation: string) => new AwsError(operation, 'ThrottlingException', 400, null, true)
@@ -48,6 +53,8 @@ class FakeAws {
 	lagAfterCreate = 0
 	/** The networks a create, an update and each init task were sent. */
 	readonly networks: EcsNetwork[] = []
+	/** The Service Connect configurations a create and an update were sent. */
+	readonly connects: EcsServiceConnect[] = []
 	logPages: { readonly message: string; readonly cursor: string; readonly atEnd: boolean }[] = [
 		{ message: 'Step 1/9 : FROM oven/bun\nStep 2/9 : RUN bun install\n', cursor: 'f/2', atEnd: false },
 	]
@@ -99,12 +106,14 @@ class FakeAws {
 				return { arn: this.registered === 1 ? REVISION : INIT_REVISION, family: definition.family, revision: 42 }
 			},
 			createService: async (create) => {
+				this.connects.push(create.serviceConnect)
 				this.hit('createService', `createService ${create.clientToken} ${create.taskDefinitionArn} ${create.desiredCount}`)
 				this.networks.push(create.network)
 				this.serviceState = 'active'
 				return { ...this.service(), taskDefinitionArn: create.taskDefinitionArn, currentDeploymentArn: this.createDeployment }
 			},
-			updateService: async (_address, taskDefinitionArn, network) => {
+			updateService: async (_address, taskDefinitionArn, network, serviceConnect) => {
+				this.connects.push(serviceConnect)
 				this.hit('updateService', `updateService ${taskDefinitionArn}`)
 				this.networks.push(network)
 				return { ...this.service(), taskDefinitionArn, currentDeploymentArn: DEPLOYMENT }
@@ -236,6 +245,7 @@ const deploy = (aws: FakeAws, events: Recorder, change: Partial<AwsDeployInput> 
 			tags: { 'fabrika:app': 'notes' },
 		},
 		network: NETWORK,
+		serviceConnect: CONNECT,
 		clients: aws.clients,
 		source: { upload: async (parts) => parts.complete({ last: new Uint8Array([1]), parts: 1, bytes: 1 }, new AbortController().signal) },
 		events,
@@ -300,6 +310,8 @@ describe('awsDeploy', () => {
 		])
 		// The init tasks and the update run in the network the deploy was handed, never one read back from the service.
 		expect(aws.networks).toEqual([NETWORK, NETWORK, NETWORK])
+		// The update publishes the service in its namespace's Service Connect namespace, as the create does.
+		expect(aws.connects).toEqual([CONNECT])
 		// The source URL went to its parameter, and the parameter is gone again.
 		expect(aws.parameters.size).toBe(0)
 		expect(events.lines).toContain('  │ Step 1/9 : FROM oven/bun')
@@ -324,6 +336,7 @@ describe('awsDeploy', () => {
 			`describeServiceDeployment ${DEPLOYMENT}`,
 		])
 		expect(aws.networks).toEqual([NETWORK, NETWORK, NETWORK])
+		expect(aws.connects).toEqual([CONNECT])
 		// Recorded before the create as before an update, and marked a create: from there the run is settled by polling.
 		expect(events.checkpoints.at(-2)).toEqual({
 			buildToken: TOKEN,
@@ -590,6 +603,14 @@ describe('awsDeploy', () => {
 		expect(stepOf(result, 'rollout')).toMatchObject({ status: 'failed' })
 		expect(aws.calls.some((call) => call.startsWith('stopBuild'))).toBe(false)
 		expect(result.checkpoint).toMatchObject({ serviceUpdateRequested: true, deploymentArn: DEPLOYMENT })
+	})
+
+	test('a run handed no Service Connect namespace fails its update before it records the submission', async () => {
+		const aws = new FakeAws()
+		const result = await deploy(aws, new Recorder(), { serviceConnect: null })
+		expect(stepOf(result, 'update')).toMatchObject({ status: 'failed', error: 'aws: the deploy has no Service Connect namespace for its service' })
+		expect(aws.calls.some((call) => call.startsWith('updateService') || call.startsWith('createService'))).toBe(false)
+		expect(result.checkpoint).not.toHaveProperty('serviceUpdateRequested')
 	})
 
 	test('a dry run calls nothing', async () => {

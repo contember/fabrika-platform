@@ -32,7 +32,7 @@ import {
 	type ProviderRegistration,
 } from '@fabrika/provider-contract'
 import type { CloudFormationClient } from './aws/cloudformation'
-import type { EcsClient } from './aws/ecs'
+import { type EcsClient, SERVICE_CONNECT_ARN } from './aws/ecs'
 import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
@@ -48,7 +48,6 @@ const MAX_STACK_NAME = 128
 const PROXY_SECURITY_GROUP_OUTPUT = 'ProxySecurityGroupId'
 const SERVICE_CONNECT_OUTPUT = 'ServiceConnectNamespaceArn'
 const SECURITY_GROUP_ID = /^sg-[0-9a-f]{8,17}$/
-const SERVICE_CONNECT_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:servicediscovery:[a-z0-9-]{1,32}:\d{12}:namespace\/ns-[a-z0-9]{1,64}$/
 /** The one preset this version offers. */
 export const AWS_CHEAP_PRESET = 'cheap'
 
