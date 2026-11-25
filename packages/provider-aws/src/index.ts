@@ -35,8 +35,6 @@ export {
 export {
 	AWS_BUILD_IMAGE,
 	AWS_LOG_RETENTION_DAYS,
-	AWS_STACK_POLL_MS,
-	AWS_STACK_TIMEOUT_MS,
 	awsAppsPermissionsBoundary,
 	type AwsEnvironmentStack,
 	awsEnvironmentStack,
@@ -46,3 +44,12 @@ export {
 	ensureEnvironmentStack,
 	type EnsureEnvironmentStackInput,
 } from './environment-stack'
+export {
+	AWS_CHEAP_PRESET,
+	awsNamespaceCapabilities,
+	type AwsNamespaceOutputs,
+	type AwsNamespaceResources,
+	awsNamespaceResources,
+	awsNamespaceStack,
+} from './namespace'
+export { AWS_STACK_POLL_MS, AWS_STACK_TIMEOUT_MS, type AwsStack, ensureStack, type EnsureStackInput } from './stack'

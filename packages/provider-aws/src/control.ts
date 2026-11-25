@@ -18,8 +18,10 @@
 //   touches a parameter a live revision reads. A run that does not succeed deletes its own; a successful one deletes
 //   the parameters of all but the newest `AWS_KEPT_SECRET_RUNS` earlier runs, which a rollback may still need. A dry
 //   run writes nothing.
-// - No dev environment, no workspace sandbox, no managed secrets capability, no namespaces: Control refuses what a
-//   provider does not offer.
+// - Every environment is placed in a namespace (`namespace.ts`): a deploy reads its namespace's stack and admits its
+//   proxy's group into the environment's own.
+// - No dev environment, no workspace sandbox, no managed secrets capability: Control refuses what a provider does not
+//   offer.
 //
 // UNVERIFIED: that a fresh read of the ECS container credentials endpoint answers a set that outlives the source URL
 // (`AWS_SOURCE_URL_SECONDS`); a set that does not fails the run before the build, never with a URL that dies early.
@@ -52,6 +54,7 @@ import { type AwsClientOptions, awsServiceOrigin } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppArtifact, awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec } from './codecs'
 import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deploy'
 import { awsEnvironmentStack, type AwsInstallationNetwork, checkInstallationNetwork, ensureEnvironmentStack } from './environment-stack'
+import { awsNamespaceCapabilities, checkNamespaceTarget, readNamespaceOutputs } from './namespace'
 import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
 import { AWS_SOURCE_URL_SECONDS, awsRunAttempt, parseAwsCheckpoint } from './run-attempt'
 
@@ -107,7 +110,7 @@ export interface AwsSourcePort {
 /** The calls of one target: the deploy's, and the listing that deletes a secret no longer handed. */
 export type AwsControlClients = Omit<AwsDeployClients, 'credentials' | 'ssm'> & {
 	readonly ssm: Pick<SsmClient, 'putSecret' | 'deleteSecret' | 'listNames'>
-	/** The environment stack's calls (`ensureEnvironmentStack`). */
+	/** The stacks' calls: an environment's (`ensureEnvironmentStack`) and a namespace's (`namespace.ts`). */
 	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'>
 }
 
@@ -347,6 +350,8 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 
 	return {
 		id: AWS_PROVIDER,
+		// Every environment is placed in a namespace: its stack holds the proxy's group, which alone reaches an application.
+		namespaces: awsNamespaceCapabilities({ installation, network, clients: clientsOf(installation), sleep: options.sleep ?? pause }),
 		// The target a registrant submits is replaced by the installation's; nothing in it is theirs to choose.
 		normalizeRegistration: ({ app, environment }) => {
 			if (app.id !== environment.appId) throw new Error('aws: the environment belongs to another application')
@@ -357,6 +362,8 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 		validateAccess: ({ environment, access }) => {
 			refuseUnsupported(access)
 			resourcesOf(environment, targetOf(environment))
+			// A placement of another installation never becomes the approved one either.
+			if (environment.namespace !== undefined) checkNamespaceTarget(environment.namespace, installation)
 		},
 		resolveSource: async (input) => {
 			input.signal.throwIfAborted()
@@ -382,6 +389,11 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			const resources = resourcesOf(input.environment, target)
 			const artifact = artifactOf(input.environment)
 			const access = refuseUnsupported(input.environment.access)
+			// Every environment is placed in a namespace (Control requires one of a provider with namespaces), whose proxy is
+			// the only way to its application.
+			const namespace = input.environment.namespace
+			if (namespace === undefined) throw new Error('aws: the environment is placed in no namespace')
+			checkNamespaceTarget(namespace, installation)
 			if (!RUN_ID.test(input.runId)) throw new Error('aws: the run id is not one a parameter name carries')
 			const values = awsTaskValues(input)
 			const repository = awsSourceRepository(input.app.source.repoUrl)
@@ -463,11 +475,15 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 				})
 			const log = (line: string): void => input.events.log(line)
 			if (input.dryRun) return { state: (await deployRun(undefined, null)).status, artifactState: 'not_applicable' }
-			// The environment's own resources first: its repository, log groups, roles, build project and security group. Nothing of the run
-			// exists yet, so a stack that does not settle fails the run with nothing to clean up.
+			// The namespace's proxy group, which the environment's group admits: its stack must serve before any deploy into it.
+			const proxy = await readNamespaceOutputs(clients.cloudFormation, namespace, installation, input.signal)
+			// The environment's own resources next: its repository, log groups, roles, build project and security group.
+			// Nothing of the run exists yet, so a stack that does not settle fails the run with nothing to clean up.
 			const stack = await ensureEnvironmentStack({
 				cloudFormation: clients.cloudFormation,
-				stack: awsEnvironmentStack(input.environment.appId, input.environment.env, target, network),
+				stack: awsEnvironmentStack(input.environment.appId, input.environment.env, target, network, {
+					securityGroupId: proxy.proxySecurityGroupId,
+				}),
 				signal: input.signal,
 				sleep: options.sleep ?? pause,
 				log,

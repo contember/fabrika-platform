@@ -4,13 +4,20 @@
 // any call (and before publication) what this version does not deploy. A cancel goes to the shared run.
 
 import { contractDigest } from '@fabrika/auth-core'
-import type { JsonValue, ProviderApprovedAccess, ProviderDeployInput, ProviderEnvironment, ProviderRunEvents } from '@fabrika/provider-contract'
+import type {
+	JsonValue,
+	ProviderApprovedAccess,
+	ProviderDeployInput,
+	ProviderDeploymentNamespace,
+	ProviderEnvironment,
+	ProviderRunEvents,
+} from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { EcsNetwork, EcsService } from '../aws/ecs'
 import { AwsError } from '../aws/transport'
-import { awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec } from '../codecs'
+import { awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec, awsNamespaceTargetCodec } from '../codecs'
 import {
 	type AwsControlClients,
 	type AwsControlProviderOptions,
@@ -45,6 +52,23 @@ const target: AwsAppTarget = {
 const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'], publicIp: true }
 /** The security group the environment's stack names as its output. */
 const SECURITY_GROUP = 'sg-0123456789abcdef9'
+/** The namespace the environment is placed in, and what its stack names. */
+const PROXY_GROUP = 'sg-0123456789abcdef7'
+const SERVICE_CONNECT = 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-abcdefghij123456'
+const NAMESPACE: ProviderDeploymentNamespace = {
+	id: 'shared',
+	env: 'prod',
+	target: {
+		provider: 'aws',
+		version: 1,
+		payload: awsNamespaceTargetCodec.encode({
+			accountId: '123456789012',
+			region: 'eu-central-1',
+			stackName: 'fabrika-ns-6-shared-prod',
+			sizing: 'cheap',
+		}),
+	},
+}
 /** The notes contract without what this version refuses: a database, jobs, file collections. */
 const contract = { ...notesArtifact, tables: {}, jobs: {}, files: {}, fileKinds: {} }
 const access: ProviderApprovedAccess = { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), checker: '0.9.1' }
@@ -55,6 +79,7 @@ const environmentOf = (change: Partial<ProviderEnvironment> = {}): ProviderEnvir
 	target: { provider: 'aws', version: 1, payload: awsAppTargetCodec.encode(target) },
 	artifact: { provider: 'aws', version: 1, payload: awsAppArtifactCodec.encode({ contractDigest: contractDigest(contract), healthPath: '/healthz' }) },
 	access,
+	namespace: NAMESPACE,
 	...change,
 })
 
@@ -82,6 +107,8 @@ class Fake {
 	readonly uploads: string[] = []
 	/** The environment stack's read refused: the deploy fails before anything of the run exists. */
 	stackRefused = false
+	/** The namespace has no stack yet. */
+	namespaceAbsent = false
 	expiresAt: number | undefined = undefined
 	buildStatus: 'succeeded' | 'failed' = 'succeeded'
 	rolloutStatus: 'successful' | 'rollback_successful' = 'successful'
@@ -185,11 +212,17 @@ class Fake {
 		cloudFormation: {
 			findStack: async (name) => {
 				this.calls.push(`findStack ${name}`)
-				if (this.stackRefused) throw new AwsError('ListStacks', 'AccessDenied', 403, null, false)
+				if (this.stackRefused && name.startsWith('fabrika-app-')) throw new AwsError('ListStacks', 'AccessDenied', 403, null, false)
+				if (this.namespaceAbsent && name.startsWith('fabrika-ns-')) return null
 				return { stackId: `arn:aws:cloudformation:eu-central-1:123456789012:stack/${name}/0f1e2d3c`, status: 'CREATE_COMPLETE' }
 			},
-			describeStack: async (stackId) => ({ stackId, status: 'CREATE_COMPLETE', outputs: { SecurityGroupId: SECURITY_GROUP } }),
-			getTemplate: async () => JSON.stringify(awsEnvironmentStack('notes', 'prod', target, network).template),
+			// One answer for both stacks: the environment's outputs and the namespace's.
+			describeStack: async (stackId) => ({
+				stackId,
+				status: 'CREATE_COMPLETE',
+				outputs: { SecurityGroupId: SECURITY_GROUP, ProxySecurityGroupId: PROXY_GROUP, ServiceConnectNamespaceArn: SERVICE_CONNECT },
+			}),
+			getTemplate: async () => JSON.stringify(awsEnvironmentStack('notes', 'prod', target, network, { securityGroupId: PROXY_GROUP }).template),
 			createStack: async () => {
 				throw new Error('the stack exists')
 			},
@@ -281,8 +314,8 @@ describe('the AWS control provider', () => {
 		expect(fake.calls).toContain('ensureRepository fabrika/apps/notes/prod')
 		// The environment's own build project, never one another environment shares.
 		expect(fake.calls).toContain('project fabrika_notes_prod')
-		// Its stack is checked before anything of the run is written.
-		expect(fake.calls[0]).toBe('findStack fabrika-app-5-notes-prod')
+		// Its namespace's stack, then its own, are checked before anything of the run is written.
+		expect(fake.calls.slice(0, 2)).toEqual(['findStack fabrika-ns-6-shared-prod', 'findStack fabrika-app-5-notes-prod'])
 	})
 
 	test('a run that fails before the update deletes its own parameters and leaves every earlier one', async () => {
@@ -298,11 +331,47 @@ describe('the AWS control provider', () => {
 		])
 	})
 
+	test("the environment's group admits its namespace proxy's, read from the namespace's stack before its own", async () => {
+		const fake = new Fake()
+		expect((await fake.provider().deploy(deployInput())).state).toBe('succeeded')
+		expect(fake.calls.slice(0, 2)).toEqual(['findStack fabrika-ns-6-shared-prod', 'findStack fabrika-app-5-notes-prod'])
+	})
+
+	test('a namespace without its stack, another one, or none at all is refused before anything of the run', async () => {
+		const absent = new Fake()
+		absent.namespaceAbsent = true
+		await expect(absent.provider().deploy(deployInput())).rejects.toThrow('the namespace shared has no stack yet; reconcile the namespace')
+		expect(absent.calls).toEqual(['findStack fabrika-ns-6-shared-prod'])
+		expect(absent.envParameters().filter((name) => name.includes(RUN))).toEqual([])
+
+		const foreign = new Fake()
+		const elsewhere: ProviderDeploymentNamespace = {
+			...NAMESPACE,
+			target: {
+				provider: 'aws',
+				version: 1,
+				payload: awsNamespaceTargetCodec.encode({
+					accountId: '999999999999',
+					region: 'eu-central-1',
+					stackName: 'fabrika-ns-6-shared-prod',
+					sizing: 'cheap',
+				}),
+			},
+		}
+		const input = deployInput()
+		await expect(foreign.provider().deploy({ ...input, environment: { ...input.environment, namespace: elsewhere } })).rejects.toThrow(
+			'another account or region',
+		)
+		const { namespace: _none, ...placed } = input.environment
+		await expect(foreign.provider().deploy({ ...input, environment: placed })).rejects.toThrow('placed in no namespace')
+		expect(foreign.calls).toEqual([])
+	})
+
 	test('a stack that fails fails the deploy before any parameter, upload or build', async () => {
 		const fake = new Fake()
 		fake.stackRefused = true
 		await expect(fake.provider().deploy(deployInput())).rejects.toMatchObject({ code: 'AccessDenied' })
-		expect(fake.calls).toEqual(['findStack fabrika-app-5-notes-prod'])
+		expect(fake.calls).toEqual(['findStack fabrika-ns-6-shared-prod', 'findStack fabrika-app-5-notes-prod'])
 		expect(fake.uploads).toEqual([])
 		expect(fake.envParameters().filter((name) => name.includes(RUN))).toEqual([])
 	})
