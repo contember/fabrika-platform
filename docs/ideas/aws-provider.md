@@ -425,7 +425,12 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     running proxy never reads a manifest newer than its image), requires the manifest, and builds the commit's own
     recipe, `packages/proxy/Dockerfile`, for `linux/amd64`. The recipe is the commit's, not the provider's: a namespace
     keeps its pinned source through a Control upgrade, and only the commit knows how its own proxy is built.
-    Not yet: the proxy service (the recipe `packages/proxy/Dockerfile`, the namespace's pinned proxy source, the upload
+    **The recipe** (built, `packages/proxy/Dockerfile`): what the proxy setup of `zerops.yaml` does, in three stages
+    pinned by digest: Caddy v2.10.2 from its module, `generate-config.ts` over the manifest (the public listener on
+    :8080, the health route alone on :8081, trusted proxy ranges as a build argument), the auth service compiled for
+    `bun-linux-x64-musl`, and an Alpine runtime that runs `start.sh` as an unprivileged user. The build fails on an
+    image whose binary cannot load its libraries or whose configuration Caddy refuses.
+    Not yet: the proxy service (the namespace's pinned proxy source, the upload
     and the build's start with its checkpoints; its ECS service in the Service Connect namespace, on X86_64; `republish`),
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
     application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack

@@ -12,7 +12,8 @@
 	},
 	"scripts": {
 		"typecheck": "tsrs --build tsconfig.test.json",
-		"test": "bun test"
+		"test": "bun test",
+		"proxy-image:check": "bun src/__tests__/helpers/proxy-image-check.ts"
 	},
 	"dependencies": {
 		"zod": "^3.25.76",

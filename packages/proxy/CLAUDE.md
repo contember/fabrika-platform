@@ -24,7 +24,13 @@ bun run build         # generate caddy.json + compile the fabrika-proxy binary (
 bun run build:check   # the same against fixtures/empty.manifest.json
 bun test              # the Caddy config and env; the authorization truth tables live in proxy-core — keep them exhaustive
 FABRIKA_TEST_CADDY_BIN=./caddy bun test src/__tests__/caddy.live.test.ts   # the chain in a real caddy 2.10.2
+bun run --filter @fabrika/provider-aws proxy-image:check   # build `Dockerfile` as the AWS build does (committed tree + a manifest), start it once; needs docker
 ```
+
+`Dockerfile` is the proxy's container image, as a namespace proxy on AWS is built. It lives here rather than in a
+provider because a namespace keeps its pinned proxy commit through a Control upgrade, and only the commit knows how its
+own proxy is built. Its build context is the commit's repository root with the manifest beside it at
+`proxy.manifest.json`. CI's `proxy-image` job builds and starts it on every change.
 
 ## Invariants
 
