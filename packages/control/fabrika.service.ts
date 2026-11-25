@@ -6,11 +6,10 @@
 
 import { defineServiceContract } from '@fabrika/app/service'
 import { type BodyAdmission, FABRIKA_SERVICE_TABLE_DIGEST, installationTableDigest } from '@fabrika/auth-core'
-import { CONTROL_APP_ID, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
+import { CONTROL_APP_ID, CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
 
-/** The MCP endpoint path on the console origin, and the one OAuth scope a client asks for. */
-export const CONTROL_MCP_PATH = '/mcp'
-export const CONTROL_MCP_SCOPE = 'authoring'
+/** The MCP endpoint path on the console origin, and the one OAuth scope a client asks for (`@fabrika/control-contract`). */
+export { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE }
 
 /** RFC 8707 resource URI of the MCP endpoint for a console public origin (no trailing slash). */
 export function controlMcpResource(publicOrigin: string): string {

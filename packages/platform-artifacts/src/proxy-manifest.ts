@@ -14,9 +14,9 @@
 // `src/installation/generated/platform-proxy-manifest.ts` (the tables, as data) — it never reaches this file.
 
 import type { BodyAdmission, InstallationEndpointRow, InstallationEndpointTable } from '@fabrika/auth-core'
-import { CONTROL_ACTIONS, CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
+import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES, CONTROL_MCP_RESOURCE } from '@fabrika/control-contract'
 import { controlSchema } from '@fabrika/control/schema'
-import { CONTROL_MCP_PATH, CONTROL_MCP_SCOPE, controlServiceContract } from '@fabrika/control/service'
+import { controlServiceContract } from '@fabrika/control/service'
 import { IAM_INSTALLATION_SERVICE_OPTIONS, iamServiceContract } from '@fabrika/iam/service'
 import {
 	type PlatformOAuthApp,
@@ -55,23 +55,14 @@ export {
 export const PLATFORM_IAM_APP_ID = 'iam'
 
 /**
- * The console's MCP endpoint (ADR-0049). The `authoring` scope grants only what the MCP tools call;
- * IAM still intersects it with the user's own grants, so a token never exceeds its holder.
+ * The console's MCP endpoint (ADR-0049), as `@fabrika/control-contract` declares it for every provider. IAM still
+ * intersects the `authoring` scope with the user's own grants, so a token never exceeds its holder.
  */
-const CONTROL_MCP_RESOURCE: PlatformOAuthResourceTemplate = {
-	path: CONTROL_MCP_PATH,
-	scopes: [CONTROL_MCP_SCOPE],
-	defaultScopes: [CONTROL_MCP_SCOPE],
-	scopeGrants: [{
-		scope: CONTROL_MCP_SCOPE,
-		actions: [
-			CONTROL_ACTIONS.SOURCE_WORKSPACE_READ,
-			CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE,
-			CONTROL_ACTIONS.SOURCE_PULL_REQUEST_CREATE,
-			CONTROL_ACTIONS.DEPLOY_TRIGGER,
-			CONTROL_ACTIONS.DEPLOY_READ,
-		],
-	}],
+const CONTROL_MCP_RESOURCE_TEMPLATE: PlatformOAuthResourceTemplate = {
+	path: CONTROL_MCP_RESOURCE.path,
+	scopes: [CONTROL_MCP_RESOURCE.scope],
+	defaultScopes: [CONTROL_MCP_RESOURCE.scope],
+	scopeGrants: [{ scope: CONTROL_MCP_RESOURCE.scope, actions: CONTROL_MCP_RESOURCE.actions }],
 }
 
 /** The command-line client's resources on the console, as `@fabrika/control-contract` declares them for every provider. */
@@ -112,7 +103,7 @@ export const PLATFORM_PROXY_APPS: readonly PlatformProxyApp[] = [
 		oauth: {
 			resources: CONTROL_CLI_RESOURCE_TEMPLATES,
 			table: serviceTable(controlServiceContract({ mcp: false, cli: true })),
-			mcp: { resource: CONTROL_MCP_RESOURCE, table: serviceTable(controlServiceContract({ mcp: true, cli: true })) },
+			mcp: { resource: CONTROL_MCP_RESOURCE_TEMPLATE, table: serviceTable(controlServiceContract({ mcp: true, cli: true })) },
 		},
 	},
 	{ id: OPERATIONS_APP_ID, service: 'operations', port: 8083, upstream: 'operations:3000', table: serviceTable(OPERATIONS_PUBLIC_SERVICE) },

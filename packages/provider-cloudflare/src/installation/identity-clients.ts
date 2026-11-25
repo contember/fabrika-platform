@@ -13,9 +13,9 @@ const PLATFORM_APPS: readonly string[] = [IAM_APP_ID, CONTROL_APP_ID, OPERATIONS
 
 /**
  * The client list of a Cloudflare installation, parsed once where it enters a stage. Unset or empty registers none.
- * Identity-bound external clients are supported (ADR-0084). MCP authoring is not supported on Cloudflare yet, so any
- * other entry is refused as unsupported; so are an identity app that is a platform service's and an identity resource
- * on one of `platformHosts`. Every refusal comes before the stage deploys anything.
+ * An identity-bound external client signs people in (ADR-0084); any other client is an MCP client and turns MCP
+ * authoring on (ADR-0049). An identity app that is a platform service's, and an identity resource on one of
+ * `platformHosts`, are refused before the stage deploys anything.
  */
 export const parseCloudflareIdentityClients = (raw: string | undefined, platformHosts: readonly string[]): readonly McpClient[] => {
 	if (raw === undefined || raw.trim() === '') return []
@@ -25,13 +25,8 @@ export const parseCloudflareIdentityClients = (raw: string | undefined, platform
 	} catch (error) {
 		throw new Error(`${MCP_CLIENTS_VARIABLE}: ${error instanceof Error ? error.message : 'unreadable'}`)
 	}
-	for (const { clientId, provider, identity } of clients) {
-		if (provider !== 'external' || identity === undefined) {
-			throw new Error(
-				`${MCP_CLIENTS_VARIABLE}: client ${clientId} is not supported on Cloudflare yet. A Cloudflare installation does not `
-					+ "support MCP authoring yet; it registers only identity-bound clients { provider: 'external', identity: { app, resource, roles? } }",
-			)
-		}
+	for (const { clientId, identity } of clients) {
+		if (identity === undefined) continue
 		if (PLATFORM_APPS.includes(identity.app)) {
 			throw new Error(`${MCP_CLIENTS_VARIABLE}: client ${clientId}: its identity app \`${identity.app}\` is a platform service's`)
 		}

@@ -6,7 +6,7 @@
 // them as plaintext. The Custom Domain route comes from `ctx.domain` (`FABRIKA_IAM_HOSTNAME` in the
 // standalone Oblaka adapter).
 
-import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
+import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES, CONTROL_MCP_RESOURCE } from '@fabrika/control-contract'
 import { type EmailTransportConfig, readEmailTransportConfig } from '@fabrika/email'
 import { isHttpOrigin } from '@fabrika/email/platform'
 import { builtinEmailProviders } from '@fabrika/email/providers'
@@ -20,7 +20,7 @@ import {
 	type ResourceContext,
 	Worker,
 } from '@fabrika/provider-cloudflare'
-import { MCP_CLIENTS_VARIABLE, type McpClient, parseCloudflareIdentityClients } from '@fabrika/provider-cloudflare/installation'
+import { MCP_CLIENTS_VARIABLE, mcpAuthoringOn, type McpClient, parseCloudflareIdentityClients } from '@fabrika/provider-cloudflare/installation'
 import { parseOAuthConfig } from './src/oauth-config'
 import { parseAdminAudiences, platformAudiencesFor } from './src/services'
 
@@ -46,8 +46,8 @@ interface RemoteConfig {
 	email: EmailTransportConfig
 	/** Control's public origin, which IAM's mail goes through when set; absent keeps IAM on its own provider. */
 	controlUrl?: string
-	/** The operator's identity-bound external clients (ADR-0084); empty registers none. */
-	identityClients: readonly McpClient[]
+	/** The operator's OAuth clients: identity-bound external ones (ADR-0084) and MCP clients (ADR-0049); empty registers none. */
+	clients: readonly McpClient[]
 }
 
 interface AuthenticationConfig {
@@ -119,8 +119,9 @@ const controlUrl = (source: EnvironmentSource): string | undefined => {
 /**
  * IAM's `OAUTH_CONFIG` on a Cloudflare installation: the command-line client's resources on the console's origin,
  * recomputed on every deploy so a release that changes the presets converges with no other step, and the operator's
- * identity-bound external clients (ADR-0084). No MCP client yet: MCP authoring is not supported on Cloudflare. Without a console origin
- * OAuth stays off. The result passes IAM's own boot parser here, so a value IAM would refuse stops the deploy instead.
+ * clients. With an MCP client, MCP authoring is on and the console's `/mcp` is registered too, as Control's proxy
+ * publishes it from the same list (ADR-0049). Without a console origin OAuth stays off. The result passes IAM's own
+ * boot parser here, so a value IAM would refuse stops the deploy instead.
  */
 const oauthConfig = (control: string | undefined, clients: readonly McpClient[], adminAudiences: string | undefined): string => {
 	if (control === undefined) {
@@ -137,6 +138,7 @@ const oauthConfig = (control: string | undefined, clients: readonly McpClient[],
 		})),
 		client: 'cli',
 	}))
+	if (mcpAuthoringOn(clients)) resources.push(mcpResource(control))
 	const config = JSON.stringify({ clients, resources })
 	parseOAuthConfig(config, platformAudiencesFor(parseAdminAudiences(adminAudiences)))
 	if (new TextEncoder().encode(config).length > WORKER_VARIABLE_MAX_BYTES) {
@@ -145,12 +147,20 @@ const oauthConfig = (control: string | undefined, clients: readonly McpClient[],
 	return config
 }
 
+/** The console's `/mcp`, served to the managed clients only (no `client: 'cli'`), under its one scope `authoring`. */
+const mcpResource = (control: string): OAuthResourceDto => ({
+	app: CONTROL_APP_ID,
+	resource: `${control}${CONTROL_MCP_RESOURCE.path}`,
+	defaultScopes: [CONTROL_MCP_RESOURCE.scope],
+	scopeGrants: [{ scope: CONTROL_MCP_RESOURCE.scope, permissions: CONTROL_MCP_RESOURCE.actions.map((action) => ({ action })) }],
+})
+
 const remoteConfig = (env: string, domain: string | undefined, source: EnvironmentSource): RemoteConfig => {
 	const authentication = authenticationConfig(source)
 	const email = emailConfig(source)
 	const control = controlUrl(source)
 	const operationsHost = source['OPERATIONS_HOSTNAME']
-	const identityClients = parseCloudflareIdentityClients(source[MCP_CLIENTS_VARIABLE], [
+	const clients = parseCloudflareIdentityClients(source[MCP_CLIENTS_VARIABLE], [
 		...(domain === undefined || domain === '' ? [] : [domain]),
 		...(control === undefined ? [] : [new URL(control).hostname]),
 		...(operationsHost === undefined || operationsHost === '' ? [] : [operationsHost]),
@@ -185,7 +195,7 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 		oidcClientId: oidcClientId ?? '',
 		email,
 		...(control === undefined ? {} : { controlUrl: control }),
-		identityClients,
+		clients,
 	}
 }
 
@@ -215,7 +225,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
-		OAUTH_CONFIG: oauthConfig(config.controlUrl, config.identityClients, config.adminAudiences),
+		OAUTH_CONFIG: oauthConfig(config.controlUrl, config.clients, config.adminAudiences),
 		// Only when named: an empty ADMIN_AUDIENCES means "no JWT may administer", so a `?? ''`
 		// default would lock the console out of every install instead of falling back to its app id.
 		...(config.adminAudiences === undefined ? {} : { ADMIN_AUDIENCES: config.adminAudiences }),

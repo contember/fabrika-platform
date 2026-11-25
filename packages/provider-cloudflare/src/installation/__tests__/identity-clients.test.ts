@@ -44,20 +44,18 @@ describe('the client list of a Cloudflare installation', () => {
 		await registerIdentityApps({ iam: undefined, clients: [], dryRun: false, reconcile: () => Promise.reject(new Error('called')) })
 	})
 
-	test('refuses an MCP client as not supported on Cloudflare yet', () => {
+	test('accepts an MCP client beside an identity-bound one, and reconciles roles for the identity-bound one alone', async () => {
 		const claude = {
 			provider: 'claude',
 			clientId: 'https://claude.ai/oauth/mcp-oauth-client-metadata',
 			redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
 		}
-		expect(() => parseCloudflareIdentityClients(JSON.stringify([SONDA, claude]), HOSTS)).toThrow(
-			'FABRIKA_PLATFORM_MCP_CLIENTS_JSON: client https://claude.ai/oauth/mcp-oauth-client-metadata is not supported on Cloudflare yet',
-		)
-	})
-
-	test('refuses an external client without an identity binding', () => {
-		const { identity: _identity, ...unbound } = SONDA
-		expect(() => parseCloudflareIdentityClients(JSON.stringify([unbound]), HOSTS)).toThrow('is not supported on Cloudflare yet')
+		const { identity: _identity, ...authoring } = { ...SONDA, clientId: 'https://agent.example.org/oauth/client.json' }
+		const clients = parseCloudflareIdentityClients(JSON.stringify([SONDA, claude, authoring]), HOSTS)
+		expect(clients.map(({ clientId }) => clientId)).toEqual([SONDA.clientId, claude.clientId, authoring.clientId])
+		const apps: string[] = []
+		await registerIdentityApps({ iam: IAM, clients, dryRun: false, reconcile: async ({ app }) => void apps.push(app) })
+		expect(apps).toEqual(['sonda'])
 	})
 
 	test("refuses an identity app that is a platform service's: its roles would rewrite that vocabulary", () => {
