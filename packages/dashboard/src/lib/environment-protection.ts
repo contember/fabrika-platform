@@ -283,12 +283,15 @@ export function parkedRunsAt(approvals: readonly ApprovalDto[], appId: string, e
 }
 
 /**
- * Why a change of protection was not saved: a passkey prompt's failure as the approval pages say it, a refusal of a change
- * that took a passkey in Control's words (the passkey check is what refused it), and any other in the console's.
+ * Why a change of protection was not saved: a passkey prompt's failure as the approval pages say it, and Control's own
+ * words for a refusal, or for a conflict of a change that took a passkey, because the passkey check or IAM may be what
+ * refused it, whatever this page expected. Any other failure in the console's words.
  */
 export function protectionChangeFailure(cause: unknown, env: string, stepUp: StepUpMode): DecisionFailure {
 	if (cause instanceof NoPasskeyError || cause instanceof PasskeyCeremonyError || cause instanceof DOMException) return decisionFailure(cause)
-	if (stepUp === 'webauthn' && cause instanceof RpcError && cause.httpStatus === 403) return { message: cause.message, noPasskey: false }
+	if (cause instanceof RpcError && (cause.httpStatus === 403 || (stepUp === 'webauthn' && cause.httpStatus === 409))) {
+		return { message: cause.message, noPasskey: false }
+	}
 	return { message: protectionFailure(cause, env), noPasskey: false }
 }
 

@@ -30,7 +30,6 @@ import {
 	presetOf,
 	PRESETS,
 	protectionChangeFailure,
-	protectionFailure,
 	protectionStepUp,
 	protectionToggle,
 	requestTtl,
@@ -87,7 +86,7 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 	const access = useConsoleAccess()
 	const approver = mayDo(access, CONTROL_ACTIONS.ACCESS_APPROVE, { app: appId, env: env.env })
 	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
+	const [error, setError] = useState<DecisionFailure | null>(null)
 	const [confirming, setConfirming] = useState(false)
 	// Null until Control lists them, or when it does not: the dialog then states the rule without a count.
 	const [parked, setParked] = useState<readonly ApprovalDto[] | null>(null)
@@ -98,7 +97,7 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 			await setEnvironmentProtection(api, env, true, undefined, credentials)
 			onDone()
 		} catch (cause) {
-			setError(protectionFailure(cause, env.env))
+			setError(protectionChangeFailure(cause, env.env, protectionStepUp(env, true)))
 		} finally {
 			setBusy(false)
 		}
@@ -145,7 +144,11 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 							? 'A deploy that widens access waits for a person with access.approve.'
 							: 'A deploy that widens access publishes at once.'}
 					</span>
-					{error && <div className="error-text small" role="alert">{error}</div>}
+					{error !== null && (
+						<div className="error-text small" role="alert">
+							<DecisionFailureText failure={error} />
+						</div>
+					)}
 					{env.protected && (approver
 						? <PolicyEditor appId={appId} env={env} onDone={onDone} credentials={credentials} />
 						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings)}</span>)}

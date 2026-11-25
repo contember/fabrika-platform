@@ -435,8 +435,21 @@ describe('a change that weakens a passkey on deciding', () => {
 			message: 'the passkey check failed, so nothing was changed; try again',
 			noPasskey: false,
 		})
-		expect(protectionChangeFailure(refusal('an access change is approved in the console, not with a key'), 'prod', 'none')).toEqual({
-			message: 'Only a person signed in to the console changes approvals, never a key or an agent.',
+		// A page that expected no passkey, while Control holds that the change takes one, reads Control's reason too.
+		expect(protectionChangeFailure(refusal('this change takes a passkey: confirm it with one of your passkeys'), 'prod', 'none')).toEqual({
+			message: 'this change takes a passkey: confirm it with one of your passkeys',
+			noPasskey: false,
+		})
+	})
+
+	test("a conflict on a change that takes a passkey reads in Control's words; one without, as a running deploy", () => {
+		const conflict = (message: string) => new RpcError({ type: 'conflict', message, httpStatus: 409 })
+		expect(protectionChangeFailure(conflict('this change takes no passkey'), 'prod', 'webauthn')).toEqual({
+			message: 'this change takes no passkey',
+			noPasskey: false,
+		})
+		expect(protectionChangeFailure(conflict('a deployment is running; retry'), 'prod', 'none')).toEqual({
+			message: 'A deploy of prod is running. Approvals change between deploys: try again when it finishes.',
 			noPasskey: false,
 		})
 	})
