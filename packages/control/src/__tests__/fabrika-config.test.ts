@@ -1,3 +1,4 @@
+import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { CONTROL_ACTIONS, CONTROL_APP_ID, CONTROL_SCOPES } from '@fabrika/control-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import {
@@ -22,7 +23,8 @@ import type {
 	controlEmailVars as ControlEmailVars,
 	controlPipelineSecrets as ControlPipelineSecrets,
 } from '../../fabrika.config'
-import { controlServiceContract, controlServiceDigest } from '../../fabrika.service'
+import { CONTROL_MCP_SCOPE, controlServiceContract, controlServiceDigest } from '../../fabrika.service'
+import { APP_AGENT_SKILL_DEFINE, parseAppAgentSkill } from '../mcp/app-rules'
 
 // fabrika's OWN deploy surface (packages/control/fabrika.config.ts). These
 // tests prove: defineApp accepts fabrika's config, the resource graph materializes with fabrika's full
@@ -241,6 +243,56 @@ describe('defineApp(control config)', () => {
 		expect(localEntry.oauthResources).toBeUndefined()
 		expect(localEntry.endpoints.some((row) => row.oauth !== null)).toBe(false)
 		expect(application(local).options.vars?.['FABRIKA_SERVICE_TABLE_DIGEST']).toBe(controlServiceDigest({ mcp: false, cli: false }))
+	})
+
+	test('with MCP authoring, the console publishes the MCP table and resource, and its Worker serves that table over the embedded skill', () => {
+		const proxy = withEnvironment(
+			{ FABRIKA_IAM_ISSUER: ISSUER },
+			() => buildControlWorker({ env: 'prod', domain: 'control.test.example.com' }, { mcpAuthoring: true }),
+		)
+		const entry = parseProxyManifestJson(proxyManifestJson(proxy) ?? '')?.apps[0]
+		if (entry === undefined || !('installation' in entry)) throw new Error('expected the console installation entry')
+		const mcp = entry.endpoints.find((row) => row.id === 'mcp')
+		expect(mcp?.oauth).toEqual({ scopes: [CONTROL_MCP_SCOPE] })
+		expect(entry.oauthResources?.map((resource) => resource.resource)).toEqual([
+			'https://control.test.example.com/api/rpc',
+			'https://control.test.example.com/operations/api/rpc',
+			'https://control.test.example.com/mcp',
+		])
+		expect(entry.oauthResources?.at(-1)).toEqual({
+			resource: 'https://control.test.example.com/mcp',
+			resourceMetadata: 'https://control.test.example.com/.well-known/oauth-protected-resource/mcp',
+			authorizationServers: [ISSUER],
+			scopesSupported: [CONTROL_MCP_SCOPE],
+		})
+		const app = application(proxy)
+		expect(app.options.vars?.['FABRIKA_SERVICE_TABLE_DIGEST']).toBe(controlServiceDigest({ mcp: true, cli: true }))
+		const embedded = app.options.define?.[APP_AGENT_SKILL_DEFINE]
+		if (embedded === undefined) throw new Error('expected the embedded skill')
+		const skill = parseAppAgentSkill(JSON.parse(embedded))
+		expect(skill.version).toBe(readAppAgentSkill().version)
+		expect(skill.references.map((reference) => reference.topic)).toEqual(readAppAgentSkill().references.map((reference) => reference.topic))
+		expect(readFileSync(join(import.meta.dir, '..', 'index.ts'), 'utf8')).toContain(`declare const ${APP_AGENT_SKILL_DEFINE}: string`)
+	})
+
+	test('MCP authoring is off without a client that is not identity-only, and locally whatever the list says', () => {
+		const identityOnly = JSON.stringify([{
+			provider: 'external',
+			clientId: 'https://ops.example.org/oauth/client.json',
+			redirectUris: ['https://ops.example.org/callback'],
+			identity: { app: 'ops-tool', resource: 'https://ops.example.org' },
+		}])
+		for (const clients of ['', identityOnly]) {
+			const proxy = withEnvironment(
+				{ FABRIKA_IAM_ISSUER: ISSUER, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: clients },
+				() => buildControlWorker({ env: 'prod', domain: 'control.test.example.com' }),
+			)
+			expect(application(proxy).options.vars?.['FABRIKA_SERVICE_TABLE_DIGEST']).toBe(controlServiceDigest({ mcp: false, cli: true }))
+			expect(application(proxy).options.define).toBeUndefined()
+		}
+		const local = application(buildControlWorker({ env: 'local' }, { mcpAuthoring: true }))
+		expect(local.options.vars?.['FABRIKA_SERVICE_TABLE_DIGEST']).toBe(controlServiceDigest({ mcp: false, cli: false }))
+		expect(local.options.define).toBeUndefined()
 	})
 
 	test('a deployed console without an https IAM issuer refuses the deploy', () => {

@@ -12,11 +12,9 @@ seconds-per-commit loop that dev sandboxes give on Zerops. Large.
 ## Problem
 
 The dev environment is Zerops only ([ADR-0049](../decisions/0049-author-applications-through-mcp-in-control.md) rule 9:
-dev sandboxes on a Zerops Box host). Cloudflare has no MCP authoring target at all: its provider
-does not declare `authoring` (`packages/provider-cloudflare/src/control.ts`; Control refuses the flag,
-`packages/control/src/api/registry/environments.ts:190`), so an agent there has no workspace, no stage loop and no
-`bind_dev`, `run_checks` or `reset_dev`. Authoring workspaces on Cloudflare come first; this item adds the fast loop on
-top.
+dev sandboxes on a Zerops Box host). Cloudflare serves authoring workspaces and a stage environment
+(`packages/provider-cloudflare/src/workspace-authoring.ts`), but no `bind_dev`, `run_checks` or `reset_dev`, and each
+`deploy_stage` is a full runner build. This item adds the fast loop on top.
 
 ## Approach / acceptance
 

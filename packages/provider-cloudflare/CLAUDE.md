@@ -412,5 +412,13 @@ Invariants:
   that vocabulary) and an identity resource on a platform host, before the stage deploys. IAM's `fabrika.config.ts`
   writes the list into `OAUTH_CONFIG`; the pair form reconciles their roles after IAM's vocabulary with
   `@fabrika/installation-init`'s `reconcileIdentityApps`, the Zerops deploy's own.
+- **The control provider declares MCP authoring (ADR-0049 rule 9, `src/workspace-authoring.ts`).** Its protected
+  files are `wrangler.json`, `wrangler.jsonc` and `wrangler.toml`. `CLOUDFLARE_ISOLATED_BUILD` is the capability flag
+  `deploy_stage` waits for: `false` until the runner builds a workspace commit in a step that holds no credential and
+  deploys the built bundle without running checkout code; until then the declaration carries
+  `stageDeployRefusal` and Control refuses `deploy_stage` with it. `cloudflareMcpAuthoringOn`
+  (`src/installation/mcp-authoring.ts`) tells Control's config whether the client list turns MCP on, parsed as the
+  platform stage parses it. That parser still refuses a client that is not identity-only, and IAM's config writes no
+  `/mcp` resource yet, so it answers `false` or throws until both change.
 - **Scaffold pushes never deploy.** Both initial and refresh commits use `[skip ci]`; init dispatches the
   workflow explicitly only after it writes the target GitHub Environment.

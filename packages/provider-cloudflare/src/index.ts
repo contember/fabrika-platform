@@ -64,3 +64,4 @@ export {
 } from './proxy'
 export type { CloudflareInstallationProxyTable, CloudflareProxyWorkerOptions } from './proxy'
 export { type AppSchemaParse, parseAppSchema } from './schema'
+export { CLOUDFLARE_ISOLATED_BUILD, CLOUDFLARE_PROTECTED_FILES, CLOUDFLARE_STAGE_DEPLOY_REFUSAL, cloudflareAuthoring } from './workspace-authoring'

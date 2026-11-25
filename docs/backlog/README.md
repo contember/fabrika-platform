@@ -105,7 +105,7 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [218](218-the-skill-names-no-working-one-click-unsubscribe-target.md): The skill's unsubscribe procedure is POST JSON, which refuses a mailbox's RFC 8058 one-click POST.
 - [223](223-terminal-authority-outlives-the-terminal-in-a-membership-change.md): A membership change made on a terminal rests on the terminal's grants and outlives sign-out, release or revoke.
 - [230](230-a-zerops-platform-deploy-rebuilds-every-service.md): A Zerops platform deploy rebuilds all four services every time, and a bring-up compiles Caddy for 5 min.
-- [231](231-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, no `authoring` flag, a bare `forbidden`, `admin` offered for a contract app.
+- [231](231-operator-traps-of-an-mcp-authoring-bring-up.md): MCP authoring bring-up traps: `put` loses bucket provenance, a bare `forbidden`, `admin` offered for a contract app.
 - [232](232-the-platform-build-runs-no-postgres-backed-test.md): No Postgres-backed application test runs on the platform, the leak sweep included; a throwaway Postgres in the build container would run them.
 - [233](233-platform-services-share-postgres-server-sessions.md): On Zerops one Postgres server session serves IAM, Operations and Control in turn; the services connect through pgBouncer on `portTls`; measure its mode, check what leaks between services, and decide whether to connect directly.
 - [224](224-terminal-follow-ups.md): Smaller gaps of terminals: sign-out without `Sec-Fetch-Site`, re-enrolment, sign-out of a personal login.

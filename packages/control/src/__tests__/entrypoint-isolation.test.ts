@@ -216,11 +216,22 @@ describe('entrypoint isolation', () => {
 		}
 	})
 
-	test('only the Bun entrypoint mounts MCP, and the workspace use cases stay provider-neutral', () => {
-		// ADR-0049: the Worker serves no `/mcp`, so the SDK must not enter its bundle.
-		expect([...walk('index.ts').externals]).not.toContain('@modelcontextprotocol/server')
-		expect(walk('index.ts').files).not.toContain('mcp/handler.ts')
+	test('both entrypoints mount MCP, and the workspace use cases stay provider-neutral', () => {
+		// ADR-0049 rule 9: the Worker serves `/mcp` through the same handler as the process.
+		const worker = walk('index.ts')
+		expect([...worker.externals]).toContain('@modelcontextprotocol/server')
+		expect(worker.files).toEqual(expect.arrayContaining(['mcp/handler.ts', 'mcp/route.ts', 'mcp/worker.ts']))
+		// Reading the skill from the package's files and Bun's semver stay on the process side.
+		expect(worker.files).not.toContain('bun/app-rules.ts')
+		expect([...worker.externals]).not.toContain('@fabrika/app/agent-skill')
+		expect(
+			[...walk('mcp/route.ts').externals].filter((specifier) =>
+				PROVIDERS.has(packageOf(specifier)) || PROCESS_ONLY(specifier) || CLOUDFLARE_ONLY(specifier)
+			),
+		)
+			.toEqual([])
 		expect([...walk('zerops/server.ts').externals]).toContain('@modelcontextprotocol/server')
+		expect(walk('zerops/server.ts').files).toContain('bun/app-rules.ts')
 		const workspaces = walk('api/workspaces.ts')
 		expect([...workspaces.externals].filter((specifier) => PROVIDERS.has(specifier) || PROCESS_ONLY(specifier) || CLOUDFLARE_ONLY(specifier)))
 			.toEqual([])

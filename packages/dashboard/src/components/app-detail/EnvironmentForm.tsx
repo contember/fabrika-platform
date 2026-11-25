@@ -30,6 +30,7 @@ export function EnvironmentForm(
 	const [configPath, setConfigPath] = useState(initialConfigPath ?? '')
 	const [manifest, setManifest] = useState('')
 	const [namespaceId, setNamespaceId] = useState(initial?.namespaceId ?? '')
+	const [authoring, setAuthoring] = useState(initial?.authoring ?? false)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const addingZerops = initial === null && provider === 'zerops'
@@ -72,6 +73,8 @@ export function EnvironmentForm(
 				publicOrigin: publicOrigin.trim() === '' ? null : publicOrigin.trim(),
 				crossOrigins: crossOrigins.split(/\r?\n/).map((origin) => origin.trim()).filter((origin) => origin !== ''),
 				triggerRef: triggerRef.trim() === '' ? null : triggerRef.trim(),
+				// Only a change is sent: Control keeps the stored flag otherwise, and refuses it on a protected environment.
+				...(authoring === (initial?.authoring ?? false) ? {} : { authoring }),
 				...resolved,
 			}
 			await api.apps.environments.put({ appId, env: envName.trim(), environment: body })
@@ -188,6 +191,21 @@ export function EnvironmentForm(
 							<p className="hint" id={`${id}-trigger-hint`}>
 								A Git branch, such as deploy/prod, or a tag ref, such as refs/tags/v*. New commits or matching tags trigger a deploy. Leave empty for manual
 								deploys only.
+							</p>
+						</div>
+						<div>
+							<label className="checkbox">
+								<input
+									type="checkbox"
+									checked={authoring}
+									onChange={(event) => setAuthoring(event.target.checked)}
+									aria-describedby={`${id}-authoring-hint`}
+								/>
+								MCP authoring target
+							</label>
+							<p className="hint" id={`${id}-authoring-hint`}>
+								People with workspace grants edit this app through an MCP client and deploy their workspaces here. Use an unprotected stage environment, one
+								per app; production changes only through a reviewed pull request.
 							</p>
 						</div>
 						{(initial !== null || addingZerops) && (

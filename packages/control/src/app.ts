@@ -2,7 +2,7 @@ import type { AuthContext, FetchService, RequestExecutionContext } from '@fabrik
 import { dispatchRpcRequest, serveService, type ServiceHandler } from '@fabrika/app/service'
 import { CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import type { ControlProvider } from '@fabrika/provider-contract'
-import { type ControlEndpointId, controlServiceContract, ControlTableError, controlTableSwitch } from '../fabrika.service'
+import { CONTROL_MCP_PATH, type ControlEndpointId, controlServiceContract, ControlTableError, controlTableSwitch } from '../fabrika.service'
 import { builderPublicResponse } from './builder-bootstrap'
 import { controlRpcRouter } from './control-rpc'
 import { handleDevSource } from './dev/receiver'
@@ -35,8 +35,11 @@ export interface ControlAppContext {
 	readonly request: Request
 }
 
-/** The MCP endpoint (ADR-0049); only the Bun process serves one. */
-export type McpRoute = (request: Request) => Promise<Response>
+/**
+ * The MCP endpoint (ADR-0049). The Bun process builds one for its lifetime and ignores the context; a Worker composes it
+ * per request from that request's env and provider.
+ */
+export type McpRoute = (request: Request, ctx: ControlAppContext) => Promise<Response>
 
 /**
  * Delivery as a first-party service: `serveService` over the console's service contract, which its proxy decides
@@ -83,7 +86,7 @@ export function createControlApp(mcp: McpRoute | null, cli: boolean): FetchServi
 		'operations-rpc': serve(operationsApi),
 		'operations-api-root': notFound,
 		'console': serve((ctx) => ctx.env.ASSETS.fetch(ctx.request)),
-		'mcp': mcp === null ? notFound : serve((ctx) => mcpRequest(mcp, ctx.request)),
+		'mcp': mcp === null ? notFound : serve((ctx) => mcpRequest(mcp, ctx)),
 	}
 	return serveService(controlServiceContract({ mcp: mcp !== null, cli }), handlers, {
 		onError(cause) {
@@ -99,31 +102,38 @@ export function createControlApp(mcp: McpRoute | null, cli: boolean): FetchServi
 /** The console without OAuth, for a caller that serves no authorization server's table. Workers use `workerControlApp`. */
 export const controlApp: FetchService<ControlAppEnv> = createControlApp(null, false)
 
-/** The console a Worker serves per table digest. A deployment's vars are fixed, so an isolate builds one. */
-const workerApps = new Map<string, FetchService<ControlAppEnv>>()
+/** The console a Worker serves per MCP route and table digest. A deployment's vars are fixed, so an isolate builds one. */
+const workerApps = new Map<McpRoute | null, Map<string, FetchService<ControlAppEnv>>>()
 
 /**
  * The console a Cloudflare Worker serves: the table its proxy publishes, read from the digest `fabrika.config.ts` writes
- * beside it, as the Bun process reads it. A digest that names no table, or MCP's, which a Worker cannot serve, fails
- * every request rather than serving another table than the proxy decides from.
+ * beside it, as the Bun process reads it. With the MCP table it mounts `mcp`, the route the Worker composes. A digest
+ * that names no table, or the MCP table on a Worker that composes no route, fails every request rather than serving
+ * another table than the proxy decides from.
  */
 export function workerControlApp(
 	vars: Pick<Env, 'FABRIKA_CONTROL_DOMAIN'> & { readonly FABRIKA_SERVICE_TABLE_DIGEST?: string },
+	mcp: McpRoute | null = null,
 ): FetchService<ControlAppEnv> {
 	const digest = vars.FABRIKA_SERVICE_TABLE_DIGEST ?? ''
-	const served = workerApps.get(digest)
+	const byDigest = workerApps.get(mcp) ?? new Map<string, FetchService<ControlAppEnv>>()
+	workerApps.set(mcp, byDigest)
+	const served = byDigest.get(digest)
 	if (served !== undefined) return served
-	const { mcp, cli } = controlTableSwitch(digest)
-	if (mcp) throw new ControlTableError('a Cloudflare console serves no MCP, but its proxy publishes the MCP table')
-	if (cli) controlOAuthResource(vars, CONTROL_RPC_PATH)
-	const app = createControlApp(null, cli)
-	workerApps.set(digest, app)
+	const table = controlTableSwitch(digest)
+	if (table.mcp) {
+		if (mcp === null) throw new ControlTableError("the console's proxy publishes the MCP table, but this Worker composes no MCP route")
+		controlOAuthResource(vars, CONTROL_MCP_PATH)
+	}
+	if (table.cli) controlOAuthResource(vars, CONTROL_RPC_PATH)
+	const app = createControlApp(table.mcp ? mcp : null, table.cli)
+	byDigest.set(digest, app)
 	return app
 }
 
-async function mcpRequest(mcp: McpRoute, request: Request): Promise<Response> {
+async function mcpRequest(mcp: McpRoute, ctx: ControlAppContext): Promise<Response> {
 	try {
-		return await mcp(request)
+		return await mcp(ctx.request, ctx)
 	} catch (cause) {
 		console.error('mcp request failed:', cause instanceof Error ? cause.message : 'unknown error')
 		return new Response('internal error', { status: 500, headers: { 'content-type': 'text/plain; charset=utf-8' } })

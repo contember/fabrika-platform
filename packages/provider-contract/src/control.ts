@@ -616,6 +616,11 @@ export interface ProviderNamespaceCapabilities {
 export interface ProviderAuthoring {
 	/** The file NAMES (no `/`) that configure the provider's deploy; a workspace changes none of them, at any depth. */
 	readonly protectedFiles: readonly string[]
+	/**
+	 * Why this provider cannot deploy a workspace's unreviewed commit to an authoring target yet: Control refuses
+	 * `deploy_stage` with it, and every other authoring operation stays served. Absent means it can.
+	 */
+	readonly stageDeployRefusal?: string
 }
 
 /** The provider's handle on one workspace sandbox, which Control persists; stable for the workspace's life. */

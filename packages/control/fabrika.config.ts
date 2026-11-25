@@ -13,6 +13,7 @@
 // `pipeline.secrets` and provisioned out-of-band (`wrangler secret put` / `.dev.vars`). GitHub App keys
 // are not among them: each source connection's key lives in the vault (ADR-0029).
 
+import { readAppAgentSkill } from '@fabrika/app/agent-skill'
 import { FABRIKA_SERVICE_TABLE_DIGEST } from '@fabrika/auth-core'
 import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
 import { EMAIL_PROVIDER_VARIABLE, NO_EMAIL_PROVIDER, pickEmailEnvironment } from '@fabrika/email'
@@ -32,10 +33,19 @@ import {
 	ServiceReference,
 	Worker,
 } from '@fabrika/provider-cloudflare'
+import { cloudflareMcpAuthoringOn } from '@fabrika/provider-cloudflare/installation'
 import { serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { controlSchema } from './fabrika.schema'
-import { controlServiceContract, controlServiceDigest, type ControlServiceOptions } from './fabrika.service'
+import {
+	CONTROL_MCP_SCOPE,
+	controlMcpResource,
+	controlMcpResourceMetadata,
+	controlServiceContract,
+	controlServiceDigest,
+	type ControlServiceOptions,
+} from './fabrika.service'
 import { CLOUDFLARE_MAIL_REMEDY, type InstallationMail, readInstallationMail } from './src/mail-transport'
+import { APP_AGENT_SKILL_DEFINE, type AppRulesSkill } from './src/mcp/app-rules'
 
 /**
  * IAM's origin — the issuer both this Worker and the proxy in front of it verify tokens against.
@@ -49,17 +59,25 @@ const resolveIamUrl = (isLocal: boolean): string => process.env['FABRIKA_IAM_ISS
 type EnvironmentSource = Readonly<Record<string, string | undefined>>
 
 /**
- * The console table a Worker serves: the command-line client's on a deployed installation, whose console has an https
- * domain and IAM for its authorization server (ADR-0049); none locally. A Worker serves no MCP.
+ * How the console is composed beyond its resource context. `mcpAuthoring` defaults to the operator's client list
+ * (`FABRIKA_PLATFORM_MCP_CLIENTS_JSON`, as on Zerops); a test names it instead.
  */
-const controlTable = (ctx: ResourceContext): ControlServiceOptions => ({
-	mcp: false,
-	cli: ctx.env !== 'local' && ctx.domain !== undefined && ctx.domain !== '',
-})
+export interface ControlCompositionOptions {
+	readonly mcpAuthoring?: boolean
+}
 
-/** What the console's proxy publishes: the table, and with the CLI's rows the resources they are bound to. */
-const controlProxyTable = (ctx: ResourceContext, iamUrl: string): CloudflareInstallationProxyTable => {
-	const table = controlTable(ctx)
+/**
+ * The console table a Worker serves: the command-line client's on a deployed installation, whose console has an https
+ * domain and IAM for its authorization server, with MCP authoring on top when the operator registers a client that is
+ * not identity-only (ADR-0049); none locally.
+ */
+const controlTable = (ctx: ResourceContext, options: ControlCompositionOptions): ControlServiceOptions => {
+	const cli = ctx.env !== 'local' && ctx.domain !== undefined && ctx.domain !== ''
+	return { mcp: cli && (options.mcpAuthoring ?? cloudflareMcpAuthoringOn(process.env)), cli }
+}
+
+/** What the console's proxy publishes: the table, and with its `oauth` rows the resources they are bound to. */
+const controlProxyTable = (ctx: ResourceContext, iamUrl: string, table: ControlServiceOptions): CloudflareInstallationProxyTable => {
 	const published = serviceProxyTable(controlServiceContract(table), { oauth: table.cli })
 	if (!table.cli || ctx.domain === undefined) return published
 	if (!iamUrl.startsWith('https://') || !isHttpOrigin(iamUrl)) {
@@ -68,13 +86,35 @@ const controlProxyTable = (ctx: ResourceContext, iamUrl: string): CloudflareInst
 	const origin = `https://${ctx.domain}`
 	return {
 		...published,
-		oauthResources: CONTROL_CLI_RESOURCES.map(({ path, grants }) => ({
-			resource: `${origin}${path}`,
-			resourceMetadata: `${origin}/.well-known/oauth-protected-resource${path}`,
-			authorizationServers: [iamUrl],
-			scopesSupported: grants.map((grant) => grant.scope),
-		})),
+		oauthResources: [
+			...CONTROL_CLI_RESOURCES.map(({ path, grants }) => ({
+				resource: `${origin}${path}`,
+				resourceMetadata: `${origin}/.well-known/oauth-protected-resource${path}`,
+				authorizationServers: [iamUrl],
+				scopesSupported: grants.map((grant) => grant.scope),
+			})),
+			// The MCP endpoint: IAM mints its token for this resource with the `authoring` scope (ADR-0049 rule 3).
+			...(table.mcp
+				? [{
+					resource: controlMcpResource(origin),
+					resourceMetadata: controlMcpResourceMetadata(origin),
+					authorizationServers: [iamUrl],
+					scopesSupported: [CONTROL_MCP_SCOPE],
+				}]
+				: []),
+		],
 	}
+}
+
+/**
+ * The `@fabrika/app` skill `get_app_rules` answers, for a Worker that serves MCP: a Worker reads no files, so wrangler
+ * replaces `APP_AGENT_SKILL_DEFINE` in the bundle with the skill read here, at deploy. Without MCP the bundle carries none.
+ */
+const appAgentSkillDefine = (table: ControlServiceOptions): { define?: Record<string, string> } => {
+	if (!table.mcp) return {}
+	const { version, body, references } = readAppAgentSkill()
+	const skill: AppRulesSkill = { version, body, references: references.map(({ topic, text }) => ({ topic, text })) }
+	return { define: { [APP_AGENT_SKILL_DEFINE]: JSON.stringify(JSON.stringify(skill)) } }
 }
 
 /** The installation's mail transport, from the same `FABRIKA_EMAIL_*` the workflow hands IAM. */
@@ -138,8 +178,9 @@ export const controlPipelineSecrets = (source: EnvironmentSource): string[] => [
  * Worker can build absolute URLs (e.g. webhook callbacks); it's empty locally, where oblaka's
  * `define` has no domain to pass.
  */
-export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
+export const buildControlApplicationWorker = (ctx: ResourceContext, options: ControlCompositionOptions = {}): Worker => {
 	const { env, domain } = ctx
+	const table = controlTable(ctx, options)
 	const isLocal = env === 'local'
 	const operationsArtifactOrigin = process.env['OPERATIONS_ARTIFACT_ORIGIN']
 	const bootstrapAdmins = process.env['FABRIKA_CONTROL_BOOTSTRAP_ADMINS'] ?? '[]'
@@ -150,6 +191,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 		dir: '.',
 		name: names.controlWorker,
 		main: './src/index.ts',
+		...appAgentSkillDefine(table),
 		// `process.env` and the importable `env` of `cloudflare:workers` stay empty: otherwise each holds every secret, the
 		// vault key included, for any bundled module to read. Control reads its configuration from the Worker's `env` only.
 		compatibility_flags: ['nodejs_compat', NO_PROCESS_ENV_FLAG, NO_IMPORTABLE_ENV_FLAG],
@@ -179,7 +221,7 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 			// The public domain this stage serves on (drives absolute URLs); empty when unknown.
 			FABRIKA_CONTROL_DOMAIN: domain ?? '',
 			// The table the proxy in front publishes (`buildControlWorker`): the Worker serves the same one (src/index.ts).
-			[FABRIKA_SERVICE_TABLE_DIGEST]: controlServiceDigest(controlTable(ctx)),
+			[FABRIKA_SERVICE_TABLE_DIGEST]: controlServiceDigest(table),
 			// Bootstrap-admin fallback (src/iam.ts): a JSON array of emails authorized as admin even
 			// when IAM denies / the binding isn't wired yet. Empty by default; the bootstrap
 			// script (scripts/bootstrap.ts) sets the first operator's email here for initial bring-up.
@@ -243,15 +285,17 @@ export const buildControlApplicationWorker = (ctx: ResourceContext): Worker => {
 	})
 }
 
-export const buildControlWorker = (ctx: ResourceContext): Worker => {
+export const buildControlWorker = (ctx: ResourceContext, options: ControlCompositionOptions = {}): Worker => {
 	const iamUrl = resolveIamUrl(ctx.env === 'local')
 	const names = platformNames(process.env)
+	// Decided once: the Worker serves the table its proxy publishes, so both read this one value.
+	const composition = { mcpAuthoring: controlTable(ctx, options).mcp }
 	return createCloudflareProxyWorker({
 		name: names.controlProxy,
-		app: buildControlApplicationWorker(ctx),
+		app: buildControlApplicationWorker(ctx, composition),
 		appId: CONTROL_APP_ID,
 		appHost: ctx.domain ?? 'localhost',
-		installation: controlProxyTable(ctx, iamUrl),
+		installation: controlProxyTable(ctx, iamUrl, controlTable(ctx, composition)),
 		domain: ctx.domain,
 		iamService: names.iamWorker,
 		iamUrl,
@@ -260,7 +304,7 @@ export const buildControlWorker = (ctx: ResourceContext): Worker => {
 
 export default defineApp({
 	id: CONTROL_APP_ID,
-	resources: buildControlWorker,
+	resources: (ctx) => buildControlWorker(ctx),
 	schema: controlSchema,
 	pipeline: {
 		// fabrika's Worker source lives alongside this config (packages/control).

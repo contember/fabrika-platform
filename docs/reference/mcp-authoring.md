@@ -291,8 +291,9 @@ retry helps, and never carries upstream text, which may hold a token or a clone 
    owner of each installation (the organization owner, or the personal account itself) to accept the new permissions, and the App keeps its
    old ones until they do.
 3. **Mark one non-production environment as the authoring target** through `apps.environments.put`
-   with `authoring: true`. Only an environment of an app with a GitHub connection, on a provider that declares
-   `authoring` (Zerops today), is accepted.
+   with `authoring: true`: `fabrika control apps environments put … --authoring=true`, or _MCP authoring target_ in the
+   environment's form in the console. Only an environment of an app with a GitHub connection, on a provider that
+   declares `authoring` (Zerops and Cloudflare), is accepted.
    Control refuses a second authoring environment for the same app (`409`); clear the flag on the
    first one before moving it. `deploy_stage` deploys unreviewed workspace heads to the authoring environment, so
    Control refuses a protected one (`409`; `prod` is protected by default), and refuses to protect an authoring
@@ -459,9 +460,9 @@ against IAM's JWKS (`typ: at+jwt`, `iss` = IAM's issuer, `aud` = its resource). 
 Registering only identity-only clients leaves MCP authoring off: no `/mcp` row is published and no authoring resource
 is served. It needs `https`, like every client.
 
-**On Cloudflare** the same variable in the installation's GitHub Environment registers identity-only clients. MCP
-authoring is not supported on Cloudflare yet, so the deploy refuses any other entry as not supported yet, before it
-deploys anything.
+**On Cloudflare** the same variable in the installation's GitHub Environment registers the clients; a client that is
+not identity-only is meant to turn MCP authoring on, but the platform stage still refuses one as not supported yet
+([On Cloudflare](#on-cloudflare)).
 The scaffolded `platform.yml` passes it to the IAM stage, which writes it into IAM's `OAUTH_CONFIG`, and to the
 control-plane stage, which reconciles the roles after IAM's own vocabulary. A workflow generated before this release
 does not pass it: bump `fabrika.ref`, regenerate the workflow, then set the variable and run `platform`. Locally, `FABRIKA_LOCAL_MCP_CLIENTS_JSON` takes the same entries and
@@ -489,6 +490,43 @@ client secret.
 **Rollout.** The binding is new in `FABRIKA_IAM_OAUTH_CONFIG`; an IAM from before it refuses the key and stops at boot.
 Before rolling `iam` back, remove every `identity` entry from the client list and deploy.
 
+## On Cloudflare
+
+A Cloudflare installation serves the same `/mcp` from the console Worker, with the same tools, OAuth flow and rules.
+
+**Not yet switchable.** Control's side is in place, but two IAM-side steps are still missing, so an installation cannot
+turn MCP authoring on today: `parseCloudflareIdentityClients`
+(`packages/provider-cloudflare/src/installation/identity-clients.ts`) refuses every client that is not identity-only,
+and stops the platform stage before it deploys anything, and IAM's `fabrika.config.ts` writes no `/mcp` resource into
+`OAUTH_CONFIG`. The rest of this section describes the state once both land.
+
+What differs:
+
+- **Turning it on.** Register Claude, ChatGPT or a non-identity external client in
+  `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` in the installation's GitHub Environment and run `platform`. IAM's stage writes
+  the clients and the `/mcp` resource into IAM's `OAUTH_CONFIG`. Control's stage derives the console's table from the
+  same list: its proxy Worker publishes the `/mcp` row and resource metadata, and the console Worker is told the
+  matching table digest and gets the `@fabrika/app` skill `get_app_rules` answers in its bundle (a Worker reads no
+  files). Without such a client the table and the bundle stay as before. A list either stage refuses stops the deploy
+  before anything is written.
+- **The stage environment.** Register a second, unprotected environment of the app (for example `stage`, with its own
+  domain and public origin, no trigger ref) and mark it the authoring target. Its deploy creates its own Worker, proxy,
+  Durable Object (empty data) and IAM application `<app>@stage`, with grants of its own. Give it non-production secrets.
+- **`deploy_stage` waits for an isolated build.** The Cloudflare deploy runs the checkout's code in the runner
+  container, which holds the installation's account-wide API token (backlog 86). A workspace commit is unreviewed, so
+  it is deployed only once the runner builds it in a step without credentials and deploys the built bundle from a
+  separate step. Until the runner does that (`CLOUDFLARE_ISOLATED_BUILD` in `@fabrika/provider-cloudflare`),
+  `deploy_stage` answers a tool error that says so and points to `create_pull_request`. Every other tool works: the
+  agent edits the workspace and opens a pull request, and a person reviews, merges and deploys it.
+- **No dev environment.** `bind_dev`, `get_dev_status`, `run_checks` and `reset_dev` answer that none is available.
+- **Protected files.** `wrangler.json`, `wrangler.jsonc` and `wrangler.toml`, at any depth ([Protected paths](#protected-paths)).
+- **`get_app_rules` pin warning.** The Worker has no semver range parser, so it warns only when `package.json` pins an
+  exact `@fabrika/app` version other than the skill's.
+
+**Rollout.** An existing installation converges on the next `platform` run once the variable names such a client; the
+workflow already passes it to both stages. Removing the client turns MCP off on the next run: the proxy stops
+publishing `/mcp`, and the console Worker's digest and bundle follow.
+
 ## Locally
 
 The local stack runs MCP off, and serves the command-line client's device grant always. Set
@@ -501,7 +539,7 @@ IAM still fetches each client's CIMD document over HTTPS, and a hosted client ca
 ## Protected paths
 
 `apply_changes` refuses the provider's deploy files (`ControlProvider.authoring.protectedFiles`: Zerops'
-`zerops.yaml` and `zerops.yml`) at any depth, every `fabrika.*` file except `fabrika.contract.ts`, and everything
+`zerops.yaml` and `zerops.yml`, Cloudflare's `wrangler.json`, `wrangler.jsonc` and `wrangler.toml`) at any depth, every `fabrika.*` file except `fabrika.contract.ts`, and everything
 under `.github/`. The operator changes them through normal review.
 
 The contract, its schema modules, `src/db/tables.ts` and `db/migrations/` are editable: Control classifies
@@ -517,7 +555,9 @@ paved road and need closer review, parked or not.
 
 - An access token stays valid until it expires, at most 300 s after a grant or session is revoked.
   Revocation stops refresh and new code exchanges.
-- Zerops only.
+- Zerops and Cloudflare. On Cloudflare MCP authoring cannot be turned on until IAM's two steps land
+  ([On Cloudflare](#on-cloudflare)), `deploy_stage` waits for the runner's isolated build, and there is no dev
+  environment.
 - One authoring environment per app, never protected; it shows one workspace at a time.
 - One dev environment per app, never production or protected, on Zerops only; each workspace gets its own sandbox,
   and the sandboxes share one IAM application. In a sandbox jobs do not run.

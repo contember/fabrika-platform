@@ -7,10 +7,11 @@ import type { ControlProvider, ProviderDevSandboxes } from '@fabrika/provider-co
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { controlMcpResource, controlMcpResourceMetadata } from '../../fabrika.service'
 import type { DeployQueue } from '../api/runs'
-import { controlMcpRoute } from '../bun/mcp'
+import { processAppRules } from '../bun/app-rules'
 import { createFetchHandler } from '../bun/server'
 import { DevSignals } from '../dev/signals'
 import type { Env } from '../env'
+import { controlMcpRoute } from '../mcp/route'
 import { createHarness, type Harness } from './helpers/harness'
 import { allowAllAuth } from './helpers/iam'
 import { proxiedRequest } from './helpers/proxy'
@@ -55,7 +56,7 @@ async function fixture(
 		...(options.dev === true ? { DEV_SOURCE: { source: world.source, signals: new DevSignals() } } : {}),
 		...(sandboxes ? { FABRIKA_CONTROL_VAULT_KEY: testVaultKey() } : {}),
 	}
-	const mcp = controlMcpRoute(env, world.source, provider)
+	const mcp = controlMcpRoute(env, world.source, provider, processAppRules())
 	const served = createFetchHandler(env, provider, unusedSourceConnection('zerops'), mcp, true)
 	return { world, fetch: (request) => served(proxiedRequest(request, { mcp: true })) }
 }
