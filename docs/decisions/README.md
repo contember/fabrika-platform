@@ -108,3 +108,4 @@ a commit message suffices.
 | [0083](0083-an-environment-chooses-what-waits-for-approval.md)                          | An environment chooses which kinds of change wait for approval                                            |
 | [0084](0084-an-external-application-signs-people-in-through-iam.md)                     | An external application signs people in through IAM and receives their roles there                        |
 | [0085](0085-a-grant-holds-a-set-of-scope-values.md)                                     | A grant holds a set of scope values, picked from the values the application lists                         |
+| [0087](0087-an-spa-mount-is-installable-under-its-own-access.md)                        | An SPA mount is installable as an application, under its own access (proposed)                            |

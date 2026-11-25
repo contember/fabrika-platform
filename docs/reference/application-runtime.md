@@ -2267,6 +2267,37 @@ never a check: every endpoint decides again. A public SPA answers it 401, becaus
 forwards no token to an anonymous kind. The test kit serves it for a test caller, whose
 `email` is `<kind>-<n>@<app>.test` or the `email` option, lower-cased.
 
+## Installing an SPA as an application
+
+Every credentialed SPA mount (access `member`, an action or `app`) can be installed by a browser as an application in
+its own window ([ADR-0087](../decisions/0087-an-spa-mount-is-installable-under-its-own-access.md)). The framework serves,
+under the mount's own access and before the asset server:
+
+- `<prefix>/__fabrika-app.webmanifest`, the web app manifest, as `application/manifest+json`: `name` is the contract's
+  `displayName` (or its id), followed by `· <mount>` below the root; `short_name` at most 12 characters (the root
+  mount: the name, else its first word, else its first characters; below the root: the name and the mount, else the
+  first word and the mount, else the mount); `id`, `start_url` and `scope` the mount, `<prefix>/`; `display:
+  standalone`; the mount's colour as `theme_color` and `background_color`; the 192 px and 512 px icons, the 512 px one
+  also as `maskable`.
+- `<prefix>/__fabrika-icon-180.png`, `-192.png` and `-512.png`: the mount's colour with the name's first letter or
+  digit in white, drawn by the framework (`installable.ts`). The root mount's hue follows from the application id; a
+  mount below the root turns it by 90° to 270°, by its own name (`mountHue`).
+
+The root mount's scope `/` covers the whole host, so its installed window also opens the other mounts' pages; a mount
+below the root keeps its window to its own prefix. A scope cannot exclude a path; the proxy decides every request.
+
+Every HTML answer of the mount gets `<link rel="manifest" href="…" crossorigin="use-credentials">` and
+`<link rel="apple-touch-icon" href="…-180.png">` at the start of its head: after `<head>`, or, in a page that omits
+that tag, after the DOCTYPE and `<html>` (`headInsertionPoint` in `html.ts`, where the share bootstrap goes too).
+Without `use-credentials` a browser fetches the manifest without the session, and the proxy refuses it. A visitor
+without a session gets the mount's refusal for these files too (a bounce on navigation, else 401). A public SPA mount
+and a link mount serve none of it. No service worker is installed and no answer is cached: an installed application
+needs the network, keeps only its manifest and icons on the device, and its sign-in after an expired session is IAM's
+page inside its window.
+
+The contract build refuses a contract in which another endpoint takes the `GET` of one of a mount's own files (its
+browser config, its caller document and, on a credentialed mount, these), naming the path and the endpoint.
+
 ## Browser error reporting
 
 Fabrika supplies an application's Operations ingest settings as three managed
