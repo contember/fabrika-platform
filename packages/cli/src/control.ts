@@ -59,7 +59,11 @@ import {
 	type OAuthClientDto,
 	type PutExternalAppRequest,
 	type PutOAuthClientRequest,
+	recipientKeyThumbprint,
+	type RecipientPublicKey,
+	REQUESTED_KEY_JWE,
 } from '@fabrika/iam-contract'
+import { compactDecrypt, exportJWK, generateKeyPair } from 'jose'
 import { z } from 'zod'
 import {
 	authorizeDevice,
@@ -126,6 +130,8 @@ Usage:
   fabrika control requests get <id> [--wait]
   fabrika control access request-grant --app=<id> --env=<name> --principal=<id> --role=<role>
                            [--scope=<dimension>:<value>] --expires-in=<seconds> [--wait]
+  fabrika control access request-key --app=<id> --action=<action> [--action=<action>…] --label=<text>
+                           --expires-in=<seconds> --wait
   fabrika control external-apps list | get <app> | put --file=<app.json> | delete <app>   [--iam-url=<origin>]
   fabrika control oauth-clients list | put --file=<client.json> | delete <client id>   [--iam-url=<origin>]
 
@@ -213,6 +219,15 @@ A category set to \`off\` applies the write; \`refuse\` refuses it; \`person\` d
 request, exactly as \`--request\` does: stdout prints its id, state and link, stderr the fingerprint of a secret, and the
 command exits 75. Hand the person the link; nothing changes until they approve it. \`--wait\` follows the request
 instead, and succeeds only when it executed.
+
+\`access request-key\` asks a person for a key holding exact Control actions at one application (each \`--action\`, no
+wildcard), for someone other than this agent, expiring in at most 30 days. It needs \`access.request\` at the app, and
+the protected environments' \`credentialCeiling\` decides whether the key may hold actions this agent does not. It
+makes a key pair in memory, sends only the public key, and prints on stderr the console link and the public key's
+thumbprint, which the page shows: an IAM installation administrator checks it there and approves with a passkey. IAM
+encrypts the key to that public key, and Control hands it out once. \`--wait\` is required: the private key never leaves
+this process, so the key cannot be fetched later; the command waits for the decision, fetches the key, decrypts it, and
+prints it once on stdout. A request that issues no key (refused, expired, failed) fails with why.
 
 Namespace placement options, each defaulting to what the preset would choose:
 
@@ -1632,8 +1647,12 @@ const runRequests = async (verb: string | undefined, flags: Flags, env: Readonly
 	emit(flags, result, () => requestLine(result))
 }
 
-/** `access request-grant`: ask a person to give a principal one role of an application environment (ADR-0083 §8). */
+/**
+ * `access request-grant`: ask a person to give a principal one role of an application environment; `access request-key`:
+ * ask a person for a key (ADR-0083 §8).
+ */
 const runAccess = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	if (verb === 'request-key') return requestKey(flags, env)
 	if (verb !== 'request-grant') throw new Error(`Unknown \`control access\` verb: ${verb ?? '(missing)'}`)
 	const expiresIn = Number(required(flags, 'expires-in'))
 	if (!Number.isSafeInteger(expiresIn) || expiresIn <= 0) throw new Error('--expires-in must be a positive whole number of seconds')
@@ -1651,6 +1670,45 @@ const runAccess = async (verb: string | undefined, flags: Flags, env: Readonly<R
 		expiresAt: Math.floor(Date.now() / 1000) + expiresIn,
 	}
 	await requestChange(controlClient(flags, env), flags, 'iam.grants.create', input)
+}
+
+/**
+ * `access request-key`: a key pair made in memory, whose public half goes with the request and whose private half opens
+ * the key IAM encrypted to it. The private key is never exported or written, so the key is fetched in this run or never.
+ */
+const requestKey = async (flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	const actions = flags.repeated.get('action') ?? []
+	if (actions.length === 0) throw new Error('--action is required: each action the key holds, e.g. --action=deploy.trigger --action=deploy.read')
+	const expiresIn = Number(required(flags, 'expires-in'))
+	if (!Number.isSafeInteger(expiresIn) || expiresIn <= 0) throw new Error('--expires-in must be a positive whole number of seconds')
+	const appId = required(flags, 'app')
+	const label = required(flags, 'label')
+	if (!flags.wait) {
+		throw new Error(
+			'`control access request-key` needs --wait: the private key that opens the issued key lives only in this process, so the key cannot be fetched later',
+		)
+	}
+	const pair = await generateKeyPair(REQUESTED_KEY_JWE.alg, { crv: 'P-256' })
+	const exported = await exportJWK(pair.publicKey)
+	if (typeof exported.x !== 'string' || typeof exported.y !== 'string') throw new Error('could not export the public key')
+	const publicKey: RecipientPublicKey = { kty: 'EC', crv: 'P-256', x: exported.x, y: exported.y }
+	const client = controlClient(flags, env)
+	const created = await client.approvals.requests.create({
+		kind: 'iam.apiKeys.provision',
+		input: { appId, label, actions: [...actions], expiresAt: Math.floor(Date.now() / 1000) + expiresIn, publicKey },
+	})
+	console.warn(`a person approves or refuses this request at ${created.url}`)
+	console.warn(`the public key's thumbprint is ${recipientKeyThumbprint(publicKey)}: the person sees the same one on the page`)
+	const read = (id: string) => client.approvals.requests.get({ id })
+	const settled = await followRequest(read, await read(created.id), { intervalMs: WAIT_INTERVAL_MS, settleTimeoutMs: REQUEST_SETTLE_TIMEOUT_MS })
+	if (settled.state !== 'executed') throw new Error(requestHint(settled) ?? `the request is ${settled.state}`)
+	const { jwe } = await client.approvals.requests.fetchKey({ id: created.id })
+	const { plaintext } = await compactDecrypt(jwe, pair.privateKey, {
+		keyManagementAlgorithms: [REQUESTED_KEY_JWE.alg],
+		contentEncryptionAlgorithms: [REQUESTED_KEY_JWE.enc],
+	})
+	const key = new TextDecoder().decode(plaintext)
+	emit(flags, { requestId: created.id, key }, () => key)
 }
 
 const requestLine = (request: ApprovalRequestDto): string => `${request.id}\t${request.kind}\t${request.appId}\t${request.env}\t${request.state}`

@@ -1,5 +1,7 @@
 import type { ApprovalRequestDto, RunDto } from '@fabrika/control-contract'
+import { recipientKeyThumbprint, type RecipientPublicKey } from '@fabrika/iam-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { CompactEncrypt, importJWK } from 'jose'
 import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -1532,6 +1534,128 @@ describe('control access request-grant', () => {
 		await expect(runControlCli('access', [...base], undefined, CONTROL_ENV)).rejects.toThrow('--expires-in is required')
 		await expect(runControlCli('access', ['grant', '--app=notes'], undefined, CONTROL_ENV)).rejects.toThrow('Unknown `control access` verb: grant')
 		expect(refused.calls).toEqual([])
+	})
+})
+
+describe('control access request-key', () => {
+	const url = 'https://console.example.test/approvals/requests/k1'
+	const executed: ApprovalRequestDto = {
+		id: 'k1',
+		kind: 'iam.apiKeys.provision',
+		category: 'credentials',
+		appId: 'notes',
+		env: '*',
+		state: 'executed',
+		url,
+		requester: { principal: { id: 'kim', type: 'user', label: 'kim' }, credential: 'oauth', personId: 'kim' },
+		description: { summary: [{ text: 'Issue a key', agent: false }], facts: [] },
+		described: true,
+		inputDigest: `sha256:${'a'.repeat(64)}`,
+		approvers: 1,
+		requesterMayApprove: true,
+		stepUp: 'webauthn',
+		deadline: 2,
+		createdAt: 1,
+		updatedAt: 1,
+		delivery: { state: 'waiting', deadline: 3 },
+	}
+
+	/** Control as the agent meets it: the request, approved at once, and the key IAM encrypted to the public key sent. */
+	const control = (state: ApprovalRequestDto['state'] = 'executed'): { calls: Captured[]; publicKey: () => RecipientPublicKey } => {
+		const calls: Captured[] = []
+		let sent: RecipientPublicKey | null = null
+		globalThis.fetch = asFetch(async (input, init) => {
+			const raw = init?.body
+			const body: unknown = typeof raw === 'string' ? JSON.parse(raw) : null
+			calls.push({ url: String(input), authorization: new Headers(init?.headers).get('authorization'), body })
+			const method = Reflect.get(Object(body), 'method')
+			let result: unknown
+			if (method === 'approvals.requests.create') {
+				sent = Reflect.get(Reflect.get(Reflect.get(Object(body), 'input'), 'input'), 'publicKey')
+				result = { id: 'k1', url, state: 'pending' }
+			} else if (method === 'approvals.requests.get') {
+				result = { ...executed, state }
+			} else {
+				if (sent === null) throw new Error('no public key was sent')
+				const jwe = await new CompactEncrypt(new TextEncoder().encode('px_the-issued-key'))
+					.setProtectedHeader({ alg: 'ECDH-ES', enc: 'A256GCM', kid: recipientKeyThumbprint(sent) })
+					.encrypt(await importJWK({ ...sent }, 'ECDH-ES'))
+				result = { jwe }
+			}
+			return new Response(JSON.stringify({ result }), { status: 200, headers: { 'content-type': 'application/json' } })
+		})
+		return {
+			calls,
+			publicKey: () => {
+				if (sent === null) throw new Error('no public key was sent')
+				return sent
+			},
+		}
+	}
+
+	const args = ['request-key', '--app=notes', '--action=deploy.trigger', '--action=deploy.read', '--label=ci deploys', '--expires-in=86400']
+
+	test('sends a public key made in memory, prints the link and the thumbprint, and with --wait prints the key once on stdout', async () => {
+		const asked = control()
+		const before = Math.floor(Date.now() / 1000)
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() => runControlCli('access', [...args, '--wait'], undefined, CONTROL_ENV))
+		})
+		const publicKey = asked.publicKey()
+		expect(publicKey).toMatchObject({ kty: 'EC', crv: 'P-256' })
+		expect(Object.keys(publicKey).sort()).toEqual(['crv', 'kty', 'x', 'y'])
+		const [create] = asked.calls
+		expect(create?.body).toMatchObject({
+			method: 'approvals.requests.create',
+			input: { kind: 'iam.apiKeys.provision', input: { appId: 'notes', label: 'ci deploys', actions: ['deploy.trigger', 'deploy.read'] } },
+		})
+		const expiresAt = Reflect.get(Reflect.get(Reflect.get(Object(create?.body), 'input'), 'input'), 'expiresAt')
+		expect(expiresAt).toBeGreaterThanOrEqual(before + 86_400)
+		expect(asked.calls.map((call) => Reflect.get(Object(call.body), 'method'))).toEqual([
+			'approvals.requests.create',
+			'approvals.requests.get',
+			'approvals.requests.fetchKey',
+		])
+		expect(err).toContain(url)
+		expect(err).toContain(recipientKeyThumbprint(publicKey))
+		expect(err).not.toContain('px_the-issued-key')
+		expect(out).toBe('px_the-issued-key')
+		expect(CONTROL_USAGE).toContain('fabrika control access request-key')
+	})
+
+	test('without --wait nothing is sent: the private key lives only in this process, so the key could not be fetched later', async () => {
+		const asked = control()
+		await expect(runControlCli('access', args, undefined, CONTROL_ENV)).rejects.toThrow('cannot be fetched later')
+		expect(asked.calls).toEqual([])
+	})
+
+	test('a request that did not issue the key fails, saying why, and fetches nothing', async () => {
+		const asked = control('rejected')
+		let failure: unknown
+		await captureStderr(async () => {
+			await captureStdout(async () => {
+				failure = await runControlCli('access', [...args, '--wait'], undefined, CONTROL_ENV).catch((error: unknown) => error)
+			})
+		})
+		expect(String(failure)).toContain('a person refused this request')
+		expect(asked.calls.map((call) => Reflect.get(Object(call.body), 'method'))).not.toContain('approvals.requests.fetchKey')
+	})
+
+	test('an action and an expiry are required before anything is sent', async () => {
+		const asked = control()
+		await expect(runControlCli('access', ['request-key', '--app=notes', '--label=x', '--expires-in=60', '--wait'], undefined, CONTROL_ENV)).rejects
+			.toThrow('--action')
+		await expect(
+			runControlCli(
+				'access',
+				['request-key', '--app=notes', '--action=deploy.read', '--label=x', '--expires-in=soon', '--wait'],
+				undefined,
+				CONTROL_ENV,
+			),
+		)
+			.rejects.toThrow('--expires-in')
+		expect(asked.calls).toEqual([])
 	})
 })
 

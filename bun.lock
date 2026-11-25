@@ -301,6 +301,7 @@
         "@fabrika/platform": "workspace:*",
         "@fabrika/platform-node": "workspace:*",
         "@fabrika/provider-contract": "workspace:*",
+        "jose": "^5.9.0",
         "zod": "^3.25.76",
       },
       "devDependencies": {

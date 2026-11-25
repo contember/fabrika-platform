@@ -29,6 +29,7 @@
 		"test": "bun test"
 	},
 	"dependencies": {
+		"jose": "^5.9.0",
 		"zod": "^3.25.76",
 		"@fabrika/app": "workspace:*",
 		"@fabrika/auth-core": "workspace:*",
