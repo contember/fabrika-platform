@@ -10,7 +10,14 @@
 // `--json` prints the procedure's result verbatim so a caller never parses a table.
 
 import { createRpcClient, type InferRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
-import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
+import {
+	displayNameProblem,
+	isCimdClientId,
+	isOAuthResourceUri,
+	type IssueKeyInput,
+	type IssueKeyResult,
+	MAX_KEY_LIFETIME_SECONDS,
+} from '@fabrika/auth-core'
 import { APP_ENV_KINDS, type ApprovalRequestDto, CONTROL_CLI_PRESETS, isFinalApprovalRequestState } from '@fabrika/control-contract'
 import type {
 	AppDto,
@@ -30,6 +37,19 @@ import type {
 	RegisterAppResponse,
 	RunDto,
 } from '@fabrika/control-contract'
+import {
+	type ExternalAppDto,
+	type IamAdminRpcContract,
+	isOAuthIdentityAppId,
+	isOAuthIdentityRoleKey,
+	MAX_EXTERNAL_APP_CLIENTS,
+	MAX_OAUTH_IDENTITY_ROLES,
+	OAUTH_CLIENT_PROVIDERS,
+	OAUTH_REGISTRY_NOT_IMPORTED,
+	type OAuthClientDto,
+	type PutExternalAppRequest,
+	type PutOAuthClientRequest,
+} from '@fabrika/iam-contract'
 import { z } from 'zod'
 import {
 	authorizeDevice,
@@ -94,6 +114,8 @@ Usage:
   fabrika control runs get --run=<id>
   fabrika control runs log --run=<id>
   fabrika control requests get <id> [--wait]
+  fabrika control external-apps list | get <app> | put --file=<app.json> | delete <app>   [--iam-url=<origin>]
+  fabrika control oauth-clients list | put --file=<client.json> | delete <client id>   [--iam-url=<origin>]
 
 \`register\` CREATES an app and refuses a second one with the same id. Re-registering a changed
 manifest — a new import document, or a new \`zerops.yaml\` of an app without a contract — is
@@ -228,6 +250,32 @@ and \`platform init\` print in their closing block, and the value \`FABRIKA_IAM_
 control service. It is NOT the private hostname the services use between themselves: \`http://iam:3000\`
 resolves inside the provider's project and nowhere else, so from here it only ever fails to connect.
 
+\`external-apps\` and \`oauth-clients\` manage the OAuth clients IAM serves (ADR-0089). They call IAM's admin API
+with the same two variables as \`key issue\`, and nothing else: FABRIKA_IAM_RPC_URL (or --iam-url), IAM's PUBLIC origin,
+and FABRIKA_IAM_PROVISIONING_KEY, the bearer. An external application is an application outside this installation that
+signs people in through IAM; \`put\` replaces it whole from a file (record, roles and clients) and is idempotent:
+
+  {
+    "app": "ops-tool",
+    "name": "Ops tool",
+    "resource": "https://ops.example.com",
+    "roles": [{ "key": "viewer", "name": "Viewer" }],
+    "clients": [{ "clientId": "https://ops.example.com/oauth/client.json",
+                  "redirectUris": ["https://ops.example.com/oauth/callback"], "metadataUrl": null }]
+  }
+
+\`roles\` null or left out: every active user of the installation signs in. \`get\` prints the same file, ready to edit
+and put back. Removing a client, changing the resource or deleting the application revokes the sign-ins through it.
+\`oauth-clients put\` writes an MCP authoring client, whose tokens reach the console's /mcp:
+
+  { "clientId": "https://claude.ai/oauth/mcp-oauth-client-metadata", "label": "claude",
+    "redirectUris": ["https://claude.ai/api/mcp/auth_callback"] }
+
+\`label\` is claude, chatgpt or external. A client of an external application is written only through
+\`external-apps put\`, and \`oauth-clients\` refuses it. \`put\` checks the file before anything is sent. Until a platform
+deploy of this release has imported the installation's client list, IAM refuses both \`put\`s; deploy, then repeat.
+The console registers external applications too, under Access → External applications.
+
 Connecting a GitHub source is NOT here and will not be: App creation is a browser flow whose
 authorization requires a human principal (ADR-0029). Use Settings → Source in the console.
 `
@@ -355,11 +403,17 @@ const carriesKey = (text: string, key: string): boolean => {
  * A JSON answer that carries the key is dropped whole, so no row, `--json` output or error can repeat it. Any other
  * body passes: the RPC client reports a non-JSON answer by its status alone.
  */
-const withoutEchoedKey = async (response: Response, key: string): Promise<Response> => {
+const withoutEchoedKey = async (
+	response: Response,
+	key: string,
+	source: { readonly service: string; readonly label: string } = { service: 'Control', label: KEY_LABEL },
+): Promise<Response> => {
 	if (!(response.headers.get('content-type') ?? '').includes('application/json')) return response
 	const text = await response.text()
 	if (carriesKey(text, key)) {
-		return Response.json({ error: { type: 'transport', message: `Control's answer carried ${KEY_LABEL}; it was dropped` } }, { status: 502 })
+		return Response.json({ error: { type: 'transport', message: `${source.service}'s answer carried ${source.label}; it was dropped` } }, {
+			status: 502,
+		})
 	}
 	return new Response(text, { status: response.status, statusText: response.statusText, headers: response.headers })
 }
@@ -1106,6 +1160,229 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 	throw new Error(`Unknown \`control namespaces\` verb: ${verb ?? '(missing)'}`)
 }
 
+// ── IAM's client registry (ADR-0089) ─────────────────────────────────────────
+// `external-apps` and `oauth-clients` call IAM's `/admin/rpc` with the provisioning key as the bearer, the credential
+// Control's own IAM provisioning client sends. A person's device grant does not reach IAM's admin API.
+
+const PROVISIONING_KEY_LABEL = '[FABRIKA_IAM_PROVISIONING_KEY]'
+
+/** `text` with the provisioning key cut out: every diagnostic of the registry verbs passes through it. */
+const withoutProvisioningKey = (text: string, env: Readonly<Record<string, string | undefined>>): string => {
+	const key = env['FABRIKA_IAM_PROVISIONING_KEY']?.trim()
+	return key === undefined || key === '' ? text : text.replaceAll(key, PROVISIONING_KEY_LABEL)
+}
+
+export type IamAdminClient = InferRpcClient<IamAdminRpcContract>
+
+/** IAM's admin RPC at its public origin, with the provisioning key from the environment only and no redirect followed. */
+export const iamAdminClient = (
+	url: string | undefined,
+	env: Readonly<Record<string, string | undefined>>,
+	send: RpcFetch = fetch,
+): IamAdminClient => {
+	const origin = credentialOrigin(url ?? env['FABRIKA_IAM_RPC_URL'], IAM_ORIGIN)
+	const key = secret('FABRIKA_IAM_PROVISIONING_KEY', env)
+	return createRpcClient<IamAdminRpcContract>({
+		baseUrl: `${origin}/admin/rpc`,
+		bounceOnAuth: false,
+		fetch: async (input, init) => {
+			const headers = new Headers(init?.headers)
+			headers.set('authorization', `Bearer ${key}`)
+			let response: Response
+			try {
+				// A followed 307/308 would re-send the provisioning key to wherever it points; the client refuses a 3xx.
+				response = await send(input, { ...init, headers, redirect: 'manual' })
+			} catch (cause) {
+				// The RPC client reads a rejected fetch as "Network request failed"; this answer keeps the reason.
+				return Response.json({ error: { type: 'transport', message: unreachableIam(origin, cause) } }, { status: 502 })
+			}
+			return await withoutEchoedKey(response, key, { service: 'IAM', label: PROVISIONING_KEY_LABEL })
+		},
+	})
+}
+
+const roleFileSchema = z.object({ key: z.string(), name: z.string() }).strict()
+const externalAppClientFileSchema = z.object({
+	clientId: z.string(),
+	redirectUris: z.array(z.string()),
+	metadataUrl: z.string().nullable().optional(),
+}).strict()
+const externalAppFileSchema = z.object({
+	app: z.string(),
+	name: z.string(),
+	resource: z.string(),
+	roles: z.array(roleFileSchema).nullable().optional(),
+	clients: z.array(externalAppClientFileSchema),
+}).strict()
+const oauthClientFileSchema = z.object({
+	clientId: z.string(),
+	label: z.enum(OAUTH_CLIENT_PROVIDERS),
+	redirectUris: z.array(z.string()),
+	metadataUrl: z.string().nullable().optional(),
+}).strict()
+
+const isHttpsUrl = (value: string): boolean => {
+	try {
+		return new URL(value).protocol === 'https:'
+	} catch {
+		return false
+	}
+}
+
+/** What IAM refuses of one client's coordinates, checked with the contract's own predicates. */
+const clientProblems = (at: string, client: { clientId: string; redirectUris: string[]; metadataUrl?: string | null | undefined }): string[] => {
+	const problems: string[] = []
+	if (!isCimdClientId(client.clientId)) problems.push(`${at}.clientId must be the https URL of the client's metadata document, with a path`)
+	const uris = client.redirectUris
+	if (uris.length === 0 || uris.length > 32 || !uris.every((uri) => isOAuthResourceUri(uri)) || new Set(uris).size !== uris.length) {
+		problems.push(`${at}.redirectUris must list 1 to 32 distinct exact https URLs without a fragment`)
+	}
+	if (client.metadataUrl != null && !isHttpsUrl(client.metadataUrl)) problems.push(`${at}.metadataUrl must be an https URL, or null`)
+	return problems
+}
+
+/** Zod's complaints about a file's shape, each as `<path>: <message>`; never the value it read. */
+const shapeProblems = (error: z.ZodError): string[] =>
+	error.issues.map((issue) => `${issue.path.length === 0 ? '(file)' : issue.path.join('.')}: ${issue.message}`)
+
+const refuseFile = (path: string, what: string, problems: readonly string[]): never => {
+	throw new Error(`${path} is not ${what}:\n${problems.map((problem) => `  - ${problem}`).join('\n')}`)
+}
+
+/** An `externalApps.put` request from a file, checked against the contract before it is sent; IAM checks it again. */
+export const parseExternalAppFile = (value: JsonValue, path: string): PutExternalAppRequest => {
+	const shape = externalAppFileSchema.safeParse(value)
+	if (!shape.success) return refuseFile(path, 'an external application', shapeProblems(shape.error))
+	const file = shape.data
+	const problems: string[] = []
+	if (!isOAuthIdentityAppId(file.app)) problems.push('app must be lowercase letters, digits and dashes, without `@`, at most 63 characters')
+	const nameProblem = displayNameProblem(file.name)
+	if (nameProblem !== null) problems.push(`name ${nameProblem}`)
+	if (!isOAuthResourceUri(file.resource) || !file.resource.startsWith('https://')) problems.push('resource must be an https URI without a fragment')
+	const roles = file.roles ?? []
+	if (roles.length > MAX_OAUTH_IDENTITY_ROLES) problems.push(`roles holds at most ${MAX_OAUTH_IDENTITY_ROLES} roles`)
+	for (const [index, role] of roles.entries()) {
+		if (!isOAuthIdentityRoleKey(role.key)) problems.push(`roles.${index}.key must be lowercase like an app id and no built-in role`)
+		else if (roles.findIndex((other) => other.key === role.key) !== index) problems.push(`roles.${index}.key repeats '${role.key}'`)
+		if (role.name === '' || role.name.length > 100) problems.push(`roles.${index}.name must be 1 to 100 characters`)
+	}
+	if (file.clients.length > MAX_EXTERNAL_APP_CLIENTS) problems.push(`clients holds at most ${MAX_EXTERNAL_APP_CLIENTS} clients`)
+	for (const [index, client] of file.clients.entries()) {
+		problems.push(...clientProblems(`clients.${index}`, client))
+		if (file.clients.findIndex((other) => other.clientId === client.clientId) !== index) problems.push(`clients.${index}.clientId repeats a client`)
+	}
+	if (problems.length > 0) return refuseFile(path, 'an external application', problems)
+	return {
+		app: file.app,
+		name: file.name,
+		resource: file.resource,
+		roles: roles.length === 0 ? null : roles,
+		clients: file.clients.map((client) => ({ clientId: client.clientId, redirectUris: client.redirectUris, metadataUrl: client.metadataUrl ?? null })),
+	}
+}
+
+/** An `oauthClients.put` request (an MCP authoring client) from a file, checked against the contract before it is sent. */
+export const parseOAuthClientFile = (value: JsonValue, path: string): PutOAuthClientRequest => {
+	const shape = oauthClientFileSchema.safeParse(value)
+	if (!shape.success) return refuseFile(path, 'an authoring client', shapeProblems(shape.error))
+	const file = shape.data
+	const problems = clientProblems('(file)', file)
+	if (problems.length > 0) return refuseFile(path, 'an authoring client', problems)
+	return { clientId: file.clientId, label: file.label, redirectUris: file.redirectUris, metadataUrl: file.metadataUrl ?? null }
+}
+
+/** What `external-apps get` prints: the file `external-apps put` takes back, so a record can be kept and edited as a file. */
+export const externalAppFile = (app: ExternalAppDto): PutExternalAppRequest => ({
+	app: app.app,
+	name: app.name ?? app.app,
+	resource: app.resource,
+	roles: app.roles,
+	clients: app.clients,
+})
+
+const externalAppLine = (app: ExternalAppDto): string =>
+	[app.app, app.name ?? '', app.resource, `${app.roles?.length ?? 0} roles`, `${app.clients.length} clients`].join('\t')
+
+const oauthClientLine = (client: OAuthClientDto): string =>
+	[client.clientId, client.label, client.externalApp ?? 'authoring', client.redirectUris.join(',')].join('\t')
+
+const positionalArgument = (flags: Flags, what: string, usage: string): string => {
+	const value = flags.positional[1]
+	if (value === undefined || value === '') throw new Error(`${usage} needs ${what}`)
+	if (flags.positional.length > 2) throw new Error(`${usage} takes only ${what}`)
+	return value
+}
+
+const fileArgument = async (flags: Flags): Promise<{ readonly path: string; readonly value: JsonValue }> => {
+	const path = required(flags, 'file')
+	return { path, value: await readJsonFile(path) }
+}
+
+/** Every registry verb names the not-imported refusal's way out: deploy the platform first. */
+const registryCall = async <T>(call: () => Promise<T>): Promise<T> => {
+	try {
+		return await call()
+	} catch (error) {
+		if (error instanceof RpcError && error.httpStatus === 409 && error.message === OAUTH_REGISTRY_NOT_IMPORTED) {
+			throw new Error(
+				'IAM does not take registry writes yet: a platform deploy of this release has not imported the OAuth client list. '
+					+ 'Run the platform deploy, then repeat this command.',
+			)
+		}
+		throw error
+	}
+}
+
+const runExternalApps = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	if (verb === 'put') {
+		const { path, value } = await fileArgument(flags)
+		const request = parseExternalAppFile(value, path)
+		const result = await registryCall(() => iamAdminClient(flags.values.get('iam-url'), env).externalApps.put(request))
+		emit(flags, result, () => externalAppLine(result))
+		return
+	}
+	if (verb === 'list') {
+		const result = await iamAdminClient(flags.values.get('iam-url'), env).externalApps.list()
+		emitList(flags, result, externalAppLine, 'no external applications registered')
+		return
+	}
+	if (verb === 'get') {
+		const app = positionalArgument(flags, 'an app id', '`control external-apps get`')
+		const result = await iamAdminClient(flags.values.get('iam-url'), env).externalApps.get({ app })
+		console.info(JSON.stringify(flags.json ? result : externalAppFile(result), null, 2))
+		return
+	}
+	if (verb === 'delete') {
+		const app = positionalArgument(flags, 'an app id', '`control external-apps delete`')
+		const result = await iamAdminClient(flags.values.get('iam-url'), env).externalApps.delete({ app })
+		emit(flags, result, () => 'deleted')
+		return
+	}
+	throw new Error(`Unknown \`control external-apps\` verb: ${verb ?? '(missing)'}`)
+}
+
+const runOAuthClients = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	if (verb === 'put') {
+		const { path, value } = await fileArgument(flags)
+		const request = parseOAuthClientFile(value, path)
+		const result = await registryCall(() => iamAdminClient(flags.values.get('iam-url'), env).oauthClients.put(request))
+		emit(flags, result, () => oauthClientLine(result))
+		return
+	}
+	if (verb === 'list') {
+		const result = await iamAdminClient(flags.values.get('iam-url'), env).oauthClients.list()
+		emitList(flags, result, oauthClientLine, 'no OAuth clients registered')
+		return
+	}
+	if (verb === 'delete') {
+		const clientId = positionalArgument(flags, 'a client id', '`control oauth-clients delete`')
+		const result = await iamAdminClient(flags.values.get('iam-url'), env).oauthClients.delete({ clientId })
+		emit(flags, result, () => 'deleted')
+		return
+	}
+	throw new Error(`Unknown \`control oauth-clients\` verb: ${verb ?? '(missing)'}`)
+}
+
 const runDeploy = async (flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	const ref = optional(flags, 'ref')
 	const client = controlClient(flags, env)
@@ -1282,6 +1559,12 @@ export const runControlCli = async (
 			case 'deploy':
 				await runDeploy(flags, env)
 				return
+			case 'external-apps':
+				await runExternalApps(verb, flags, env)
+				return
+			case 'oauth-clients':
+				await runOAuthClients(verb, flags, env)
+				return
 			default:
 				throw new Error(`Unknown control command: ${command}\n\n${USAGE}`)
 		}
@@ -1289,7 +1572,7 @@ export const runControlCli = async (
 		// An RPC denial is an ANSWER, not a transport fault; keep its type so a caller can tell "the
 		// control plane said no" from "the control plane was unreachable".
 		const message = error instanceof RpcError ? `${error.type}: ${error.message}` : error instanceof Error ? error.message : String(error)
-		throw new Error(withoutControlKey(message, env))
+		throw new Error(withoutProvisioningKey(withoutControlKey(message, env), env))
 	}
 }
 

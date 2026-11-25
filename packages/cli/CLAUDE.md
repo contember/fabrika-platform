@@ -51,6 +51,13 @@ label the envelope a registration carries.
   and the unreachable-IAM message both say so. The origin passes the same check as
   Control's (`credentialOrigin`: https or loopback http, origin only) before either key
   is read into a request, and a redirect is refused, never followed.
+- `external-apps` and `oauth-clients` are the exception to "one procedure of `ControlRpcContract`": they call IAM's
+  `IamAdminRpcContract` at `<FABRIKA_IAM_RPC_URL>/admin/rpc` (`iamAdminClient`), with FABRIKA_IAM_PROVISIONING_KEY as the
+  bearer, the credential Control's own IAM provisioning client sends ([ADR-0089](../../docs/decisions/0089-oauth-clients-are-registered-in-iam-at-runtime.md)).
+  The origin passes `credentialOrigin`, no redirect is followed, an answer that echoes the key is dropped and every
+  error has the key cut out. `put` reads the whole record from `--file` and checks it with the contract's predicates
+  before anything is sent; `external-apps get` prints that same file. IAM's not-imported refusal
+  (`OAUTH_REGISTRY_NOT_IMPORTED`) is reworded as "deploy first". A person's device grant does not reach IAM's admin API.
 - `namespaces create` commits the plan it just read, never a second derivation —
   the console's two-step form has the same rule for the same reason.
 - `apps variables` writes an app's operator-set values, and a name the app's
