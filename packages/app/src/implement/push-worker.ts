@@ -5,8 +5,8 @@
 // session, read through the proxy when the push arrives. Plain script, no module syntax, nothing evaluated from a string.
 //
 // It talks to two rows: `POST /__fabrika/push/subscription` (`implement/push-subscription.ts`), and
-// `POST /__fabrika/push/inbox` (answering `PushInboxAnswer`), which a later release serves. Until then no push reaches
-// it: nothing sends one.
+// `POST /__fabrika/push/inbox` (answering `PushInboxAnswer`, `dispatch.ts`'s `#pushInbox`). Until the sender ships no
+// push reaches it: nothing sends one.
 
 import { PUSH_PREFIX } from '../contract/defaults'
 

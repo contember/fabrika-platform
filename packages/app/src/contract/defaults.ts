@@ -164,6 +164,11 @@ export const PUSH_SUBSCRIPTION_ROW_ID = '__fabrika.push.subscription'
 export const PUSH_SUBSCRIPTION_PATH = `${PUSH_PREFIX}/subscription`
 /** The subscription row's limits: its body, and its bucket per caller (a page load asks once or twice). */
 export const PUSH_SUBSCRIPTION_LIMITS = { maxBytes: 4 * 1024, perCaller: 30 } as const
+/** The worker's row: it names its subscription and gets the caller's unseen notifications for it, and moves the cursor. */
+export const PUSH_INBOX_ROW_ID = '__fabrika.push.inbox'
+export const PUSH_INBOX_PATH = `${PUSH_PREFIX}/inbox`
+/** The inbox row's limits: its body (one endpoint), its bucket per caller, and the rows one read answers at most. */
+export const PUSH_INBOX_LIMITS = { maxBytes: 2 * 1024, perCaller: 60, rows: 20 } as const
 /**
  * The push services a subscription may name (ADR-0088 §8): Google's (Chrome, Edge on Android, Opera), Mozilla's,
  * Apple's and Microsoft's (Edge on Windows). Any other endpoint is refused at the subscription row, so the sender never

@@ -115,6 +115,7 @@ import {
 	valueList,
 	valuesNode,
 } from './nodes'
+import { notifications } from './notifications'
 import { dataAccess } from './orm'
 import {
 	type Acknowledgement,
@@ -3508,6 +3509,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			files: storedFiles(() => runtimeOf(connection)),
 			receipts: requestReceipts(),
 			push: pushSubscriptions(),
+			notifications: notifications(),
 		}),
 		data: dataAccess({
 			models,

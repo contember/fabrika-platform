@@ -20,6 +20,7 @@ export const FILE_DELETIONS_TABLE = 'fabrika_file_deletions'
 export const REQUEST_RECEIPTS_TABLE = 'fabrika_request_receipts'
 export const LIST_CURSOR_KEY_TABLE = 'fabrika_list_cursor_key'
 export const PUSH_SUBSCRIPTIONS_TABLE = 'fabrika_push_subscriptions'
+export const NOTIFICATIONS_TABLE = 'fabrika_notifications'
 /** The function an application's last adoption migration calls with the name of a file collection it adopted. */
 export const FILES_RELEASE_FUNCTION = 'fabrika_files_release'
 /**
@@ -355,6 +356,28 @@ CREATE TABLE ${PUSH_SUBSCRIPTIONS_TABLE} (
 );
 CREATE INDEX ${PUSH_SUBSCRIPTIONS_TABLE}_principal ON ${PUSH_SUBSCRIPTIONS_TABLE} (principal, recorded_at) WHERE gone_at IS NULL;
 CREATE INDEX ${PUSH_SUBSCRIPTIONS_TABLE}_gone_at ON ${PUSH_SUBSCRIPTIONS_TABLE} (gone_at) WHERE gone_at IS NOT NULL;
+`,
+	}),
+	Object.freeze({
+		name: '0016_notifications.sql',
+		sql: `-- A notification for one principal (ADR-0088 §6): its text and the path a click opens, and what the recipient must
+-- hold to read it, checked when the inbox answers: an action on an object (its dimension and key), or the action as a
+-- global grant (dimension and scope_value null). The id is a UUIDv7, so its order is the order written, which a
+-- subscription's cursor counts in. created_at is epoch milliseconds; a row lives seven days.
+CREATE TABLE ${NOTIFICATIONS_TABLE} (
+	id UUID PRIMARY KEY,
+	principal TEXT NOT NULL,
+	title TEXT NOT NULL,
+	body TEXT NOT NULL,
+	path TEXT NOT NULL,
+	action TEXT NOT NULL,
+	dimension TEXT,
+	scope_value TEXT,
+	created_at BIGINT NOT NULL,
+	CONSTRAINT ${NOTIFICATIONS_TABLE}_about CHECK ((dimension IS NULL) = (scope_value IS NULL))
+);
+CREATE INDEX ${NOTIFICATIONS_TABLE}_principal ON ${NOTIFICATIONS_TABLE} (principal, id);
+CREATE INDEX ${NOTIFICATIONS_TABLE}_created_at ON ${NOTIFICATIONS_TABLE} (created_at);
 `,
 	}),
 ])

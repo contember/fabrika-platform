@@ -124,6 +124,7 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 		const artifact = readContractSource(application(edited("app: 'notes',", "app: 'notes',\n\tnotifications: true,")))
 		expect(artifact.notifications).toBe(true)
 		expect(artifact.endpoints.filter((row) => row.source.kind === 'push').map((row) => row.id).sort()).toEqual([
+			'__fabrika.push.inbox',
 			'__fabrika.push.subscription',
 			'__fabrika.push.worker',
 		])

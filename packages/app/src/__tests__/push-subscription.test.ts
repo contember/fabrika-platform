@@ -34,6 +34,7 @@ describe('the contract build and the artifact parser', () => {
 	test('notifications add the subscription row beside the worker row, with its own rules', () => {
 		expect(artifact.endpoints.find((row) => row.id === SUBSCRIPTION_ROW.id)).toEqual(SUBSCRIPTION_ROW)
 		expect(artifact.endpoints.filter((row) => row.source.kind === 'push').map((row) => row.id).sort()).toEqual([
+			'__fabrika.push.inbox',
 			'__fabrika.push.subscription',
 			'__fabrika.push.worker',
 		])

@@ -396,7 +396,7 @@ src/
   exports under `/__fabrika/connect/<export>.v<version>.<procedure>`, each export's
   description at `/__fabrika/connect/<export>.v<version>`; a webhook
   appends `/:bindingId`; the vocabulary's `notifications: true` (ADR-0088) adds the push rows under the reserved
-  `/__fabrika/push` (`PUSH_PREFIX`), today two: the service worker's, `GET /__fabrika/push/worker.js`
+  `/__fabrika/push` (`PUSH_PREFIX`), today three: the service worker's, `GET /__fabrika/push/worker.js`
   (`PUSH_WORKER_ROW_ID`, source `push`, kind `query`, caller `human`, requirement `member`), which `boot` serves as the
   fixed script of `implement/push-worker.ts`: no `fetch` handler, no cache, no read of a push's payload; and the
   subscription row, `POST /__fabrika/push/subscription` (`PUSH_SUBSCRIPTION_ROW_ID`, kind `mutation`, the same caller
@@ -407,9 +407,15 @@ src/
   must be a URL of `PUSH_SERVICE_ORIGINS` as the URL parser writes it, and its `key` the environment's current VAPID
   public key (`BootOptions.pushKey`; without one a record is the 503 `push_key_missing`); an endpoint bound to another
   principal (409 `push_subscription_taken`) and a replacement of one that was not the caller's (409
-  `push_replacement_refused`) roll back. A notifying contract does not boot without a `scoped(tables)` layer. The
-  artifact parser admits exactly those two rows field for field, and only beside `notifications: true` and the reserved
-  prefix. No authored path may lie under `/__fabrika`.
+  `push_replacement_refused`) roll back. The inbox row, `POST /__fabrika/push/inbox` (`PUSH_INBOX_ROW_ID`, the same
+  form, `PUSH_INBOX_LIMITS`), takes `{ endpoint }` and answers the worker's `PushInboxAnswer`: for the caller's own
+  subscription, the caller's rows of `@fabrika/db`'s `fabrika_notifications` after its cursor (at most
+  `PUSH_INBOX_LIMITS.rows`), of which only those the caller may read now (`#mayRead`: a row about an object takes
+  `#onRef`, the `on` check; an application-wide one the action as a global grant; an undeclared action nothing); the
+  cursor moves past every row read, and `more` counts the rest, unchecked. Another principal's subscription is
+  deleted and answered `mine: false`, as is one the table does not hold. A notifying contract does not boot without a
+  `scoped(tables)` layer. The artifact parser admits exactly those three rows field for field, and only beside
+  `notifications: true` and the reserved prefix. No authored path may lie under `/__fabrika`.
 - **The proxy reads the contract's endpoint table**, `contractProxyTable(artifact)` from
   `@fabrika/proxy-core/manifest`; nothing else describes an application to the proxy, and
   the strict manifest parser refuses any other form (ADR-0022 rule 3).

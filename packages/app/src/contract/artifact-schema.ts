@@ -49,6 +49,9 @@ import {
 	challengeRowId,
 	JOB_LIMITS,
 	PROCEDURE_LIMITS,
+	PUSH_INBOX_LIMITS,
+	PUSH_INBOX_PATH,
+	PUSH_INBOX_ROW_ID,
 	PUSH_PREFIX,
 	PUSH_SUBSCRIPTION_LIMITS,
 	PUSH_SUBSCRIPTION_PATH,
@@ -629,32 +632,30 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 		// The push rows are the framework's, exactly as the build writes them, and exist exactly when notifications are declared.
 		const pushRows = artifact.endpoints.filter((row) => row.source.kind === 'push')
 		for (const row of pushRows) {
-			if (!isPushWorkerRow(row) && !isPushSubscriptionRow(row)) {
+			if (!isPushWorkerRow(row) && !PUSH_POST_ROWS.some((expected) => isPushPostRow(row, expected))) {
 				context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${row.id}' is no push row the framework writes` })
 			}
 		}
 		const pushIds = new Set(pushRows.map((row) => row.id))
-		const complete = pushRows.length === 2 && pushIds.has(PUSH_WORKER_ROW_ID) && pushIds.has(PUSH_SUBSCRIPTION_ROW_ID)
+		const complete = pushRows.length === 1 + PUSH_POST_ROWS.length && pushIds.has(PUSH_WORKER_ROW_ID)
+			&& PUSH_POST_ROWS.every((expected) => pushIds.has(expected.id))
 		if ((artifact.notifications === true) !== complete || (pushRows.length > 0 && !complete)) {
 			context.addIssue({
 				code: 'custom',
 				path: ['notifications'],
-				message: 'declared notifications have exactly the service worker row and the subscription row',
+				message: 'declared notifications have exactly the service worker, subscription and inbox rows',
 			})
 		}
-		const pushRules = artifact.procedures?.[PUSH_SUBSCRIPTION_ROW_ID]
-		if (pushRules !== undefined || pushIds.has(PUSH_SUBSCRIPTION_ROW_ID)) {
-			const rate = pushRules?.rate
+		for (const expected of PUSH_POST_ROWS) {
+			const rules = artifact.procedures?.[expected.id]
+			if (rules === undefined && !pushIds.has(expected.id)) continue
+			const rate = rules?.rate
 			if (
-				rate?.perClient !== null || rate.perCaller !== PUSH_SUBSCRIPTION_LIMITS.perCaller || rate.perEndpoint !== null
-				|| rate.bytesPerHour !== null || pushRules?.challenge !== null || pushRules.timeoutMs !== PROCEDURE_LIMITS.timeoutMs
-				|| pushRules.query !== undefined || pushRules.changesStateOnGet !== undefined
+				rate?.perClient !== null || rate.perCaller !== expected.perCaller || rate.perEndpoint !== null || rate.bytesPerHour !== null
+				|| rules?.challenge !== null || rules.timeoutMs !== PROCEDURE_LIMITS.timeoutMs || rules.query !== undefined
+				|| rules.changesStateOnGet !== undefined
 			) {
-				context.addIssue({
-					code: 'custom',
-					path: ['procedures', PUSH_SUBSCRIPTION_ROW_ID],
-					message: "the subscription row has the framework's own rules, beside its row",
-				})
+				context.addIssue({ code: 'custom', path: ['procedures', expected.id], message: `'${expected.id}' has the framework's own rules, beside its row` })
 			}
 		}
 		if (pushRows.length > 0 && !artifact.reservedPrefixes.includes(PUSH_PREFIX)) {
@@ -674,11 +675,17 @@ function isPushWorkerRow(row: EndpointRow): boolean {
 		&& row.crossOrigin === undefined && row.response === undefined
 }
 
-/** The subscription row (ADR-0088), field for field as `buildArtifact` writes it. */
-function isPushSubscriptionRow(row: EndpointRow): boolean {
-	return row.id === PUSH_SUBSCRIPTION_ROW_ID && row.source.name === 'subscription' && row.kind === 'mutation' && row.method === 'POST'
-		&& row.path === PUSH_SUBSCRIPTION_PATH && row.admission?.contentTypes.length === 1 && row.admission.contentTypes[0] === 'application/json'
-		&& row.admission.maxBytes === PUSH_SUBSCRIPTION_LIMITS.maxBytes && row.input === null && row.output === null
+/** The framework's push rows a page or the worker posts JSON to, with their body limit and bucket per caller. */
+const PUSH_POST_ROWS = [
+	{ id: PUSH_SUBSCRIPTION_ROW_ID, name: 'subscription', path: PUSH_SUBSCRIPTION_PATH, ...PUSH_SUBSCRIPTION_LIMITS },
+	{ id: PUSH_INBOX_ROW_ID, name: 'inbox', path: PUSH_INBOX_PATH, maxBytes: PUSH_INBOX_LIMITS.maxBytes, perCaller: PUSH_INBOX_LIMITS.perCaller },
+] as const
+
+/** The subscription or the inbox row (ADR-0088), field for field as `buildArtifact` writes it. */
+function isPushPostRow(row: EndpointRow, expected: (typeof PUSH_POST_ROWS)[number]): boolean {
+	return row.id === expected.id && row.source.name === expected.name && row.kind === 'mutation' && row.method === 'POST'
+		&& row.path === expected.path && row.admission?.contentTypes.length === 1 && row.admission.contentTypes[0] === 'application/json'
+		&& row.admission.maxBytes === expected.maxBytes && row.input === null && row.output === null
 		&& row.callers.length === 1 && row.callers[0] === 'human' && row.requirement?.kind === 'member'
 		&& row.crossOrigin === undefined && row.response === undefined
 }
