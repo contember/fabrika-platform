@@ -1,6 +1,7 @@
 import type { EndpointKind, EndpointMethod } from '@fabrika/auth-core'
 import type { JsonValue, ProviderEnvelope } from '@fabrika/provider-contract'
 import { z } from 'zod'
+import type { ApprovalCategory, ApprovalPolicy, ReviewReason } from './approval-policy.js'
 
 export * from './access.js'
 export * from './builder-bootstrap.js'
@@ -268,6 +269,8 @@ export interface AppEnvDto {
 	 * order; `DEFAULT_APPROVAL_CATEGORIES` unless someone chose otherwise.
 	 */
 	approvalCategories: ApprovalCategory[]
+	/** What lets a change of each category through while the environment is protected (ADR-0083 §3); `STRICT_POLICY` unless someone chose otherwise. */
+	approvalPolicy: ApprovalPolicy
 	/** The run whose snapshot is this environment's active access; null until a run publishes one. */
 	publishedRunId: string | null
 	/**
@@ -698,27 +701,6 @@ export interface ChangeAudienceDto {
 	callers?: string[]
 }
 
-/**
- * Why a line needs closer review: a step off the paved road, something anyone without signing in sets off, a mutation
- * served on `GET`, people becoming visible, a file collection adopted or released, the application naming who signs
- * in at an enrolled terminal, or a migration statement not known to keep every stored value.
- */
-export const REVIEW_REASONS = ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'] as const
-
-export type ReviewReason = (typeof REVIEW_REASONS)[number]
-
-/**
- * The kinds of change an environment may make wait for a person (ADR-0083): each closer-review reason, the permission
- * changes in the contract (`role-actions`, `role-external`, `role-added`), an endpoint anyone opens (`public`), a CSP
- * origin (`csp`), and a console grant, grant edit or revocation in IAM (`grants`). `changeCategories` places a line.
- */
-export const APPROVAL_CATEGORIES = [...REVIEW_REASONS, 'role-actions', 'role-external', 'role-added', 'public', 'csp', 'grants'] as const
-
-export type ApprovalCategory = (typeof APPROVAL_CATEGORIES)[number]
-
-/** What a protected environment waits for when nobody chose otherwise: ADR-0050's closer-review reasons, nothing more. */
-export const DEFAULT_APPROVAL_CATEGORIES: readonly ApprovalCategory[] = REVIEW_REASONS
-
 /** What a call sets off, when the line says so. */
 export interface ChangeConsequenceDto {
 	kind: 'starts-job'
@@ -810,13 +792,13 @@ export interface CompleteApprovalRequest {
 	baselineDigest: string
 }
 
-/** Change whether, and for which kinds of change, a deploy or a grant waits for approval on one environment (ADR-0050 §4, ADR-0083). */
+/** Change whether, and with which mode per category, a change waits for approval on one environment (ADR-0050 §4, ADR-0083). */
 export interface SetEnvironmentProtectionRequest {
 	appId: string
 	env: string
 	protected: boolean
-	/** The categories that wait while protected; omitted keeps the stored choice. */
-	categories?: ApprovalCategory[]
+	/** The mode of each category while protected; omitted keeps the stored choice. A mode the category does not take is a 400. */
+	policy?: ApprovalPolicy
 }
 
 export interface TriggerDeployRequest {
@@ -838,6 +820,7 @@ export interface RunLogResponse {
 }
 
 export { OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/auth-core'
+export * from './approval-policy.js'
 export * from './approval-view.js'
 export type {
 	AdoptNamespaceInput,

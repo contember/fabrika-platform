@@ -3,6 +3,7 @@ import { TEST_BRAND } from './brand'
 
 export interface RouterLeaf {
 	method: string
+	kind: 'query' | 'mutation'
 	requirements: number
 	/** Top-level keys of the procedure's input object; empty only for a procedure that takes no input. */
 	inputKeys: string[]
@@ -18,6 +19,7 @@ export function routerLeaves(node: unknown, path: string[] = []): RouterLeaf[] {
 		const requirements = Reflect.get(node, 'requirements')
 		return [{
 			method: path.join('.'),
+			kind: Reflect.get(node, 'kind') === 'mutation' ? 'mutation' : 'query',
 			requirements: Array.isArray(requirements) ? requirements.length : 0,
 			inputKeys: objectKeys(Reflect.get(node, 'input')),
 		}]

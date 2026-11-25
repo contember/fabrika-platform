@@ -2796,7 +2796,7 @@ td {
 	padding-right: 0;
 }
 
-/* The kinds of change an environment approves (ADR-0083): one column of grouped checkboxes under the switch. */
+/* What lets each kind of change through on an environment (ADR-0083): the presets, then one row per category with its mode. */
 .approval-categories {
 	display: flex;
 	flex-direction: column;
@@ -2810,6 +2810,28 @@ td {
 	display: flex;
 	flex-direction: column;
 	gap: 2px;
+}
+
+.approval-presets {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--s-2);
+}
+
+.approval-mode {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 13rem;
+	align-items: center;
+	gap: var(--s-2);
+	max-width: 52rem;
+}
+
+@media (max-width: 700px) {
+	.approval-mode {
+		grid-template-columns: minmax(0, 1fr);
+		gap: 2px;
+	}
 }
 
 /* Two related values in one cell, the second under the first. */

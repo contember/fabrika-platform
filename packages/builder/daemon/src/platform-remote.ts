@@ -4,11 +4,14 @@ import {
 	type AppEnvDto,
 	APPROVAL_CATEGORIES,
 	type ApprovalCategory,
+	approvalPolicySchema,
 	type ControlRpcContract,
 	DEFAULT_APPROVAL_CATEGORIES,
 	type JsonValue,
+	policyFromCategories,
 	type ProviderEnvelopeDto,
 	type RunStatus,
+	STRICT_POLICY,
 	SURFACE_REACHES,
 	type SurfaceEndpointDto,
 } from '@fabrika/control-contract'
@@ -47,33 +50,40 @@ const surfaceEndpointSchema: z.ZodType<SurfaceEndpointDto> = z.object({
 	notes: z.array(storedTextSchema),
 })
 const environmentsSchema = z.object({
-	items: z.array(z.object({
-		appId: storedTextSchema,
-		env: storedTextSchema,
-		// A Control older than the field has standard environments only.
-		kind: z.enum(APP_ENV_KINDS).default('standard'),
-		domain: storedTextSchema.nullable(),
-		publicOrigin: storedTextSchema.nullable(),
-		// A Control older than the field lists none.
-		crossOrigins: z.array(storedTextSchema).default([]),
-		triggerRef: storedTextSchema.nullable(),
-		authoring: z.boolean(),
-		protected: z.boolean(),
-		// A Control older than the field waits for the defaults; a category this release does not know is left out.
-		approvalCategories: z.array(storedTextSchema).optional().transform((values): ApprovalCategory[] =>
-			values === undefined ? [...DEFAULT_APPROVAL_CATEGORIES] : APPROVAL_CATEGORIES.filter((category) => values.includes(category))
-		),
-		publishedRunId: storedTextSchema.nullable(),
-		// A Control older than the field lists none.
-		deviationSubjects: z.array(z.object({ subject: storedTextSchema, steps: z.array(storedTextSchema) })).default([]),
-		// A Control older than the field lists none.
-		surface: z.array(surfaceEndpointSchema).default([]),
-		namespaceId: storedTextSchema.nullable(),
-		provider: storedTextSchema,
-		target: envelopeSchema,
-		artifact: envelopeSchema,
-		createdAt: storedIntegerSchema,
-	})),
+	items: z.array(
+		z.object({
+			appId: storedTextSchema,
+			env: storedTextSchema,
+			// A Control older than the field has standard environments only.
+			kind: z.enum(APP_ENV_KINDS).default('standard'),
+			domain: storedTextSchema.nullable(),
+			publicOrigin: storedTextSchema.nullable(),
+			// A Control older than the field lists none.
+			crossOrigins: z.array(storedTextSchema).default([]),
+			triggerRef: storedTextSchema.nullable(),
+			authoring: z.boolean(),
+			protected: z.boolean(),
+			// A Control older than the field waits for the defaults; a category this release does not know is left out.
+			approvalCategories: z.array(storedTextSchema).optional().transform((values): ApprovalCategory[] =>
+				values === undefined ? [...DEFAULT_APPROVAL_CATEGORIES] : APPROVAL_CATEGORIES.filter((category) => values.includes(category))
+			),
+			// A Control older than the field, or one whose policy this release cannot read, stands for its categories.
+			approvalPolicy: approvalPolicySchema.partial().optional().catch(undefined),
+			publishedRunId: storedTextSchema.nullable(),
+			// A Control older than the field lists none.
+			deviationSubjects: z.array(z.object({ subject: storedTextSchema, steps: z.array(storedTextSchema) })).default([]),
+			// A Control older than the field lists none.
+			surface: z.array(surfaceEndpointSchema).default([]),
+			namespaceId: storedTextSchema.nullable(),
+			provider: storedTextSchema,
+			target: envelopeSchema,
+			artifact: envelopeSchema,
+			createdAt: storedIntegerSchema,
+		}).transform(({ approvalPolicy, ...environment }): AppEnvDto => ({
+			...environment,
+			approvalPolicy: approvalPolicy === undefined ? policyFromCategories(environment.approvalCategories) : { ...STRICT_POLICY, ...approvalPolicy },
+		})),
+	),
 })
 const runSchema = z.object({
 	id: storedTextSchema,

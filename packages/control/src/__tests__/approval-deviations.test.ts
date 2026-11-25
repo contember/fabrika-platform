@@ -4,7 +4,7 @@
 
 import { canonicalArtifactJson, canonicalJson, sha256Hex } from '@fabrika/auth-core'
 import { readContractSource } from '@fabrika/check/contract'
-import { DEFAULT_APPROVAL_CATEGORIES, waitsForApproval } from '@fabrika/control-contract'
+import { type AccessChangeDto, type ApprovalCategory, DEFAULT_APPROVAL_CATEGORIES, gate, policyFromCategories } from '@fabrika/control-contract'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
 import { migrationChecksum, readPostgresMigrationBundle } from '@fabrika/platform-node'
@@ -39,6 +39,11 @@ import { BASE } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
 import { AUDIT_TRIGGER_MIGRATION, kitFiles, type KitOptions, NOTES_MIGRATION } from './helpers/kit-contract'
 import { makeFakeLock } from './helpers/lock'
+
+/** Whether a change waits under a category list, through the gate. */
+function waitsForApproval(changes: readonly AccessChangeDto[], categories: readonly ApprovalCategory[]): boolean {
+	return gate({ lines: changes }, policyFromCategories(categories)).kind !== 'pass'
+}
 
 const COMMIT = 'c'.repeat(40)
 const ORIGIN = 'https://control.example.test'

@@ -51,6 +51,8 @@ export interface AppEnvRow {
 	protection_revision: number
 	/** The categories that wait while protected, as their difference from the defaults (ADR-0083); read through `appEnvCategories`. */
 	approval_categories: string | null
+	/** The mode per category that differs from the defaults (ADR-0083 §2), written beside `approval_categories`; read through `appEnvPolicy`. */
+	approval_policy: string | null
 	/** The contract digest IAM last received for the environment; NULL until Control writes its schema. */
 	iam_digest: string | null
 	/** When Control took the environment offline (`apps.environments.suspend`); NULL while it serves. */

@@ -1,8 +1,8 @@
 import { isStructuralError } from '@fabrika/app'
-import type { AppEnvDto, RegisterAppRequest, RegisterAppResponse } from '@fabrika/control-contract'
+import { type AppEnvDto, type RegisterAppRequest, type RegisterAppResponse, waitingCategories } from '@fabrika/control-contract'
 import type { ControlProvider, ProviderApp, ProviderDeploymentNamespace, ProviderEnvironment, ProviderRegistration } from '@fabrika/provider-contract'
 import { snapshotAccessMap } from '../../approval/access-map'
-import { appEnvCategories } from '../../approval/categories'
+import { appEnvPolicy } from '../../approval/categories'
 import { snapshotDeviations } from '../../approval/diff'
 import { requirePersonToPointPublicOrigin, requirePersonToPointTriggerRef } from '../../approval/human'
 import { approvedSnapshot } from '../../approval/snapshot'
@@ -249,7 +249,8 @@ export function toAppEnvDto(row: AppEnvRow): AppEnvDto {
 		triggerRef: row.trigger_ref,
 		authoring: row.authoring === 1,
 		protected: row.protected === 1,
-		approvalCategories: appEnvCategories(row),
+		approvalCategories: waitingCategories(appEnvPolicy(row)),
+		approvalPolicy: appEnvPolicy(row),
 		publishedRunId: row.published_run_id,
 		deviationSubjects: snapshotDeviations(snapshot),
 		surface: snapshotSurface(snapshot),

@@ -8,9 +8,9 @@ import {
 	type SurfaceEndpointDto,
 	type SurfaceNoteDto,
 	type SurfaceReach,
-	waitsForApproval,
 } from '@fabrika/control-contract'
 import { type Lamp, runLamp } from '../components/Status'
+import { changeWaits } from './environment-protection'
 
 export type AccessEffect = AccessChangeDto['effect']
 
@@ -163,8 +163,9 @@ export function approvalStage(approval: ApprovalDto): { readonly lamp: Lamp; rea
  * A run without an approval: one that waited and was refused (a refusal is the only way out of waiting without an
  * approval or a cancellation), or one that never waited, because its change narrows or its environment is unprotected.
  */
-function unapproved({ run, changes, protected: guarded, categories }: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
-	if (waitsForApproval(changes, categories) && guarded && run.status === 'failed') return { lamp: 'stop', text: 'Refused' }
+function unapproved(approval: ApprovalDto): { readonly lamp: Lamp; readonly text: string } {
+	const { run, protected: guarded } = approval
+	if (changeWaits(approval) && guarded && run.status === 'failed') return { lamp: 'stop', text: 'Refused' }
 	switch (run.status) {
 		case 'pending':
 		case 'running':

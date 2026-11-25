@@ -3,7 +3,7 @@ import type { AuthContext } from '@fabrika/auth'
 import { type OpsContentView, type OpsView, parseAppEnvironmentId } from '@fabrika/auth-core'
 import {
 	APP_ENV_KINDS,
-	APPROVAL_CATEGORIES,
+	approvalPolicySchema,
 	BUILDER_APPROVAL_VERIFIER,
 	BUILDER_CONNECTION_ATTEMPT_ID,
 	BUILDER_CONNECTION_IDENTIFIER,
@@ -122,7 +122,7 @@ import { isInstallationSender, type MailRelay, mayRequeueMail, releaseMailMessag
 import { operationDeploys, type RunDeps } from './run-lifecycle'
 import { buildControlRpcDeps, type ControlRpcDeps } from './services'
 
-interface ControlRpcContext {
+export interface ControlRpcContext {
 	readonly env: Env
 	readonly provider: ControlProvider
 	readonly sourceConnection: SourceConnectionPort
@@ -183,7 +183,7 @@ const protectEnvironmentInput = z.object({
 	appId: nonEmpty,
 	env: nonEmpty,
 	protected: z.boolean(),
-	categories: z.array(z.enum(APPROVAL_CATEGORIES)).optional(),
+	policy: approvalPolicySchema.strict().optional(),
 }).strict()
 const accessDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
 const completeApprovalInput = z.object({
