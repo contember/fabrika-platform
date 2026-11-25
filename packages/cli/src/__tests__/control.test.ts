@@ -5,6 +5,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+	APPROVAL_PENDING_EXIT_CODE,
+	ApprovalPendingError,
 	CONTROL_USAGE,
 	environmentLine,
 	followRequest,
@@ -656,6 +658,139 @@ describe('control apps secrets', () => {
 			method: 'approvals.requests.create',
 			input: { kind: 'apps.secrets.delete', input: { appId: 'notes', name: 'API_KEY' } },
 		})
+	})
+})
+
+/** Answer each request with the next envelope, at status 200 for a result and 409 for an error, and record the methods. */
+const sequenceFetch = (envelopes: unknown[]): { methods: string[] } => {
+	const methods: string[] = []
+	globalThis.fetch = asFetch(async (_input, init) => {
+		const raw = init?.body
+		const body: unknown = typeof raw === 'string' ? JSON.parse(raw) : null
+		methods.push(typeof body === 'object' && body !== null ? String(Reflect.get(body, 'method')) : '')
+		const next = envelopes.shift()
+		if (next === undefined) throw new Error('no answer left')
+		const status = typeof next === 'object' && next !== null && 'error' in next ? 409 : 200
+		return new Response(JSON.stringify(next), { status, headers: { 'content-type': 'application/json' } })
+	})
+	return { methods }
+}
+
+describe('a write that waits for a person', () => {
+	const SECRET = 'n0t-for-any-log'
+	const piped = (text: string): SecretValueInput => ({ isTerminal: () => false, text: () => Promise.resolve(text) })
+	const url = 'https://console.example.test/approvals/requests/q1'
+	const fingerprint = createHash('sha256').update(SECRET).digest('hex').slice(0, 8)
+	const waiting = (data: Record<string, string>) => ({
+		error: { type: 'approval_requested', message: `the change was not made: it waits for a person, who approves or refuses it at ${url}`, data },
+	})
+	const request = (state: string) => ({
+		result: {
+			id: 'q1',
+			kind: 'apps.secrets.put',
+			category: 'secrets',
+			appId: 'notes',
+			env: 'prod',
+			state,
+			url,
+			requester: { principal: { id: 'svc', type: 'service', label: 'ci' }, credential: 'key', personId: null },
+			description: { summary: [], facts: [] },
+			described: true,
+			inputDigest: `sha256:${'a'.repeat(64)}`,
+			approvers: 1,
+			requesterMayApprove: true,
+			stepUp: 'none',
+			deadline: 2,
+			createdAt: 1,
+			updatedAt: 1,
+		},
+	})
+	const outcome = (run: () => Promise<void>) => run().then(() => null, (error: unknown) => error)
+
+	test('prints the link and its own fingerprint, and fails with the exit code of a pending change', async () => {
+		sequenceFetch([waiting({ id: 'q1', url, state: 'pending', fingerprint })])
+		let failure: unknown = null
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(async () => {
+				failure = await outcome(() =>
+					runControlCli('apps', ['secrets', 'put', '--app=notes', '--env=prod', '--name=API_KEY'], undefined, CONTROL_ENV, piped(SECRET))
+				)
+			})
+		})
+		expect(out).toBe(`q1\tpending\t${url}`)
+		expect(err).toContain(`fingerprint is ${fingerprint}`)
+		expect(failure).toBeInstanceOf(ApprovalPendingError)
+		if (!(failure instanceof ApprovalPendingError)) throw new Error('expected a pending change')
+		expect(failure.exitCode).toBe(APPROVAL_PENDING_EXIT_CODE)
+		expect(failure.message).toContain(url)
+		expect(`${out}\n${err}\n${failure.message}`).not.toContain(SECRET)
+
+		// A fingerprint that is not the value's own fails as any refusal does, telling the person to refuse the request.
+		sequenceFetch([waiting({ id: 'q1', url, state: 'pending', fingerprint: '0a1b2c3d' })])
+		let mismatch: unknown = null
+		await captureStderr(async () => {
+			await captureStdout(async () => {
+				mismatch = await outcome(() => runControlCli('apps', ['secrets', 'put', '--app=notes', '--name=API_KEY'], undefined, CONTROL_ENV, piped(SECRET)))
+			})
+		})
+		expect(mismatch).not.toBeInstanceOf(ApprovalPendingError)
+		expect(mismatch instanceof Error ? mismatch.message : '').toContain(
+			`Control answered the fingerprint 0a1b2c3d, but the value sent has ${fingerprint}`,
+		)
+	})
+
+	test('every write the gate routes answers the same way: a variable, an environment, a suspension', async () => {
+		const manifest = `${import.meta.dir}/fixtures/manifest.json`
+		for (
+			const [command, argv, provider] of [
+				['apps', ['variables', 'put', '--app=notes', '--env=prod', '--name=REGION', '--value=eu'], undefined],
+				['apps', ['variables', 'delete', '--app=notes', '--name=REGION'], undefined],
+				['apps', ['secrets', 'delete', '--app=notes', '--env=prod', '--name=API_KEY'], undefined],
+				['apps', ['environments', 'put', '--app=notes', '--env=prod', `--manifest=${manifest}`], 'zerops'],
+				['apps', ['environments', 'suspend', '--app=notes', '--env=prod'], undefined],
+				['apps', ['environments', 'resume', '--app=notes', '--env=prod'], undefined],
+			] as const
+		) {
+			sequenceFetch([waiting({ id: 'q1', url, state: 'pending' })])
+			let failure: unknown = null
+			const out = await captureStdout(async () => {
+				await captureStderr(async () => {
+					failure = await outcome(() => runControlCli(command, [...argv], provider, CONTROL_ENV))
+				})
+			})
+			expect({ argv, out, pending: failure instanceof ApprovalPendingError }).toEqual({ argv, out: `q1\tpending\t${url}`, pending: true })
+		}
+	})
+
+	test('--wait follows the request: an executed one succeeds, a refused one fails', async () => {
+		const asked = sequenceFetch([waiting({ id: 'q1', url, state: 'pending' }), request('executed')])
+		const out = await captureStdout(async () => {
+			await captureStderr(() =>
+				runControlCli('apps', ['variables', 'put', '--app=notes', '--name=REGION', '--value=eu', '--wait'], undefined, CONTROL_ENV)
+			)
+		})
+		expect(asked.methods).toEqual(['apps.variables.put', 'approvals.requests.get'])
+		expect(out).toBe('q1\tapps.secrets.put\tnotes\tprod\texecuted')
+
+		sequenceFetch([waiting({ id: 'q1', url, state: 'pending' }), request('rejected')])
+		let failure: unknown = null
+		await captureStdout(async () => {
+			await captureStderr(async () => {
+				failure = await outcome(() =>
+					runControlCli('apps', ['variables', 'put', '--app=notes', '--name=REGION', '--value=eu', '--wait'], undefined, CONTROL_ENV)
+				)
+			})
+		})
+		expect(failure).not.toBeInstanceOf(ApprovalPendingError)
+		expect(failure instanceof Error ? failure.message : '').toBe('a person refused this request; nothing changed')
+	})
+
+	test("an answer without the request's data is shown as Control's refusal, its message naming the link", async () => {
+		sequenceFetch([{ error: { type: 'approval_requested', message: `waits for a person: ${url}` } }])
+		const failure = await outcome(() => runControlCli('apps', ['variables', 'delete', '--app=notes', '--name=REGION'], undefined, CONTROL_ENV))
+		expect(failure).not.toBeInstanceOf(ApprovalPendingError)
+		expect(failure instanceof Error ? failure.message : '').toBe(`approval_requested: waits for a person: ${url}`)
 	})
 })
 

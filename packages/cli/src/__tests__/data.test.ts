@@ -2,6 +2,7 @@ import { OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/a
 import type { DataBackupDto, DataOperationDto } from '@fabrika/control-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { runCli } from '..'
+import { ApprovalPendingError } from '../control.js'
 import { ENV_USAGE, runEnvCli } from '../data.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
@@ -558,5 +559,82 @@ describe('env restore', () => {
 		const { out, err } = await captureOutput(() => runEnvCli('restore', ['notes', 'prod', `--at=${AT}`], CONTROL_ENV))
 		expect(out).toBe(`${OPERATION.id}\trestore\tfailed\topen\topen\t8\timport_failed\t2025-10-24T12:00:00.000Z`)
 		expect(err).toBe(`open the environment past it: fabrika env recover notes prod ${OPERATION.id} open`)
+	})
+})
+
+describe('a data write that waits for a person', () => {
+	const url = 'https://console.example.test/approvals/requests/q1'
+	const waiting = {
+		error: { type: 'approval_requested', message: `the change was not made: it waits for a person: ${url}`, data: { id: 'q1', url, state: 'pending' } },
+	}
+
+	/** A fake Control answering each request with the next envelope; an error envelope is a 409. */
+	const sequenceControl = (envelopes: unknown[]): { methods: string[] } => {
+		const methods: string[] = []
+		globalThis.fetch = asFetch(async (_input, init) => {
+			const raw = init?.body
+			const body: unknown = typeof raw === 'string' ? JSON.parse(raw) : null
+			methods.push(typeof body === 'object' && body !== null ? String(Reflect.get(body, 'method')) : '')
+			const next = envelopes.shift()
+			if (next === undefined) throw new Error('no answer left')
+			const status = typeof next === 'object' && next !== null && 'error' in next ? 409 : 200
+			return new Response(JSON.stringify(next), { status, headers: { 'content-type': 'application/json' } })
+		})
+		return { methods }
+	}
+
+	const outcome = async (run: () => Promise<void>): Promise<unknown> => {
+		try {
+			await run()
+			return null
+		} catch (error) {
+			return error
+		}
+	}
+
+	test('maintenance, recover, restore and a schedule change print the request and fail as pending', async () => {
+		const commands: readonly (readonly [string, readonly string[]])[] = [
+			['maintenance', ['notes', 'prod', 'closed']],
+			['recover', ['notes', 'prod', STUCK_ID, 'open']],
+			['restore', ['notes', 'prod', `--at=${AT}`]],
+			['backups', ['schedule', 'notes', 'prod', 'off']],
+		]
+		for (const [command, argv] of commands) {
+			sequenceControl([waiting])
+			let failure: unknown = null
+			const { out } = await captureOutput(async () => {
+				failure = await outcome(() => runEnvCli(command, argv, CONTROL_ENV))
+			})
+			expect(out).toBe(`q1\tpending\t${url}`)
+			expect(failure).toBeInstanceOf(ApprovalPendingError)
+			expect(failure instanceof Error ? failure.message : '').toContain(url)
+		}
+	})
+
+	test('--wait follows the request to its end state', async () => {
+		const request = {
+			id: 'q1',
+			kind: 'data.start',
+			category: 'data',
+			appId: 'notes',
+			env: 'prod',
+			state: 'executed',
+			url,
+			requester: { principal: { id: 'svc', type: 'service', label: 'ci' }, credential: 'key', personId: null },
+			description: { summary: [], facts: [] },
+			described: true,
+			inputDigest: `sha256:${'a'.repeat(64)}`,
+			approvers: 1,
+			requesterMayApprove: true,
+			stepUp: 'none',
+			deadline: 2,
+			createdAt: 1,
+			updatedAt: 1,
+		}
+		const control = sequenceControl([waiting, { result: request }])
+		const { out } = await captureOutput(() => runEnvCli('maintenance', ['notes', 'prod', 'closed', '--wait'], CONTROL_ENV))
+		expect(control.methods).toEqual(['data.start', 'approvals.requests.get'])
+		expect(out).toBe('q1\tdata.start\tnotes\tprod\texecuted')
+		await expect(runEnvCli('inspect', ['notes', 'prod', '--wait'], CONTROL_ENV)).rejects.toThrow('--wait applies to a write')
 	})
 })

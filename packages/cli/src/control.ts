@@ -19,7 +19,14 @@ import {
 	MAX_KEY_LIFETIME_SECONDS,
 	sha256Hex,
 } from '@fabrika/auth-core'
-import { APP_ENV_KINDS, type ApprovalRequestDto, CONTROL_CLI_PRESETS, isFinalApprovalRequestState } from '@fabrika/control-contract'
+import {
+	APP_ENV_KINDS,
+	APPROVAL_REQUESTED,
+	type ApprovalRequestDto,
+	approvalRequestedSchema,
+	CONTROL_CLI_PRESETS,
+	isFinalApprovalRequestState,
+} from '@fabrika/control-contract'
 import type {
 	AppDto,
 	AppEnvDto,
@@ -92,15 +99,15 @@ Usage:
   fabrika control apps environments list --app=<id>
   fabrika control apps environments put --provider=<name> --app=<id> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>] [--namespace=<id>]
-                           [--cross-origin=<origin> ...] [--kind=standard|dev]
-  fabrika control apps environments suspend --app=<id> --env=<name>
-  fabrika control apps environments resume  --app=<id> --env=<name>
+                           [--cross-origin=<origin> ...] [--kind=standard|dev] [--wait]
+  fabrika control apps environments suspend --app=<id> --env=<name> [--wait]
+  fabrika control apps environments resume  --app=<id> --env=<name> [--wait]
   fabrika control apps variables list --app=<id>
-  fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>] [--not-secret] [--request [--wait]]
-  fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>] [--request [--wait]]
+  fabrika control apps variables put --app=<id> --name=<name> --value=<text> [--env=<name>] [--not-secret] [--request] [--wait]
+  fabrika control apps variables delete --app=<id> --name=<name> [--env=<name>] [--request] [--wait]
   fabrika control apps secrets list --app=<id>
-  fabrika control apps secrets put --app=<id> --name=<name> [--env=<name>] [--request [--wait]]    (the value on stdin)
-  fabrika control apps secrets delete --app=<id> --name=<name> [--env=<name>] [--request [--wait]]
+  fabrika control apps secrets put --app=<id> --name=<name> [--env=<name>] [--request] [--wait]    (the value on stdin)
+  fabrika control apps secrets delete --app=<id> --name=<name> [--env=<name>] [--request] [--wait]
   fabrika control register --provider=<name> --app=<id> --repo=<url> --env=<name> --manifest=<path>
                            [--domain=<host>] [--public-origin=<url>] [--trigger-ref=<ref>]
                            [--namespace=<id>] [--installation-id=<n|none>] [--cross-origin=<origin> ...]
@@ -198,6 +205,14 @@ administrator of the application approves it at the console link stderr prints; 
 the application's grants wait for approval, IAM holds it for a second administrator. An environment that does not gate
 an agent's grants (not protected, or \`agent-grants\` off) refuses it: there is nothing to approve there. stdout prints
 the request's id, state and link; \`--wait\` follows it as \`requests get --wait\` does.
+
+Without \`--request\`, a write by \`FABRIKA_CONTROL_KEY\` or a device grant on a protected environment meets that
+environment's approval policy (ADR-0083): \`apps secrets\`, \`apps variables\` and \`apps environments put|suspend|resume\`
+are \`secrets\`, \`variables\` and \`registry\` writes.
+A category set to \`off\` applies the write; \`refuse\` refuses it; \`person\` does not make the change but stores it as a
+request, exactly as \`--request\` does: stdout prints its id, state and link, stderr the fingerprint of a secret, and the
+command exits 75. Hand the person the link; nothing changes until they approve it. \`--wait\` follows the request
+instead, and succeeds only when it executed.
 
 Namespace placement options, each defaulting to what the preset would choose:
 
@@ -311,7 +326,10 @@ interface Flags {
 	readonly json: boolean
 	/** `--not-secret`: `apps variables put` stores a value that looks like a credential. */
 	readonly notSecret: boolean
-	/** `--wait`: `deploy` follows the run until it succeeds or fails; `requests get` follows the request until it settles. */
+	/**
+	 * `--wait`: `deploy` follows the run until it succeeds or fails; `requests get`, `--request` and a write Control stores as
+	 * a request follow the request until it settles.
+	 */
 	readonly wait: boolean
 	/** `--request`: a secret or variable write asks a person to approve it instead of making it (ADR-0083 §8). */
 	readonly request: boolean
@@ -542,7 +560,7 @@ const parseJsonText = (text: string, label: string): JsonValue => {
 	}
 }
 
-const emit = (flags: Flags, result: unknown, render: () => string): void => {
+const emit = (flags: Pick<Flags, 'json'>, result: unknown, render: () => string): void => {
 	console.info(flags.json ? JSON.stringify(result, null, 2) : render())
 }
 
@@ -837,13 +855,20 @@ const runEnvironments = async (
 			...(namespaceId === undefined ? {} : { namespaceId }),
 			...(kind === undefined ? {} : { kind }),
 		}
-		const result = await client.apps.environments.put({ appId: required(flags, 'app'), env: required(flags, 'env'), environment })
+		const target = { appId: required(flags, 'app'), env: required(flags, 'env') }
+		const result = await directWrite(client, flags, () => client.apps.environments.put({ ...target, environment }))
+		if (result === null) return
 		emit(flags, result, () => `${result.appId}\t${result.env}\t${result.provider}`)
 		return
 	}
 	if (verb === 'suspend' || verb === 'resume') {
 		const target = { appId: required(flags, 'app'), env: required(flags, 'env') }
-		const result = verb === 'suspend' ? await client.apps.environments.suspend(target) : await client.apps.environments.resume(target)
+		const result = await directWrite(
+			client,
+			flags,
+			() => verb === 'suspend' ? client.apps.environments.suspend(target) : client.apps.environments.resume(target),
+		)
+		if (result === null) return
 		if (result.namespaceId !== null) {
 			console.warn(
 				`the proxy of namespace ${result.namespaceId} is rebuilding; follow it: fabrika control namespaces get --namespace=${result.namespaceId}`,
@@ -895,7 +920,8 @@ const runVariables = async (verb: string | undefined, flags: Flags, env: Readonl
 			await requestChange(client, flags, 'apps.variables.put', { appId, variable: { ...variable } })
 			return
 		}
-		const result = await client.apps.variables.put({ appId, variable })
+		const result = await directWrite(client, flags, () => client.apps.variables.put({ appId, variable }))
+		if (result === null) return
 		emit(flags, result, () => `${result.env ?? '*'}\t${result.name}\t${result.value}`)
 		return
 	}
@@ -905,7 +931,8 @@ const runVariables = async (verb: string | undefined, flags: Flags, env: Readonl
 			await requestChange(client, flags, 'apps.variables.delete', target)
 			return
 		}
-		const result = await client.apps.variables.delete(target)
+		const result = await directWrite(client, flags, () => client.apps.variables.delete(target))
+		if (result === null) return
 		emit(flags, result, () => (result.ok ? 'deleted' : 'not deleted'))
 		return
 	}
@@ -967,12 +994,14 @@ const runSecrets = async (
 			await requestChange(client, flags, 'apps.secrets.put', { appId, secret: { ...secret } }, value)
 			return
 		}
-		let result: AppSecretDto
+		let result: AppSecretDto | null
 		try {
-			result = await client.apps.secrets.put({ appId, secret })
+			result = await directWrite(client, flags, () => client.apps.secrets.put({ appId, secret }), value)
 		} catch (error) {
+			if (error instanceof ApprovalPendingError) throw error
 			throw new Error(failureMessage(error, value, 'secret value'))
 		}
+		if (result === null) return
 		emit(flags, result, () => `${result.env ?? '*'}\t${result.name}\tok`)
 		return
 	}
@@ -982,7 +1011,8 @@ const runSecrets = async (
 			await requestChange(client, flags, 'apps.secrets.delete', target)
 			return
 		}
-		const result = await client.apps.secrets.delete(target)
+		const result = await directWrite(client, flags, () => client.apps.secrets.delete(target))
+		if (result === null) return
 		emit(flags, result, () => (result.ok ? 'deleted' : 'not deleted'))
 		return
 	}
@@ -1495,9 +1525,71 @@ const requestChange = async (client: ControlClient, flags: Flags, kind: string, 
 		if (secretValue === undefined) throw error
 		throw new Error(failureMessage(error, secretValue, 'secret value'))
 	}
-	if (secretValue !== undefined) {
+	await handRequest(client, flags, created, { routed: false, ...(secretValue === undefined ? {} : { secretValue }) })
+}
+
+/**
+ * The exit code of a write that did not apply because it waits for a person (ADR-0083 §3): neither done nor failed.
+ * sysexits' EX_TEMPFAIL, "not done now; it may be later".
+ */
+export const APPROVAL_PENDING_EXIT_CODE = 75
+
+/** A write Control stored as a request for a person instead of making it; the process exits with `APPROVAL_PENDING_EXIT_CODE`. */
+export class ApprovalPendingError extends Error {
+	readonly exitCode = APPROVAL_PENDING_EXIT_CODE
+}
+
+/** What printing and following a request takes from a command's flags. */
+export interface RequestOutput {
+	readonly json: boolean
+	readonly wait: boolean
+}
+
+/**
+ * The request Control stored a write as (`approval_requested`), or null for any other answer. An answer whose data does
+ * not read as a request is left as Control's refusal, whose message names the link.
+ */
+const routedRequest = (error: unknown): CreateApprovalRequestResponse | null => {
+	if (!(error instanceof RpcError) || error.type !== APPROVAL_REQUESTED) return null
+	const parsed = approvalRequestedSchema.safeParse(error.data)
+	return parsed.success ? parsed.data : null
+}
+
+/**
+ * Make a write; when Control stores it as a request for a person instead (D8, a protected environment), print the
+ * request as `--request` does and, without `--wait`, fail with `ApprovalPendingError`. With `--wait` the request is
+ * followed: an executed one answers null, anything else fails. `secretValue` is the value a secret write sent, whose
+ * fingerprint is computed here.
+ */
+export const directWrite = async <T>(
+	client: ControlClient,
+	output: RequestOutput,
+	write: () => Promise<T>,
+	secretValue?: string,
+): Promise<T | null> => {
+	try {
+		return await write()
+	} catch (error) {
+		const created = routedRequest(error)
+		if (created === null) throw error
+		await handRequest(client, output, created, { routed: true, ...(secretValue === undefined ? {} : { secretValue }) })
+		return null
+	}
+}
+
+/**
+ * Print a request a person decides: for a secret, the value's fingerprint, computed here and compared with Control's;
+ * then follow it with `--wait`, or print it. A routed write that did not execute fails.
+ */
+const handRequest = async (
+	client: ControlClient,
+	output: RequestOutput,
+	created: CreateApprovalRequestResponse,
+	options: { readonly routed: boolean; readonly secretValue?: string },
+): Promise<void> => {
+	if (options.secretValue !== undefined) {
 		// The first 8 hex characters of the value's SHA-256, as the page shows them: the CLI's own, not an echo of Control's.
-		const fingerprint = sha256Hex(secretValue).slice(0, 8)
+		const fingerprint = sha256Hex(options.secretValue).slice(0, 8)
 		if (created.fingerprint !== fingerprint) {
 			throw new Error(
 				`Control answered the fingerprint ${created.fingerprint ?? '(none)'}, but the value sent has ${fingerprint}: `
@@ -1506,14 +1598,23 @@ const requestChange = async (client: ControlClient, flags: Flags, kind: string, 
 		}
 		console.warn(`the value's fingerprint is ${fingerprint}: the person sees the same one beside the value's length on the page`)
 	}
-	if (flags.wait) {
+	if (output.wait) {
 		const read = (id: string) => client.approvals.requests.get({ id })
 		const result = await followRequest(read, await read(created.id), { intervalMs: WAIT_INTERVAL_MS, settleTimeoutMs: REQUEST_SETTLE_TIMEOUT_MS })
-		emit(flags, result, () => requestLine(result))
+		emit(output, result, () => requestLine(result))
+		if (options.routed && result.state !== 'executed') {
+			throw new Error(requestHint(result) ?? `the request is ${result.state}`)
+		}
 		return
 	}
-	console.warn(`a person approves or refuses this request at ${created.url}`)
-	emit(flags, created, () => `${created.id}\t${created.state}\t${created.url}`)
+	if (!options.routed) console.warn(`a person approves or refuses this request at ${created.url}`)
+	emit(output, created, () => `${created.id}\t${created.state}\t${created.url}`)
+	if (options.routed) {
+		throw new ApprovalPendingError(
+			`the change was not made: it waits for a person, who approves or refuses it at ${created.url}; `
+				+ `hand them the link, and follow it with \`fabrika control requests get ${created.id} --wait\``,
+		)
+	}
 }
 
 const runRequests = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
@@ -1680,6 +1781,7 @@ export const runControlCli = async (
 				throw new Error(`Unknown control command: ${command}\n\n${USAGE}`)
 		}
 	} catch (error) {
+		if (error instanceof ApprovalPendingError) throw error
 		// An RPC denial is an ANSWER, not a transport fault; keep its type so a caller can tell "the
 		// control plane said no" from "the control plane was unreachable".
 		const message = error instanceof RpcError ? `${error.type}: ${error.message}` : error instanceof Error ? error.message : String(error)

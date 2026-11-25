@@ -12,18 +12,18 @@ import {
 } from '@fabrika/auth-core'
 import { type DataBackupDto, type DataBackupScheduleDto, type DataOperationDto, startDataOperationInputSchema } from '@fabrika/control-contract'
 import { z } from 'zod'
-import { connectControl, type ControlClient, withoutControlKey } from './control.js'
+import { ApprovalPendingError, connectControl, type ControlClient, directWrite, withoutControlKey } from './control.js'
 
 const USAGE = `fabrika env — an application environment's data, through the control plane
 
 Usage:
   fabrika env inspect <app> <env> [--content] [--json]
-  fabrika env maintenance <app> <env> <open|read-only|closed> [--json]
+  fabrika env maintenance <app> <env> <open|read-only|closed> [--wait] [--json]
   fabrika env operations <app> <env> [--json]
-  fabrika env recover <app> <env> <operationId> <resume|open> [--json]
+  fabrika env recover <app> <env> <operationId> <resume|open> [--wait] [--json]
   fabrika env backups <app> <env> [--json]
-  fabrika env backups schedule <app> <env> [on|off] [--json]
-  fabrika env restore <app> <env> --at=<time> [--json]
+  fabrika env backups schedule <app> <env> [on|off] [--wait] [--json]
+  fabrika env restore <app> <env> --at=<time> [--wait] [--json]
 
 \`inspect\` prints the environment's data view: the object's maintenance mode and generation, the database size and
 each table's row count (a count at ${OPS_ROW_COUNT_CAP} reads \`${OPS_ROW_COUNT_CAP}+\`: it is capped), the applied migrations,
@@ -57,6 +57,10 @@ object, ordinary traffic is pointed at the clone, which serves the current data 
 rewound to that time and kept in \`inspect\`, serving nothing, for inspection. It starts a data operation and prints
 it; \`operations\` follows it. It needs \`data.manage\`.
 
+On a protected environment whose \`data\` category waits for a person (ADR-0083), a write by a key or an agent does not
+apply: Control stores it as an approval request, the request's \`<id> <state> <url>\` goes to stdout, and the command
+exits 75. Hand the person the link. \`--wait\` follows the request to its end instead and succeeds only when it executed.
+
 A release of the control plane that does not offer a command answers that it is not available; retrying does not
 change that. An environment the caller may not see answers \`not_found\`, as one that does not exist.
 
@@ -78,6 +82,8 @@ interface EnvArgs {
 	readonly positional: readonly string[]
 	readonly json: boolean
 	readonly content: boolean
+	/** Follow a write that waits for a person to its end state. */
+	readonly wait: boolean
 	readonly url: string | undefined
 	/** \`''\` when \`--at\` closes the arguments with no time after it. */
 	readonly at: string | undefined
@@ -85,31 +91,33 @@ interface EnvArgs {
 
 const COMMAND_FORMS: Readonly<Record<string, string>> = {
 	inspect: '<app> <env> [--content] [--json]',
-	maintenance: '<app> <env> <open|read-only|closed> [--json]',
+	maintenance: '<app> <env> <open|read-only|closed> [--wait] [--json]',
 	operations: '<app> <env> [--json]',
-	recover: '<app> <env> <operationId> <resume|open> [--json]',
+	recover: '<app> <env> <operationId> <resume|open> [--wait] [--json]',
 	backups: '<app> <env> [--json]',
-	'backups schedule': '<app> <env> [on|off] [--json]',
-	restore: '<app> <env> --at=<time> [--json]',
+	'backups schedule': '<app> <env> [on|off] [--wait] [--json]',
+	restore: '<app> <env> --at=<time> [--wait] [--json]',
 }
 
 const parseEnvArgs = (argv: readonly string[]): EnvArgs => {
 	const positional: string[] = []
 	let json = false
 	let content = false
+	let wait = false
 	let url: string | undefined
 	let at: string | undefined
 	for (let index = 0; index < argv.length; index++) {
 		const arg = argv[index] ?? ''
 		if (arg === '--json') json = true
 		else if (arg === '--content') content = true
+		else if (arg === '--wait') wait = true
 		else if (arg.startsWith('--url=')) url = arg.slice('--url='.length)
 		else if (arg.startsWith('--at=')) at = arg.slice('--at='.length)
 		else if (arg === '--at') at = argv[++index] ?? ''
 		else if (arg.startsWith('-')) throw new Error(`Unknown option: ${arg}`)
 		else positional.push(arg)
 	}
-	return { positional, json, content, url, at }
+	return { positional, json, content, wait, url, at }
 }
 
 /** The positional words of `command`, exactly `count` of them. */
@@ -333,7 +341,9 @@ const runMaintenance = async (args: EnvArgs, env: Environment): Promise<void> =>
 	const [appId = '', environment = '', requested = ''] = words('maintenance', args, 3)
 	const mode = oneOf(requested, MAINTENANCE_MODES)
 	if (mode === undefined) throw new Error(`The mode is one of ${MAINTENANCE_MODES.join(', ')}, not "${requested}"`)
-	const result = await controlClient(args, env).data.start({ appId, env: environment, kind: 'maintenance', mode })
+	const client = controlClient(args, env)
+	const result = await directWrite(client, args, () => client.data.start({ appId, env: environment, kind: 'maintenance', mode }))
+	if (result === null) return
 	emitOperation(args, parseOperation(result, { appId, env: environment }))
 }
 
@@ -352,7 +362,9 @@ const runRecover = async (args: EnvArgs, env: Environment): Promise<void> => {
 	const [appId = '', environment = '', operationId = '', requested = ''] = words('recover', args, 4)
 	const resolution = oneOf(requested, RESOLUTIONS)
 	if (resolution === undefined) throw new Error(`The resolution is resume or open, not "${requested}"`)
-	const result = await controlClient(args, env).data.recover({ appId, env: environment, operationId, resolution })
+	const client = controlClient(args, env)
+	const result = await directWrite(client, args, () => client.data.recover({ appId, env: environment, operationId, resolution }))
+	if (result === null) return
 	emitOperation(args, parseOperation(result, { appId, env: environment }))
 }
 
@@ -383,7 +395,9 @@ const runBackupSchedule = async (args: EnvArgs, env: Environment): Promise<void>
 	}
 	const daily = oneOf(requested, SCHEDULE_SWITCHES)
 	if (daily === undefined) throw new Error(`The schedule is on or off, not "${requested}"`)
-	const schedule = parseSchedule(await client.data.backups.setSchedule({ ...target, daily: daily === 'on' }), target)
+	const result = await directWrite(client, args, () => client.data.backups.setSchedule({ ...target, daily: daily === 'on' }))
+	if (result === null) return
+	const schedule = parseSchedule(result, target)
 	if (!schedule.daily) note('the backup before a migration still runs')
 	emit(args, schedule, () => scheduleLines(schedule))
 }
@@ -394,7 +408,9 @@ const runRestore = async (args: EnvArgs, env: Environment): Promise<void> => {
 	// The contract's own rule for `at`, checked before anything is sent; whether it lies in the past is Control's to decide.
 	const input = startDataOperationInputSchema.safeParse({ appId, env: environment, kind: 'restore', at: args.at })
 	if (!input.success) throw new Error(`The time is ISO 8601 with an offset, such as 2026-10-24T12:00:00.000Z, not "${args.at}"`)
-	const result = await controlClient(args, env).data.start(input.data)
+	const client = controlClient(args, env)
+	const result = await directWrite(client, args, () => client.data.start(input.data))
+	if (result === null) return
 	emitOperation(args, parseOperation(result, { appId, env: environment }))
 }
 
@@ -436,8 +452,10 @@ export const runEnvCli = async (command: string | undefined, argv: readonly stri
 		const args = parseEnvArgs(argv)
 		if (args.content && command !== 'inspect') throw new Error('--content applies to `env inspect` only')
 		if (args.at !== undefined && command !== 'restore') throw new Error('--at applies to `env restore` only')
+		if (args.wait && (command === 'inspect' || command === 'operations')) throw new Error('--wait applies to a write only')
 		await run(args, env)
 	} catch (error) {
+		if (error instanceof ApprovalPendingError) throw new ApprovalPendingError(printable(error.message))
 		throw new Error(printable(withoutControlKey(diagnostic(command, error), env)))
 	}
 }

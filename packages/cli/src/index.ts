@@ -5,7 +5,7 @@ import { authoredAppProvider } from '@fabrika/provider-contract'
 import { type AppCli, appCliFromModule, type NamespaceCli } from '@fabrika/provider-contract/app-cli'
 import { installationCliFromModule, isInstallationCommand, supportsInstallationCommand } from '@fabrika/provider-contract/installation'
 import { dirname, join, relative, resolve } from 'node:path'
-import { CONTROL_USAGE, registerCompiledManifest, runControlCli } from './control.js'
+import { ApprovalPendingError, CONTROL_USAGE, registerCompiledManifest, runControlCli } from './control.js'
 
 const USAGE = `fabrika — application platform CLI
 
@@ -380,6 +380,7 @@ export const runCli = async (argv: readonly string[]): Promise<void> => {
 if (import.meta.main) {
 	await runCli(process.argv.slice(2)).catch((error: unknown) => {
 		console.error(`fabrika: ${error instanceof Error ? error.message : String(error)}`)
-		process.exit(1)
+		// A write that waits for a person neither applied nor failed: its own code lets a script tell it apart.
+		process.exit(error instanceof ApprovalPendingError ? error.exitCode : 1)
 	})
 }
