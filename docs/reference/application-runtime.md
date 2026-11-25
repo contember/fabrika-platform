@@ -2267,6 +2267,27 @@ never a check: every endpoint decides again. A public SPA answers it 401, becaus
 forwards no token to an anonymous kind. The test kit serves it for a test caller, whose
 `email` is `<kind>-<n>@<app>.test` or the `email` option, lower-cased.
 
+## Installing an SPA as an application
+
+Every credentialed SPA mount (access `member`, an action or `app`) can be installed by a browser as an application in
+its own window ([ADR-0086](../decisions/0086-an-spa-mount-is-installable-under-its-own-access.md)). The framework serves,
+under the mount's own access and before the asset server:
+
+- `<prefix>/__fabrika-app.webmanifest`, the web app manifest, as `application/manifest+json`: `name` is the contract's
+  `displayName` (or its id), followed by `· <mount>` below the root; `short_name` the name cut to 12 characters (its
+  first word when that fits); `id`, `start_url` and `scope` the mount, `<prefix>/`; `display: standalone`; the
+  application's colour as `theme_color` and `background_color`; the 192 px and 512 px icons, the 512 px one also as
+  `maskable`.
+- `<prefix>/__fabrika-icon-180.png`, `-192.png` and `-512.png`: the application's colour with the name's first letter or
+  digit in white, drawn by the framework (`installable.ts`). The colour follows from the application id.
+
+Every HTML answer of the mount gets `<link rel="manifest" href="…" crossorigin="use-credentials">` and
+`<link rel="apple-touch-icon" href="…-180.png">` right after `<head>`. Without `use-credentials` a browser fetches the
+manifest without the session, and the proxy refuses it. A visitor without a session gets the mount's refusal for these
+files too (a bounce on navigation, else 401). A public SPA mount and a link mount serve none of it. No service worker
+is installed and nothing is cached: an installed application needs the network, and its sign-in after an expired
+session is IAM's page inside its window.
+
 ## Browser error reporting
 
 Fabrika supplies an application's Operations ingest settings as three managed

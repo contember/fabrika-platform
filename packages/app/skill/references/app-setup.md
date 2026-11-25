@@ -436,6 +436,10 @@ await Bun.write(
   action. It comes from the token and asks IAM nothing. Use it to greet the person and to show or hide a control,
   never as the check: every endpoint decides again, so a hidden button is no protection. A public SPA answers it 401,
   because its pages arrive without a token, signed in or not.
+- **Installing.** Every member SPA can be installed as an application in its own window: the framework serves its web
+  app manifest and icons (`<prefix>/__fabrika-app.webmanifest`, `<prefix>/__fabrika-icon-*.png`) from the contract's
+  `displayName` and links them in the page's head. Write no manifest, icon link or service worker of your own: the
+  platform's link comes first, and a worker of your own would cache what the platform keeps `no-store`.
 
 ## Ignored files
 

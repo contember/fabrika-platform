@@ -102,6 +102,7 @@ import type { FailureReports } from './failures'
 import { ServerFault } from './faults'
 import { type HeaderPolicy, withHeaderPolicy } from './headers'
 import type { ContractDatabase } from './implement'
+import type { InstallableApp } from './installable'
 import {
 	boundTo,
 	boundWebhookApp,
@@ -278,7 +279,15 @@ export type ServedEndpoint =
 	}
 	/** What an export's consumer vendors, behind the export's own callers. */
 	| { readonly kind: 'description'; readonly row: CredentialedEndpoint; readonly description: ExportDescription }
-	| { readonly kind: 'spa'; readonly row: CredentialedEndpoint; readonly prefix: string; readonly dir: string; readonly config: BrowserConfig }
+	/** A credentialed SPA mount, installable as an application under its own access (ADR-0086). */
+	| {
+		readonly kind: 'spa'
+		readonly row: CredentialedEndpoint
+		readonly prefix: string
+		readonly dir: string
+		readonly config: BrowserConfig
+		readonly install: InstallableApp
+	}
 	/** An SPA mount's bare prefix (`/admin`): the proxy admitted it under the mount's access; it redirects to `/admin/`. */
 	| { readonly kind: 'spa-prefix'; readonly row: EndpointRow; readonly prefix: string }
 	/** An SPA anyone opens: anonymous, served without a token. */
@@ -540,10 +549,10 @@ export class ContractRuntime {
 				return jsonResponse({ status: 'ok' }, 200)
 			case 'spa': {
 				const caller = await this.#authorize(served.row, request)
-				return await this.#spaFile(served, request, caller)
+				return await this.#spaFile(served, request, caller, served.install)
 			}
 			case 'public-spa':
-				return await this.#spaFile(served, request, null)
+				return await this.#spaFile(served, request, null, null)
 			case 'spa-prefix':
 				return new Response(null, { status: 308, headers: { Location: `${served.prefix}/${new URL(request.url).search}` } })
 			case 'link-spa':
@@ -569,12 +578,15 @@ export class ContractRuntime {
 	/**
 	 * An SPA mount's files, at `<prefix>/__fabrika-config.json` its browser config (`browser-config.ts`), and at
 	 * `<prefix>/__fabrika-me.json` the caller document of the person the mount admitted. A public mount admits no one:
-	 * the proxy forwards no token there, so it cannot say whether the visitor is signed in.
+	 * the proxy forwards no token there, so it cannot say whether the visitor is signed in. A credentialed mount also
+	 * serves its web app manifest and icons, and its pages link them (`installable.ts`); a public mount is no application
+	 * to install.
 	 */
 	async #spaFile(
 		served: { readonly prefix: string; readonly dir: string; readonly config: BrowserConfig },
 		request: Request,
 		caller: Caller | null,
+		install: InstallableApp | null,
 	): Promise<Response> {
 		const path = rawRequestTarget(request.url).pathname
 		if (path === joinPath(served.prefix, BROWSER_CONFIG_FILE)) {
@@ -586,7 +598,11 @@ export class ContractRuntime {
 			}
 			return jsonResponse(pageCallerOf(caller.principal, caller.perms, this.#parts.actions), 200)
 		}
-		return await this.#asset(served, request)
+		if (install === null) {
+			return await this.#asset(served, request)
+		}
+		const installable = install.file(path)
+		return installable === null ? await install.page(await this.#asset(served, request)) : await installable
 	}
 
 	/**

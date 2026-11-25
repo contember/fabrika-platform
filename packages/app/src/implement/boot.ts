@@ -79,6 +79,7 @@ import type { CapturedEnvironment } from './environment'
 import { FailureReports, type HandlerErrorSink } from './failures'
 import { applicationPolicy } from './headers'
 import type { ContractDatabase, ContractImplementation, ImplementationDatabase } from './implement'
+import { InstallableApp } from './installable'
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
 import type { ReadDirectory } from './membership'
 import { type AdmissionOptions, InFlightShare, type ProcedureAdmission, procedureAdmission, publicShareOf } from './public'
@@ -954,7 +955,8 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 			const row = rows.get(name)
 			const config = configs.get(name)
 			if (config !== undefined && isCredentialed(row)) {
-				endpoints.set(name, { kind: 'spa', row, prefix: mount.prefix, dir: mount.dir, config })
+				const install = new InstallableApp({ app: artifact.app, displayName: artifact.displayName, mount: name, prefix: mount.prefix })
+				endpoints.set(name, { kind: 'spa', row, prefix: mount.prefix, dir: mount.dir, config, install })
 			} else if (config !== undefined && row?.kind === 'public-spa') {
 				endpoints.set(name, { kind: 'public-spa', row, prefix: mount.prefix, dir: mount.dir, config })
 			}

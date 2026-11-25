@@ -237,6 +237,23 @@ export const BROWSER_CONFIG_FILE = '__fabrika-config.json'
 /** What every `c.spa` mount serves under its prefix to the person its access admitted: label, mailbox and actions. */
 export const PAGE_CALLER_FILE = '__fabrika-me.json'
 
+/**
+ * What every credentialed `c.spa` mount serves under its prefix so a browser can install it as an application: the web
+ * app manifest and its icons, under the mount's own access (ADR-0086). The page links the manifest with
+ * `crossorigin="use-credentials"`, without which a browser fetches it without the session.
+ */
+export const APP_MANIFEST_FILE = '__fabrika-app.webmanifest'
+
+/** The sizes of the icon the framework draws for an installed SPA mount: Apple's touch icon, and the manifest's two. */
+export const APP_ICON_SIZES = [180, 192, 512] as const
+
+export type AppIconSize = (typeof APP_ICON_SIZES)[number]
+
+/** The file of one size of an installed SPA mount's icon, under its prefix. */
+export function appIconFile(size: AppIconSize): string {
+	return `__fabrika-icon-${size}.png`
+}
+
 /** The row of an SPA mount's bare prefix (`GET /admin`), which redirects to the mount (`/admin/`). */
 export function spaPrefixRowId(mount: string): string {
 	return `${mount}.prefix`

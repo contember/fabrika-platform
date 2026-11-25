@@ -5,6 +5,7 @@
 import { bodyDeadlineMs, LINK_BOOTSTRAP_FILE, SHARE_KEY_GLOBAL } from '../contract/defaults'
 import { HttpError } from '../errors'
 import { deadline, readBoundedBytes } from './bounded'
+import { injectIntoHead } from './html'
 
 /**
  * The body as bytes, read until `maxBytes`; a longer one stops the read and is a 413. A body whose stream fails before
@@ -78,15 +79,5 @@ export function bootstrapResponse(): Response {
  * module script and every script the document loads. A response that is not HTML passes unchanged.
  */
 export async function withBootstrap(response: Response, prefix: string): Promise<Response> {
-	const type = response.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase()
-	if (type !== 'text/html') {
-		return response
-	}
-	const html = await response.text()
-	const tag = `<script src="${bootstrapPath(prefix)}"></script>`
-	const head = /<head(?:\s[^>]*)?>/i.exec(html)
-	const injected = head === null ? `${tag}${html}` : `${html.slice(0, head.index + head[0].length)}${tag}${html.slice(head.index + head[0].length)}`
-	const headers = new Headers(response.headers)
-	headers.delete('Content-Length')
-	return new Response(injected, { status: response.status, statusText: response.statusText, headers })
+	return await injectIntoHead(response, `<script src="${bootstrapPath(prefix)}"></script>`)
 }
