@@ -15,6 +15,8 @@ type Judged = { readonly category: PolicyCategory } | { readonly exempt: string 
 
 const ALWAYS_A_PERSON = 'always a person, whatever the mode (ADR-0083 §9)'
 const NARROWS = 'takes access away; nothing to approve'
+const NAMESPACE = 'an installation resource under the global `namespace.manage`, which no command-line preset carries (ADR-0083 §9)'
+const MAIL = "the installation's mail gate under the global `mail.manage`, which no command-line preset carries (ADR-0083 §9)"
 
 /** Control's mutations. A non-person's action of a category waits or is refused by its mode, from the step that adds its requests. */
 const CONTROL: Readonly<Record<string, Judged>> = {
@@ -44,10 +46,10 @@ const CONTROL: Readonly<Record<string, Judged>> = {
 	'vault.set': { category: 'secrets' },
 	'vault.rotate': { category: 'secrets' },
 	'vault.delete': { category: 'secrets' },
-	'namespaces.create': { exempt: 'an installation resource under the global `namespace.manage`, outside every environment' },
-	'namespaces.adopt': { exempt: 'an installation resource under the global `namespace.manage`, outside every environment' },
+	'namespaces.create': { exempt: NAMESPACE },
+	'namespaces.adopt': { exempt: NAMESPACE },
 	'namespaces.reconcile': { exempt: 'converges a namespace on its stored state; changes no choice' },
-	'namespaces.update': { exempt: 'an installation resource under the global `namespace.manage`, outside every environment' },
+	'namespaces.update': { exempt: NAMESPACE },
 	'namespaces.remove': { exempt: 'never requested (ADR-0034 frees resources); keeps its rule' },
 	'namespaces.republishAll': { exempt: 'republishes stored state; changes no choice' },
 	'namespaces.releaseClaims': { exempt: 'never requested (ADR-0034 frees resources); keeps its rule' },
@@ -55,11 +57,11 @@ const CONTROL: Readonly<Record<string, Judged>> = {
 	'approvals.complete': { exempt: `deciding a pending item: ${ALWAYS_A_PERSON}` },
 	'deploy': { category: 'deploy-request' },
 	'register': { category: 'registry' },
-	'mail.messages.release': { exempt: "the installation's mail gate under the global `mail.manage`, outside every environment" },
+	'mail.messages.release': { exempt: MAIL },
 	'mail.messages.drop': { exempt: NARROWS },
-	'mail.messages.requeue': { exempt: "the installation's mail gate under the global `mail.manage`, outside every environment" },
-	'mail.rules.set': { exempt: "the installation's mail gate under the global `mail.manage`, outside every environment" },
-	'mail.rules.remove': { exempt: "the installation's mail gate under the global `mail.manage`, outside every environment" },
+	'mail.messages.requeue': { exempt: MAIL },
+	'mail.rules.set': { exempt: MAIL },
+	'mail.rules.remove': { exempt: MAIL },
 	'data.start': { category: 'data' },
 	'data.recover': { category: 'data' },
 	'data.backups.setSchedule': { category: 'data' },

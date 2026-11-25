@@ -2608,7 +2608,19 @@ describe('approval categories', () => {
 			categories: JSON.stringify({ added: [], removed: ['off-road'] }),
 		})
 		const row = await w.db.registry.getAppEnv('notes', 'prod')
-		expect(row === null ? null : appEnvPolicy(row)).toEqual({ ...STRICT_POLICY, 'off-road': 'off' })
+		// Only what the list changed is converted; the other modes keep the policy's.
+		expect(row === null ? null : appEnvPolicy(row)).toEqual({ ...STRICT_POLICY, 'off-road': 'off', secrets: 'off', 'deletes-data': 'plan' })
+	})
+
+	test('a stored mode this release does not take reads as the waiting categories', async () => {
+		const w = world()
+		await seed(w)
+		await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'prod' }, true, Date.now, {
+			policy: JSON.stringify({ secrets: 'from-a-newer-release', 'role-added': 'person' }),
+			categories: JSON.stringify({ added: ['role-added'], removed: [] }),
+		})
+		const row = await w.db.registry.getAppEnv('notes', 'prod')
+		expect(row === null ? null : appEnvPolicy(row)).toEqual({ ...STRICT_POLICY, 'role-added': 'person' })
 	})
 
 	test('under the permissive preset nothing waits, the lines are still recorded, and IAM holds no grant', async () => {
@@ -2626,7 +2638,7 @@ describe('approval categories', () => {
 		expect(classification.changes.some((change) => change.reason === 'deletes-data')).toBe(true)
 	})
 
-	test('a closer-review category set to `person` waits as `plan` does while no plan exists', async () => {
+	test('a category set to `plan` waits as `person` does while no plan exists', async () => {
 		const w = world()
 		await publishedBase(w)
 		await setPolicy(w, 'prod', { ...STRICT_POLICY, 'deletes-data': 'plan' })

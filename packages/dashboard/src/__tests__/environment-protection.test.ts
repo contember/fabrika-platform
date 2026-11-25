@@ -217,7 +217,10 @@ describe('approval modes', () => {
 	})
 
 	test('an action no request routes yet says what applies today', () => {
-		expect(editor(environment('prod', true))).toContain('not enforced yet. Today it applies at once.')
+		const markup = editor(environment('prod', true))
+		expect(markup).toContain('Not enforced yet. Today it applies at once.')
+		expect(markup).toContain('aria-describedby="approval-prod-secrets"')
+		expect(markup).toContain('id="approval-prod-secrets"')
 	})
 
 	test('a change that loosens any category asks first; one that tightens does not', () => {

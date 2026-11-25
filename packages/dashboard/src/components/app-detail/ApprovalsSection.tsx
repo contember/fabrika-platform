@@ -208,12 +208,15 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 						<label key={option.category} className="approval-mode" title={option.hint}>
 							<span>
 								{option.label}
-								{option.pending !== undefined && <span className="muted small">{` · not enforced yet. ${option.pending}`}</span>}
+								<span id={`approval-${env.env}-${option.category}`} className="muted small">
+									{` · ${option.hint}.${option.pending === undefined ? '' : ` Not enforced yet. ${option.pending}`}`}
+								</span>
 							</span>
 							<select
 								value={chosen[option.category]}
 								disabled={busy}
 								aria-label={option.label}
+								aria-describedby={`approval-${env.env}-${option.category}`}
 								onChange={(event) => choose(option.category, event.target.value)}
 							>
 								{modesOf(option.category).map((mode) => (

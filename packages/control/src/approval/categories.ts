@@ -54,23 +54,30 @@ export function grantsWait(row: Pick<AppEnvRow, 'protected' | 'approval_categori
 	return row.protected === 1 && appEnvPolicy(row).grants === 'person'
 }
 
-/** The modes a stored policy sets over the defaults, checked against the mode matrix. */
-function parseStoredPolicy(text: string): ApprovalPolicy {
-	return { ...STRICT_POLICY, ...approvalPolicySchema.partial().parse(JSON.parse(text)) }
+/**
+ * The modes a stored policy sets over the defaults, checked against the mode matrix; null when it holds a mode this
+ * release does not take (a newer release's, after a rollback), which then reads as its waiting categories.
+ */
+function parseStoredPolicy(text: string): ApprovalPolicy | null {
+	const parsed = approvalPolicySchema.partial().safeParse(JSON.parse(text))
+	return parsed.success ? { ...STRICT_POLICY, ...parsed.data } : null
 }
 
 /**
- * The policy an environment's row holds. The policy column wins while the earlier list beside it still reads the same
- * waiting categories; a Control released before the policy writes only the list, so a list that differs is newer and
- * is converted (ADR-0083 §2). Null in both is the defaults.
+ * The policy an environment's row holds (ADR-0083 §2). Null in both columns is the defaults, and a list alone (from
+ * before the policy) is converted. A Control released before the policy writes only the list, so where the list's
+ * waiting categories differ from the policy's, the list is newer: those categories take its conversion, and every other
+ * mode keeps the policy's.
  */
 export function appEnvPolicy(row: Pick<AppEnvRow, 'approval_categories' | 'approval_policy'>): ApprovalPolicy {
 	const categories = appEnvCategories(row)
-	if (row.approval_policy !== null) {
-		const policy = parseStoredPolicy(row.approval_policy)
-		if (sameList(waitingCategories(policy), categories)) return policy
-	}
-	return row.approval_categories === null ? STRICT_POLICY : policyFromCategories(categories)
+	const converted = row.approval_categories === null ? STRICT_POLICY : policyFromCategories(categories)
+	const policy = row.approval_policy === null ? null : parseStoredPolicy(row.approval_policy)
+	if (policy === null) return converted
+	const waiting = new Set(categories)
+	const changed = APPROVAL_CATEGORIES.filter((category) => (policy[category] !== 'off') !== waiting.has(category))
+	if (changed.length === 0) return policy
+	return approvalPolicySchema.parse({ ...policy, ...Object.fromEntries(changed.map((category) => [category, converted[category]])) })
 }
 
 /** The stored forms of a policy: the modes that differ from the defaults (null when none) and the earlier list. */
@@ -80,8 +87,4 @@ export function storedPolicy(policy: ApprovalPolicy): { readonly policy: string 
 		policy: changed.length === 0 ? null : JSON.stringify(Object.fromEntries(changed.map((category) => [category, policy[category]]))),
 		categories: storedCategories(waitingCategories(policy)),
 	}
-}
-
-function sameList(a: readonly ApprovalCategory[], b: readonly ApprovalCategory[]): boolean {
-	return a.length === b.length && a.every((category, index) => category === b[index])
 }

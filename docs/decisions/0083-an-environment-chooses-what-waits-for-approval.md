@@ -280,7 +280,9 @@ would deliver production content to the agent), and anything that would return a
 could read. A request of such a kind is refused when it is created (400 naming the kind), not at approval.
 
 Every mutation of Control's router and of IAM's `/admin/rpc` is either gated by a category or listed as exempt with its
-reason. A table test over both routers fails when a new mutation is neither.
+reason. A table test over both routers fails when a new mutation is neither. No mode applies to the installation's own
+resources, which keep their rule: namespaces and the mail gate (`namespace.manage` and `mail.manage`, global, which no
+command-line preset carries), and IAM's named policies and an application's return origins (`iam.admin`).
 
 ### Rollout
 
