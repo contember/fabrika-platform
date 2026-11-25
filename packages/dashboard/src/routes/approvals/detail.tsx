@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, type SubjectRow, waitsForApproval } from '@fabrika/control-contract'
+import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, type SubjectRow } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { AccessMapView } from '../../components/AccessMap'
 import { CloserReview } from '../../components/CloserReview'
@@ -21,6 +21,7 @@ import {
 	surfaceNotes,
 } from '../../lib/access-changes'
 import { type AccessChangeDto, api, ApiError, type ApprovalDto, type SurfaceEndpointDto } from '../../lib/api'
+import { changeWaits } from '../../lib/environment-protection'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
 
 // One access change (ADR-0050 §7): who gains access first, grouped by caller, then what changes in data and runtime,
@@ -243,7 +244,7 @@ function endpointSentence({ added, changed, removed }: ApprovalView['summary']):
  * whatever its lines need now: an earlier release parked every widening on a protected environment.
  */
 function outcomeSentence(approval: ApprovalDto): string {
-	const waits = waitsForApproval(approval.changes, approval.categories)
+	const waits = changeWaits(approval)
 	const what = approval.outcome === 'widening' ? 'It widens access' : 'It only narrows access or leaves it unchanged'
 	const closer = waits ? ', and a line needs approval on this environment' : ''
 	if (approval.run.status === 'awaiting_approval') return `${what}${closer}, so it waits for your approval.`

@@ -9,7 +9,14 @@ import { contractDigest as contractDigest05 } from '@fabrika/auth-core-0.5'
 import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/contract'
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
 import { CHECKER_VERSION, readContractSource } from '@fabrika/check/contract'
-import { type ApprovalCategory, DEFAULT_APPROVAL_CATEGORIES } from '@fabrika/control-contract'
+import {
+	type ApprovalCategory,
+	type ApprovalPolicy,
+	DEFAULT_APPROVAL_CATEGORIES,
+	PERMISSIVE_POLICY,
+	policyFromCategories,
+	STRICT_POLICY,
+} from '@fabrika/control-contract'
 import { hashPlatformKey } from '@fabrika/email/platform'
 import type { BlobStore } from '@fabrika/platform'
 import { uuidv7 } from '@fabrika/platform'
@@ -29,7 +36,7 @@ import {
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from '../approval/api'
-import { appEnvCategories, storedCategories } from '../approval/categories'
+import { appEnvCategories, appEnvPolicy, storedCategories } from '../approval/categories'
 import { parseClassification } from '../approval/publish'
 import { MIGRATION_GUIDE } from '../approval/readers'
 import { type AccessSnapshot, approvedSnapshot, parseSnapshot, serializeSnapshot } from '../approval/snapshot'
@@ -1104,7 +1111,8 @@ describe('protection survives the registry', () => {
 		const w = world()
 		await seed(w)
 		const human = auth({ permissions: [{ action: '*', scope: null }] })
-		await setEnvironmentProtectionUseCase(approvals(w, human), { appId: 'notes', env: 'stage', protected: true })
+		const permissive = { appId: 'notes', env: 'stage', protected: true, policy: PERMISSIVE_POLICY }
+		await setEnvironmentProtectionUseCase({ ...approvals(w, human), grantApproval: { set: () => Promise.resolve() } }, permissive)
 		await setEnvironmentProtectionUseCase(approvals(w, human), { appId: 'notes', env: 'prod', protected: false })
 
 		for (const env of ['stage', 'prod']) {
@@ -1112,6 +1120,8 @@ describe('protection survives the registry', () => {
 			await recreate(w, env)
 		}
 		expect([await protectionOf(w, 'stage'), await protectionOf(w, 'prod')]).toEqual([1, 0])
+		const stage = await w.db.registry.getAppEnv('notes', 'stage')
+		expect(stage === null ? null : appEnvPolicy(stage)).toEqual(PERMISSIVE_POLICY)
 
 		expect(await deleteAppUseCase(registry(w, human), 'notes')).toEqual({ ok: true })
 		await w.db.registry.createApp({ id: 'notes', repoUrl: 'github.com/acme/notes' })
@@ -2449,7 +2459,12 @@ describe('approval categories', () => {
 	}
 
 	function choose(w: World, env: string, categories: ApprovalCategory[], gate: GrantGate = grantGate(), caller = auth()) {
-		return setEnvironmentProtectionUseCase({ ...approvals(w, caller), grantApproval: gate }, { appId: 'notes', env, protected: true, categories })
+		return setEnvironmentProtectionUseCase({ ...approvals(w, caller), grantApproval: gate }, {
+			appId: 'notes',
+			env,
+			protected: true,
+			policy: policyFromCategories(categories),
+		})
 	}
 
 	/** `prod` published at `BASE`, so the next deploy classifies against it. */
@@ -2547,6 +2562,78 @@ describe('approval categories', () => {
 		expect(appEnvCategories({ approval_categories: stored })).toEqual(DEFAULT_APPROVAL_CATEGORIES.filter((category) => category !== 'people'))
 	})
 
+	function setPolicy(w: World, env: string, policy: ApprovalPolicy, gate: GrantGate = grantGate()) {
+		return setEnvironmentProtectionUseCase({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env, protected: true, policy })
+	}
+
+	test('a policy is stored as its modes that differ from the defaults, with the waiting categories beside it', async () => {
+		const w = world()
+		await seed(w)
+		const policy: ApprovalPolicy = { ...STRICT_POLICY, 'off-road': 'person', people: 'off', 'role-added': 'plan', secrets: 'off', registry: 'refuse' }
+		const dto = await setPolicy(w, 'prod', policy)
+		expect(dto.approvalPolicy).toEqual(policy)
+		expect(dto.approvalCategories).toEqual(['off-road', 'anyone-calls', 'get-mutation', 'adoption', 'terminal', 'deletes-data', 'role-added'])
+		const row = await w.db.registry.getAppEnv('notes', 'prod')
+		expect(JSON.parse(row?.approval_policy ?? '')).toEqual({
+			'off-road': 'person',
+			people: 'off',
+			'role-added': 'plan',
+			secrets: 'off',
+			registry: 'refuse',
+		})
+		// What a Control released before the policy reads: the same waiting categories.
+		expect(JSON.parse(row?.approval_categories ?? '')).toEqual({ added: ['role-added'], removed: ['people'] })
+		await setPolicy(w, 'prod', STRICT_POLICY)
+		expect(await w.db.registry.getAppEnv('notes', 'prod')).toMatchObject({ approval_policy: null, approval_categories: null })
+	})
+
+	test('an environment that chose categories before the policy reads them converted', async () => {
+		const w = world()
+		await seed(w)
+		await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'prod' }, true, Date.now, {
+			policy: null,
+			categories: JSON.stringify({ added: ['role-actions', 'grants'], removed: ['people'] }),
+		})
+		const row = await w.db.registry.getAppEnv('notes', 'prod')
+		expect(row === null ? null : appEnvPolicy(row)).toEqual({ ...STRICT_POLICY, people: 'off', 'role-actions': 'person', grants: 'person' })
+	})
+
+	test('categories an older Control wrote after the policy win over the stale policy', async () => {
+		const w = world()
+		await seed(w)
+		await setPolicy(w, 'prod', { ...STRICT_POLICY, secrets: 'off', 'deletes-data': 'plan' })
+		// A Control rolled back below the policy writes only the list, here dropping `off-road`.
+		await fixtureProtect(w.db.registry, makeFakeLock(w.db), { appId: 'notes', env: 'prod' }, true, Date.now, {
+			policy: JSON.stringify({ secrets: 'off', 'deletes-data': 'plan' }),
+			categories: JSON.stringify({ added: [], removed: ['off-road'] }),
+		})
+		const row = await w.db.registry.getAppEnv('notes', 'prod')
+		expect(row === null ? null : appEnvPolicy(row)).toEqual({ ...STRICT_POLICY, 'off-road': 'off' })
+	})
+
+	test('under the permissive preset nothing waits, the lines are still recorded, and IAM holds no grant', async () => {
+		const w = world()
+		await publishedBase(w)
+		const gate = grantGate()
+		await setPolicy(w, 'prod', PERMISSIVE_POLICY, gate)
+		expect(gate.state?.required).toBe(false)
+		w.files = DELETES_NOTES
+		const result = await deploy(w, 'prod')
+		expect(result.status).toBe('succeeded')
+		const classification = parseClassification((await run(w, result.runId)).classification_json ?? '')
+		expect(classification.protected).toBe(true)
+		expect(classification.categories).toEqual([])
+		expect(classification.changes.some((change) => change.reason === 'deletes-data')).toBe(true)
+	})
+
+	test('a closer-review category set to `person` waits as `plan` does while no plan exists', async () => {
+		const w = world()
+		await publishedBase(w)
+		await setPolicy(w, 'prod', { ...STRICT_POLICY, 'deletes-data': 'plan' })
+		w.files = DELETES_NOTES
+		expect((await deploy(w, 'prod')).status).toBe('awaiting_approval')
+	})
+
 	test("choosing `grants` makes IAM hold the environment's grants first; dropping it releases them after Control", async () => {
 		const w = world()
 		await seed(w)
@@ -2593,7 +2680,7 @@ describe('approval categories', () => {
 		}
 		const lost = setEnvironmentProtectionUseCase(
 			{ ...approvals(w, auth()), grantApproval: gate, leaseClock: clock },
-			{ appId: 'notes', env: 'prod', protected: true, categories: [...DEFAULT_APPROVAL_CATEGORIES, 'grants'] },
+			{ appId: 'notes', env: 'prod', protected: true, policy: policyFromCategories([...DEFAULT_APPROVAL_CATEGORIES, 'grants']) },
 		)
 		await expect(lost).rejects.toThrow()
 		expect(gate.calls.map(([, required]) => required)).toEqual([true])
@@ -2609,7 +2696,7 @@ describe('approval categories', () => {
 		await seed(w)
 		const caller = auth()
 		const withoutIam = (categories: ApprovalCategory[]) =>
-			setEnvironmentProtectionUseCase(approvals(w, caller), { appId: 'notes', env: 'prod', protected: true, categories })
+			setEnvironmentProtectionUseCase(approvals(w, caller), { appId: 'notes', env: 'prod', protected: true, policy: policyFromCategories(categories) })
 		expect(await status(withoutIam([...DEFAULT_APPROVAL_CATEGORIES, 'grants']))).toBe(503)
 		expect((await withoutIam([...DEFAULT_APPROVAL_CATEGORIES, 'public'])).approvalCategories).toContain('public')
 	})

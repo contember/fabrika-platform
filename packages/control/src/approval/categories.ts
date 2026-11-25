@@ -1,7 +1,18 @@
-// The approval categories an environment chose (ADR-0083): stored as their difference from the defaults, so a category a
-// later release adds to the defaults applies to every environment that did not remove it by name.
+// The approval policy an environment chose (ADR-0083 §2): a mode per category, stored as its difference from the
+// defaults, so a category a later release adds applies to every environment that did not set it. The earlier list of
+// waiting categories is written beside it, so a Control released before the policy reads the same choice.
 
-import { APPROVAL_CATEGORIES, type ApprovalCategory, DEFAULT_APPROVAL_CATEGORIES } from '@fabrika/control-contract'
+import {
+	APPROVAL_CATEGORIES,
+	type ApprovalCategory,
+	type ApprovalPolicy,
+	approvalPolicySchema,
+	DEFAULT_APPROVAL_CATEGORIES,
+	POLICY_CATEGORIES,
+	policyFromCategories,
+	STRICT_POLICY,
+	waitingCategories,
+} from '@fabrika/control-contract'
 import { z } from 'zod'
 import type { AppEnvRow } from '../db'
 
@@ -38,7 +49,39 @@ export function isDefaultCategories(categories: readonly ApprovalCategory[]): bo
 	return storedCategories(categories) === null
 }
 
-/** Whether IAM holds the environment's console grants for approval: it is protected and chose `grants`. */
-export function grantsWait(row: Pick<AppEnvRow, 'protected' | 'approval_categories'>): boolean {
-	return row.protected === 1 && appEnvCategories(row).includes('grants')
+/** Whether IAM holds the environment's console grants for approval: it is protected and `grants` waits for a person. */
+export function grantsWait(row: Pick<AppEnvRow, 'protected' | 'approval_categories' | 'approval_policy'>): boolean {
+	return row.protected === 1 && appEnvPolicy(row).grants === 'person'
+}
+
+/** The modes a stored policy sets over the defaults, checked against the mode matrix. */
+function parseStoredPolicy(text: string): ApprovalPolicy {
+	return { ...STRICT_POLICY, ...approvalPolicySchema.partial().parse(JSON.parse(text)) }
+}
+
+/**
+ * The policy an environment's row holds. The policy column wins while the earlier list beside it still reads the same
+ * waiting categories; a Control released before the policy writes only the list, so a list that differs is newer and
+ * is converted (ADR-0083 §2). Null in both is the defaults.
+ */
+export function appEnvPolicy(row: Pick<AppEnvRow, 'approval_categories' | 'approval_policy'>): ApprovalPolicy {
+	const categories = appEnvCategories(row)
+	if (row.approval_policy !== null) {
+		const policy = parseStoredPolicy(row.approval_policy)
+		if (sameList(waitingCategories(policy), categories)) return policy
+	}
+	return row.approval_categories === null ? STRICT_POLICY : policyFromCategories(categories)
+}
+
+/** The stored forms of a policy: the modes that differ from the defaults (null when none) and the earlier list. */
+export function storedPolicy(policy: ApprovalPolicy): { readonly policy: string | null; readonly categories: string | null } {
+	const changed = POLICY_CATEGORIES.filter((category) => policy[category] !== STRICT_POLICY[category])
+	return {
+		policy: changed.length === 0 ? null : JSON.stringify(Object.fromEntries(changed.map((category) => [category, policy[category]]))),
+		categories: storedCategories(waitingCategories(policy)),
+	}
+}
+
+function sameList(a: readonly ApprovalCategory[], b: readonly ApprovalCategory[]): boolean {
+	return a.length === b.length && a.every((category, index) => category === b[index])
 }

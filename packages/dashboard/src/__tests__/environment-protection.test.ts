@@ -1,20 +1,22 @@
 import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
 import { BuzolaProvider } from '@buzola/router/react'
-import { APPROVAL_CATEGORIES, DEFAULT_APPROVAL_CATEGORIES } from '@fabrika/control-contract'
+import { PERMISSIVE_POLICY, POLICY_CATEGORIES, STRICT_POLICY } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement, type ReactElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { CategoryEditor, ProtectionRow, UnprotectConsequences } from '../components/app-detail/ApprovalsSection'
+import { PolicyEditor, ProtectionRow, UnprotectConsequences } from '../components/app-detail/ApprovalsSection'
 import { type AppEnvDto, type ApprovalDto, type ConsoleAccessDto, type ControlFetch, createControlClient } from '../lib/api'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import {
 	APPROVAL_CATEGORY_GROUPS,
-	categoryChange,
-	isDefaultCategory,
+	loosened,
 	parkedRunsAt,
+	policyChange,
+	presetOf,
 	protectionFailure,
 	protectionToggle,
 	setEnvironmentProtection,
+	waitingSummary,
 } from '../lib/environment-protection'
 
 const environment = (env: string, isProtected: boolean): AppEnvDto => ({
@@ -26,6 +28,7 @@ const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	authoring: false,
 	protected: isProtected,
 	approvalCategories: ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'],
+	approvalPolicy: STRICT_POLICY,
 	publishedRunId: null,
 	deviationSubjects: [],
 	surface: [],
@@ -185,37 +188,62 @@ describe('turning approvals on and off for an environment', () => {
 	})
 })
 
-// ADR-0083 §5: the categories under a protected environment's switch, editable for a holder of `access.approve`.
-describe('approval categories', () => {
-	const editor = (env: AppEnvDto): string => renderToStaticMarkup(createElement(CategoryEditor, { appId: 'notes', env, onDone: () => undefined }))
+// ADR-0083 §5: the mode of each category under a protected environment's switch, editable for a holder of `access.approve`.
+describe('approval modes', () => {
+	const editor = (env: AppEnvDto): string => renderToStaticMarkup(createElement(PolicyEditor, { appId: 'notes', env, onDone: () => undefined }))
 
-	test('every category is offered once, the defaults marked, the chosen ones checked', () => {
-		const markup = editor({ ...environment('prod', true), approvalCategories: [...DEFAULT_APPROVAL_CATEGORIES, 'grants'] })
+	test('every category is offered once with only the modes it takes, the stored ones selected and the defaults marked', () => {
+		const markup = editor({ ...environment('prod', true), approvalPolicy: { ...STRICT_POLICY, grants: 'person', secrets: 'refuse' } })
 		const offered = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options.map((option) => option.category))
-		expect([...offered].sort()).toEqual([...APPROVAL_CATEGORIES].sort())
-		expect(markup.match(/type="checkbox"/g)).toHaveLength(APPROVAL_CATEGORIES.length)
-		expect(markup.match(/checked=""/g)).toHaveLength(DEFAULT_APPROVAL_CATEGORIES.length + 1)
-		expect(markup).toContain('Console grants and revocations')
+		expect([...offered].sort()).toEqual([...POLICY_CATEGORIES].sort())
+		expect(markup.match(/<select/g)).toHaveLength(POLICY_CATEGORIES.length)
+		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three.
+		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3)
+		expect(markup.match(/selected=""/g)).toHaveLength(POLICY_CATEGORIES.length)
+		expect(markup).toContain('<option value="refuse" selected="">Refused</option>')
+		expect(markup).toContain('<option value="person" selected="">A person approves</option>')
+		expect(markup).toContain('<option value="person" selected="">A person approves (default)</option>')
+		expect(markup).toContain('Custom')
 	})
 
-	test('saving fewer categories asks first; adding one does not', () => {
-		expect(categoryChange(['people', 'csp'], ['people'])).toBe('confirm')
-		expect(categoryChange(['people'], ['people', 'role-added'])).toBe('apply')
-		expect(isDefaultCategory('deletes-data')).toBe(true)
-		expect(isDefaultCategory('grants')).toBe(false)
+	test('the presets are offered, the stored one pressed', () => {
+		expect(editor(environment('prod', true))).toContain('aria-pressed="true" title="a person approves what an agent asks for; the default"')
+		expect(editor({ ...environment('prod', true), approvalPolicy: PERMISSIVE_POLICY })).toContain(
+			'aria-pressed="true" title="an agent configures and deploys with no approval"',
+		)
+		expect(presetOf(STRICT_POLICY)).toBe('strict')
+		expect(presetOf(PERMISSIVE_POLICY)).toBe('permissive')
+		expect(presetOf({ ...STRICT_POLICY, csp: 'plan' })).toBeNull()
 	})
 
-	test('the protection call sends the categories only when given', async () => {
+	test('an action no request routes yet says what applies today', () => {
+		expect(editor(environment('prod', true))).toContain('not enforced yet. Today it applies at once.')
+	})
+
+	test('a change that loosens any category asks first; one that tightens does not', () => {
+		expect(policyChange(STRICT_POLICY, PERMISSIVE_POLICY)).toBe('confirm')
+		expect(policyChange(STRICT_POLICY, { ...STRICT_POLICY, 'off-road': 'person', csp: 'plan', secrets: 'refuse' })).toBe('apply')
+		expect(loosened(STRICT_POLICY, { ...STRICT_POLICY, 'deletes-data': 'plan', 'deploy-request': 'off' })).toEqual(['deletes-data', 'deploy-request'])
+	})
+
+	test('a reader who cannot change the policy reads what waits', () => {
+		expect(waitingSummary(PERMISSIVE_POLICY)).toBe('Nothing waits.')
+		expect(waitingSummary({ ...PERMISSIVE_POLICY, 'deletes-data': 'person', registry: 'refuse' })).toBe(
+			'Waits for a person: Migrations that may change stored data; refused to an agent: Where a deploy points.',
+		)
+	})
+
+	test('the protection call sends the policy only when given', async () => {
 		const sent: unknown[] = []
 		const fetch: ControlFetch = (_input, init) => {
 			sent.push(JSON.parse(String(init?.body)))
 			return Promise.resolve(Response.json({ result: environment('prod', true) }))
 		}
 		const client = createControlClient(fetch)
-		await setEnvironmentProtection(client, 'notes', 'prod', true, ['grants'])
+		await setEnvironmentProtection(client, 'notes', 'prod', true, PERMISSIVE_POLICY)
 		await setEnvironmentProtection(client, 'notes', 'prod', true)
 		expect(sent).toEqual([
-			{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true, categories: ['grants'] } },
+			{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true, policy: PERMISSIVE_POLICY } },
 			{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: true } },
 		])
 	})

@@ -1,18 +1,30 @@
 import { Link } from '@buzola/router'
-import { type ApprovalCategory, CONTROL_ACTIONS } from '@fabrika/control-contract'
+import {
+	type ApprovalPolicy,
+	approvalPolicySchema,
+	CONTROL_ACTIONS,
+	modesOf,
+	POLICY_CATEGORIES,
+	type PolicyCategory,
+} from '@fabrika/control-contract'
 import { useState } from 'react'
 import { api, type AppEnvDto, type ApprovalDto } from '../../lib/api'
 import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import {
 	APPROVAL_CATEGORY_GROUPS,
-	categoryChange,
 	categoryLabel,
-	isDefaultCategory,
+	isDefaultMode,
+	loosened,
+	modeLabel,
 	parkedRunsAt,
+	policyChange,
+	presetOf,
+	PRESETS,
 	protectionFailure,
 	protectionToggle,
 	setEnvironmentProtection,
+	waitingSummary,
 } from '../../lib/environment-protection'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Icon } from '../Icon'
@@ -29,11 +41,12 @@ export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs:
 				<h2>Access approvals</h2>
 			</div>
 			<p className="hint">
-				On an environment that requires approval, a deploy with a change of a chosen kind waits until a person with <code>access.approve</code>{' '}
-				approves it, and a console grant of a chosen kind waits for another IAM administrator. By default that is every change that needs closer review
-				(raw SQL, a table read across scopes, a public endpoint, people becoming visible, a migration that may change stored data); permission changes may
-				be added. Any other change goes out at once. A team that already reviews every merge to the trigger branch on GitHub may turn this off. Only a
-				person signed in to the console changes it, and the audit log records each change.
+				On an environment that requires approval, each kind of change has a mode: it goes through with no approval, waits for a plan or a person, waits
+				for a person with{' '}
+				<code>access.approve</code>, or, for what an agent or a key does, is refused. By default every change that needs closer review waits (raw SQL, a
+				table read across scopes, a public endpoint, people becoming visible, a migration that may change stored data), and what an agent does waits for a
+				person. The permissive preset lets everything through and keeps recording it. Only a person signed in to the console changes this, and the audit
+				log records each change.
 			</p>
 			<Table
 				head={
@@ -112,8 +125,8 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 					</span>
 					{error && <div className="error-text small" role="alert">{error}</div>}
 					{env.protected && (approver
-						? <CategoryEditor appId={appId} env={env} onDone={onDone} />
-						: <span className="muted small">Waits for: {env.approvalCategories.map(categoryLabel).join(', ') || 'nothing'}</span>)}
+						? <PolicyEditor appId={appId} env={env} onDone={onDone} />
+						: <span className="muted small">{waitingSummary(env.approvalPolicy)}</span>)}
 				</div>
 				{confirming && (
 					<ConfirmDialog
@@ -131,18 +144,20 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 }
 
 /**
- * The kinds of change that wait on a protected environment (ADR-0083), for a holder of `access.approve`: one save, and
- * a confirmation first when it removes a chosen kind.
+ * What lets a change of each category through on a protected environment (ADR-0083), for a holder of `access.approve`:
+ * a mode per category, the strict and permissive presets, one save, and a confirmation first when it loosens any.
  */
-export function CategoryEditor({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
-	const [chosen, setChosen] = useState<readonly ApprovalCategory[]>(env.approvalCategories)
+export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
+	const [chosen, setChosen] = useState<ApprovalPolicy>(env.approvalPolicy)
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 	const [confirming, setConfirming] = useState(false)
-	const changed = chosen.length !== env.approvalCategories.length || chosen.some((category) => !env.approvalCategories.includes(category))
+	const changed = POLICY_CATEGORIES.some((category) => chosen[category] !== env.approvalPolicy[category])
+	const preset = presetOf(chosen)
 
-	function toggle(category: ApprovalCategory, on: boolean) {
-		setChosen((current) => (on ? [...current, category] : current.filter((other) => other !== category)))
+	function choose(category: PolicyCategory, mode: string) {
+		const parsed = approvalPolicySchema.safeParse({ ...chosen, [category]: mode })
+		if (parsed.success) setChosen(parsed.data)
 	}
 
 	async function save() {
@@ -152,7 +167,7 @@ export function CategoryEditor({ appId, env, onDone }: { appId: string; env: App
 
 	async function apply() {
 		setError(null)
-		if (categoryChange(env.approvalCategories, chosen) === 'confirm') {
+		if (policyChange(env.approvalPolicy, chosen) === 'confirm') {
 			setConfirming(true)
 			return
 		}
@@ -166,46 +181,65 @@ export function CategoryEditor({ appId, env, onDone }: { appId: string; env: App
 		}
 	}
 
-	const removed = env.approvalCategories.filter((category) => !chosen.includes(category))
+	const looser = loosened(env.approvalPolicy, chosen)
 	return (
 		<fieldset className="approval-categories">
-			<legend className="small">What waits for approval on {env.env}</legend>
+			<legend className="small">What lets a change through on {env.env}</legend>
+			<div className="approval-presets">
+				{PRESETS.map((option) => (
+					<button
+						key={option.name}
+						type="button"
+						className={preset === option.name ? 'btn small primary' : 'btn small'}
+						aria-pressed={preset === option.name}
+						title={option.hint}
+						disabled={busy}
+						onClick={() => setChosen(option.policy)}
+					>
+						{option.label}
+					</button>
+				))}
+				<span className="muted small">{preset === null ? 'Custom' : PRESETS.find((option) => option.name === preset)?.hint}</span>
+			</div>
 			{APPROVAL_CATEGORY_GROUPS.map((group) => (
 				<div key={group.title} className="approval-category-group">
 					<div className="muted small">{group.title}</div>
 					{group.options.map((option) => (
-						<label key={option.category} className="checkbox" title={option.hint}>
-							<input
-								type="checkbox"
-								checked={chosen.includes(option.category)}
-								disabled={busy}
-								onChange={(event) => toggle(option.category, event.target.checked)}
-							/>
+						<label key={option.category} className="approval-mode" title={option.hint}>
 							<span>
 								{option.label}
-								{isDefaultCategory(option.category) && (
-									<>
-										{' '}
-										<span className="muted small">default</span>
-									</>
-								)}
+								{option.pending !== undefined && <span className="muted small">{` · not enforced yet. ${option.pending}`}</span>}
 							</span>
+							<select
+								value={chosen[option.category]}
+								disabled={busy}
+								aria-label={option.label}
+								onChange={(event) => choose(option.category, event.target.value)}
+							>
+								{modesOf(option.category).map((mode) => (
+									<option key={mode} value={mode}>
+										{modeLabel(mode)}
+										{isDefaultMode(option.category, mode) ? ' (default)' : ''}
+									</option>
+								))}
+							</select>
 						</label>
 					))}
 				</div>
 			))}
 			<div>
-				<button type="button" className="btn small" disabled={!changed || busy} onClick={() => void apply()}>Save approval categories</button>
+				<button type="button" className="btn small" disabled={!changed || busy} onClick={() => void apply()}>Save approvals</button>
 			</div>
 			{error && <div className="error-text small" role="alert">{error}</div>}
 			{confirming && (
 				<ConfirmDialog
-					title="Approve fewer kinds of change"
-					confirmLabel="Save approval categories"
+					title="Approve less"
+					confirmLabel="Save approvals"
 					body={
 						<>
 							<p>
-								On <strong>{env.env}</strong>, these will no longer wait for a person: {removed.map(categoryLabel).join(', ')}.
+								On <strong>{env.env}</strong>, these will need less to go through:{' '}
+								{looser.map((category) => `${categoryLabel(category)} (${modeLabel(chosen[category]).toLowerCase()})`).join(', ')}.
 							</p>
 							<p>The audit log records this change. A deploy or grant that already waits keeps waiting until a person decides it.</p>
 						</>

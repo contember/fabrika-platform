@@ -7,12 +7,15 @@ import {
 	type AccessChangeDto,
 	APPROVAL_CATEGORIES,
 	type ApprovalCategory,
+	type ApprovalPolicy,
 	CHANGE_SUBJECT_KINDS,
 	DEFAULT_APPROVAL_CATEGORIES,
+	gate,
+	policyFromCategories,
 	REVIEW_REASONS,
 	SURFACE_NOTE_TOPICS,
 	SURFACE_REACHES,
-	waitsForApproval,
+	waitingCategories,
 } from '@fabrika/control-contract'
 import type { MigrationDataLoss, MigrationDialect } from '@fabrika/platform-node/sql'
 import type { ProviderApprovedAccess } from '@fabrika/provider-contract'
@@ -24,7 +27,7 @@ import type { CommitSource } from '../github/source/commit-files'
 import { SourceFailure, SourceRateLimited } from '../github/source/failure'
 import type { LeaseFence } from '../lease'
 import { mailCustodyRefusal } from '../mail-transport'
-import { appEnvCategories, isDefaultCategories } from './categories'
+import { appEnvPolicy, isDefaultCategories } from './categories'
 import { type AccessEffect, type AccessOutcome, classifyAccess, isJobStartLine } from './diff'
 import { relationGrantsRefusal } from './enforcement'
 import { AppliedMigrationsChanged, ContractMissing, readAccessSnapshot, readLockfile, snapshotReads, SnapshotRefused } from './read'
@@ -63,6 +66,14 @@ export interface StoredClassification {
 /** The categories a stored classification waits for: its own, or the defaults it was classified under. */
 export function classificationCategories(classification: StoredClassification): readonly ApprovalCategory[] {
 	return classification.categories ?? DEFAULT_APPROVAL_CATEGORIES
+}
+
+/**
+ * The policy a stored classification is gated by. It stores the waiting categories only: with no plan entries `plan`
+ * waits as `person` does, so the list decides as the policy would.
+ */
+export function classificationPolicy(classification: StoredClassification): ApprovalPolicy {
+	return policyFromCategories(classificationCategories(classification))
 }
 
 /** A human's approval of one classified change: valid only for these two digests (ADR-0050 §5). */
@@ -228,7 +239,8 @@ export async function publishRunSnapshot(
 		logClassification(input.log, classification, appEnv.env)
 		const serialized = JSON.stringify(classification)
 		if (
-			classification.protected && waitsForApproval(classification.changes, classificationCategories(classification)) && !approves(run, classification)
+			classification.protected && gate({ lines: classification.changes }, classificationPolicy(classification)).kind !== 'pass'
+			&& !approves(run, classification)
 		) {
 			await invocation.write((fence) => runs.parkRunForApproval(run.id, serialized, fence))
 			input.log(`access: waiting for a human with access.approve to approve this change on \`${appEnv.env}\``)
@@ -246,7 +258,7 @@ export async function publishRunSnapshot(
 }
 
 function classify(active: ActiveSnapshot, candidate: AccessSnapshot, appEnv: AppEnvRow): StoredClassification {
-	const categories = appEnvCategories(appEnv)
+	const categories = waitingCategories(appEnvPolicy(appEnv))
 	return {
 		...classifyAccess(active.snapshot, candidate),
 		candidateDigest: snapshotDigest(candidate),

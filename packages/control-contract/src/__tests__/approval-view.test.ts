@@ -2,8 +2,22 @@
 // expanding anything, folds only quiet subjects that changed alike, and decides nothing.
 
 import { describe, expect, test } from 'bun:test'
-import { type ApprovalView, approvalView, changeCategories, type ChangeRow, rowChanges, waitsForApproval } from '../approval-view'
-import { type AccessChangeDto, type ApprovalCategory, type ChangeAudienceDto, DEFAULT_APPROVAL_CATEGORIES, REVIEW_REASONS } from '../index'
+import { type ApprovalView, approvalView, type ChangeRow, rowChanges } from '../approval-view'
+import {
+	type AccessChangeDto,
+	type ApprovalCategory,
+	type ChangeAudienceDto,
+	changeCategories,
+	DEFAULT_APPROVAL_CATEGORIES,
+	gate,
+	policyFromCategories,
+	REVIEW_REASONS,
+} from '../index'
+
+/** Whether a change waits under an earlier category list, through the gate that replaced the list's predicate. */
+function waitsForApproval(changes: readonly AccessChangeDto[], categories: readonly ApprovalCategory[]): boolean {
+	return gate({ lines: changes }, policyFromCategories(categories)).kind !== 'pass'
+}
 
 const anyone: ChangeAudienceDto = { reach: 'anyone', requirement: null }
 const staff: ChangeAudienceDto = { reach: 'human', requirement: 'with `candidates.read` (on `candidate`)' }
