@@ -28,9 +28,10 @@ import { error, json, readJson } from './http'
 
 /** The app ids a grant can be scoped to — the apps that have registered a vocabulary — with their display names. */
 export async function listAppsUseCase(c: AdminContext): Promise<{ items: AppDto[] }> {
+	const external = new Set((await c.services.repositories.oauthRegistry.listExternalApps()).map((row) => row.app))
 	const items = await Promise.all((await knownApps(c)).map(async (id): Promise<AppDto> => {
 		const { displayName } = parsePresentation(await c.services.repositories.appSchema.getPresentation(id))
-		return { id, displayName, installation: c.services.config.platformAudiences.has(id) }
+		return { id, displayName, installation: c.services.config.platformAudiences.has(id), externalApplication: external.has(id) }
 	}))
 	return { items }
 }
@@ -122,6 +123,11 @@ export async function putAppSchema(c: AdminContext, app: string): Promise<Respon
 		return error(400, appSchemaError(parsed.error.issues))
 	}
 	const schema = parsed.data
+	// An external application's vocabulary is the registry's (ADR-0089): a deploy that reconciled one would hand its id
+	// actions an administrator never declared, and the registry's next write would wipe them.
+	if ((await c.services.repositories.oauthRegistry.externalApp(app)) !== null) {
+		return error(409, `\`${app}\` is an external application; its roles are the OAuth client registry's (externalApps.put)`)
+	}
 	// A role key an admin already owns as a custom policy is a CONFLICT, not something to overwrite.
 	// The rule was one-directional: `createPolicyUseCase` 409s on an existing key so an admin can never
 	// clobber an app role, but a deploy silently flipped a custom policy to origin='app' — after which

@@ -25,6 +25,7 @@ import { type AuditEventInput, type OAuthGrantRow, type PrincipalRow, principalS
 import type { Env } from './env'
 import { parseJsonOrNull } from './json'
 import { clientMetadata } from './oauth-client'
+import { registeredClient } from './oauth-clients'
 import type { ManagedOAuthClient, OAuthConfig } from './oauth-config'
 import { pkceChallenge } from './oidc'
 import { unixNow } from './repositories/sql'
@@ -76,9 +77,14 @@ export function storedResourceList(text: string): string[] | null {
  * Resolve a client and its redirect URI. Until this succeeds nothing may be redirected to
  * `redirect_uri`. An unregistered client id is refused before any metadata fetch.
  */
-export async function establishClient(config: OAuthConfig, clientId: string, redirectUri: string): Promise<ManagedClient | null> {
-	const registration = config.clients.find((client) => client.clientId === clientId)
-	if (registration === undefined || !registration.redirectUris.includes(redirectUri)) return null
+export async function establishClient(
+	services: Services,
+	config: OAuthConfig,
+	clientId: string,
+	redirectUri: string,
+): Promise<ManagedClient | null> {
+	const registration = await registeredClient(services, config, clientId)
+	if (registration === null || !registration.redirectUris.includes(redirectUri)) return null
 	const metadata = await clientMetadata(registration)
 	if (metadata === null || !metadata.redirect_uris.includes(redirectUri)) return null
 	return { kind: 'managed', registration, metadata }
@@ -310,7 +316,7 @@ export async function grantAuthority(
 	const config = services.config.oauth
 	if (config === null || grant.revoked_at !== null || grant.expires_at <= now || !grantResources(grant).includes(resourceUri)) return null
 	const scopes = parseOAuthScopes(parseJsonOrNull(grant.scopes))
-	const ceiling = scopes === null ? null : grantCeiling(config, grant, resourceUri, scopes)
+	const ceiling = scopes === null ? null : await grantCeiling(services, config, grant, resourceUri, scopes)
 	if (scopes === null || ceiling === null) return null
 	const session = await services.repositories.sessions.getActiveSessionById(grant.session_id)
 	if (session === null || session.app !== null || session.principal_id !== grant.principal_id || !sessionUsable(session, services.config, now)) {
@@ -340,15 +346,16 @@ export async function grantAuthority(
  * is no longer configured for it. An identity-only client is served its own resource alone, so a grant it holds for
  * any other one (given before it was bound) mints nothing, and a grant for an identity resource carries no permission.
  */
-function grantCeiling(
+async function grantCeiling(
+	services: Services,
 	config: OAuthConfig,
 	grant: OAuthGrantRow,
 	resourceUri: string,
 	scopes: readonly string[],
-): { kind: 'identity'; roles: readonly OAuthIdentityRole[] | undefined } | { kind: 'scoped'; permissions: KeyGrant[] } | null {
+): Promise<{ kind: 'identity'; roles: readonly OAuthIdentityRole[] | undefined } | { kind: 'scoped'; permissions: KeyGrant[] } | null> {
 	const cli = grant.client_id === OAUTH_CLI_CLIENT_ID
-	const client = config.clients.find((entry) => entry.clientId === grant.client_id)
-	if (!cli && client === undefined) return null
+	const client = cli ? null : await registeredClient(services, config, grant.client_id)
+	if (!cli && client === null) return null
 	const identity = client?.identity
 	if (identity !== undefined) {
 		const matches = identity.resource === resourceUri && identity.app === grant.app && sameScopes(scopes, [OAUTH_IDENTITY_SCOPE])
@@ -360,8 +367,8 @@ function grantCeiling(
 }
 
 /**
- * The declared roles `principal` holds at an external application, in declared order, and when the earliest of them
- * ends (null: none ends); null when it holds none. Only a global grant of a declared role counts, and only for an
+ * The declared roles `principal` holds at an external application, in the registration's order (key order from the
+ * registry), and when the earliest of them ends (null: none ends); null when it holds none. Only a global grant of a declared role counts, and only for an
  * internal principal: an external one holds nothing but roles its application declares external (ADR-0051).
  */
 export async function heldIdentityRoles(

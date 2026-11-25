@@ -186,6 +186,7 @@ describe('the OIDC session cap — SQLite', () => {
 			oauth: {
 				clients: [{ provider: 'claude', clientId: CLIENT_ID, redirectUris: [`${ISSUER}/cb`], metadataUrl: CLIENT_ID }],
 				resources: [{ app: 'control', resource: RESOURCE, defaultScopes: ['read'], scopeGrants: [{ scope: 'read', permissions: [{ action: '*' }] }] }],
+				hosts: [],
 			},
 		})
 		const almost = await login(new TestSqlDatabase(harness.sqlite), harness.repositories, 'oidc', CAP - 60)

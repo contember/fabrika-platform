@@ -26,6 +26,16 @@ import type {
 	WorkloadKind,
 } from '@fabrika/auth-core'
 import type { InstallationBrand } from '@fabrika/proxy-core/brand'
+import type {
+	ExternalAppDto,
+	ExternalAppInput,
+	ImportOAuthClientsRequest,
+	ImportOAuthClientsResponse,
+	OAuthClientDto,
+	OAuthClientInput,
+	PutExternalAppRequest,
+	PutOAuthClientRequest,
+} from './oauth-registry'
 import type { PasswordPolicyDto, SetPasswordPolicyRequest } from './password-policy'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
@@ -271,6 +281,8 @@ export interface AppDto {
 	displayName: string | null
 	/** One of the installation's own apps (a platform audience): a user administrator grants nothing there (ADR-0058). */
 	installation: boolean
+	/** Registered in IAM as an external application (ADR-0089): it has no deploy target, only roles and OAuth clients. */
+	externalApplication: boolean
 }
 
 // ── Roles & policies (per-app, DB-backed) ─────────────────────────────────────
@@ -900,6 +912,28 @@ export interface IamAdminRpcContract {
 	roles: {
 		list: RpcProcedure<ListRolesInput, ListResponse<RoleDto>>
 	}
+	/**
+	 * Applications outside the installation that sign people in through IAM (ADR-0089), an installation administrator's
+	 * (`iam.admin`). `put` replaces the whole application, its roles and its clients in one transaction; removing a client
+	 * or the application revokes its OAuth grants there.
+	 */
+	externalApps: {
+		list: RpcProcedure<void, ListResponse<ExternalAppDto>>
+		get: RpcProcedure<ExternalAppInput, ExternalAppDto>
+		put: RpcProcedure<PutExternalAppRequest, ExternalAppDto>
+		delete: RpcProcedure<ExternalAppInput, OkResponse>
+	}
+	/**
+	 * Every registered OAuth client, listed for an installation administrator. An MCP authoring client is written with
+	 * the provisioning key only; a client of an external application only through `externalApps.put`.
+	 */
+	oauthClients: {
+		list: RpcProcedure<void, ListResponse<OAuthClientDto>>
+		put: RpcProcedure<PutOAuthClientRequest, OAuthClientDto>
+		delete: RpcProcedure<OAuthClientInput, OkResponse>
+		/** The deploy's one import of its client list, with the provisioning key; every later call writes nothing. */
+		importOnce: RpcProcedure<ImportOAuthClientsRequest, ImportOAuthClientsResponse>
+	}
 	policies: {
 		list: RpcProcedure<AppInput, ListResponse<PolicyDto>>
 		create: RpcProcedure<CreatePolicyInput, PolicyDto>
@@ -1016,4 +1050,5 @@ export type {
 }
 export * from './access'
 export * from './oauth'
+export * from './oauth-registry'
 export * from './password-policy'

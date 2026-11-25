@@ -1,6 +1,6 @@
 import { type AuthContext, ForbiddenError, initRpc, type RpcRouterFor, toErrorResponse, UnauthorizedError } from '@fabrika/app'
 import { permits, scopedValues, WORKLOAD_KINDS } from '@fabrika/auth-core'
-import { type IamAdminRpcContract, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
+import { type IamAdminRpcContract, OAUTH_CLIENT_PROVIDERS, PASSWORD_MAX_LENGTH, PASSWORD_MIN_LENGTH_FLOOR } from '@fabrika/iam-contract'
 import { installationBrandSchema } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
@@ -8,6 +8,16 @@ import { logError } from '../log'
 import { recordAdminAccess, rpcProcedureOf } from './access'
 import { grantAppRole, listAdministeredApps, listAppPeople, revokeAppRole } from './app-people'
 import { listConnections, revokeConnection } from './connections'
+import {
+	deleteExternalAppUseCase,
+	deleteOAuthClientUseCase,
+	getExternalAppUseCase,
+	importOAuthClientsUseCase,
+	listExternalAppsUseCase,
+	listOAuthClientsUseCase,
+	putExternalAppUseCase,
+	putOAuthClientUseCase,
+} from './external-apps'
 import {
 	decideGrantRequestUseCase,
 	type GrantRequester,
@@ -45,6 +55,8 @@ const policy = {
 	permissions: z.array(nonEmpty),
 }
 const grantSchema = z.object({ principalId: nonEmpty, ...authorization })
+const redirectUris = z.array(z.string())
+const metadataUrl = z.string().nullable().optional()
 const shareGrantSchema = z.object({
 	action: nonEmpty,
 	scope: z.object({ type: nonEmpty, value: nonEmpty }).nullable().optional(),
@@ -154,6 +166,40 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 		list: t.procedure
 			.input(z.object({ app: optionalNullableString }))
 			.query(({ ctx, input }) => adminUseCases.listRoles(context(ctx), input)),
+	}),
+	// Where IAM sends people's identity: an installation administrator's decision (ADR-0089), never a user administrator's.
+	externalApps: t.router({
+		list: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => listExternalAppsUseCase(context(ctx))),
+		get: t.procedure.input(appInput).require(ADMIN_ACTION).query(({ ctx, input }) => getExternalAppUseCase(context(ctx), input)),
+		put: t.procedure
+			.input(
+				z.object({
+					app: nonEmpty,
+					name: z.string(),
+					resource: nonEmpty,
+					roles: z.array(z.object({ key: z.string(), name: z.string() }).strict()).nullable().optional(),
+					clients: z.array(z.object({ clientId: nonEmpty, redirectUris, metadataUrl }).strict()),
+				}).strict(),
+			)
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => putExternalAppUseCase(context(ctx), input)),
+		delete: t.procedure.input(appInput).require(ADMIN_ACTION).mutation(({ ctx, input }) => deleteExternalAppUseCase(context(ctx), input)),
+	}),
+	// The writes are the provisioning key's alone: an authoring client's tokens reach `/mcp` (ADR-0089 §3).
+	oauthClients: t.router({
+		list: t.procedure.require(ADMIN_ACTION).query(({ ctx }) => listOAuthClientsUseCase(context(ctx))),
+		put: t.procedure
+			.input(z.object({ clientId: nonEmpty, label: z.enum(OAUTH_CLIENT_PROVIDERS), redirectUris, metadataUrl }).strict())
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => putOAuthClientUseCase(context(ctx), input)),
+		delete: t.procedure
+			.input(z.object({ clientId: nonEmpty }).strict())
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => deleteOAuthClientUseCase(context(ctx), input)),
+		importOnce: t.procedure
+			.input(z.object({ clients: z.array(z.unknown()).max(64) }).strict())
+			.require(ADMIN_ACTION)
+			.mutation(({ ctx, input }) => importOAuthClientsUseCase(context(ctx), input)),
 	}),
 	policies: t.router({
 		list: t.procedure.input(appInput).query(({ ctx, input }) => adminUseCases.listPolicies(context(ctx), input)),

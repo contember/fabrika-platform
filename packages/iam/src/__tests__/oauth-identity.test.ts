@@ -16,7 +16,7 @@ let active: Fixture | null = null
 
 let database: ReturnType<typeof createHarness>['sqlite'] | null = null
 
-async function fixture(options: Parameters<typeof oauthFixture>[1] = {}): Promise<Fixture> {
+async function configuredFixture(options: Parameters<typeof oauthFixture>[1] = {}): Promise<Fixture> {
 	const harness = createHarness()
 	database = harness.sqlite
 	active = await oauthFixture(harness.repositories, options)
@@ -51,196 +51,203 @@ async function platformVerifier(options: Parameters<typeof createIam>[1]) {
 	return createIam({ IAM: binding, FABRIKA_IAM_ISSUER: ISSUER }, options)
 }
 
-describe('an identity-only external client', () => {
-	test('gets a token naming the person, with no permission, and a refresh keeps it so', async () => {
-		const f = await fixture({ provider: 'external', identity: IDENTITY })
-		// A grant at the identity app's own id must not reach the token either: IAM reads no grant for it.
-		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, permissions: ['accounts.manage'] })
+// Every flow runs twice: with the client in `OAUTH_CONFIG` (before the import) and in IAM's registry (ADR-0089).
+for (const registry of [false, true]) {
+	const source = registry ? 'the registry' : 'OAUTH_CONFIG'
+	const fixture = (options: Parameters<typeof oauthFixture>[1] = {}): Promise<Fixture> => configuredFixture({ ...options, registry })
 
-		const page = await f.authorize(IDENTITY_REQUEST)
-		expect(page.status).toBe(200)
-		const html = await page.text()
-		expect(html).toContain('no permission')
-		expect(html).not.toContain('accounts.manage')
+	describe(`an identity-only external client, served from ${source}`, () => {
+		test('gets a token naming the person, with no permission, and a refresh keeps it so', async () => {
+			const f = await fixture({ provider: 'external', identity: IDENTITY })
+			// A grant at the identity app's own id must not reach the token either: IAM reads no grant for it.
+			await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, permissions: ['accounts.manage'] })
 
-		const exchanged = await f.exchange(await identityCode(f), { resource: IDENTITY.resource })
-		expect(exchanged.status).toBe(200)
-		const first = await tokenBody(exchanged)
-		expect(first.scope).toBe('identity')
-		expect(decodeProtectedHeader(first.access_token).typ).toBe(RESOURCE_ACCESS_TOKEN_TYP)
-		const claims = parseAccessClaims(decodeJwt(first.access_token))
-		expect(claims?.iss).toBe(ISSUER)
-		expect(claims?.sub).toBe(f.principal.id)
-		expect(claims?.aud).toBe(IDENTITY.resource)
-		expect(claims?.ptype).toBe('user')
-		expect(claims?.oauth?.app).toBe(IDENTITY.app)
-		expect(claims?.oauth?.clientId).toBe(f.clientId)
-		expect(claims?.perms).toEqual([])
+			const page = await f.authorize(IDENTITY_REQUEST)
+			expect(page.status).toBe(200)
+			const html = await page.text()
+			expect(html).toContain('no permission')
+			expect(html).not.toContain('accounts.manage')
 
-		const rotated = await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource })
-		expect(rotated.status).toBe(200)
-		const refreshed = parseAccessClaims(decodeJwt((await tokenBody(rotated)).access_token))
-		expect(refreshed?.sub).toBe(f.principal.id)
-		expect(refreshed?.perms).toEqual([])
-	})
+			const exchanged = await f.exchange(await identityCode(f), { resource: IDENTITY.resource })
+			expect(exchanged.status).toBe(200)
+			const first = await tokenBody(exchanged)
+			expect(first.scope).toBe('identity')
+			expect(decodeProtectedHeader(first.access_token).typ).toBe(RESOURCE_ACCESS_TOKEN_TYP)
+			const claims = parseAccessClaims(decodeJwt(first.access_token))
+			expect(claims?.iss).toBe(ISSUER)
+			expect(claims?.sub).toBe(f.principal.id)
+			expect(claims?.aud).toBe(IDENTITY.resource)
+			expect(claims?.ptype).toBe('user')
+			expect(claims?.oauth?.app).toBe(IDENTITY.app)
+			expect(claims?.oauth?.clientId).toBe(f.clientId)
+			expect(claims?.perms).toEqual([])
 
-	test('is refused every registered resource and every scope but `identity`, with the error sent to its redirect', async () => {
-		const f = await fixture({ provider: 'external', identity: IDENTITY })
-		const target = locationOf(await f.authorize({ resource: RESOURCE, scope: 'authoring' }))
-		expect(target.origin + target.pathname).toBe(REDIRECT_URI)
-		expect(target.searchParams.get('error')).toBe('invalid_target')
-		expect(locationOf(await f.decide('approve', { resource: RESOURCE })).searchParams.get('error')).toBe('invalid_target')
-		expect(locationOf(await f.authorize({ ...IDENTITY_REQUEST, scope: 'authoring' })).searchParams.get('error')).toBe('invalid_scope')
-		expect(locationOf(await f.authorize({ ...IDENTITY_REQUEST, scope: 'identity authoring' })).searchParams.get('error')).toBe('invalid_scope')
-		// No scope is the `identity` scope.
-		const withoutScope = new URLSearchParams({
-			response_type: 'code',
-			client_id: f.clientId,
-			redirect_uri: REDIRECT_URI,
-			resource: IDENTITY.resource,
-			code_challenge: 'a'.repeat(43),
-			code_challenge_method: 'S256',
+			const rotated = await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource })
+			expect(rotated.status).toBe(200)
+			const refreshed = parseAccessClaims(decodeJwt((await tokenBody(rotated)).access_token))
+			expect(refreshed?.sub).toBe(f.principal.id)
+			expect(refreshed?.perms).toEqual([])
 		})
-		const page = await f.call(new Request(`${ISSUER}/oauth/authorize?${withoutScope}`, { headers: { cookie: f.cookie } }))
-		expect(page.status).toBe(200)
-		expect(await page.text()).toContain('<code>identity</code>')
+
+		test('is refused every registered resource and every scope but `identity`, with the error sent to its redirect', async () => {
+			const f = await fixture({ provider: 'external', identity: IDENTITY })
+			const target = locationOf(await f.authorize({ resource: RESOURCE, scope: 'authoring' }))
+			expect(target.origin + target.pathname).toBe(REDIRECT_URI)
+			expect(target.searchParams.get('error')).toBe('invalid_target')
+			expect(locationOf(await f.decide('approve', { resource: RESOURCE })).searchParams.get('error')).toBe('invalid_target')
+			expect(locationOf(await f.authorize({ ...IDENTITY_REQUEST, scope: 'authoring' })).searchParams.get('error')).toBe('invalid_scope')
+			expect(locationOf(await f.authorize({ ...IDENTITY_REQUEST, scope: 'identity authoring' })).searchParams.get('error')).toBe('invalid_scope')
+			// No scope is the `identity` scope.
+			const withoutScope = new URLSearchParams({
+				response_type: 'code',
+				client_id: f.clientId,
+				redirect_uri: REDIRECT_URI,
+				resource: IDENTITY.resource,
+				code_challenge: 'a'.repeat(43),
+				code_challenge_method: 'S256',
+			})
+			const page = await f.call(new Request(`${ISSUER}/oauth/authorize?${withoutScope}`, { headers: { cookie: f.cookie } }))
+			expect(page.status).toBe(200)
+			expect(await page.text()).toContain('<code>identity</code>')
+		})
+
+		test('a code for its identity resource redeems for no other resource', async () => {
+			const f = await fixture({ provider: 'external', identity: IDENTITY })
+			expect((await f.exchange(await identityCode(f), { resource: RESOURCE })).status).toBe(400)
+		})
+
+		// Only `OAUTH_CONFIG` can bind an authoring client: the registry's writers refuse each other's clients.
+		test.skipIf(registry)('a grant for a registered resource given before the client was bound mints nothing after', async () => {
+			const f = await fixture({ provider: 'external' })
+			const authoring = await tokenBody(await f.exchange(await f.approve()))
+			const client = f.config.clients[0]
+			if (client === undefined) throw new Error('no client')
+			f.config.clients[0] = { ...client, identity: IDENTITY }
+			const refused = await f.refresh(authoring.refresh_token ?? '')
+			expect(refused.status).toBe(400)
+			expect(await refused.json()).toEqual({ error: 'invalid_grant' })
+		})
+
+		test("its token is refused by the console's and Operations' resources and by every application", async () => {
+			const f = await fixture({ provider: 'external', identity: IDENTITY })
+			const token = (await tokenBody(await f.exchange(await identityCode(f), { resource: IDENTITY.resource }))).access_token
+			const request = new Request('https://console.example.test/api/rpc', { headers: { [PROXY_TOKEN_HEADER]: token } })
+			const verifiers = await Promise.all([
+				// Control's `/mcp` (`control/src/bun/mcp.ts`) and its RPC with the command-line client's resource.
+				platformVerifier({ appId: 'vozka', tokenAudience: { kind: 'resource', app: 'vozka', resource: RESOURCE } }),
+				platformVerifier({ appId: 'vozka', oauthResource: 'https://console.example.test/api/rpc' }),
+				// Operations (`createOperationsIam`): the console's audience beside its OAuth resource.
+				platformVerifier({ appId: 'vozka', oauthResource: 'https://console.example.test/operations/api/rpc' }),
+				// An application accepts only its own native tokens, the identity app's id included.
+				platformVerifier({ appId: 'notes@prod' }),
+				platformVerifier({ appId: IDENTITY.app }),
+			])
+			for (const iam of verifiers) {
+				expect(await iam.authenticate(request)).toEqual({ ok: false, reason: 'invalid_token', status: 401 })
+			}
+			// The positive control: the same SDK accepts it at the identity resource itself.
+			const own = await platformVerifier({ appId: IDENTITY.app, tokenAudience: { kind: 'resource', app: IDENTITY.app, resource: IDENTITY.resource } })
+			const accepted = await own.authenticate(request)
+			expect(accepted.ok).toBe(true)
+			if (accepted.ok) expect(accepted.context.can('accounts.manage')).toBe(false)
+		})
 	})
 
-	test('a code for its identity resource redeems for no other resource', async () => {
-		const f = await fixture({ provider: 'external', identity: IDENTITY })
-		expect((await f.exchange(await identityCode(f), { resource: RESOURCE })).status).toBe(400)
-	})
+	describe(`an external application that declares roles, served from ${source}`, () => {
+		const ROLES = { ...IDENTITY, roles: [{ key: 'admin-ops', name: 'Administrator' }, { key: 'viewer', name: 'Viewer' }] }
 
-	test('a grant for a registered resource given before the client was bound mints nothing after', async () => {
-		const f = await fixture({ provider: 'external' })
-		const authoring = await tokenBody(await f.exchange(await f.approve()))
-		const client = f.config.clients[0]
-		if (client === undefined) throw new Error('no client')
-		f.config.clients[0] = { ...client, identity: IDENTITY }
-		const refused = await f.refresh(authoring.refresh_token ?? '')
-		expect(refused.status).toBe(400)
-		expect(await refused.json()).toEqual({ error: 'invalid_grant' })
-	})
-
-	test("its token is refused by the console's and Operations' resources and by every application", async () => {
-		const f = await fixture({ provider: 'external', identity: IDENTITY })
-		const token = (await tokenBody(await f.exchange(await identityCode(f), { resource: IDENTITY.resource }))).access_token
-		const request = new Request('https://console.example.test/api/rpc', { headers: { [PROXY_TOKEN_HEADER]: token } })
-		const verifiers = await Promise.all([
-			// Control's `/mcp` (`control/src/bun/mcp.ts`) and its RPC with the command-line client's resource.
-			platformVerifier({ appId: 'vozka', tokenAudience: { kind: 'resource', app: 'vozka', resource: RESOURCE } }),
-			platformVerifier({ appId: 'vozka', oauthResource: 'https://console.example.test/api/rpc' }),
-			// Operations (`createOperationsIam`): the console's audience beside its OAuth resource.
-			platformVerifier({ appId: 'vozka', oauthResource: 'https://console.example.test/operations/api/rpc' }),
-			// An application accepts only its own native tokens, the identity app's id included.
-			platformVerifier({ appId: 'notes@prod' }),
-			platformVerifier({ appId: IDENTITY.app }),
-		])
-		for (const iam of verifiers) {
-			expect(await iam.authenticate(request)).toEqual({ ok: false, reason: 'invalid_token', status: 401 })
+		async function signIn(f: Fixture) {
+			return f.exchange(await identityCode(f), { resource: IDENTITY.resource })
 		}
-		// The positive control: the same SDK accepts it at the identity resource itself.
-		const own = await platformVerifier({ appId: IDENTITY.app, tokenAudience: { kind: 'resource', app: IDENTITY.app, resource: IDENTITY.resource } })
-		const accepted = await own.authenticate(request)
-		expect(accepted.ok).toBe(true)
-		if (accepted.ok) expect(accepted.context.can('accounts.manage')).toBe(false)
-	})
-})
 
-describe('an external application that declares roles', () => {
-	const ROLES = { ...IDENTITY, roles: [{ key: 'admin-ops', name: 'Administrator' }, { key: 'viewer', name: 'Viewer' }] }
+		test('a person holding a role gets a token naming it and their mailbox, with no permission; a refresh names it again', async () => {
+			const f = await fixture({ provider: 'external', identity: ROLES })
+			const until = Math.floor(Date.now() / 1000) + 120
+			await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'viewer', expiresAt: until })
+			// Neither a role the application does not declare, nor a declared role held only in a scope value, is named.
+			await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'other' })
+			await f.repositories.grants.createGrant({
+				principalId: f.principal.id,
+				app: IDENTITY.app,
+				roleKey: 'admin-ops',
+				scopeType: 'team',
+				scopeValue: 'a',
+			})
 
-	async function signIn(f: Fixture) {
-		return f.exchange(await identityCode(f), { resource: IDENTITY.resource })
-	}
+			const html = await (await f.authorize(IDENTITY_REQUEST)).text()
+			expect(html).toContain('the roles you hold in <strong>ops-tool</strong>')
+			const exchanged = await signIn(f)
+			expect(exchanged.status).toBe(200)
+			const first = await tokenBody(exchanged)
+			const claims = parseAccessClaims(decodeJwt(first.access_token))
+			expect(claims?.oauth?.roles).toEqual(['viewer'])
+			expect(claims?.email).toBe(f.principal.email ?? '')
+			expect(claims?.perms).toEqual([])
+			// The token ends when the role's grant does.
+			expect(claims?.exp).toBeLessThanOrEqual(until)
 
-	test('a person holding a role gets a token naming it and their mailbox, with no permission; a refresh names it again', async () => {
-		const f = await fixture({ provider: 'external', identity: ROLES })
-		const until = Math.floor(Date.now() / 1000) + 120
-		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'viewer', expiresAt: until })
-		// Neither a role the application does not declare, nor a declared role held only in a scope value, is named.
-		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'other' })
-		await f.repositories.grants.createGrant({
-			principalId: f.principal.id,
-			app: IDENTITY.app,
-			roleKey: 'admin-ops',
-			scopeType: 'team',
-			scopeValue: 'a',
+			await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin-ops' })
+			const refreshed = parseAccessClaims(
+				decodeJwt((await tokenBody(await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource }))).access_token),
+			)
+			expect(refreshed?.oauth?.roles).toEqual(['admin-ops', 'viewer'])
+			expect(refreshed?.perms).toEqual([])
 		})
 
-		const html = await (await f.authorize(IDENTITY_REQUEST)).text()
-		expect(html).toContain('the roles you hold in <strong>ops-tool</strong>')
-		const exchanged = await signIn(f)
-		expect(exchanged.status).toBe(200)
-		const first = await tokenBody(exchanged)
-		const claims = parseAccessClaims(decodeJwt(first.access_token))
-		expect(claims?.oauth?.roles).toEqual(['viewer'])
-		expect(claims?.email).toBe(f.principal.email ?? '')
-		expect(claims?.perms).toEqual([])
-		// The token ends when the role's grant does.
-		expect(claims?.exp).toBeLessThanOrEqual(until)
+		test('a person holding no role is refused at sign-in, with access_denied sent to the client', async () => {
+			const f = await fixture({ provider: 'external', identity: ROLES })
+			const shown = locationOf(await f.authorize(IDENTITY_REQUEST))
+			expect(shown.origin + shown.pathname).toBe(REDIRECT_URI)
+			expect(shown.searchParams.get('error')).toBe('access_denied')
+			const decided = locationOf(await f.decide('approve', IDENTITY_REQUEST))
+			expect(decided.searchParams.get('error')).toBe('access_denied')
+			expect(decided.searchParams.get('code')).toBeNull()
+		})
 
-		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin-ops' })
-		const refreshed = parseAccessClaims(
-			decodeJwt((await tokenBody(await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource }))).access_token),
-		)
-		expect(refreshed?.oauth?.roles).toEqual(['admin-ops', 'viewer'])
-		expect(refreshed?.perms).toEqual([])
-	})
+		test('removing the role ends the sign-in at the next refresh', async () => {
+			const f = await fixture({ provider: 'external', identity: ROLES })
+			const grant = await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin-ops' })
+			const first = await tokenBody(await signIn(f))
+			expect(parseAccessClaims(decodeJwt(first.access_token))?.oauth?.roles).toEqual(['admin-ops'])
+			await f.repositories.grants.deleteGrant(grant.id)
+			const refused = await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource })
+			expect(refused.status).toBe(400)
+			expect(await refused.json()).toEqual({ error: 'invalid_grant' })
+		})
 
-	test('a person holding no role is refused at sign-in, with access_denied sent to the client', async () => {
-		const f = await fixture({ provider: 'external', identity: ROLES })
-		const shown = locationOf(await f.authorize(IDENTITY_REQUEST))
-		expect(shown.origin + shown.pathname).toBe(REDIRECT_URI)
-		expect(shown.searchParams.get('error')).toBe('access_denied')
-		const decided = locationOf(await f.decide('approve', IDENTITY_REQUEST))
-		expect(decided.searchParams.get('error')).toBe('access_denied')
-		expect(decided.searchParams.get('code')).toBeNull()
-	})
+		test('a code issued while the person held a role redeems for nothing once it is removed', async () => {
+			const f = await fixture({ provider: 'external', identity: ROLES })
+			const grant = await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin-ops' })
+			const code = await identityCode(f)
+			await f.repositories.grants.deleteGrant(grant.id)
+			expect((await f.exchange(code, { resource: IDENTITY.resource })).status).toBe(400)
+		})
 
-	test('removing the role ends the sign-in at the next refresh', async () => {
-		const f = await fixture({ provider: 'external', identity: ROLES })
-		const grant = await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin-ops' })
-		const first = await tokenBody(await signIn(f))
-		expect(parseAccessClaims(decodeJwt(first.access_token))?.oauth?.roles).toEqual(['admin-ops'])
-		await f.repositories.grants.deleteGrant(grant.id)
-		const refused = await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource })
-		expect(refused.status).toBe(400)
-		expect(await refused.json()).toEqual({ error: 'invalid_grant' })
-	})
+		test('a cross-app grant and a grant of the built-in admin name no role', async () => {
+			const f = await fixture({ provider: 'external', identity: ROLES })
+			await f.repositories.grants.createGrant({ principalId: f.principal.id, app: null, roleKey: 'viewer' })
+			await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin' })
+			expect(locationOf(await f.authorize(IDENTITY_REQUEST)).searchParams.get('error')).toBe('access_denied')
+		})
 
-	test('a code issued while the person held a role redeems for nothing once it is removed', async () => {
-		const f = await fixture({ provider: 'external', identity: ROLES })
-		const grant = await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin-ops' })
-		const code = await identityCode(f)
-		await f.repositories.grants.deleteGrant(grant.id)
-		expect((await f.exchange(code, { resource: IDENTITY.resource })).status).toBe(400)
-	})
+		test('an external principal holds no role of it, a grant written around the locks included', async () => {
+			const f = await fixture({ provider: 'external', identity: ROLES })
+			await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'viewer' })
+			const first = await tokenBody(await signIn(f))
+			// The grant locks refuse this grant for an external principal; resolution is the lock that remains.
+			database?.run("UPDATE principals SET affiliation = 'external' WHERE id = ?", [f.principal.id])
+			expect((await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource })).status).toBe(400)
+			expect(locationOf(await f.authorize(IDENTITY_REQUEST)).searchParams.get('error')).toBe('access_denied')
+		})
 
-	test('a cross-app grant and a grant of the built-in admin name no role', async () => {
-		const f = await fixture({ provider: 'external', identity: ROLES })
-		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: null, roleKey: 'viewer' })
-		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'admin' })
-		expect(locationOf(await f.authorize(IDENTITY_REQUEST)).searchParams.get('error')).toBe('access_denied')
+		test('without declared roles the token names none and every active user signs in', async () => {
+			const f = await fixture({ provider: 'external', identity: IDENTITY })
+			const claims = parseAccessClaims(decodeJwt((await tokenBody(await signIn(f))).access_token))
+			expect(claims?.oauth?.roles).toBeUndefined()
+			expect(claims?.email).toBe(f.principal.email ?? '')
+		})
 	})
-
-	test('an external principal holds no role of it, a grant written around the locks included', async () => {
-		const f = await fixture({ provider: 'external', identity: ROLES })
-		await f.repositories.grants.createGrant({ principalId: f.principal.id, app: IDENTITY.app, roleKey: 'viewer' })
-		const first = await tokenBody(await signIn(f))
-		// The grant locks refuse this grant for an external principal; resolution is the lock that remains.
-		database?.run("UPDATE principals SET affiliation = 'external' WHERE id = ?", [f.principal.id])
-		expect((await f.refresh(first.refresh_token ?? '', { resource: IDENTITY.resource })).status).toBe(400)
-		expect(locationOf(await f.authorize(IDENTITY_REQUEST)).searchParams.get('error')).toBe('access_denied')
-	})
-
-	test('without declared roles the token names none and every active user signs in', async () => {
-		const f = await fixture({ provider: 'external', identity: IDENTITY })
-		const claims = parseAccessClaims(decodeJwt((await tokenBody(await signIn(f))).access_token))
-		expect(claims?.oauth?.roles).toBeUndefined()
-		expect(claims?.email).toBe(f.principal.email ?? '')
-	})
-})
+}
 
 describe('OAUTH_CONFIG with an identity-only client', () => {
 	const client = {

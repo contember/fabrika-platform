@@ -3,6 +3,7 @@ import type { OAuthClientCredential, OAuthClientMetadataDocument } from '@fabrik
 import { createLocalJWKSet, errors, type JSONWebKeySet, type JWTPayload, jwtVerify } from 'jose'
 import type { EstablishedClient } from './oauth'
 import { clientJwks, clientMetadata } from './oauth-client'
+import { registeredClient } from './oauth-clients'
 import type { OAuthConfig } from './oauth-config'
 import { unixNow } from './repositories/sql'
 import type { Services } from './services'
@@ -27,8 +28,8 @@ export async function authenticateOAuthClient(
 ): Promise<EstablishedClient | null> {
 	// The CLI client is public: it holds no key, so it sends no assertion.
 	if (input.clientId === OAUTH_CLI_CLIENT_ID) return input.credential.method === 'none' ? { kind: 'cli', clientId: input.clientId } : null
-	const registration = config.clients.find((client) => client.clientId === input.clientId)
-	if (registration === undefined) return null
+	const registration = await registeredClient(services, config, input.clientId)
+	if (registration === null) return null
 	const metadata = await clientMetadata(registration)
 	if (metadata === null) return null
 	if (metadata.token_endpoint_auth_method === 'none') return input.credential.method === 'none' ? { kind: 'managed', registration, metadata } : null
@@ -50,8 +51,8 @@ export async function authenticateRevokingClient(
 ): Promise<boolean> {
 	if (input.credential.method !== 'none') return await authenticateOAuthClient(services, config, input) !== null
 	if (input.clientId === OAUTH_CLI_CLIENT_ID) return true
-	const registration = config.clients.find((client) => client.clientId === input.clientId)
-	if (registration === undefined) return false
+	const registration = await registeredClient(services, config, input.clientId)
+	if (registration === null) return false
 	const metadata = await clientMetadata(registration)
 	return metadata?.token_endpoint_auth_method !== 'private_key_jwt'
 }

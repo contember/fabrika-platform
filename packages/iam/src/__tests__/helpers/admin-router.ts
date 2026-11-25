@@ -148,6 +148,14 @@ const INPUTS: Record<string, unknown> = {
 	'passwordPolicy.set': { minLength: 12 },
 	'secondFactor.get': { principalId: 'nobody' },
 	'secondFactor.reset': { principalId: 'nobody' },
+	'externalApps.list': null,
+	'externalApps.get': { app: 'nowhere' },
+	'externalApps.put': { app: 'nowhere', name: 'Nowhere', resource: 'https://nowhere.example.com', clients: [] },
+	'externalApps.delete': { app: 'nowhere' },
+	'oauthClients.list': null,
+	'oauthClients.put': { clientId: 'https://nowhere.example.com/client.json', label: 'claude', redirectUris: ['https://nowhere.example.com/cb'] },
+	'oauthClients.delete': { clientId: 'https://nowhere.example.com/client.json' },
+	'oauthClients.importOnce': { clients: [] },
 }
 
 /** The input `INPUTS` names for `method`, or `{}`. */

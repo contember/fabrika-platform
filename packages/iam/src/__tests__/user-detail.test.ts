@@ -215,6 +215,7 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 					oauth: {
 						clients: [{ provider: 'claude', clientId, metadataUrl: clientId, redirectUris: ['https://client.example.test/callback'] }],
 						resources: [{ app: APP, resource, defaultScopes: ['read'], scopeGrants: [{ scope: 'read', permissions: [{ action: 'notes.read' }] }] }],
+						hosts: [],
 					},
 				}),
 			}

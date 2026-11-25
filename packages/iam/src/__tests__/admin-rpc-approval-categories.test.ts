@@ -50,6 +50,11 @@ const IAM: Readonly<Record<string, Judged>> = {
 	'brand.clear': { exempt: INSTALLATION },
 	'passwordPolicy.set': { exempt: INSTALLATION },
 	'secondFactor.reset': { exempt: INSTALLATION },
+	'externalApps.put': { exempt: `where IAM sends people's identity: ${INSTALLATION}` },
+	'externalApps.delete': { exempt: NARROWS },
+	'oauthClients.put': { exempt: "the operator's MCP authoring client, the provisioning key only" },
+	'oauthClients.delete': { exempt: NARROWS },
+	'oauthClients.importOnce': { exempt: "the deploy's one import of its client list, the provisioning key only" },
 }
 
 describe('every IAM administration mutation is judged by an approval category or exempt with its reason', () => {

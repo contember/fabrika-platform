@@ -112,11 +112,12 @@ type AuthorizationCheck =
  * Validate an authorization request in the order RFC 6749 §4.1.2.1 requires: until the client and its
  * redirect URI are established an error is a page here, never a redirect to an unverified address.
  */
-async function checkAuthorization(issuer: string, config: OAuthConfig, input: Record<string, string> | null): Promise<AuthorizationCheck> {
+async function checkAuthorization(services: Services, config: OAuthConfig, input: Record<string, string> | null): Promise<AuthorizationCheck> {
+	const issuer = services.config.issuer
 	const attempt = parseOAuthAuthorizationAttempt(input)
 	if (attempt.kind === 'invalid_request') return { kind: 'refused', message: 'The authorization request is malformed.' }
 	const coordinates = attempt.kind === 'valid' ? attempt.request : attempt.coordinates
-	const client = await establishClient(config, coordinates.client_id, coordinates.redirect_uri)
+	const client = await establishClient(services, config, coordinates.client_id, coordinates.redirect_uri)
 	if (client === null) return { kind: 'refused', message: 'The client or its redirect URI is not registered.' }
 	if (attempt.kind === 'invalid_scope') return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }
 	const identity = client.registration.identity
@@ -155,7 +156,7 @@ async function refusedByIdentityRoles(
 
 async function showConsent(request: Request, services: Services, config: OAuthConfig): Promise<Response> {
 	const url = new URL(request.url)
-	const check = await checkAuthorization(services.config.issuer, config, singleValued(url.searchParams))
+	const check = await checkAuthorization(services, config, singleValued(url.searchParams))
 	if (check.kind === 'refused') return errorPage(services, check.message, 400)
 	if (check.kind === 'redirect') return check.response
 	const session = await currentSession(request, services)
@@ -179,7 +180,7 @@ async function decideConsent(request: Request, services: Services, config: OAuth
 	const fields = form === null ? null : singleValued(form)
 	const decision = fields?.['decision']
 	const issuer = services.config.issuer
-	const check = await checkAuthorization(issuer, config, fields)
+	const check = await checkAuthorization(services, config, fields)
 	if (check.kind === 'refused') return errorPage(services, check.message, 400)
 	if (check.kind === 'redirect') return check.response
 	if (decision === 'deny') return clientRedirect(issuer, check.request, { error: 'access_denied' })

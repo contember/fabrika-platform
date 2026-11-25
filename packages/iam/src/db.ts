@@ -11,6 +11,7 @@ import { HandoffRepository } from './repositories/handoff'
 import { MembershipRepository } from './repositories/membership'
 import { MembershipTransportKeyRepository } from './repositories/membership-transport'
 import { OAuthRepository } from './repositories/oauth'
+import { OAuthRegistryRepository } from './repositories/oauth-registry'
 import { PasswordPolicyRepository } from './repositories/password-policy'
 import { PrincipalRepository } from './repositories/principals'
 import { SecondFactorRepository } from './repositories/second-factors'
@@ -61,6 +62,16 @@ export {
 } from './repositories/membership'
 export { MembershipTransportKeyRepository, type MembershipTransportKeyRow } from './repositories/membership-transport'
 export { type OAuthCodeRow, type OAuthGrantRow, type OAuthRefreshTokenRow, OAuthRepository } from './repositories/oauth'
+export {
+	type AuthoringClientWrite,
+	ExternalAppResourceTaken,
+	type ExternalAppRevocation,
+	type ExternalAppRow,
+	type ExternalAppWrite,
+	type OAuthClientRow,
+	OAuthRegistryRepository,
+	type RegistryEvents,
+} from './repositories/oauth-registry'
 export { PasswordPolicyRepository, type PasswordPolicyRow } from './repositories/password-policy'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
 export { SecondFactorRepository, type SecondFactorRow, type SecondFactorStatus } from './repositories/second-factors'
@@ -96,6 +107,7 @@ export interface IamRepositories {
 	handoff: HandoffRepository
 	membership: MembershipRepository
 	oauth: OAuthRepository
+	oauthRegistry: OAuthRegistryRepository
 	audit: AuditRepository
 	workloads: WorkloadRepository
 	terminals: TerminalRepository
@@ -115,18 +127,20 @@ export function createIamRepositories(
 	dialect: SqlDialect = 'sqlite',
 ): IamRepositories {
 	const writer = new AuditWriter(db, dialect)
+	const appSchema = replacements.appSchema ?? new AppSchemaRepository(db, writer)
 	return {
 		device: replacements.device ?? new DeviceAuthorizationRepository(db),
 		principals: replacements.principals ?? new PrincipalRepository(db, writer),
 		grants: replacements.grants ?? new GrantRepository(db, writer),
 		grantRequests: replacements.grantRequests ?? new GrantRequestRepository(db, writer),
-		appSchema: replacements.appSchema ?? new AppSchemaRepository(db, writer),
+		appSchema,
 		credentials: replacements.credentials ?? new CredentialRepository(db, writer),
 		sessions: replacements.sessions ?? new SessionRepository(db, writer),
 		passwords: replacements.passwords ?? new PasswordRepository(db, writer),
 		handoff: replacements.handoff ?? new HandoffRepository(db),
 		membership: replacements.membership ?? new MembershipRepository(db, { dialect }),
 		oauth: replacements.oauth ?? new OAuthRepository(db, writer),
+		oauthRegistry: replacements.oauthRegistry ?? new OAuthRegistryRepository(db, writer, appSchema),
 		audit: replacements.audit ?? new AuditRepository(db, writer),
 		workloads: replacements.workloads ?? new WorkloadRepository(db),
 		terminals: replacements.terminals ?? new TerminalRepository(db, writer),

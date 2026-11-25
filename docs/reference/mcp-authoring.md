@@ -490,6 +490,22 @@ client secret.
 **Rollout.** The binding is new in `FABRIKA_IAM_OAUTH_CONFIG`; an IAM from before it refuses the key and stops at boot.
 Before rolling `iam` back, remove every `identity` entry from the client list and deploy.
 
+### IAM's client registry
+
+IAM also keeps its clients in its own database ([ADR-0089](../decisions/0089-oauth-clients-are-registered-in-iam-at-runtime.md)).
+An external application (its id, display name, resource, roles and clients) is a record an installation administrator
+writes whole with `externalApps.put` and removes with `externalApps.delete` (`/admin/rpc`, `iam.admin`); an authoring
+client is a row only the provisioning key writes (`oauthClients.put | delete`). Each writer refuses a client id the
+other one owns, and removing a client revokes its grants. The rules above for `app`, `resource` and `roles` hold there
+too; the resource must also be on none of the installation's hosts, which the deploy may list in `OAUTH_CONFIG` as
+`hosts`. An id under which IAM already holds roles that grant no action, as the deploy's reconcile writes them, is
+adopted with every grant of its roles; any other vocabulary refuses it.
+
+Until a deploy calls `oauthClients.importOnce` with this variable's entries, IAM serves the clients of its
+`OAUTH_CONFIG`, as described above, and refuses both `put`s. The first import writes every entry and a mark in one
+transaction; from then on IAM serves the registry alone, and every later import answers `already_imported` and writes
+nothing. No deploy calls the import yet, so on this release the variable stays the source of every client.
+
 ## Locally
 
 The local stack runs MCP off, and serves the command-line client's device grant always. Set
