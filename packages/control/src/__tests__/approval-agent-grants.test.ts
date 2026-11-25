@@ -650,6 +650,29 @@ for (const backend of backends) {
 			expect((await w.db.approvalRequests.get(nothing.id))?.state).toBe('failed')
 			expect((await w.grantsAt()).map((grant) => grant.role_key)).toEqual(['staff'])
 		})
+
+		test('following an unseen execution claims no grant another person made in the console', async () => {
+			const w = await world()
+			const created = await w.ask()
+			const ada = await w.person(w.ada, 'ada')
+			const approver = ada.iamApprover
+			if (approver === undefined) throw new Error('no IAM approver')
+			const neverSent = {
+				...ada,
+				iamApprover: { administration: () => approver.administration(), createGrant: () => Promise.reject(new Error('connection refused')) },
+			}
+			const read = await getApprovalRequestUseCase(ada, created.id)
+			expect((await decideApprovalRequestUseCase(neverSent, { id: created.id, decision: 'approve', inputDigest: read.inputDigest })).state).toBe(
+				'unknown',
+			)
+			// Meanwhile another administrator grants the same role in the console.
+			await w.iam.grants.createGrant({ principalId: w.grantee.id, app: APP, roleKey: 'staff', grantedBy: w.bob.id })
+
+			await sweepApprovalRequests({ repositories: w.db, lock: w.locks, iamGrants: w.iamGrants })
+			const followed = await w.db.approvalRequests.get(created.id)
+			expect(followed?.state).toBe('failed')
+			expect(followed?.result_json).toBeNull()
+		})
 	})
 }
 

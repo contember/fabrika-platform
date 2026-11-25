@@ -26,9 +26,16 @@ export const heldGrantSchema = z.object({
 })
 export type HeldGrant = z.infer<typeof heldGrantSchema>
 
+/** A grant as IAM holds it now: what a request binds, and who made it, by which `follow` tells an execution's own grant. */
+export interface CurrentGrant extends HeldGrant {
+	readonly grantedBy: string | null
+}
+
 const principalSchema = z.object({
 	label: z.string(),
-	grants: z.array(heldGrantSchema.extend({ app: z.string().nullable(), scopeValues: z.array(z.string()).nullable().optional() })),
+	grants: z.array(
+		heldGrantSchema.extend({ app: z.string().nullable(), scopeValues: z.array(z.string()).nullable().optional(), grantedBy: z.string().nullable() }),
+	),
 })
 
 /** An open grant request, as `follow` matches it against an execution. */
@@ -52,7 +59,7 @@ export interface IamGrantsReader {
 	 * The principal's label and its grants at `app` (an `<app>@<env>` id), cross-app ones left out; null when IAM knows no
 	 * such principal.
 	 */
-	principalAt(principalId: string, app: string): Promise<{ readonly label: string; readonly grants: readonly HeldGrant[] } | null>
+	principalAt(principalId: string, app: string): Promise<{ readonly label: string; readonly grants: readonly CurrentGrant[] } | null>
 	/** The grant requests at `app` that wait for an administrator. */
 	openGrantRequests(app: string): Promise<readonly OpenGrantRequest[]>
 }
@@ -77,6 +84,7 @@ export function iamGrantsReader(client: InferRpcClient<IamAdminRpcContract>): Ia
 					scopeType: grant.scopeType,
 					scopeValues: grant.scopeValues ?? null,
 					expiresAt: grant.expiresAt,
+					grantedBy: grant.grantedBy,
 				}))
 			return { label: principal.label, grants }
 		},

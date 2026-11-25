@@ -68,7 +68,16 @@ function readerOf(c: RequestKindContext): IamGrantsReader {
 async function principalOf(c: RequestKindContext, input: GrantInput): Promise<GrantBefore['principal']> {
 	const principal = await readerOf(c).principalAt(input.principalId, appEnvironmentId(input.appId, input.env))
 	if (principal === null) return null
-	return { label: principal.label, grants: [...principal.grants].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) }
+	// What the request binds, without who made each grant, which `follow` alone reads.
+	const grants: HeldGrant[] = principal.grants.map(({ id, roleKey, permissions, scopeType, scopeValues, expiresAt }) => ({
+		id,
+		roleKey,
+		permissions,
+		scopeType,
+		scopeValues,
+		expiresAt,
+	}))
+	return { label: principal.label, grants: grants.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)) }
 }
 
 /** Whether a held grant, or an open grant request, is the one asked for: the role in the same scope value. */
@@ -174,8 +183,9 @@ export const createGrantKind = requestKind<GrantInput, GrantBefore>({
 		const app = appEnvironmentId(input.appId, input.env)
 		const stored = grantBefore.safeParse(JSON.parse(row.before_json))
 		const heldBefore = new Set(stored.success ? (stored.data.principal?.grants ?? []).map((grant) => grant.id) : [])
+		// The approver's own new grant: one another person made in the console meanwhile is not this execution's.
 		const made = ((await reader.principalAt(input.principalId, app))?.grants ?? []).find((grant) =>
-			!heldBefore.has(grant.id) && isAskedGrant(input, grant)
+			!heldBefore.has(grant.id) && grant.grantedBy === row.decided_by_id && isAskedGrant(input, grant)
 		)
 		if (made !== undefined) return { state: 'executed', result: resultOf(input, { kind: 'granted', grantId: made.id }) }
 		const requested = (await reader.openGrantRequests(app)).find((request) =>
