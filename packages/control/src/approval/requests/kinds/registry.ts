@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { fail } from '../../../api/domain'
 import { parseStoredEnvelope } from '../../../api/provider-envelope'
 import { updateAppUseCase } from '../../../api/registry/apps'
-import { putAppEnvUseCase } from '../../../api/registry/environments'
+import { admitAppEnvPut, putAppEnvUseCase } from '../../../api/registry/environments'
 import { assertCrossOrigins, assertProxyDomain, canonicalOrigin, triggerRefInput } from '../../../api/registry/validation'
 import { appEnvCrossOrigins, type AppEnvRow, type AppRow } from '../../../db'
 import { type RequestActionContext, requestKind, type RequestKindContext } from '../kind'
@@ -86,11 +86,13 @@ async function admitEnvironmentPut(c: RequestActionContext, input: PutEnvironmen
 		)
 	}
 	const appEnv = await requireAppEnv(c, input)
+	const app = (await c.repositories.registry.getApp(input.appId)) ?? fail(404, 'app not found')
 	const put = putOf(appEnv, fields)
 	assertProxyDomain(put.domain)
-	triggerRefInput(put.triggerRef)
-	canonicalOrigin(put.publicOrigin, appEnv.public_origin)
+	const triggerRef = triggerRefInput(put.triggerRef)
 	assertCrossOrigins(put.crossOrigins ?? appEnvCrossOrigins(appEnv), put.domain ?? null)
+	await admitAppEnvPut(c, app, input.env, appEnv, put, triggerRef)
+	canonicalOrigin(put.publicOrigin, appEnv.public_origin)
 }
 
 export const putEnvironmentKind = requestKind<PutEnvironmentInput, EnvironmentBefore>({
@@ -137,7 +139,9 @@ export const putEnvironmentKind = requestKind<PutEnvironmentInput, EnvironmentBe
 		facts: ENVIRONMENT_FIELDS.flatMap((field) => {
 			const after = input.environment[field]
 			if (after === undefined) return []
-			const text = before === null ? fieldText(after) : `${fieldText(before.fields[field])} → ${fieldText(after)}`
+			// A trigger ref as the put will write it: a bare branch name is `refs/heads/<name>`.
+			const written = field === 'triggerRef' && typeof after === 'string' ? triggerRefInput(after) : after
+			const text = before === null ? fieldText(written) : `${fieldText(before.fields[field])} → ${fieldText(written)}`
 			return [{ label: ENVIRONMENT_FIELD_LABELS[field], value: agentText(text) }]
 		}),
 	}),

@@ -56,16 +56,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	}
 	await requirePersonToPointTriggerRef(c, { appId, env, existing, triggerRef })
 	await requirePersonToPointDomain(c, { appId, env, existing, domain: input.domain ?? null })
-	const kind = existing?.kind ?? input.kind ?? 'standard'
-	if (kind === 'dev') await assertDevEnvironment(c, app, env, existing, input.authoring === true, triggerRef, input.domain ?? null)
-	if (input.authoring === true) {
-		assertAuthoringTarget(c.provider, app)
-		await assertUnprotectedAuthoringTarget(c, appId, env, existing)
-		// ADR-0049: one stage environment per app.
-		const other = (await c.repositories.registry.listAppEnvs(appId)).find((row) => row.authoring === 1 && row.env !== env)
-		if (other !== undefined) fail(409, `app ${appId} already authors environment ${other.env}; clear its authoring flag first`)
-	}
-	await assertTriggerRefFree(c, appId, env, triggerRef)
+	const kind = await admitAppEnvPut(c, app, env, existing, input, triggerRef)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, existing?.public_origin ?? null)
 	await requirePersonToPointPublicOrigin(c, { appId, env, existing, publicOrigin })
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, appId, env, existing)
@@ -170,11 +161,39 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	return toAppEnvDto(row)
 }
 
+/** What the admission of a put reads: the registry and the provider, never the caller. */
+type RegistryAdmissionContext = Pick<RegistryUseCaseContext, 'repositories' | 'provider'>
+
+/**
+ * A put's checks of a dev environment, an authoring target and its trigger ref, which read the registry but call no
+ * provider: an approval request of the put runs them when it is asked for. Answers the environment's kind.
+ */
+export async function admitAppEnvPut(
+	c: RegistryAdmissionContext,
+	app: AppRow,
+	env: string,
+	existing: AppEnvRow | null,
+	input: Pick<PutAppEnvRequest, 'kind' | 'authoring' | 'domain'>,
+	triggerRef: string | null,
+): Promise<AppEnvRow['kind']> {
+	const kind = existing?.kind ?? input.kind ?? 'standard'
+	if (kind === 'dev') await assertDevEnvironment(c, app, env, existing, input.authoring === true, triggerRef, input.domain ?? null)
+	if (input.authoring === true) {
+		assertAuthoringTarget(c.provider, app)
+		await assertUnprotectedAuthoringTarget(c, app.id, env, existing)
+		// ADR-0049: one stage environment per app.
+		const other = (await c.repositories.registry.listAppEnvs(app.id)).find((row) => row.authoring === 1 && row.env !== env)
+		if (other !== undefined) fail(409, `app ${app.id} already authors environment ${other.env}; clear its authoring flag first`)
+	}
+	await assertTriggerRefFree(c, app.id, env, triggerRef)
+	return kind
+}
+
 /**
  * An app's environments deploy on distinct trigger refs. Checked before the provider prepares anything, because
  * preparation creates provider services; the write repeats the check for a concurrent put.
  */
-async function assertTriggerRefFree(c: RegistryUseCaseContext, appId: string, env: string, triggerRef: string | null): Promise<void> {
+async function assertTriggerRefFree(c: RegistryAdmissionContext, appId: string, env: string, triggerRef: string | null): Promise<void> {
 	if (triggerRef === null) return
 	const holder = await c.repositories.registry.getAppEnvByTriggerRef(appId, triggerRef)
 	if (holder !== null && holder.env !== env) fail(409, new AppEnvTriggerRefConflictError(appId, env, triggerRef, holder.env).message)
@@ -224,7 +243,7 @@ function assertAuthoringTarget(provider: ControlProvider, app: AppRow): void {
  * ADR-0049 rule 7: `deploy_stage` deploys unreviewed workspace heads to the authoring target, and only a person deploys
  * to a protected environment, so the two never meet.
  */
-async function assertUnprotectedAuthoringTarget(c: RegistryUseCaseContext, appId: string, env: string, existing: AppEnvRow | null): Promise<void> {
+async function assertUnprotectedAuthoringTarget(c: RegistryAdmissionContext, appId: string, env: string, existing: AppEnvRow | null): Promise<void> {
 	if (await startsProtected(c.repositories.registry, appId, env, existing)) {
 		fail(
 			409,
@@ -240,7 +259,7 @@ async function assertUnprotectedAuthoringTarget(c: RegistryUseCaseContext, appId
  * Each workspace gets its own sandbox, served at `<workspace id>.<domain>`, so its domain is that wildcard base.
  */
 async function assertDevEnvironment(
-	c: RegistryUseCaseContext,
+	c: RegistryAdmissionContext,
 	app: AppRow,
 	env: string,
 	existing: AppEnvRow | null,

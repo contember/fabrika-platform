@@ -576,7 +576,7 @@ for (const backend of backends) {
 				})
 				const page = await getApprovalRequestUseCase(context(w, BOB), id)
 				expect(page.description.facts).toEqual([
-					{ label: 'Trigger ref', value: { text: 'none → release', agent: true } },
+					{ label: 'Trigger ref', value: { text: 'none → refs/heads/release', agent: true } },
 					{ label: 'Domain', value: { text: 'none → notes.example.com', agent: true } },
 				])
 				expect((await decide(w, id, 'approve')).state).toBe('executed')
@@ -593,6 +593,27 @@ for (const backend of backends) {
 				}))
 				expect(target.status).toBe(400)
 				expect(target.message).toContain('does not take')
+			})
+
+			test("the put's own checks of a trigger ref and a dev environment refuse it when it is asked for", async () => {
+				const w = await world()
+				const held = await ask(w, 'apps.environments.put', { appId: 'notes', env: 'stage', environment: { triggerRef: 'main' } })
+				expect((await decide(w, held.id, 'approve')).state).toBe('executed')
+				const taken = await status(ask(w, 'apps.environments.put', { appId: 'notes', env: 'prod', environment: { triggerRef: 'refs/heads/main' } }))
+				expect(taken).toEqual({ status: 409, message: expect.stringContaining('stage') })
+
+				await w.db.registry.upsertAppEnv({
+					appId: 'notes',
+					env: 'dev',
+					kind: 'dev',
+					namespaceId: null,
+					provider: 'harbor',
+					providerTargetJson: ENVELOPE,
+					providerArtifactJson: ENVELOPE,
+				})
+				const dev = await status(ask(w, 'apps.environments.put', { appId: 'notes', env: 'dev', environment: { domain: 'dev.example.com' } }))
+				expect(dev).toEqual({ status: 409, message: expect.stringContaining('runs no dev environment') })
+				expect((await w.db.approvalRequests.listPending(10)).length).toBe(0)
 			})
 
 			test('a changed environment closes it stale; a provider that prepares registrations cannot take it yet', async () => {
