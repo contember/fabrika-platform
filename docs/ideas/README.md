@@ -30,3 +30,6 @@ decided work or status.
 - [Start memory and init connections without the isolation tests](start-memory-without-isolation-tests.md) — the
   container init on 0.9.0-dev.22 peaks at ~38 MiB and 1 connection (was ~180–200 MiB and 4); measured locally, not yet
   on Zerops; the 0.5 GB floor and the 5-connection budget are unchanged.
+- [Approvals an agent asks for](agent-requested-approvals.md) — one approval gate with a mode per environment and change
+  category (off, plan, person, refuse): one-off requests a person approves from one link, and plans approved with the
+  pull request and matched at deploy; decided defaults, the settings for the alternatives and a ten-PR plan.
