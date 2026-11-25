@@ -68,3 +68,27 @@ describe.skipIf(!hasPostgres)('OAuth on real Postgres', () => {
 		expect(await repositories.oauth.recordClientAssertion('https://other.example.test/cimd', 'jti-concurrent', expiresAt)).toBe(true)
 	})
 })
+
+describe.skipIf(!hasPostgres)('OAuth from the registry on real Postgres', () => {
+	test("an external application's client signs a role holder in and refreshes, served from the registry alone", async () => {
+		// Its own schema: the import mark makes the registry the only source for every client of the database.
+		const registry = await createPostgres('iam_oauth_registry')
+		try {
+			const own = createPostgresIamRepositories(registry.db)
+			const identity = { app: 'ops-tool', resource: 'https://ops.example.test', roles: [{ key: 'viewer', name: 'Viewer' }] }
+			active = await oauthFixture(own, { provider: 'external', identity, registry: true })
+			expect(active.config.clients).toEqual([])
+			await own.grants.createGrant({ principalId: active.principal.id, app: identity.app, roleKey: 'viewer' })
+			const location = (await active.decide('approve', { resource: identity.resource, scope: 'identity' })).headers.get('location')
+			const code = location === null ? null : new URL(location).searchParams.get('code')
+			const first = await tokenBody(await active.exchange(code ?? '', { resource: identity.resource }))
+			expect(parseAccessClaims(decodeJwt(first.access_token))?.oauth?.roles).toEqual(['viewer'])
+			const second = await tokenBody(await active.refresh(first.refresh_token ?? '', { resource: identity.resource }))
+			expect(parseAccessClaims(decodeJwt(second.access_token))?.perms).toEqual([])
+		} finally {
+			active?.restoreFetch()
+			active = null
+			await registry.close()
+		}
+	})
+})

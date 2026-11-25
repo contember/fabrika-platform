@@ -2,8 +2,8 @@ import { SESSION_COOKIE } from '@fabrika/auth-core'
 import type { OAuthClientProvider, OAuthIdentityResource, OAuthResourceDto } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { spyOn } from 'bun:test'
-import type { IamRepositories } from '../../db'
-import type { OAuthConfig } from '../../oauth-config'
+import type { AuditEventInput, IamRepositories } from '../../db'
+import type { ManagedOAuthClient, OAuthConfig } from '../../oauth-config'
 import { handleOAuth } from '../../oauth-http'
 import { pkceChallenge, randomToken } from '../../oidc'
 import { hashToken } from '../../secret'
@@ -34,6 +34,8 @@ export async function oauthFixture(
 		extraResources?: readonly OAuthResourceDto[]
 		/** Binds the registered client to its own identity resource; it is then served that one alone. */
 		identity?: OAuthIdentityResource
+		/** Registers the client in IAM's registry, marked imported, instead of `OAUTH_CONFIG` (ADR-0089). */
+		registry?: boolean
 	} = {},
 ) {
 	const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
@@ -53,14 +55,17 @@ export async function oauthFixture(
 	})
 	const clientId = `https://claude.example.test/cimd/${uuidv7()}`
 	const jwksUri = `https://claude.example.test/jwks/${uuidv7()}.json`
+	const registration = {
+		provider: options.provider ?? 'claude',
+		clientId,
+		redirectUris: [REDIRECT_URI],
+		metadataUrl: clientId,
+		...(options.identity === undefined ? {} : { identity: options.identity }),
+	}
+	if (options.registry === true) await register(repositories, registration)
 	const config: OAuthConfig = {
-		clients: [{
-			provider: options.provider ?? 'claude',
-			clientId,
-			redirectUris: [REDIRECT_URI],
-			metadataUrl: clientId,
-			...(options.identity === undefined ? {} : { identity: options.identity }),
-		}],
+		clients: options.registry === true ? [] : [registration],
+		hosts: [],
 		resources: [{
 			app: 'control',
 			resource: RESOURCE,
@@ -188,6 +193,30 @@ export async function oauthFixture(
 		refresh,
 		post,
 	}
+}
+
+const registryEvent = (action: string): AuditEventInput => ({
+	requestId: 'req-registry',
+	principalId: null,
+	principalLabel: 'test',
+	app: 'propustka',
+	action,
+	resourceType: 'oauth_registry',
+})
+
+/** Write one client into the registry as its writers do, after an empty import when nothing was imported yet. */
+export async function register(repositories: IamRepositories, client: ManagedOAuthClient): Promise<void> {
+	const registry = repositories.oauthRegistry
+	if (!(await registry.imported())) await registry.importOnce([], [], registryEvent('iam.oauth_registry.import'))
+	const write = { clientId: client.clientId, redirectUris: client.redirectUris, metadataUrl: null }
+	if (client.identity === undefined) {
+		await registry.putAuthoringClient({ ...write, label: client.provider }, registryEvent('iam.oauth_client.put'))
+		return
+	}
+	await registry.putExternalApp(
+		{ app: client.identity.app, displayName: null, resource: client.identity.resource, roles: client.identity.roles ?? [], clients: [write] },
+		{ change: registryEvent('iam.external_app.put'), revocation: () => registryEvent('iam.oauth.grant.revoke') },
+	)
 }
 
 export async function tokenBody(response: Response): Promise<{ access_token: string; refresh_token?: string; scope: string; expires_in: number }> {

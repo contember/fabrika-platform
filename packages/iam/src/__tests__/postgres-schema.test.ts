@@ -81,6 +81,9 @@ async function reset(): Promise<void> {
 			'app_schema_revisions',
 			'installation_brand',
 			'password_policy',
+			'oauth_clients',
+			'external_apps',
+			'oauth_registry',
 		]
 	) {
 		await raw.prepare(`DELETE FROM ${table}`).run()
@@ -137,6 +140,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0035_grant_requests.sql' },
 			{ bundle: 'iam', name: '0036_grant_scope_sets.sql' },
 			{ bundle: 'iam', name: '0037_scope_value_sources.sql' },
+			{ bundle: 'iam', name: '0038_oauth_client_registry.sql' },
 		])
 	})
 
@@ -193,6 +197,9 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'terminal_asserters',
 				'terminal_identifications',
 				'app_terminals',
+				'external_apps',
+				'oauth_clients',
+				'oauth_registry',
 			]
 		) {
 			expect(names).toContain(table)

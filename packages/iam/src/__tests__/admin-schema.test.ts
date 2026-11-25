@@ -253,13 +253,16 @@ describe('PUT/GET /admin/apps/:app/schema', () => {
 			'apps.list',
 			null,
 			(value) =>
-				z.object({ items: z.array(z.object({ id: z.string(), displayName: z.string().nullable(), installation: z.boolean() }).strict()) }).parse(value)
-					.items,
+				z.object({
+					items: z.array(
+						z.object({ id: z.string(), displayName: z.string().nullable(), installation: z.boolean(), externalApplication: z.boolean() }).strict(),
+					),
+				}).parse(value).items,
 		)
 		expect(apps.filter((app) => ['opice', 'bare', 'vozka'].includes(app.id))).toEqual([
-			{ id: 'bare', displayName: null, installation: false },
-			{ id: 'opice', displayName: 'Opice', installation: false },
-			{ id: 'vozka', displayName: null, installation: true },
+			{ id: 'bare', displayName: null, installation: false, externalApplication: false },
+			{ id: 'opice', displayName: 'Opice', installation: false, externalApplication: false },
+			{ id: 'vozka', displayName: null, installation: true, externalApplication: false },
 		])
 	})
 

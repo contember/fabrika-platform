@@ -28,9 +28,10 @@ import { error, json, readJson } from './http'
 
 /** The app ids a grant can be scoped to — the apps that have registered a vocabulary — with their display names. */
 export async function listAppsUseCase(c: AdminContext): Promise<{ items: AppDto[] }> {
+	const external = new Set((await c.services.repositories.oauthRegistry.listExternalApps()).map((row) => row.app))
 	const items = await Promise.all((await knownApps(c)).map(async (id): Promise<AppDto> => {
 		const { displayName } = parsePresentation(await c.services.repositories.appSchema.getPresentation(id))
-		return { id, displayName, installation: c.services.config.platformAudiences.has(id) }
+		return { id, displayName, installation: c.services.config.platformAudiences.has(id), externalApplication: external.has(id) }
 	}))
 	return { items }
 }

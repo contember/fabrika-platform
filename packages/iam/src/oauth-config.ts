@@ -8,13 +8,17 @@ export interface ManagedOAuthClient extends OAuthManagedClient {
 
 /** `OAUTH_CONFIG`, parsed once. `null` from `parseOAuthConfig` means OAuth is off. */
 export interface OAuthConfig {
+	/** Served only until the deploy variable is imported into the registry (ADR-0089), then never. */
 	clients: ManagedOAuthClient[]
 	resources: OAuthResourceDto[]
+	/** The installation's hostnames, which no external application's resource may be on; empty when the deploy names none. */
+	hosts: string[]
 }
 
 const MAX_CLIENTS = 16
 const MAX_RESOURCES = 32
-const CONFIG_KEYS = ['clients', 'resources']
+const MAX_HOSTS = 64
+const CONFIG_KEYS = ['clients', 'resources', 'hosts']
 const CLIENT_KEYS = ['provider', 'clientId', 'redirectUris', 'metadataUrl', 'identity']
 const RESOURCE_KEYS = ['app', 'resource', 'defaultScopes', 'scopeGrants', 'client']
 
@@ -36,17 +40,15 @@ export function parseOAuthConfig(raw: string | undefined, platformAudiences: Rea
 	) {
 		throw new Error('OAUTH_CONFIG must be a JSON object { clients: [...], resources: [...] }')
 	}
+	const hosts = parseHosts(prop(value, 'hosts'))
+	if (hosts === null) throw new Error('OAUTH_CONFIG.hosts must be an array of hostnames')
 	const clients: ManagedOAuthClient[] = []
 	for (const entry of rawClients) {
-		const client = parseOAuthManagedClient(entry)
-		const metadataUrl = prop(entry, 'metadataUrl') ?? client?.clientId
-		if (
-			client === null || !hasOnlyKeys(entry, CLIENT_KEYS) || typeof metadataUrl !== 'string' || !isHttpsDocumentUrl(metadataUrl)
-			|| clients.some((existing) => existing.clientId === client.clientId)
-		) {
+		const client = parseManagedClientEntry(entry)
+		if (client === null || clients.some((existing) => existing.clientId === client.clientId)) {
 			throw new Error(`OAUTH_CONFIG.clients[${clients.length}] is not a valid managed client`)
 		}
-		clients.push({ ...client, metadataUrl })
+		clients.push(client)
 	}
 	const resources: OAuthResourceDto[] = []
 	for (const entry of rawResources) {
@@ -64,14 +66,47 @@ export function parseOAuthConfig(raw: string | undefined, platformAudiences: Rea
 			throw new Error(`OAUTH_CONFIG.clients[${index}].identity names an installation service's app or resource`)
 		}
 	}
-	return { clients, resources }
+	return { clients, resources, hosts }
+}
+
+/**
+ * One managed client as `OAUTH_CONFIG.clients` and the deploy variable list it (`OAuthManagedClient` with an optional
+ * `metadataUrl`), or null when it is not one. Unknown keys are refused.
+ */
+export function parseManagedClientEntry(entry: unknown): ManagedOAuthClient | null {
+	const client = parseOAuthManagedClient(entry)
+	const metadataUrl = prop(entry, 'metadataUrl') ?? client?.clientId
+	if (client === null || !hasOnlyKeys(entry, CLIENT_KEYS) || typeof metadataUrl !== 'string' || !isHttpsDocumentUrl(metadataUrl)) return null
+	return { ...client, metadataUrl }
+}
+
+function parseHosts(value: unknown): string[] | null {
+	if (value === undefined) return []
+	if (!Array.isArray(value) || value.length > MAX_HOSTS) return null
+	const hosts: string[] = []
+	for (const entry of value) {
+		if (!isHostname(entry)) return null
+		if (!hosts.includes(entry)) hosts.push(entry)
+	}
+	return hosts
+}
+
+/** A hostname as a URL spells it: lowercase, no port, no path. */
+function isHostname(value: unknown): value is string {
+	if (typeof value !== 'string' || value === '') return false
+	try {
+		return new URL(`https://${value}/`).hostname === value
+	} catch {
+		return false
+	}
 }
 
 function hasOnlyKeys(value: unknown, allowed: readonly string[]): boolean {
 	return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.keys(value).every((key) => allowed.includes(key))
 }
 
-function isHttpsDocumentUrl(value: string): boolean {
+/** An HTTPS URL without credentials or a fragment, where IAM may fetch a client's document. */
+export function isHttpsDocumentUrl(value: string): boolean {
 	try {
 		const url = new URL(value)
 		return url.protocol === 'https:' && url.username === '' && url.password === '' && url.hash === ''

@@ -38,6 +38,7 @@ async function fixture() {
 	]
 	const config: OAuthConfig = {
 		clients: f.config.clients,
+		hosts: [],
 		resources: [
 			{
 				app: 'control',

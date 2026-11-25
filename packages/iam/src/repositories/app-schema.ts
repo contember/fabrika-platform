@@ -101,6 +101,46 @@ export interface AppActionRow {
 	description: string | null
 }
 
+/** An application's whole declared vocabulary, as a reconcile writes it. */
+export interface AppSchemaReconcile {
+	app: string
+	scopes: {
+		scopeType: string
+		label?: string | null
+		parentScope?: string | null
+		creatorRole?: string | null
+		members?: { manage: string; list: string } | null
+		directory?: 'labels' | null
+		values?: readonly DimensionValue[] | null
+		valueSource?: DimensionValueSource | null
+		lookups?: string[] | null
+	}[]
+	actions: { action: string; description?: string | null }[]
+	roles: {
+		roleKey: string
+		name: string
+		description?: string | null
+		permissions: string[]
+		memberScope?: string | null
+		assignableBy?: string[] | null
+		external?: boolean
+		via?: Record<string, string[]> | null
+	}[]
+	/** The contract flag is part of the vocabulary: written in the same batch, so it never outlives the roles it constrains. */
+	contract?: boolean
+	links?: { mount: string; dimension: string; grants: string[]; issuedBy: string; maxDays: number }[]
+	delegations?: { endpoint: string; action: string; dimension: string; purpose: 'members' | 'creates' }[]
+	workloads?: { kind: WorkloadKind; name: string; actions: string[]; issues?: string }[]
+	/** How IAM names the app; a field left out is "not declared", and both left out remove the row. */
+	presentation?: { locale: string | null; displayName: string | null }
+	/** The app's e-mail templates; every row of the app is replaced, and none left out removes them all. */
+	mail?: { kind: string; locale: string; subject: string; text: string; html?: string }[]
+	/** The actions that manage and list the app's own people; absent or null removes the row. */
+	members?: { manage: string; list: string; directory: 'labels' | null } | null
+	/** The app's identification page at a terminal; absent or null removes the row. */
+	terminal?: { identify: string } | null
+}
+
 export class AppSchemaRepository {
 	constructor(
 		protected readonly db: SqlDatabase,
@@ -345,44 +385,16 @@ export class AppSchemaRepository {
 	 * silently flipping an admin's policy to `origin='app'` and making it unmanageable (SEC-3). The
 	 * caller refuses that collision outright; this is the second lock on the same rule.
 	 */
-	async reconcileAppSchema(input: {
-		app: string
-		scopes: {
-			scopeType: string
-			label?: string | null
-			parentScope?: string | null
-			creatorRole?: string | null
-			members?: { manage: string; list: string } | null
-			directory?: 'labels' | null
-			values?: readonly DimensionValue[] | null
-			valueSource?: DimensionValueSource | null
-			lookups?: string[] | null
-		}[]
-		actions: { action: string; description?: string | null }[]
-		roles: {
-			roleKey: string
-			name: string
-			description?: string | null
-			permissions: string[]
-			memberScope?: string | null
-			assignableBy?: string[] | null
-			external?: boolean
-			via?: Record<string, string[]> | null
-		}[]
-		/** The contract flag is part of the vocabulary: written in the same batch, so it never outlives the roles it constrains. */
-		contract?: boolean
-		links?: { mount: string; dimension: string; grants: string[]; issuedBy: string; maxDays: number }[]
-		delegations?: { endpoint: string; action: string; dimension: string; purpose: 'members' | 'creates' }[]
-		workloads?: { kind: WorkloadKind; name: string; actions: string[]; issues?: string }[]
-		/** How IAM names the app; a field left out is "not declared", and both left out remove the row. */
-		presentation?: { locale: string | null; displayName: string | null }
-		/** The app's e-mail templates; every row of the app is replaced, and none left out removes them all. */
-		mail?: { kind: string; locale: string; subject: string; text: string; html?: string }[]
-		/** The actions that manage and list the app's own people; absent or null removes the row. */
-		members?: { manage: string; list: string; directory: 'labels' | null } | null
-		/** The app's identification page at a terminal; absent or null removes the row. */
-		terminal?: { identify: string } | null
-	}, audit?: AuditEventInput): Promise<void> {
+	async reconcileAppSchema(input: AppSchemaReconcile, audit?: AuditEventInput): Promise<void> {
+		const statements = this.reconcileStatements(input)
+		if (audit !== undefined) {
+			statements.push(auditEventStatement(this.db, audit))
+		}
+		await this.db.batch(statements)
+	}
+
+	/** The statements of `reconcileAppSchema` without its record, for a change that writes the vocabulary in its own batch. */
+	reconcileStatements(input: AppSchemaReconcile): SqlStatement[] {
 		const { app } = input
 		const statements: SqlStatement[] = [
 			this.bumpRevisionStatement(app),
@@ -575,10 +587,6 @@ export class AppSchemaRepository {
 						AND NOT EXISTS (SELECT 1 FROM app_terminals t WHERE t.app = ?)`)
 				.bind(app, app, app, app, app, app),
 		)
-		if (audit !== undefined) {
-			statements.push(auditEventStatement(this.db, audit))
-		}
-
-		await this.db.batch(statements)
+		return statements
 	}
 }

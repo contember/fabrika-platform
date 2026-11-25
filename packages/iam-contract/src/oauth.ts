@@ -230,7 +230,8 @@ const IDENTITY_APP = /^[a-z0-9][a-z0-9-]{0,62}$/
 /** A role key; never a built-in one (`admin` means every action of an application). */
 const IDENTITY_ROLE_KEY = /^[a-z0-9][a-z0-9-]{0,62}$/
 
-function parseOAuthIdentityResource(value: unknown): OAuthIdentityResource | null {
+/** An identity resource binding `{ app, resource, roles? }`, or null when it is not one; unknown keys are refused. */
+export function parseOAuthIdentityResource(value: unknown): OAuthIdentityResource | null {
 	const app = field(value, 'app')
 	const resource = field(value, 'resource')
 	const rawRoles = field(value, 'roles')
