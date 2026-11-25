@@ -242,16 +242,15 @@ describe('ACL enforcement (resolved auth context)', () => {
 			rpcRequest('apps.environments.put', { appId: 'app', env, environment: { ...envelopes, ...(triggerRef === undefined ? {} : { triggerRef }) } })
 		const key = makeDeps(service).deps
 		await key.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', defaultBranch: 'main' })
-		const created = await rpcResult(put('prod', 'refs/heads/unreviewed'), key)
-		expect(created.status).toBe(403)
-		expect(await created.text()).toContain(
-			'environment `prod` is protected: only a person changes its trigger ref, which decides what a deploy there runs; '
-				+ 'an agent, a builder key or a service key cannot',
-		)
+		// A new environment that starts protected has no request to wait in: the gate refuses a key's put, with or without a trigger ref.
+		for (const triggerRef of ['refs/heads/unreviewed', undefined]) {
+			const created = await rpcResult(put('prod', triggerRef), key)
+			expect(created.status).toBe(403)
+			expect(await created.text()).toContain('environment `prod` starts protected')
+		}
 		expect(await key.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
-		// A new environment that starts unprotected, or a protected one with no trigger ref, takes a key.
+		// A new environment that starts unprotected takes a key.
 		expect((await rpcResult(put('qa', 'refs/heads/develop'), key)).status).toBe(200)
-		expect((await rpcResult(put('prod'), key)).status).toBe(200)
 
 		const person = makeDeps(manager).deps
 		await person.repositories.registry.createApp({ id: 'app', repoUrl: 'github.com/acme/app', defaultBranch: 'main' })
@@ -279,7 +278,6 @@ describe('ACL enforcement (resolved auth context)', () => {
 			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'stage', { domain: 'stage.example.com' }))
 			return deps
 		}
-		const refusal = 'environment `prod` is protected: only a person changes its domain; an agent, a builder key or a service key cannot'
 
 		for (const caller of [service, agent]) {
 			// The put of a protected environment goes to the gate as a request, and nothing changes.
@@ -287,11 +285,11 @@ describe('ACL enforcement (resolved auth context)', () => {
 			expect((await rpcResult(put('prod', 'app.attacker.example'), deps, { consoleOrigin: ORIGIN })).status).toBe(409)
 			expect((await rpcResult(put('prod', null), deps, { consoleOrigin: ORIGIN })).status).toBe(409)
 			expect((await deps.repositories.registry.getAppEnv('app', 'prod'))?.domain).toBe('app.example.com')
-			// A new environment that starts protected has no request to wait in, so its first domain takes a person.
+			// A new environment that starts protected has no request to wait in, so the gate refuses a key's put of it.
 			await deps.repositories.registry.deleteAppEnv('app', 'prod')
 			const created = await rpcResult(put('prod', 'app.attacker.example'), deps)
 			expect(created.status).toBe(403)
-			expect(await created.text()).toContain(refusal)
+			expect(await created.text()).toContain('environment `prod` starts protected')
 			expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
 			// An unprotected environment takes a key, a cleared domain included.
 			const other = await seeded(caller)
@@ -330,18 +328,17 @@ describe('ACL enforcement (resolved auth context)', () => {
 			await deps.repositories.registry.upsertAppEnv(providerEnvironment('app', 'stage', { publicOrigin: 'https://stage.example.com' }))
 			return deps
 		}
-		const refusal = 'environment `prod` is protected: only a person changes its public origin; an agent, a builder key or a service key cannot'
 
 		for (const caller of [service, agent]) {
 			// The put of a protected environment goes to the gate as a request, and nothing changes.
 			const deps = await seeded(caller)
 			expect((await rpcResult(put('prod', 'https://attacker.example'), deps, { consoleOrigin: ORIGIN })).status).toBe(409)
 			expect((await deps.repositories.registry.getAppEnv('app', 'prod'))?.public_origin).toBe('https://app.example.com')
-			// A new environment that starts protected has no request to wait in, so its first public origin takes a person.
+			// A new environment that starts protected has no request to wait in, so the gate refuses a key's put of it.
 			await deps.repositories.registry.deleteAppEnv('app', 'prod')
 			const created = await rpcResult(put('prod', 'https://attacker.example'), deps)
 			expect(created.status).toBe(403)
-			expect(await created.text()).toContain(refusal)
+			expect(await created.text()).toContain('environment `prod` starts protected')
 			expect(await deps.repositories.registry.getAppEnv('app', 'prod')).toBeNull()
 			// An unprotected environment takes a key, a cleared origin included.
 			const other = await seeded(caller)
