@@ -424,9 +424,9 @@ describe('IAM resource graph', () => {
 		const many = Array.from({ length: 16 }, (_, index) => ({
 			...opsTool,
 			clientId: `https://ops-tool${index}.example.com/admin/oauth/client`,
-			identity: { ...opsTool.identity, app: `ops-tool-${index}` },
+			identity: { ...opsTool.identity, app: `ops-tool-${index}`, resource: `https://ops-tool${index}.example.com/admin` },
 		}))
-		expect(refused(many)).toThrow('longer than a Worker variable holds (5120 bytes)')
+		expect(refused(many)).toThrow("with the installation's hosts makes OAUTH_CONFIG longer than a Worker variable holds (5120 bytes)")
 		// Without the console's origin IAM serves no OAuth at all.
 		expect(() =>
 			buildIamWorker({ env: 'prod', domain: REMOTE_DOMAIN }, { ...REMOTE_SOURCE, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([opsTool]) })

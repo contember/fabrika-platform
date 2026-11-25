@@ -154,7 +154,10 @@ const oauthConfig = (
 	const config = JSON.stringify({ clients, resources, hosts })
 	parseOAuthConfig(config, platformAudiencesFor(parseAdminAudiences(adminAudiences)))
 	if (new TextEncoder().encode(config).length > WORKER_VARIABLE_MAX_BYTES) {
-		throw new Error(`${MCP_CLIENTS_VARIABLE} makes OAUTH_CONFIG longer than a Worker variable holds (${WORKER_VARIABLE_MAX_BYTES} bytes)`)
+		throw new Error(
+			`${MCP_CLIENTS_VARIABLE} with the installation's hosts makes OAUTH_CONFIG longer than a Worker variable holds `
+				+ `(${WORKER_VARIABLE_MAX_BYTES} bytes); register the clients that do not fit in the console instead`,
+		)
 	}
 	return config
 }
