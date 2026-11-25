@@ -98,8 +98,21 @@ becomes public, the proxy table does not change, and no service worker is instal
 - **A session that expired while the application was closed is a sign-in inside its window.** The start URL's
   navigation is bounced to IAM like any other, and IAM's page is out of scope, so a browser shows its origin above it.
   The handoff (ADR-0022 rule 4, [ADR-0023](0023-one-session-per-host.md)) runs in the same window and the same cookie
-  jar, so it completes there. On iOS an installed application has a cookie jar of its own: a person signs in once more
-  in it, and Safari's session does not carry over.
+  jar, so it completes there. This holds for Chromium's installed windows; iOS differs (next item).
+- **On iOS, the sign-in after an expired session is unverified and may fail closed.** What is reported, not yet
+  checked on a device: an iOS Home Screen application has a cookie jar of its own, separate from Safari's (since iOS
+  17.2 it starts with a copy of Safari's cookies, then diverges), and it opens a navigation outside its scope, such as
+  IAM's sign-in, in a Safari View Controller sheet over its window. Older reports (iOS 12.2) say a redirect back into
+  the scope closes the sheet and loads the page in the application's window; recent ones say the redirect can stay in
+  the sheet or end in Safari. The flow then runs like this. The start URL's 302 sets the handoff verifier in the
+  application's own jar. IAM's sign-in happens in the sheet, and IAM's own session cookie stays wherever the sheet
+  keeps it. The callback on the application's host redeems the code only where the verifier is. If it loads in the
+  application's window, the session cookie is set in the application's jar and the person is in. If it stays in the
+  sheet or in Safari, the verifier is missing and the proxy refuses the callback with its failed sign-in page: the
+  person is stuck outside the application, and no session reaches a jar that did not start the sign-in. Either way
+  nothing weakens: ADR-0023's binding is what turns the wrong jar into a refusal. If a device check shows the
+  refusal, the fix belongs in the sign-in flow (for example a sign-in the application's window opens itself), not in
+  the manifest.
 - **An installed application works only online.** With no worker, an offline launch shows the browser's own offline
   page. Every answer needs the network anyway: the data is behind the proxy and `no-store`.
 - **The page's HTML is rewritten** on every mount, as the share bootstrap already is for a link mount. An HTML answer
@@ -137,9 +150,10 @@ becomes public, the proxy table does not change, and no service worker is instal
 ## Open questions
 
 - **Safari, Firefox and Android.** Does Safari on macOS and iOS send the session for a `use-credentials` manifest and
-  for `apple-touch-icon`? Does an installed application on iOS follow the sign-in redirect to IAM and back inside its
-  window? Does Chromium on Android mint its installed package with the session? Each needs a check on a device; a
-  browser that refuses would bring back the public-path alternative for that file alone.
+  for `apple-touch-icon`? On iOS, does the callback after IAM's sign-in load in the application's window (signed in)
+  or stay in the Safari View Controller sheet (the refused callback above)? Does Chromium on Android mint its installed
+  package with the session? Each needs a check on a device; a browser that refuses the cookie for a file would bring
+  back the public-path alternative for that file alone.
 - **Web Push**, the next decision. A worker is required to receive a push. It would be a fixed platform script under the
   mount (`<prefix>/__fabrika-sw.js`) with the narrowest scope that serves (the prefix of the script, so it controls no
   page and intercepts no request), no `fetch` handler and no cache. Its update check runs without a session once the
