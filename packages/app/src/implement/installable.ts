@@ -52,26 +52,51 @@ export function appName(mount: InstallableMount): string {
 	return mount.prefix === '/' ? base : `${base} · ${mount.mount}`
 }
 
-function shortNameOf(name: string): string {
-	const characters = [...name]
-	if (characters.length <= SHORT_NAME_LENGTH) return name
-	const first = name.split(/\s+/)[0] ?? ''
-	return first !== '' && [...first].length <= SHORT_NAME_LENGTH ? first : characters.slice(0, SHORT_NAME_LENGTH).join('').trim()
+function fits(text: string): boolean {
+	return [...text].length <= SHORT_NAME_LENGTH
+}
+
+function cut(text: string): string {
+	return [...text].slice(0, SHORT_NAME_LENGTH).join('').trim()
 }
 
 /**
- * The manifest of the mount. Scope and start URL are the mount itself, so the window an installed application opens
- * shows the mount's pages and nothing else of the host; IAM's sign-in on its own origin is out of scope, which a browser
- * shows inside the application's window with its origin named.
+ * The name under the icon: the whole name when it fits, else its first word, else its first characters. A mount below
+ * the root keeps its own name in it, so two mounts of one application never show the same one: the name and the mount,
+ * the first word and the mount, else the mount alone.
+ */
+export function shortNameOf(mount: InstallableMount): string {
+	const base = mount.displayName ?? mount.app
+	const first = base.split(/\s+/)[0] ?? ''
+	if (mount.prefix === '/') {
+		return fits(base) ? base : first !== '' && fits(first) ? first : cut(base)
+	}
+	const candidates = [`${base} ${mount.mount}`, `${first} ${mount.mount}`]
+	return candidates.find(fits) ?? cut(mount.mount)
+}
+
+/**
+ * What a mount's colour is picked from: the application id for the root mount, the id and the mount below it, so two
+ * mounts of one application get different icons.
+ */
+export function colourKey(mount: InstallableMount): string {
+	return mount.prefix === '/' ? mount.app : `${mount.app}/${mount.mount}`
+}
+
+/**
+ * The manifest of the mount. Scope and start URL are the mount itself; below the root that keeps the installed window
+ * to the mount's pages, while the root mount's scope `/` covers the whole host, the other mounts included (a scope
+ * cannot exclude a path; the proxy still decides every request). IAM's sign-in on its own origin is out of scope,
+ * which a browser shows inside the application's window with its origin named.
  */
 export function appManifest(mount: InstallableMount): AppManifest {
 	const name = appName(mount)
 	const scope = scopeOf(mount.prefix)
-	const colour = hexColour(iconColour(mount.app))
+	const colour = hexColour(iconColour(colourKey(mount)))
 	return {
 		id: scope,
 		name,
-		short_name: shortNameOf(name),
+		short_name: shortNameOf(mount),
 		start_url: scope,
 		scope,
 		display: 'standalone',
@@ -127,7 +152,7 @@ export class InstallableApp {
 	async #icon(size: AppIconSize): Promise<Response> {
 		let drawn = this.#icons.get(size)
 		if (drawn === undefined) {
-			drawn = drawIcon(size, appName(this.#mount), iconColour(this.#mount.app))
+			drawn = drawIcon(size, appName(this.#mount), iconColour(colourKey(this.#mount)))
 			this.#icons.set(size, drawn)
 			// A failed draw is not kept, so the next request draws again.
 			drawn.catch(() => this.#icons.delete(size))
@@ -140,10 +165,10 @@ export class InstallableApp {
 
 type Rgb = readonly [number, number, number]
 
-/** A colour per application id, stable across releases: FNV-1a of the id picks the hue, at a fixed saturation and lightness. */
-export function iconColour(app: string): Rgb {
+/** A colour per key (`colourKey`), stable across releases: FNV-1a of the key picks the hue, at a fixed saturation and lightness. */
+export function iconColour(key: string): Rgb {
 	let hash = 0x811c9dc5
-	for (const byte of new TextEncoder().encode(app)) {
+	for (const byte of new TextEncoder().encode(key)) {
 		hash = Math.imul(hash ^ byte, 0x01000193) >>> 0
 	}
 	return hslToRgb(hash % 360, 0.55, 0.42)

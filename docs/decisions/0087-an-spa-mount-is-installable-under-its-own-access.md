@@ -59,34 +59,51 @@ becomes public, the proxy table does not change, and no service worker is instal
    `<prefix>/__fabrika-icon-<180|192|512>.png` (`appIconFile`) itself, before the asset server, in
    `packages/app/src/implement/installable.ts`. They are paths of the mount's own row: the proxy decides them as it
    decides the mount's pages, and the answers carry the header policy of every other answer, `no-store` included. An
-   application's own files at those names are never served.
+   application's own files at those names are never served. **No other endpoint may take one of these paths:**
+   `buildArtifact` plans a `GET` of each file an SPA mount serves (`spaMountFiles`: the browser config and the caller
+   document of every mount, the installable files of a credentialed one) and refuses the contract when the selected row
+   is not the mount's, because a more specific row (a health endpoint or a webhook at
+   `/admin/__fabrika-app.webmanifest`, a public procedure's own path under the root SPA) would take the request under
+   its own rules and the page would link that endpoint's answer.
 2. **The manifest is derived, never authored.** `name` is the contract's `displayName`, or its id; a mount below the
-   root appends its own name (`Orders · admin`). `short_name` is the name when it has at most 12 characters, else its
-   first word when that fits, else its first 12 characters. `id`, `start_url` and `scope` are the mount itself
-   (`<prefix>/`), so an installed window shows that mount and no other of the host. `display` is `standalone`.
-   `theme_color` and `background_color` are the application's colour (below). The icons are the 192 px and 512 px
-   PNGs, and the 512 px one again as `maskable`.
-3. **The icon is drawn by the framework.** It is the application's colour edge to edge, with the name's first letter
-   or digit (diacritics removed) in white at its centre, drawn from a fixed 5×7 glyph inside the circle a maskable icon
-   keeps visible. The colour is a hue picked by FNV-1a of the application id at a fixed saturation and lightness, so it
-   is stable across releases and differs between applications. It is encoded as a PNG with `CompressionStream`, which
-   Bun and workerd both provide, once per runtime and size.
-4. **The mount's pages link them with the session.** Every HTML answer of the mount gets, right after `<head>`,
+   root appends its own name (`Orders · admin`). `short_name` of the root mount is the name when it has at most 12
+   characters, else its first word when that fits, else its first 12 characters; below the root it keeps the mount, so
+   two mounts never show the same one: the name and the mount, else its first word and the mount (`Orders admin`), else
+   the mount alone. `id`, `start_url` and `scope` are the mount itself (`<prefix>/`). Below the root that keeps an
+   installed window to the mount's pages; the root mount's scope `/` covers the whole host, its other mounts included,
+   and a nested mount's prefix lies inside its parent's scope. A scope cannot exclude a path, so this is documented,
+   not prevented: the installed window treats those pages as its own, and the proxy still decides every request.
+   `display` is `standalone`. `theme_color` and `background_color` are the mount's colour (below). The icons are the
+   192 px and 512 px PNGs, and the 512 px one again as `maskable`.
+3. **The icon is drawn by the framework.** It is the mount's colour edge to edge, with the name's first letter or digit
+   (diacritics removed) in white at its centre, drawn from a fixed 5×7 glyph inside the circle a maskable icon keeps
+   visible. The colour is a hue picked by FNV-1a of the application id (the root mount) or of the id and the mount
+   (`orders/admin`), at a fixed saturation and lightness, so it is stable across releases and differs between
+   applications and between the mounts of one. It is encoded as a PNG with `CompressionStream`, which Bun and workerd
+   both provide, once per runtime and size.
+4. **The mount's pages link them with the session.** Every HTML answer of the mount gets, at the start of its head,
    `<link rel="manifest" href="<prefix>/__fabrika-app.webmanifest" crossorigin="use-credentials">` and
    `<link rel="apple-touch-icon" href="<prefix>/__fabrika-icon-180.png">`, through the one injection the share
-   bootstrap uses (`html.ts`). The link comes first in the document, so where a page links a manifest of its own, the
-   browser uses the platform's.
+   bootstrap uses (`html.ts`). The start of the head is read from the document's opening only: after the `<head>`
+   start tag, or, where the document omits it (HTML allows that), after the DOCTYPE and the `<html>` start tag, never
+   before the DOCTYPE, which would switch the page to quirks mode. The link comes first in the head, so where a page
+   links a manifest of its own, the browser uses the platform's.
 5. **A public SPA mount and a link mount are not installable.** A public mount is a site anyone opens (a form, an
    identification page); a link mount is a page opened from a share link. Neither serves the files nor gets the links.
-6. **No service worker, and nothing is cached on the device.** The platform installs no worker in this decision. When
-   one comes (with Web Push, below), it is a fixed script the platform writes, it caches no answer of the application,
-   and it never holds or forwards a credential.
+6. **No service worker, and no answer of the application is cached.** The platform installs no worker in this
+   decision, and every answer stays `no-store`. What an installed application does keep on the device is its manifest
+   and its icons (its name and colour), which the browser or the operating system holds past a sign-out or a
+   revocation; they carry nothing the sign-in page does not show, and every request still meets the proxy. When a
+   worker comes (with Web Push, below), it is a fixed script the platform writes, it caches no answer of the
+   application, and it never holds or forwards a credential.
 
 ## Consequences
 
 - **Every member application can be installed** on Chrome and Edge from the address bar or the menu, and through
   Safari's "Add to Dock" and "Add to Home Screen", without its author doing anything. Each mount of an application is
-  its own installable application, with its own scope.
+  its own installable application, with its own name, colour and scope. Mounts are separate installed windows only
+  where their prefixes do not nest: the root mount's window also opens the other mounts' pages, and a browser may open
+  a link to one of them in the root application. An author who wants separate windows gives every mount its own prefix.
 - **Nothing is public that was not.** The manifest and the icons say no more than the sign-in page already does (the
   application's name), and they are refused to a visitor without a session like every other file of the mount.
 - **The access surface does not change.** No row, no row kind, no manifest field and no header is added, so the
@@ -115,8 +132,12 @@ becomes public, the proxy table does not change, and no service worker is instal
   the manifest.
 - **An installed application works only online.** With no worker, an offline launch shows the browser's own offline
   page. Every answer needs the network anyway: the data is behind the proxy and `no-store`.
-- **The page's HTML is rewritten** on every mount, as the share bootstrap already is for a link mount. An HTML answer
-  without `<head>` gets the links at its very start.
+- **The page's HTML is rewritten** on every mount, as the share bootstrap already is for a link mount, and the share
+  bootstrap now goes to the same place: after the DOCTYPE in a page without a `<head>` tag, where it used to go before
+  it. A fragment without a DOCTYPE gets the links at its very start.
+- **A contract that puts another endpoint on one of a mount's own files no longer compiles** (Decision 1). Before, the
+  more specific row silently answered there; for `__fabrika-config.json` and `__fabrika-me.json` too. The refusal names
+  the path and the endpoint that takes it.
 - The pixel glyph is a default, not a brand: an author's own icon is an open question below.
 
 ## Alternatives considered

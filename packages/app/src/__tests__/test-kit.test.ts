@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
 import { implement } from '../implement/implement'
+import { installLinks } from '../implement/installable'
 import { notesApp } from './fixtures/implement/app'
 import { contract } from './fixtures/implement/fabrika.contract'
 import type { NoteRow } from './fixtures/implement/stores'
@@ -399,7 +400,8 @@ describe("the kit serves an SPA's built directory as the deploy does", () => {
 		const member = kit.browser(kit.testCaller([{ action: 'notes.read', scope: W1 }]))
 		const page = await member('/')
 		expect(page.status).toBe(200)
-		expect(await page.text()).toBe('<!doctype html><title>Notes</title><script src="/assets/app.js"></script>')
+		// The framework links the installable files at the start of the head, after the DOCTYPE (ADR-0087).
+		expect(await page.text()).toBe('<!doctype html>' + installLinks('/') + '<title>Notes</title><script src="/assets/app.js"></script>')
 		expect(await (await member('/assets/app.js')).text()).toBe('console.log("notes")')
 		expect(await (await member('/notes/n-1/edit')).text()).toContain('<title>Notes</title>')
 	})
@@ -416,7 +418,7 @@ describe("the kit serves an SPA's built directory as the deploy does", () => {
 		const kit = testKit(notesApp(seed()), { root: join(root, 'elsewhere') })
 		const page = await kit.browser(kit.testCaller([{ action: 'notes.read', scope: W1 }]))('/')
 		expect(page.status).toBe(200)
-		expect(await page.text()).toBe('<!doctype html><title></title>')
+		expect(await page.text()).toBe('<!doctype html>' + installLinks('/') + '<title></title>')
 	})
 })
 

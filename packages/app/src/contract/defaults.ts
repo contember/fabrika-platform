@@ -254,6 +254,16 @@ export function appIconFile(size: AppIconSize): string {
 	return `__fabrika-icon-${size}.png`
 }
 
+/**
+ * The files the framework answers under an SPA mount's prefix before its asset server: every mount its browser config
+ * and caller document, a credentialed one also its installable files. `buildArtifact` refuses a contract in which
+ * another endpoint would take one of their paths.
+ */
+export function spaMountFiles(credentialed: boolean): readonly string[] {
+	const files = [BROWSER_CONFIG_FILE, PAGE_CALLER_FILE]
+	return credentialed ? [...files, APP_MANIFEST_FILE, ...APP_ICON_SIZES.map(appIconFile)] : files
+}
+
 /** The row of an SPA mount's bare prefix (`GET /admin`), which redirects to the mount (`/admin/`). */
 export function spaPrefixRowId(mount: string): string {
 	return `${mount}.prefix`

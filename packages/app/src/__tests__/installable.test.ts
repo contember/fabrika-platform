@@ -1,12 +1,13 @@
 // An SPA mount as an installable application (ADR-0087): its manifest and icons are served under the mount's own
 // access, behind the production proxy decision, and its pages link them with the session.
 
-import { compileContract, defineContract } from '@fabrika/app/contract'
+import { compileContract, ContractError, defineContract } from '@fabrika/app/contract'
 import { testKit } from '@fabrika/app/testing'
 import { describe, expect, test } from 'bun:test'
 import { inflateSync } from 'node:zlib'
+import { headInsertionPoint } from '../implement/html'
 import { implement } from '../implement/implement'
-import { appManifest, crc32, drawIcon, iconColour, initialOf, installLinks } from '../implement/installable'
+import { appManifest, colourKey, crc32, drawIcon, iconColour, initialOf, installLinks } from '../implement/installable'
 
 const vocabulary = {
 	app: 'intake',
@@ -75,7 +76,7 @@ describe('the manifest', () => {
 		const admin = appManifest({ app: 'intake', displayName: 'Příjem zakázek', mount: 'admin', prefix: '/admin' })
 		expect([admin.name, admin.short_name, admin.scope, admin.start_url, admin.id]).toEqual([
 			'Příjem zakázek · admin',
-			'Příjem',
+			'Příjem admin',
 			'/admin/',
 			'/admin/',
 			'/admin/',
@@ -86,6 +87,17 @@ describe('the manifest', () => {
 			'/admin/__fabrika-icon-512.png',
 		])
 		expect(appManifest({ app: 'intake', displayName: 'Longwordwithoutspaces', mount: 'web', prefix: '/' }).short_name).toBe('Longwordwith')
+	})
+
+	test('two mounts of one application never install as the same entry: the short name keeps the mount, the colour differs', () => {
+		const orders = { app: 'orders', displayName: 'Orders' }
+		const root = appManifest({ ...orders, mount: 'web', prefix: '/' })
+		const admin = appManifest({ ...orders, mount: 'admin', prefix: '/admin' })
+		const portal = appManifest({ ...orders, mount: 'portal', prefix: '/portal' })
+		expect([root.short_name, admin.short_name, portal.short_name]).toEqual(['Orders', 'Orders admin', 'portal'])
+		expect(new Set([root.theme_color, admin.theme_color, portal.theme_color]).size).toBe(3)
+		// The root mount keeps the colour of the application id alone.
+		expect(iconColour(colourKey({ ...orders, mount: 'web', prefix: '/' }))).toEqual(iconColour('orders'))
 	})
 
 	test('the page links it with the session and names the touch icon', () => {
@@ -221,5 +233,63 @@ describe('the production proxy and the dispatcher serve them under the mount', (
 		const kinds = Object.fromEntries(artifact.endpoints.map((row) => [row.id, row.kind]))
 		expect(kinds).toEqual({ web: 'spa', admin: 'spa', 'admin.prefix': 'spa', site: 'public-spa', 'site.prefix': 'public-spa', health: 'health' })
 		expect(artifact.endpoints.filter((row) => row.path.includes('__fabrika'))).toEqual([])
+	})
+})
+
+describe('the links go to the start of the head, never before the DOCTYPE', () => {
+	test.each<[string, string, string]>([
+		['after the head start tag', '<!doctype html><html lang="cs"><head><meta charset="utf-8">', '<!doctype html><html lang="cs"><head>'],
+		['after whitespace and line breaks of the prologue', '<!DOCTYPE html>\n<html>\n  <head>\n<title>', '<!DOCTYPE html>\n<html>\n  <head>'],
+		['after the DOCTYPE, where the head and html tags are omitted', '<!doctype html><title>Notes</title>', '<!doctype html>'],
+		['after the html start tag, where the head tag is omitted', '<!doctype html><html><title>Notes</title>', '<!doctype html><html>'],
+		['after comments before the DOCTYPE', '<!-- built --><!doctype html><head>', '<!-- built --><!doctype html><head>'],
+		['not into a header element', '<!doctype html><header>', '<!doctype html>'],
+		['at the very start of a fragment, never at a head written later in it', '<p>a <head> in the text</p>', ''],
+	])('%s', (_name, html, prologue) => {
+		expect(headInsertionPoint(html)).toBe(prologue.length)
+	})
+
+	test('after a byte order mark, then the prologue', () => {
+		const mark = String.fromCharCode(0xfeff)
+		expect(headInsertionPoint(mark + '<!doctype html><title>x</title>')).toBe(1 + '<!doctype html>'.length)
+		expect(headInsertionPoint(mark + '<p>text</p>')).toBe(1)
+	})
+})
+
+function problemsOf(compile: () => unknown): readonly string[] {
+	try {
+		compile()
+	} catch (error) {
+		if (error instanceof ContractError) {
+			return error.problems
+		}
+		throw error
+	}
+	throw new Error('the contract compiled')
+}
+
+describe('no other endpoint may take a file an SPA mount serves', () => {
+	test('a health endpoint at the manifest path of a credentialed mount is refused, naming both', () => {
+		const claimed = defineContract(vocabulary, (c) => ({
+			admin: c.spa('/admin', { dir: 'dist/admin', access: { member: true } }),
+			probe: c.health('/admin/__fabrika-app.webmanifest'),
+		}))
+		expect(problemsOf(() => compileContract(claimed, {}))).toEqual([
+			"mount 'admin': '/admin/__fabrika-app.webmanifest' is served by 'probe' (health); the framework serves the mount's __fabrika-app.webmanifest there, so no other endpoint may take it",
+		])
+	})
+
+	test("an icon path, and the browser config of any mount, are refused the same way; a public mount's manifest path is free", () => {
+		const claimed = defineContract(vocabulary, (c) => ({
+			web: c.spa('/', { dir: 'dist/web', access: { member: true } }),
+			site: c.spa('/site', { dir: 'dist/site', access: { public: true } }),
+			icon: c.health('/__fabrika-icon-512.png'),
+			config: c.health('/site/__fabrika-config.json'),
+			free: c.health('/site/__fabrika-app.webmanifest'),
+		}))
+		const problems = problemsOf(() => compileContract(claimed, {}))
+		expect(problems).toHaveLength(2)
+		expect(problems.some((problem) => problem.startsWith("mount 'web': '/__fabrika-icon-512.png' is served by 'icon' (health)"))).toBe(true)
+		expect(problems.some((problem) => problem.startsWith("mount 'site': '/site/__fabrika-config.json' is served by 'config' (health)"))).toBe(true)
 	})
 })

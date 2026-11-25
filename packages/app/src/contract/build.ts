@@ -123,6 +123,7 @@ import {
 	PROCEDURE_LIMITS,
 	procedurePath,
 	PUBLIC_MUTATION_RATE,
+	spaMountFiles,
 	spaPrefixRowId,
 	WEBHOOK_BINDING_PARAMETER,
 	WEBHOOK_LIMITS,
@@ -295,7 +296,32 @@ class ArtifactBuilder {
 		if (terminal !== null) {
 			this.#checkIdentifyPage(artifact, terminal)
 		}
+		this.#checkMountFiles(artifact)
 		return artifact
+	}
+
+	/**
+	 * The framework answers an SPA mount's own files (`spaMountFiles`) only on a request the proxy selected the mount's
+	 * row for. A more specific endpoint at one of their paths would take the request under its own access, and the page
+	 * would link that endpoint's answer as its manifest or icon (ADR-0087), so no other endpoint may take one.
+	 */
+	#checkMountFiles(artifact: ContractArtifact): void {
+		const table = compileEndpointTable(artifact)
+		for (const [name, mount] of Object.entries(artifact.mounts)) {
+			const row = mount.kind === 'spa' ? artifact.endpoints.find((endpoint) => endpoint.id === name) : undefined
+			if (mount.kind !== 'spa' || row === undefined) continue
+			for (const file of spaMountFiles(row.kind === 'spa')) {
+				const path = joinPath(mount.prefix, file)
+				const plan = planEndpoint(table, 'GET', path)
+				if (plan.outcome !== 'endpoint' || plan.endpoint.id !== name) {
+					const served = plan.outcome === 'endpoint' ? `'${plan.endpoint.id}' (${plan.endpoint.kind})` : 'no endpoint'
+					this.#problem(
+						`mount '${name}'`,
+						`'${path}' is served by ${served}; the framework serves the mount's ${file} there, so no other endpoint may take it`,
+					)
+				}
+			}
+		}
 	}
 
 	/** The terminal's identification page, when its path is one. */
