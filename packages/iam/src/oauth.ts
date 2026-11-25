@@ -367,8 +367,8 @@ async function grantCeiling(
 }
 
 /**
- * The declared roles `principal` holds at an external application, in declared order, and when the earliest of them
- * ends (null: none ends); null when it holds none. Only a global grant of a declared role counts, and only for an
+ * The declared roles `principal` holds at an external application, in the registration's order (key order from the
+ * registry), and when the earliest of them ends (null: none ends); null when it holds none. Only a global grant of a declared role counts, and only for an
  * internal principal: an external one holds nothing but roles its application declares external (ADR-0051).
  */
 export async function heldIdentityRoles(
