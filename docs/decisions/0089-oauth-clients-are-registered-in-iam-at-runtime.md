@@ -1,7 +1,7 @@
 ---
 id: 0089
 title: OAuth clients and external applications are registered in IAM at runtime
-status: proposed
+status: accepted
 date: 2026-11-25
 ---
 
@@ -76,8 +76,9 @@ Per-application OAuth resources, tokens a deployed application accepts, are not 
 `oauth` rows on contract application entries in the proxy ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)),
 a caller kind in the framework, and a protocol change an older framework release must tolerate
 ([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)), and which endpoints admit them is the
-application's approved contract, not runtime data. A client allowed to call an application's API would be one more
-kind of client row.
+application's approved contract, not runtime data. They include the device grant for an application's own API, which
+today issues tokens only for the console's RPC resources. A later ADR decides them; a client allowed to call an
+application's API would be one more kind of client row.
 
 **Invariant:** IAM reads the OAuth clients it serves from its own database. Only an installation administrator writes an
 external application and its clients; only the provisioning key writes an authoring client.
