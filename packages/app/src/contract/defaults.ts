@@ -159,6 +159,22 @@ export const PUSH_PREFIX = '/__fabrika/push'
 export const PUSH_WORKER_ROW_ID = '__fabrika.push.worker'
 export const PUSH_WORKER_PATH = `${PUSH_PREFIX}/worker.js`
 export const PUSH_WORKER_SCOPE = `${PUSH_PREFIX}/`
+/** The page's own row: it asks whose a subscription is, records or replaces it, or removes it, as the caller. */
+export const PUSH_SUBSCRIPTION_ROW_ID = '__fabrika.push.subscription'
+export const PUSH_SUBSCRIPTION_PATH = `${PUSH_PREFIX}/subscription`
+/** The subscription row's limits: its body, and its bucket per caller (a page load asks once or twice). */
+export const PUSH_SUBSCRIPTION_LIMITS = { maxBytes: 4 * 1024, perCaller: 30 } as const
+/**
+ * The push services a subscription may name (ADR-0088 §8): Google's (Chrome, Edge on Android, Opera), Mozilla's,
+ * Apple's and Microsoft's (Edge on Windows). Any other endpoint is refused at the subscription row, so the sender never
+ * posts a signed request to a URL the page chose. A new push service joins in a framework release.
+ */
+export const PUSH_SERVICE_ORIGINS: readonly string[] = Object.freeze([
+	'https://fcm.googleapis.com',
+	'https://updates.push.services.mozilla.com',
+	'https://web.push.apple.com',
+	'https://*.notify.windows.com',
+])
 
 export function challengePath(action: string): string {
 	return `${CHALLENGE_PREFIX}/${action}`

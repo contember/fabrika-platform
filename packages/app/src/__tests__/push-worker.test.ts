@@ -3,11 +3,14 @@
 // the production proxy decision.
 
 import { compileContract, defineApp, defineContract, defineVocabulary, parseContractArtifact } from '@fabrika/app/contract'
-import { testKit } from '@fabrika/app/testing'
-import { describe, expect, test } from 'bun:test'
+import { serve } from '@fabrika/app/implement'
+import { type TestKit, testKit as createTestKit, type TestKitOptions } from '@fabrika/app/testing'
+import { scoped } from '@fabrika/db'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { runInNewContext } from 'node:vm'
 import { implement } from '../implement/implement'
 import { PUSH_NOTICE_TAG, PUSH_WORKER_SCRIPT } from '../implement/push-worker'
+import { pushContract, pushDatabase, pushTables } from './fixtures/push-app'
 
 const vocabulary = {
 	app: 'orders',
@@ -42,7 +45,7 @@ describe('the contract build', () => {
 	test('notifications: true adds the service worker row, credentialed, and reserves the push prefix', () => {
 		const artifact = compileContract(notifying, {})
 		expect(artifact.notifications).toBe(true)
-		expect(artifact.endpoints.find((row) => row.source.kind === 'push')).toEqual(WORKER_ROW)
+		expect(artifact.endpoints.find((row) => row.id === WORKER_ROW.id)).toEqual(WORKER_ROW)
 		expect(artifact.reservedPrefixes).toContain('/__fabrika/push')
 	})
 
@@ -51,7 +54,7 @@ describe('the contract build', () => {
 		const contract = kit.contract((c) => ({ web: c.spa('/', { dir: 'dist/web', access: { member: true } }), health: c.health('/healthz') }))
 		const artifact = compileContract(contract, {})
 		expect(artifact.notifications).toBe(true)
-		expect(artifact.endpoints.find((row) => row.source.kind === 'push')).toEqual(WORKER_ROW)
+		expect(artifact.endpoints.find((row) => row.id === WORKER_ROW.id)).toEqual(WORKER_ROW)
 	})
 
 	test('without the declaration there is no push row, no field and no reserved prefix', () => {
@@ -91,12 +94,28 @@ function swapWorker(artifact: { readonly endpoints: readonly { readonly id: stri
 }
 
 describe('the production proxy and the dispatcher serve the worker under the row', () => {
-	const app = implement(notifying, { database: null, deps: () => ({}), handlers: () => ({}) })
-	const clerk = [{ role: 'clerk', scope: { type: 'workspace', value: 'w1' } }] as const
+	// The subscriptions live in the framework's tables, so a notifying application boots on a database.
+	let fresh: Awaited<ReturnType<typeof pushDatabase>>
+	type PushKit = TestKit<typeof pushContract>
+	let kits: PushKit[] = []
+	beforeEach(async () => {
+		fresh = await pushDatabase('push-worker.test.ts')
+	})
+	afterEach(async () => {
+		for (const kit of kits) await kit.drain()
+		kits = []
+		await fresh.close()
+	})
+	const testKit = (options: TestKitOptions = {}): PushKit => {
+		const kit = createTestKit(serve(pushContract, { database: scoped(pushTables) }), { database: fresh.database, ...options })
+		kits.push(kit)
+		return kit
+	}
+	const clerk = [{ role: 'editor', scope: { type: 'workspace', value: 'w1' } }] as const
 
 	test('a member gets the fixed script as JavaScript, no-store, from the framework and not the asset server', async () => {
 		const served: string[] = []
-		const kit = testKit(app, {
+		const kit = testKit({
 			assets: {
 				serve: (_mount, request) => {
 					served.push(new URL(request.url).pathname)
@@ -113,7 +132,7 @@ describe('the production proxy and the dispatcher serve the worker under the row
 	})
 
 	test('without a session it is refused like a member page, and a person without a permission gets nothing', async () => {
-		const kit = testKit(app)
+		const kit = testKit()
 		const fetched = await kit.fetch('/__fabrika/push/worker.js', { headers: { 'Sec-Fetch-Mode': 'same-origin', 'Sec-Fetch-Dest': 'serviceworker' } })
 		expect(fetched.status).toBe(401)
 		const stranger = await kit.browser(kit.testCaller([]))('/__fabrika/push/worker.js')
@@ -121,7 +140,7 @@ describe('the production proxy and the dispatcher serve the worker under the row
 	})
 
 	test('no other path under the reserved prefix reaches the root SPA', async () => {
-		const kit = testKit(app, { assets: { serve: () => Promise.resolve(new Response('page', { headers: { 'Content-Type': 'text/html' } })) } })
+		const kit = testKit({ assets: { serve: () => Promise.resolve(new Response('page', { headers: { 'Content-Type': 'text/html' } })) } })
 		const other = await kit.browser(kit.testCaller(clerk))('/__fabrika/push/inbox')
 		expect(other.status).toBe(403)
 		expect(await other.text()).not.toBe('page')
@@ -129,8 +148,8 @@ describe('the production proxy and the dispatcher serve the worker under the row
 
 	test('a contract without the declaration serves its root SPA there, as before', async () => {
 		const plain = implement(silent, { database: null, deps: () => ({}), handlers: () => ({}) })
-		const kit = testKit(plain, { assets: { serve: () => Promise.resolve(new Response('page', { headers: { 'Content-Type': 'text/plain' } })) } })
-		const response = await kit.browser(kit.testCaller(clerk))('/__fabrika/push/worker.js')
+		const kit = createTestKit(plain, { assets: { serve: () => Promise.resolve(new Response('page', { headers: { 'Content-Type': 'text/plain' } })) } })
+		const response = await kit.browser(kit.testCaller([{ role: 'clerk', scope: { type: 'workspace', value: 'w1' } }]))('/__fabrika/push/worker.js')
 		expect(await response.text()).toBe('page')
 	})
 })

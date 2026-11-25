@@ -19,6 +19,7 @@ export const FILES_TABLE = 'fabrika_files'
 export const FILE_DELETIONS_TABLE = 'fabrika_file_deletions'
 export const REQUEST_RECEIPTS_TABLE = 'fabrika_request_receipts'
 export const LIST_CURSOR_KEY_TABLE = 'fabrika_list_cursor_key'
+export const PUSH_SUBSCRIPTIONS_TABLE = 'fabrika_push_subscriptions'
 /** The function an application's last adoption migration calls with the name of a file collection it adopted. */
 export const FILES_RELEASE_FUNCTION = 'fabrika_files_release'
 /**
@@ -327,6 +328,33 @@ CREATE TABLE ${JOB_SCHEDULE_TABLE} (
 		sql: `-- The cron keys (cron:<job>:<expression>) the stored generation's deploy declares, as a JSON array: a run of any
 -- deploy schedules its job's next fire only under a key in it, so an old revision restores no removed job or expression.
 ALTER TABLE ${JOB_SCHEDULE_TABLE} ADD COLUMN declared TEXT NOT NULL DEFAULT '[]';
+`,
+	}),
+	Object.freeze({
+		name: '0015_push_subscriptions.sql',
+		sql: `-- A browser's Web Push subscription (ADR-0088), bound to the principal who recorded it: its endpoint at the push service,
+-- its keys, the VAPID public key it was made with, the newest notification the inbox answered for it (cursor), and when
+-- the sender may try it again. A row whose gone_at is set is a tombstone: the push service called the endpoint gone,
+-- and only the principal and the endpoint stay, so a replacement the page posts later still finds whose it was. Times
+-- are epoch milliseconds.
+CREATE TABLE ${PUSH_SUBSCRIPTIONS_TABLE} (
+	id UUID PRIMARY KEY,
+	principal TEXT NOT NULL,
+	endpoint TEXT NOT NULL UNIQUE,
+	p256dh TEXT,
+	auth TEXT,
+	vapid_key TEXT,
+	cursor TEXT,
+	next_attempt_at BIGINT,
+	recorded_at BIGINT NOT NULL,
+	gone_at BIGINT,
+	CONSTRAINT ${PUSH_SUBSCRIPTIONS_TABLE}_tombstone CHECK (
+		(gone_at IS NULL AND p256dh IS NOT NULL AND auth IS NOT NULL AND vapid_key IS NOT NULL)
+		OR (gone_at IS NOT NULL AND p256dh IS NULL AND auth IS NULL AND vapid_key IS NULL AND next_attempt_at IS NULL)
+	)
+);
+CREATE INDEX ${PUSH_SUBSCRIPTIONS_TABLE}_principal ON ${PUSH_SUBSCRIPTIONS_TABLE} (principal, recorded_at) WHERE gone_at IS NULL;
+CREATE INDEX ${PUSH_SUBSCRIPTIONS_TABLE}_gone_at ON ${PUSH_SUBSCRIPTIONS_TABLE} (gone_at) WHERE gone_at IS NOT NULL;
 `,
 	}),
 ])

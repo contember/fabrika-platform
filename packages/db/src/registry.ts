@@ -9,6 +9,7 @@ import type { WebhookTables } from './framework-tables'
 import type { JobLeases } from './job-leases'
 import type { JobWakes } from './job-wakes'
 import type { DataAccess } from './orm'
+import type { PushSubscriptions } from './push-subscriptions'
 import type { RequestReceipts } from './request-receipts'
 import type { DataLayerRuntime, TableContext, TableProbe } from './store'
 import type { StoredFiles } from './stored-files'
@@ -66,6 +67,8 @@ export interface FrameworkTables {
 	readonly files: StoredFiles
 	/** The answers of keyed mutations, read and written in the invocation's transaction (ADR-0078). */
 	readonly receipts: RequestReceipts
+	/** The browsers' Web Push subscriptions (ADR-0088), read and written in the invocation's transaction. */
+	readonly push: PushSubscriptions
 }
 
 /** A connection of the layer and its locator. Only its holder can `release` it, which lets the layer be bound again. */

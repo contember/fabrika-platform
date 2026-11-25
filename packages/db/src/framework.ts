@@ -24,6 +24,7 @@ export type { DeliveryClaim, NewWebhookBinding, WebhookBinding, WebhookTables } 
 export type { JobLeases, JobLeaseState, JobOutcome, LeaseChange, LeaseProjection, OverdueClaim } from './job-leases'
 export type { FinishWakes, JobWakes, NewWake, ScheduledFire, Wake, WakeReason } from './job-wakes'
 export type { DataAccess, DataHandles, DataSite } from './orm'
+export type { PushBinding, PushRecordOutcome, PushSubscriptionKeys, PushSubscriptions } from './push-subscriptions'
 export type { FrameworkTables, Locator, MemberRevealCheck, PathCheck, ProvisionalBinding, RelationCheck, RevealCheck } from './registry'
 export type { RequestReceipt, RequestReceipts } from './request-receipts'
 export type { SqlMode, SqlSite, SqlTag, SqlValue } from './sql'

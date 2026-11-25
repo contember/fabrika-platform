@@ -154,6 +154,7 @@ import {
 	visibleFor,
 	visibleThrough,
 } from './policy'
+import { pushSubscriptions } from './push-subscriptions'
 import { frameworkSideOf, type ProvisionalBinding, register } from './registry'
 import { requestReceipts } from './request-receipts'
 import type { ScopeTerms, ScopeTest, ScopeUse } from './sql'
@@ -3506,6 +3507,7 @@ export function scoped<DB, P>(tables: Tables<DB, P>): ScopedDatabase<DB, P> {
 			admissions: admissions(() => runtimeOf(connection)),
 			files: storedFiles(() => runtimeOf(connection)),
 			receipts: requestReceipts(),
+			push: pushSubscriptions(),
 		}),
 		data: dataAccess({
 			models,

@@ -10,6 +10,7 @@ export const SERVER_FAULTS = {
 	link_mount: 'the endpoint asked for a link of a mount it does not issue',
 	directory_unlocated: "no table locates the value of the member directory's dimension that the endpoint's object lies in",
 	facility_unbound: 'a facility the endpoint needs (assets, data layer, framework tables or IAM transport) was not bound at boot',
+	push_key_missing: 'a subscription was to be recorded, and the environment holds no VAPID key to compare its key with',
 	endpoint_decision_missing: "the request did not carry the proxy's endpoint decision",
 	endpoint_decision_mismatch: 'the proxy applied other rules than this version serves the endpoint with',
 	key_set_unavailable: 'the IAM key set could not be fetched; nothing was checked',

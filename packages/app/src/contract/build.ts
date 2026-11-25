@@ -124,6 +124,9 @@ import {
 	procedurePath,
 	PUBLIC_MUTATION_RATE,
 	PUSH_PREFIX,
+	PUSH_SUBSCRIPTION_LIMITS,
+	PUSH_SUBSCRIPTION_PATH,
+	PUSH_SUBSCRIPTION_ROW_ID,
 	PUSH_WORKER_PATH,
 	PUSH_WORKER_ROW_ID,
 	spaMountFiles,
@@ -331,8 +334,9 @@ class ArtifactBuilder {
 
 	/**
 	 * `notifications: true` (ADR-0088) gives the contract the framework's push rows under the reserved prefix: in this
-	 * release the service worker's, credentialed like a member SPA (any permission of the application), so the proxy
-	 * decides it like any row. Reserving the prefix keeps a root SPA from answering any other path under it.
+	 * release the service worker's and the subscription row, each credentialed like a member SPA (any permission of the
+	 * application), so the proxy decides them like any row. The subscription row has a bucket per caller and a JSON body
+	 * the framework reads itself. Reserving the prefix keeps a root SPA from answering any other path under it.
 	 */
 	#notifications(): boolean {
 		const declared = this.#contract.notifications
@@ -353,6 +357,23 @@ class ArtifactBuilder {
 			input: null,
 			output: null,
 		})
+		this.#row({
+			id: PUSH_SUBSCRIPTION_ROW_ID,
+			source: { kind: 'push', name: 'subscription' },
+			kind: 'mutation',
+			method: 'POST',
+			path: PUSH_SUBSCRIPTION_PATH,
+			callers: ['human'],
+			requirement: { kind: 'member' },
+			admission: { contentTypes: ['application/json'], maxBytes: PUSH_SUBSCRIPTION_LIMITS.maxBytes },
+			input: null,
+			output: null,
+		})
+		this.#procedureRules[PUSH_SUBSCRIPTION_ROW_ID] = {
+			rate: { perClient: null, perCaller: PUSH_SUBSCRIPTION_LIMITS.perCaller, perEndpoint: null, bytesPerHour: null },
+			challenge: null,
+			timeoutMs: PROCEDURE_LIMITS.timeoutMs,
+		}
 		this.#reserve(PUSH_PREFIX)
 		return true
 	}
