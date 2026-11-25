@@ -42,10 +42,12 @@ export { PageHeader, type PageHeaderProps } from './PageHeader'
 export {
 	type CreatedRouter,
 	createRouter,
+	type HrefOptions,
 	type LinkProps,
 	type NavigateOptions,
 	type ParamsArgs,
 	type ParamsOf,
+	type QueryInit,
 	type RouteMatch,
 	type RouterOptions,
 	type RouterProps,

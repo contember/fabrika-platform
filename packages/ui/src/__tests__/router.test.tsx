@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import { act } from 'react'
 import { PageHeader } from '../PageHeader'
 import { type CreatedRouter, createRouter, type ParamsOf, type RouteMatch } from '../router'
@@ -75,22 +75,40 @@ describe('href', () => {
 		expect(router.href('note', params)).toBe('/crm/deals/a%2Fb/notes/n%201')
 		expect(createRouter(routes).href('deal', { id: '5' })).toBe('/deals/5')
 	})
+
+	test('adds a query: encoded, an array repeats its key, an undefined entry is left out', () => {
+		const router = createRouter(routes, { base: '/crm' })
+		expect(router.href('deals', { query: { stage: 'won & lost', owner: ['a', 'b'], empty: undefined } })).toBe(
+			'/crm/deals?stage=won+%26+lost&owner=a&owner=b',
+		)
+		expect(router.href('deal', { id: '5' }, { query: { tab: 'notes' } })).toBe('/crm/deals/5?tab=notes')
+		expect(router.href('deals', { query: {} })).toBe('/crm/deals')
+		expect(router.href('deals', { query: { gone: undefined, none: [] } })).toBe('/crm/deals')
+	})
 })
 
 describe('Router', () => {
 	const router = createRouter(routes)
-	const { Router, Link, useRoute, navigate } = router
+	const { Router, Link, useRoute, useSearchParams, navigate } = router
 
 	function Screen() {
 		const route = useRoute()
+		const search = useSearchParams()
 		const title = route === null ? 'Not found' : route.name === 'deal' ? `Deal ${route.params.id}` : route.name
 		return (
 			<main>
 				<PageHeader title={title} />
+				<output data-testid="stage">{search.getAll('stage').join(',')}</output>
 				<Link to="deals">All deals</Link>
+				<Link to="deals" query={{ stage: 'won' }}>
+					Won deals
+				</Link>
 				<Link to="deal" params={{ id: '42' }}>
 					Deal 42
 				</Link>
+				<a href="/deals?stage=lost" data-testid="lost">
+					Lost
+				</a>
 				<a href="/deals/7" data-testid="plain">
 					Plain
 				</a>
@@ -122,6 +140,22 @@ describe('Router', () => {
 		return mounted.container
 	}
 	const heading = (root: HTMLElement) => query(root, 'h1', HTMLElement)
+	const stage = (root: HTMLElement) => query(root, '[data-testid="stage"]', HTMLOutputElement).textContent
+	const linkByText = (root: HTMLElement, text: string) => {
+		const link = [...root.querySelectorAll('a')].find((anchor) => anchor.textContent === text)
+		if (link === undefined) throw new Error(`no link ${text}`)
+		return link
+	}
+	/** Mounts the app on `path` with focus on a control outside the heading, and counts the router's scrolls to the top. */
+	const mountAt = async (path: string) => {
+		window.history.replaceState(null, '', path)
+		const root = await mountApp()
+		const control = document.createElement('button')
+		document.body.append(control)
+		control.focus()
+		const scroll = spyOn(window, 'scrollTo').mockImplementation(() => {})
+		return { root, control, scroll }
+	}
 
 	test('a click with a modifier key, a target, a download, a native opt-out, another origin or another button is not intercepted', async () => {
 		const root = await mountApp()
@@ -163,6 +197,99 @@ describe('Router', () => {
 		await act(async () => navigate('deals'))
 		expect(window.history.length).toBe(length + 1)
 		expect(heading(root).textContent).toBe('deals')
+	})
+
+	test('Link and navigate carry a query, and useSearchParams follows it', async () => {
+		const root = await mountApp()
+		expect(linkByText(root, 'Won deals').getAttribute('href')).toBe('/deals?stage=won')
+		await act(async () => navigate('deals', { query: { stage: ['won', 'open'] } }))
+		expect(window.location.pathname + window.location.search).toBe('/deals?stage=won&stage=open')
+		expect(stage(root)).toBe('won,open')
+		await act(async () => navigate('deal', { id: '3' }, { query: { stage: 'lost' }, replace: true }))
+		expect(window.location.pathname + window.location.search).toBe('/deals/3?stage=lost')
+		expect(stage(root)).toBe('lost')
+	})
+
+	test("an aria-current the application sets wins over the router's", async () => {
+		const { Link: PlainLink } = createRouter(routes)
+		mounted = await mount(
+			<Router>
+				<PlainLink to="home" aria-current={false}>
+					Home tab
+				</PlainLink>
+			</Router>,
+		)
+		expect(linkByText(mounted.container, 'Home tab').getAttribute('aria-current')).toBe('false')
+	})
+
+	test('a link is current by its path, whatever the query', async () => {
+		const root = await mountApp()
+		await act(async () => navigate('deals', { query: { stage: 'open' } }))
+		expect(linkByText(root, 'All deals').getAttribute('aria-current')).toBe('page')
+		expect(linkByText(root, 'Won deals').getAttribute('aria-current')).toBe('page')
+	})
+
+	test('a navigation that changes only the query keeps the scroll and the focus', async () => {
+		const { root, control, scroll } = await mountAt('/deals')
+		try {
+			await act(async () => navigate('deals', { query: { stage: 'open' } }))
+			expect(await click(linkByText(root, 'Won deals'))).toBe(true)
+			await click(query(root, '[data-testid="lost"]', HTMLAnchorElement))
+			expect(window.location.search).toBe('?stage=lost')
+			expect(stage(root)).toBe('lost')
+			expect(scroll).not.toHaveBeenCalled()
+			expect(document.activeElement).toBe(control)
+		} finally {
+			scroll.mockRestore()
+		}
+	})
+
+	test('a navigation to another path, or to the same URL, scrolls up and focuses the heading', async () => {
+		const { root, scroll } = await mountAt('/deals?stage=won')
+		try {
+			await click(linkByText(root, 'Won deals'))
+			expect(scroll).toHaveBeenCalledTimes(1)
+			expect(document.activeElement).toBe(heading(root))
+			await act(async () => navigate('deal', { id: '5' }, { query: { stage: 'won' } }))
+			expect(scroll).toHaveBeenCalledTimes(2)
+			expect(heading(root).textContent).toBe('Deal 5')
+			expect(document.activeElement).toBe(heading(root))
+		} finally {
+			scroll.mockRestore()
+		}
+	})
+
+	test('navigate to the URL already shown, with or without replace, keeps the scroll and the focus', async () => {
+		const { control, scroll } = await mountAt('/deals?stage=won')
+		try {
+			await act(async () => navigate('deals', { query: { stage: 'won' } }))
+			await act(async () => navigate('deals', { query: { stage: 'won' }, replace: true }))
+			expect(scroll).not.toHaveBeenCalled()
+			expect(document.activeElement).toBe(control)
+		} finally {
+			scroll.mockRestore()
+		}
+	})
+
+	test('a click on the current link from an anchor of the page still scrolls up', async () => {
+		const { root, scroll } = await mountAt('/deals#notes')
+		try {
+			await click(linkByText(root, 'All deals'))
+			expect(window.location.hash).toBe('')
+			expect(scroll).toHaveBeenCalledTimes(1)
+			expect(document.activeElement).toBe(heading(root))
+		} finally {
+			scroll.mockRestore()
+		}
+	})
+
+	test('popstate updates the query', async () => {
+		const root = await mountApp()
+		await act(async () => {
+			window.history.pushState(null, '', '/?stage=won')
+			window.dispatchEvent(new PopStateEvent('popstate'))
+		})
+		expect(stage(root)).toBe('won')
 	})
 
 	test('popstate updates the route', async () => {
