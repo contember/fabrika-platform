@@ -230,7 +230,7 @@ for (const backend of backends) {
 				registerAppUseCase(registry(port), { id, repoUrl: `https://github.com/acme/${id}`, env, ...REGISTRATION })
 			const putEnv = (appId: string, env: string, port?: GrantApprovalPort | null) => putAppEnvUseCase(registry(port), appId, env, REGISTRATION)
 
-			return { db, machine, provision, provisionAtControl, setCredentials, converge, adaToken, knownToIam, register, putEnv }
+			return { db, grantApproval, machine, provision, provisionAtControl, setCredentials, converge, adaToken, knownToIam, register, putEnv }
 		}
 
 		test('after an upgrade IAM refuses the machine key everywhere until the maintenance pass mirrors each mode', async () => {
@@ -240,6 +240,16 @@ for (const backend of backends) {
 			// The unprotected environment is `off`; the protected one keeps the default, `person`.
 			expect([await w.provision(w.machine, STAGE), await w.provision(w.machine, APP)]).toEqual([200, 403])
 			expect(await w.converge()).toEqual({ written: 0, failed: 0 })
+		})
+
+		test('the pass marks an environment done only when IAM holds the revision and the mode it sent', async () => {
+			const w = await world()
+			// IAM holds notes@stage stricter, at a later revision than Control's: a tightening whose row write then failed.
+			await w.grantApproval.set(STAGE, { grants: false, credentials: 'person' }, 5)
+			expect(await w.converge()).toEqual({ written: 1, failed: 1 })
+			// Not marked, so the next pass writes it again; IAM keeps the stricter mode meanwhile.
+			expect(await w.converge()).toEqual({ written: 0, failed: 1 })
+			expect(await w.provision(w.machine, STAGE)).toBe(403)
 		})
 
 		test('a new environment reaches IAM before its row: a registered or put `prod` is judged at once', async () => {

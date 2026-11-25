@@ -33,6 +33,7 @@ import {
 	type ApprovalUseCaseContext,
 	completeApprovalUseCase,
 	getApprovalUseCase,
+	type IamGatesHeld,
 	listApprovalsUseCase,
 	setEnvironmentProtectionUseCase,
 } from '../approval/api'
@@ -1122,7 +1123,10 @@ describe('protection survives the registry', () => {
 		await seed(w)
 		const human = auth({ permissions: [{ action: '*', scope: null }] })
 		const permissive = { appId: 'notes', env: 'stage', protected: true, policy: PERMISSIVE_POLICY }
-		await setEnvironmentProtectionUseCase({ ...approvals(w, human), grantApproval: { set: () => Promise.resolve() } }, permissive)
+		await setEnvironmentProtectionUseCase({
+			...approvals(w, human),
+			grantApproval: { set: (_app, gates, revision) => Promise.resolve({ revision, credentials: gates.credentials }) },
+		}, permissive)
 		await protectAsConsole(approvals(w, human), { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
 
 		for (const env of ['stage', 'prod']) {
@@ -2452,10 +2456,12 @@ describe('approval categories', () => {
 		/** Runs before the write is taken, so a test reads what Control holds at that moment. */
 		beforeSet?: () => Promise<void>
 		afterSet?: () => void
-		set(app: string, gates: IamGates, revision: number): Promise<void>
+		set(app: string, gates: IamGates, revision: number): Promise<IamGatesHeld>
 	}
 
 	function grantGate(): GrantGate {
+		/** What IAM answers it holds, per application id. `state` is the last write taken, of whichever application. */
+		const held = new Map<string, { gates: IamGates; revision: number }>()
 		const gate: GrantGate = {
 			calls: [],
 			state: null,
@@ -2465,7 +2471,11 @@ describe('approval categories', () => {
 				if (gate.fail) throw new Error('IAM is down')
 				gate.calls.push([app, gates, revision])
 				if (gate.state === null || gate.state.revision <= revision) gate.state = { gates, revision }
+				const before = held.get(app)
+				const now = before === undefined || before.revision <= revision ? { gates, revision } : before
+				held.set(app, now)
 				gate.afterSet?.()
+				return { revision: now.revision, credentials: now.gates.credentials }
 			},
 		}
 		return gate

@@ -26,6 +26,7 @@ import {
 	requiredStepUp,
 	weakensStepUp,
 } from '@fabrika/control-contract'
+import type { CredentialsMode } from '@fabrika/iam-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
@@ -65,7 +66,14 @@ import { snapshotSurface } from './surface'
  * environment's protection revision, and IAM ignores one older than it holds.
  */
 export interface GrantApprovalPort {
-	set(app: string, gates: IamGates, revision: number): Promise<void>
+	/** Answers what IAM holds after the write, which is not what was sent when IAM held a later revision. */
+	set(app: string, gates: IamGates, revision: number): Promise<IamGatesHeld>
+}
+
+/** What IAM answers it holds of an environment: its protection revision and its `credentials` mode, null for none. */
+export interface IamGatesHeld {
+	readonly revision: number
+	readonly credentials: CredentialsMode | null
 }
 
 export interface ApprovalUseCaseContext extends ConsoleAdmission {

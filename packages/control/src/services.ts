@@ -1,6 +1,8 @@
 import type { AuthContext } from '@fabrika/auth'
+import { CREDENTIALS_MODES } from '@fabrika/iam-contract'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
+import { z } from 'zod'
 import type { BuilderPairingIam } from './api/builder-pairing'
 import { type NamespaceProxyChanged, republishNamespace } from './api/namespaces'
 import type { DeployQueue, LogReader } from './api/runs'
@@ -202,11 +204,15 @@ export function grantApprovalDeps(env: Env): { grantApproval?: GrantApprovalPort
 	return { grantApproval: grantApprovalPort(iamProvisioningClient({ origin, provisioningKey })) }
 }
 
+/** What IAM answers a gate write: the revision and the mode it holds; `credentials` absent when it holds none. */
+const heldGatesSchema = z.object({ revision: z.number().int().nonnegative(), credentials: z.enum(CREDENTIALS_MODES).optional() })
+
 /** The mirror's writes over IAM's admin RPC, as the provisioning client reaches it. */
 export function grantApprovalPort(client: Pick<ReturnType<typeof iamProvisioningClient>, 'grantApproval'>): GrantApprovalPort {
 	return {
 		async set(app, gates, revision) {
-			await client.grantApproval.set({ app, required: gates.grants, revision, credentials: gates.credentials })
+			const held = heldGatesSchema.parse(await client.grantApproval.set({ app, required: gates.grants, revision, credentials: gates.credentials }))
+			return { revision: held.revision, credentials: held.credentials ?? null }
 		},
 	}
 }

@@ -44,10 +44,11 @@ export interface IamMirrorSummary {
 }
 
 /**
- * Write the gates of every environment IAM has not taken at its protection revision, then record that revision. The
- * write carries the revision as a protection change's does, so the pass needs no lease: a change in flight has already
- * written IAM at the next revision, which this older write cannot undo. A refused write is written again on the next
- * pass; a failure that is not IAM's refusal (IAM unreachable) ends the pass.
+ * Write the gates of every environment IAM has not taken at its protection revision, then record that revision once IAM
+ * answers it holds that revision and that mode. The write carries the revision as a protection change's does, so the pass
+ * needs no lease: a change in flight has already written IAM at the next revision, which this older write cannot undo.
+ * A refused write, and one IAM answers otherwise (it holds a later revision), is written again on the next pass; a
+ * failure that is not IAM's refusal (IAM unreachable) ends the pass. One pass writes at most `PASS_LIMIT` environments.
  */
 export async function convergeIamGates(
 	deps: { readonly repositories: Pick<ControlRepositories, 'registry'>; readonly grantApproval?: GrantApprovalPort },
@@ -58,8 +59,13 @@ export async function convergeIamGates(
 	let written = 0
 	let failed = 0
 	for (const row of await registry.listAppEnvsUnmirroredInIam(PASS_LIMIT)) {
+		const gates = iamGatesOf(row)
 		try {
-			await port.set(appEnvironmentId(row.app_id, row.env), iamGatesOf(row), row.protection_revision)
+			const held = await port.set(appEnvironmentId(row.app_id, row.env), gates, row.protection_revision)
+			if (held.revision !== row.protection_revision || held.credentials !== gates.credentials) {
+				failed += 1
+				continue
+			}
 		} catch (cause) {
 			failed += 1
 			if (cause instanceof RpcError && cause.httpStatus !== undefined && cause.httpStatus >= 400 && cause.httpStatus < 500) continue
