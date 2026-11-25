@@ -89,6 +89,13 @@ test('remote projections keep exact identities, finite recursive JSON and forwar
 		triggerRef: null,
 		approvalSettings: { ...PERMISSIVE_SETTINGS, requesterMayApprove: STRICT_SETTINGS.requesterMayApprove },
 	}])
+	// A Control older than stepUp keeps every other setting it sends.
+	const { stepUp: _________, ...withoutStepUp } = { ...PERMISSIVE_SETTINGS, requestTtlHours: 48 }
+	expect(parseEnvironments({ items: [{ ...environment, triggerRef: null, approvalSettings: withoutStepUp }] })).toEqual([{
+		...environment,
+		triggerRef: null,
+		approvalSettings: { ...PERMISSIVE_SETTINGS, requestTtlHours: 48, stepUp: STRICT_SETTINGS.stepUp },
+	}])
 	expect(() => parseEnvironments({ items: [{ ...environment, triggerRef: null, target: { ...envelope, payload: { secret: Infinity } } }] }))
 		.toThrow('Invalid stored or upstream data')
 	const run: ReturnType<typeof parseRun> = { id: 'run', appId: 'app', env: 'dev', ref: 'sha', commitSha: null, status: 'running' }
