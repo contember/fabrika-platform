@@ -176,13 +176,9 @@ becomes public, the proxy table does not change, and no service worker is instal
   or stay in the Safari View Controller sheet (the refused callback above)? Does Chromium on Android mint its installed
   package with the session? Each needs a check on a device; a browser that refuses the cookie for a file would bring
   back the public-path alternative for that file alone.
-- **Web Push**, the next decision. A worker is required to receive a push. It would be a fixed platform script under the
-  mount (`<prefix>/__fabrika-sw.js`) with the narrowest scope that serves (the prefix of the script, so it controls no
-  page and intercepts no request), no `fetch` handler and no cache. Its update check runs without a session once the
-  session has expired, gets a 401 and keeps the installed version, which is harmless while the script is fixed. Where
-  the subscription is stored (IAM, per person and device), who may send (a job of the application, through IAM), and
-  that a push carries no application data (a prompt to open the application, which then loads under its session) are
-  that decision's.
+- **Web Push** is [ADR-0088](0088-a-push-says-only-that-something-happened.md): an empty push, a platform worker at
+  `/__fabrika/push/worker.js` that controls no page and caches nothing, the text read under the session, and the
+  subscriptions in the application's own database.
 - **An author's own icon and name.** A `c.spa` option naming an image of the mount's build (PNG, at least 512 px), and
   a display name per mount, both read by the static reader; until then the drawn icon and the derived name stand.
 - **Turning it off.** An application that must not be installable (a kiosk page) needs a way out, most likely the same
