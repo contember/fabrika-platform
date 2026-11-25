@@ -108,7 +108,7 @@ export interface AwsSourcePort {
 export type AwsControlClients = Omit<AwsDeployClients, 'credentials' | 'ssm'> & {
 	readonly ssm: Pick<SsmClient, 'putSecret' | 'deleteSecret' | 'listNames'>
 	/** The environment stack's calls (`ensureEnvironmentStack`). */
-	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'getTemplate' | 'createStack' | 'updateStack'>
+	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'>
 }
 
 export interface AwsControlProviderOptions {

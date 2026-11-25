@@ -4,7 +4,7 @@
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
-import type { StackStatus, StackSummary } from '../aws/cloudformation'
+import { MAX_TEMPLATE_BYTES, type StackStatus, type StackSummary } from '../aws/cloudformation'
 import { ecrLifecyclePolicy } from '../aws/ecr'
 import { AwsError } from '../aws/transport'
 import { AWS_BUILDSPEC } from '../build'
@@ -148,23 +148,35 @@ describe('awsEnvironmentStack', () => {
 	})
 })
 
+const STACK_ID = 'arn:aws:cloudformation:eu-central-1:123456789012:stack/fabrika-app-5-notes-prod/0f1e2d3c'
+
 /**
- * A scripted CloudFormation: each `findStack` answers the next of `states` (the last one repeats; `null` is no stack),
- * `getTemplate` answers `template`. Every call is recorded.
+ * A scripted CloudFormation: each read (`findStack` by name, `describeStack` by id) answers the next of `states` (the
+ * last one repeats; `null` is no stack, which a read by id answers as `DELETE_COMPLETE`), `getTemplate` answers
+ * `template`. `readErrors` are thrown by the next reads first. Every call is recorded.
  */
 class FakeCloudFormation {
 	readonly calls: string[] = []
 	template = ''
 	createError: AwsError | null = null
+	readonly readErrors: AwsError[] = []
 	constructor(private readonly states: (StackStatus | null)[]) {}
 
+	private next(call: string): StackStatus | null {
+		this.calls.push(call)
+		const error = this.readErrors.shift()
+		if (error !== undefined) throw error
+		return (this.states.length > 1 ? this.states.shift() : this.states[0]) ?? null
+	}
+
 	readonly client = {
-		findStack: async (name: string): Promise<StackSummary | null> => {
-			this.calls.push('findStack')
-			const status = this.states.length > 1 ? this.states.shift() : this.states[0]
-			return status === null || status === undefined
-				? null
-				: { stackId: `arn:aws:cloudformation:eu-central-1:123456789012:stack/${name}/0f1e2d3c`, status }
+		findStack: async (): Promise<StackSummary | null> => {
+			const status = this.next('findStack')
+			return status === null ? null : { stackId: STACK_ID, status }
+		},
+		describeStack: async (stackId: string): Promise<{ readonly stackId: string; readonly status: StackStatus | 'DELETE_COMPLETE' }> => {
+			const status = this.next('describeStack')
+			return { stackId, status: status ?? 'DELETE_COMPLETE' }
 		},
 		getTemplate: async (): Promise<string> => {
 			this.calls.push('getTemplate')
@@ -176,7 +188,7 @@ class FakeCloudFormation {
 			this.calls.push(`createStack ${input.name} ${JSON.stringify(input.tags)}`)
 			if (this.createError !== null) throw this.createError
 			this.template = input.templateBody
-			return 'id'
+			return STACK_ID
 		},
 		updateStack: async (input: { readonly templateBody: string }): Promise<string> => {
 			this.calls.push('updateStack')
@@ -210,8 +222,9 @@ describe('ensureEnvironmentStack', () => {
 		expect(fake.calls).toEqual([
 			'findStack',
 			`createStack fabrika-app-5-notes-prod {"fabrika:app":"notes","fabrika:env":"prod"}`,
-			'findStack',
-			'findStack',
+			// From the create on, the stack is read by the id its answer named.
+			'describeStack',
+			'describeStack',
 			'getTemplate',
 		])
 		expect(lines).toEqual(['aws: creating the stack fabrika-app-5-notes-prod', 'aws: the stack fabrika-app-5-notes-prod is current'])
@@ -228,7 +241,49 @@ describe('ensureEnvironmentStack', () => {
 		const fake = new FakeCloudFormation(['CREATE_COMPLETE', 'UPDATE_IN_PROGRESS', 'UPDATE_COMPLETE'])
 		fake.template = '{"older":true}'
 		await ensure(fake).run
-		expect(fake.calls).toEqual(['findStack', 'getTemplate', 'updateStack', 'findStack', 'findStack', 'getTemplate'])
+		expect(fake.calls).toEqual(['findStack', 'getTemplate', 'updateStack', 'describeStack', 'describeStack', 'getTemplate'])
+	})
+
+	test('a template that answers equal as JSON (keys reordered, spaced) is current: no no-op update is sent', async () => {
+		const fake = new FakeCloudFormation(['UPDATE_COMPLETE'])
+		const reordered = Object.fromEntries(Object.entries(stack.template ?? {}).reverse())
+		fake.template = JSON.stringify(reordered, null, 2)
+		await ensure(fake).run
+		expect(fake.calls).toEqual(['findStack', 'getTemplate'])
+		// A body that is not JSON is no match: the stack is updated, never wedged.
+		const odd = new FakeCloudFormation(['UPDATE_COMPLETE'])
+		odd.template = 'Resources: {}'
+		await ensure(odd).run
+		expect(odd.calls).toContain('updateStack')
+	})
+
+	test('a read refused for rate or with a lost answer is read again at the next poll', async () => {
+		const fake = new FakeCloudFormation(['UPDATE_COMPLETE'])
+		fake.template = body
+		fake.readErrors.push(new AwsError('ListStacks', 'Throttling', 400, null, true), new AwsError('ListStacks', 'timeout', 0, null, true))
+		await ensure(fake).run
+		expect(fake.calls).toEqual(['findStack', 'findStack', 'findStack', 'getTemplate'])
+		const refused = new FakeCloudFormation(['UPDATE_COMPLETE'])
+		refused.readErrors.push(new AwsError('ListStacks', 'AccessDenied', 403, null, false))
+		await expect(ensure(refused).run).rejects.toMatchObject({ code: 'AccessDenied' })
+	})
+
+	test('a create that fails before the first read is reported as failed, not as a timeout', async () => {
+		const fake = new FakeCloudFormation([null, null])
+		await expect(ensure(fake).run).rejects.toThrow('creating the stack fabrika-app-5-notes-prod failed')
+		// Deleted inside the first poll: the read by id answers DELETE_COMPLETE at once.
+		expect(fake.calls).toEqual(['findStack', `createStack fabrika-app-5-notes-prod {"fabrika:app":"notes","fabrika:env":"prod"}`, 'describeStack'])
+	})
+
+	test("the rendered template stays well under CloudFormation's inline limit, and one past it is named", async () => {
+		expect(new TextEncoder().encode(JSON.stringify(stack.template)).byteLength).toBeLessThan(MAX_TEMPLATE_BYTES / 2)
+		const fake = new FakeCloudFormation([null])
+		const big = { ...stack, template: { Resources: { Padding: 'x'.repeat(MAX_TEMPLATE_BYTES) } } }
+		await expect(
+			ensureEnvironmentStack({ cloudFormation: fake.client, stack: big, signal: new AbortController().signal, sleep: async () => {}, log: () => {} }),
+		)
+			.rejects.toThrow(`past the ${MAX_TEMPLATE_BYTES} CloudFormation takes inline`)
+		expect(fake.calls).toEqual([])
 	})
 
 	test('a stack another creator won is waited for, not created again', async () => {

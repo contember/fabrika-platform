@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { EcsService } from '../aws/ecs'
+import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec } from '../codecs'
 import {
 	type AwsControlClients,
@@ -74,6 +75,8 @@ class Fake {
 	])
 	readonly registered: { family: string; environment: Readonly<Record<string, string>>; secrets: Readonly<Record<string, string>> }[] = []
 	readonly uploads: string[] = []
+	/** The environment stack's read refused: the deploy fails before anything of the run exists. */
+	stackRefused = false
 	expiresAt: number | undefined = undefined
 	buildStatus: 'succeeded' | 'failed' = 'succeeded'
 	rolloutStatus: 'successful' | 'rollback_successful' = 'successful'
@@ -172,8 +175,10 @@ class Fake {
 		cloudFormation: {
 			findStack: async (name) => {
 				this.calls.push(`findStack ${name}`)
+				if (this.stackRefused) throw new AwsError('ListStacks', 'AccessDenied', 403, null, false)
 				return { stackId: `arn:aws:cloudformation:eu-central-1:123456789012:stack/${name}/0f1e2d3c`, status: 'CREATE_COMPLETE' }
 			},
+			describeStack: async (stackId) => ({ stackId, status: 'CREATE_COMPLETE' }),
 			getTemplate: async () => JSON.stringify(awsEnvironmentStack('notes', 'prod', target).template),
 			createStack: async () => {
 				throw new Error('the stack exists')
@@ -276,6 +281,15 @@ describe('the AWS control provider', () => {
 			`${ENV_PATH}/${PREVIOUS}.API_TOKEN`,
 			`${ENV_PATH}/LEGACY`,
 		])
+	})
+
+	test('a stack that fails fails the deploy before any parameter, upload or build', async () => {
+		const fake = new Fake()
+		fake.stackRefused = true
+		await expect(fake.provider().deploy(deployInput())).rejects.toMatchObject({ code: 'AccessDenied' })
+		expect(fake.calls).toEqual(['findStack fabrika-app-5-notes-prod'])
+		expect(fake.uploads).toEqual([])
+		expect(fake.envParameters().filter((name) => name.includes(RUN))).toEqual([])
 	})
 
 	test('a run that throws while writing its secrets deletes what it wrote', async () => {

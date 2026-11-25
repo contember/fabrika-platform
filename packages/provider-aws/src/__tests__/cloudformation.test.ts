@@ -45,6 +45,19 @@ describe('cloudFormationClient', () => {
 		await expect(cloudFormationClient(twice.options).findStack('fabrika-app-5-notes-prod')).rejects.toMatchObject({ code: 'invalid_answer' })
 	})
 
+	test('reads a stack by its id, a deleted one as DELETE_COMPLETE; an answer about another stack is invalid', async () => {
+		const { options, calls } = fakeAwsQuery(CLOUDFORMATION, {
+			DescribeStacks: () => `<Stacks>${member('fabrika-app-5-notes-prod', ID, 'DELETE_COMPLETE')}</Stacks>`,
+		})
+		expect(await cloudFormationClient(options).describeStack(ID)).toEqual({ stackId: ID, status: 'DELETE_COMPLETE' })
+		expect(calls[0]?.parameters).toEqual({ StackName: ID })
+		const other = fakeAwsQuery(CLOUDFORMATION, {
+			DescribeStacks: () => `<Stacks>${member('fabrika-app-5-notes-stage', OTHER, 'CREATE_COMPLETE')}</Stacks>`,
+		})
+		await expect(cloudFormationClient(other.options).describeStack(ID)).rejects.toMatchObject({ code: 'invalid_answer' })
+		await expect(cloudFormationClient(other.options).describeStack('fabrika-app-5-notes-prod')).rejects.toMatchObject({ code: 'invalid_request' })
+	})
+
 	test('reads the template the stack was sent', async () => {
 		const { options, calls } = fakeAwsQuery(CLOUDFORMATION, { GetTemplate: () => '<TemplateBody>{"Resources":{"a":&quot;b&quot;}}</TemplateBody>' })
 		expect(await cloudFormationClient(options).getTemplate('fabrika-app-5-notes-prod')).toBe('{"Resources":{"a":"b"}}')

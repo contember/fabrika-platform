@@ -7,6 +7,8 @@
 //   block the next create of the same name, and a `ClientRequestToken`, so a lost answer repeated creates nothing more.
 // - `CAPABILITY_NAMED_IAM`: the environment stack names its roles.
 // - A status CloudFormation may add later is `invalid_answer`, never a guess.
+// - `describeStack` reads one stack by its id (its ARN), which keeps answering `DELETE_COMPLETE` after a delete: how a
+//   caller tells a create of its own that failed (and was deleted) from a stack `ListStacks` does not show yet.
 //
 // UNVERIFIED: the actions, their parameters, the answers' element names, `ListStacks`' filter and the statuses follow
 // CloudFormation's API reference; none was checked against an account.
@@ -65,7 +67,12 @@ export interface StackSummary {
 export interface CloudFormationClient {
 	/** The live stack named `name`, `null` when there is none (or only deleted ones). */
 	findStack(name: string, signal?: AbortSignal): Promise<StackSummary | null>
-	/** The template body the stack was last created or updated with, as it was sent. */
+	/**
+	 * The stack of `stackId` (an ARN): for a deleted stack `DELETE_COMPLETE`, because a read by id keeps answering one,
+	 * so a stack this caller created and CloudFormation deleted is told apart from one not listed yet.
+	 */
+	describeStack(stackId: string, signal?: AbortSignal): Promise<{ readonly stackId: string; readonly status: StackStatus | 'DELETE_COMPLETE' }>
+	/** The template body the stack was last created or updated with. */
 	getTemplate(name: string, signal?: AbortSignal): Promise<string>
 	/** Starts creating `name`; answers its id. */
 	createStack(
@@ -140,6 +147,22 @@ export function cloudFormationClient(options: AwsClientOptions): CloudFormationC
 				next = answer.next
 			}
 			throw new AwsError('ListStacks', 'too_many_pages', 200, null, false)
+		},
+
+		async describeStack(stackId, signal) {
+			if (!STACK_ID.test(stackId)) refuse('DescribeStacks')
+			return query.call('DescribeStacks', { StackName: stackId }, (result) => {
+				const stacks = result === null ? null : xmlOptional(result, 'Stacks')
+				const members = stacks === null ? [] : xmlChildren(stacks, 'member')
+				const [only, ...more] = members
+				if (only === undefined || more.length > 0) throw new Error('not one stack')
+				const status = xmlText(only, 'StackStatus') ?? ''
+				// An answer about another stack is no answer about this one.
+				if (xmlText(only, 'StackId') !== stackId) throw new Error('another stack')
+				if (status === 'DELETE_COMPLETE') return { stackId, status }
+				if (!isStatus(status)) throw new Error('a status of another form')
+				return { stackId, status }
+			}, signal)
 		},
 
 		async getTemplate(name, signal) {
