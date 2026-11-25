@@ -10,8 +10,11 @@ import {
 	PERMISSIVE_POLICY,
 	POLICY_CATEGORIES,
 	policyFromCategories,
+	requesterMayApprove,
+	requesterPersonId,
 	REVIEW_REASONS,
 	STRICT_POLICY,
+	STRICT_SETTINGS,
 	waitingCategories,
 } from '../index.js'
 
@@ -142,5 +145,22 @@ describe('the conversion from the earlier category list', () => {
 			false,
 			true,
 		])
+	})
+})
+
+describe('who decides a pending item (ADR-0083 §8)', () => {
+	test("the requester may approve unless a waiting category says otherwise; grants keep IAM's rule", () => {
+		const others = { ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, secrets: false } }
+		expect(requesterMayApprove(STRICT_SETTINGS, ['secrets', 'deploy-request'])).toBe(true)
+		expect(requesterMayApprove(others, ['deploy-request'])).toBe(true)
+		expect(requesterMayApprove(others, ['deploy-request', 'secrets'])).toBe(false)
+		expect(requesterMayApprove(others, ['grants'])).toBe(true)
+	})
+
+	test("the requester's person: the user behind a token or key, a service key's issuer, else unknown", () => {
+		expect(requesterPersonId({ id: 'p-ada', type: 'user' })).toBe('p-ada')
+		expect(requesterPersonId({ id: 'svc', type: 'service' }, 'p-bob')).toBe('p-bob')
+		expect(requesterPersonId({ id: 'svc', type: 'service' })).toBeNull()
+		expect(requesterPersonId({ id: 'svc', type: 'service' }, null)).toBeNull()
 	})
 })

@@ -28,6 +28,35 @@ export function requireHumanApprover(auth: AuthContext, admission: ConsoleAdmiss
 	return { id: principal.id, label: principal.label }
 }
 
+/** The person behind a pending item's request (`requesterPersonId`): null when it cannot be known. */
+export interface RequesterPerson {
+	readonly personId: string | null
+	/** Who asked, as the request recorded them: the person, or the service principal that holds the key. */
+	readonly label: string
+}
+
+/**
+ * Under `requesterMayApprove: false`, the approver is someone other than the requester's person (ADR-0083 §8). A service
+ * key's token names no issuer, so its person is unknown and nobody may approve the item: it fails closed, and a
+ * refusal, or a person with `access.approve` changing the setting, still decides it.
+ */
+export function requireOtherThanRequester(approver: { readonly id: string }, requester: RequesterPerson, item: 'deploy' | 'request'): void {
+	if (requester.personId === null) {
+		fail(
+			403,
+			`${requester.label} asked for this ${item} with a service key whose issuer Control cannot know, and the environment lets only `
+				+ "someone other than the requester's person approve it (requesterMayApprove: false), so nobody can approve it; it can be refused",
+		)
+	}
+	if (requester.personId === approver.id) {
+		fail(
+			403,
+			`this ${item} was asked for on your behalf, and the environment lets only someone other than the requester's person approve it `
+				+ '(requesterMayApprove: false); another person with access.approve decides it',
+		)
+	}
+}
+
 /**
  * Deleting a protected environment erases the policy a human set, so it takes the same human with `access.approve`
  * at its coordinates as unprotecting it. An unprotected environment needs nothing beyond the caller's own action.

@@ -12,7 +12,7 @@ import type {
 	ListResponse,
 	SetEnvironmentProtectionRequest,
 } from '@fabrika/control-contract'
-import { changeCategories, CONTROL_ACTIONS, gate, type PolicyCategory, requiredApprovers } from '@fabrika/control-contract'
+import { changeCategories, CONTROL_ACTIONS, gate, type PolicyCategory, requesterMayApprove, requiredApprovers } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
@@ -21,7 +21,7 @@ import { appEnvCrossOrigins, type AppEnvRow, type ControlRepositories, type RunR
 import { acquireLease, type LeaseClock, runLeaseKey } from '../lease'
 import { snapshotAccessMap } from './access-map'
 import { appEnvPolicy, appEnvSettings, grantsWait, storedPolicy, storedSettings } from './categories'
-import { type ConsoleAdmission, requireHumanApprover } from './human'
+import { type ConsoleAdmission, requireHumanApprover, requireOtherThanRequester } from './human'
 import {
 	classificationCategories,
 	classificationPolicy,
@@ -30,7 +30,7 @@ import {
 	type StoredApproval,
 	type StoredClassification,
 } from './publish'
-import { toDeployRequestDto } from './request'
+import { deployRequester, parseDeployRequest, toDeployRequestDto } from './request'
 import { type AccessSnapshot, parseSnapshot } from './snapshot'
 import { snapshotSurface } from './surface'
 
@@ -97,10 +97,13 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 	}
 	const now = (c.now ?? (() => Math.floor(Date.now() / 1000)))()
 	if (run.approval_deadline !== null && run.approval_deadline <= now) fail(410, expiredMessage(run))
-	const approvers = await runApprovers(c.repositories, run, classification)
+	const { approvers, requesterMayApprove } = await runDeciders(c.repositories, run, classification)
 	const partial = heldPartialApproval(run, classification)
 	if (input.decision === 'approve' && approvers === 2 && partial?.principalId === approver.id) {
 		return await toApprovalDto(c.repositories, run)
+	}
+	if (input.decision === 'approve' && !requesterMayApprove && run.request_json !== null) {
+		requireOtherThanRequester(approver, deployRequester(parseDeployRequest(run.request_json)), 'deploy')
 	}
 	const lease = await acquireLease(c.lock, runLeaseKey(run.app_id, run.env), c.leaseClock)
 	if (lease === null) fail(409, 'the environment is deploying; try again in a moment')
@@ -161,13 +164,19 @@ export function waitingCategoriesOf(run: Pick<RunRow, 'park_reason'>, classifica
 	return run.park_reason === 'requested' ? [...lines, 'deploy-request'] : lines
 }
 
-async function runApprovers(
+/**
+ * Who decides a parked run: how many people, the most any of its waiting categories asks for, and whether the
+ * requester's own person may be one of them, which no waiting category may refuse (ADR-0083 §8).
+ */
+async function runDeciders(
 	repositories: Pick<ControlRepositories, 'registry'>,
 	run: RunRow,
 	classification: StoredClassification,
-): Promise<1 | 2> {
+): Promise<{ readonly approvers: 1 | 2; readonly requesterMayApprove: boolean }> {
 	const appEnv = await repositories.registry.getAppEnv(run.app_id, run.env)
-	return requiredApprovers(appEnvSettings(appEnv ?? { approval_settings: null }), waitingCategoriesOf(run, classification))
+	const settings = appEnvSettings(appEnv ?? { approval_settings: null })
+	const categories = waitingCategoriesOf(run, classification)
+	return { approvers: requiredApprovers(settings, categories), requesterMayApprove: requesterMayApprove(settings, categories) }
 }
 
 /** The first of two approvals, while it names the digests the run shows now; a run that parked again dropped it. */
@@ -318,7 +327,7 @@ async function toApprovalDto(
 		baselineRunId: classification.baselineRunId,
 		protected: classification.protected,
 		categories: [...classificationCategories(classification)],
-		approvers: await runApprovers(repositories, run, classification),
+		...await runDeciders(repositories, run, classification),
 		...(partial === null ? {} : { partialApproval: { principalId: partial.principalId, label: partial.label, approvedAt: partial.approvedAt } }),
 		...(waiting && run.approval_deadline !== null ? { deadline: run.approval_deadline } : {}),
 		...(request === undefined ? {} : { request }),

@@ -128,6 +128,48 @@ A non-person's manual deploy of a protected environment is its own approval requ
   completes it, either may reject, and the same person twice changes nothing.
 - **The restart check applies the same rule** when the run starts, under the mode then in force; a restore's own deploy
   is exempt.
+- **The requester's person may approve by default.** `requesterMayApprove: false` (per category, the strictest of the
+  waiting categories winning) makes someone other than the requester's person decide: the person behind an OAuth
+  token or a person's own key cannot approve, only refuse. A service key has no person behind it that Control can
+  name, since no token carries its issuer, so under `false` nobody approves its request and anyone may refuse it.
+
+Any other action of a non-person that waits for a person is an **approval request**
+([ADR-0083 §8](../decisions/0083-an-environment-chooses-what-waits-for-approval.md#8-an-approval-request-is-the-pending-registry-write),
+[`approval/requests/`](../../packages/control/src/approval/requests/)). **Built:** the store, its decision and its
+execution. No action goes through one yet: every kind is refused when a request is created (400), the procedures that
+no request may ever name with their reason, every other one as not requestable yet.
+
+- **Only a non-person asks.** `approvals.requests.create` takes a bearer (an agent's OAuth token or a key); a person in
+  the console gets 409 and makes the change directly. The requester must hold the kind's action at the application,
+  or `access.request` where the kind is one the requester cannot execute itself (only `admin` holds it, and no
+  command-line preset carries it). The environment's mode for the kind's category is checked when the request is
+  created: `refuse` answers 403.
+- **Inert and exact.** The row holds the kind, the canonical input and its SHA-256, the coordinates, the requester
+  (principal, credential, OAuth client and grant id from the verified token), the before-state the action depends on
+  with its digest, and an absolute deadline `requestTtlHours` after creation. Nothing reads a pending row as authority.
+- **The decision** (`approvals.requests.decide`) is a person's in the console with `access.approve` at the
+  coordinates (or the IAM administration the kind names), posting the input digest the page showed (409 when it is
+  not the stored one, 410 past the deadline). It is one conditional update on `pending`, so a second tap changes
+  nothing. `requesterMayApprove` and `approvers` apply as they do to a parked deploy request.
+- **Execution** follows the final approval in the same call, under the environment's deployment lease (409 while
+  it is busy), with the approver's authority and the requester recorded beside them. Control judges the policy as it
+  stands now and the before-state again; a stricter policy or a changed before-state closes the request `stale` and
+  nothing runs. The operation id is recorded before the kind's first external effect; an execution that throws leaves
+  the request `unknown`. A Control whose kind reads the stored input back to another digest (a release rolled back
+  under the request, which drops a key it does not know) shows the request as one it cannot describe and closes an
+  approved one `failed`: it never executes less than the person approved. A request whose kind or input this Control
+  cannot describe can only be refused: the page offers no Approve, and an approval answers 409 and changes nothing.
+- **The lifecycle** is `pending → approved | rejected | expired`, then `executing → executed | failed | unknown`, and
+  `stale`. The maintenance sweep expires a pending request past its deadline, closes an approved one whose execution
+  never started `failed` (nothing changed; the agent asks again), and follows an `unknown` one through its kind until
+  it settles. It decides and executes nothing anew.
+- **Audit.** A decision writes `auth.audit` (`access.approve` on the request, with the decision) under the person;
+  an execution writes the kind's action with its outcome, the operation id and the requester.
+- **Reading it.** The agent reads the state with `approvals.requests.get`, `fabrika control requests get <id> [--wait]`
+  or the MCP tool `get_approval_request`; the person decides at `<console>/approvals/requests/<id>`, where text the
+  agent wrote is escaped and marked. Fabrika sends no notification. The requester reads its request only through the
+  credential that asked (the same principal and OAuth client, or no client for a key), so another agent of the same
+  person does not; a person who may decide it reads any at those coordinates.
 
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval
@@ -163,14 +205,15 @@ each keeps the `@fabrika/*` release it pins until it raises the pin and deploys
 
 ## Decided, not built
 
-| What                                                                            | Where it is decided                                                                                    |
-| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| The access diff posted as a GitHub check on a pull request                      | [spec](../specs/access-diff-as-a-github-check.md)                                                      |
-| A release watch window after a deploy, with a manual rollback                   | [spec](../specs/release-watch-window-and-rollback.md)                                                  |
-| Automatic rollback of a suspect release                                         | [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)                               |
-| Browser journeys as a stage gate and production checks                          | [backlog 268](../backlog/268-opice-journeys-as-a-stage-gate-and-production-checks.md)                  |
-| Destructive-change rules for application migrations                             | [backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)                 |
-| A Cloudflare deploy that keeps the account token away from repository code      | [backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md) |
-| A redelivered push webhook that does not create a second run                    | [backlog 204](../backlog/204-a-redelivered-push-webhook-creates-a-second-run.md)                       |
-| An environment's default branch checked like a trigger ref                      | [backlog 297](../backlog/297-control-accepts-any-default-branch.md)                                    |
-| A narrowing applied to IAM when its reconcile fails after the version went live | [backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)                   |
+| What                                                                               | Where it is decided                                                                                        |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| The access diff posted as a GitHub check on a pull request                         | [spec](../specs/access-diff-as-a-github-check.md)                                                          |
+| A release watch window after a deploy, with a manual rollback                      | [spec](../specs/release-watch-window-and-rollback.md)                                                      |
+| Automatic rollback of a suspect release                                            | [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)                                   |
+| Browser journeys as a stage gate and production checks                             | [backlog 268](../backlog/268-opice-journeys-as-a-stage-gate-and-production-checks.md)                      |
+| Destructive-change rules for application migrations                                | [backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)                     |
+| A Cloudflare deploy that keeps the account token away from repository code         | [backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md)     |
+| A redelivered push webhook that does not create a second run                       | [backlog 204](../backlog/204-a-redelivered-push-webhook-creates-a-second-run.md)                           |
+| An environment's default branch checked like a trigger ref                         | [backlog 297](../backlog/297-control-accepts-any-default-branch.md)                                        |
+| A narrowing applied to IAM when its reconcile fails after the version went live    | [backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)                       |
+| Secrets, variables, data, registry, grant and key writes through approval requests | [ADR-0083 §8 and its rollout](../decisions/0083-an-environment-chooses-what-waits-for-approval.md#rollout) |

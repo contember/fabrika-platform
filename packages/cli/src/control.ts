@@ -11,7 +11,7 @@
 
 import { createRpcClient, type InferRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import { type IssueKeyInput, type IssueKeyResult, MAX_KEY_LIFETIME_SECONDS } from '@fabrika/auth-core'
-import { APP_ENV_KINDS, CONTROL_CLI_PRESETS } from '@fabrika/control-contract'
+import { APP_ENV_KINDS, type ApprovalRequestDto, CONTROL_CLI_PRESETS, isFinalApprovalRequestState } from '@fabrika/control-contract'
 import type {
 	AppDto,
 	AppEnvDto,
@@ -93,6 +93,7 @@ Usage:
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
   fabrika control runs get --run=<id>
   fabrika control runs log --run=<id>
+  fabrika control requests get <id> [--wait]
 
 \`register\` CREATES an app and refuses a second one with the same id. Re-registering a changed
 manifest — a new import document, or a new \`zerops.yaml\` of an app without a contract — is
@@ -148,6 +149,11 @@ workspaces and are never a trigger ref.
 \`--ref\` names a 40-character commit SHA, by default one merged into the environment's trigger ref (or the default
 branch), and stderr prints the console link the person opens. \`--wait\` follows the run until it succeeds or
 fails, approval being one step on the way, and prints its final row; a refusal or an expiry says so on stderr.
+
+\`requests get\` reads one approval request: a change an agent or a key asked a person to approve, by the id its
+creation answered. stderr prints the console link while it waits, and why it did not run once it failed, went stale or
+expired. \`--wait\` reads it again until it is refused, expired, executed, failed or stale, and prints its final row;
+once a person decided it, it stops with an error after 15 minutes without an outcome.
 
 Namespace placement options, each defaulting to what the preset would choose:
 
@@ -235,7 +241,7 @@ interface Flags {
 	readonly json: boolean
 	/** `--not-secret`: `apps variables put` stores a value that looks like a credential. */
 	readonly notSecret: boolean
-	/** `--wait`: `deploy` follows the run until it succeeds or fails. */
+	/** `--wait`: `deploy` follows the run until it succeeds or fails; `requests get` follows the request until it settles. */
 	readonly wait: boolean
 	readonly positional: readonly string[]
 }
@@ -1114,7 +1120,7 @@ const runDeploy = async (flags: Flags, env: Readonly<Record<string, string | und
 	emit(flags, result, () => runLine(result))
 }
 
-/** How often `deploy --wait` reads the run again. */
+/** How often `deploy --wait` reads the run, and `requests get --wait` the request, again. */
 const WAIT_INTERVAL_MS = 5000
 
 /**
@@ -1155,8 +1161,85 @@ export const followRun = async (
 	return run
 }
 
+const runRequests = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
+	if (verb !== 'get') throw new Error(`Unknown \`control requests\` verb: ${verb ?? '(missing)'}`)
+	const id = flags.positional[1]
+	if (id === undefined) throw new Error('`control requests get` needs the request id: fabrika control requests get <id>')
+	const client = controlClient(flags, env)
+	const read = (requestId: string) => client.approvals.requests.get({ id: requestId })
+	const request = await read(id)
+	const result = flags.wait
+		? await followRequest(read, request, { intervalMs: WAIT_INTERVAL_MS, settleTimeoutMs: REQUEST_SETTLE_TIMEOUT_MS })
+		: request
+	const hint = requestHint(result)
+	if (hint !== null && !flags.wait) console.warn(hint)
+	emit(flags, result, () => requestLine(result))
+}
+
+const requestLine = (request: ApprovalRequestDto): string => `${request.id}\t${request.kind}\t${request.appId}\t${request.env}\t${request.state}`
+
+/** What stderr says about a request beside its row: where a person decides it, or why it did not run. */
+export const requestHint = (request: ApprovalRequestDto): string | null => {
+	switch (request.state) {
+		case 'pending':
+			return request.url === undefined ? 'the request waits for a person' : `a person approves or refuses this request at ${request.url}`
+		case 'rejected':
+			return 'a person refused this request; nothing changed'
+		case 'expired':
+			return 'nobody approved or refused this request before its deadline, so it expired; nothing changed'
+		case 'failed':
+		case 'stale':
+		case 'unknown':
+			return request.error === undefined ? `the request is ${request.state}` : `the request is ${request.state}: ${request.error}`
+		case 'approved':
+		case 'executing':
+			return `the request is ${request.state}`
+		case 'executed':
+			return null
+	}
+}
+
 /**
- * `command` is the group (`key`, `apps`, `runs`, `register`, `deploy`); the verb, where a group has
+ * How long `requests get --wait` follows a request once a person decided it. Waiting is bounded by the request's deadline,
+ * but an `unknown` outcome lasts until Control settles it, which a Control without the request's kind never does.
+ */
+const REQUEST_SETTLE_TIMEOUT_MS = 15 * 60_000
+
+/**
+ * Follow a request until it settles, saying each stage once on stderr; what it ended as is what this answers. Once it is
+ * no longer pending, it stops with an error after `settleTimeoutMs`.
+ */
+export const followRequest = async (
+	read: (id: string) => Promise<ApprovalRequestDto>,
+	first: ApprovalRequestDto,
+	options: { readonly intervalMs: number; readonly settleTimeoutMs: number },
+): Promise<ApprovalRequestDto> => {
+	let request = first
+	let said: string | null = null
+	let decidedAt: number | null = null
+	while (!isFinalApprovalRequestState(request.state)) {
+		if (request.state !== 'pending') {
+			decidedAt ??= Date.now()
+			if (Date.now() - decidedAt >= options.settleTimeoutMs) {
+				throw new Error(
+					`the request is still ${request.state} after ${Math.round(options.settleTimeoutMs / 60_000)} minutes; Control keeps following it: `
+						+ `fabrika control requests get ${request.id}`,
+				)
+			}
+		}
+		const line = requestHint(request) ?? `the request is ${request.state}`
+		if (line !== said) console.warn(line)
+		said = line
+		await Bun.sleep(options.intervalMs)
+		request = await read(request.id)
+	}
+	const hint = requestHint(request)
+	if (hint !== null) console.warn(hint)
+	return request
+}
+
+/**
+ * `command` is the group (`key`, `apps`, `runs`, `requests`, `register`, `deploy`); the verb, where a group has
  * one, is the first positional word after it. `provider` reaches here only to label an envelope.
  */
 export const runControlCli = async (
@@ -1189,6 +1272,9 @@ export const runControlCli = async (
 				return
 			case 'namespaces':
 				await runNamespaces(verb, flags, env)
+				return
+			case 'requests':
+				await runRequests(verb, flags, env)
 				return
 			case 'register':
 				await runRegister(flags, provider, env)

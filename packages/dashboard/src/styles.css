@@ -2831,16 +2831,26 @@ td {
 
 .approval-mode {
 	display: grid;
-	grid-template-columns: minmax(0, 1fr) repeat(2, 13rem);
+	grid-template-columns: minmax(0, 1fr) auto;
 	align-items: center;
 	gap: var(--s-2);
 	max-width: 66rem;
+}
+
+/* A category's controls, two to a line beside its label, so a third and fourth line up under the first two. */
+.approval-mode-controls {
+	display: grid;
+	grid-template-columns: repeat(2, 13rem);
+	gap: var(--s-1) var(--s-2);
 }
 
 @media (max-width: 700px) {
 	.approval-mode {
 		grid-template-columns: minmax(0, 1fr);
 		gap: 2px;
+	}
+	.approval-mode-controls {
+		grid-template-columns: minmax(0, 1fr);
 	}
 }
 
@@ -2944,6 +2954,13 @@ td.empty:hover {
 	justify-content: flex-end;
 	flex-wrap: nowrap;
 	white-space: nowrap;
+}
+
+/* Why a decision is not offered, in place of its button: a sentence, so it wraps on a phone. */
+.row-actions > .decision-note {
+	min-width: 0;
+	white-space: normal;
+	text-align: right;
 }
 
 /* As a table cell the cluster stays a cell, or the row's hairline and height stop short of it; its controls line up
@@ -4677,6 +4694,27 @@ pre.agent-text {
 	border-radius: var(--r-2);
 	background: var(--tile);
 	white-space: pre-wrap;
+	max-height: 16rem;
+	overflow: auto;
+}
+
+/* An approval request (ADR-0083 §8): its facts stack on a phone, label above value. */
+.request-facts {
+	margin: 0 0 var(--s-2);
+}
+
+.request-facts > div {
+	margin-bottom: var(--s-2);
+}
+
+.request-facts dd {
+	margin: 0;
+	overflow-wrap: anywhere;
+}
+
+pre.request-result {
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
 	max-height: 16rem;
 	overflow: auto;
 }

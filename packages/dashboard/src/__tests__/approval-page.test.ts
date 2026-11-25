@@ -93,6 +93,7 @@ const APPROVAL: ApprovalDto = {
 	],
 	approval: null,
 	approvers: 1,
+	requesterMayApprove: true,
 }
 
 const render = (approval: ApprovalDto) => renderToStaticMarkup(createElement(AccessChangeView, { view: approvalView(approval.changes), approval }))
@@ -337,5 +338,26 @@ describe('the decision', () => {
 		expect(other).toContain('Approve and deploy')
 		expect(other).not.toContain('Waiting for a second person')
 		expect(render({ approvers: 2 })).toContain('Approve and deploy')
+	})
+
+	test("under requesterMayApprove: false the requester's person, and for a service key everyone, may only refuse", () => {
+		const request: DeployRequestDto = {
+			principal: { id: 'p-ada', type: 'user', label: 'ada@example.test' },
+			credential: 'oauth',
+			commitSha: 'c'.repeat(40),
+			commitMessage: null,
+			runningCommitSha: null,
+			compareUrl: null,
+		}
+		const own = render({ request, requesterMayApprove: false })
+		expect(own).not.toContain('Approve and deploy')
+		expect(own).toContain('asked for on your behalf, and this environment lets only someone other than the requester')
+		expect(own).toContain('>Refuse</button>')
+		expect(render({ request, requesterMayApprove: false }, 'p-bob')).toContain('Approve and deploy')
+		expect(render({ request })).toContain('Approve and deploy')
+		const service = render({ request: { ...request, principal: { id: 'svc', type: 'service', label: 'ci' } }, requesterMayApprove: false }, 'p-bob')
+		expect(service).not.toContain('Approve and deploy')
+		expect(service).toContain('nobody can approve it')
+		expect(service).toContain('>Refuse</button>')
 	})
 })

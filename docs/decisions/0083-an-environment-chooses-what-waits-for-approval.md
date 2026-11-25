@@ -242,15 +242,19 @@ checks the approver as it does today.
   own steps (ADR-0069), so `unknown` retries or follows it.
 - **Who approves.** A person in the console with the action's approval right (`access.approve` at the coordinates, the
   application's IAM administration for an IAM action). The person may approve their own agent's request, grants and
-  keys included. `requesterMayApprove: false` makes someone other than the requester's person decide; a service key's
-  request has no human owner, so there it means anyone but the key's issuer. `approvers: 2` takes two different people
+  keys included. `requesterMayApprove: false` makes someone other than the requester's person decide. A service key's
+  request has no human owner, and no verified token names the key's issuer, so there it fails closed: nobody approves
+  it, and anyone with the approval right may refuse it. `approvers: 2` takes two different people
   on the same digest; the item stays `pending` after the first, and a rejection by either closes it. Both apply to
   parked runs too, and the stricter among a change's categories wins. `stepUp: webauthn` makes the decision take a
   console token whose `amr` names `webauthn`, at most five minutes old.
 - **Expiry.** Every pending item has an absolute deadline, `requestTtlHours` after it starts waiting: a request when it
   is created, a parked run when it parks. Past it the item is `expired`; a parked run that expires fails and deploys
-  nothing. The sweep only cleans up; it authorizes nothing. An approval does not expire, and a
-  policy made stricter after it applies at execution, where `gate()` runs again.
+  nothing. The sweep only cleans up; it authorizes nothing. The final approval executes in the same call, under
+  the environment's lease, so an approval does not wait to expire: a policy made stricter since the request was made
+  applies at that execution, where `gate()` and the deciders are judged again, and closes the request `stale`. An
+  approved request whose execution never started (Control stopped in between) is closed `failed` by the sweep, nothing
+  having changed, and the agent asks again.
 - **Audit.** The row itself is the record of authority: requester, approver, decision id and times, written in the
   transition. `auth.audit` records follow as for any change.
 - **Outcome.** Creating answers `{ id, url, state }`, the link `<console>/approvals/requests/<id>` (a parked run keeps

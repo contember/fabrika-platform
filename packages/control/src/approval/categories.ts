@@ -97,6 +97,7 @@ const storedSettingsSchema = z.object({
 	deployRequestCommits: approvalSettingsSchema.shape.deployRequestCommits.optional(),
 	requestTtlHours: approvalSettingsSchema.shape.requestTtlHours.optional(),
 	approvers: approvalSettingsSchema.shape.approvers.partial().optional(),
+	requesterMayApprove: approvalSettingsSchema.shape.requesterMayApprove.partial().optional(),
 })
 
 /**
@@ -112,16 +113,21 @@ export function appEnvSettings(row: Pick<AppEnvRow, 'approval_settings'>): Appro
 		deployRequestCommits: stored.deployRequestCommits ?? STRICT_SETTINGS.deployRequestCommits,
 		requestTtlHours: stored.requestTtlHours ?? STRICT_SETTINGS.requestTtlHours,
 		approvers: { ...STRICT_SETTINGS.approvers, ...stored.approvers },
+		requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, ...stored.requesterMayApprove },
 	}
 }
 
 /** The stored form of settings: what differs from the defaults, null when nothing does. */
 export function storedSettings(settings: ApprovalSettings): { readonly settings: string | null } {
 	const approvers = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] !== STRICT_SETTINGS.approvers[category])
+	const mayApprove = APPROVER_CATEGORIES.filter((category) => settings.requesterMayApprove[category] !== STRICT_SETTINGS.requesterMayApprove[category])
 	const stored = {
 		...(settings.deployRequestCommits === STRICT_SETTINGS.deployRequestCommits ? {} : { deployRequestCommits: settings.deployRequestCommits }),
 		...(settings.requestTtlHours === STRICT_SETTINGS.requestTtlHours ? {} : { requestTtlHours: settings.requestTtlHours }),
 		...(approvers.length === 0 ? {} : { approvers: Object.fromEntries(approvers.map((category) => [category, settings.approvers[category]])) }),
+		...(mayApprove.length === 0
+			? {}
+			: { requesterMayApprove: Object.fromEntries(mayApprove.map((category) => [category, settings.requesterMayApprove[category]])) }),
 	}
 	return { settings: Object.keys(stored).length === 0 ? null : JSON.stringify(stored) }
 }

@@ -289,9 +289,14 @@ export interface ApprovalSettings {
 	readonly deployRequestCommits: DeployRequestCommits
 	readonly requestTtlHours: number
 	readonly approvers: { readonly [K in ApproverCategory]: ApproverCount }
+	/** `false`: someone other than the requester's person decides a pending item of the category (ADR-0083 §8). */
+	readonly requesterMayApprove: { readonly [K in ApproverCategory]: boolean }
 }
 
-/** The strict preset's settings, and the defaults: merged commits only, a day to decide, one approver per category. */
+/**
+ * The strict preset's settings, and the defaults: merged commits only, a day to decide, one approver per category, and
+ * the requester's own person may decide (D2).
+ */
 export const STRICT_SETTINGS: ApprovalSettings = {
 	deployRequestCommits: 'merged',
 	requestTtlHours: REQUEST_TTL_HOURS.default,
@@ -315,6 +320,27 @@ export const STRICT_SETTINGS: ApprovalSettings = {
 		registry: 1,
 		'agent-grants': 1,
 		credentials: 1,
+	},
+	requesterMayApprove: {
+		'off-road': true,
+		'anyone-calls': true,
+		'get-mutation': true,
+		people: true,
+		adoption: true,
+		terminal: true,
+		'deletes-data': true,
+		'role-actions': true,
+		'role-external': true,
+		'role-added': true,
+		public: true,
+		csp: true,
+		'deploy-request': true,
+		secrets: true,
+		variables: true,
+		data: true,
+		registry: true,
+		'agent-grants': true,
+		credentials: true,
 	},
 }
 
@@ -345,11 +371,34 @@ const approversSchema = z.object({
 	credentials: approverCount,
 })
 
+const requesterMayApproveSchema = z.object({
+	'off-road': z.boolean(),
+	'anyone-calls': z.boolean(),
+	'get-mutation': z.boolean(),
+	people: z.boolean(),
+	adoption: z.boolean(),
+	terminal: z.boolean(),
+	'deletes-data': z.boolean(),
+	'role-actions': z.boolean(),
+	'role-external': z.boolean(),
+	'role-added': z.boolean(),
+	public: z.boolean(),
+	csp: z.boolean(),
+	'deploy-request': z.boolean(),
+	secrets: z.boolean(),
+	variables: z.boolean(),
+	data: z.boolean(),
+	registry: z.boolean(),
+	'agent-grants': z.boolean(),
+	credentials: z.boolean(),
+})
+
 /** Settings checked against their bounds; a category or a setting this release does not know (a newer one's) is dropped. */
 export const approvalSettingsSchema = z.object({
 	deployRequestCommits: z.enum(DEPLOY_REQUEST_COMMITS),
 	requestTtlHours: z.number().int().min(REQUEST_TTL_HOURS.min).max(REQUEST_TTL_HOURS.max),
 	approvers: approversSchema,
+	requesterMayApprove: requesterMayApproveSchema,
 }) satisfies z.ZodType<ApprovalSettings, z.ZodTypeDef, unknown>
 
 /**
@@ -361,4 +410,25 @@ export function requiredApprovers(settings: ApprovalSettings, categories: Iterab
 		if (isApproverCategory(category) && settings.approvers[category] === 2) return 2
 	}
 	return 1
+}
+
+/**
+ * Whether the requester's own person may decide a pending item: not when any of its waiting categories says `false`, so
+ * the strictest wins (ADR-0083 §8). `grants` takes IAM's own rule, which never lets the requester approve.
+ */
+export function requesterMayApprove(settings: ApprovalSettings, categories: Iterable<PolicyCategory>): boolean {
+	for (const category of categories) {
+		if (isApproverCategory(category) && !settings.requesterMayApprove[category]) return false
+	}
+	return true
+}
+
+/**
+ * The person behind a request (ADR-0083 §8): the subject of an OAuth token or of a key bound to a user, and the issuer of
+ * a service key. Null when that person cannot be known, a service key whose issuer the token does not name: under
+ * `requesterMayApprove: false` nobody may then approve the item, and it can only be refused.
+ */
+export function requesterPersonId(principal: { readonly id: string; readonly type: string }, issuerId?: string | null): string | null {
+	if (principal.type === 'user') return principal.id
+	return issuerId ?? null
 }

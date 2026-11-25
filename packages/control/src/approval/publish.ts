@@ -143,13 +143,15 @@ const classificationSchema = z.object({
 	categories: z.array(z.enum(APPROVAL_CATEGORIES)).optional(),
 }).strict() satisfies z.ZodType<StoredClassification, z.ZodTypeDef, unknown>
 
+// Not strict: a later release records more about an approval (its step-up), which a rolled-back Control drops; the
+// two digests it approved are what binds it.
 const approvalSchema = z.object({
 	principalId: z.string().min(1),
 	label: z.string(),
 	approvedAt: z.number().int(),
 	candidateDigest: digest,
 	baselineDigest: digest,
-}).strict() satisfies z.ZodType<StoredApproval>
+}) satisfies z.ZodType<StoredApproval>
 
 export const parseClassification = (raw: string): StoredClassification => classificationSchema.parse(JSON.parse(raw))
 export const parseApproval = (raw: string): StoredApproval => approvalSchema.parse(JSON.parse(raw))

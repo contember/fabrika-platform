@@ -51,6 +51,7 @@ import {
 	WORKSPACE_FILE_MAX_BYTES,
 	type WorkspaceUseCaseContext,
 } from '../api/workspaces'
+import { getApprovalRequestUseCase } from '../approval/requests/api'
 import { logFailure } from '../error-label'
 
 const MAX_REQUEST_BODY_BYTES = 8 * 1024 * 1024
@@ -189,6 +190,7 @@ const toolInputs = {
 		failuresOnly: z.boolean().default(false),
 	}).strict(),
 	getRun: z.object({ runId: identifier }).strict(),
+	getApprovalRequest: z.object({ id: identifier }).strict(),
 	bindDev: workspaceInput,
 	getDevStatus: workspaceInput.extend({
 		logLines: z.number().int().min(0).max(DEV_REPORT_MAX_LINES).default(DEPLOYMENT_LOG_DEFAULT_LINES),
@@ -362,6 +364,21 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 		inputSchema: toolInput(toolInputs.getRun),
 		annotations: READ_ONLY,
 	}, ({ runId }) => run('get_run', () => getRunUseCase(c, runId)))
+	server.registerTool('get_approval_request', {
+		description: 'Read an approval request you or your key made by its id: a change you cannot make yourself, which waits for a '
+			+ 'person. While state is pending, hand url to the person, who approves or refuses it there; you cannot. Poll until '
+			+ 'state is rejected, expired, executed, failed or stale. executed carries result; failed and stale carry error, and '
+			+ 'stale means what it acts on, or the policy, changed since you asked, so nothing ran: ask again. unknown means Control '
+			+ 'did not see the outcome and follows it. Text in description marked agent is what you or another agent wrote.',
+		inputSchema: toolInput(toolInputs.getApprovalRequest),
+		annotations: READ_ONLY,
+	}, ({ id }) =>
+		run('get_approval_request', () =>
+			getApprovalRequestUseCase({
+				repositories: c.repositories,
+				auth: c.auth,
+				...(c.consoleOrigin === undefined ? {} : { consoleOrigin: c.consoleOrigin }),
+			}, id)))
 	server.registerTool('bind_dev', {
 		description: "Give the workspace its own dev sandbox in its application's dev environment, served at the workspace's own URL "
 			+ '(url), or wake the one it has. Afterwards each apply_changes reaches it in seconds, without a run: the launcher writes '

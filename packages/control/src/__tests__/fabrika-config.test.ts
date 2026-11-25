@@ -380,6 +380,13 @@ describe('Schema actions/scopes match the contract (no drift)', () => {
 		expect(config.schema?.roles['admin']?.permissions).toEqual(['*'])
 	})
 
+	test('only admin holds the approval actions: no role names access.* or either action', () => {
+		for (const [name, role] of Object.entries(config.schema?.roles ?? {})) {
+			if (name === 'admin') continue
+			expect(role.permissions.filter((permission) => permission.startsWith('access.') || permission === '*')).toEqual([])
+		}
+	})
+
 	test('every role permission is `*` or matches an action prefix in the catalog', () => {
 		const actions = (config.schema?.actions ?? []).map((a) => a.action)
 		for (const role of Object.values(config.schema?.roles ?? {})) {

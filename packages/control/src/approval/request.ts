@@ -3,7 +3,7 @@
 // merged unless the environment chose `deployRequestCommits: any`; Control asks the source and fails closed.
 
 import type { AuthContext } from '@fabrika/auth'
-import type { DeployRequestDto } from '@fabrika/control-contract'
+import { type DeployRequestDto, requesterPersonId } from '@fabrika/control-contract'
 import { z } from 'zod'
 import { ControlApiError, fail } from '../api/domain'
 import type { AppEnvRow, AppRow, ControlRepositories, RunRow } from '../db'
@@ -12,6 +12,7 @@ import { SourceFailure } from '../github/source/failure'
 import { parseGitHubRepo } from '../github/triggers/push-event'
 import { isRefPattern } from '../ref-match'
 import { appEnvSettings } from './categories'
+import type { RequesterPerson } from './human'
 
 /** The longest commit message a request keeps; the page shows the agent's text, never all of an arbitrary one. */
 export const MAX_REQUEST_MESSAGE_CHARS = 4096
@@ -29,6 +30,11 @@ export type StoredDeployRequest = z.infer<typeof storedRequestSchema>
 
 export function parseDeployRequest(raw: string): StoredDeployRequest {
 	return storedRequestSchema.parse(JSON.parse(raw))
+}
+
+/** The person behind a deploy request: the subject of its OAuth token or user key; unknown for a service key. */
+export function deployRequester(request: StoredDeployRequest): RequesterPerson {
+	return { personId: requesterPersonId(request.principal), label: request.principal.label }
 }
 
 /** The branch or tag (short name) a requested commit must be merged into: the trigger ref, or the default branch. */

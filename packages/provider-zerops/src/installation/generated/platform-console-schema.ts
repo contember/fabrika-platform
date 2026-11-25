@@ -27,6 +27,7 @@ export const PLATFORM_CONSOLE_APP_SCHEMA: AppSchema = {
 		{ action: 'source.workspace.write', description: 'Create and commit to own Git workspaces on an authoring target' },
 		{ action: 'source.pull-request.create', description: 'Open a pull request from an own Git workspace' },
 		{ action: 'access.approve', description: 'Approve an access change and protect an environment (a person in the console only)' },
+		{ action: 'access.request', description: 'Ask a person to approve a change the caller cannot make itself' },
 		{ action: 'mail.read', description: 'List relayed mail and read its metadata' },
 		{ action: 'mail.content.read', description: 'Read the recipient, subject and bodies of relayed mail' },
 		{ action: 'mail.manage', description: 'Release or drop held mail and manage the mail rules' },

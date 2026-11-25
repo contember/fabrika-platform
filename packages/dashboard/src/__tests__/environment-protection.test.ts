@@ -23,6 +23,7 @@ import {
 	presetOf,
 	protectionFailure,
 	protectionToggle,
+	requesterBlocks,
 	requestTtl,
 	setEnvironmentProtection,
 	settingsSummary,
@@ -77,6 +78,7 @@ const parkedRun = (id: string, appId: string, env: string): ApprovalDto => ({
 	categories: ['off-road', 'anyone-calls', 'get-mutation', 'people', 'adoption', 'terminal', 'deletes-data'],
 	approval: null,
 	approvers: 1,
+	requesterMayApprove: true,
 })
 
 const withRouter = (element: ReactElement): ReactElement =>
@@ -208,11 +210,13 @@ describe('approval modes', () => {
 		const markup = editor({ ...environment('prod', true), approvalPolicy: { ...STRICT_POLICY, grants: 'person', secrets: 'refuse' } })
 		const offered = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options.map((option) => option.category))
 		expect([...offered].sort()).toEqual([...POLICY_CATEGORIES].sort())
-		// A mode per category, a number of approvers per category but `grants`, and the commits a request may name.
-		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length + 1
+		// A mode per category, a number of approvers and whether the requester's person decides per category but `grants`,
+		// and the commits a request may name.
+		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length * 2 + 1
 		expect(markup.match(/<select/g)).toHaveLength(selects)
-		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three; approvers one or two; commits two.
-		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + APPROVER_CATEGORIES.length * 2 + 2)
+		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three; approvers one or two; the
+		// requester's person or someone else; commits two.
+		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + APPROVER_CATEGORIES.length * 4 + 2)
 		expect(markup.match(/selected=""/g)).toHaveLength(selects)
 		expect(markup).toContain('<option value="refuse" selected="">Refused</option>')
 		expect(markup).toContain('<option value="person" selected="">A person approves</option>')
@@ -254,6 +258,18 @@ describe('approval modes', () => {
 			'Secrets (one approver)',
 		])
 		expect(loosened(STRICT_POLICY, { ...STRICT_POLICY, 'deletes-data': 'plan', 'deploy-request': 'off' })).toEqual(['deletes-data', 'deploy-request'])
+		// Someone other than the requester's person tightens; letting that person decide again loosens.
+		const others = { ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, secrets: false } }
+		expect(policyChange(strict, { ...strict, settings: others })).toBe('apply')
+		expect(loosenedSettings(others, STRICT_SETTINGS)).toEqual(["Secrets (the requester's person may approve)"])
+		expect(presetOf(STRICT_POLICY, others)).toBeNull()
+	})
+
+	test("an approve button is withheld from the requester's person, and from everyone when that person is unknown", () => {
+		expect(requesterBlocks(true, null, 'p-ada')).toBeNull()
+		expect(requesterBlocks(false, 'p-ada', 'p-ada')).toBe('you')
+		expect(requesterBlocks(false, 'p-ada', 'p-bob')).toBeNull()
+		expect(requesterBlocks(false, null, 'p-bob')).toBe('nobody')
 	})
 
 	test('the hours a request waits take a whole number within their bounds', () => {
@@ -270,6 +286,8 @@ describe('approval modes', () => {
 		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } })).toContain(
 			'An agent may ask to deploy any commit.',
 		)
+		expect(settingsSummary({ ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, 'deploy-request': false } }))
+			.toContain("Someone other than the requester's person decides: A deploy started by an agent or a key.")
 	})
 
 	test('the protection call sends the policy and settings only when given', async () => {

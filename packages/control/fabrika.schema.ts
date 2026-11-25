@@ -39,6 +39,7 @@ export const controlSchema: AppSchema = {
 		{ action: CONTROL_ACTIONS.SOURCE_WORKSPACE_WRITE, description: 'Create and commit to own Git workspaces on an authoring target' },
 		{ action: CONTROL_ACTIONS.SOURCE_PULL_REQUEST_CREATE, description: 'Open a pull request from an own Git workspace' },
 		{ action: CONTROL_ACTIONS.ACCESS_APPROVE, description: 'Approve an access change and protect an environment (a person in the console only)' },
+		{ action: CONTROL_ACTIONS.ACCESS_REQUEST, description: 'Ask a person to approve a change the caller cannot make itself' },
 		{ action: CONTROL_ACTIONS.MAIL_READ, description: 'List relayed mail and read its metadata' },
 		{ action: CONTROL_ACTIONS.MAIL_CONTENT_READ, description: 'Read the recipient, subject and bodies of relayed mail' },
 		{ action: CONTROL_ACTIONS.MAIL_MANAGE, description: 'Release or drop held mail and manage the mail rules' },

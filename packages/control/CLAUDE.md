@@ -830,6 +830,22 @@ other environment, before the provider prepares anything, and the write maps a r
   in-flight publication loses. Registry put and delete apply only at the generation they read (409 otherwise), and
   every write of an environment takes its coordinate lock first (`DATABASE.md`). `apps.environments.protect` takes
   the environment's deployment lease and answers 409 while a run holds it or is still `running`.
+  `requesterMayApprove: false` on any waiting category (`requesterMayApprove` in the contract) keeps the requester's
+  person from approving a parked deploy request (`requireOtherThanRequester`); where that person is unknown (a service
+  key's issuer, which no token names) nobody approves it, and anyone may refuse it.
+- **Every other action of a non-person that waits is an `approval_requests` row (ADR-0083 §8, `src/approval/requests/`).**
+  A kind (`kind.ts`, `requestKind`) owns its input and before-state schemas, its coordinates, the action the requester
+  must hold to ask, its execution, its `follow` hook, and an optional `discard` hook that releases what a refused or
+  expired request held; `PRODUCTION_REQUEST_KINDS` is empty, so creating answers 400
+  until a step adds one, and `refused.ts` names the procedures no request may name, with why. Creating is a bearer's
+  only (a console person gets 409). Every transition is one conditional update on the state it leaves
+  (`ApprovalRequestRepository`), the decision checks the deadline in the same write, and every write from the final
+  approval on is fenced on the environment's deployment lease, which the decision holds through the execution.
+  `executeApprovedRequest` judges the policy and the before-state again (either closes it `stale`), records the
+  operation id before the kind acts, and leaves a throw `unknown`; `sweepApprovalRequests` (cron, after
+  `sweepParkedRuns`) expires pending rows past their deadline, closes an approved row that never started `failed`,
+  and follows `unknown` ones through the kind. A decider holds `access.approve` at the coordinates, or what the kind's
+  `approverMayDecide` seam says (an IAM action); `approval-gate-coverage.test.ts` lists the create and decide procedures as exempt.
 - **Never log a secret/credential** (see root). The run row is written before the queue is touched (durable trigger).
 - **`fabrika.config.ts` is the source of truth** for fabrika's own resources; keep `oblaka.ts` a thin shim (see root).
 

@@ -1,9 +1,19 @@
-import type { RunDto } from '@fabrika/control-contract'
+import type { ApprovalRequestDto, RunDto } from '@fabrika/control-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CONTROL_USAGE, environmentLine, followRun, parseControlFlags, runControlCli, runHint, type SecretValueInput } from '../control.js'
+import {
+	CONTROL_USAGE,
+	environmentLine,
+	followRequest,
+	followRun,
+	parseControlFlags,
+	requestHint,
+	runControlCli,
+	runHint,
+	type SecretValueInput,
+} from '../control.js'
 
 const CONTROL_ENV = { FABRIKA_CONTROL_URL: 'https://control.example', FABRIKA_CONTROL_KEY: 'px_test' } as const
 
@@ -1264,5 +1274,107 @@ describe('control register source binding', () => {
 		const captured = captureFetch({ result: { app: { id: 'notes' }, env: { env: 'prod', provider: 'zerops' } } })
 		await captureStdout(() => runControlCli('register', registerArgs(['--installation-id=154387356']), 'zerops', CONTROL_ENV))
 		expect(captured.calls[0]?.body).toMatchObject({ input: { githubInstallationId: 154387356 } })
+	})
+})
+
+describe('control requests', () => {
+	const url = 'https://console.example.test/approvals/requests/q1'
+	const pending: ApprovalRequestDto = {
+		id: 'q1',
+		kind: 'notes.put',
+		category: 'secrets',
+		appId: 'notes',
+		env: 'prod',
+		state: 'pending',
+		url,
+		requester: { principal: { id: 'svc', type: 'service', label: 'ci' }, credential: 'key', personId: null },
+		description: { summary: [{ text: 'Set a note', agent: false }], facts: [] },
+		described: true,
+		inputDigest: `sha256:${'a'.repeat(64)}`,
+		approvers: 1,
+		requesterMayApprove: true,
+		deadline: 2,
+		createdAt: 1,
+		updatedAt: 1,
+	}
+
+	test('get reads the request by its id, prints its row and the console link on stderr', async () => {
+		const captured = captureFetch({ result: pending })
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() => runControlCli('requests', ['get', 'q1'], undefined, CONTROL_ENV))
+		})
+		expect(captured.calls.map((call) => call.body)).toEqual([{ method: 'approvals.requests.get', input: { id: 'q1' } }])
+		expect(out).toBe('q1\tnotes.put\tnotes\tprod\tpending')
+		expect(err).toBe(`a person approves or refuses this request at ${url}`)
+	})
+
+	test('get needs an id and knows only its own verb', async () => {
+		await expect(runControlCli('requests', ['get'], undefined, CONTROL_ENV)).rejects.toThrow('needs the request id')
+		await expect(runControlCli('requests', ['decide', 'q1'], undefined, CONTROL_ENV)).rejects.toThrow('Unknown `control requests` verb: decide')
+		expect(CONTROL_USAGE).toContain('fabrika control requests get <id> [--wait]')
+	})
+
+	test('a request that did not run says why', () => {
+		expect(requestHint({ ...pending, state: 'rejected' })).toBe('a person refused this request; nothing changed')
+		expect(requestHint({ ...pending, state: 'expired' })).toContain('before its deadline, so it expired')
+		expect(requestHint({ ...pending, state: 'stale', error: 'what the request acts on changed' })).toBe(
+			'the request is stale: what the request acts on changed',
+		)
+		expect(requestHint({ ...pending, state: 'executed' })).toBeNull()
+	})
+
+	test('--wait follows the request until it settles, saying each stage once', async () => {
+		const stages: ApprovalRequestDto[] = [
+			{ ...pending },
+			{ ...pending, state: 'executing' },
+			{ ...pending, state: 'unknown', error: 'the execution did not report its outcome' },
+			{ ...pending, state: 'executed', result: { ok: true } },
+		]
+		const reads: string[] = []
+		let outcome: ApprovalRequestDto | null = null
+		const err = await captureStderr(async () => {
+			outcome = await followRequest(
+				(id) => {
+					reads.push(id)
+					const next = stages.shift()
+					if (next === undefined) throw new Error('read past the outcome')
+					return Promise.resolve(next)
+				},
+				pending,
+				{ intervalMs: 0, settleTimeoutMs: 60_000 },
+			)
+		})
+		expect(outcome).toMatchObject({ state: 'executed' })
+		expect(reads).toHaveLength(4)
+		expect(err.split('\n')).toEqual([
+			`a person approves or refuses this request at ${url}`,
+			'the request is executing',
+			'the request is unknown: the execution did not report its outcome',
+		])
+
+		const refused = await captureStderr(async () => {
+			outcome = await followRequest(() => Promise.resolve({ ...pending, state: 'rejected' }), pending, { intervalMs: 0, settleTimeoutMs: 60_000 })
+		})
+		expect(outcome).toMatchObject({ state: 'rejected' })
+		expect(refused.split('\n').at(-1)).toBe('a person refused this request; nothing changed')
+	})
+
+	test('--wait stops with an error once a decided request has not settled within its bound', async () => {
+		let reads = 0
+		const unknown: ApprovalRequestDto = { ...pending, state: 'unknown', error: 'the execution did not report its outcome' }
+		await captureStderr(async () => {
+			await expect(followRequest(
+				() => {
+					reads++
+					return Promise.resolve(unknown)
+				},
+				pending,
+				{ intervalMs: 0, settleTimeoutMs: 0 },
+			)).rejects.toThrow(
+				'the request is still unknown after 0 minutes; Control keeps following it: fabrika control requests get q1',
+			)
+		})
+		expect(reads).toBe(1)
 	})
 })
