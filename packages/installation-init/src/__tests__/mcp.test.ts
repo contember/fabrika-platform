@@ -94,6 +94,19 @@ describe('the MCP client list', () => {
 		expect(() => parseMcpClientsJson(JSON.stringify([web, elsewhere]))).toThrow('names another resource or other roles')
 	})
 
+	test('two external applications must not name one identity resource, as the registry refuses', () => {
+		const other = {
+			...OPS_TOOL,
+			clientId: 'https://other.example.test/oauth/client.json',
+			identity: { app: 'other-tool', resource: OPS_TOOL.identity?.resource ?? '' },
+		}
+		expect(() => parseMcpClientsJson(JSON.stringify([OPS_TOOL, other]))).toThrow(
+			'`ops-tool` and `other-tool` name one identity resource, https://ops.example.test',
+		)
+		const apart = { ...other, identity: { app: 'other-tool', resource: 'https://other.example.test' } }
+		expect(parseMcpClientsJson(JSON.stringify([OPS_TOOL, apart]))).toEqual([OPS_TOOL, apart])
+	})
+
 	test('only a client that is not identity-only turns MCP authoring on', () => {
 		expect(mcpAuthoringOn(undefined)).toBe(false)
 		expect(mcpAuthoringOn([OPS_TOOL])).toBe(false)

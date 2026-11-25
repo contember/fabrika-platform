@@ -83,11 +83,12 @@ export const parseMcpClientsJson = (raw: string): readonly McpClient[] => {
 }
 
 /**
- * IAM's registry holds one resource and one list of roles per external application (ADR-0089), and its import refuses
- * clients of one app that name different ones. Refused here, before the deploy writes anything.
+ * IAM's registry holds one resource and one list of roles per external application, and no resource under two
+ * applications (ADR-0089); its import refuses a list that breaks either. Refused here, before the deploy writes anything.
  */
 const assertOneIdentityPerApp = (clients: readonly McpClient[]): void => {
 	const declared = new Map<string, string>()
+	const resources = new Map<string, string>()
 	for (const { clientId, identity } of clients) {
 		if (identity === undefined) continue
 		const shape = JSON.stringify({ resource: identity.resource, roles: identity.roles ?? null })
@@ -95,7 +96,12 @@ const assertOneIdentityPerApp = (clients: readonly McpClient[]): void => {
 		if (known !== undefined && known !== shape) {
 			throw new Error(`MCP client ${clientId}: another client of \`${identity.app}\` names another resource or other roles`)
 		}
+		const owner = resources.get(identity.resource)
+		if (owner !== undefined && owner !== identity.app) {
+			throw new Error(`MCP client ${clientId}: \`${owner}\` and \`${identity.app}\` name one identity resource, ${identity.resource}`)
+		}
 		declared.set(identity.app, shape)
+		resources.set(identity.resource, identity.app)
 	}
 }
 
