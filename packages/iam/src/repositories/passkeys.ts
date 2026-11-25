@@ -2,7 +2,7 @@ import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { type AuditEventInput, AuditWriter } from './audit'
 import { principalLockStatements } from './principals'
 
-/** A row of `passkeys` (migration 0038). `sign_count` is a BIGINT on Postgres, which the driver may answer as text. */
+/** A row of `passkeys` (migration 0039). `sign_count` is a BIGINT on Postgres, which the driver may answer as text. */
 export interface PasskeyRow {
 	id: string
 	principal_id: string

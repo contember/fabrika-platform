@@ -689,7 +689,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   code's use records `iam.second_factor.recovery_code.use`, and `secondFactor.reset` (`iam.admin` only) records
   `iam.second_factor.reset`, each in its change's own transaction.
 - **A PASSKEY IS A PERSON'S OWN, AND ONLY A PASSKEY THEY HOLD CHANGES THE SET** (`src/passkeys.ts`, `admin/passkeys.ts`,
-  `passkeys` and `passkey_challenges`, migration 0038). The person's `passkeys.*` of `/admin/rpc` (all but `listOf` and
+  `passkeys` and `passkey_challenges`, migration 0039). The person's `passkeys.*` of `/admin/rpc` (all but `listOf` and
   `reset`) carry no `.require` and need a signed-in session's console token of a user; a `px_` key is refused. The
   relying party is the console the token was minted for: its first registered return origin, and that host as RP ID.
   Verification is `@simplewebauthn/server`'s, never hand-rolled, with user presence and verification required. A

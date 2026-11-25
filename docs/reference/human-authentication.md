@@ -194,7 +194,7 @@ approver's answer with the approver's console token
 ([security-deployment.md](./security-deployment.md#a-passkey-on-deciding)). No token carries a step-up claim, and the
 proxy is unchanged.
 
-**Storage.** Two tables, in both migration sets (`0038_passkeys.sql`). `passkeys` holds the credential id, the COSE
+**Storage.** Two tables, in both migration sets (`0039_passkeys.sql`). `passkeys` holds the credential id, the COSE
 public key, the counter, the transports and a label. `passkey_challenges` holds the open challenges and their bindings.
 Neither holds a secret: a public key and a challenge authenticate nothing on their own. An existing installation gets
 both tables empty on its next upgrade. No variable or generated file changes.
