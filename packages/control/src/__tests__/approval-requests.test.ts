@@ -575,6 +575,27 @@ for (const backend of backends) {
 				expect((await decide(w, id, 'reject', BOB)).state).toBe('rejected')
 			})
 
+			test('the settings apply only while the environment is protected, to the decision as to the execution', async () => {
+				const w = await world()
+				const strictest = {
+					...STRICT_SETTINGS,
+					approvers: { ...STRICT_SETTINGS.approvers, secrets: 2 as const },
+					requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, secrets: false },
+				}
+				await fixtureProtect(
+					w.db.registry,
+					w.locks,
+					{ appId: 'notes', env: 'prod' },
+					false,
+					Date.now,
+					storedPolicy(STRICT_POLICY),
+					storedSettings(strictest),
+				)
+				const { id } = await ask(w)
+				expect(await getApprovalRequestUseCase(context(w, ADA), id)).toMatchObject({ approvers: 1, requesterMayApprove: true })
+				expect((await decide(w, id, 'approve', ADA)).state).toBe('executed')
+			})
+
 			test('the default lets the requester approve their own agent', async () => {
 				const w = await world()
 				const { id } = await ask(w)

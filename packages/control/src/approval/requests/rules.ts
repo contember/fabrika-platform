@@ -10,9 +10,10 @@ import {
 	requesterMayApprove,
 	requesterPersonId,
 	requiredApprovers,
+	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
 import type { AppEnvRow, ApprovalRequestRow } from '../../db'
-import { appEnvPolicy } from '../categories'
+import { appEnvPolicy, appEnvSettings } from '../categories'
 import type { RequesterPerson } from '../human'
 
 /** `sha256:<hex>` of a canonical JSON text. */
@@ -28,6 +29,14 @@ export function requesterOf(row: ApprovalRequestRow): RequesterPerson {
 /** The modes a change of an environment meets: its own while protected, none otherwise (ADR-0083 §3). */
 export function policyOf(appEnv: AppEnvRow): ApprovalPolicy {
 	return appEnv.protected === 1 ? appEnvPolicy(appEnv) : PERMISSIVE_POLICY
+}
+
+/**
+ * The settings a request of an environment meets: its own while protected, the defaults otherwise (ADR-0083 §2). The
+ * creation, the decision and the execution all read them here.
+ */
+export function settingsOf(appEnv: AppEnvRow | null): ApprovalSettings {
+	return appEnv !== null && appEnv.protected === 1 ? appEnvSettings(appEnv) : STRICT_SETTINGS
 }
 
 /** The category a stored request names, or null for one this release does not know. */

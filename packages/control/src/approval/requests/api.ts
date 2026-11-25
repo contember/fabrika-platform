@@ -12,7 +12,6 @@ import {
 	type DecideApprovalRequestInput,
 	gate,
 	type ListResponse,
-	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { JsonValue } from '@fabrika/provider-contract'
@@ -21,12 +20,11 @@ import { canAtCoordinates } from '../../api/runs'
 import type { ApprovalRequestRow, ControlRepositories } from '../../db'
 import { jsonValueSchema } from '../../json-value'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../../lease'
-import { appEnvSettings } from '../categories'
 import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOtherThanRequester } from '../human'
 import { actionOf, executeApprovedRequest } from './execute'
 import { PRODUCTION_REQUEST_KINDS, type RequestCoordinates, type RequestKindRegistry } from './kind'
 import { refusedKindReason } from './refused'
-import { deciders, jsonDigest, policyOf, requesterOf } from './rules'
+import { deciders, jsonDigest, policyOf, requesterOf, settingsOf } from './rules'
 
 export interface ApprovalRequestReadContext {
 	readonly repositories: ControlRepositories
@@ -116,7 +114,7 @@ export async function createApprovalRequestUseCase(
 		},
 		beforeJson,
 		beforeDigest: jsonDigest(beforeJson),
-		ttlSeconds: appEnvSettings(appEnv).requestTtlHours * 3600,
+		ttlSeconds: settingsOf(appEnv).requestTtlHours * 3600,
 	})
 	return { id: row.id, url: approvalRequestUrl(c.consoleOrigin, row.id), state: 'pending' }
 }
@@ -244,8 +242,7 @@ async function requestDeciders(
 	repositories: Pick<ControlRepositories, 'registry'>,
 	row: ApprovalRequestRow,
 ): Promise<{ approvers: 1 | 2; requesterMayApprove: boolean }> {
-	const appEnv = await repositories.registry.getAppEnv(row.app_id, row.env)
-	return deciders(appEnv === null ? STRICT_SETTINGS : appEnvSettings(appEnv), row)
+	return deciders(settingsOf(await repositories.registry.getAppEnv(row.app_id, row.env)), row)
 }
 
 async function auditDecision(

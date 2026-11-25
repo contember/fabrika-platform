@@ -7,7 +7,6 @@ import { gate } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ApprovalRequestRow, ControlRepositories } from '../../db'
 import { acquireLease, type Lease, type LeaseClock, runLeaseKey } from '../../lease'
-import { appEnvSettings } from '../categories'
 import {
 	PRODUCTION_REQUEST_KINDS,
 	type RequestAction,
@@ -17,7 +16,7 @@ import {
 	type RequestKindRegistry,
 	type RequestOutcome,
 } from './kind'
-import { deciders, jsonDigest, policyOf, requestCategory, requesterOf } from './rules'
+import { deciders, jsonDigest, policyOf, requestCategory, requesterOf, settingsOf } from './rules'
 
 /** What the row says when an execution threw: its outcome was not observed. Never the error itself, which may carry a secret. */
 const UNKNOWN_OUTCOME = 'the execution did not report its outcome; Control follows its operation'
@@ -36,7 +35,7 @@ async function stricterPolicy(repositories: Pick<ControlRepositories, 'registry'
 	if (gate({ lines: [], actions: [category] }, policyOf(appEnv)).kind === 'refuse') {
 		return `environment \`${row.env}\` now refuses this to an agent or a key (${category}: refuse)`
 	}
-	const who = deciders(appEnvSettings(appEnv), row)
+	const who = deciders(settingsOf(appEnv), row)
 	if (who.approvers === 2 && row.partial_approver_id === null) return `environment \`${row.env}\` now takes two people to approve it`
 	if (!who.requesterMayApprove) {
 		const person = requesterOf(row).personId
