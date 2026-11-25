@@ -4,8 +4,8 @@
 // module supplies the AWS calls.
 //
 // - The external id is `buildToken`, recorded before `StartBuild`, so it exists before anything does.
-// - The run is submitted once `serviceUpdateRequested` is recorded, before `UpdateService`: only that call activates
-//   anything. A build's image and a registered revision run nowhere until it.
+// - The run is submitted once `serviceUpdateRequested` is recorded, before `UpdateService` or `CreateService`: only
+//   those calls activate anything. A build's image and a registered revision run nowhere until one of them.
 // - The verdict of a submitted run is its service deployment's (`DescribeServiceDeployments`), never `DescribeServices`'
 //   deployment list, which drops a rolled-back deployment once the rollback is done.
 // - Cancellation never implies rollback: `stop` stops a build, never a service deployment, whose circuit breaker
@@ -79,6 +79,7 @@ export function parseAwsCheckpoint(state: JsonValue | undefined): RecordedCheckp
 	if (checkpoint.taskDefinitionArn !== undefined && checkpoint.buildId === undefined) return null
 	if (checkpoint.serviceUpdateRequested === true && checkpoint.taskDefinitionArn === undefined) return null
 	if (checkpoint.deploymentArn !== undefined && checkpoint.serviceUpdateRequested !== true) return null
+	if (checkpoint.serviceCreateRequested === true && checkpoint.serviceUpdateRequested !== true) return null
 	return { ...checkpoint, buildToken }
 }
 
@@ -117,14 +118,16 @@ export function awsRunAttempt(input: AwsRunAttemptInput): RunAttempt<RecordedChe
 	 * The run's service deployment: the recorded one, or the service's current one when it deploys this run's revision.
 	 * `unconfirmed` when ECS does not show it (yet). Only a service ECS answers `MISSING` is `absent`: an update whose
 	 * answer was lost can still land, and ECS's reads may lag the update, so everything else waits for the deadline, as
-	 * the shared run's `cancelRun` and `reconcileRun` plan for a submission that never landed.
+	 * the shared run's `cancelRun` and `reconcileRun` plan for a submission that never landed. A run that asked for a
+	 * create (`serviceCreateRequested`) reads `MISSING` as `unconfirmed` too: a service just created may not show yet,
+	 * and a create whose answer was lost may still land.
 	 */
 	const deploymentOf = async (checkpoint: RecordedCheckpoint, signal: AbortSignal): Promise<EcsServiceDeployment | 'unconfirmed' | 'absent'> => {
 		if (checkpoint.deploymentArn !== undefined) {
 			return (await ecs.describeServiceDeployment(checkpoint.deploymentArn, signal)) ?? 'unconfirmed'
 		}
 		const current = await ecs.describeService(service, signal)
-		if (current === null) return 'absent'
+		if (current === null) return checkpoint.serviceCreateRequested === true ? 'unconfirmed' : 'absent'
 		if (current.currentDeploymentArn === null) return 'unconfirmed'
 		const deployment = await ecs.describeServiceDeployment(current.currentDeploymentArn, signal)
 		if (deployment === null || deployment.targetRevisionArn === null) return 'unconfirmed'

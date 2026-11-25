@@ -86,9 +86,11 @@ export interface AwsNamespaceTarget {
  *   successor may repeat the call only while the token holds (the reference gives five minutes); past that it must
  *   find the build the token started instead, because a repeat would start a second one.
  * - `taskDefinitionArn`, the revision `RegisterTaskDefinition` answered; a lost answer only leaves an unused revision.
- * - `serviceUpdateRequested`, written before `UpdateService`: a successor that finds it without a `deploymentArn`
- *   reads the service's deployment of this run's task definition instead of updating again; `deploymentArn` once AWS
- *   answered.
+ * - `serviceUpdateRequested`, written before `UpdateService` or `CreateService`: a successor that finds it without a
+ *   `deploymentArn` reads the service's deployment of this run's task definition instead of updating again;
+ *   `deploymentArn` once AWS answered.
+ * - `serviceCreateRequested`, written with it when the call is `CreateService`: a service ECS answers `MISSING` is
+ *   then no verdict (the create may not show yet, or may still land), so the run waits for its deadline instead.
  *
  * UNVERIFIED: `StartBuild`'s idempotency token and how long it holds come from the API reference; `deploy.ts` (B8)
  * settles the recovery against a fake of each answer.
@@ -98,6 +100,7 @@ export interface AwsRunCheckpoint {
 	readonly buildId?: string
 	readonly taskDefinitionArn?: string
 	readonly serviceUpdateRequested?: true
+	readonly serviceCreateRequested?: true
 	readonly deploymentArn?: string
 }
 
@@ -125,6 +128,7 @@ const runCheckpointSchema = z.object({
 	buildId: z.string().regex(BUILD_ID).optional(),
 	taskDefinitionArn: z.string().regex(TASK_DEFINITION_ARN).optional(),
 	serviceUpdateRequested: z.literal(true).optional(),
+	serviceCreateRequested: z.literal(true).optional(),
 	deploymentArn: z.string().regex(SERVICE_DEPLOYMENT_ARN).optional(),
 }).strict()
 

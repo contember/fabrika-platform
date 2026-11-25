@@ -367,7 +367,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the circuit breaker, no ECS Exec, tags propagated, the run's build token as its 36-character client token, a lost
     answer sent again under it) when there is none or ECS keeps it `INACTIVE`, and `UpdateService` otherwise; a
     `DRAINING` one fails the run before anything is asked. Both send the network (the installation's subnets, the
-    stack's group, the public address setting), so a service converges on the installation's current one. The init
+    stack's group, the public address setting), so a service converges on the installation's current subnets and
+    public address setting. Not on another VPC: that replaces the group, whose old copy the running tasks hold, so
+    CloudFormation's cleanup fails and the deploy waits on it; moving an installation to another VPC is an operator's
+    step (move each service, then delete the old groups). The init
     tasks run in the same network, which exists before the service does, so the first run migrates before it creates
     the service. The installation's network is Control's configuration (`FABRIKA_AWS_VPC_ID`, `FABRIKA_AWS_SUBNETS`,
     `FABRIKA_AWS_TASK_PUBLIC_IP`), stored by no environment. Tearing an environment down (not built) deletes its
@@ -418,7 +421,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         `aws:ResourceTag/fabrika:env` present; `DescribeSecurityGroups` (no resource scope). The installation's own
         groups (the database's, the balancer's, Control's) carry no `fabrika:env` tag. No IAM condition sees a rule's
         source, so an environment's group admitting more than its namespace proxy is a review matter: its tasks may
-        have a public address.
+        have a public address. UNVERIFIED: both tag conditions assume CloudFormation tags the group in its create
+        call (`TagSpecifications`); if it creates the group untagged and tags it afterwards, both refuse the stack's
+        create. The live check of step 13 settles it before the policy is written.
     - **The boundary.** Role writes would let Control mint a role with any inline policy and run code under it. So
       `iam:CreateRole` and `iam:PutRolePolicy` are allowed only with the condition `iam:PermissionsBoundary` equal to
       `policy/fabrika/fabrika-apps-boundary`, which the installation stack creates and which allows only what an

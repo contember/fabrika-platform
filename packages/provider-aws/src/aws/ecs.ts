@@ -589,6 +589,8 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 					taskDefinition: taskDefinitionArn,
 					deploymentConfiguration: DEPLOYMENT_CONFIGURATION,
 					networkConfiguration,
+					// Sent on every update too: ECS Exec turned on out of band is turned off by the next deploy.
+					enableExecuteCommand: false,
 				},
 				updatedSchema,
 				signal,

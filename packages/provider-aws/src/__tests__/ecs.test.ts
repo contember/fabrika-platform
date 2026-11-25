@@ -162,7 +162,7 @@ describe('ecsClient', () => {
 		await expect(ecsClient(options).registerTaskDefinition(definition)).rejects.toMatchObject({ code: 'invalid_answer' })
 	})
 
-	test('updates the service to the revision in the network with the circuit breaker on, and reads the service it answers', async () => {
+	test('updates the service to the revision in the network with the circuit breaker on and ECS Exec off, and reads the service it answers', async () => {
 		const { options, calls } = fakeAws(ECS, { UpdateService: () => ({ service }) })
 		expect(await ecsClient(options).updateService(address, TASK_DEFINITION, serviceNetwork)).toEqual(read)
 		expect(calls[0]?.body).toEqual({
@@ -171,6 +171,7 @@ describe('ecsClient', () => {
 			taskDefinition: TASK_DEFINITION,
 			deploymentConfiguration: { deploymentCircuitBreaker: { enable: true, rollback: true }, maximumPercent: 200, minimumHealthyPercent: 100 },
 			networkConfiguration: awsvpc,
+			enableExecuteCommand: false,
 		})
 	})
 

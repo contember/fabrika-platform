@@ -443,12 +443,16 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 			const current = await repeated(() => clients.ecs.describeService(service, signal), isThrottled)
 			if (current?.status === 'draining') throw new Error(`aws: the service ${target.service} is being deleted; deploy again once it is gone`)
 			const create = current === null || current.status === 'inactive'
-			// Recorded before the call: from here the run is settled only by polling (ADR-0044).
-			await context.record({ ...checkpoint, serviceUpdateRequested: true })
+			// Recorded before the call: from here the run is settled only by polling (ADR-0044). A create is marked as one, so a
+			// service ECS does not show yet is no verdict on it.
+			const submitted: RecordedCheckpoint = create
+				? { ...checkpoint, serviceUpdateRequested: true, serviceCreateRequested: true }
+				: { ...checkpoint, serviceUpdateRequested: true }
+			await context.record(submitted)
 			try {
 				const updated = create
 					// Under its client token (the run's) a repeated create creates no second service, so any retryable failure
-					// is repeated. One whose answers were all lost is settled by the rollout: a service that never came is absent.
+					// is repeated. One whose answers were all lost is settled by the rollout, which waits for its deadline.
 					? await repeated(
 						() =>
 							clients.ecs.createService(
@@ -468,7 +472,7 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 					: await repeated(() => clients.ecs.updateService(service, revision, network, signal), isThrottled)
 				if (create) log(`  created the service ${target.service}`)
 				if (updated.currentDeploymentArn !== null) {
-					await context.record({ ...checkpoint, serviceUpdateRequested: true, deploymentArn: updated.currentDeploymentArn }).catch(() => {
+					await context.record({ ...submitted, deploymentArn: updated.currentDeploymentArn }).catch(() => {
 						// The rollout finds the deployment through the service when its ARN is not recorded.
 						log('  [warn] the service deployment could not be recorded; the rollout reads it through the service')
 					})

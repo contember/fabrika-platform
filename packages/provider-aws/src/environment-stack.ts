@@ -15,6 +15,10 @@
 // - The stack owns the repository, its lifecycle policy included (`ecrLifecyclePolicy`, the rule the deploy sends).
 // - The security group of the environment's tasks, in the installation's VPC: outbound only, no ingress rule, so
 //   nothing reaches the application's port until the namespace stack admits its proxy. Its id is the stack's output.
+//   A change of the installation's VPC (or of the group's description) replaces the group, and does not converge:
+//   CloudFormation creates the new group, then fails to delete the old one while the service's tasks still hold it,
+//   and the deploy waits on that cleanup before it moves the service. Moving an installation to another VPC is an
+//   operator's step (move the services, then delete the old groups), never a deploy's.
 // - Not the ECS service: its task definition is the deploy's, which registers one per run and creates the service with
 //   the first (`deploy.ts`). A service in the stack would name a revision the next stack update could roll back to.
 //

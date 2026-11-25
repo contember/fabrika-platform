@@ -5,7 +5,7 @@
 // shared run then does about the candidate.
 
 import type { DeployStepResult, JsonValue, ProviderRunEvents } from '@fabrika/provider-contract'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, setSystemTime, test } from 'bun:test'
 import type { CodeBuildStatus } from '../aws/codebuild'
 import type { EcsNetwork, EcsService, EcsServiceDeploymentStatus } from '../aws/ecs'
 import type { S3PartWriter } from '../aws/s3'
@@ -43,6 +43,9 @@ class FakeAws {
 	findLost = true
 	/** The environment's service as ECS reads it: `null` while it does not exist. */
 	serviceState: EcsService['status'] | null = 'active'
+	/** The deployment a create answers, and how many reads after a create still answer MISSING. */
+	createDeployment: string | null = DEPLOYMENT
+	lagAfterCreate = 0
 	/** The networks a create, an update and each init task were sent. */
 	readonly networks: EcsNetwork[] = []
 	logPages: { readonly message: string; readonly cursor: string; readonly atEnd: boolean }[] = [
@@ -99,7 +102,7 @@ class FakeAws {
 				this.hit('createService', `createService ${create.clientToken} ${create.taskDefinitionArn} ${create.desiredCount}`)
 				this.networks.push(create.network)
 				this.serviceState = 'active'
-				return { ...this.service(), taskDefinitionArn: create.taskDefinitionArn, currentDeploymentArn: DEPLOYMENT }
+				return { ...this.service(), taskDefinitionArn: create.taskDefinitionArn, currentDeploymentArn: this.createDeployment }
 			},
 			updateService: async (_address, taskDefinitionArn, network) => {
 				this.hit('updateService', `updateService ${taskDefinitionArn}`)
@@ -108,6 +111,10 @@ class FakeAws {
 			},
 			describeService: async () => {
 				this.hit('describeService', 'describeService')
+				if (this.serviceState !== null && this.lagAfterCreate > 0) {
+					this.lagAfterCreate -= 1
+					return null
+				}
 				return this.serviceState === null ? null : { ...this.service(), status: this.serviceState }
 			},
 			describeServiceDeployment: async (arn) => {
@@ -317,8 +324,14 @@ describe('awsDeploy', () => {
 			`describeServiceDeployment ${DEPLOYMENT}`,
 		])
 		expect(aws.networks).toEqual([NETWORK, NETWORK, NETWORK])
-		// Recorded before the create as before an update: from there the run is settled by polling.
-		expect(events.checkpoints.at(-2)).toEqual({ buildToken: TOKEN, buildId: BUILD_ID, taskDefinitionArn: REVISION, serviceUpdateRequested: true })
+		// Recorded before the create as before an update, and marked a create: from there the run is settled by polling.
+		expect(events.checkpoints.at(-2)).toEqual({
+			buildToken: TOKEN,
+			buildId: BUILD_ID,
+			taskDefinitionArn: REVISION,
+			serviceUpdateRequested: true,
+			serviceCreateRequested: true,
+		})
 		expect(result.checkpoint).toMatchObject({ deploymentArn: DEPLOYMENT })
 		expect(events.lines).toContain('  created the service notes-prod')
 		// A service ECS keeps as deleted is created again under its name.
@@ -328,7 +341,23 @@ describe('awsDeploy', () => {
 		expect(deleted.calls).toContain(`createService ${TOKEN} ${REVISION} 1`)
 	})
 
-	test('a lost create is sent again under its client token; one never answered is absent to the rollout', async () => {
+	test('a created service ECS does not show yet is waited for, not a verdict', async () => {
+		const aws = new FakeAws()
+		aws.serviceState = null
+		// The create answers no deployment, and the first reads after it still answer MISSING.
+		aws.createDeployment = null
+		aws.lagAfterCreate = 2
+		// Settled at the first read that finds the deployment: two reads answer MISSING, the third the service.
+		aws.rollout = ['successful']
+		const result = await deploy(aws, new Recorder())
+		expect(result.status).toBe('succeeded')
+		expect(result.checkpoint).not.toHaveProperty('deploymentArn')
+		const after = aws.calls.slice(aws.calls.indexOf(`createService ${TOKEN} ${REVISION} 1`) + 1)
+		expect(after.filter((call) => call === 'describeService').length).toBe(3)
+		expect(after).toContain(`describeServiceRevision ${SERVICE_REVISION}`)
+	})
+
+	test('a lost create is sent again under its client token; one never answered waits for the deadline', async () => {
 		const aws = new FakeAws()
 		aws.serviceState = null
 		aws.failures['createService'] = [lost('CreateService')]
@@ -338,9 +367,20 @@ describe('awsDeploy', () => {
 		const never = new FakeAws()
 		never.serviceState = null
 		never.failures['createService'] = Array.from({ length: 4 }, () => lost('CreateService'))
-		const result = await deploy(never, new Recorder())
+		// Once the rollout reads the service (the update step read it first), the clock passes the run's deadline.
+		const sleep = async (): Promise<void> => {
+			if (never.calls.filter((call) => call === 'describeService').length >= 2) setSystemTime(new Date(Date.now() + AWS_RUN_DEADLINE_MS))
+		}
+		let result: Awaited<ReturnType<typeof deploy>>
+		try {
+			result = await deploy(never, new Recorder(), { sleep })
+		} finally {
+			setSystemTime()
+		}
 		expect(stepOf(result, 'update')).toMatchObject({ status: 'succeeded' })
+		// No verdict from MISSING: the rollout waited until the deadline, more than one read.
 		expect(stepOf(result, 'rollout')).toMatchObject({ status: 'failed' })
+		expect(stepOf(result, 'rollout')?.error ?? '').toContain('gave up waiting')
 		expect(never.calls.filter((call) => call.startsWith('createService')).length).toBe(4)
 
 		const refused = new FakeAws()
