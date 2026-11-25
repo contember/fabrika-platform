@@ -100,19 +100,13 @@ function suite(name: string, backend: () => Backend, skip: boolean): void {
 			expect(await push.record(session, ALICE, id(4), keys('new'), endpoint('old'), later - DAY)).toBe('recorded')
 		})
 
-		test('a replacement refused after its old row went leaves the old row when the caller rolls back', async () => {
+		test("a replacement onto another principal's endpoint is taken, and the old row stays though the caller commits", async () => {
 			await push.record(backend().session(), ALICE, id(1), keys('old'), null, NOW)
 			await push.record(backend().session(), BOB, id(2), keys('bob'), null, NOW)
-			const refused = new Error('not recorded')
-			await expect(
-				backend().session().transaction(async (session) => {
-					// The new endpoint is Bob's, so the upsert refuses after the old row's delete.
-					const outcome = await push.record(session, ALICE, id(3), keys('bob'), endpoint('old'), NOW + 1)
-					expect(outcome).toBe('taken')
-					throw refused
-				}),
-			).rejects.toBe(refused)
+			const outcome = await backend().session().transaction((session) => push.record(session, ALICE, id(3), keys('bob'), endpoint('old'), NOW + 1))
+			expect(outcome).toBe('taken')
 			expect(await push.binding(backend().session(), ALICE, endpoint('old'))).toBe('mine')
+			expect(await push.binding(backend().session(), BOB, endpoint('bob'))).toBe('mine')
 		})
 
 		test("a principal keeps its ten newest subscriptions; another principal's are not counted", async () => {

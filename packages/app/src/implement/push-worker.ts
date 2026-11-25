@@ -173,10 +173,15 @@ async function onChange(previous, next) {
 	const current = next || (previous ? await self.registration.pushManager.subscribe(previous.options).catch(function () { return null }) : null)
 	if (!previous || !current) return
 	const key = keyOf(current)
-	if (key === null) return
 	const pending = await stored('replacement')
 	const replace = pending && typeof pending.replace === 'string' ? pending.replace : previous.endpoint
 	const replacement = { op: 'record', replace: replace, subscription: current.toJSON(), key: key }
+	// A subscription that does not report its key cannot be recorded here: the page keeps the pair and adds the key it
+	// subscribes with, as after a change without a session.
+	if (key === null) {
+		await store('replacement', replacement)
+		return
+	}
 	try {
 		const response = await post(SUBSCRIPTION, replacement)
 		if (response.ok) {

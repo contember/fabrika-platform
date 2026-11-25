@@ -151,6 +151,14 @@ describe('the subscription row through the proxy and the dispatcher', () => {
 		expect(await post(kit, alice(), { op: 'status', endpoint: endpoint('new') })).toEqual(whose('mine', 'new'))
 	})
 
+	test("a replacement onto another person's endpoint is refused, and the caller's old subscription stays", async () => {
+		await post(kit, alice(), record('old'))
+		await post(kit, bob(), record('bob'))
+		expect(await post(kit, alice(), record('bob', { replace: endpoint('old') }))).toMatchObject(refusal(409, 'push_subscription_taken'))
+		expect(await post(kit, alice(), { op: 'status', endpoint: endpoint('old') })).toEqual(whose('mine', 'old'))
+		expect(await post(kit, bob(), { op: 'status', endpoint: endpoint('bob') })).toEqual(whose('mine', 'bob'))
+	})
+
 	test("a removal reaches only the caller's own subscription", async () => {
 		await post(kit, alice(), record('e1'))
 		expect(await post(kit, bob(), { op: 'remove', endpoint: endpoint('e1') })).toEqual(whose('other', 'e1'))

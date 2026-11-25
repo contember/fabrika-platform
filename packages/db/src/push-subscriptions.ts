@@ -50,8 +50,8 @@ export interface PushSubscriptions {
 	/**
 	 * Records `subscription` for `principal` under `id` (a new row's key; an existing row of the caller keeps its own),
 	 * replacing the endpoint `replace` when it names one, at `now`. Prunes a batch of expired tombstones first, and
-	 * drops the principal's oldest live rows past the bound after. Run it in the caller's transaction and roll that back
-	 * on any outcome but `recorded`: a replacement whose new endpoint turns out `taken` has already removed the old row.
+	 * drops the principal's oldest live rows past the bound after. An outcome but `recorded` changes no subscription: the
+	 * old row is removed only after the new one was written.
 	 */
 	record(
 		session: Session,
@@ -82,10 +82,17 @@ const SQL_PRUNE: DialectTexts = {
 	sqlite: `delete from ${T} where id in (select id from ${T} where gone_at < ?1 limit ${PRUNE_BATCH})`,
 }
 
-// The old row goes only when it, or its tombstone within the retention, is the caller's; its cursor moves on.
-const SQL_TAKE_REPLACED: DialectTexts = {
-	postgres: `delete from ${T} where endpoint = $1 and principal = $2 and (gone_at is null or gone_at >= $3::bigint) returning cursor`,
-	sqlite: `delete from ${T} where endpoint = ?1 and principal = ?2 and (gone_at is null or gone_at >= ?3) returning cursor`,
+// The old row is replaceable only when it, or its tombstone within the retention, is the caller's; its cursor moves on.
+// Locked until the transaction ends, so the sender cannot retire it between this read and its delete.
+const SQL_REPLACED: DialectTexts = {
+	postgres: `select cursor from ${T} where endpoint = $1 and principal = $2 and (gone_at is null or gone_at >= $3::bigint) for update`,
+	sqlite: `select cursor from ${T} where endpoint = ?1 and principal = ?2 and (gone_at is null or gone_at >= ?3)`,
+}
+
+// After the new row is written: the old one, read and locked above, goes.
+const SQL_DROP_REPLACED: DialectTexts = {
+	postgres: `delete from ${T} where endpoint = $1 and principal = $2`,
+	sqlite: `delete from ${T} where endpoint = ?1 and principal = ?2`,
 }
 
 // One statement decides between two principals: a row of another principal is overwritten only when it is a tombstone
@@ -193,9 +200,11 @@ export function pushSubscriptions(): PushSubscriptions {
 					await runFixedStatement(transaction, SQL_LOCK, [principal])
 				}
 				await runFixedStatement(transaction, SQL_PRUNE[dialect], [cutoff])
+				// Nothing but the prune is written before both checks pass, so no outcome but `recorded` changes a row.
 				let cursor: string | null = null
-				if (replace !== null && replace !== subscription.endpoint) {
-					const [replaced] = await runFixedStatement(transaction, SQL_TAKE_REPLACED[dialect], [replace, principal, cutoff])
+				const replacing = replace !== null && replace !== subscription.endpoint ? replace : null
+				if (replacing !== null) {
+					const [replaced] = await runFixedStatement(transaction, SQL_REPLACED[dialect], [replacing, principal, cutoff])
 					if (replaced === undefined) {
 						return 'not_replaceable'
 					}
@@ -213,8 +222,10 @@ export function pushSubscriptions(): PushSubscriptions {
 					cutoff,
 				])
 				if (written.length === 0) {
-					// The old row may already be gone: the caller's transaction must not commit.
 					return 'taken'
+				}
+				if (replacing !== null) {
+					await runFixedStatement(transaction, SQL_DROP_REPLACED[dialect], [replacing, principal])
 				}
 				await runFixedStatement(transaction, SQL_TRIM[dialect], [principal])
 				return 'recorded'
