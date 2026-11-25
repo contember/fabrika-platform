@@ -509,22 +509,26 @@ flowchart LR
 
 The deploy categories stay as ADR-0083 defines them. The new ones are actions with no run:
 
-| Category         | Covers                                                                                                                                                                                                  | Default on a protected environment |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `deploy-request` | A manual run started by a non-person, of a merged commit (`deployRequestCommits`)                                                                                                                       | `person`                           |
-| `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey` by a non-person, the all-environments layer included                                                                             | `person` (D8)                      |
-| `variables`      | `apps.variables.put/delete` by a non-person, the all-environments layer included                                                                                                                        | `person` (D8)                      |
-| `data`           | `data.start` (maintenance modes, side restore), `data.recover`, suspend and resume, the backup schedule, by a non-person                                                                                | `person` (D8)                      |
-| `registry`       | Trigger ref, domain, public origin, `apps.update` source fields (today a 403, `human.ts:106-113,130-169`); the cross-origin list, provider target, artifact and namespace (open today); by a non-person | `person`                           |
-| `agent-grants`   | A grant an agent asks for at the app                                                                                                                                                                    | `person`                           |
-| `credentials`    | A key an agent asks for, issued to someone other than the agent (below)                                                                                                                                 | `person`                           |
-| `grants`         | ADR-0083's existing category: a person's own console grant. `plan` does not apply: a grant has no pull request.                                                                                         | `off` (as today)                   |
+| Category         | Covers                                                                                                                                                                                             | Default on a protected environment |
+| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `deploy-request` | A manual run started by a non-person, of a merged commit (`deployRequestCommits`)                                                                                                                  | `person`                           |
+| `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey` by a non-person, the all-environments layer included                                                                        | `person` (D8)                      |
+| `variables`      | `apps.variables.put/delete` by a non-person, the all-environments layer included                                                                                                                   | `person` (D8)                      |
+| `data`           | `data.start` (maintenance modes, side restore), `data.recover`, suspend and resume, the backup schedule, by a non-person                                                                           | `person` (D8)                      |
+| `registry`       | `apps.update` and `apps.environments.put`, every field of each: trigger ref, domain, public origin, the cross-origin list, provider target, artifact and namespace, source fields; by a non-person | `person` (D8)                      |
+| `agent-grants`   | A grant an agent asks for at the app                                                                                                                                                               | `person`                           |
+| `credentials`    | A key an agent asks for, issued to someone other than the agent (below)                                                                                                                            | `person`                           |
+| `grants`         | ADR-0083's existing category: a person's own console grant. `plan` does not apply: a grant has no pull request.                                                                                    | `off` (as today)                   |
 
 Each category is enforced only from the PR that adds the requests it waits in: `deploy-request` from step 3; `secrets`,
-`variables`, `data` and `registry` from step 5b; `agent-grants` from step 6; `credentials` from step 7b. Until then
-everything behaves as today: a non-person's secret, variable and data write applies at once, and its registry write is
-refused (decision D8). The hole is closed by routing these writes through requests, never by refusing them
-outright.
+`variables`, `data` and `registry` from step 5b; `agent-grants` from step 6; `credentials` from step 7b. Before step 5b
+a non-person's secret, variable and data write applied at once, and its write of the trigger ref, domain, public origin
+or source fields was refused. From step 5b on D8 holds: each such write meets the gate before it runs. `off` applies it,
+`refuse` is a 403 naming the category, and `person` stores it as an approval request, exactly as
+`approvals.requests.create` would, and answers 409 `approval_requested` with `{ id, url, state }` and a secret's
+fingerprint; the message names the link, so an older client shows it and never reads the write as applied. The
+command-line client prints the request and exits 75, or follows it with `--wait`; MCP's `request_change` asks for one.
+The hole is closed by routing these writes through requests, never by refusing them outright.
 
 **Who is a non-person here.** The gate treats as a person only a person acting in a console session, the rule of
 `requireHumanApprover`. Every bearer counts as a non-person, a person's own `px_` key included, so an agent handed that
@@ -597,9 +601,9 @@ The second row is the combination the design started from: plan approval for cod
 - `deploy-request`, `secrets`, `variables`, `data`, `registry`, `agent-grants` and `credentials` are `person`.
 - The settings take the defaults in the table above.
 
-Today an agent's secret, variable or data write on a protected environment applies at once. With these defaults it
-waits for a person, from step 5b on (D8). That is a chosen change in behaviour. A team that wants today's
-behaviour sets those categories to `off`.
+Before step 5b an agent's secret, variable or data write on a protected environment applied at once. With these
+defaults it waits for a person, from step 5b on (D8). That is a chosen change in behaviour. A team that wants the
+earlier behaviour sets those categories to `off`.
 
 ### Always a person, whatever the mode
 
@@ -654,6 +658,9 @@ environments.
   in behaviour, beside D8.
 - **A person's own `px_` key stops passing the protected-environment checks** (step 3): its manual deploy parks with a
   link instead of running.
+- **An agent's secret, variable, data or registry write on a protected environment waits for a person** (step 5b, D8).
+  No migration: an environment whose policy is null reads the defaults, `person` for those four, from the upgrade on.
+  Setting them to `off` restores the earlier behaviour; it is the release-notes headline.
 - No generated file and no environment variable changes. One operator step, for `planEvidence: console+github` only:
   an existing GitHub App gets the user-authorization callback URL and a client secret in its GitHub settings, which is
   documented in `docs/reference/`. Without it, reviews count for nothing and console approvals still work.
