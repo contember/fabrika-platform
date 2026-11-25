@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import { ACTION_CATEGORIES, type ApprovalRequestState, isFinalApprovalRequestState } from '@fabrika/control-contract'
+import { ACTION_CATEGORIES, ALL_ENVIRONMENTS, type ApprovalRequestState, isFinalApprovalRequestState } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 import { DecisionFailureNotice, StepUpHint } from '../../../components/DecisionFailureNotice'
@@ -38,7 +38,7 @@ export default createPage()
 								Request for <Link to="apps/detail" params={{ id: request.appId }}>{request.appId}</Link>
 							</h1>
 							<div className="subtitle">
-								<Chip>{request.env}</Chip>
+								<Chip>{requestEnvLabel(request.env)}</Chip>
 								<span className="dot-sep">{requestCategoryLabel(request.category)}</span>
 							</div>
 						</div>
@@ -82,6 +82,11 @@ function requestLamp(state: ApprovalRequestState): Lamp {
 		case 'pending':
 			return 'idle'
 	}
+}
+
+/** Where a request acts: its environment, or every environment of the application (`ALL_ENVIRONMENTS`). */
+export function requestEnvLabel(env: string): string {
+	return env === ALL_ENVIRONMENTS ? 'every environment' : env
 }
 
 /** A category's label in the console's words; a category a later release added reads as its name. */
@@ -128,7 +133,7 @@ export function ApprovalRequestView({ request }: { request: ApprovalRequestDto }
 					</dl>
 				)}
 				<p className="small">
-					<strong>{request.appId}</strong> · <strong>{request.env}</strong> · asked {fmtDate(request.createdAt)}
+					<strong>{request.appId}</strong> · <strong>{requestEnvLabel(request.env)}</strong> · asked {fmtDate(request.createdAt)}
 				</p>
 				{request.state === 'pending' && (
 					<p className="muted small">Decide by {fmtDate(request.deadline)}; after that the request expires and changes nothing.</p>

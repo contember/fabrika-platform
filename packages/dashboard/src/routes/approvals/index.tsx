@@ -7,7 +7,7 @@ import { api, type ApprovalRequestDto } from '../../lib/api'
 import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
 import { quietIamClient } from '../../lib/iam'
 import { consoleSession } from '../../lib/session'
-import { requestCategoryLabel, RequestSummary } from './requests/detail'
+import { requestCategoryLabel, requestEnvLabel, RequestSummary } from './requests/detail'
 
 // Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050), requests an
 // agent or a key made for a change it cannot make itself, and console grants that wait for another administrator
@@ -109,7 +109,7 @@ function PendingRequests({ requests }: { requests: readonly ApprovalRequestDto[]
 							<Link to="apps/detail" params={{ id: request.appId }}>{request.appId}</Link>
 						</td>
 						<td>
-							<Chip>{request.env}</Chip>
+							<Chip>{requestEnvLabel(request.env)}</Chip>
 						</td>
 						<td>
 							<Link to="approvals/requests/detail" params={{ id: request.id }}>{requestCategoryLabel(request.category)}</Link>
