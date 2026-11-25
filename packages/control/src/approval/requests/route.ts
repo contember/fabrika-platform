@@ -25,9 +25,9 @@ export interface DirectWrite {
 /**
  * Apply `write` (`apply`) when the caller is a person in the console, when no protected environment it reaches judges it,
  * when every one that does has its category `off`, or, where it would wait, when it changes nothing. Otherwise refuse it
- * (403) or store it as a request and answer 409 `approval_requested`: the write did not apply. An environment that does not exist but starts protected has nowhere
- * for a request to wait, so a non-person's write there is refused (403). Anything else the write names that does not
- * exist is left to its use case.
+ * (403) or store it as a request and answer 409 `approval_requested`: the write did not apply. An environment that does
+ * not exist but starts protected has nowhere for a request to wait, so a non-person's write there is refused (403).
+ * Anything else the write names that does not exist is left to its use case.
  */
 export async function gateDirectWrite<T>(c: ApprovalRequestContext, write: DirectWrite, apply: () => Promise<T>): Promise<T> {
 	if (isConsolePerson(c.auth, c.admission)) return apply()
