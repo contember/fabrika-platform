@@ -1,5 +1,6 @@
 import type { ApprovalRequestDto, RunDto } from '@fabrika/control-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -615,7 +616,8 @@ describe('control apps secrets', () => {
 
 	test('--request asks for the write instead of making it, and prints the fingerprint, never the value', async () => {
 		const url = 'https://console.example.test/approvals/requests/q1'
-		const asked = captureFetch({ result: { id: 'q1', url, state: 'pending', fingerprint: '0a1b2c3d' } })
+		const fingerprint = createHash('sha256').update(SECRET).digest('hex').slice(0, 8)
+		const asked = captureFetch({ result: { id: 'q1', url, state: 'pending', fingerprint } })
 		let out = ''
 		const err = await captureStderr(async () => {
 			out = await captureStdout(() =>
@@ -627,9 +629,19 @@ describe('control apps secrets', () => {
 			input: { kind: 'apps.secrets.put', input: { appId: 'notes', secret: { name: 'API_KEY', value: SECRET, env: 'prod' } } },
 		}])
 		expect(out).toBe(`q1\tpending\t${url}`)
-		expect(err).toContain('fingerprint is 0a1b2c3d')
+		expect(err).toContain(`fingerprint is ${fingerprint}`)
 		expect(err).toContain(`a person approves or refuses this request at ${url}`)
 		expect(`${out}\n${err}`).not.toContain(SECRET)
+
+		// The fingerprint is the CLI's own: an answer that names another fails, so the person is told to refuse the request.
+		captureFetch({ result: { id: 'q1', url, state: 'pending', fingerprint: '0a1b2c3d' } })
+		let mismatch = ''
+		await captureStderr(async () => {
+			mismatch = await runControlCli('apps', ['secrets', 'put', '--app=notes', '--name=API_KEY', '--request'], undefined, CONTROL_ENV, piped(SECRET))
+				.then(() => 'resolved', (error: unknown) => (error instanceof Error ? error.message : String(error)))
+		})
+		expect(mismatch).toContain(`Control answered the fingerprint 0a1b2c3d, but the value sent has ${fingerprint}`)
+		expect(mismatch).toContain(url)
 
 		captureFetch({ error: { type: 'bad_request', message: `refused ${SECRET}` } })
 		const message = await runControlCli('apps', ['secrets', 'put', '--app=notes', '--name=API_KEY', '--request'], undefined, CONTROL_ENV, piped(SECRET))

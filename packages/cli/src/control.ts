@@ -17,6 +17,7 @@ import {
 	type IssueKeyInput,
 	type IssueKeyResult,
 	MAX_KEY_LIFETIME_SECONDS,
+	sha256Hex,
 } from '@fabrika/auth-core'
 import { APP_ENV_KINDS, type ApprovalRequestDto, CONTROL_CLI_PRESETS, isFinalApprovalRequestState } from '@fabrika/control-contract'
 import type {
@@ -181,8 +182,9 @@ once a person decided it, it stops with an error after 15 minutes without an out
 
 \`--request\` on \`apps secrets put|delete\` and \`apps variables put|delete\` does not make the change: it asks a person
 to approve it. Control stores the request, inert, and stderr prints the console link the person opens; for a secret it
-also prints the value's fingerprint (the first 8 hex characters of its SHA-256), which the page shows beside the
-value's length, so the person can tell it is the value you sent. Control seals the value and stores only that. stdout
+also prints the value's fingerprint (the first 8 hex characters of its SHA-256, computed here), which the page shows
+beside the value's length, so the person can tell it is the value you sent; when Control's answer names another
+fingerprint, the command fails and says to refuse the request. Control seals the value and stores only that. stdout
 prints the request's id, state and link; \`--wait\` follows it as \`requests get --wait\` does. Without \`--env\` the request
 is for every environment of the app, and every protected one judges it. A secret the provider keeps (a Zerops
 environment) cannot be requested yet.
@@ -1472,7 +1474,8 @@ export const followRun = async (
 
 /**
  * Ask a person to approve a write instead of making it (ADR-0083 §8): stderr says where they decide it and, for a
- * secret, the value's fingerprint; stdout prints the request. `secretValue` is cut out of any failure that quotes it.
+ * secret, the value's fingerprint, computed here and compared with Control's; stdout prints the request. `secretValue`
+ * is cut out of any failure that quotes it.
  */
 const requestChange = async (client: ControlClient, flags: Flags, kind: string, input: JsonValue, secretValue?: string): Promise<void> => {
 	let created: CreateApprovalRequestResponse
@@ -1482,8 +1485,16 @@ const requestChange = async (client: ControlClient, flags: Flags, kind: string, 
 		if (secretValue === undefined) throw error
 		throw new Error(failureMessage(error, secretValue, 'secret value'))
 	}
-	if (created.fingerprint !== undefined) {
-		console.warn(`the value's fingerprint is ${created.fingerprint}: the person sees the same one beside the value's length on the page`)
+	if (secretValue !== undefined) {
+		// The first 8 hex characters of the value's SHA-256, as the page shows them: the CLI's own, not an echo of Control's.
+		const fingerprint = sha256Hex(secretValue).slice(0, 8)
+		if (created.fingerprint !== fingerprint) {
+			throw new Error(
+				`Control answered the fingerprint ${created.fingerprint ?? '(none)'}, but the value sent has ${fingerprint}: `
+					+ `refuse the request at ${created.url}, since what it holds is not the value you sent`,
+			)
+		}
+		console.warn(`the value's fingerprint is ${fingerprint}: the person sees the same one beside the value's length on the page`)
 	}
 	if (flags.wait) {
 		const read = (id: string) => client.approvals.requests.get({ id })
