@@ -38,8 +38,9 @@ export interface RequestKindDefinition<Input, Before> {
 	/** The action category whose mode and settings judge it. */
 	readonly category: ActionCategory
 	/**
-	 * The input, checked when the request is created and parsed again from the stored row. Not strict: a key a later
-	 * release adds is dropped, so a rollback still reads the row.
+	 * The input, checked when the request is created and parsed again from the stored row. Not strict, so a rollback
+	 * still parses a row with a later release's key; but a stored input that does not read back to its digest (a key
+	 * dropped, a default filled) is neither described nor executed, since the person approved the whole of it.
 	 */
 	readonly input: z.ZodType<Input, z.ZodTypeDef, unknown>
 	/** The before-state as stored, parsed the same way. */

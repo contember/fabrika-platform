@@ -47,11 +47,22 @@ async function stricterPolicy(repositories: Pick<ControlRepositories, 'registry'
 	return null
 }
 
-/** The request's kind and its checked input, or why this Control cannot act on it. */
-function actionOf(kind: RequestKind | undefined, row: ApprovalRequestRow): RequestAction | string {
+/**
+ * The request's kind and its checked input, or why this Control cannot act on it. The input must read back to the digest
+ * the person approved: a kind's schema drops a key it does not know (a later release's), and acting on the rest would
+ * act on less than what was approved.
+ */
+export function actionOf(
+	kind: RequestKind | undefined,
+	row: Pick<ApprovalRequestRow, 'kind' | 'input_json' | 'input_digest'>,
+): RequestAction | string {
 	if (kind === undefined) return `this Control cannot execute kind \`${row.kind}\``
 	const checked = kind.action(JSON.parse(row.input_json))
-	return checked.ok ? checked.action : `this Control cannot read the request's input: ${checked.error}`
+	if (!checked.ok) return `this Control cannot read the request's input: ${checked.error}`
+	if (jsonDigest(checked.action.inputJson) !== row.input_digest) {
+		return "this Control reads the request's input without part of it (a later release's), so what it would execute is not the input that was approved"
+	}
+	return checked.action
 }
 
 /**

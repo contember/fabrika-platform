@@ -21,12 +21,12 @@ import {
 	getApprovalRequestUseCase,
 	listApprovalRequestsUseCase,
 } from '../approval/requests/api'
-import { sweepApprovalRequests } from '../approval/requests/execute'
+import { executeApprovedRequest, sweepApprovalRequests } from '../approval/requests/execute'
 import { requestKind, type RequestKindRegistry, type RequestOutcome } from '../approval/requests/kind'
 import { REFUSED_KINDS } from '../approval/requests/refused'
 import { type ControlRpcContext, controlRpcRouter } from '../control-rpc'
 import { type ControlRepositories, createControlRepositories } from '../db'
-import { LEASE_TTL_MS, runLeaseKey } from '../lease'
+import { acquireLease, LEASE_TTL_MS, runLeaseKey } from '../lease'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { authWithActions } from './helpers/iam'
 import { fixtureProtect } from './helpers/lock'
@@ -57,11 +57,12 @@ interface Notes {
 
 const noteInput = z.object({ appId: z.string().min(1), env: z.string().min(1), name: z.string().min(1), value: z.string() })
 
-function notesKind(notes: Notes) {
+/** `input` stands in for another release's schema of the same kind: a newer one with a key this one drops. */
+function notesKind(notes: Notes, input: z.ZodType<z.infer<typeof noteInput>, z.ZodTypeDef, unknown> = noteInput) {
 	return requestKind({
 		kind: 'test.notes.put',
 		category: 'secrets',
-		input: noteInput,
+		input,
 		before: z.object({ value: z.string().nullable() }),
 		coordinates: (input) => ({ appId: input.appId, env: input.env }),
 		requesterAction: CONTROL_ACTIONS.SECRET_MANAGE,
@@ -430,6 +431,34 @@ for (const backend of backends) {
 				expect((await getApprovalRequestUseCase(context(w, ADA, { kinds: new Map() }), id)).description.summary[0]?.text).toContain(
 					'which this Control cannot describe',
 				)
+			})
+
+			test('an input this Control reads without a key the person approved is neither described nor executed', async () => {
+				const w = await world()
+				const newer = new Map([['test.notes.put', notesKind(w.notes, noteInput.extend({ expiresIn: z.number().optional() }))]])
+				const { id } = await createApprovalRequestUseCase(context(w, AGENT, { kinds: newer }), {
+					kind: 'test.notes.put',
+					input: { appId: 'notes', env: 'prod', name: 'greeting', value: 'hello', expiresIn: 60 },
+				})
+				expect((await row(w, id)).input_json).toContain('"expiresIn":60')
+				// This Control serves the kind without the key, as a release rolled back under the request does.
+				expect((await getApprovalRequestUseCase(context(w, ADA), id)).description.summary[0]?.text).toContain('which this Control cannot describe')
+
+				const lease = await acquireLease(w.locks, runLeaseKey('notes', 'prod'))
+				if (lease === null) throw new Error('the lease is held')
+				try {
+					expect(await w.db.approvalRequests.approve(id, { decisionId: uuidv7(), id: 'p-ada', label: 'ada' }, null, lease.fence())).toBe(true)
+					const kind = w.kinds.get('test.notes.put')
+					if (kind === undefined) throw new Error('no test kind')
+					await executeApprovedRequest({ repositories: w.db, auth: auth(w, ADA) }, kind, await row(w, id), lease)
+				} finally {
+					await lease.release()
+				}
+				const closed = await row(w, id)
+				expect(closed).toMatchObject({ state: 'failed', operation_id: null })
+				expect(closed.error).toContain('not the input that was approved')
+				expect(w.notes.effects).toEqual([])
+				expect(w.notes.values.has('greeting')).toBe(false)
 			})
 
 			test('a policy made stricter after the first approval closes it stale at execution: refuse, or the requester now excluded', async () => {

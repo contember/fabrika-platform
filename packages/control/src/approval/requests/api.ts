@@ -23,8 +23,8 @@ import { jsonValueSchema } from '../../json-value'
 import { acquireLease, type LeaseClock, runLeaseKey } from '../../lease'
 import { appEnvSettings } from '../categories'
 import { type ConsoleAdmission, isConsolePerson, requireHumanApprover, requireOtherThanRequester } from '../human'
-import { executeApprovedRequest } from './execute'
-import { PRODUCTION_REQUEST_KINDS, type RequestCoordinates, type RequestKind, type RequestKindRegistry } from './kind'
+import { actionOf, executeApprovedRequest } from './execute'
+import { PRODUCTION_REQUEST_KINDS, type RequestCoordinates, type RequestKindRegistry } from './kind'
 import { refusedKindReason } from './refused'
 import { deciders, jsonDigest, policyOf, requesterOf } from './rules'
 
@@ -263,11 +263,9 @@ function undescribed(row: ApprovalRequestRow): ApprovalRequestDescription {
 }
 
 function describe(c: ApprovalRequestReadContext, row: ApprovalRequestRow): ApprovalRequestDescription {
-	const kind: RequestKind | undefined = kindsOf(c).get(row.kind)
-	if (kind === undefined) return undescribed(row)
 	try {
-		const checked = kind.action(JSON.parse(row.input_json))
-		return checked.ok ? checked.action.describe(row.before_json) : undescribed(row)
+		const action = actionOf(kindsOf(c).get(row.kind), row)
+		return typeof action === 'string' ? undescribed(row) : action.describe(row.before_json)
 	} catch {
 		return undescribed(row)
 	}

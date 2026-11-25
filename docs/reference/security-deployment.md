@@ -155,7 +155,9 @@ no request may ever name with their reason, every other one as not requestable y
   it is busy), with the approver's authority and the requester recorded beside them. Control judges the policy as it
   stands now and the before-state again; a stricter policy or a changed before-state closes the request `stale` and
   nothing runs. The operation id is recorded before the kind's first external effect; an execution that throws leaves
-  the request `unknown`.
+  the request `unknown`. A Control whose kind reads the stored input back to another digest (a release rolled back
+  under the request, which drops a key it does not know) shows the request as one it cannot describe and closes an
+  approved one `failed`: it never executes less than the person approved.
 - **The lifecycle** is `pending → approved | rejected | expired`, then `executing → executed | failed | unknown`, and
   `stale`. The maintenance sweep expires a pending request past its deadline, closes an approved one whose execution
   never started `failed` (nothing changed; the agent asks again), and follows an `unknown` one through its kind until
