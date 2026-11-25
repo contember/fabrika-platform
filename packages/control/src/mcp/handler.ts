@@ -26,6 +26,7 @@ import {
 	runChecksUseCase,
 } from '../api/dev-environments'
 import { ControlApiError } from '../api/domain'
+import { getRunUseCase } from '../api/runs'
 import {
 	abandonWorkspaceUseCase,
 	applyChangesUseCase,
@@ -187,6 +188,7 @@ const toolInputs = {
 		before: z.number().int().min(0).optional(),
 		failuresOnly: z.boolean().default(false),
 	}).strict(),
+	getRun: z.object({ runId: identifier }).strict(),
 	bindDev: workspaceInput,
 	getDevStatus: workspaceInput.extend({
 		logLines: z.number().int().min(0).max(DEV_REPORT_MAX_LINES).default(DEPLOYMENT_LOG_DEFAULT_LINES),
@@ -351,6 +353,15 @@ function controlMcpServer(c: DevUseCaseContext): McpServer {
 				runId,
 				log: { lines: logLines, failuresOnly, ...(after === undefined ? {} : { after }), ...(before === undefined ? {} : { before }) },
 			})))
+	server.registerTool('get_run', {
+		description: 'Read any deploy run you may read by its id, not only a workspace run: its status, commit, actor and, while a '
+			+ 'person must decide it, approvalUrl and approvalDeadline. A manual deploy of a protected environment that you or a key '
+			+ 'asked for (fabrika control deploy names a 40-character commit SHA) waits in awaiting_approval: hand approvalUrl to the '
+			+ 'person, who approves or refuses it there; you cannot. Approval is only a step: poll until status is succeeded or '
+			+ 'failed. failureCause says why a run failed without deploying: rejected by a person, or expired past its deadline.',
+		inputSchema: toolInput(toolInputs.getRun),
+		annotations: READ_ONLY,
+	}, ({ runId }) => run('get_run', () => getRunUseCase(c, runId)))
 	server.registerTool('bind_dev', {
 		description: "Give the workspace its own dev sandbox in its application's dev environment, served at the workspace's own URL "
 			+ '(url), or wake the one it has. Afterwards each apply_changes reaches it in seconds, without a run: the launcher writes '

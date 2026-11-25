@@ -89,7 +89,7 @@ Usage:
   fabrika control namespaces update --namespace=<id> --proxy-source=current
   fabrika control namespaces remove --namespace=<id>
   fabrika control namespaces release-claims --namespace=<id> --app=<id> --env=<name>
-  fabrika control deploy --app=<id> --env=<name> [--ref=<ref>]
+  fabrika control deploy --app=<id> --env=<name> [--ref=<ref>] [--wait]
   fabrika control runs list [--app=<id>] [--env=<name>] [--limit=<n>]
   fabrika control runs get --run=<id>
   fabrika control runs log --run=<id>
@@ -143,6 +143,11 @@ A full ref is kept as given: \`refs/heads/<branch>\`, \`refs/tags/<tag>\`, or a 
 \`refs/tags/v*\`, which deploys every matching tag. A tag always needs the \`refs/tags/\` form. Each
 environment of an app needs its own trigger ref. Branches named \`fabrika/…\` are reserved for MCP
 workspaces and are never a trigger ref.
+
+\`deploy\` of a protected environment with \`FABRIKA_CONTROL_KEY\` or a device grant is a request a person approves:
+\`--ref\` names a 40-character commit SHA, by default one merged into the environment's trigger ref (or the default
+branch), and stderr prints the console link the person opens. \`--wait\` follows the run until it succeeds or
+fails, approval being one step on the way, and prints its final row; a refusal or an expiry says so on stderr.
 
 Namespace placement options, each defaulting to what the preset would choose:
 
@@ -230,21 +235,26 @@ interface Flags {
 	readonly json: boolean
 	/** `--not-secret`: `apps variables put` stores a value that looks like a credential. */
 	readonly notSecret: boolean
+	/** `--wait`: `deploy` follows the run until it succeeds or fails. */
+	readonly wait: boolean
 	readonly positional: readonly string[]
 }
 
-/** Split `--key=value` options from positional words; `--json` is the one flag every verb shares, `--not-secret` the other bare one. */
+/** Split `--key=value` options from positional words; `--json` is the one flag every verb shares, `--not-secret` and `--wait` the other bare ones. */
 export const parseControlFlags = (argv: readonly string[]): Flags => {
 	const values = new Map<string, string>()
 	const repeated = new Map<string, string[]>()
 	const positional: string[] = []
 	let json = false
 	let notSecret = false
+	let wait = false
 	for (const arg of argv) {
 		if (arg === '--json') {
 			json = true
 		} else if (arg === '--not-secret') {
 			notSecret = true
+		} else if (arg === '--wait') {
+			wait = true
 		} else if (arg.startsWith('--')) {
 			const eq = arg.indexOf('=')
 			if (eq === -1) {
@@ -258,7 +268,7 @@ export const parseControlFlags = (argv: readonly string[]): Flags => {
 			positional.push(arg)
 		}
 	}
-	return { values, repeated, json, notSecret, positional }
+	return { values, repeated, json, notSecret, wait, positional }
 }
 
 const required = (flags: Flags, name: string): string => {
@@ -920,7 +930,8 @@ const runRuns = async (verb: string | undefined, flags: Flags, env: Readonly<Rec
 	}
 	if (verb === 'get') {
 		const result = await client.runs.get({ runId: required(flags, 'run') })
-		if (result.status === 'failed') console.warn(`why it failed: fabrika control runs log --run=${result.id}`)
+		const hint = runHint(result)
+		if (hint !== null) console.warn(hint)
 		emit(flags, result, () => runLine(result))
 		return
 	}
@@ -1091,12 +1102,57 @@ const runNamespaces = async (verb: string | undefined, flags: Flags, env: Readon
 
 const runDeploy = async (flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	const ref = optional(flags, 'ref')
-	const result = await controlClient(flags, env).deploy({
+	const client = controlClient(flags, env)
+	const created = await client.deploy({
 		appId: required(flags, 'app'),
 		env: required(flags, 'env'),
 		...(ref === undefined ? {} : { ref }),
 	})
+	const result = flags.wait ? await followRun((runId) => client.runs.get({ runId }), created, { intervalMs: WAIT_INTERVAL_MS }) : created
+	const hint = runHint(result)
+	if (hint !== null && !flags.wait) console.warn(hint)
 	emit(flags, result, () => runLine(result))
+}
+
+/** How often `deploy --wait` reads the run again. */
+const WAIT_INTERVAL_MS = 5000
+
+/**
+ * What stderr says about a run beside its row: the link a person approves it at, or why it failed. A non-person's
+ * deploy of a protected environment carries the link from its creation (ADR-0050 §4).
+ */
+export const runHint = (run: RunDto): string | null => {
+	if (run.status === 'failed') {
+		if (run.failureCause === 'rejected') return 'a person refused this deploy; nothing was deployed'
+		if (run.failureCause === 'expired') return 'nobody approved or refused this deploy before its deadline, so it expired; nothing was deployed'
+		return `why it failed: fabrika control runs log --run=${run.id}`
+	}
+	if (run.approvalUrl !== undefined) return `a person approves or refuses this deploy at ${run.approvalUrl}`
+	return null
+}
+
+/**
+ * Follow a run until it succeeds or fails, saying on stderr when it starts to wait for a person and where. Approval is
+ * only a step: an approved run deploys, and its outcome is what this answers.
+ */
+export const followRun = async (
+	read: (runId: string) => Promise<RunDto>,
+	created: RunDto,
+	options: { readonly intervalMs: number },
+): Promise<RunDto> => {
+	let run = created
+	let said: string | null = null
+	while (run.status !== 'succeeded' && run.status !== 'failed') {
+		const hint = runHint(run)
+		const line = hint === null ? `the run is ${run.status.replace('_', ' ')}` : hint
+		if (line !== said) console.warn(line)
+		said = line
+		await Bun.sleep(options.intervalMs)
+		run = await read(run.id)
+	}
+	const hint = runHint(run)
+	if (hint !== null) console.warn(hint)
+	return run
 }
 
 /**
