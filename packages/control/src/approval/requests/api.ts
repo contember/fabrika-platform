@@ -124,8 +124,16 @@ export async function createApprovalRequestUseCase(
 /** One request: the requester's own, or any at coordinates where the caller may decide it. */
 export async function getApprovalRequestUseCase(c: ApprovalRequestReadContext, id: string): Promise<ApprovalRequestDto> {
 	const row = await c.repositories.approvalRequests.get(id)
-	if (row === null || (row.requester_id !== c.auth.principal?.id && !mayDecide(c, row))) fail(404, 'approval request not found')
+	if (row === null || (!isRequester(c.auth, row) && !mayDecide(c, row))) fail(404, 'approval request not found')
 	return toApprovalRequestDto(c, row)
+}
+
+/**
+ * Whether the caller is the request's requester: the same principal through the same OAuth client, or through no client
+ * for a key. Another agent of the same person reads only what it asked for itself.
+ */
+function isRequester(auth: AuthContext, row: ApprovalRequestRow): boolean {
+	return auth.principal !== null && row.requester_id === auth.principal.id && row.requester_client_id === (auth.oauth?.clientId ?? null)
 }
 
 /**

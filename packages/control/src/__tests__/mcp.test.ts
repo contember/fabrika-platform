@@ -272,7 +272,7 @@ describe('the MCP endpoint', () => {
 	test("get_approval_request reads a request its caller made, with the console link, and no one else's", async () => {
 		const { fetch, world } = await fixture()
 		const token = await testResourceToken({ resource: RESOURCE, label: 'author@acme.test', actions: AUTHOR_ACTIONS })
-		const ask = (id: string, requesterId: string) =>
+		const ask = (id: string, requesterId: string, clientId: string | null = 'https://claude.ai/oauth/client.json') =>
 			world.repositories.approvalRequests.create({
 				id,
 				kind: 'notes.put',
@@ -281,13 +281,15 @@ describe('the MCP endpoint', () => {
 				appId: 'shop',
 				env: 'stage',
 				category: 'secrets',
-				requester: { id: requesterId, type: 'user', label: 'author@acme.test', credential: 'oauth', clientId: null, grantId: null, issuerId: null },
+				requester: { id: requesterId, type: 'user', label: 'author@acme.test', credential: 'oauth', clientId, grantId: null, issuerId: null },
 				beforeJson: '{}',
 				beforeDigest: `sha256:${'b'.repeat(64)}`,
 				ttlSeconds: 3600,
 			})
 		await ask('01900000-0000-7000-8000-00000000a001', 'user-author@acme.test')
 		await ask('01900000-0000-7000-8000-00000000a002', 'user-someone-else')
+		// The same person's request through another agent is that agent's.
+		await ask('01900000-0000-7000-8000-00000000a003', 'user-author@acme.test', 'https://other-agent.example.test/client.json')
 
 		const own = toolJson(
 			await rpc(fetch, token, 'tools/call', { name: 'get_approval_request', arguments: { id: '01900000-0000-7000-8000-00000000a001' } }),
@@ -298,8 +300,10 @@ describe('the MCP endpoint', () => {
 			url: `${ORIGIN}/approvals/requests/01900000-0000-7000-8000-00000000a001`,
 		})
 
-		const foreign = await rpc(fetch, token, 'tools/call', { name: 'get_approval_request', arguments: { id: '01900000-0000-7000-8000-00000000a002' } })
-		expect(field(foreign, 'result')).toEqual({ isError: true, content: [{ type: 'text', text: 'approval request not found' }] })
+		for (const id of ['01900000-0000-7000-8000-00000000a002', '01900000-0000-7000-8000-00000000a003']) {
+			const foreign = await rpc(fetch, token, 'tools/call', { name: 'get_approval_request', arguments: { id } })
+			expect(field(foreign, 'result')).toEqual({ isError: true, content: [{ type: 'text', text: 'approval request not found' }] })
+		}
 	})
 
 	test('a refused tool call is a tool error with a short message, and invalid input never reaches Source', async () => {

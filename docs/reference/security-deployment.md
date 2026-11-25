@@ -167,7 +167,9 @@ no request may ever name with their reason, every other one as not requestable y
   an execution writes the kind's action with its outcome, the operation id and the requester.
 - **Reading it.** The agent reads the state with `approvals.requests.get`, `fabrika control requests get <id> [--wait]`
   or the MCP tool `get_approval_request`; the person decides at `<console>/approvals/requests/<id>`, where text the
-  agent wrote is escaped and marked. Fabrika sends no notification.
+  agent wrote is escaped and marked. Fabrika sends no notification. The requester reads its request only through the
+  credential that asked (the same principal and OAuth client, or no client for a key), so another agent of the same
+  person does not; a person who may decide it reads any at those coordinates.
 
 Known gap: an edited statement inside an already-declared `sql` site produces no closer-review line, so it publishes on
 a protected environment without approval

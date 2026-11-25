@@ -133,6 +133,8 @@ interface Who {
 	readonly actions?: readonly string[]
 	/** Where the actions hold; everywhere when absent. */
 	readonly scope?: Scope
+	/** An OAuth credential's client; the test agent's when absent. */
+	readonly clientId?: string
 }
 
 const ADA: Who = { credential: 'console', id: 'p-ada', label: 'ada@example.test' }
@@ -199,7 +201,15 @@ for (const backend of backends) {
 				ok: true,
 				principal: { id: who.id ?? (service ? 'svc-ci' : 'p-ada'), type: service ? 'service' : 'user', label: who.label ?? (service ? 'ci' : 'ada') },
 				...(who.credential === 'oauth'
-					? { oauth: { app: 'vozka', clientId: 'https://agent.example.test/client.json', scopes: ['operate'], grantId: 'grant-1', tokenId: 't' } }
+					? {
+						oauth: {
+							app: 'vozka',
+							clientId: who.clientId ?? 'https://agent.example.test/client.json',
+							scopes: ['operate'],
+							grantId: 'grant-1',
+							tokenId: 't',
+						},
+					}
 					: {}),
 				can: (action, scope) => permits(grants, action, scope),
 				scopedTo: () => null,
@@ -670,6 +680,19 @@ for (const backend of backends) {
 				const everywhere = (await listApprovalRequestsUseCase(context(w, BOB))).items
 				expect(everywhere).toHaveLength(100)
 				expect(everywhere.map((item) => item.id)).not.toContain(decidable.id)
+			})
+
+			test("the requester reads its request only through the credential that asked: another agent's token of the same person does not", async () => {
+				const w = await world()
+				const { id } = await ask(w)
+				expect((await getApprovalRequestUseCase(context(w, AGENT), id)).id).toBe(id)
+				const otherAgent: Who = { ...AGENT, clientId: 'https://other-agent.example.test/client.json' }
+				expect(await status(getApprovalRequestUseCase(context(w, otherAgent), id))).toEqual({ status: 404, message: 'approval request not found' })
+				const ownKey: Who = { credential: 'key', id: 'p-ada', actions: [CONTROL_ACTIONS.SECRET_MANAGE] }
+				expect((await status(getApprovalRequestUseCase(context(w, ownKey), id))).status).toBe(404)
+				const byKey = await ask(w, ownKey)
+				expect((await getApprovalRequestUseCase(context(w, ownKey), byKey.id)).id).toBe(byKey.id)
+				expect((await status(getApprovalRequestUseCase(context(w, AGENT), byKey.id))).status).toBe(404)
 			})
 
 			test('only a person in the console decides: a key or an agent holding access.approve is refused', async () => {
