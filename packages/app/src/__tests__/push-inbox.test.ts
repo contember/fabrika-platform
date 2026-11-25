@@ -10,7 +10,7 @@ import { scoped } from '@fabrika/db'
 import { frameworkTablesOf, type NotificationAbout } from '@fabrika/db/framework'
 import { uuidv7 } from '@fabrika/platform'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { sessionOf } from '../../../db/src/database'
+import { runFixedStatement, sessionOf } from '../../../db/src/database'
 import { pushContract as contract, pushDatabase, pushTables as tables } from './fixtures/push-app'
 
 const INBOX_ROW = {
@@ -169,6 +169,43 @@ describe('the inbox through the proxy and the dispatcher', () => {
 		expect(await inbox(alice(), 'nobody')).toEqual({ status: 200, body: { mine: false, notifications: [], more: 0 } })
 		expect(await post(kit, alice(), '/__fabrika/push/inbox', { endpoint: endpoint('x'), principal: 'bob' }))
 			.toMatchObject({ status: 400, body: { error: { type: 'push_inbox' } } })
+	})
+
+	test("a terminal session is refused and shows nothing, though the browser's subscription is the person's", async () => {
+		await post(kit, admin(), '/__fabrika/push/subscription', record('kiosk'))
+		await notify('admin', 'secret title', APP)
+		// The ceiling keeps the person's permissions, so the proxy admits the row and the dispatcher refuses the terminal.
+		const terminal = { id: 'terminal-1', label: 'Entrance', grants: [], ceiling: ['notes.*'] }
+		const onTerminal = kit.testCaller([{ role: 'editor' }], { id: 'admin', terminal })
+		expect(await inbox(onTerminal, 'kiosk')).toMatchObject({ status: 403, body: { error: { type: 'forbidden' } } })
+		// Negative control: the same person's own session reads it.
+		expect(titles(await inbox(admin(), 'kiosk'))).toEqual(['secret title'])
+	})
+
+	test('a new subscription reads only what is written after it', async () => {
+		await notify('alice', 'before subscribing', W1)
+		await post(kit, alice(), '/__fabrika/push/subscription', record('alice'))
+		await notify('alice', 'after subscribing', W1)
+		expect(titles(await inbox(alice(), 'alice'))).toEqual(['after subscribing'])
+	})
+
+	test("a row about an object is read through a grant on the object's container, and hidden in another one", async () => {
+		const session = sessionOf({ database: fresh.database })
+		const note = (id: string, workspace: string) =>
+			runFixedStatement(session, 'insert into notes (id, workspace_id, title, created_by, version) values (?1, ?2, ?3, ?4, 1)', [
+				id,
+				workspace,
+				'n',
+				'x',
+			])
+		const inW1 = uuidv7()
+		const inW2 = uuidv7()
+		await note(inW1, 'w1')
+		await note(inW2, 'w2')
+		await post(kit, alice(), '/__fabrika/push/subscription', record('alice'))
+		await notify('alice', 'note in w1', { action: 'notes.read', dimension: 'note', value: inW1 })
+		await notify('alice', 'note in w2', { action: 'notes.read', dimension: 'note', value: inW2 })
+		expect(titles(await inbox(alice(), 'alice'))).toEqual(['note in w1'])
 	})
 
 	test('a person without a permission never reaches it', async () => {

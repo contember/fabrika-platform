@@ -135,7 +135,8 @@ function suite(name: string, backend: () => Backend, skip: boolean): void {
 		test("the inbox reads the caller's subscription and its cursor, and deletes another principal's", async () => {
 			const session = backend().session()
 			await push.record(session, ALICE, id(1), keys('e1'), null, NOW)
-			expect(await push.inbox(session, ALICE, endpoint('e1'))).toEqual({ cursor: null })
+			// A new subscription's cursor is its own id: it reads only what is written after it.
+			expect(await push.inbox(session, ALICE, endpoint('e1'))).toEqual({ cursor: id(1) })
 			expect(await push.inbox(session, ALICE, endpoint('nobody'))).toBeNull()
 			expect(await push.inbox(session, BOB, endpoint('e1'))).toBeNull()
 			expect(await push.binding(session, ALICE, endpoint('e1'))).toBe('unknown')

@@ -51,7 +51,8 @@ export interface PushSubscriptions {
 	/** Whose `endpoint` is, for `principal`. */
 	binding(session: Session, principal: string, endpoint: string): Promise<PushBinding>
 	/**
-	 * Records `subscription` for `principal` under `id` (a new row's key; an existing row of the caller keeps its own),
+	 * Records `subscription` for `principal` under `id` (a new row's key, a UUIDv7 made now, which is also a new row's
+	 * cursor, so it reads only notifications written after it; an existing row of the caller keeps its key and cursor),
 	 * replacing the endpoint `replace` when it names one, at `now`. Prunes a batch of expired tombstones first, and
 	 * drops the principal's oldest live rows past the bound after. An outcome but `recorded` changes no subscription: the
 	 * old row is removed only after the new one was written.
@@ -242,7 +243,9 @@ export function pushSubscriptions(): PushSubscriptions {
 					subscription.p256dh,
 					subscription.auth,
 					subscription.vapidKey,
-					cursor,
+					// A new subscription reads only what is written after it: its id is a UUIDv7 made now. A replacement
+					// carries the old cursor, so a key rotation or a changed subscription neither replays nor skips.
+					cursor ?? id,
 					now,
 					cutoff,
 				])

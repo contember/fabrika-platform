@@ -1613,6 +1613,11 @@ export class ContractRuntime {
 		exec: RequestExecutionContext | undefined,
 	): Promise<Response> {
 		const caller = await this.#authorize(served.row, request)
+		// A terminal is a shared browser (§7): a subscription recorded there in a person's own session must never show
+		// that person's text to whoever holds the terminal. The worker closes what it showed and unsubscribes on a 403.
+		if (caller.principal.kind !== 'user' || caller.principal.terminal !== undefined) {
+			throw new ForbiddenError('A terminal is a shared browser, and reads no notification')
+		}
 		await this.#admit(served.row, served.admission, request, caller.subject)
 		const { endpoint } = pushInboxRequest(await readBodyInTime(request, maxBytesOf(served.row)))
 		const framework = this.#framework()
@@ -1652,7 +1657,12 @@ export class ContractRuntime {
 		}
 	}
 
-	/** Whether the caller may read a notification about `about` now: the check an endpoint of its action makes. */
+	/**
+	 * Whether the caller may read a notification about `about` now: the check an endpoint of its action makes. Any
+	 * failure but "not found" fails the whole read, so the cursor stays and every later push answers 500 until the row
+	 * expires. Nothing writes rows yet; `ctx.notify` must keep that from happening by validating `about`'s value against
+	 * the owning table's key when it writes (a value Postgres cannot cast would abort the transaction here).
+	 */
 	async #mayRead(caller: Caller, about: NotificationAbout, frame: RequestFrame): Promise<boolean> {
 		if (!this.#parts.actions.includes(about.action)) {
 			return false
