@@ -155,12 +155,18 @@ export function loosened(before: ApprovalPolicy, after: ApprovalPolicy): PolicyC
 	return POLICY_CATEGORIES.filter((category) => APPROVAL_MODES.indexOf(after[category]) < APPROVAL_MODES.indexOf(before[category]))
 }
 
-/** The settings a change loosens, in the console's words: an unmerged commit admitted, or one approver where two decided. */
+/**
+ * The settings a change loosens, in the console's words: an unmerged commit admitted, one approver where two decided, or
+ * the requester's own person allowed to approve.
+ */
 export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettings): string[] {
 	return [
 		...(before.deployRequestCommits === 'merged' && after.deployRequestCommits === 'any' ? ['an agent may ask to deploy an unmerged commit'] : []),
 		...APPROVER_CATEGORIES.filter((category) => after.approvers[category] < before.approvers[category]).map((category) =>
 			`${categoryLabel(category)} (one approver)`
+		),
+		...APPROVER_CATEGORIES.filter((category) => after.requesterMayApprove[category] && !before.requesterMayApprove[category]).map((category) =>
+			`${categoryLabel(category)} (the requester's person may approve)`
 		),
 	]
 }
@@ -187,7 +193,9 @@ export const PRESETS = [
 /** Whether two sets of settings say the same. */
 export function sameSettings(a: ApprovalSettings, b: ApprovalSettings): boolean {
 	return a.deployRequestCommits === b.deployRequestCommits && a.requestTtlHours === b.requestTtlHours
-		&& APPROVER_CATEGORIES.every((category) => a.approvers[category] === b.approvers[category])
+		&& APPROVER_CATEGORIES.every((category) =>
+			a.approvers[category] === b.approvers[category] && a.requesterMayApprove[category] === b.requesterMayApprove[category]
+		)
 }
 
 /** The preset a choice is, if any. */
@@ -206,10 +214,12 @@ export function requestTtl(text: string): number | null {
 /** The settings in the console's words, for a reader who cannot change them. */
 export function settingsSummary(settings: ApprovalSettings): string {
 	const two = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] === 2).map(categoryLabel)
+	const others = APPROVER_CATEGORIES.filter((category) => !settings.requesterMayApprove[category]).map(categoryLabel)
 	return [
 		settings.deployRequestCommits === 'merged' ? 'An agent asks to deploy merged commits only.' : 'An agent may ask to deploy any commit.',
 		`A request waits ${settings.requestTtlHours} h for a decision.`,
 		...(two.length === 0 ? [] : [`Two people decide: ${two.join(', ')}.`]),
+		...(others.length === 0 ? [] : [`Someone other than the requester's person decides: ${others.join(', ')}.`]),
 	].join(' ')
 }
 
@@ -247,4 +257,22 @@ export function protectionFailure(cause: unknown, env: string): string {
 		default:
 			return cause.message
 	}
+}
+
+/**
+ * Whether the viewer may approve an item a request asked for (ADR-0083 §8): under `requesterMayApprove: false` not the
+ * requester's person, and nobody when that person is unknown (a service key). Control decides again.
+ */
+export function requesterBlocks(requesterMayApprove: boolean, personId: string | null, me: string | null): 'nobody' | 'you' | null {
+	if (requesterMayApprove) return null
+	if (personId === null) return 'nobody'
+	return personId === me ? 'you' : null
+}
+
+/** Why the viewer has no approve button on an item a request asked for. */
+export function requesterBlockText(blocked: 'nobody' | 'you', item: 'deploy' | 'request'): string {
+	return blocked === 'you'
+		? `It was asked for on your behalf, and this environment lets someone other than the requester's person approve it. You may refuse it.`
+		: `A service key asked for this ${item}, and this environment lets only someone other than the key's issuer approve it, whom Control cannot know: `
+			+ 'nobody can approve it. You may refuse it.'
 }

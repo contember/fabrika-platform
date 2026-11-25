@@ -588,6 +588,49 @@ describe('the approval link', () => {
 	})
 })
 
+describe('requesterMayApprove: false on a parked deploy request', () => {
+	const ada = () => caller('console', 'p-ada', 'ada@example.test')
+	const bob = () => caller('console', 'p-bob', 'bob@example.test')
+	const others = { ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, 'deploy-request': false } }
+
+	for (const kind of ['oauth', 'key'] as const) {
+		test(`${kind}: the person behind the token may not approve it, may refuse it, and someone else approves it`, async () => {
+			const w = await world()
+			await published(w)
+			await choose(w, 'prod', STRICT_POLICY, others)
+			const runId = (await requested(w, kind)).runId
+			expect((await getApprovalUseCase(approvals(w), runId)).requesterMayApprove).toBe(false)
+			const own = await status(decide(w, runId, 'approve', ada()))
+			expect(own.status).toBe(403)
+			expect(own.message).toContain('asked for on your behalf')
+			expect(await run(w, runId)).toMatchObject({ status: 'awaiting_approval', approval_json: null })
+			expect((await decide(w, runId, 'approve', bob())).run.status).toBe('pending')
+		})
+	}
+
+	test("a service key's issuer is unknown, so nobody approves it and it can still be refused", async () => {
+		const w = await world()
+		await published(w)
+		await choose(w, 'prod', STRICT_POLICY, others)
+		const runId = (await requested(w, 'service')).runId
+		for (const person of [ada, bob]) {
+			const refused = await status(decide(w, runId, 'approve', person()))
+			expect(refused.status).toBe(403)
+			expect(refused.message).toContain('nobody can approve it')
+		}
+		expect((await decide(w, runId, 'reject', ada())).run).toMatchObject({ status: 'failed', failureCause: 'rejected' })
+	})
+
+	test('the stricter category wins, and the default lets the requester approve', async () => {
+		const w = await world()
+		await published(w)
+		// The run waits for `deploy-request` only; a false on another category does not reach it.
+		await choose(w, 'prod', STRICT_POLICY, { ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, secrets: false } })
+		const runId = (await requested(w, 'oauth')).runId
+		expect((await decide(w, runId, 'approve', ada())).run.status).toBe('pending')
+	})
+})
+
 describe('the settings are stored with the protection', () => {
 	test('stored as their difference from the defaults, kept beyond the deletion of the environment', async () => {
 		const w = await world()
@@ -595,6 +638,7 @@ describe('the settings are stored with the protection', () => {
 			deployRequestCommits: 'any',
 			requestTtlHours: 6,
 			approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2, secrets: 2 },
+			requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, variables: false },
 		}
 		const dto = await setEnvironmentProtectionUseCase(approvals(w), { appId: 'notes', env: 'prod', protected: true, settings })
 		expect(dto.approvalSettings).toEqual(settings)
@@ -602,6 +646,7 @@ describe('the settings are stored with the protection', () => {
 			deployRequestCommits: 'any',
 			requestTtlHours: 6,
 			approvers: { 'deploy-request': 2, secrets: 2 },
+			requesterMayApprove: { variables: false },
 		})
 		// Omitted keeps them; the defaults store nothing.
 		expect((await setEnvironmentProtectionUseCase(approvals(w), { appId: 'notes', env: 'prod', protected: true })).approvalSettings).toEqual(settings)

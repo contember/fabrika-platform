@@ -1,5 +1,5 @@
 import { createPage, Link } from '@buzola/router'
-import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, type SubjectRow } from '@fabrika/control-contract'
+import { type ApprovalView, approvalView, type ChangeGroup, type ChangeRow, requesterPersonId, type SubjectRow } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { AccessMapView } from '../../components/AccessMap'
 import { CloserReview } from '../../components/CloserReview'
@@ -21,7 +21,7 @@ import {
 	surfaceNotes,
 } from '../../lib/access-changes'
 import { type AccessChangeDto, api, ApiError, type ApprovalDto, type DeployRequestDto, type SurfaceEndpointDto } from '../../lib/api'
-import { changeWaits } from '../../lib/environment-protection'
+import { changeWaits, requesterBlocks, requesterBlockText } from '../../lib/environment-protection'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
 import { consoleSession } from '../../lib/session'
 
@@ -632,6 +632,9 @@ export function Decision({ approval, me, now, onDone }: { approval: ApprovalDto;
 		)
 	}
 	const approvedByMe = approval.partialApproval !== undefined && approval.partialApproval.principalId === me
+	const blocked = approval.request === undefined
+		? null
+		: requesterBlocks(approval.requesterMayApprove, requesterPersonId(approval.request.principal), me)
 
 	async function decide(decision: 'approve' | 'reject') {
 		setBusy(true)
@@ -668,6 +671,8 @@ export function Decision({ approval, me, now, onDone }: { approval: ApprovalDto;
 				<div className="row-actions">
 					{approvedByMe
 						? <span className="muted">Waiting for a second person</span>
+						: blocked !== null
+						? <span className="muted">{requesterBlockText(blocked, 'deploy')}</span>
 						: (
 							<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
 								{busy ? 'Recording…' : 'Approve and deploy'}

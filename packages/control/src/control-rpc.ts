@@ -185,7 +185,10 @@ const protectEnvironmentInput = z.object({
 	env: nonEmpty,
 	protected: z.boolean(),
 	policy: approvalPolicySchema.strict().optional(),
-	settings: approvalSettingsSchema.extend({ approvers: approvalSettingsSchema.shape.approvers.strict() }).strict().optional(),
+	settings: approvalSettingsSchema.extend({
+		approvers: approvalSettingsSchema.shape.approvers.strict(),
+		requesterMayApprove: approvalSettingsSchema.shape.requesterMayApprove.strict(),
+	}).strict().optional(),
 }).strict()
 const accessDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
 const completeApprovalInput = z.object({

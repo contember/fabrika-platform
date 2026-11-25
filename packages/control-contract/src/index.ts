@@ -798,6 +798,11 @@ export interface ApprovalDto {
 	partialApproval?: { principalId: string; label: string; approvedAt: number }
 	/** How many people decide the run: the most any of its waiting categories asks for (ADR-0083 §8). */
 	approvers: 1 | 2
+	/**
+	 * Whether the person behind `request` may approve it: false when a waiting category sets `requesterMayApprove: false`
+	 * (ADR-0083 §8), and then `requesterPersonId` of the request names who may not, or, when null, that nobody may.
+	 */
+	requesterMayApprove: boolean
 	/** When the parked run expires unless decided; absent once decided, and for a run parked before deadlines existed until maintenance sets one. */
 	deadline?: number
 	/** A non-person asked for the deploy (ADR-0050 §4): who, and the commit. Absent for any other run. */

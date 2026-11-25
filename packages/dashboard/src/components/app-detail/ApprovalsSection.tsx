@@ -179,6 +179,10 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 		if (isApproverCategory(category)) setSettings({ ...settings, approvers: { ...settings.approvers, [category]: count } })
 	}
 
+	function chooseRequesterMayApprove(category: PolicyCategory, may: boolean) {
+		if (isApproverCategory(category)) setSettings({ ...settings, requesterMayApprove: { ...settings.requesterMayApprove, [category]: may } })
+	}
+
 	function chooseTtl(text: string) {
 		setTtlText(text)
 		const hours = requestTtl(text)
@@ -269,6 +273,17 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 								>
 									<option value="1">One person decides (default)</option>
 									<option value="2">Two people decide</option>
+								</select>
+							)}
+							{isApproverCategory(option.category) && (
+								<select
+									value={settings.requesterMayApprove[option.category] ? 'yes' : 'no'}
+									disabled={busy}
+									aria-label={`${option.label}: who decides an agent's request`}
+									onChange={(event) => chooseRequesterMayApprove(option.category, event.target.value === 'yes')}
+								>
+									<option value="yes">The requester's person may decide (default)</option>
+									<option value="no">Someone else decides</option>
 								</select>
 							)}
 						</label>
