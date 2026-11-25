@@ -53,6 +53,7 @@ import { parameterArn, type SsmClient, ssmClient } from './aws/ssm'
 import { type AwsClientOptions, awsServiceOrigin } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppArtifact, awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec } from './codecs'
 import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deploy'
+import { AWS_APPLICATION_PORT } from './ecs-task'
 import { awsEnvironmentStack, type AwsInstallationNetwork, checkInstallationNetwork, ensureEnvironmentStack } from './environment-stack'
 import { awsNamespaceCapabilities, checkNamespaceTarget, readNamespaceOutputs } from './namespace'
 import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
@@ -428,7 +429,10 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			const tags = { 'fabrika:app': input.app.id, 'fabrika:env': input.environment.env }
 			const deployClients: AwsDeployClients = { ...clients, credentials: lastingCredentials() }
 			const commitSha = input.app.source.ref
-			const deployRun = (events: ProviderRunEvents | undefined, securityGroupId: string | null) =>
+			const deployRun = (
+				events: ProviderRunEvents | undefined,
+				placement: { readonly securityGroupId: string; readonly serviceConnectNamespaceArn: string } | null,
+			) =>
 				awsDeploy({
 					appId: input.app.id,
 					env: input.environment.env,
@@ -458,7 +462,12 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 						log: { group: resources.logGroup, region: target.region },
 						tags,
 					},
-					network: securityGroupId === null ? null : { subnets: network.subnets, securityGroups: [securityGroupId], publicIp: network.publicIp },
+					network: placement === null
+						? null
+						: { subnets: network.subnets, securityGroups: [placement.securityGroupId], publicIp: network.publicIp },
+					serviceConnect: placement === null
+						? null
+						: { namespaceArn: placement.serviceConnectNamespaceArn, discoveryName: resources.discoveryName, port: AWS_APPLICATION_PORT },
 					clients: deployClients,
 					source: {
 						upload: async (parts, signal) => {
@@ -510,7 +519,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 				for (const name of secretNames) {
 					await clients.ssm.putSecret(awsSecretParameter(resources, input.runId, name), values.secret[name] ?? '', input.signal)
 				}
-				const result = await deployRun(events, stack.securityGroupId)
+				const result = await deployRun(events, { securityGroupId: stack.securityGroupId, serviceConnectNamespaceArn: proxy.serviceConnectNamespaceArn })
 				succeeded = result.status === 'succeeded'
 				input.signal.throwIfAborted()
 				return { state: result.status, artifactState: 'not_applicable' }

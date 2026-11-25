@@ -394,10 +394,17 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     stack, its service and its parameter path, and `claimedResources` reads each back (no stack, no service ECS shows
     active, no parameter under `env/`), so a later registration of the same coordinates never inherits an earlier one's
     secrets or images; fabrika deletes none of them (ADR-0034).
+    **Service Connect** (built): every create and update publishes the service in its namespace's Service Connect
+    namespace, its server port named `http` (`appProtocol: http`), under the discovery name
+    `e<length of app>-<app>-<env>` (a DNS label; the service's own name holds `_`), with a client alias of that name on
+    the application's port. The proxy will reach an application at `http://<discovery name>:3000`, through its group's
+    ingress rule alone. Sent on every update, so a service moved to another namespace is published in the new one.
+    UNVERIFIED: the configuration's fields and rules, and whether Control's role needs Cloud Map service calls
+    (`servicediscovery:CreateService`, `GetService`) of its own when ECS publishes a service.
     Not yet: the proxy service (its image built from the pinned proxy source with the manifest carried in its build as
     on Zerops, ADR-0045, so a running proxy never reads a manifest newer than its image; its ECS service in the Service
-    Connect namespace; `republish`), the balancer's host rules and certificates, the applications joining Service
-    Connect, and the database (one instance for `cheap` namespaces, a database per application; an instance per `full`
+    Connect namespace, on X86_64, because the proxy package builds its binary for `linux-x64-musl` only; `republish`),
+    the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per application; an instance per `full`
     namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
     a message: a stack's absence is decided from `ListStacks` (or a `DescribeStacks` by the stack's id, which keeps

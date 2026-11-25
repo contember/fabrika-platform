@@ -45,7 +45,7 @@ import {
 } from '@fabrika/provider-contract'
 import type { CodeBuildBuild, CodeBuildClient } from './aws/codebuild'
 import type { EcrClient } from './aws/ecr'
-import type { EcsClient, EcsNetwork } from './aws/ecs'
+import type { EcsClient, EcsNetwork, EcsServiceConnect } from './aws/ecs'
 import type { LogsClient } from './aws/logs'
 import { awsSourceKey, type S3ObjectAddress, type S3PartWriter, s3PresignedGet } from './aws/s3'
 import type { SsmClient } from './aws/ssm'
@@ -149,6 +149,8 @@ export interface AwsDeployInput {
 	 * security group. `null` only in a dry run, which calls nothing.
 	 */
 	readonly network: EcsNetwork | null
+	/** How the service is published in its namespace's Service Connect namespace, for its proxy; `null` only in a dry run. */
+	readonly serviceConnect: EcsServiceConnect | null
 	readonly clients: AwsDeployClients
 	readonly source: AwsSourceUpload
 	readonly events: ProviderRunEvents
@@ -438,6 +440,8 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 			const revision = checkpoint.taskDefinitionArn
 			if (revision === undefined) throw new Error('aws: the update ran before a revision was registered')
 			const network = networkOf()
+			const serviceConnect = input.serviceConnect
+			if (serviceConnect === null) throw new Error('aws: the deploy has no Service Connect namespace for its service')
 			// The environment's first run creates its service on its revision; every later one updates it. A service being
 			// deleted is neither: ECS refuses an update of it, and a create of its name until it is gone.
 			const current = await repeated(() => clients.ecs.describeService(service, signal), isThrottled)
@@ -462,6 +466,7 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 									network,
 									desiredCount: AWS_SERVICE_DESIRED_COUNT,
 									clientToken: token,
+									serviceConnect,
 									tags: input.task.tags,
 								},
 								signal,
@@ -469,7 +474,7 @@ export async function awsDeploy(input: AwsDeployInput): Promise<AwsDeployResult>
 						(error) => error instanceof AwsError && error.retryable,
 					)
 					// A throttled update was not processed: the same revision is asked for again.
-					: await repeated(() => clients.ecs.updateService(service, revision, network, signal), isThrottled)
+					: await repeated(() => clients.ecs.updateService(service, revision, network, serviceConnect, signal), isThrottled)
 				if (create) log(`  created the service ${target.service}`)
 				if (updated.currentDeploymentArn !== null) {
 					await context.record({ ...submitted, deploymentArn: updated.currentDeploymentArn }).catch(() => {

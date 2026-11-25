@@ -92,7 +92,18 @@ const awsvpc = {
 		assignPublicIp: 'ENABLED',
 	},
 }
+const connect = {
+	namespaceArn: 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-abcdefghij123456',
+	discoveryName: 'e5-notes-prod',
+	port: 3000,
+}
+const connectBody = {
+	enabled: true,
+	namespace: connect.namespaceArn,
+	services: [{ portName: 'http', discoveryName: 'e5-notes-prod', clientAliases: [{ port: 3000, dnsName: 'e5-notes-prod' }] }],
+}
 const create = {
+	serviceConnect: connect,
 	...address,
 	taskDefinitionArn: TASK_DEFINITION,
 	network: serviceNetwork,
@@ -139,7 +150,7 @@ describe('ecsClient', () => {
 							name: 'server',
 							image: IMAGE,
 							essential: true,
-							portMappings: [{ containerPort: 3000, protocol: 'tcp' }],
+							portMappings: [{ name: 'http', containerPort: 3000, protocol: 'tcp', appProtocol: 'http' }],
 							environment: [{ name: 'FABRIKA_APP_ID', value: 'notes' }],
 							secrets: [{ name: 'FABRIKA_TOKEN_KEYS', valueFrom: server.secrets?.['FABRIKA_TOKEN_KEYS'] }],
 							healthCheck: { command: ['CMD', 'bun', 'fabrika/health.ts'], interval: 10, timeout: 5, retries: 3, startPeriod: 30 },
@@ -164,13 +175,14 @@ describe('ecsClient', () => {
 
 	test('updates the service to the revision in the network with the circuit breaker on and ECS Exec off, and reads the service it answers', async () => {
 		const { options, calls } = fakeAws(ECS, { UpdateService: () => ({ service }) })
-		expect(await ecsClient(options).updateService(address, TASK_DEFINITION, serviceNetwork)).toEqual(read)
+		expect(await ecsClient(options).updateService(address, TASK_DEFINITION, serviceNetwork, connect)).toEqual(read)
 		expect(calls[0]?.body).toEqual({
 			cluster: 'fabrika-apps',
 			service: 'notes-prod',
 			taskDefinition: TASK_DEFINITION,
 			deploymentConfiguration: { deploymentCircuitBreaker: { enable: true, rollback: true }, maximumPercent: 200, minimumHealthyPercent: 100 },
 			networkConfiguration: awsvpc,
+			serviceConnectConfiguration: connectBody,
 			enableExecuteCommand: false,
 		})
 	})
@@ -178,7 +190,7 @@ describe('ecsClient', () => {
 	test('an update answered for another service or another revision is an invalid answer', async () => {
 		for (const change of [{ serviceName: 'other' }, { taskDefinition: 'arn:aws:ecs:eu-central-1:123456789012:task-definition/notes-prod:41' }]) {
 			const { options } = fakeAws(ECS, { UpdateService: () => ({ service: { ...service, ...change } }) })
-			await expect(ecsClient(options).updateService(address, TASK_DEFINITION, serviceNetwork)).rejects.toMatchObject({ code: 'invalid_answer' })
+			await expect(ecsClient(options).updateService(address, TASK_DEFINITION, serviceNetwork, connect)).rejects.toMatchObject({ code: 'invalid_answer' })
 		}
 	})
 
@@ -196,6 +208,7 @@ describe('ecsClient', () => {
 			deploymentController: { type: 'ECS' },
 			deploymentConfiguration: { deploymentCircuitBreaker: { enable: true, rollback: true }, maximumPercent: 200, minimumHealthyPercent: 100 },
 			networkConfiguration: awsvpc,
+			serviceConnectConfiguration: connectBody,
 			clientToken: '0f1e2d3c-4b5a-4968-8776-655443322110',
 			enableExecuteCommand: false,
 			enableECSManagedTags: true,
@@ -219,6 +232,10 @@ describe('ecsClient', () => {
 			[{ network: { ...serviceNetwork, securityGroups: Array.from({ length: 6 }, () => 'sg-0123456789abcdef0') } }, 'the security groups'],
 			[{ tags: { 'aws:x': 'y' } }, 'a tag'],
 			[{ service: 'a/b' }, 'the service name'],
+			[{ serviceConnect: { ...connect, namespaceArn: 'arn:aws:s3:::bucket' } }, 'the Service Connect namespace'],
+			[{ serviceConnect: { ...connect, discoveryName: 'notes_prod' } }, 'the discovery name'],
+			[{ serviceConnect: { ...connect, discoveryName: 'e5-notes-' } }, 'the discovery name'],
+			[{ serviceConnect: { ...connect, port: 0 } }, 'the Service Connect port'],
 		]
 		for (const [change, message] of refusals) await expect(client.createService({ ...create, ...change })).rejects.toThrow(message)
 		expect(refused.calls).toEqual([])
@@ -430,8 +447,8 @@ describe('ecsClient', () => {
 			[{ tags: { 'AWS:x': 'y' } }, 'a tag'],
 		]
 		for (const [change, message] of refusals) await expect(ecs.registerTaskDefinition({ ...definition, ...change })).rejects.toThrow(message)
-		await expect(ecs.updateService({ cluster: 'a/b', service: 'notes' }, TASK_DEFINITION, serviceNetwork)).rejects.toThrow('the cluster name')
-		await expect(ecs.updateService(address, 'notes-prod:42', serviceNetwork)).rejects.toThrow('the task definition')
+		await expect(ecs.updateService({ cluster: 'a/b', service: 'notes' }, TASK_DEFINITION, serviceNetwork, connect)).rejects.toThrow('the cluster name')
+		await expect(ecs.updateService(address, 'notes-prod:42', serviceNetwork, connect)).rejects.toThrow('the task definition')
 		await expect(ecs.describeService({ cluster: 'fabrika-apps', service: '' })).rejects.toThrow('the service name')
 		expect(calls).toEqual([])
 	})

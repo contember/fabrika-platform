@@ -7,7 +7,8 @@
 // submitting call: the checkpoint's `serviceUpdateRequested` is recorded before it (ADR-0044).
 //
 // UNVERIFIED: the operations' input and answer fields, the Fargate CPU values, the rollout states, the `dependsOn`
-// rules, `CreateService`'s 36-character client token and that its answer names `currentServiceDeployment` follow
+// rules, `CreateService`'s 36-character client token and that its answer names `currentServiceDeployment`, and the
+// Service Connect configuration (a named port, its discovery name a DNS label, a client alias of the same name) follow
 // ECS's API reference; none was checked against an account.
 
 import { z } from 'zod'
@@ -186,6 +187,23 @@ export interface EcsServiceCreate extends EcsServiceAddress {
 	/** The idempotency token, at most 36 characters: one per run, so a lost answer is settled by repeating the call. */
 	readonly clientToken: string
 	readonly tags: Readonly<Record<string, string>>
+	readonly serviceConnect: EcsServiceConnect
+}
+
+/** The name a container's port is published under, which Service Connect addresses it by. */
+export const ECS_PORT_NAME = 'http'
+
+/**
+ * A service in a Service Connect namespace as a server: its port (`ECS_PORT_NAME`) published under `discoveryName`,
+ * which the namespace's other services (its proxy) reach at `http://<discoveryName>:<port>`. Reachable only from what
+ * the task's security group admits.
+ */
+export interface EcsServiceConnect {
+	/** The Service Connect (Cloud Map) namespace's ARN. */
+	readonly namespaceArn: string
+	/** A DNS label: a lowercase letter, then lowercase letters, digits and hyphens, at most 63. */
+	readonly discoveryName: string
+	readonly port: number
 }
 
 /** A service deployment's state; a circuit breaker's rollback is a state of the same deployment. */
@@ -229,7 +247,13 @@ export interface EcsClient {
 	 * Points the service at `taskDefinitionArn` in `network` with the circuit breaker on: the submitting call of every
 	 * later run. The network is sent each time, so a service converges on the installation's current one.
 	 */
-	updateService(address: EcsServiceAddress, taskDefinitionArn: string, network: EcsNetwork, signal?: AbortSignal): Promise<EcsService>
+	updateService(
+		address: EcsServiceAddress,
+		taskDefinitionArn: string,
+		network: EcsNetwork,
+		serviceConnect: EcsServiceConnect,
+		signal?: AbortSignal,
+	): Promise<EcsService>
 	/** The service, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
 	describeService(address: EcsServiceAddress, signal?: AbortSignal): Promise<EcsService | null>
 	/** The service deployment `arn`, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
@@ -401,7 +425,10 @@ function containerOf(container: EcsContainer, names: ReadonlySet<string>): Recor
 		name: container.name,
 		image: container.image,
 		essential: container.essential,
-		...(container.port === undefined ? {} : { portMappings: [{ containerPort: container.port, protocol: 'tcp' }] }),
+		...(container.port === undefined ? {} : {
+			// Named, so Service Connect can publish it; HTTP, so its proxy speaks HTTP to it.
+			portMappings: [{ name: ECS_PORT_NAME, containerPort: container.port, protocol: 'tcp', appProtocol: 'http' }],
+		}),
 		...(container.command === undefined ? {} : { command: [...container.command] }),
 		environment: environment.map(([name, value]) => ({ name, value })),
 		secrets: secrets.map(([name, valueFrom]) => ({ name, valueFrom })),
@@ -486,6 +513,29 @@ function awsvpcOf(network: EcsNetwork): Record<string, unknown> {
 	}
 }
 
+/** A Service Connect namespace's ARN, and a discovery name: a DNS label. */
+const SERVICE_CONNECT_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:servicediscovery:[a-z0-9-]{1,32}:\d{12}:namespace\/ns-[a-z0-9]{1,64}$/
+const DISCOVERY_NAME = /^[a-z][a-z0-9-]{0,62}$/
+
+/**
+ * The `serviceConnectConfiguration` ECS takes, after every value was checked: the service publishes its named port
+ * under its discovery name, at that name and port for the namespace's clients.
+ */
+function serviceConnectOf(connect: EcsServiceConnect): Record<string, unknown> {
+	if (!SERVICE_CONNECT_ARN.test(connect.namespaceArn)) refuse('the Service Connect namespace')
+	if (!DISCOVERY_NAME.test(connect.discoveryName) || connect.discoveryName.endsWith('-')) refuse('the discovery name')
+	if (!Number.isInteger(connect.port) || connect.port < 1 || connect.port > 65535) refuse('the Service Connect port')
+	return {
+		enabled: true,
+		namespace: connect.namespaceArn,
+		services: [{
+			portName: ECS_PORT_NAME,
+			discoveryName: connect.discoveryName,
+			clientAliases: [{ port: connect.port, dnsName: connect.discoveryName }],
+		}],
+	}
+}
+
 /**
  * How ECS rolls a service: a new task starts before an old one stops (at most twice the desired count, never below it),
  * and the circuit breaker rolls a deployment whose tasks do not come up back to the last one that did.
@@ -547,6 +597,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (!SERVICE_CLIENT_TOKEN.test(create.clientToken)) refuse('the client token')
 			if (!Number.isInteger(create.desiredCount) || create.desiredCount < 0 || create.desiredCount > MAX_DESIRED_COUNT) refuse('the desired count')
 			const networkConfiguration = awsvpcOf(create.network)
+			const serviceConnectConfiguration = serviceConnectOf(create.serviceConnect)
 			const created = await json.call(
 				'CreateService',
 				{
@@ -560,6 +611,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 					deploymentController: { type: 'ECS' },
 					deploymentConfiguration: DEPLOYMENT_CONFIGURATION,
 					networkConfiguration,
+					serviceConnectConfiguration,
 					clientToken: create.clientToken,
 					// No shell into a task: ECS Exec would reach the application's process around the proxy.
 					enableExecuteCommand: false,
@@ -577,10 +629,11 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			return serviceOf('CreateService', created.service)
 		},
 
-		async updateService(where, taskDefinitionArn, network, signal) {
+		async updateService(where, taskDefinitionArn, network, serviceConnect, signal) {
 			const { cluster, service } = address(where)
 			if (!TASK_DEFINITION_ARN.test(taskDefinitionArn)) refuse('the task definition')
 			const networkConfiguration = awsvpcOf(network)
+			const serviceConnectConfiguration = serviceConnectOf(serviceConnect)
 			const updated = await json.call(
 				'UpdateService',
 				{
@@ -589,6 +642,8 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 					taskDefinition: taskDefinitionArn,
 					deploymentConfiguration: DEPLOYMENT_CONFIGURATION,
 					networkConfiguration,
+					// Sent on every update, so a service moved to another namespace is published in the new one.
+					serviceConnectConfiguration,
 					// Sent on every update too: ECS Exec turned on out of band is turned off by the next deploy.
 					enableExecuteCommand: false,
 				},

@@ -26,6 +26,11 @@ export interface AwsEnvironmentResources {
 	readonly buildLogGroup: string
 	/** The CloudFormation stack that holds the environment's resources (`awsEnvironmentStack`). */
 	readonly stackName: string
+	/**
+	 * The name the service is published under in its namespace's Service Connect namespace, and the host its proxy
+	 * reaches it at: `e<length of app>-<app>-<env>`, a DNS label (the service's own name holds `_`, which none does).
+	 */
+	readonly discoveryName: string
 }
 
 /**
@@ -54,5 +59,7 @@ export function awsEnvironmentResources(appId: string, env: string, accountId: s
 		buildRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_build`,
 		buildLogGroup: `/fabrika/apps/${appId}/${env}/build`,
 		stackName: `fabrika-app-${appId.length}-${appId}-${env}`,
+		// The role name's bound above keeps it within a DNS label's 63 characters.
+		discoveryName: `e${appId.length}-${appId}-${env}`,
 	}
 }
