@@ -3,11 +3,11 @@
 **TLDR.** A coding agent can deploy, write secrets and change an application's registry rows through its own
 credential. The actions that today need a person (a manual deploy of a protected environment, an access change that
 waits, a console grant that waits, issuing keys) have no path where the agent asks and the person answers. Four designs
-were compared. The user chose **(b)**, an explicit one-off approval request in Control that opens on one console page,
+were compared. The maintainers chose **(b)**, an explicit one-off approval request in Control that opens on one console page,
 and **(d)**, an approval plan bound to content hashes and approved before the deploy, in the console or by a GitHub
 review of a mapped person. They are two kinds of evidence for one gate. Each environment chooses a mode per change
 category (`off`, `plan`, `person`, and `refuse` for what a non-person may not do at all), plus a few settings of its
-own; there is no installation level yet. **The user's principle: to any customer's approval requirement the answer is
+own; there is no installation level yet. **The design principle: to any customer's approval requirement the answer is
 "yes, it is configurable".** Every decision below is a default, and "Settings" names the setting that makes each
 alternative possible, where it lives and what it costs. The step plan (10 PRs, about 45–55 h of agent time) is at the
 end. Nothing is built yet.
@@ -24,9 +24,15 @@ environments.
 ## What needs a person today (inventory, verified at `origin/main` 528eb6993)
 
 "A person" means `isPerson` (`packages/control/src/iam.ts:130-133`): a `user` principal with no OAuth claims and no
-link claims. The command-line client's device-grant token is therefore **not** a person, nor is an MCP token, a `px_`
-key or a builder key. Approvals also require the console itself (`requireHumanApprover`,
-`packages/control/src/approval/human.ts:22-28`): a session, with no `Authorization` header.
+link claims. The command-line client's device-grant token is therefore **not** a person, nor is an MCP token, a
+service principal's `px_` key or a builder key. A `px_` key **bound to the person who issued it** is one: its token has
+`ptype: user` and no OAuth or link claim, and Control counts such a bearer on purpose (`iam.ts:128`, `human.ts:95`). So
+it passes every row below marked "person", except approving: approvals also require the console itself
+(`requireHumanApprover`, `packages/control/src/approval/human.ts:22-28`), a session with no `Authorization` header.
+IAM's person-only flows require a session as well (`packages/iam/src/device.ts:44`, `admin/grant-requests.ts:79`).
+
+The inventory was taken at `528eb6993`. The cited files are unchanged at `c8d214ed0`, except for one unrelated hunk in
+`diff.ts`.
 
 ### Control
 
@@ -44,21 +50,21 @@ key or a builder key. Approvals also require the console itself (`requireHumanAp
 | App secrets and vault values (`apps.secrets.*`, `vault.*`), token key rotation       | `secret.manage` only. **No person, no wait, also on a protected environment.** The CLI's `operate` preset carries `secret.manage`.                                                    | `packages/control/src/control-rpc.ts:359,370-376,393-399`; `packages/control-contract/src/cli-access.ts:37`                                                                                               |
 | Variables, environment put (non-protected fields), suspend/resume                    | `app.manage` only.                                                                                                                                                                    | `control-rpc.ts:349,362-365,381-387`                                                                                                                                                                      |
 | Data operations: maintenance modes, side restore, recovery                           | `data.manage` at the coordinates only, no person.                                                                                                                                     | `startDataOperationUseCase` `control-rpc.ts:835-845`, `recoverDataOperationUseCase` `:849-853`                                                                                                            |
-| Namespaces (create, adopt, update, remove, release claims), mail gate                | `namespace.manage` / `mail.manage`, global. No person. No CLI preset carries them.                                                                                                    | `control-rpc.ts:404-429,468-485`; `cli-access.ts:29-31`                                                                                                                                                   |
+| Namespaces (create, adopt, update, remove, release claims), mail gate                | `namespace.manage` / `mail.manage`, global. No person. No CLI preset carries them.                                                                                                    | `control-rpc.ts:404-429,468-485`; `cli-access.ts:30-33`                                                                                                                                                   |
 
-ADR-0083 already names the gap for registry writes: "Variables, secrets and domains are registry writes with no run to
-park; they do not wait ... gating them needs a pending registry write of its own" (its Alternatives).
+ADR-0083 already names the gap for registry writes: variables, secrets and domains have no run to park, so they do not
+wait, and its Alternatives defer gating them until there is a pending registry write of their own.
 
 ### IAM
 
-| Action                                                                                  | Rule today                                                                                                                                            | Evidence                                                                                                                                       |
-| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
-| Console grants (`grants.*`, `appPeople.grant/revoke`) at an app whose grants wait       | Become a grant request. An administrator of the app who is **not the requester**, as a person in a session, decides it. Requests expire after 7 days. | `packages/iam/src/admin/rpc.ts:104-124`, `admin/grant-requests.ts:71-79`; `GRANT_REQUEST_TTL_SECONDS` `packages/iam-contract/src/index.ts:195` |
-| API keys (`apiKeys.provision/rotate/revoke`), workload and membership keys, share links | `iam.admin`. **A `px_` key with `iam.admin` may do it; no person needed.** The provisioning key does it (`fabrika control key issue`).                | `admin/rpc.ts:173-205`; `packages/cli/src/control.ts:205-214`                                                                                  |
-| Promoting a principal, terminals, brand, password policy, second-factor reset           | `iam.admin`.                                                                                                                                          | `admin/rpc.ts:75-78,248,279-300`                                                                                                               |
-| User administration (`iam.users.manage`), `appPeople.*`, scope-value lookups            | A person in a session only, never a key.                                                                                                              | `admin/user-admin.ts:18-21`, `admin/app-people.ts:59-65`, `admin/scope-values.ts:43`                                                           |
-| Approving a CLI device grant                                                            | A signed-in person on IAM's `/oauth/device` page, who picks a lifetime of 1 h, 24 h or 7 days, capped at the IAM session.                             | `packages/iam/src/oauth-device-page.ts:44-70`                                                                                                  |
-| Approving a builder device key (ADR-0042)                                               | A person in a session, internal, active, never a key's token.                                                                                         | `packages/iam/src/device.ts:40-55`                                                                                                             |
+| Action                                                                                  | Rule today                                                                                                                                            | Evidence                                                                                                                                             |
+| --------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Console grants (`grants.*`, `appPeople.grant/revoke`) at an app whose grants wait       | Become a grant request. An administrator of the app who is **not the requester**, as a person in a session, decides it. Requests expire after 7 days. | `packages/iam/src/admin/rpc.ts:104-124`, `admin/grant-requests.ts:71-79,96-98`; `GRANT_REQUEST_TTL_SECONDS` `packages/iam-contract/src/index.ts:195` |
+| API keys (`apiKeys.provision/rotate/revoke`), workload and membership keys, share links | `iam.admin`. **A `px_` key with `iam.admin` may do it; no person needed.** The provisioning key does it (`fabrika control key issue`).                | `admin/rpc.ts:173-205`; `packages/cli/src/control.ts:205-214`                                                                                        |
+| Promoting a principal, terminals, brand, password policy, second-factor reset           | `iam.admin`.                                                                                                                                          | `admin/rpc.ts:75-78,248,279-300`                                                                                                                     |
+| User administration (`iam.users.manage`), `appPeople.*`, scope-value lookups            | A person in a session only, never a key.                                                                                                              | `admin/user-admin.ts:18-21`, `admin/app-people.ts:59-65`, `admin/scope-values.ts:43`                                                                 |
+| Approving a CLI device grant                                                            | A signed-in person on IAM's `/oauth/device` page, who picks a lifetime of 1 h, 24 h or 7 days, capped at the IAM session.                             | `packages/iam/src/oauth-device-page.ts:44-70`                                                                                                        |
+| Approving a builder device key (ADR-0042)                                               | A person in a session, internal, active, never a key's token.                                                                                         | `packages/iam/src/device.ts:40-55`                                                                                                                   |
 
 ### What an agent holds
 
@@ -76,8 +82,9 @@ park; they do not wait ... gating them needs a pending registry write of its own
   (`packages/control/src/api/workspaces.ts:608-613`), and the dashboard route `/approvals/:id`
   (`packages/dashboard/src/routes/approvals/detail.tsx:33`). Grant requests have no page of their own: they are listed
   on `/approvals` (`routes/approvals/index.tsx:18-23,79`).
-- **A parked run never expires.** No sweep or cron touches `awaiting_approval` (`packages/control/src/db/runs.ts:408-445`
-  holds the only writes; `cron.ts` sweeps stale running runs only).
+- **A parked run never expires.** No sweep or timer moves `awaiting_approval`. Only a decision
+  (`packages/control/src/db/runs.ts:408-436`) or a cancellation (`:485-514`) does; `cron.ts` sweeps pending and running
+  runs only.
 
 ### The gaps this draft addresses
 
@@ -126,9 +133,9 @@ it once.
   application (an application row cannot admit the `oauth` caller), so ADR-0062's protocol window is not touched. But
   each kind needs a type definition, a consent renderer in IAM and a check in Control.
 - **Effort.** About 10–14 h of agent time for deploys and keys, plus a consent renderer per action kind.
-- **Never through it.** The same list as (b), below.
+- **Never through it.** The same list as for (b) and (d) ("Actions never approved through a request or a plan").
 
-### (b) An explicit one-off approval request in Control (recommended for single actions)
+### (b) An explicit one-off approval request in Control (chosen for single actions)
 
 The agent, with the credential it already holds, asks Control for an action. Control stores the request, **inert and
 exact**, and answers with an id and a console link. The person opens the link, signed in to the console. The page shows
@@ -187,7 +194,7 @@ Two shapes, by owner. An ADR-0083 rule already holds here: the service that writ
   `requesterMayApprove: false`. IAM reads it from the same row Control already writes for the grant gate
   (`app_grant_approvals`, ADR-0083 §4), so IAM keeps deciding its own requests.
 - **Effort.** Deploy shape: 3–4 h. Generic Control requests and the page: 5–7 h. IAM requests for agents: 3–4 h. In
-  total about 12–15 h, plus a framework-free console change with screenshots.
+  total about 11–15 h, plus a framework-free console change with screenshots.
 
 ### (c) CIBA-style backchannel, and other variants
 
@@ -371,22 +378,30 @@ flowchart LR
 
 The deploy categories stay as ADR-0083 defines them. The new ones are actions with no run:
 
-| Category         | Covers                                                                                                            | Default on a protected environment |
-| ---------------- | ----------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
-| `deploy-request` | A manual run started by a non-person, of a merged commit (`deployRequestCommits`)                                 | `person`                           |
-| `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey` by a non-person                            | `person` (D8)                      |
-| `variables`      | `apps.variables.put/delete` by a non-person                                                                       | `person` (D8)                      |
-| `data`           | `data.start` (maintenance modes, side restore), `data.recover` by a non-person                                    | `person` (D8)                      |
-| `registry`       | Trigger ref, domain, public origin, `apps.update` source fields by a non-person (today a 403, `human.ts:130-169`) | `person`                           |
-| `agent-grants`   | A grant an agent asks for at the app                                                                              | `person`                           |
-| `credentials`    | A key an agent asks for, issued to someone other than the agent (below)                                           | `person`                           |
-| `grants`         | ADR-0083's existing category: a person's own console grant. `plan` does not apply: a grant has no pull request.   | `off` (as today)                   |
+| Category         | Covers                                                                                                                    | Default on a protected environment |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| `deploy-request` | A manual run started by a non-person, of a merged commit (`deployRequestCommits`)                                         | `person`                           |
+| `secrets`        | `apps.secrets.put/delete`, `vault.set/rotate/delete`, `rotateTokenKey` by a non-person                                    | `person` (D8)                      |
+| `variables`      | `apps.variables.put/delete` by a non-person                                                                               | `person` (D8)                      |
+| `data`           | `data.start` (maintenance modes, side restore), `data.recover` by a non-person                                            | `person` (D8)                      |
+| `registry`       | Trigger ref, domain, public origin, `apps.update` source fields by a non-person (today a 403, `human.ts:106-113,130-169`) | `person`                           |
+| `agent-grants`   | A grant an agent asks for at the app                                                                                      | `person`                           |
+| `credentials`    | A key an agent asks for, issued to someone other than the agent (below)                                                   | `person`                           |
+| `grants`         | ADR-0083's existing category: a person's own console grant. `plan` does not apply: a grant has no pull request.           | `off` (as today)                   |
 
 Each category is enforced only from the PR that adds the requests it waits in: `deploy-request` from step 3; `secrets`,
 `variables`, `data` and `registry` from step 5; `agent-grants` from step 6; `credentials` from step 7. Until then
 everything behaves as today: a non-person's secret, variable and data write applies at once, and its registry write is
-refused (the user's decision D8). The hole is closed by routing these writes through requests, never by refusing them
+refused (decision D8). The hole is closed by routing these writes through requests, never by refusing them
 outright.
+
+**Who is a non-person here.** The gate treats as a person only a person acting in a console session, the rule of
+`requireHumanApprover`. Every bearer counts as a non-person, a person's own `px_` key included, so an agent handed that
+key cannot pass the gate as its owner. Today such a key passes the protected-environment checks of `human.ts`. Under
+the gate, its protected manual deploy parks for approval instead of running, a chosen change in behaviour from step 3.
+
+**`plan` applies only to deploy lines.** No plan entry can cover a request of these categories, so saving `plan` for
+one of them is refused with a 400.
 
 A person acting directly in the console is their own evidence for these: their act is the decision, as today. The one
 exception stays as it is: a person's own deploy still shows its lines for approval, because clicking "Deploy" is not
@@ -411,7 +426,7 @@ reading the diff.
 ### Settings
 
 Every setting is on the environment, changed only by a person in the console with `access.approve`. Defaults are the
-user's answers. The alternative of each answer is the other value.
+decided answers. The alternative of each answer is the other value.
 
 | Setting                         | Lives in                                                                | Default                                     | Alternatives                                                                 | Cost                                                                                                            |
 | ------------------------------- | ----------------------------------------------------------------------- | ------------------------------------------- | ---------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- |
@@ -434,7 +449,7 @@ user's answers. The alternative of each answer is the other value.
 | Agent-driven, person on a phone             | Deploy categories `plan`; `deploy-request` `person`; everything else `person`; plans approved from the console        | `deploy-request` `off` |
 | No approvals                                | Unprotected, or every category `off`                                                                                  | `off`                  |
 
-The second row is the user's example: plan approval for code and permissions, link approval for credentials.
+The second row is the combination the design started from: plan approval for code and permissions, link approval for credentials.
 
 ### The safe default for a new installation
 
@@ -446,12 +461,12 @@ The second row is the user's example: plan approval for code and permissions, li
 - The settings take the defaults in the table above.
 
 Today an agent's secret, variable or data write on a protected environment applies at once. With these defaults it
-waits for a person, from step 5 on (D8). That is the change in behaviour the user chose. A team that wants today's
+waits for a person, from step 5 on (D8). That is a chosen change in behaviour. A team that wants today's
 behaviour sets those categories to `off`.
 
 ### Always a person, whatever the mode
 
-These are not categories. No mode, plan or floor applies to them, and no request can name them:
+These are not categories. No mode or plan (nor, later, an installation floor) applies to them, and no request can name them:
 
 - Changing the approval configuration itself: the protection flag, the modes and the settings (and, later, the
   installation's defaults and floor). A mode that an agent could set to `off` would gate nothing.
@@ -472,6 +487,11 @@ as ADR-0083 already decided.
 - The old column keeps its meaning, so a Control rolled back reads it as before. A classification stores its policy
   only when it differs from the defaults, as `StoredClassification.categories` does today.
 - The settings are new nullable columns; null reads as the default.
+- **Parked runs start to expire** (step 3). A run parked before the upgrade gets its expiry when the sweep first sees
+  it (that time plus `requestTtlHours`), so nothing parked earlier expires at the first sweep. This is a chosen change
+  in behaviour, beside D8.
+- **A person's own `px_` key stops passing the protected-environment checks** (step 3): its manual deploy parks with a
+  link instead of running.
 - No generated file and no environment variable changes. One operator step, for `planEvidence: console+github` only:
   an existing GitHub App gets the user-authorization callback URL in its GitHub settings, which is documented in
   `docs/reference/`. Without it, reviews count for nothing and console approvals still work.
@@ -511,7 +531,7 @@ The "always a person" list above holds whatever the mode. Beyond it, no request 
 - Namespace removal and claim release: ADR-0034 frees resources that the next app could adopt with their old secrets.
 - Reading data content (`data.content.read`): an approval would deliver production content to the agent.
 - Anything that returns a secret to the agent in a form Control could read. A key for someone else goes back only
-  encrypted to the agent's own public key (below).
+  encrypted to the agent's own public key (above).
 
 A request of such a kind is refused when it is created (400 naming the kind), not at approval.
 
@@ -531,7 +551,7 @@ A request of such a kind is refused when it is created (400 naming the kind), no
 
 ## Recommendation and steps
 
-The user chose (b) and (d) on one gate with modes (D1 and the modes decision). (a)
+The maintainers chose (b) and (d) on one gate with four modes (D1 and D10). (a)
 and (c) are not built. The device flow stays what it is: how an agent gets its own standing, narrowed credential, from
 one link.
 
@@ -555,17 +575,20 @@ this draft: an agent deploys `prod` and sends the person a link. Order: 1 → 2 
 The two tracks after step 2 are independent. Optional and not counted: the GitHub check spec, which shows the access
 diff on the pull request; and the installation level (2–3 h).
 
-Waits on the user: none of these PRs changes deploy configuration, so each merges after an approved round and green
+Waits on a maintainer: none of these PRs changes deploy configuration, so each merges after an approved round and green
 CI. The App callback URL of step 9 is an operator step on each existing installation that wants GitHub reviews to
 count.
 
-## Decisions (answered by the user)
+## Decided defaults
+
+These are the maintainers' answers, proposed as defaults. They become binding when step 1 rewrites the ADRs; until then
+this file stays an idea.
 
 | Decision group         | Decision                                                                                                                                      | Default here                                                   | Setting for the alternative                                        |
 | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------- | ------------------------------------------------------------------ |
 | Path                   | D1: (b) and (d), as recommended                                                                                                               | both, on one gate                                              | modes per category (`off`, `plan`, `person`, `refuse`)             |
 | Path                   | D7: only merged commits may be requested for deploy                                                                                           | `deployRequestCommits: merged`                                 | `any`; `deploy-request: refuse` for no agent deploys at all        |
-| Modes                  | Build `off`, `plan` and `person` now; D9: no installation level yet                                                                           | environment settings only                                      | an installation level later (defaults and floor, 2–3 h)            |
+| Modes                  | D10: build all four modes (`off`, `plan`, `person`, `refuse`) now; D9: no installation level yet                                              | environment settings only                                      | an installation level later (defaults and floor, 2–3 h)            |
 | Secrets and data       | D8: `person` for secrets, vault and data operations, app variables included; close the hole only with requests; nothing changes before step 5 | `secrets`, `variables`, `data`: `person`, enforced from step 5 | the same categories `off` (today's behaviour) or `refuse`          |
 | Who approves, expiry   | D2: a person may always approve their own agent's request, grants and keys included; D3: 24 h, configurable                                   | `requesterMayApprove: true`, `requestTtlHours: 24`             | `requesterMayApprove: false`; 1–168 h                              |
 | Keys for others        | D4: keys for someone else through a request whose result is encrypted to the agent's public key                                               | `credentials: person`, JWE to the agent's key                  | `credentials: refuse`; `off` for a requester that may issue anyway |
