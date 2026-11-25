@@ -79,7 +79,7 @@ in the console is their own evidence, as before:
 | `data`           | `data.start` (maintenance modes, side restore), `data.recover`, suspend and resume, the backup schedule                                                                                                       | `person` |
 | `registry`       | `apps.update` and `apps.environments.put`, every field of each: the trigger ref, domain, public origin, cross-origin list, provider target, artifact and namespace, the application's source and build fields | `person` |
 | `agent-grants`   | a grant an agent asks for at the application environment: one role its approved contract declares, for the agent or another principal, for at most 30 days (§4)                                               | `person` |
-| `credentials`    | a key an agent asks for, issued to someone other than the agent (§8)                                                                                                                                          | `person` |
+| `credentials`    | a key an agent asks for, issued to someone other than the agent: exact Control actions at one application, for at most 30 days, encrypted to the agent's public key (§8)                                      | `person` |
 | `grants`         | a person's own console grant, grant edit or revocation in IAM (§4)                                                                                                                                            | `off`    |
 
 A write to the all-environments layer (`env: null`) is a write to every protected environment of the application, and
@@ -115,17 +115,17 @@ The settings are one nullable column beside it, `approval_settings`, holding the
 `approvers` takes every category but `grants`, whose two-person rule IAM keeps (§4). Each setting lands with the step
 that first uses it:
 
-| Setting                | Default                                        | Alternative                                                                                 |
-| ---------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| `deployRequestCommits` | `merged`                                       | `any`: an unmerged commit may be requested, still never a workspace ref                     |
-| `requestTtlHours`      | 24, for requests and parked runs               | 1–168                                                                                       |
-| `requesterMayApprove`  | `true`, per category, grants and keys included | `false`: someone other than the requester's person decides                                  |
-| `approvers`            | 1, per category                                | 2: two different people decide, each on the same digest                                     |
-| `stepUp`               | `webauthn` for `credentials`, `none` elsewhere | `webauthn` (a passkey assertion bound to the decision) or `none`, any category but `grants` |
-| `credentialCeiling`    | `requester`                                    | `approver`: up to the approver's own rights, the page warning what exceeds them             |
-| `planEvidence`         | `console`                                      | `console+github`, once the access-diff GitHub check is built                                |
-| `planBinding`          | `transition`                                   | `after-state`                                                                               |
-| `planTtlDays`          | 30                                             | 1–365                                                                                       |
+| Setting                | Default                                        | Alternative                                                                                      |
+| ---------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `deployRequestCommits` | `merged`                                       | `any`: an unmerged commit may be requested, still never a workspace ref                          |
+| `requestTtlHours`      | 24, for requests and parked runs               | 1–168                                                                                            |
+| `requesterMayApprove`  | `true`, per category, grants and keys included | `false`: someone other than the requester's person decides                                       |
+| `approvers`            | 1, per category                                | 2: two different people decide, each on the same digest                                          |
+| `stepUp`               | `webauthn` for `credentials`, `none` elsewhere | `webauthn` (a passkey assertion bound to the decision) or `none`, any category but `grants`      |
+| `credentialCeiling`    | `requester`: actions the requester holds       | `approver`: actions the approver holds in Control, the page warning which exceed the requester's |
+| `planEvidence`         | `console`                                      | `console+github`, once the access-diff GitHub check is built                                     |
+| `planBinding`          | `transition`                                   | `after-state`                                                                                    |
+| `planTtlDays`          | 30                                             | 1–365                                                                                            |
 
 The policy and the settings are kept in `app_env_protection` with the `protected` flag, so a recreated environment
 starts from the choice its deleted predecessor left (ADR-0050 §4). They apply only while the environment is protected;
@@ -134,8 +134,8 @@ They change through `apps.environments.protect`, under the rules of the flag: `a
 person in the console, the environment's deployment lease, a refusal while a run is `running`, and one audit row
 (`access.protect`, with the policy and the settings before and after). A change that weakens what deciding takes in a
 category with `stepUp: webauthn` also takes a passkey assertion bound to the change (ADR-0050 §5), and the audit row
-names the passkey. The change advances `protection_revision` and `generation`, so a run classified under the old
-choice classifies again. There is no installation level of defaults or floors yet.
+names the passkey; turning `credentialCeiling` to `approver` weakens `credentials`. The change advances
+`protection_revision` and `generation`, so a run classified under the old choice classifies again. There is no installation level of defaults or floors yet.
 
 ### 3. The modes and the gate
 
@@ -304,10 +304,24 @@ checks the approver as it does today.
 - **Outcome.** Creating answers `{ id, url, state }`, the link `<console>/approvals/requests/<id>` (a parked run keeps
   `<console>/approvals/<run id>`). The agent reads the request's state; Fabrika sends no notification.
 
-A key for someone else (`credentials`) is issued by IAM on approval and encrypted there to a public key the agent sent
-with the request (JWE, `ECDH-ES` with `A256GCM`), so the plaintext reaches neither the approver's browser nor Control's
-database; the agent fetches it once. It is no wider than the requester by default (`credentialCeiling`), lives at most
-30 days, and is revoked when it is not fetched by the deadline. IAM enforces the `credentials` mode on its own key
+A key for someone else (`credentials`, the kind `iam.apiKeys.provision`) holds exact Control actions at one application,
+scoped to it, so it acts in every environment of the application and the strictest protected one judges it; where none
+gates `credentials` (none is protected, or it is `off`) the request is refused (409), since an agent's credential issues
+nothing in IAM. The agent sends the application, the actions, a label, an expiry at most 30 days ahead and a public
+P-256 or X25519 JWK (a private one, another curve or a later expiry is 400). The stored input adds the key's RFC 7638
+thumbprint, which the page shows and the agent prints beside the link, and the actions the requester's own token lacks
+at the application: under `credentialCeiling: requester` such an action is refused when the request is created (403),
+under `approver` the page warns of each. An IAM installation administrator decides it, since only `iam.admin` issues a
+key, and the approver must hold every action of the key in Control. On approval Control calls IAM's
+`apiKeys.provisionRequested` with the approver's console token and the request id as the idempotency key. IAM issues the
+key as the approver, its audit row naming the request and the requester, enforces the 30-day ceiling, and answers the
+key only encrypted to the agent's public key (compact JWE, `ECDH-ES` with `A256GCM`, the thumbprint as `kid`), so the
+plaintext reaches neither the approver's browser nor Control. An `unknown` execution is followed by asking IAM for the
+key under the request id with the provisioning key, so a retry never issues a second key. Control keeps the JWE until
+the requester (the same principal through the same OAuth client, or through no client for a key) fetches it once with
+`approvals.requests.fetchKey`, which deletes it; at the request's deadline, or an hour after the key was issued when that
+is later, the sweep drops an unfetched one and revokes the key in IAM. No DTO, audit row or log line carries the JWE.
+IAM enforces the `credentials` mode on its own key
 issuance for a machine caller too, mirrored from Control stricter side first as the grant gate is, so a `px_` key
 holding `iam.admin` meets the same mode. Two issuances keep their rule: the provisioning key's own (workload,
 membership and connector keys) and the bootstrap `POST /admin/api-keys`.

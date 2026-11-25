@@ -144,8 +144,8 @@ judge ([`production.ts`](../../packages/control/src/approval/requests/production
 `vault.set/rotate/delete`, in Control's vault or kept by the provider, `apps.environments.rotateTokenKey`,
 `apps.variables.put/delete`, `apps.environments.put` with its whole body, `apps.update`, suspend and resume,
 `data.backups.setSchedule`, `data.start` and `data.recover`. The procedures no request may ever name are refused with
-their reason. Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category
-`agent-grants`, below).
+their reason. Beside them, an agent's grant and a key an agent asks for, which IAM makes (`iam.grants.create`, category
+`agent-grants`, and `iam.apiKeys.provision`, category `credentials`, below).
 
 - **A write that reaches outside Control** is followed by what the provider or the environment's object holds, since
   an interrupted one may have applied or not:
@@ -267,6 +267,28 @@ their reason. Beside them, an agent's grant, which IAM makes (`iam.grants.create
   instead (`iam.grant.request`, naming the Control request): the Control request is `executed` with a link to it, and
   nothing is granted until a second IAM administrator approves it on the Approvals page. An `unknown` execution is
   settled by the sweep from IAM's grants and open grant requests, read with the provisioning key.
+- **A key an agent asks for** (`iam.apiKeys.provision`, `fabrika control access request-key`,
+  [`kinds/keys.ts`](../../packages/control/src/approval/requests/kinds/keys.ts)) is a key for someone else holding exact
+  Control actions at one application (`app:<app>` at Control's IAM application, no wildcard), expiring at most 30 days
+  ahead. Its coordinates are `<app>@*`, so the strictest protected environment judges it; where none gates `credentials`
+  it is refused (409). The agent sends a public P-256 or X25519 JWK with it; a private JWK, another curve or a later
+  expiry is 400. The row stores the key's RFC 7638 thumbprint, which the page shows and the CLI prints, and the actions
+  the requester's token lacked at the application: `credentialCeiling: requester` (the default) refuses those when the
+  request is created (403); `approver` admits them, and the page warns of each. A ceiling turned back to `requester`
+  before the decision closes such a request `stale`. Only an IAM installation administrator (`iam.admin`) decides it,
+  holding every action of the key in Control (403 otherwise), and with a passkey by default. Approving calls IAM's
+  `apiKeys.provisionRequested` with the approver's console token, keyed by the request id: IAM issues a service key as
+  the approver (`iam.apikey.create`, naming the request and the requester), refuses an expiry past 30 days, and answers
+  it only as a compact JWE (`ECDH-ES`, `A256GCM`) to the agent's key. The sweep follows an `unknown` execution by asking
+  IAM's `apiKeys.requested` for the key under the request id with the provisioning key, so no retry issues a second.
+  The JWE waits in `approval_request_deliveries`; `approvals.requests.fetchKey` hands it to the requester once (the same
+  principal and OAuth client) and deletes it: 409 before the key is issued, 410 once fetched or past the deadline, 404
+  to anyone else. The deadline is the request's own, or an hour after issuance when later; the sweep then drops an
+  unfetched JWE and revokes the key in IAM (`iam.apikey.revoke`), retrying on a later pass when IAM does not answer.
+  `ApprovalRequestDto.delivery` says whether the key waits, was fetched, or was dropped and revoked; no DTO, audit row
+  or log line carries the JWE, and the plaintext never reaches Control. Known gap: a key requester has no OAuth client,
+  so any key of the same principal fetches its request's JWE, which only the private key in the requesting process
+  opens.
 - **Reading it.** The agent reads the state with `approvals.requests.get`, `fabrika control requests get <id> [--wait]`
   or the MCP tool `get_approval_request`; the person decides at `<console>/approvals/requests/<id>`, where text the
   agent wrote is escaped and marked. Fabrika sends no notification. The requester reads its request only through the
