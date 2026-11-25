@@ -289,8 +289,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   compact, `ECDH-ES` with `A256GCM`, `kid` the recipient's RFC 7638 thumbprint) and is never stored, logged or audited.
   The approval request's id is the idempotency key: `requested_api_keys` (written in the issuing transaction) keeps the
   JWE, so a repeat answers the same key and issues no second, and a repeat that asks for something else (by
-  `input_digest`) is a 409. `apiKeys.requested` answers that row to the provisioning key, which is how Control follows an
-  execution whose outcome it did not see; it revokes an unfetched key with `apiKeys.revoke`. The records
+  `input_digest`) is a 409. `apiKeys.requested` answers that row to any `iam.admin` caller (Control uses the provisioning
+  key), which is how Control follows an execution whose outcome it did not see; it revokes an unfetched key with
+  `apiKeys.revoke`. IAM keeps the JWE after Control's copy is fetched or expired; it is useless without the private key. The records
   (`iam.apikey.create`, `iam.grant.create`) are the approver's and name the request and its requester.
 - **`POST /auth/workload/token` IS PUBLIC, SO ITS COST IS BOUNDED BEFORE ANY LOOKUP** (`src/workload-token.ts`). In
   order: the key's exact format (`px_` + 27 base64url characters; no body is read without it), the body `{ app }`
