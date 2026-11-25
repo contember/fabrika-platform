@@ -38,24 +38,26 @@ import {
 	type ProviderSourceBinding,
 	reconcileRun,
 } from '@fabrika/provider-contract'
+import { type CloudFormationClient, cloudFormationClient } from './aws/cloudformation'
 import { codeBuildClient } from './aws/codebuild'
 import { ecrClient } from './aws/ecr'
 import { ecsClient } from './aws/ecs'
 import { CODEBUILD, ECR, ECS, LOGS, SSM } from './aws/json'
 import { logsClient } from './aws/logs'
+import { CLOUDFORMATION } from './aws/query'
 import { s3BucketOrigin, type S3PartWriter, s3PartWriter } from './aws/s3'
 import type { SigningCredentials } from './aws/sigv4'
 import { parameterArn, type SsmClient, ssmClient } from './aws/ssm'
 import { type AwsClientOptions, awsServiceOrigin } from './aws/transport'
 import { AWS_PROVIDER, type AwsAppArtifact, awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec } from './codecs'
 import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deploy'
+import { awsEnvironmentStack, ensureEnvironmentStack } from './environment-stack'
+import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
 import { AWS_SOURCE_URL_SECONDS, awsRunAttempt, parseAwsCheckpoint } from './run-attempt'
 
 /** Fargate CPU units and memory in MiB of every task, until an application's size is authored. */
 export const AWS_TASK_CPU = 512
 export const AWS_TASK_MEMORY = 1024
-/** How many images an environment's repository keeps. */
-export const AWS_KEPT_IMAGES = 20
 /** Where the build unpacks the source and where the image runs it; the runtime stage's user (the Bun image's `bun`). */
 const SOURCE_ROOT = '/src'
 const RUNTIME_ROOT = '/app'
@@ -64,62 +66,12 @@ const RUNTIME_USER = '1000:1000'
 const IMMUTABLE_GIT_OBJECT = /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/
 /** A GitHub owner or repository name, lowercased. */
 const GITHUB_NAME = /^[a-z0-9](?:[a-z0-9._-]{0,99})$/
-/**
- * An application id or environment name the derived names take: no `_`, `/` or `.`, which the names join them with,
- * so no two environments derive one name.
- */
-const NAME_PART = /^[a-z0-9][a-z0-9-]{0,62}$/
 /** A run id a parameter name carries: Control's UUIDv7, whose text order is its time order. */
 const RUN_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
-/** An IAM role's name holds at most 64 characters. */
-const MAX_ROLE_NAME = 64
 /** How many earlier runs' secret parameters a successful run keeps: the revisions a rollback may return to. */
 export const AWS_KEPT_SECRET_RUNS = 2
 
-/** One application environment's own AWS resources, each named from its application id and environment alone. */
-export interface AwsEnvironmentResources {
-	readonly service: string
-	readonly repository: string
-	readonly parameterPath: string
-	readonly logGroup: string
-	readonly taskRoleArn: string
-	readonly executionRoleArn: string
-	/** The environment's own CodeBuild project, its role and its log group: no build reaches another environment's. */
-	readonly buildProject: string
-	readonly buildRoleArn: string
-	readonly buildLogGroup: string
-	/** The CloudFormation stack that holds the environment's resources (`awsEnvironmentStack`). */
-	readonly stackName: string
-}
-
-/**
- * The names of an environment's resources, under the prefixes the installation's policy for Control's role is scoped
- * to (`fabrika/apps/`): an ECS service `<app>_<env>`, a repository `fabrika/apps/<app>/<env>`, the parameter path and
- * log group `/fabrika/apps/<app>/<env>` (the build's log group below it, `…/build`), the roles
- * `fabrika/apps/<app>_<env>_task`, `…_execution` and `…_build` (ADR-0004's AWS invariant: two roles, never one; the
- * build's a third), the build project `fabrika_<app>_<env>` and the stack `fabrika-app-<length of app>-<app>-<env>`,
- * whose length keeps a hyphen in the id apart from the one that joins it. An id or name outside `NAME_PART`, or a role
- * name past IAM's 64, is refused.
- */
-export function awsEnvironmentResources(appId: string, env: string, accountId: string): AwsEnvironmentResources {
-	if (!NAME_PART.test(appId) || !NAME_PART.test(env)) {
-		throw new Error('aws: the application id or environment name is not one this provider names resources by')
-	}
-	const role = `${appId}_${env}`
-	if (`${role}_execution`.length > MAX_ROLE_NAME) throw new Error('aws: the application id and environment name are too long for an IAM role name')
-	return {
-		service: role,
-		repository: `fabrika/apps/${appId}/${env}`,
-		parameterPath: `/fabrika/apps/${appId}/${env}`,
-		logGroup: `/fabrika/apps/${appId}/${env}`,
-		taskRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_task`,
-		executionRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_execution`,
-		buildProject: `fabrika_${role}`,
-		buildRoleArn: `arn:aws:iam::${accountId}:role/fabrika/apps/${role}_build`,
-		buildLogGroup: `/fabrika/apps/${appId}/${env}/build`,
-		stackName: `fabrika-app-${appId.length}-${appId}-${env}`,
-	}
-}
+export { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
 
 /** Credentials as platform-node's `CredentialProvider` answers them: a temporary set says when it expires. */
 export interface AwsExpiringCredentialSource {
@@ -155,6 +107,8 @@ export interface AwsSourcePort {
 /** The calls of one target: the deploy's, and the listing that deletes a secret no longer handed. */
 export type AwsControlClients = Omit<AwsDeployClients, 'credentials' | 'ssm'> & {
 	readonly ssm: Pick<SsmClient, 'putSecret' | 'deleteSecret' | 'listNames'>
+	/** The environment stack's calls (`ensureEnvironmentStack`). */
+	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'>
 }
 
 export interface AwsControlProviderOptions {
@@ -300,6 +254,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			ecs: ecsClient(at(ECS)),
 			logs: logsClient(at(LOGS)),
 			ssm: ssmClient(at(SSM)),
+			cloudFormation: cloudFormationClient(at(CLOUDFORMATION)),
 			s3PartWriter: (address) => s3PartWriter(clientOptions(s3BucketOrigin(target.sourcesBucket, target.region), target.region), address),
 		}
 	})
@@ -501,6 +456,15 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 				})
 			const log = (line: string): void => input.events.log(line)
 			if (input.dryRun) return { state: (await deployRun(undefined)).status, artifactState: 'not_applicable' }
+			// The environment's own resources first: its repository, log groups, roles and build project. Nothing of the run
+			// exists yet, so a stack that does not settle fails the run with nothing to clean up.
+			await ensureEnvironmentStack({
+				cloudFormation: clients.cloudFormation,
+				stack: awsEnvironmentStack(input.environment.appId, input.environment.env, target),
+				signal: input.signal,
+				sleep: options.sleep ?? pause,
+				log,
+			})
 			// Whether the run recorded the update's marker: from then on its revision may run and read its parameters.
 			let submitted = false
 			const sees = (state: JsonValue | undefined): void => {

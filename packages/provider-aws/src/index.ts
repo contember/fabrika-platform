@@ -35,7 +35,11 @@ export {
 export {
 	AWS_BUILD_IMAGE,
 	AWS_LOG_RETENTION_DAYS,
+	AWS_STACK_POLL_MS,
+	AWS_STACK_TIMEOUT_MS,
 	awsAppsPermissionsBoundary,
 	type AwsEnvironmentStack,
 	awsEnvironmentStack,
+	ensureEnvironmentStack,
+	type EnsureEnvironmentStackInput,
 } from './environment-stack'

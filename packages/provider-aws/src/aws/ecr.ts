@@ -90,7 +90,6 @@ function repositoryOf(raw: z.infer<typeof repositorySchema>): EcrRepository {
 	return { name: raw.repositoryName, uri: raw.repositoryUri, arn: raw.repositoryArn }
 }
 
-/** ECR at `options.origin`; the client is of the `ECR` service by construction, so it cannot call another one. */
 /**
  * The lifecycle policy text that keeps a repository's newest `keep` images, counting pushes: what `keepNewestImages`
  * sends and the environment stack declares, so the two never disagree.
@@ -109,6 +108,7 @@ export function ecrLifecyclePolicy(keep: number): string {
 	})
 }
 
+/** ECR at `options.origin`; the client is of the `ECR` service by construction, so it cannot call another one. */
 export function ecrClient(options: AwsJsonClientOptions): EcrClient {
 	const json = awsJsonClient(ECR, options)
 	return {
