@@ -94,6 +94,7 @@ const APPROVAL: ApprovalDto = {
 	approval: null,
 	approvers: 1,
 	requesterMayApprove: true,
+	stepUp: 'none',
 }
 
 const render = (approval: ApprovalDto) => renderToStaticMarkup(createElement(AccessChangeView, { view: approvalView(approval.changes), approval }))
@@ -316,6 +317,13 @@ describe('the decision', () => {
 		const markup = render({})
 		expect(markup).toContain('Approve and deploy')
 		expect(markup).toContain('>Refuse</button>')
+	})
+
+	test('a decision that takes a passkey says so before either button', () => {
+		const markup = render({ stepUp: 'webauthn' })
+		expect(markup).toContain('Deciding this deploy takes one of your passkeys')
+		expect(markup).toContain('Approve and deploy')
+		expect(render({})).not.toContain('passkey')
 	})
 
 	test('a run past its deadline offers neither, and says it expired', () => {

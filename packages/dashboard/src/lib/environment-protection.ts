@@ -156,8 +156,8 @@ export function loosened(before: ApprovalPolicy, after: ApprovalPolicy): PolicyC
 }
 
 /**
- * The settings a change loosens, in the console's words: an unmerged commit admitted, one approver where two decided, or
- * the requester's own person allowed to approve.
+ * The settings a change loosens, in the console's words: an unmerged commit admitted, one approver where two decided,
+ * the requester's own person allowed to approve, or a decision no longer confirmed with a passkey.
  */
 export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettings): string[] {
 	return [
@@ -167,6 +167,9 @@ export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettin
 		),
 		...APPROVER_CATEGORIES.filter((category) => after.requesterMayApprove[category] && !before.requesterMayApprove[category]).map((category) =>
 			`${categoryLabel(category)} (the requester's person may approve)`
+		),
+		...APPROVER_CATEGORIES.filter((category) => after.stepUp[category] === 'none' && before.stepUp[category] === 'webauthn').map((category) =>
+			`${categoryLabel(category)} (no passkey to decide)`
 		),
 	]
 }
@@ -195,6 +198,7 @@ export function sameSettings(a: ApprovalSettings, b: ApprovalSettings): boolean 
 	return a.deployRequestCommits === b.deployRequestCommits && a.requestTtlHours === b.requestTtlHours
 		&& APPROVER_CATEGORIES.every((category) =>
 			a.approvers[category] === b.approvers[category] && a.requesterMayApprove[category] === b.requesterMayApprove[category]
+			&& a.stepUp[category] === b.stepUp[category]
 		)
 }
 
@@ -215,11 +219,13 @@ export function requestTtl(text: string): number | null {
 export function settingsSummary(settings: ApprovalSettings): string {
 	const two = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] === 2).map(categoryLabel)
 	const others = APPROVER_CATEGORIES.filter((category) => !settings.requesterMayApprove[category]).map(categoryLabel)
+	const passkey = APPROVER_CATEGORIES.filter((category) => settings.stepUp[category] === 'webauthn').map(categoryLabel)
 	return [
 		settings.deployRequestCommits === 'merged' ? 'An agent asks to deploy merged commits only.' : 'An agent may ask to deploy any commit.',
 		`A request waits ${settings.requestTtlHours} h for a decision.`,
 		...(two.length === 0 ? [] : [`Two people decide: ${two.join(', ')}.`]),
 		...(others.length === 0 ? [] : [`Someone other than the requester's person decides: ${others.join(', ')}.`]),
+		...(passkey.length === 0 ? [] : [`A passkey confirms deciding: ${passkey.join(', ')}.`]),
 	].join(' ')
 }
 

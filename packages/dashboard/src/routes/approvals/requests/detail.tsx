@@ -2,12 +2,15 @@ import { createPage, Link } from '@buzola/router'
 import { ACTION_CATEGORIES, type ApprovalRequestState, isFinalApprovalRequestState } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
+import { DecisionFailureNotice, StepUpHint } from '../../../components/DecisionFailureNotice'
 import { Icon } from '../../../components/Icon'
 import { Chip, type Lamp, Status } from '../../../components/Status'
-import { api, ApiError, type ApprovalRequestDto, type ApprovalRequestText } from '../../../lib/api'
+import { api, type ApprovalRequestDto, type ApprovalRequestText } from '../../../lib/api'
+import { type DecisionFailure, decisionFailure, postDecision } from '../../../lib/decision-step-up'
 import { categoryLabel, requesterBlocks, requesterBlockText } from '../../../lib/environment-protection'
 import { fmtDate } from '../../../lib/format'
 import { consoleSession } from '../../../lib/session'
+import { browserCredentials, type PasskeyCredentials } from '../../../lib/webauthn'
 
 // One approval request (ADR-0083 §8), mobile-first: who asks, through which client or key, exactly what its kind says
 // it does, where and by when, and the decision. Text the agent wrote is escaped (React renders it as text) and marked
@@ -168,9 +171,15 @@ export function RequestOutcome({ request }: { request: ApprovalRequestDto }) {
  * deadline Control refuses both; the first of two approvers waits for a second person; the requester's own person may
  * only refuse where the environment says so; a request this Control cannot describe may only be refused.
  */
-export function RequestDecision({ request, me, now, onDone }: { request: ApprovalRequestDto; me: string | null; now: number; onDone: () => void }) {
+export function RequestDecision({ request, me, now, onDone, credentials = browserCredentials() }: {
+	request: ApprovalRequestDto
+	me: string | null
+	now: number
+	onDone: () => void
+	credentials?: PasskeyCredentials | null
+}) {
 	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
+	const [failure, setFailure] = useState<DecisionFailure | null>(null)
 	const [rejecting, setRejecting] = useState(false)
 
 	if (request.deadline <= now) {
@@ -181,12 +190,20 @@ export function RequestDecision({ request, me, now, onDone }: { request: Approva
 
 	async function decide(decision: 'approve' | 'reject') {
 		setBusy(true)
-		setError(null)
+		setFailure(null)
+		const item = { id: request.id, decision, inputDigest: request.inputDigest }
 		try {
-			await api.approvals.requests.decide({ id: request.id, decision, inputDigest: request.inputDigest })
+			await postDecision(
+				request.stepUp,
+				credentials,
+				() => api.approvals.requests.challenge(item),
+				async (stepUp) => {
+					await api.approvals.requests.decide(stepUp === undefined ? item : { ...item, stepUp })
+				},
+			)
 			onDone()
 		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'The decision was not recorded.')
+			setFailure(decisionFailure(cause))
 			setBusy(false)
 		}
 	}
@@ -202,6 +219,7 @@ export function RequestDecision({ request, me, now, onDone }: { request: Approva
 							: `${request.partialApproval.label} approved it ${fmtDate(request.partialApproval.at)}; a second, different person carries it out.`}
 					</p>
 				)}
+				<StepUpHint stepUp={request.stepUp} item="request" />
 				<div className="row-actions">
 					{!request.described
 						? <span className="muted decision-note">This Control cannot show what the request does, so it cannot be approved here.</span>
@@ -215,7 +233,7 @@ export function RequestDecision({ request, me, now, onDone }: { request: Approva
 							</button>
 						)}
 				</div>
-				{error && <p className="error-text" role="alert">{error}</p>}
+				{failure !== null && <DecisionFailureNotice failure={failure} />}
 			</section>
 			<div className="danger-zone">
 				<div className="danger-zone-copy">

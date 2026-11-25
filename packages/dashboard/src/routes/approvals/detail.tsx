@@ -4,6 +4,7 @@ import { useState } from 'react'
 import { AccessMapView } from '../../components/AccessMap'
 import { CloserReview } from '../../components/CloserReview'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
+import { DecisionFailureNotice, StepUpHint } from '../../components/DecisionFailureNotice'
 import { Icon, type IconName } from '../../components/Icon'
 import { SearchField } from '../../components/SearchField'
 import { Chip, RunStatus, Status } from '../../components/Status'
@@ -20,10 +21,12 @@ import {
 	SUBJECT_TITLES,
 	surfaceNotes,
 } from '../../lib/access-changes'
-import { type AccessChangeDto, api, ApiError, type ApprovalDto, type DeployRequestDto, type SurfaceEndpointDto } from '../../lib/api'
+import { type AccessChangeDto, api, type ApprovalDto, type DeployRequestDto, type SurfaceEndpointDto } from '../../lib/api'
+import { type DecisionFailure, decisionFailure, postDecision } from '../../lib/decision-step-up'
 import { changeWaits, requesterBlocks, requesterBlockText } from '../../lib/environment-protection'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
 import { consoleSession } from '../../lib/session'
+import { browserCredentials, type PasskeyCredentials } from '../../lib/webauthn'
 
 // One access change (ADR-0050 §7): who gains access first, grouped by caller, then what changes in data and runtime,
 // built from the facts each line of the diff carries; every line stays one step away, and the decision follows.
@@ -617,9 +620,15 @@ export function DeployRequestView({ request, approval }: { request: DeployReques
  * the signed-in principal and `now` the time in unix seconds: past the deadline Control refuses both, and the first of
  * two approvers may refuse but not approve again.
  */
-export function Decision({ approval, me, now, onDone }: { approval: ApprovalDto; me: string | null; now: number; onDone: () => void }) {
+export function Decision({ approval, me, now, onDone, credentials = browserCredentials() }: {
+	approval: ApprovalDto
+	me: string | null
+	now: number
+	onDone: () => void
+	credentials?: PasskeyCredentials | null
+}) {
 	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
+	const [failure, setFailure] = useState<DecisionFailure | null>(null)
 	const [rejecting, setRejecting] = useState(false)
 
 	if (approval.deadline !== undefined && approval.deadline <= now) {
@@ -638,17 +647,20 @@ export function Decision({ approval, me, now, onDone }: { approval: ApprovalDto;
 
 	async function decide(decision: 'approve' | 'reject') {
 		setBusy(true)
-		setError(null)
+		setFailure(null)
+		const item = { runId: approval.run.id, decision, candidateDigest: approval.candidateDigest, baselineDigest: approval.baselineDigest }
 		try {
-			await api.approvals.complete({
-				runId: approval.run.id,
-				decision,
-				candidateDigest: approval.candidateDigest,
-				baselineDigest: approval.baselineDigest,
-			})
+			await postDecision(
+				approval.stepUp,
+				credentials,
+				() => api.approvals.challenge(item),
+				async (stepUp) => {
+					await api.approvals.complete(stepUp === undefined ? item : { ...item, stepUp })
+				},
+			)
 			onDone()
 		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'The decision was not recorded.')
+			setFailure(decisionFailure(cause))
 			setBusy(false)
 		}
 	}
@@ -668,6 +680,7 @@ export function Decision({ approval, me, now, onDone }: { approval: ApprovalDto;
 							: `${approval.partialApproval.label} approved it ${fmtDate(approval.partialApproval.approvedAt)}; a second, different person deploys it.`}
 					</p>
 				)}
+				<StepUpHint stepUp={approval.stepUp} item="deploy" />
 				<div className="row-actions">
 					{approvedByMe
 						? <span className="muted decision-note">Waiting for a second person</span>
@@ -679,7 +692,7 @@ export function Decision({ approval, me, now, onDone }: { approval: ApprovalDto;
 							</button>
 						)}
 				</div>
-				{error && <p className="error-text" role="alert">{error}</p>}
+				{failure !== null && <DecisionFailureNotice failure={failure} />}
 			</section>
 			<div className="danger-zone">
 				<div className="danger-zone-copy">

@@ -32,6 +32,7 @@ const REQUEST: ApprovalRequestDto = {
 	inputDigest: `sha256:${'a'.repeat(64)}`,
 	approvers: 1,
 	requesterMayApprove: true,
+	stepUp: 'none',
 	deadline: NOW + 3600,
 	createdAt: NOW - 60,
 	updatedAt: NOW - 60,
@@ -92,6 +93,11 @@ describe('the approval request page', () => {
 		const html = decision({ ...REQUEST, approvers: 2, partialApproval: { principalId: 'user-bo', label: 'Bo', at: NOW - 10 } }, 'user-cy')
 		expect(html).toContain('Bo approved it')
 		expect(html).toContain('>Approve</button>')
+	})
+
+	test('a decision that takes a passkey says so before either button', () => {
+		expect(decision({ ...REQUEST, stepUp: 'webauthn' }, 'user-bo')).toContain('Deciding this request takes one of your passkeys')
+		expect(decision(REQUEST, 'user-bo')).not.toContain('passkey')
 	})
 
 	test('the requester’s own person may only refuse where the environment says so', () => {

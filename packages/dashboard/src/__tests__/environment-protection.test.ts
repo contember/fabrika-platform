@@ -16,6 +16,7 @@ import { type AppEnvDto, type ApprovalDto, type ConsoleAccessDto, type ControlFe
 import { ConsoleAccessContext } from '../lib/console-caller'
 import {
 	APPROVAL_CATEGORY_GROUPS,
+	categoryLabel,
 	loosened,
 	loosenedSettings,
 	parkedRunsAt,
@@ -79,6 +80,7 @@ const parkedRun = (id: string, appId: string, env: string): ApprovalDto => ({
 	approval: null,
 	approvers: 1,
 	requesterMayApprove: true,
+	stepUp: 'none',
 })
 
 const withRouter = (element: ReactElement): ReactElement =>
@@ -210,17 +212,18 @@ describe('approval modes', () => {
 		const markup = editor({ ...environment('prod', true), approvalPolicy: { ...STRICT_POLICY, grants: 'person', secrets: 'refuse' } })
 		const offered = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options.map((option) => option.category))
 		expect([...offered].sort()).toEqual([...POLICY_CATEGORIES].sort())
-		// A mode per category, a number of approvers and whether the requester's person decides per category but `grants`,
-		// and the commits a request may name.
-		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length * 2 + 1
+		// A mode per category; a number of approvers, whether the requester's person decides and whether a passkey confirms
+		// the decision per category but `grants`; and the commits a request may name.
+		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length * 3 + 1
 		expect(markup.match(/<select/g)).toHaveLength(selects)
 		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three; approvers one or two; the
-		// requester's person or someone else; commits two.
-		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + APPROVER_CATEGORIES.length * 4 + 2)
+		// requester's person or someone else; a passkey or none; commits two.
+		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + APPROVER_CATEGORIES.length * 6 + 2)
 		expect(markup.match(/selected=""/g)).toHaveLength(selects)
 		expect(markup).toContain('<option value="refuse" selected="">Refused</option>')
 		expect(markup).toContain('<option value="person" selected="">A person approves</option>')
 		expect(markup).toContain('<option value="person" selected="">A person approves (default)</option>')
+		expect(markup).toContain('<option value="webauthn" selected="">Passkey to decide (default)</option>')
 		expect(markup).toContain('Custom')
 	})
 
@@ -263,6 +266,12 @@ describe('approval modes', () => {
 		expect(policyChange(strict, { ...strict, settings: others })).toBe('apply')
 		expect(loosenedSettings(others, STRICT_SETTINGS)).toEqual(["Secrets (the requester's person may approve)"])
 		expect(presetOf(STRICT_POLICY, others)).toBeNull()
+		// A passkey on deciding tightens; deciding without one again loosens, the default's own included.
+		const passkey = { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, secrets: 'webauthn' as const } }
+		expect(policyChange(strict, { ...strict, settings: passkey })).toBe('apply')
+		expect(loosenedSettings(passkey, STRICT_SETTINGS)).toEqual(['Secrets (no passkey to decide)'])
+		expect(policyChange(strict, { ...strict, settings: { ...STRICT_SETTINGS, stepUp: PERMISSIVE_SETTINGS.stepUp } })).toBe('confirm')
+		expect(presetOf(STRICT_POLICY, passkey)).toBeNull()
 	})
 
 	test("an approve button is withheld from the requester's person, and from everyone when that person is unknown", () => {
@@ -282,7 +291,10 @@ describe('approval modes', () => {
 		expect(waitingSummary({ ...PERMISSIVE_POLICY, 'deletes-data': 'person', registry: 'refuse' })).toBe(
 			'Waits for a person: Migrations that may change stored data; refused to an agent: Where a deploy points.',
 		)
-		expect(settingsSummary(STRICT_SETTINGS)).toBe('An agent asks to deploy merged commits only. A request waits 24 h for a decision.')
+		expect(settingsSummary(STRICT_SETTINGS)).toBe(
+			`An agent asks to deploy merged commits only. A request waits 24 h for a decision. A passkey confirms deciding: ${categoryLabel('credentials')}.`,
+		)
+		expect(settingsSummary(PERMISSIVE_SETTINGS)).not.toContain('passkey')
 		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } })).toContain(
 			'An agent may ask to deploy any commit.',
 		)

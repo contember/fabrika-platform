@@ -10,6 +10,8 @@ import {
 	POLICY_CATEGORIES,
 	type PolicyCategory,
 	REQUEST_TTL_HOURS,
+	type StepUpMode,
+	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
 import { useState } from 'react'
 import { api, type AppEnvDto, type ApprovalDto } from '../../lib/api'
@@ -183,6 +185,10 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 		if (isApproverCategory(category)) setSettings({ ...settings, requesterMayApprove: { ...settings.requesterMayApprove, [category]: may } })
 	}
 
+	function chooseStepUp(category: PolicyCategory, mode: StepUpMode) {
+		if (isApproverCategory(category)) setSettings({ ...settings, stepUp: { ...settings.stepUp, [category]: mode } })
+	}
+
 	function chooseTtl(text: string) {
 		setTtlText(text)
 		const hours = requestTtl(text)
@@ -285,6 +291,21 @@ export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEn
 									>
 										<option value="yes">Requester may decide (default)</option>
 										<option value="no">Someone else decides</option>
+									</select>
+								)}
+								{isApproverCategory(option.category) && (
+									<select
+										value={settings.stepUp[option.category]}
+										disabled={busy}
+										aria-label={`${option.label}: confirming a decision`}
+										onChange={(event) => chooseStepUp(option.category, event.target.value === 'webauthn' ? 'webauthn' : 'none')}
+									>
+										<option value="none">
+											No passkey to decide{STRICT_SETTINGS.stepUp[option.category] === 'none' ? ' (default)' : ''}
+										</option>
+										<option value="webauthn">
+											Passkey to decide{STRICT_SETTINGS.stepUp[option.category] === 'webauthn' ? ' (default)' : ''}
+										</option>
 									</select>
 								)}
 							</span>
