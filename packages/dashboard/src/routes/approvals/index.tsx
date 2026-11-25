@@ -3,24 +3,27 @@ import { GrantRequests } from '../../components/GrantRequests'
 import { Chip, RunStatus } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { effectCounts } from '../../lib/access-changes'
-import { api } from '../../lib/api'
+import { api, type ApprovalRequestDto } from '../../lib/api'
 import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
 import { quietIamClient } from '../../lib/iam'
 import { consoleSession } from '../../lib/session'
+import { requestCategoryLabel, RequestSummary } from './requests/detail'
 
-// Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050), and console
-// grants that wait for another administrator (ADR-0083). Only runs at coordinates where the viewer holds
-// `access.approve` are listed, and only grant requests at applications the viewer administers in IAM, or the viewer's
-// own; a viewer IAM does not answer sees no grant section.
+// Approvals: deploy runs whose access change waits for a person on a protected environment (ADR-0050), requests an
+// agent or a key made for a change it cannot make itself, and console grants that wait for another administrator
+// (ADR-0083). Only runs and requests at coordinates where the viewer holds `access.approve` are listed, and only grant
+// requests at applications the viewer administers in IAM, or the viewer's own; a viewer IAM does not answer sees no
+// grant section.
 
 export default createPage()
 	.loader(async () => {
-		const [approvals, grantRequests, session] = await Promise.all([
+		const [approvals, requests, grantRequests, session] = await Promise.all([
 			api.approvals.list().then((list) => list.items),
+			api.approvals.requests.list().then((list) => list.items),
 			quietIamClient(fetch).grantRequests.list({}).then((list) => list.items, () => null),
 			consoleSession(),
 		])
-		return { approvals, grantRequests, me: session.principal?.id ?? null }
+		return { approvals, requests, grantRequests, me: session.principal?.id ?? null }
 	})
 	.route('/approvals')
 	.render(({ data }) => (
@@ -76,6 +79,49 @@ export default createPage()
 				))}
 			</Table>
 
+			{data.requests.length > 0 && <PendingRequests requests={data.requests} />}
+
 			{data.grantRequests !== null && <GrantRequests initial={data.grantRequests} viewerId={data.me} />}
 		</>
 	))
+
+/** Requests waiting for a person, beside the parked deploys: what each asks, where, who asks and by when. */
+function PendingRequests({ requests }: { requests: readonly ApprovalRequestDto[] }) {
+	return (
+		<section>
+			<h2>Requests</h2>
+			<Table
+				colSpan={5}
+				isEmpty={false}
+				head={
+					<tr>
+						<th className="grow">Request</th>
+						<th>App</th>
+						<th>Env</th>
+						<th>Asked by</th>
+						<th>Decide by</th>
+					</tr>
+				}
+			>
+				{requests.map((request) => (
+					<tr key={request.id}>
+						<td>
+							<Link to="approvals/requests/detail" params={{ id: request.id }}>{requestCategoryLabel(request.category)}</Link>
+							<div className="small">
+								<RequestSummary request={request} />
+							</div>
+						</td>
+						<td>
+							<Link to="apps/detail" params={{ id: request.appId }}>{request.appId}</Link>
+						</td>
+						<td>
+							<Chip>{request.env}</Chip>
+						</td>
+						<td>{request.requester.principal.label}</td>
+						<td className="muted small">{fmtDate(request.deadline)}</td>
+					</tr>
+				))}
+			</Table>
+		</section>
+	)
+}
