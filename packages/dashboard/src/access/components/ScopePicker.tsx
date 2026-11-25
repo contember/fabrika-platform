@@ -74,7 +74,14 @@ export function ScopePicker({ app, scopes, value, onChange, idPrefix = 'scope' }
 							{scopes.map((s) => <option key={s.type} value={s.type}>{s.label ? `${s.label} (${s.type})` : s.type}</option>)}
 						</select>
 					</label>
-					<ScopeValuesField app={app} dimension={dimension ?? { type: value.type }} value={value} onChange={onChange} idPrefix={idPrefix} />
+					<ScopeValuesField
+						key={value.type}
+						app={app}
+						dimension={dimension ?? { type: value.type }}
+						value={value}
+						onChange={onChange}
+						idPrefix={idPrefix}
+					/>
 				</>
 			)}
 			{value.kind === 'global' && <p className="hint">Applies to all scopes within the selected application.</p>}
@@ -148,7 +155,7 @@ export function ScopeValuesChoice({ dimension, live, value, onChange, idPrefix =
 	const chosen = new Set(value.values)
 	const known = new Set(listed.map((entry) => entry.value))
 	const unlisted = value.values.filter((entry) => !known.has(entry))
-	const filtering = listed.length + unlisted.length > FILTER_FROM
+	const filtering = listed.length + unlisted.length > FILTER_ABOVE
 	const shownListed = filtering ? listed.filter((entry) => valueMatches(entry, query)) : listed
 	const shownUnlisted = filtering ? unlisted.filter((entry) => valueMatches({ value: entry }, query)) : unlisted
 	function toggle(entry: string, on: boolean) {
@@ -208,8 +215,8 @@ export function ScopeValuesChoice({ dimension, live, value, onChange, idPrefix =
 	)
 }
 
-/** Past this many values the list offers a filter; fewer fit the box without one. */
-const FILTER_FROM = 8
+/** Past this many values the list offers a filter; this many or fewer fit the box without one. */
+const FILTER_ABOVE = 8
 
 /** Whether a value's label or ID contains the filter, ignoring case; an empty filter matches every value. */
 export function valueMatches(entry: DimensionValue, query: string): boolean {

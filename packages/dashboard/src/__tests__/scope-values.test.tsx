@@ -120,6 +120,9 @@ describe('the values of a grant', () => {
 		expect(rows[0]?.[2]).toContain(`<span class="truncate">${label}</span><span class="truncate muted small">${id}</span>`)
 		expect(rows[1]?.[2]).toContain('<code class="truncate">acme</code>')
 		expect(html).toContain('<div class="scope-value-list">')
+		const held = renderLive({ status: 'live', values: [{ value: 'acme' }] }, [id])
+		expect(held).toContain(`<label for="t-value-${id}" class="checkbox" title="${id}">`)
+		expect(held).toContain(`<code class="truncate">${id}</code>`)
 	})
 
 	test('past eight values a filter narrows the rows by label or ID; eight or fewer need none', () => {
