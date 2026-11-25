@@ -77,10 +77,11 @@ becomes public, the proxy table does not change, and no service worker is instal
    192 px and 512 px PNGs, and the 512 px one again as `maskable`.
 3. **The icon is drawn by the framework.** It is the mount's colour edge to edge, with the name's first letter or digit
    (diacritics removed) in white at its centre, drawn from a fixed 5×7 glyph inside the circle a maskable icon keeps
-   visible. The colour is a hue picked by FNV-1a of the application id (the root mount) or of the id and the mount
-   (`orders/admin`), at a fixed saturation and lightness, so it is stable across releases and differs between
-   applications and between the mounts of one. It is encoded as a PNG with `CompressionStream`, which Bun and workerd
-   both provide, once per runtime and size.
+   visible. The colour is a hue at a fixed saturation and lightness: for the root mount, FNV-1a of the application
+   id; below the root, that hue turned by 90° to 270°, picked by FNV-1a of the mount's name. So it is stable across
+   releases, differs between applications, and a mount is always at least 90° of hue from its application's root
+   mount: two hues hashed independently can land a few degrees apart and look the same. It is encoded as a PNG with
+   `CompressionStream`, which Bun and workerd both provide, once per runtime and size.
 4. **The mount's pages link them with the session.** Every HTML answer of the mount gets, at the start of its head,
    `<link rel="manifest" href="<prefix>/__fabrika-app.webmanifest" crossorigin="use-credentials">` and
    `<link rel="apple-touch-icon" href="<prefix>/__fabrika-icon-180.png">`, through the one injection the share

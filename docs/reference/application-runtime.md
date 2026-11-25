@@ -2280,8 +2280,8 @@ under the mount's own access and before the asset server:
   standalone`; the mount's colour as `theme_color` and `background_color`; the 192 px and 512 px icons, the 512 px one
   also as `maskable`.
 - `<prefix>/__fabrika-icon-180.png`, `-192.png` and `-512.png`: the mount's colour with the name's first letter or
-  digit in white, drawn by the framework (`installable.ts`). The colour follows from the application id for the root
-  mount, and from the id and the mount below it.
+  digit in white, drawn by the framework (`installable.ts`). The root mount's hue follows from the application id; a
+  mount below the root turns it by 90° to 270°, by its own name (`mountHue`).
 
 The root mount's scope `/` covers the whole host, so its installed window also opens the other mounts' pages; a mount
 below the root keeps its window to its own prefix. A scope cannot exclude a path; the proxy decides every request.

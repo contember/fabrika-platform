@@ -75,12 +75,22 @@ export function shortNameOf(mount: InstallableMount): string {
 	return candidates.find(fits) ?? cut(mount.mount)
 }
 
+/** The shortest distance between a mount's hue and the root mount's, in degrees, so the two icons look different. */
+const MOUNT_HUE_DISTANCE = 90
+
 /**
- * What a mount's colour is picked from: the application id for the root mount, the id and the mount below it, so two
- * mounts of one application get different icons.
+ * The hue of a mount's colour: the application id's for the root mount; below the root, that hue turned by 90° to 270°,
+ * picked by the mount's name. Two hashes picked independently can land a few degrees apart and look the same, so a mount
+ * is always at least `MOUNT_HUE_DISTANCE` from the root mount's colour.
  */
-export function colourKey(mount: InstallableMount): string {
-	return mount.prefix === '/' ? mount.app : `${mount.app}/${mount.mount}`
+export function mountHue(mount: InstallableMount): number {
+	const root = hueOf(mount.app)
+	return mount.prefix === '/' ? root : (root + MOUNT_HUE_DISTANCE + (fnv1a(mount.mount) % (361 - 2 * MOUNT_HUE_DISTANCE))) % 360
+}
+
+/** The mount's colour: its hue at the fixed saturation and lightness of every icon. */
+export function mountColour(mount: InstallableMount): Rgb {
+	return colourOfHue(mountHue(mount))
 }
 
 /**
@@ -92,7 +102,7 @@ export function colourKey(mount: InstallableMount): string {
 export function appManifest(mount: InstallableMount): AppManifest {
 	const name = appName(mount)
 	const scope = scopeOf(mount.prefix)
-	const colour = hexColour(iconColour(colourKey(mount)))
+	const colour = hexColour(mountColour(mount))
 	return {
 		id: scope,
 		name,
@@ -152,7 +162,7 @@ export class InstallableApp {
 	async #icon(size: AppIconSize): Promise<Response> {
 		let drawn = this.#icons.get(size)
 		if (drawn === undefined) {
-			drawn = drawIcon(size, appName(this.#mount), iconColour(colourKey(this.#mount)))
+			drawn = drawIcon(size, appName(this.#mount), mountColour(this.#mount))
 			this.#icons.set(size, drawn)
 			// A failed draw is not kept, so the next request draws again.
 			drawn.catch(() => this.#icons.delete(size))
@@ -165,13 +175,26 @@ export class InstallableApp {
 
 type Rgb = readonly [number, number, number]
 
-/** A colour per key (`colourKey`), stable across releases: FNV-1a of the key picks the hue, at a fixed saturation and lightness. */
-export function iconColour(key: string): Rgb {
+function fnv1a(text: string): number {
 	let hash = 0x811c9dc5
-	for (const byte of new TextEncoder().encode(key)) {
+	for (const byte of new TextEncoder().encode(text)) {
 		hash = Math.imul(hash ^ byte, 0x01000193) >>> 0
 	}
-	return hslToRgb(hash % 360, 0.55, 0.42)
+	return hash
+}
+
+/** A hue per text, stable across releases: FNV-1a of the text, in degrees. */
+function hueOf(text: string): number {
+	return fnv1a(text) % 360
+}
+
+function colourOfHue(hue: number): Rgb {
+	return hslToRgb(hue, 0.55, 0.42)
+}
+
+/** The colour of an application id: the root mount's (`mountColour`). */
+export function iconColour(app: string): Rgb {
+	return colourOfHue(hueOf(app))
 }
 
 function hslToRgb(hue: number, saturation: number, lightness: number): Rgb {

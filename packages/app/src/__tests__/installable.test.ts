@@ -7,7 +7,7 @@ import { describe, expect, test } from 'bun:test'
 import { inflateSync } from 'node:zlib'
 import { headInsertionPoint } from '../implement/html'
 import { implement } from '../implement/implement'
-import { appManifest, colourKey, crc32, drawIcon, iconColour, initialOf, installLinks } from '../implement/installable'
+import { appManifest, crc32, drawIcon, iconColour, initialOf, installLinks, mountColour, mountHue } from '../implement/installable'
 
 const vocabulary = {
 	app: 'intake',
@@ -95,9 +95,22 @@ describe('the manifest', () => {
 		const admin = appManifest({ ...orders, mount: 'admin', prefix: '/admin' })
 		const portal = appManifest({ ...orders, mount: 'portal', prefix: '/portal' })
 		expect([root.short_name, admin.short_name, portal.short_name]).toEqual(['Orders', 'Orders admin', 'portal'])
-		expect(new Set([root.theme_color, admin.theme_color, portal.theme_color]).size).toBe(3)
 		// The root mount keeps the colour of the application id alone.
-		expect(iconColour(colourKey({ ...orders, mount: 'web', prefix: '/' }))).toEqual(iconColour('orders'))
+		expect(mountColour({ ...orders, mount: 'web', prefix: '/' })).toEqual(iconColour('orders'))
+		expect(root.theme_color).toBe('#' + iconColour('orders').map((channel) => channel.toString(16).padStart(2, '0')).join(''))
+	})
+
+	test("a mount below the root is at least 90° of hue from the root mount's colour, so the icons look different", () => {
+		const distance = (a: number, b: number): number => Math.min(Math.abs(a - b), 360 - Math.abs(a - b))
+		for (const app of ['orders', 'intake', 'crm', 'ucetnictvi', 'sklad-42']) {
+			const root = mountHue({ app, displayName: undefined, mount: 'web', prefix: '/' })
+			for (const mount of ['admin', 'portal', 'kiosk', 'reports']) {
+				const hue = mountHue({ app, displayName: undefined, mount, prefix: '/' + mount })
+				expect(hue).toBeGreaterThanOrEqual(0)
+				expect(hue).toBeLessThan(360)
+				expect(distance(hue, root)).toBeGreaterThanOrEqual(90)
+			}
+		}
 	})
 
 	test('the page links it with the session and names the touch icon', () => {
