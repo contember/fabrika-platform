@@ -42,9 +42,10 @@ const IAM: Readonly<Record<string, Judged>> = {
 	'scopeValues.list': { exempt: 'a read served as a mutation; writes nothing' },
 	'apps.setReturnOrigins': { exempt: `where IAM returns an application's sign-in: ${INSTALLATION}` },
 	'connections.revoke': { exempt: NARROWS },
-	'policies.create': { exempt: `a named policy under \`iam.admin\`: ${INSTALLATION}` },
 	// A named policy keeps the installation's rule for a person; its holders gain what it gains, keys among them, so a
-	// machine caller meets the application's `credentials` (ADR-0083 §8).
+	// machine caller meets the application's `credentials` (ADR-0083 §8). A grant names a role by key alone, so a policy
+	// created under a deleted role's key reaches every key still naming it.
+	'policies.create': { category: 'credentials' },
 	'policies.update': { category: 'credentials' },
 	'policies.delete': { exempt: `a named policy under \`iam.admin\`: ${INSTALLATION}` },
 	'apiKeys.provision': { category: 'credentials' },
@@ -191,6 +192,7 @@ describe('every IAM administration mutation is judged by an approval category or
 			'grants.create': { principalId: existing, app: APP, roleKey: 'staff' },
 			'grants.update': { id: grantIdOf(existingGrant), roleKey: 'staff' },
 			'policies.update': { app: APP, key: policy.key, policy: { name: policy.name, permissions: ['notes.read', 'notes.admin'] } },
+			'policies.create': { app: APP, policy: { key: 'auditor', name: 'Auditor', permissions: ['notes.read'] } },
 		}
 		const credentials = MUTATIONS.filter((method) => meets(IAM[method], 'credentials'))
 		const admitted: string[] = []
