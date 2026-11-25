@@ -854,6 +854,8 @@ export interface SetEnvironmentProtectionRequest {
 	policy?: ApprovalPolicy
 	/** The settings beside the modes; omitted keeps the stored ones. A value out of its bounds is a 400. */
 	settings?: ApprovalSettings
+	/** A passkey assertion bound to this change, which a change that `weakensStepUp` takes (ADR-0050 §5). */
+	stepUp?: ApprovalStepUp
 }
 
 export interface TriggerDeployRequest {

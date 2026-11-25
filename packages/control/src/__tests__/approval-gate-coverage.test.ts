@@ -36,6 +36,9 @@ const CONTROL: Readonly<Record<string, Judged>> = {
 	'apps.environments.put': { category: 'registry' },
 	'apps.environments.delete': { exempt: `deleting a protected environment: ${ALWAYS_A_PERSON}` },
 	'apps.environments.protect': { exempt: `the approval configuration: ${ALWAYS_A_PERSON}` },
+	'apps.environments.protectChallenge': {
+		exempt: `a passkey challenge for a change of the approval configuration, which IAM issues and nothing else changes: ${ALWAYS_A_PERSON}`,
+	},
 	'apps.environments.rotateTokenKey': { category: 'secrets' },
 	'apps.environments.suspend': { category: 'data' },
 	'apps.environments.resume': { category: 'data' },

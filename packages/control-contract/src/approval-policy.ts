@@ -503,6 +503,33 @@ export function requiredStepUp(settings: ApprovalSettings, categories: Iterable<
 	return 'none'
 }
 
+/** What an environment's protection holds, or a change asks for: the flag, the modes and the settings. */
+export interface ProtectionChoice {
+	readonly protected: boolean
+	readonly policy: ApprovalPolicy
+	readonly settings: ApprovalSettings
+}
+
+/**
+ * The categories whose deciding takes a passkey under `held` that a change to `after` lets more through (ADR-0050 §5):
+ * the environment unprotected, the passkey dropped, the mode lowered, fewer approvers, the requester's person let
+ * approve, or for `deploy-request` an unmerged commit admitted. Such a change takes a passkey too, so a driven browser
+ * cannot loosen the setting and then decide without one. Empty while `held` is not protected.
+ */
+export function weakensStepUp(held: ProtectionChoice, after: ProtectionChoice): ApproverCategory[] {
+	if (!held.protected) return []
+	return APPROVER_CATEGORIES.filter((category) =>
+		held.settings.stepUp[category] === 'webauthn' && (
+			!after.protected
+			|| after.settings.stepUp[category] === 'none'
+			|| RANK[after.policy[category]] < RANK[held.policy[category]]
+			|| after.settings.approvers[category] < held.settings.approvers[category]
+			|| (after.settings.requesterMayApprove[category] && !held.settings.requesterMayApprove[category])
+			|| (category === 'deploy-request' && held.settings.deployRequestCommits === 'merged' && after.settings.deployRequestCommits === 'any')
+		)
+	)
+}
+
 /**
  * Whether the requester's own person may decide a pending item: not when any of its waiting categories says `false`, so
  * the strictest wins (ADR-0083 §8). `grants` takes IAM's own rule, which never lets the requester approve.

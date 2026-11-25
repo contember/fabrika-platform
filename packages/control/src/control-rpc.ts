@@ -87,6 +87,7 @@ import {
 import {
 	type ApprovalUseCaseContext,
 	challengeApprovalUseCase,
+	challengeProtectionUseCase,
 	completeApprovalUseCase,
 	getApprovalUseCase,
 	listApprovalsUseCase,
@@ -190,7 +191,7 @@ const appEnvironmentBody = z.object({
 	artifact: providerEnvelopeSchema,
 })
 const putEnvironmentInput = z.object({ appId: nonEmpty, env: nonEmpty, environment: appEnvironmentBody })
-const protectEnvironmentInput = z.object({
+const protectionChallengeInput = z.object({
 	appId: nonEmpty,
 	env: nonEmpty,
 	protected: z.boolean(),
@@ -201,6 +202,7 @@ const protectEnvironmentInput = z.object({
 		stepUp: approvalSettingsSchema.shape.stepUp.strict(),
 	}).strict().optional(),
 }).strict()
+const protectEnvironmentInput = protectionChallengeInput.extend({ stepUp: stepUpAssertionSchema.optional() }).strict()
 const accessDigest = z.string().regex(/^sha256:[0-9a-f]{64}$/)
 const approvalDecision = z.enum(['approve', 'reject'])
 const approvalChallengeInput = z.object({
@@ -377,6 +379,9 @@ export function createControlRpcRouter(
 				// `access.approve` is checked at the coordinates inside, with the human and origin rules (ADR-0050 §4).
 				protect: rpc.procedure.input(protectEnvironmentInput).mutation(({ ctx, input }) =>
 					controlCall(() => setEnvironmentProtectionUseCase(approvalContext(ctx), input))
+				),
+				protectChallenge: rpc.procedure.input(protectionChallengeInput).mutation(({ ctx, input }) =>
+					controlCall(() => challengeProtectionUseCase(approvalContext(ctx), input))
 				),
 				rotateTokenKey: rpc.procedure.input(appEnvironment).require(CONTROL_ACTIONS.SECRET_MANAGE, ({ appId }) => appScope(appId)).mutation((
 					{ ctx, input },

@@ -1,10 +1,18 @@
-// ADR-0050 §5 end to end: deciding an approval request that takes a step-up, with Control's real IAM client over IAM's
-// admin transport (`IAM_ADMIN`), answered by IAM's own app in process with its real WebAuthn verifier. The authenticator
-// is IAM's test one, a WebCrypto key pair; the approver's console token is one IAM signed for a signed-in session.
+// ADR-0050 §5 end to end: deciding an approval request, and weakening what deciding takes, with Control's real IAM
+// client over IAM's admin transport (`IAM_ADMIN`), answered by IAM's own app in process with its real WebAuthn verifier.
+// The authenticator is IAM's test one, a WebCrypto key pair; the approver's console token is one IAM signed for a
+// signed-in session.
 
-import type { AuthContext } from '@fabrika/auth'
+import type { AuthContext, DomainEvent } from '@fabrika/auth'
 import { permits } from '@fabrika/auth-core'
-import { type ApprovalStepUp, type ApprovalStepUpChallenge, CONTROL_ACTIONS } from '@fabrika/control-contract'
+import {
+	type ApprovalStepUp,
+	type ApprovalStepUpChallenge,
+	CONTROL_ACTIONS,
+	type ProtectionChallengeInput,
+	STRICT_POLICY,
+	STRICT_SETTINGS,
+} from '@fabrika/control-contract'
 import type { PasskeyChallenge, PasskeyCreationOptions, PasskeyDto } from '@fabrika/iam-contract'
 import { type HttpService, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
@@ -14,6 +22,8 @@ import { TestAuthenticator } from '../../../iam/src/__tests__/helpers/webauthn'
 import { createIamApp } from '../../../iam/src/app'
 import type { IamRepositories } from '../../../iam/src/db'
 import { ControlApiError } from '../api/domain'
+import { type ApprovalUseCaseContext, challengeProtectionUseCase, setEnvironmentProtectionUseCase } from '../approval/api'
+import { appEnvSettings } from '../approval/categories'
 import { type ApprovalRequestContext, challengeApprovalRequestUseCase, decideApprovalRequestUseCase } from '../approval/requests/api'
 import { jsonDigest } from '../approval/requests/rules'
 import { iamPasskeyStepUp } from '../approval/step-up'
@@ -114,8 +124,10 @@ async function setup() {
 		return { id: row.id, inputDigest: row.input_digest }
 	}
 
+	const audited: DomainEvent[] = []
+
 	/** A console call by `principalId`, carrying the token IAM signed for their signed-in session. */
-	async function context(principalId: string): Promise<ApprovalRequestContext> {
+	async function consoleCall(principalId: string) {
 		const token = await adminTokenFor(iam.repositories, principalId, { issuer: ISSUER })
 		const request = new Request(`${CONSOLE}/api/rpc`, { method: 'POST', headers: { 'X-Fabrika-Token': token, 'Sec-Fetch-Site': 'same-origin' } })
 		const grants = [{ action: CONTROL_ACTIONS.ACCESS_APPROVE, scope: null, source: 'grant' as const }]
@@ -124,10 +136,20 @@ async function setup() {
 			principal: { id: principalId, type: 'user', label: principalId },
 			can: (action, scope) => permits(grants, action, scope),
 			scopedTo: () => null,
-			audit: () => Promise.resolve(),
+			audit: (event) => Promise.resolve(void audited.push(event)),
 		}
 		const stepUp = iamPasskeyStepUp(transport, request)
-		return { repositories: db, auth, admission: { request }, lock: locks, ...(stepUp === null ? {} : { stepUp }) }
+		return { request, auth, ...(stepUp === null ? {} : { stepUp }) }
+	}
+
+	async function context(principalId: string): Promise<ApprovalRequestContext> {
+		const { request, ...call } = await consoleCall(principalId)
+		return { repositories: db, admission: { request }, lock: locks, ...call }
+	}
+
+	/** The same console call, as `apps.environments.protect` and its challenge read it. */
+	async function protection(principalId: string): Promise<ApprovalUseCaseContext> {
+		return { repositories: db, queue: { send: () => Promise.resolve() }, lock: locks, ...await consoleCall(principalId) }
 	}
 
 	/** Answer a challenge Control obtained from IAM with ada's authenticator. */
@@ -146,7 +168,7 @@ async function setup() {
 		await iam.repositories.handoff.setReturnOrigins(CONSOLE_APP, [])
 	}
 
-	return { db, ada, eve, authenticator, credentialRequest, context, answer, forgetConsoleOrigin, close }
+	return { db, ada, eve, authenticator, audited, credentialRequest, context, protection, answer, forgetConsoleOrigin, close }
 }
 
 const refusal = async (promise: Promise<unknown>): Promise<{ status: number; message: string }> => {
@@ -229,5 +251,103 @@ describe('the step-up through the real IAM', () => {
 		} finally {
 			s.close()
 		}
+	})
+
+	describe('a change of protection that weakens a passkey on deciding', () => {
+		const PROD = { appId: 'notes', env: 'prod' }
+		const noPasskey = { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' as const } }
+		const weaken: ProtectionChallengeInput = { ...PROD, protected: true, policy: STRICT_POLICY, settings: noPasskey }
+
+		async function credentialsStepUp(db: ControlRepositories): Promise<string> {
+			const row = await db.registry.getAppEnv('notes', 'prod')
+			if (row === null) throw new Error('no prod')
+			return appEnvSettings(row).stepUp.credentials
+		}
+
+		test('is refused without an assertion and writes nothing; with one bound to it, it is written and audited', async () => {
+			const s = await setup()
+			try {
+				expect(await refusal(setEnvironmentProtectionUseCase(await s.protection(s.ada), weaken))).toEqual({
+					status: 403,
+					message: 'this change takes a passkey: confirm it with one of your passkeys',
+				})
+				expect(await credentialsStepUp(s.db)).toBe('webauthn')
+				expect(s.audited).toEqual([])
+
+				const stepUp = await s.answer(await challengeProtectionUseCase(await s.protection(s.ada), weaken))
+				expect((await setEnvironmentProtectionUseCase(await s.protection(s.ada), { ...weaken, stepUp })).approvalSettings).toEqual(noPasskey)
+				expect(await credentialsStepUp(s.db)).toBe('none')
+				expect(s.audited).toMatchObject([
+					{ action: 'access.protect', metadata: { stepUp: { credentialId: s.authenticator.credentialId, at: expect.any(Number) } } },
+				])
+			} finally {
+				s.close()
+			}
+		})
+
+		test("an assertion for one change applies no other change and decides no item; a decision's applies no change", async () => {
+			const s = await setup()
+			try {
+				const unprotect = { ...PROD, protected: false }
+				const forWeaken = await s.answer(await challengeProtectionUseCase(await s.protection(s.ada), weaken))
+				expect((await refusal(setEnvironmentProtectionUseCase(await s.protection(s.ada), { ...unprotect, stepUp: forWeaken }))).status).toBe(403)
+
+				const x = await s.credentialRequest()
+				const decide = { id: x.id, decision: 'reject' as const, inputDigest: x.inputDigest }
+				const another = await s.answer(await challengeProtectionUseCase(await s.protection(s.ada), weaken))
+				expect(await status(decideApprovalRequestUseCase(await s.context(s.ada), { ...decide, stepUp: another }))).toBe(403)
+				expect((await s.db.approvalRequests.get(x.id))?.state).toBe('pending')
+
+				const forDecision = await s.answer(await challengeApprovalRequestUseCase(await s.context(s.ada), decide))
+				expect((await refusal(setEnvironmentProtectionUseCase(await s.protection(s.ada), { ...weaken, stepUp: forDecision }))).status).toBe(403)
+				expect((await s.db.registry.getAppEnv('notes', 'prod'))?.protected).toBe(1)
+				expect(await credentialsStepUp(s.db)).toBe('webauthn')
+			} finally {
+				s.close()
+			}
+		})
+
+		test('a tightening, and a change to categories without a passkey, take none; their challenge answers 409', async () => {
+			const s = await setup()
+			try {
+				const tighten = {
+					...PROD,
+					protected: true,
+					settings: { ...STRICT_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, credentials: 2 as const } },
+				}
+				expect(await refusal(challengeProtectionUseCase(await s.protection(s.ada), tighten))).toEqual({
+					status: 409,
+					message: 'this change takes no passkey',
+				})
+				await setEnvironmentProtectionUseCase(await s.protection(s.ada), tighten)
+				const elsewhere = { ...PROD, protected: true, policy: { ...STRICT_POLICY, 'deletes-data': 'off' as const, secrets: 'off' as const } }
+				expect((await setEnvironmentProtectionUseCase(await s.protection(s.ada), elsewhere)).approvalPolicy).toEqual(elsewhere.policy)
+			} finally {
+				s.close()
+			}
+		})
+
+		test('unprotecting an environment whose credentials take a passkey by default takes one', async () => {
+			const s = await setup()
+			try {
+				const unprotect = { ...PROD, protected: false }
+				expect((await refusal(setEnvironmentProtectionUseCase(await s.protection(s.ada), unprotect))).status).toBe(403)
+				expect((await s.db.registry.getAppEnv('notes', 'prod'))?.protected).toBe(1)
+				// A person with no passkey is told so by the challenge.
+				expect(await challengeProtectionUseCase(await s.protection(s.eve), unprotect)).toEqual({ kind: 'no-passkey' })
+
+				const stepUp = await s.answer(await challengeProtectionUseCase(await s.protection(s.ada), unprotect))
+				expect((await setEnvironmentProtectionUseCase(await s.protection(s.ada), { ...unprotect, stepUp })).protected).toBe(false)
+				// Unprotected, loosening anything takes none.
+				const loosen = {
+					...PROD,
+					protected: false,
+					settings: { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' as const } },
+				}
+				expect((await setEnvironmentProtectionUseCase(await s.protection(s.ada), loosen)).approvalSettings.stepUp.credentials).toBe('none')
+			} finally {
+				s.close()
+			}
+		})
 	})
 })

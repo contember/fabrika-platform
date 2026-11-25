@@ -2,6 +2,7 @@
 // bound to the decision, answers it in the browser, and posts the assertion with the decision. IAM issues and verifies.
 
 import type { PasskeyAssertion, PasskeyChallenge, PasskeyRequestOptions } from '@fabrika/iam-contract'
+import type { SetEnvironmentProtectionRequest } from './index.js'
 
 /** The decision a step-up is bound to. */
 export type ApprovalDecision = 'approve' | 'reject'
@@ -20,6 +21,9 @@ export interface ApprovalRequestChallengeInput {
 	decision: ApprovalDecision
 	inputDigest: string
 }
+
+/** A challenge for one change of an environment's protection that weakens a passkey on deciding: the change as posted. */
+export type ProtectionChallengeInput = Omit<SetEnvironmentProtectionRequest, 'stepUp'>
 
 /**
  * IAM's challenge, bound to the decision, for `navigator.credentials.get`; or `no-passkey` when the person has none to

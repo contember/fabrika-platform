@@ -227,7 +227,7 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 	const binding = requestStepUpBinding(row.id, input.decision, row.input_digest)
 
 	if (input.decision === 'reject') {
-		const stepUp = await requireStepUp(c.stepUp, deciders.stepUp, binding, approver, input.stepUp)
+		const stepUp = await requireStepUp(c.stepUp, deciders.stepUp, binding, approver, input.stepUp, 'decision')
 		const decider = { decisionId: uuidv7(), id: approver.id, label: approver.label, stepUp }
 		if (!(await c.repositories.approvalRequests.reject(row.id, decider))) await lostDecision(c, row.id)
 		await auditDecision(c, row, 'reject', decider)
@@ -237,7 +237,7 @@ export async function decideApprovalRequestUseCase(c: ApprovalRequestContext, in
 
 	const kind = approvableKind(c, pending)
 	if (deciders.approvers === 2 && row.partial_approver_id === approver.id) return toApprovalRequestDto(c, row)
-	const stepUp = await requireStepUp(c.stepUp, deciders.stepUp, binding, approver, input.stepUp)
+	const stepUp = await requireStepUp(c.stepUp, deciders.stepUp, binding, approver, input.stepUp, 'decision')
 	const decider = { decisionId: uuidv7(), id: approver.id, label: approver.label, stepUp }
 	if (deciders.approvers === 2 && row.partial_approver_id === null) {
 		if (!(await c.repositories.approvalRequests.recordPartialApproval(row.id, decider))) await lostDecision(c, row.id)

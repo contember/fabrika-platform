@@ -5,10 +5,18 @@
 // person's assertion. The console token is `token:<principal id>`.
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import type { ApprovalStepUp, ApprovalStepUpChallenge } from '@fabrika/control-contract'
+import {
+	type AppEnvDto,
+	type ApprovalStepUp,
+	type ApprovalStepUpChallenge,
+	type ProtectionChallengeInput,
+	weakensStepUp,
+} from '@fabrika/control-contract'
 import { NO_PASSKEY_ERROR } from '@fabrika/iam-contract'
 import type { HttpService } from '@fabrika/platform'
 import { z } from 'zod'
+import { type ApprovalUseCaseContext, challengeProtectionUseCase, setEnvironmentProtectionUseCase } from '../../approval/api'
+import { appEnvPolicy, appEnvSettings } from '../../approval/categories'
 
 interface IssuedChallenge {
 	readonly binding: string
@@ -102,4 +110,18 @@ export function answerChallenge(issued: ApprovalStepUpChallenge, principalId: st
 		challengeId: issued.challenge.challengeId,
 		credential: { id, rawId: id, type: 'public-key', response: { clientDataJSON: 'AA', authenticatorData: 'AA', signature: 'AA' } },
 	}
+}
+
+/**
+ * A change of protection as the console makes it (ADR-0050 §5): confirmed with `principalId`'s passkey when it weakens a
+ * passkey on deciding under what the environment holds, posted as it is otherwise.
+ */
+export async function protectAsConsole(c: ApprovalUseCaseContext, input: ProtectionChallengeInput, principalId: string): Promise<AppEnvDto> {
+	const held = await c.repositories.registry.getAppEnv(input.appId, input.env)
+	if (held === null) return setEnvironmentProtectionUseCase(c, input)
+	const before = { protected: held.protected === 1, policy: appEnvPolicy(held), settings: appEnvSettings(held) }
+	const after = { protected: input.protected, policy: input.policy ?? before.policy, settings: input.settings ?? before.settings }
+	if (weakensStepUp(before, after).length === 0) return setEnvironmentProtectionUseCase(c, input)
+	const stepUp = answerChallenge(await challengeProtectionUseCase(c, input), principalId)
+	return setEnvironmentProtectionUseCase(c, { ...input, stepUp })
 }

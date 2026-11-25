@@ -8,7 +8,7 @@ import type {
 	CreateApprovalRequestResponse,
 	DecideApprovalRequestInput,
 } from './approval-requests.js'
-import type { ApprovalChallengeInput, ApprovalRequestChallengeInput, ApprovalStepUpChallenge } from './approval-step-up.js'
+import type { ApprovalChallengeInput, ApprovalRequestChallengeInput, ApprovalStepUpChallenge, ProtectionChallengeInput } from './approval-step-up.js'
 import type { BuilderConnectionReceiptDto, CreateBuilderConnectionReceiptRequest, GetBuilderConnectionReceiptRequest } from './builder-connections.js'
 import type {
 	ApproveDeviceAuthorizationResult,
@@ -200,6 +200,8 @@ export interface ControlRpcContract {
 			delete: RpcProcedure<AppEnvironmentInput, OkResponse>
 			/** Human user principals with `access.approve` only, from the console (ADR-0050 §4). */
 			protect: RpcProcedure<SetEnvironmentProtectionRequest, AppEnvDto>
+			/** A passkey challenge bound to one change that weakens a passkey on deciding; the same person and right as `protect`. */
+			protectChallenge: RpcProcedure<ProtectionChallengeInput, ApprovalStepUpChallenge>
 			/** The environment's next deploy retires the key its signed tokens are signed with and signs with a new one. */
 			rotateTokenKey: RpcProcedure<AppEnvironmentInput, RotateTokenKeyResponse>
 			/**

@@ -12,6 +12,7 @@ import type {
 	ApprovalStepUpChallenge,
 	CompleteApprovalRequest,
 	ListResponse,
+	ProtectionChallengeInput,
 	SetEnvironmentProtectionRequest,
 	StepUpMode,
 } from '@fabrika/control-contract'
@@ -23,6 +24,7 @@ import {
 	requesterMayApprove,
 	requiredApprovers,
 	requiredStepUp,
+	weakensStepUp,
 } from '@fabrika/control-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
@@ -43,7 +45,7 @@ import {
 } from './publish'
 import { deployRequester, parseDeployRequest, toDeployRequestDto } from './request'
 import { type AccessSnapshot, parseSnapshot } from './snapshot'
-import { issueStepUpChallenge, type PasskeyStepUpPort, requireStepUp, runStepUpBinding } from './step-up'
+import { issueStepUpChallenge, type PasskeyStepUpPort, protectionStepUpBinding, requireStepUp, runStepUpBinding } from './step-up'
 import { snapshotSurface } from './surface'
 
 /**
@@ -157,7 +159,7 @@ export async function completeApprovalUseCase(c: ApprovalUseCaseContext, input: 
 	if (input.decision === 'approve' && !requesterMayApprove && run.request_json !== null) {
 		requireOtherThanRequester(approver, deployRequester(parseDeployRequest(run.request_json)), 'deploy')
 	}
-	const stepUp = await requireStepUp(c.stepUp, stepUpMode, runBinding(pending, input.decision), approver, input.stepUp)
+	const stepUp = await requireStepUp(c.stepUp, stepUpMode, runBinding(pending, input.decision), approver, input.stepUp, 'decision')
 	const lease = await acquireLease(c.lock, runLeaseKey(run.app_id, run.env), c.leaseClock)
 	if (lease === null) fail(409, 'the environment is deploying; try again in a moment')
 	const completes = input.decision === 'approve' && (approvers === 1 || partial !== null)
@@ -254,19 +256,57 @@ function heldPartialApproval(run: RunRow, classification: StoredClassification):
 }
 
 /**
- * Set an environment's `protected` flag and, when given, its approval policy: the same human rule as approving, and
- * audited (ADR-0050 §4, ADR-0083 §2). IAM's grant gate follows every change, the stricter side first: IAM holds grants
- * before Control says so and releases them only after, so a failure between the two writes leaves grants waiting rather
- * than not, and the next change repairs it (ADR-0083 §4).
+ * The checks every change of protection passes first: a person in the console with `access.approve` at an environment
+ * that may take the change. Answers the person and the environment as read before the lease.
  */
-export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
-	requireHumanApprover(c.auth, c)
+async function requireProtectionChange(
+	c: ApprovalUseCaseContext,
+	input: ProtectionChallengeInput,
+): Promise<{ readonly person: { readonly id: string; readonly label: string }; readonly before: AppEnvRow }> {
+	const person = requireHumanApprover(c.auth, c)
 	if (!canAtCoordinates(c.auth, CONTROL_ACTIONS.ACCESS_APPROVE, input.appId, input.env)) fail(404, 'app env not found')
 	const before = await c.repositories.registry.getAppEnv(input.appId, input.env)
 	if (before === null) fail(404, 'app env not found')
 	// ADR-0050: a dev environment runs unreviewed workspace heads, and approval never applies to it.
 	if (before.kind === 'dev' && input.protected) fail(409, 'a dev environment is never protected')
 	if (before.authoring === 1 && input.protected) fail(409, authoringNeverProtected(input.env))
+	return { person, before }
+}
+
+/**
+ * What a change of protection takes beyond the session (ADR-0050 §5): a passkey when it weakens what deciding an item of
+ * a category takes where that category takes one under what the environment holds, so a driven browser cannot loosen
+ * the setting and then decide without one.
+ */
+function protectionStepUp(held: AppEnvRow, input: ProtectionChallengeInput): StepUpMode {
+	const policy = appEnvPolicy(held)
+	const settings = appEnvSettings(held)
+	const weakened = weakensStepUp(
+		{ protected: held.protected === 1, policy, settings },
+		{ protected: input.protected, policy: input.policy ?? policy, settings: input.settings ?? settings },
+	)
+	return weakened.length > 0 ? 'webauthn' : 'none'
+}
+
+/**
+ * A single-use passkey challenge bound to one change of protection that takes a step-up: the same person, right and
+ * checks as the change, judged against what the environment holds now.
+ */
+export async function challengeProtectionUseCase(c: ApprovalUseCaseContext, input: ProtectionChallengeInput): Promise<ApprovalStepUpChallenge> {
+	const { before } = await requireProtectionChange(c, input)
+	if (protectionStepUp(before, input) === 'none') fail(409, 'this change takes no passkey')
+	return await issueStepUpChallenge(c.stepUp, protectionStepUpBinding(input))
+}
+
+/**
+ * Set an environment's `protected` flag and, when given, its approval policy: the same human rule as approving, and
+ * audited (ADR-0050 §4, ADR-0083 §2). A change that weakens a passkey on deciding carries an assertion bound to it, which
+ * IAM verifies before anything is written (ADR-0050 §5). IAM's grant gate follows every change, the stricter side first:
+ * IAM holds grants before Control says so and releases them only after, so a failure between the two writes leaves
+ * grants waiting rather than not, and the next change repairs it (ADR-0083 §4).
+ */
+export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext, input: SetEnvironmentProtectionRequest): Promise<AppEnvDto> {
+	const { person } = await requireProtectionChange(c, input)
 	const policy = input.policy === undefined ? undefined : storedPolicy(input.policy)
 	const settings = input.settings === undefined ? undefined : storedSettings(input.settings)
 	const iamApp = appEnvironmentId(input.appId, input.env)
@@ -277,6 +317,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 	let row: AppEnvRow | null = null
 	try {
 		const held = await c.repositories.registry.getAppEnv(input.appId, input.env) ?? fail(404, 'app env not found')
+		const stepUp = await requireStepUp(c.stepUp, protectionStepUp(held, input), protectionStepUpBinding(input), person, input.stepUp, 'change')
 		const grantsAfter = grantsWait({
 			protected: input.protected ? 1 : 0,
 			approval_categories: policy === undefined ? held.approval_categories : policy.categories,
@@ -302,6 +343,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 					policyTo: appEnvPolicy(row),
 					settingsFrom: appEnvSettings(held),
 					settingsTo: appEnvSettings(row),
+					...(stepUp === null ? {} : { stepUp: { credentialId: stepUp.credentialId, at: stepUp.at } }),
 				},
 			})
 			if (grantApproval !== null && !grantsAfter) await setGrantApproval(grantApproval, iamApp, false, row.protection_revision)

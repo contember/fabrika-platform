@@ -1,10 +1,12 @@
-// The step-up on deciding a pending item (ADR-0050 §5): a passkey assertion bound to the decision. Control builds the
-// binding from the item it decides, IAM issues the challenge and verifies the answer, each with the approver's own console
-// token, and Control decides only when IAM verified an assertion of that approver against that binding.
+// The step-up on deciding a pending item (ADR-0050 §5): a passkey assertion bound to the decision, or to a change of
+// protection that weakens what deciding takes. Control builds the binding from the item it decides or the change it
+// applies, IAM issues the challenge and verifies the answer, each with the person's own console token, and Control goes
+// on only when IAM verified an assertion of that person against that binding.
 
 import { createRpcClient, RpcError } from '@fabrika/app'
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
-import type { ApprovalDecision, ApprovalStepUp, ApprovalStepUpChallenge, StepUpMode } from '@fabrika/control-contract'
+import { canonicalJson, sha256Hex } from '@fabrika/auth-core'
+import type { ApprovalDecision, ApprovalStepUp, ApprovalStepUpChallenge, ProtectionChallengeInput, StepUpMode } from '@fabrika/control-contract'
 import {
 	type IamAdminRpcContract,
 	NO_PASSKEY_ERROR,
@@ -30,6 +32,15 @@ export function runStepUpBinding(runId: string, decision: ApprovalDecision, cand
 /** The binding of an approval request's decision: the request, the decision and the input digest it decides. */
 export function requestStepUpBinding(id: string, decision: ApprovalDecision, inputDigest: string): string {
 	return `control:approval:${JSON.stringify(['request', id, decision, inputDigest])}`
+}
+
+/**
+ * The binding of a change of an environment's protection: the environment and the SHA-256 of the change as it was asked
+ * for, in canonical JSON, a part it leaves out (keeping the stored one) as null.
+ */
+export function protectionStepUpBinding(change: ProtectionChallengeInput): string {
+	const asked = canonicalJson({ protected: change.protected, policy: change.policy ?? null, settings: change.settings ?? null })
+	return `control:protect:${JSON.stringify(['env', change.appId, change.env, `sha256:${sha256Hex(asked)}`])}`
 }
 
 /**
@@ -134,25 +145,29 @@ export async function issueStepUpChallenge(port: PasskeyStepUpPort | undefined, 
 }
 
 /**
- * The step-up a decision takes, checked before anything is written: none under `none`; under `webauthn` an assertion
- * IAM verifies against `binding`, the one Control built from the item it decides, made by the approver. A missing
- * assertion, a refusal, a failure to reach IAM and another person's assertion all refuse the decision.
+ * The step-up a decision or a change of protection takes, checked before anything is written: none under `none`; under
+ * `webauthn` an assertion IAM verifies against `binding`, the one Control built from the item it decides or the change it
+ * applies, made by the person acting. A missing assertion, a refusal, a failure to reach IAM and another person's
+ * assertion all refuse it.
  */
 export async function requireStepUp(
 	port: PasskeyStepUpPort | undefined,
 	mode: StepUpMode,
 	binding: string,
-	approver: { readonly id: string },
+	person: { readonly id: string },
 	assertion: ApprovalStepUp | undefined,
+	what: 'decision' | 'change',
 ): Promise<StepUpRecord | null> {
 	if (mode === 'none') return null
-	if (assertion === undefined) fail(403, 'this decision takes a passkey: confirm it with one of your passkeys')
+	if (assertion === undefined) fail(403, `this ${what} takes a passkey: confirm it with one of your passkeys`)
 	let verified: VerifiedPasskeyAssertion | null = null
 	try {
 		verified = port === undefined ? null : await port.verify(binding, assertion)
 	} catch {
 		verified = null
 	}
-	if (verified === null || verified.principalId !== approver.id) fail(403, 'the passkey check failed, so nothing was decided; try again')
+	if (verified === null || verified.principalId !== person.id) {
+		fail(403, `the passkey check failed, so nothing was ${what === 'decision' ? 'decided' : 'changed'}; try again`)
+	}
 	return { credentialId: verified.credentialId, at: verified.at }
 }

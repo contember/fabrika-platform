@@ -839,7 +839,10 @@ other environment, before the provider prepares anything, and the write maps a r
   `passkeys.challenge`/`verify` over `IAM_ADMIN` with the caller's `X-Fabrika-Token` (`iamPasskeyStepUp`), no other
   credential. `requireStepUp` runs before any decision write and refuses (403) a missing assertion, any IAM refusal or
   failure, and a verified person other than the approver. The passkey is recorded on the decision (the run's approval
-  JSON, the request's `*_step_up_*` columns) and in its audit row. Never log an assertion.
+  JSON, the request's `*_step_up_*` columns) and in its audit row. Never log an assertion. A change of protection that
+  `weakensStepUp` (against the row read under the lease) takes one too: `apps.environments.protectChallenge` issues it on
+  `protectionStepUpBinding` (the environment and the digest of the change as asked), and `protect` runs `requireStepUp`
+  before IAM's grant gate and the row are written, recording the passkey in the `access.protect` audit row.
 - **Every other action of a non-person that waits is an `approval_requests` row (ADR-0083 §8, `src/approval/requests/`).**
   A kind (`kind.ts`, `requestKind`) owns its input and before-state schemas, its coordinates, the action the requester
   must hold to ask, its execution, its `follow` hook, and an optional `discard` hook that releases what a refused or

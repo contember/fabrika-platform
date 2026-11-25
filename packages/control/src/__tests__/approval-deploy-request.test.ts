@@ -42,7 +42,7 @@ import { memoryCommits } from './helpers/commits'
 import { BASE, WITH_EXPORT } from './helpers/contracts'
 import { createHarness, harnessDatabase } from './helpers/harness'
 import { fixtureProtect, makeFakeLock } from './helpers/lock'
-import { answerChallenge, consoleTokenHeaders, type FakePasskeyIam, fakePasskeyIam } from './helpers/passkeys'
+import { answerChallenge, consoleTokenHeaders, type FakePasskeyIam, fakePasskeyIam, protectAsConsole } from './helpers/passkeys'
 
 const COMMIT = 'c'.repeat(40)
 const ORIGIN = 'https://console.example.test'
@@ -217,7 +217,7 @@ function approvals(w: World, auth: AuthContext = caller('console')): ApprovalUse
 }
 
 async function choose(w: World, env: string, policy: ApprovalPolicy, settings: ApprovalSettings = STRICT_SETTINGS): Promise<void> {
-	await setEnvironmentProtectionUseCase(approvals(w), { appId: 'notes', env, protected: true, policy, settings })
+	await protectAsConsole(approvals(w), { appId: 'notes', env, protected: true, policy, settings }, 'p-ada')
 }
 
 async function run(w: World, runId: string): Promise<RunRow> {
@@ -781,7 +781,7 @@ describe('the settings are stored with the protection', () => {
 			requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, variables: false },
 			stepUp: { ...STRICT_SETTINGS.stepUp, 'deploy-request': 'webauthn', credentials: 'none' },
 		}
-		const dto = await setEnvironmentProtectionUseCase(approvals(w), { appId: 'notes', env: 'prod', protected: true, settings })
+		const dto = await protectAsConsole(approvals(w), { appId: 'notes', env: 'prod', protected: true, settings }, 'p-ada')
 		expect(dto.approvalSettings).toEqual(settings)
 		expect(JSON.parse((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_settings ?? '')).toEqual({
 			deployRequestCommits: 'any',
@@ -802,7 +802,7 @@ describe('the settings are stored with the protection', () => {
 			providerArtifactJson: ENVELOPE,
 		})
 		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_settings).not.toBeNull()
-		await setEnvironmentProtectionUseCase(approvals(w), { appId: 'notes', env: 'prod', protected: true, settings: STRICT_SETTINGS })
+		await protectAsConsole(approvals(w), { appId: 'notes', env: 'prod', protected: true, settings: STRICT_SETTINGS }, 'p-ada')
 		expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_settings).toBeNull()
 	})
 
