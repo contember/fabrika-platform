@@ -210,6 +210,18 @@ describe('Router', () => {
 		expect(stage(root)).toBe('lost')
 	})
 
+	test("an aria-current the application sets wins over the router's", async () => {
+		const { Link: PlainLink } = createRouter(routes)
+		mounted = await mount(
+			<Router>
+				<PlainLink to="home" aria-current={false}>
+					Home tab
+				</PlainLink>
+			</Router>,
+		)
+		expect(linkByText(mounted.container, 'Home tab').getAttribute('aria-current')).toBe('false')
+	})
+
 	test('a link is current by its path, whatever the query', async () => {
 		const root = await mountApp()
 		await act(async () => navigate('deals', { query: { stage: 'open' } }))
@@ -241,6 +253,30 @@ describe('Router', () => {
 			await act(async () => navigate('deal', { id: '5' }, { query: { stage: 'won' } }))
 			expect(scroll).toHaveBeenCalledTimes(2)
 			expect(heading(root).textContent).toBe('Deal 5')
+			expect(document.activeElement).toBe(heading(root))
+		} finally {
+			scroll.mockRestore()
+		}
+	})
+
+	test('navigate to the URL already shown, with or without replace, keeps the scroll and the focus', async () => {
+		const { control, scroll } = await mountAt('/deals?stage=won')
+		try {
+			await act(async () => navigate('deals', { query: { stage: 'won' } }))
+			await act(async () => navigate('deals', { query: { stage: 'won' }, replace: true }))
+			expect(scroll).not.toHaveBeenCalled()
+			expect(document.activeElement).toBe(control)
+		} finally {
+			scroll.mockRestore()
+		}
+	})
+
+	test('a click on the current link from an anchor of the page still scrolls up', async () => {
+		const { root, scroll } = await mountAt('/deals#notes')
+		try {
+			await click(linkByText(root, 'All deals'))
+			expect(window.location.hash).toBe('')
+			expect(scroll).toHaveBeenCalledTimes(1)
 			expect(document.activeElement).toBe(heading(root))
 		} finally {
 			scroll.mockRestore()

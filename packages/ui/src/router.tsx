@@ -223,12 +223,16 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 		}
 	}
 
-	function go(url: string, replace: boolean): void {
-		const before = window.location.href
-		const path = window.location.pathname
+	/**
+	 * Moves to `url`. A new path scrolls up and focuses the heading; a new query alone keeps both, so a filter does not
+	 * jump the page. A click on a link to the page already shown (`reclick`) scrolls up too, as a browser would.
+	 */
+	function go(url: string, replace: boolean, reclick: boolean): void {
+		const { pathname, search } = window.location
 		if (replace) window.history.replaceState(null, '', url)
 		else window.history.pushState(null, '', url)
-		notify(window.location.pathname !== path || window.location.href === before)
+		const samePage = window.location.pathname === pathname && window.location.search === search
+		notify(window.location.pathname !== pathname || (reclick && samePage))
 	}
 
 	function useLocation(): LocationSnapshot {
@@ -259,7 +263,7 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 				const url = interceptedUrl(event)
 				if (url === undefined) return
 				event.preventDefault()
-				go(`${url.pathname}${url.search}${url.hash}`, false)
+				go(`${url.pathname}${url.search}${url.hash}`, false, true)
 			}
 			document.addEventListener('click', onClick)
 			return () => document.removeEventListener('click', onClick)
@@ -297,17 +301,16 @@ export function createRouter<const R extends RouteTable>(routes: R, options: Rou
 
 	function navigate<Name extends RouteName<R>>(name: Name, ...args: [...ParamsArgs<R[Name]>, options?: NavigateOptions]): void {
 		const { params, options } = splitArgs(name, args)
-		go(buildHref(name, params, options.query), options.replace === true)
+		go(buildHref(name, params, options.query), options.replace === true, false)
 	}
 
 	function Link<Name extends RouteName<R>>(props: LinkProps<R, Name>): ReactNode {
 		const { to, params, query, children, ...rest } = props
 		const location = useLocation()
-		const target = buildHref(to, params, query)
 		// Current by path alone: a navigation item stays current whatever query (filters) the page carries.
-		const current = splitPath(location.pathname).join('/') === splitPath(new URL(target, window.location.origin).pathname).join('/')
+		const current = splitPath(location.pathname).join('/') === splitPath(buildHref(to, params)).join('/')
 		return (
-			<a {...rest} href={target} aria-current={current ? 'page' : rest['aria-current']}>
+			<a {...rest} href={buildHref(to, params, query)} aria-current={rest['aria-current'] ?? (current ? 'page' : undefined)}>
 				{children}
 			</a>
 		)
