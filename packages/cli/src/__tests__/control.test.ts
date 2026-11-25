@@ -612,6 +612,39 @@ describe('control apps secrets', () => {
 			'Unknown `control apps secrets` verb: rotate',
 		)
 	})
+
+	test('--request asks for the write instead of making it, and prints the fingerprint, never the value', async () => {
+		const url = 'https://console.example.test/approvals/requests/q1'
+		const asked = captureFetch({ result: { id: 'q1', url, state: 'pending', fingerprint: '0a1b2c3d' } })
+		let out = ''
+		const err = await captureStderr(async () => {
+			out = await captureStdout(() =>
+				runControlCli('apps', ['secrets', 'put', '--app=notes', '--env=prod', '--name=API_KEY', '--request'], undefined, CONTROL_ENV, piped(SECRET))
+			)
+		})
+		expect(asked.calls.map((call) => call.body)).toEqual([{
+			method: 'approvals.requests.create',
+			input: { kind: 'apps.secrets.put', input: { appId: 'notes', secret: { name: 'API_KEY', value: SECRET, env: 'prod' } } },
+		}])
+		expect(out).toBe(`q1\tpending\t${url}`)
+		expect(err).toContain('fingerprint is 0a1b2c3d')
+		expect(err).toContain(`a person approves or refuses this request at ${url}`)
+		expect(`${out}\n${err}`).not.toContain(SECRET)
+
+		captureFetch({ error: { type: 'bad_request', message: `refused ${SECRET}` } })
+		const message = await runControlCli('apps', ['secrets', 'put', '--app=notes', '--name=API_KEY', '--request'], undefined, CONTROL_ENV, piped(SECRET))
+			.then(() => 'resolved', (error: unknown) => (error instanceof Error ? error.message : String(error)))
+		expect(message).toBe('bad_request: refused [secret value]')
+
+		const removed = captureFetch({ result: { id: 'q2', url, state: 'pending' } })
+		await captureStderr(async () => {
+			await captureStdout(() => runControlCli('apps', ['secrets', 'delete', '--app=notes', '--name=API_KEY', '--request'], undefined, CONTROL_ENV))
+		})
+		expect(removed.calls[0]?.body).toEqual({
+			method: 'approvals.requests.create',
+			input: { kind: 'apps.secrets.delete', input: { appId: 'notes', name: 'API_KEY' } },
+		})
+	})
 })
 
 describe('control apps environments', () => {
