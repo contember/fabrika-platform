@@ -128,6 +128,7 @@ import {
 	type ReadDirectory,
 } from './membership'
 import { multipartBoundary, MultipartError, multipartParts, type MultipartReader } from './multipart'
+import { notifier, type Notify, type NotifyRules } from './notify'
 import { paramsObject, urlParams } from './params'
 import { globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
@@ -395,6 +396,8 @@ export interface RuntimeParts {
 	/** `proxySecretDigest` of the proxy secret every request must carry; `null` where the hop is a service binding. */
 	readonly proxySecretDigest: Uint8Array | null
 	readonly policy: HeaderPolicy
+	/** What `ctx.notify` may be about and open (ADR-0088 §6). */
+	readonly notify: NotifyRules
 	readonly database: ContractDatabase | null
 	/** Dimensions a table owns, so `in` and `on` must find the object. */
 	readonly ownedDimensions: ReadonlySet<string>
@@ -818,6 +821,9 @@ export class ContractRuntime {
 								: { webhooks: this.#webhookBindings(served.row.id, served.binds, invocation, caller.subject) }),
 							...this.#signing(`'${served.row.id}'`, site?.declaration.signs ?? []),
 							kick: kicks.kick,
+							...(site === undefined || invocation === null || site.kind === 'query' || served.readOnly === true
+								? {}
+								: { notify: this.#notify(`'${served.row.id}'`, invocation) }),
 							...callerRow,
 						})
 						const args = { input: access.input, ctx, ...(query === undefined ? {} : { query }) }
@@ -959,6 +965,11 @@ export class ContractRuntime {
 			...invocation.frameworkSite('ctx.webhooks'),
 			principal,
 		})
+	}
+
+	/** `ctx.notify` of a writing site: one row of the framework's notifications, in the invocation's transaction (ADR-0088 §6). */
+	#notify(site: string, invocation: Invocation): Notify {
+		return notifier(this.#parts.notify, { site, tables: () => this.#framework().notifications, ...invocation.frameworkSite('ctx.notify') })
 	}
 
 	/** `ctx.files` of a staged-kit site: `put` and `open` of the stored files, bound to the invocation and the request's work. */
@@ -1660,8 +1671,8 @@ export class ContractRuntime {
 	/**
 	 * Whether the caller may read a notification about `about` now: the check an endpoint of its action makes. Any
 	 * failure but "not found" fails the whole read, so the cursor stays and every later push answers 500 until the row
-	 * expires. Nothing writes rows yet; `ctx.notify` must keep that from happening by validating `about`'s value against
-	 * the owning table's key when it writes (a value Postgres cannot cast would abort the transaction here).
+	 * expires. `ctx.notify` keeps that from happening: it writes only a declared action and dimension, and locates a key
+	 * of a dimension a table owns in the writer's transaction, so a value Postgres cannot cast fails the writer, not here.
 	 */
 	async #mayRead(caller: Caller, about: NotificationAbout, frame: RequestFrame): Promise<boolean> {
 		if (!this.#parts.actions.includes(about.action)) {
@@ -1798,6 +1809,7 @@ export class ContractRuntime {
 							}),
 							...this.#terminals(authority.token, request.headers.get(REQUEST_ID_HEADER) ?? frame.id),
 							kick: kicks.kick,
+							...(served.site.kind === 'query' ? {} : { notify: this.#notify(where, invocation) }),
 						})
 						const args = { input, ctx, ...(query === undefined ? {} : { query }) }
 						return await runAsSite(`'${served.row.id}'`, siteEgress(served.site.declaration.egress, null), async () => await served.handler(args))
@@ -1948,6 +1960,7 @@ export class ContractRuntime {
 								}),
 								...this.#signing(`webhook '${served.webhook}'`, site?.signs ?? []),
 								kick: kicks.kick,
+								...(invocation === null ? {} : { notify: this.#notify(`webhook '${served.webhook}'`, invocation) }),
 								...data,
 							}),
 						}

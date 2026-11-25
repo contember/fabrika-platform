@@ -804,6 +804,18 @@ vocabulary (`packages/db/CLAUDE.md`).
   transaction (`#recordKicks`, before the answer), due now by the database's clock (`JobWakes.now`);
   `ctx.kick(job, { at })` writes only that wake, deduplicated per job and due second (`kick:<job>:<s>`). A job's kicks
   are written after its attempt succeeded, before its finish.
+- **`ctx.notify` writes a row of the person's inbox in the site's transaction, and nothing else** (ADR-0088 §6,
+  `implement/notify.ts`): a mutation's (public and link ones included), a webhook delivery's, a job's as `tx.notify`
+  inside `ctx.transaction`; a query, an export and a job outside its transaction have none, and a vocabulary without
+  `notifications: true` gets one that only refuses (`undeclared_notify`). `about` is `{ action, on: { <dimension>: key } }`
+  or `{ action, app: true }`, the **recipient's** action, which grants nothing and the writer need not hold. Everything
+  the inbox's `#mayRead` will read is checked before the row exists, because a row it cannot check fails every read of
+  that person's inbox: the person, the plain-text title and body (`NOTIFY_LIMITS`, no control character but a body's
+  `\n`, no lone surrogate), a path whose `GET` plans to an SPA mount's row (canonical, an optional query, no fragment),
+  a declared action and dimension, and, for a dimension a table owns, the key located in the site's own transaction, so
+  a key the table cannot read (a UUID column handed other text) fails the writer there. A missing object is written all
+  the same: refusing it would tell the handler's caller whether it exists, and the inbox shows nothing about it. Every
+  refusal is `refused_notification`. Nothing kicks a sender yet: the sending job is a later slice.
 - **A public procedure's challenge is verified after its buckets and its body, before its handler, and recorded once it
   passed** (`challenge.ts`). The provider list is closed (`turnstile`, `altcha`) and each one's browser sources are
   fixed (`CHALLENGE_ORIGINS`: Turnstile's origin, which `buildArtifact` adds to `scriptSrc`/`frameSrc`; ALTCHA's

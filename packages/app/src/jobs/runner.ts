@@ -17,6 +17,7 @@ import {
 	type JobWakes,
 	type LeaseFence,
 	LeaseLostError,
+	type Notifications,
 	type Session,
 	type Wake,
 } from '@fabrika/db/framework'
@@ -53,6 +54,7 @@ import {
 	undeclaredSql,
 } from '../implement/invocation'
 import { jobLinkIssuing, type JobLinkMount } from '../implement/membership'
+import { notifier, type NotifyRules } from '../implement/notify'
 import type { SignedTokens } from '../implement/tokens'
 import { type AppUrl, appUrl } from '../implement/urls'
 import { type WorkloadAuthority, type WorkloadCredential, workloadSite } from '../implement/workload'
@@ -295,6 +297,9 @@ interface RunnerContext {
 	 * writes none for a job or an expression the newer deploy removed.
 	 */
 	readonly guardsNextFire: boolean
+	/** What `tx.notify` may be about and open, and the table it writes (ADR-0088 §6). */
+	readonly notify: NotifyRules
+	readonly notifications: Notifications
 }
 
 export interface JobBindingInput {
@@ -304,6 +309,8 @@ export interface JobBindingInput {
 	readonly database: ContractDatabase | null
 	/** The framework side of `@fabrika/db`, bound by `boot`; `null` when the application has no such layer. */
 	readonly framework: FrameworkTables | null
+	/** What a job's `tx.notify` may be about and open: the rules every site of the boot shares. */
+	readonly notify: NotifyRules
 	readonly ownedDimensions: ReadonlySet<string>
 	/** Where failures and missed runs go: Operations, or the server log without a DSN. */
 	readonly reporter: OperationsReporter
@@ -449,6 +456,8 @@ export function bindJobs(input: JobBindingInput, problems: string[]): BoundJobs 
 		// A job's kicks run only after the job is bound, so `kick` below is defined by then.
 		kick: (name: string) => kick(name),
 		guardsNextFire: input.schedule !== undefined,
+		notify: input.notify,
+		notifications: tables.notifications,
 	})
 	const jobs: ContractJobs = Object.freeze({
 		names,
@@ -1490,6 +1499,7 @@ function jobContext(
 				app,
 				periodAt(job.schedule, new Date()) ?? undefined,
 				holds,
+				context,
 			)),
 		...(job.links === null || context.membership === null ? {} : { links: jobLinksOf(job, job.links, context.membership, frame, context) }),
 		...(job.mailer === null ? {} : { mail: jobMailOf(job, job.mailer, frame, signal, context) }),
@@ -1568,6 +1578,7 @@ function kitJobContext(
 	app: (action: string) => AppCapability<string>,
 	tickMs: number | undefined,
 	holds: readonly string[],
+	context: RunnerContext,
 ): Readonly<Record<string, unknown>> {
 	// One attempt's files: what it reads, puts and writes, inside its transactions and outside them, belongs to it.
 	const work = new FileWork(frame, frame.id)
@@ -1597,7 +1608,14 @@ function kitJobContext(
 							return ref(action, dimension, id, session)
 						}
 						const files = storedFilesHandle(kinds, own, { where: job, check: boundTo(frame, () => !open, 'tx.files'), writes: true })
-						return await body(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files, ref: located }))
+						// In this transaction, fenced by the lease like every write of it: a lost lease writes no notification.
+						const notify = notifier(context.notify, {
+							site: job,
+							tables: () => context.notifications,
+							session: async () => session,
+							check: boundTo(frame, () => !open, 'tx.notify'),
+						})
+						return await body(Object.freeze({ db: siteData(writes, (action) => writes.app(app(action))), sql, files, ref: located, notify }))
 					} catch (error) {
 						rolledBack = true
 						throw error

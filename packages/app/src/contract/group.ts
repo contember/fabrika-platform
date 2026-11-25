@@ -15,6 +15,7 @@ import type {
 	KickContext,
 	KitTypes,
 	LinkContext,
+	NotifyOf,
 	PublicContext,
 	SqlMode,
 	TokensContext,
@@ -190,6 +191,7 @@ export type ProcedureContext<
 		: EndpointContext<K, Caller, Kind, CheckedAccess<Acc>, D> & WebhooksContext<Bs> & CallerContext<K['caller'], Caller, Co>)
 	& KickContext<Ks>
 	& TokensContext<K, Sg>
+	& NotifyOf<K, Kind>
 
 /** A group without callers holds public procedures only; any other group may hold both. */
 export type GroupAccess<Caller extends RpcCaller, Acc> = [Caller] extends [never] ? PublicAccess : Acc | PublicAccess

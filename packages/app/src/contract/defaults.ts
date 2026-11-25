@@ -170,6 +170,11 @@ export const PUSH_INBOX_PATH = `${PUSH_PREFIX}/inbox`
 /** The inbox row's limits: its body (one endpoint), its bucket per caller, and the rows one read answers at most. */
 export const PUSH_INBOX_LIMITS = { maxBytes: 2 * 1024, perCaller: 60, rows: 20 } as const
 /**
+ * What `ctx.notify` stores (ADR-0088 §6), in characters (code points): a title and a body of plain text, the body's
+ * lines apart; the path a click opens; the person's principal id and the key of the object it is about.
+ */
+export const NOTIFY_LIMITS = { title: 120, body: 500, path: 512, principal: 256, key: 256 } as const
+/**
  * The push services a subscription may name (ADR-0088 §8): Google's (Chrome, Edge on Android, Opera), Mozilla's,
  * Apple's and Microsoft's (Edge on Windows). Any other endpoint is refused at the subscription row, so the sender never
  * posts a signed request to a URL the page chose. A new push service joins in a framework release.

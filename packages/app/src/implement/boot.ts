@@ -23,6 +23,7 @@ import {
 	isLoopbackHost,
 	type Jwks,
 	parseAppEnvironmentId,
+	planEndpoint,
 } from '@fabrika/auth-core'
 import type { Database } from '@fabrika/db'
 import type { CapabilityAuthority } from '@fabrika/db/capability'
@@ -82,6 +83,7 @@ import type { ContractDatabase, ContractImplementation, ImplementationDatabase }
 import { InstallableApp } from './installable'
 import { approvedDeclaration, approvedReach, isSiteHandler, type SiteDeclaration } from './invocation'
 import type { ReadDirectory } from './membership'
+import type { NotifyRules } from './notify'
 import { type AdmissionOptions, InFlightShare, type ProcedureAdmission, procedureAdmission, publicShareOf } from './public'
 import { isVapidPublicKey } from './push-subscription'
 import { readTokenKeys, type RuntimePurpose, SignedTokens } from './tokens'
@@ -1059,11 +1061,24 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 		}
 	}
 	const membership = membershipRpc === undefined ? null : new IamMembership(membershipRpc, variables.iamAppId)
+	const table = compileEndpointTable(artifact)
+	const notify: NotifyRules = Object.freeze({
+		declared: artifact.notifications === true,
+		actions: new Set(Object.keys(artifact.actions)),
+		dimensions: new Set(Object.keys(artifact.dimensions)),
+		opens: (pathname: string) => {
+			const plan = planEndpoint(table, 'GET', pathname)
+			return plan.outcome === 'endpoint' && (plan.endpoint.kind === 'spa' || plan.endpoint.kind === 'public-spa')
+		},
+		locate: (dimension: string, key: string, using: Session) =>
+			database === null || !owned.has(dimension) ? null : database.locate(dimension, key, using),
+	})
 	const jobs = bindJobs({
 		artifact,
 		handlers,
 		database,
 		framework,
+		notify,
 		ownedDimensions: owned,
 		reporter: reporterFor('fabrika.jobs') ?? logReporter,
 		credentials: workloads,
@@ -1193,7 +1208,8 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 	}
 
 	const runtime = new ContractRuntime({
-		table: compileEndpointTable(artifact),
+		table,
+		notify,
 		endpoints,
 		digests: new Map(artifact.endpoints.map((row) => [row.id, endpointDigest(artifact, row)])),
 		verifier,

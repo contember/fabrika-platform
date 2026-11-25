@@ -11,6 +11,10 @@ import type {
 	EndpointContext,
 	JobKitContext,
 	KitTypes,
+	NotificationText,
+	NotifyAbout,
+	NotifyContext,
+	NotifyOf,
 	SqlTag,
 	Unavailable,
 	WebhookKitContext,
@@ -281,6 +285,32 @@ export type OffRoadFields = [
 
 /** The fixture's kit with a terminal declared: what `defineVocabulary({ …, terminal: { identify } })` computes. */
 type TerminalKit = Omit<K, 'terminal'> & { readonly terminal: true }
+
+/** The fixture's kit with notifications declared: what `defineVocabulary({ …, notifications: true })` computes. */
+type NotifyingKit = Omit<K, 'notifications'> & { readonly notifications: true }
+type Admits<T> = T extends NotifyAbout<NotifyingKit> ? true : false
+
+/** ctx.notify: a writing site's, in a vocabulary that declares notifications; `about` names one object, or the application. */
+export type Notify = [
+	Expect<Equal<NotifyOf<K, 'query'>['notify'], Unavailable<'a query writes nothing, so it notifies no one: notify from a mutation'>>>,
+	Expect<
+		Equal<NotifyOf<K, 'mutation'>['notify'], Unavailable<'the vocabulary declares no notifications: add notifications: true to defineVocabulary'>>
+	>,
+	Expect<Equal<NotifyOf<NotifyingKit, 'query'>['notify'], Unavailable<'a query writes nothing, so it notifies no one: notify from a mutation'>>>,
+	Expect<Equal<Parameters<NotifyOf<NotifyingKit, 'mutation'>['notify']>, [string, NotificationText, NotifyAbout<NotifyingKit>]>>,
+	Expect<Equal<Admits<{ readonly action: 'crm.read'; readonly on: { readonly deal: string } }>, true>>,
+	Expect<Equal<Admits<{ readonly action: 'crm.read'; readonly app: true }>, true>>,
+	Expect<Equal<Admits<{ readonly action: 'orders.read'; readonly app: true }>, false>>,
+	Expect<Equal<Admits<{ readonly action: 'crm.read'; readonly on: { readonly order: string } }>, false>>,
+	Expect<Equal<Admits<{ readonly action: 'crm.read' }>, false>>,
+	Expect<Equal<NotificationText['path'], `/${string}`>>,
+	// A job notifies inside its transaction; a webhook delivery is one.
+	Expect<Equal<JobCtx['notify'], Unavailable<'a job notifies inside ctx.transaction((tx) => …), as tx.notify'>>>,
+	Expect<
+		Equal<Parameters<Parameters<JobCtx['transaction']>[0]>[0]['notify'], NotifyContext<K>['notify']>
+	>,
+	Expect<Equal<HookCtx['notify'], Unavailable<'the vocabulary declares no notifications: add notifications: true to defineVocabulary'>>>,
+]
 type OnDeal = { readonly action: 'crm.read'; readonly on: 'deal'; readonly from: 'id' }
 
 /** A capability whose action type was widened holds no single action provably: it reads no column of another action. */

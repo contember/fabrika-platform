@@ -16,7 +16,8 @@ import {
 
 /**
  * The vocabulary as `defineVocabulary` returned it, with its literal names, dimension definitions, the actions of its
- * people (`M`, `never` when it declares none) and its terminal (`T`, `never` when it declares none).
+ * people (`M`, `never` when it declares none), its terminal (`T`, `never` when it declares none) and whether it
+ * notifies (`N`, `never` when it does not).
  */
 export interface AppVocabulary<
 	A extends string,
@@ -25,13 +26,15 @@ export interface AppVocabulary<
 	Dims,
 	M extends AppMembers<A> = never,
 	T extends TerminalDeclaration = never,
+	N extends true = never,
 > extends Vocabulary<A, D, R> {
 	readonly dimensions: Dims & { readonly [K in D]: DimensionDef<A, D, R> }
 	readonly members?: M
 	readonly terminal?: T
+	readonly notifications?: N
 }
 
-export type AnyAppVocabulary = AppVocabulary<string, string, string, unknown, AppMembers<string>, TerminalDeclaration>
+export type AnyAppVocabulary = AppVocabulary<string, string, string, unknown, AppMembers<string>, TerminalDeclaration, true>
 
 /**
  * Declares the dimensions, actions and roles, and how IAM names the application (`locale`, `displayName`). `src/vocabulary.ts` exports it; `defineTables`, `defineApp` and the
@@ -44,6 +47,7 @@ export function defineVocabulary<
 	const Dims extends { readonly [K in D]: DimensionDef<NoInfer<A>, NoInfer<D>, NoInfer<R>> },
 	const M extends AppMembers<NoInfer<A>> = never,
 	const T extends TerminalDeclaration = never,
+	const N extends true = never,
 >(
 	vocabulary: Presentation & {
 		readonly app: string
@@ -54,9 +58,9 @@ export function defineVocabulary<
 		readonly members?: M
 		readonly directory?: 'labels'
 		readonly terminal?: T
-		readonly notifications?: true
+		readonly notifications?: N
 	},
-): AppVocabulary<A, D, R, Dims, M, T> {
+): AppVocabulary<A, D, R, Dims, M, T, N> {
 	const people = vocabulary.members
 	return {
 		app: vocabulary.app,

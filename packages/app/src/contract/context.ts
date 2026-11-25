@@ -58,6 +58,8 @@ export interface KitTypes {
 	readonly members: { readonly manage: string; readonly list: string }
 	/** Whether the vocabulary declares `terminal: { identify }`, which gives `ctx.terminals`. */
 	readonly terminal: boolean
+	/** Whether the vocabulary declares `notifications: true`, which gives a writing site `ctx.notify`. */
+	readonly notifications: boolean
 	readonly index: AnyDbIndex
 	/** The table names of `src/db/tables.ts`. */
 	readonly tables: string
@@ -474,6 +476,40 @@ export interface KickOptions {
 	readonly at: Date
 }
 
+/**
+ * What a notification is about (ADR-0088 §6): an action the **recipient** must hold to read it, on one object
+ * (`{ action: 'orders.read', on: { order: id } }`) or as a global grant (`{ action: 'orders.read', app: true }`). It
+ * grants nothing, and the writer needs none of it: the inbox checks the reader against it when the push arrives.
+ */
+export type NotifyAbout<K extends KitTypes> =
+	| { readonly [D in K['dimension']]: { readonly action: K['action']; readonly on: { readonly [P in D]: string } } }[K['dimension']]
+	| { readonly action: K['action']; readonly app: true }
+
+/**
+ * A notification's text, plain and shown on a locked screen: keep names and amounts out of it. `path` is a path of one
+ * of the application's SPA mounts, which a click opens.
+ */
+export interface NotificationText {
+	readonly title: string
+	readonly body: string
+	readonly path: `/${string}`
+}
+
+/**
+ * `ctx.notify(person, { title, body, path }, about)` of a writing site in a vocabulary that declares notifications:
+ * one row of the person's inbox, written in the site's transaction, so a rollback writes none. `person` is a principal
+ * id (`ctx.principal.id` of a person, a member's id from `ctx.members`). It sends nothing itself.
+ */
+export type NotifyContext<K extends KitTypes> = K['notifications'] extends true
+	? { notify(person: string, notification: NotificationText, about: NotifyAbout<K>): Promise<void> }
+	: { readonly notify: Unavailable<'the vocabulary declares no notifications: add notifications: true to defineVocabulary'> }
+
+/** A query writes nothing, so it notifies no one. */
+export type NoNotify = { readonly notify: Unavailable<'a query writes nothing, so it notifies no one: notify from a mutation'> }
+
+/** `ctx.notify` by the site's kind: a mutation's, a query's refusal. */
+export type NotifyOf<K extends KitTypes, Kind> = Kind extends 'query' ? NoNotify : NotifyContext<K>
+
 /** `ctx.tokens.sign('<purpose>', claims, { days })` of a site that declares `signs`: a token of one of those purposes. */
 export type TokensContext<K extends KitTypes, Sg> = [Sg] extends [never]
 	? { readonly tokens: Unavailable<"declare signs: ['<token purpose>'] on this site to sign its tokens"> }
@@ -503,6 +539,7 @@ export type LinkContext<
 	& {
 		readonly db: DataOf<K['index'], EndpointData<K['index'], Kind, { readonly action: A; readonly on: LD; readonly from: string }, Of<D, 'unscoped'>>>
 	}
+	& NotifyOf<K, Kind>
 	& NoMail
 
 /** An export procedure runs read-only, for a consumer application: its capability and data, nothing that writes. */
@@ -543,6 +580,7 @@ export type JobTransaction<K extends KitTypes, A extends string, D extends Decla
 	& { readonly db: SiteData<K['index'], 'mutation', A, Of<D, 'unscoped'>> & WorkloadAppData<K['index'], 'mutation', A> }
 	& SqlContext<Of<D, 'sql'>, K['index']>
 	& FilesContext<K['index'], 'transaction'>
+	& NotifyContext<K>
 	& {
 		/**
 		 * `ctx.ref`, located in this transaction: an object it wrote is found before the commit, so the same transaction
@@ -572,6 +610,7 @@ export type JobKitContext<K extends KitTypes, A extends string, D extends Declar
 	& JobContext<A, K['dimension']>
 	& { readonly db: SiteData<K['index'], 'job', A, Of<D, 'unscoped'>> & WorkloadAppData<K['index'], 'job', A> }
 	& { readonly sql: Unavailable<'a job runs ctx.sql inside ctx.transaction((tx) => …), as tx.sql'> }
+	& { readonly notify: Unavailable<'a job notifies inside ctx.transaction((tx) => …), as tx.notify'> }
 	& FilesContext<K['index'], 'job'>
 	& JobLinksContext<K['dimension'], A, Of<D, 'issues'>>
 	& JobMailContext<Of<D, 'mailer'>>
@@ -603,6 +642,7 @@ export type WebhookKitContext<K extends KitTypes, B extends string, Acts extends
 		/** The stored files: a delivery puts one, and opens one it holds. */
 		readonly files: StoredFilesHandle
 	}
+	& NotifyContext<K>
 	& NoMail
 
 type IndexOf<A> = A extends App<infer K> ? K['index'] : never
