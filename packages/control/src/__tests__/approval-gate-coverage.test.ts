@@ -139,6 +139,12 @@ describe("every mutation judged by a category meets the gate on a non-person's w
 		expect(Object.keys(GATED_INPUTS).sort()).toEqual(judged.sort())
 	})
 
+	test('every judged mutation but register and deploy becomes a request kind this release serves', () => {
+		// A deploy waits as a parked run (`deploy-request`); register creates its environment, which no request can wait in.
+		const unserved = Object.keys(GATED_INPUTS).filter((method) => method !== 'deploy' && PRODUCTION_REQUEST_KINDS.get(method) === undefined)
+		expect(unserved).toEqual([])
+	})
+
 	test('a request kind that a mutation becomes is judged by the same category', () => {
 		for (const [method, entry] of Object.entries(CONTROL)) {
 			const kind = PRODUCTION_REQUEST_KINDS.get(method)

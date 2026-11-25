@@ -744,6 +744,7 @@ export function createControlRpcRouter(
 
 	function approvalRequestContext(ctx: ControlRpcContext): ApprovalRequestContext {
 		const deps = buildDeps(ctx.env, ctx.provider, ctx.auth)
+		const runDeps = deps.runDeps
 		const consoleOrigin = controlPublicOrigin(ctx.env)
 		return {
 			repositories: deps.repositories,
@@ -754,6 +755,8 @@ export function createControlRpcRouter(
 			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
 			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
 			...(deps.lock === undefined ? {} : { lock: deps.lock }),
+			...(deps.lock === undefined || deps.opsTransport === undefined ? {} : { maintenance: { lock: deps.lock, ops: deps.opsTransport } }),
+			...(runDeps === undefined ? {} : { deploys: async () => operationDeploys(await runDeps()) }),
 			...(consoleOrigin === undefined ? {} : { consoleOrigin }),
 			...passkeyStepUp(ctx),
 			...iamGrantsDeps(ctx.env),
@@ -800,7 +803,9 @@ function sourceConnectionContext(ctx: ControlRpcContext) {
 function askedAppUpdate(input: z.infer<typeof updateAppInput>): JsonValue {
 	const app: Record<string, JsonValue> = {}
 	for (const [field, value] of Object.entries(input.app)) {
-		if (value !== null && value !== undefined) app[field] = value
+		// A `null` build field keeps it, so the request leaves it out; a `null` binding removes the binding.
+		if (value === undefined || (value === null && field !== 'githubInstallationId')) continue
+		app[field] = value
 	}
 	return { appId: input.appId, app }
 }

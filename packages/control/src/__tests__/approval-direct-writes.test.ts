@@ -219,6 +219,32 @@ for (const backend of backends) {
 			expect((await w.repositories.registry.getApp('notes'))?.build_cmd).toBeNull()
 		})
 
+		test("removing an application's GitHub binding is asked for with its null, which removes it", async () => {
+			const w = await world()
+			const answer = await call(w, 'agent', 'apps.update', { appId: 'notes', app: { githubInstallationId: null, workerDir: null } })
+			expect(answer.status).toBe(409)
+			const created = approvalRequestedSchema.parse(answer.error?.data)
+			const row = await w.repositories.approvalRequests.get(created.id)
+			expect(JSON.parse(row?.input_json ?? 'null')).toEqual({ appId: 'notes', app: { githubInstallationId: null } })
+		})
+
+		test('a write that reaches the provider or the environment itself waits as a request too', async () => {
+			const w = await world()
+			const registration = {
+				target: { provider: 'harbor', version: 1, payload: { kind: 'target' } },
+				artifact: { provider: 'harbor', version: 1, payload: { kind: 'artifact' } },
+			}
+			const writes: readonly [string, JsonValue][] = [
+				['apps.environments.suspend', { appId: 'notes', env: 'prod' }],
+				['apps.environments.put', { appId: 'notes', env: 'prod', environment: { ...registration, triggerRef: 'refs/heads/other' } }],
+			]
+			for (const [method, input] of writes) {
+				const answer = await call(w, 'agent', method, input)
+				expect({ method, status: answer.status, type: answer.error?.type }).toEqual({ method, status: 409, type: 'approval_requested' })
+			}
+			expect((await w.repositories.registry.getAppEnv('notes', 'prod'))?.suspended_at).toBeNull()
+		})
+
 		test('refuse is a 403 naming the category, and nothing is asked or written', async () => {
 			const w = await world()
 			await policy(w, 'prod', { ...STRICT_POLICY, data: 'refuse' })

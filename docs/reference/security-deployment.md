@@ -139,14 +139,44 @@ A non-person's manual deploy of a protected environment is its own approval requ
 Any other action of a non-person that waits for a person is an **approval request**
 ([ADR-0083 §8](../decisions/0083-an-environment-chooses-what-waits-for-approval.md#8-an-approval-request-is-the-pending-registry-write),
 [`approval/requests/`](../../packages/control/src/approval/requests/)). **Built:** the store, its decision, its
-execution, and the kinds of the writes Control makes itself
-([`production.ts`](../../packages/control/src/approval/requests/production.ts)): `apps.secrets.put/delete`,
-`vault.set/rotate/delete`, `apps.environments.rotateTokenKey`, `apps.variables.put/delete`, the trigger ref, domain,
-public origin and cross-origins of `apps.environments.put`, an `apps.update` patch of the build fields, and
-`data.backups.setSchedule`. A write that reaches the provider is not requestable yet (400): a secret the
-provider keeps, an environment write on a provider that prepares its registrations, a target, artifact or namespace,
-suspension and resumption, a data operation. The procedures no request may ever name are refused with their reason.
-Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category `agent-grants`, below).
+execution, and a kind for every write a protected environment's `secrets`, `variables`, `data` and `registry` modes
+judge ([`production.ts`](../../packages/control/src/approval/requests/production.ts)): `apps.secrets.put/delete` and
+`vault.set/rotate/delete`, in Control's vault or kept by the provider, `apps.environments.rotateTokenKey`,
+`apps.variables.put/delete`, `apps.environments.put` with its whole body, `apps.update`, suspend and resume,
+`data.backups.setSchedule`, `data.start` and `data.recover`. The procedures no request may ever name are refused with
+their reason. Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category
+`agent-grants`, below).
+
+- **A write that reaches outside Control** is followed by what the provider or the environment's object holds, since
+  an interrupted one may have applied or not:
+  - **A secret the provider keeps** ([`kinds/secrets.ts`](../../packages/control/src/approval/requests/kinds/secrets.ts))
+    is unsealed at execution and put under the request's operation id. The provider cannot read a sensitive value back,
+    so the request binds the provider's own version of it (`ProviderManagedSecrets.version`, never the value; Zerops
+    answers its env record's id and `lastUpdate`), and a provider without one refuses the request with a 400. A request
+    is for one environment: the all-environments layer is refused when it is asked for. A version that moved since the
+    request closes it `stale`. `follow` settles an interrupted put `failed` when the version did not move (the value did
+    not land), and `executed` when it moved and Control's row exists; it never puts again. A version that moved without
+    Control's row (the provider took the value, Control's write after it was lost) settles `failed` and the agent asks
+    again; so does a delete the provider applied while Control still lists the secret. A concurrent write at the
+    provider inside the same window reads as the request's (Zerops' `lastUpdate` has one-second resolution). The sweep
+    needs the provider for this: without it a provider-kept request stays `unknown`.
+  - **`apps.environments.put`** ([`kinds/registry.ts`](../../packages/control/src/approval/requests/kinds/registry.ts))
+    takes the procedure's whole body, target, artifact and namespace included, and runs `putAppEnvUseCase` as the
+    approver, through the provider's `prepareRegistration`. It binds the environment's `generation` and the fields it
+    writes (the target and artifact as digests); the page shows only the fields that change, before → after. An absent
+    domain or trigger ref clears it, as the direct put does. A put that would create an environment is refused when it
+    is asked for (404): a new environment that starts protected keeps the person rule.
+  - **`apps.update` of `repoUrl` or the GitHub binding** needs global `app.manage` of the requester (403 when it is
+    held only at the application) and of the approver, as the procedure does. The request binds the repository and the
+    binding with the build fields it names.
+  - **Suspend, resume, `data.start` and `data.recover`**
+    ([`kinds/data.ts`](../../packages/control/src/approval/requests/kinds/data.ts)) run their use case under the
+    request's deployment lease, and an operation of the environment's object takes the request's operation id
+    (`HeldOperation` in [`data-operations.ts`](../../packages/control/src/data-operations.ts)), so `follow` reads the
+    outcome from the operation's own record: running waits, failed fails, absent means nothing reached the object.
+    Behind a namespace proxy a suspension is the registry's record, which `follow` reads. A data operation binds the
+    environment's serving object and object list, a recovery the state of the operation it recovers, and a change of
+    either closes the request `stale`. A backup answers 501 when it is asked for, as the procedure does.
 
 - **A direct write meets the gate (D8).** A bearer's `apps.secrets.put/delete`, `vault.set/rotate/delete`,
   `apps.environments.rotateTokenKey`, `apps.variables.put/delete`, `apps.environments.put` (every field),
@@ -156,8 +186,7 @@ Beside them, an agent's grant, which IAM makes (`iam.grants.create`, category `a
   `gateDirectWrite`). `off` applies it with the bearer's own authority; `refuse` answers 403 naming the category;
   `person` creates the request exactly as `approvals.requests.create` would and answers 409 of type
   `approval_requested`, whose message names the link and whose data is `{ id, url, state }` and a secret's fingerprint.
-  Nothing applies, and no write that did not apply answers 200. Where the kind is not requestable yet, the answer is
-  that 400. A person in the console writes directly. The CLI prints the request and exits 75, or follows it with
+  Nothing applies, and no write that did not apply answers 200. A person in the console writes directly. The CLI prints the request and exits 75, or follows it with
   `--wait`; MCP's `request_change` asks for one. The mode is read when the write arrives: `apps.environments.put` and
   `apps.update` also bind it to the environment's `generation`, so a stricter mode saved in between refuses them; a
   secret, variable or data write under `off` that races a stricter mode applies under `off`.
@@ -316,15 +345,15 @@ each keeps the `@fabrika/*` release it pins until it raises the pin and deploys
 
 ## Decided, not built
 
-| What                                                                                                                                                | Where it is decided                                                                                        |
-| --------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| The access diff posted as a GitHub check on a pull request                                                                                          | [spec](../specs/access-diff-as-a-github-check.md)                                                          |
-| A release watch window after a deploy, with a manual rollback                                                                                       | [spec](../specs/release-watch-window-and-rollback.md)                                                      |
-| Automatic rollback of a suspect release                                                                                                             | [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)                                   |
-| Browser journeys as a stage gate and production checks                                                                                              | [backlog 268](../backlog/268-opice-journeys-as-a-stage-gate-and-production-checks.md)                      |
-| Destructive-change rules for application migrations                                                                                                 | [backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)                     |
-| A Cloudflare deploy that keeps the account token away from repository code                                                                          | [backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md)     |
-| A redelivered push webhook that does not create a second run                                                                                        | [backlog 204](../backlog/204-a-redelivered-push-webhook-creates-a-second-run.md)                           |
-| An environment's default branch checked like a trigger ref                                                                                          | [backlog 297](../backlog/297-control-accepts-any-default-branch.md)                                        |
-| A narrowing applied to IAM when its reconcile fails after the version went live                                                                     | [backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)                       |
-| Requests for the writes that reach a provider (a provider's secret, a target, artifact or namespace, suspension, a data operation), grants and keys | [ADR-0083 §8 and its rollout](../decisions/0083-an-environment-chooses-what-waits-for-approval.md#rollout) |
+| What                                                                            | Where it is decided                                                                                        |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| The access diff posted as a GitHub check on a pull request                      | [spec](../specs/access-diff-as-a-github-check.md)                                                          |
+| A release watch window after a deploy, with a manual rollback                   | [spec](../specs/release-watch-window-and-rollback.md)                                                      |
+| Automatic rollback of a suspect release                                         | [backlog 273](../backlog/273-automatic-rollback-of-a-suspect-release.md)                                   |
+| Browser journeys as a stage gate and production checks                          | [backlog 268](../backlog/268-opice-journeys-as-a-stage-gate-and-production-checks.md)                      |
+| Destructive-change rules for application migrations                             | [backlog 98](../backlog/98-application-migrations-have-no-destructive-change-rules.md)                     |
+| A Cloudflare deploy that keeps the account token away from repository code      | [backlog 86](../backlog/86-a-cloudflare-deploy-holds-the-account-token-beside-the-repositorys-code.md)     |
+| A redelivered push webhook that does not create a second run                    | [backlog 204](../backlog/204-a-redelivered-push-webhook-creates-a-second-run.md)                           |
+| An environment's default branch checked like a trigger ref                      | [backlog 297](../backlog/297-control-accepts-any-default-branch.md)                                        |
+| A narrowing applied to IAM when its reconcile fails after the version went live | [backlog 226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)                       |
+| Requests for grants and keys                                                    | [ADR-0083 §8 and its rollout](../decisions/0083-an-environment-chooses-what-waits-for-approval.md#rollout) |

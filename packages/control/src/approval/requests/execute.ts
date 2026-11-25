@@ -5,6 +5,7 @@
 import type { AuthContext } from '@fabrika/auth'
 import { ALL_ENVIRONMENTS, isFinalApprovalRequestState, REQUEST_TTL_HOURS } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
+import type { ControlProvider } from '@fabrika/provider-contract'
 import type { ApprovalRequestRow, ControlRegistryRepository, ControlRepositories } from '../../db'
 import { acquireLease, acquireLeases, type Lease, type LeaseClock, runLeaseKey } from '../../lease'
 import type { Vault } from '../../vault'
@@ -127,7 +128,7 @@ export async function executeApprovedRequest(c: RequestExecutionContext, kind: R
 	}
 	const operationId = uuidv7()
 	if (!(await requests.startExecution(row.id, operationId, lease.fence()))) return
-	const execution = { requestId: row.id, operationId, signal: lease.signal }
+	const execution = { requestId: row.id, operationId, signal: lease.signal, lease }
 	let outcome: RequestOutcome
 	try {
 		outcome = await action.execute(c, execution)
@@ -176,9 +177,14 @@ function stored(
 }
 
 /** The kind's settlement of an unknown execution, or null while it stays unknown, a throw included. */
-async function follow(action: RequestAction, c: RequestKindContext, execution: RequestExecution): Promise<RequestOutcome | null> {
+async function follow(
+	action: RequestAction,
+	c: RequestKindContext,
+	execution: RequestExecution,
+	beforeJson: string,
+): Promise<RequestOutcome | null> {
 	try {
-		const followed = await action.follow(c, execution)
+		const followed = await action.follow(c, execution, beforeJson)
 		return followed.state === 'unknown' ? null : followed
 	} catch {
 		return null
@@ -218,6 +224,8 @@ export interface ApprovalRequestSweepDeps {
 	readonly vault?: () => Promise<Vault>
 	/** IAM's grants and grant requests, which an IAM kind's unknown execution is followed through. */
 	readonly iamGrants?: IamGrantsReader
+	/** The installation's provider: a request whose effect the provider keeps is settled by reading it back. */
+	readonly provider?: ControlProvider
 	readonly lock: DeployLocks
 	readonly leaseClock?: LeaseClock
 	readonly kinds?: RequestKindRegistry
@@ -265,7 +273,7 @@ export async function sweepApprovalRequests(deps: ApprovalRequestSweepDeps): Pro
 			if (row.state === 'executing' && !(await requests.markUnknown(row.id, operationId, UNKNOWN_OUTCOME, lease.fence()))) continue
 			const action = actionOf(kinds.get(row.kind), row)
 			if (typeof action === 'string') continue
-			const followed = await follow(action, deps, { requestId: row.id, operationId, signal: lease.signal })
+			const followed = await follow(action, deps, { requestId: row.id, operationId, signal: lease.signal, lease }, row.before_json)
 			if (followed === null) continue
 			if (await requests.finish(row.id, operationId, stored(followed), lease.fence())) {
 				summary.settled++

@@ -270,9 +270,11 @@ checks the approver as it does today.
   the requester recorded beside them. At execution, under the environment's lease, Control compares the bound
   before-state with the current one; a mismatch closes the request `stale`, and the agent asks again.
 - **The lifecycle** is `pending → approved | rejected | expired`, then `executing (operation id) → executed | failed |
-  unknown`, and `stale`. The operation id is recorded before any external effect: a provider secret put is idempotent
-  by name and value, IAM's key issuance takes the request id as its idempotency key, and a data operation records its
-  own steps (ADR-0069), so `unknown` retries or follows it.
+  unknown`, and `stale`. The operation id is recorded before any external effect: a secret the provider keeps binds
+  the provider's own version of it (never the value, which a sensitive provider variable does not return), IAM's key
+  issuance takes the request id as its idempotency key, and a data operation records its own steps (ADR-0069) under the
+  request's operation id, so `unknown` retries or follows it. A provider secret is followed, never put again: an
+  unchanged version says the value did not land, a moved one that it did.
 - **Who approves.** A person in the console with the action's approval right (`access.approve` at the coordinates, the
   application's IAM administration for an IAM action: `iam.admin`, or `iam.users.manage` at that application
   environment, which Control asks IAM's `me` for with the person's console token; `access.approve` alone decides no IAM

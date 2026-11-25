@@ -122,14 +122,16 @@ export function requestTtlHoursOf(reach: readonly AppEnvRow[]): number {
 }
 
 /**
- * Whether the caller holds a kind's action where the request acts: at the application when the kind's route requires it
- * there or the request reaches every environment, else at the application or the environment.
+ * Whether the caller holds a kind's action where the request acts: unscoped where the input's use case requires that, at
+ * the application when the kind's route requires it there or the request reaches every environment, else at the
+ * application or the environment.
  */
 export function holdsKindAction(
 	auth: AuthContext,
 	kind: Pick<RequestKind, 'requesterAction' | 'requesterAt'>,
 	coordinates: RequestCoordinates,
 ): boolean {
+	if (kind.requesterAt === 'global') return auth.can(kind.requesterAction)
 	if (kind.requesterAt === 'app' || coordinates.env === ALL_ENVIRONMENTS) return auth.can(kind.requesterAction, appScope(coordinates.appId))
 	return canAtCoordinates(auth, kind.requesterAction, coordinates.appId, coordinates.env)
 }

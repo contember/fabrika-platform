@@ -196,7 +196,7 @@ beside the value's length, so the person can tell it is the value you sent; when
 fingerprint, the command fails and says to refuse the request. Control seals the value and stores only that. stdout
 prints the request's id, state and link; \`--wait\` follows it as \`requests get --wait\` does. Without \`--env\` the request
 is for every environment of the app, and every protected one judges it. A secret the provider keeps (a Zerops
-environment) cannot be requested yet.
+environment) is requested for one \`--env\`.
 
 \`access request-grant\` asks a person to give a principal (this agent's own, or another) one role of an application
 environment. It needs \`access.request\` at the app, the role must be one the environment's approved contract declares,

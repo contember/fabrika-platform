@@ -190,17 +190,17 @@ describe('ACL enforcement (resolved auth context)', () => {
 
 		const update = (app: Record<string, string | null>) => rpcRequest('apps.update', { appId: 'app', app })
 
-		// A key's put of a protected environment goes to the gate whole (ADR-0083 §1, D8). This release's request of it takes
-		// no provider envelope, so the put is refused and nothing changes.
+		// A key's put of a protected environment goes to the gate whole (ADR-0083 §1, D8): it waits as a request and nothing
+		// changes.
 		const key = await seeded(service)
 		const redirected = await rpcResult(put('prod', 'refs/heads/unreviewed'), key, { consoleOrigin: ORIGIN })
-		expect(redirected.status).toBe(400)
+		expect(redirected.status).toBe(409)
 		expect((await key.repositories.registry.getAppEnv('app', 'prod'))?.trigger_ref).toBe('refs/heads/main')
 		// An unprotected environment takes a key.
 		expect((await rpcResult(put('stage', 'refs/heads/feature'), key)).status).toBe(200)
 
-		// Every field of the app decides what its deploys run, so a key's change of any waits for a person; the repository
-		// needs global app.manage, which this release's request does not take.
+		// Every field of the app decides what its deploys run, so a key's change of any waits for a person, the repository
+		// included (it needs global app.manage of the requester, which this key holds, and of the approver).
 		const fields: Array<[string, string]> = [
 			['repoUrl', 'github.com/other/app'],
 			['defaultBranch', 'release'],
@@ -210,7 +210,7 @@ describe('ACL enforcement (resolved auth context)', () => {
 		]
 		for (const [field, value] of fields) {
 			const moved = await rpcResult(update({ [field]: value }), key, { consoleOrigin: ORIGIN })
-			expect({ field, status: moved.status }).toEqual({ field, status: field === 'repoUrl' ? 400 : 409 })
+			expect({ field, status: moved.status }).toEqual({ field, status: 409 })
 		}
 		expect(await key.repositories.registry.getApp('app')).toMatchObject({
 			repo_url: 'github.com/acme/app',
@@ -282,10 +282,10 @@ describe('ACL enforcement (resolved auth context)', () => {
 		const refusal = 'environment `prod` is protected: only a person changes its domain; an agent, a builder key or a service key cannot'
 
 		for (const caller of [service, agent]) {
-			// The put of a protected environment goes to the gate, and nothing changes.
+			// The put of a protected environment goes to the gate as a request, and nothing changes.
 			const deps = await seeded(caller)
-			expect((await rpcResult(put('prod', 'app.attacker.example'), deps)).status).toBe(400)
-			expect((await rpcResult(put('prod', null), deps)).status).toBe(400)
+			expect((await rpcResult(put('prod', 'app.attacker.example'), deps, { consoleOrigin: ORIGIN })).status).toBe(409)
+			expect((await rpcResult(put('prod', null), deps, { consoleOrigin: ORIGIN })).status).toBe(409)
 			expect((await deps.repositories.registry.getAppEnv('app', 'prod'))?.domain).toBe('app.example.com')
 			// A new environment that starts protected has no request to wait in, so its first domain takes a person.
 			await deps.repositories.registry.deleteAppEnv('app', 'prod')
@@ -333,9 +333,9 @@ describe('ACL enforcement (resolved auth context)', () => {
 		const refusal = 'environment `prod` is protected: only a person changes its public origin; an agent, a builder key or a service key cannot'
 
 		for (const caller of [service, agent]) {
-			// The put of a protected environment goes to the gate, and nothing changes.
+			// The put of a protected environment goes to the gate as a request, and nothing changes.
 			const deps = await seeded(caller)
-			expect((await rpcResult(put('prod', 'https://attacker.example'), deps)).status).toBe(400)
+			expect((await rpcResult(put('prod', 'https://attacker.example'), deps, { consoleOrigin: ORIGIN })).status).toBe(409)
 			expect((await deps.repositories.registry.getAppEnv('app', 'prod'))?.public_origin).toBe('https://app.example.com')
 			// A new environment that starts protected has no request to wait in, so its first public origin takes a person.
 			await deps.repositories.registry.deleteAppEnv('app', 'prod')
