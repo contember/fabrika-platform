@@ -283,13 +283,16 @@ their reason. Beside them, an agent's grant and a key an agent asks for, which I
   it only as a compact JWE (`ECDH-ES`, `A256GCM`) to the agent's key. The sweep follows an `unknown` execution by asking
   IAM's `apiKeys.requested` for the key under the request id with the provisioning key, so no retry issues a second.
   The JWE waits in `approval_request_deliveries`; `approvals.requests.fetchKey` hands it to the requester once (the same
-  principal and OAuth client) and deletes it: 409 before the key is issued, 410 once fetched or past the deadline, 404
-  to anyone else. The deadline is the request's own, or an hour after issuance when later; the sweep then drops an
-  unfetched JWE and revokes the key in IAM (`iam.apikey.revoke`), retrying on a later pass when IAM does not answer.
+  principal and OAuth client) and deletes Control's copy: 409 before the key is issued, 410 once fetched or past the
+  deadline, 404 to anyone else. IAM keeps its own copy in `requested_api_keys`, which `apiKeys.requested` answers to any
+  `iam.admin` caller; it is useless without the private key. The deadline is the request's own, or an hour after
+  issuance when later; the sweep then drops an unfetched JWE and revokes the key in IAM (`iam.apikey.revoke`), retrying
+  on a later pass when IAM does not answer.
   `ApprovalRequestDto.delivery` says whether the key waits, was fetched, or was dropped and revoked; no DTO, audit row
   or log line carries the JWE, and the plaintext never reaches Control. Known gap: a key requester has no OAuth client,
   so any key of the same principal fetches its request's JWE, which only the private key in the requesting process
-  opens.
+  opens. Such a fetch also uses up the delivery: the requester's own fetch then answers 410, and since the key counts
+  as fetched, the sweep never revokes it, so it stays valid until its expiry (at most 30 days).
 - **Reading it.** The agent reads the state with `approvals.requests.get`, `fabrika control requests get <id> [--wait]`
   or the MCP tool `get_approval_request`; the person decides at `<console>/approvals/requests/<id>`, where text the
   agent wrote is escaped and marked. Fabrika sends no notification. The requester reads its request only through the

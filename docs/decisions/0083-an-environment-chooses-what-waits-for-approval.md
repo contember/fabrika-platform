@@ -319,8 +319,10 @@ key only encrypted to the agent's public key (compact JWE, `ECDH-ES` with `A256G
 plaintext reaches neither the approver's browser nor Control. An `unknown` execution is followed by asking IAM for the
 key under the request id with the provisioning key, so a retry never issues a second key. Control keeps the JWE until
 the requester (the same principal through the same OAuth client, or through no client for a key) fetches it once with
-`approvals.requests.fetchKey`, which deletes it; at the request's deadline, or an hour after the key was issued when that
-is later, the sweep drops an unfetched one and revokes the key in IAM. No DTO, audit row or log line carries the JWE.
+`approvals.requests.fetchKey`, which deletes Control's copy; at the request's deadline, or an hour after the key was
+issued when that is later, the sweep drops an unfetched one and revokes the key in IAM. IAM keeps its own copy of the
+JWE under the request id, readable by `iam.admin` (`apiKeys.requested`) and useless without the private key. No DTO,
+audit row or log line carries the JWE.
 IAM enforces the `credentials` mode on its own key
 issuance for a machine caller too, mirrored from Control stricter side first as the grant gate is, so a `px_` key
 holding `iam.admin` meets the same mode. Two issuances keep their rule: the provisioning key's own (workload,
