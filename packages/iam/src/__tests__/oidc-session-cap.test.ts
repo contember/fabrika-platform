@@ -209,6 +209,7 @@ describe('the OIDC session cap — SQLite', () => {
 			revoked_at: null,
 			agent_label: null,
 			passkey_confirmed_at: null,
+			passkey_credential_id: null,
 		}
 
 		expect((await grantAuthority(services, grant, now()))?.expiresAt).toBe(almost.signedIn + CAP)

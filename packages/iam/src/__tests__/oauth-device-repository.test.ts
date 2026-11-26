@@ -102,6 +102,7 @@ for (const engine of engines) {
 				revoked_at: null,
 				agent_label: null,
 				passkey_confirmed_at: null,
+				passkey_credential_id: null,
 			}
 			const audit = {
 				requestId: 'request-device',
@@ -134,6 +135,41 @@ for (const engine of engines) {
 			expect((await repositories.oauth.grant(grantId))?.session_id).toBe(sessionId)
 			const events = await repositories.audit.listAuditEvents({ principalId: principal.id, limit: 10 })
 			expect(events.map((event) => event.action)).toEqual(['iam.oauth.grant.create'])
+		})
+
+		test('an approval a passkey confirmed is written only while the approver holds that passkey', async () => {
+			const repositories = engine.repositories()
+			const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
+			const now = unixNow()
+			const sessionId = await repositories.sessions.createSession({
+				tokenHash: uuidv7(),
+				principalId: principal.id,
+				authenticationMethod: 'password',
+				expiresAt: now + 3600,
+			})
+			const credentialId = `credential-${uuidv7()}`
+			await repositories.passkeys.insert(
+				{ id: uuidv7(), principalId: principal.id, credentialId, publicKey: 'AA', signCount: 0, transports: [], label: 'Laptop', createdAt: now },
+				{ steppedUp: false, max: 10 },
+				{
+					requestId: 'req',
+					principalId: principal.id,
+					principalLabel: principal.id,
+					app: 'iam',
+					action: 'iam.passkey.register',
+					resourceType: 'principal',
+				},
+			)
+			const approval = (id: string) => ({ principalId: principal.id, sessionId, grantExpiresAt: now + 3600, passkey: { at: now, credentialId: id } })
+			// A passkey reset between the check and the approval removed it, or it is another person's.
+			const gone = attempt(now)
+			await repositories.oauth.startDeviceAuthorization(gone)
+			expect(await repositories.oauth.approveDeviceAuthorization(gone.user_code_hash, approval(`credential-${uuidv7()}`), now)).toBe(false)
+			expect((await repositories.oauth.deviceAuthorization(gone.device_code_hash))?.status).toBe('pending')
+			const held = attempt(now)
+			await repositories.oauth.startDeviceAuthorization(held)
+			expect(await repositories.oauth.approveDeviceAuthorization(held.user_code_hash, approval(credentialId), now)).toBe(true)
+			expect((await repositories.oauth.deviceAuthorization(held.device_code_hash))?.passkey_credential_id).toBe(credentialId)
 		})
 
 		test('a denial ends a pending attempt, an expired one is decided by nobody, and the prune removes it', async () => {

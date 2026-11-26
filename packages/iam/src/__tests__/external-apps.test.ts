@@ -178,6 +178,7 @@ async function setup(engine: (typeof ENGINES)[number]) {
 				revoked_at: null,
 				agent_label: null,
 				passkey_confirmed_at: null,
+				passkey_credential_id: null,
 			},
 			{ token_hash: uuidv7(), redirect_uri: 'https://ops.example.net/callback', challenge: 'c', expires_at: now + 60 },
 		)

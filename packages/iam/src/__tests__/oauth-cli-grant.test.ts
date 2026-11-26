@@ -69,6 +69,7 @@ async function fixture() {
 				revoked_at: null,
 				agent_label: null,
 				passkey_confirmed_at: null,
+				passkey_credential_id: null,
 			},
 			{ token_hash: await hashToken(generateToken()), redirect_uri: 'urn:fabrika:unused', challenge: 'unused', expires_at: now },
 		)

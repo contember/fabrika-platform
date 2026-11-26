@@ -33,7 +33,7 @@ import type { OAuthConfig } from './oauth-config'
 import { attemptRequest, enterUserCode, formatUserCode, normalizeUserCode, OAUTH_DEVICE_PATH, userCodeHash } from './oauth-device'
 import { assertionSchema, issueAssertionChallenge, relyingParty, verifyPasskeyAssertion } from './passkeys'
 import { htmlPage } from './password-pages'
-import type { OAuthDeviceAuthorizationRow } from './repositories/oauth'
+import type { OAuthDeviceAuthorizationRow, PasskeyConfirmation } from './repositories/oauth'
 import type { SignedInSessionRow } from './repositories/sessions'
 import { unixNow } from './repositories/sql'
 import { resolveAuthorityAt } from './resolve'
@@ -87,7 +87,7 @@ export async function handleDevicePage(request: Request, services: Services, con
 	if (decision !== 'approve' || !isOAuthDeviceGrantLifetime(lifetime)) return page(services, 'Not allowed', '<p>The decision is missing.</p>', 400)
 	// An agent's grant is approved at the scope the page offered, never wider than the request (ADR-0090 §2).
 	let scopes: string | undefined
-	let passkeyConfirmedAt: number | undefined
+	let passkey: PasskeyConfirmation | undefined
 	if (entry.attempt.client_id === AGENT_CLIENT_ID) {
 		const gate = await agentWriteGate(services, entry.attempt.app)
 		const chosen = approvedAgentScope(entry.attempt, form?.get('scope') ?? null, gate, await holdsPasskey(services, signedIn.principal.id))
@@ -101,7 +101,7 @@ export async function handleDevicePage(request: Request, services: Services, con
 				lifetime,
 			})
 			if (confirmed instanceof Response) return confirmed
-			passkeyConfirmedAt = confirmed
+			passkey = confirmed
 		}
 	}
 	// The grant stays bound to this IAM session and ends with it, an OIDC login's cap included.
@@ -113,7 +113,7 @@ export async function handleDevicePage(request: Request, services: Services, con
 			sessionId: signedIn.session.id,
 			grantExpiresAt,
 			...(scopes === undefined ? {} : { scopes }),
-			...(passkeyConfirmedAt === undefined ? {} : { passkeyConfirmedAt }),
+			...(passkey === undefined ? {} : { passkey }),
 		},
 		now,
 	)
@@ -236,7 +236,7 @@ async function devicePasskeyBinding(userCodeHash: string, scope: AgentScope, lif
 
 /**
  * The passkey check of an approval that takes one (ADR-0090 §5). Without an answer in the form, a page that asks the
- * passkey and posts the same decision back with it; with one, the time the passkey answered, or a refusal page. An
+ * passkey and posts the same decision back with it; with one, when and which passkey answered, or a refusal page. An
  * answer that reaches verification spends the challenge, right or wrong; a malformed one leaves it to expire.
  */
 async function confirmWithPasskey(
@@ -244,7 +244,7 @@ async function confirmWithPasskey(
 	principalId: string,
 	form: URLSearchParams | null,
 	decision: { userCodeHash: string; userCode: string; scope: AgentScope; lifetime: number },
-): Promise<number | Response> {
+): Promise<PasskeyConfirmation | Response> {
 	const rp = relyingParty(services.config)
 	const binding = await devicePasskeyBinding(decision.userCodeHash, decision.scope, decision.lifetime)
 	const challengeId = form?.get('challengeId') ?? null
@@ -278,7 +278,7 @@ async function confirmWithPasskey(
 			403,
 		)
 	}
-	return verified.value.at
+	return { at: verified.value.at, credentialId: verified.value.credentialId }
 }
 
 const NO_PASSKEY_TEXT =

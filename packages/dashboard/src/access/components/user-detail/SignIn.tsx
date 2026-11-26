@@ -388,7 +388,8 @@ function Passkeys({ principal, passkeys, onDone }: { principal: PrincipalDetail;
 						<p>
 							Remove every passkey of{' '}
 							<strong>{principal.label}</strong>? Until they add a new one, they cannot confirm a step that asks for a passkey, and the first one they add
-							needs no other passkey. Confirm who is asking before you do this. The removal is recorded in the audit log.
+							needs no other passkey. The agent access these passkeys confirmed ends with them. Confirm who is asking before you do this. The removal is
+							recorded in the audit log.
 						</p>
 					}
 					onClose={() => setConfirmReset(false)}

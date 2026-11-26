@@ -21,6 +21,8 @@ export interface OAuthGrantRow {
 	agent_label: string | null
 	/** When a passkey confirmed the approval of an agent's `write` grant on the device page (ADR-0090 §5); null when none did. */
 	passkey_confirmed_at: number | null
+	/** The credential id of the passkey that confirmed it; null when none did, or when it was confirmed before IAM recorded which. */
+	passkey_credential_id: string | null
 }
 
 export interface OAuthCodeRow {
@@ -62,6 +64,14 @@ export interface OAuthDeviceAuthorizationRow {
 	grant_id: string | null
 	/** When a passkey confirmed the approval, set with it; null when none did. */
 	passkey_confirmed_at: number | null
+	/** The credential id of that passkey, set with `passkey_confirmed_at`. */
+	passkey_credential_id: string | null
+}
+
+/** The passkey answer that confirmed an approval: when, and which passkey (`passkeys.credential_id`). */
+export interface PasskeyConfirmation {
+	at: number
+	credentialId: string
 }
 
 export type NewOAuthDeviceAuthorization = Pick<
@@ -98,7 +108,7 @@ export class OAuthRepository {
 		}
 		await this.db.batch([
 			this.db.prepare(`INSERT INTO oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at,
-				revoked_at, agent_label, passkey_confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`).bind(
+				revoked_at, agent_label, passkey_confirmed_at, passkey_credential_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)`).bind(
 				grant.id,
 				grant.principal_id,
 				grant.session_id,
@@ -111,6 +121,7 @@ export class OAuthRepository {
 				grant.expires_at,
 				grant.agent_label,
 				grant.passkey_confirmed_at,
+				grant.passkey_credential_id,
 			),
 			this.db.prepare('INSERT INTO oauth_codes (token_hash, grant_id, redirect_uri, challenge, expires_at, used_at) VALUES (?, ?, ?, ?, ?, NULL)')
 				.bind(code.token_hash, grant.id, code.redirect_uri, code.challenge, code.expires_at),
@@ -221,16 +232,19 @@ export class OAuthRepository {
 
 	/**
 	 * Approve a pending attempt under the approver's IAM session. `scopes`, when given, replaces the requested scope tokens
-	 * with the ones the person approved. False when it was decided, or expired, meanwhile.
+	 * with the ones the person approved. False when it was decided, or expired, meanwhile, or when the confirming passkey
+	 * is no longer the approver's: a reset between the check and this write leaves no approval it would have denied.
 	 */
 	async approveDeviceAuthorization(
 		userCodeHash: string,
-		approval: { principalId: string; sessionId: string; grantExpiresAt: number; scopes?: string; passkeyConfirmedAt?: number },
+		approval: { principalId: string; sessionId: string; grantExpiresAt: number; scopes?: string; passkey?: PasskeyConfirmation },
 		now: number,
 	): Promise<boolean> {
 		const row = await this.db.prepare(
 			`UPDATE oauth_device_authorizations SET status = 'approved', principal_id = ?, session_id = ?, grant_expires_at = ?,
-			scopes = COALESCE(?, scopes), passkey_confirmed_at = ? WHERE user_code_hash = ? AND status = 'pending' AND expires_at > ?
+			scopes = COALESCE(?, scopes), passkey_confirmed_at = ?, passkey_credential_id = ?
+			WHERE user_code_hash = ? AND status = 'pending' AND expires_at > ?
+			AND (CAST(? AS TEXT) IS NULL OR EXISTS (SELECT 1 FROM passkeys WHERE principal_id = ? AND credential_id = ?))
 			RETURNING device_code_hash`,
 		)
 			.bind(
@@ -238,9 +252,13 @@ export class OAuthRepository {
 				approval.sessionId,
 				approval.grantExpiresAt,
 				approval.scopes ?? null,
-				approval.passkeyConfirmedAt ?? null,
+				approval.passkey?.at ?? null,
+				approval.passkey?.credentialId ?? null,
 				userCodeHash,
 				now,
+				approval.passkey?.credentialId ?? null,
+				approval.principalId,
+				approval.passkey?.credentialId ?? null,
 			)
 			.first<{ device_code_hash: string }>()
 		return row !== null
@@ -295,8 +313,9 @@ export class OAuthRepository {
 			binds: [deviceCodeHash, grant.id],
 		}
 		const grantInsert = guardedInsert(
-			'oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at, revoked_at, agent_label, passkey_confirmed_at)',
-			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?',
+			`oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at, revoked_at, agent_label,
+				passkey_confirmed_at, passkey_credential_id)`,
+			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?',
 			[
 				grant.id,
 				grant.principal_id,
@@ -310,6 +329,7 @@ export class OAuthRepository {
 				grant.expires_at,
 				grant.agent_label,
 				grant.passkey_confirmed_at,
+				grant.passkey_credential_id,
 			],
 			claimed,
 		)

@@ -767,7 +767,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   registered with the session alone. `passkeys.challenge` and `verify` of `/admin/rpc` are the step-up seam Control's IAM
   client uses with the approver's console token (ADR-0050 §5): no `.require`, a signed-in session's token of a user, a
   `px_` key refused; they write no token claim. The counter is stored by compare-and-set. Each change writes
-  `iam.passkey.register`/`remove` in its own statement; `passkeys.reset` (`iam.admin`) writes `iam.passkey.reset`, and
+  `iam.passkey.register`/`remove` in its own statement; `passkeys.reset` (`iam.admin`) writes `iam.passkey.reset` and, in
+  the same batch, revokes the person's live grants and denies the approved attempts that a reset passkey confirmed (one
+  `iam.oauth.grant.revoke`, `reason: 'passkey_reset'`; a grant confirmed before migration 0049 names no passkey and ends
+  too when a passkey is reset); an approval is written only while its confirming passkey is still held, and
   the maintenance pass writes one per passkey migration 0047 removed (`rp_moved`). Never log a challenge, a credential,
   a key or a verifier's message (it quotes the challenge).
 - **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no
@@ -939,7 +942,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   `agentModeServed` (`agent-resource.ts`) is the one place the rule lives, read at the device page and at every exchange,
   so a gate that tightens refuses a `write` grant from its next exchange on, while the gate holds. Under `passkey`, Allow on `write` renders a ceremony
   page (`confirmWithPasskey`, `oauth-device-page.ts`) whose assertion is bound to the attempt, the scope and the lifetime
-  (`iam:device:<sha-256>`); its time is stored as `passkey_confirmed_at` on the attempt and copied to the grant, and a
+  (`iam:device:<sha-256>`); its time and the passkey's credential id are stored as `passkey_confirmed_at` and
+  `passkey_credential_id` on the attempt and copied to the grant and its `iam.oauth.grant.create` record, and a
   `write` grant without it is refused there. The device page offers `read` for a `write` request it cannot serve (no
   passkey held, or `refuse`) and says why (`approvableAgentScopes`: never wider than asked, the narrowing never dropped or changed), and the
   exchange answers `write_refused`.
@@ -977,7 +981,8 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A PERSON LISTS AND REVOKES THEIR OWN GRANTS ON `/auth/account`, AND ONLY THEIR OWN** (ADR-0090 step 6,
   `auth/account.ts`). The page needs `currentLogin` (an active user's IAM login; none is a redirect to sign-in and back,
   a POST included, which then revoked nothing). It lists the person's grants in force (`listLiveForPrincipal`: not
-  revoked, not expired, the approving login not revoked), newest first, at most `ACCOUNT_GRANTS_SHOWN`. The same-origin
+  revoked, not expired, the approving login not revoked), newest first, at most `ACCOUNT_GRANTS_SHOWN`, each confirmed one
+  with the label of the passkey that confirmed it (or that it was since removed). The same-origin
   POST revokes a grant by id with `revokeOwnGrant`, whose UPDATE names the person, so another person's id, an unknown
   one and a spent one all answer "already ended" and change nothing. A revocation writes `iam.oauth.grant.revoke` under
   the person, `reason: 'owner'`, in its own statement. Words come from the catalog in the person's language.

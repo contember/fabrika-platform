@@ -13,6 +13,7 @@ import { createPostgresIamRepositories, type IamRepositories, type OAuthGrantRow
 import { prop } from '../json'
 import { mintForGrant } from '../oauth'
 import { startDeviceAuthorization } from '../oauth-device'
+import type { AuditEventInput } from '../repositories/audit'
 import { unixNow } from '../repositories/sql'
 import { hashToken } from '../secret'
 import { getSigner } from '../signing'
@@ -118,7 +119,10 @@ async function agentFixture(repositories: IamRepositories) {
 	}
 
 	/** A grant of the agent client as the device flow records one, and the resource token it mints now. */
-	async function directGrant(scope: string, options: { sessionId?: string; label?: string | null; expiresAt?: number } = {}) {
+	async function directGrant(
+		scope: string,
+		options: { sessionId?: string; label?: string | null; expiresAt?: number; passkey?: { at: number; credentialId: string | null } } = {},
+	) {
 		const now = unixNow()
 		const grant: OAuthGrantRow = {
 			id: uuidv7(),
@@ -133,7 +137,8 @@ async function agentFixture(repositories: IamRepositories) {
 			expires_at: options.expiresAt ?? now + 1800,
 			revoked_at: null,
 			agent_label: options.label === undefined ? 'release bot' : options.label,
-			passkey_confirmed_at: null,
+			passkey_confirmed_at: options.passkey?.at ?? null,
+			passkey_credential_id: options.passkey?.credentialId ?? null,
 		}
 		await repositories.oauth.createGrant(grant, {
 			token_hash: uuidv7(),
@@ -196,6 +201,15 @@ async function agentFixture(repositories: IamRepositories) {
 	}
 
 	return { f, repositories, app, origin, start, page, poll, started, approved, directGrant, fiveMinuteToken, exchange, gate }
+}
+
+/** The records an administrator's passkey reset of `principalId` writes. */
+function resetRecords(principalId: string): { reset: AuditEventInput; revocation: AuditEventInput } {
+	const by = { requestId: 'req-reset', principalId: null, principalLabel: 'admin', app: IAM_APP, resourceType: 'principal', resourceId: principalId }
+	return {
+		reset: { ...by, action: 'iam.passkey.reset' },
+		revocation: { ...by, action: 'iam.oauth.grant.revoke', metadata: { reason: 'passkey_reset' } },
+	}
 }
 
 async function json(response: Response): Promise<unknown> {
@@ -448,10 +462,16 @@ for (const engine of engines) {
 			const access = field(tokens, 'access_token')
 			if (typeof access !== 'string') throw new Error('no access token')
 			const grantId = parseAccessClaims(decodeJwt(access))?.oauth?.grantId ?? ''
-			const confirmedAt = (await a.repositories.oauth.grant(grantId))?.passkey_confirmed_at
-			expect(confirmedAt).toBeNumber()
+			const stored = await a.repositories.oauth.grant(grantId)
+			expect(stored?.passkey_confirmed_at).toBeNumber()
+			// Which passkey answered is recorded on the attempt, the grant and the grant's record.
+			const [passkey] = await a.repositories.passkeys.list(a.f.principal.id)
+			expect(stored?.passkey_credential_id).toBe(passkey?.credential_id ?? 'none')
+			expect((await a.repositories.oauth.deviceAuthorization(await hashToken(deviceCode)))?.passkey_credential_id).toBe(passkey?.credential_id ?? 'none')
 			const [record] = await a.repositories.audit.listAuditEvents({ resourceType: 'oauth_grant', resourceId: grantId, limit: 5 })
-			expect(prop(JSON.parse(record?.metadata ?? 'null'), 'passkeyConfirmedAt')).toBe(confirmedAt)
+			const metadata: unknown = JSON.parse(record?.metadata ?? 'null')
+			expect(prop(metadata, 'passkeyConfirmedAt')).toBe(stored?.passkey_confirmed_at)
+			expect(prop(metadata, 'passkeyCredentialId')).toBe(passkey?.credential_id)
 			expect((await a.exchange(access)).ok).toBe(true)
 
 			// A write grant no passkey confirmed is not served under the gate; a confirmed one ends when the gate refuses.
@@ -467,17 +487,75 @@ for (const engine of engines) {
 			await a.gate('passkey')
 			const { deviceCode, userCode } = await a.started({ scope: 'write' })
 			expect(await (await a.page({ user_code: userCode })).text()).toContain('name="scope" value="write"')
-			await a.repositories.passkeys.reset(a.f.principal.id, {
-				requestId: 'req-reset',
-				principalId: null,
-				principalLabel: 'admin',
-				app: IAM_APP,
-				action: 'iam.passkey.reset',
-				resourceType: 'principal',
-				resourceId: a.f.principal.id,
-			})
+			await a.repositories.passkeys.reset(a.f.principal.id, resetRecords(a.f.principal.id), unixNow())
 			expect((await a.page({ user_code: userCode, decision: 'approve', lifetime: '3600', scope: 'write' })).status).toBe(400)
 			expect(field(await json(await a.poll(deviceCode)), 'error')).toBe('authorization_pending')
+		})
+
+		test("a passkey reset revokes the person's grants and approvals a reset passkey confirmed, and leaves every other grant", async () => {
+			const a = await agentFixture(engine.repositories())
+			const authenticator = await TestAuthenticator.create()
+			await registerTestPasskey(a.repositories, ISSUER, a.f.principal.id, authenticator)
+			const [passkey] = await a.repositories.passkeys.list(a.f.principal.id)
+			if (passkey === undefined) throw new Error('no passkey')
+			await a.gate('passkey')
+			const approve = async (scope: string): Promise<string> => {
+				const { deviceCode, userCode } = await a.started({ scope })
+				const ceremony = await ceremonyOf(await a.page({ user_code: userCode, decision: 'approve', lifetime: '3600', scope }))
+				const credential = JSON.stringify(await authenticator.assert(assertionOptionsOf(ceremony), ISSUER))
+				expect((await a.page({ ...ceremony.fields, credential })).status).toBe(200)
+				return deviceCode
+			}
+			const tokens = await json(await a.poll(await approve('write:project=a')))
+			const access = field(tokens, 'access_token')
+			if (typeof access !== 'string') throw new Error('no access token')
+			const confirmed = parseAccessClaims(decodeJwt(access))?.oauth?.grantId ?? ''
+			// Approved with the passkey, not yet redeemed.
+			const unredeemed = await approve('write')
+			const now = unixNow()
+			const unrecorded = await a.directGrant('write', { passkey: { at: now - 60, credentialId: null } })
+			const read = await a.directGrant('read')
+			const unconfirmed = await a.directGrant('write:project=a')
+			const removedEarlier = await a.directGrant('write', { passkey: { at: now - 60, credentialId: 'a-passkey-removed-earlier' } })
+			const other = await a.repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
+			const otherSession = await a.repositories.sessions.createSession({
+				tokenHash: await hashToken(uuidv7()),
+				principalId: other.id,
+				authenticationMethod: 'password',
+				expiresAt: now + 3600,
+			})
+			const foreign: OAuthGrantRow = {
+				...read.grant,
+				id: uuidv7(),
+				principal_id: other.id,
+				session_id: otherSession,
+				scopes: '["write"]',
+				passkey_confirmed_at: now - 60,
+				passkey_credential_id: `${passkey.credential_id}-other`,
+			}
+			await a.repositories.oauth.createGrant(foreign, {
+				token_hash: uuidv7(),
+				redirect_uri: 'urn:device',
+				challenge: 'c'.repeat(43),
+				expires_at: now + 60,
+			})
+
+			expect(await a.repositories.passkeys.reset(a.f.principal.id, resetRecords(a.f.principal.id), unixNow())).toEqual({ removed: 1, revoked: 2 })
+
+			for (const id of [confirmed, unrecorded.grant.id]) expect((await a.repositories.oauth.grant(id))?.revoked_at).toBeNumber()
+			for (const id of [read.grant.id, unconfirmed.grant.id, removedEarlier.grant.id, foreign.id]) {
+				expect((await a.repositories.oauth.grant(id))?.revoked_at).toBeNull()
+			}
+			expect(await a.exchange(access)).toEqual({ ok: false, reason: 'invalid_grant' })
+			expect(field(await json(await a.poll(unredeemed)), 'error')).toBe('access_denied')
+			const records = await a.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: a.f.principal.id, limit: 5 })
+			expect(records.map((record) => JSON.parse(record.metadata ?? 'null'))).toEqual([{ reason: 'passkey_reset' }])
+
+			// A reset of a person with no passkey left ends nothing, not even a grant that names no passkey, and records nothing.
+			const afterwards = await a.directGrant('write', { passkey: { at: now - 60, credentialId: null } })
+			expect(await a.repositories.passkeys.reset(a.f.principal.id, resetRecords(a.f.principal.id), unixNow())).toEqual({ removed: 0, revoked: 0 })
+			expect((await a.repositories.oauth.grant(afterwards.grant.id))?.revoked_at).toBeNull()
+			expect(await a.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: a.f.principal.id, limit: 5 })).toHaveLength(1)
 		})
 
 		test('the exchange refuses another resource or app, another client, a write grant, and a grant that no longer holds', async () => {

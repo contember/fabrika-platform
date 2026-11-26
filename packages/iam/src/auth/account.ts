@@ -15,6 +15,7 @@ import { authFailurePage, htmlPage } from '../password-pages'
 import { chooseLocale, parseLocale, requestLocales } from '../person-locale'
 import type { AuditEventInput } from '../repositories/audit'
 import type { OAuthGrantRow } from '../repositories/oauth'
+import type { PasskeyRow } from '../repositories/passkeys'
 import { unixNow } from '../repositories/sql'
 import type { Services } from '../services'
 import { parseStoredPermissions } from '../stored-permissions'
@@ -104,10 +105,12 @@ async function accountPage(request: Request, services: Services, login: CurrentL
 	const rows = await services.repositories.oauth.listLiveForPrincipal(login.principal.id, unixNow(), ACCOUNT_GRANTS_SHOWN + 1)
 	const shown = rows.slice(0, ACCOUNT_GRANTS_SHOWN)
 	const names = await appNames(services, shown)
+	const held = await services.repositories.passkeys.list(login.principal.id)
+	const passkeyLabels = new Map(held.map((passkey) => [passkey.credential_id, passkey.label]))
 	const status = notice === null ? '' : `<p role="status">${escapeHtml(noticeText(catalog, notice))}</p>`
 	const list = shown.length === 0
 		? `<p>${escapeHtml(text.none)}</p>`
-		: `<ul class="rows">${shown.map((grant) => grantItem(catalog, grant, names.get(grant.app) ?? grant.app)).join('')}</ul>`
+		: `<ul class="rows">${shown.map((grant) => grantItem(catalog, grant, names.get(grant.app) ?? grant.app, passkeyLabels)).join('')}</ul>`
 	const more = rows.length > ACCOUNT_GRANTS_SHOWN ? `<p>${escapeHtml(text.more(ACCOUNT_GRANTS_SHOWN))}</p>` : ''
 	return htmlPage({
 		locale,
@@ -119,7 +122,7 @@ async function accountPage(request: Request, services: Services, login: CurrentL
 		<h2 id="connections">${escapeHtml(text.connectionsTitle)}</h2>
 		<p>${escapeHtml(text.connectionsText)}</p>
 		${list}${more}
-		${await passkeysSection(services, login, catalog)}`,
+		${passkeysSection(held, catalog)}`,
 	})
 }
 
@@ -159,7 +162,7 @@ async function appNames(services: Services, grants: readonly OAuthGrantRow[]): P
 	return names
 }
 
-function grantItem(catalog: Catalog, grant: OAuthGrantRow, appName: string): string {
+function grantItem(catalog: Catalog, grant: OAuthGrantRow, appName: string, passkeyLabels: ReadonlyMap<string, string>): string {
 	const text = catalog.pages.account
 	const who = grant.client_id === AGENT_CLIENT_ID
 		? `<strong>${escapeHtml(text.agent(grant.agent_label))}</strong>${
@@ -176,15 +179,27 @@ function grantItem(catalog: Catalog, grant: OAuthGrantRow, appName: string): str
 	return `<li>${who}
 		<p>${escapeHtml(text.reaches)}: <strong>${escapeHtml(reaches)}</strong> ${resources}</p>
 		${what}
+		${confirmation(text, grant, passkeyLabels)}
 		<p>${escapeHtml(text.allowed)}: ${utc(grant.created_at)} · ${escapeHtml(text.ends)}: ${utc(grant.expires_at)}</p>
 		<form method="post" action="${ACCOUNT_PATH}"><input type="hidden" name="grant" value="${escapeHtml(grant.id)}">
 		<button type="submit">${escapeHtml(text.revoke)}</button></form></li>`
 }
 
+/** Which passkey confirmed the grant's approval and when, by the label of a passkey the person still holds; empty when none did. */
+function confirmation(text: Catalog['pages']['account'], grant: OAuthGrantRow, passkeyLabels: ReadonlyMap<string, string>): string {
+	if (grant.passkey_confirmed_at === null) return ''
+	const label = grant.passkey_credential_id === null ? null : passkeyLabels.get(grant.passkey_credential_id) ?? null
+	const words = grant.passkey_credential_id === null
+		? text.confirmedWithUnrecorded
+		: label === null
+		? text.confirmedWithRemoved
+		: text.confirmedWith(label)
+	return `<p>${escapeHtml(words)}: ${utc(grant.passkey_confirmed_at)}</p>`
+}
+
 /** The passkeys section of the account page: the person's passkeys, each with its removal, and the form that adds one. */
-async function passkeysSection(services: Services, login: CurrentLogin, catalog: Catalog): Promise<string> {
+function passkeysSection(held: readonly PasskeyRow[], catalog: Catalog): string {
 	const text = catalog.pages.passkeys
-	const held = await services.repositories.passkeys.list(login.principal.id)
 	const list = held.length === 0
 		? `<p>${escapeHtml(text.none)}</p>`
 		: `<ul class="rows">${

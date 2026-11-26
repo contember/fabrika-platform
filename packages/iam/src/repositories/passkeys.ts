@@ -207,12 +207,35 @@ export class PasskeyRepository {
 		return rows.length > 0
 	}
 
-	/** Remove every passkey and open challenge of the principal, with one record when a passkey was removed. */
-	async reset(principalId: string, audit: AuditEventInput): Promise<number> {
+	/**
+	 * Remove every passkey and open challenge of the principal, with one record when a passkey was removed, and end what
+	 * those passkeys confirmed (ADR-0090 §5): the live agent grants, with one `revocation` record, and the approved
+	 * attempts not yet redeemed, which a poll then finds denied. A grant confirmed before IAM recorded which passkey
+	 * answered (no credential id) ends too when the principal still holds a passkey. Answers how many passkeys it removed
+	 * and how many grants it revoked.
+	 */
+	async reset(
+		principalId: string,
+		audit: { reset: AuditEventInput; revocation: AuditEventInput },
+		now: number,
+	): Promise<{ removed: number; revoked: number }> {
+		const confirmedByHeld =
+			'passkey_confirmed_at IS NOT NULL AND EXISTS (SELECT 1 FROM passkeys p WHERE p.principal_id = ? AND (passkey_credential_id IS NULL OR p.credential_id = passkey_credential_id))'
 		const challenges = this.db.prepare('DELETE FROM passkey_challenges WHERE principal_id = ?').bind(principalId)
-		const removal = this.writer.changed([{ sql: 'DELETE FROM passkeys WHERE principal_id = ? RETURNING id', binds: [principalId] }], audit)
-		const results = await this.db.batch([challenges, ...removal.statements])
-		return removal.rows(results, 1).length
+		const attempts = this.db
+			.prepare(`UPDATE oauth_device_authorizations SET status = 'denied' WHERE principal_id = ? AND status = 'approved' AND ${confirmedByHeld}`)
+			.bind(principalId, principalId)
+		const revocation = this.writer.changed([{
+			sql: `UPDATE oauth_grants SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL AND expires_at > ? AND ${confirmedByHeld} RETURNING id`,
+			binds: [now, principalId, now, principalId],
+		}], audit.revocation)
+		const removal = this.writer.changed([{ sql: 'DELETE FROM passkeys WHERE principal_id = ? RETURNING id', binds: [principalId] }], audit.reset)
+		// The grants are matched against the passkeys before the removal, so it runs last.
+		const results = await this.db.batch([challenges, attempts, ...revocation.statements, ...removal.statements])
+		return {
+			revoked: revocation.rows(results, 2).length,
+			removed: removal.rows(results, 2 + revocation.statements.length).length,
+		}
 	}
 
 	/** The passkeys migration 0047 removed and nothing has recorded yet, oldest first, at most `limit`. */

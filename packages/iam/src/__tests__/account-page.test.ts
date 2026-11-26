@@ -14,7 +14,9 @@ import { unixNow } from '../repositories/sql'
 import { hashToken } from '../secret'
 import { createHarness } from './helpers/harness'
 import { ISSUER, oauthFixture, SIGNING_ENV } from './helpers/oauth'
+import { registerTestPasskey } from './helpers/passkey-pages'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
+import { TestAuthenticator } from './helpers/webauthn'
 
 if (!hasPostgres) console.warn(`account-page.test.ts ${skipReason}`)
 
@@ -51,7 +53,17 @@ async function grant(
 	const now = unixNow()
 	const id = uuidv7()
 	await repositories.oauth.createGrant(
-		{ id, resources: null, created_at: now, expires_at: now + 3600, revoked_at: null, agent_label: null, passkey_confirmed_at: null, ...values },
+		{
+			id,
+			resources: null,
+			created_at: now,
+			expires_at: now + 3600,
+			revoked_at: null,
+			agent_label: null,
+			passkey_confirmed_at: null,
+			passkey_credential_id: null,
+			...values,
+		},
 		{ token_hash: await hashToken(randomToken(32)), redirect_uri: 'urn:device', challenge: '', expires_at: now + 60 },
 	)
 	// A new grant is always live; a revoked one is revoked after it was written.
@@ -218,6 +230,43 @@ for (const engine of engines) {
 			// An outcome the page does not know shows no notice.
 			const unknown = await (await a.get(true, `${ACCOUNT_PATH}?done=<b>`)).text()
 			expect(unknown).not.toContain('role="status"')
+		})
+
+		test('names the passkey that confirmed each write grant, one since removed, and one confirmed before it was recorded', async () => {
+			const a = await accountFixture(engine.repositories())
+			await registerTestPasskey(a.repositories, ISSUER, a.person, await TestAuthenticator.create())
+			const [passkey] = await a.repositories.passkeys.list(a.person)
+			const at = Date.UTC(2026, 0, 2, 3, 4) / 1000
+			const confirmed = (credentialId: string | null, label: string) =>
+				grant(a.repositories, {
+					principal_id: a.person,
+					session_id: a.f.sessionId,
+					client_id: AGENT_CLIENT_ID,
+					app: `notes-${a.tag}@prod`,
+					resource: a.agentOrigin,
+					scopes: '["write"]',
+					agent_label: label,
+					passkey_confirmed_at: at,
+					passkey_credential_id: credentialId,
+				})
+			await confirmed(passkey?.credential_id ?? 'none', 'held')
+			await confirmed('a-passkey-removed-earlier', 'removed')
+			await confirmed(null, 'unrecorded')
+			const markup = `credential-${uuidv7()}`
+			await a.repositories.passkeys.insert(
+				{ id: uuidv7(), principalId: a.person, credentialId: markup, publicKey: 'AA', signCount: 0, transports: [], label: '<b>Key</b>', createdAt: at },
+				{ steppedUp: true, max: 10 },
+				{ requestId: 'req', principalId: a.person, principalLabel: a.person, app: 'iam', action: 'iam.passkey.register', resourceType: 'principal' },
+			)
+			await confirmed(markup, 'markup')
+			const html = await (await a.get()).text()
+			expect(html).toContain('<p>Confirmed with the passkey “&lt;b&gt;Key&lt;/b&gt;”: 2026-01-02 03:04 UTC</p>')
+			expect(html).not.toContain('<b>Key</b>')
+			expect(html).toContain('<p>Confirmed with the passkey “Laptop”: 2026-01-02 03:04 UTC</p>')
+			expect(html).toContain('<p>Confirmed with a passkey you have since removed: 2026-01-02 03:04 UTC</p>')
+			expect(html).toContain('<p>Confirmed with a passkey: 2026-01-02 03:04 UTC</p>')
+			// The grant no passkey confirmed says nothing of one.
+			expect(html.match(/Confirmed with/g)).toHaveLength(4)
 		})
 
 		test("the person's own language wins over the browser's", async () => {
