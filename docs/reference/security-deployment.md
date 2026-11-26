@@ -412,11 +412,13 @@ know takes it. `ApprovalDto.stepUp` and `ApprovalRequestDto.stepUp` say which ap
   team that relies on reviewed merges sets that up on GitHub, outside fabrika.
 - **Anything after activation.** No health verdict follows a deploy, and nothing rolls back by itself; a cancellation
   never rolls back ([ADR-0044](../decisions/0044-zerops-delivery-ownership-and-recovery.md)). What the approved schema
-  takes away from the running version's roles and actions (read from the last succeeded run's snapshot) goes to IAM
-  before the new version is published, and a failure there fails the run while the old version serves (`applyNarrowing`,
-  `packages/control/src/run-lifecycle.ts`).
-  The full schema is written after the version went live; when that write fails, IAM keeps the previous roles, so only
-  what the new version adds is not yet in force.
+  takes away from the running version's roles and actions (read from the snapshot of the environment's last succeeded
+  run) goes to IAM before the new version is published, and a failure there fails the run while the old version serves
+  (`applyNarrowing`, `packages/control/src/run-lifecycle.ts`). The full schema follows once the version is live. While
+  that write fails, IAM holds the narrowed running schema: what the new version adds is not in force, and neither is a
+  narrowing the write ahead leaves out. Those are a removed workload, link mount, delegation, member declaration or
+  terminal page; a narrowing that does not form a valid schema on its own; and every narrowing of a dev bootstrap or of
+  an environment without a readable last succeeded run.
 
 ## The platform's own releases
 
