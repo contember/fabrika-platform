@@ -92,6 +92,7 @@ describe("the installation's database", () => {
 				vpcId: 'vpc-0123456789abcdef0',
 				taskSubnetIds: ['subnet-0123456789abcdef0'],
 				installationHosts: ['iam.example.com'],
+				platformNamespaceArn: 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-0123456789abcdef',
 			}).map((managed) => managed.statements.filter((statement) => JSON.stringify(statement).includes('"Allow"'))),
 		)
 		expect(grants).not.toContain('parameter/fabrika/platform')

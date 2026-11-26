@@ -40,6 +40,10 @@
 //   (`fabrika_platform_*`) denied, and so are `CreateService` and `UpdateService` naming one, as the task runner's role
 //   is denied running one: no application family can take that name (one has exactly one `_`, a namespace's starts
 //   `ns_`). A task definition Control registers can only pass the applications' and namespaces' roles (`iam:PassRole`).
+// - **Not in the platform's Service Connect namespace.** IAM, Control and Operations address each other in a namespace
+//   of their own (`runtime.ts`). A service Control creates or updates may name a Service Connect namespace, and
+//   Control's Cloud Map grants are held by a tag the platform's namespace does not carry; so Control's role is denied
+//   `CreateService` and `UpdateService` naming the platform's (`ecs:namespace`, by its ARN or its name).
 // - **No task started by Control.** See the applications' network above: the task runner starts an init task, and
 //   every Lambda action on it but invoking it is denied, as on the certificate broker.
 // - **No certificate on a listener.** Elastic Load Balancing scopes `AddListenerCertificates` by the listener alone, so a
@@ -95,6 +99,17 @@ export function awsSourcesBucket(accountId: string): string {
 	return `fabrika-sources-${accountId}`
 }
 
+/** Control's run logs bucket (the runtime stack's, `runtime.ts`), which Control's role alone writes. */
+export function awsRunLogsBucket(accountId: string): string {
+	return `fabrika-run-logs-${accountId}`
+}
+
+/**
+ * The platform's Service Connect namespace (the runtime stack's), which IAM, Control and Operations address each other
+ * in. Control's role is denied naming it on a service it creates or updates.
+ */
+export const AWS_PLATFORM_NAMESPACE = 'fabrika-platform'
+
 export interface AwsAccessInput {
 	readonly accountId: string
 	readonly region: string
@@ -109,9 +124,13 @@ export interface AwsAccessInput {
 	 * attaches no certificate naming one. Lower-case.
 	 */
 	readonly installationHosts: readonly string[]
+	/** The platform's Service Connect namespace (`runtime.ts`'s output), which Control's role is denied naming. */
+	readonly platformNamespaceArn: string
 }
 
 const ACCOUNT_ID = /^\d{12}$/
+/** A Cloud Map namespace's ARN. */
+const NAMESPACE_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:servicediscovery:[a-z0-9-]{1,32}:\d{12}:namespace\/ns-[a-z0-9]{1,64}$/
 const REGION = /^[a-z]{2}(?:-[a-z]+)+-\d$/
 
 /** `input` as given, or an error naming the part of another form (never a value). */
@@ -129,6 +148,9 @@ export function checkAwsAccessInput(input: AwsAccessInput): AwsAccessInput {
 	const hosts = input.installationHosts
 	if (hosts.length === 0 || !hosts.every((host) => CERTIFICATE_HOST.test(host)) || new Set(hosts).size !== hosts.length) {
 		throw new Error("aws: the installation's own hosts are none, one twice, or one that is not a lower-case host name")
+	}
+	if (!NAMESPACE_ARN.test(input.platformNamespaceArn) || !input.platformNamespaceArn.includes(`:${input.region}:${input.accountId}:`)) {
+		throw new Error("aws: the platform's namespace is not a Cloud Map namespace of this account and region")
 	}
 	return input
 }
@@ -230,6 +252,9 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 					['s3:PutObject', 's3:GetObject', 's3:AbortMultipartUpload'],
 					[`arn:aws:s3:::${awsSourcesBucket(a)}/sources/*`],
 				),
+				// The run logs Control keeps (`FABRIKA_CONTROL_RUN_LOGS_*`), in a bucket of their own.
+				allow(['s3:PutObject', 's3:GetObject', 's3:DeleteObject', 's3:AbortMultipartUpload'], [`arn:aws:s3:::${awsRunLogsBucket(a)}/*`]),
+				allow(['s3:ListBucket'], [`arn:aws:s3:::${awsRunLogsBucket(a)}`]),
 				// An IAM wildcard spans `:`, so a group's pattern covers its streams too.
 				allow(['logs:GetLogEvents', 'logs:FilterLogEvents'], logGroups),
 				allow(['acm:RequestCertificate', 'acm:DescribeCertificate'], ['*']),
@@ -359,6 +384,14 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 					// The request may name the definition by its ARN or by its family (`family` or `family:revision`), so
 					// both forms; `StringLike`, as `ArnLike` would not match a bare family.
 					Condition: { StringLike: { 'ecs:task-definition': [platformTaskDefinitions, `${AWS_PLATFORM_FAMILY_PREFIX}*`] } },
+				},
+				{
+					Effect: 'Deny',
+					Action: ['ecs:CreateService', 'ecs:UpdateService'],
+					Resource: ['*'],
+					// The platform's Service Connect namespace, by its ARN or its name, whichever the request names: no
+					// application's or namespace proxy's task joins the platform's services.
+					Condition: { StringLike: { 'ecs:namespace': [input.platformNamespaceArn, AWS_PLATFORM_NAMESPACE] } },
 				},
 			],
 		},
