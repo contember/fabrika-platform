@@ -382,8 +382,9 @@ An application can declare `agent` only after Control accepts it, but Control is
 | 5 | `agent-write` in the approval policy and its mirror; the ADR-0083 rewrite                                             | S    | 2–3 h      | Control and IAM tests of the mirror and the refusal |
 | 6 | the person's own grant list with revoke on IAM's account page                                                         | S    | 1 h        | a browser test that revokes a grant                 |
 
-PRs 1–4 deliver the feature; 5 and 6 can follow in either order. An ADR on the decision lands with PR 4, and
-`cli-device-grant.md` describes the application case with it. Waits on the user: none for the code; the merge of each PR
+PRs 1–4 deliver the feature; 5 and 6 can follow in either order. The decision is
+[ADR-0090](../decisions/0090-a-device-grant-reaches-an-application-as-the-person.md), which adds the narrowing to one
+scope value; `cli-device-grant.md` describes the application case with PR 4. Waits on the user: none for the code; the merge of each PR
 follows the usual review round.
 
 ## Open questions
@@ -400,4 +401,5 @@ follows the usual review round.
   (`actor_id`, `actor_label`) serve both.
 - **The MCP surface of backlog 267.** Its tools could run on this exchange with an authorization-code client instead of
   `agent-cli`. Default: decided there, with its policy on application data reaching a third-party model.
-- **Scope values.** A grant narrowed to one value of a dimension (`read:<dimension>=<value>`). Default: not in v1.
+- **Scope values.** Decided by [ADR-0090](../decisions/0090-a-device-grant-reaches-an-application-as-the-person.md):
+  a grant may be narrowed to one value of a dimension (`read:<dimension>=<value>`, `write:<dimension>=<value>`), in v1.

@@ -364,8 +364,8 @@ The proxy then decides, in the same pass as every other request of a contract ap
 3. **Bearer only.** A request from a listed origin to an `environment` row is never session-authenticated: without
    `Authorization` it is 401 (`no_credential`), never a login bounce, and the session cookie is not read. Without
    `Allow-Credentials` the browser would not expose such an answer anyway; the proxy ignoring the cookie is the second
-   guard. The caller is a `px_` key: an application row admits no OAuth resource token, so the question of OAuth
-   callers does not arise here. The `cross_site` rule of step 6 is unchanged for every other request.
+   guard. The caller is a `px_` key or an agent's exchanged grant (ADR-0090); no OAuth resource token reaches the
+   application itself. The `cross_site` rule of step 6 is unchanged for every other request.
 4. **The application answers nothing about CORS.** The proxy deletes every `Access-Control-*` header from a contract
    application's answer (`REMOVED_RESPONSE_HEADERS`), so a handler cannot open its own endpoint to another origin,
    and the framework does the same in-process. On Zerops the auth service tells Caddy which origin to admit, and
@@ -399,8 +399,11 @@ form.
 admits a session or a `user` key; `machine` a `service` key; `link` a `link` key; `app:<id>` the
 connector key of application `<id>`, and only on export paths. Job, webhook and public keys are accepted by no
 mount. The proxy refuses an unknown kind, on cached paths too. An OAuth resource token is no `px_` key:
-`callerOf` maps it to the caller `oauth`, which only an installation entry's row may admit, so every
-application endpoint refuses it.
+`callerOf` maps it to the caller `oauth`, which only an installation entry's row may admit, so no
+application endpoint admits it as its credential. On an application row that lists the caller `agent`, the proxy
+exchanges a resource token of its host at IAM for the approving person's application token, which carries `act` and
+which `callerOf` maps to `agent` ([ADR-0090](0090-a-device-grant-reaches-an-application-as-the-person.md)); the
+application sees only that token.
 
 A workload token carries its kind in `ptype` and names its workload in `workload`: the job's or the
 webhook's name, a public procedure's endpoint id, or for `app` the consuming application's id. `callerOf` maps `app`
