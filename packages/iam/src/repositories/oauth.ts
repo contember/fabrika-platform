@@ -1,6 +1,6 @@
 import type { SqlDatabase } from '@fabrika/platform'
 import { parseJsonOrNull } from '../json'
-import { type AuditEventInput, auditEventStatement, AuditWriter, guardedInsert, type SqlGuard } from './audit'
+import { type AuditEventInput, auditEventStatement, AuditWriter, guardedInsert, type SqlChange, type SqlGuard } from './audit'
 
 export interface OAuthGrantRow {
 	id: string
@@ -121,6 +121,11 @@ export class OAuthRepository {
 		const { results } = await this.db.prepare(`SELECT * FROM oauth_grants WHERE principal_id = ?${before === undefined ? '' : ' AND id < ?'}
 			ORDER BY id DESC LIMIT ?`).bind(principalId, ...(before === undefined ? [] : [before]), limit).all<OAuthGrantRow>()
 		return results
+	}
+
+	/** The revocation of every live grant of a principal, as a change an audited deprovisioning groups with others. */
+	revokeGrantsForPrincipalChange(principalId: string, now: number): SqlChange {
+		return { sql: 'UPDATE oauth_grants SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING id', binds: [now, principalId] }
 	}
 
 	/** Revoke a grant; `audit` is written exactly when this call revoked it. */

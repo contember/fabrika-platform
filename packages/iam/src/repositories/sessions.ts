@@ -329,11 +329,12 @@ export class SessionRepository {
 	 * that is at least one.
 	 */
 	async revokeSessionsForPrincipal(principalId: string, audit?: AuditEventInput): Promise<number> {
-		const revoke: SqlChange = {
-			sql: 'UPDATE sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING id',
-			binds: [unixNow(), principalId],
-		}
-		return (await this.writer.run([revoke], audit)).length
+		return (await this.writer.run([this.revokeSessionsForPrincipalChange(principalId)], audit)).length
+	}
+
+	/** The revocation of every live session of a principal, as a change an audited deprovisioning groups with others. */
+	revokeSessionsForPrincipalChange(principalId: string): SqlChange {
+		return { sql: 'UPDATE sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING id', binds: [unixNow(), principalId] }
 	}
 
 	/** Prune expired or revoked sessions (cron). Returns the number removed. */

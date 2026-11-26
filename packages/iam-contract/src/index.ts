@@ -48,6 +48,7 @@ import type {
 } from './passkeys'
 import type { PasswordPolicyDto, SetPasswordPolicyRequest } from './password-policy'
 import type { ProvisionRequestedApiKeyRequest, RequestedApiKey, RequestedApiKeyInput, RequestedApiKeyResponse } from './requested-keys'
+import type { ScimSettingsDto, ScimTokenIssuedDto } from './scim'
 
 // ── Common wrappers ───────────────────────────────────────────────────────────
 
@@ -1041,6 +1042,17 @@ export interface IamAdminRpcContract {
 		set: RpcProcedure<SetPasswordPolicyRequest, PasswordPolicyDto>
 	}
 	/**
+	 * SCIM provisioning by the organization's identity provider (ADR-0091), an installation administrator's in a signed-in
+	 * session. `rotateToken` creates the installation's one token or replaces it (the old one stops working at once) and
+	 * answers the secret once; `revokeToken` removes it, after which every SCIM request is refused. Each writes
+	 * `iam.scim.token.rotate` or `iam.scim.token.revoke`.
+	 */
+	scim: {
+		get: RpcProcedure<void, ScimSettingsDto>
+		rotateToken: RpcProcedure<void, ScimTokenIssuedDto>
+		revokeToken: RpcProcedure<void, ScimSettingsDto>
+	}
+	/**
 	 * A person's second factor (TOTP), an installation administrator's (`iam.admin`) to read and to reset. The person
 	 * enrols at IAM's `SECOND_FACTOR_ENROL_PATH`, never here. A reset removes the authenticator and its recovery codes
 	 * and writes `iam.second_factor.reset`; the next sign-in asks for no code.
@@ -1110,3 +1122,4 @@ export * from './oauth-registry'
 export * from './passkeys'
 export * from './password-policy'
 export * from './requested-keys'
+export * from './scim'

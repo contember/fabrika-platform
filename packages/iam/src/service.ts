@@ -2,9 +2,9 @@
 // decides from it. IAM's Cloudflare Worker stays unfronted; there the table is only its router.
 //
 // Every row is `protocol`: IAM authenticates each surface itself (its login, the JWKS, OAuth, `/admin/*` bearer-only,
-// the shared secrets of `/rpc/*` and `/auth/mint/*`, an application's own key on `/membership/*`), so the proxy reads
-// no credential here. This module imports only `@fabrika/app/service`, so strict consumers can import it without IAM's
-// runtime.
+// the shared secrets of `/rpc/*` and `/auth/mint/*`, an application's own key on `/membership/*`, the SCIM token on
+// `/scim/v2/*`), so the proxy reads no credential here. This module imports only `@fabrika/app/service`, so strict
+// consumers can import it without IAM's runtime.
 
 import { defineServiceContract } from '@fabrika/app/service'
 
@@ -39,6 +39,9 @@ export function iamServiceContract(options: IamServiceOptions) {
 				'admin-rpc': s.protocol('POST', '/admin/rpc'),
 				'admin-root': s.protocol('*', '/admin'),
 				'admin': s.protocol('*', '/admin/*'),
+				// The organization's identity provider, authenticated by the installation's SCIM token (ADR-0091).
+				'scim-root': s.protocol('*', '/scim/v2'),
+				'scim': s.protocol('*', '/scim/v2/*'),
 				// Authenticated by the calling application's own transport key, per environment.
 				'membership': options.membershipTransport ? s.protocol('*', '/membership/*') : null,
 				'rpc-root': options.managementRpc ? s.protocol('*', '/rpc') : null,

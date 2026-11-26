@@ -15,6 +15,7 @@ import { OAuthRegistryRepository } from './repositories/oauth-registry'
 import { PasskeyRepository } from './repositories/passkeys'
 import { PasswordPolicyRepository } from './repositories/password-policy'
 import { PrincipalRepository } from './repositories/principals'
+import { ScimRepository } from './repositories/scim'
 import { SecondFactorRepository } from './repositories/second-factors'
 import { SessionRepository } from './repositories/sessions'
 import { TerminalRepository } from './repositories/terminals'
@@ -76,6 +77,7 @@ export {
 export { PasskeyRepository, type PasskeyRow } from './repositories/passkeys'
 export { PasswordPolicyRepository, type PasswordPolicyRow } from './repositories/password-policy'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
+export { ScimRepository, type ScimTokenRow, type ScimUserAttributes, type ScimUserRecord } from './repositories/scim'
 export { SecondFactorRepository, type SecondFactorRow, type SecondFactorStatus } from './repositories/second-factors'
 export {
 	type AuthenticationMethod,
@@ -118,6 +120,7 @@ export interface IamRepositories {
 	passwordPolicy: PasswordPolicyRepository
 	secondFactors: SecondFactorRepository
 	passkeys: PasskeyRepository
+	scim: ScimRepository
 }
 
 /**
@@ -152,6 +155,7 @@ export function createIamRepositories(
 		passwordPolicy: replacements.passwordPolicy ?? new PasswordPolicyRepository(db, writer),
 		secondFactors: replacements.secondFactors ?? new SecondFactorRepository(db, writer),
 		passkeys: replacements.passkeys ?? new PasskeyRepository(db, writer),
+		scim: replacements.scim ?? new ScimRepository(db, writer),
 	}
 }
 

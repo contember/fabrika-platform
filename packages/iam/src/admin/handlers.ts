@@ -19,6 +19,7 @@ import { getPasswordPolicyUseCase, setPasswordPolicyUseCase } from './password-p
 import { disablePasswordUseCase, issuePasswordEnrollmentUseCase, issuePasswordResetUseCase } from './passwords'
 import { createPolicyUseCase, deletePolicyUseCase, listPoliciesUseCase, updatePolicyUseCase } from './policies'
 import { getPrincipalUseCase, invitePrincipalUseCase, listPrincipalsUseCase, me, promotePrincipalUseCase, updatePrincipalUseCase } from './principals'
+import { getScimSettingsUseCase, revokeScimTokenUseCase, rotateScimTokenUseCase } from './scim'
 import { getSecondFactorUseCase, resetSecondFactorUseCase } from './second-factor'
 import { listSessionsUseCase, revokeSessionsForPrincipalUseCase, revokeSessionUseCase } from './sessions'
 import { createShareLinkUseCase, listShareLinksUseCase, revokeShareLinkUseCase } from './share-links'
@@ -98,6 +99,9 @@ export const adminUseCases = {
 	clearInstallationBrand: clearInstallationBrandUseCase,
 	getPasswordPolicy: getPasswordPolicyUseCase,
 	setPasswordPolicy: setPasswordPolicyUseCase,
+	getScimSettings: getScimSettingsUseCase,
+	rotateScimToken: rotateScimTokenUseCase,
+	revokeScimToken: revokeScimTokenUseCase,
 	getSecondFactor: getSecondFactorUseCase,
 	resetSecondFactor: resetSecondFactorUseCase,
 	listTerminals: listTerminalsUseCase,

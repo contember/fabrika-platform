@@ -14,6 +14,7 @@ import { proxyProof, UNPROVEN_CLIENT_ADDRESS } from './proxy-proof'
 import { generateRequestId, readRequestId } from './request-id'
 import { createIamRpc } from './rpc'
 import { handleMintHttp, handleRpcHttp } from './rpc-http'
+import { handleScim } from './scim/http'
 import { type IamEndpointId, iamServiceContract, type IamServiceOptions } from './service'
 import { buildServices, type Services } from './services'
 import { handleWorkloadToken } from './workload-token'
@@ -115,6 +116,8 @@ export function createIamApp(options: IamAppOptions = {}): FetchService<Env> {
 		'admin-rpc': serve((ctx) => adminRpcAuth(ctx.request, ctx, () => dispatchRpcRequest({ router: adminRpcRouter, ctx, request: ctx.request }))),
 		'admin-root': admin,
 		'admin': admin,
+		'scim-root': serve((ctx) => handleScim(ctx.request, ctx.services, ctx.requestId)),
+		'scim': serve((ctx) => handleScim(ctx.request, ctx.services, ctx.requestId)),
 		'membership': serve((ctx) => handleMembershipTransport(ctx.request, ctx.services, createIamRpc(ctx.env, ctx.exec))),
 		'rpc-root': rpc,
 		'rpc': rpc,

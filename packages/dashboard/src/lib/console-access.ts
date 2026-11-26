@@ -13,6 +13,7 @@ export type NavPage =
 	| 'settings/source'
 	| 'settings/branding'
 	| 'settings/passwords'
+	| 'settings/provisioning'
 	| 'access'
 	| 'access/users'
 	| 'access/credentials'
@@ -108,6 +109,8 @@ export function mayOpen(caller: ConsoleCaller, page: NavPage): boolean {
 		case 'settings/branding':
 		// IAM keeps the minimum password length too, under the same rule (ADR-0020).
 		case 'settings/passwords':
+		// And the SCIM token, which deprovisions every person of the installation (ADR-0091).
+		case 'settings/provisioning':
 			return caller.iam === null || (caller.iam !== false && caller.iam.kind === 'installation')
 		case 'access/users':
 			return caller.iam !== false
