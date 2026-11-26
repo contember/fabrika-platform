@@ -47,6 +47,7 @@ import { ecrClient } from './aws/ecr'
 import { ecsClient } from './aws/ecs'
 import { ELB, type ElbClient, elbClient } from './aws/elb'
 import { CODEBUILD, ECR, ECS, LOGS, SSM } from './aws/json'
+import { LAMBDA, lambdaFunction } from './aws/lambda'
 import { logsClient } from './aws/logs'
 import { CLOUDFORMATION } from './aws/query'
 import { s3BucketOrigin, type S3PartWriter, s3PartWriter } from './aws/s3'
@@ -57,6 +58,7 @@ import { AWS_PROVIDER, type AwsAppArtifact, awsAppArtifactCodec, type AwsAppTarg
 import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deploy'
 import { AWS_APPLICATION_PORT } from './ecs-task'
 import { awsEnvironmentStack, type AwsInstallationNetwork, checkInstallationNetwork, ensureEnvironmentStack } from './environment-stack'
+import { AWS_TASK_RUNNER } from './installation/task-runner'
 import {
 	type AwsInstallationBalancer,
 	awsNamespaceCapabilities,
@@ -333,7 +335,8 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 		return {
 			ecr: ecrClient(at(ECR)),
 			codeBuild: codeBuildClient(at(CODEBUILD)),
-			ecs: ecsClient(at(ECS)),
+			// A one-off task goes through the task runner: Control's role is denied `RunTask`.
+			ecs: ecsClient(at(ECS), lambdaFunction(at(LAMBDA), AWS_TASK_RUNNER)),
 			logs: logsClient(at(LOGS)),
 			ssm: ssmClient(at(SSM)),
 			cloudFormation: cloudFormationClient(at(CLOUDFORMATION)),

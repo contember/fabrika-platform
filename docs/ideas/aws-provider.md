@@ -606,9 +606,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        `iam:AttachRolePolicy`, and `ec2:CreateSecurityGroup` on the applications' VPC alone; `ecs:CreateService` and
        `ecs:UpdateService` held to the applications' task subnets (`ecs:subnet`, present on a create); the platform's
        task definition families (`fabrika_platform_*`, which no application or namespace family can take) denied to
-       `RegisterTaskDefinition`, `RunTask` and any service naming one, and `RegisterTaskDefinition` on
-       `task-definition/*`, not `*`; the certificate broker. `RunTask` has no subnet key, so an init task's subnets are
-       the code's; anywhere in the applications' VPC reaches nothing of the platform's. The remaining reach: a
+       `RegisterTaskDefinition` and any service naming one, and `RegisterTaskDefinition` on `task-definition/*`, not
+       `*`; the certificate broker; and the task runner (below): Control is denied `RunTask` and `StartTask` on `*`,
+       and an init task is started by a function Control may only invoke. The remaining reach: a
        bounded role's trust policy is not held (no condition key reads one, and the stacks need `CreateRole` and
        `UpdateAssumeRolePolicy`), so a misused Control could write a bounded role another account may take; step 13
        adds IAM Access Analyzer's external access findings on `role/fabrika/apps/*` and `role/fabrika/namespaces/*` to
@@ -624,8 +624,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
-    - ECS: `CreateService`, `UpdateService`, `DescribeServices`, the service deployment and revision reads, `RunTask`,
-      `DescribeTasks` on `service/<cluster>/*` and `task/<cluster>/*`, and `TagResource` only with the condition
+    - ECS: `CreateService`, `UpdateService`, `DescribeServices`, the service deployment and revision reads,
+      `DescribeTasks` on `service/<cluster>/*` and `task/<cluster>/*` (no `RunTask`: the task runner starts an init
+      task), and `TagResource` only with the condition
       `ecs:CreateAction = CreateService` (the tags of a service it creates); `RegisterTaskDefinition` (no resource scope
       in ECS), with `iam:PassRole` only on `role/fabrika/apps/*` and the condition
       `iam:PassedToService = ecs-tasks.amazonaws.com`. `CreateService` passes no role: the account's ECS service-linked
@@ -719,6 +720,30 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
           `Custom::FabrikaListenerCertificate` of the broker. The broker's configuration (the applications' listener, the
           installation's hosts) is its environment, written by the access stack; it attaches to that listener alone, and
           refuses a certificate one of whose names, exactly or by a wildcard, is an installation host;
+      - **One-off tasks and `RunTask`: decided 2026-11-26, a task runner** (built, `installation/task-runner.ts`, its
+        function and role in the access stack). `RunTask` takes no condition key on the subnets or the security groups
+        (the service authorization reference lists `ecs:subnet` for `CreateService` and `UpdateService` alone, and no
+        ECS key names a group), and ECS attaches a task's interface with its own role. A role holding `RunTask` could
+        so start a task in the platform's network carrying any of the platform's groups (the database clients', the
+        platform proxy's) and reach the platform's services past their proxy. It could not read the database's
+        password (the roles Control may pass reach only the applications' parameters) nor take a platform role.
+        Alternatives weighed:
+        - **(a) The platform in a region of its own.** ECS places a task in its own region's subnets alone, and
+          Control's role names only the applications' region. Rejected: the operator chooses two regions, and the
+          proxies' calls to IAM cross them (10 to 25 ms within Europe).
+        - **(b) One-off tasks as a service of one task.** Control loses `RunTask`, and `ecs:subnet` holds the service.
+          Rejected: ECS restarts a task that exits, so the command would have to sleep after it and report its exit in
+          its log, and a task that crashes still runs again.
+        - **(c) Security groups and detection alone.** Rejected: whatever the platform's groups admit, `RunTask` may
+          attach that group; an EventBridge rule that stops such a task acts after it starts (Fargate takes tens of
+          seconds, delivery is not bounded).
+        - **(d) A task runner (chosen).** Control's role is denied `RunTask` and `StartTask` on `*` and may invoke the
+          runner and nothing more of it. The runner starts the task in the applications' cluster and task subnets of its
+          own configuration, whatever the request names; a security group of the request is taken as it is, since ECS
+          refuses a group of another VPC than the subnets'. It overrides one container's command alone (no role, no
+          environment, no ECS Exec), refuses a platform task definition (its role is denied one too), passes only the
+          applications' and namespaces' roles, and answers the task cut to what the deploy reads. The deploy's init step
+          is unchanged but for the call (`ecsClient`'s `runTask` invokes the runner), its client token included;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
@@ -776,7 +801,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack. The live check also settles: which actions
     CloudFormation calls with Control's credentials (a custom resource's invoke among them), the condition keys each
     service evaluates (`ecs:subnet`'s values, `ecs:task-definition`), whether ECS checks `iam:PassRole` on `RunTask` for
-    the roles an existing task definition names, which source ARN ECS sends when a task takes Control's role, and
+    the roles an existing task definition names (the task runner's role holds it on the applications' and namespaces'
+    roles), that Lambda reports a thrown error's `name` as its `errorType`, which source ARN ECS sends when a task takes
+    Control's role, and
     IAM Access Analyzer's external access findings on the bounded roles.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.

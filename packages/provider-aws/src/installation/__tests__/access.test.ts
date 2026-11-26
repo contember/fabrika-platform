@@ -23,6 +23,7 @@ import {
 } from '../access'
 import { awsBalancersStack } from '../balancers'
 import { AWS_DEFAULT_PLATFORM_VPC_CIDR, awsNetworkLayout, awsNetworkOutputs, awsNetworkStack } from '../network'
+import { AWS_TASK_RUNNER_SOURCE } from '../task-runner'
 
 const certificate = (n: number) => `arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 /** A network's outputs over `prefix.0.0/16`, its subnet ids numbered from `first`. */
@@ -40,6 +41,7 @@ const outputsOf = (prefix: string, first: number) => {
 
 const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210'
 const BROKER = 'arn:aws:lambda:eu-central-1:123456789012:function:fabrika-certificate-broker'
+const RUNNER = 'arn:aws:lambda:eu-central-1:123456789012:function:fabrika-task-runner'
 const HOSTS = ['iam.example.com', 'control.example.com', 'operations.example.com', 'apps.example.com']
 const input: AwsAccessInput = {
 	accountId: '123456789012',
@@ -155,11 +157,11 @@ describe("the installation's access", () => {
 		expect(() => checkAwsAccessInput({ ...input, taskSubnetIds: ['subnet-X'] })).toThrow('task subnets')
 	})
 
-	test("the platform's task definitions are never registered into, run, or named by a service of Control's", () => {
+	test("the platform's task definitions are never registered into, or named by a service of Control's", () => {
 		const platform = 'arn:aws:ecs:eu-central-1:123456789012:task-definition/fabrika_platform_*'
 		const denies = control.filter((statement) => statement.Effect === 'Deny')
 		expect(denies.find((statement) => statement.Action.includes('ecs:RegisterTaskDefinition'))).toMatchObject({
-			Action: ['ecs:RegisterTaskDefinition', 'ecs:RunTask'],
+			Action: ['ecs:RegisterTaskDefinition'],
 			Resource: [platform],
 		})
 		expect(denies.find((statement) => statement.Action.includes('ecs:CreateService'))).toMatchObject({
@@ -202,14 +204,58 @@ describe("the installation's access", () => {
 			expect(allows.some((statement) => statement.Action.includes(action))).toBe(false)
 			expect(control.find((statement) => statement.Effect === 'Deny' && statement.Action.includes(action))?.Resource).toEqual(['*'])
 		}
+		// The broker and the task runner are the only functions Control reaches, and it may only invoke them.
 		const invoke = allows.filter((statement) => statement.Action.some((action) => action.startsWith('lambda:')))
-		expect(invoke.map((statement) => [statement.Action, statement.Resource])).toEqual([[['lambda:InvokeFunction'], [BROKER]]])
-		expect(control.find((statement) => statement.NotAction !== undefined)).toEqual({
-			Effect: 'Deny',
-			Action: [],
-			NotAction: ['lambda:InvokeFunction'],
-			Resource: [BROKER],
+		expect(invoke.map((statement) => [statement.Action, statement.Resource])).toEqual([
+			[['lambda:InvokeFunction'], [RUNNER]],
+			[['lambda:InvokeFunction'], [BROKER]],
+		])
+		const notActions = control.filter((statement) => statement.NotAction !== undefined)
+		expect(notActions.map((statement) => [statement.Effect, statement.NotAction, statement.Resource])).toEqual([
+			['Deny', ['lambda:InvokeFunction'], [BROKER]],
+			['Deny', ['lambda:InvokeFunction'], [RUNNER]],
+		])
+	})
+
+	test('Control starts no task itself: the task runner does, which Control may invoke and nothing more', () => {
+		for (const action of ['ecs:RunTask', 'ecs:StartTask']) {
+			expect(allows.some((statement) => statement.Action.includes(action))).toBe(false)
+			expect(control.find((statement) => statement.Effect === 'Deny' && statement.Action.includes(action))?.Resource).toEqual(['*'])
+		}
+		const resources = JSON.parse(JSON.stringify(awsAccessStack(input).template)).Resources
+		expect(resources.TaskRunner.Properties).toMatchObject({
+			FunctionName: 'fabrika-task-runner',
+			Handler: 'index.handler',
+			// The applications' cluster and task subnets: the runner's own, never a request's.
+			Environment: { Variables: { CLUSTER: AWS_APPS_CLUSTER, SUBNETS: input.taskSubnetIds.join(',') } },
 		})
+		expect(resources.TaskRunner.Properties.Code.ZipFile).toBe(AWS_TASK_RUNNER_SOURCE)
+		expect(AWS_TASK_RUNNER_SOURCE.length).toBeLessThanOrEqual(4096)
+		// The source's own platform prefix is the one the policies deny.
+		expect(AWS_TASK_RUNNER_SOURCE).toContain(`const PLATFORM = '${AWS_PLATFORM_FAMILY_PREFIX}'`)
+		expect(resources.TaskRunnerRole.Properties.Path).toBe('/fabrika/platform/')
+		const grants = statementsOf(resources.TaskRunnerRole.Properties.Policies[0].PolicyDocument.Statement)
+		expect(grants.map((statement) => [statement.Effect, statement.Action, statement.Resource, statement.Condition])).toEqual([
+			[
+				'Allow',
+				['ecs:RunTask'],
+				['arn:aws:ecs:eu-central-1:123456789012:task-definition/*'],
+				{ ArnEquals: { 'ecs:cluster': `arn:aws:ecs:eu-central-1:123456789012:cluster/${AWS_APPS_CLUSTER}` } },
+			],
+			['Deny', ['ecs:RunTask'], ['arn:aws:ecs:eu-central-1:123456789012:task-definition/fabrika_platform_*'], undefined],
+			[
+				'Allow',
+				['iam:PassRole'],
+				['arn:aws:iam::123456789012:role/fabrika/apps/*', 'arn:aws:iam::123456789012:role/fabrika/namespaces/*'],
+				{ StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+			],
+			[
+				'Allow',
+				['logs:CreateLogStream', 'logs:PutLogEvents'],
+				['arn:aws:logs:eu-central-1:123456789012:log-group:/aws/lambda/fabrika-task-runner:*'],
+				undefined,
+			],
+		])
 	})
 
 	test("the broker: the applications' listener's certificates and the certificates' names alone, configured with the installation's hosts", () => {
@@ -273,9 +319,7 @@ describe("the installation's access", () => {
 		}
 	})
 
-	test("tasks run, and services and security groups are created, in the applications' cluster and the installation's VPC alone", () => {
-		const runTask = allows.find((statement) => statement.Action.includes('ecs:RunTask'))
-		expect(runTask?.Condition).toEqual({ ArnEquals: { 'ecs:cluster': `arn:aws:ecs:eu-central-1:123456789012:cluster/${AWS_APPS_CLUSTER}` } })
+	test("services and security groups are created in the applications' cluster and the installation's VPC alone", () => {
 		expect(allows.find((statement) => statement.Action.includes('ecs:CreateService'))?.Resource).toEqual([
 			`arn:aws:ecs:eu-central-1:123456789012:service/${AWS_APPS_CLUSTER}/*`,
 		])

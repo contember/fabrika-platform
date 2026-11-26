@@ -15,8 +15,10 @@
 //   names with ECS's own role, and no condition key of this policy names a target group, so the platform's target
 //   group is in a VPC of its own with no route from the applications'. A service Control creates or updates is held
 //   to the applications' task subnets (`ecs:subnet`); a security group Control creates is in the applications' VPC
-//   alone. `RunTask` has no subnet key, so an init task's subnets are held by the code alone: in the applications'
-//   VPC, which is all that reaches anything (a task of any subnet there is no address of the platform's network).
+//   alone. `RunTask` takes no key on the subnets or the security groups, so Control's role is denied it (and
+//   `StartTask`) outright: a one-off task is started by the task runner (`task-runner.ts`, decided 2026-11-26), which
+//   Control may only invoke, and which places it in the applications' cluster and task subnets of its own
+//   configuration.
 // - **No role past the boundary.** `iam:CreateRole` and `iam:PutRolePolicy` only with `iam:PermissionsBoundary` equal to
 //   the boundary, which allows only what an environment's and a namespace proxy's roles need. No `AttachRolePolicy`, so
 //   no managed policy reaches a role Control writes. Control is denied removing or replacing a boundary, and every write
@@ -34,10 +36,12 @@
 //   key: none does, which a test pins.
 // - **Actions that take no resource** (the `Describe*` of EC2 and Elastic Load Balancing, `ecr:GetAuthorizationToken`,
 //   `cloudformation:ListStacks`, ACM's request) are granted on `*`.
-// - **Task definitions.** `RegisterTaskDefinition` and `RunTask` are granted on `task-definition/*` with the
-//   platform's families (`fabrika_platform_*`) denied, and so are `CreateService` and `UpdateService` naming one: no
-//   application family can take that name (one has exactly one `_`, a namespace's starts `ns_`). A task definition
-//   Control registers can only pass the applications' and namespaces' roles (`iam:PassRole`).
+// - **Task definitions.** `RegisterTaskDefinition` is granted on `task-definition/*` with the platform's families
+//   (`fabrika_platform_*`) denied, and so are `CreateService` and `UpdateService` naming one, as the task runner's role
+//   is denied running one: no application family can take that name (one has exactly one `_`, a namespace's starts
+//   `ns_`). A task definition Control registers can only pass the applications' and namespaces' roles (`iam:PassRole`).
+// - **No task started by Control.** See the applications' network above: the task runner starts an init task, and
+//   every Lambda action on it but invoking it is denied, as on the certificate broker.
 // - **No certificate on a listener.** Elastic Load Balancing scopes `AddListenerCertificates` by the listener alone, so a
 //   role holding it could attach any certificate of the account, a platform host's among them, to the applications'
 //   listener. Control's role holds neither listener certificate action: a namespace's certificates go on through the
@@ -64,6 +68,7 @@ import {
 	AWS_MAX_INLINE_SOURCE,
 	awsCertificateBrokerArn,
 } from './certificate-broker'
+import { AWS_TASK_RUNNER, AWS_TASK_RUNNER_SOURCE, awsTaskRunnerArn } from './task-runner'
 
 /** The access stack's name: under `fabrika-platform-`, which no grant of Control's role names. */
 export const AWS_ACCESS_STACK = 'fabrika-platform-access'
@@ -178,7 +183,6 @@ export function awsAppsBoundaryStatements(input: AwsAccessInput): readonly JsonV
 export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPolicy[] {
 	const { accountId: a, region: r, appsListenerArn } = checkAwsAccessInput(input)
 	const both = (shape: (prefix: string) => string): string[] => ['apps', 'namespaces'].map(shape)
-	const cluster = `arn:aws:ecs:${r}:${a}:cluster/${AWS_APPS_CLUSTER}`
 	const services = `arn:aws:ecs:${r}:${a}:service/${AWS_APPS_CLUSTER}/*`
 	const taskDefinitions = `arn:aws:ecs:${r}:${a}:task-definition/*`
 	const platformTaskDefinitions = `arn:aws:ecs:${r}:${a}:task-definition/${AWS_PLATFORM_FAMILY_PREFIX}*`
@@ -209,13 +213,12 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 				allow(['ecs:DescribeServiceDeployments'], [`arn:aws:ecs:${r}:${a}:service-deployment/${AWS_APPS_CLUSTER}/*`]),
 				allow(['ecs:DescribeServiceRevisions'], [`arn:aws:ecs:${r}:${a}:service-revision/${AWS_APPS_CLUSTER}/*`]),
 				allow(['ecs:DescribeTasks'], [`arn:aws:ecs:${r}:${a}:task/${AWS_APPS_CLUSTER}/*`]),
-				// A task runs in the applications' cluster alone; the platform's families are denied below. `RunTask` has no
-				// subnet key: the code places an init task in the applications' task subnets.
-				allowIf(['ecs:RunTask'], [taskDefinitions], { ArnEquals: { 'ecs:cluster': cluster } }),
+				// An init task through the task runner alone: `RunTask` is denied below.
+				allow(['lambda:InvokeFunction'], [awsTaskRunnerArn(a, r)]),
 				// What a registered definition can pass is held by `iam:PassRole` below; the platform's families are denied.
 				allow(['ecs:RegisterTaskDefinition'], [taskDefinitions]),
-				// Tags only as ECS creates the service, the task definition or the task they belong to.
-				allowIf(['ecs:TagResource'], ['*'], { StringEquals: { 'ecs:CreateAction': ['CreateService', 'RegisterTaskDefinition', 'RunTask'] } }),
+				// Tags only as ECS creates the service or the task definition they belong to.
+				allowIf(['ecs:TagResource'], ['*'], { StringEquals: { 'ecs:CreateAction': ['CreateService', 'RegisterTaskDefinition'] } }),
 				allowIf(['iam:PassRole'], roles, { StringEquals: { 'iam:PassedToService': ['ecs-tasks.amazonaws.com', 'codebuild.amazonaws.com'] } }),
 				allow(['ecr:DescribeImages'], repositories),
 				allow(['ssm:PutParameter', 'ssm:DeleteParameter'], both((prefix) => `arn:aws:ssm:${r}:${a}:parameter/fabrika/${prefix}/*`)),
@@ -343,8 +346,12 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 				{ Effect: 'Deny', NotAction: ['lambda:InvokeFunction'], Resource: [awsCertificateBrokerArn(appsListenerArn)] },
 				// No listener certificate, whatever else is granted: only the broker attaches one.
 				deny(['elasticloadbalancing:AddListenerCertificates', 'elasticloadbalancing:RemoveListenerCertificates'], ['*']),
-				// The platform's task definitions: never registered into, run, or named by a service of Control's.
-				deny(['ecs:RegisterTaskDefinition', 'ecs:RunTask'], [platformTaskDefinitions]),
+				// No task Control starts itself, whatever else is granted: neither call takes a key on the network.
+				deny(['ecs:RunTask', 'ecs:StartTask'], ['*']),
+				// The task runner: invoked, nothing else.
+				{ Effect: 'Deny', NotAction: ['lambda:InvokeFunction'], Resource: [awsTaskRunnerArn(a, r)] },
+				// The platform's task definitions: never registered into, or named by a service of Control's.
+				deny(['ecs:RegisterTaskDefinition'], [platformTaskDefinitions]),
 				{
 					Effect: 'Deny',
 					Action: ['ecs:CreateService', 'ecs:UpdateService'],
@@ -488,6 +495,58 @@ export function awsAccessStack(input: AwsAccessInput): AwsStack {
 			MemorySize: 128,
 			Code: { ZipFile: AWS_CERTIFICATE_BROKER_SOURCE },
 			Environment: { Variables: { LISTENER_ARN: input.appsListenerArn, RESERVED_HOSTS: input.installationHosts.join(',') } },
+		},
+	}
+	// The task runner: its role runs an application's or a namespace's task definition in the applications' cluster and
+	// passes their roles, nothing else; its configuration is that cluster and the applications' task subnets.
+	if (AWS_TASK_RUNNER_SOURCE.length > AWS_MAX_INLINE_SOURCE) {
+		throw new Error("aws: the task runner's source is past CloudFormation's inline bound")
+	}
+	const appsCluster = `arn:aws:ecs:${region}:${accountId}:cluster/${AWS_APPS_CLUSTER}`
+	resources['TaskRunnerLogGroup'] = {
+		Type: 'AWS::Logs::LogGroup',
+		Properties: { LogGroupName: `/aws/lambda/${AWS_TASK_RUNNER}`, RetentionInDays: 30 },
+	}
+	resources['TaskRunnerRole'] = {
+		Type: 'AWS::IAM::Role',
+		Properties: {
+			RoleName: AWS_TASK_RUNNER,
+			Path: AWS_PLATFORM_PATH,
+			// As the broker's: only the operator's stack may pass it.
+			AssumeRolePolicyDocument: {
+				Version: '2012-10-17',
+				Statement: [{ Effect: 'Allow', Principal: { Service: 'lambda.amazonaws.com' }, Action: 'sts:AssumeRole' }],
+			},
+			Policies: [{
+				PolicyName: 'runner',
+				PolicyDocument: {
+					Version: '2012-10-17',
+					Statement: [
+						allowIf(['ecs:RunTask'], [`arn:aws:ecs:${region}:${accountId}:task-definition/*`], { ArnEquals: { 'ecs:cluster': appsCluster } }),
+						deny(['ecs:RunTask'], [`arn:aws:ecs:${region}:${accountId}:task-definition/${AWS_PLATFORM_FAMILY_PREFIX}*`]),
+						allowIf(
+							['iam:PassRole'],
+							['apps', 'namespaces'].map((prefix) => `arn:aws:iam::${accountId}:role/fabrika/${prefix}/*`),
+							{ StringEquals: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+						),
+						allow(['logs:CreateLogStream', 'logs:PutLogEvents'], [`arn:aws:logs:${region}:${accountId}:log-group:/aws/lambda/${AWS_TASK_RUNNER}:*`]),
+					],
+				},
+			}],
+		},
+	}
+	resources['TaskRunner'] = {
+		Type: 'AWS::Lambda::Function',
+		DependsOn: ['TaskRunnerLogGroup'],
+		Properties: {
+			FunctionName: AWS_TASK_RUNNER,
+			Runtime: AWS_CERTIFICATE_BROKER_RUNTIME,
+			Handler: 'index.handler',
+			Role: { 'Fn::GetAtt': ['TaskRunnerRole', 'Arn'] },
+			Timeout: 30,
+			MemorySize: 128,
+			Code: { ZipFile: AWS_TASK_RUNNER_SOURCE },
+			Environment: { Variables: { CLUSTER: AWS_APPS_CLUSTER, SUBNETS: input.taskSubnetIds.join(',') } },
 		},
 	}
 	for (const [index, managed] of awsControlPolicies(input).entries()) {
