@@ -6,6 +6,7 @@ import {
 	type ApproverCount,
 	CONTROL_ACTIONS,
 	isApproverCategory,
+	isStepUpCategory,
 	modesOf,
 	POLICY_CATEGORIES,
 	type PolicyCategory,
@@ -36,6 +37,7 @@ import {
 	sameSettings,
 	setEnvironmentProtection,
 	settingsSummary,
+	stepUpVerb,
 	waitingSummary,
 } from '../../lib/environment-protection'
 import { browserCredentials, type PasskeyCredentials } from '../../lib/webauthn'
@@ -151,7 +153,7 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 					)}
 					{env.protected && (approver
 						? <PolicyEditor appId={appId} env={env} onDone={onDone} credentials={credentials} />
-						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings)}</span>)}
+						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings, env.approvalPolicy)}</span>)}
 				</div>
 				{confirming && (
 					<ConfirmDialog
@@ -207,7 +209,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 	}
 
 	function chooseStepUp(category: PolicyCategory, mode: StepUpMode) {
-		if (isApproverCategory(category)) setSettings({ ...settings, stepUp: { ...settings.stepUp, [category]: mode } })
+		if (isStepUpCategory(category)) setSettings({ ...settings, stepUp: { ...settings.stepUp, [category]: mode } })
 	}
 
 	function chooseTtl(text: string) {
@@ -314,18 +316,18 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 										<option value="no">Someone else decides</option>
 									</select>
 								)}
-								{isApproverCategory(option.category) && (
+								{isStepUpCategory(option.category) && (
 									<select
 										value={settings.stepUp[option.category]}
 										disabled={busy}
-										aria-label={`${option.label}: confirming a decision`}
+										aria-label={`${option.label}: confirming with a passkey`}
 										onChange={(event) => chooseStepUp(option.category, event.target.value === 'webauthn' ? 'webauthn' : 'none')}
 									>
 										<option value="none">
-											No passkey to decide{STRICT_SETTINGS.stepUp[option.category] === 'none' ? ' (default)' : ''}
+											{`No passkey ${stepUpVerb(option.category)}${STRICT_SETTINGS.stepUp[option.category] === 'none' ? ' (default)' : ''}`}
 										</option>
 										<option value="webauthn">
-											Passkey to decide{STRICT_SETTINGS.stepUp[option.category] === 'webauthn' ? ' (default)' : ''}
+											{`Passkey ${stepUpVerb(option.category)}${STRICT_SETTINGS.stepUp[option.category] === 'webauthn' ? ' (default)' : ''}`}
 										</option>
 									</select>
 								)}

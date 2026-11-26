@@ -11,8 +11,8 @@ import {
 	type PermissionEntry,
 } from '@fabrika/auth-core'
 import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
-import { isOAuthDeviceGrantLifetime, OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS, type OAuthResourceDto } from '@fabrika/iam-contract'
-import { applicationResource, approvableAgentScopes, storedAgentScope } from './agent-resource'
+import { type AgentWriteGate, isOAuthDeviceGrantLifetime, OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS, type OAuthResourceDto } from '@fabrika/iam-contract'
+import { agentWriteGate, applicationResource, approvableAgentScopes, storedAgentScope } from './agent-resource'
 import { parsePresentation } from './app-presentation'
 import { sessionEndsAt } from './auth'
 import { ACCOUNT_PATH } from './auth/account'
@@ -77,7 +77,9 @@ export async function handleDevicePage(request: Request, services: Services, con
 	const lifetime = Number(form?.get('lifetime'))
 	if (decision !== 'approve' || !isOAuthDeviceGrantLifetime(lifetime)) return page(services, 'Not allowed', '<p>The decision is missing.</p>', 400)
 	// An agent's grant is approved at the scope the page offered, never wider than the request (ADR-0090 §2).
-	const scopes = entry.attempt.client_id === AGENT_CLIENT_ID ? approvedAgentScopes(entry.attempt, form?.get('scope') ?? null) : undefined
+	const scopes = entry.attempt.client_id === AGENT_CLIENT_ID
+		? approvedAgentScopes(entry.attempt, form?.get('scope') ?? null, await agentWriteGate(services, entry.attempt.app))
+		: undefined
 	if (scopes === null) return page(services, 'Not allowed', '<p>That scope cannot be approved for this request.</p>', 400)
 	// The grant stays bound to this IAM session and ends with it, an OIDC login's cap included.
 	const grantExpiresAt = Math.min(now + lifetime, sessionEndsAt(signedIn.session, services.config))
@@ -178,12 +180,19 @@ function decisionFields(): string {
 }
 
 /** The stored scope tokens an agent's approval writes, or null when `offered` is not a scope the request may be approved at. */
-function approvedAgentScopes(attempt: OAuthDeviceAuthorizationRow, offered: string | null): string | null {
+function approvedAgentScopes(attempt: OAuthDeviceAuthorizationRow, offered: string | null, gate: AgentWriteGate): string | null {
 	const requested = storedAgentScope(attemptRequest(attempt)?.scopes ?? [])
 	const chosen = offered === null ? null : parseAgentScope(offered)
 	if (requested === null || chosen === null) return null
-	const approvable = approvableAgentScopes(requested).some((scope) => agentScopeToken(scope) === agentScopeToken(chosen))
+	const approvable = approvableAgentScopes(requested, gate).some((scope) => agentScopeToken(scope) === agentScopeToken(chosen))
 	return approvable ? JSON.stringify([agentScopeToken(chosen)]) : null
+}
+
+/** Why the page offers `read` to an agent that asked to write, by the environment's `agent-write` gate. */
+const DOWNGRADE_REASONS: Readonly<Record<AgentWriteGate, string>> = {
+	open: '',
+	passkey: 'This environment lets an agent write only after a passkey confirmation, which this page cannot ask yet.',
+	refuse: 'This environment does not let agents write.',
 }
 
 const AGENT_MODE_WORDS: Readonly<Record<AgentScopeMode, string>> = {
@@ -206,7 +215,8 @@ async function agentConsentPage(
 	const [uri] = request?.resources ?? []
 	const resource = uri === undefined ? null : await applicationResource(services, uri)
 	const requested = storedAgentScope(request?.scopes ?? [])
-	const [offered] = requested === null ? [] : approvableAgentScopes(requested)
+	const gate = await agentWriteGate(services, attempt.app)
+	const [offered] = requested === null ? [] : approvableAgentScopes(requested, gate)
 	if (resource === null || resource.app !== attempt.app || requested === null || offered === undefined) {
 		return page(services, 'Not available', '<p>This request asks for something the server no longer offers.</p>', 409)
 	}
@@ -220,7 +230,7 @@ async function agentConsentPage(
 		: `<p>The agent calls itself <q>${escapeHtml(attempt.agent_label)}</q>. These are its own words; nothing checks them.</p>`
 	const downgrade = offered.mode === requested.mode
 		? ''
-		: `<p role="alert">The agent asked to <strong>write</strong>. Agents may only read in this environment for now, so you can allow it to read.</p>`
+		: `<p role="alert">The agent asked to <strong>write</strong>. ${DOWNGRADE_REASONS[gate]} You can allow it to read.</p>`
 	return page(
 		services,
 		'Authorize agent',

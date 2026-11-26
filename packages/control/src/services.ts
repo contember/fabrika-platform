@@ -1,6 +1,6 @@
 import { RpcError } from '@fabrika/app'
 import type { AuthContext } from '@fabrika/auth'
-import { CREDENTIALS_MODES } from '@fabrika/iam-contract'
+import { AGENT_WRITE_GATES, CREDENTIALS_MODES } from '@fabrika/iam-contract'
 import { type DeployLocks, SqlDeployLocks } from '@fabrika/platform'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import { z } from 'zod'
@@ -205,47 +205,63 @@ export function grantApprovalDeps(env: Env): { grantApproval?: GrantApprovalPort
 	return { grantApproval: grantApprovalPort(iamProvisioningClient({ origin, provisioningKey })) }
 }
 
-/** What IAM answers a gate write: the revision and the mode it holds; `credentials` absent when it holds none. */
-const heldGatesSchema = z.object({ revision: z.number().int().nonnegative(), credentials: z.enum(CREDENTIALS_MODES).optional() })
+/** What IAM answers a gate write: the revision and the modes it holds; each absent when it holds none. */
+const heldGatesSchema = z.object({
+	revision: z.number().int().nonnegative(),
+	credentials: z.enum(CREDENTIALS_MODES).optional(),
+	agentWrite: z.enum(AGENT_WRITE_GATES).optional(),
+})
 
 /** The issues of a refused RPC input, as far as telling an unknown field apart needs them. */
 const inputIssuesSchema = z.array(z.object({ code: z.string(), keys: z.array(z.string()).optional() }))
 
-/** An IAM released before the `credentials` mirror refuses the field as an unknown key of its strict input. */
-function refusesCredentialsField(cause: unknown): boolean {
-	if (!(cause instanceof RpcError) || cause.httpStatus !== 400) return false
+/** The optional gate fields of a write, newest last: an older IAM takes a prefix of them. */
+const GATE_FIELDS = ['credentials', 'agentWrite'] as const
+
+type GateField = (typeof GATE_FIELDS)[number]
+
+/** The field an IAM released before its mirror refuses as an unknown key of its strict input, or null. */
+function refusedGateField(cause: unknown): GateField | null {
+	if (!(cause instanceof RpcError) || cause.httpStatus !== 400) return null
 	const issues = inputIssuesSchema.safeParse(cause.issues)
-	return issues.success && issues.data.some((issue) => issue.code === 'unrecognized_keys' && issue.keys?.includes('credentials') === true)
+	if (!issues.success) return null
+	const unknown = issues.data.flatMap((issue) => issue.code === 'unrecognized_keys' ? issue.keys ?? [] : [])
+	return GATE_FIELDS.find((field) => unknown.includes(field)) ?? null
 }
 
 /**
- * The mirror's writes over IAM's admin RPC, as the provisioning client reaches it. An IAM older than the `credentials`
- * mirror (rolled back alone, or behind a Control deployed alone) refuses the mode: the grant gate is written again
- * without it, and the answer carries no mode, so the maintenance pass leaves the environment unmirrored and writes it
- * again once IAM takes it (ADR-0062). One port finds an older IAM once, logs it once and writes every later gate without
- * the mode; the maintenance pass builds one per pass, a request one per call.
+ * The mirror's writes over IAM's admin RPC, as the provisioning client reaches it. An IAM older than a gate's mirror
+ * (rolled back alone, or behind a Control deployed alone) refuses that field: the gates are written again without it and
+ * every newer one, and the answer carries none of them, so the maintenance pass leaves the environment unmirrored and
+ * writes it again once IAM takes them (ADR-0062). One port finds an older IAM once per field, logs it once and writes
+ * every later gate without it; the maintenance pass builds one per pass, a request one per call.
  */
 export function grantApprovalPort(client: Pick<ReturnType<typeof iamProvisioningClient>, 'grantApproval'>): GrantApprovalPort {
-	let olderIam = false
+	let taken: number = GATE_FIELDS.length
 	return {
 		async set(app, gates, revision) {
-			const write = (credentials: boolean) =>
-				client.grantApproval.set({ app, required: gates.grants, revision, ...(credentials ? { credentials: gates.credentials } : {}) })
+			const write = () =>
+				client.grantApproval.set({
+					app,
+					required: gates.grants,
+					revision,
+					...(taken > GATE_FIELDS.indexOf('credentials') ? { credentials: gates.credentials } : {}),
+					...(taken > GATE_FIELDS.indexOf('agentWrite') ? { agentWrite: gates.agentWrite } : {}),
+				})
 			let answer: unknown
-			if (olderIam) {
-				answer = await write(false)
-			} else {
+			for (;;) {
 				try {
-					answer = await write(true)
+					answer = await write()
+					break
 				} catch (cause) {
-					if (!refusesCredentialsField(cause)) throw cause
-					olderIam = true
-					console.warn('IAM does not take the credentials mode yet; writing grant gates without it')
-					answer = await write(false)
+					const refused = refusedGateField(cause)
+					if (refused === null || GATE_FIELDS.indexOf(refused) >= taken) throw cause
+					taken = GATE_FIELDS.indexOf(refused)
+					console.warn(`IAM does not take the ${refused} gate yet; writing grant gates without it`)
 				}
 			}
 			const held = heldGatesSchema.parse(answer)
-			return { revision: held.revision, credentials: held.credentials ?? null }
+			return { revision: held.revision, credentials: held.credentials ?? null, agentWrite: held.agentWrite ?? null }
 		},
 	}
 }

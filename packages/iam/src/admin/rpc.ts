@@ -2,6 +2,7 @@ import { type AuthContext, ForbiddenError, initRpc, type RpcRouterFor, toErrorRe
 import { permits, scopedValues, WORKLOAD_KINDS } from '@fabrika/auth-core'
 import { recipientPublicKeySchema } from '@fabrika/control-contract'
 import {
+	AGENT_WRITE_GATES,
 	CREDENTIALS_MODES,
 	type IamAdminRpcContract,
 	OAUTH_CLIENT_PROVIDERS,
@@ -156,12 +157,17 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 					: withdrawOwnGrantRequestUseCase(requester, input)
 			}),
 	}),
-	// Control's, with the provisioning key: an application environment's grant gate and `credentials` mode (ADR-0083).
+	// Control's, with the provisioning key: an application environment's grant gate, `credentials` mode and `agentWrite` gate.
 	grantApproval: t.router({
 		set: t.procedure
 			.input(
-				z.object({ app: nonEmpty, required: z.boolean(), revision: z.number().int().nonnegative(), credentials: z.enum(CREDENTIALS_MODES).optional() })
-					.strict(),
+				z.object({
+					app: nonEmpty,
+					required: z.boolean(),
+					revision: z.number().int().nonnegative(),
+					credentials: z.enum(CREDENTIALS_MODES).optional(),
+					agentWrite: z.enum(AGENT_WRITE_GATES).optional(),
+				}).strict(),
 			)
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => setGrantApprovalUseCase(context(ctx), input)),

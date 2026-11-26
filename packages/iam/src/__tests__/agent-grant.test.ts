@@ -3,9 +3,11 @@
 // Postgres runs when FABRIKA_TEST_POSTGRES_URL is set and skips cleanly otherwise.
 
 import { AGENT_CLIENT_ID, buildResourceAccessClaims, OAUTH_CLI_CLIENT_ID, parseAccessClaims, permits } from '@fabrika/auth-core'
+import type { AgentWriteGate } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import { decodeJwt } from 'jose'
+import { IAM_APP } from '../admin/router'
 import { mintFromGrant } from '../agent-grant'
 import { createPostgresIamRepositories, type IamRepositories, type OAuthGrantRow } from '../db'
 import { mintForGrant } from '../oauth'
@@ -337,7 +339,7 @@ for (const engine of engines) {
 			const a = await agentFixture(engine.repositories())
 			const { deviceCode, userCode } = await a.started({ scope: 'write:project=b' })
 			const html = await (await a.page({ user_code: userCode })).text()
-			expect(html).toContain('Agents may only read in this environment')
+			expect(html).toContain('This environment does not let agents write.')
 			expect(html).toContain('name="scope" value="read:project=b"')
 			expect(html).not.toContain('value="write:project=b"')
 			expect(html).toContain('Nothing checks that this value exists')
@@ -352,6 +354,46 @@ for (const engine of engines) {
 			expect(approved.status).toBe(200)
 			const tokens = await json(await a.poll(deviceCode))
 			expect(field(tokens, 'scope')).toBe('read:project=b')
+		})
+
+		test("an environment serves write only where Control's `agent-write` gate is `open`, at the approval and at every exchange", async () => {
+			const a = await agentFixture(engine.repositories())
+			let revision = 0
+			const gate = async (agentWrite: AgentWriteGate) => {
+				revision += 1
+				await a.repositories.grantRequests.setGates(a.app, { required: false, credentials: 'off', agentWrite }, revision, unixNow(), {
+					requestId: 'req-gate',
+					principalId: null,
+					principalLabel: 'control',
+					app: IAM_APP,
+					action: 'iam.grant_approval.set',
+					resourceType: 'app',
+					resourceId: a.app,
+				})
+			}
+			await gate('open')
+			const open = await a.started({ scope: 'write:project=b' })
+			const html = await (await a.page({ user_code: open.userCode })).text()
+			expect(html).toContain('name="scope" value="write:project=b"')
+			expect(html).not.toContain('role="alert"')
+			expect((await a.page({ user_code: open.userCode, decision: 'approve', lifetime: '3600', scope: 'write:project=b' })).status).toBe(200)
+			expect(field(await json(await a.poll(open.deviceCode)), 'scope')).toBe('write:project=b')
+			const write = await a.directGrant('write:project=a')
+			expect((await a.exchange(write.token)).ok).toBe(true)
+
+			// A passkey gate fails closed until the device page asks the passkey: the page offers read, the exchange refuses write.
+			await gate('passkey')
+			const passkey = await a.started({ scope: 'write' })
+			const offered = await (await a.page({ user_code: passkey.userCode })).text()
+			expect(offered).toContain('only after a passkey confirmation')
+			expect(offered).toContain('name="scope" value="read"')
+			expect((await a.page({ user_code: passkey.userCode, decision: 'approve', lifetime: '3600', scope: 'write' })).status).toBe(400)
+			expect(await a.exchange(write.token)).toEqual({ ok: false, reason: 'write_refused' })
+
+			await gate('refuse')
+			expect(await a.exchange(write.token)).toEqual({ ok: false, reason: 'write_refused' })
+			const read = await a.directGrant('read')
+			expect((await a.exchange(read.token)).ok).toBe(true)
 		})
 
 		test('the exchange refuses another resource or app, another client, a write grant, and a grant that no longer holds', async () => {
@@ -380,7 +422,7 @@ for (const engine of engines) {
 			}))
 			expect(await a.exchange(cliToken)).toEqual({ ok: false, reason: 'invalid_grant' })
 
-			// Until Control mirrors `agent-write`, no environment serves a write grant.
+			// Where Control has mirrored no `agent-write` gate, the environment serves no write grant.
 			const write = await a.directGrant('write:project=a')
 			expect(await a.exchange(write.token)).toEqual({ ok: false, reason: 'write_refused' })
 

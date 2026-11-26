@@ -14,6 +14,7 @@ import {
 	type PolicyCategory,
 	policyFromCategories,
 	REQUEST_TTL_HOURS,
+	STEP_UP_CATEGORIES,
 	type StepUpMode,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
@@ -159,9 +160,20 @@ export const APPROVAL_CATEGORY_GROUPS: readonly { readonly title: string; readon
 				hint:
 					'a key for someone else, decided by an IAM installation administrator, encrypted to the agent and fetched by it once; with no approval an agent cannot ask for one',
 			},
+			{
+				category: 'agent-write',
+				label: 'An agent writing as a person',
+				hint:
+					"a person lets an agent act as them with changes, on IAM's approval page; while that takes a passkey, IAM refuses writing until its page asks for one",
+			},
 		],
 	},
 ]
+
+/** What a category's passkey confirms: deciding a pending item, or, for `agent-write`, allowing an agent to write. */
+export function stepUpVerb(category: PolicyCategory): string {
+	return category === 'agent-write' ? 'to allow' : 'to decide'
+}
 
 export function categoryLabel(category: PolicyCategory): string {
 	return APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options).find((option) => option.category === category)?.label ?? category
@@ -192,8 +204,8 @@ export function loosened(before: ApprovalPolicy, after: ApprovalPolicy): PolicyC
 
 /**
  * The settings a change loosens, in the console's words: an unmerged commit admitted, a key no longer bounded by its
- * requester, one approver where two decided, the requester's own person allowed to approve, or a decision no longer
- * confirmed with a passkey.
+ * requester, one approver where two decided, the requester's own person allowed to approve, or a decision (or an
+ * agent's write access) no longer confirmed with a passkey.
  */
 export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettings): string[] {
 	return [
@@ -207,8 +219,8 @@ export function loosenedSettings(before: ApprovalSettings, after: ApprovalSettin
 		...APPROVER_CATEGORIES.filter((category) => after.requesterMayApprove[category] && !before.requesterMayApprove[category]).map((category) =>
 			`${categoryLabel(category)} (the requester's person may approve)`
 		),
-		...APPROVER_CATEGORIES.filter((category) => after.stepUp[category] === 'none' && before.stepUp[category] === 'webauthn').map((category) =>
-			`${categoryLabel(category)} (no passkey to decide)`
+		...STEP_UP_CATEGORIES.filter((category) => after.stepUp[category] === 'none' && before.stepUp[category] === 'webauthn').map((category) =>
+			`${categoryLabel(category)} (no passkey ${stepUpVerb(category)})`
 		),
 	]
 }
@@ -237,8 +249,8 @@ export function sameSettings(a: ApprovalSettings, b: ApprovalSettings): boolean 
 	return a.deployRequestCommits === b.deployRequestCommits && a.requestTtlHours === b.requestTtlHours && a.credentialCeiling === b.credentialCeiling
 		&& APPROVER_CATEGORIES.every((category) =>
 			a.approvers[category] === b.approvers[category] && a.requesterMayApprove[category] === b.requesterMayApprove[category]
-			&& a.stepUp[category] === b.stepUp[category]
 		)
+		&& STEP_UP_CATEGORIES.every((category) => a.stepUp[category] === b.stepUp[category])
 }
 
 /** The preset a choice is, if any. */
@@ -255,7 +267,7 @@ export function requestTtl(text: string): number | null {
 }
 
 /** The settings in the console's words, for a reader who cannot change them. */
-export function settingsSummary(settings: ApprovalSettings): string {
+export function settingsSummary(settings: ApprovalSettings, policy: ApprovalPolicy): string {
 	const two = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] === 2).map(categoryLabel)
 	const others = APPROVER_CATEGORIES.filter((category) => !settings.requesterMayApprove[category]).map(categoryLabel)
 	const passkey = APPROVER_CATEGORIES.filter((category) => settings.stepUp[category] === 'webauthn').map(categoryLabel)
@@ -268,6 +280,9 @@ export function settingsSummary(settings: ApprovalSettings): string {
 		...(two.length === 0 ? [] : [`Two people decide: ${two.join(', ')}.`]),
 		...(others.length === 0 ? [] : [`Someone other than the requester's person decides: ${others.join(', ')}.`]),
 		...(passkey.length === 0 ? [] : [`A passkey confirms deciding: ${passkey.join(', ')}.`]),
+		...(policy['agent-write'] === 'off' && settings.stepUp['agent-write'] === 'webauthn'
+			? ["An agent writing as a person takes a passkey; until IAM's approval page asks for one, agents only read here."]
+			: []),
 	].join(' ')
 }
 

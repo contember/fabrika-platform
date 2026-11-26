@@ -235,8 +235,8 @@ that does not list it. One that does needs a platform of the same release or new
 - `ctx.principal` is the person. A group that lists `agent` has `ctx.agent`: `{ grant, label, scope }` when an agent
   calls, `null` when the person does. `ctx.caller` is the person's row for both.
 - The test kit's `kit.agentGrant(person, { scope, label })` answers the resource token an agent presents as a bearer;
-  the kit's proxy exchanges it as production's does. As IAM does until an environment mirrors `agent-write`, the kit
-  refuses the exchange of a `write` grant; `testKit(app, { agentWrite: 'off' })` serves it. The endpoint access kit
+  the kit's proxy exchanges it as production's does. As IAM does where an environment's `agent-write` gate is not
+  `open`, the kit refuses the exchange of a `write` grant; `testKit(app, { agentWrite: 'off' })` serves it. The endpoint access kit
   and the leak sweep ask a group that lists only `agent` as a person's agent.
 
 An application that added a `machine` group so that an agent could call it adds `agent` to the groups the agent needs,
