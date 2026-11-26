@@ -733,6 +733,8 @@ describe('data RPC', () => {
 			'recoversOperationId',
 			'resolution',
 			'revertRunId',
+			'rewindRefusal',
+			'rewound',
 			'runId',
 			'state',
 			'step',

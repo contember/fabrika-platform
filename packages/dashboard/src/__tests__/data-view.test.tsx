@@ -89,6 +89,8 @@ const operation = (id: string, overrides: Partial<DataOperationDto> = {}): DataO
 	migrationFailure: null,
 	revertRunId: null,
 	candidateRecovered: false,
+	rewound: false,
+	rewindRefusal: null,
 	...overrides,
 })
 

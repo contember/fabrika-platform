@@ -450,13 +450,14 @@ never an earlier one or a split (ADR-0069 §3). A refused rewind fails safe: not
 ADR-0069 §3's branch for a record it cannot rewind. A `verify` that finds the sentinel gone records `rewound` in the
 record, so a later boot never marks a rewound migration `booted`, and the record is never rewound again.
 
-Control then redeploys the last succeeded run's commit and opens the object at a new generation. The undo bookmark `arm`
+Control then redeploys the last succeeded run's commit and, once the failed version's instance is gone (ADR-0069 §3),
+opens the object at a new generation. The undo bookmark `arm`
 answers is recorded like a side restore's. If `verify` finds the sentinel three times, the object stays `inspect` for an
 operator, and nothing was lost. Probe 7 exercised the in-place restore's failure boundaries on a live account
 (2026-11-26): an `arm` whose answer the abort loses still restores, so `verify` decides; an armed object that is not
 reset keeps its writes only until its next reset, which restores and discards them, so `arm` runs only in `inspect`; and
-the undo bookmark brings the rewound writes back. Until the rewind is built, every record is one ADR-0069 §3 cannot
-rewind.
+the undo bookmark brings the rewound writes back. So a rewind that fails once an `arm` went out leaves the object
+`inspect` too: a refusal before the first `arm` alone rewound nothing for certain.
 
 **Not built: an in-place restore of an object that served, and a whole-environment rollback.** Rewinding an object
 that served writes discards them, and restoring forward rests on the forward restore succeeding, which is unprobed.

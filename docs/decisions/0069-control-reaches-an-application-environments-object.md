@@ -289,11 +289,12 @@ deadline and does the same. The run's status is the migration's: it succeeds onl
   boots over the schema it knows.
 - **`committed`, never `booted`.** Control publishes the object `inspect` and rewinds it in place to the record's
   bookmark (ADR-0070 §9), so the old code meets exactly its own schema. It then redeploys the last succeeded run's
-  commit and opens the object at a new generation. The rewind is a step before the redeploy, and an operation never
+  commit, keeps the object `inspect` to the deadline counted from that deploy, since the failed version's instance
+  would migrate again on its next boot, and opens the object at a new generation. The rewind is a step before the redeploy, and an operation never
   returns to it once the redeploy has started. Control asks for it only within the operation whose `migrate` answered
   the record; the object's guards decide whether it may.
-- **A record it cannot rewind.** The object refuses the rewind (another version runs, or the record has no version),
-  or the rewind is not built. A `committed`, never-`booted` migration without a `dataLoss` line then gets the redeploy
+- **A record it cannot rewind.** The object refuses the rewind before anything is armed (another version runs, or the
+  record has no version), or the record names no version or bookmark, so Control does not ask. A `committed`, never-`booted` migration without a `dataLoss` line then gets the redeploy
   alone: the runner tolerates a ledger ahead of the code. With a `dataLoss` line, or when the redeployed commit does
   not answer `ok` by the deadline, Control publishes the object `closed`, and the run fails as `migration_failed` for
   an operator to fix forward. Nothing is rewound, so no write is lost.

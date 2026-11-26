@@ -7,6 +7,7 @@ import {
 	DEFAULT_APPLICATION_OBJECT,
 	MAX_APPLICATION_OBJECTS,
 	OPS_CONTENT_TYPE,
+	OPS_DATA_REFUSALS,
 	OPS_DATA_REFUSED_STATUS,
 	OPS_DUMP_MAX_PARTS,
 	OPS_METHOD,
@@ -613,7 +614,7 @@ export async function recordedMaintenance(
 		})
 		const deciding = page.find((operation) => !(operation.state === 'failed' && operation.error_code === NOT_SERVED_CODE))
 		if (deciding?.state === 'succeeded') return deciding.target_mode
-		if (deciding?.state === 'failed' && (REOPENED_CODES.has(deciding.error_code) || failedOpen(deciding))) return 'open'
+		if (deciding?.state === 'failed' && failedOpen(deciding)) return 'open'
 		if (deciding !== undefined) return 'unsettled'
 		const last = page.at(-1)
 		if (last === undefined || page.length < RECORDED_PAGE) return 'open'
@@ -621,9 +622,13 @@ export async function recordedMaintenance(
 	}
 }
 
-/** A bookmark migration sends only `open` until it publishes `closed` to fail, so one that failed in `open` left it open. */
+/**
+ * Whether a failed operation left the object open. A bookmark migration publishes `open`, except while it rewinds in place
+ * (`inspect`) and once it closes, so one that failed in `open` left it open, and only that one; every other kind by its code.
+ */
 function failedOpen(operation: DataOperationRow): boolean {
-	return operation.kind === 'migrate' && operation.records_bookmark === 1 && operation.target_mode === 'open'
+	if (operation.kind === 'migrate' && operation.records_bookmark === 1) return operation.target_mode === 'open'
+	return REOPENED_CODES.has(operation.error_code)
 }
 
 /** How many operations `recordedMaintenance` reads at once while it looks past the ones that changed nothing. */
@@ -660,6 +665,8 @@ export function toDataOperationDto(row: DataOperationRow): DataOperationDto {
 		migrationFailure: row.migration_failure,
 		revertRunId: row.revert_run_id,
 		candidateRecovered: row.candidate_recovered === 1,
+		rewound: row.rewind_outcome === 'rewound',
+		rewindRefusal: row.rewind_refusal,
 	}
 }
 
@@ -714,6 +721,16 @@ type Step = { readonly kind: 'next'; readonly row: DataOperationRow } | { readon
 type DataStop = { readonly kind: 'failed'; readonly code: string } | { readonly kind: 'paused' } | { readonly kind: 'interrupted' }
 
 type DataResult<T> = { readonly kind: 'ok'; readonly value: T } | DataStop
+
+/**
+ * How arming a restore ended: `verify` found the sentinel gone; an `arm` failed with a code; a `verify` failed; or no
+ * answer to act on.
+ */
+type Rewound =
+	| { readonly kind: 'rewound' }
+	| { readonly kind: 'arm_failed'; readonly code: string; readonly armedBefore: boolean }
+	| { readonly kind: 'failed'; readonly code: string }
+	| { readonly kind: 'done'; readonly result: 'paused' | 'interrupted' }
 
 /** What `prepare` says of ordinary traffic: it still reaches the original, or it moved off it, which both others prove. */
 type Pointer =
@@ -1060,12 +1077,15 @@ class OperationDriver {
 	/**
 	 * A bookmark migration (ADR-0069 §3), which restricts nothing. `deploy` runs the operation's run, or a successor reads
 	 * how it ended; `migrate` asks at the published generation, in `open`, until the new version answers: every candidate
-	 * file with its checksum, or `migration_failed`. Until then, or the deadline, the old version still answers. A failed
-	 * migration that nothing committed (`rolled_back`, `record_unwritable`), or a committed one without a `dataLoss`
-	 * line, gets the rollback deploy of the last succeeded commit (`revert`), and `check` waits to the same deadline for
-	 * an `ok` of another version than the failed one. A committed `dataLoss` migration, which no rewind can undo yet, a
-	 * rollback that does not answer, and a failed version that answers `ok` after all, go to `restrict`, which publishes
-	 * `closed` and fails the operation for an operator. The operation's run ends with it: succeeded only when it did.
+	 * file with its checksum, or `migration_failed`. Until then, or the deadline, the old version still answers. A
+	 * committed migration whose record names its version and bookmark is first rewound in place (`rewind`, ADR-0070 §9),
+	 * and the object stays `inspect` through the rollback deploy and until the failed version's instance is gone. A failed
+	 * migration that nothing committed (`rolled_back`, `record_unwritable`), a rewound one, or a committed one the object
+	 * refuses to rewind and without a `dataLoss` line, gets the rollback deploy of the last succeeded commit (`revert`),
+	 * and `check` waits to the same deadline for an `ok` of another version than the failed one. A committed `dataLoss`
+	 * migration that is not rewound, a rollback that does not answer, and a failed version that answers `ok` after all,
+	 * go to `restrict`, which publishes `closed` and fails the operation for an operator. The operation's run ends with
+	 * it: succeeded only when it did.
 	 */
 	private async bookmarkMigrateStep(row: DataOperationRow): Promise<Step> {
 		const close = async (from: DataOperationRow, change: Pick<DataOperationAdvance, 'candidateRecovered'> = {}): Promise<Step> => ({
@@ -1106,17 +1126,33 @@ class OperationDriver {
 					return { kind: 'done', result: 'succeeded' }
 				}
 				if (answer.kind === 'deadline') return await fail(answer.row, deployed ? MIGRATION_UNCONFIRMED_CODE : DEPLOY_FAILED_CODE)
-				const reason = answer.failure.reason
+				const { reason, record } = answer.failure
 				// The answering version, so `check` tells the rollback's `ok` from this version's own once it boots after all.
-				const version = answer.failure.version ?? answer.failure.record.version
+				const version = answer.failure.version ?? record.version
 				const failure = { migrationFailure: reason, ...(version === null ? {} : { candidateVersion: version }) }
-				// A committed migration is not rewound here (the in-place rewind, ADR-0070 §9, is built later): the old code may
-				// run over the migrated schema, unless a `dataLoss` line deleted what it reads.
+				// The object refuses to rewind a record without its version or bookmark, so such a record is not asked for.
+				if (reason === 'committed' && record.version !== null && record.bookmark !== null) {
+					return {
+						kind: 'next',
+						row: await this.advance(answer.row, {
+							step: 'rewind',
+							targetMode: 'inspect',
+							generation: await this.allocate(),
+							rewindRecord: record.id,
+							...failure,
+						}),
+					}
+				}
+				// Not rewound, the old code may run over the migrated schema, unless a `dataLoss` line deleted what it reads.
 				if (reason === 'committed' && row.data_loss === 1) {
 					return await close(await this.advance(answer.row, { step: 'migrate', ...failure }))
 				}
 				return { kind: 'next', row: await this.advance(answer.row, { step: 'revert', ...failure }) }
 			}
+			case 'rewind':
+				// The migration failed, so its run did; it ends before the rewind, which may stop the operation for an operator.
+				await this.finishRun(row, 'failed')
+				return await this.rewindInPlace(row)
 			case 'revert': {
 				// The migration failed, so its run did; it ends first, as an environment runs one run at a time.
 				await this.finishRun(row, 'failed')
@@ -1126,6 +1162,14 @@ class OperationDriver {
 				return { kind: 'next', row: await this.advance(row, { step: 'check', deadlineAt: this.deadline() }) }
 			}
 			case 'check': {
+				// A rewound object stays `inspect` until the failed version's instance is gone, whose next boot would migrate again.
+				if (row.target_mode === 'inspect') {
+					if ((await this.until(row.deadline_at)) === 'paused') return { kind: 'done', result: 'paused' }
+					return {
+						kind: 'next',
+						row: await this.advance(row, { step: 'check', targetMode: 'open', generation: await this.allocate(), deadlineAt: this.deadline() }),
+					}
+				}
 				// Only another version's `ok` is the rollback's: the failed version retries its boot and may succeed after all.
 				// Without the failed version's id no answer can be told apart, so the wait runs to its deadline.
 				const candidate = row.candidate_version
@@ -1193,6 +1237,17 @@ class OperationDriver {
 			}
 			if (this.now() >= deadline * 1000) return { kind: 'deadline', row }
 			await (this.deps.wait ?? abortableWait)(NEW_VERSION_POLL_MS, this.lease.signal)
+		}
+	}
+
+	/** Waits until `deadline` (unix seconds) passes, or the pass ends. */
+	private async until(deadline: number | null): Promise<'due' | 'paused'> {
+		if (deadline === null) throw new Error('a bookmark migration waits with no deadline')
+		for (;;) {
+			const left = deadline * 1000 - this.now()
+			if (left <= 0) return 'due'
+			if (this.deps.passSpent?.() === true) return 'paused'
+			await (this.deps.wait ?? abortableWait)(Math.min(left, NEW_VERSION_POLL_MS), this.lease.signal)
 		}
 	}
 
@@ -1582,39 +1637,128 @@ class OperationDriver {
 
 	/**
 	 * Rewind the original (ADR-0070 §9 step 6), from the record, once `serve` recorded `prepare`'s bookmarks: fence it
-	 * `inspect` at the record's generation; then each `arm` counted before it is sent, sent once, and a `verify` after it,
-	 * since its answer may be lost to the reset. A recorded `arm` is verified before another is sent. An absent sentinel
-	 * is the restore; a present one arms again, at most `MAX_ARMS` times.
+	 * `inspect` at the record's generation, then arm until `verify` finds the sentinel gone.
 	 */
 	private async rewind(start: DataOperationRow, initial: RestoreRow): Promise<Step> {
 		const fenced = await this.publish(start, 'inspect', initial.original)
 		if (fenced.kind === 'refused') return await this.failed(start, REWIND_FAILED_CODE)
 		if (fenced.kind !== 'acked') return { kind: 'done', result: fenced.kind }
 		const row = fenced.row
-		const object = initial.original
-		const sentinel = row.id
-		let restore = initial
-		const target = restore.target_bookmark
+		const target = initial.target_bookmark
 		if (target === null) throw new Error('a restore reached its rewind without recorded bookmarks')
-		for (;;) {
-			if (restore.arms > 0) {
-				const verified = await this.restoreRequest({ step: 'verify', object, sentinel })
-				if (verified.kind === 'failed') return await this.failed(row, REWIND_FAILED_CODE)
-				if (verified.kind !== 'ok') return { kind: 'done', result: verified.kind }
-				if (verified.value.step !== 'verify') return await this.failed(row, 'invalid_answer')
-				if (verified.value.sentinel === 'absent') return { kind: 'next', row: await this.advance(row, { step: 'check' }) }
-				if (restore.arms >= MAX_ARMS) return await this.failed(row, REWIND_FAILED_CODE)
+		const restores = this.deps.repositories.restores
+		const rewound = await this.armUntilRewound({ object: initial.original, generation: row.generation, sentinel: row.id, target }, initial.arms, {
+			arms: async () => (await this.restoreOf(row)).arms,
+			arming: async (arms) => await restores.arming(initial.operation_id, arms, this.lease.fence()),
+			armed: async (undo) => await restores.armed(initial.operation_id, undo, this.lease.fence()),
+		})
+		switch (rewound.kind) {
+			case 'rewound':
+				return { kind: 'next', row: await this.advance(row, { step: 'check' }) }
+			case 'arm_failed':
+				return await this.failed(row, rewound.code === 'bookmark_unavailable' ? BOOKMARK_UNAVAILABLE_CODE : REWIND_FAILED_CODE)
+			case 'failed':
+				return await this.failed(row, rewound.code)
+			default:
+				return rewound
+		}
+	}
+
+	/**
+	 * The in-place rewind of a bookmark migration that committed and never booted (ADR-0070 §9): fence the serving object
+	 * `inspect` at the record's generation; `prepare` with the migration record, its bookmarks recorded before anything
+	 * is armed; then arm until `verify` finds the sentinel gone, which also marks the record `rewound`. Every refusal
+	 * before an `arm` was sent rewound nothing, and takes the branch for a record it cannot rewind (ADR-0069 §3). A rewind
+	 * that fails once an `arm` was sent leaves the object `inspect` for an operator: an armed object restores at its next
+	 * reset, which would discard what an opened one wrote.
+	 */
+	private async rewindInPlace(start: DataOperationRow): Promise<Step> {
+		const record = start.rewind_record
+		if (record === null) throw new Error('an in-place rewind names no migration record')
+		const fenced = await this.publish(start, 'inspect')
+		if (fenced.kind === 'refused') return await this.failed(start, fenced.code)
+		if (fenced.kind !== 'acked') return { kind: 'done', result: fenced.kind }
+		const row = fenced.row
+		const object = await this.serving()
+		const sentinel = row.id
+		let target = row.rewind_target
+		if (target === null) {
+			const prepared = await this.restoreRequest({ step: 'prepare', object, generation: row.generation, sentinel, record })
+			if (prepared.kind === 'failed') {
+				return isDataRefusal(prepared.code)
+					? await this.cannotRewind(row, prepared.code)
+					: await this.failed(row, REWIND_FAILED_CODE)
 			}
-			this.lease.assertWritten(await this.deps.repositories.restores.arming(restore.operation_id, restore.arms, this.lease.fence()))
-			const armed = await this.restoreRequest({ step: 'arm', object, generation: row.generation, sentinel, target })
-			if (armed.kind === 'failed') return await this.failed(row, armed.code === 'bookmark_unavailable' ? BOOKMARK_UNAVAILABLE_CODE : REWIND_FAILED_CODE)
+			if (prepared.kind !== 'ok') return { kind: 'done', result: prepared.kind }
+			if (prepared.value.step !== 'prepare') return await this.failed(row, 'invalid_answer')
+			const bookmarks = { current: prepared.value.current, target: prepared.value.target }
+			this.lease.assertWritten(await this.records.rewindPrepared(row.id, bookmarks, this.lease.fence()))
+			target = bookmarks.target
+		}
+		const rewound = await this.armUntilRewound({ object, generation: row.generation, sentinel, target, record }, row.rewind_arms, {
+			arms: async () => (await this.require(row.id)).rewind_arms,
+			arming: async (arms) => await this.records.rewindArming(row.id, arms, this.lease.fence()),
+			armed: async (undo) => await this.records.rewindArmed(row.id, undo, this.lease.fence()),
+		})
+		switch (rewound.kind) {
+			case 'rewound':
+				return { kind: 'next', row: await this.advance(row, { step: 'revert', rewind: { outcome: 'rewound' } }) }
+			case 'arm_failed':
+				if (!rewound.armedBefore && isDataRefusal(rewound.code)) return await this.cannotRewind(row, rewound.code)
+				return await this.failed(row, REWIND_FAILED_CODE)
+			case 'failed':
+				return await this.failed(row, rewound.code)
+			default:
+				return rewound
+		}
+	}
+
+	/**
+	 * ADR-0069 §3's branch for a record it cannot rewind: nothing was rewound. Without a `dataLoss` line the rollback deploy
+	 * alone, since the runner tolerates a ledger ahead of the code; with one, `closed` for an operator.
+	 */
+	private async cannotRewind(row: DataOperationRow, refusal: string): Promise<Step> {
+		const change = { generation: await this.allocate(), rewind: { outcome: 'refused', refusal } } satisfies Partial<DataOperationAdvance>
+		if (row.data_loss === 1) return { kind: 'next', row: await this.advance(row, { step: 'restrict', targetMode: 'closed', ...change }) }
+		return { kind: 'next', row: await this.advance(row, { step: 'revert', targetMode: 'open', ...change }) }
+	}
+
+	/**
+	 * Arm the restore of `target` and verify it (ADR-0070 §9 step 6), for a side restore and an in-place rewind alike: each
+	 * `arm` counted before it is sent, sent once, and a `verify` after it, since its answer may be lost to the reset. A
+	 * recorded `arm` is verified before another is sent, so nothing arms blindly. An absent sentinel is the restore; a
+	 * present one arms again, at most `MAX_ARMS` times. `armedBefore` says whether an `arm` went out before the one that
+	 * failed.
+	 */
+	private async armUntilRewound(
+		rewind: { readonly object: string; readonly generation: number; readonly sentinel: string; readonly target: string; readonly record?: string },
+		initialArms: number,
+		recorded: {
+			readonly arms: () => Promise<number>
+			readonly arming: (arms: number) => Promise<boolean>
+			readonly armed: (undo: string) => Promise<boolean>
+		},
+	): Promise<Rewound> {
+		const { object, generation, sentinel, target, record } = rewind
+		const named = record === undefined ? {} : { record }
+		let arms = initialArms
+		for (;;) {
+			if (arms > 0) {
+				const verified = await this.restoreRequest({ step: 'verify', object, sentinel, ...named })
+				if (verified.kind === 'failed') return { kind: 'failed', code: REWIND_FAILED_CODE }
+				if (verified.kind !== 'ok') return { kind: 'done', result: verified.kind }
+				if (verified.value.step !== 'verify') return { kind: 'failed', code: 'invalid_answer' }
+				if (verified.value.sentinel === 'absent') return { kind: 'rewound' }
+				if (arms >= MAX_ARMS) return { kind: 'failed', code: REWIND_FAILED_CODE }
+			}
+			this.lease.assertWritten(await recorded.arming(arms))
+			const armed = await this.restoreRequest({ step: 'arm', object, generation, sentinel, target, ...named })
+			if (armed.kind === 'failed') return { kind: 'arm_failed', code: armed.code, armedBefore: arms > 0 }
 			if (armed.kind === 'paused') return { kind: 'done', result: 'paused' }
 			// A lost answer is the expected one: the object resets right after it answers, and `verify` decides.
-			if (armed.kind === 'ok' && armed.value.step === 'arm') {
-				this.lease.assertWritten(await this.deps.repositories.restores.armed(restore.operation_id, armed.value.undo, this.lease.fence()))
-			}
+			if (armed.kind === 'ok' && armed.value.step === 'arm') this.lease.assertWritten(await recorded.armed(armed.value.undo))
 			await (this.deps.wait ?? abortableWait)(RESET_GRACE_MS, this.lease.signal)
-			restore = await this.restoreOf(row)
+			arms = await recorded.arms()
 		}
 	}
 
@@ -1990,6 +2134,13 @@ class OperationDriver {
 		await this.fail(row, code, checkpoint)
 		return { kind: 'done', result: 'failed' }
 	}
+}
+
+const DATA_REFUSALS: ReadonlySet<string> = new Set(OPS_DATA_REFUSALS)
+
+/** Whether a failed restore step's code is the object's refusal, which it answers before it changes anything. */
+function isDataRefusal(code: string): boolean {
+	return DATA_REFUSALS.has(code)
 }
 
 /** How long a restore waits after an `arm` before its `verify`: the object resets only once it answered. */

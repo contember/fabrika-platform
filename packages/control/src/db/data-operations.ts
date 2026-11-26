@@ -14,7 +14,8 @@ export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery
  * first `reconcile`s the record with the object's published state, and `resume` hands back to the interrupted operation.
  * A restore also `list`s its clone, `import`s into it, `promote`s it, `point`s ordinary traffic at it, waits for it to
  * `serve`, `rewind`s the original and `check`s its schema; `revert` points traffic back at the original. A bookmark
- * migration's `revert` is its rollback deploy, `check` waits for its `ok`, and `restrict` publishes `closed`.
+ * migration `rewind`s a committed, never-booted migration in place, `revert` is its rollback deploy, `check` waits for
+ * its `ok`, and `restrict` publishes `closed`.
  */
 export type DataOperationStep =
 	| 'reconcile'
@@ -79,7 +80,22 @@ export interface DataOperationRow {
 	candidate_version: string | null
 	/** 1 when that version answered `ok` while the rollback deployed, so the operation closed for an operator. */
 	candidate_recovered: number
+	/** The migration record an in-place rewind names (ADR-0070 §9): the one the new version's `committed` 422 answered. */
+	rewind_record: string | null
+	/** `prepare`'s bookmarks, recorded before anything is armed. */
+	rewind_current: string | null
+	rewind_target: string | null
+	/** Each `arm`, counted before it is sent. */
+	rewind_arms: number
+	/** The undo bookmark an answered `arm` returned; `null` while none answered. */
+	rewind_undo: string | null
+	/** `rewound` once `verify` found the sentinel gone; `refused` when the object refused the rewind. */
+	rewind_outcome: RewindOutcome | null
+	/** The object's reason for a refused rewind. */
+	rewind_refusal: string | null
 }
+
+export type RewindOutcome = 'rewound' | 'refused'
 
 export interface DataOperationFields {
 	id: string
@@ -119,6 +135,10 @@ export interface DataOperationAdvance {
 	candidateVersion?: string
 	/** The failed version answered `ok` while the rollback deployed. */
 	candidateRecovered?: true
+	/** The migration record the in-place rewind names. */
+	rewindRecord?: string
+	/** The rewind's outcome, with the object's reason when it refused. */
+	rewind?: { readonly outcome: 'rewound' } | { readonly outcome: 'refused'; readonly refusal: string }
 }
 
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
@@ -255,6 +275,18 @@ export class DataOperationRepository {
 			setValues.push(change.candidateVersion)
 		}
 		if (change.candidateRecovered === true) sets.push('candidate_recovered = 1')
+		if (change.rewindRecord !== undefined) {
+			sets.push('rewind_record = ?')
+			setValues.push(change.rewindRecord)
+		}
+		if (change.rewind !== undefined) {
+			sets.push('rewind_outcome = ?')
+			setValues.push(change.rewind.outcome)
+			if (change.rewind.outcome === 'refused') {
+				sets.push('rewind_refusal = ?')
+				setValues.push(change.rewind.refusal)
+			}
+		}
 		if (change.generation !== undefined) {
 			sets.push('generation = ?')
 			setValues.push(change.generation)
@@ -286,6 +318,38 @@ export class DataOperationRepository {
 			id,
 			`UPDATE app_env_data_operations SET revert_run_id = ?, updated_at = ? WHERE id = ? AND state = 'running' AND revert_run_id IS NULL`,
 			[runId, this.now(), id],
+			fence,
+		)
+	}
+
+	/** Records the in-place rewind's `prepare` bookmarks, once, before anything is armed. */
+	async rewindPrepared(id: string, bookmarks: { current: string; target: string }, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_current = ?, rewind_target = ?, updated_at = ?
+				WHERE id = ? AND state = 'running' AND rewind_record IS NOT NULL AND rewind_target IS NULL`,
+			[bookmarks.current, bookmarks.target, this.now(), id],
+			fence,
+		)
+	}
+
+	/** Counts an in-place `arm` before it is sent, so a successor never takes an unanswered one for an unsent one. */
+	async rewindArming(id: string, arms: number, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_arms = ?, updated_at = ?
+				WHERE id = ? AND state = 'running' AND rewind_arms = ? AND rewind_target IS NOT NULL`,
+			[arms + 1, this.now(), id, arms],
+			fence,
+		)
+	}
+
+	/** Records the undo bookmark an answered in-place `arm` returned. */
+	async rewindArmed(id: string, undo: string, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_undo = ?, updated_at = ? WHERE id = ? AND state = 'running' AND rewind_arms > 0`,
+			[undo, this.now(), id],
 			fence,
 		)
 	}

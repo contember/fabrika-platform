@@ -543,17 +543,28 @@ other environment, before the provider prepares anything, and the write maps a r
   deadline the operation fails `migration_unconfirmed` (`deploy_failed` when the provider failed the run after it
   uploaded; such a run is still asked, and its 422 enters the recovery below). Only the 422 `migration_failed`
   (`parseOpsMigrationFailure`) is a failure, recorded as `migration_failure` with the answering Worker version
-  (`candidate_version`, the answer's `version`, else the record's): `rolled_back`, `record_unwritable`, and `committed`
-  without `data_loss`, go to `revert`, the rollback deploy of `getLatestDeployedRun` (a succeeded run that recorded its
+  (`candidate_version`, the answer's `version`, else the record's). A `committed` record that names its version and
+  bookmark goes to `rewind` first (`rewindInPlace`, ADR-0070 §9): the run ends `failed`; the object is published
+  `inspect` at a new generation; `prepare` names the record (`rewind_record`), and its bookmarks are recorded before
+  any `arm`; `armUntilRewound`, shared with the side restore, counts each `arm` (`rewind_arms`) before it is sent and
+  `verify`s before another, at most 3; an answered `arm` records `rewind_undo`. An absent sentinel records
+  `rewind_outcome = 'rewound'` and goes to `revert` with the object still `inspect`; three present ones, or a failure
+  once an `arm` went out, fail `rewind_failed` with the object `inspect` (an armed object restores at its next reset).
+  A refusal before any `arm` records `refused` and `rewind_refusal` and takes the branch below for a record it cannot
+  rewind. `rolled_back`, `record_unwritable`, a rewound migration, and a `committed` one not rewound without
+  `data_loss`, go to `revert`, the rollback deploy of `getLatestDeployedRun` (a succeeded run that recorded its
   migration barrier, so never a dry run, and not the operation's own), through `OperationDeploys.run` under the same
   lease. `revert_run_id` is named before the run is created, and `deployUnder` exempts that run from the `deploy-request`
   decision as it does a restore's deploys; its publication returns to the snapshot the redeployed run published
-  (`rollbackReturn`, `PublicationInput.returnTo`), which needs no new approval even where it widens. `check` then waits to a new deadline for a 200 of another version than
+  (`rollbackReturn`, `PublicationInput.returnTo`), which needs no new approval even where it widens. Nothing returns to
+  `rewind` once `revert` started. After a rewind, `check` first keeps the object `inspect` to the deadline counted from
+  the rollback's success, because the failed version's instance would migrate again on its next boot, then publishes
+  `open` at a new generation. `check` then waits to a new deadline for a 200 of another version than
   `candidate_version` and fails `migration_reverted`; without a known version it waits to the deadline. A 200 of the
   failed version itself (its boot retried and succeeded) records `candidate_recovered` and goes to `restrict`. So do a
-  committed `dataLoss` migration (the in-place rewind is not built), a rollback that fails or is not accepted, and one
+  committed `dataLoss` migration that is not rewound, a rollback that fails or is not accepted, and one
   that does not answer by the deadline: `restrict` publishes `closed` at a new generation and fails `migration_failed`.
-  `recordedMaintenance` reads a failed bookmark migration whose target is still `open` as `open`. The maintenance pass
+  `recordedMaintenance` reads a failed bookmark migration as `open` only when its target is still `open`. The maintenance pass
   resumes each step; its time bound pauses a wait, which the next pass continues to the recorded deadline.
   `RunDeps.opsClock` and `DataOperationDeps.clock`/`wait` let tests move that clock.
 - **A bookmark migration's run ends with the migration.** The provider's success records `deployed` on the operation and

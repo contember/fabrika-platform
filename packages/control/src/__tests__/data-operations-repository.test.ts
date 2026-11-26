@@ -144,6 +144,13 @@ for (const backend of backends) {
 				deployed: 0,
 				candidate_version: null,
 				candidate_recovered: 0,
+				rewind_record: null,
+				rewind_current: null,
+				rewind_target: null,
+				rewind_arms: 0,
+				rewind_undo: null,
+				rewind_outcome: null,
+				rewind_refusal: null,
 			})
 			expect(await operations.get(refused.id)).toEqual(created)
 		})

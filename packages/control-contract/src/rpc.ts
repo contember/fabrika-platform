@@ -427,6 +427,10 @@ export interface DataOperationDto {
 	readonly revertRunId: string | null
 	/** The failed version of a bookmark migration answered `ok` while its rollback deployed, so the operation closed. */
 	readonly candidateRecovered: boolean
+	/** A bookmark migration's committed, never-booted migration was rewound in place before the rollback (ADR-0070 §9). */
+	readonly rewound: boolean
+	/** Why the object refused that rewind, a refusal code; `null` when it was not refused or not asked for. */
+	readonly rewindRefusal: string | null
 }
 
 export const DATA_OPERATION_MAX_PAGE_SIZE = 100

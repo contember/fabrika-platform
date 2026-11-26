@@ -432,12 +432,14 @@ export class FakeEnvironments implements OpsTransport {
 		}
 		const published = this.published.get(key(target, request.object)) ?? null
 		if (published === null || published.generation !== request.generation) return { kind: 'stale', published }
-		if (request.object === this.serving) return refusal('serving_object')
+		// The in-place rewind of a failed migration names its record, and runs on the serving object (ADR-0070 §9).
+		const inPlace = 'record' in request && request.record !== undefined
+		if (request.object === this.serving && !inPlace) return refusal('serving_object')
 		if (published.mode !== 'inspect') return refusal('wrong_mode')
 		if (this.bookmarkUnavailable) return refusal('bookmark_unavailable')
 		let answer: OpsDataAnswer<OpsRestoreAck>
 		if (request.step === 'prepare') {
-			const kept = rewind.sentinels.get(request.sentinel) ?? { current: 'bookmark-0009', target: 'bookmark-0005' }
+			const kept = rewind.sentinels.get(request.sentinel) ?? { current: 'bookmark-0009', target: inPlace ? RECORD_BOOKMARK : 'bookmark-0005' }
 			rewind.sentinels.set(request.sentinel, kept)
 			answer = { kind: 'ok', value: { step: 'prepare', ...kept } }
 		} else {
@@ -466,12 +468,15 @@ export class FakeEnvironments implements OpsTransport {
 	}
 }
 
+/** The bookmark before a failed migration's transaction, which its record names. */
+const RECORD_BOOKMARK = 'bookmark-0001'
+
 /** The record a failed migrating boot answers with, as the object writes it for `reason`. */
 function failedRecord(reason: OpsMigrationFailureReason, files: OpsMigrationRecord['files'], version: string | null): OpsMigrationRecord {
 	return {
 		id: '0192c4a0-0000-7000-8000-00000000f00d',
 		version,
-		bookmark: 'bookmark-0001',
+		bookmark: RECORD_BOOKMARK,
 		startDigest: digest('ledger'),
 		files,
 		at: BOOT_FAILED_AT,

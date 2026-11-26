@@ -175,6 +175,9 @@ const dataOperationSchema: z.ZodType<DataOperationDto, z.ZodTypeDef, unknown> = 
 	migrationFailure: z.enum(OPS_MIGRATION_FAILURES).nullable().default(null),
 	revertRunId: z.string().uuid().nullable().default(null),
 	candidateRecovered: z.boolean().default(false),
+	// Absent from a Control before the in-place rewind.
+	rewound: z.boolean().default(false),
+	rewindRefusal: z.string().regex(ERROR_CODE).nullable().default(null),
 })
 
 interface Target {

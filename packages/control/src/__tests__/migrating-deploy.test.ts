@@ -4,7 +4,7 @@
 // provider double that deploys each commit's migrations, with the real SQL lease and records on SQLite always and on
 // Postgres when FABRIKA_TEST_POSTGRES_URL is set.
 
-import { type OpsMigrationFailureReason, sha256Hex } from '@fabrika/auth-core'
+import { type OpsDataRefusalReason, type OpsMigrationFailureReason, sha256Hex } from '@fabrika/auth-core'
 import { type BlobStore, type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import { abortableWait, type ControlProvider, type ProviderDeployOutcome } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -18,6 +18,7 @@ import {
 	NEW_VERSION_DEADLINE_S,
 	type OpsTarget,
 	recordedMaintenance,
+	REWIND_FAILED_CODE,
 } from '../data-operations'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import type { RunTrigger } from '../db/runs'
@@ -32,7 +33,7 @@ import { memoryCommits } from './helpers/commits'
 import { healthOnly } from './helpers/contracts'
 import { createHarness } from './helpers/harness'
 import { fixtureProtect, fixtureRuns } from './helpers/lock'
-import { FakeEnvironments } from './helpers/ops-environments'
+import { FakeEnvironments, type Sent } from './helpers/ops-environments'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
 import { providerEnvironment, TEST_PROVIDER_ID } from './helpers/provider'
 import { createTestVault } from './helpers/vault'
@@ -51,6 +52,15 @@ const DROPS = '20261028000000_drop_notes.sql'
 const POLL_MS = 10_000
 /** How many `migrate` requests one wait sends before its deadline: one at once, then one per poll until it passes. */
 const ASKS_TO_DEADLINE = (NEW_VERSION_DEADLINE_S * 1000) / POLL_MS + 1
+/** The object's requests of an in-place rewind that restores at its first `arm`, at generation `generation`. */
+const REWOUND_AT = (generation: number): string[] => [
+	`state application inspect @${generation}`,
+	`restore application prepare @${generation}`,
+	`restore application arm @${generation}`,
+	'restore application verify',
+]
+/** The object's refusals of an in-place rewind (ADR-0070 §9), each answered before it changes anything. */
+const REWIND_REFUSALS: readonly OpsDataRefusalReason[] = ['not_rewindable', 'version_changed', 'wrong_target', 'serving_object', 'wrong_mode']
 
 const vault = await createTestVault()
 
@@ -445,38 +455,248 @@ for (const backend of backends) {
 			})
 		}
 
-		test('a committed migration without a dataLoss line gets the rollback deploy alone: the ledger stays ahead of the code', async () => {
+		for (const candidate of [SECOND, DROPS]) {
+			test(`committed, never booted (${candidate === DROPS ? 'a dataLoss line' : 'no dataLoss line'}): rewound in place, rolled back, then opened`, async () => {
+				const { b, fake, state, deps, log, deployFirst, candidateRun, timeline, operations, clock } = await open()
+				const first = await deployFirst()
+				fake.rewoundLedger = [...fake.ledger]
+				state.failure = 'committed'
+				const second = await candidateRun([FIRST, candidate])
+				let deployedAt = 0
+				state.onRollback = () => {
+					deployedAt = clock()
+					return Promise.resolve()
+				}
+				let openedAt = 0
+				fake.fault = (sent) => {
+					if (sent.op === 'state' && sent.mode === 'open' && sent.generation === 3) openedAt = clock()
+					return undefined
+				}
+				expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
+				expect(timeline()).toEqual([
+					'inspect',
+					'deploy',
+					'state application open @1',
+					'migrate @1',
+					...REWOUND_AT(2),
+					'rollback deploy',
+					'state application open @3',
+					'migrate @3',
+				])
+				// The object stayed `inspect` until the failed version's instance was gone, so it never migrated again.
+				expect(openedAt - deployedAt).toBeGreaterThanOrEqual(NEW_VERSION_DEADLINE_S * 1000 - 1000)
+				expect(fake.ledgers.get('application')?.map((row) => row.name)).toEqual([FIRST])
+				const [operation] = await operations()
+				expect(operation).toMatchObject({
+					state: 'failed',
+					error_code: MIGRATION_REVERTED_CODE,
+					step: 'check',
+					target_mode: 'open',
+					generation: 3,
+					migration_failure: 'committed',
+					rewind_record: '0192c4a0-0000-7000-8000-00000000f00d',
+					rewind_current: 'bookmark-0009',
+					rewind_target: 'bookmark-0001',
+					rewind_arms: 1,
+					rewind_undo: 'bookmark-undo',
+					rewind_outcome: 'rewound',
+					rewind_refusal: null,
+				})
+				const rollback = await b.repositories.runs.getRun(operation?.revert_run_id ?? '')
+				expect(rollback).toMatchObject({ status: 'succeeded', commit_sha: (await b.repositories.runs.getRun(first))?.commit_sha })
+				expect((await b.repositories.runs.getRun(second))?.status).toBe('failed')
+				expect(await recordedMaintenance(b, TARGET)).toBe('open')
+				expect(log(second)).toContain(`failed at check (${MIGRATION_REVERTED_CODE}`)
+			})
+		}
+
+		test("a lost answer to arm is the reset's: verify decides, and nothing arms again", async () => {
 			const { fake, state, deps, deployFirst, candidateRun, timeline, operations } = await open()
 			await deployFirst()
+			fake.rewoundLedger = [...fake.ledger]
 			state.failure = 'committed'
+			fake.fault = (sent) => sent.op === 'restore' && sent.step === 'arm' ? 'lose' : undefined
 			const second = await candidateRun([FIRST, SECOND])
 			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
-			expect(timeline()).toEqual(['inspect', 'deploy', 'state application open @1', 'migrate @1', 'rollback deploy', 'migrate @1'])
-			expect(fake.ledger.map((row) => row.name)).toEqual([FIRST, SECOND])
-			expect(await operations()).toMatchObject([{ state: 'failed', error_code: MIGRATION_REVERTED_CODE, migration_failure: 'committed' }])
+			expect(timeline().filter((request) => request.startsWith('restore'))).toEqual(REWOUND_AT(2).slice(1))
+			expect(await operations()).toMatchObject([{
+				error_code: MIGRATION_REVERTED_CODE,
+				rewind_arms: 1,
+				rewind_undo: null,
+				rewind_outcome: 'rewound',
+			}])
 		})
 
-		test('a committed dataLoss migration is never rolled back: the object is closed for an operator', async () => {
-			const { b, fake, state, deps, log, deployFirst, candidateRun, timeline, operations } = await open()
+		test('a sentinel still present after the first arm arms again; absent after the second, the rewind goes on', async () => {
+			const { fake, state, deps, deployFirst, candidateRun, timeline, operations } = await open()
+			await deployFirst()
+			fake.rewoundLedger = [...fake.ledger]
+			state.failure = 'committed'
+			let arms = 0
+			fake.fault = (sent) => {
+				if (sent.op === 'restore' && sent.step === 'arm') fake.resets = ++arms > 1
+				return undefined
+			}
+			const second = await candidateRun([FIRST, SECOND])
+			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
+			expect(timeline().filter((request) => request.startsWith('restore'))).toEqual([
+				'restore application prepare @2',
+				'restore application arm @2',
+				'restore application verify',
+				'restore application arm @2',
+				'restore application verify',
+			])
+			expect(await operations()).toMatchObject([{ error_code: MIGRATION_REVERTED_CODE, rewind_arms: 2, rewind_outcome: 'rewound' }])
+		})
+
+		test('a sentinel present after three arms leaves the object inspect for an operator: rewind_failed, and no rollback', async () => {
+			const { b, fake, state, deps, deployFirst, candidateRun, timeline, operations, runStatus } = await open()
 			await deployFirst()
 			state.failure = 'committed'
-			const drops = await candidateRun([FIRST, DROPS])
-			expect(await executeDeploy(deps(), { runId: drops })).toEqual({ runId: drops, status: 'failed' })
-			expect(timeline()).toEqual(['inspect', 'deploy', 'state application open @1', 'migrate @1', 'state application closed @2'])
-			const [operation] = await operations()
-			expect(operation).toMatchObject({
+			fake.resets = false
+			const second = await candidateRun([FIRST, SECOND])
+			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
+			expect(timeline().slice(4)).toEqual([
+				'state application inspect @2',
+				'restore application prepare @2',
+				...Array.from({ length: 3 }, () => ['restore application arm @2', 'restore application verify']).flat(),
+			])
+			expect(state.deploys.filter((deploy) => deploy.rollback)).toEqual([])
+			expect(await operations()).toMatchObject([{
 				state: 'failed',
-				error_code: MIGRATION_FAILED_CODE,
-				step: 'restrict',
-				target_mode: 'closed',
-				generation: 2,
-				data_loss: 1,
-				migration_failure: 'committed',
-				revert_run_id: null,
-			})
-			expect(fake.published.get(`${APP}/${ENV}/application`)).toEqual({ generation: 2, mode: 'closed' })
+				error_code: REWIND_FAILED_CODE,
+				step: 'rewind',
+				target_mode: 'inspect',
+				rewind_arms: 3,
+				rewind_outcome: null,
+			}])
+			expect(fake.published.get(`${APP}/${ENV}/application`)).toEqual({ generation: 2, mode: 'inspect' })
 			expect(await recordedMaintenance(b, TARGET)).toBe('unsettled')
-			expect(log(drops)).toContain('the environment stays restricted until an operator recovers it')
+			expect(await runStatus(second)).toBe('failed')
+		})
+
+		for (const refused of REWIND_REFUSALS) {
+			for (const candidate of [SECOND, DROPS]) {
+				const dataLoss = candidate === DROPS
+				test(`a rewind refused as ${refused} rewinds nothing: ${dataLoss ? 'with a dataLoss line, closed' : 'the rollback deploy alone'}`, async () => {
+					const { b, fake, state, deps, deployFirst, candidateRun, timeline, operations } = await open()
+					await deployFirst()
+					state.failure = 'committed'
+					fake.fault = (sent) => sent.op === 'restore' && sent.step === 'prepare' ? { refused } : undefined
+					const run = await candidateRun([FIRST, candidate])
+					expect(await executeDeploy(deps(), { runId: run })).toEqual({ runId: run, status: 'failed' })
+					const rewind = ['state application inspect @2', 'restore application prepare @2']
+					expect(timeline().slice(4)).toEqual(
+						dataLoss ? [...rewind, 'state application closed @3'] : [...rewind, 'rollback deploy', 'state application open @3', 'migrate @3'],
+					)
+					expect(fake.ledger.map((row) => row.name)).toEqual([FIRST, candidate])
+					expect(await operations()).toMatchObject([{
+						state: 'failed',
+						error_code: dataLoss ? MIGRATION_FAILED_CODE : MIGRATION_REVERTED_CODE,
+						step: dataLoss ? 'restrict' : 'check',
+						target_mode: dataLoss ? 'closed' : 'open',
+						revert_run_id: dataLoss ? null : expect.any(String),
+						rewind_outcome: 'refused',
+						rewind_refusal: refused,
+						rewind_arms: 0,
+					}])
+					expect(await recordedMaintenance(b, TARGET)).toBe(dataLoss ? 'unsettled' : 'open')
+				})
+			}
+		}
+
+		test('a refusal of the first arm rewinds nothing either; one after an arm went out leaves the object inspect', async () => {
+			for (const refusedAt of [1, 2]) {
+				const { fake, state, deps, deployFirst, candidateRun, operations } = await open()
+				await deployFirst()
+				state.failure = 'committed'
+				fake.resets = false
+				let arms = 0
+				fake.fault = (sent) => sent.op === 'restore' && sent.step === 'arm' && ++arms === refusedAt ? { refused: 'version_changed' } : undefined
+				const run = await candidateRun([FIRST, SECOND])
+				expect(await executeDeploy(deps(), { runId: run })).toEqual({ runId: run, status: 'failed' })
+				expect(await operations()).toMatchObject([
+					refusedAt === 1
+						? { error_code: MIGRATION_REVERTED_CODE, rewind_outcome: 'refused', rewind_refusal: 'version_changed', target_mode: 'open' }
+						: { error_code: REWIND_FAILED_CODE, rewind_outcome: null, target_mode: 'inspect', step: 'rewind' },
+				])
+				await opened?.close()
+				opened = null
+			}
+		})
+
+		test('a record without its version is not rewound: the rollback deploy alone, or closed with a dataLoss line', async () => {
+			for (const candidate of [SECOND, DROPS]) {
+				const { fake, state, deps, deployFirst, candidateRun, operations } = await open()
+				await deployFirst()
+				fake.versioned = false
+				state.failure = 'committed'
+				const run = await candidateRun([FIRST, candidate])
+				expect(await executeDeploy(deps(), { runId: run })).toEqual({ runId: run, status: 'failed' })
+				expect(fake.requests().filter((request) => request.startsWith('restore') || request.includes('inspect @'))).toEqual([])
+				expect(await operations()).toMatchObject([{ error_code: MIGRATION_FAILED_CODE, rewind_record: null, rewind_outcome: null }])
+				await opened?.close()
+				opened = null
+			}
+		})
+
+		for (const lostAt of ['prepare', 'arm', 'verify'] as const) {
+			test(`a lease lost at ${lostAt} stops the rewind; a successor fences inspect above it and carries on from the record`, async () => {
+				const { b, fake, state, deps, locks, deployFirst, candidateRun, timeline, operations, steal, pass } = await open()
+				await deployFirst()
+				fake.rewoundLedger = [...fake.ledger]
+				state.failure = 'committed'
+				fake.fault = async (sent: Sent) => {
+					if (sent.op === 'restore' && sent.step === lostAt) await steal()
+					return undefined
+				}
+				const second = await candidateRun([FIRST, SECOND])
+				await executeDeploy(deps(), { runId: second })
+				const [stuck] = await operations()
+				expect(stuck).toMatchObject({ state: 'running', step: 'rewind', target_mode: 'inspect', rewind_arms: lostAt === 'prepare' ? 0 : 1 })
+				fake.fault = () => undefined
+				fake.sent.length = 0
+				state.deploys.length = 0
+				await locks.release(KEY, 'thief')
+				await pass()
+				// The settle wait outlasts one pass's bound; the next pass carries on from it.
+				await pass()
+				const resumed = lostAt === 'prepare'
+					? ['state application inspect @3', 'restore application prepare @3', 'restore application arm @3', 'restore application verify']
+					: ['state application inspect @3', 'restore application verify']
+				expect(timeline().slice(0, resumed.length + 1)).toEqual([...resumed, 'rollback deploy'])
+				expect(timeline().filter((request) => request.includes(' arm '))).toHaveLength(lostAt === 'prepare' ? 1 : 0)
+				expect(await b.repositories.dataOperations.get(stuck?.id ?? '')).toMatchObject({
+					state: 'failed',
+					error_code: MIGRATION_REVERTED_CODE,
+					rewind_outcome: 'rewound',
+					rewind_arms: 1,
+				})
+				expect(await recordedMaintenance(b, TARGET)).toBe('open')
+			})
+		}
+
+		test('the rewind is never asked for again once the rollback deploy started: a successor settles the rollback in inspect', async () => {
+			const { b, fake, state, deps, locks, deployFirst, candidateRun, timeline, operations, steal, pass } = await open()
+			await deployFirst()
+			fake.rewoundLedger = [...fake.ledger]
+			state.failure = 'committed'
+			state.onRollback = steal
+			const second = await candidateRun([FIRST, SECOND])
+			await executeDeploy(deps(), { runId: second })
+			const [stuck] = await operations()
+			expect(stuck).toMatchObject({ state: 'running', step: 'revert', target_mode: 'inspect', rewind_outcome: 'rewound' })
+			state.onRollback = () => Promise.resolve()
+			fake.sent.length = 0
+			state.deploys.length = 0
+			await locks.release(KEY, 'thief')
+			await pass()
+			await pass()
+			expect(timeline().filter((request) => request.startsWith('restore'))).toEqual([])
+			expect(timeline()[0]).toBe('state application inspect @3')
+			expect(state.deploys).toEqual([])
+			expect(await b.repositories.dataOperations.get(stuck?.id ?? '')).toMatchObject({ state: 'failed', error_code: MIGRATION_REVERTED_CODE })
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
 		})
 
 		test('a rollback that never answers ok by the deadline closes the object and fails the migration', async () => {
