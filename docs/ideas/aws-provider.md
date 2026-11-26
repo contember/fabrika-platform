@@ -544,11 +544,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         `role/fabrika/namespaces/*` with `iam:PassedToService = ecs-tasks.amazonaws.com` (its task definition names its two
         roles); its ECS calls are on `service/<cluster>/*` already. Its target group adds, for CloudFormation, on
         `targetgroup/*` (CloudFormation names the group, so no prefix scopes it): `elasticloadbalancing:CreateTargetGroup`
-        only with the request tag `fabrika:namespace`; `AddTags` only with `elasticloadbalancing:CreateAction =
-        CreateTargetGroup`, so a tag is written only with a group Control creates and Control can never tag another group
-        (one the installation's stack holds) into its reach; `ModifyTargetGroup`, `ModifyTargetGroupAttributes` and
-        `DeleteTargetGroup` only with the resource tag `fabrika:namespace`, as these calls carry no request tags; no
-        `RemoveTags`, since a namespace's tags never change; and the `Describe*` reads, which take no resource;
+        only with the request tag `fabrika:namespace` (`Null` on `aws:RequestTag/fabrika:namespace` = `false`); `AddTags`
+        only with `StringEquals` on `elasticloadbalancing:CreateAction` = `CreateTargetGroup` (never an `IfExists` form,
+        which a call without the key would pass), so a tag is written only with a group Control creates and Control can
+        never tag another group (one the installation's stack holds) into its reach, and no other statement of the role
+        grants `AddTags` on `targetgroup/*`; `ModifyTargetGroup`, `ModifyTargetGroupAttributes` and `DeleteTargetGroup`
+        only with the resource tag (`Null` on `aws:ResourceTag/fabrika:namespace` = `false`), as these calls carry no
+        request tags; no `RemoveTags`, since a namespace's tags never change; and the `Describe*` reads, which take no
+        resource. UNVERIFIED: that CloudFormation sends a new target group's tags inside `CreateTargetGroup` rather than
+        with a later `AddTags`; a later one would be denied, and the stack would fail closed;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
