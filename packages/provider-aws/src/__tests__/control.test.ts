@@ -256,6 +256,7 @@ class Fake {
 			installation: target,
 			network,
 			proxySource: PROXY_SOURCE,
+			proxyIam: { issuer: 'https://iam.example.com', key: 'proxy-iam-key' },
 			source: this.source,
 			clients: this.clients,
 			sleep: async () => {},
@@ -401,6 +402,16 @@ describe('the AWS control provider', () => {
 	test("the installation's proxy source is checked at composition, and a namespace pinned to another repository is refused", async () => {
 		const options = new Fake().options()
 		expect(() => createAwsControlProvider({ ...options, proxySource: { ...PROXY_SOURCE, commitSha: 'main' } })).toThrow('not a full commit')
+		// The proxies' IAM: an absolute http(s) URL without credentials, and a key; the key is never quoted.
+		expect(() => createAwsControlProvider({ ...options, proxyIam: { issuer: 'iam.example.com', key: 'k' } })).toThrow('not an absolute URL')
+		expect(() => createAwsControlProvider({ ...options, proxyIam: { issuer: 'https://user:pass@iam.example.com', key: 'k' } })).toThrow(
+			'without credentials',
+		)
+		expect(() => createAwsControlProvider({ ...options, proxyIam: { issuer: 'https://iam.example.com', key: ' ' } })).toThrow(
+			"the proxies' IAM key is empty",
+		)
+		// The namespaces republish their proxy.
+		expect(createAwsControlProvider(options).namespaces?.republish).toBeDefined()
 		expect(() => createAwsControlProvider({ ...options, proxySource: { ...PROXY_SOURCE, repository: { owner: 'Contember', name: 'x' } } })).toThrow(
 			'proxy repository',
 		)

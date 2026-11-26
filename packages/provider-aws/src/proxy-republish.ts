@@ -1,0 +1,168 @@
+// A namespace proxy's republish (the AWS idea's checklist, step 10): the steps of `proxy-attempt.ts` and
+// `proxy-service.ts` driven to the namespace's current members, each resumable from what its target records.
+//
+// One pass reads the target and does the one step it says is next:
+// - an image of the current manifest is recorded and nothing newer is in flight: set the service to it
+//   (`ensureAwsProxyService`), which settles the republish;
+// - a build of the current manifest is in flight: follow it (`followAwsProxyBuild`); built, the next pass sets the service;
+// - otherwise: start a build of the current manifest (`startAwsProxyBuild`), replacing an attempt of an older one.
+//
+// `wait: 'started'` returns unsettled once a build of the current manifest is in flight, and Control hands the namespace
+// to a reconcile job; `wait: 'active'` follows the build, polling, until the service is set or `AWS_PROXY_WAIT_MS` ran
+// out. The namespace's `reconcile` continues a republish in flight the same way, and fails retryably
+// (`awsProxyPending`) when the wait runs out, so a later reconcile takes it up again.
+//
+// Not yet: the service's rollout and its verdict, and deleting the secrets of members no longer routed once a rollout
+// succeeded; the balancer's host rules and certificates.
+
+import {
+	type ProviderDeploymentNamespace,
+	type ProviderNamespaceCapabilities,
+	ProviderNamespaceError,
+	type ProviderNamespaceEvents,
+	type ProviderNamespaceMember,
+} from '@fabrika/provider-contract'
+import type { CloudFormationClient } from './aws/cloudformation'
+import type { AwsCredentialSource } from './aws/transport'
+import type { AwsAppTarget } from './codecs'
+import type { AwsInstallationNetwork } from './environment-stack'
+import { type AwsProxySource, checkNamespaceTarget, namespaceFailure, readNamespaceOutputs } from './namespace'
+import {
+	type AwsProxyBuildClients,
+	type AwsProxyBuildFollowClients,
+	awsProxyManifestFile,
+	type AwsProxySourceUpload,
+	followAwsProxyBuild,
+	sha256Hex,
+	startAwsProxyBuild,
+} from './proxy-attempt'
+import { type AwsProxyIam, type AwsProxyServiceClients, ensureAwsProxyService } from './proxy-service'
+
+/** How often a proxy build is read while a republish waits for it. */
+export const AWS_PROXY_POLL_MS = 10_000
+/** How long a republish or a reconcile waits for a proxy build before it answers unsettled: a build's usual length. */
+export const AWS_PROXY_WAIT_MS = 15 * 60_000
+
+/** Every call a republish makes. */
+export type AwsProxyClients =
+	& Omit<AwsProxyBuildClients, 'credentials'>
+	& AwsProxyBuildFollowClients
+	& AwsProxyServiceClients
+	& {
+		readonly codeBuild: AwsProxyBuildClients['codeBuild'] & AwsProxyBuildFollowClients['codeBuild']
+		readonly ssm: AwsProxyBuildClients['ssm'] & AwsProxyServiceClients['ssm']
+		readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack'>
+	}
+
+/** What a namespace's proxy is republished with: Control's configuration and calls. */
+export interface AwsProxyRuntime {
+	readonly iam: AwsProxyIam
+	readonly clients: AwsProxyClients
+	/** The credentials a build's presigned read is signed with, read anew for each republish: they must outlive the URL. */
+	readonly credentials: () => AwsCredentialSource
+	readonly source: AwsProxySourceUpload
+	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>
+	readonly now?: () => number
+	readonly pollIntervalMs?: number
+	readonly waitMs?: number
+}
+
+export interface AwsProxyRepublishInput {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly members: readonly ProviderNamespaceMember[]
+	readonly events: ProviderNamespaceEvents
+	readonly signal: AbortSignal
+	readonly wait: 'started' | 'active'
+}
+
+export interface AwsProxyRepublishContext {
+	readonly installation: AwsAppTarget
+	readonly proxySource: AwsProxySource
+	readonly network: AwsInstallationNetwork
+	readonly runtime: AwsProxyRuntime
+}
+
+/** Republishes the namespace's proxy toward its members; settled once the service is set to their manifest's image. */
+export async function republishAwsProxy(
+	context: AwsProxyRepublishContext,
+	input: AwsProxyRepublishInput,
+): Promise<{ readonly namespace: ProviderDeploymentNamespace; readonly settled: boolean }> {
+	const { installation, proxySource, runtime } = context
+	const now = runtime.now ?? Date.now
+	const giveUpAt = now() + (input.wait === 'active' ? (runtime.waitMs ?? AWS_PROXY_WAIT_MS) : 0)
+	const manifestSha256 = await sha256Hex(awsProxyManifestFile(input.namespace.id, input.members))
+	const common = { installation, proxySource, events: input.events, signal: input.signal }
+	let namespace = input.namespace
+	for (;;) {
+		const target = checkNamespaceTarget(namespace, installation, proxySource)
+		if (target.proxyBuildToken === undefined && target.proxyImageManifestSha256 === manifestSha256) {
+			const outputs = await readNamespaceOutputs(runtime.clients.cloudFormation, namespace, installation, proxySource, input.signal)
+			namespace = await ensureAwsProxyService({
+				...common,
+				namespace,
+				members: input.members,
+				network: context.network,
+				outputs,
+				iam: runtime.iam,
+				clients: runtime.clients,
+			})
+			return { namespace, settled: true }
+		}
+		if (target.proxyBuildId !== undefined && target.proxyBuildManifestSha256 === manifestSha256) {
+			const followed = await followAwsProxyBuild({ ...common, namespace, clients: runtime.clients })
+			namespace = followed.namespace
+			if (followed.state === 'built') continue
+			if (now() >= giveUpAt) return { namespace, settled: false }
+			await runtime.sleep(runtime.pollIntervalMs ?? AWS_PROXY_POLL_MS, input.signal)
+			continue
+		}
+		namespace = await startAwsProxyBuild({
+			...common,
+			namespace,
+			members: input.members,
+			clients: { ...runtime.clients, credentials: runtime.credentials() },
+			source: runtime.source,
+		})
+		if (input.wait === 'started') return { namespace, settled: false }
+	}
+}
+
+/** The code of a reconcile whose proxy work is still in flight when its wait ran out: retryable, a later one carries on. */
+export const AWS_PROXY_PENDING = 'awsProxyPending'
+
+/**
+ * The namespace capabilities with the proxy's republish: `republish` drives the proxy to the members, and `reconcile`,
+ * after the stack, carries on proxy work in flight (waiting as `active` does) and fails retryably when it does not
+ * settle in time. `provision` stays the stack's alone: a namespace's proxy is built once it has members.
+ */
+export function withAwsProxyRepublish(base: ProviderNamespaceCapabilities, context: AwsProxyRepublishContext): ProviderNamespaceCapabilities {
+	const run = async (input: AwsProxyRepublishInput) => {
+		try {
+			return await republishAwsProxy(context, input)
+		} catch (error) {
+			throw namespaceFailure(error)
+		}
+	}
+	return {
+		...base,
+		republish: (input) => run({ namespace: input.namespace, members: input.members, events: input.events, signal: input.signal, wait: input.wait }),
+		reconcile: async (input) => {
+			const namespace = await base.reconcile(input)
+			if (!awsProxyInFlight(namespace, context)) return namespace
+			const result = await run({ namespace, members: input.members, events: input.events, signal: input.signal, wait: 'active' })
+			if (!result.settled) {
+				throw new ProviderNamespaceError("aws: the namespace's proxy build is still running; a later reconcile carries on", AWS_PROXY_PENDING, true)
+			}
+			return result.namespace
+		},
+	}
+}
+
+/** Whether the namespace's target records proxy work a reconcile is to carry on: a build in flight, or an image not set. */
+export function awsProxyInFlight(
+	namespace: ProviderDeploymentNamespace,
+	context: Pick<AwsProxyRepublishContext, 'installation' | 'proxySource'>,
+): boolean {
+	const target = checkNamespaceTarget(namespace, context.installation, context.proxySource)
+	return target.proxyBuildToken !== undefined || (target.proxyImageDigest !== undefined && target.proxyServiceUpdated !== true)
+}

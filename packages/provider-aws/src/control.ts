@@ -56,6 +56,8 @@ import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deplo
 import { AWS_APPLICATION_PORT } from './ecs-task'
 import { awsEnvironmentStack, type AwsInstallationNetwork, checkInstallationNetwork, ensureEnvironmentStack } from './environment-stack'
 import { awsNamespaceCapabilities, type AwsProxySource, checkNamespaceTarget, readNamespaceOutputs } from './namespace'
+import { withAwsProxyRepublish } from './proxy-republish'
+import type { AwsProxyIam } from './proxy-service'
 import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
 import { AWS_SOURCE_URL_SECONDS, awsRunAttempt, parseAwsCheckpoint } from './run-attempt'
 
@@ -146,6 +148,11 @@ export interface AwsControlProviderOptions {
 	 * planned is pinned to it, and no namespace's pin may name another repository (ADR-0045).
 	 */
 	readonly proxySource: AwsProxySource
+	/**
+	 * The IAM every namespace proxy asks: its issuer's origin, a plain value of the proxy's task definition, and the key
+	 * IAM knows as the proxies', a credential that reaches Parameter Store alone (`ensureAwsProxyService`).
+	 */
+	readonly proxyIam: AwsProxyIam
 	readonly source: AwsSourcePort
 	readonly fetch?: (input: string, init: RequestInit) => Promise<Response>
 	/** The clients of a target's region; absent, the package's own over `fetch`. Tests pass fakes. */
@@ -185,6 +192,24 @@ export function checkProxySource(source: AwsProxySource): AwsProxySource {
 	}
 	if (!COMMIT_SHA.test(source.commitSha)) throw new Error("aws: the installation's proxy commit is not a full commit")
 	return { repository: { owner: source.repository.owner, name: source.repository.name }, commitSha: source.commitSha }
+}
+
+/**
+ * The proxies' IAM as Control's configuration names it: an absolute http(s) URL (the proxy reads its origin) and a
+ * key. A malformed one fails the composition, naming the field only, never the key.
+ */
+export function checkProxyIam(iam: AwsProxyIam): AwsProxyIam {
+	let issuer: URL
+	try {
+		issuer = new URL(iam.issuer)
+	} catch {
+		throw new Error("aws: the proxies' IAM issuer is not an absolute URL")
+	}
+	if ((issuer.protocol !== 'https:' && issuer.protocol !== 'http:') || issuer.username !== '' || issuer.password !== '') {
+		throw new Error("aws: the proxies' IAM issuer is not an http(s) URL without credentials")
+	}
+	if (iam.key.trim() === '') throw new Error("aws: the proxies' IAM key is empty")
+	return { issuer: issuer.origin, key: iam.key }
 }
 
 /** The private binding the source reads a repository with, as the source takes it. */
@@ -298,6 +323,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 	const installationTarget = { provider: AWS_PROVIDER, version: awsAppTargetCodec.version, payload: installationPayload }
 	const network = checkInstallationNetwork(options.network)
 	const proxySource = checkProxySource(options.proxySource)
+	const proxyIam = checkProxyIam(options.proxyIam)
 	const targetOf = (environment: ProviderEnvironment): AwsAppTarget => {
 		const stored = decodeEnvelope('target', AWS_PROVIDER, environment.target, awsAppTargetCodec)
 		const differs = AWS_TARGET_FIELDS.filter((field) => stored[field] !== installation[field])
@@ -376,7 +402,32 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 	return {
 		id: AWS_PROVIDER,
 		// Every environment is placed in a namespace: its stack holds the proxy's group, which alone reaches an application.
-		namespaces: awsNamespaceCapabilities({ installation, network, proxySource, clients: clientsOf(installation), sleep: options.sleep ?? pause }),
+		namespaces: withAwsProxyRepublish(
+			awsNamespaceCapabilities({ installation, network, proxySource, clients: clientsOf(installation), sleep: options.sleep ?? pause }),
+			{
+				installation,
+				proxySource,
+				network,
+				runtime: {
+					iam: proxyIam,
+					clients: clientsOf(installation),
+					// A fresh read for each attempt: the build's presigned read must outlive its URL.
+					credentials: lastingCredentials,
+					// The pinned platform commit with the manifest appended (ADR-0045); public, so no binding.
+					source: {
+						upload: (upload) =>
+							options.source.upload({
+								repository: upload.repository,
+								commitSha: upload.commitSha,
+								archive: { kind: 'platform', dataFile: upload.dataFile },
+								parts: upload.parts,
+								signal: upload.signal,
+							}),
+					},
+					sleep: options.sleep ?? pause,
+				},
+			},
+		),
 		// The target a registrant submits is replaced by the installation's; nothing in it is theirs to choose.
 		normalizeRegistration: ({ app, environment }) => {
 			if (app.id !== environment.appId) throw new Error('aws: the environment belongs to another application')
