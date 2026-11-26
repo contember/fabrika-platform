@@ -74,6 +74,17 @@ describe('host rules', () => {
 		expect([...listenerConflicts(hosts, rules, OURS, ['console.example.com'])].sort()).toEqual(['b.example.com', 'c.other.org', 'console.example.com'])
 	})
 
+	test('two namespaces that put one host on at once: the rule the listener serves first keeps it, whoever looks first', () => {
+		const both = [rule(5, ['a.example.com'], [OURS]), rule(9, ['a.example.com'], [THEIRS])]
+		// Ours is evaluated first (5 before 9): we keep it, and they see a conflict.
+		expect(listenerConflicts(['a.example.com'], both, OURS, []).size).toBe(0)
+		expect([...listenerConflicts(['a.example.com'], both, THEIRS, [])]).toEqual(['a.example.com'])
+		// Turned around, they keep it.
+		const turned = [rule(9, ['a.example.com'], [OURS]), rule(5, ['a.example.com'], [THEIRS])]
+		expect([...listenerConflicts(['a.example.com'], turned, OURS, [])]).toEqual(['a.example.com'])
+		expect(listenerConflicts(['a.example.com'], turned, THEIRS, []).size).toBe(0)
+	})
+
 	test('a served host gets a free priority, the same one on every pass, and keeps it while the rule there is its own', () => {
 		const hosts = ['a.example.com', 'b.example.com']
 		const first = assignHostRulePriorities([issued('a.example.com', 1), issued('b.example.com', 2)], hosts, [], OURS)

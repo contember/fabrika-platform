@@ -58,9 +58,11 @@ export function isOwnHostRule(rule: ListenerRule, host: string, targetGroupArn: 
 }
 
 /**
- * The hosts of `hosts` the listener must not serve for the namespace: one of the installation's own hosts, or one any
- * rule but the namespace's own of it matches. A conflict is decided against the rules as read; two namespaces putting
- * one host on at the same moment are both served until the next pass of the later one sees the other's rule.
+ * The hosts of `hosts` the listener must not serve for the namespace: one of the installation's own hosts, or one
+ * another rule matches that the listener would serve first. A namespace without a rule of its own for the host defers
+ * to any matching rule; one with its own rule defers only to a matching rule of a lower priority number, which the
+ * listener evaluates first. So when two namespaces put one host on at the same moment, the one whose rule the listener
+ * serves keeps it, whichever of them reconciles first, and the other drops it on its next pass.
  */
 export function listenerConflicts(
 	hosts: readonly string[],
@@ -70,12 +72,14 @@ export function listenerConflicts(
 ): ReadonlySet<string> {
 	const reserved = new Set(installationHosts.map((host) => host.toLowerCase()))
 	return new Set(
-		hosts.filter((host) =>
-			reserved.has(host)
-			|| rules.some((rule) =>
-				rule.priority !== 'default' && !isOwnHostRule(rule, host, targetGroupArn) && rule.hosts.some((pattern) => hostMatches(pattern, host))
+		hosts.filter((host) => {
+			if (reserved.has(host)) return true
+			const own = rules.find((rule) => isOwnHostRule(rule, host, targetGroupArn))
+			const ownPriority = own === undefined || own.priority === 'default' ? Number.POSITIVE_INFINITY : own.priority
+			return rules.some((rule) =>
+				rule.priority !== 'default' && rule !== own && rule.priority < ownPriority && rule.hosts.some((pattern) => hostMatches(pattern, host))
 			)
-		),
+		}),
 	)
 }
 

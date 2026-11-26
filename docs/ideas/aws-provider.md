@@ -507,7 +507,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     rule) that holds it, then reconcile. Nothing in AWS can know which claim is right; an installation-wide check of a
     routed domain in Control, with the installation's own hosts reserved, would refuse the second claim at
     registration (a separate change across providers, not built). Two namespaces putting one host on in the same moment
-    are both served until the later's next pass sees the other's rule. A priority is unique per listener: each host's
+    are settled by the listener's own order: the one whose rule the listener serves first (the lower priority number)
+    keeps the host, whichever of them reconciles first, and the other drops it on its next pass. A priority is unique per listener: each host's
     is chosen against the rules as read, from a hash of the host to the next free one, and recorded with its
     certificate; one another rule has taken since is chosen anew. The listener's default action must be a fixed answer:
     one that forwards to the namespace's target group serves it nothing (`defaultForwards`). A departed host's rule and

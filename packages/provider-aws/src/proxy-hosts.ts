@@ -2,7 +2,7 @@
 // and reconcile, after the certificates (`proxy-certificates.ts`), the namespace's hosts stack is brought to the hosts
 // the listener may serve for it (`host-rules.ts`).
 //
-// - A stack of its own (`<namespace stack>-hosts`), apart from the namespace's: a rule refused by the listener (a
+// - A stack of its own (`fabrika-nh-<length of id>-<id>-<env>`), apart from the namespace's: a rule refused by the listener (a
 //   priority another namespace took in the same moment, a quota) rolls back that stack alone, and nothing of the
 //   namespace (its stack, the proxy's build and rollout, deploys into it) waits on it or fails with it. Its failure is
 //   recorded (`proxyHostsFailure`) and shown to the operator, and the next republish or reconcile applies it again.
