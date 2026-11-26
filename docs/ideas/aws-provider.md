@@ -460,10 +460,16 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     namespace's proxy images, writes that log group and reads the namespace's `env/` parameters, both under the boundary.
     `ensureAwsProxyService` writes the IAM key and each routed member's proxy secret to SecureStrings under `env/`,
     registers the recorded image's task definition on X86_64 (the issuer plain, every secret by ARN, a health check on
-    :8081), records the revision with its image before the call that sets the service to it, then creates the service
-    `ns_<id>_<env>_proxy` (its token derived from the image) or updates it, as a Service Connect client of the
-    namespace (no published name) in the installation's subnets behind the proxy's group, and records the update. A
-    service of this image already updated is answered with no call; a draining one is refused, retryably.
+    :8081), records the revision with its fingerprint (the sha256 of the image, the issuer and the secrets' names and
+    values, so a rotated key or secret with the same image is a new revision whose tasks read it) before the call that
+    sets the service to it, then creates the service `ns_<id>_<env>_proxy` (its token derived from the revision; an
+    answer that is not an active service is refused) or updates it, as a Service Connect client of the namespace (no
+    published name) in the installation's subnets behind the proxy's group, and records the update. A service of this
+    fingerprint already updated is answered with no call; a draining one is refused, retryably. The service lives
+    outside the stack and holds its group, roles and log group, so removing a namespace deletes the service first,
+    then its `env/` parameters and task definition family, then the stack; the namespace's instructions say so. The
+    proxy's group still allows all egress; it is scoped with the balancer's rules (TCP 443 to AWS and IAM, the
+    applications' port).
     Not yet: the proxy service's rollout and its verdict, deleting the secrets of members no longer routed (once a rollout
     succeeded, because a rollback reads an older revision's), Control's configuration of the IAM issuer and key, relaying
     the build's log to an operator, and `republish`, which will start and follow the build and set the service; then

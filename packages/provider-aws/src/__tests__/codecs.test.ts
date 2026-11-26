@@ -107,11 +107,11 @@ describe('the AWS codecs', () => {
 		const serving: AwsNamespaceTarget = {
 			...built,
 			proxyServiceTaskDefinitionArn: revision,
-			proxyServiceImageDigest: `sha256:${'a'.repeat(64)}`,
+			proxyServiceFingerprint: 'a'.repeat(64),
 			proxyServiceUpdated: true,
 		}
 		expect(roundTrip(awsNamespaceTargetCodec, serving)).toEqual({ decoded: serving, json: serving })
-		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyServiceTaskDefinitionArn: revision })).toContain('proxyServiceImageDigest')
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyServiceTaskDefinitionArn: revision })).toContain('proxyServiceFingerprint')
 		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyServiceUpdated: true })).toContain('proxyServiceTaskDefinitionArn')
 		// The pin is required: a target without it is one this release does not read.
 		const { proxyCommitSha: _sha, ...unpinned } = namespace

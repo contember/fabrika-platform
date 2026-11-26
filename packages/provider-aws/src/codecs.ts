@@ -101,13 +101,13 @@ export interface AwsNamespaceTarget {
 	readonly proxyImageDigest?: string
 	readonly proxyImageManifestSha256?: string
 	/**
-	 * The proxy's service (ADR-0044): `proxyServiceTaskDefinitionArn` and `proxyServiceImageDigest` (the revision
-	 * registered for an image, and that image) are recorded before the call that sets the service to it, so a retry
-	 * reuses the revision and `CreateService`'s token always comes with the same body; `proxyServiceUpdated` once the
-	 * call was answered.
+	 * The proxy's service (ADR-0044): `proxyServiceTaskDefinitionArn` and `proxyServiceFingerprint` (the revision
+	 * registered, and the sha256 of all its tasks depend on: the image, the IAM issuer, the secrets' names and values)
+	 * are recorded before the call that sets the service to it, so a retry reuses the revision and `CreateService`'s
+	 * token always comes with the same body; `proxyServiceUpdated` once the call was answered.
 	 */
 	readonly proxyServiceTaskDefinitionArn?: string
-	readonly proxyServiceImageDigest?: string
+	readonly proxyServiceFingerprint?: string
 	readonly proxyServiceUpdated?: true
 }
 
@@ -163,11 +163,11 @@ const namespaceTargetSchema = z.object({
 	proxyImageDigest: z.string().regex(CONTRACT_DIGEST).optional(),
 	proxyImageManifestSha256: z.string().regex(SHA256_HEX).optional(),
 	proxyServiceTaskDefinitionArn: z.string().regex(TASK_DEFINITION_ARN).optional(),
-	proxyServiceImageDigest: z.string().regex(CONTRACT_DIGEST).optional(),
+	proxyServiceFingerprint: z.string().regex(SHA256_HEX).optional(),
 	proxyServiceUpdated: z.literal(true).optional(),
-}).strict().refine((target) => (target.proxyServiceTaskDefinitionArn === undefined) === (target.proxyServiceImageDigest === undefined), {
-	message: "the proxy service's revision is recorded with its image",
-	path: ['proxyServiceImageDigest'],
+}).strict().refine((target) => (target.proxyServiceTaskDefinitionArn === undefined) === (target.proxyServiceFingerprint === undefined), {
+	message: "the proxy service's revision is recorded with its fingerprint",
+	path: ['proxyServiceFingerprint'],
 }).refine((target) => target.proxyServiceUpdated === undefined || target.proxyServiceTaskDefinitionArn !== undefined, {
 	message: "the proxy service's update is recorded with its revision",
 	path: ['proxyServiceTaskDefinitionArn'],

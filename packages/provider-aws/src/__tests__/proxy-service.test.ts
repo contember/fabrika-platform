@@ -13,7 +13,8 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import type { EcsService, EcsServiceCreate, EcsTaskDefinition } from '../aws/ecs'
 import { awsAppArtifactCodec, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsNamespaceTargetEnvelope } from '../namespace'
-import { awsProxySecrets, awsProxyTaskDefinition, ensureAwsProxyService } from '../proxy-service'
+import { sha256Hex } from '../proxy-attempt'
+import { awsProxySecrets, awsProxyServiceFingerprint, awsProxyTaskDefinition, ensureAwsProxyService } from '../proxy-service'
 
 const installation: AwsAppTarget = {
 	accountId: '123456789012',
@@ -167,6 +168,10 @@ describe('awsProxyTaskDefinition', () => {
 	})
 })
 
+/** What the service's tasks depend on in these tests, and the creation token of the fake's revision. */
+const FINGERPRINT = await awsProxyServiceFingerprint(DIGEST, IAM.issuer, { FABRIKA_IAM_KEY: IAM.key, [NOTES_SECRET]: 'notes-proxy-secret' })
+const CREATE_TOKEN = `p-${(await sha256Hex(REVISION)).slice(0, 32)}`
+
 describe('ensureAwsProxyService', () => {
 	test('writes the secrets, registers and records the revision, then creates the service as a Service Connect client', async () => {
 		const fake = new Fake()
@@ -177,13 +182,15 @@ describe('ensureAwsProxyService', () => {
 			'registerTaskDefinition ns_shared_prod_proxy',
 			'checkpoint',
 			'describeService ns_shared_prod_proxy',
-			`createService ns_shared_prod_proxy p-${'b'.repeat(32)}`,
+			`createService ns_shared_prod_proxy ${CREATE_TOKEN}`,
 			'checkpoint',
 		])
 		expect(fake.checkpoints).toEqual([
-			{ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceImageDigest: DIGEST },
-			{ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceImageDigest: DIGEST, proxyServiceUpdated: true },
+			{ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceFingerprint: FINGERPRINT },
+			{ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceFingerprint: FINGERPRINT, proxyServiceUpdated: true },
 		])
+		// The fingerprint names no credential.
+		expect(FINGERPRINT).not.toContain(IAM.key)
 		expect(awsNamespaceTargetCodec.decode(set.target.payload)).toMatchObject({ proxyServiceUpdated: true })
 		expect(fake.secrets.get('/fabrika/namespaces/shared/prod/env/FABRIKA_IAM_KEY')).toBe(IAM.key)
 		// The key and the proxy secrets travel only to Parameter Store, never in the task definition.
@@ -199,10 +206,10 @@ describe('ensureAwsProxyService', () => {
 		expect(fake.creates[0]?.serviceConnect).not.toHaveProperty('discoveryName')
 	})
 
-	test('an existing service is updated; a recorded revision of this image is reused, not registered again', async () => {
+	test('an existing service is updated; a recorded revision of this fingerprint is reused, not registered again', async () => {
 		const fake = new Fake()
 		fake.existing = service('active')
-		const recorded = namespaceOf({ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceImageDigest: DIGEST })
+		const recorded = namespaceOf({ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceFingerprint: FINGERPRINT })
 		await ensureAwsProxyService(fake.input(recorded))
 		expect(fake.calls.filter((call) => !call.startsWith('putSecret'))).toEqual([
 			'describeService ns_shared_prod_proxy',
@@ -213,12 +220,12 @@ describe('ensureAwsProxyService', () => {
 		const inactive = new Fake()
 		inactive.existing = service('inactive')
 		await ensureAwsProxyService(inactive.input(recorded))
-		expect(inactive.calls).toContain(`createService ns_shared_prod_proxy p-${'b'.repeat(32)}`)
+		expect(inactive.calls).toContain(`createService ns_shared_prod_proxy ${CREATE_TOKEN}`)
 	})
 
-	test('a service already updated to this image is answered with no call; a newer image registers a new revision', async () => {
+	test('a service already updated to this fingerprint is answered with no call; a newer image registers a new revision', async () => {
 		const fake = new Fake()
-		const updated = namespaceOf({ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceImageDigest: DIGEST, proxyServiceUpdated: true })
+		const updated = namespaceOf({ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceFingerprint: FINGERPRINT, proxyServiceUpdated: true })
 		expect(await ensureAwsProxyService(fake.input(updated))).toEqual(updated)
 		expect(fake.calls).toEqual([])
 		const newer = new Fake()
@@ -228,7 +235,7 @@ describe('ensureAwsProxyService', () => {
 			...BUILT,
 			proxyImageDigest: rebuilt,
 			proxyServiceTaskDefinitionArn: REVISION,
-			proxyServiceImageDigest: DIGEST,
+			proxyServiceFingerprint: FINGERPRINT,
 			proxyServiceUpdated: true,
 		})))
 		expect(newer.calls).toContain('registerTaskDefinition ns_shared_prod_proxy')
@@ -237,8 +244,37 @@ describe('ensureAwsProxyService', () => {
 			...BUILT,
 			proxyImageDigest: rebuilt,
 			proxyServiceTaskDefinitionArn: REVISION,
-			proxyServiceImageDigest: rebuilt,
+			proxyServiceFingerprint: await awsProxyServiceFingerprint(rebuilt, IAM.issuer, { FABRIKA_IAM_KEY: IAM.key, [NOTES_SECRET]: 'notes-proxy-secret' }),
 		})
+	})
+
+	test('the same image with a new IAM key, issuer or proxy secret writes the secrets and sets the service to a new revision', async () => {
+		const updated = namespaceOf({ ...BUILT, proxyServiceTaskDefinitionArn: REVISION, proxyServiceFingerprint: FINGERPRINT, proxyServiceUpdated: true })
+		const changes: readonly [string, (fake: Fake) => ReturnType<Fake['input']>][] = [
+			['the IAM key', (fake) => ({ ...fake.input(updated), iam: { ...IAM, key: 'rotated-iam-key' } })],
+			['the IAM issuer', (fake) => ({ ...fake.input(updated), iam: { ...IAM, issuer: 'https://iam.example.org' } })],
+			['a proxy secret', (fake) => fake.input(updated, [member({ proxySecret: 'rotated-proxy-secret' })])],
+		]
+		for (const [what, input] of changes) {
+			const fake = new Fake()
+			fake.existing = service('active')
+			await ensureAwsProxyService(input(fake))
+			expect(fake.calls.filter((call) => call.startsWith('putSecret')).length, what).toBe(2)
+			expect(fake.calls, what).toContain('registerTaskDefinition ns_shared_prod_proxy')
+			expect(fake.calls, what).toContain(`updateService ns_shared_prod_proxy ${REVISION}`)
+			expect(fake.checkpoints.at(-1)?.proxyServiceFingerprint, what).not.toBe(FINGERPRINT)
+		}
+	})
+
+	test('a creation answered with a service that is not active is refused, its update not recorded', async () => {
+		const fake = new Fake()
+		const input = fake.input(namespaceOf(BUILT))
+		const failure = await ensureAwsProxyService({
+			...input,
+			clients: { ...input.clients, ecs: { ...input.clients.ecs, createService: async () => service('inactive') } },
+		}).catch((error: unknown) => error)
+		expect(failure).toMatchObject({ code: 'awsProxyService', retryable: true })
+		expect(fake.checkpoints.some((checkpoint) => checkpoint.proxyServiceUpdated === true)).toBe(false)
 	})
 
 	test('no image, a draining service or a pin of another repository is refused as a namespace error', async () => {

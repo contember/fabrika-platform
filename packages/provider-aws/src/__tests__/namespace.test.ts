@@ -351,7 +351,7 @@ describe('awsNamespaceCapabilities', () => {
 		// Nor the proxy service's revision, which a later call would set the service to.
 		const revision = target({
 			proxyServiceTaskDefinitionArn: 'arn:aws:ecs:eu-central-1:123456789012:task-definition/ns_shared_prod_proxy:3',
-			proxyServiceImageDigest: `sha256:${'a'.repeat(64)}`,
+			proxyServiceFingerprint: 'a'.repeat(64),
 		})
 		expect(() => capabilities.normalize({ ...NAMESPACE, target: revision })).toThrow('never submitted')
 		expect(() => capabilities.normalize({ ...NAMESPACE, target: target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64) }) }))
@@ -492,6 +492,11 @@ describe('awsNamespaceCapabilities', () => {
 		})
 		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy build project', value: 'fabrika_ns_shared_prod', resource: true })
 		expect(planned?.presentation.instructions.join(' ')).toContain("deletes the proxy's images with their repository")
+		// The proxy's service lives outside the stack and holds its group, roles and log group: it goes first.
+		expect(planned?.presentation.instructions).toContain(
+			'When no environment uses the namespace, delete in this order: the ECS service ns_shared_prod_proxy in the cluster fabrika-apps; then the parameters under /fabrika/namespaces/shared/prod/env and the task definition family ns_shared_prod_proxy; then the stack fabrika-ns-6-shared-prod.',
+		)
+		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy service', value: 'fabrika-apps/ns_shared_prod_proxy', resource: true })
 		expect(() => operator?.plan({ id: 'shared', env: 'prod', preset: 'full' })).toThrow('only the cheap preset')
 		expect(() => operator?.plan({ id: 'shared', env: 'prod', preset: 'cheap', options: { size: 1 } })).toThrow('takes no options')
 	})

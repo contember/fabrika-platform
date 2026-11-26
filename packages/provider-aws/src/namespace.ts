@@ -374,7 +374,7 @@ function targetOf(
 		...(stored?.proxyImageDigest === undefined ? {} : { proxyImageDigest: stored.proxyImageDigest }),
 		...(stored?.proxyImageManifestSha256 === undefined ? {} : { proxyImageManifestSha256: stored.proxyImageManifestSha256 }),
 		...(stored?.proxyServiceTaskDefinitionArn === undefined ? {} : { proxyServiceTaskDefinitionArn: stored.proxyServiceTaskDefinitionArn }),
-		...(stored?.proxyServiceImageDigest === undefined ? {} : { proxyServiceImageDigest: stored.proxyServiceImageDigest }),
+		...(stored?.proxyServiceFingerprint === undefined ? {} : { proxyServiceFingerprint: stored.proxyServiceFingerprint }),
 		...(stored?.proxyServiceUpdated === undefined ? {} : { proxyServiceUpdated: stored.proxyServiceUpdated }),
 	}
 	return awsNamespaceTargetEnvelope(target)
@@ -414,11 +414,15 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				{ label: 'Service Connect namespace', value: resources.serviceConnectNamespace, resource: true },
 				{ label: 'Proxy image repository', value: resources.repository, resource: true },
 				{ label: 'Proxy build project', value: resources.buildProject, resource: true },
+				{ label: 'Proxy service', value: `${installation.cluster}/${resources.service}`, resource: true },
 				// A policy choice, not a resource: the pin the proxy is built from until an operator moves it.
 				{ label: 'Proxy source', value: `${target.proxyRepository}@${target.proxyCommitSha}` },
 			],
 			instructions: [
-				'Control creates the stack. Removing the namespace leaves it in place: delete the stack when no environment uses it.',
+				"Control creates the stack and the proxy's service. Removing the namespace leaves both in place.",
+				// The service lives outside the stack and holds its security group, roles and log group: deleting the stack first
+				// removes the roles under a running service and then fails on the group its network interfaces hold.
+				`When no environment uses the namespace, delete in this order: the ECS service ${resources.service} in the cluster ${installation.cluster}; then the parameters under ${resources.parameterPath}/env and the task definition family ${resources.service}; then the stack ${resources.stackName}.`,
 				"Deleting the stack deletes the proxy's images with their repository: they are rebuilt from the namespace's pinned source.",
 			],
 		}
@@ -474,7 +478,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 			if (
 				submitted.proxyBuildToken !== undefined || submitted.proxyBuildManifestSha256 !== undefined || submitted.proxyBuildId !== undefined
 				|| submitted.proxyImageDigest !== undefined || submitted.proxyImageManifestSha256 !== undefined
-				|| submitted.proxyServiceTaskDefinitionArn !== undefined || submitted.proxyServiceImageDigest !== undefined
+				|| submitted.proxyServiceTaskDefinitionArn !== undefined || submitted.proxyServiceFingerprint !== undefined
 				|| submitted.proxyServiceUpdated !== undefined
 			) {
 				throw new Error("aws: a namespace's proxy build and image are recorded by its provider, never submitted")

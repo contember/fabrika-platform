@@ -7,10 +7,15 @@
 //   reach the container by ARN. The IAM issuer is a plain value. Nothing of either is logged or recorded.
 // - The task definition (`awsProxyTaskDefinition`, pure): the proxy container on :8080, a health check on its own
 //   listener (:8081) through the image's busybox, the namespace's task and execution roles, never one role (ADR-0004).
-// - The service: recorded before the call that sets it (ADR-0044). The revision is registered once per image and
-//   recorded with it, so a retry reuses it; `CreateService` when there is no service (its token derived from the image,
-//   so a lost answer is settled by repeating the same call) and `UpdateService` otherwise; `proxyServiceUpdated` once
-//   answered. A service of this image already updated is answered as it is. A draining service is refused, retryably.
+// - The service: recorded before the call that sets it (ADR-0044). The revision is registered once per fingerprint (the
+//   image, the IAM issuer, the secrets' names and values: `awsProxyServiceFingerprint`) and recorded with it, so a retry
+//   reuses it and a new key or secret with the same image is a new revision, whose tasks read the new values;
+//   `CreateService` when there is no service (its token derived from the revision, so a lost answer is settled by
+//   repeating the same call, and an answer that is not an active service is refused) and `UpdateService` otherwise;
+//   `proxyServiceUpdated` once answered. A service of this fingerprint already updated is answered with no call. A
+//   draining service is refused, retryably.
+// - The service lives outside the namespace's stack and holds its security group, roles and log group, so an
+//   operator deletes the service first, then its parameters, then the stack (the namespace's instructions say so).
 // - No published port, no balancer yet: the proxy's group admits nothing until the balancer's host rules come.
 //
 // Not yet: following the rollout to its verdict, deleting the secrets of members no longer routed (only once a
@@ -20,7 +25,7 @@
 // UNVERIFIED: that a Service Connect configuration with a namespace and no services makes the tasks clients of it, and
 // that busybox `wget` is in the image's Alpine base, follow ECS's and Alpine's documentation; neither was checked here.
 
-import { proxySecretVariable } from '@fabrika/auth-core'
+import { appEnvironmentId, proxySecretVariable } from '@fabrika/auth-core'
 import {
 	type ProviderDeploymentNamespace,
 	ProviderNamespaceError,
@@ -39,6 +44,7 @@ import {
 	checkNamespaceTarget,
 	namespaceFailure,
 } from './namespace'
+import { sha256Hex } from './proxy-attempt'
 
 /** The proxy's public listener and its health listener (`packages/proxy/src/caddy.ts`'s defaults). */
 export const AWS_PROXY_PORT = 8080
@@ -67,9 +73,21 @@ export function awsProxySecrets(members: readonly ProviderNamespaceMember[], iam
 	for (const member of members) {
 		// Only a member the manifest routes (approved access) has an entry whose secret the proxy sends.
 		if (member.access === undefined || member.proxySecret === undefined || member.proxySecret === '') continue
-		secrets[proxySecretVariable(`${member.appId}@${member.env}`)] = member.proxySecret
+		// The manifest's entry id, by the same function, so the variable the proxy reads is the entry's.
+		secrets[proxySecretVariable(appEnvironmentId(member.appId, member.env))] = member.proxySecret
 	}
 	return secrets
+}
+
+/**
+ * The sha256 of everything the proxy's tasks depend on: the image, the IAM issuer (a plain value of the revision), the
+ * secrets' names (the revision's references) and their values (which ECS reads only at a task's start). A change of any
+ * of them is a new revision, so the service starts new tasks that read the new values. The values are high-entropy
+ * credentials, so their digest names none of them; it is recorded, never they.
+ */
+export async function awsProxyServiceFingerprint(imageDigest: string, iamIssuer: string, secrets: Readonly<Record<string, string>>): Promise<string> {
+	const names = Object.keys(secrets).sort()
+	return sha256Hex(JSON.stringify({ imageDigest, iamIssuer, secrets: names.map((name) => [name, secrets[name] ?? '']) }))
 }
 
 export interface AwsProxyTaskInput {
@@ -139,9 +157,13 @@ export interface AwsProxyServiceInput {
 	readonly signal: AbortSignal
 }
 
-/** The ECS idempotency token of the service's creation for one image: at most 36 characters, the same on every retry. */
-function createToken(imageDigest: string): string {
-	return `p-${imageDigest.slice('sha256:'.length, 'sha256:'.length + 32)}`
+/**
+ * The ECS idempotency token of the service's creation on one revision: at most 36 characters, the same on every retry
+ * of that revision's creation and another for any other revision, so a service created again on a newer one is never
+ * answered with an earlier creation.
+ */
+async function createToken(revision: string): Promise<string> {
+	return `p-${(await sha256Hex(revision)).slice(0, 32)}`
 }
 
 /**
@@ -164,7 +186,10 @@ async function ensure(input: AwsProxyServiceInput): Promise<ProviderDeploymentNa
 	const resources = awsNamespaceResources(namespace.id, namespace.env)
 	const imageDigest = stored.proxyImageDigest
 	if (imageDigest === undefined) throw new Error("aws: the namespace's proxy has no image built to run")
-	if (stored.proxyServiceImageDigest === imageDigest && stored.proxyServiceUpdated === true) return namespace
+	const secrets = awsProxySecrets(input.members, input.iam.key)
+	// Not the image alone: a new IAM key or issuer, or a member's new proxy secret, with the same image is a new revision.
+	const fingerprint = await awsProxyServiceFingerprint(imageDigest, input.iam.issuer, secrets)
+	if (stored.proxyServiceFingerprint === fingerprint && stored.proxyServiceUpdated === true) return namespace
 
 	const record = async (target: AwsNamespaceTarget): Promise<AwsNamespaceTarget> => {
 		namespace = { ...namespace, target: awsNamespaceTargetEnvelope(target) }
@@ -173,10 +198,9 @@ async function ensure(input: AwsProxyServiceInput): Promise<ProviderDeploymentNa
 	}
 
 	// The secrets first: a revision that names one ECS cannot read would never start.
-	const secrets = awsProxySecrets(input.members, input.iam.key)
 	for (const [name, value] of Object.entries(secrets)) await clients.ssm.putSecret(`${resources.parameterPath}/env/${name}`, value, signal)
 
-	let revision = stored.proxyServiceImageDigest === imageDigest ? stored.proxyServiceTaskDefinitionArn : undefined
+	let revision = stored.proxyServiceFingerprint === fingerprint ? stored.proxyServiceTaskDefinitionArn : undefined
 	let current = stored
 	if (revision === undefined) {
 		const definition = awsProxyTaskDefinition({
@@ -188,7 +212,7 @@ async function ensure(input: AwsProxyServiceInput): Promise<ProviderDeploymentNa
 		})
 		revision = (await clients.ecs.registerTaskDefinition(definition, signal)).arn
 		const { proxyServiceUpdated: _updated, ...rest } = stored
-		current = await record({ ...rest, proxyServiceTaskDefinitionArn: revision, proxyServiceImageDigest: imageDigest })
+		current = await record({ ...rest, proxyServiceTaskDefinitionArn: revision, proxyServiceFingerprint: fingerprint })
 	}
 
 	await input.events.boundary()
@@ -200,15 +224,19 @@ async function ensure(input: AwsProxyServiceInput): Promise<ProviderDeploymentNa
 		throw new ProviderNamespaceError(`aws: the proxy service ${resources.service} is being deleted; try again once it is gone`, 'awsProxyService', true)
 	}
 	if (existing === null || existing.status === 'inactive') {
-		await clients.ecs.createService({
+		const created = await clients.ecs.createService({
 			...address,
 			taskDefinitionArn: revision,
 			network,
 			desiredCount: AWS_PROXY_DESIRED_COUNT,
-			clientToken: createToken(imageDigest),
+			clientToken: await createToken(revision),
 			tags: { 'fabrika:namespace': namespace.id, 'fabrika:env': namespace.env },
 			serviceConnect,
 		}, signal)
+		// A replayed token may answer a creation ECS has since let go: only an active service is one this call made.
+		if (created.status !== 'active') {
+			throw new ProviderNamespaceError(`aws: the proxy service ${resources.service} was answered ${created.status}; try again`, 'awsProxyService', true)
+		}
 	} else {
 		await clients.ecs.updateService(address, revision, network, serviceConnect, signal)
 	}
