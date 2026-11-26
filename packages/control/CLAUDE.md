@@ -348,8 +348,9 @@ other environment, before the provider prepares anything, and the write maps a r
   and a failed redeploy would hide the expiry of the key still running.
 - **The maintenance pass reads exposure back between deploys (`src/exposure-watch.ts`), where the provider declares
   `exposure` (Zerops).** Under each environment's `<app>:<env>` lease, skipping one a run holds or still runs and every
-  `dev` environment, it calls `exposure.check`; a set of findings other than the one recorded in
-  `app_env_exposure_alerts` raises one `FabrikaExposureDetected` error event in the application's own Operations
+  `dev` environment, it calls `exposure.check`, bounded at `EXPOSURE_CHECK_TIMEOUT_MS`; a set of findings other than the
+  one recorded in `app_env_exposure_alerts` raises one `FabrikaExposureDetected` error event in the application's own
+  Operations, its fingerprint carrying the raise time so each raise is a new issue that `new_issue` rules notify
   (`sendControlEvent`, `src/operations-event.ts`, the transport the workload-key warning uses) and is recorded once
   Operations took it, refused it for good, or there is no ingest; a failed delivery is sent again by the next pass. The
   same exposure is not raised again while it lasts; a check that finds none deletes the row. It only reports: the next

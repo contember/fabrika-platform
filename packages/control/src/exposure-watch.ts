@@ -28,6 +28,9 @@ export interface ExposureWatchSummary {
 
 export const NO_EXPOSURE_WATCH: ExposureWatchSummary = { checked: 0, alerted: 0, cleared: 0, busy: 0, failed: 0 }
 
+/** One environment's read-back, so a provider that does not answer cannot hold up the rest of the pass. */
+export const EXPOSURE_CHECK_TIMEOUT_MS = 60_000
+
 export interface ExposureWatchDeps {
 	readonly repositories: Pick<ControlRepositories, 'registry' | 'runs' | 'operationsCatalog'>
 	readonly provider: ControlProvider & { readonly exposure: ProviderExposure }
@@ -36,6 +39,8 @@ export interface ExposureWatchDeps {
 	readonly ingest: (request: Request) => Promise<Response>
 	/** Unix seconds. */
 	readonly now: () => number
+	/** Defaults to `EXPOSURE_CHECK_TIMEOUT_MS`. */
+	readonly checkTimeoutMs?: number
 }
 
 /** The provider, when it reads exposure back outside a run. */
@@ -65,7 +70,10 @@ export async function watchExposure(deps: ExposureWatchDeps): Promise<ExposureWa
 				summary.busy++
 				continue
 			}
-			const findings = await deps.provider.exposure.check({ environment: await providerEnvironment(deps.repositories, row), signal: lease.signal })
+			const findings = await deps.provider.exposure.check({
+				environment: await providerEnvironment(deps.repositories, row),
+				signal: AbortSignal.any([lease.signal, AbortSignal.timeout(deps.checkTimeoutMs ?? EXPOSURE_CHECK_TIMEOUT_MS)]),
+			})
 			summary.checked++
 			const outcome = await settle(deps, appId, env, findings, () => lease.assertHeld())
 			if (outcome !== 'unchanged') summary[outcome]++
@@ -102,11 +110,13 @@ async function settle(
 	const message = `${appId}/${env} became reachable past its proxy since its last deploy: `
 		+ findings.map((finding) => `service \`${finding.service}\` ${finding.reason}`).join('; ')
 	console.warn(`exposure: ${message}`)
+	const raisedAt = deps.now()
 	const delivery = await sendControlEvent(deps, appId, env, {
 		type: 'FabrikaExposureDetected',
 		message,
 		level: 'error',
-		fingerprint: ['fabrika-exposure-detected', appId, env, ...findings.map((finding) => finding.service).sort()],
+		// Every raise is a new issue: Operations notifies only a new or regressed one, and nothing resolves the last.
+		fingerprint: ['fabrika-exposure-detected', appId, env, ...findings.map((finding) => finding.service).sort(), String(raisedAt)],
 	})
 	if (delivery.outcome === 'failed') {
 		console.error(
@@ -120,6 +130,6 @@ async function settle(
 		console.error(`exposure: the Operations of ${appId}/${env} refused the alert with ${delivery.status}; not sent again while it lasts`)
 	}
 	assertHeld()
-	await deps.repositories.registry.recordExposureAlert(appId, env, record, deps.now())
+	await deps.repositories.registry.recordExposureAlert(appId, env, record, raisedAt)
 	return 'alerted'
 }

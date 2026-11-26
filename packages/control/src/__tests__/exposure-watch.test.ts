@@ -1,9 +1,10 @@
 // The maintenance pass reads an environment's exposure back between deploys (`watchExposure`): an environment that
 // stays as its last deploy verified raises nothing; one that became exposed raises one error event in its own
 // Operations, not again while the same exposure lasts, again when it changes or returns after it was gone; an alert
-// Operations did not take is sent again by the next pass; an environment a run or another holder has waits.
+// Operations did not take is sent again by the next pass; an environment a run or another holder has waits, a dev
+// environment is not read, and a read that does not answer is abandoned at its timeout.
 
-import { SqlDeployLocks } from '@fabrika/platform'
+import { SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider, ProviderExposureFinding } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, spyOn, test } from 'bun:test'
 import { exposureProvider, watchExposure } from '../exposure-watch'
@@ -47,16 +48,20 @@ async function world(options: { ingest?: boolean } = {}) {
 			START,
 		).run()
 	}
-	/** What the provider reads back on the next check; a thrown error is a failed read. */
-	const live: { findings: readonly ProviderExposureFinding[] | Error } = { findings: [] }
+	/** What the provider reads back on the next check; a thrown error is a failed read, `hang` never answers. */
+	const live: { findings: readonly ProviderExposureFinding[] | Error | 'hang' } = { findings: [] }
 	const checked: string[] = []
 	const fake: ControlProvider = {
 		id: 'test',
 		deploy: () => Promise.resolve({ state: 'succeeded' }),
 		exposure: {
-			check: ({ environment }) => {
+			check: ({ environment, signal }) => {
 				checked.push(`${environment.appId}/${environment.env}`)
-				return live.findings instanceof Error ? Promise.reject(live.findings) : Promise.resolve(live.findings)
+				const findings = live.findings
+				if (findings === 'hang') {
+					return new Promise((_, reject) => signal.addEventListener('abort', () => reject(new Error('zerops: find service was aborted'))))
+				}
+				return findings instanceof Error ? Promise.reject(findings) : Promise.resolve(findings)
 			},
 		},
 	}
@@ -74,7 +79,7 @@ async function world(options: { ingest?: boolean } = {}) {
 		return new Response(null, { status: answers.shift() ?? 200 })
 	}
 	const locks = new SqlDeployLocks(harness.d1)
-	const pass = () => watchExposure({ repositories: harness.repositories, provider, locks, ingest, now: () => clock.now })
+	const pass = () => watchExposure({ repositories: harness.repositories, provider, locks, ingest, now: () => clock.now, checkTimeoutMs: 50 })
 	const recorded = () => queryRows(harness.sqlite, 'SELECT exposure, alerted_at FROM app_env_exposure_alerts')
 	return { clock, harness, live, checked, sent, answers, locks, pass, recorded }
 }
@@ -120,7 +125,7 @@ describe('the maintenance pass alerts Operations when an environment becomes exp
 			level: 'error',
 			logger: 'fabrika.control',
 			environment: 'prod',
-			fingerprint: ['fabrika-exposure-detected', 'notes', 'prod', 'notes'],
+			fingerprint: ['fabrika-exposure-detected', 'notes', 'prod', 'notes', String(START + 300)],
 			exception: { values: [{ type: 'FabrikaExposureDetected', value: message }] },
 		})
 		expect(logs.warn).toHaveBeenCalledWith(`exposure: ${message}`)
@@ -139,7 +144,7 @@ describe('the maintenance pass alerts Operations when an environment becomes exp
 
 		w.live.findings = [SUBDOMAIN, BUCKET]
 		expect(await w.pass()).toEqual({ checked: 1, alerted: 1, cleared: 0, busy: 0, failed: 0 })
-		expect(w.sent.at(-1)?.event).toMatchObject({ fingerprint: ['fabrika-exposure-detected', 'notes', 'prod', 'files', 'notes'] })
+		expect(w.sent.at(-1)?.event).toMatchObject({ fingerprint: ['fabrika-exposure-detected', 'notes', 'prod', 'files', 'notes', String(START)] })
 		w.live.findings = [BUCKET, SUBDOMAIN]
 		expect(await w.pass()).toEqual({ checked: 1, alerted: 0, cleared: 0, busy: 0, failed: 0 })
 
@@ -148,9 +153,13 @@ describe('the maintenance pass alerts Operations when an environment becomes exp
 		expect(logs.info).toHaveBeenCalledWith('exposure: notes/prod no longer exposes a service past its proxy')
 		expect(w.recorded()).toEqual([])
 
+		// The same exposure again is a new Operations issue, so its new_issue rules notify it again.
 		w.live.findings = [SUBDOMAIN]
+		w.clock.now = START + 900
 		expect(await w.pass()).toEqual({ checked: 1, alerted: 1, cleared: 0, busy: 0, failed: 0 })
 		expect(w.sent).toHaveLength(3)
+		expect(w.sent[0]?.event['fingerprint']).toEqual(['fabrika-exposure-detected', 'notes', 'prod', 'notes', String(START)])
+		expect(w.sent[2]?.event['fingerprint']).toEqual(['fabrika-exposure-detected', 'notes', 'prod', 'notes', String(START + 900)])
 	})
 
 	test('an alert Operations did not take is sent again by the next pass; without an ingest the log line stands', async () => {
@@ -163,6 +172,14 @@ describe('the maintenance pass alerts Operations when an environment becomes exp
 		expect(w.recorded()).toEqual([])
 		expect(await w.pass()).toEqual({ checked: 1, alerted: 1, cleared: 0, busy: 0, failed: 0 })
 		expect(w.sent).toHaveLength(2)
+
+		const refusing = await world()
+		refusing.live.findings = [SUBDOMAIN]
+		refusing.answers.push(403)
+		expect(await refusing.pass()).toEqual({ checked: 1, alerted: 1, cleared: 0, busy: 0, failed: 0 })
+		expect(logs.error).toHaveBeenCalledWith('exposure: the Operations of notes/prod refused the alert with 403; not sent again while it lasts')
+		expect(await refusing.pass()).toEqual({ checked: 1, alerted: 0, cleared: 0, busy: 0, failed: 0 })
+		expect(refusing.sent).toHaveLength(1)
 
 		const bare = await world({ ingest: false })
 		bare.live.findings = [SUBDOMAIN]
@@ -186,5 +203,38 @@ describe('the maintenance pass alerts Operations when an environment becomes exp
 		expect(logs.error).toHaveBeenCalledWith('exposure: notes/prod could not be read back, retried next pass: zerops: find service answered 503')
 		expect(w.sent).toEqual([])
 		expect(w.recorded()).toEqual([])
+	})
+
+	test('a read that does not answer is abandoned at its timeout, and the pass goes on', async () => {
+		const logs = quiet()
+		const w = await world()
+		w.live.findings = 'hang'
+		expect(await w.pass()).toEqual({ checked: 0, alerted: 0, cleared: 0, busy: 0, failed: 1 })
+		expect(logs.error).toHaveBeenCalledWith('exposure: notes/prod could not be read back, retried next pass: zerops: find service was aborted')
+		const lease = await acquireLease(w.locks, runLeaseKey('notes', 'prod'))
+		expect(lease).not.toBeNull()
+		await lease?.release()
+	})
+
+	test('a dev environment is not read, nor one whose run still runs', async () => {
+		quiet()
+		const w = await world()
+		w.live.findings = [SUBDOMAIN]
+		await w.harness.d1.prepare("UPDATE app_envs SET kind = 'dev' WHERE app_id = 'notes' AND env = 'prod'").run()
+		expect(await w.pass()).toEqual({ checked: 0, alerted: 0, cleared: 0, busy: 0, failed: 0 })
+		await w.harness.d1.prepare("UPDATE app_envs SET kind = 'standard' WHERE app_id = 'notes' AND env = 'prod'").run()
+
+		const run = await w.harness.repositories.runs.createRun({
+			id: uuidv7(),
+			appId: 'notes',
+			env: 'prod',
+			ref: 'refs/heads/main',
+			trigger: 'manual',
+			actor: 'user:test',
+		})
+		await w.harness.d1.prepare("UPDATE runs SET status = 'running' WHERE id = ?").bind(run.id).run()
+		expect(await w.pass()).toEqual({ checked: 0, alerted: 0, cleared: 0, busy: 1, failed: 0 })
+		expect(w.checked).toEqual([])
+		expect(w.sent).toEqual([])
 	})
 })
