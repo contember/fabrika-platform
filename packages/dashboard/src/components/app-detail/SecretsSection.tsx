@@ -105,7 +105,7 @@ function SecretCell(
 	return (
 		<button
 			type="button"
-			className="ghost small"
+			className="small"
 			aria-label={`${row.name} on ${layerLabel(env)}: ${state.words}`}
 			aria-expanded={open}
 			onClick={(event) => onOpen(event.currentTarget)}
@@ -132,7 +132,7 @@ export function secretWhereabouts(row: LayeredName<AppSecretDto>, env: string | 
 	const own = env === null ? row.all : row.byEnv.get(env) ?? null
 	if (own !== null) {
 		if (own.storage === 'vault') return "Set, sealed in Control's vault."
-		if (own.storage === 'provider') return `Set, kept by the provider of ${env ?? 'each environment'}.`
+		if (own.storage === 'provider') return `Set, kept by the hosting of ${env ?? 'each environment'}, not by Control.`
 		return 'Stored outside the vault, so a deploy cannot read it: set it again.'
 	}
 	if (env === null) return 'Not set for all environments. A value here reaches every environment without its own.'
@@ -205,7 +205,7 @@ function SecretLayerEditor(
 						<span className="hint">Never shown again. {takesEffect(env)}</span>
 					</label>
 					<div className="form-actions">
-						<button type="submit" className="primary" disabled={busy || value === ''}>{busy ? 'Saving…' : rotate ? 'Rotate' : 'Set'}</button>
+						<button type="submit" className="primary" disabled={busy || value === ''}>{busy ? 'Saving…' : rotate ? 'Rotate' : 'Save'}</button>
 						<button type="button" onClick={onClose} disabled={busy}>Cancel</button>
 						{own !== null && (
 							<>

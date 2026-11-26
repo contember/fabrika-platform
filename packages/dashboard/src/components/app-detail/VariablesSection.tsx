@@ -106,12 +106,14 @@ function VarCell(
 	return (
 		<button
 			type="button"
-			className="ghost small"
+			className="small"
 			aria-label={`${row.name} on ${layerLabel(env)}: ${words}`}
 			aria-expanded={open}
 			onClick={(event) => onOpen(event.currentTarget)}
 		>
-			{own !== null ? <code className="layer-value" title={own.value}>{own.value}</code> : <span className="muted">{inherits ? 'from all' : '—'}</span>}
+			{own !== null
+				? <code className="layer-value" title={own.value}>{own.value}</code>
+				: <span className="muted">{inherits ? 'from all' : 'not set'}</span>}
 		</button>
 	)
 }

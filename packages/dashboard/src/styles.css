@@ -3864,7 +3864,8 @@ th.layer-head {
 }
 
 .layer-cell > button {
-	margin-left: calc(var(--s-2) * -1);
+	min-width: 6.5rem;
+	justify-content: flex-start;
 }
 
 .layer-value {

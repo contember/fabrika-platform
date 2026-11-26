@@ -83,7 +83,7 @@ describe('secrets as a matrix', () => {
 		const [inherited] = layersByName([secret('K', null)])
 		if (vault === undefined || provider === undefined || legacy === undefined || inherited === undefined) throw new Error('rows expected')
 		expect(secretWhereabouts(vault, 'prod')).toBe("Set, sealed in Control's vault.")
-		expect(secretWhereabouts(provider, 'prod')).toBe('Set, kept by the provider of prod.')
+		expect(secretWhereabouts(provider, 'prod')).toBe('Set, kept by the hosting of prod, not by Control.')
 		expect(secretWhereabouts(legacy, 'prod')).toBe('Stored outside the vault, so a deploy cannot read it: set it again.')
 		expect(secretWhereabouts(vault, 'test')).toBe('Not set on test or for all environments: a deploy of test has no value for it.')
 		expect(secretWhereabouts(inherited, 'test')).toBe('Not set on test: it reads the value for all environments. A value here overrides it for test.')

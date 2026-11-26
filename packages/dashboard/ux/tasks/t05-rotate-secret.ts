@@ -16,7 +16,7 @@ export const rotateSecret: UxTask = {
 		await actor.click(page.getByRole('button', { name: /^PAYMENT_API_KEY on prod: / }))
 		const value = page.getByLabel(/^(New value|Secret value)/)
 		await actor.fill(value, `ux-${Date.now().toString(36)}`)
-		await actor.click(page.getByRole('button', { name: /^(Rotate|Set)$/ }))
+		await actor.click(page.getByRole('button', { name: /^(Rotate|Save)$/ }))
 		await gone(value, 'the value field')
 		await seen(page.getByRole('status').filter({ hasText: 'PAYMENT_API_KEY on prod: new value saved' }), 'the saved confirmation')
 	},
