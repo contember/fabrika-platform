@@ -7,6 +7,7 @@
 
 import { type JsonValue, MAX_PROVIDER_STATE_BYTES, type ProviderCodec } from '@fabrika/provider-contract'
 import { z } from 'zod'
+import { CERTIFICATE_ARN, CERTIFICATE_HOST, CERTIFICATE_STATUS_ENUM, type CertificateStatus, RECORD_NAME as VALIDATION_RECORD } from './aws/acm'
 
 /** The provider id an envelope and an authored config carry. */
 export const AWS_PROVIDER = 'aws'
@@ -111,7 +112,26 @@ export interface AwsNamespaceTarget {
 	readonly proxyServiceUpdated?: true
 	/** Once the service's deployment of the recorded revision completed, and the secrets it no longer names were deleted. */
 	readonly proxyServiceRolledOut?: true
+	/**
+	 * The certificates of the namespace's hosts, one per host, each recorded once ACM answered its request, with its
+	 * status and validation record as last read (`ensureAwsProxyCertificates`). A host that left keeps its entry until its
+	 * certificate is off the listener and deleted.
+	 */
+	readonly proxyCertificates?: readonly AwsProxyCertificate[]
 }
+
+/** One host's certificate as a namespace records it: what the operator is shown, never a secret. */
+export interface AwsProxyCertificate {
+	readonly host: string
+	readonly arn: string
+	readonly status: CertificateStatus
+	/** The `CNAME` the operator adds, `name` to `value`; absent until ACM names it. */
+	readonly validationName?: string
+	readonly validationValue?: string
+}
+
+/** The most hosts a namespace holds certificates for: a balancer's listener takes 25 besides its default one. */
+export const AWS_MAX_PROXY_CERTIFICATES = 25
 
 /**
  * A run's progress (ADR-0044). An id AWS hands back exists only after the call that started the work, so a crash or a
@@ -168,6 +188,24 @@ const namespaceTargetSchema = z.object({
 	proxyServiceFingerprint: z.string().regex(SHA256_HEX).optional(),
 	proxyServiceUpdated: z.literal(true).optional(),
 	proxyServiceRolledOut: z.literal(true).optional(),
+	proxyCertificates: z
+		.array(
+			z.object({
+				host: z.string().regex(CERTIFICATE_HOST),
+				arn: z.string().regex(CERTIFICATE_ARN),
+				status: z.enum(CERTIFICATE_STATUS_ENUM),
+				validationName: z.string().regex(VALIDATION_RECORD).optional(),
+				validationValue: z.string().regex(VALIDATION_RECORD).optional(),
+			}).strict().refine((certificate) => (certificate.validationName === undefined) === (certificate.validationValue === undefined), {
+				message: "a certificate's validation record is recorded whole",
+				path: ['validationValue'],
+			}),
+		)
+		.max(AWS_MAX_PROXY_CERTIFICATES)
+		.refine((certificates) => new Set(certificates.map((certificate) => certificate.host)).size === certificates.length, {
+			message: 'one certificate per host',
+		})
+		.optional(),
 }).strict().refine((target) => target.proxyServiceRolledOut === undefined || target.proxyServiceUpdated === true, {
 	message: "the proxy service's rollout is recorded after its update",
 	path: ['proxyServiceUpdated'],
@@ -207,9 +245,24 @@ function issueFields(issue: z.ZodIssue): readonly string[] {
 	return [path === '' ? '(root)' : path]
 }
 
+/** A flat record's JSON: its fields that are set. */
+function flatJson(value: Readonly<Record<string, string | true | undefined>>): Record<string, JsonValue> {
+	const encoded: Record<string, JsonValue> = {}
+	for (const [key, field] of Object.entries(value)) {
+		if (field !== undefined) encoded[key] = field
+	}
+	return encoded
+}
+
 /** A codec over `schema` whose encoding is the parsed value itself, refused above Control's limit either way. */
 function strictCodec<T extends Readonly<Record<string, string | true | undefined>>>(kind: string, schema: z.ZodType<T>): ProviderCodec<T> {
-	const parse = (value: unknown): T => {
+	const parse = strictParse(kind, schema)
+	return { version: 1, encode: (value): JsonValue => flatJson(parse(value)), decode: (payload) => parse(payload) }
+}
+
+/** Parses `value` with `schema`, naming the fields of an issue (never a value), and refuses one above Control's limit. */
+function strictParse<T>(kind: string, schema: z.ZodType<T>): (value: unknown) => T {
+	return (value: unknown): T => {
 		const parsed = schema.safeParse(value)
 		if (!parsed.success) {
 			// The issues name fields only; a value is never quoted.
@@ -221,21 +274,19 @@ function strictCodec<T extends Readonly<Record<string, string | true | undefined
 		}
 		return parsed.data
 	}
-	return {
-		version: 1,
-		encode: (value): JsonValue => {
-			const parsed = parse(value)
-			const encoded: Record<string, string | boolean> = {}
-			for (const [key, field] of Object.entries(parsed)) {
-				if (field !== undefined) encoded[key] = field
-			}
-			return encoded
-		},
-		decode: (payload) => parse(payload),
-	}
 }
+
+const parseNamespaceTarget = strictParse('namespace target', namespaceTargetSchema)
 
 export const awsAppTargetCodec: ProviderCodec<AwsAppTarget> = strictCodec('target', appTargetSchema)
 export const awsAppArtifactCodec: ProviderCodec<AwsAppArtifact> = strictCodec('artifact', appArtifactSchema)
-export const awsNamespaceTargetCodec: ProviderCodec<AwsNamespaceTarget> = strictCodec('namespace target', namespaceTargetSchema)
+/** Flat as the others, but for its list of certificates, each a flat record. */
+export const awsNamespaceTargetCodec: ProviderCodec<AwsNamespaceTarget> = {
+	version: 1,
+	encode: (value): JsonValue => {
+		const { proxyCertificates, ...flat } = parseNamespaceTarget(value)
+		return { ...flatJson(flat), ...(proxyCertificates === undefined ? {} : { proxyCertificates: proxyCertificates.map(flatJson) }) }
+	},
+	decode: (payload) => parseNamespaceTarget(payload),
+}
 export const awsRunCheckpointCodec: ProviderCodec<AwsRunCheckpoint> = strictCodec('run checkpoint', runCheckpointSchema)

@@ -475,9 +475,18 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the installation balancer's group, on :8080 and :8081, and its egress is TCP 443 anywhere (IAM, ECR, logs) and the
     applications' port in the VPC's range. Control reads the balancer's group and the range from
     `FABRIKA_AWS_BALANCER_SECURITY_GROUP` and `FABRIKA_AWS_VPC_CIDR` (the VPC's primary block, its network address; a
-    secondary block is not covered), which the installation's stack will give. Not yet: the listener's host rules and
-    the certificates, and Caddy's `trusted_proxies` set to the VPC's range, so a request's client address is the
-    caller's, not the balancer's.
+    secondary block is not covered), which the installation's stack will give. Not yet: the listener's host rules, and
+    Caddy's `trusted_proxies` set to the VPC's range, so a request's client address is the caller's, not the balancer's.
+    **The certificates** (built, `src/proxy-certificates.ts`, `src/aws/acm.ts`): every republish and reconcile first
+    requests a public ACM certificate, validated by DNS, for each routed host that has none, and records it in the
+    namespace target as ACM answers (its idempotency token derived from the namespace, the host and the certificate it
+    replaces). It reads every recorded one of a current host again: its status and the `CNAME` the operator adds, which
+    the namespace's presentation shows with "add it, and reconcile the namespace". Nothing waits for a certificate and
+    nothing fails on one: validation waits on the operator's DNS, and a namespace that is not ready refuses deploys. One
+    ACM no longer knows is requested anew; one that failed or timed out stays shown until the operator deletes it in
+    ACM. A departed host keeps its entry until its certificate is off the listener. At most 25 per namespace (a
+    listener's certificate quota besides its default one; the quota is the installation's, shared by every namespace).
+    Not yet: serving them on the listener, and deleting a departed host's.
     **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
     members, one resumable step per pass from what the target records: an image of the current manifest sets the
     service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
@@ -551,8 +560,14 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         grants `AddTags` on `targetgroup/*`; `ModifyTargetGroup`, `ModifyTargetGroupAttributes` and `DeleteTargetGroup`
         only with the resource tag (`Null` on `aws:ResourceTag/fabrika:namespace` = `false`), as these calls carry no
         request tags; no `RemoveTags`, since a namespace's tags never change; and the `Describe*` reads, which take no
-        resource. UNVERIFIED: that CloudFormation sends a new target group's tags inside `CreateTargetGroup` rather than
-        with a later `AddTags`; a later one would be denied, and the stack would fail closed;
+        resource. That freezes a target group's tags: a later release that changes them would fail the namespace stack's
+        update on every existing installation, so such a change brings its own upgrade step (a grant, or a replaced
+        group). UNVERIFIED: that CloudFormation sends a new target group's tags inside `CreateTargetGroup` rather than with
+        a later `AddTags`; a later one would be denied, and the stack would fail closed. Its certificates add `acm:RequestCertificate` only with the request tag `fabrika:namespace`, `acm:AddTagsToCertificate`
+        (which a request with tags needs) only with `aws:TagKeys` within `fabrika:namespace` and `fabrika:env`, and
+        `acm:DescribeCertificate` on `certificate/*`. ACM has no create-action key, so that tag grant alone could tag an
+        existing certificate; the deletes that come with the listener's rules are therefore scoped by the resource tag and
+        refused by ACM for a certificate in use (the installation's default one is);
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
