@@ -1206,7 +1206,7 @@ button.search-clear:hover:not(:disabled) {
 	text-decoration: none;
 }
 
-.app-env-state:hover {
+a.app-env-state:hover {
 	border-color: var(--ink-3);
 }
 

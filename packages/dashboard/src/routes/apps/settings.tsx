@@ -9,7 +9,7 @@ import { api, ApiError, type DeploymentNamespaceDto } from '../../lib/api'
 import { fmtDate } from '../../lib/format'
 
 // How an application is built and where its environments run. Only this tab reads the namespaces, which an
-// application's own manager may not list (card t1429-ctenar-dat): the environment form's placement picker needs them.
+// application's own manager may not list: the environment form's placement picker needs them.
 
 export default createPage()
 	.params({ id: 'string' })

@@ -517,7 +517,7 @@ function Navigation({ caller, pathname }: { caller: ConsoleCaller; pathname: str
 /** The data view lies under Applications' path, but its rule is its own: no global `app.manage`, and no rail page. */
 const DATA_VIEW_PATH = /^\/apps\/[^/]+\/(?:data\/[^/]+|environments\/[^/]+\/data)$/
 
-/** An application's own tabs open to a manager of that one application, who cannot list the others (card t1429-ctenar-dat). */
+/** An application's own tabs open to a manager of that one application, who cannot list the others. */
 const APP_PAGE_PATH = /^\/apps\/(?!new$)([^/]+)(?:\/|$)/
 
 function managesAppAt(caller: ConsoleCaller, pathname: string): boolean {

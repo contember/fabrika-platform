@@ -32,7 +32,13 @@ export function DeployButton({ appId, env, named = false }: { appId: string; env
 
 	return (
 		<div className="environment-deploy">
-			<button type="button" className="small" onClick={deploy} disabled={busy} aria-label={`Deploy ${env}`}>
+			<button
+				type="button"
+				className="small"
+				onClick={deploy}
+				disabled={busy}
+				aria-label={named ? undefined : busy ? `Deploying ${env}` : `Deploy ${env}`}
+			>
 				<Icon name="bolt" size={12} />
 				{busy ? 'Deploying…' : named ? `Deploy ${env}` : 'Deploy'}
 			</button>

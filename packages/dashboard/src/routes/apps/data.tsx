@@ -1,7 +1,14 @@
 import { createPage, Link } from '@buzola/router'
 import { CONTROL_ACTIONS, OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/control-contract'
-import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
-import { AppFrame, type AppFrameData, forgetEnvironmentStates, loadAppFrame, useEnvironmentStates } from '../../components/app/AppFrame'
+import { type FormEvent, type ReactNode, useCallback, useEffect, useState } from 'react'
+import {
+	AppFrame,
+	type AppFrameData,
+	forgetEnvironmentState,
+	loadAppFrame,
+	readableEnvironments,
+	useEnvironmentStates,
+} from '../../components/app/AppFrame'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { Chip, type Lamp, Status } from '../../components/Status'
@@ -272,7 +279,7 @@ export default createPage()
 	.params({ id: 'string', env: 'string' })
 	.loader(async ({ params }) => {
 		const { access } = await consoleSession()
-		// A data reader may manage no application (card t1429-ctenar-dat): then the page stands alone, without the tabs.
+		// A data reader may manage no application: then the page stands alone, without the tabs.
 		const managesApp = access === null || holdsAtApp(access, CONTROL_ACTIONS.APP_MANAGE, params.id)
 		const [data, frame] = await Promise.all([loadDataView(api, params.id, params.env), managesApp ? loadAppFrame(params.id) : null])
 		return { data, frame }
@@ -293,15 +300,17 @@ function DataTab({ frame, env, data, onChanged }: {
 }) {
 	const { app, envs } = frame
 	const states = useEnvironmentStates(envs)
-	function changed() {
-		forgetEnvironmentStates(app.id)
+	const access = useConsoleAccess()
+	// Stable, so the running operation's poll keeps its timer; it forgets only this environment's held state.
+	const changed = useCallback(() => {
+		forgetEnvironmentState(app.id, env)
 		onChanged()
-	}
+	}, [app.id, env, onChanged])
 	return (
 		<AppFrame app={app} envs={envs} tab="data" states={states}>
 			<div className="toolbar">
 				<div className="filter-group" role="group" aria-label="Environment">
-					{envs.map((candidate) => (
+					{readableEnvironments(access, envs).map((candidate) => (
 						<Link
 							key={candidate.env}
 							to="apps/data"

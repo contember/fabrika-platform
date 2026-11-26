@@ -8,8 +8,7 @@ import { WaitingApprovals } from '../../components/app/WaitingApprovals'
 import { RunStatus, Status } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import { api, type AppEnvDto, type RunDto } from '../../lib/api'
-import { mayDo } from '../../lib/console-access'
-import { useConsoleAccess } from '../../lib/console-caller'
+import { holdsAtApp, mayDo } from '../../lib/console-access'
 import { type EnvironmentState, stateLabel, stateLamp } from '../../lib/environment-state'
 import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
 import { type OverviewRead, overviewRead } from '../../lib/overview'
@@ -17,36 +16,57 @@ import { consoleSession } from '../../lib/session'
 import { operationsClient } from '../../operations/client'
 
 // An application's Overview: each environment's state, what it runs, its last run and open errors, what waits for a
-// decision, and the newest runs. The environment states load one by one after the page (T1429, card t1429-stav-prostredi).
+// decision, and the newest runs. The environment states load one by one after the page, so a slow one blocks no row.
 
 const RECENT_RUNS = 5
-const ISSUE_LIMIT = 100
+
+/** An environment's open errors: a count, no source to count in, or not known (refused or unavailable). */
+type OpenErrors = { readonly kind: 'count'; readonly open: number; readonly sourceId: string } | { readonly kind: 'no-source' } | {
+	readonly kind: 'unknown'
+}
 
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
 		const { access } = await consoleSession()
 		const frame = await loadAppFrame(params.id)
-		const readsRuns = access === null || mayDo(access, CONTROL_ACTIONS.DEPLOY_READ)
+		const at = (env: AppEnvDto) => ({ app: params.id, env: env.env })
+		const readsRuns = access === null || holdsAtApp(access, CONTROL_ACTIONS.DEPLOY_READ, params.id)
 		const decides = access === null || mayDo(access, CONTROL_ACTIONS.ACCESS_APPROVE)
 		const readsErrors = access === null || mayDo(access, OPERATIONS_ACTIONS.READ)
-		const [runs, approvals, issues, published] = await Promise.all([
+		const [runs, approvals, sources, perEnv] = await Promise.all([
 			overviewRead(readsRuns, () => api.runs.list({ appId: params.id, limit: RECENT_RUNS })),
 			overviewRead(decides, () => api.approvals.list()),
-			overviewRead(readsErrors, () => operationsClient.issues({ status: 'open', window: 'all', sort: 'recent', limit: ISSUE_LIMIT })),
-			Promise.all(frame.envs.map(async (env) => [env.env, await publishedRun(env)] as const)),
+			overviewRead(readsErrors, () => operationsClient.sources()),
+			Promise.all(frame.envs.map(async (env) => {
+				const [published, last] = await Promise.all([
+					publishedRun(env),
+					overviewRead(access === null || mayDo(access, CONTROL_ACTIONS.DEPLOY_READ, at(env)), async () => {
+						const page = await api.runs.list({ appId: params.id, env: env.env, limit: 1 })
+						return page.items[0] ?? null
+					}),
+				])
+				return { env: env.env, published, last }
+			})),
 		])
+		const errors = await Promise.all(frame.envs.map(async (env): Promise<readonly [string, OpenErrors]> => {
+			if (sources.data === null || (access !== null && !mayDo(access, OPERATIONS_ACTIONS.READ, at(env)))) return [env.env, { kind: 'unknown' }]
+			const source = sources.data.items.find((candidate) => candidate.appId === params.id && candidate.environment === env.env)
+			if (source === undefined) return [env.env, { kind: 'no-source' }]
+			const read = await overviewRead(true, () => operationsClient.issues({ sourceId: source.id, status: 'open', window: 'all', limit: 1 }))
+			return [env.env, read.data === null ? { kind: 'unknown' } : { kind: 'count', open: read.data.summary.open, sourceId: source.id }]
+		}))
 		return {
 			...frame,
 			runs,
 			waiting: approvals.data?.items.filter((approval) => approval.run.appId === params.id) ?? [],
-			issues,
-			published: new Map(published),
+			perEnv: new Map(perEnv.map((entry) => [entry.env, entry])),
+			errors: new Map(errors),
 		}
 	})
 	.route('/apps/:id')
 	.render(({ data }) => {
-		const { app, envs, runs, waiting, issues, published } = data
+		const { app, envs, runs, waiting, perEnv, errors } = data
 		const states = useEnvironmentStates(envs)
 		return (
 			<AppFrame app={app} envs={envs} tab="overview" states={states}>
@@ -84,9 +104,9 @@ export default createPage()
 								key={env.env}
 								env={env}
 								state={states.get(env.env) ?? { kind: 'reading' }}
-								published={published.get(env.env) ?? null}
-								last={runs.data?.items.find((run) => run.env === env.env) ?? null}
-								issues={issues}
+								published={perEnv.get(env.env)?.published ?? null}
+								last={perEnv.get(env.env)?.last ?? { data: null, problem: 'unavailable' }}
+								errors={errors.get(env.env) ?? { kind: 'unknown' }}
 							/>
 						))}
 					</Table>
@@ -103,16 +123,13 @@ async function publishedRun(env: AppEnvDto): Promise<RunDto | null> {
 	return api.runs.get({ runId: env.publishedRunId }).catch(() => null)
 }
 
-function EnvironmentRow({ env, state, published, last, issues }: {
+function EnvironmentRow({ env, state, published, last, errors }: {
 	env: AppEnvDto
 	state: EnvironmentState
 	published: RunDto | null
-	last: RunDto | null
-	issues: OverviewRead<Awaited<ReturnType<typeof operationsClient.issues>>>
+	last: OverviewRead<RunDto | null>
+	errors: OpenErrors
 }) {
-	const access = useConsoleAccess()
-	const open = issues.data?.items.filter((issue) => issue.source.appId === env.appId && issue.source.environment === env.env) ?? null
-	const readsErrors = mayDo(access, OPERATIONS_ACTIONS.READ, { app: env.appId, env: env.env })
 	return (
 		<tr>
 			<td>
@@ -138,25 +155,23 @@ function EnvironmentRow({ env, state, published, last, issues }: {
 				)}
 			</td>
 			<td>
-				{last === null ? <span className="muted">None</span> : (
-					<div className="cell-stack">
-						<Link to="runs/detail" params={{ id: last.id }}>
-							<RunStatus status={last.status} />
-						</Link>
-						<span className="muted small" title={fmtDate(last.createdAt)}>{fmtAgo(last.createdAt)}</span>
-					</div>
-				)}
+				{last.data === null
+					? <span className="muted">{last.problem === null ? 'None' : 'Unknown'}</span>
+					: (
+						<div className="cell-stack">
+							<Link to="runs/detail" params={{ id: last.data.id }}>
+								<RunStatus status={last.data.status} />
+							</Link>
+							<span className="muted small" title={fmtDate(last.data.createdAt)}>{fmtAgo(last.data.createdAt)}</span>
+						</div>
+					)}
 			</td>
 			<td>
-				{!readsErrors || open === null
+				{errors.kind === 'unknown'
 					? <span className="muted">Unknown</span>
-					: open.length === 0
+					: errors.kind === 'no-source' || errors.open === 0
 					? <span className="muted">None</span>
-					: (
-						<Link to="operations/errors" params={{ window: 'all', source: open[0]?.source.id ?? '' }}>
-							{open.length >= ISSUE_LIMIT ? `${ISSUE_LIMIT}+` : open.length} open
-						</Link>
-					)}
+					: <Link to="operations/errors" params={{ window: 'all', source: errors.sourceId }}>{errors.open} open</Link>}
 			</td>
 			<td>
 				<DeployButton appId={env.appId} env={env.env} />
