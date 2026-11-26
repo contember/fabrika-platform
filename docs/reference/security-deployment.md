@@ -367,7 +367,7 @@ a protected environment without approval
 ### A passkey on deciding
 
 `stepUp` (`none` or `webauthn`, per category but `grants`, which IAM decides) makes deciding a pending item take a
-passkey assertion bound to the decision ([ADR-0050 §5](../decisions/0050-approved-access.md),
+passkey assertion bound to the decision, given on IAM's step-up page ([ADR-0050 §5](../decisions/0050-approved-access.md),
 [`approval/step-up.ts`](../../packages/control/src/approval/step-up.ts)). It is `webauthn` for `credentials` by default
 and `none` elsewhere; the permissive preset sets `none` everywhere. A parked run or a request takes it when any category
 it waits in says `webauthn` (`requiredStepUp`, beside `requiredApprovers`); a request of a category this Control does not
@@ -379,16 +379,19 @@ know takes it. `ApprovalDto.stepUp` and `ApprovalRequestDto.stepUp` say which ap
   takes none answers 409. Control builds the binding from the stored item,
   `control:approval:["run",<id>,<decision>,<candidate digest>,<baseline digest>]` or
   `control:approval:["request",<id>,<decision>,<input digest>]`, and asks IAM's `passkeys.challenge` with the
-  approver's console token, over IAM's admin transport (`IAM_ADMIN`, the console's IAM gateway's). A person with no
-  passkey gets `{ kind: 'no-passkey' }`, and the page links Account → Passkeys. IAM's other refusals reach the page with
-  their own status and words: 409 when the console has no registered origin, 429 for too many open challenges.
-- **The check.** `approvals.complete` and `approvals.requests.decide` take the answer as `stepUp`. Before anything is
-  written, Control rebuilds the binding from the item it decides and asks IAM's `passkeys.verify` with the approver's
-  token, then checks that the verified person is the approver. A missing assertion answers 403 ("this decision takes a
-  passkey"); a refusal by IAM, IAM out of reach, or another person's assertion answers 403 ("the passkey check
-  failed"). Approving and refusing both take it: the binding names the decision, so an assertion for one never makes
-  the other, nor decides another item. IAM consumes the challenge on its first use, so an assertion decides once; a
-  decision that then fails (the lease busy, another decision first) takes a new one.
+  approver's console token, over IAM's admin transport (`IAM_ADMIN`, the console's IAM gateway's). The page gets IAM's
+  `{ challengeId, expiresAt, url }`, links IAM's step-up page at `url` (a new tab, where the person confirms with a
+  passkey; [human-authentication.md](./human-authentication.md#passkeys)), and posts the decision when the person
+  continues. A person with no passkey gets `{ kind: 'no-passkey' }`, and the page links their IAM account page. IAM's
+  other refusals reach the page with their own status and words: 429 for too many open challenges.
+- **The check.** `approvals.complete` and `approvals.requests.decide` take the answered challenge as `stepUp`
+  (`{ challengeId }`). Before anything is written, Control rebuilds the binding from the item it decides and asks IAM's
+  `passkeys.verify` with the approver's token, then checks that the verified person is the approver. A missing
+  `stepUp` answers 403 ("this decision takes a passkey"); a challenge not answered yet, a refusal by IAM, IAM out of
+  reach, or another person's answer answers 403 ("the passkey check failed"). Approving and refusing both take it: the
+  binding names the decision, so an answer for one never makes the other, nor decides another item. IAM spends an
+  answered challenge on its first verification, so an answer decides once; a decision that then fails (the lease busy,
+  another decision first) takes a new one.
 - **Weakening it.** On a protected environment, `apps.environments.protect` takes a passkey too when the change weakens
   what deciding takes in a category that says `webauthn` under the held settings (`weakensStepUp` in
   `@fabrika/control-contract`, which the console shares): protection off, that category's `stepUp` to `none`, a lower
@@ -396,7 +399,7 @@ know takes it. `ApprovalDto.stepUp` and `ApprovalRequestDto.stepUp` say which ap
   from `merged` to `any`. The console asks `apps.environments.protectChallenge` with the change as it will post it;
   Control answers 409 to one that takes none, and binds the challenge to
   `control:protect:["env",<app>,<env>,<sha256 of the canonical {protected, policy, settings}>]`, a part left out as
-  null. `protect` carries the answer as `stepUp`, and Control judges and verifies it under the environment's lease,
+  null. `protect` carries the answered challenge as `stepUp`, and Control judges and verifies it under the environment's lease,
   against the row read there, before IAM's grant gate or the row is written; a missing assertion and a failed check
   answer the decisions' 403. A tightening and a change to categories without `webauthn` take none. An unprotected
   environment's requests are decided under the defaults, so a change that keeps it unprotected takes none, and

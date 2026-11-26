@@ -364,7 +364,7 @@ function Passkeys({ principal, passkeys, onDone }: { principal: PrincipalDetail;
 						<strong>{passkeys.length === 0 ? 'No passkey' : passkeys.map((passkey) => passkey.label).join(', ')}</strong>
 						<p>
 							{passkeys.length === 0
-								? 'The person adds one from the account menu, under Passkeys.'
+								? 'The person adds one on their IAM account page, reached from the account menu under Passkeys.'
 								: 'They confirm sensitive steps in the console, such as deciding an approval that asks for a passkey.'}
 						</p>
 					</div>
@@ -376,7 +376,7 @@ function Passkeys({ principal, passkeys, onDone }: { principal: PrincipalDetail;
 					<div className="user-item-actions">
 						<button type="button" className="danger" onClick={() => setConfirmReset(true)}>Remove all passkeys</button>
 					</div>
-					<p className="hint">For a person who lost every passkey: they add a new one from the account menu.</p>
+					<p className="hint">For a person who lost every passkey: they add a new one on their IAM account page, reached from the account menu.</p>
 				</div>
 			)}
 			{notice && <p className="notice" role="status">{notice}</p>}

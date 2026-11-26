@@ -21,8 +21,7 @@ import {
 	weakensStepUp,
 } from '@fabrika/control-contract'
 import type { createControlClient } from './api'
-import { type DecisionFailure, decisionFailure, NoPasskeyError, postDecision } from './decision-step-up'
-import { PasskeyCeremonyError, type PasskeyCredentials } from './webauthn'
+import { type DecisionFailure, decisionFailure, NoPasskeyError, startDecision, type StartedDecision } from './decision-step-up'
 
 type ControlClient = ReturnType<typeof createControlClient>
 
@@ -55,20 +54,18 @@ export function protectionStepUp(held: HeldProtection, value: boolean, choice?: 
 /**
  * Control's `apps.environments.protect`: `access.approve` from a person in the console, audited (ADR-0050 §4). With
  * `policy` and `settings`, also the mode of each category and the settings beside them (ADR-0083); without, the stored
- * choice stays. A change that takes a passkey runs the prompt first, on a challenge bound to it
- * (`protectChallenge`), and carries its answer; nothing is sent when the prompt fails.
+ * choice stays. A change that takes a passkey is not sent yet: it answers the check on a challenge bound to it
+ * (`protectChallenge`), which sends it with the challenge's id once the person confirmed it on IAM's page.
  */
 export function setEnvironmentProtection(
 	client: ControlClient,
 	held: HeldProtection,
 	value: boolean,
 	choice: ProtectionChoiceInput | undefined,
-	credentials: PasskeyCredentials | null,
-): Promise<AppEnvDto> {
+): Promise<StartedDecision<AppEnvDto>> {
 	const change = { appId: held.appId, env: held.env, protected: value, ...(choice === undefined ? {} : choice) }
-	return postDecision(
+	return startDecision(
 		protectionStepUp(held, value, choice),
-		credentials,
 		() => client.apps.environments.protectChallenge(change),
 		(stepUp) => client.apps.environments.protect(stepUp === undefined ? change : { ...change, stepUp }),
 		'change',
@@ -309,12 +306,12 @@ export function parkedRunsAt(approvals: readonly ApprovalDto[], appId: string, e
 }
 
 /**
- * Why a change of protection was not saved: a passkey prompt's failure as the approval pages say it, and Control's own
+ * Why a change of protection was not saved: a person without a passkey as the approval pages say it, and Control's own
  * words for a refusal, or for a conflict of a change that took a passkey, because the passkey check or IAM may be what
  * refused it, whatever this page expected. Any other failure in the console's words.
  */
 export function protectionChangeFailure(cause: unknown, env: string, stepUp: StepUpMode): DecisionFailure {
-	if (cause instanceof NoPasskeyError || cause instanceof PasskeyCeremonyError || cause instanceof DOMException) return decisionFailure(cause)
+	if (cause instanceof NoPasskeyError) return decisionFailure(cause)
 	if (cause instanceof RpcError && (cause.httpStatus === 403 || (stepUp === 'webauthn' && cause.httpStatus === 409))) {
 		return { message: cause.message, noPasskey: false }
 	}

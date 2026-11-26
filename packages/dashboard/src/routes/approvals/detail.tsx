@@ -6,6 +6,7 @@ import { CloserReview } from '../../components/CloserReview'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { DecisionFailureNotice, StepUpHint } from '../../components/DecisionFailureNotice'
 import { Icon, type IconName } from '../../components/Icon'
+import { PasskeyCheckPrompt } from '../../components/PasskeyCheckPrompt'
 import { SearchField } from '../../components/SearchField'
 import { Chip, RunStatus, Status } from '../../components/Status'
 import { Table } from '../../components/Table'
@@ -22,11 +23,10 @@ import {
 	surfaceNotes,
 } from '../../lib/access-changes'
 import { type AccessChangeDto, api, type ApprovalDto, type DeployRequestDto, type SurfaceEndpointDto } from '../../lib/api'
-import { type DecisionFailure, decisionFailure, postDecision } from '../../lib/decision-step-up'
+import { type DecisionFailure, decisionFailure, type PasskeyCheck, startDecision } from '../../lib/decision-step-up'
 import { changeWaits, requesterBlocks, requesterBlockText } from '../../lib/environment-protection'
 import { fmtDate, shortRef, shortSha } from '../../lib/format'
 import { consoleSession } from '../../lib/session'
-import { browserCredentials, type PasskeyCredentials } from '../../lib/webauthn'
 
 // One access change (ADR-0050 §7): who gains access first, grouped by caller, then what changes in data and runtime,
 // built from the facts each line of the diff carries; every line stays one step away, and the decision follows.
@@ -618,18 +618,18 @@ export function DeployRequestView({ request, approval }: { request: DeployReques
 /**
  * Approve (the page's one constructive step) or refuse. Only a person signed in to the console can do either. `me` is
  * the signed-in principal and `now` the time in unix seconds: past the deadline Control refuses both, and the first of
- * two approvers may refuse but not approve again.
+ * two approvers may refuse but not approve again. A decision that takes a passkey waits for its check on IAM's page.
  */
-export function Decision({ approval, me, now, onDone, credentials = browserCredentials() }: {
+export function Decision({ approval, me, now, onDone }: {
 	approval: ApprovalDto
 	me: string | null
 	now: number
 	onDone: () => void
-	credentials?: PasskeyCredentials | null
 }) {
 	const [busy, setBusy] = useState(false)
 	const [failure, setFailure] = useState<DecisionFailure | null>(null)
 	const [rejecting, setRejecting] = useState(false)
+	const [check, setCheck] = useState<PasskeyCheck<void> | null>(null)
 
 	if (approval.deadline !== undefined && approval.deadline <= now) {
 		return (
@@ -650,20 +650,23 @@ export function Decision({ approval, me, now, onDone, credentials = browserCrede
 		setFailure(null)
 		const item = { runId: approval.run.id, decision, candidateDigest: approval.candidateDigest, baselineDigest: approval.baselineDigest }
 		try {
-			await postDecision(
+			const started = await startDecision(
 				approval.stepUp,
-				credentials,
 				() => api.approvals.challenge(item),
 				async (stepUp) => {
 					await api.approvals.complete(stepUp === undefined ? item : { ...item, stepUp })
 				},
 				'decision',
 			)
-			onDone()
+			if (started.kind === 'posted') {
+				onDone()
+				return
+			}
+			setCheck(started.check)
 		} catch (cause) {
 			setFailure(decisionFailure(cause))
-			setBusy(false)
 		}
+		setBusy(false)
 	}
 
 	return (
@@ -682,17 +685,21 @@ export function Decision({ approval, me, now, onDone, credentials = browserCrede
 					</p>
 				)}
 				<StepUpHint stepUp={approval.stepUp} item="deploy" />
-				<div className="row-actions">
-					{approvedByMe
-						? <span className="muted decision-note">Waiting for a second person</span>
-						: blocked !== null
-						? <span className="muted decision-note">{requesterBlockText(blocked, 'deploy')}</span>
-						: (
-							<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
-								{busy ? 'Recording…' : 'Approve and deploy'}
-							</button>
-						)}
-				</div>
+				{check !== null
+					? <PasskeyCheckPrompt check={check} onDone={onDone} onCancel={() => setCheck(null)} />
+					: (
+						<div className="row-actions">
+							{approvedByMe
+								? <span className="muted decision-note">Waiting for a second person</span>
+								: blocked !== null
+								? <span className="muted decision-note">{requesterBlockText(blocked, 'deploy')}</span>
+								: (
+									<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
+										{busy ? 'Recording…' : 'Approve and deploy'}
+									</button>
+								)}
+						</div>
+					)}
 				{failure !== null && <DecisionFailureNotice failure={failure} />}
 			</section>
 			<div className="danger-zone">
@@ -701,7 +708,7 @@ export function Decision({ approval, me, now, onDone, credentials = browserCrede
 					The run fails and nothing is published. A new deploy is classified again.
 				</div>
 				<span className="spacer" />
-				<button type="button" className="danger" disabled={busy} onClick={() => setRejecting(true)}>
+				<button type="button" className="danger" disabled={busy || check !== null} onClick={() => setRejecting(true)}>
 					Refuse
 				</button>
 			</div>

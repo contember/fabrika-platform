@@ -5,7 +5,7 @@ import {
 	type ControlRpcContract,
 	parseBuilderInstallationDiscovery,
 } from '@fabrika/control-contract'
-import { SECOND_FACTOR_ENROL_PATH } from '@fabrika/iam-contract'
+import { ACCOUNT_PAGE_PATH, SECOND_FACTOR_ENROL_PATH } from '@fabrika/iam-contract'
 import type { ConsoleCaller } from './console-access'
 import { administersPeople, type IamAdministration, iamAdministration, type SignedInPrincipal } from './iam'
 
@@ -18,6 +18,8 @@ export interface ConsoleSession extends ConsoleCaller {
 	signOutUrl: string | null
 	/** IAM's page where an administrator enrols an authenticator app; null for anyone else or without IAM's origin. */
 	secondFactorUrl: string | null
+	/** The passkeys section of the person's IAM account page, where they add and remove passkeys; null without IAM's origin. */
+	passkeysUrl: string | null
 }
 
 /** The installation facts control publishes on the console's own origin, or null when it publishes none. */
@@ -40,6 +42,13 @@ export async function installationDiscovery(fetcher: RpcFetch = fetch): Promise<
 export function signOutUrl(iamIssuer: string): string {
 	const url = new URL('/auth/logout', iamIssuer)
 	url.searchParams.set('redirect', new URL('/auth/login', iamIssuer).toString())
+	return url.toString()
+}
+
+/** The passkeys section of IAM's account page: passkeys live under IAM's host, so only IAM's pages add or remove one. */
+export function passkeysUrl(iamIssuer: string): string {
+	const url = new URL(ACCOUNT_PAGE_PATH, iamIssuer)
+	url.hash = 'passkeys'
 	return url.toString()
 }
 
@@ -70,6 +79,7 @@ export async function readConsoleSession(fetcher: RpcFetch = fetch): Promise<Con
 		secondFactorUrl: discovery === null || administration.status !== 'administrator'
 			? null
 			: new URL(SECOND_FACTOR_ENROL_PATH, discovery.iamIssuer).toString(),
+		passkeysUrl: discovery === null ? null : passkeysUrl(discovery.iamIssuer),
 		access,
 		iam: administration.status === 'unknown' ? null : administration.status === 'administrator' ? administration.scope : false,
 		administersPeople: people,

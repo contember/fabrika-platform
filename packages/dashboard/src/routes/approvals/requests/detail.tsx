@@ -5,13 +5,13 @@ import { roleSummary } from '../../../components/AccessMap'
 import { ConfirmDialog } from '../../../components/ConfirmDialog'
 import { DecisionFailureNotice, StepUpHint } from '../../../components/DecisionFailureNotice'
 import { Icon } from '../../../components/Icon'
+import { PasskeyCheckPrompt } from '../../../components/PasskeyCheckPrompt'
 import { Chip, type Lamp, Status } from '../../../components/Status'
 import { type AccessMapRoleDto, api, type ApprovalRequestDto, type ApprovalRequestText } from '../../../lib/api'
-import { type DecisionFailure, decisionFailure, postDecision } from '../../../lib/decision-step-up'
+import { type DecisionFailure, decisionFailure, type PasskeyCheck, startDecision } from '../../../lib/decision-step-up'
 import { categoryLabel, requesterBlocks, requesterBlockText } from '../../../lib/environment-protection'
 import { fmtDate } from '../../../lib/format'
 import { consoleSession } from '../../../lib/session'
-import { browserCredentials, type PasskeyCredentials } from '../../../lib/webauthn'
 
 // One approval request (ADR-0083 §8), mobile-first: who asks, through which client or key, exactly what its kind says
 // it does, where and by when, and the decision. Text the agent wrote is escaped (React renders it as text) and marked
@@ -227,18 +227,19 @@ export function RequestOutcome({ request }: { request: ApprovalRequestDto }) {
 /**
  * Approve or refuse a pending request. `me` is the signed-in principal and `now` the time in unix seconds: past the
  * deadline Control refuses both; the first of two approvers waits for a second person; the requester's own person may
- * only refuse where the environment says so; a request this Control cannot describe may only be refused.
+ * only refuse where the environment says so; a request this Control cannot describe may only be refused. A decision that
+ * takes a passkey waits for its check on IAM's page.
  */
-export function RequestDecision({ request, me, now, onDone, credentials = browserCredentials() }: {
+export function RequestDecision({ request, me, now, onDone }: {
 	request: ApprovalRequestDto
 	me: string | null
 	now: number
 	onDone: () => void
-	credentials?: PasskeyCredentials | null
 }) {
 	const [busy, setBusy] = useState(false)
 	const [failure, setFailure] = useState<DecisionFailure | null>(null)
 	const [rejecting, setRejecting] = useState(false)
+	const [check, setCheck] = useState<PasskeyCheck<void> | null>(null)
 
 	if (request.deadline <= now) {
 		return <p className="hint">Nobody decided this request before {fmtDate(request.deadline)}, so it expired and changes nothing.</p>
@@ -251,20 +252,23 @@ export function RequestDecision({ request, me, now, onDone, credentials = browse
 		setFailure(null)
 		const item = { id: request.id, decision, inputDigest: request.inputDigest }
 		try {
-			await postDecision(
+			const started = await startDecision(
 				request.stepUp,
-				credentials,
 				() => api.approvals.requests.challenge(item),
 				async (stepUp) => {
 					await api.approvals.requests.decide(stepUp === undefined ? item : { ...item, stepUp })
 				},
 				'decision',
 			)
-			onDone()
+			if (started.kind === 'posted') {
+				onDone()
+				return
+			}
+			setCheck(started.check)
 		} catch (cause) {
 			setFailure(decisionFailure(cause))
-			setBusy(false)
 		}
+		setBusy(false)
 	}
 
 	return (
@@ -279,19 +283,23 @@ export function RequestDecision({ request, me, now, onDone, credentials = browse
 					</p>
 				)}
 				<StepUpHint stepUp={request.stepUp} item="request" />
-				<div className="row-actions">
-					{!request.described
-						? <span className="muted decision-note">This Control cannot show what the request does, so it cannot be approved here.</span>
-						: approvedByMe
-						? <span className="muted decision-note">Waiting for a second person</span>
-						: blocked !== null
-						? <span className="muted decision-note">{requesterBlockText(blocked, 'request')}</span>
-						: (
-							<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
-								{busy ? 'Recording…' : 'Approve'}
-							</button>
-						)}
-				</div>
+				{check !== null
+					? <PasskeyCheckPrompt check={check} onDone={onDone} onCancel={() => setCheck(null)} />
+					: (
+						<div className="row-actions">
+							{!request.described
+								? <span className="muted decision-note">This Control cannot show what the request does, so it cannot be approved here.</span>
+								: approvedByMe
+								? <span className="muted decision-note">Waiting for a second person</span>
+								: blocked !== null
+								? <span className="muted decision-note">{requesterBlockText(blocked, 'request')}</span>
+								: (
+									<button type="button" className="primary" disabled={busy} onClick={() => void decide('approve')}>
+										{busy ? 'Recording…' : 'Approve'}
+									</button>
+								)}
+						</div>
+					)}
 				{failure !== null && <DecisionFailureNotice failure={failure} />}
 			</section>
 			<div className="danger-zone">
@@ -300,7 +308,7 @@ export function RequestDecision({ request, me, now, onDone, credentials = browse
 					Nothing changes. The agent may ask again.
 				</div>
 				<span className="spacer" />
-				<button type="button" className="danger" disabled={busy} onClick={() => setRejecting(true)}>
+				<button type="button" className="danger" disabled={busy || check !== null} onClick={() => setRejecting(true)}>
 					Refuse
 				</button>
 			</div>

@@ -2,7 +2,7 @@ import { Link } from '@buzola/router'
 import type { StepUpMode } from '../lib/api'
 import type { DecisionFailure } from '../lib/decision-step-up'
 
-/** Why a decision was not recorded, announced; a person without a passkey is pointed to where they register one. */
+/** Why a decision was not recorded, announced; a person without a passkey is pointed to where they add one. */
 export function DecisionFailureNotice({ failure }: { failure: DecisionFailure }) {
 	return (
 		<p className="error-text" role="alert">
@@ -11,7 +11,7 @@ export function DecisionFailureNotice({ failure }: { failure: DecisionFailure })
 	)
 }
 
-/** The words of a failure, with the link to Account → Passkeys for a person without a passkey, for an alert of its caller. */
+/** The words of a failure, with the link to Account → Passkeys (which leads to IAM's account page) for a person without a passkey. */
 export function DecisionFailureText({ failure }: { failure: DecisionFailure }) {
 	return (
 		<>
@@ -29,5 +29,9 @@ export function DecisionFailureText({ failure }: { failure: DecisionFailure }) {
 /** What the page says before a decision that takes a passkey. */
 export function StepUpHint({ stepUp, item }: { stepUp: StepUpMode; item: 'deploy' | 'request' }) {
 	if (stepUp === 'none') return null
-	return <p className="hint">Deciding this {item} takes one of your passkeys: your browser asks for it when you approve or refuse.</p>
+	return (
+		<p className="hint">
+			Deciding this {item} takes one of your passkeys: when you approve or refuse, the console links to IAM's page, where you confirm it with a passkey.
+		</p>
+	)
 }

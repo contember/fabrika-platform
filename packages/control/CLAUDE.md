@@ -899,13 +899,13 @@ other environment, before the provider prepares anything, and the write maps a r
   `requesterMayApprove: false` on any waiting category (`requesterMayApprove` in the contract) keeps the requester's
   person from approving a parked deploy request (`requireOtherThanRequester`); where that person is unknown (a service
   key's issuer, which no token names) nobody approves it, and anyone may refuse it.
-- **A decision under `stepUp: webauthn` carries a passkey assertion IAM verified (ADR-0050 §5, `src/approval/step-up.ts`).**
+- **A decision under `stepUp: webauthn` carries a step-up challenge the person answered on IAM's page and IAM verified (ADR-0050 §5, `src/approval/step-up.ts`).**
   `requiredStepUp` on the waiting categories decides it, beside `requiredApprovers`. Control builds the binding from the
   stored item and the decision (`runStepUpBinding`, `requestStepUpBinding`), never from the input, and calls IAM's
   `passkeys.challenge`/`verify` over `IAM_ADMIN` with the caller's `X-Fabrika-Token` (`iamPasskeyStepUp`), no other
-  credential. `requireStepUp` runs before any decision write and refuses (403) a missing assertion, any IAM refusal or
-  failure, and a verified person other than the approver. The passkey is recorded on the decision (the run's approval
-  JSON, the request's `*_step_up_*` columns) and in its audit row. Never log an assertion. A change of protection that
+  credential. `requireStepUp` runs before any decision write and refuses (403) a missing or unanswered challenge, any IAM
+  refusal or failure, and a verified person other than the approver. The passkey is recorded on the decision (the run's approval
+  JSON, the request's `*_step_up_*` columns) and in its audit row. A change of protection that
   `weakensStepUp` (against the row read under the lease) takes one too: `apps.environments.protectChallenge` issues it on
   `protectionStepUpBinding` (the environment and the digest of the change as asked), and `protect` runs `requireStepUp`
   before IAM's grant gate and the row are written, recording the passkey in the `access.protect` audit row.

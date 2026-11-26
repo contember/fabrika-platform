@@ -169,21 +169,14 @@ const INPUTS: Record<string, unknown> = {
 	'oauthClients.list': null,
 	'oauthClients.put': { clientId: 'https://nowhere.example.com/client.json', label: 'claude', redirectUris: ['https://nowhere.example.com/cb'] },
 	'oauthClients.delete': { clientId: 'https://nowhere.example.com/client.json' },
-	'passkeys.list': null,
-	'passkeys.registrationOptions': null,
+	'passkeys.challenge': { binding: 'nothing' },
+	'passkeys.verify': { binding: 'nothing', challengeId: 'nothing' },
 	'passkeys.listOf': { principalId: 'nobody' },
 	'passkeys.reset': { principalId: 'nobody' },
 }
 
-/** A person's own passkeys, which anyone in a signed-in session reaches (`admin/passkeys.ts`): no `.require`. */
-export const OWN_PASSKEYS = [
-	'passkeys.challenge',
-	'passkeys.list',
-	'passkeys.register',
-	'passkeys.registrationOptions',
-	'passkeys.remove',
-	'passkeys.verify',
-]
+/** The step-up seam, which anyone in a signed-in session reaches for their own passkeys (`admin/passkeys.ts`): no `.require`. */
+export const OWN_PASSKEYS = ['passkeys.challenge', 'passkeys.verify']
 
 /** The input `INPUTS` names for `method`, or `{}`. */
 export function procedureInput(method: string): unknown {

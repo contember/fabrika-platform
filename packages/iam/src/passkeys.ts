@@ -4,10 +4,12 @@
 // nor a verifier's error message, which quotes the challenge.
 
 import {
+	IAM_BINDING_PREFIX,
 	MAX_PASSKEY_BINDING_LENGTH,
 	MAX_PASSKEY_LABEL_LENGTH,
 	MAX_PASSKEYS_PER_PERSON,
 	PASSKEY_CHALLENGE_TTL_SECONDS,
+	PASSKEY_REGISTRATION_BINDING,
 	type PasskeyAssertion,
 	type PasskeyChallenge,
 	type PasskeyCreationOptions,
@@ -20,11 +22,12 @@ import { uuidv7 } from '@fabrika/platform'
 import { verifyAuthenticationResponse, verifyRegistrationResponse, type WebAuthnCredential } from '@simplewebauthn/server'
 import { isoBase64URL } from '@simplewebauthn/server/helpers'
 import { z } from 'zod'
-import { registeredLanding } from './app-presentation'
+import { IAM_APP } from './admin/router'
 import type { PrincipalRow } from './db'
 import type { AuditEventInput } from './repositories/audit'
-import type { PasskeyRow } from './repositories/passkeys'
+import type { ConsumedPasskeyChallenge, PasskeyRow } from './repositories/passkeys'
 import { unixNow } from './repositories/sql'
+import type { Config } from './services'
 import type { Services } from './services'
 
 /** ES256, EdDSA and RS256, in the order the authenticator should prefer them. */
@@ -34,17 +37,17 @@ const ALGORITHMS = [-7, -8, -257]
 const MAX_OPEN_CHALLENGES = 10
 
 /**
- * Where a passkey is used: the console the caller's token was minted for. Its origin is that application's first
- * registered return origin, and its RP ID that origin's host, so a passkey answers on the console and nowhere else.
+ * Where a passkey is used: IAM's own pages. The origin is IAM's issuer and the RP ID its host, so every ceremony runs on
+ * IAM's host, where the person signs in, and a passkey answers there and nowhere else.
  */
 export interface RelyingParty {
 	readonly id: string
 	readonly origin: string
 }
 
-export async function relyingPartyOf(services: Services, audience: string): Promise<RelyingParty | null> {
-	const origin = await registeredLanding(services, audience)
-	return origin === null ? null : { id: new URL(origin).hostname, origin }
+export function relyingParty(config: Pick<Config, 'issuer'>): RelyingParty {
+	const issuer = new URL(config.issuer)
+	return { id: issuer.hostname, origin: issuer.origin }
 }
 
 /** Why a ceremony refused. Each is a fixed reason, never a verifier's message. */
@@ -64,7 +67,12 @@ export type PasskeyOutcome<T> = { readonly ok: true; readonly value: T } | { rea
 const base64url = z.string().min(1).max(16_384).regex(/^[A-Za-z0-9_-]+$/)
 const transports = z.array(z.string().min(1).max(32)).max(8)
 
-export const passkeyBindingSchema = z.string().min(1).max(MAX_PASSKEY_BINDING_LENGTH)
+/** The binding another service asks a step-up with: never one of IAM's own. */
+export const stepUpBindingSchema = z
+	.string()
+	.min(1)
+	.max(MAX_PASSKEY_BINDING_LENGTH)
+	.refine((binding) => !binding.startsWith(IAM_BINDING_PREFIX), 'a binding starting with iam: is reserved for IAM')
 export const passkeyLabelSchema = z.string().trim().min(1).max(MAX_PASSKEY_LABEL_LENGTH)
 
 /** A credential's JSON encoding as the browser sends it; `id` and `rawId` must name the same credential. */
@@ -113,18 +121,22 @@ function descriptors(rows: readonly PasskeyRow[]): { type: 'public-key'; id: str
 	})
 }
 
-/** Issue a registration challenge for the principal; null when it holds too many unanswered ones. */
+/**
+ * Issue a registration challenge for the principal; null when it holds too many unanswered ones. `steppedUp` says the
+ * caller verified an assertion bound to `PASSKEY_REGISTRATION_BINDING` first, and the challenge carries it as its binding.
+ */
 export async function issueRegistrationChallenge(
 	services: Services,
 	rp: RelyingParty,
 	principal: PrincipalRow,
+	steppedUp: boolean,
 ): Promise<PasskeyChallenge<PasskeyCreationOptions> | null> {
 	const held = await services.repositories.passkeys.list(principal.id)
 	const challenge = newChallenge()
 	const now = unixNow()
 	const expiresAt = now + PASSKEY_CHALLENGE_TTL_SECONDS
 	const challengeId = await services.repositories.passkeys.issueChallenge(
-		{ principalId: principal.id, kind: 'registration', challenge, binding: '', now, expiresAt },
+		{ principalId: principal.id, kind: 'registration', challenge, binding: steppedUp ? PASSKEY_REGISTRATION_BINDING : '', now, expiresAt },
 		MAX_OPEN_CHALLENGES,
 	)
 	if (challengeId === null) return null
@@ -161,17 +173,28 @@ export async function issueAssertionChallenge(
 		MAX_OPEN_CHALLENGES,
 	)
 	if (challengeId === null) return 'too_many'
-	return {
-		challengeId,
-		expiresAt,
-		options: {
-			challenge,
-			rpId: rp.id,
-			timeout: PASSKEY_CHALLENGE_TTL_SECONDS * 1000,
-			allowCredentials: descriptors(held),
-			userVerification: 'required',
-		},
-	}
+	return { challengeId, expiresAt, options: requestOptions(rp, challenge, held) }
+}
+
+function requestOptions(rp: RelyingParty, challenge: string, held: readonly PasskeyRow[]): PasskeyRequestOptions {
+	return { challenge, rpId: rp.id, timeout: PASSKEY_CHALLENGE_TTL_SECONDS * 1000, allowCredentials: descriptors(held), userVerification: 'required' }
+}
+
+/**
+ * The options of the principal's open step-up challenge, for IAM's step-up page to answer; null when it is unknown,
+ * answered, spent or expired, or the principal holds no passkey any more.
+ */
+export async function openStepUp(
+	services: Services,
+	rp: RelyingParty,
+	principalId: string,
+	challengeId: string,
+): Promise<PasskeyChallenge<PasskeyRequestOptions> | null> {
+	const issued = await services.repositories.passkeys.openAssertionChallenge(principalId, challengeId)
+	if (issued === null || issued.expires_at <= unixNow() || issued.binding.startsWith(IAM_BINDING_PREFIX)) return null
+	const held = await services.repositories.passkeys.list(principalId)
+	if (held.length === 0) return null
+	return { challengeId, expiresAt: issued.expires_at, options: requestOptions(rp, issued.challenge, held) }
 }
 
 /**
@@ -189,12 +212,23 @@ export async function verifyPasskeyAssertion(
 	binding: string,
 	assertion: PasskeyAssertion,
 ): Promise<PasskeyOutcome<VerifiedPasskeyAssertion>> {
-	const repository = services.repositories.passkeys
-	const issued = await repository.consumeChallenge(principalId, 'assertion', assertion.challengeId)
+	const issued = await services.repositories.passkeys.consumeChallenge(principalId, 'assertion', assertion.challengeId)
 	if (issued === null) return refused('challenge_unknown')
+	if (issued.binding !== binding) return refused('binding_mismatch')
+	return checkAssertion(services, rp, principalId, issued, assertion)
+}
+
+/** The checks of an assertion against its issued challenge, after the caller found it: expiry, credential, signature, counter. */
+async function checkAssertion(
+	services: Services,
+	rp: RelyingParty,
+	principalId: string,
+	issued: ConsumedPasskeyChallenge,
+	assertion: PasskeyAssertion,
+): Promise<PasskeyOutcome<VerifiedPasskeyAssertion>> {
+	const repository = services.repositories.passkeys
 	const now = unixNow()
 	if (issued.expires_at <= now) return refused('challenge_expired')
-	if (issued.binding !== binding) return refused('binding_mismatch')
 	const passkey = await repository.findByCredentialId(principalId, assertion.credential.id)
 	if (passkey === null) return refused('credential_unknown')
 	const counter = Number(passkey.sign_count)
@@ -218,14 +252,57 @@ export async function verifyPasskeyAssertion(
 }
 
 /**
+ * Answer a step-up challenge on IAM's page: verify the assertion as `verifyPasskeyAssertion` does, against the
+ * principal's open assertion challenge whatever its binding (but one of IAM's own pages), and record the answer on the challenge instead of spending
+ * it. Its issuer consumes it with `consumeStepUp`, which compares the binding. A refused answer spends the challenge.
+ */
+export async function answerStepUp(
+	services: Services,
+	rp: RelyingParty,
+	principalId: string,
+	assertion: PasskeyAssertion,
+): Promise<PasskeyOutcome<VerifiedPasskeyAssertion>> {
+	const repository = services.repositories.passkeys
+	const issued = await repository.openAssertionChallenge(principalId, assertion.challengeId)
+	if (issued === null || issued.binding.startsWith(IAM_BINDING_PREFIX)) return refused('challenge_unknown')
+	const outcome = await checkAssertion(services, rp, principalId, issued, assertion)
+	if (!outcome.ok) {
+		await repository.dropChallenge(principalId, assertion.challengeId)
+		return outcome
+	}
+	const answered = await repository.markAnswered(principalId, assertion.challengeId, outcome.value.credentialId, outcome.value.at)
+	return answered ? outcome : refused('challenge_unknown')
+}
+
+/**
+ * Consume a step-up challenge answered on IAM's page: the principal's, answered, unexpired, issued with exactly
+ * `binding`, and answered by a passkey the principal still holds. It is spent whatever the comparison says.
+ */
+export async function consumeStepUp(
+	services: Services,
+	principalId: string,
+	binding: string,
+	challengeId: string,
+): Promise<PasskeyOutcome<VerifiedPasskeyAssertion>> {
+	const repository = services.repositories.passkeys
+	const answered = await repository.consumeAnswered(principalId, challengeId)
+	if (answered === null) return refused('challenge_unknown')
+	if (answered.expires_at <= unixNow()) return refused('challenge_expired')
+	if (answered.binding !== binding) return refused('binding_mismatch')
+	if (await repository.findByCredentialId(principalId, answered.answered_credential_id) === null) return refused('credential_unknown')
+	return { ok: true, value: { principalId, credentialId: answered.answered_credential_id, at: answered.answered_at } }
+}
+
+/**
  * Verify a registration answer against the principal's registration challenge, then store the passkey with its record.
- * A person who has a passkey already registers another only `steppedUp` (the caller verified an assertion first).
+ * A person who has a passkey already registers another only on a challenge issued after a verified step-up (its binding
+ * is `PASSKEY_REGISTRATION_BINDING`).
  */
 export async function completeRegistration(
 	services: Services,
 	rp: RelyingParty,
 	principalId: string,
-	input: { challengeId: string; label: string; credential: PasskeyRegistrationCredential; steppedUp: boolean },
+	input: { challengeId: string; label: string; credential: PasskeyRegistrationCredential },
 	audit: (passkeyId: string) => AuditEventInput,
 ): Promise<PasskeyOutcome<PasskeyRow>> {
 	const id = uuidv7()
@@ -262,10 +339,37 @@ export async function completeRegistration(
 			label: input.label,
 			createdAt: now,
 		},
-		{ steppedUp: input.steppedUp, max: MAX_PASSKEYS_PER_PERSON },
+		{ steppedUp: issued.binding === PASSKEY_REGISTRATION_BINDING, max: MAX_PASSKEYS_PER_PERSON },
 		audit(id),
 	)
 	return typeof stored === 'string' ? refused(stored) : { ok: true, value: stored }
+}
+
+/** How many passkeys removed by migration 0047 one maintenance pass records. */
+const MOVED_PER_PASS = 500
+
+/**
+ * Record each passkey migration 0047 removed, because it answered on the console's host and can never answer on IAM's,
+ * as one `iam.passkey.reset` filed under its owner with the reason `rp_moved`, and forget it. Run by the maintenance
+ * pass; a later pass takes the rest. Answers how many it recorded.
+ */
+export async function recordMovedPasskeys(services: Services): Promise<number> {
+	const repository = services.repositories.passkeys
+	let recorded = 0
+	for (const moved of await repository.listMoved(MOVED_PER_PASS)) {
+		const event: AuditEventInput = {
+			requestId: uuidv7(),
+			principalId: null,
+			principalLabel: 'iam-maintenance',
+			app: IAM_APP,
+			action: 'iam.passkey.reset',
+			resourceType: 'principal',
+			resourceId: moved.principal_id,
+			metadata: { passkeyId: moved.id, label: moved.label, reason: 'rp_moved' },
+		}
+		if (await repository.recordMoved(moved.id, event)) recorded++
+	}
+	return recorded
 }
 
 function refused(reason: PasskeyRefusal): { ok: false; reason: PasskeyRefusal } {

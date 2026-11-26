@@ -107,8 +107,8 @@ describe('every admin RPC procedure is gated', () => {
 		expect(await (await call('grantRequests.list')).json()).toEqual({ result: { items: [] } })
 		const decide = await call('grantRequests.decide')
 		expect([decide.status, prop(prop(await decide.json(), 'error'), 'type')]).toEqual([404, 'not_found'])
-		// Its passkeys are its own: it has none. With no console origin registered here, a ceremony cannot start.
-		expect(await (await call('passkeys.list')).json()).toEqual({ result: { items: [] } })
-		expect((await call('passkeys.registrationOptions')).status).toBe(409)
+		// Its passkeys are its own: it has none, so it gets no step-up challenge, and has none answered to verify.
+		expect((await call('passkeys.challenge')).status).toBe(409)
+		expect((await call('passkeys.verify')).status).toBe(409)
 	})
 })

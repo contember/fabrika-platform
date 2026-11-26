@@ -60,20 +60,20 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
 - **Settings → Provisioning holds the installation's SCIM token, which IAM keeps (ADR-0091).** The page calls IAM's
   `scim.get` / `rotateToken` / `revokeToken`, shows the tenant URL, and shows a new token once (`SecretModal`). Rotation
   and removal confirm first: both stop the identity provider until it holds the new token.
-- **Account → Passkeys is the person's own, and the console runs only the browser half** (`routes/account/passkeys.tsx`,
-  `lib/webauthn.ts`). IAM issues every challenge and verifies every answer (`passkeys.*` of `/admin/rpc`); the console
-  turns IAM's JSON options into `navigator.credentials` calls and the answer back, with no WebAuthn library. Adding a
-  passkey beside one, and removing one, first takes a step-up bound to that change. `components/StepUpPrompt.tsx` is
-  the step-up control: it takes a challenge-fetching function (the caller decides the binding) and hands the assertion
-  to its caller, who sends it with the change it guards. The user page's Sign-in tab lets an installation administrator
-  remove every passkey of a person (`passkeys.reset`).
-- **A decision that takes a passkey runs the prompt first** (`lib/decision-step-up.ts` `postDecision`, both approval
-  pages). Under `stepUp: webauthn` the page asks Control's `approvals.challenge` / `approvals.requests.challenge` for a
-  challenge bound to that one decision, the browser answers it, and the decision is posted with the answer; nothing is
-  posted when the prompt fails. `{ kind: 'no-passkey' }` is announced with a link to Account → Passkeys
-  (`components/DecisionFailureNotice.tsx`). Saving or turning off an environment's approvals goes the same way when
-  `weakensStepUp` says the change takes a passkey (`lib/environment-protection.ts` `setEnvironmentProtection`, on
-  `apps.environments.protectChallenge`): the prompt runs when the loosening is confirmed, before anything is sent.
+- **Passkeys live on IAM's host, so the console runs no WebAuthn ceremony.** Account → Passkeys
+  (`routes/account/passkeys.tsx`) and the account menu link to the passkeys section of the person's IAM account page
+  (`ConsoleSession.passkeysUrl`, from `ACCOUNT_PAGE_PATH` and the discovered IAM issuer); without IAM's origin the page
+  says so. The user page's Sign-in tab lets an installation administrator remove every passkey of a person
+  (`passkeys.reset`).
+- **A decision that takes a passkey is confirmed on IAM's step-up page first** (`lib/decision-step-up.ts`
+  `startDecision`, `components/PasskeyCheckPrompt.tsx`, both approval pages). Under `stepUp: webauthn` the page asks
+  Control's `approvals.challenge` / `approvals.requests.challenge` for a challenge bound to that one decision and posts
+  nothing yet: the person opens the challenge's `url` in a new tab (a plain link, never a popup: the console's
+  `Cross-Origin-Opener-Policy: same-origin` severs the opener), confirms there, and Continue posts the decision with
+  `stepUp: { challengeId }`; Control refuses an unanswered one. `{ kind: 'no-passkey' }` is announced with a link to
+  Account → Passkeys (`components/DecisionFailureNotice.tsx`). Saving or turning off an environment's approvals goes the
+  same way when `weakensStepUp` says the change takes a passkey (`lib/environment-protection.ts`
+  `setEnvironmentProtection`, on `apps.environments.protectChallenge`).
 - **An application's page is one tab per task** (`components/app/AppFrame.tsx`, `routes/apps/*`): Overview, Deploys,
   Data, Secrets and variables, Access, Approvals, Settings. The frame reads the application and its environments
   (`app.manage` at the app, so `workspaceGate` opens `/apps/:id/*` to a manager of that one application), and each

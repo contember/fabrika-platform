@@ -1,5 +1,6 @@
-// A person's passkeys (WebAuthn), kept by IAM. The console runs the browser half of each ceremony; IAM issues the
-// challenge and verifies the answer. Every binary value travels base64url-encoded, as in WebAuthn's JSON encodings.
+// A person's passkeys (WebAuthn), kept by IAM. Every ceremony runs on IAM's own pages, under IAM's host as the RP ID: the
+// person registers and removes passkeys on IAM's account page, and a step-up another service asks for is answered on
+// IAM's step-up page. Every binary value travels base64url-encoded, as in WebAuthn's JSON encodings.
 
 /** How long a ceremony's challenge can be answered, in seconds. */
 export const PASSKEY_CHALLENGE_TTL_SECONDS = 300
@@ -16,12 +17,18 @@ export const MAX_PASSKEYS_PER_PERSON = 20
 /** The error `type` of `passkeys.challenge`'s refusal to a person with no passkey, so a caller tells it from other 409s. */
 export const NO_PASSKEY_ERROR = 'no_passkey'
 
+/**
+ * The prefix of the bindings IAM's own pages use. Another service never asks a step-up with one, and IAM's step-up page
+ * never answers one, so a check IAM asks for itself is answered only on the page that asked it.
+ */
+export const IAM_BINDING_PREFIX = 'iam:'
+
 /** The binding of the assertion that registering another passkey takes, when the person already has one. */
-export const PASSKEY_REGISTRATION_BINDING = 'iam:passkeys.register'
+export const PASSKEY_REGISTRATION_BINDING = `${IAM_BINDING_PREFIX}passkeys.register`
 
 /** The binding of the assertion that removing the passkey `passkeyId` takes. */
 export function passkeyRemovalBinding(passkeyId: string): string {
-	return `iam:passkeys.remove:${passkeyId}`
+	return `${IAM_BINDING_PREFIX}passkeys.remove:${passkeyId}`
 }
 
 /** A passkey as its owner and an installation administrator see it. No key material. */
@@ -102,29 +109,26 @@ export interface PasskeyAssertion {
 	credential: PasskeyAssertionCredential
 }
 
-export interface RegisterPasskeyRequest {
-	challengeId: string
-	label: string
-	credential: PasskeyRegistrationCredential
-	/** Required when the person already has a passkey: an assertion bound to `PASSKEY_REGISTRATION_BINDING`. */
-	stepUp?: PasskeyAssertion
-}
-
-export interface RemovePasskeyRequest {
-	passkeyId: string
-	/** An assertion by one of the person's passkeys, bound to `passkeyRemovalBinding(passkeyId)`. */
-	stepUp: PasskeyAssertion
-}
-
 export interface IssuePasskeyChallengeRequest {
 	/** What the assertion is for, compared verbatim at verification. Opaque to IAM. */
 	binding: string
 }
 
+/**
+ * A step-up challenge IAM issued to the person: they answer it on IAM's page at `url` before `expiresAt` (epoch
+ * seconds), and its issuer then verifies it by `challengeId`.
+ */
+export interface PasskeyStepUpChallenge {
+	challengeId: string
+	expiresAt: number
+	url: string
+}
+
 export interface VerifyPasskeyAssertionRequest {
 	/** The binding the challenge was issued with. */
 	binding: string
-	assertion: PasskeyAssertion
+	/** The challenge the person answered on IAM's step-up page. */
+	challengeId: string
 }
 
 /** A verified assertion: who answered, with which credential (its WebAuthn id, base64url), and when (epoch seconds). */

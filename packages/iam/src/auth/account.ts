@@ -3,6 +3,7 @@
 
 import { AGENT_CLIENT_ID, agentScopeToken, OAUTH_CLI_CLIENT_ID, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
+import { ACCOUNT_PAGE_PATH, MAX_PASSKEY_LABEL_LENGTH } from '@fabrika/iam-contract'
 import { IAM_APP } from '../admin/router'
 import { storedAgentScope } from '../agent-resource'
 import { INSTALLATION_PRESENTATION, parsePresentation } from '../app-presentation'
@@ -20,14 +21,29 @@ import { parseStoredPermissions } from '../stored-permissions'
 import { readForm, redirectHeaders, sameOrigin } from './http'
 import { type CurrentLogin, currentLogin } from './sessions'
 
-export const ACCOUNT_PATH = '/auth/account'
+export const ACCOUNT_PATH = ACCOUNT_PAGE_PATH
 
 /** The most grants the page lists, newest first; it says so when more are live. */
 export const ACCOUNT_GRANTS_SHOWN = 50
 
-const NOTICES = ['revoked', 'already_ended'] as const
+/** Where the passkey forms of the page post (`passkey-pages.ts`); the hidden `step` names the step of the ceremony. */
+export const PASSKEYS_PATH = '/auth/passkeys'
 
-type Notice = (typeof NOTICES)[number]
+const NOTICES = [
+	'revoked',
+	'already_ended',
+	'passkey_added',
+	'passkey_removed',
+	'passkey_refused',
+	'passkey_busy',
+	'passkey_duplicate',
+	'passkey_limit',
+	'passkey_label',
+] as const
+
+export type AccountNotice = (typeof NOTICES)[number]
+
+type Notice = AccountNotice
 
 /** The query parameter a revocation's redirect names its outcome in, so a reload of the page submits nothing again. */
 const NOTICE_PARAM = 'done'
@@ -55,8 +71,13 @@ export async function handleAccount(request: Request, services: Services, reques
 	}
 	const form = await readForm(request)
 	const id = form?.get('grant') ?? ''
-	const notice: Notice = await revokeOwn(services, login, id, requestId) ? 'revoked' : 'already_ended'
-	return new Response(null, { status: 303, headers: redirectHeaders(`${ACCOUNT_PATH}?${NOTICE_PARAM}=${notice}`) })
+	return accountRedirect(await revokeOwn(services, login, id, requestId) ? 'revoked' : 'already_ended')
+}
+
+/** Back to the account page with an outcome, as a 303, so a reload of the page submits nothing again. */
+export function accountRedirect(notice: AccountNotice): Response {
+	const section = notice.startsWith('passkey_') ? '#passkeys' : ''
+	return new Response(null, { status: 303, headers: redirectHeaders(`${ACCOUNT_PATH}?${NOTICE_PARAM}=${notice}${section}`) })
 }
 
 /** Revoke `id` when it is a live grant of the signed-in person; any other id, another person's included, changes nothing. */
@@ -83,9 +104,7 @@ async function accountPage(request: Request, services: Services, login: CurrentL
 	const rows = await services.repositories.oauth.listLiveForPrincipal(login.principal.id, unixNow(), ACCOUNT_GRANTS_SHOWN + 1)
 	const shown = rows.slice(0, ACCOUNT_GRANTS_SHOWN)
 	const names = await appNames(services, shown)
-	const status = notice === null
-		? ''
-		: `<p role="status">${escapeHtml(notice === 'revoked' ? text.revoked : text.alreadyEnded)}</p>`
+	const status = notice === null ? '' : `<p role="status">${escapeHtml(noticeText(catalog, notice))}</p>`
 	const list = shown.length === 0
 		? `<p>${escapeHtml(text.none)}</p>`
 		: `<ul class="rows">${shown.map((grant) => grantItem(catalog, grant, names.get(grant.app) ?? grant.app)).join('')}</ul>`
@@ -97,10 +116,36 @@ async function accountPage(request: Request, services: Services, login: CurrentL
 		content: `<h1>${escapeHtml(text.title)}</h1>
 		<p>${escapeHtml(catalog.pages.chooseAccount.signedInAs)} <strong>${escapeHtml(login.principal.label)}</strong>.</p>
 		${status}
-		<h2>${escapeHtml(text.connectionsTitle)}</h2>
+		<h2 id="connections">${escapeHtml(text.connectionsTitle)}</h2>
 		<p>${escapeHtml(text.connectionsText)}</p>
-		${list}${more}`,
+		${list}${more}
+		${await passkeysSection(services, login, catalog)}`,
 	})
+}
+
+function noticeText(catalog: Catalog, notice: Notice): string {
+	const account = catalog.pages.account
+	const passkeys = catalog.pages.passkeys
+	switch (notice) {
+		case 'revoked':
+			return account.revoked
+		case 'already_ended':
+			return account.alreadyEnded
+		case 'passkey_added':
+			return passkeys.addedNotice
+		case 'passkey_removed':
+			return passkeys.removedNotice
+		case 'passkey_refused':
+			return passkeys.refusedNotice
+		case 'passkey_busy':
+			return passkeys.busyNotice
+		case 'passkey_duplicate':
+			return passkeys.duplicateNotice
+		case 'passkey_limit':
+			return passkeys.limitNotice
+		case 'passkey_label':
+			return passkeys.labelNotice
+	}
 }
 
 /** What a person reads each grant's application as: its declared name with the environment, else its id. */
@@ -134,6 +179,33 @@ function grantItem(catalog: Catalog, grant: OAuthGrantRow, appName: string): str
 		<p>${escapeHtml(text.allowed)}: ${utc(grant.created_at)} · ${escapeHtml(text.ends)}: ${utc(grant.expires_at)}</p>
 		<form method="post" action="${ACCOUNT_PATH}"><input type="hidden" name="grant" value="${escapeHtml(grant.id)}">
 		<button type="submit">${escapeHtml(text.revoke)}</button></form></li>`
+}
+
+/** The passkeys section of the account page: the person's passkeys, each with its removal, and the form that adds one. */
+async function passkeysSection(services: Services, login: CurrentLogin, catalog: Catalog): Promise<string> {
+	const text = catalog.pages.passkeys
+	const held = await services.repositories.passkeys.list(login.principal.id)
+	const list = held.length === 0
+		? `<p>${escapeHtml(text.none)}</p>`
+		: `<ul class="rows">${
+			held.map((passkey) =>
+				`<li><strong>${escapeHtml(passkey.label)}</strong><br>${escapeHtml(text.added)}: ${utc(passkey.created_at)} · ${escapeHtml(text.lastUsed)}: ${
+					passkey.last_used_at === null ? escapeHtml(text.neverUsed) : utc(passkey.last_used_at)
+				}
+				<form method="post" action="${PASSKEYS_PATH}"><input type="hidden" name="step" value="remove"><input type="hidden" name="passkey" value="${
+					escapeHtml(passkey.id)
+				}"><button type="submit">${escapeHtml(text.remove)}</button></form></li>`
+			).join('')
+		}</ul>`
+	return `<h2 id="passkeys">${escapeHtml(text.title)}</h2>
+		<p>${escapeHtml(text.text)}</p>
+		${list}
+		<h3>${escapeHtml(text.addTitle)}</h3>
+		<form method="post" action="${PASSKEYS_PATH}"><input type="hidden" name="step" value="add">
+		<label for="passkey-label">${escapeHtml(text.label)}</label>
+		<input id="passkey-label" name="label" required maxlength="${MAX_PASSKEY_LABEL_LENGTH}" autocomplete="off">
+		<p>${escapeHtml(text.labelHint)}</p>
+		<button type="submit">${escapeHtml(text.add)}</button></form>`
 }
 
 /** The names the device page gives the console's command-line resources (`Console`, `Operations`), for a grant on them. */

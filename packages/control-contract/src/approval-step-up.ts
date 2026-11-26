@@ -1,7 +1,8 @@
 // The step-up on deciding a pending item (ADR-0050 §5): the approval page asks Control for a single-use passkey challenge
-// bound to the decision, answers it in the browser, and posts the assertion with the decision. IAM issues and verifies.
+// bound to the decision, the person answers it on IAM's step-up page, and the page posts the challenge's id with the
+// decision. IAM issues the challenge, takes the answer and verifies it for Control.
 
-import type { PasskeyAssertion, PasskeyChallenge, PasskeyRequestOptions } from '@fabrika/iam-contract'
+import type { PasskeyStepUpChallenge } from '@fabrika/iam-contract'
 import type { SetEnvironmentProtectionRequest } from './index.js'
 
 /** The decision a step-up is bound to. */
@@ -26,12 +27,14 @@ export interface ApprovalRequestChallengeInput {
 export type ProtectionChallengeInput = Omit<SetEnvironmentProtectionRequest, 'stepUp'>
 
 /**
- * IAM's challenge, bound to the decision, for `navigator.credentials.get`; or `no-passkey` when the person has none to
- * answer it with and registers one under Account → Passkeys first.
+ * IAM's challenge, bound to the decision, which the person answers on IAM's page at its `url`; or `no-passkey` when the
+ * person has none to answer it with and adds one on their IAM account page first.
  */
 export type ApprovalStepUpChallenge =
-	| { kind: 'challenge'; challenge: PasskeyChallenge<PasskeyRequestOptions> }
+	| { kind: 'challenge'; challenge: PasskeyStepUpChallenge }
 	| { kind: 'no-passkey' }
 
-/** The answered challenge a decision carries when it takes a step-up. */
-export type ApprovalStepUp = PasskeyAssertion
+/** The challenge, answered on IAM's page, that a decision carries when it takes a step-up. */
+export interface ApprovalStepUp {
+	challengeId: string
+}

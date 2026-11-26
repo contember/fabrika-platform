@@ -143,24 +143,16 @@ step-up is ([Passkeys](#passkeys)), but it does not guard TOTP enrolment.
 Any person can keep passkeys (WebAuthn credentials) at IAM. A passkey confirms a sensitive step in the console: a
 **step-up**. It does not sign anyone in. Sign-in stays as above.
 
-**In the console**, the account menu has "Passkeys" (`/account/passkeys`). The page lists the person's passkeys, adds
-one and removes one. The browser half of each ceremony runs on the console's page (`navigator.credentials`). IAM issues
-every challenge and verifies every answer. The procedures are `passkeys.*` of IAM's `/admin/rpc`, which the console
-reaches through Control's IAM gateway:
+**The relying party is IAM.** The RP ID is the host of IAM's issuer and the origin is the issuer's, so every ceremony runs
+on IAM's own pages, where the person signs in, and a passkey answers there and nowhere else. A person who uses only
+applications, never the console, registers there too. If IAM moves to another host, every passkey stops answering, and
+each person registers a new one.
 
-| Procedure                         | Who                                    | What                                                                           |
-| --------------------------------- | -------------------------------------- | ------------------------------------------------------------------------------ |
-| `list`                            | the person                             | their own passkeys: label, added, last used. No key material.                  |
-| `registrationOptions`, `register` | the person                             | a registration challenge, then the attestation it answers                      |
-| `remove`                          | the person                             | one of their passkeys, with an assertion bound to its removal                  |
-| `challenge`, `verify`             | the person, or Control on their behalf | the step-up: a challenge bound to a string, and the verification of its answer |
-| `listOf`, `reset`                 | `iam.admin`                            | another person's passkeys; the reset removes every one                         |
-
-The person's procedures need a signed-in session's console token of a user. A token minted from a `px_` key is refused.
-
-**The relying party** is the console the token was minted for. The origin is that application's first registered
-return origin, and the RP ID is that origin's host. A passkey therefore answers on the console and on no other host. If
-the console moves to another host, every passkey stops answering, and an administrator resets them.
+**On IAM's account page** (`/auth/account`, the section `#passkeys`) a person lists their passkeys (label, added, last
+used), adds one and removes one. In the console, the account menu's "Passkeys" links there. Each ceremony is a page of
+its own: a form posts the step, the page runs `navigator.credentials` under its nonce, puts the answer in a hidden field
+and posts it. No page fetches anything, so the pages' `connect-src` stays closed. Every POST is same-origin and needs
+the person's IAM login; a browser without one is sent to sign in.
 
 **Each ceremony** asks for attestation `none`, user presence and user verification. IAM verifies the answer with
 `@simplewebauthn/server`: the client data's type, challenge and origin, the RP ID hash, the flags, the attestation or
@@ -168,38 +160,61 @@ the signature, and the signature counter. A counter must move past the stored on
 reports 0 every time, which is accepted. The new counter is stored by compare-and-set, so two answers that race on one
 counter accept one.
 
-**A challenge** lives five minutes. It is issued to one person and answered once: the read that finds it also deletes
-it, before anything is compared, so a wrong answer spends it too. A person holds at most ten open challenges, and the
-cron removes expired ones. An assertion challenge carries a **binding**, an opaque string its issuer sets.
+**A challenge** lives five minutes and is issued to one person. A ceremony on the account page spends it with the read
+that finds it, before anything is compared, so a wrong answer spends it too. A person holds at most ten open challenges,
+and the cron removes expired ones. An assertion challenge carries a **binding**, an opaque string its issuer sets.
 Verification takes the binding it expects and refuses any other. A challenge for one purpose never verifies for
-another.
+another. Bindings starting with `iam:` are IAM's own pages': `passkeys.challenge` and `passkeys.verify` refuse one, and
+the step-up page never answers one.
 
 **Changing the set of passkeys takes a passkey already held.** The first passkey is registered with the session alone.
-Another one is registered only with an assertion bound to `iam:passkeys.register`, and removing one, the last one
-included, only with an assertion bound to `iam:passkeys.remove:<id>`. Otherwise a browser driven by someone else could
-add an authenticator of its own and pass every later step-up. The first registration has no such check, so a stolen
-session can register the first passkey of a person who has none. It is audited, and a reset removes it. A person who
-can no longer answer with any passkey asks an installation administrator. The administrator removes every passkey of
-that person: "Remove all passkeys" on the person's Sign-in tab, or `passkeys.reset` over `/admin/rpc`.
+Another one is registered only after an assertion bound to `iam:passkeys.register`: the creation challenge issued after
+it carries that binding, and IAM stores a second passkey only on such a challenge. Removing one, the last one included,
+takes an assertion bound to `iam:passkeys.remove:<id>`. Otherwise a browser driven by someone else could add an
+authenticator of its own and pass every later step-up. The first registration has no such check, so a stolen session
+can register the first passkey of a person who has none. It is audited, and a reset removes it. A person who can no
+longer answer with any passkey asks an installation administrator. The administrator removes every passkey of that
+person: "Remove all passkeys" on the person's Sign-in tab, or `passkeys.reset` over `/admin/rpc`.
 
 **Records.** `iam.passkey.register` and `iam.passkey.remove` are filed under the person, and `iam.passkey.reset`
 under the administrator. Each is written in its change's own transaction. A verified assertion records only its use,
 as the passkey's last-used time.
 
-**The step-up seam** is `challenge` and `verify`. `verify` answers `{ principalId, credentialId, at }`: the person, the
-passkey's WebAuthn credential id, and the time of the verification in epoch seconds. It answers only for a challenge
-issued to the caller with the same binding, unused and unexpired. `challenge` refuses a person with no passkey with a
-409 of type `no_passkey` (`NO_PASSKEY_ERROR`), so a caller tells it from its other 409. Deciding an approval of a
-category with `stepUp: webauthn` (ADR-0050 §5) uses this seam, and so does a change of an environment's protection that
-weakens it. Control asks for a challenge bound to the decision or the change, and verifies the person's answer with
-their console token
+**The step-up seam** is `passkeys.challenge` and `passkeys.verify` of IAM's `/admin/rpc`, for a person in a signed-in
+session (the console's token, never a `px_` key), which Control reaches through its IAM client:
+
+| Procedure         | Who                                    | What                                                                                                  |
+| ----------------- | -------------------------------------- | ----------------------------------------------------------------------------------------------------- |
+| `challenge`       | the person, or Control on their behalf | a challenge bound to a string: `{ challengeId, expiresAt, url }`, `url` being IAM's step-up page      |
+| `verify`          | the person, or Control on their behalf | `{ binding, challengeId }`: the answer the person gave on IAM's page, checked against the same string |
+| `listOf`, `reset` | `iam.admin`                            | another person's passkeys; the reset removes every one                                                |
+
+The person answers the challenge on IAM's step-up page (`/auth/step-up?challenge=<id>`): the console opens it in a new
+tab, and the person confirms with a passkey there and comes back. The page finds the challenge only for the signed-in
+person, unanswered and unexpired, verifies the assertion as above whatever the binding (but an `iam:` one), and records the answer on
+the challenge (the credential and the time) instead of spending it; a refused answer spends an unanswered challenge, never
+one answered meanwhile. `verify` then spends the
+answered challenge and answers `{ principalId, credentialId, at }`: the person, the passkey's WebAuthn credential id, and
+the time of the answer in epoch seconds. It answers only for a challenge issued to the caller, answered, unexpired, with
+the same binding, by a passkey the person still holds; a challenge not yet answered stays open. `challenge` refuses a
+person with no passkey with a 409 of type `no_passkey` (`NO_PASSKEY_ERROR`), so a caller tells it from its other 409.
+Deciding an approval of a category with `stepUp: webauthn` (ADR-0050 §5) uses this seam, and so does a change of an
+environment's protection that weakens it. Control asks for a challenge bound to the decision or the change, and verifies
+the person's answer with their console token
 ([security-deployment.md](./security-deployment.md#a-passkey-on-deciding)). No token carries a step-up claim, and the
 proxy is unchanged.
 
 **Storage.** Two tables, in both migration sets (`0039_passkeys.sql`). `passkeys` holds the credential id, the COSE
-public key, the counter, the transports and a label. `passkey_challenges` holds the open challenges and their bindings.
-Neither holds a secret: a public key and a challenge authenticate nothing on their own. An existing installation gets
-both tables empty on its next upgrade. No variable or generated file changes.
+public key, the counter, the transports and a label. `passkey_challenges` holds the open challenges, their bindings, and
+for an answered step-up its credential and time (`0047_passkeys_on_iam.sql`). Neither holds a secret: a public key and a
+challenge authenticate nothing on their own.
+
+**Passkeys registered on the console.** Before migration 0047 the relying party was the console's host, and a
+credential answers only under the RP ID it was created for. The migration removes every such passkey and every open
+challenge, and keeps each removed passkey in `passkeys_rp_moved` until IAM's daily maintenance pass records it as one
+`iam.passkey.reset` filed under its owner (no acting principal, label `iam-maintenance`, reason `rp_moved`) and deletes
+the row. After the upgrade every person registers a passkey again on their IAM account page; until they do, a step that
+takes one refuses, as for a person who never had one. No variable or generated file changes.
 
 ## Per-user state
 

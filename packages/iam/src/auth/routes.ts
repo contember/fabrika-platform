@@ -13,12 +13,13 @@ import { generateRequestId } from '../request-id'
 import { SECOND_FACTOR_ENROL_PATH, SECOND_FACTOR_PATH } from '../second-factor-pages'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
-import { ACCOUNT_PATH, handleAccount } from './account'
+import { ACCOUNT_PATH, handleAccount, PASSKEYS_PATH } from './account'
 import { methodNotAllowed, safeRedirect } from './http'
 import { handleInvitation } from './invitations'
 import { handleAccountChoice, handleLogin } from './login'
 import { handleCallback, handleOidcStart } from './oidc'
 import type { AuthEnv } from './oidc-flight'
+import { handlePasskeys, handleStepUp, STEP_UP_PATH } from './passkey-pages'
 import { handleForgotPassword, handlePasswordAction, handlePasswordLogin } from './password'
 import { handleSecondFactor, handleSecondFactorEnrolment } from './second-factor'
 import { handleLogout } from './sessions'
@@ -90,6 +91,12 @@ export async function handleAuth(
 	}
 	if (url.pathname === ACCOUNT_PATH) {
 		return request.method === 'GET' || request.method === 'POST' ? handleAccount(request, services, requestId) : methodNotAllowed()
+	}
+	if (url.pathname === PASSKEYS_PATH) {
+		return request.method === 'POST' ? handlePasskeys(request, services, requestId) : methodNotAllowed()
+	}
+	if (url.pathname === STEP_UP_PATH) {
+		return request.method === 'GET' || request.method === 'POST' ? handleStepUp(request, services, requestId) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/logout') {
 		// Logging out is a state change, so it needs a method that can carry an origin check. A GET

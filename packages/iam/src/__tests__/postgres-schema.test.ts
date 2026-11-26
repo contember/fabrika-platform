@@ -149,6 +149,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0044_scim_provisioning.sql' },
 			{ bundle: 'iam', name: '0045_revocation_feed.sql' },
 			{ bundle: 'iam', name: '0046_agent_write_mirror.sql' },
+			{ bundle: 'iam', name: '0047_passkeys_on_iam.sql' },
 		])
 	})
 
@@ -210,6 +211,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 				'oauth_registry',
 				'passkeys',
 				'passkey_challenges',
+				'passkeys_rp_moved',
 			]
 		) {
 			expect(names).toContain(table)

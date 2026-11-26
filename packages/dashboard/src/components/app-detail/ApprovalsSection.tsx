@@ -18,7 +18,7 @@ import { useState } from 'react'
 import { api, type AppEnvDto, type ApprovalDto } from '../../lib/api'
 import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
-import type { DecisionFailure } from '../../lib/decision-step-up'
+import type { DecisionFailure, PasskeyCheck, StartedDecision } from '../../lib/decision-step-up'
 import {
 	APPROVAL_CATEGORY_GROUPS,
 	categoryLabel,
@@ -40,10 +40,10 @@ import {
 	stepUpVerb,
 	waitingSummary,
 } from '../../lib/environment-protection'
-import { browserCredentials, type PasskeyCredentials } from '../../lib/webauthn'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { DecisionFailureText } from '../DecisionFailureNotice'
 import { Icon } from '../Icon'
+import { PasskeyCheckPrompt } from '../PasskeyCheckPrompt'
 import { Chip } from '../Status'
 import { Table } from '../Table'
 
@@ -79,25 +79,20 @@ export function ApprovalsSection({ appId, envs, onDone }: { appId: string; envs:
 }
 
 /** Holders of `access.approve` at the environment get the switch; everyone else reads the setting. */
-export function ProtectionRow({ appId, env, onDone, credentials = browserCredentials() }: {
-	appId: string
-	env: AppEnvDto
-	onDone: () => void
-	credentials?: PasskeyCredentials | null
-}) {
+export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
 	const access = useConsoleAccess()
 	const approver = mayDo(access, CONTROL_ACTIONS.ACCESS_APPROVE, { app: appId, env: env.env })
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<DecisionFailure | null>(null)
 	const [confirming, setConfirming] = useState(false)
+	const [check, setCheck] = useState<PasskeyCheck<AppEnvDto> | null>(null)
 	// Null until Control lists them, or when it does not: the dialog then states the rule without a count.
 	const [parked, setParked] = useState<readonly ApprovalDto[] | null>(null)
 
 	async function protect() {
 		setBusy(true)
 		try {
-			await setEnvironmentProtection(api, env, true, undefined, credentials)
-			onDone()
+			settle(await setEnvironmentProtection(api, env, true, undefined))
 		} catch (cause) {
 			setError(protectionChangeFailure(cause, env.env, protectionStepUp(env, true)))
 		} finally {
@@ -120,8 +115,12 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 	}
 
 	async function unprotect() {
-		await setEnvironmentProtection(api, env, false, undefined, credentials)
-		onDone()
+		settle(await setEnvironmentProtection(api, env, false, undefined))
+	}
+
+	function settle(started: StartedDecision<AppEnvDto>) {
+		if (started.kind === 'posted') onDone()
+		else setCheck(started.check)
 	}
 
 	const unprotectStepUp = protectionStepUp(env, false)
@@ -136,7 +135,12 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 					{approver
 						? (
 							<label className="checkbox">
-								<input type="checkbox" checked={env.protected} disabled={busy} onChange={(event) => toggle(event.target.checked)} />
+								<input
+									type="checkbox"
+									checked={env.protected}
+									disabled={busy || check !== null}
+									onChange={(event) => toggle(event.target.checked)}
+								/>
 								Require approval for access changes
 							</label>
 						)
@@ -151,8 +155,16 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 							<DecisionFailureText failure={error} />
 						</div>
 					)}
+					{check !== null && (
+						<PasskeyCheckPrompt
+							check={check}
+							onDone={onDone}
+							onCancel={() => setCheck(null)}
+							describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
+						/>
+					)}
 					{env.protected && (approver
-						? <PolicyEditor appId={appId} env={env} onDone={onDone} credentials={credentials} />
+						? <PolicyEditor appId={appId} env={env} onDone={onDone} />
 						: <span className="muted small">{waitingSummary(env.approvalPolicy)} {settingsSummary(env.approvalSettings, env.approvalPolicy)}</span>)}
 				</div>
 				{confirming && (
@@ -173,20 +185,19 @@ export function ProtectionRow({ appId, env, onDone, credentials = browserCredent
 /**
  * What lets a change of each category through on a protected environment (ADR-0083), for a holder of `access.approve`:
  * a mode and a number of approvers per category, the settings beside them, the strict and permissive presets, one save,
- * and a confirmation first when it loosens any. A save that weakens a passkey on deciding runs the passkey prompt first.
+ * and a confirmation first when it loosens any. A save that weakens a passkey on deciding waits for its check on IAM's
+ * page, and the choice stays fixed until it is sent or cancelled.
  */
-export function PolicyEditor({ appId, env, onDone, credentials = browserCredentials() }: {
-	appId: string
-	env: AppEnvDto
-	onDone: () => void
-	credentials?: PasskeyCredentials | null
-}) {
+export function PolicyEditor({ appId, env, onDone }: { appId: string; env: AppEnvDto; onDone: () => void }) {
 	const [chosen, setChosen] = useState<ApprovalPolicy>(env.approvalPolicy)
 	const [settings, setSettings] = useState<ApprovalSettings>(env.approvalSettings)
 	const [ttlText, setTtlText] = useState(String(env.approvalSettings.requestTtlHours))
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<DecisionFailure | null>(null)
 	const [confirming, setConfirming] = useState(false)
+	const [check, setCheck] = useState<PasskeyCheck<AppEnvDto> | null>(null)
+	// The check is bound to the choice it was issued for, so the choice stays fixed while it waits.
+	const locked = busy || check !== null
 	const ttl = requestTtl(ttlText)
 	const changed = POLICY_CATEGORIES.some((category) => chosen[category] !== env.approvalPolicy[category])
 		|| !sameSettings(settings, env.approvalSettings)
@@ -225,8 +236,9 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 	}
 
 	async function save() {
-		await setEnvironmentProtection(api, env, true, after, credentials)
-		onDone()
+		const started = await setEnvironmentProtection(api, env, true, after)
+		if (started.kind === 'posted') onDone()
+		else setCheck(started.check)
 	}
 
 	async function apply() {
@@ -260,7 +272,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 						className={preset === option.name ? 'btn small primary' : 'btn small'}
 						aria-pressed={preset === option.name}
 						title={option.hint}
-						disabled={busy}
+						disabled={locked}
 						onClick={() => choosePreset(option)}
 					>
 						{option.label}
@@ -282,7 +294,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 							<span className="approval-mode-controls">
 								<select
 									value={chosen[option.category]}
-									disabled={busy}
+									disabled={locked}
 									aria-label={option.label}
 									aria-describedby={`approval-${env.env}-${option.category}`}
 									onChange={(event) => choose(option.category, event.target.value)}
@@ -297,7 +309,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 								{isApproverCategory(option.category) && (
 									<select
 										value={settings.approvers[option.category]}
-										disabled={busy}
+										disabled={locked}
 										aria-label={`${option.label}: approvers`}
 										onChange={(event) => chooseApprovers(option.category, event.target.value === '2' ? 2 : 1)}
 									>
@@ -308,7 +320,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 								{isApproverCategory(option.category) && (
 									<select
 										value={settings.requesterMayApprove[option.category] ? 'yes' : 'no'}
-										disabled={busy}
+										disabled={locked}
 										aria-label={`${option.label}: who decides an agent's request`}
 										onChange={(event) => chooseRequesterMayApprove(option.category, event.target.value === 'yes')}
 									>
@@ -319,7 +331,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 								{isStepUpCategory(option.category) && (
 									<select
 										value={settings.stepUp[option.category]}
-										disabled={busy}
+										disabled={locked}
 										aria-label={`${option.label}: confirming with a passkey`}
 										onChange={(event) => chooseStepUp(option.category, event.target.value === 'webauthn' ? 'webauthn' : 'none')}
 									>
@@ -349,7 +361,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 					<span className="approval-mode-controls">
 						<select
 							value={settings.deployRequestCommits}
-							disabled={busy}
+							disabled={locked}
 							aria-label="Commits an agent may ask to deploy"
 							onChange={(event) => setSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
 						>
@@ -369,7 +381,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 					<span className="approval-mode-controls">
 						<select
 							value={settings.credentialCeiling}
-							disabled={busy}
+							disabled={locked}
 							aria-label="Actions a key an agent asks for may hold"
 							onChange={(event) => setSettings({ ...settings, credentialCeiling: event.target.value === 'approver' ? 'approver' : 'requester' })}
 						>
@@ -391,7 +403,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 							min={REQUEST_TTL_HOURS.min}
 							max={REQUEST_TTL_HOURS.max}
 							value={ttlText}
-							disabled={busy}
+							disabled={locked}
 							aria-label="Hours a request waits for a decision"
 							aria-invalid={ttl === null}
 							onChange={(event) => chooseTtl(event.target.value)}
@@ -400,7 +412,7 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 				</label>
 			</div>
 			<div>
-				<button type="button" className="btn small" disabled={!changed || ttl === null || busy} onClick={() => void apply()}>
+				<button type="button" className="btn small" disabled={!changed || ttl === null || locked} onClick={() => void apply()}>
 					Save approvals
 				</button>
 			</div>
@@ -408,6 +420,14 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 				<div className="error-text small" role="alert">
 					<DecisionFailureText failure={error} />
 				</div>
+			)}
+			{check !== null && (
+				<PasskeyCheckPrompt
+					check={check}
+					onDone={onDone}
+					onCancel={() => setCheck(null)}
+					describeFailure={(cause) => protectionChangeFailure(cause, env.env, 'webauthn')}
+				/>
 			)}
 			{confirming && (
 				<ConfirmDialog
@@ -434,7 +454,12 @@ export function PolicyEditor({ appId, env, onDone, credentials = browserCredenti
 /** What a confirmation says before a change that takes one of the person's passkeys. */
 function StepUpNote({ stepUp }: { stepUp: StepUpMode }) {
 	if (stepUp === 'none') return null
-	return <p>A passkey confirms deciding here, so this change takes one of your passkeys: your browser asks for it when you confirm.</p>
+	return (
+		<p>
+			A passkey confirms deciding here, so this change takes one of your passkeys: when you confirm, the console links to IAM's page, where you confirm
+			it with a passkey.
+		</p>
+	)
 }
 
 /** What turning approvals off means, read before it happens. `parked` is null while unknown. */

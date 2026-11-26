@@ -36,13 +36,9 @@ import type {
 } from './oauth-registry'
 import type {
 	IssuePasskeyChallengeRequest,
-	PasskeyChallenge,
-	PasskeyCreationOptions,
 	PasskeyDto,
-	PasskeyRequestOptions,
 	PasskeyResetResponse,
-	RegisterPasskeyRequest,
-	RemovePasskeyRequest,
+	PasskeyStepUpChallenge,
 	VerifiedPasskeyAssertion,
 	VerifyPasskeyAssertionRequest,
 } from './passkeys'
@@ -1072,23 +1068,22 @@ export interface IamAdminRpcContract {
 		reset: RpcProcedure<PrincipalIdInput, SecondFactorDto>
 	}
 	/**
-	 * A person's passkeys. The first six are the caller's own and need a person in a signed-in session, never a `px_` key:
-	 * the console runs the browser half of each ceremony. Registering another passkey while one exists, and removing one,
-	 * take an assertion by one of the person's passkeys bound to that change. `challenge` and `verify` are the step-up
-	 * seam: a challenge bound to an opaque string, and its verification against the same string. `listOf` and `reset`
-	 * are an installation administrator's (`iam.admin`); the reset removes every passkey and writes `iam.passkey.reset`.
+	 * A person's passkeys. A person registers and removes their own on IAM's account page (`ACCOUNT_PAGE_PATH`).
+	 * `challenge` and `verify` are the step-up seam, for a person in a signed-in session, never a `px_` key: a challenge
+	 * bound to an opaque string, which the person answers on IAM's page at its `url`, and its verification against the
+	 * same string. `listOf` and `reset` are an installation administrator's (`iam.admin`); the reset removes every
+	 * passkey and writes `iam.passkey.reset`.
 	 */
 	passkeys: {
-		list: RpcProcedure<void, ListResponse<PasskeyDto>>
-		registrationOptions: RpcProcedure<void, PasskeyChallenge<PasskeyCreationOptions>>
-		register: RpcProcedure<RegisterPasskeyRequest, PasskeyDto>
-		remove: RpcProcedure<RemovePasskeyRequest, OkResponse>
-		challenge: RpcProcedure<IssuePasskeyChallengeRequest, PasskeyChallenge<PasskeyRequestOptions>>
+		challenge: RpcProcedure<IssuePasskeyChallengeRequest, PasskeyStepUpChallenge>
 		verify: RpcProcedure<VerifyPasskeyAssertionRequest, VerifiedPasskeyAssertion>
 		listOf: RpcProcedure<PrincipalIdInput, ListResponse<PasskeyDto>>
 		reset: RpcProcedure<PrincipalIdInput, PasskeyResetResponse>
 	}
 }
+
+/** The signed-in person's own page on IAM's origin: their connections and their passkeys. */
+export const ACCOUNT_PAGE_PATH = '/auth/account'
 
 /** Where a signed-in administrator enrols an authenticator app, on IAM's own origin. */
 export const SECOND_FACTOR_ENROL_PATH = '/auth/second-factor/enrol'

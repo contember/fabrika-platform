@@ -1,8 +1,9 @@
 // A stand-in for IAM's passkey step-up behind Control's IAM transport (`IAM_ADMIN`): it answers `passkeys.challenge` and
-// `passkeys.verify` over `/admin/rpc` the way IAM does (a challenge is single-use, consumed before any comparison, and
-// bound to its binding; a person with no passkey gets a 409 of type `no_passkey`), so Control's real client and error
-// mapping run. Unlike IAM, it verifies an assertion whoever calls, so a test can show that Control itself refuses another
-// person's assertion. The console token is `token:<principal id>`.
+// `passkeys.verify` over `/admin/rpc` the way IAM does (a challenge is verified once it was answered on IAM's step-up
+// page, then spent before any comparison, and bound to its binding; a person with no passkey gets a 409 of type
+// `no_passkey`), so Control's real client and error mapping run. `answerChallenge` stands for the person's answer on
+// IAM's page. Unlike IAM, it verifies an answer whoever calls, so a test can show that Control itself refuses another
+// person's answer. The console token is `token:<principal id>`.
 
 import { PROXY_TOKEN_HEADER } from '@fabrika/auth'
 import {
@@ -36,7 +37,10 @@ export interface FakePasskeyIam {
 
 const call = z.object({ method: z.string(), input: z.unknown() })
 const challengeInput = z.object({ binding: z.string() })
-const verifyInput = z.object({ binding: z.string(), assertion: z.object({ challengeId: z.string(), credential: z.object({ id: z.string() }) }) })
+const verifyInput = z.object({ binding: z.string(), challengeId: z.string() })
+
+/** The answers given on the stand-in's step-up page: the credential id each challenge was answered with. */
+const answers = new Map<string, string>()
 
 function answer(status: number, body: unknown): Response {
 	return Response.json(body, { status })
@@ -62,7 +66,7 @@ export function fakePasskeyIam(people: readonly string[] = []): FakePasskeyIam {
 				if (method === 'passkeys.challenge') {
 					const { binding } = challengeInput.parse(input)
 					if (!iam.people.has(principalId)) {
-						return answer(409, { error: { type: NO_PASSKEY_ERROR, message: 'no passkey is registered; register one under Account → Passkeys' } })
+						return answer(409, { error: { type: NO_PASSKEY_ERROR, message: 'no passkey is registered; add one on your IAM account page' } })
 					}
 					const challengeId = crypto.randomUUID()
 					challenges.set(challengeId, { binding, principalId, used: false })
@@ -71,24 +75,21 @@ export function fakePasskeyIam(people: readonly string[] = []): FakePasskeyIam {
 						result: {
 							challengeId,
 							expiresAt: Math.floor(Date.now() / 1000) + 300,
-							options: {
-								challenge: 'Y2hhbGxlbmdl',
-								rpId: 'console.example.test',
-								timeout: 300_000,
-								allowCredentials: [{ type: 'public-key', id: `cred-${principalId}` }],
-								userVerification: 'required',
-							},
+							url: `https://iam.example.test/auth/step-up?challenge=${challengeId}`,
 						},
 					})
 				}
 				if (method === 'passkeys.verify') {
 					iam.verifications += 1
-					const { binding, assertion } = verifyInput.parse(input)
-					const issued = challenges.get(assertion.challengeId)
-					if (issued === undefined || issued.used) return refusal(409, 'the passkey challenge expired or was already answered; ask for a new one')
+					const { binding, challengeId } = verifyInput.parse(input)
+					const issued = challenges.get(challengeId)
+					const credentialId = answers.get(challengeId)
+					if (issued === undefined || issued.used || credentialId === undefined) {
+						return refusal(409, 'the passkey check was not completed, or it expired or was used already; confirm it again')
+					}
 					issued.used = true
 					if (issued.binding !== binding) return refusal(403, 'the passkey challenge was issued for something else')
-					return answer(200, { result: { principalId: issued.principalId, credentialId: assertion.credential.id, at: Math.floor(Date.now() / 1000) } })
+					return answer(200, { result: { principalId: issued.principalId, credentialId, at: Math.floor(Date.now() / 1000) } })
 				}
 				return refusal(400, `unknown method ${method}`)
 			},
@@ -102,14 +103,11 @@ export function consoleTokenHeaders(principalId: string): Record<string, string>
 	return { [PROXY_TOKEN_HEADER]: `token:${principalId}` }
 }
 
-/** What the browser answers to an issued challenge with the passkey `cred-<principal>`. */
+/** Answer an issued challenge on IAM's step-up page with the passkey `cred-<principal>`; the decision then carries its id. */
 export function answerChallenge(issued: ApprovalStepUpChallenge, principalId: string): ApprovalStepUp {
 	if (issued.kind !== 'challenge') throw new Error('the person has no passkey')
-	const id = `cred-${principalId}`
-	return {
-		challengeId: issued.challenge.challengeId,
-		credential: { id, rawId: id, type: 'public-key', response: { clientDataJSON: 'AA', authenticatorData: 'AA', signature: 'AA' } },
-	}
+	answers.set(issued.challenge.challengeId, `cred-${principalId}`)
+	return { challengeId: issued.challenge.challengeId }
 }
 
 /**

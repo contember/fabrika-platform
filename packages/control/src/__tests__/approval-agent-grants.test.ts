@@ -14,7 +14,6 @@ import {
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
-import type { PasskeyChallenge, PasskeyCreationOptions } from '@fabrika/iam-contract'
 import { type DeployLocks, type HttpService, type SqlDatabase, SqlDeployLocks } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import type { JsonValue } from '@fabrika/provider-contract'
@@ -23,6 +22,7 @@ import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-a
 import { PEOPLE_SCHEMA } from '../../../iam/src/__tests__/helpers/app-people'
 import { adminTokenFor, CONSOLE_APP, createHarness as createIamHarness, TEST_SIGNING_KEYS } from '../../../iam/src/__tests__/helpers/harness'
 import { APP, membershipFixture, ORIGIN as IAM_ORIGIN, type Person } from '../../../iam/src/__tests__/helpers/membership'
+import { answerTestStepUp, registerTestPasskey } from '../../../iam/src/__tests__/helpers/passkey-pages'
 import { createPostgres as createIamPostgres, hasPostgres as hasIamPostgres } from '../../../iam/src/__tests__/helpers/postgres'
 import { TestAuthenticator } from '../../../iam/src/__tests__/helpers/webauthn'
 import { createIamApp } from '../../../iam/src/app'
@@ -144,10 +144,6 @@ const status = async (promise: Promise<unknown>): Promise<{ status: number; mess
 		if (error instanceof ControlApiError) return { status: error.httpStatus, message: error.message }
 		throw error
 	}
-}
-
-function isCreation(value: unknown): value is PasskeyChallenge<PasskeyCreationOptions> {
-	return typeof value === 'object' && value !== null && 'challengeId' in value && 'options' in value
 }
 
 for (const backend of backends) {
@@ -306,28 +302,12 @@ for (const backend of backends) {
 
 			async function registerPasskey(who: Person): Promise<TestAuthenticator> {
 				const authenticator = await TestAuthenticator.create()
-				const token = await adminTokenFor(opened.iam, who.id, { issuer: IAM_ORIGIN })
-				const rpc = async (method: string, input: unknown): Promise<unknown> => {
-					const response = await transport.fetch(
-						new Request(`${IAM_ORIGIN}/admin/rpc`, {
-							method: 'POST',
-							headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-							body: JSON.stringify({ method, input }),
-						}),
-					)
-					const body: { result?: unknown } = await response.json()
-					if (response.status !== 200) throw new Error(`${method}: ${response.status}`)
-					return body.result
-				}
-				const issued = await rpc('passkeys.registrationOptions', null)
-				if (!isCreation(issued)) throw new Error('no creation options')
-				await rpc('passkeys.register', {
-					challengeId: issued.challengeId,
-					label: 'Laptop',
-					credential: await authenticator.register(issued.options, CONSOLE),
-				})
+				await registerTestPasskey(opened.iam, IAM_ORIGIN, who.id, authenticator)
 				return authenticator
 			}
+			/** Answer a step-up challenge on IAM's page, as the person's popup does. */
+			const answerStepUp = (who: Person, authenticator: TestAuthenticator, challengeId: string) =>
+				answerTestStepUp(opened.iam, IAM_ORIGIN, who.id, authenticator, challengeId)
 
 			await publish('prod')
 			await publish('stage')
@@ -355,6 +335,7 @@ for (const backend of backends) {
 				iamAudit,
 				gateGrants,
 				registerPasskey,
+				answerStepUp,
 				iam: opened.iam,
 			}
 		}
@@ -607,7 +588,8 @@ for (const backend of backends) {
 			const item = { id: created.id, decision: 'approve' as const, inputDigest: shown.inputDigest }
 			const issued = await challengeApprovalRequestUseCase(await w.person(w.ada, 'ada'), item)
 			if (issued.kind !== 'challenge') throw new Error('ada holds a passkey')
-			const stepUp = { challengeId: issued.challenge.challengeId, credential: await authenticator.assert(issued.challenge.options, CONSOLE) }
+			await w.answerStepUp(w.ada, authenticator, issued.challenge.challengeId)
+			const stepUp = { challengeId: issued.challenge.challengeId }
 			expect((await w.decide(created.id, 'approve', w.ada, 'ada', stepUp)).state).toBe('executed')
 			expect(await w.grantsAt()).toMatchObject([{ role_key: 'staff', granted_by: w.ada.id }])
 			expect((await w.db.approvalRequests.get(created.id))?.decided_step_up_credential_id).toBe(authenticator.credentialId)

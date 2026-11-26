@@ -1,48 +1,55 @@
 // The step-up on deciding a pending item (ADR-0050 §5): when deciding takes a passkey, the page asks Control for a
-// challenge bound to this one decision, the browser answers it with one of the person's passkeys, and the decision is
-// posted with the answer. A change of protection that weakens what deciding takes goes the same way. IAM verifies it
-// through Control; the page decides nothing.
+// challenge bound to this one decision, the person answers it with one of their passkeys on IAM's step-up page, and the
+// decision is posted with the challenge's id. A change of protection that weakens what deciding takes goes the same way.
+// IAM verifies the answer for Control; the page decides nothing.
 
 import { RpcError } from '@fabrika/app'
 import type { ApprovalStepUp, ApprovalStepUpChallenge, StepUpMode } from '@fabrika/control-contract'
-import { ceremonyFailure, PasskeyCeremonyError, type PasskeyCredentials, stepUpWithPasskey } from './webauthn'
 
 /** What a step-up confirms: a decision of a pending item, or a change of an environment's protection. */
 export type StepUpSubject = 'decision' | 'change'
 
-/** The person holds no passkey, so what takes one cannot be confirmed until they register one. */
+/** The person holds no passkey, so what takes one cannot be confirmed until they add one. */
 export class NoPasskeyError extends Error {
 	constructor(what: StepUpSubject) {
 		super(
 			what === 'decision'
-				? 'You have no passkey, and this decision takes one. Register one under Account → Passkeys, then decide.'
-				: 'You have no passkey, and this change takes one. Register one under Account → Passkeys, then save again.',
+				? 'You have no passkey, and this decision takes one. Add one on your IAM account page, then decide.'
+				: 'You have no passkey, and this change takes one. Add one on your IAM account page, then save again.',
 		)
 	}
 }
 
+/** A decision waiting for its passkey check on IAM's page: `post` sends it with the challenge's id, once the person is back. */
+export interface PasskeyCheck<T> {
+	readonly url: string
+	/** Epoch seconds. */
+	readonly expiresAt: number
+	readonly what: StepUpSubject
+	post(): Promise<T>
+}
+
+/** A decision posted at once, or one that waits for the person to confirm it on IAM's page first. */
+export type StartedDecision<T> = { kind: 'posted'; value: T } | { kind: 'confirm'; check: PasskeyCheck<T> }
+
 /**
- * Post one decision or change: under `webauthn` the passkey prompt runs first, on a challenge bound to it, and it
- * carries the answer; under `none` it is posted as it is. Nothing is posted when the prompt fails.
+ * Start one decision or change: under `none` it is posted at once; under `webauthn` the challenge bound to it is
+ * fetched and nothing is posted until the caller runs the check's `post`, after the person answered it on IAM's page.
  */
-export async function postDecision<T>(
+export async function startDecision<T>(
 	mode: StepUpMode,
-	credentials: PasskeyCredentials | null,
 	challenge: () => Promise<ApprovalStepUpChallenge>,
 	post: (stepUp: ApprovalStepUp | undefined) => Promise<T>,
 	what: StepUpSubject,
-): Promise<T> {
-	if (mode === 'none') return post(undefined)
-	if (credentials === null) throw new PasskeyCeremonyError(`This browser cannot use passkeys, so this ${what} cannot be confirmed here.`)
-	const stepUp = await stepUpWithPasskey(credentials, async () => {
-		const issued = await challenge()
-		if (issued.kind === 'no-passkey') throw new NoPasskeyError(what)
-		return issued.challenge
-	})
-	return post(stepUp)
+): Promise<StartedDecision<T>> {
+	if (mode === 'none') return { kind: 'posted', value: await post(undefined) }
+	const issued = await challenge()
+	if (issued.kind === 'no-passkey') throw new NoPasskeyError(what)
+	const { challengeId, expiresAt, url } = issued.challenge
+	return { kind: 'confirm', check: { url, expiresAt, what, post: () => post({ challengeId }) } }
 }
 
-/** Why a decision was not recorded, in the console's words; `noPasskey` adds the way to register one. */
+/** Why a decision was not recorded, in the console's words; `noPasskey` adds the way to add one. */
 export interface DecisionFailure {
 	readonly message: string
 	readonly noPasskey: boolean
@@ -51,6 +58,5 @@ export interface DecisionFailure {
 export function decisionFailure(cause: unknown): DecisionFailure {
 	if (cause instanceof NoPasskeyError) return { message: cause.message, noPasskey: true }
 	if (cause instanceof RpcError) return { message: cause.message, noPasskey: false }
-	if (cause instanceof PasskeyCeremonyError || cause instanceof DOMException) return { message: ceremonyFailure(cause), noPasskey: false }
 	return { message: 'The decision was not recorded.', noPasskey: false }
 }

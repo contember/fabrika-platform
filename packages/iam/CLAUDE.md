@@ -753,18 +753,22 @@ fails if that stops being true — it is the guard, not documentation of one.
   writes the authenticator, its ten recovery codes and `iam.second_factor.enrol` in one guarded change, a recovery
   code's use records `iam.second_factor.recovery_code.use`, and `secondFactor.reset` (`iam.admin` only) records
   `iam.second_factor.reset`, each in its change's own transaction.
-- **A PASSKEY IS A PERSON'S OWN, AND ONLY A PASSKEY THEY HOLD CHANGES THE SET** (`src/passkeys.ts`, `admin/passkeys.ts`,
-  `passkeys` and `passkey_challenges`, migration 0039). The person's `passkeys.*` of `/admin/rpc` (all but `listOf` and
-  `reset`) carry no `.require` and need a signed-in session's console token of a user; a `px_` key is refused. The
-  relying party is the console the token was minted for: its first registered return origin, and that host as RP ID.
-  Verification is `@simplewebauthn/server`'s, never hand-rolled, with user presence and verification required. A
-  challenge is single-use (the DELETE that reads it consumes it, before any comparison), five minutes, bound to its
-  principal and to an opaque binding set at issue, at most ten open per person. Registering a passkey while one exists,
-  and removing one, take an assertion bound to that change (`PASSKEY_REGISTRATION_BINDING`, `passkeyRemovalBinding`);
-  the first is registered with the session alone. `challenge` and `verify` are the step-up seam Control's IAM client uses
-  with the approver's token (ADR-0050 §5); they write no token claim. The counter is stored by compare-and-set. Each
-  change writes `iam.passkey.register`/`remove` in its own statement; `passkeys.reset` (`iam.admin`) writes
-  `iam.passkey.reset`. Never log a challenge, a credential, a key or a verifier's message (it quotes the challenge).
+- **A PASSKEY IS A PERSON'S OWN, ITS RELYING PARTY IS IAM, AND ONLY A PASSKEY THEY HOLD CHANGES THE SET** (`src/passkeys.ts`,
+  `auth/passkey-pages.ts`, `admin/passkeys.ts`, `passkeys` and `passkey_challenges`, migrations 0039 and 0047). The RP ID
+  is the issuer's host and the origin the issuer's (`relyingParty`), so every ceremony runs on IAM's own pages: the
+  account page adds and removes one, and `/auth/step-up` answers a step-up. Those pages post forms only (no fetch),
+  same-origin, with the person's IAM login. Verification is `@simplewebauthn/server`'s, never hand-rolled, with user
+  presence and verification required. A challenge lives five minutes, bound to its principal and to an opaque binding
+  set at issue, at most ten open per person; a ceremony of the account page spends it with the DELETE that reads it, and
+  the step-up page records the answer on it (a refused answer spends it) for `passkeys.verify` to spend. Registering a
+  passkey while one exists takes an assertion bound to `PASSKEY_REGISTRATION_BINDING` first, which the creation
+  challenge then carries as its binding; removing one takes an assertion bound to `passkeyRemovalBinding`; the first is
+  registered with the session alone. `passkeys.challenge` and `verify` of `/admin/rpc` are the step-up seam Control's IAM
+  client uses with the approver's console token (ADR-0050 §5): no `.require`, a signed-in session's token of a user, a
+  `px_` key refused; they write no token claim. The counter is stored by compare-and-set. Each change writes
+  `iam.passkey.register`/`remove` in its own statement; `passkeys.reset` (`iam.admin`) writes `iam.passkey.reset`, and
+  the maintenance pass writes one per passkey migration 0047 removed (`rp_moved`). Never log a challenge, a credential,
+  a key or a verifier's message (it quotes the challenge).
 - **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no
   `SESSION_COOKIE_DOMAIN` and `CookieOptions` has no `domain` field, so a parent-domain cookie is not
   expressible. `SESSION_COOKIE` is `__Host-px_session`, and the prefix makes the BROWSER enforce the

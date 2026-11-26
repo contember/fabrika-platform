@@ -1,12 +1,13 @@
 // The step-up on deciding a pending item (ADR-0050 §5): a passkey assertion bound to the decision, or to a change of
 // protection that weakens what deciding takes. Control builds the binding from the item it decides or the change it
-// applies, IAM issues the challenge and verifies the answer, each with the person's own console token, and Control goes
-// on only when IAM verified an assertion of that person against that binding.
+// applies, IAM issues the challenge, the person answers it on IAM's step-up page, and IAM verifies that answer for
+// Control, each call with the person's own console token. Control goes on only when IAM verified an answer of that person
+// to a challenge issued with that binding.
 
 import { RpcError } from '@fabrika/app'
 import { canonicalJson, sha256Hex } from '@fabrika/auth-core'
 import type { ApprovalDecision, ApprovalStepUp, ApprovalStepUpChallenge, ProtectionChallengeInput, StepUpMode } from '@fabrika/control-contract'
-import { NO_PASSKEY_ERROR, type PasskeyChallenge, type PasskeyRequestOptions, type VerifiedPasskeyAssertion } from '@fabrika/iam-contract'
+import { NO_PASSKEY_ERROR, type PasskeyStepUpChallenge, type VerifiedPasskeyAssertion } from '@fabrika/iam-contract'
 import type { HttpService } from '@fabrika/platform'
 import { z } from 'zod'
 import { ControlApiError, fail } from '../api/domain'
@@ -40,38 +41,20 @@ export function protectionStepUpBinding(change: ProtectionChallengeInput): strin
 /**
  * IAM's passkey step-up for the person the request's console token names. `challenge` answers null when the person has
  * no passkey, and throws IAM's other refusals as Control's, with IAM's status and message; `verify` answers null when IAM
- * refused the assertion. Every other failure throws.
+ * refused the answer (none yet, another binding, spent or expired). Every other failure throws.
  */
 export interface PasskeyStepUpPort {
-	challenge(binding: string): Promise<PasskeyChallenge<PasskeyRequestOptions> | null>
-	verify(binding: string, assertion: ApprovalStepUp): Promise<VerifiedPasskeyAssertion | null>
+	challenge(binding: string): Promise<PasskeyStepUpChallenge | null>
+	verify(binding: string, stepUp: ApprovalStepUp): Promise<VerifiedPasskeyAssertion | null>
 }
 
-const base64url = z.string().min(1).max(16_384).regex(/^[A-Za-z0-9_-]+$/)
-
-/** The assertion a decision carries, checked at the edge; IAM checks it again. */
-export const stepUpAssertionSchema = z.object({
-	challengeId: z.string().min(1).max(64),
-	credential: z.object({
-		id: base64url,
-		rawId: base64url,
-		type: z.literal('public-key'),
-		response: z.object({ clientDataJSON: base64url, authenticatorData: base64url, signature: base64url, userHandle: base64url.optional() }).strict(),
-	}).strict(),
-}).strict()
-
-const descriptorSchema = z.object({ type: z.literal('public-key'), id: z.string(), transports: z.array(z.string()).optional() })
+/** The answered challenge a decision carries, checked at the edge; IAM checks it again. */
+export const stepUpAssertionSchema = z.object({ challengeId: z.string().min(1).max(64) }).strict()
 
 const challengeSchema = z.object({
 	challengeId: z.string().min(1),
 	expiresAt: z.number().int(),
-	options: z.object({
-		challenge: z.string().min(1),
-		rpId: z.string().min(1),
-		timeout: z.number().int(),
-		allowCredentials: z.array(descriptorSchema),
-		userVerification: z.literal('required'),
-	}),
+	url: z.string().url(),
 })
 
 const verifiedSchema = z.object({ principalId: z.string().min(1), credentialId: z.string().min(1), at: z.number().int() })
@@ -104,9 +87,9 @@ export function iamPasskeyStepUp(gateway: HttpService, request: Request): Passke
 				throw cause
 			}
 		},
-		async verify(binding, assertion) {
+		async verify(binding, stepUp) {
 			try {
-				return verifiedSchema.parse(await client.passkeys.verify({ binding, assertion }))
+				return verifiedSchema.parse(await client.passkeys.verify({ binding, challengeId: stepUp.challengeId }))
 			} catch (cause) {
 				if (refusalStatus(cause) !== null) return null
 				throw cause
@@ -118,7 +101,7 @@ export function iamPasskeyStepUp(gateway: HttpService, request: Request): Passke
 /** Ask IAM for a challenge bound to one decision, for the page to answer before it posts the decision. */
 export async function issueStepUpChallenge(port: PasskeyStepUpPort | undefined, binding: string): Promise<ApprovalStepUpChallenge> {
 	if (port === undefined) fail(503, 'Control cannot reach IAM to issue a passkey challenge; nothing can be decided that takes one')
-	let challenge: PasskeyChallenge<PasskeyRequestOptions> | null
+	let challenge: PasskeyStepUpChallenge | null
 	try {
 		challenge = await port.challenge(binding)
 	} catch (cause) {
@@ -130,9 +113,9 @@ export async function issueStepUpChallenge(port: PasskeyStepUpPort | undefined, 
 
 /**
  * The step-up a decision or a change of protection takes, checked before anything is written: none under `none`; under
- * `webauthn` an assertion IAM verifies against `binding`, the one Control built from the item it decides or the change it
- * applies, made by the person acting. A missing assertion, a refusal, a failure to reach IAM and another person's
- * assertion all refuse it.
+ * `webauthn` an answer IAM verifies against `binding`, the one Control built from the item it decides or the change it
+ * applies, given by the person acting. A missing or unanswered challenge, a refusal, a failure to reach IAM and another
+ * person's answer all refuse it.
  */
 export async function requireStepUp(
 	port: PasskeyStepUpPort | undefined,
