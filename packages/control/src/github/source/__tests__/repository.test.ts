@@ -240,6 +240,26 @@ describe('the GitHub tarball repository', () => {
 		])
 	})
 
+	test('a branch holds a commit only when it is behind or identical with the commit as the merge base', async () => {
+		const fixture = await gitFixture()
+		const signal = new AbortController().signal
+		const merged = async (compareStatus: 'identical' | 'ahead' | 'behind' | 'diverged', compareMergeBase?: string) =>
+			(await sourceFor(fixture, { compareStatus, ...(compareMergeBase === undefined ? {} : { compareMergeBase }) }).requestedCommit({
+				repository,
+				commitSha: fixture.commitSha,
+				mergedInto: 'deploy/prod',
+				signal,
+			})).merged
+
+		expect(await merged('identical')).toBe(true)
+		expect(await merged('behind')).toBe(true)
+		// The commit is ahead of the branch: the branch does not hold it.
+		expect(await merged('ahead')).toBe(false)
+		expect(await merged('diverged')).toBe(false)
+		// An answer that claims the branch holds the commit but names another merge base is no answer.
+		await expect(merged('behind', 'e'.repeat(40))).rejects.toMatchObject({ code: 'archive_rejected' })
+	})
+
 	test('fails closed without fetching when the bound connection has no credential', async () => {
 		const fixture = await gitFixture()
 		let metadata = 0

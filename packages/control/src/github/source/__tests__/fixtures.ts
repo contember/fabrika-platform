@@ -184,6 +184,8 @@ export interface SourceOptions {
 	descriptorResponse?: () => Response
 	/** The compare of the branch that must hold a requested commit with it; the branch holds it (`behind`) by default. */
 	compareStatus?: 'identical' | 'ahead' | 'behind' | 'diverged'
+	/** The merge base the compare names; the requested commit when the branch holds it, another commit otherwise. */
+	compareMergeBase?: string
 	onDownload?: () => void
 	onMetadataRequest?: (url: string) => void
 	onMetadataAuthorization?: (value: string | null) => void
@@ -207,7 +209,7 @@ export function sourceFor(fixture: Fixture, options: SourceOptions = {}): Tarbal
 				if (url.includes('/contents/')) return options.descriptorResponse?.() ?? new Response(descriptor)
 				if (url.includes('/compare/')) {
 					const status = options.compareStatus ?? 'behind'
-					const mergeBase = status === 'behind' || status === 'identical' ? fixture.commitSha : 'e'.repeat(40)
+					const mergeBase = options.compareMergeBase ?? (status === 'behind' || status === 'identical' ? fixture.commitSha : 'e'.repeat(40))
 					return Response.json({ status, merge_base_commit: { sha: mergeBase } })
 				}
 				return new Response(null, { status: 404 })
