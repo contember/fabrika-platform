@@ -51,8 +51,9 @@ Cloudflare version without its IAM schema until the next deploy; the rest are sm
 
 11. `@fabrika/provider-contract`'s conformance subpath imports `bun:test`; its CLAUDE.md does not say it is Bun-only.
 12. `@fabrika/provider-zerops/installation` no longer exports `platformServiceTableDigest`,
-    `resolvePlatformProxyManifest`, `McpClient`, `parseMcpClientsJson`, the `PlatformProxy*` types and `IamOAuthConfig`;
-    they come from `@fabrika/installation-init`. Only code outside the repository that imports the tarball is affected.
+    `resolvePlatformProxyManifest`, the `PlatformProxy*` types and `IamOAuthConfig`; they come from
+    `@fabrika/installation-init`. `McpClient` and `parseMcpClientsJson` are gone with the client list (ADR-0089). Only
+    code outside the repository that imports the tarball is affected.
 
 ## Approach / acceptance
 
