@@ -2,7 +2,7 @@
 // its rows, a Within lists them, both through the parent row its parent column names, a column's own read action hides
 // a column, a reference view lists for every site, and every write is refused before a statement. The Postgres half skips cleanly when FABRIKA_TEST_POSTGRES_URL is unset:
 //
-//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
+//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 postgres:17 -c listen_addresses=127.0.0.1
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/db
 //
 // The URL is a credential: it is never logged.

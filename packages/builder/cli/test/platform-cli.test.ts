@@ -215,6 +215,7 @@ test('wait polls status without retriggering and preserves run identity when pol
 	expect(JSON.parse(failed.stdout).deployment.runId).toBe('run-poll')
 })
 
+// Four runs of the CLI, each a Bun process of its own: about 0.5 s on an idle machine, several seconds on a loaded one.
 test('repeat connected init reuses pending and approved pairing without a second connect', async () => {
 	const f = setup()
 	const args = ['init', '--url=https://control.example', '--no-open', '--json']
@@ -235,4 +236,4 @@ test('repeat connected init reuses pending and approved pairing without a second
 	expect(approved.code).toBe(0)
 	expect(JSON.parse(approved.stdout).platform.pairing).toEqual({ status: 'approved' })
 	expect(f.requests.filter(r => r.path.endsWith('/connect'))).toHaveLength(1)
-})
+}, 30_000)
