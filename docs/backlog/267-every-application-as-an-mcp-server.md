@@ -28,7 +28,7 @@ ordinary request through the proxy's one enforcement decision.
 
 The token is the unsolved part; [agent login into applications](../specs/agent-login-into-applications.md) designs the
 exchange this item can reuse. Caller `oauth` is installation-only (`packages/auth-core/src/installation-endpoint.ts:11`),
-and an application's verifier refuses a resource token (`packages/auth-core/src/token.ts:280`). The design must say how
+and an application's verifier refuses a resource token (`packages/auth-core/src/token.ts:294-296`). The design must say how
 the proxy turns an MCP client's OAuth authority into the application's own token (for example, IAM exchanges the
 resource token for an ordinary application token, as the proxy's session handoff does) while the proxy keeps the one
 enforcement decision. That is an additive change to the application↔platform protocol
