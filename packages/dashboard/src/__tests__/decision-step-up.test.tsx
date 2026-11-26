@@ -10,7 +10,7 @@ import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { DecisionFailureNotice } from '../components/DecisionFailureNotice'
-import { PasskeyCheckPrompt } from '../components/PasskeyCheckPrompt'
+import { PasskeyCheckFailure, PasskeyCheckPrompt } from '../components/PasskeyCheckPrompt'
 import { decisionFailure, NoPasskeyError, startDecision } from '../lib/decision-step-up'
 
 const URL_OF_CHECK = 'https://iam.example.test/auth/step-up?challenge=challenge-1'
@@ -94,5 +94,13 @@ describe('the passkey check', () => {
 		expect(markup).toContain('>Continue</button>')
 		expect(markup).toContain('>Cancel</button>')
 		expect(markup).not.toContain('role="alert"')
+	})
+
+	test('a failed Continue says why, and that a confirmed check is started again, not continued', () => {
+		const failure = decisionFailure(new RpcError({ type: 'conflict', message: 'the request was decided already', httpStatus: 409 }))
+		const markup = renderToStaticMarkup(<PasskeyCheckFailure failure={failure} />)
+		expect(markup).toContain('role="alert"')
+		expect(markup).toContain('the request was decided already')
+		expect(markup).toContain('A passkey check works once. If you confirmed it already, cancel and start again.')
 	})
 })

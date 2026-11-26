@@ -40,7 +40,17 @@ export function PasskeyCheckPrompt<T>({ check, onDone, onCancel, describeFailure
 				</button>
 				<button type="button" className="ghost" disabled={busy} onClick={onCancel}>Cancel</button>
 			</div>
-			{failure !== null && <DecisionFailureNotice failure={failure} />}
+			{failure !== null && <PasskeyCheckFailure failure={failure} />}
 		</div>
+	)
+}
+
+/** Why Continue recorded nothing. IAM spends a check on its first use, so one confirmed already cannot be continued again. */
+export function PasskeyCheckFailure({ failure }: { failure: DecisionFailure }) {
+	return (
+		<>
+			<DecisionFailureNotice failure={failure} />
+			<p className="hint">A passkey check works once. If you confirmed it already, cancel and start again.</p>
+		</>
 	)
 }
