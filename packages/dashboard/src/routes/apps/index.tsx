@@ -122,6 +122,11 @@ export type EnvironmentsRead =
 	| { readonly kind: 'read'; readonly items: readonly AppEnvDto[] }
 	| { readonly kind: 'failed'; readonly reason: 'forbidden' | 'unavailable' }
 
+/** Why an application's environment list failed: Control answers a refusal as 404 (or 403), anything else is an outage. */
+export function environmentsFailure(cause: unknown): 'forbidden' | 'unavailable' {
+	return cause instanceof ApiError && (cause.httpStatus === 403 || cause.httpStatus === 404) ? 'forbidden' : 'unavailable'
+}
+
 function useApplicationEnvironments(apps: readonly AppDto[]): ReadonlyMap<string, EnvironmentsRead> {
 	const [reads, setReads] = useState<ReadonlyMap<string, EnvironmentsRead>>(new Map())
 	useEffect(() => {
@@ -132,8 +137,7 @@ function useApplicationEnvironments(apps: readonly AppDto[]): ReadonlyMap<string
 		for (const app of apps) {
 			void api.apps.environments.list({ appId: app.id }).then(
 				(page) => settle(app.id, { kind: 'read', items: page.items }),
-				(cause: unknown) =>
-					settle(app.id, { kind: 'failed', reason: cause instanceof ApiError && cause.httpStatus === 403 ? 'forbidden' : 'unavailable' }),
+				(cause: unknown) => settle(app.id, { kind: 'failed', reason: environmentsFailure(cause) }),
 			)
 		}
 		return () => {

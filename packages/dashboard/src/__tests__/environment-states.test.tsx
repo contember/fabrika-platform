@@ -12,13 +12,14 @@ import { z } from 'zod'
 import { environmentKey, useEnvironmentStatesAcross } from '../components/app/AppFrame'
 import { Applications } from '../components/overview/Applications'
 import { Attention } from '../components/overview/Attention'
+import { ApiError } from '../lib/api'
 import type { ConsoleCaller } from '../lib/console-access'
 import { ConsoleAccessContext } from '../lib/console-caller'
 import type { EnvironmentState } from '../lib/environment-state'
 import { loadOverview, type OverviewData } from '../lib/overview'
 import dataPage from '../routes/apps/data'
 import appPage from '../routes/apps/detail'
-import appsPage, { ApplicationStates, type EnvironmentsRead } from '../routes/apps/index'
+import appsPage, { ApplicationStates, environmentsFailure, type EnvironmentsRead } from '../routes/apps/index'
 import healthPage from '../routes/operations/health/index'
 
 const pageRegistry = {
@@ -72,6 +73,14 @@ const cell = (appId: string, read: EnvironmentsRead, states: ReadonlyMap<string,
 
 describe("the Applications list's State column", () => {
 	const envs = [environment('notes', 'prod'), environment('notes', 'test')]
+
+	test('a refused environment list reads as not readable, any other failure as unavailable', () => {
+		const refusal = (httpStatus: number) => new ApiError({ type: 'error', httpStatus, message: 'refused' })
+		expect(environmentsFailure(refusal(403))).toBe('forbidden')
+		expect(environmentsFailure(refusal(404))).toBe('forbidden')
+		expect(environmentsFailure(refusal(500))).toBe('unavailable')
+		expect(environmentsFailure(new TypeError('Failed to fetch'))).toBe('unavailable')
+	})
 
 	test('each environment shows its lamp and label, linked to its Data tab', () => {
 		const html = cell('notes', { kind: 'read', items: envs }, new Map([[environmentKey('notes', 'prod'), { kind: 'mode', mode: 'closed' }]]))
