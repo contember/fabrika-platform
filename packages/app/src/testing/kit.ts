@@ -27,7 +27,6 @@ import {
 	PROXY_TOKEN_HEADER,
 	SESSION_COOKIE,
 	signAccessClaims,
-	type TerminalFailure,
 	TOKEN_ALG,
 	uniquePermissions,
 	UNTRUSTED_FORWARD_HEADERS,
@@ -40,7 +39,7 @@ import { MemoryEmailSender } from '@fabrika/email/memory'
 import type { FileObjectStore } from '@fabrika/platform'
 import { type IamGateway, REQUEST_ID_HEADER, stripFabrikaCookies } from '@fabrika/proxy-core'
 import { type ContractProxyTable, contractProxyTable } from '@fabrika/proxy-core/manifest'
-import { exportJWK, generateKeyPair, SignJWT } from 'jose'
+import { exportJWK, generateKeyPair, jwtVerify, SignJWT } from 'jose'
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { resolve } from 'node:path'
@@ -89,16 +88,10 @@ import {
 	type TestMembership,
 } from './membership'
 import { endpointProxy } from './proxy'
+import { kitIdentifications, type TestIdentification, type TestIdentificationState } from './terminals'
 
 export const TEST_ISSUER = 'https://iam.test'
 
-/** The kit's IAM without a terminal: no identification is open, so every one is `not_found`. */
-const noIdentification = (): Promise<TerminalFailure> => Promise.resolve({ ok: false, reason: 'not_found' })
-const NO_IDENTIFICATIONS: IamTerminalRpc = Object.freeze({
-	inspectIdentification: noIdentification,
-	assertIdentity: noIdentification,
-	cancelIdentification: noIdentification,
-})
 export { TEST_ENVIRONMENT }
 /**
  * The kit's VAPID public key: shaped like an uncompressed P-256 point in unpadded base64url, which is all the
@@ -144,8 +137,8 @@ export interface TestKitOptions {
 	 */
 	readonly membership?: IamMembershipRpc
 	/**
-	 * IAM's identifications at a terminal (ADR-0067), for a contract that declares one. Without it the kit's IAM knows no
-	 * open identification: `inspect` answers null and `assert` `not_found`.
+	 * IAM's identifications at a terminal (ADR-0067), for a contract that declares one. Without it the kit's IAM answers
+	 * them under IAM's rules over the identifications `kit.openIdentification` opened.
 	 */
 	readonly terminals?: IamTerminalRpc
 	/**
@@ -212,6 +205,15 @@ export interface TestKit<C extends AnyContract> {
 	 * that is not open, and in a kit given its own `membership`.
 	 */
 	acceptInvitation(invitationId: string, person?: LabelledTestCaller): LabelledTestCaller
+	/**
+	 * Opens an identification on `terminal`, as IAM does when the enrolled terminal's browser arrives with no login: its
+	 * `id` is what IAM appends to the identification page, `url`. For two minutes `ctx.terminals` inspects it; an
+	 * assertion of an enabled internal person of this kit, or a cancellation, ends it. Throws in a contract that declares
+	 * no terminal and in a kit given its own `terminals`.
+	 */
+	openIdentification(terminal?: Pick<TestTerminal, 'id' | 'label'>): TestIdentification
+	/** What became of an identification `openIdentification` opened: open, asserted for whom, cancelled, or expired unused. */
+	identification(id: string): TestIdentificationState | undefined
 	/**
 	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for
 	 * its key, its writes fenced. It first waits for the runs a site's `ctx.kick` sent, so it never races them.
@@ -497,6 +499,17 @@ export function bootTestKit<C extends AnyContract>(
 	// issues the proxy's delegation grants.
 	const standIn = options.membership === undefined ? kitMembership(artifact, directoryCallers) : null
 	const membership = options.membership ?? standIn?.rpc
+	// The kit's IAM opens identifications for a contract that declares a terminal, unless the test brings its own.
+	const identifyPath = artifact.terminal?.identify
+	const identifications = options.terminals !== undefined || identifyPath === undefined ? null : kitIdentifications({
+		issuer: TEST_ISSUER,
+		identifyUrl: new URL(identifyPath, origin).href,
+		verifies: async (credential) => {
+			const { publicKey } = await signing
+			return jwtVerify(credential, publicKey, { issuer: TEST_ISSUER, audience: appId }).then(() => true, () => false)
+		},
+		principals: (id) => [...memberships.keys()].filter((caller) => caller.id === id),
+	})
 	const mail = options.mail === undefined || options.mail === 'none' ? new MemoryEmailSender() : options.mail
 	const mailKeyScope: MailKeyScope = Object.freeze({ issuer: TEST_ISSUER, appId })
 	// The kit stands in for Control's token key too: one random key, which signs and verifies.
@@ -543,7 +556,7 @@ export function bootTestKit<C extends AnyContract>(
 		...dev,
 		...(options.revealHandlerErrors === undefined ? {} : { revealHandlerErrors: options.revealHandlerErrors }),
 		membership,
-		terminals: options.terminals ?? (artifact.terminal === undefined ? undefined : NO_IDENTIFICATIONS),
+		terminals: options.terminals ?? identifications?.rpc,
 		connectBindings,
 		workloadTokens,
 		mailStandIn: options.mail === 'none' ? 'none' : mail,
@@ -674,6 +687,21 @@ export function bootTestKit<C extends AnyContract>(
 				resolveGrants<AnyContract>(app.contract, terminal.grants ?? []).map((entry): PermissionEntry => ({ ...entry, source: 'terminal' })),
 			),
 		})
+	}
+
+	/** An identification on `terminal`, opened by the kit's IAM: refused where IAM would open none for this application. */
+	function openIdentification(terminal: Pick<TestTerminal, 'id' | 'label'> = {}): TestIdentification {
+		if (artifact.terminal === undefined) {
+			throw new Error("the contract declares no terminal, so IAM opens no identification for it: terminal: { identify: '/identify' } in the vocabulary")
+		}
+		if (identifications === null) {
+			throw new Error('this kit was given its own terminals transport, so its IAM opens no identification')
+		}
+		if (terminal.id === '' || terminal.label === '') {
+			throw new Error('a terminal has a non-empty id and label, as IAM enrols one: openIdentification({ id, label })')
+		}
+		terminals += 1
+		return identifications.open({ id: terminal.id ?? `terminal-${terminals}`, label: terminal.label ?? `Terminal ${terminals}` })
 	}
 
 	const scope = <D extends DimensionOf<C>>(dimension: D, value: string): TestScope<D> => Object.freeze({ type: dimension, value })
@@ -956,6 +984,8 @@ export function bootTestKit<C extends AnyContract>(
 			drain,
 			runDueJobs,
 			acceptInvitation,
+			openIdentification,
+			identification: (id: string) => identifications?.stateOf(id),
 			mail,
 			mailKeyScope,
 			signToken,

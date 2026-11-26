@@ -1074,8 +1074,10 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   (`not_found`, `invalid_principal`); `cancel(id)` ends an abandoned one. They ask IAM over the membership transport with
   the request's credential, a public procedure's workload token. IAM refusing the application's own credential is a 500
   (`terminal_refused`), IAM out of reach a 503. The application throttles guesses per terminal and signs the person out
-  at `/__fabrika/auth/signout?redirect=<path>`. `boot` refuses such a contract without the transport; the test kit
-  answers every identification `not_found` unless `options.terminals` replaces it. Elsewhere `ctx.terminals` is
+  at `/__fabrika/auth/signout?redirect=<path>`. `boot` refuses such a contract without the transport. The test kit's
+  IAM answers as IAM does over the identifications a test opens with `kit.openIdentification({ id, label })` (its `id`
+  and the page's `url`), single use and for two minutes, and `kit.identification(id)` tells whether it was asserted, for
+  whom, cancelled or expired unused; `options.terminals` replaces it. Elsewhere `ctx.terminals` is
   unavailable. A kit test reaches a terminal-only endpoint as a person on a terminal: `testCaller(grants, { terminal: {
   id, label, ceiling, grants } })`, whose token carries `amr` and `terminal` and the permissions IAM signs there (the
   person's own entries the ceiling keeps, none by default, and the terminal's grants with the source `terminal`).
