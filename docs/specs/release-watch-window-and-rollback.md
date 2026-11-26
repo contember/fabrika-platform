@@ -206,9 +206,9 @@ its opt-in flag, its guards and its own ADR, is [backlog 273](../backlog/273-aut
 - Audit: a rollback writes the usual `deploy.trigger` audit through the person's verified token, with `rollbackOf`
   and the verdict in its metadata. IAM's audit delivery is best-effort (backlog
   [71](../backlog/71-deliver-domain-audit-events-durably.md)).
-- A rollback that narrows access depends on the IAM write after publish; while that write fails, the narrowing is not in
-  force (backlog [226](../backlog/226-a-failed-iam-reconcile-leaves-a-narrowing-unapplied.md)). The rollback adds no new
-  window; it inherits that one.
+- A rollback that narrows access writes the narrowing to IAM before the rolled-back version is published, as every
+  deploy does (`applyNarrowing`, `packages/control/src/run-lifecycle.ts`), so it opens no window in which the narrowing
+  is not in force.
 - The alert payload carries issue titles, as today's new-issue alert does. It carries no event payload.
 
 ## Rollout on an existing installation
