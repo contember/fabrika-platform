@@ -499,9 +499,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     republish and reconcile applies it after the certificates, and its failure (a rollback, a priority two namespaces
     chose at once, the listener's rule or certificate quota) is recorded (`proxyHostsFailure`) and shown, never thrown:
     the namespace's own stack, the proxy's build and rollout and deploys into it never wait on it. A served host is one
-    whose certificate is issued and that no other rule of the listener matches (exact or by a wildcard) and that is
-    not one of the installation's own hosts (`FABRIKA_AWS_INSTALLATION_HOSTS`); a rule is the namespace's own only when
-    it names that host alone and forwards to the namespace's own target group. A host that conflicts is marked
+    whose certificate is issued and that is not one of the installation's own hosts (`FABRIKA_AWS_INSTALLATION_HOSTS`),
+    and that no other rule of the listener matches (exact or by a wildcard) ahead of the namespace's own: a namespace
+    without a rule of its own for the host defers to any matching rule, and one with its own rule defers only to a
+    matching rule of a lower priority number, which the listener evaluates first. So a rule added later with a higher
+    number (another namespace's, the operator's or the installation's) takes no host a namespace already routes, and
+    shows no conflict, because the listener still serves the namespace's rule. The installation's own hosts are
+    therefore protected by that list, not by their rules, and the installation's stack must write it (step 11). A rule
+    is the namespace's own only when it names that host alone and forwards to the namespace's own target group. A host
+    that conflicts is marked
     (`listenerConflict`) and shown. **First come keeps a host**: a namespace whose member names a host already routed
     never takes it over, whoever its rightful owner is. ACM reuses one validation record per domain in an account, so a
     second namespace gets an issued certificate for a host whose record is in DNS without touching DNS; that buys it no

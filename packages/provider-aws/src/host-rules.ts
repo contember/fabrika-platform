@@ -5,8 +5,13 @@
 //
 // - The listener is the installation's, shared by every namespace and by the installation's own routes. A rule is the
 //   namespace's own only when it names the one host alone and forwards to the namespace's own target group. A host that
-//   any other rule matches (exact or by a wildcard), or that is one of the installation's own hosts, is not served: it
-//   is marked a conflict and shown to the operator. So the first namespace to route a host keeps it, and a later one
+//   is one of the installation's own hosts, or that another rule matches (exact or by a wildcard) ahead of the
+//   namespace's own, is not served: it is marked a conflict and shown to the operator. A namespace without a rule of its
+//   own for the host defers to any matching rule; one with its own rule defers only to a matching rule of a lower
+//   priority number, which the listener evaluates first. So a rule added later with a higher number (another
+//   namespace's, the operator's or the installation's) takes no host a namespace already routes and shows no conflict,
+//   since the listener still serves the namespace's rule; the installation's own hosts are protected by their list
+//   (`FABRIKA_AWS_INSTALLATION_HOSTS`), not by their rules. So the first namespace to route a host keeps it, and a later one
 //   claiming the same host never takes it over; which one is the host's rightful owner is the operator's to decide (the
 //   namespace's presentation names the conflict, and the operator removes the domain from the wrong environment).
 // - A rule's priority must be one no other rule of the listener holds. Each served host's is chosen against the
