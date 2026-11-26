@@ -747,29 +747,12 @@ export function childListPredicate(context: TableContext, capability: unknown, o
 }
 
 /**
- * The column that places a row of `model` in `dimension`: a dimension table's own key for its own dimension, else the
- * column of that link of its containment chain; `undefined` when no `Within` of the dimension reaches the table.
- */
-export function reachColumn(model: TableModel, dimension: string): string | undefined {
-	if (model.scope.mode === 'dimension' && model.scope.dimension === dimension) {
-		return model.scope.key
-	}
-	for (let index = 0; index < model.chain.length; index++) {
-		const link = model.chain[index]
-		if (link?.dimension === dimension) {
-			return link.column
-		}
-	}
-	return undefined
-}
-
-/**
  * Whether a `Within` of `dimension` lists the table: a dimension table its own dimension's, then through its containment
  * chain or a secondary path; a child view through its parent's.
  */
 export function reachedBy(context: TableContext, dimension: string): boolean {
 	const model = context.through?.context.model ?? context.model
-	return reachColumn(model, dimension) !== undefined || secondaryPathsOf(model, dimension).length > 0
+	return nodeColumnOf(model, dimension) !== undefined || secondaryPathsOf(model, dimension).length > 0
 }
 
 /** The secondary read paths of `model` that reach `dimension`, a dimension outside its chain: at their node or above it. */
@@ -810,7 +793,7 @@ export function reachPredicate(context: TableContext, capability: unknown): Oper
 
 /** A `Within`'s read of a table it reaches: through the column that places a row in its dimension, or its secondary paths. */
 function withinReach(context: TableContext, grant: WithinGrant): OperationNode | undefined {
-	const column = reachColumn(context.model, grant.dimension)
+	const column = nodeColumnOf(context.model, grant.dimension)
 	if (column !== undefined) {
 		return withinPredicate(context, column, grant, 'read')
 	}
@@ -964,7 +947,7 @@ export function scopeTerms(context: TableContext, capability: unknown, use: Scop
 		}
 		return [tests]
 	}
-	const column = reachColumn(model, grant.dimension)
+	const column = nodeColumnOf(model, grant.dimension)
 	if (column === undefined) {
 		throw new CapabilityError(
 			'out_of_reach',
@@ -1316,7 +1299,7 @@ export function claimScope(
 		throw new CapabilityError('table_kind', `${model.name} is an application table: claim it through ctx.db.app`)
 	}
 	checkAction(context, 'update', grant.action)
-	const column = reachColumn(model, grant.dimension)
+	const column = nodeColumnOf(model, grant.dimension)
 	if (column === undefined) {
 		throw new CapabilityError(
 			'out_of_reach',

@@ -104,8 +104,9 @@ export default serve(contract, { database: scoped(tables) })
   `organization: { valuesFrom: 'api.organizationValues' }`. The procedure is a query that admits `human`, requires an
   action `over` that dimension other than its `members.manage`, takes no input and answers `{ values: [{ value, label? }] }`; the build refuses any
   other. When an administrator grants in the dimension, IAM calls it through the application's proxy as that person,
-  with a 60-second key carrying only that action, and the handler answers what `ctx.within.values` allows, labelled
-  from the dimension's own table (`ctx.db.within.<table>`, which lists the rows of the values it holds). When the
+  with a 60-second key carrying only that action, and the handler answers what `ctx.within.values` allows. When that
+  action is the read action of the dimension's own table, `ctx.db.within.<table>` lists the table's rows the caller
+  reaches (its values and the rows its container grants hold), so the labels come from there. When the
   application does not answer within 3 s, the console falls back to the declared list or free text
   ([ADR-0085](../decisions/0085-a-grant-holds-a-set-of-scope-values.md) §4).
 

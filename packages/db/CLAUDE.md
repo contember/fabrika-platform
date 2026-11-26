@@ -387,7 +387,7 @@ pass a recording one); `Database.fromEngine` takes another engine (`openSqlite`)
   shape (`checkRoot`); without the parenthesis, `true or 1=1` followed by the scope would match every
   row. An insert carries no WHERE and gets its scope columns stamped from the capability instead.
 - **A handle's `Within` lists every table whose containment chain holds its dimension** (`reachedBy`,
-  `reachPredicate`), and a dimension table its own, by its key (`reachColumn`): tasks under a `Within` of `org` through
+  `reachPredicate`), and a dimension table its own, by its key (`nodeColumnOf`, the column relation terms use too): tasks under a `Within` of `org` through
   their stamped `org_id`, projects under a `Within` of `project` by `id`, its container grants through `org_id`. A
   child view is listed wherever its parent is reached, its parent's own dimension included.
   The predicate, the keyset page, the projection and the hidden columns are the nearest container's. The stores'

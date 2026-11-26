@@ -98,8 +98,9 @@ application itself. IAM:
    malformed. IAM never answers an error for the application's failure.
 
 The application answers what that person may see: the handler reads `ctx.within.values` as for any procedure `over`
-the dimension, and labels them from the dimension's own table, which `ctx.db.within` lists under `over` that dimension. The console shows the application's values as checkboxes. When IAM answers `unavailable`, it shows the
-declared list, or free text without one, under a warning naming the reason. A value the grant holds and the answer
+the dimension, and labels them from the dimension's own table, which `ctx.db.within` lists under `over` that dimension
+when the action is that table's read action. The console shows the application's values as checkboxes. When IAM
+answers `unavailable`, it shows the declared list, or free text without one, under a warning naming the reason. A value the grant holds and the answer
 does not list is flagged as in section 3, never dropped. The answer is information, like the static list: IAM still
 grants a value neither lists.
 
