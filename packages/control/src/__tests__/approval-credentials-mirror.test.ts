@@ -46,9 +46,15 @@ const REGISTRATION: { target: ProviderEnvelope; artifact: ProviderEnvelope } = {
 const PROVIDER: ControlProvider = { id: 'harbor', deploy: () => Promise.resolve({ state: 'succeeded' }) }
 /**
  * IAM released before the `credentials` mirror, served by the real RPC dispatcher: its `grantApproval.set` input is
- * strict and has no `credentials`, and it answers the grant gate it holds.
+ * strict and has no `credentials`, and it answers the grant gate it holds. `pass()` is a new port over the same IAM, as
+ * each maintenance pass builds one; `requests` counts every call that reached IAM, refused ones included.
  */
-function olderIam(): { readonly port: GrantApprovalPort; readonly writes: unknown[] } {
+function olderIam(): {
+	readonly port: GrantApprovalPort
+	pass(): GrantApprovalPort
+	readonly writes: unknown[]
+	readonly requests: { count: number }
+} {
 	const t = initRpc<Record<string, never>>()
 	const held = new Map<string, { required: boolean; revision: number }>()
 	const writes: unknown[] = []
@@ -65,12 +71,17 @@ function olderIam(): { readonly port: GrantApprovalPort; readonly writes: unknow
 				}),
 		}),
 	})
-	const port = grantApprovalPort(iamProvisioningClient({
-		origin: IAM_ORIGIN,
-		provisioningKey: PROVISIONING_KEY,
-		fetch: (input, init) => dispatchRpcRequest({ router, ctx: {}, request: new Request(input, init) }),
-	}))
-	return { port, writes }
+	const requests = { count: 0 }
+	const pass = () =>
+		grantApprovalPort(iamProvisioningClient({
+			origin: IAM_ORIGIN,
+			provisioningKey: PROVISIONING_KEY,
+			fetch: (input, init) => {
+				requests.count += 1
+				return dispatchRpcRequest({ router, ctx: {}, request: new Request(input, init) })
+			},
+		}))
+	return { port: pass(), pass, writes, requests }
 }
 
 /** IAM down: every write of the mirror fails. */
@@ -297,9 +308,12 @@ for (const backend of backends) {
 				expect(older.writes.length).toBeGreaterThan(0)
 				expect(older.writes.every((write) => typeof write === 'object' && write !== null && !('credentials' in write))).toBe(true)
 				// The pass writes every environment the same way and records none, so a pass after IAM's upgrade writes them.
-				expect(await w.converge(older.port)).toEqual({ written: 0, failed: 2 })
-				expect(await w.converge(older.port)).toEqual({ written: 0, failed: 2 })
-				expect(warn.mock.calls.length).toBeGreaterThan(0)
+				// It finds the older IAM once: one refused call and one line per pass, then one call per environment.
+				for (let pass = 0; pass < 2; pass += 1) {
+					const [requests, lines] = [older.requests.count, warn.mock.calls.length]
+					expect(await w.converge(older.pass())).toEqual({ written: 0, failed: 2 })
+					expect([older.requests.count - requests, warn.mock.calls.length - lines]).toEqual([3, 1])
+				}
 				expect(warn.mock.calls.every((call) => call.length === 1 && typeof call[0] === 'string')).toBe(true)
 			} finally {
 				warn.mockRestore()

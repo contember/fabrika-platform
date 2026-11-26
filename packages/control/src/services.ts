@@ -222,20 +222,27 @@ function refusesCredentialsField(cause: unknown): boolean {
  * The mirror's writes over IAM's admin RPC, as the provisioning client reaches it. An IAM older than the `credentials`
  * mirror (rolled back alone, or behind a Control deployed alone) refuses the mode: the grant gate is written again
  * without it, and the answer carries no mode, so the maintenance pass leaves the environment unmirrored and writes it
- * again once IAM takes it (ADR-0062).
+ * again once IAM takes it (ADR-0062). One port finds an older IAM once, logs it once and writes every later gate without
+ * the mode; the maintenance pass builds one per pass, a request one per call.
  */
 export function grantApprovalPort(client: Pick<ReturnType<typeof iamProvisioningClient>, 'grantApproval'>): GrantApprovalPort {
+	let olderIam = false
 	return {
 		async set(app, gates, revision) {
 			const write = (credentials: boolean) =>
 				client.grantApproval.set({ app, required: gates.grants, revision, ...(credentials ? { credentials: gates.credentials } : {}) })
 			let answer: unknown
-			try {
-				answer = await write(true)
-			} catch (cause) {
-				if (!refusesCredentialsField(cause)) throw cause
-				console.warn(`IAM does not take the credentials mode yet; wrote ${app}'s grant gate without it`)
+			if (olderIam) {
 				answer = await write(false)
+			} else {
+				try {
+					answer = await write(true)
+				} catch (cause) {
+					if (!refusesCredentialsField(cause)) throw cause
+					olderIam = true
+					console.warn('IAM does not take the credentials mode yet; writing grant gates without it')
+					answer = await write(false)
+				}
 			}
 			const held = heldGatesSchema.parse(answer)
 			return { revision: held.revision, credentials: held.credentials ?? null }

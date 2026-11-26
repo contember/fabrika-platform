@@ -411,8 +411,8 @@ environment's mode: the window fails closed, and no operator step is needed. One
 so convergence takes one pass per 200 environments; an environment IAM keeps refusing, or answers at a later revision
 than Control's, is not recorded as taken and takes a slot on every pass until it converges. Both upgrade workflows
 deploy IAM before Control, but IAM can still be older than Control: rolled back alone, or with Control deployed alone.
-Such an IAM refuses the `credentials` field as unknown; Control then writes the grant gate without it, logs one line,
-and records nothing, so the pass writes the mode once IAM is upgraded (ADR-0062). An installation without the provisioning
+Such an IAM refuses the `credentials` field as unknown; Control then writes the grant gates without it, logs one line
+per pass, and records nothing, so the pass writes the mode once IAM is upgraded (ADR-0062). An installation without the provisioning
 key cannot write the mirror, and its IAM keeps reading `person`; an installation with IAM and no Control has the operator
 write it with the provisioning key ([`security-deployment.md`](../reference/security-deployment.md)). From then on, `apiKeys.provision` takes an expiry at
 most 30 days ahead; existing keys keep theirs.

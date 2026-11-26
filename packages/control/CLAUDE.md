@@ -805,8 +805,9 @@ other environment, before the provider prepares anything, and the write maps a r
   missing or names another revision, which converges an upgraded installation, a new environment whose write failed and
   a failed write after Control's row. It records an environment only when IAM answers the revision and the mode it
   sent; `GrantApprovalPort.set` parses IAM's answer. An IAM older than the mirror refuses `credentials` as an unknown
-  key: the port writes the grant gate again without it and logs one line, and its answer carries no mode, so nothing is
-  recorded and the pass writes the mode once IAM takes it.
+  key: the port writes the grant gate again without it, and from then on writes without it and logs one line (once per
+  port, which the pass builds once per pass), and its answer carries no mode, so nothing is recorded and the pass writes
+  the mode once IAM takes it.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the
