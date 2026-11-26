@@ -904,12 +904,14 @@ function bootOnce(app: ContractImplementation, options: BootOptions, binding: Bi
 	frameworkProblems(artifact, framework, problems)
 	const database = bound?.database ?? null
 	const verifier = new TokenVerifier({ getJwks: () => platformCall(() => options.iam.getJwks()), issuer: variables.issuer })
+	const workloadReporter = reporterFor('fabrika.workloads')
 	const workloads = workloadCredentials({
 		artifact,
 		framework: options.environment.framework,
 		audience: variables.iamAppId,
 		source: workloadTokens,
 		verifier,
+		...(workloadReporter === null ? {} : { reporter: workloadReporter }),
 	}, problems)
 	const connect = wireImports({
 		artifact,

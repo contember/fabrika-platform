@@ -16,15 +16,28 @@ Queue consumers resolve a merged issue to its canonical fingerprint before stori
 
 A contract application reports to the ingest of its own `FABRIKA_OPERATIONS_DSN` ([ADR-0059](../decisions/0059-application-server-errors-carry-their-stack-and-message.md)). Each report is one `event` item:
 
-| Logger             | Last exception value (the issue title)   | Fingerprint                                       | Tags                                                                |
-| ------------------ | ---------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- |
-| `fabrika.requests` | `RequestFailed`, endpoint, status, code  | `fabrika-request-failed`, endpoint, code          | `endpoint`, `code`, `status`, `reason`, `request`                   |
-| `fabrika.jobs`     | `JobFailed` or `JobMissed`, job and code | `fabrika-job-failed` or `fabrika-job-missed`, job | `job`, `code`, `reason`                                             |
-| `fabrika.process`  | what was thrown                          | none: the derived fingerprint                     | `crash`: `uncaught_exception`, `unhandled_rejection`, `boot_failed` |
+| Logger              | Last exception value (the issue title)            | Fingerprint                                       | Tags                                                                |
+| ------------------- | ------------------------------------------------- | ------------------------------------------------- | ------------------------------------------------------------------- |
+| `fabrika.requests`  | `RequestFailed`, endpoint, status, code           | `fabrika-request-failed`, endpoint, code          | `endpoint`, `code`, `status`, `reason`, `request`                   |
+| `fabrika.jobs`      | `JobFailed` or `JobMissed`, job and code          | `fabrika-job-failed` or `fabrika-job-missed`, job | `job`, `code`, `reason`                                             |
+| `fabrika.process`   | what was thrown                                   | none: the derived fingerprint                     | `crash`: `uncaught_exception`, `unhandled_rejection`, `boot_failed` |
+| `fabrika.workloads` | `WorkloadKeyRefused`, kind, name and IAM's reason | `fabrika-workload-key-refused`, kind, name        | `workload_kind`, `workload`, `reason`                               |
 
 The values before a request's or job's last value are what was thrown and its causes, the deepest first: the error's type, its message and its stack frames (file, function, line, column, in-app). A framework failure sends its reason and catalog text instead of its message. The application scrubs every text first: the values of its secret framework variables and of application variables named as secrets, JWTs, authorization schemes, credential headers, URL userinfo and credential query parameters. It caps a message at 2,048 characters, the frames at the 50 nearest the throw, the chain at five errors and the encoded chain at 64 KiB. Request bodies, headers, input and rows are never sent. Ingest redaction then applies as to any event.
 
 A report that meets a network error, a timeout (5 s) or a 5xx is sent once more after a pause of 200–500 ms, with the same `event_id`, which the ingest stores once. A 4xx is not retried. A report still undelivered is one line in the application's log and is lost.
+
+A job, a webhook or a public procedure whose key IAM refuses (`invalid_key`, `unknown_principal`, `disabled`) does
+nothing until Control hands it a valid key; one whose declared permissions do not fit in a token (`token_too_large`)
+does nothing until its contract declares fewer. Its credential reports `WorkloadKeyRefused` once an hour while the key stays
+refused, as an issue of its own beside the job's `JobFailed`.
+
+Control warns the same ingest, at most once per key and day (the keys of one environment due together in one event),
+when a workload key the running version holds has a week or less left: logger `fabrika.control`, `WorkloadKeyExpiring`, fingerprint `fabrika-workload-key-expiring`,
+level `warning`, and `error` once the key has expired. A key Control renews and hands over in time never warns; the
+warning means the renewal could not reach the running version (a provider that writes no credential without a deploy,
+or a write that keeps failing), and a deploy clears it. An environment left with an expired key reports its `error`
+daily until it is deployed or removed. A warning the ingest refuses with a 4xx is logged and not sent again that day.
 
 A request's and a job's fingerprint and title do not depend on the thrown value, so grouping is the same with or without it. A crash groups by the thrown value's type and in-app frames.
 

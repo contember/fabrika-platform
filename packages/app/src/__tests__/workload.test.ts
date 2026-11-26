@@ -7,7 +7,8 @@ import { TokenVerifier } from '@fabrika/jwks'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { parseContractArtifact } from '../contract/artifact-schema'
-import { issuerWorkloadTokens, WorkloadCredential, workloadCredentials, workloadSite } from '../implement/workload'
+import { issuerWorkloadTokens, KEY_REFUSAL_REPORT_INTERVAL_MS, WorkloadCredential, workloadCredentials, workloadSite } from '../implement/workload'
+import type { OperationsReport } from '../jobs/report'
 import { APP_ID, grant, ISSUER, keySource, sign } from './fixtures/implement/harness'
 
 function credential(answer: () => Promise<Response>): WorkloadCredential {
@@ -41,6 +42,97 @@ describe('the workload token exchange', () => {
 		try {
 			const refusal = () => Promise.resolve(Response.json({ ok: false, reason: 'invalid_key' }))
 			expect(await credential(refusal).authority()).toEqual({ ok: false, reason: 'refused' })
+		} finally {
+			log.mockRestore()
+		}
+	})
+})
+
+describe('a refused key reaches Operations', () => {
+	const refusal = () => Promise.resolve(Response.json({ ok: false, reason: 'invalid_key' }))
+
+	function reporting(answer: () => Promise<Response>, clock: { now: number }) {
+		const reports: OperationsReport[] = []
+		const credential = new WorkloadCredential({
+			kind: 'job',
+			name: 'nightly',
+			key: 'px_harness_job_nightly',
+			audience: APP_ID,
+			source: issuerWorkloadTokens(ISSUER, answer),
+			verifier: new TokenVerifier({ getJwks: () => keySource.getJwks(), issuer: ISSUER }),
+			reporter: { report: (report) => Promise.resolve(void reports.push(report)) },
+			now: () => clock.now,
+		})
+		return { credential, reports }
+	}
+
+	test('as an issue of its own, once an hour while the key stays refused, never with the key', async () => {
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const clock = { now: 1_000_000 }
+			const { credential, reports } = reporting(refusal, clock)
+			expect(await credential.authority()).toEqual({ ok: false, reason: 'refused' })
+			expect(reports).toEqual([{
+				fingerprint: ['fabrika-workload-key-refused', 'job', 'nightly'],
+				type: 'WorkloadKeyRefused',
+				message: "IAM refused the key of the job 'nightly': invalid_key; it does nothing until Control hands it a valid key, so deploy the environment",
+				tags: { workload_kind: 'job', workload: 'nightly', reason: 'invalid_key' },
+			}])
+			expect(JSON.stringify(reports)).not.toContain('px_')
+			clock.now += KEY_REFUSAL_REPORT_INTERVAL_MS - 1
+			await credential.authority()
+			expect(reports).toHaveLength(1)
+			clock.now += 1
+			await credential.authority()
+			expect(reports).toHaveLength(2)
+		} finally {
+			log.mockRestore()
+		}
+	})
+
+	test('a token too large for its permissions says so, not to deploy', async () => {
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const { credential, reports } = reporting(() => Promise.resolve(Response.json({ ok: false, reason: 'token_too_large' })), { now: 0 })
+			await credential.authority()
+			expect(reports.map((report) => report.message)).toEqual([
+				"IAM refused the key of the job 'nightly': token_too_large; its declared permissions do not fit in a token",
+			])
+		} finally {
+			log.mockRestore()
+		}
+	})
+
+	test('an IAM it cannot reach is not a refused key', async () => {
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const { credential, reports } = reporting(() => Promise.resolve(Response.json({ error: 'unavailable' }, { status: 503 })), { now: 0 })
+			expect(await credential.authority()).toEqual({ ok: false, reason: 'unavailable' })
+			expect(reports).toEqual([])
+		} finally {
+			log.mockRestore()
+		}
+	})
+
+	test("workloadCredentials hands each credential the application's reporter", async () => {
+		const log = spyOn(console, 'error').mockImplementation(() => {})
+		try {
+			const reports: OperationsReport[] = []
+			const artifact: ContractArtifact = { ...notesArtifact, imports: {} }
+			const framework = { [workloadKeyVariable('job', 'purgeDeleted')]: 'px_job', [workloadKeyVariable('webhook', 'github')]: 'px_webhook' }
+			const credentials = workloadCredentials({
+				artifact,
+				framework,
+				audience: APP_ID,
+				source: { exchange: () => Promise.resolve({ ok: false, reason: 'disabled' }) },
+				verifier: new TokenVerifier({ getJwks: () => keySource.getJwks(), issuer: ISSUER }),
+				reporter: { report: (report) => Promise.resolve(void reports.push(report)) },
+			}, [])
+			await credentials.get(workloadSite('webhook', 'github'))?.authority()
+			expect(reports.map((report) => [report.fingerprint, report.tags['reason']])).toEqual([[
+				['fabrika-workload-key-refused', 'webhook', 'github'],
+				'disabled',
+			]])
 		} finally {
 			log.mockRestore()
 		}

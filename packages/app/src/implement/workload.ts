@@ -16,6 +16,7 @@ import {
 } from '@fabrika/auth-core'
 import type { TokenVerifier } from '@fabrika/jwks'
 import { z } from 'zod/v4'
+import type { OperationsReporter } from '../jobs/report'
 import { deadline } from './bounded'
 
 export type WorkloadKindOf = OwnWorkloadKind
@@ -27,6 +28,8 @@ export interface WorkloadTokenSource {
 
 /** The token exchange is a cold path, once per token lifetime; it is still bounded. */
 const EXCHANGE_TIMEOUT_MS = 5_000
+/** A refused key is refused at every attempt and request: Operations hears of it once an hour per workload. */
+export const KEY_REFUSAL_REPORT_INTERVAL_MS = 60 * 60 * 1000
 
 const mintResultSchema = z.union([
 	z.strictObject({ ok: z.literal(true), token: z.string().min(1), expiresAt: z.number() }),
@@ -85,6 +88,10 @@ export interface WorkloadCredentialOptions {
 	readonly audience: string
 	readonly source: WorkloadTokenSource
 	readonly verifier: TokenVerifier
+	/** Where a refused key is reported; without one, the log line alone. */
+	readonly reporter?: OperationsReporter
+	/** Milliseconds; the clock that spaces the refusal reports. */
+	readonly now?: () => number
 }
 
 /** One workload's key, exchanged for a token when none is cached or the cached one is about to expire. */
@@ -92,6 +99,7 @@ export class WorkloadCredential {
 	readonly #options: WorkloadCredentialOptions
 	#cached: { readonly perms: readonly PermissionEntry[]; readonly token: string; readonly exp: number } | null = null
 	#pending: Promise<WorkloadAuthority> | null = null
+	#refusalReportedAt: number | null = null
 
 	constructor(options: WorkloadCredentialOptions) {
 		this.#options = options
@@ -135,6 +143,7 @@ export class WorkloadCredential {
 		}
 		if (!minted.ok) {
 			console.error(`fabrika: IAM refused the key of the ${kind} '${name}': ${minted.reason}`)
+			await this.#reportRefusal(minted.reason)
 			return { ok: false, reason: 'refused' }
 		}
 		const verified = await verifier.verify(minted.token, audience)
@@ -148,7 +157,28 @@ export class WorkloadCredential {
 		}
 		const perms = Object.freeze(claims.perms.map((entry) => Object.freeze({ ...entry })))
 		this.#cached = { perms, token: minted.token, exp: claims.exp }
+		this.#refusalReportedAt = null
 		return { ok: true, perms, token: minted.token }
+	}
+
+	/**
+	 * A refused key stops the workload until Control hands it a new one, so Operations raises it as an issue of its own,
+	 * apart from the failures of the job it stops; once per `KEY_REFUSAL_REPORT_INTERVAL_MS` while it stays refused.
+	 */
+	async #reportRefusal(reason: string): Promise<void> {
+		const { kind, name, reporter } = this.#options
+		if (reporter === undefined) return
+		const now = this.#options.now?.() ?? Date.now()
+		if (this.#refusalReportedAt !== null && now - this.#refusalReportedAt < KEY_REFUSAL_REPORT_INTERVAL_MS) return
+		this.#refusalReportedAt = now
+		await reporter.report({
+			fingerprint: ['fabrika-workload-key-refused', kind, name],
+			type: 'WorkloadKeyRefused',
+			message: reason === 'token_too_large'
+				? `IAM refused the key of the ${kind} '${name}': token_too_large; its declared permissions do not fit in a token`
+				: `IAM refused the key of the ${kind} '${name}': ${reason}; it does nothing until Control hands it a valid key, so deploy the environment`,
+			tags: { workload_kind: kind, workload: name, reason },
+		})
 	}
 }
 
@@ -163,6 +193,7 @@ export interface WorkloadCredentialsInput {
 	readonly audience: string
 	readonly source: WorkloadTokenSource | undefined
 	readonly verifier: TokenVerifier
+	readonly reporter?: OperationsReporter
 }
 
 /** `workloadSite(kind, name)` → the workload's credential, or why one cannot start to `problems`. */
@@ -180,7 +211,15 @@ export function workloadCredentials(input: WorkloadCredentialsInput, problems: s
 		} else if (input.source !== undefined) {
 			credentials.set(
 				workloadSite(kind, name),
-				new WorkloadCredential({ kind, name, key, audience: input.audience, source: input.source, verifier: input.verifier }),
+				new WorkloadCredential({
+					kind,
+					name,
+					key,
+					audience: input.audience,
+					source: input.source,
+					verifier: input.verifier,
+					...(input.reporter === undefined ? {} : { reporter: input.reporter }),
+				}),
 			)
 		}
 	}
