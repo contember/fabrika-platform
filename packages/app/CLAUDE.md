@@ -42,6 +42,7 @@ bun test src/__tests__/archive.test.ts          # the archive check: LZMA, damag
 bun test src/__tests__/multi-tenant.test.ts     # creates, ctx.members, share links, a webhook bound by binds (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/members-lookup.test.ts   # ctx.members below its dimension: types, the kit, a generated member field (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/terminal.test.ts        # a terminal: the identification page, ctx.principal.terminal, ctx.terminals over a fake IAM
+bun test src/__tests__/test-kit-terminal.test.ts  # the kit's IAM opens identifications and answers ctx.terminals under IAM's rules
 bun test src/__tests__/public-admission.test.ts # a public procedure's shared buckets and challenge through boot (needs FABRIKA_TEST_POSTGRES_URL)
 bun test src/__tests__/challenge.test.ts        # the client key and the Turnstile verification, no database
 bun test src/__tests__/public-kick.test.ts      # a public procedure's kicks: kicked runs, coalescing on the lease, the cron recovery (needs FABRIKA_TEST_POSTGRES_URL)
@@ -169,6 +170,8 @@ src/
                       is skipped
     proxy.ts          endpointProxy: proxy-core's verify service over contractProxyTable
     caller.ts         test callers and their grants
+    terminals.ts      kitIdentifications, the kit's stand-in for IAM's identifications at a terminal: openIdentification
+                      opens one, ctx.terminals inspects, asserts and cancels it under IAM's rules
     membership.ts     kitMembership, every kit's stand-in IAM transport: member directories from the kit's callers,
                       the writes checked as IAM checks them, live in the directory and the next token; it records them,
                       accepts an invitation, seeds the invitations and links an endpoint access case cancels or revokes, and
@@ -1139,6 +1142,13 @@ vocabulary (`packages/db/CLAUDE.md`).
   permissions are `signedPermissions`: its own entries narrowed by the ceiling (auth-core's `narrowPermissions`, IAM's
   own) plus the terminal's grants with the source `terminal`. `kitMembership`'s `permsOf` resolves its membership
   requests against the same set, as IAM does.
+- **The kit's IAM opens identifications at a terminal** (`testing/terminals.ts`), for a contract that declares one,
+  unless a test passes `options.terminals`. `kit.openIdentification({ id, label })` is the terminal's browser arriving at
+  IAM with no login: it answers the id and the identification page's URL. `ctx.terminals` is then answered as IAM answers:
+  the credential must be a token the kit signed for the application (a public procedure's workload token included), an
+  identification lives `IDENTIFICATION_TTL_SECONDS` (IAM's 120 s), an assertion consumes it and answers IAM's completion
+  URL, a principal that is not an enabled internal person of the kit is `invalid_principal` and leaves it open, and
+  every other id is `not_found`. `kit.identification(id)` tells what became of it.
 - `options.connect` wires each import to an owner: its origin, the edge key, and the `fetch` that reaches
   it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision. The owner kit's
   `testCaller(grants, { kind: 'app', app })` is the consumer's key: an `app` token naming the consumer.

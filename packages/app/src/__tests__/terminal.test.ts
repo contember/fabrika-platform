@@ -329,17 +329,6 @@ describe('ctx.terminals', () => {
 		})
 	})
 
-	test("the test kit's IAM answers that no identification is open", async () => {
-		const kit = testKit(app)
-		const clerk = kit.testCaller([{ role: 'clerk' }])
-		const response = await kit.browser(clerk)('/api/kiosk.identify', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ id: 'ident-1', principalId: 'person-7' }),
-		})
-		expect(await response.json()).toEqual({ result: { terminal: null, completionUrl: null, refused: 'not_found' } })
-	})
-
 	test('maps every answer without a runtime: the reasons a handler cannot change are server faults', async () => {
 		const caller = { app: APP_ID, credential: 'token', requestId: 'r1' }
 		const refusing = terminalIdentification(fakeTerminals({ assertIdentity: () => Promise.resolve({ ok: false, reason: 'not_allowed' }) }).rpc, caller)
