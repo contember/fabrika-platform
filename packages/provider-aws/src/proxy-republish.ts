@@ -60,6 +60,7 @@ export type AwsProxyClients =
 	& AwsProxyServiceClients
 	& {
 		readonly codeBuild: AwsProxyBuildClients['codeBuild'] & AwsProxyBuildFollowClients['codeBuild']
+		readonly ecs: AwsProxyServiceClients['ecs'] & AwsProxyRolloutClients['ecs']
 		readonly ssm: AwsProxyBuildClients['ssm'] & AwsProxyServiceClients['ssm'] & AwsProxyRolloutClients['ssm']
 		readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack'>
 	}

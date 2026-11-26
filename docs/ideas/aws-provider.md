@@ -478,12 +478,16 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     (`awsProxyPending`) when the wait runs out; `provision` stays the stack's. Control's composition reads the proxies'
     IAM (`FABRIKA_AWS_PROXY_IAM_URL`, `FABRIKA_AWS_PROXY_IAM_KEY`, refused when malformed) and uploads the pinned
     platform commit with the manifest appended.
-    **The rollout** (built, `followAwsProxyRollout`): a republish settles only once the service's primary deployment
-    is of the recorded revision and its rollout completed. Only then are the secrets under `env/` it no longer names
-    deleted (a rollback would start an older revision, which reads them), and `proxyServiceRolledOut` is recorded. A
-    rollout in progress polls within the same wait. One the circuit breaker rolled back fails with `awsProxyRollout`, not
-    retryable, because the same revision would fail again; a new image or secret is a new fingerprint and sets the
-    service anew. A service deleted out of band drops the update's mark, so the next pass creates it.
+    **The rollout** (built, `followAwsProxyRollout`): read through the service's current service deployment and its
+    revision, as an application's run reads its own, because ECS's reads lag an update. A republish settles only once
+    that deployment is of the recorded revision and successful. Only then are the secrets under `env/` it no longer
+    names deleted (a rollback would start an older revision, which reads them), after the members given are checked
+    against the revision's fingerprint; a failed delete fails the pass retryably before `proxyServiceRolledOut` is
+    recorded. A deployment in progress, or one not shown yet, polls within the same wait. One stopped or rolled back by
+    the circuit breaker fails with `awsProxyRollout`, not retryable, because the same revision would fail again; a new
+    image or secret is a new fingerprint and sets the service anew. A service that ECS answers missing before the
+    rollout is recorded drops the update's mark, so the next pass creates it (or finds the create that landed). Once the
+    rollout is recorded the service is not read again, so one deleted out of band after that is not created again.
     Not yet: relaying the build's log to an operator, and a needless build when an older manifest's build is in flight
     while the current one's image is recorded; then
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
@@ -523,8 +527,12 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         `role/fabrika/namespaces/*` (with the same boundary condition), the ECR writes on
         `repository/fabrika/namespaces/*`, the log group writes on `log-group:/fabrika/namespaces/*`, and `iam:PassRole`
         on `role/fabrika/namespaces/*` with `iam:PassedToService = codebuild.amazonaws.com`; the project is already
-        under `project/fabrika_*`. Running the build adds the SSM calls on `parameter/fabrika/namespaces/*` and the log
-        reads on `log-group:/fabrika/namespaces/*`. The proxy's service adds `iam:PassRole` on
+        under `project/fabrika_*`. Running the build and the service adds `ssm:PutParameter`, `ssm:DeleteParameter` and
+        `ssm:DescribeParameters` on `parameter/fabrika/namespaces/*`, and the log reads on
+        `log-group:/fabrika/namespaces/*`. That grant covers every namespace: one namespace's calls stay on its own path
+        because the code names it (`awsNamespaceResources`, a one-level listing of its `env/`), not because IAM scopes them.
+        Following the rollout adds `ecs:DescribeServiceDeployments` and `ecs:DescribeServiceRevisions`, which the
+        application runs already need. The proxy's service adds `iam:PassRole` on
         `role/fabrika/namespaces/*` with `iam:PassedToService = ecs-tasks.amazonaws.com` (its task definition names its two
         roles); its ECS calls are on `service/<cluster>/*` already;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on

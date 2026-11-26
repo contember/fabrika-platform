@@ -13,13 +13,14 @@ import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { CodeBuildBuild } from '../aws/codebuild'
-import type { EcsService } from '../aws/ecs'
+import type { EcsService, EcsServiceDeploymentStatus } from '../aws/ecs'
 import type { S3PartWriter } from '../aws/s3'
+import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsNamespaceTargetEnvelope } from '../namespace'
 import { awsProxyManifestFile, sha256Hex } from '../proxy-attempt'
 import { AWS_PROXY_PENDING, type AwsProxyRepublishContext, republishAwsProxy, withAwsProxyRepublish } from '../proxy-republish'
-import { AWS_PROXY_ROLLOUT_FAILED } from '../proxy-service'
+import { AWS_PROXY_ROLLOUT_FAILED, followAwsProxyRollout } from '../proxy-service'
 
 const installation: AwsAppTarget = {
 	accountId: '123456789012',
@@ -68,14 +69,19 @@ const service: EcsService = {
 	network: null,
 	events: [],
 }
+const DEPLOYMENT_ARN = 'arn:aws:ecs:eu-central-1:123456789012:service-deployment/fabrika-apps/ns_shared_prod_proxy/deployment1'
+const REVISION = 'arn:aws:ecs:eu-central-1:123456789012:service-revision/fabrika-apps/ns_shared_prod_proxy/revision1'
+const OLDER_REVISION = 'arn:aws:ecs:eu-central-1:123456789012:service-revision/fabrika-apps/ns_shared_prod_proxy/revision0'
 
 /** One fake of every call: the build answers `pending` for its first `pendingReads` reads, then succeeded. */
 class Fake {
 	readonly calls: string[] = []
 	pendingReads = 0
 	created = false
-	rollouts: ('in_progress' | 'completed' | 'failed')[] = []
+	rollouts: (EcsServiceDeploymentStatus | 'unseen')[] = []
+	current: EcsServiceDeploymentStatus | 'unseen' = 'successful'
 	parameters: string[] = []
+	deleteFails = false
 	sleeps = 0
 	clock = 0
 	readonly context: AwsProxyRepublishContext = {
@@ -115,28 +121,32 @@ class Fake {
 						return service
 					},
 					updateService: async () => service,
-					// None until created; then the deployment of the revision, its rollout as `rollouts` says, read by read.
+					// None until created; then a current deployment in the state `rollouts` says, read by read. `unseen` is
+					// ECS lagging the update: the current deployment is still the older revision's, and successful.
 					describeService: async () => {
 						if (!this.created) return null
-						const rolloutState = this.rollouts.shift() ?? 'completed'
-						return {
-							...service,
-							deployments: [{
-								id: 'ecs-svc/1',
-								status: 'primary',
-								taskDefinitionArn: service.taskDefinitionArn,
-								rolloutState,
-								runningCount: 1,
-								desiredCount: 1,
-								failedTasks: 0,
-							}],
-						}
+						this.current = this.rollouts.shift() ?? 'successful'
+						return { ...service, currentDeploymentArn: DEPLOYMENT_ARN }
 					},
+					describeServiceDeployment: async (arn) => ({
+						arn,
+						serviceArn: service.arn,
+						status: this.current === 'unseen' ? 'successful' : this.current,
+						statusReason: null,
+						targetRevisionArn: this.current === 'unseen' ? OLDER_REVISION : REVISION,
+					}),
+					describeServiceRevision: async (arn) => ({
+						arn,
+						taskDefinitionArn: arn === OLDER_REVISION
+							? 'arn:aws:ecs:eu-central-1:123456789012:task-definition/ns_shared_prod_proxy:0'
+							: service.taskDefinitionArn,
+					}),
 				},
 				ssm: {
 					putSecret: async () => 1,
 					deleteSecret: async (name) => {
 						this.calls.push(`deleteSecret ${name}`)
+						if (this.deleteFails) throw new AwsError('DeleteParameter', 'ThrottlingException', 400, null, true)
 						return true
 					},
 					listNames: async () => this.parameters,
@@ -291,7 +301,7 @@ describe("the proxy service's rollout", () => {
 
 	test('a rollout the circuit breaker rolled back fails with a stable code, not retryable, and deletes nothing', async () => {
 		const fake = new Fake()
-		fake.rollouts = ['failed']
+		fake.rollouts = ['in_progress', 'rollback_in_progress']
 		fake.parameters = [`${ENV}/${proxySecretVariable('gone@prod')}`]
 		const failure = await republishAwsProxy(fake.context, {
 			namespace: built,
@@ -305,21 +315,92 @@ describe("the proxy service's rollout", () => {
 		expect(fake.calls.some((call) => call.startsWith('deleteSecret'))).toBe(false)
 	})
 
-	test('a service that is gone drops the update, so the next pass creates it again', async () => {
+	test("a read that still shows the older revision's deployment is pending, not a rollback, and deletes nothing yet", async () => {
+		const fake = new Fake()
+		fake.rollouts = ['unseen', 'unseen']
+		fake.parameters = [`${ENV}/${proxySecretVariable('gone@prod')}`]
+		const started = await republishAwsProxy(fake.context, {
+			namespace: built,
+			members: MEMBERS,
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'started',
+		})
+		expect(started.settled).toBe(false)
+		expect(fake.calls.some((call) => call.startsWith('deleteSecret'))).toBe(false)
+		// The next read still lags, the one after shows the revision's deployment successful.
+		const active = await republishAwsProxy(fake.context, {
+			namespace: started.namespace,
+			members: MEMBERS,
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'active',
+		})
+		expect(active.settled).toBe(true)
+		expect(fake.calls.filter((call) => call.startsWith('deleteSecret'))).toEqual([`deleteSecret ${ENV}/${proxySecretVariable('gone@prod')}`])
+	})
+
+	test('a service that is gone drops the update, and the next read of the same wait creates it again', async () => {
 		const fake = new Fake()
 		const set = await republishAwsProxy(fake.context, { namespace: built, members: MEMBERS, events: fake.events, signal: fake.signal, wait: 'started' })
 		const { proxyServiceRolledOut: _rolled, ...unrolled } = decoded(set.namespace)
 		// Deleted out of band after its update was recorded.
 		const gone = new Fake()
-		const failure = await republishAwsProxy(gone.context, {
+		const started = await republishAwsProxy(gone.context, {
 			namespace: namespaceOf(unrolled),
 			members: MEMBERS,
 			events: gone.events,
 			signal: gone.signal,
 			wait: 'started',
 		})
+		expect(started.settled).toBe(false)
+		expect(decoded(started.namespace).proxyServiceUpdated).toBeUndefined()
+		const active = await republishAwsProxy(gone.context, {
+			namespace: started.namespace,
+			members: MEMBERS,
+			events: gone.events,
+			signal: gone.signal,
+			wait: 'active',
+		})
+		expect(active.settled).toBe(true)
+		expect(gone.calls).toContain('createService')
+	})
+
+	test('a failed delete fails the pass retryably and records no rollout, so the next pass deletes again', async () => {
+		const fake = new Fake()
+		fake.deleteFails = true
+		fake.parameters = [`${ENV}/${proxySecretVariable('gone@prod')}`]
+		const failure = await republishAwsProxy(fake.context, {
+			namespace: built,
+			members: MEMBERS,
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'active',
+		})
 			.catch((error: unknown) => error)
-		expect(failure).toMatchObject({ code: 'awsProxyService', retryable: true })
+		expect(failure).toMatchObject({ retryable: true })
+	})
+
+	test('members other than the ones the revision was set for delete nothing', async () => {
+		const fake = new Fake()
+		const set = await republishAwsProxy(fake.context, { namespace: built, members: MEMBERS, events: fake.events, signal: fake.signal, wait: 'started' })
+		const { proxyServiceRolledOut: _rolled, ...unrolled } = decoded(set.namespace)
+		const follower = new Fake()
+		follower.created = true
+		follower.parameters = [`${ENV}/${proxySecretVariable('notes@prod')}`]
+		const failure = await followAwsProxyRollout({
+			namespace: namespaceOf(unrolled),
+			members: [],
+			installation,
+			proxySource: PROXY_SOURCE,
+			iam: follower.context.runtime.iam,
+			clients: follower.context.runtime.clients,
+			events: follower.events,
+			signal: follower.signal,
+		})
+			.catch((error: unknown) => error)
+		expect(failure).toMatchObject({ retryable: false })
+		expect(follower.calls.some((call) => call.startsWith('deleteSecret'))).toBe(false)
 	})
 })
 
