@@ -1,0 +1,15 @@
+# The build context of `platform.Dockerfile` (the repository root), which BuildKit reads in place of the root's
+# `.dockerignore`: the root's list without `packages/dashboard`, because the services' image builds the console that
+# Control serves. The build fetches the commit into a git checkout, so `.git` stays out too.
+**/node_modules
+**/dist
+**/.tsc-out
+.lopata
+.wrangler
+.git
+**/*.tsbuildinfo
+**/wrangler.jsonc
+**/worker-configuration.d.ts
+.dev.vars
+.env
+*.log

@@ -74,9 +74,17 @@ export const BUILD_STEPS: readonly CiStep[] = [
 	{ job: 'build', name: 'Build proxy', run: 'bun run --filter @fabrika/proxy build:check' },
 ]
 
-/** These need docker: the namespace proxy's image, built from the committed tree (`git archive HEAD`) and started once. */
+/**
+ * These need docker, each built from the committed tree (`git archive HEAD`): the namespace proxy's image, started
+ * once, and the AWS platform services' image, checked for what it holds.
+ */
 export const PROXY_IMAGE_STEPS: readonly CiStep[] = [
 	{ job: 'proxy-image', name: 'Build and start the proxy image', run: 'bun run --filter @fabrika/provider-aws proxy-image:check' },
+	{
+		job: 'platform-image',
+		name: "Build the platform services' image and check what it holds",
+		run: 'bun run --filter @fabrika/provider-aws platform-image:check',
+	},
 ]
 
 /** These need npm on PATH, as the CI job gets it from `setup-node`. */
@@ -398,7 +406,7 @@ const run = async (results: StepResult[], skipped: string[]): Promise<void> => {
 	if (await dockerAvailable()) {
 		for (const step of PROXY_IMAGE_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
 	} else {
-		skipped.push(`the proxy-image job (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
+		skipped.push(`the image jobs (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
 	}
 
 	if (Bun.which('npm') === null) {
