@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { z } from 'zod'
 import {
 	assertBumpForward,
+	assertMigrationBookmarkGate,
 	assertPackedImports,
 	assertStandaloneCheckout,
 	assertTagMatchesSource,
@@ -17,6 +18,8 @@ import {
 	LOCAL_TARBALL_DIRECTORY,
 	localInstallBlock,
 	localVersion,
+	MIGRATING_BOOT_MARKERS,
+	missingMigratingBoot,
 	packageGraph,
 	packageInfo,
 	packedFiles,
@@ -30,6 +33,7 @@ import {
 	releaseDistTag,
 	rewriteExamplePins,
 	rewriteLockfileExamplePins,
+	type SourceReader,
 	stagedAppSkill,
 	unifiedDiff,
 } from '../release'
@@ -251,6 +255,56 @@ describe('command line', () => {
 	test('takes the version a bump sets only from --tag, never from the environment or the checked-out tag', async () => {
 		await expect(parseOptions(['bump'])).rejects.toThrow('bump needs the next release: --tag=v1.2.3')
 		expect((await parseOptions(['bump', '--tag=v0.4.3'])).version).toBe('0.4.3')
+	})
+})
+
+describe('the migration bookmark gate (ADR-0069 Rollout)', () => {
+	/** A source tree holding exactly `files`. */
+	const tree = (files: Readonly<Record<string, string>>): SourceReader => async (path) => files[path] ?? null
+	const withBoot = tree(Object.fromEntries(MIGRATING_BOOT_MARKERS.map((marker) => [marker.path, `// …\n${marker.text}\n`])))
+	const withoutBoot = tree({ 'packages/app/src/cloudflare/names.ts': "export const CLOUDFLARE_FILES_BINDING = 'FABRIKA_FILES'\n" })
+	const gate = '0.9.0-dev.49'
+	const assert = (version: string, source: SourceReader, gateSource: SourceReader | null = null) =>
+		assertMigrationBookmarkGate({ tag: `v${version}`, version, gate, source, gateSource })
+
+	test("this checkout's framework source holds the migrating boot", async () => {
+		const root = join(import.meta.dir, '..', '..')
+		const checkout: SourceReader = async (path) => {
+			const file = Bun.file(join(root, path))
+			return (await file.exists()) ? await file.text() : null
+		}
+		expect(await missingMigratingBoot(checkout)).toEqual([])
+	})
+
+	test('a release at or above the gate whose source lacks the boot is refused', async () => {
+		for (const version of [gate, '0.9.0-dev.50', '0.9.0', '1.0.0']) {
+			await expect(assert(version, withoutBoot)).rejects.toThrow(
+				`v${version} is at or above the migration bookmark gate ${gate}, but its framework source lacks the migrating boot`,
+			)
+			await expect(assert(version, withBoot)).resolves.toBeUndefined()
+		}
+	})
+
+	test('a source that drops one marker lacks the boot', async () => {
+		for (const dropped of MIGRATING_BOOT_MARKERS) {
+			const partial = tree(Object.fromEntries(MIGRATING_BOOT_MARKERS.filter((marker) => marker !== dropped).map((marker) => [marker.path, marker.text])))
+			expect(await missingMigratingBoot(partial)).toEqual([`${dropped.path}: ${dropped.text}`])
+		}
+	})
+
+	test('a release below the gate needs no boot', async () => {
+		for (const version of ['0.9.0-dev.48', '0.9.0-cloudflare.3', '0.8.12']) {
+			await expect(assert(version, withoutBoot)).resolves.toBeUndefined()
+		}
+	})
+
+	test('a gate that names a release already tagged without the boot is refused, from any release', async () => {
+		for (const version of ['0.9.0-dev.48', '0.9.0-dev.50']) {
+			await expect(assert(version, withBoot, withoutBoot)).rejects.toThrow(
+				`the migration bookmark gate ${gate} names a release already tagged without the migrating boot`,
+			)
+			await expect(assert(version, withBoot, withBoot)).resolves.toBeUndefined()
+		}
 	})
 })
 

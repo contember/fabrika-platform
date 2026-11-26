@@ -97,8 +97,9 @@ this one import.
   the minor gates hold, every `releaseFrom` gate fails closed. An older Control still sends `checker` as the job's
   `framework`, so its runs keep that error until Control is upgraded; an older runner reads the pin as it read
   `checker`. `dataOperations` on the control provider answers `servesOps && servesDataOperations`.
-  `recordsMigrationBookmark` holds from `MIGRATION_BOOKMARK_SINCE` (`0.9.0-dev.49`), the first release whose object
-  records a bookmark and migrates in one transaction; `migrationBookmark` on the control provider answers
+  `recordsMigrationBookmark` holds from `MIGRATION_BOOKMARK_SINCE` (`0.9.0-dev.49`, in the import-free
+  `src/migration-bookmark-gate.ts` the release script reads), the first release whose object records a bookmark and
+  migrates in one transaction; `migrationBookmark` on the control provider answers
   `servesOps && recordsMigrationBookmark`, and Control then migrates without a read-only window (ADR-0069 §3).
   `release:validate` refuses a release at or above that gate whose framework source lacks that boot.
 - **From `servesOps` the platform composes Control's ops channel** (ADR-0069, `src/provider.ts`): `platformProxied`

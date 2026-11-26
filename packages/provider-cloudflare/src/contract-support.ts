@@ -10,6 +10,7 @@ import {
 	releaseFrom,
 } from '@fabrika/auth-core'
 import type { ProviderManagedEnvironment } from '@fabrika/provider-contract'
+import { MIGRATION_BOOKMARK_SINCE } from './migration-bookmark-gate'
 
 // Imported by `./control` (the `./runner` entry), so it stays clear of `oblaka-iac`.
 
@@ -158,13 +159,6 @@ export const SCHEMA_CHECK_CONFIG_SINCE = '0.9.0-dev.23'
 
 /** Whether the deploy may name a config of another name to the schema checks of an application on release `release`. */
 export const namesSchemaCheckConfig = (release: string): boolean => releaseFrom(release, SCHEMA_CHECK_CONFIG_SINCE)
-
-/**
- * The first framework release whose object records a migration bookmark before it migrates, migrates in one
- * transaction and answers a failed migration with a 422 `migration_failed` (ADR-0069 §3). `release:validate` refuses a
- * release at or above it whose framework source lacks that boot.
- */
-export const MIGRATION_BOOKMARK_SINCE = '0.9.0-dev.49'
 
 /**
  * Whether the Worker of release `release` binds its version metadata, and whether Control migrates it without a

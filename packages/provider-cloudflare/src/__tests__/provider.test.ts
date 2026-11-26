@@ -35,8 +35,9 @@ import {
 	type StagedLocalAssets,
 	stageLocalAssets,
 } from '..'
-import { MIGRATION_BOOKMARK_SINCE, SCHEMA_CHECK_CONFIG_SINCE } from '../contract-support'
+import { SCHEMA_CHECK_CONFIG_SINCE } from '../contract-support'
 import { deployOrder } from '../deploy-order'
+import { MIGRATION_BOOKMARK_SINCE } from '../migration-bookmark-gate'
 import { changedNothing } from '../plan'
 import type { PlatformIamTarget } from '../provider'
 import {
