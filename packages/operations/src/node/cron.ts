@@ -1,3 +1,4 @@
+import type { SecurityAlertProductionResult } from '../security-alerts.js'
 import { createOperationsRuntime } from './runtime.js'
 
 async function main(): Promise<void> {
@@ -11,11 +12,17 @@ async function main(): Promise<void> {
 				+ `telemetry=${health.recordedTelemetry} transitions=${health.transitions} `
 				+ `alerts=${health.enqueuedAlerts} errors=${health.errors} `
 				+ `spikes=${notifications.spikes.enqueued}/${notifications.spikes.evaluated} `
+				+ `security=${securitySummary(notifications.security)} `
 				+ `pruned=${notifications.prunedClaims} notifications=${notifications.notifications}`,
 		)
 	} finally {
 		await runtime.shutdown()
 	}
+}
+
+function securitySummary(result: SecurityAlertProductionResult): string {
+	if (result.status === 'evaluated') return String(result.enqueued)
+	return result.status === 'skipped' ? `skipped:${result.reason}` : result.status
 }
 
 if (import.meta.main) {

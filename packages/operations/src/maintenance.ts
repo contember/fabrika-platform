@@ -1,5 +1,6 @@
 import type { OperationsAlertProducer, SpikeProductionResult } from './alerts.js'
 import type { AlertsRepository, ClaimedNotification } from './repositories.js'
+import type { SecurityAlertProductionResult } from './security-alerts.js'
 import { isValidWebhookTarget } from './webhook-target.js'
 
 export interface NotificationSender {
@@ -22,6 +23,7 @@ export interface OperationsMaintenanceOptions {
 	retryDelayMs?: (attempt: number) => number
 	logger?: OperationsLogger
 	alertProducer?: OperationsAlertProducer
+	securityAlerts?: { run(): Promise<SecurityAlertProductionResult> }
 }
 
 const silentLogger: OperationsLogger = { warn() {} }
@@ -32,6 +34,7 @@ export class OperationsMaintenance {
 	private readonly retryDelayMs: (attempt: number) => number
 	private readonly logger: OperationsLogger
 	private readonly alertProducer: OperationsAlertProducer | undefined
+	private readonly securityAlerts: { run(): Promise<SecurityAlertProductionResult> } | undefined
 
 	constructor(
 		private readonly alerts: AlertsRepository,
@@ -43,17 +46,37 @@ export class OperationsMaintenance {
 		this.retryDelayMs = options.retryDelayMs ?? ((attempt) => Math.min(15 * 60_000, 1_000 * 2 ** attempt))
 		this.logger = options.logger ?? silentLogger
 		this.alertProducer = options.alertProducer
+		this.securityAlerts = options.securityAlerts
 	}
 
-	async run(signal?: AbortSignal): Promise<{ prunedClaims: number; notifications: number; spikes: SpikeProductionResult }> {
+	async run(signal?: AbortSignal): Promise<{
+		prunedClaims: number
+		notifications: number
+		spikes: SpikeProductionResult
+		security: SecurityAlertProductionResult
+	}> {
 		const spikes = await this.alertProducer?.detectSpikes() ?? { evaluated: 0, enqueued: 0, deduplicated: 0 }
 		const prunedClaims = await this.alerts.pruneClaims()
+		// Before the outbox claim, so its alerts leave in this pass.
+		const security = await this.runSecurityAlerts()
 		const claimed = await this.alerts.claimNotifications({ limit: this.batchSize, leaseMs: this.leaseMs })
 		for (const notification of claimed) {
 			if (signal?.aborted) break
 			await this.deliver(notification, signal)
 		}
-		return { prunedClaims, notifications: claimed.length, spikes }
+		return { prunedClaims, notifications: claimed.length, spikes, security }
+	}
+
+	/** A failing security step never holds up delivery of the alerts already in the outbox, health alerts included. */
+	private async runSecurityAlerts(): Promise<SecurityAlertProductionResult> {
+		if (this.securityAlerts === undefined) return { status: 'unconfigured' }
+		try {
+			return await this.securityAlerts.run()
+		} catch {
+			// The error is not logged: it may carry a statement or a URL.
+			console.warn('operations security alerts failed; the next pass retries')
+			return { status: 'skipped', reason: 'failed' }
+		}
 	}
 
 	private async deliver(notification: ClaimedNotification, signal?: AbortSignal): Promise<void> {

@@ -748,8 +748,41 @@ describe('the entrypoint an application binds', () => {
 				'listOwnDeviceAuthorizations',
 				'revokeKey',
 				'scheduled',
+				'signInSignals',
 			].sort(),
 		)
+	})
+
+	// Operations' security read names principals and their sign-ins; every application binds the narrow class.
+	test('signInSignals is served by the default export only', () => {
+		expect(prototypeMembers(PropustkaApplication).methods).not.toContain('signInSignals')
+		expect(prototypeMembers(Propustka).methods).toContain('signInSignals')
+	})
+
+	test("a refused px_ key writes a deny row that the full entrypoint's sign-in signals count", async () => {
+		const db = freshDb()
+		const env = makeEnv(db)
+		const ctx = makeCtx()
+		const worker = makeEntrypoint(ctx, env)
+		const since = Math.floor(Date.now() / 1000) - 60
+		expect(await worker.mintFromKey({ app: 'notes@prod', key: 'px_does-not-exist', requestId: 'req-key' })).toEqual({
+			ok: false,
+			reason: 'invalid_key',
+		})
+		await settle(ctx)
+		expect(await worker.signInSignals({ since, refusalsSince: since, until: since + 120 })).toEqual({
+			ok: true,
+			accounts: [],
+			refusals: 1,
+			reasons: [{ reason: 'invalid_key', refusals: 1 }],
+			privileged: [],
+			accountsTruncated: false,
+			privilegedTruncated: false,
+		})
+		expect(await worker.signInSignals({ since: since + 120, refusalsSince: since + 120, until: since })).toEqual({
+			ok: false,
+			reason: 'invalid_window',
+		})
 	})
 
 	// A getter returning the env or the RPC object is reachable over RPC (`env.IAM.rpc.issueKey(…)`).

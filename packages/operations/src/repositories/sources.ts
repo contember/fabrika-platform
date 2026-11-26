@@ -65,13 +65,20 @@ export class SourcesRepository {
 		return row
 	}
 
+	/** Every source, Control's catalog and the installation's own, for the console to filter by access. */
+	async list(): Promise<SourceRow[]> {
+		const { results } = await this.db.prepare('SELECT * FROM sources ORDER BY app_id, environment, service_key').all<SourceRow>()
+		return results
+	}
+
 	get(id: string): Promise<SourceRow | null> {
 		return this.db.prepare('SELECT * FROM sources WHERE id = ?').bind(id).first<SourceRow>()
 	}
 
+	/** A source of Control's catalog by its coordinate; the installation source is never one. */
 	getByCoordinate(appId: string, environment: string, serviceKey: string): Promise<SourceRow | null> {
 		return this.db
-			.prepare('SELECT * FROM sources WHERE app_id = ? AND environment = ? AND service_key = ? AND enabled = 1')
+			.prepare(`SELECT * FROM sources WHERE app_id = ? AND environment = ? AND service_key = ? AND enabled = 1 AND origin = 'control'`)
 			.bind(appId, environment, serviceKey)
 			.first<SourceRow>()
 	}

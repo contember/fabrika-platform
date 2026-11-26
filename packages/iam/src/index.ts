@@ -19,6 +19,7 @@ import type {
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
+	IamSignInSignalsRpc,
 	IamTerminalRpc,
 	InspectDeviceAuthorizationInput,
 	InspectDeviceAuthorizationResult,
@@ -52,6 +53,8 @@ import type {
 	RevokeLinkResult,
 	RevokeMemberInput,
 	RevokeMemberResult,
+	SignInSignalsInput,
+	SignInSignalsResult,
 	TerminalFailure,
 } from '@fabrika/auth-core'
 import { EmailDeliveryError, type EmailSender, pickEmailEnvironment } from '@fabrika/email'
@@ -155,7 +158,10 @@ const DELEGATION_NOT_ALLOWED: MembershipFailure = { ok: false, reason: 'not_allo
 const GRANT_NOT_ALLOWED: MintFromGrantResult = { ok: false, reason: 'invalid_grant' }
 
 /** Every call builds its surface from the Worker's own bindings; see `PropustkaApplication` for why it is no getter. */
-function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc & IamGrantRpc & IamMembershipRpc & IamTerminalRpc {
+function iamRpc(
+	bindings: WorkerBindings,
+	ctx: ExecutionContext,
+): IamRpc & IamHandoffRpc & IamGrantRpc & IamMembershipRpc & IamTerminalRpc & IamSignInSignalsRpc {
 	return createIamRpc(iamEnv(bindings), ctx)
 }
 
@@ -260,7 +266,7 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 }
 
 /** The default export: the whole `IamRpc`, `/admin/*` + `/auth/*`, and the cron. Only platform components bind it. */
-export class Propustka extends PropustkaApplication implements IamRpc, IamHandoffRpc {
+export class Propustka extends PropustkaApplication implements IamRpc, IamHandoffRpc, IamSignInSignalsRpc {
 	inspectDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<InspectDeviceAuthorizationResult> {
 		return iamRpc(this.env, this.ctx).inspectDeviceAuthorization(input)
 	}
@@ -283,6 +289,11 @@ export class Propustka extends PropustkaApplication implements IamRpc, IamHandof
 
 	issueKey(input: IssueKeyInput): Promise<IssueKeyResult> {
 		return iamRpc(this.env, this.ctx).issueKey(input)
+	}
+
+	/** Operations' security alerts; never on `PropustkaApplication`, which every application binds. */
+	signInSignals(input: SignInSignalsInput): Promise<SignInSignalsResult> {
+		return iamRpc(this.env, this.ctx).signInSignals(input)
 	}
 
 	override fetch(request: Request): Promise<Response> {

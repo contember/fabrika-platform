@@ -27,5 +27,7 @@ something a future reader needs; the durable _why_ goes to `../decisions/` and t
   application environment, read-only by default, and acts there as the person who approved it.
 - [Agent-canvas artifact features](agent-canvas-artifact-features.md) — which hosted-artifact features fit the canvas
   feedback loop: comment threads the agent answers, a streaming watcher, file intake, downloads and project themes.
+- [Security alerts in Operations](security-alerts-in-operations.md) — Operations pulls IAM's sign-in signals each
+  minute and alerts on refused sign-ins and privileged sign-ins on a new installation source.
 
 The order they are built in: [sprint — platform feedback loops](../sprints/sprint-2026-11-02-platform-feedback-loops.md).

@@ -128,6 +128,70 @@ export interface IamGrantRpc {
 	mintFromGrant(input: MintFromGrantInput): Promise<MintFromGrantResult>
 }
 
+// ── Sign-in signals for Operations' security alerts ───────────────────────────
+//
+// Operations' maintenance pass asks IAM for a bounded summary of its `auth_log` over a time window. Only IAM's full
+// entrypoint serves it (the Cloudflare default export and the management `/rpc/*`), never the entrypoint every
+// application binds, so it is a contract of its own and not a member of `IamRpc`.
+
+/** The longest window `signInSignals` answers: a reader that fell further behind reads the last day only. */
+export const SIGN_IN_SIGNALS_MAX_WINDOW_SECONDS = 24 * 60 * 60
+
+/** The most accounts and privileged sign-ins one answer lists; `accountsTruncated`/`privilegedTruncated` say a list was cut. */
+export const SIGN_IN_SIGNALS_LIMIT = 500
+
+export interface SignInSignalsInput {
+	/**
+	 * Unix seconds, inclusive, by `auth_log.created_at`: where privileged sign-ins are listed from. The reader overlaps
+	 * windows, never resumes from an id.
+	 */
+	since: number
+	/** Unix seconds, inclusive, by `auth_log.created_at`: where refusals are counted from, so a threshold has one window. */
+	refusalsSince: number
+	/** Unix seconds, inclusive. */
+	until: number
+}
+
+export interface SignInAccountRefusals {
+	principalId: string
+	/** Refused password sign-ins of this known account from `refusalsSince`. */
+	refusals: number
+}
+
+export interface SignInRefusalReason {
+	reason: string
+	refusals: number
+}
+
+export interface PrivilegedSignIn {
+	/** The `auth_log` row id, as a string on both engines: the reader's deduplication key. */
+	id: string
+	principalId: string
+	reason: string | null
+	/** Unix seconds. */
+	at: number
+}
+
+export type SignInSignalsResult =
+	| {
+		ok: true
+		/** Per known account, the most first. */
+		accounts: SignInAccountRefusals[]
+		/** Every counted refusal from `refusalsSince`, unknown accounts and refused `px_` keys included. */
+		refusals: number
+		reasons: SignInRefusalReason[]
+		/** Allowed sign-ins of a principal that administers at IAM from `since`, oldest first. */
+		privileged: PrivilegedSignIn[]
+		accountsTruncated: boolean
+		/** The list stops at its oldest `SIGN_IN_SIGNALS_LIMIT`; a reader resumes after the last one it got. */
+		privilegedTruncated: boolean
+	}
+	| { ok: false; reason: 'invalid_window' }
+
+export interface IamSignInSignalsRpc {
+	signInSignals(input: SignInSignalsInput): Promise<SignInSignalsResult>
+}
+
 /**
  * Where the proxy answers the handoff, on every app host it fronts. Reserved: an app route at this
  * path is shadowed by the proxy and never reaches the upstream, so it is deliberately namespaced.

@@ -75,7 +75,8 @@ export class CatalogRepository {
 						disabled_at = NULL,
 						public_origin = excluded.public_origin,
 						updated_at = excluded.updated_at
-					WHERE (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?`)
+					WHERE sources.origin = 'control'
+						AND (SELECT revision FROM operations_catalog_cursor WHERE singleton = 1) < ?`)
 					.bind(
 						id,
 						source.coordinate.appId,

@@ -14,13 +14,22 @@ import type {
 	OperationsNotificationChannelRequestDto,
 	OperationsReleaseDetailResponseDto,
 	OperationsReleaseListResponseDto,
+	OperationsSecurityAlertRequestDto,
 	OperationsSourceDetailResponseDto,
 	OperationsSourceHealthDto,
 	OperationsSourceListResponseDto,
 	OperationsSpikeAlertRequestDto,
 } from '@fabrika/operations-contract/operator-api'
 import type { OperationsIssueQuery, OperationsReleaseQuery } from '@fabrika/operations-contract/rpc'
-import { alertSettings, createAlertChannel, deleteAlertChannel, updateAlertChannel, updateAlertRule, updateSpikeAlert } from './alerts.js'
+import {
+	alertSettings,
+	createAlertChannel,
+	deleteAlertChannel,
+	updateAlertChannel,
+	updateAlertRule,
+	updateSecurityAlert,
+	updateSpikeAlert,
+} from './alerts.js'
 import type { OperationsOperatorOptions } from './context.js'
 import { createHealthCheck, deleteHealthCheck, healthOverview, sourceHealth, updateHealthCheck } from './health.js'
 import { bulkIssueStatus, issueDetail, issueEvent, issueLatestEvent, issueOccurrences, listIssues, mutateIssue } from './issues.js'
@@ -108,6 +117,10 @@ export class OperationsOperatorUseCases {
 
 	updateSpikeAlert(sourceId: string, input: OperationsSpikeAlertRequestDto): Promise<{ threshold: number; enabled: boolean }> {
 		return updateSpikeAlert(sourceId, input, this.options)
+	}
+
+	updateSecurityAlert(sourceId: string, input: OperationsSecurityAlertRequestDto): Promise<OperationsSecurityAlertRequestDto> {
+		return updateSecurityAlert(sourceId, input, this.options)
 	}
 
 	updateAlertRule(sourceId: string, kind: OperationsAlertKind, input: { enabled: boolean }): Promise<{ kind: OperationsAlertKind; enabled: boolean }> {

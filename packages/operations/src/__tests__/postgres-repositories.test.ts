@@ -59,6 +59,7 @@ describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => 
 			.all<{ bundle: string; name: string }>()
 		expect(ledger).toEqual([
 			{ bundle: 'operations', name: '0001_init.sql' },
+			{ bundle: 'operations', name: '0002_security_alerts.sql' },
 			{ bundle: 'platform-node', name: '0001_jobs.sql' },
 		])
 
@@ -290,5 +291,34 @@ describe.skipIf(!hasPostgres)('Operations repositories on real Postgres', () => 
 		expect(await clocked.alerts.liveClaims(['slot:a', 'slot:b', 'slot:c'])).toEqual(new Set(['slot:b']))
 		expect(await clocked.alerts.hasNotification('order:failed_check')).toBe(true)
 		expect(await clocked.alerts.hasNotification('order:missing')).toBe(false)
+	})
+
+	test('keeps the installation source, its thresholds and the sign-in signal mark', async () => {
+		const clocked = createPostgresOperationsRepositories(db, { now: () => 1_800_000_000_000 })
+		const source = await clocked.security.ensureInstallationSource()
+		if (source === null) throw new Error('installation source was not created')
+		expect((await clocked.security.ensureInstallationSource())?.id).toBe(source.id)
+		expect(source.origin).toBe('installation')
+		expect(await clocked.security.isConfigured(source.id)).toBe(false)
+		await clocked.alerts.setRule(source.id, 'security', true)
+		await clocked.alerts.upsertChannel({
+			id: 'security-postgres',
+			sourceId: source.id,
+			scope: 'security',
+			type: 'webhook',
+			target: 'https://hooks.example.test/security',
+			enabled: true,
+		})
+		expect(await clocked.security.isConfigured(source.id)).toBe(true)
+		expect(await clocked.security.getConfig(source.id)).toBeNull()
+		await clocked.security.setConfig(source.id, { accountThreshold: 3, installationThreshold: 20 })
+		expect(await clocked.security.getConfig(source.id)).toEqual({ source_id: source.id, account_threshold: 3, installation_threshold: 20 })
+		expect(await clocked.security.evaluatedUntil()).toBeNull()
+		// Milliseconds past int4: the BIGINT column comes back as a string and is read as a number.
+		await clocked.security.advance(1_800_000_000_000)
+		await clocked.security.advance(1_700_000_000_000)
+		expect(await clocked.security.evaluatedUntil()).toBe(1_800_000_000_000)
+		await clocked.security.reset()
+		expect(await clocked.security.evaluatedUntil()).toBeNull()
 	})
 })

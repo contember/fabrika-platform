@@ -45,4 +45,7 @@ not one per pass.
 `packages/control/src/cron.ts`, `packages/control/src/operations-gateway.ts`, backlog
 [46](46-add-portable-email-alert-delivery.md).
 
+Operations already has an installation source (`origin = 'installation'`, `packages/operations/src/installation-source.ts`,
+created by the maintenance pass) that carries the `security` alerts; IAM's check can land there.
+
 <!-- Origin: the root-cause review of an IAM outage on a production Zerops installation (2026-10). -->

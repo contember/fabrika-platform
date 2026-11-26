@@ -75,7 +75,20 @@ New-issue and regression producers run after durable ingest persistence. The
 scheduled maintenance pass evaluates the preceding one-minute occurrence window
 for spikes and claims each source/fingerprint for fifteen minutes before enqueue.
 New-issue alerts take one of ten source/channel claims (`alert_claims`, ten minutes each); none free means no alert.
-The outbox claim takes health kinds (`HEALTH_ALERT_KINDS`) before other rows, then oldest first, on both runtimes.
+The outbox claim takes health kinds (`HEALTH_ALERT_KINDS`) and `security` before other rows, then oldest first, on both runtimes.
+
+One source belongs to the installation, not to an application: `origin = 'installation'`, IAM's app id and the
+environment `_installation`, which the catalog's coordinate pattern cannot name (`installation-source.ts`). The
+maintenance pass creates it (`SecurityAlertsRepository.ensureInstallationSource`), so an existing installation gains it
+on upgrade; the catalog reconcile and `getByCoordinate` touch only `origin = 'control'` rows. **Its access is not the
+app/environment union**: only an app-scoped grant at IAM's app id or a global grant reaches it (`access.ts`), never an
+environment-scoped grant. It carries the `security` kind (`security-alerts.ts`): with an enabled `security` rule and
+channel there, each pass asks IAM's full entrypoint for its sign-in signals (`IamSignInSignalsRpc`; the `IAM` binding on
+Cloudflare, the process's one `HttpIamRpc` on Bun) for privileged sign-ins from the stored mark minus fifteen minutes and for refusals over the last fifteen minutes, raises
+an alert per account and installation-wide at the thresholds (`security_alert_config`, defaults 5 and 50, each claimed
+for an hour) and per privileged sign-in (deduplicated by its `auth_log` id), and only then advances the mark (to the last listed privileged sign-in when that list was cut). An IAM
+that does not answer, or is older than the method, leaves the mark and logs one line; without a rule and channel IAM is
+not asked and the mark is cleared. Payloads carry principal ids, counts, reasons and times, never an email or address.
 Logs may contain the notification id and attempt number, never the target,
 payload, or caught error detail. Cloudflare owns scheduled invocation; the Bun
 consumer owns its abortable loop and can restart after `stop()`.

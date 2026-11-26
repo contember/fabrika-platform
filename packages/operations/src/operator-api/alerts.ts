@@ -2,10 +2,14 @@ import type {
 	OperationsAlertKind,
 	OperationsAlertSettingsResponseDto,
 	OperationsNotificationChannelRequestDto,
+	OperationsSecurityAlertDto,
+	OperationsSecurityAlertRequestDto,
 	OperationsSpikeAlertRequestDto,
 } from '@fabrika/operations-contract/operator-api'
 import { uuidv7 } from '@fabrika/platform'
 import { alertKind } from '../operator-input.js'
+import type { SourceRow } from '../repositories.js'
+import { DEFAULT_ACCOUNT_REFUSAL_THRESHOLD, DEFAULT_INSTALLATION_REFUSAL_THRESHOLD } from '../security-alerts.js'
 import { isValidWebhookTarget } from '../webhook-target.js'
 import { visibleSource } from './access.js'
 import type { OperationsOperatorOptions } from './context.js'
@@ -13,15 +17,17 @@ import { badRequest, notFoundError } from './errors.js'
 import { now } from './values.js'
 
 export async function alertSettings(sourceId: string, options: OperationsOperatorOptions): Promise<OperationsAlertSettingsResponseDto> {
-	await visibleSource(sourceId, 'operations.manage', options)
-	const [config, rules, channels, deliveries] = await Promise.all([
+	const source = await visibleSource(sourceId, 'operations.manage', options)
+	const [config, security, rules, channels, deliveries] = await Promise.all([
 		options.repositories.alerts.getConfig(sourceId),
+		securitySettings(source, options),
 		options.repositories.alerts.listRules(sourceId),
 		options.repositories.alerts.listChannels(sourceId),
 		options.repositories.operator.listNotificationDeliveries(sourceId),
 	])
 	return {
 		spike: config === null ? null : { threshold: config.threshold, enabled: config.enabled === 1 },
+		security,
 		rules: rules.flatMap((rule) => {
 			const kind = alertKind(rule.type)
 			return kind === null ? [] : [{ kind, enabled: rule.enabled === 1 }]
@@ -74,6 +80,28 @@ export async function updateSpikeAlert(
 	await options.repositories.alerts.setConfig(sourceId, { threshold, enabled })
 	await options.auth.audit({ action: 'operations.alert.spike', resourceType: 'operations_source', resourceId: sourceId })
 	return { threshold, enabled }
+}
+
+async function securitySettings(source: SourceRow, options: OperationsOperatorOptions): Promise<OperationsSecurityAlertDto | null> {
+	if (source.origin !== 'installation') return null
+	const config = await options.repositories.security.getConfig(source.id)
+	return {
+		accountThreshold: config?.account_threshold ?? DEFAULT_ACCOUNT_REFUSAL_THRESHOLD,
+		installationThreshold: config?.installation_threshold ?? DEFAULT_INSTALLATION_REFUSAL_THRESHOLD,
+	}
+}
+
+export async function updateSecurityAlert(
+	sourceId: string,
+	input: OperationsSecurityAlertRequestDto,
+	options: OperationsOperatorOptions,
+): Promise<OperationsSecurityAlertRequestDto> {
+	const source = await visibleSource(sourceId, 'operations.manage', options)
+	if (source.origin !== 'installation') throw badRequest('sign-in thresholds belong to the installation source')
+	const { accountThreshold, installationThreshold } = input
+	await options.repositories.security.setConfig(sourceId, { accountThreshold, installationThreshold })
+	await options.auth.audit({ action: 'operations.alert.security', resourceType: 'operations_source', resourceId: sourceId })
+	return { accountThreshold, installationThreshold }
 }
 
 export async function updateAlertRule(

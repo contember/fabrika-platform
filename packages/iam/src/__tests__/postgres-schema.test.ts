@@ -145,6 +145,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'iam', name: '0040_requested_api_keys.sql' },
 			{ bundle: 'iam', name: '0041_credentials_mirror.sql' },
 			{ bundle: 'iam', name: '0042_agent_grants.sql' },
+			{ bundle: 'iam', name: '0043_auth_log_time.sql' },
 		])
 	})
 

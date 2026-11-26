@@ -60,6 +60,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   `env.IAM.rpc.issueKey(…)` callable through any entrypoint, and a `get iam()` returned the signing
   keys. Each method builds its surface with the module function `iamRpc(this.env, this.ctx)`.
   `index.test.ts` lists both classes' members.
+- **`signInSignals` (`IamSignInSignalsRpc`, `src/sign-in-signals.ts`) IS SERVED ONLY BY THE FULL ENTRYPOINT**: the
+  default `Propustka` class and the management `/rpc/*`, never `PropustkaApplication`, `/membership/*` or the proxy's
+  `/auth/mint/*`. It takes no caller credential: the transport is the authentication, as for the other platform-only
+  methods. It answers Operations' security alerts a bounded summary of one window of `auth_log` by `created_at`
+  (`idx_auth_log_time`, at most a day): refused password sign-ins per known account, every counted refusal, and the
+  privileged `allow` rows. What counts is decided per reason in `COUNTED_LOGIN_REFUSALS`, typed over `LoginRefusal`, so
+  a new refusal reason fails the typecheck until it is decided there; the one counted refusal outside IAM's sign-in is
+  `mintFromKey`'s `invalid_key`. No email, address or credential is in the answer.
 - **Only the SHA-256 hash of a credential is stored** (`src/secret.ts`), for API keys, share links,
   and SSO sessions alike. Plaintext is shown once at issue. Compare digests with
   `timingSafeEqualHex`, never raw secrets.

@@ -8,6 +8,7 @@ export type OperationsAlertKind =
 	| 'failed_check'
 	| 'recovery'
 	| 'unhealthy_telemetry'
+	| 'security'
 
 export type OperationsHealthState = 'healthy' | 'degraded' | 'failed' | 'stale' | 'unavailable'
 
@@ -226,8 +227,16 @@ export interface OperationsNotificationDeliveryDto {
 	attempts: OperationsNotificationAttemptDto[]
 }
 
+/** Refused sign-ins within fifteen minutes that raise a `security` alert; only the installation source has them. */
+export interface OperationsSecurityAlertDto {
+	accountThreshold: number
+	installationThreshold: number
+}
+
 export interface OperationsAlertSettingsResponseDto {
 	spike: { threshold: number; enabled: boolean } | null
+	/** The installation source's sign-in thresholds, defaults included; null on every application source. */
+	security: OperationsSecurityAlertDto | null
 	rules: OperationsAlertRuleDto[]
 	channels: OperationsNotificationChannelDto[]
 	deliveries: OperationsNotificationDeliveryDto[]
@@ -237,6 +246,8 @@ export interface OperationsSpikeAlertRequestDto {
 	threshold: number
 	enabled: boolean
 }
+
+export type OperationsSecurityAlertRequestDto = OperationsSecurityAlertDto
 
 export interface OperationsAlertRuleRequestDto {
 	enabled: boolean

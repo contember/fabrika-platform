@@ -268,3 +268,37 @@ describe('successful results decode field by field', () => {
 		})
 	})
 })
+
+describe('signInSignals', () => {
+	const answer = {
+		ok: true,
+		accounts: [{ principalId: 'p1', refusals: 5 }],
+		refusals: 7,
+		reasons: [{ reason: 'password_invalid', refusals: 7 }],
+		privileged: [{ id: '42', principalId: 'p2', reason: 'password_login', at: 1_800_000_000 }],
+		accountsTruncated: false,
+		privilegedTruncated: false,
+	}
+
+	test('POSTs the window to /rpc/signInSignals and decodes the summary', async () => {
+		const { rpc, calls } = stub(200, { ...answer, extra: 'ignored' })
+		expect(await rpc.signInSignals({ since: 1, refusalsSince: 1, until: 2 })).toEqual({ ...answer, ok: true })
+		expect(calls[0]?.url).toBe('http://iam:3000/rpc/signInSignals')
+		expect(JSON.parse(String(calls[0]?.init.body))).toEqual({ since: 1, refusalsSince: 1, until: 2 })
+	})
+
+	test('a refused window is a result', async () => {
+		const { rpc } = stub(200, { ok: false, reason: 'invalid_window' })
+		expect(await rpc.signInSignals({ since: 2, refusalsSince: 2, until: 1 })).toEqual({ ok: false, reason: 'invalid_window' })
+	})
+
+	// An IAM older than the method answers 404: "not yet", the same as an unreachable IAM.
+	test('an IAM without the method, or a body off the contract, is a transport fault', async () => {
+		await expect(stub(404, { error: 'not found' }).rpc.signInSignals({ since: 1, refusalsSince: 1, until: 2 })).rejects.toBeInstanceOf(
+			IamTransportError,
+		)
+		await expect(stub(200, { ...answer, refusals: -1 }).rpc.signInSignals({ since: 1, refusalsSince: 1, until: 2 })).rejects.toBeInstanceOf(
+			IamTransportError,
+		)
+	})
+})

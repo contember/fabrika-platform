@@ -16,6 +16,7 @@ import type {
 	OperationsNotificationChannelRequestDto,
 	OperationsReleaseDetailResponseDto,
 	OperationsReleaseListResponseDto,
+	OperationsSecurityAlertRequestDto,
 	OperationsSourceDetailResponseDto,
 	OperationsSourceHealthDto,
 	OperationsSourceListResponseDto,
@@ -69,6 +70,10 @@ export interface OperationsRpcContract {
 	updateSpikeAlert: RpcProcedureContract<
 		{ sourceId: string; input: OperationsSpikeAlertRequestDto },
 		{ threshold: number; enabled: boolean }
+	>
+	updateSecurityAlert: RpcProcedureContract<
+		{ sourceId: string; input: OperationsSecurityAlertRequestDto },
+		OperationsSecurityAlertRequestDto
 	>
 	updateAlertRule: RpcProcedureContract<
 		{ sourceId: string; kind: OperationsAlertKind; input: OperationsAlertRuleRequestDto },

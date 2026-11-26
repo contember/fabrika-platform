@@ -55,6 +55,9 @@ export const operationsRpcRouter: RpcRouterFor<OperationsRpcContext, OperationsR
 	updateSpikeAlert: rpc.procedure.input(schemas.spikeAlertInput).mutation(({ ctx, input }) =>
 		operatorCall(ctx, (operations) => operations.updateSpikeAlert(input.sourceId, input.input))
 	),
+	updateSecurityAlert: rpc.procedure.input(schemas.securityAlertInput).mutation(({ ctx, input }) =>
+		operatorCall(ctx, (operations) => operations.updateSecurityAlert(input.sourceId, input.input))
+	),
 	updateAlertRule: rpc.procedure.input(schemas.alertRuleInput).mutation(({ ctx, input }) =>
 		operatorCall(ctx, (operations) => operations.updateAlertRule(input.sourceId, input.kind, input.input))
 	),

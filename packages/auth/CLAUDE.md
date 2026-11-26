@@ -50,7 +50,8 @@ the service that owns identity.
   exposed as `AuthContext.link`. A person's agent (ADR-0090) arrives as the person's token with `act`, exposed as
   `AuthContext.agent`. `issueLink` returns the key IAM issued — the SDK only asked for it.
   `HttpIamRpc` still carries `issueKey` / `revokeKey` because they are `IamRpc` members other callers
-  use, not SDK surface.
+  use, not SDK surface; likewise `signInSignals` and `decodeSignInSignals`, Operations' read of IAM's sign-in signals
+  (`IamSignInSignalsRpc`), which an application's IAM entrypoint does not serve.
 - **`audit` forwards the verified token, not an app id.** `AuthContext.audit` sends the token it was
   built from as `credential`; IAM files the event under that token's app.
 - **The SDK REQUESTS; IAM decides and writes.** `IamMembership` (`src/membership.ts`,
