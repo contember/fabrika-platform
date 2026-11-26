@@ -24,6 +24,7 @@ import { TICK_HEADER } from '../cloudflare/application'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { dailyAhead } from './fixtures/cron-ahead'
 import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
+import { isMigrationRecordKey, RecordObjects } from './fixtures/migration-records'
 
 interface DealsTable {
 	id: string
@@ -342,10 +343,18 @@ async function sqlite(): Promise<Sqlite> {
 	const pending: Promise<unknown>[] = []
 	const tokens = workloadTokensFor(implementation)
 	const unused = () => Promise.reject(new Error('not called'))
+	// The first boot migrates the empty storage, so it writes the migration record; nothing else touches the bucket.
+	const records = new RecordObjects()
 	const env = {
 		...frameworkEnvFor(implementation),
 		FABRIKA_PROXY_SECRET: PROXY_SECRET,
-		[CLOUDFLARE_FILES_BINDING]: { head: unused, put: unused, delete: unused, get: () => Promise.resolve(null) },
+		[CLOUDFLARE_FILES_BINDING]: {
+			head: unused,
+			delete: unused,
+			get: (key: string) => isMigrationRecordKey(key) ? records.get(key) : Promise.resolve(null),
+			put: (key: string, body: unknown, options: { readonly onlyIf: { readonly etagMatches?: string; readonly etagDoesNotMatch?: string } }) =>
+				isMigrationRecordKey(key) ? records.put(key, body, options) : unused(),
+		},
 		[FABRIKA_APPLICATION_OBJECT]: 'application',
 		[FABRIKA_APPLICATION_OBJECTS]: 'application',
 		IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
