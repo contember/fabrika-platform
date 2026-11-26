@@ -502,8 +502,8 @@ The flag also governs who deploys by hand. **A person** here is a user principal
 rule of approving (section 5). **Every bearer is a non-person**, a person's own `px_` key included, so an agent handed
 that key cannot pass as its owner; so are a service principal, the builder key
 ([ADR-0042](0042-connect-local-builders-through-human-consent.md)), an IAM service key, the command-line client's
-device-grant token and an MCP agent. A person's manual run of a protected environment runs as before. A non-person's
-is judged by the environment's `deploy-request` category:
+device-grant token and an MCP agent. A person's manual run of a protected environment runs as before, with one limit below:
+its commit must be one the trigger ref holds. A non-person's is judged by the environment's `deploy-request` category:
 
 - `person`, the default: the run is accepted, its snapshot is classified, and it parks in `awaiting_approval` whatever
   its lines, with the park reason `requested`. A person approves it from its link, `<console>/approvals/<run id>`, which
@@ -519,7 +519,10 @@ A non-person's manual run of a protected environment names a 40-character commit
 its branch holds when the run starts, not what the person approves. Under `deployRequestCommits: merged`, the default,
 the commit must be reachable from the environment's trigger ref, or from the application's default branch when the
 trigger ref is a pattern; Control asks the source when the run is created and refuses (400) a commit it cannot show
-merged. `any` admits an unmerged commit. A person's manual run names a full ref (`refs/heads/…`, `refs/tags/…`) or a
+merged. `any` admits an unmerged commit. Every manual run of a protected environment, a person's included, is checked once more
+when it starts: once the provider resolved its commit, and before anything publishes, the source must show that commit
+reachable from the same ref, or the run fails (`assertManualCommitReachable`); only a request under `any` skips it. A
+person's manual run names a full ref (`refs/heads/…`, `refs/tags/…`) or a
 40-character commit SHA; any other spelling is refused with a 400 that names the accepted forms. A workspace ref
 (`refs/heads/fabrika/…`) is refused there whoever asks: a workspace reaches a protected environment only after a merge
 into its trigger ref ([ADR-0049](0049-author-applications-through-mcp-in-control.md) rule 7). The limit: a SHA or a tag

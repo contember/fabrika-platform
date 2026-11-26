@@ -105,9 +105,15 @@ What approval does not cover:
   ([`approval/requests/route.ts`](../../packages/control/src/approval/requests/route.ts)). Control presents an
   environment's ops key only at the domain a provider deployed it to, so a domain no deploy reached receives none
   ([`ops-key.ts`](../../packages/control/src/ops-key.ts)).
-- **Which commit.** A person's manual deploy of a protected environment from the console may name any branch, tag or
-  commit of the repository; Control does not check that it descends from the trigger ref. Approval judges the access
-  the commit declares, not how the commit was reviewed.
+- **Which commit.** A manual deploy of a protected environment, a person's included, deploys only a commit reachable
+  from the trigger branch or tag, or from the default branch when the trigger ref is a pattern or absent. Once the
+  provider resolved the commit, and before anything publishes, Control asks GitHub's compare through the connection's
+  token where one reads the repository, and fails the run when it cannot show it, a source error included
+  ([`approval/request.ts`](../../packages/control/src/approval/request.ts) `assertManualCommitReachable`, on every
+  provider). A request (a non-person's run that parks for a person) under `deployRequestCommits: any` is the one
+  exception; a non-person's run under `deploy-request: off` parks for nobody, so it is checked. A restore's own deploy
+  is exempt, as it redeploys what the environment ran. A provider that resolves no commit cannot deploy a protected
+  environment by hand. Approval judges the access the commit declares, not how the commit was reviewed.
 
 A non-person's manual deploy of a protected environment is its own approval request
 ([ADR-0050 §4](../decisions/0050-approved-access.md), [`approval/request.ts`](../../packages/control/src/approval/request.ts)):
@@ -121,9 +127,9 @@ A non-person's manual deploy of a protected environment is its own approval requ
 - **The commit must be merged by default.** Under `deployRequestCommits: merged` Control asks GitHub's compare whether
   the commit is reachable from the trigger branch or tag, or from the default branch when the trigger ref is a
   pattern or absent, and answers 400 when it cannot show it, a source error included. `any` admits any commit.
-  The compare also carries the changed files with their patches (up to 300) between the commit and the branch, and
-  Control reads at most 7 MiB of it. A commit far enough behind the branch exceeds that and is refused as a source that
-  did not answer (`archive_rejected`): a person deploys it from the console, or the environment chooses `any`.
+  Control compares the branch with the commit, so for a commit the branch holds GitHub lists no files, however far
+  behind it is. A diverged commit brings its own changed files with their patches (up to 300), of which Control reads
+  at most 7 MiB; past that it is refused as a source that did not answer (`archive_rejected`), as it would be anyway.
 - **It expires.** The run's `approval_deadline` is its park time plus `requestTtlHours` (1–168, 24 by default), and
   every park sets a fresh one. A decision past it answers 410; the maintenance sweep fails the run with
   `failure_cause = 'expired'` and deploys nothing. A run parked before the column gets its deadline at the first

@@ -1,9 +1,11 @@
 // A non-person's manual run of a protected environment is its own approval request (ADR-0050 §4): the run records who
 // asked and the commit's message when it is created, and parks for a person whatever its lines. The commit must be
-// merged unless the environment chose `deployRequestCommits: any`; Control asks the source and fails closed.
+// merged unless the environment chose `deployRequestCommits: any`; Control asks the source and fails closed. Every
+// manual run of a protected environment, a person's too, deploys only a commit its merge target holds.
 
 import type { AuthContext } from '@fabrika/auth'
 import { type DeployRequestDto, requesterPersonId } from '@fabrika/control-contract'
+import type { ProviderSourceBinding } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { ControlApiError, fail } from '../api/domain'
 import type { AppEnvRow, AppRow, ControlRepositories, RunRow } from '../db'
@@ -44,6 +46,48 @@ export function mergeTarget(appEnv: Pick<AppEnvRow, 'trigger_ref'>, app: Pick<Ap
 	if (trigger.startsWith('refs/heads/')) return trigger.slice('refs/heads/'.length)
 	if (trigger.startsWith('refs/tags/')) return trigger.slice('refs/tags/'.length)
 	return trigger
+}
+
+/**
+ * A manual run of a protected environment deploys only a commit reachable from its merge target, whoever started it,
+ * checked once the provider resolved the commit and before anything publishes. A request (a non-person's run that parks
+ * for a person) under `deployRequestCommits: any` is the exception the environment chose: a person approves each one. A
+ * non-person's run under `deploy-request: off` parks for nobody, so it is checked. The source is asked through the same
+ * credentials as the commit's files, and anything but a yes fails the run.
+ */
+export async function assertManualCommitReachable(
+	commits: CommitSource | undefined,
+	input: {
+		readonly app: AppRow
+		readonly appEnv: AppEnvRow
+		/** The run parks for a person (`protectedRunDecision` answered `request`). */
+		readonly request: boolean
+		readonly commitSha: string
+		readonly sourceBinding?: ProviderSourceBinding
+		readonly signal: AbortSignal
+	},
+): Promise<void> {
+	const { app, appEnv, commitSha } = input
+	if (appEnv.protected !== 1) return
+	if (input.request && appEnvSettings(appEnv).deployRequestCommits === 'any') return
+	const target = mergeTarget(appEnv, app)
+	const refused = `environment \`${appEnv.env}\` is protected: a manual deploy must be a commit reachable from \`${target}\``
+	if (commits === undefined) throw new Error(`${refused}, and Control has no source to ask whether commit ${commitSha} is`)
+	let merged: boolean | null
+	try {
+		merged = (await commits.requestedCommit({
+			repoUrl: app.repo_url,
+			commitSha,
+			...(input.sourceBinding === undefined ? {} : { sourceBinding: input.sourceBinding }),
+			mergedInto: target,
+			signal: input.signal,
+		})).merged
+	} catch (error) {
+		input.signal.throwIfAborted()
+		const cause = error instanceof SourceFailure ? error.code : 'internal'
+		throw new Error(`${refused}, and the source did not answer whether commit ${commitSha} is (${cause}); try again`)
+	}
+	if (merged !== true) throw new Error(`${refused}; commit ${commitSha} is not, so merge it there first`)
 }
 
 export interface DeployRequestContext {

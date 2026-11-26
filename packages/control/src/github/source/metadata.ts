@@ -21,7 +21,7 @@ const commitSchema = z.object({
 	commit: z.object({ tree: z.object({ sha: objectIdSchema }) }).optional().catch(undefined),
 })
 const messageCommitSchema = z.object({ sha: objectIdSchema, commit: z.object({ message: z.string() }) })
-const compareSchema = z.object({ status: z.enum(['identical', 'ahead', 'behind', 'diverged']), base_commit: messageCommitSchema })
+const compareSchema = z.object({ status: z.enum(['identical', 'ahead', 'behind', 'diverged']), merge_base_commit: z.object({ sha: objectIdSchema }) })
 const treeResponseSchema = z.object({ sha: z.string(), truncated: z.literal(false), tree: z.array(z.unknown()) })
 const treeEntrySchema = z.object({
 	path: z.string(),
@@ -89,8 +89,9 @@ export class GitHubMetadataClient {
 	}
 
 	/**
-	 * Whether an exact commit is reachable from a branch or tag (its short name), with the commit's message: one compare of
-	 * the commit with the branch, which is ahead of it or identical exactly when it holds the commit.
+	 * Whether an exact commit is reachable from a branch or tag (its short name): one compare of the branch with the commit,
+	 * which is behind it or identical, with the commit as the merge base, exactly when the branch holds it. In that order the
+	 * answer lists no files for a held commit, however far behind the branch it is.
 	 */
 	async reachableFrom(
 		repository: SourceRepository,
@@ -98,20 +99,22 @@ export class GitHubMetadataClient {
 		head: string,
 		token: string | undefined,
 		signal: AbortSignal,
-	): Promise<{ readonly reachable: boolean; readonly message: string }> {
+	): Promise<boolean> {
 		if (!OBJECT_ID_PATTERN.test(commitSha) || !safeRefName(head)) throw rejected('resolve')
-		// One commit per page: only the status and the base commit are read. The files still come, so the bound is the tree's.
+		// One commit per page: only the status and the merge base are read. A diverged commit's own files still come.
 		const parsed = compareSchema.safeParse(
 			await this.requestJson(
-				`${prefix(repository)}/compare/${commitSha}...${head.split('/').map(encodeURIComponent).join('/')}?per_page=1`,
+				`${prefix(repository)}/compare/${head.split('/').map(encodeURIComponent).join('/')}...${commitSha}?per_page=1`,
 				token,
 				signal,
 				'resolve',
 				GITHUB_TREE_MAX_RESPONSE_BYTES,
 			),
 		)
-		if (!parsed.success || parsed.data.base_commit.sha !== commitSha) throw rejected('resolve')
-		return { reachable: parsed.data.status === 'ahead' || parsed.data.status === 'identical', message: parsed.data.base_commit.commit.message }
+		if (!parsed.success) throw rejected('resolve')
+		const held = parsed.data.status === 'behind' || parsed.data.status === 'identical'
+		if (held && parsed.data.merge_base_commit.sha !== commitSha) throw rejected('resolve')
+		return held
 	}
 
 	/**

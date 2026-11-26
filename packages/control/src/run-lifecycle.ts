@@ -56,6 +56,7 @@ import {
 	rereadDataLoss,
 	runningSnapshot,
 } from './approval/publish'
+import { assertManualCommitReachable } from './approval/request'
 import { type AccessSnapshot, approvedAccess, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
@@ -762,6 +763,11 @@ async function deployUnder(
 		const resolveSource = deps.provider.resolveSource
 		/** The snapshot this run published, and how to classify its data changes again when it predates the classifier. */
 		let published: { readonly candidate: PublishedCandidate; readonly reread: () => Promise<readonly MigrationDataLoss[] | null> } | null = null
+		if (decision !== null && appEnv.protected === 1 && !dryRun && resolveSource === undefined) {
+			throw new Error(
+				`environment \`${appEnv.env}\` is protected: a manual deploy must be a commit its trigger ref holds, and the provider resolves no commit to check`,
+			)
+		}
 		if (!dryRun && resolveSource !== undefined) {
 			await invocation.boundary()
 			const expectedCommitSha = startedRun.commit_sha === null
@@ -808,6 +814,17 @@ async function deployUnder(
 			await invocation.write((fence) => runs.setRunCommit(runId, commitSha, fence))
 			startedRun = await invocation.boundary()
 			registration = { ...registration, app: providerAppAtCommit(registration.app, commitSha) }
+			if (decision !== null) {
+				await assertManualCommitReachable(deps.commits, {
+					app,
+					appEnv,
+					request: decision.kind === 'request',
+					commitSha,
+					...(sourceBinding === undefined ? {} : { sourceBinding }),
+					signal: invocation.work.signal,
+				})
+				await invocation.boundary()
+			}
 			// A pending change is published nowhere (ADR-0050): parked here, the run reaches no proxy and no IAM.
 			const commits = deps.commits
 			if (commits === undefined) throw new Error('no commit source is configured to read the run snapshot')
