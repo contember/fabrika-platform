@@ -1,10 +1,11 @@
 import { describe, expect, test } from 'bun:test'
 import { machineKeyStillWorks } from '../machine-key'
+import { CONTROL_ORIGIN } from '../ports'
 
 describe('machine key readiness', () => {
 	test('lists namespaces through RPC with the machine bearer and manual redirects', async () => {
 		const works = await machineKeyStillWorks('px_test', async (input, init) => {
-			expect(input).toBe('http://control.fabrika.localhost:18080/api/rpc')
+			expect(input).toBe(`${CONTROL_ORIGIN}/api/rpc`)
 			expect(init?.method).toBe('POST')
 			expect(init?.redirect).toBe('manual')
 			expect(new Headers(init?.headers).get('authorization')).toBe('Bearer px_test')

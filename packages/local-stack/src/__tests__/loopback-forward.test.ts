@@ -2,7 +2,8 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { createServer, type Server } from 'node:net'
 import { z } from 'zod'
 import { parseLoopbackArgs, startLoopbackForwards } from '../loopback-forward'
-import { COMPOSE_FILE } from '../prepare'
+import { LOCAL_PORTS } from '../ports'
+import { readComposeFile } from './compose-file'
 
 const composeSchema = z.object({
 	services: z.record(
@@ -67,7 +68,7 @@ describe('the composition', () => {
 	const FORWARDER = '/workspace/packages/local-stack/src/loopback-forward.ts'
 
 	test('starts every container that calls a public host through the forwarder, aimed at a proxy it already reaches', async () => {
-		const { services } = composeSchema.parse(Bun.YAML.parse(await Bun.file(COMPOSE_FILE).text()))
+		const { services } = composeSchema.parse(Bun.YAML.parse(await readComposeFile('compose.yaml')))
 		const networks = (name: string): ReadonlySet<string> => {
 			const declared = services[name]?.networks
 			return new Set(declared === undefined ? [] : Array.isArray(declared) ? declared : Object.keys(declared))
@@ -78,7 +79,10 @@ describe('the composition', () => {
 			const { forwards } = parseLoopbackArgs([...(service.entrypoint ?? []).slice(2), 'true'])
 			for (const forward of forwards) {
 				// Each public port is served by the proxy pair whose auth container holds its network namespace.
-				expect(`${forward.port}=${forward.host}:${forward.targetPort}`).toBeOneOf(['18080=platform-proxy-auth:18080', '18081=apps-proxy-auth:18081'])
+				expect(`${forward.port}=${forward.host}:${forward.targetPort}`).toBeOneOf([
+					`${LOCAL_PORTS.platform}=platform-proxy-auth:${LOCAL_PORTS.platform}`,
+					`${LOCAL_PORTS.apps}=apps-proxy-auth:${LOCAL_PORTS.apps}`,
+				])
 				expect([...networks(name)].some((network) => networks(forward.host).has(network)), `${name} → ${forward.host}`).toBe(true)
 			}
 		}
