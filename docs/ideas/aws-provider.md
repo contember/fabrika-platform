@@ -575,9 +575,13 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        carry each subnet's range as AWS created it: no subnet named twice or as both kinds, no task's range over a
        balancer's, and the ranges the layout's, or nothing reaches Control. Any later subnet (the database's, an
        interface endpoint's) stays out of the balancers' subnets too.
-    2. **The balancers**: the applications' balancer (its group, the HTTPS listener with a fixed default answer and a
-       default certificate, `xff_header_processing.mode` at `append`, the HTTP listener's redirect) and the
-       platform's, with its rules for the installation's hosts to the platform proxy.
+    2. **The balancers** (built, `installation/balancers.ts`): the applications' balancer and the platform's, both
+       internet-facing in the balancers' subnets, `xff_header_processing.mode` at `append` and invalid header fields
+       dropped, HTTPS (TLS 1.3 and forward-secret 1.2) with a fixed 404 as the default action and HTTP redirected,
+       their groups reaching only the tasks' subnets on the proxies' ports. The platform's listener has a rule per
+       platform host (IAM, Control, Operations) to the platform proxy's target group, each with its certificate; the
+       applications' listener has none of its own, and takes IAM's certificate as its default. The certificates are
+       the operator's, validated before the stack is applied. Control's balancer variables come from its outputs.
     3. **Access**: the apps' permissions boundary, Control's role (the grants below), the ECS cluster, the sources
        bucket, the ECS service-linked role.
     4. **The database**: RDS PostgreSQL for IAM, Control and Operations, in subnets of its own.
