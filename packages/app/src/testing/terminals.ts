@@ -33,13 +33,14 @@ export interface TestIdentification {
 	readonly expiresAt: number
 }
 
-/** What became of an identification: still open, asserted for a principal, or cancelled. */
+/** What became of an identification: still open, asserted for a principal, cancelled, or expired unused. */
 export type TestIdentificationState =
 	& TestIdentification
 	& (
 		| { readonly state: 'open'; readonly principalId: null; readonly completionUrl: null }
 		| { readonly state: 'asserted'; readonly principalId: string; readonly completionUrl: string }
 		| { readonly state: 'cancelled'; readonly principalId: null; readonly completionUrl: null }
+		| { readonly state: 'expired'; readonly principalId: null; readonly completionUrl: null }
 	)
 
 export interface KitIdentificationsOptions {
@@ -91,6 +92,10 @@ export function kitIdentifications(options: KitIdentificationsOptions): KitIdent
 			if (!options.principals(input.principalId).some(signsInAtTerminal)) {
 				return { ok: false, reason: 'invalid_principal' }
 			}
+			// Single use: a concurrent assertion or cancellation that ended it first leaves nothing to consume.
+			if (identifications.get(open.id) !== open) {
+				return NOT_FOUND
+			}
 			const completion = new URL(TERMINAL_COMPLETE_PATH, options.issuer)
 			completion.searchParams.set(IDENTIFICATION_QUERY_PARAMETER, open.id)
 			const completionUrl = completion.toString()
@@ -101,6 +106,9 @@ export function kitIdentifications(options: KitIdentificationsOptions): KitIdent
 			const open = await openOne(input, input.id)
 			if ('ok' in open) {
 				return open
+			}
+			if (identifications.get(open.id) !== open) {
+				return NOT_FOUND
 			}
 			identifications.set(open.id, Object.freeze({ ...identity(open), state: 'cancelled', principalId: null, completionUrl: null }))
 			return { ok: true }
@@ -122,7 +130,13 @@ export function kitIdentifications(options: KitIdentificationsOptions): KitIdent
 			identifications.set(id, Object.freeze({ ...opened, state: 'open', principalId: null, completionUrl: null }))
 			return opened
 		},
-		stateOf: (id) => identifications.get(id),
+		stateOf(id) {
+			const identification = identifications.get(id)
+			if (identification?.state !== 'open' || identification.expiresAt > unixNow()) {
+				return identification
+			}
+			return Object.freeze({ ...identity(identification), state: 'expired', principalId: null, completionUrl: null })
+		},
 	}
 }
 

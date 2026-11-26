@@ -212,7 +212,7 @@ export interface TestKit<C extends AnyContract> {
 	 * no terminal and in a kit given its own `terminals`.
 	 */
 	openIdentification(terminal?: Pick<TestTerminal, 'id' | 'label'>): TestIdentification
-	/** What became of an identification `openIdentification` opened: open, asserted for whom, or cancelled. */
+	/** What became of an identification `openIdentification` opened: open, asserted for whom, cancelled, or expired unused. */
 	identification(id: string): TestIdentificationState | undefined
 	/**
 	 * Runs the cron job `name` once, as `fabrika job run <name>` does: under its lease, with the actions IAM signs for

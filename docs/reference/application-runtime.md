@@ -1077,7 +1077,7 @@ request the schema cannot express); an IAM that cannot be asked is 503.
   at `/__fabrika/auth/signout?redirect=<path>`. `boot` refuses such a contract without the transport. The test kit's
   IAM answers as IAM does over the identifications a test opens with `kit.openIdentification({ id, label })` (its `id`
   and the page's `url`), single use and for two minutes, and `kit.identification(id)` tells whether it was asserted, for
-  whom, or cancelled; `options.terminals` replaces it. Elsewhere `ctx.terminals` is
+  whom, cancelled or expired unused; `options.terminals` replaces it. Elsewhere `ctx.terminals` is
   unavailable. A kit test reaches a terminal-only endpoint as a person on a terminal: `testCaller(grants, { terminal: {
   id, label, ceiling, grants } })`, whose token carries `amr` and `terminal` and the permissions IAM signs there (the
   person's own entries the ceiling keeps, none by default, and the terminal's grants with the source `terminal`).

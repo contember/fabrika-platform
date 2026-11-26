@@ -15,6 +15,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { z } from 'zod/v4'
+import { kitIdentifications } from '../testing/terminals'
 
 interface VisitsTable {
 	id: string
@@ -136,6 +137,7 @@ describe("the test kit's IAM opens identifications", () => {
 		const refused = [
 			'nobody',
 			kit.testCaller([], { disabled: true }).id,
+			kit.testCaller([], { affiliation: 'external' }).id,
 			kit.testCaller([], { kind: 'machine' }).id,
 			kit.testCaller([], { kind: 'link' }).id,
 		]
@@ -162,12 +164,43 @@ describe("the test kit's IAM opens identifications", () => {
 		setSystemTime(new Date((expiring.expiresAt + 1) * 1000))
 		try {
 			expect(await post(clerk, '/api/desk.assert', { id: expiring.id, principalId: person.id })).toEqual(notFound)
+			expect(kit.identification(expiring.id)?.state).toBe('expired')
 		} finally {
 			setSystemTime()
 		}
-		expect(kit.identification(expiring.id)?.state).toBe('open')
 	})
 
+	test("only a token the kit signed for the application is IAM's caller", async () => {
+		const stand = kitIdentifications({
+			issuer: 'https://iam.test',
+			identifyUrl: 'https://kiosk.test/identify',
+			verifies: (credential) => Promise.resolve(credential === 'signed'),
+			principals: () => [],
+		})
+		const { id } = stand.open({ id: 'terminal-1', label: 'Entrance' })
+		const as = (credential: string | null) => ({ app: 'kiosk@test', credential, requestId: 'r1', id })
+		expect(await stand.rpc.inspectIdentification(as(null))).toEqual({ ok: false, reason: 'missing_token' })
+		expect(await stand.rpc.assertIdentity({ ...as('forged'), principalId: 'person-1' })).toEqual({ ok: false, reason: 'invalid_token' })
+		expect(await stand.rpc.cancelIdentification(as('forged'))).toEqual({ ok: false, reason: 'invalid_token' })
+		expect(stand.stateOf(id)?.state).toBe('open')
+		expect(await stand.rpc.cancelIdentification(as('signed'))).toEqual({ ok: true })
+		expect(await stand.rpc.cancelIdentification(as('signed'))).toEqual({ ok: false, reason: 'not_found' })
+	})
+
+	test('one of two concurrent assertions consumes the identification', async () => {
+		const stand = kitIdentifications({
+			issuer: 'https://iam.test',
+			identifyUrl: 'https://kiosk.test/identify',
+			verifies: () => Promise.resolve(true),
+			principals: () => [kit.testCaller([])],
+		})
+		const { id } = stand.open({ id: 'terminal-1', label: 'Entrance' })
+		const input = { app: 'kiosk@test', credential: 'signed', requestId: 'r1', id, principalId: 'person-1' }
+		const answers = await Promise.all([stand.rpc.assertIdentity(input), stand.rpc.assertIdentity(input)])
+		expect(answers.map((answer) => answer.ok)).toEqual([true, false])
+	})
+
+	// Last: its kit takes the file's data layer over from `kit`.
 	test('opens none where IAM would not, and none in a kit given its own terminals', async () => {
 		expect(() => kit.openIdentification({ label: '' })).toThrow('a terminal has a non-empty id and label')
 		const personal = defineApp(defineVocabulary({ app: 'personal', dimensions: {}, actions: { 'notes.read': 'Read notes' }, roles: {} }))

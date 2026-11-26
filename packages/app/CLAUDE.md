@@ -1148,7 +1148,8 @@ vocabulary (`packages/db/CLAUDE.md`).
   the credential must be a token the kit signed for the application (a public procedure's workload token included), an
   identification lives `IDENTIFICATION_TTL_SECONDS` (IAM's 120 s), an assertion consumes it and answers IAM's completion
   URL, a principal that is not an enabled internal person of the kit is `invalid_principal` and leaves it open, and
-  every other id is `not_found`. `kit.identification(id)` tells what became of it.
+  every other id is `not_found`. `kit.identification(id)` tells what became of it: open, asserted (for whom, with the
+  completion URL), cancelled, or expired unused.
 - `options.connect` wires each import to an owner: its origin, the edge key, and the `fetch` that reaches
   it — usually the owner kit's own `fetch`, so the call meets the owner's real proxy decision. The owner kit's
   `testCaller(grants, { kind: 'app', app })` is the consumer's key: an `app` token naming the consumer.
