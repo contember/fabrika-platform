@@ -489,15 +489,29 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the delete forgets it. At most 25 entries per namespace, departed ones counted (a listener's certificate quota
     besides its default one; the quota is the installation's, shared by every namespace): a host over it gets none
     until a place is free, and the rest of the pass runs as ever.
-    **The host rules** (built, `src/host-rules.ts`, `src/aws/elb.ts`): the namespace stack holds, for each current host
-    whose certificate is issued, the certificate on the installation's HTTPS listener (`FABRIKA_AWS_BALANCER_LISTENER`)
-    and a host-header rule forwarding to the namespace's target group, named by the rule's priority. A priority is unique
-    per listener, which every namespace shares: each host's is chosen against the listener's rules as read, from a hash
-    of the host to the next free one, and recorded with its certificate, so it stays put; one another rule has taken
-    since is chosen anew before the stack is rendered. Two namespaces choosing one free priority at once fail one stack
-    update, and its next reconcile chooses again. The namespace's `apply` and its republish render through the same step
-    (`ensureAwsNamespaceStack`), from the target and the members, so both send the same template. A departed host's
-    rule and listener certificate leave the stack; its certificate is the operator's to delete (above).
+    **The host rules** (built, `src/host-rules.ts`, `src/proxy-hosts.ts`, `src/aws/elb.ts`): a stack of the namespace's
+    own, `fabrika-nh-<length of id>-<id>-<env>`, holds for each served host its certificate on the installation's HTTPS
+    listener (`FABRIKA_AWS_BALANCER_LISTENER`) and a host-header rule forwarding to the namespace's target group; the
+    rule is named by its host and the certificate by its ARN, so a priority chosen anew is an in-place update. Every
+    republish and reconcile applies it after the certificates, and its failure (a rollback, a priority two namespaces
+    chose at once, the listener's rule or certificate quota) is recorded (`proxyHostsFailure`) and shown, never thrown:
+    the namespace's own stack, the proxy's build and rollout and deploys into it never wait on it. A served host is one
+    whose certificate is issued and that no other rule of the listener matches (exact or by a wildcard) and that is
+    not one of the installation's own hosts (`FABRIKA_AWS_INSTALLATION_HOSTS`); a rule is the namespace's own only when
+    it names that host alone and forwards to the namespace's own target group. A host that conflicts is marked
+    (`listenerConflict`) and shown. **First come keeps a host**: a namespace whose member names a host already routed
+    never takes it over, whoever its rightful owner is. ACM reuses one validation record per domain in an account, so a
+    second namespace gets an issued certificate for a host whose record is in DNS without touching DNS; that buys it no
+    route, because the conflict check, not the certificate, decides. If the later namespace is the rightful owner, the
+    operator resolves it: the conflict's instruction says to remove the domain from the environment (or the listener's
+    rule) that holds it, then reconcile. Nothing in AWS can know which claim is right; an installation-wide check of a
+    routed domain in Control, with the installation's own hosts reserved, would refuse the second claim at
+    registration (a separate change across providers, not built). Two namespaces putting one host on in the same moment
+    are both served until the later's next pass sees the other's rule. A priority is unique per listener: each host's
+    is chosen against the rules as read, from a hash of the host to the next free one, and recorded with its
+    certificate; one another rule has taken since is chosen anew. The listener's default action must be a fixed answer:
+    one that forwards to the namespace's target group serves it nothing (`defaultForwards`). A departed host's rule and
+    listener certificate leave the hosts stack; its certificate is the operator's to delete (above).
     **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
     members, one resumable step per pass from what the target records: an image of the current manifest sets the
     service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
@@ -539,7 +553,7 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     - CloudWatch Logs: the reads on `log-group:/fabrika/apps/*` (the build log groups are below it).
     - S3: `PutObject`, the multipart calls and `GetObject` (the presigned read) on `<bucket>/sources/*`.
     - CloudFormation, for the environment and namespace stacks of step 10: `CreateStack`, `UpdateStack`, `GetTemplate`,
-      `DescribeStacks`, `DescribeStackEvents` and `DeleteStack` on `stack/fabrika-app-*` and `stack/fabrika-ns-*`, and
+      `DescribeStacks`, `DescribeStackEvents` and `DeleteStack` on `stack/fabrika-app-*`, `stack/fabrika-ns-*` and `stack/fabrika-nh-*`, and
       `ListStacks` (which
       takes no resource). Without a service role CloudFormation creates, updates and reads back each resource with the
       caller's credentials, so applying the stack also needs, each on the step 9 prefix:
@@ -582,14 +596,20 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         Control can request a public certificate for any host (it costs nothing and serves nothing until a rule names
         it) and read every certificate's status and validation record (public DNS), never delete or tag one. Its host
         rules add, on the installation's listener alone (`listener/app/<balancer>/<id>/<id>`, never `*`),
-        `elasticloadbalancing:CreateRule`, `AddListenerCertificates` and `RemoveListenerCertificates`, and
-        `DescribeRules`; and `ModifyRule` and `DeleteRule` on its rules (`listener-rule/app/<balancer>/<id>/<id>/*`).
-        OPEN, for step 11: those two cannot be scoped to a namespace's own rules unless the rules carry a tag, and
-        whether CloudFormation's `ListenerRule` tags a rule is UNVERIFIED. Without one, Control's role reaches every rule
-        of the listener, the installation's own routes (Control's, IAM's) among them. Step 11 either tags the rules and
-        scopes the two by the resource tag, with `AddTags` on `listener-rule/*` held to `StringEquals` on
-        `elasticloadbalancing:CreateAction` = `CreateRule` as for target groups, or keeps the installation's own hosts on
-        a listener Control's role does not reach (a second balancer);
+        `elasticloadbalancing:CreateRule`, `AddListenerCertificates` and `RemoveListenerCertificates`; on its rules
+        (`listener-rule/app/<balancer>/<id>/<id>/*`) `ModifyRule`, `DeleteRule` and `SetRulePriorities` (a priority
+        chosen anew is an in-place update); and `DescribeRules`, which, like every Elastic Load Balancing `Describe*`
+        action, takes no resource-level permission and is granted on `*` (it is read-only). OPEN, for step 11, and it
+        bounds the routing blast radius: on a listener the installation shares with the namespaces, `CreateRule` lets
+        Control put a rule for any host at any priority ahead of the installation's own routes, and
+        `RemoveListenerCertificates` lets it take any of the installation's non-default certificates off the listener;
+        `ModifyRule` and `DeleteRule` reach every rule unless the rules carry a tag, and whether CloudFormation's
+        `ListenerRule` tags a rule is UNVERIFIED. Tagging the rules (`AddTags` on `listener-rule/*` held to
+        `StringEquals` on `elasticloadbalancing:CreateAction` = `CreateRule`, as for target groups, and the two scoped
+        by the resource tag) bounds only `ModifyRule` and `DeleteRule`. Only a listener Control's role does not reach at
+        all (a second balancer for the installation's own hosts, about $16 a month) bounds the routing; step 11 decides
+        between the two knowing that. CloudFormation also needs `stack/fabrika-nh-*` beside `stack/fabrika-ns-*` for
+        the hosts stacks;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;

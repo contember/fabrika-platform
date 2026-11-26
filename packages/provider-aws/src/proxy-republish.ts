@@ -20,9 +20,9 @@
 // Every pass first requests the certificates of hosts that have none and reads the recorded ones again
 // (`ensureAwsProxyCertificates`); nothing waits for one, because validation waits on the operator's DNS.
 //
-// Then the namespace's stack is brought to its template (`ensureAwsNamespaceStack`), which serves the hosts whose
-// certificates are issued on the installation's listener and no longer serves those that left; a departed host's
-// certificate is the operator's to delete once it is off the listener.
+// Then the namespace's hosts stack is brought to the hosts the installation's listener may serve for it
+// (`ensureAwsProxyHosts`): one whose certificate is issued and that no other rule routes. That step never fails the
+// pass: its failure is recorded and shown, so the proxy's build and rollout below always run.
 
 import {
 	type ProviderDeploymentNamespace,
@@ -36,14 +36,7 @@ import { type ElbClient } from './aws/elb'
 import type { AwsCredentialSource } from './aws/transport'
 import type { AwsAppTarget } from './codecs'
 import type { AwsInstallationNetwork } from './environment-stack'
-import {
-	type AwsInstallationBalancer,
-	type AwsProxySource,
-	checkNamespaceTarget,
-	ensureAwsNamespaceStack,
-	namespaceFailure,
-	readNamespaceOutputs,
-} from './namespace'
+import { type AwsInstallationBalancer, type AwsProxySource, checkNamespaceTarget, namespaceFailure, readNamespaceOutputs } from './namespace'
 import {
 	type AwsProxyBuildClients,
 	type AwsProxyBuildFollowClients,
@@ -54,6 +47,7 @@ import {
 	startAwsProxyBuild,
 } from './proxy-attempt'
 import { type AwsProxyCertificateClients, ensureAwsProxyCertificates } from './proxy-certificates'
+import { ensureAwsProxyHosts } from './proxy-hosts'
 import {
 	type AwsProxyIam,
 	type AwsProxyRolloutClients,
@@ -77,7 +71,7 @@ export type AwsProxyClients =
 		readonly codeBuild: AwsProxyBuildClients['codeBuild'] & AwsProxyBuildFollowClients['codeBuild']
 		readonly ecs: AwsProxyServiceClients['ecs'] & AwsProxyRolloutClients['ecs']
 		readonly ssm: AwsProxyBuildClients['ssm'] & AwsProxyServiceClients['ssm'] & AwsProxyRolloutClients['ssm']
-		// The namespace's stack, which serves the hosts' rules (`ensureAwsNamespaceStack`), and the listener's rules it reads.
+		// The hosts stack's calls (`ensureAwsProxyHosts`), and the listener's rules it reads.
 		readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'>
 		readonly elb: Pick<ElbClient, 'describeRules'>
 	}
@@ -124,12 +118,12 @@ export async function republishAwsProxy(
 	// The hosts' certificates first: their DNS validation is the operator's, and the longer they have the better. Nothing
 	// here waits for one.
 	let namespace = await ensureAwsProxyCertificates({ ...common, namespace: input.namespace, members: input.members, clients: runtime.clients })
-	// The listener serves the hosts whose certificates are issued, and no longer serves those that left.
-	namespace = await ensureAwsNamespaceStack({
+	// The listener serves the hosts whose certificates are issued and that no other rule routes, and no longer serves those
+	// that left. This step records its failure rather than throwing it.
+	namespace = await ensureAwsProxyHosts({
 		...common,
 		namespace,
 		members: input.members,
-		network: context.network,
 		balancer: context.balancer,
 		clients: runtime.clients,
 		sleep: runtime.sleep,

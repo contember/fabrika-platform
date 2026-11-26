@@ -1,23 +1,29 @@
-// A namespace proxy's hosts on the installation's HTTPS listener (the AWS idea's checklist, step 10): for every member
-// host whose certificate is issued, the namespace's stack holds the certificate on the listener and a host rule that
-// forwards the host to the namespace's target group.
+// A namespace proxy's hosts on the installation's HTTPS listener (the AWS idea's checklist, step 10), as pure functions:
+// which hosts the listener may serve for the namespace, each served host's rule priority, and the namespace's hosts
+// stack, which holds for each served host its certificate on the listener and a rule forwarding the host to the
+// namespace's target group. `proxy-hosts.ts` reads the listener and applies the stack.
 //
-// - A rule's priority must be one no other rule of the listener holds, and the listener is the installation's, shared by
-//   every namespace. Each host's priority is chosen against the listener's rules as read (`describeRules`), starting
-//   from a hash of the host and taking the next free one, and recorded with its certificate, so it stays put. A recorded
-//   priority some other rule has taken since (another namespace's stack, an operator's rule) is chosen anew before the
-//   stack is rendered. Two namespaces choosing the same free priority at once fail one stack update, and its next
-//   reconcile chooses again.
-// - The resources are named by priority (`HostRule<n>`, `HostCertificate<n>`), so a host that moves is a replacement.
-// - A host that left, or whose certificate is not issued, has no rule and no certificate on the listener.
+// - The listener is the installation's, shared by every namespace and by the installation's own routes. A rule is the
+//   namespace's own only when it names the one host alone and forwards to the namespace's own target group. A host that
+//   any other rule matches (exact or by a wildcard), or that is one of the installation's own hosts, is not served: it
+//   is marked a conflict and shown to the operator. So the first namespace to route a host keeps it, and a later one
+//   claiming the same host never takes it over; which one is the host's rightful owner is the operator's to decide (the
+//   namespace's presentation names the conflict, and the operator removes the domain from the wrong environment).
+// - A rule's priority must be one no other rule of the listener holds. Each served host's is chosen against the
+//   listener's rules as read, starting from a hash of the host and taking the next free one, and recorded with its
+//   certificate, so it stays put; one some other rule has taken since is chosen anew before the stack is rendered.
+// - The rule is named by its host and the certificate by its ARN, so a priority chosen anew is an in-place update of the
+//   rule (`SetRulePriorities`), never a replacement that would take the certificate off the listener.
 //
-// UNVERIFIED: the resources' properties, that a rule's priority is unique per listener and at most 50,000, and that
-// removing a `ListenerCertificate` takes the certificate off the listener follow the CloudFormation and Elastic Load
-// Balancing references; none was checked against an account.
+// UNVERIFIED: the resources' properties, that a rule's priority is unique per listener and at most 50,000, that a
+// host-header value's wildcards are `*` and `?` and match case-insensitively, and that removing a `ListenerCertificate`
+// takes the certificate off the listener follow the CloudFormation and Elastic Load Balancing references; none was
+// checked against an account.
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { type ListenerRule, MAX_RULE_PRIORITY } from './aws/elb'
 import type { AwsProxyCertificate } from './codecs'
+import type { AwsStack } from './stack'
 
 /** One host the listener serves for the namespace: its certificate and its rule's priority. */
 export interface AwsHostRule {
@@ -31,14 +37,49 @@ export function servedCertificates(certificates: readonly AwsProxyCertificate[],
 	return certificates.filter((certificate) => certificate.status === 'ISSUED' && hosts.includes(certificate.host))
 }
 
-/** The rules the namespace's stack renders: its served certificates that hold a priority. */
+/** The rules the hosts stack renders: its served certificates that hold a priority. */
 export function awsHostRules(certificates: readonly AwsProxyCertificate[], hosts: readonly string[]): readonly AwsHostRule[] {
 	return servedCertificates(certificates, hosts).flatMap((certificate) =>
 		certificate.priority === undefined ? [] : [{ host: certificate.host, certificateArn: certificate.arn, priority: Number(certificate.priority) }]
 	)
 }
 
-/** FNV-1a over `text`: where a host's search for a free priority starts. Not a secret, only a spread. */
+/** Whether the host-header value `pattern` matches `host`: case-insensitive, `*` any run of characters, `?` one. */
+export function hostMatches(pattern: string, host: string): boolean {
+	const source = [...pattern.toLowerCase()].map((char) => (char === '*' ? '.*' : char === '?' ? '.' : char.replace(/[.\\+^$|()[\]{}]/g, '\\$&')))
+		.join('')
+	return new RegExp(`^${source}$`).test(host.toLowerCase())
+}
+
+/** Whether `rule` is the namespace's own rule of `host`: that host alone, forwarding to the namespace's target group alone. */
+export function isOwnHostRule(rule: ListenerRule, host: string, targetGroupArn: string): boolean {
+	return rule.priority !== 'default' && rule.hosts.length === 1 && rule.hosts[0] === host && rule.targetGroups.length === 1
+		&& rule.targetGroups[0] === targetGroupArn
+}
+
+/**
+ * The hosts of `hosts` the listener must not serve for the namespace: one of the installation's own hosts, or one any
+ * rule but the namespace's own of it matches. A conflict is decided against the rules as read; two namespaces putting
+ * one host on at the same moment are both served until the next pass of the later one sees the other's rule.
+ */
+export function listenerConflicts(
+	hosts: readonly string[],
+	rules: readonly ListenerRule[],
+	targetGroupArn: string,
+	installationHosts: readonly string[],
+): ReadonlySet<string> {
+	const reserved = new Set(installationHosts.map((host) => host.toLowerCase()))
+	return new Set(
+		hosts.filter((host) =>
+			reserved.has(host)
+			|| rules.some((rule) =>
+				rule.priority !== 'default' && !isOwnHostRule(rule, host, targetGroupArn) && rule.hosts.some((pattern) => hostMatches(pattern, host))
+			)
+		),
+	)
+}
+
+/** FNV-1a over `text`, in hex: where a host's search for a free priority starts, and a resource's name. Not a secret. */
 function spread(text: string): number {
 	let hash = 0x811c9dc5
 	for (const char of new TextEncoder().encode(text)) {
@@ -48,21 +89,23 @@ function spread(text: string): number {
 	return hash
 }
 
+const nameOf = (text: string): string => spread(text).toString(16).padStart(8, '0')
+
 /**
- * The certificates with each served host's priority chosen: a recorded one is kept while no other rule holds it (the
- * rule there is this host's own, or there is none); otherwise the first free one from the host's hash. A certificate
- * not served holds none.
+ * The certificates with each served host's priority chosen: a recorded one is kept while the rule there is the host's
+ * own or there is none; otherwise the first free one from the host's hash. A certificate not served holds none.
  */
 export function assignHostRulePriorities(
 	certificates: readonly AwsProxyCertificate[],
 	hosts: readonly string[],
 	rules: readonly ListenerRule[],
+	targetGroupArn: string,
 ): readonly AwsProxyCertificate[] {
 	const at = new Map<number, ListenerRule>()
 	for (const rule of rules) if (rule.priority !== 'default') at.set(rule.priority, rule)
 	const ownAt = (priority: number, host: string): boolean => {
 		const rule = at.get(priority)
-		return rule === undefined || (rule.hosts.length === 1 && rule.hosts[0] === host)
+		return rule === undefined || isOwnHostRule(rule, host, targetGroupArn)
 	}
 	const served = new Set(servedCertificates(certificates, hosts).map((certificate) => certificate.host))
 	const claimed = new Set<number>()
@@ -93,25 +136,42 @@ export function assignHostRulePriorities(
 	})
 }
 
-/** The listener's resources of `rules`, by priority, for the namespace stack whose target group is `ProxyTargetGroup`. */
-export function hostRuleResources(listenerArn: string, rules: readonly AwsHostRule[]): Record<string, JsonValue> {
-	const resources: Record<string, JsonValue> = {}
+/**
+ * The namespace's hosts stack: for each rule, the certificate on the listener and the host's rule, forwarding to the
+ * namespace's target group. A stack holds at least one resource, so a placeholder that creates nothing stays in it.
+ */
+export function awsHostsStack(
+	stackName: string,
+	tags: Readonly<Record<string, string>>,
+	listenerArn: string,
+	targetGroupArn: string,
+	rules: readonly AwsHostRule[],
+): AwsStack {
+	const resources: Record<string, JsonValue> = { Placeholder: { Type: 'AWS::CloudFormation::WaitConditionHandle' } }
 	for (const rule of rules) {
-		resources[`HostCertificate${rule.priority}`] = {
+		const certificate = `HostCertificate${nameOf(rule.certificateArn)}`
+		const hostRule = `HostRule${nameOf(rule.host)}`
+		// Two hosts, or two certificates, of one name would be one resource: refused rather than one host lost.
+		if (certificate in resources || hostRule in resources) throw new Error(`aws: two hosts of the stack ${stackName} share a resource name`)
+		resources[certificate] = {
 			Type: 'AWS::ElasticLoadBalancingV2::ListenerCertificate',
 			Properties: { ListenerArn: listenerArn, Certificates: [{ CertificateArn: rule.certificateArn }] },
 		}
-		resources[`HostRule${rule.priority}`] = {
+		resources[hostRule] = {
 			Type: 'AWS::ElasticLoadBalancingV2::ListenerRule',
 			// The certificate on the listener first, so the host is never routed before the listener can answer its TLS.
-			DependsOn: [`HostCertificate${rule.priority}`],
+			DependsOn: [certificate],
 			Properties: {
 				ListenerArn: listenerArn,
 				Priority: rule.priority,
 				Conditions: [{ Field: 'host-header', HostHeaderConfig: { Values: [rule.host] } }],
-				Actions: [{ Type: 'forward', TargetGroupArn: { Ref: 'ProxyTargetGroup' } }],
+				Actions: [{ Type: 'forward', TargetGroupArn: targetGroupArn }],
 			},
 		}
 	}
-	return resources
+	return {
+		stackName,
+		template: { AWSTemplateFormatVersion: '2010-09-09', Description: `fabrika: the hosts of ${stackName}`, Resources: resources },
+		tags,
+	}
 }

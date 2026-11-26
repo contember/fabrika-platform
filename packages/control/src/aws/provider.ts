@@ -18,7 +18,9 @@
 //   range a proxy's egress to its applications is scoped to: the VPC's primary block, by its network address. An
 //   application in a subnet of a secondary block is not reachable from its proxy.
 // - `FABRIKA_AWS_BALANCER_LISTENER`: the balancer's HTTPS listener (an ARN), on which every namespace's stack serves its
-//   hosts: a certificate and a host rule each, forwarding to the namespace's proxy.
+//   hosts: a certificate and a host rule each, forwarding to the namespace's proxy. Its default action is a fixed answer.
+// - `FABRIKA_AWS_INSTALLATION_HOSTS` (comma-separated): the installation's own hosts (IAM's, Control's, the console's,
+//   the platform proxy's), which no namespace's host rule may take.
 // - `FABRIKA_AWS_PROXY_REPOSITORY` (an HTTPS GitHub URL) and `FABRIKA_AWS_PROXY_COMMIT_SHA` (a full commit): the
 //   installation's release of the public platform repository. A namespace being planned is pinned to it, and keeps
 //   its pin through an upgrade; no namespace may be pinned to another repository (ADR-0045).
@@ -86,6 +88,7 @@ export function awsControlProvider(source: Record<string, string | undefined>, s
 			securityGroupId: required(source, 'FABRIKA_AWS_BALANCER_SECURITY_GROUP').trim(),
 			vpcCidr: required(source, 'FABRIKA_AWS_VPC_CIDR').trim(),
 			listenerArn: required(source, 'FABRIKA_AWS_BALANCER_LISTENER').trim(),
+			installationHosts: required(source, 'FABRIKA_AWS_INSTALLATION_HOSTS').split(',').map((host) => host.trim().toLowerCase()),
 		},
 		// The installation's release of the public platform repository: a planned namespace's proxy pin (ADR-0045).
 		proxySource: {

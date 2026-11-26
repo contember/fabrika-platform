@@ -272,6 +272,7 @@ class Fake {
 				securityGroupId: 'sg-0123456789abcdef1',
 				vpcCidr: '10.0.0.0/16',
 				listenerArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika/0123456789abcdef/fedcba9876543210',
+				installationHosts: ['console.example.com'],
 			},
 			proxySource: PROXY_SOURCE,
 			proxyIam: { issuer: 'https://iam.example.com', key: 'proxy-iam-key' },

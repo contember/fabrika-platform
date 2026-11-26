@@ -11,7 +11,6 @@ import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { StackDescription, StackSummary } from '../aws/cloudformation'
 import type { EcsService } from '../aws/ecs'
-import type { ListenerRule } from '../aws/elb'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsAppsPermissionsBoundary } from '../environment-stack'
@@ -37,7 +36,12 @@ const installation: AwsAppTarget = {
 }
 const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0'], publicIp: true }
 const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika/0123456789abcdef/fedcba9876543210'
-const balancer = { securityGroupId: 'sg-0123456789abcdef1', vpcCidr: '10.0.0.0/16', listenerArn: LISTENER }
+const balancer = {
+	securityGroupId: 'sg-0123456789abcdef1',
+	vpcCidr: '10.0.0.0/16',
+	listenerArn: LISTENER,
+	installationHosts: ['console.example.com', 'iam.example.com'],
+}
 /** The installation's proxy source; an older release's commit, which a namespace may keep. */
 const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
 const OLDER_COMMIT = 'fedcba9876543210fedcba9876543210fedcba98'
@@ -120,15 +124,7 @@ class Fake {
 				return this.parameters
 			},
 		},
-		elb: {
-			describeRules: async (listenerArn: string): Promise<readonly ListenerRule[]> => {
-				this.calls.push(`describeRules ${listenerArn}`)
-				return this.rules
-			},
-		},
 	}
-	/** The installation listener's rules, which a served host's priority is chosen against. */
-	rules: readonly ListenerRule[] = []
 	readonly capabilities = awsNamespaceCapabilities({
 		installation,
 		network,
@@ -150,6 +146,7 @@ describe('awsNamespaceResources', () => {
 	test("names the stack and the Service Connect namespace from the id and the environment, the id's length between", () => {
 		expect(awsNamespaceResources('shared', 'prod')).toEqual({
 			stackName: 'fabrika-ns-6-shared-prod',
+			hostsStackName: 'fabrika-nh-6-shared-prod',
 			serviceConnectNamespace: 'fabrika-ns-6-shared-prod',
 			repository: 'fabrika/namespaces/shared/prod/proxy',
 			parameterPath: '/fabrika/namespaces/shared/prod',
@@ -223,6 +220,10 @@ describe('awsNamespaceStack', () => {
 		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.32/27' })).toEqual({ ...balancer, vpcCidr: '10.0.0.32/27' })
 		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '172.31.0.0/16' }).vpcCidr).toBe('172.31.0.0/16')
 		expect(() => checkInstallationBalancer({ ...balancer, listenerArn: 'arn:aws:s3:::bucket' })).toThrow('listener')
+		// The installation's own hosts: at least one, each a lower-case host name, none twice.
+		for (const installationHosts of [[], ['Console.example.com'], ['*.example.com'], ['a.example.com', 'a.example.com']]) {
+			expect(() => checkInstallationBalancer({ ...balancer, installationHosts })).toThrow("installation's own hosts")
+		}
 	})
 
 	test("holds the proxy's build: its repository, log group, a role under the boundary reaching only its own, and an x86 project", () => {
@@ -448,7 +449,7 @@ describe('awsNamespaceCapabilities', () => {
 		expect(fake.calls).toEqual(['findStack fabrika-ns-6-shared-prod', 'describeStack'])
 	})
 
-	test("a member's issued certificate is served on the listener: its priority chosen and recorded, its rule rendered", async () => {
+	test("the namespace's own stack holds no host rule, even with an issued certificate: those are the hosts stack's", async () => {
 		const fake = new Fake()
 		const contract = { ...notesArtifact, tables: {}, jobs: {}, files: {}, fileKinds: {} }
 		const member: ProviderNamespaceMember = {
@@ -471,20 +472,11 @@ describe('awsNamespaceCapabilities', () => {
 				proxyCertificates: [{ host: 'notes.example.com', arn: certificate, status: 'ISSUED' }],
 			}),
 		}
-		const applied = await fake.capabilities.provision({ ...mutation(certified), members: [member] })
-		const [recorded] = awsNamespaceTargetCodec.decode(applied.target.payload).proxyCertificates ?? []
-		expect(recorded?.priority).toMatch(/^[1-9]\d{0,4}$/)
-		expect(fake.calls).toContain(`describeRules ${LISTENER}`)
+		expect(await fake.capabilities.provision({ ...mutation(certified), members: [member] })).toEqual(certified)
 		const template: JsonValue = JSON.parse(fake.template)
-		expect(at(template, 'Resources', `HostRule${recorded?.priority}`, 'Properties', 'Conditions')).toEqual([
-			{ Field: 'host-header', HostHeaderConfig: { Values: ['notes.example.com'] } },
-		])
-		expect(at(template, 'Resources', `HostCertificate${recorded?.priority}`, 'Properties', 'Certificates')).toEqual([{ CertificateArn: certificate }])
-		// No member, no rule: a provision without the member renders none, and reads no listener.
-		const bare = new Fake()
-		await bare.capabilities.provision(mutation(certified))
-		expect(bare.calls).not.toContain(`describeRules ${LISTENER}`)
-		expect(Object.keys(at(JSON.parse(bare.template), 'Resources') ?? {}).some((key) => key.startsWith('Host'))).toBe(false)
+		expect(Object.keys(at(template, 'Resources') ?? {}).some((key) => key.startsWith('Host'))).toBe(false)
+		// The namespace claims both stacks, so removing it names the hosts stack too.
+		expect(fake.capabilities.namespaceResourceClaims?.(NAMESPACE)).toEqual(['stack:fabrika-ns-6-shared-prod', 'stack:fabrika-nh-6-shared-prod'])
 	})
 
 	test('a failed stack call is a namespace error with a stable code, never the error object', async () => {
@@ -528,7 +520,7 @@ describe('awsNamespaceCapabilities', () => {
 
 	test('a namespace claims its stack; an environment placed in one, its stack, service and parameter path', () => {
 		const { capabilities } = new Fake()
-		expect(capabilities.namespaceResourceClaims(NAMESPACE)).toEqual(['stack:fabrika-ns-6-shared-prod'])
+		expect(capabilities.namespaceResourceClaims(NAMESPACE)).toEqual(['stack:fabrika-ns-6-shared-prod', 'stack:fabrika-nh-6-shared-prod'])
 		const registration = {
 			app: { id: 'notes', source: { repoUrl: 'https://github.com/example/notes', ref: 'main' } },
 			environment: {
@@ -596,10 +588,12 @@ describe('awsNamespaceCapabilities', () => {
 		})
 		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy build project', value: 'fabrika_ns_shared_prod', resource: true })
 		expect(planned?.presentation.instructions.join(' ')).toContain("deletes the proxy's images with their repository")
-		// The proxy's service lives outside the stack and holds its group, roles and log group: it goes first.
+		// The hosts stack forwards to the namespace stack's target group, and the proxy's service lives outside the stack
+		// and holds its group, roles and log group: both go first.
 		expect(planned?.presentation.instructions).toContain(
-			'When no environment uses the namespace, delete in this order: the ECS service ns_shared_prod_proxy in the cluster fabrika-apps; then the parameters under /fabrika/namespaces/shared/prod/env and the task definition family ns_shared_prod_proxy; then the stack fabrika-ns-6-shared-prod.',
+			'When no environment uses the namespace, delete in this order: the stack fabrika-nh-6-shared-prod; the ECS service ns_shared_prod_proxy in the cluster fabrika-apps; then the parameters under /fabrika/namespaces/shared/prod/env and the task definition family ns_shared_prod_proxy; then the stack fabrika-ns-6-shared-prod.',
 		)
+		expect(planned?.presentation.facts).toContainEqual({ label: 'Hosts stack', value: 'fabrika-nh-6-shared-prod', resource: true })
 		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy service', value: 'fabrika-apps/ns_shared_prod_proxy', resource: true })
 		expect(() => operator?.plan({ id: 'shared', env: 'prod', preset: 'full' })).toThrow('only the cheap preset')
 		expect(() => operator?.plan({ id: 'shared', env: 'prod', preset: 'cheap', options: { size: 1 } })).toThrow('takes no options')
