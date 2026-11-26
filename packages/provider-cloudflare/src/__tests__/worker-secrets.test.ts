@@ -29,8 +29,11 @@ interface Sent {
 	readonly settings: unknown
 }
 
-/** Cloudflare's API over the proxy's and the application's settings; `answer` overrides one URL's response. */
-function cloudflare(options: { app?: string; answer?: (url: string, method: string) => Response | null } = {}) {
+/**
+ * Cloudflare's API over the proxy's and the application's settings; `answer` overrides one URL's response, and
+ * `nullErrors` answers each success with `"errors": null`, as some endpoints do.
+ */
+function cloudflare(options: { app?: string; answer?: (url: string, method: string) => Response | null; nullErrors?: boolean } = {}) {
 	const sent: Sent[] = []
 	const settings: Record<string, unknown> = {
 		[`${API}/${options.app ?? 'prod-notes'}/settings`]: {
@@ -58,13 +61,14 @@ function cloudflare(options: { app?: string; answer?: (url: string, method: stri
 		})
 		const answered = options.answer?.(url, method) ?? null
 		if (answered !== null) return answered
-		if (method === 'PATCH') return Response.json({ success: true, result: {}, errors: [] })
+		const errors = options.nullErrors === true ? null : []
+		if (method === 'PATCH') return Response.json({ success: true, result: {}, errors })
 		const result = settings[url]
 		return result === undefined
 			? Response.json({ success: false, result: null, errors: [{ code: 10007, message: 'This Worker does not exist on your account.' }] }, {
 				status: 404,
 			})
-			: Response.json({ success: true, result, errors: [] })
+			: Response.json({ success: true, result, errors })
 	}
 	const provider = createCloudflareControlProvider({
 		accountId: 'account-1',
@@ -105,6 +109,12 @@ describe('writing managed credentials to an application Worker without a deploy'
 				{ type: 'secret_text', name: 'FABRIKA_WEBHOOK_GITHUB_KEY', text: 'px_new_webhook_key' },
 			],
 		})
+	})
+
+	test('reads a success whose `errors` is null, as Cloudflare answers on some endpoints', async () => {
+		const api = cloudflare({ nullErrors: true })
+		await api.write({ FABRIKA_JOB_PURGE_DELETED_KEY: 'px_new_job_key' })
+		expect(api.sent.map((sent) => sent.method)).toEqual(['GET', 'GET', 'PATCH'])
 	})
 
 	test("never writes a Worker outside the environment's names, nor the proxy itself", async () => {
