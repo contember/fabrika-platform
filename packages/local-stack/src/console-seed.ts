@@ -12,7 +12,6 @@ import { LOCAL_SOURCE_FIXTURE_DIRECTORY } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
 import {
-	CONTROL_ORIGIN,
 	ensureNamespace,
 	envValue,
 	type LocalNamespace,
@@ -22,6 +21,7 @@ import {
 	waitForParkOrProvider,
 	waitForRunSuccess,
 } from './notes-deploy'
+import { CONTROL_ORIGIN, NOTES_TEST_ORIGIN } from './ports'
 import { STATE_DIR } from './prepare'
 
 const TEST_NAMESPACE: LocalNamespace = { id: 'apps-test', env: 'test' }
@@ -72,7 +72,7 @@ const main = async (): Promise<void> => {
 			env: TEST_NAMESPACE.env,
 			environment: {
 				domain: 'notes-test.fabrika.localhost',
-				publicOrigin: 'http://notes-test.fabrika.localhost:18081',
+				publicOrigin: NOTES_TEST_ORIGIN,
 				triggerRef: null,
 				namespaceId: TEST_NAMESPACE.id,
 				...await notesEnvironmentEnvelopes(fixtures, TEST_NAMESPACE.env),

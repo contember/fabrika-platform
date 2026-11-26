@@ -1,9 +1,10 @@
+import { CONTROL_ORIGIN, NOTES_ORIGIN } from '@fabrika/local-stack/ports'
 import { browserTest, byLabel, byRole, expect, getContext, getPage, invariant, step } from '@opice/harness'
 
-const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
+const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? CONTROL_ORIGIN
 // The Notes example: its `FabrikaProvider` reads the DSN, the release and the environment from the framework's
 // `/__fabrika-config.json` and reports the page's uncaught errors, with no SDK of the application's own.
-const APP_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
+const APP_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? NOTES_ORIGIN
 const CONFIG_URL = `${APP_URL}/__fabrika-config.json`
 
 interface ManagedConfig {

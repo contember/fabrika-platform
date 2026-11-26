@@ -1,4 +1,6 @@
 # The project name comes from `src/compose.ts` (`COMPOSE_PROJECT`), one per checkout; run this file through `local:*`.
+# So do the two host ports, FABRIKA_LOCAL_PLATFORM_PORT and FABRIKA_LOCAL_APPS_PORT (`src/ports.ts`): every container
+# listens on them too, because each public origin carries its port and reaches the container's loopback.
 
 # A Bun container that calls a public `*.fabrika.localhost` URL forwards its loopback to the proxy serving it
 # (`src/loopback-forward.ts`): Bun 1.4.1+ resolves every `*.localhost` name to loopback, past the network aliases.
@@ -89,9 +91,9 @@ services:
 
   iam:
     <<: *bun
-    # IAM serves :18080 itself; it calls an application's public origin for a dimension's values (ADR-0085 §4), as an
-    # installation's IAM reaches it over the internet, so `:18081` goes to the apps proxy on `edge`.
-    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18081=apps-proxy-auth:18081, --]
+    # IAM serves the platform port itself; it calls an application's public origin for a dimension's values (ADR-0085 §4), as an
+    # installation's IAM reaches it over the internet, so the apps port goes to the apps proxy on `edge`.
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, "${FABRIKA_LOCAL_APPS_PORT:?}=apps-proxy-auth:${FABRIKA_LOCAL_APPS_PORT:?}", --]
     # The production server with the `directory` provider registered (`src/iam-server.ts`); its mail goes through Control.
     command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/local-stack/src/iam-server.ts"]
     # `iam-oauth.env` is rewritten by every prepare: the command-line client's resources, and MCP's with
@@ -102,9 +104,9 @@ services:
         required: false
     environment:
       <<: *local-mail
-      PORT: "18080"
+      PORT: "${FABRIKA_LOCAL_PLATFORM_PORT:?}"
       ENVIRONMENT: local
-      ISSUER: http://iam.fabrika.localhost:18080
+      ISSUER: http://iam.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
       # IAM's own local bypass: `/auth/login` mints a real session row for the bootstrap admin instead
       # of calling an external IdP. It is refused at USE the moment this is off.
       LOCAL_DEV_LOGIN: "true"
@@ -123,14 +125,14 @@ services:
       platform-db:
         condition: service_healthy
     healthcheck:
-      test: [CMD, wget, -qO-, http://127.0.0.1:18080/healthz]
+      test: [CMD, wget, -qO-, "http://127.0.0.1:${FABRIKA_LOCAL_PLATFORM_PORT:?}/healthz"]
       interval: 2s
       timeout: 2s
       retries: 30
 
   control:
     <<: *bun
-    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18080=platform-proxy-auth:18080, --]
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, "${FABRIKA_LOCAL_PLATFORM_PORT:?}=platform-proxy-auth:${FABRIKA_LOCAL_PLATFORM_PORT:?}", --]
     # The production server with its GitHub and upload transports pointed at the local fixtures (ADR-0029).
     command: [sh, -c, "bun packages/control/src/zerops/migrate.ts && bun packages/local-stack/src/source-connection-fixture-seed.ts && exec bun packages/local-stack/src/control-server.ts"]
     # `control-table.env` is rewritten by every prepare: the digest of the table the platform proxy publishes for it.
@@ -142,18 +144,18 @@ services:
       PORT: "3000"
       FABRIKA_CONTROL_ASSETS_DIR: packages/dashboard/dist
       ENVIRONMENT: local
-      FABRIKA_CONTROL_DOMAIN: http://control.fabrika.localhost:18080
+      FABRIKA_CONTROL_DOMAIN: http://control.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
       FABRIKA_CONTROL_BOOTSTRAP_ADMINS: "[]"
-      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
-      FABRIKA_IAM_RPC_URL: http://iam:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
+      FABRIKA_IAM_RPC_URL: http://iam:${FABRIKA_LOCAL_PLATFORM_PORT:?}
       FABRIKA_OPERATIONS_URL: http://operations:3000
-      OPERATIONS_ARTIFACT_ORIGIN: http://errors.fabrika.localhost:18080
+      OPERATIONS_ARTIFACT_ORIGIN: http://errors.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
       FABRIKA_CONTROL_RUN_LOGS_BUCKET: run-logs
       FABRIKA_CONTROL_RUN_LOGS_ENDPOINT: http://object-storage:9000
       FABRIKA_CONTROL_RUN_LOGS_REGION: us-east-1
       FABRIKA_ZEROPS_API_BASE_URL: http://zerops-emulator:3000/api/rest/public
       FABRIKA_ZEROPS_CLIENT_ID: local-client
-      FABRIKA_ZEROPS_PROXY_IAM_URL: http://iam.fabrika.localhost:18080
+      FABRIKA_ZEROPS_PROXY_IAM_URL: http://iam.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
     networks: [platform]
     depends_on:
       platform-db:
@@ -174,7 +176,7 @@ services:
 
   operations:
     <<: *bun
-    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18080=platform-proxy-auth:18080, --]
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, "${FABRIKA_LOCAL_PLATFORM_PORT:?}=platform-proxy-auth:${FABRIKA_LOCAL_PLATFORM_PORT:?}", --]
     command: [sh, -c, "bun packages/operations/src/node/migrate.ts && exec bun packages/operations/src/node/server.ts"]
     # `operations-oauth.env` is rewritten by every prepare: the console's Operations RPC as an OAuth resource.
     env_file:
@@ -187,9 +189,9 @@ services:
       FABRIKA_OPERATIONS_BLOB_BUCKET: operations-payloads
       FABRIKA_OPERATIONS_BLOB_ENDPOINT: http://object-storage:9000
       FABRIKA_OPERATIONS_BLOB_REGION: us-east-1
-      FABRIKA_IAM_RPC_URL: http://iam:18080
+      FABRIKA_IAM_RPC_URL: http://iam:${FABRIKA_LOCAL_PLATFORM_PORT:?}
       FABRIKA_CONTROL_URL: http://control:3000
-      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
     networks: [platform]
     depends_on:
       platform-db:
@@ -211,7 +213,7 @@ services:
     environment:
       FABRIKA_PROXY_MANIFEST: /local-state/platform-proxy.manifest.json
       FABRIKA_PROXY_PORT: "9000"
-      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
     volumes:
       - ../..:/workspace
       - ./.state:/local-state:ro
@@ -223,7 +225,7 @@ services:
       iam-public:
         aliases: [iam.fabrika.localhost, control.fabrika.localhost]
     ports:
-      - 127.0.0.1:18080:18080
+      - 127.0.0.1:${FABRIKA_LOCAL_PLATFORM_PORT:?}:${FABRIKA_LOCAL_PLATFORM_PORT:?}
     depends_on:
       iam:
         condition: service_healthy
@@ -273,7 +275,7 @@ services:
   # `followNotesDeploy` points it at another fixture commit the emulator activated (`src/notes-follow.ts`).
   notes:
     <<: *bun
-    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18080=platform-proxy-auth:18080, 18081=apps-proxy-auth:18081, --]
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, "${FABRIKA_LOCAL_PLATFORM_PORT:?}=platform-proxy-auth:${FABRIKA_LOCAL_PLATFORM_PORT:?}", "${FABRIKA_LOCAL_APPS_PORT:?}=apps-proxy-auth:${FABRIKA_LOCAL_APPS_PORT:?}", --]
     # The application image: Bun with ClamAV, so a `scan: true` collection's scan job finds its scanner.
     image: fabrika-local-app:clamav
     build: app-image
@@ -299,9 +301,9 @@ services:
     environment:
       PORT: "3000"
       FABRIKA_APP_ID: notes
-      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
       FABRIKA_IAM_APP_ID: notes@prod
-      FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.fabrika.localhost:18080/1
+      FABRIKA_OPERATIONS_DSN: http://00000000000000000000000000000000@errors.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}/1
       FABRIKA_RELEASE: fabrika/local-notes/local/default/0000000000000000000000000000000000000000
     networks: [apps-prod, iam-public]
     depends_on:
@@ -317,7 +319,7 @@ services:
 
   apps-proxy-auth:
     <<: *bun
-    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18080=platform-proxy-auth:18080, --]
+    entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, "${FABRIKA_LOCAL_PLATFORM_PORT:?}=platform-proxy-auth:${FABRIKA_LOCAL_PLATFORM_PORT:?}", --]
     command: bun packages/proxy/src/main.ts
     env_file:
       - .state/apps-proxy.env
@@ -325,7 +327,7 @@ services:
     environment:
       FABRIKA_PROXY_MANIFEST: /local-state/apps-proxy.manifest.json
       FABRIKA_PROXY_PORT: "9000"
-      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:18080
+      FABRIKA_IAM_ISSUER: http://iam.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}
     volumes:
       - ../..:/workspace
       - ./.state:/local-state:ro
@@ -333,7 +335,7 @@ services:
       apps-prod: {}
       edge: {}
     ports:
-      - 127.0.0.1:18081:18081
+      - 127.0.0.1:${FABRIKA_LOCAL_APPS_PORT:?}:${FABRIKA_LOCAL_APPS_PORT:?}
     depends_on:
       notes:
         condition: service_healthy

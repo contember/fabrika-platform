@@ -14,5 +14,5 @@ services:
   # The Notes example reports its browser errors to a seeded source, so a scenario can find them in Operations.
   notes:
     environment:
-      FABRIKA_OPERATIONS_DSN: "${FABRIKA_BROWSER_OPERATIONS_DSN:-http://00000000000000000000000000000000@errors.fabrika.localhost:18080/1}"
+      FABRIKA_OPERATIONS_DSN: "${FABRIKA_BROWSER_OPERATIONS_DSN:-http://00000000000000000000000000000000@errors.fabrika.localhost:${FABRIKA_LOCAL_PLATFORM_PORT:?}/1}"
       FABRIKA_RELEASE: "${FABRIKA_BROWSER_RELEASE:-fabrika/browser-notes/test/default/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb}"

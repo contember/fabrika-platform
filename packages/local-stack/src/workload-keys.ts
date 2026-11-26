@@ -15,9 +15,9 @@ import { notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { resolve } from 'node:path'
 import { z } from 'zod'
 import { readStateEnv } from './machine-key'
+import { IAM_ORIGIN } from './ports'
 import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR } from './prepare'
 
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 const NOTES_WORKLOADS_ENV_FILE = 'notes-workloads.env'
 
 const exchangeAnswerSchema = z.object({ ok: z.boolean() })

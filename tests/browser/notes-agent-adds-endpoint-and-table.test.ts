@@ -17,10 +17,10 @@ import {
 	readNotesAgentChange,
 	waitForNotesDeploy,
 } from '@fabrika/local-stack/browser-support'
+import { CONTROL_ORIGIN, NOTES_ORIGIN } from '@fabrika/local-stack/ports'
 import { browserTest, byRole, expect, getPage, invariant, step } from '@opice/harness'
 
-const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
-const NOTES_ORIGIN = 'http://notes.fabrika.localhost:18081'
+const CONTROL_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? CONTROL_ORIGIN
 const RENAMED_TITLE = `Renamed by the agent change ${Date.now()}`
 
 const CLOSER_REVIEW = 'needs closer review'

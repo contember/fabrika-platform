@@ -21,6 +21,7 @@ import {
 	type LocalSourceBranchHead,
 	type LocalSourceManifest,
 } from './local-source-contract'
+import { CONTROL_ORIGIN, NOTES_ORIGIN } from './ports'
 import { LOCAL_NOTES_ENVIRONMENT, STATE_DIR } from './prepare'
 import { itemsResponseSchema, rpcResponseSchema } from './response-schemas'
 import {
@@ -36,7 +37,6 @@ import {
 import { LOCAL_SOURCE_CONNECTIONS } from './source-connection-fixture'
 import { parseSnapshot } from './zerops-emulator/snapshot'
 
-export const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
 export const NOTES_APP_ID = 'notes'
 const NOTES_ENVIRONMENT = LOCAL_NOTES_ENVIRONMENT
 export const NOTES_DEPLOY_SERVICE = 'notesapi'
@@ -213,14 +213,14 @@ export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceMa
 		}
 		if (
 			existing?.domain !== 'notes.fabrika.localhost'
-			|| existing?.publicOrigin !== 'http://notes.fabrika.localhost:18081'
+			|| existing?.publicOrigin !== NOTES_ORIGIN
 		) {
 			await consoleRpc(CONTROL_ORIGIN, await signInToConsole(CONTROL_ORIGIN, login), 'apps.environments.put', {
 				appId: NOTES_APP_ID,
 				env: NOTES_ENVIRONMENT,
 				environment: {
 					domain: 'notes.fabrika.localhost',
-					publicOrigin: 'http://notes.fabrika.localhost:18081',
+					publicOrigin: NOTES_ORIGIN,
 					triggerRef: existing?.triggerRef ?? NOTES_TRIGGER_REF,
 					namespaceId: existing?.namespaceId ?? 'apps-prod',
 					target: existing?.target ?? target,
@@ -240,7 +240,7 @@ export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceMa
 		env: 'prod',
 		triggerRef: NOTES_TRIGGER_REF,
 		domain: 'notes.fabrika.localhost',
-		publicOrigin: 'http://notes.fabrika.localhost:18081',
+		publicOrigin: NOTES_ORIGIN,
 		namespaceId: 'apps-prod',
 		target,
 		artifact,

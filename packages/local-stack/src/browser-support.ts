@@ -7,6 +7,7 @@ import type { z } from 'zod'
 import { type browserFixtureSourceSchema, type browserIdentitySchema, parseBrowserFixtures, parseBrowserIdentity } from './browser-fixture-schemas'
 import { BROWSER_COMPOSE_ENV, compose } from './compose'
 import { seedNotesAgentChange } from './notes-agent-change'
+import { CONTROL_ORIGIN, IAM_ORIGIN, OPERATIONS_ORIGIN } from './ports'
 import { STATE_DIR, writeEnv } from './prepare'
 import {
 	alertChannelFixtureSchema,
@@ -32,9 +33,6 @@ export {
 export { followNotesDeploy } from './notes-follow'
 export { createPasswordPerson, issuePasswordLink, type NotesPrincipal, type PasswordPerson, readNotesPrincipal } from './password-person'
 
-const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
-const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
 const FIXTURES_FILE = resolve(STATE_DIR, 'browser-fixtures.json')
 const IDENTITIES_DIR = resolve(STATE_DIR, 'browser-identities')
 const HOST_USER = hostUser()

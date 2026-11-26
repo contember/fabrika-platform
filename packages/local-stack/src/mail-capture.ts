@@ -7,6 +7,7 @@ import type { EmailProviderRegistry } from '@fabrika/email'
 import { type CapturedEmail, directoryEmailProvider, readCapturedEmails } from '@fabrika/email/directory'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { resolve } from 'node:path'
+import { IAM_ORIGIN } from './ports'
 
 /** The providers IAM and Control accept here: the built-in ones and the composition's capture. */
 export const LOCAL_EMAIL_PROVIDERS = { ...builtinEmailProviders, directory: directoryEmailProvider } satisfies EmailProviderRegistry
@@ -14,7 +15,6 @@ export const LOCAL_EMAIL_PROVIDERS = { ...builtinEmailProviders, directory: dire
 /** The same path in the IAM and Control containers, which mount the workspace, and on the host. */
 export const MAIL_DIRECTORY = resolve(import.meta.dir, '..', '.state', 'mail')
 
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 const URL_PATTERN = /https?:\/\/\S+/g
 
 export interface MailQuery {

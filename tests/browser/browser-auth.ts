@@ -25,6 +25,11 @@
 
 import { SESSION_COOKIE } from '@fabrika/auth-core'
 import { type BrowserIdentity, type BrowserIdentityRole, createBrowserIdentity } from '@fabrika/local-stack/browser-support'
+import {
+	CONTROL_ORIGIN as LOCAL_CONTROL_ORIGIN,
+	IAM_ORIGIN as LOCAL_IAM_ORIGIN,
+	NOTES_ORIGIN as LOCAL_NOTES_ORIGIN,
+} from '@fabrika/local-stack/ports'
 import type { Browser, BrowserContext } from 'playwright'
 
 type StorageState = Awaited<ReturnType<BrowserContext['storageState']>>
@@ -34,10 +39,10 @@ interface AuthResolveContext {
 	browser: Browser
 }
 
-const CONTROL_ORIGIN = process.env['FABRIKA_BROWSER_ORIGIN'] ?? 'http://control.fabrika.localhost:18080'
-const IAM_ORIGIN = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? 'http://iam.fabrika.localhost:18080'
+const CONTROL_ORIGIN = process.env['FABRIKA_BROWSER_ORIGIN'] ?? LOCAL_CONTROL_ORIGIN
+const IAM_ORIGIN = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? LOCAL_IAM_ORIGIN
 // The Notes example, the one application host a scenario visits; its member SPA at `/` starts the handoff.
-const NOTES_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
+const NOTES_ORIGIN = process.env['FABRIKA_BROWSER_APP_URL'] ?? LOCAL_NOTES_ORIGIN
 
 /**
  * Every host a scenario is signed in to, with the app id IAM knows it by and the roles that hold a permission there.

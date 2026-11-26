@@ -1,10 +1,11 @@
 import { OAUTH_CLI_CLIENT_ID } from '@fabrika/auth-core'
 import { CONTROL_RPC_PATH } from '@fabrika/control-contract'
+import { CONTROL_ORIGIN } from '@fabrika/local-stack/ports'
 import { browserTest, byRole, expect, getPage, invariant, step } from '@opice/harness'
 import { z } from 'zod'
 import { expectOnIam, IAM_URL } from './support/notes'
 
-const CONSOLE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
+const CONSOLE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? CONTROL_ORIGIN
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
 
 const startSchema = z.object({ device_code: z.string(), verification_uri_complete: z.string(), interval: z.number() })

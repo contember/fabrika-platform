@@ -6,10 +6,9 @@ import { resolve } from 'node:path'
 import { z } from 'zod'
 import { waitForMailLink } from './mail-capture'
 import { envValue, requestJson } from './notes-deploy'
+import { IAM_ORIGIN } from './ports'
 import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR } from './prepare'
 import { rpcResponseSchema } from './response-schemas'
-
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 
 const principalSchema = z.object({ id: z.string().min(1) })
 const emailDeliverySchema = z.object({ delivery: z.literal('email') })

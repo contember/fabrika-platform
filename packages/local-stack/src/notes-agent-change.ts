@@ -11,7 +11,6 @@ import { LOCAL_SOURCE_FIXTURE_DIRECTORY } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
 import {
-	CONTROL_ORIGIN,
 	ensureNamespace,
 	ensureNotesApp,
 	envValue,
@@ -21,10 +20,10 @@ import {
 	waitForRunSuccess,
 } from './notes-deploy'
 import { followNotesDeploy } from './notes-follow'
+import { CONTROL_ORIGIN, IAM_ORIGIN } from './ports'
 import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR } from './prepare'
 import { keyPrincipalSchema } from './smoke-schemas'
 
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 const NOTES_AGENT_CHANGE_FILE = 'notes-agent-change.json'
 /** The workspace the keys below are granted in; the scenario's notes lie in it. */
 export const NOTES_AGENT_CHANGE_WORKSPACE = 'agent-change'

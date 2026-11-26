@@ -1,8 +1,9 @@
+import { CONTROL_ORIGIN } from '@fabrika/local-stack/ports'
 import { browserTest, byLabel, byRole, expect, getContext, getPage, invariant, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
 import type { Response } from 'playwright'
 
-const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
+const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? CONTROL_ORIGIN
 const RUN_ID = randomUUID()
 const WEBHOOK_URL = `https://${RUN_ID}.hooks.example.test/${randomUUID()}`
 const WEBHOOK_DISPLAY = `https://${RUN_ID}.hooks.example.test/…`

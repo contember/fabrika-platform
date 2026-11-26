@@ -4,6 +4,7 @@ import { Vault } from '@fabrika/control/vault'
 import { PostgresDatabase } from '@fabrika/platform-node'
 import { randomBytes } from 'node:crypto'
 import { resolve } from 'node:path'
+import { CONTROL_ORIGIN } from './ports'
 import {
 	LOCAL_SOURCE_CONNECTIONS,
 	localGitHubAppKey,
@@ -92,7 +93,7 @@ async function insertConnection(
 			connection.owner,
 			`fabrika-${connection.connectionId}`,
 			appCredentialRef,
-			`http://control.fabrika.localhost:18080/webhooks/github/${connection.connectionId}`,
+			`${CONTROL_ORIGIN}/webhooks/github/${connection.connectionId}`,
 			webhookSecretRef,
 			connection.installationId,
 			connection.owner,

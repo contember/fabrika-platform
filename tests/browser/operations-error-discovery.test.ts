@@ -1,11 +1,12 @@
 import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { CONTROL_ORIGIN } from '@fabrika/local-stack/ports'
 import { browserTest, byLabel, byRole, expect, getPage, invariant, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
 import { searchIssues } from './support/console'
 import { readBrowserFixtures, scenarioMarker, sendErrorFixture } from './support/fixtures'
 import { createBrowserIdentity } from './support/local-stack'
 
-const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
+const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? CONTROL_ORIGIN
 const PRIMARY_FAILURE = 'BrowserFixtureError: Browser fixture primary failure'
 const MERGE_CANDIDATE = 'BrowserFixtureError: Browser fixture merge candidate'
 const FILTER_SCENARIO = 'operations-discovery-status-filters'
