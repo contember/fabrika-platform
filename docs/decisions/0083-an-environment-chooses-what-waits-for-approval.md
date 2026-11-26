@@ -60,10 +60,14 @@ A deploy category is a fact the diff already records on a line (ADR-0050 §3), n
 | `terminal`      | reason `terminal`                                                                                                                                          | `plan`   |
 | `deletes-data`  | reason `deletes-data` (a migration statement not known to keep every stored value)                                                                         | `person` |
 | `role-actions`  | it widens with rule `role.grants` or `role.via`: a role gains an action, directly or through a relation                                                    | `off`    |
-| `role-external` | it widens with rule `role.external`: a role opened to external principals                                                                                  | `off`    |
+| `role-external` | it widens with rule `role.external`: a role opened to external principals                                                                                  | `person` |
 | `role-added`    | rule `role.added`: a new role                                                                                                                              | `off`    |
-| `public`        | it widens with rule `endpoint.public`, or is rule `endpoint.added` with audience `anyone`: an endpoint (an SPA among them) anyone opens without signing in | `off`    |
-| `csp`           | it widens with rule `csp.source`: a CSP directive admits another origin                                                                                    | `off`    |
+| `public`        | it widens with rule `endpoint.public`, or is rule `endpoint.added` with audience `anyone`: an endpoint (an SPA among them) anyone opens without signing in | `person` |
+| `csp`           | it widens with rule `csp.source`: a CSP directive admits another origin                                                                                    | `person` |
+
+`role-external`, `public` and `csp` wait for a person by default: each lets someone outside the organization reach the
+application, or its pages reach another origin, which no reviewer of the code alone judges. The first deploy of an
+application with an endpoint anyone opens (a health check among them) to a protected environment therefore waits too.
 
 A closer-review line stored before lines carried a reason belongs to every closer-review category, so it takes the
 strictest of their modes. The mapping is one pure function in `@fabrika/control-contract` (`changeCategories`).
@@ -440,9 +444,17 @@ whose policy is null reads the defaults, `person` for the four, from the upgrade
 
 ## Consequences
 
-- An environment nobody configures behaves as under ADR-0050 for deploys: the closer-review categories wait, `plan`
-  waiting for a person while no plan exists. An agent's action on it waits for a person, category by category as the
+- An environment nobody configures behaves as under ADR-0050 for deploys, and waits for three more categories: the
+  closer-review categories wait, `plan` waiting for a person while no plan exists, and so do `role-external`, `public`
+  and `csp`. An agent's action on it waits for a person, category by category as the
   requests land.
+- A protected environment with no choice of its own waits for a person on a role opened to external principals, an
+  endpoint anyone opens (a new health check, a public page or procedure) and a CSP origin, a first deploy
+  that has such an endpoint included. An existing installation meets this from its upgrade on. The choice is stored as
+  its difference from the defaults, so migration `0046` writes the three out as `off` on every environment that saved a
+  choice (either column set), the permissive preset among them; only an environment with no choice of its own takes the
+  new defaults. A run parked before the upgrade is re-read under the new defaults, so its lines of the three may now
+  wait as well. A Control rolled back below this change reads the written-out modes as its own defaults.
 - An agent hands the person one link per pending item and learns the outcome by reading it; the person approves on a
   phone what the page shows, and nothing else can be approved through that link.
 - A team that wants today's behaviour for secrets, variables and data sets those categories `off`; one that wants no

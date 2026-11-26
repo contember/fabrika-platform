@@ -10,8 +10,10 @@ import { readContractSource as readContractSource04 } from '@fabrika/check-0.4/c
 import { readContractSource as readContractSource05 } from '@fabrika/check-0.5/contract'
 import { CHECKER_VERSION, readContractSource } from '@fabrika/check/contract'
 import {
+	APPROVAL_CATEGORIES,
 	type ApprovalCategory,
 	type ApprovalPolicy,
+	changeCategories,
 	DEFAULT_APPROVAL_CATEGORIES,
 	PERMISSIVE_POLICY,
 	policyFromCategories,
@@ -218,6 +220,18 @@ async function seed(w: World, workerDir?: string): Promise<void> {
 async function deploy(w: World, env: string, runId = uuidv7()): Promise<{ runId: string; status: string }> {
 	await w.db.runs.createRun({ id: runId, appId: 'notes', env, ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
 	return executeDeploy(deps(w), { runId })
+}
+
+/**
+ * `prod`'s first deploy, of `BASE`: its health check is an endpoint anyone opens, a `public` line, so it waits for a
+ * person by default (ADR-0083 §1), who approves it.
+ */
+async function approvedFirstDeploy(w: World): Promise<string> {
+	const first = await deploy(w, 'prod')
+	expect(first.status).toBe('awaiting_approval')
+	await approve(w, first.runId)
+	expect((await executeDeploy(deps(w), { runId: first.runId })).status).toBe('succeeded')
+	return first.runId
 }
 
 async function run(w: World, runId: string): Promise<RunRow> {
@@ -437,18 +451,28 @@ describe('approved access through the run lifecycle', () => {
 		expect(w.deploys).toHaveLength(1)
 	})
 
-	test('a widening without a line that needs closer review publishes at once on prod', async () => {
+	test('a first deploy waits on prod for its endpoint anyone opens; a widening in no waiting category then publishes at once', async () => {
 		const w = world()
 		await seed(w)
 
 		const first = await deploy(w, 'prod')
-		expect(first.status).toBe('succeeded')
-		expect(await published(w, 'prod')).toEqual({ runId: first.runId, generation: 1 })
-		const classification = parseClassification((await run(w, first.runId)).classification_json ?? '')
-		expect(classification).toMatchObject({ outcome: 'widening', protected: true, baselineRunId: null })
-		expect(classification.changes.some((change) => change.review === 'closer')).toBe(false)
-		expect(w.logs.get(`runs/${first.runId}/logs.ndjson`)).not.toContain('waiting for a human')
-		expect(w.deploys.map((input) => input.environment.access?.contractDigest)).toEqual([DIGEST])
+		expect(first.status).toBe('awaiting_approval')
+		const parked = parseClassification((await run(w, first.runId)).classification_json ?? '')
+		expect(parked).toMatchObject({ outcome: 'widening', protected: true, baselineRunId: null })
+		expect(parked.changes.some((change) => change.review === 'closer')).toBe(false)
+		// The health check needs no sign-in: a `public` line, which waits by default.
+		expect(parked.changes.some((change) => changeCategories(change).includes('public'))).toBe(true)
+		await approve(w, first.runId)
+		expect((await executeDeploy(deps(w), { runId: first.runId })).status).toBe('succeeded')
+
+		w.contract = WITH_EXPORT
+		const wider = await deploy(w, 'prod')
+		expect(wider.status).toBe('succeeded')
+		expect((await published(w, 'prod')).runId).toBe(wider.runId)
+		const classification = parseClassification((await run(w, wider.runId)).classification_json ?? '')
+		expect(classification).toMatchObject({ outcome: 'widening', protected: true, baselineRunId: first.runId })
+		expect(w.logs.get(`runs/${wider.runId}/logs.ndjson`)).not.toContain('waiting for a human')
+		expect(w.deploys.map((input) => input.environment.access?.contractDigest)).toEqual([DIGEST, expect.any(String)])
 	})
 
 	test('a change with a line that needs closer review applies at once on stage and waits on prod', async () => {
@@ -484,8 +508,7 @@ describe('approved access through the run lifecycle', () => {
 	test('a migration that deletes data waits on prod, and publishes once a person approves it', async () => {
 		const w = world()
 		await seed(w)
-		const first = await deploy(w, 'prod')
-		expect(first.status).toBe('succeeded')
+		const first = { runId: await approvedFirstDeploy(w) }
 
 		w.files = DELETES_NOTES
 		const parked = await deploy(w, 'prod')
@@ -510,7 +533,7 @@ describe('approved access through the run lifecycle', () => {
 	test("a parked run stores its commit's zerops.yaml only once a person approved it (ADR-0043)", async () => {
 		const w = world()
 		await seed(w)
-		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		await approvedFirstDeploy(w)
 		const registeredDescriptor = (payload: unknown): unknown =>
 			typeof payload === 'object' && payload !== null && 'descriptor' in payload ? payload.descriptor : undefined
 		const withDescriptor = (base: RunDeps): RunDeps => ({
@@ -566,7 +589,7 @@ describe('approved access through the run lifecycle', () => {
 	/** Parks a run that brings `CREATES_AND_DELETES`, then strips its stored `dataLoss` as a release before the classifier stored it. */
 	async function parkedByAnOlderRelease(w: World): Promise<string> {
 		await seed(w)
-		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		await approvedFirstDeploy(w)
 		w.files = CREATES_AND_DELETES
 		const parked = await deploy(w, 'prod')
 		expect(parked.status).toBe('awaiting_approval')
@@ -648,7 +671,7 @@ describe('approved access through the run lifecycle', () => {
 	test('dropping the contract from the commit fails the run, and the approved contract stays published', async () => {
 		const w = world()
 		await seed(w)
-		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		await approvedFirstDeploy(w)
 		const before = await published(w, 'prod')
 
 		w.contract = null
@@ -925,7 +948,7 @@ describe('approved access through the run lifecycle', () => {
 	test('a removal runs through on prod without approval', async () => {
 		const w = world()
 		await seed(w)
-		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		await approvedFirstDeploy(w)
 
 		w.contract = WITHOUT_REMOVE
 		const removal = await deploy(w, 'prod')
@@ -941,7 +964,7 @@ describe('approved access through the run lifecycle', () => {
 		const ROOT = "app: c.spa('/', { dir: 'dist/app', access: { member: true } }),"
 		w.contract = edited(ROOT, `${PUBLIC}\n\tinterest: c.spa('/interest', { dir: 'dist/interest', access: { public: true } }),`)
 		await seed(w)
-		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		await approvedFirstDeploy(w)
 
 		w.contract = edited(ROOT, PUBLIC)
 		const neutral = await deploy(w, 'prod')
@@ -2494,7 +2517,7 @@ describe('approval categories', () => {
 	/** `prod` published at `BASE`, so the next deploy classifies against it. */
 	async function publishedBase(w: World): Promise<void> {
 		await seed(w)
-		expect((await deploy(w, 'prod')).status).toBe('succeeded')
+		await approvedFirstDeploy(w)
 	}
 
 	test('an environment nobody configured reads the defaults, stored as null', async () => {
@@ -2503,6 +2526,31 @@ describe('approval categories', () => {
 		const row = await w.db.registry.getAppEnv('notes', 'prod')
 		expect(row?.approval_categories).toBeNull()
 		expect(row === null ? null : appEnvCategories(row)).toEqual([...DEFAULT_APPROVAL_CATEGORIES])
+	})
+
+	test('an environment with no choice of its own waits for an external role, an endpoint anyone opens and a CSP origin', async () => {
+		const WIDGET = "{ origin: 'https://widgets.example.com', purpose: 'the booking widget' }"
+		const HEALTH = "health: c.health('/healthz'),"
+		const changes: Array<[ApprovalCategory, string]> = [
+			[
+				'role-external',
+				edited("assignableBy: ['owner'] } },\n\t},", "assignableBy: ['owner'] }, external: true },\n\t},"),
+			],
+			['public', edited(HEALTH, `${HEALTH}\n\tpromo: c.spa('/promo', { dir: 'dist/promo', access: { public: true } }),`)],
+			['csp', edited(HEALTH, `${HEALTH}\n\tcsp: { frameSrc: [${WIDGET}] },`)],
+		]
+		for (const [category, contract] of changes) {
+			const w = world()
+			await publishedBase(w)
+			expect((await w.db.registry.getAppEnv('notes', 'prod'))?.approval_policy).toBeNull()
+			w.contract = contract
+			const parked = await deploy(w, 'prod')
+			expect([category, parked.status]).toEqual([category, 'awaiting_approval'])
+			const approval = await getApprovalUseCase(approvals(w, auth()), parked.runId)
+			expect(approval.changes.some((change) => changeCategories(change).includes(category))).toBe(true)
+			// Unprotected, the same change publishes at once.
+			expect((await deploy(w, 'stage')).status).toBe('succeeded')
+		}
 	})
 
 	test('a role that gains an action publishes at once by default, and waits once `role-actions` is chosen', async () => {
@@ -2518,7 +2566,9 @@ describe('approval categories', () => {
 		const parked = await deploy(chosen, 'prod')
 		expect(parked.status).toBe('awaiting_approval')
 		const classification = parseClassification((await run(chosen, parked.runId)).classification_json ?? '')
-		expect(classification.categories).toEqual([...DEFAULT_APPROVAL_CATEGORIES, 'role-actions'])
+		expect(classification.categories).toEqual(
+			APPROVAL_CATEGORIES.filter((category) => category === 'role-actions' || DEFAULT_APPROVAL_CATEGORIES.includes(category)),
+		)
 		expect((await getApprovalUseCase(approvals(chosen, auth()), parked.runId)).categories).toContain('role-actions')
 		expect((await approve(chosen, parked.runId)).run.status).toBe('pending')
 	})
@@ -2564,7 +2614,7 @@ describe('approval categories', () => {
 		const stored = (await w.db.registry.getAppEnv('notes', 'prod'))?.approval_categories ?? ''
 		expect(JSON.parse(stored)).toEqual({
 			added: ['role-added'],
-			removed: ['anyone-calls', 'get-mutation', 'adoption', 'terminal', 'deletes-data'],
+			removed: ['anyone-calls', 'get-mutation', 'adoption', 'terminal', 'deletes-data', 'role-external', 'public', 'csp'],
 		})
 		expect(caller.audited).toEqual(['access.protect'])
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES])
@@ -2596,7 +2646,18 @@ describe('approval categories', () => {
 		const policy: ApprovalPolicy = { ...STRICT_POLICY, 'off-road': 'person', people: 'off', 'role-added': 'plan', secrets: 'off', registry: 'refuse' }
 		const dto = await setPolicy(w, 'prod', policy)
 		expect(dto.approvalPolicy).toEqual(policy)
-		expect(dto.approvalCategories).toEqual(['off-road', 'anyone-calls', 'get-mutation', 'adoption', 'terminal', 'deletes-data', 'role-added'])
+		expect(dto.approvalCategories).toEqual([
+			'off-road',
+			'anyone-calls',
+			'get-mutation',
+			'adoption',
+			'terminal',
+			'deletes-data',
+			'role-external',
+			'role-added',
+			'public',
+			'csp',
+		])
 		const row = await w.db.registry.getAppEnv('notes', 'prod')
 		expect(JSON.parse(row?.approval_policy ?? '')).toEqual({
 			'off-road': 'person',

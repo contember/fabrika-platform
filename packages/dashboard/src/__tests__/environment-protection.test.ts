@@ -272,7 +272,9 @@ describe('approval modes', () => {
 	test('a change that loosens any category asks first; one that tightens does not', () => {
 		const strict = { policy: STRICT_POLICY, settings: STRICT_SETTINGS }
 		expect(policyChange(strict, { policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toBe('confirm')
-		expect(policyChange(strict, { ...strict, policy: { ...STRICT_POLICY, 'off-road': 'person', csp: 'plan', secrets: 'refuse' } })).toBe('apply')
+		expect(policyChange(strict, { ...strict, policy: { ...STRICT_POLICY, 'off-road': 'person', 'role-actions': 'plan', secrets: 'refuse' } })).toBe(
+			'apply',
+		)
 		const two = { ...STRICT_SETTINGS, requestTtlHours: 2, approvers: { ...STRICT_SETTINGS.approvers, secrets: 2 } }
 		// Two approvers and a shorter wait tighten; an unmerged commit or one approver where two decided loosens.
 		expect(policyChange(strict, { ...strict, settings: two })).toBe('apply')

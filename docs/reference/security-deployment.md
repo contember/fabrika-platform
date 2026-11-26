@@ -68,8 +68,10 @@ line **needs closer review** when the change steps off the paved road, for examp
 in a migration, or a migration statement not known to keep every stored value.
 
 - **Only a protected environment waits.** `prod` is protected by default; staging and `dev` are not, and `dev` cannot
-  be. A closer-review line on a protected environment parks the run in `awaiting_approval`. Any other change, a plain
-  widening included, publishes at once.
+  be. By default a closer-review line, a role opened to externals, an endpoint anyone opens or a new
+  CSP origin on a protected environment parks the run in `awaiting_approval` (the environment can choose otherwise,
+  [ADR-0083](../decisions/0083-an-environment-chooses-what-waits-for-approval.md)). Any other change, a plain widening
+  included, publishes at once.
 - **Only a person approves.** `approvals.complete` needs `access.approve` at the coordinates, which lies outside
   `deploy.*`, so of the built-in roles only `admin` holds it. The caller must be a user principal on a console session:
   a key, a service principal, an OAuth or MCP token, a share link and a request with `Authorization` are refused
