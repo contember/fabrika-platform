@@ -91,6 +91,26 @@ const RESTORE_BACK_STEPS: readonly { readonly step: DataOperationStep; readonly 
 	{ step: 'open', effect: 'The clone is set to inspect; the original is opened again.' },
 ]
 
+/** A migration without a read-only window (ADR-0069 §3): the environment stays open throughout. */
+const MIGRATE_STEPS: readonly { readonly step: DataOperationStep; readonly effect: string }[] = [
+	{ step: 'deploy', effect: 'A deploy of the new version.' },
+	{ step: 'migrate', effect: 'Control waits until the new version answers that it migrated.' },
+]
+
+/** The way back after the new version's migration failed. */
+const MIGRATE_BACK_STEPS: readonly { readonly step: DataOperationStep; readonly effect: string }[] = [
+	{ step: 'revert', effect: 'A rollback deploy of the last succeeded commit.' },
+	{ step: 'check', effect: 'Control waits until the rolled-back version answers.' },
+	{ step: 'restrict', effect: 'The environment is closed for an operator.' },
+]
+
+/** What the new version's failed migration did to the data. */
+const MIGRATION_FAILURES: Readonly<Record<NonNullable<DataOperationDto['migrationFailure']>, string>> = {
+	rolled_back: 'Its migration was rolled back: the data is as it was before the deploy.',
+	record_unwritable: 'Its migration record could not be written, so nothing migrated.',
+	committed: 'Its migration committed before it failed: the data is already migrated.',
+}
+
 /** The restore failures that leave the clone serving and the original in inspect (`packages/control/CLAUDE.md`). */
 const CLONE_SERVING_CODES: readonly string[] = ['bookmark_unavailable', 'rewind_failed', 'unexpected_schema']
 
@@ -514,6 +534,7 @@ export function StuckOperation(
 						)}
 					</p>
 					<RestoreSituation operation={operation} />
+					<MigrationSituation operation={operation} />
 					{manages
 						? (
 							<div className="toolbar">
@@ -526,7 +547,10 @@ export function StuckOperation(
 			<details className="disclosure">
 				<summary>
 					<span className="disclosure-title">Where it stands</span>
-					<span className="muted">its record and {operation.kind === 'restore' ? 'every step of the restore' : 'its step'}</span>
+					<span className="muted">
+						its record and{' '}
+						{operation.kind === 'restore' ? 'every step of the restore' : operation.recordsBookmark ? 'every step of the migration' : 'its step'}
+					</span>
 				</summary>
 				<OperationProgress operation={operation} />
 			</details>
@@ -773,6 +797,40 @@ export function RestoreSituation({ operation }: { operation: DataOperationDto })
 	return null
 }
 
+/** Where a migration without a read-only window left the environment, and why. */
+export function MigrationSituation({ operation }: { operation: DataOperationDto }) {
+	if (operation.kind !== 'migrate' || !operation.recordsBookmark) return null
+	const failure = operation.migrationFailure
+	return (
+		<>
+			{failure !== null && (
+				<p>
+					The new version answered <code>{failure}</code>. {MIGRATION_FAILURES[failure]}
+				</p>
+			)}
+			<p>{migrationEffect(operation)}</p>
+		</>
+	)
+}
+
+function migrationEffect(operation: DataOperationDto): string {
+	if (operation.state === 'running') {
+		return operation.step === 'revert' || operation.step === 'check'
+			? 'Control is deploying the last succeeded commit back; the environment stays open.'
+			: 'The environment stays open while the new version migrates: there is no read-only window and no backup.'
+	}
+	switch (operation.errorCode) {
+		case 'migration_unconfirmed':
+			return 'The new version did not confirm its migration before the deadline. The environment stays open; the next deploy asks again.'
+		case 'migration_reverted':
+			return 'The last succeeded commit serves again, and the environment is open. The failed version needs a fix before it is deployed again.'
+		case 'migration_failed':
+			return 'The environment is closed, so nothing writes over the data. An operator decides what follows.'
+		default:
+			return 'The environment stays open.'
+	}
+}
+
 /** An operation as it stands, and for a side restore each of its steps (ADR-0070 §9). */
 export function OperationProgress({ operation }: { operation: DataOperationDto }) {
 	return (
@@ -795,13 +853,28 @@ export function OperationProgress({ operation }: { operation: DataOperationDto }
 				</Field>
 			</div>
 			{operation.kind === 'restore' && <RestoreSteps operation={operation} />}
+			{operation.kind === 'migrate' && operation.recordsBookmark && <MigrationSteps operation={operation} />}
 		</>
 	)
 }
 
 function RestoreSteps({ operation }: { operation: DataOperationDto }) {
 	const back = RESTORE_BACK_STEPS.some((entry) => entry.step === operation.step)
-	const steps = back ? RESTORE_BACK_STEPS : RESTORE_STEPS
+	return <StepsTable operation={operation} steps={back ? RESTORE_BACK_STEPS : RESTORE_STEPS} />
+}
+
+function MigrationSteps({ operation }: { operation: DataOperationDto }) {
+	if (!MIGRATE_BACK_STEPS.some((entry) => entry.step === operation.step)) return <StepsTable operation={operation} steps={MIGRATE_STEPS} />
+	// A committed migration that lost data goes straight to `restrict`, without a rollback deploy.
+	const steps = operation.revertRunId === null && operation.step === 'restrict'
+		? MIGRATE_BACK_STEPS.filter((entry) => entry.step === 'restrict')
+		: MIGRATE_BACK_STEPS
+	return <StepsTable operation={operation} steps={steps} />
+}
+
+function StepsTable(
+	{ operation, steps }: { operation: DataOperationDto; steps: readonly { readonly step: DataOperationStep; readonly effect: string }[] },
+) {
 	const current = steps.findIndex((entry) => entry.step === operation.step)
 	return (
 		<>

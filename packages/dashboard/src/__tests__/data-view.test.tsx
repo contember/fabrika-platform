@@ -28,6 +28,7 @@ import {
 	DataView,
 	type DataViewDto,
 	loadDataView,
+	MigrationSituation,
 	OperationProgress,
 	parseRestoreTime,
 	readBootFailure,
@@ -84,6 +85,9 @@ const operation = (id: string, overrides: Partial<DataOperationDto> = {}): DataO
 	finishedAt: null,
 	recoversOperationId: null,
 	resolution: null,
+	recordsBookmark: false,
+	migrationFailure: null,
+	revertRunId: null,
 	...overrides,
 })
 
@@ -850,6 +854,8 @@ test('a short id tells apart UUIDv7 records made a moment apart: their heads are
 
 describe('following a running operation', () => {
 	const restore = (overrides: Partial<DataOperationDto>) => operation('0192f1aa-restore', { kind: 'restore', targetMode: 'open', ...overrides })
+	const migration = (overrides: Partial<DataOperationDto>) =>
+		operation('0192f1aa-migrate', { kind: 'migrate', step: 'migrate', targetMode: 'open', recordsBookmark: true, ...overrides })
 
 	/** Each step row's code and the state it reads in, in order. */
 	const stepRows = (html: string): [string, string][] =>
@@ -919,6 +925,52 @@ describe('following a running operation', () => {
 		expect(reader).not.toContain('Recover and')
 		expect(reader).toContain('Only a holder of data management on this environment can recover it.')
 		expect(markup(holding(['data.manage']), undefined, page([restore({ step: 'check', state: 'succeeded' })]))).not.toContain('Restore running')
+	})
+
+	test('a migration without a read-only window shows deploy and migrate, and says the environment stays open', () => {
+		const running = migration({ step: 'migrate' })
+		const html = renderToStaticMarkup(<OperationProgress operation={running} />)
+		expect(stepRows(html)).toEqual([['deploy', 'done'], ['migrate', 'current']])
+		expect(renderToStaticMarkup(<MigrationSituation operation={running} />)).toContain('there is no read-only window and no backup')
+		// The read-only phase keeps its single step and says nothing about a window.
+		const readOnly = operation('0192f1aa-migrate', { kind: 'migrate', step: 'backup' })
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={readOnly} />))).toEqual([])
+		expect(renderToStaticMarkup(<MigrationSituation operation={readOnly} />)).toBe('')
+	})
+
+	test("a failed migration names the new version's answer, the rollback deploy's steps and what the environment is left in", () => {
+		const reverting = migration({ step: 'check', migrationFailure: 'rolled_back', revertRunId: 'run-back' })
+		expect(renderToStaticMarkup(<MigrationSituation operation={reverting} />)).toContain('the data is as it was before the deploy')
+		expect(renderToStaticMarkup(<MigrationSituation operation={reverting} />)).toContain('deploying the last succeeded commit back')
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={reverting} />))).toEqual([
+			['revert', 'done'],
+			['check', 'current'],
+			['restrict', 'pending'],
+		])
+
+		const reverted = migration({ ...reverting, state: 'failed', errorCode: 'migration_reverted' })
+		const page_ = markup(holding(['data.manage']), undefined, page([reverted]))
+		expect(page_).toContain('Migration failed at step <code>check</code>')
+		expect(page_).toContain('<code>migration_reverted</code>')
+		expect(page_.indexOf('The last succeeded commit serves again')).toBeGreaterThan(-1)
+		expect(page_.indexOf('The last succeeded commit serves again')).toBeLessThan(page_.indexOf('Where it stands'))
+		expect(page_).toContain('every step of the migration')
+
+		// A committed migration that lost data is closed without a rollback deploy.
+		const closed = migration({ step: 'restrict', state: 'failed', errorCode: 'migration_failed', migrationFailure: 'committed' })
+		const closedHtml = renderToStaticMarkup(<MigrationSituation operation={closed} />)
+		expect(closedHtml).toContain('<code>committed</code>')
+		expect(closedHtml).toContain('the data is already migrated')
+		expect(closedHtml).toContain('The environment is closed')
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={closed} />))).toEqual([['restrict', 'stopped']])
+
+		const unconfirmed = migration({ state: 'failed', errorCode: 'migration_unconfirmed' })
+		const unconfirmedHtml = renderToStaticMarkup(<MigrationSituation operation={unconfirmed} />)
+		expect(unconfirmedHtml).toContain('did not confirm its migration before the deadline')
+		expect(unconfirmedHtml).not.toContain('The new version answered')
+		expect(renderToStaticMarkup(<MigrationSituation operation={migration({ migrationFailure: 'record_unwritable', step: 'revert' })} />)).toContain(
+			'nothing migrated',
+		)
 	})
 
 	test('the page reads again while the newest operation runs, and not once it finished', () => {
