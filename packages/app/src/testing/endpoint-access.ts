@@ -481,6 +481,8 @@ export function endpointAccessKit<DB, P>(
 		scanner: cleanScanner,
 		env: unusedVariables(app),
 		challengeFetch: () => Promise.resolve(Response.json({ success: false, 'error-codes': ['invalid-input-response'] })),
+		// An agent-only mutation is asked with a `write` grant, which an environment serves once `agent-write` is `off`.
+		agentWrite: 'off',
 	})
 	const policies = tablePolicies(tables)
 	const callerRow = declaredCallerRow(app.contract, options.callerRows)
@@ -599,11 +601,12 @@ export function endpointAccessKit<DB, P>(
 		return parent?.mode === 'dimension' ? (parent.container?.dimension ?? parent.dimension) : undefined
 	}
 
-	/** The kind of caller the kit asks `row` as: a person where it admits one, else a script. */
-	const callerKindOf = (row: ActionEndpoint): 'human' | 'machine' => {
+	/** The kind of caller the kit asks `row` as: a person where it admits one, else a script, else a person's agent. */
+	const callerKindOf = (row: ActionEndpoint): 'human' | 'machine' | 'agent' => {
 		if (row.callers.some((caller) => caller === 'human')) return 'human'
 		if (row.callers.some((caller) => caller === 'machine')) return 'machine'
-		throw new Error(`${row.id} admits neither a human nor a machine caller`)
+		if (row.callers.some((caller) => caller === 'agent')) return 'agent'
+		throw new Error(`${row.id} admits neither a human, a machine nor an agent caller`)
 	}
 
 	/** A new caller holding `grants`, under `id` when given; an action without a scope is held globally. */
@@ -613,9 +616,23 @@ export function endpointAccessKit<DB, P>(
 		id?: string,
 	): { readonly caller: TestCaller; readonly fetch: RpcFetch } => {
 		const named = id === undefined ? {} : { id }
-		if (callerKindOf(row) === 'human') {
+		const kind = callerKindOf(row)
+		if (kind === 'human') {
 			const caller = kit.testCaller(grants, named)
 			return { caller, fetch: kit.browser(caller) }
+		}
+		if (kind === 'agent') {
+			// The person's agent with an unnarrowed grant: it holds the person's permissions, which the case gave.
+			const caller = kit.testCaller(grants, named)
+			const granted = kit.agentGrant(caller, { scope: row.readOnly ? 'read' : 'write' })
+			return {
+				caller,
+				fetch: async (input, init) => {
+					const headers = new Headers(init?.headers)
+					headers.set('Authorization', `Bearer ${(await granted).token}`)
+					return kit.fetch(input, { ...init, headers })
+				},
+			}
 		}
 		const caller = kit.testCaller(grants, { kind: 'machine', ...named })
 		return {

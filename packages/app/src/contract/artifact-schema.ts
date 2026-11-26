@@ -2,6 +2,8 @@
 // object is strict and every field required, so a value that is not exactly an artifact is refused, not coerced.
 
 import {
+	AGENT_CALLER,
+	AGENT_SCOPE_KINDS,
 	ANY_ORIGIN_KINDS,
 	type ArrayShape,
 	type AttachmentShape,
@@ -168,8 +170,10 @@ function outputShapeSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<OutputSha
 
 export const outputShapeSchema: z.ZodType<OutputShape> = outputShapeSchemaOf(schemaShapeSchema)
 
-const caller = z.union([z.enum(['human', 'machine', 'link']), z.templateLiteral(['app:', z.string().min(1)])])
-const rpcCaller = z.enum(['human', 'machine'])
+const caller = z.union([z.enum(['human', 'machine', 'agent', 'link']), z.templateLiteral(['app:', z.string().min(1)])])
+const rpcCaller = z.enum(['human', 'machine', 'agent'])
+/** The kinds an agent's grant can reach at all: its widest scope's (ADR-0090 §2). */
+const AGENT_ROW_KINDS: readonly string[] = AGENT_SCOPE_KINDS.write
 
 const accessForm = z.discriminatedUnion('form', [
 	z.strictObject({ form: z.literal('over'), dimension: name }),
@@ -589,6 +593,16 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 		tokens: record(z.strictObject({ claims: shape, maxDays: z.int().positive().max(TOKEN_MAX_DAYS) })).optional(),
 	}).superRefine((artifact, context) => {
 		for (const row of artifact.endpoints) {
+			if (row.callers.some((caller) => caller === AGENT_CALLER)) {
+				const mount = row.source.kind === 'mount' ? artifact.mounts[row.source.name] : undefined
+				if (mount?.kind !== 'rpc' || !mount.callers.some((caller) => caller === AGENT_CALLER) || !AGENT_ROW_KINDS.includes(row.kind)) {
+					context.addIssue({
+						code: 'custom',
+						path: ['endpoints', artifact.endpoints.indexOf(row), 'callers'],
+						message: 'an agent caller reaches only a procedure of an RPC mount that lists agent (ADR-0090)',
+					})
+				}
+			}
 			// A row answering a file of an inline kind shows it, every other row that answers a file downloads it.
 			if (row.output?.type === 'file' && (row.response === 'inline-file') !== (artifact.fileKinds?.[row.output.kind]?.inline === true)) {
 				context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${row.id}' is inline-file exactly when its file kind is inline` })

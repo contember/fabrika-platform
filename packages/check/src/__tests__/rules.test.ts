@@ -1151,7 +1151,7 @@ describe('literal: a spread of a constant object and a re-export', () => {
 })
 
 describe('member-admits-external', () => {
-	test('names a { member: true } endpoint a human reaches, and not one of a machine-only mount', async () => {
+	test('names a { member: true } endpoint a person or their agent reaches, and not one of a machine-only mount', async () => {
 		const external = CLEAN_CONTRACT.replace(
 			"assignableBy: ['owner'] } } },",
 			"assignableBy: ['owner'] } }, partner: { grants: ['notes.read'], member: { scope: 'workspace', assignableBy: ['owner'] }, external: true } },",
@@ -1168,6 +1168,10 @@ describe('member-admits-external', () => {
 			}),
 		])
 		expect(await hints(external.replace("callers: ['human']", "callers: ['machine']"))).toEqual([])
+		// A person's agent acts as the person, an external one included (ADR-0090).
+		expect(await hints(external.replace("callers: ['human']", "callers: ['agent']"))).toEqual([
+			expect.objectContaining({ message: "'api.me' admits every member, and external role 'partner' makes a person from outside the organization one" }),
+		])
 	})
 })
 

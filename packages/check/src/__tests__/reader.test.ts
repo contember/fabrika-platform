@@ -163,6 +163,14 @@ export const contract = defineServiceContract('vozka', (s) => ({ mcp: s.oauth('/
 		expect(readContractSource(application(mail(html))).mail?.reset?.cs?.html).toBe(html)
 	})
 
+	test("a group of a person's agent alone, or of a script and an agent, is read as declared (ADR-0090)", () => {
+		for (const callers of [['agent'], ['agent', 'machine']]) {
+			const source = edited("callers: ['human']", `callers: [${callers.map((caller) => `'${caller}'`).join(', ')}]`)
+			const row = readContractSource(application(source)).endpoints.find((endpoint) => endpoint.id === 'api.get')
+			expect(row?.callers.join(', ')).toBe(callers.join(', '))
+		}
+	})
+
 	test('callers outside the RPC callers, an empty caller list, and an access that mixes two forms', () => {
 		expect(refusal(application(edited("callers: ['human']", "callers: ['human', 'link']")))).toEqual([
 			"fabrika.contract.ts:11:32 contract 'link' is not a caller of an RPC mount",

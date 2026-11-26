@@ -69,8 +69,17 @@ const desk = app.group({ callers: ['human'] }, (r) => ({
 	}),
 }))
 
+// What a person's call carries of the terminal, for a person and for their agent (ADR-0090).
+const own = app.group({ callers: ['human', 'agent'] }, (r) => ({
+	where: r.query({
+		output: z.strictObject({ terminal: z.nullable(z.string()), agent: z.boolean() }),
+		access: { action: 'attendance.record', app: true },
+	}).handle(({ ctx }) => ({ terminal: ctx.principal.terminal?.id ?? null, agent: ctx.agent !== null })),
+}))
+
 const contract = app.contract((c) => ({
 	api: c.rpc('/api', { page, desk }),
+	own: c.rpc('/own', { own }),
 	identify: c.spa('/identify', { dir: 'dist/identify', access: { public: true } }),
 }))
 const served = serve(contract, { database: scoped(tables) })
@@ -102,6 +111,24 @@ async function post(fetch: typeof clerk, path: string, input: unknown): Promise<
 }
 
 const notFound = { result: { completionUrl: null, refused: 'not_found' } }
+
+describe("a person's agent, from a person who signed in at a terminal (ADR-0090)", () => {
+	test("is minted from the person's own permissions with no terminal, as IAM's exchange resolves the person", async () => {
+		// The terminal's ceiling admits no action, so the person's session there reaches nothing of their own.
+		const person = kit.testCaller([{ role: 'clerk' }], { terminal: { id: 'front-desk', label: 'Front desk', ceiling: [] } })
+		expect((await kit.browser(person)('/own/own.where', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' })).status)
+			.toBe(403)
+		const { token } = await kit.agentGrant(person)
+		const answered = await kit.fetch('/own/own.where', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+			body: '{}',
+		})
+		expect(answered.status).toBe(200)
+		const body: unknown = await answered.json()
+		expect(body).toEqual({ result: { terminal: null, agent: true } })
+	})
+})
 
 describe("the test kit's IAM opens identifications", () => {
 	test('an opened identification is inspected by a public procedure and asserted once, for a person of the kit', async () => {

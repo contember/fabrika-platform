@@ -1,4 +1,4 @@
-import type { AccessTokenClaims, PermissionEntry } from '@fabrika/auth-core'
+import { type AccessTokenClaims, AGENT_CLIENT_ID, type PermissionEntry } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { buildAuthContext, IamClient } from '../client'
 import type { AuthContext } from '../types'
@@ -43,6 +43,26 @@ describe('AuthContext.can', () => {
 
 		const global = ctxWith([{ action: 'project.*', scope: null, source: 'grant' }])
 		expect(global.can('project.read', { type: 'project', value: 'p2' })).toBe(true)
+	})
+})
+
+describe('AuthContext.agent', () => {
+	test("is the token's act for a person's agent (ADR-0090), and absent when the person calls", () => {
+		const claims: AccessTokenClaims = {
+			iss: 'https://iam.example.com',
+			aud: 'app-x',
+			sub: 'pr-1',
+			iat: 0,
+			exp: 9_999_999_999,
+			perms: [],
+			ptype: 'user',
+			label: 'alice@example.com',
+			act: { sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: { mode: 'read', within: null }, label: 'nightly report' },
+		}
+		const acting = buildAuthContext(new IamRpcStub(), 'verified-token', claims, 'req-1')
+		expect(acting.principal?.id).toBe('pr-1')
+		expect(acting.agent).toEqual({ sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: { mode: 'read', within: null }, label: 'nightly report' })
+		expect(ctxWith([]).agent).toBeUndefined()
 	})
 })
 

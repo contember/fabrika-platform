@@ -1,7 +1,7 @@
 // The proxy in front of the test kit's application: production's decision, proxy-core's verify service over the
 // endpoint table `contractProxyTable` compiles from the contract, asked the way the Cloudflare proxy Worker asks it.
 
-import { DELEGATION_HEADER, ENDPOINT_HEADER, rawRequestTarget } from '@fabrika/auth-core'
+import { DELEGATION_HEADER, ENDPOINT_HEADER, type IamGrantRpc, rawRequestTarget } from '@fabrika/auth-core'
 import {
 	APP_QUERY_PARAM,
 	createVerifyService,
@@ -55,6 +55,8 @@ export interface EndpointProxyOptions {
 	readonly issuer: string
 	/** Issues the delegation grants of membership and scope-creating endpoints, as IAM does for the proxy. */
 	readonly delegations: DelegationIssuer | null
+	/** Exchanges an agent's resource token for the person's token, as IAM's `mintFromGrant` does (ADR-0090). */
+	readonly grants?: IamGrantRpc
 	/** The proxy's token cache, as production keeps one; omitted, every request mints. */
 	readonly cache?: TokenCache
 	/** The origins the environment lists for the contract's cross-origin endpoints; none when omitted. */
@@ -79,6 +81,7 @@ export function endpointProxy(options: EndpointProxyOptions): TestProxy {
 		iam: options.iam,
 		issuer: options.issuer,
 		delegations: options.delegations,
+		...(options.grants === undefined ? {} : { grants: options.grants }),
 		...(options.cache === undefined ? {} : { cache: options.cache }),
 	})
 	const verifyUrl = `https://fabrika-proxy.internal${DEFAULT_VERIFY_PATH}?${APP_QUERY_PARAM}=${encodeURIComponent(options.appId)}`

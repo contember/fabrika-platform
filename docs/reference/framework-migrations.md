@@ -222,6 +222,27 @@ manifest and touch icon links at the start of their head. Two things can change 
   path (a health check, a webhook, a public procedure's `http.path` under the root SPA) is refused, naming the path and
   the endpoint. Move that endpoint to another path. Before, it silently answered there in the mount's place.
 
+From the release after `0.9.0-dev.46`, a group may list the caller `agent`
+([ADR-0090](../decisions/0090-a-device-grant-reaches-an-application-as-the-person.md)): a person's agent with a device
+grant ([`cli-device-grant.md`](cli-device-grant.md#an-application-environment)) then calls its procedures as that person,
+with the person's permissions, narrowed to one scope value when the grant names one. Nothing changes for an application
+that does not list it. One that does needs a platform of the same release or newer: an older Control refuses the caller
+`agent`, and on Zerops a namespace proxy pinned to an older source refuses the deploy until it is re-pinned
+(`fabrika control namespaces update --namespace=<id> --proxy-source=current`).
+
+- `app.group({ callers: ['human', 'agent'] }, …)`. `agent` reaches procedures only: a `read` grant its queries and
+  downloads, a `write` grant its mutations and uploads too. An SPA, a link mount and an export never list it.
+- `ctx.principal` is the person. A group that lists `agent` has `ctx.agent`: `{ grant, label, scope }` when an agent
+  calls, `null` when the person does. `ctx.caller` is the person's row for both.
+- The test kit's `kit.agentGrant(person, { scope, label })` answers the resource token an agent presents as a bearer;
+  the kit's proxy exchanges it as production's does. As IAM does until an environment mirrors `agent-write`, the kit
+  refuses the exchange of a `write` grant; `testKit(app, { agentWrite: 'off' })` serves it. The endpoint access kit
+  and the leak sweep ask a group that lists only `agent` as a person's agent.
+
+An application that added a `machine` group so that an agent could call it adds `agent` to the groups the agent needs,
+moves the agent from the service key to a device grant, then removes the machine-only group or the `machine` caller and
+revokes the service key and its principal's grants. `machine` stays for what has no person behind it.
+
 ## 0.7 → 0.8
 
 0.8 changed no 0.7 form: it added the ALTCHA challenge provider. Raise the pin; nothing else changes. To move a public

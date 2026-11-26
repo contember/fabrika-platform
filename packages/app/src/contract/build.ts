@@ -2825,8 +2825,8 @@ class ArtifactBuilder {
 		for (const caller of callers) {
 			if (caller.startsWith('app:')) {
 				this.#problem(where, `'${caller}' reaches only an export; declare an export with consumers: ['${caller.slice('app:'.length)}'] instead`)
-			} else if (caller !== 'human' && caller !== 'machine') {
-				this.#problem(where, `'${caller}' is not a caller of an RPC mount (allowed: 'human' or 'machine')`)
+			} else if (caller !== 'human' && caller !== 'machine' && caller !== 'agent') {
+				this.#problem(where, `'${caller}' is not a caller of an RPC mount (allowed: 'human', 'machine' or 'agent')`)
 			}
 		}
 	}

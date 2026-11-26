@@ -6,7 +6,7 @@ import { file } from '@fabrika/app/contract'
 import { app } from '../app-kit'
 import { Created, InProject, NewNote, NoteList, OneNote } from '../schemas'
 
-export const notes = app.group({ callers: ['human', 'machine'] }, (r) => ({
+export const notes = app.group({ callers: ['human', 'machine', 'agent'] }, (r) => ({
 	create: r.mutation({ input: NewNote, output: Created, access: { action: 'example.write', in: 'project', from: 'projectId' } })
 		.handle(async ({ input, ctx }) => {
 			const { id } = await ctx.db.target.notes.insert({ title: input.title, attachment: input.attachment ?? null })

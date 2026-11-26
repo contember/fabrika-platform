@@ -589,7 +589,9 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **Caller kinds** come from the token through `@fabrika/auth-core`'s `callerOf`, the
   mapping the proxy applies too (`presentedBy` only adds the principal): `ptype:
   'user'` is `human`, `ptype: 'service'` is `machine`, `ptype: 'app'` is `app:<workload>`, an
-  anonymous token (a share link) is `link`. A job or webhook token and an OAuth resource token
+  anonymous token (a share link) is `link`, and a person's token with `act` is `agent` (ADR-0090): the person's
+  `UserPrincipal` plus `ctx.agent`, and only a group that lists `agent` has `ctx.agent`. The dispatcher repeats the
+  proxy's scope check (`agentScopeAdmits`) after the caller check. A job or webhook token and an OAuth resource token
   are no caller. Never map a token to a caller kind anywhere else. A `human` principal's `email` is the token's
   `email` claim and nothing else (never derived from `label`); a `human` token without it is 401 (`no_mailbox`).
 - **The caller document is information for the page, never a check.** `pageCallerOf` lists the token's grants as
@@ -1137,6 +1139,15 @@ vocabulary (`packages/db/CLAUDE.md`).
   it are its credential at `kitMembership`'s link operations (`jobByCredential`), held to IAM's rules for a job: its
   declared actions app-wide, issuing for its declared `issues` mount only, revoking only links it issued; every other
   membership call of a workload answers `invalid_token`, as IAM's `resolveCaller` does.
+- **An agent's grant** (`kit.agentGrant(person, { scope, label })`, ADR-0090) is a resource token of `agent-cli` for
+  the kit's origin. The kit's proxy exchanges it through the stand-in `mintFromGrant` (`grantExchange`), which signs the
+  person's live permissions narrowed with auth-core's `narrowToValue`, as IAM does, and refuses a `write` grant
+  (`write_refused`) as IAM does until `agent-write` is mirrored, unless the kit's `agentWrite` is `off`. The endpoint
+  access kit sets it `off` and asks a row whose only caller is `agent` with an unnarrowed grant, `read` for a read-only
+  row and `write` otherwise. The exchanged token is signed from the person's own permissions with no terminal claims,
+  even for a caller on a terminal, as IAM's `mintFromGrant` resolves the person. `kitMembership` holds it as IAM does:
+  to its own entries the person still holds, a write refused under a `read` grant, and a link of the person revoked
+  only where the agent could issue one.
 - **A test caller on a terminal** (`testCaller(grants, { terminal })`, ADR-0067) is a person's session in a contract
   that declares `terminal`, as IAM refuses any other. Its token carries `session`, `amr` and `terminal`, and its
   permissions are `signedPermissions`: its own entries narrowed by the ceiling (auth-core's `narrowPermissions`, IAM's

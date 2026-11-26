@@ -3,6 +3,7 @@
 import {
 	type AccessTokenClaims,
 	AGENT_CALLER,
+	type AgentScope,
 	APP_CALLER_PREFIX,
 	type Caller,
 	callerOf,
@@ -58,7 +59,7 @@ export interface PublicPrincipal {
 	readonly endpoint: string
 }
 
-export type PrincipalOf<C> = C extends 'human' ? UserPrincipal
+export type PrincipalOf<C> = C extends 'human' | 'agent' ? UserPrincipal
 	: C extends 'machine' ? ServicePrincipal
 	: C extends 'link' ? LinkHolder
 	: C extends `app:${infer Id}` ? AppPrincipal<Id>
@@ -67,6 +68,18 @@ export type PrincipalOf<C> = C extends 'human' ? UserPrincipal
 export interface Presented {
 	readonly caller: Caller
 	readonly principal: Principal
+	/** The agent the person's token acts for, when the proxy exchanged an agent's grant for it (ADR-0090); else `null`. */
+	readonly agent: AgentGrant | null
+}
+
+/**
+ * `ctx.agent`: the agent a person's token acts for — the grant the person approved, the name the agent gave itself and
+ * the grant's scope. `ctx.principal` is the person, with the person's permissions as the grant's scope narrowed them.
+ */
+export interface AgentGrant {
+	readonly grant: string
+	readonly label: string | null
+	readonly scope: AgentScope
 }
 
 /**
@@ -80,7 +93,10 @@ export function presentedBy(claims: AccessTokenClaims): Presented | Unpresented 
 	const caller = callerOf(claims)
 	switch (caller) {
 		case 'human':
+		case AGENT_CALLER: {
 			if (claims.email === undefined) return 'no_mailbox'
+			// `callerOf` presents `agent` exactly when the token carries `act`.
+			const act = claims.act
 			return {
 				caller,
 				principal: {
@@ -90,19 +106,19 @@ export function presentedBy(claims: AccessTokenClaims): Presented | Unpresented 
 					email: claims.email,
 					...(claims.terminal === undefined ? {} : { terminal: Object.freeze({ id: claims.terminal.id, label: claims.terminal.label }) }),
 				},
+				agent: act === undefined ? null : Object.freeze({ grant: act.grant, label: act.label ?? null, scope: act.scope }),
 			}
+		}
 		case 'machine':
-			return { caller, principal: { kind: 'service', id: claims.sub, label: claims.label ?? claims.sub } }
+			return { caller, principal: { kind: 'service', id: claims.sub, label: claims.label ?? claims.sub }, agent: null }
 		case 'link':
-			return { caller, principal: { kind: 'link', credentialId: claims.sub } }
-		// An OAuth token reaches only an installation entry, which no application serves. An agent's token reaches only a
-		// group that lists `agent`, which no contract declares yet (ADR-0090).
+			return { caller, principal: { kind: 'link', credentialId: claims.sub }, agent: null }
+		// An OAuth token reaches only an installation entry, which no application serves.
 		case OAUTH_CALLER:
-		case AGENT_CALLER:
 		case null:
 			return 'no_caller'
 		default:
-			return { caller, principal: { kind: 'app', app: caller.slice(APP_CALLER_PREFIX.length), id: claims.sub } }
+			return { caller, principal: { kind: 'app', app: caller.slice(APP_CALLER_PREFIX.length), id: claims.sub }, agent: null }
 	}
 }
 

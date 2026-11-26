@@ -4,8 +4,13 @@
 // real `boot` and its dispatcher.
 
 import {
+	AGENT_CALLER,
+	AGENT_CLIENT_ID,
+	type AgentActClaims,
+	agentScopeToken,
 	API_KEY_PREFIX,
 	buildAccessClaims,
+	buildResourceAccessClaims,
 	canonicalArtifactJson,
 	CLIENT_ADDRESS_HEADER,
 	type ContractArtifact,
@@ -15,16 +20,22 @@ import {
 	FABRIKA_IAM_APP_ID,
 	FABRIKA_IAM_ISSUER,
 	FABRIKA_TOKEN_KEYS,
+	type IamGrantRpc,
 	type IamMembershipRpc,
 	type IamTerminalRpc,
 	isActionAllowed,
+	isAgentLabel,
 	isNormalizedMailbox,
 	type Jwks,
 	MAX_ACCESS_TOKEN_BYTES,
 	MAX_APPLICATION_TOKEN_BYTES,
+	narrowToValue,
 	normalizeEmailIdentity,
+	parseAccessClaims,
+	parseAgentScope,
 	type PermissionEntry,
 	PROXY_TOKEN_HEADER,
+	RESOURCE_ACCESS_TOKEN_TYP,
 	SESSION_COOKIE,
 	signAccessClaims,
 	TOKEN_ALG,
@@ -166,6 +177,24 @@ export interface TestKitOptions {
 	 * Control; a page on one of them may call such an endpoint with a key. None when omitted.
 	 */
 	readonly crossOrigins?: readonly string[]
+	/**
+	 * The environment's `agent-write` mode as Control mirrors it into IAM (ADR-0090 §5): `off` serves an agent's `write`
+	 * grant; `refuse`, the default, serves `read` grants only, as IAM does where it holds no mirror.
+	 */
+	readonly agentWrite?: 'off' | 'refuse'
+}
+
+export interface TestAgentGrantOptions {
+	/** `read` by default; `write`, or either narrowed to one value of a dimension: `read:project=p-1`. */
+	readonly scope?: string
+	/** The name the agent gives itself, which `ctx.agent.label` reads. */
+	readonly label?: string
+}
+
+/** An agent's grant the kit's IAM approved for a person: its id, and the resource token the agent presents. */
+export interface TestAgentGrant {
+	readonly grant: string
+	readonly token: string
 }
 
 export interface TestConnection {
@@ -197,6 +226,16 @@ export interface TestKit<C extends AnyContract> {
 	browser(caller?: TestCaller): RpcFetch
 	/** The test IAM as the proxy calls it: it mints for the credentials `testCaller` issued and serves their key set. */
 	readonly iam: IamGateway
+	/**
+	 * `person` approves an agent's device grant at this environment (ADR-0090): answers the grant's id and the resource
+	 * token the agent presents as a bearer, `Authorization: Bearer <token>`. The kit's proxy exchanges it at the kit's IAM
+	 * for the person's token, with the person's live permissions narrowed to the scope's value, as IAM does. `scope` is
+	 * `read` (the default), `write`, or either narrowed to one value: `read:<dimension>=<value>`. The exchange of a `write`
+	 * grant is refused unless the kit's `agentWrite` is `off`. Throws where IAM refuses
+	 * the grant: a contract whose groups list no `agent`, a scope it does not read, an undeclared dimension, a caller that
+	 * is not a person of this kit.
+	 */
+	agentGrant(person: PersonTestCaller, options?: TestAgentGrantOptions): Promise<TestAgentGrant>
 	/**
 	 * The addressee of an invitation the kit's IAM holds open accepts it, as IAM's onboarding does: `person` holds the
 	 * invited role in its scope from now on, or, without one, a new person labelled by the invited address does. Answers
@@ -706,10 +745,24 @@ export function bootTestKit<C extends AnyContract>(
 
 	const scope = <D extends DimensionOf<C>>(dimension: D, value: string): TestScope<D> => Object.freeze({ type: dimension, value })
 
-	/** The caller's token, or why IAM signs none: a disabled principal, or a token above IAM's bound for it. */
-	async function mint(caller: TestCaller): Promise<{ readonly ok: true; readonly token: string; readonly expiresAt: number } | MintRefusal> {
+	/**
+	 * The caller's token, or why IAM signs none: a disabled principal, or a token above IAM's bound for it. For an agent's
+	 * grant (`act`), the person's token with its permissions narrowed to the grant's value and `act`, expiring no later
+	 * than `notAfter`, as IAM's `mintFromGrant` signs it.
+	 */
+	async function mint(
+		caller: TestCaller,
+		agent?: { readonly act: AgentActClaims; readonly notAfter: number },
+	): Promise<{ readonly ok: true; readonly token: string; readonly expiresAt: number } | MintRefusal> {
 		if (caller.disabled) return { ok: false, reason: 'disabled' }
 		const now = Math.floor(Date.now() / 1000)
+		// IAM resolves an agent's token from the person's own live permissions, at no terminal (ADR-0090).
+		const terminal = agent === undefined ? caller.terminal : null
+		const own = uniquePermissions(
+			agent === undefined ? (standIn?.permsOf(caller) ?? signedPermissions(caller, caller.perms)) : (standIn?.ownPermsOf(caller) ?? caller.perms),
+		)
+		const within = agent?.act.scope.within ?? null
+		const permissions = within === null ? own : narrowToValue(own, within)
 		const claims = buildAccessClaims({
 			iss: TEST_ISSUER,
 			app: appId,
@@ -719,10 +772,11 @@ export function bootTestKit<C extends AnyContract>(
 			...(caller.link === null ? {} : { link: { mount: caller.link.mount, chain: [...caller.link.chain] } }),
 			label: caller.label,
 			...(caller.email === null ? {} : { email: caller.email }),
-			...(caller.terminal === null ? {} : { session: true, terminal: { id: caller.terminal.id, label: caller.terminal.label } }),
-			permissions: uniquePermissions(standIn?.permsOf(caller) ?? signedPermissions(caller, caller.perms)),
+			...(terminal === null ? {} : { session: true, terminal: { id: terminal.id, label: terminal.label } }),
+			permissions,
 			issuedAt: now,
-			expiresAt: now + TOKEN_TTL_SECONDS,
+			expiresAt: Math.min(now + TOKEN_TTL_SECONDS, agent?.notAfter ?? Number.POSITIVE_INFINITY),
+			...(agent === undefined ? {} : { act: agent.act }),
 		})
 		const { privateKey } = await signing
 		// IAM bounds a workload's own token as any installation token, and a token the proxy injects at the application's.
@@ -733,8 +787,90 @@ export function bootTestKit<C extends AnyContract>(
 			(payload) => new SignJWT({ ...payload }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey),
 		)
 		if (token.length > bound) return { ok: false, reason: 'token_too_large' }
-		byToken.set(token, { caller, expiresAt: claims.exp })
+		// The stand-in's membership operations hold an agent's token to its own entries the person still holds, as IAM does.
+		byToken.set(token, {
+			caller,
+			expiresAt: claims.exp,
+			...(agent === undefined ? {} : { agent: { entries: permissions, mode: agent.act.scope.mode } }),
+		})
 		return { ok: true, token, expiresAt: claims.exp }
+	}
+
+	/** The agents' grants the kit's IAM approved, by id: whose they are, and their scope and label. */
+	const agentGrants = new Map<string, { readonly person: PersonTestCaller; readonly act: AgentActClaims }>()
+	const admitsAgent = artifact.endpoints.some((row) => row.callers.some((caller) => caller === AGENT_CALLER))
+
+	/** A person's approval of an agent's device grant at this environment, refused where IAM's device start refuses it. */
+	async function agentGrant(person: PersonTestCaller, grantOptions: TestAgentGrantOptions = {}): Promise<TestAgentGrant> {
+		if (!admitsAgent) {
+			throw new Error(
+				"no group of the contract lists 'agent', so IAM serves this environment to no agent: app.group({ callers: ['human', 'agent'] }, …)",
+			)
+		}
+		if (person.kind !== 'human' || !memberships.has(person)) {
+			throw new Error('an agent acts for a person of this kit: kit.agentGrant(kit.testCaller(grants), …)')
+		}
+		const requested = grantOptions.scope ?? 'read'
+		const scope = parseAgentScope(requested)
+		if (scope === null) {
+			throw new Error(`'${requested}' is no agent scope (allowed: read, write, or read:<dimension>=<value>)`)
+		}
+		if (scope.within !== null && !Object.hasOwn(artifact.dimensions, scope.within.type)) {
+			throw new Error(`'${scope.within.type}' is not a dimension of the contract, so IAM refuses the scope (invalid_scope)`)
+		}
+		const label = grantOptions.label
+		if (label !== undefined && !isAgentLabel(label)) {
+			throw new Error('an agent label holds 1–64 characters, no control character and no surrounding space')
+		}
+		const grant = crypto.randomUUID()
+		agentGrants.set(grant, {
+			person,
+			act: { sub: AGENT_CLIENT_ID, grant, scope, ...(label === undefined ? {} : { label }) },
+		})
+		const now = Math.floor(Date.now() / 1000)
+		const claims = buildResourceAccessClaims({
+			iss: TEST_ISSUER,
+			app: appId,
+			resource: origin,
+			subject: person.id,
+			label: person.label,
+			email: person.email,
+			// IAM's resource token of an application resource carries no permissions: the exchange resolves them.
+			permissions: [],
+			issuedAt: now,
+			expiresAt: now + TOKEN_TTL_SECONDS,
+			clientId: AGENT_CLIENT_ID,
+			scopes: [agentScopeToken(scope)],
+			grantId: grant,
+			tokenId: crypto.randomUUID(),
+		})
+		const { privateKey } = await signing
+		const token = await new SignJWT(claims).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID, typ: RESOURCE_ACCESS_TOKEN_TYP }).sign(privateKey)
+		return Object.freeze({ grant, token })
+	}
+
+	/** IAM's `mintFromGrant` as the proxy calls it: the resource token, its grant and its person checked again. */
+	const grantExchange: IamGrantRpc = {
+		async mintFromGrant({ app: audience, resource, token }) {
+			const { publicKey } = await signing
+			const verified = await jwtVerify(token, publicKey, { issuer: TEST_ISSUER, audience: resource, typ: RESOURCE_ACCESS_TOKEN_TYP }).then(
+				({ payload }) => parseAccessClaims(payload),
+				() => null,
+			)
+			const oauth = verified?.oauth
+			const held = oauth === undefined ? undefined : agentGrants.get(oauth.grantId)
+			if (
+				verified === null || oauth === undefined || held === undefined || audience !== appId || resource !== origin
+				|| oauth.app !== audience || oauth.clientId !== AGENT_CLIENT_ID || verified.sub !== held.person.id
+			) {
+				return { ok: false, reason: 'invalid_grant' }
+			}
+			// IAM serves a `write` grant only where Control mirrored the environment's `agent-write` as `off` (ADR-0090 §5).
+			if (held.act.scope.mode === 'write' && options.agentWrite !== 'off') return { ok: false, reason: 'write_refused' }
+			const minted = await mint(held.person, { act: held.act, notAfter: verified.exp })
+			if (minted.ok) return minted
+			return minted.reason === 'token_too_large' ? { ok: false, reason: 'token_too_large' } : { ok: false, reason: 'invalid_grant' }
+		},
 	}
 
 	/**
@@ -793,6 +929,7 @@ export function bootTestKit<C extends AnyContract>(
 		iam,
 		issuer: TEST_ISSUER,
 		delegations: membership ?? null,
+		grants: grantExchange,
 		...(options.crossOrigins === undefined ? {} : { crossOrigins: options.crossOrigins }),
 	})
 
@@ -980,6 +1117,7 @@ export function bootTestKit<C extends AnyContract>(
 			fetch: kitFetch,
 			browser,
 			iam,
+			agentGrant,
 			runJob,
 			drain,
 			runDueJobs,

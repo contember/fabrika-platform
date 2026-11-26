@@ -34,12 +34,12 @@ function isInputObject(value: unknown): value is Readonly<Record<string, unknown
 }
 
 /**
- * Whether the sweep asks `row`: a query or a mutation a person or a script calls with one action on, in or over a
+ * Whether the sweep asks `row`: a query or a mutation a person, a script or a person's agent calls with one action on, in or over a
  * dimension. `app` and `creates` need a global grant, a link procedure reaches its link's object only.
  */
 function isSwept(row: EndpointRow): boolean {
 	if (row.kind !== 'query' && row.kind !== 'mutation') return false
-	if (!row.callers.some((caller) => caller === 'human' || caller === 'machine')) return false
+	if (!row.callers.some((caller) => caller === 'human' || caller === 'machine' || caller === 'agent')) return false
 	const requirement = row.requirement
 	return requirement?.kind === 'action' && (requirement.access.form === 'on' || requirement.access.form === 'in' || requirement.access.form === 'over')
 }

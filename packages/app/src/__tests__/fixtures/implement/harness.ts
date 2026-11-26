@@ -14,6 +14,7 @@ import {
 } from '@fabrika/app/implement'
 import {
 	type AccessTokenClaims,
+	accessTokenPayload,
 	buildAccessClaims,
 	compileEndpointTable,
 	contractDigest,
@@ -49,7 +50,7 @@ const JWKS: Promise<Jwks> = signingKeys.then(async ({ publicKey }) => {
 
 /** `claims` signed with the harness's key, as IAM signs a token. */
 export async function sign(claims: AccessTokenClaims): Promise<string> {
-	return new SignJWT({ ...claims }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign((await signingKeys).privateKey)
+	return new SignJWT({ ...accessTokenPayload(claims, 'entries') }).setProtectedHeader({ alg: 'ES256', kid: 'k1' }).sign((await signingKeys).privateKey)
 }
 
 export const keySource: IamKeySource = { getJwks: () => JWKS }

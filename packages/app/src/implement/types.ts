@@ -21,7 +21,7 @@ import type { JobHandlersOf } from '../jobs/types'
 import type { AppCapability, Ref, Within } from './capability'
 import type { ConnectResult } from './connect'
 import type { LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from './membership'
-import type { AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
+import type { AgentGrant, AppPrincipal, LinkHolder, PrincipalOf, ServicePrincipal } from './principal'
 import type { AppUrl } from './urls'
 import type { WebhookDelivery, WebhookPrincipal } from './webhook'
 
@@ -39,6 +39,12 @@ export interface RequestContext<P> {
 	/** An absolute link to a procedure of this application: `ctx.url('api.mail.unsubscribe', { query: { t } })`. */
 	readonly url: AppUrl
 }
+
+/**
+ * `ctx.agent` of a group that lists `agent` (ADR-0090): the agent the person's token acts for, or `null` when the person
+ * calls. `ctx.principal` is the person either way. A group that does not list `agent` has none.
+ */
+export type AgentContext<Caller extends string> = 'agent' extends Caller ? { readonly agent: AgentGrant | null } : unknown
 
 /**
  * The client of a request: its address as the proxy saw it, `null` where the platform cannot vouch for it (behind a
@@ -162,13 +168,13 @@ type ConnectorOf<S, P extends string> = {
 export type ConnectContext<C, Snap, Id extends string> = [ImportsUsedBy<C, Id>] extends [never] ? unknown
 	: { readonly connect: { readonly [K in ImportsUsedBy<C, Id> & keyof Snap]: ConnectorOf<Snap[K], ImportedProcedures<C, K>> } }
 
-type RpcHandlers<C, P, T, Snap, Prefix extends string> = {
+type RpcHandlers<C, P, Ag, T, Snap, Prefix extends string> = {
 	readonly [K in keyof T]: T[K] extends Procedure<'query' | 'mutation', infer I, infer O, infer Acc> ? Handler<
 			HandlerInput<I, Acc>,
-			RequestContext<P> & ContractContext<C, Acc> & ConnectContext<C, Snap, `${Prefix}${K & string}`>,
+			RequestContext<P> & Ag & ContractContext<C, Acc> & ConnectContext<C, Snap, `${Prefix}${K & string}`>,
 			O
 		>
-		: RpcHandlers<C, P, T[K], Snap, `${Prefix}${K & string}.`>
+		: RpcHandlers<C, P, Ag, T[K], Snap, `${Prefix}${K & string}.`>
 }
 
 /** An export handler runs read-only: its context carries its capability and nothing that writes. */
@@ -200,7 +206,7 @@ export type WebhookHandler<B extends string, Acts extends string, I> = (args: {
 }) => void | Promise<void>
 
 type MountHandlers<C, M, Name extends string, Snap> = M extends RpcMount<infer Callers, infer T>
-	? RpcHandlers<C, PrincipalOf<Callers[number]>, T, Snap, `${Name}.`>
+	? RpcHandlers<C, PrincipalOf<Callers[number]>, AgentContext<Callers[number]>, T, Snap, `${Name}.`>
 	: M extends LinkMount<infer D, string, string, infer T> ? LinkHandlers<D, T>
 	: M extends WebhookMount<infer B, infer Acts, infer I> ? WebhookHandler<B, Acts, I>
 	: never

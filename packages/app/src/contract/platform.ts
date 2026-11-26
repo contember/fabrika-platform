@@ -2,6 +2,7 @@
 // endpoint table itself (`contractProxyTable` in `@fabrika/proxy-core/manifest`).
 
 import {
+	AGENT_CALLER,
 	APP_CALLER_PREFIX,
 	type AppDelegationDef,
 	type AppLinkMountDef,
@@ -48,6 +49,8 @@ export function schemaFromContract(artifact: ContractArtifact): AppSchema {
 		...(artifact.members === undefined ? {} : { members: { manage: artifact.members.manage, list: artifact.members.list } }),
 		...(artifact.directory === 'labels' ? { directory: 'labels' } : {}),
 		...(artifact.terminal === undefined ? {} : { terminal: { identify: artifact.terminal.identify } }),
+		// Absent unless a group lists `agent`, so every other application's schema stays as it was (ADR-0062).
+		...(artifact.endpoints.some((row) => row.callers.some((caller) => caller === AGENT_CALLER)) ? { agentCallers: true } : {}),
 	}
 }
 

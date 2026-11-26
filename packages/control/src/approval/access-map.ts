@@ -82,9 +82,12 @@ function byPath(endpoints: AccessMapEndpointDto[]): AccessMapEndpointDto[] {
 	return endpoints.sort((left, right) => compareText(left.path, right.path) || compareText(left.method, right.method))
 }
 
-/** The callers of `row` that hold roles: a person and a script's key. A share link and another application hold none. */
+/**
+ * The callers of `row` that hold roles: a person, a person's agent (with the person's roles, ADR-0090) and a script's key.
+ * A share link and another application hold none.
+ */
 function roleCallers(row: EndpointRow): string[] {
-	return row.callers.filter((caller) => caller === 'human' || caller === 'machine')
+	return row.callers.filter((caller) => caller === 'human' || caller === 'agent' || caller === 'machine')
 }
 
 /** The tables whose rows confer `relation`, and who writes such a row. */
