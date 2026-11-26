@@ -136,6 +136,16 @@ export const applicationApprovalsEdit: PageSpec = {
 	],
 }
 
+export const applicationSecrets: PageSpec = {
+	id: 'application-secrets',
+	path: '/apps/notes/secrets',
+	elements: [
+		...frame,
+		{ id: 'secrets', label: 'Secrets', kind: 'section', usedBy: ['t05-rotate-secret'], consequence: 2, audience: 'role', placement: 'primary' },
+		{ id: 'variables', label: 'Variables', kind: 'section', usedBy: [], consequence: 1, audience: 'role', placement: 'secondary' },
+	],
+}
+
 export const applicationSettings: PageSpec = {
 	id: 'application-settings',
 	path: '/apps/notes/settings',

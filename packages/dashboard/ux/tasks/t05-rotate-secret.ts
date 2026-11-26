@@ -13,13 +13,11 @@ export const rotateSecret: UxTask = {
 	run: async (page, actor) => {
 		await openApp(page, actor)
 		await openTab(page, actor, 'Secrets and variables')
-		const row = page.locator('.workspace tr').filter({ hasText: 'PAYMENT_API_KEY' }).filter({ hasText: 'prod' })
-		await actor.click(row.getByRole('button', { name: /^(Rotate|Set value)$/ }))
-		const value = page.getByLabel('Secret value')
-		const editing = page.locator('.workspace tr').filter({ has: value })
+		await actor.click(page.getByRole('button', { name: /^PAYMENT_API_KEY on prod: / }))
+		const value = page.getByLabel(/^(New value|Secret value)/)
 		await actor.fill(value, `ux-${Date.now().toString(36)}`)
-		await actor.click(editing.getByRole('button', { name: /^(Rotate|Set)$/ }))
+		await actor.click(page.getByRole('button', { name: /^(Rotate|Set)$/ }))
 		await gone(value, 'the value field')
-		await seen(row.getByRole('button', { name: /^(Rotate|Set value)$/ }), 'the saved secret row')
+		await seen(page.getByRole('status').filter({ hasText: 'PAYMENT_API_KEY on prod: new value saved' }), 'the saved confirmation')
 	},
 }
