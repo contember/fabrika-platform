@@ -54,6 +54,7 @@ import { LOGIN_REDIRECT_PARAM, SIGNOUT_RELEASE_PATH } from './constants'
 import { carriesPlatformKey, readBearer, readCookie } from './credentials'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams, unmatchedVerifier } from './handoff'
 import { type DelegationIssuer, type IamGateway, IamUnavailableError } from './iam'
+import type { ProxyLogger } from './log'
 import {
 	audienceOf,
 	isApplicationEntry,
@@ -210,6 +211,8 @@ export interface AuthorizerOptions {
 	 * serves no cached token: every request is minted at IAM.
 	 */
 	revocations?: IamRevocationRpc | null
+	/** Where the revocation feed reports a change between serving and withholding cached tokens; silent when unset. */
+	logger?: ProxyLogger
 	/** Unix seconds. Injectable for tests. */
 	now?: () => number
 	/**
@@ -281,7 +284,7 @@ export class Authorizer {
 	constructor(private readonly options: AuthorizerOptions) {
 		this.now = options.now ?? (() => Math.floor(Date.now() / 1000))
 		this.cache = options.cache ?? null
-		this.revocations = new RevocationFeed(options.revocations ?? null, this.now)
+		this.revocations = new RevocationFeed(options.revocations ?? null, this.now, options.logger)
 		this.verifier = new TokenVerifier(() => options.iam.getJwks(), options.issuer, this.now)
 	}
 

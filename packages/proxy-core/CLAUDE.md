@@ -93,9 +93,10 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   times IAM is called. ADR-0022 requires the proxy to stay stateless, so never make it shared or persistent.
 - **A cached token is served only through the revocation feed** (`revocations.ts`, `RevocationFeed`): its last read of
   IAM's `revocations` is under `REVOCATION_FEED_INTERVAL_SECONDS` (5 s) old and lists no revocation of the token's
-  subject at or after its `iat`. No feed (`revocations` unset or `null`), a failed or refused read, a stale read and an
-  incomplete answer all mint instead: FAIL-CLOSED, and only ever a withheld cached token, never an allow. A new cache
-  read path calls `this.revocations.admits` before it serves.
+  subject from 10 s before its `iat` on (a revocation is stamped before it commits). No feed (`revocations` unset or
+  `null`), a failed or refused read, a read past its deadline, a stale read and an incomplete answer all mint instead:
+  FAIL-CLOSED, and only ever a withheld cached token, never an allow. A new cache read path calls
+  `this.revocations.admits` before it serves.
 - **There is exactly one enforcement decision, and it is `src/authorize.ts`.** It composes
   `@fabrika/auth-core`'s planner (`planEndpoint`), `callerOf` and `satisfies`; it does not reimplement or
   extend them. A whole `:name` segment matches exactly one non-empty segment, a terminal `*` the rest of

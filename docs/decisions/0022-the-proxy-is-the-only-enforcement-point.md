@@ -807,7 +807,9 @@ still refuses any `Authorization` header, as authorization.
   `DEFAULT_TOKEN_TTL_SECONDS` (300 s). So the proxy reads IAM's revocation feed (`IamRevocationRpc.revocations`, on
   Cloudflare the `IAM` binding, on Zerops `POST /auth/mint/revocations` with the proxy key) at most once an interval,
   and serves a cached token only while its last good read is younger than the interval and the token's subject has no
-  revocation at or after the token's `iat`. Otherwise it mints, and IAM decides. The feed lists every subject that,
+  revocation that could postdate the token's `iat`. A revocation is stamped before it commits and a mint stamps `iat`
+  after its checks, so a token issued up to 10 s after a revocation of its subject counts as revoked; the same slack
+  covers clock skew between IAM instances. Otherwise it mints, and IAM decides. The feed lists every subject that,
   in the last token lifetime, had its principal disabled, a session revoked, a key revoked (an anonymous key, share
   links included, is its own subject) or an OAuth grant revoked. IAM reads it from the timestamps those writes
   already set, so no writer has to remember the feed. SCIM deprovisioning, a console disable and a sign-out all reach
@@ -815,7 +817,13 @@ still refuses any `Authorization` header, as authorization.
   - **Fail closed.** No feed, a failed or refused read, a stale read and an answer that lists more than
     `REVOCATION_FEED_MAX_SUBJECTS` (5 000) subjects each turn the cache off: every request mints until a read
     succeeds. The last one also refuses every cached token issued up to that answer. A failed read is retried an
-    interval later, not per request.
+    interval later, not per request. Each request waits for a read at most an interval, and a read that has not settled
+    by then is left behind, so a runtime that never settles one cannot hang the cache.
+  - **IAM keeps what the feed reads for a token lifetime.** The cron keeps a revoked session row, and with it its OAuth
+    grants, for `REVOCATION_FEED_WINDOW_SECONDS` after its revocation.
+  - The feed lists principal ids. Only the proxy reads it: IAM refuses it over a binding marked
+    `props.worker: 'application'`, so an application Worker deployed before that mark can read it until its next deploy,
+    as with `requestDelegation`.
   - **What stays at the token lifetime of 300 s:** a narrowed grant or permission, a share link whose issuer is
     disabled (the link's token names the link, not its issuer), and an OAuth resource token a client presents to an
     `oauth` row, which the proxy verifies locally and never mints. The feed does not list the first two, and the third

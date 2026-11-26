@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test'
 import { MemoryTokenCache } from '../cache'
 import { PROXY_TOKEN_HEADER } from '../constants'
 import { type FetchLike, HttpIamGateway, IamUnavailableError } from '../iam'
+import type { LogFields } from '../log'
 import { REVOCATION_FEED_INTERVAL_SECONDS, RevocationFeed } from '../revocations'
 import { createVerifyService } from '../service'
 import { FakeIam, ISSUER, manifestWith, serviceRow, signToken, signUserToken, verifyRequest } from './helpers'
@@ -50,13 +51,16 @@ describe('RevocationFeed', () => {
 		expect(source.seen).toStrictEqual([{ since: null }])
 	})
 
-	test('a revocation at or after the token issue time refuses it; a token issued later is admitted', async () => {
+	test('a revocation refuses a token issued before it and within the slack after it; one issued later is admitted', async () => {
 		const clock = new Clock()
 		const source = new FakeFeed({ ok: true, now: clock.value, complete: true, subjects: [{ subject: 'user-1', at: clock.value - 5 }] })
 		const feed = new RevocationFeed(source, clock.now)
 		expect(await feed.admits('user-1', clock.value - 6)).toBe(false)
 		expect(await feed.admits('user-1', clock.value - 5)).toBe(false)
-		expect(await feed.admits('user-1', clock.value - 4)).toBe(true)
+		// A mint that read the session just before the revocation committed stamps its `iat` after the revocation's stamp.
+		expect(await feed.admits('user-1', clock.value - 4)).toBe(false)
+		expect(await feed.admits('user-1', clock.value + 5)).toBe(false)
+		expect(await feed.admits('user-1', clock.value + 6)).toBe(true)
 		expect(await feed.admits('user-2', clock.value - 60)).toBe(true)
 	})
 
@@ -114,7 +118,8 @@ describe('RevocationFeed', () => {
 		const source = new FakeFeed({ ok: true, now: 1000, complete: false, subjects: [] })
 		const feed = new RevocationFeed(source, clock.now)
 		expect(await feed.admits('anyone', 1000)).toBe(false)
-		expect(await feed.admits('anyone', 1001)).toBe(true)
+		expect(await feed.admits('anyone', 1010)).toBe(false)
+		expect(await feed.admits('anyone', 1011)).toBe(true)
 	})
 
 	test('concurrent requests share one read', async () => {
@@ -134,6 +139,48 @@ describe('RevocationFeed', () => {
 		release({ ok: true, now: clock.value, complete: true, subjects: [] })
 		expect(await answers).toStrictEqual([true, true, true])
 		expect(calls).toBe(1)
+	})
+
+	test('a read that never settles admits nothing past the deadline, and is left behind after the interval', async () => {
+		const clock = new Clock()
+		let calls = 0
+		const source: IamRevocationRpc = {
+			revocations: () => {
+				calls++
+				// The first read hangs, as a Worker's cancelled I/O may; the next one answers.
+				return calls === 1 ? new Promise(() => {}) : Promise.resolve({ ok: true, now: clock.value, complete: true, subjects: [] })
+			},
+		}
+		const feed = new RevocationFeed(source, clock.now, undefined, 10)
+		expect(await feed.admits('a', clock.value)).toBe(false)
+		expect(await feed.admits('a', clock.value)).toBe(false)
+		expect(calls).toBe(1)
+		clock.value += REVOCATION_FEED_INTERVAL_SECONDS
+		expect(await feed.admits('a', clock.value)).toBe(true)
+		expect(calls).toBe(2)
+	})
+
+	test('a change between serving and withholding is logged once each way, with no detail of the failure', async () => {
+		const clock = new Clock()
+		const source = new FakeFeed(new Error('connect ECONNREFUSED https://iam.internal'))
+		const lines: string[] = []
+		const logger = {
+			info: (message: string, fields?: LogFields) => lines.push(`info ${message} ${JSON.stringify(fields)}`),
+			warn: (message: string, fields?: LogFields) => lines.push(`warn ${message} ${JSON.stringify(fields)}`),
+			error: (message: string, fields?: LogFields) => lines.push(`error ${message} ${JSON.stringify(fields)}`),
+		}
+		const feed = new RevocationFeed(source, clock.now, logger)
+		await feed.admits('a', clock.value)
+		clock.value += REVOCATION_FEED_INTERVAL_SECONDS
+		await feed.admits('a', clock.value)
+		source.answer = { ok: true, now: clock.value, complete: true, subjects: [] }
+		clock.value += REVOCATION_FEED_INTERVAL_SECONDS
+		await feed.admits('a', clock.value)
+		await feed.admits('a', clock.value)
+		expect(lines).toEqual([
+			'warn revocation feed unavailable; serving no cached token {"operation":"revocations"}',
+			'info revocation feed restored {"operation":"revocations"}',
+		])
 	})
 })
 

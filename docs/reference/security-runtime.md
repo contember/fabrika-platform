@@ -43,8 +43,8 @@ flowchart LR
 - **The proxy holds no durable state.** Its token cache is in memory, per process
   ([ADR-0022 rule 1](../decisions/0022-the-proxy-is-the-only-enforcement-point.md#1-only-the-proxy-is-publicly-routed)).
   A process that holds a token minted from a session or a key reuses it until 30 s before it expires, but only while
-  its last read of IAM's revocation feed is under 5 s old and lists no revocation of the token's subject since the
-  token was minted; otherwise it mints again. So after a revocation a warm process may still admit that caller for up
+  its last read of IAM's revocation feed is under 5 s old and lists no revocation of the token's subject that could postdate
+  its minting; otherwise it mints again. So after a revocation a warm process may still admit that caller for up
   to 5 s, and a proxy whose feed read fails admits nothing from its cache
   ([`revocations.ts`](../../packages/proxy-core/src/revocations.ts), [`authorize.ts`](../../packages/proxy-core/src/authorize.ts)).
 - **Exposure is refused at each deploy and watched between deploys.** `verify-exposure` refuses a deploy

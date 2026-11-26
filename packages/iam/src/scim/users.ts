@@ -3,7 +3,7 @@
 // Deprovisioning is immediate at IAM: `active=false` and DELETE disable the principal and, in the same transaction,
 // revoke every session (an application session is revoked with its parent and by its own row), every `px_` key bound
 // to it, every OAuth grant, and spend every pending password action. The next mint, key exchange, refresh or `/admin`
-// call is refused. A token a proxy already cached stays valid until it expires (ADR-0022, `DEFAULT_TOKEN_TTL_SECONDS`).
+// call is refused. A proxy stops serving a token it cached within its revocation feed's interval (ADR-0022).
 
 import { uuidv7 } from '@fabrika/platform'
 import { IAM_APP } from '../admin/router'

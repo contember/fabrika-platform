@@ -120,7 +120,7 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 		}
 	}
 
-	const authorizerOptions: AuthorizerOptions = { iam: config.iam, issuer: config.issuer }
+	const authorizerOptions: AuthorizerOptions = { iam: config.iam, issuer: config.issuer, logger }
 	if (config.cache !== undefined) {
 		authorizerOptions.cache = config.cache
 	}
