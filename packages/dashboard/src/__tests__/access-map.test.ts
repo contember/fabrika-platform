@@ -119,9 +119,11 @@ describe('the access map in the console', () => {
 		expect(html).toContain('<code>POST /api/me</code>')
 	})
 
-	test('before a publication, or from a Control that does not send the map, the environment says it has no roles yet', () => {
-		expect(section(environment('prod', { roles: [], actions: [], memberEndpoints: [] }))).toContain('No roles are published on prod yet.')
-		expect(section(environment('dev', undefined))).toContain('No roles are published on dev yet.')
+	test('before a publication the environment has no roles yet; a published release without roles says so; an older Control shows nothing', () => {
+		const empty = { roles: [], actions: [], memberEndpoints: [] }
+		expect(section(environment('prod', empty))).toContain('No roles are published on prod yet.')
+		expect(section({ ...environment('prod', empty), publishedRunId: 'run-1' })).toContain('The release published on prod declares no roles.')
+		expect(section(environment('dev', undefined))).toBe('')
 	})
 
 	test('who holds the roles links to the people of that environment, for a caller who administers people', () => {

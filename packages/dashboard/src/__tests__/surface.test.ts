@@ -85,9 +85,17 @@ describe('the surface in the console', () => {
 		expect(markup).toContain('<td><span class="muted small">human, machine</span> with <code>notes.read</code> (on <code>note</code>)</td>')
 	})
 
-	test('an environment with nothing published says so', () => {
-		const markup = section(environment('dev', []))
+	test('an environment with nothing published says so; a published release without endpoints to list says that instead', () => {
+		const markup = section({ ...environment('dev', []), publishedRunId: null })
 		expect(markup).toContain('Nothing is published on dev yet.')
 		expect(markup).not.toContain('<table')
+		expect(section({ ...environment('prod', []), publishedRunId: 'run-1' })).toContain(
+			'The release published on prod declares no endpoints the console can list.',
+		)
+	})
+
+	test('with nothing public, every endpoint folds under a count naming its reaches', () => {
+		const markup = section(environment('prod', [GET, SPA, { ...GET, id: 'app.other', reach: 'app' }]))
+		expect(markup).toContain('<summary>Show 3 endpoints, for other apps, machines and signed-in people</summary>')
 	})
 })

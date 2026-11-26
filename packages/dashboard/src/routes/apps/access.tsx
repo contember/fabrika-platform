@@ -1,4 +1,5 @@
 import { createPage, Link } from '@buzola/router'
+import { appEnvironmentId } from '@fabrika/auth-core'
 import { AccessMapSection } from '../../components/app-detail/AccessMapSection'
 import { AdminAccessSection } from '../../components/app-detail/AdminAccessSection'
 import { DeviationsSection } from '../../components/app-detail/DeviationsSection'
@@ -13,11 +14,11 @@ export default createPage()
 	.loader(async ({ params }) => {
 		const [frame, session] = await Promise.all([loadAppFrame(params.id), consoleSession()])
 		const selfAdmin = await readSelfAdmin(params.id, frame.envs.map((env) => env.env), session)
-		return { ...frame, selfAdmin, people: session.administersPeople !== false }
+		return { ...frame, selfAdmin, peopleApps: session.peopleApps ?? [] }
 	})
 	.route('/apps/:id/access/:env')
 	.render(({ data, params, invalidate }) => {
-		const { app, envs, selfAdmin, people } = data
+		const { app, envs, selfAdmin, peopleApps } = data
 		const states = useEnvironmentStates(envs)
 		const env = envs.find((candidate) => candidate.env === params.env)
 		return (
@@ -39,11 +40,13 @@ export default createPage()
 					</div>
 				</div>
 				{env === undefined
-					? <EmptyState icon="shield" title={`No environment ${params.env}`} body="Choose one of the application's environments above." />
+					? envs.length === 0
+						? <EmptyState icon="shield" title="No environments" body="An environment's endpoints and roles appear here once it is added and deployed." />
+						: <EmptyState icon="shield" title={`No environment ${params.env}`} body="Choose one of the application's environments above." />
 					: (
 						<>
 							<SurfaceSection env={env} />
-							<AccessMapSection env={env} people={people} />
+							<AccessMapSection env={env} people={peopleApps.includes(appEnvironmentId(env.appId, env.env))} />
 							<DeviationsSection env={env} />
 						</>
 					)}

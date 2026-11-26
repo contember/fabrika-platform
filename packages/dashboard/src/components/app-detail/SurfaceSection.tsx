@@ -21,7 +21,11 @@ export function SurfaceSection({ env }: { env: AppEnvDto }) {
 				<h2>Endpoints</h2>
 			</div>
 			<p className="section-note">What {env.env} serves, by the most exposed caller that reaches each endpoint. The proxy refuses every other path.</p>
-			{env.surface.length === 0 ? <p className="muted">Nothing is published on {env.env} yet.</p> : <EnvironmentSurface env={env} />}
+			{env.surface.length > 0
+				? <EnvironmentSurface env={env} />
+				: env.publishedRunId === null
+				? <p className="muted">Nothing is published on {env.env} yet.</p>
+				: <p className="muted">The release published on {env.env} declares no endpoints the console can list.</p>}
 		</section>
 	)
 }
@@ -62,13 +66,18 @@ function EnvironmentSurface({ env }: { env: AppEnvDto }) {
 				<details className="surface">
 					<summary>
 						{open.length === 0 ? 'Show' : 'Show the other'} {rest.length === 1 ? '1 endpoint' : `${rest.length} endpoints`}, for{' '}
-						{SURFACE_REACHES.filter((reach) => rest.some((endpoint) => endpoint.reach === reach)).map((reach) => REACH_LABELS[reach]).join(' and ')}
+						{inWords(SURFACE_REACHES.filter((reach) => rest.some((endpoint) => endpoint.reach === reach)).map((reach) => REACH_LABELS[reach]))}
 					</summary>
 					<SurfaceTable endpoints={rest} />
 				</details>
 			)}
 		</>
 	)
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function inWords(items: readonly string[]): string {
+	return items.length <= 1 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items.at(-1)}`
 }
 
 function SurfaceTable({ endpoints }: { endpoints: readonly SurfaceEndpointDto[] }) {

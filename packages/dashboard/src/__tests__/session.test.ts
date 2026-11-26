@@ -75,6 +75,7 @@ describe('console session', () => {
 
 		expect(session.iam).toEqual({ kind: 'installation' })
 		expect(session.administersPeople).toBe(true)
+		expect(session.peopleApps).toEqual(['app-0'])
 	})
 
 	test('a user administrator is named from IAM with the applications it administers', async () => {
@@ -91,6 +92,7 @@ describe('console session', () => {
 		expect(session.access).toBeNull()
 		expect(session.iam).toBeNull()
 		expect(session.administersPeople).toBeNull()
+		expect(session.peopleApps).toBeNull()
 	})
 
 	test('does not start a login bounce when the session is refused', async () => {

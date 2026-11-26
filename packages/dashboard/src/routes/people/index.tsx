@@ -17,7 +17,7 @@ export default createPage()
 	.params({ app: '?string', after: '?string' })
 	.loader(async ({ params }) => {
 		const apps = (await api.appPeople.apps()).items
-		const selected = apps.find((app) => app.app === params.app) ?? apps[0] ?? null
+		const selected = selectedPeopleApp(apps, params.app)
 		const people = selected === null
 			? null
 			: await api.appPeople.list({ app: selected.app, ...(params.after === undefined ? {} : { after: params.after }) })
@@ -36,10 +36,17 @@ export default createPage()
 					</p>
 				</div>
 				{selected === null || people === null
-					? <EmptyState title="You administer no application's people" body="An IAM administrator grants the role that does." />
+					? params.app !== undefined && apps.length > 0
+						? (
+							<>
+								<AppPicker apps={apps} selected={null} />
+								<EmptyState title={`You do not administer the people of ${params.app}`} body="Choose an application whose people you administer." />
+							</>
+						)
+						: <EmptyState title="You administer no application's people" body="An IAM administrator grants the role that does." />
 					: (
 						<>
-							{apps.length > 1 && <AppPicker apps={apps} selected={selected.app} />}
+							<AppPicker apps={apps} selected={selected.app} />
 							<GrantForm app={selected} onDone={invalidate} />
 							<PeopleTable app={selected} members={people.members} onDone={invalidate} />
 							{people.next !== null && (
@@ -52,17 +59,26 @@ export default createPage()
 		)
 	})
 
-function AppPicker({ apps, selected }: { apps: AdministeredAppDto[]; selected: string }) {
+/**
+ * The application a people page shows: the one asked for, else the first. One the caller does not administer is never
+ * swapped for another, so a grant made there cannot land on an application the link did not name.
+ */
+export function selectedPeopleApp<T extends { readonly app: string }>(apps: readonly T[], requested: string | undefined): T | null {
+	return requested === undefined ? apps[0] ?? null : apps.find((app) => app.app === requested) ?? null
+}
+
+function AppPicker({ apps, selected }: { apps: AdministeredAppDto[]; selected: string | null }) {
 	return (
 		<div className="filters">
 			<label>
 				Application
 				<select
-					value={selected}
+					value={selected ?? ''}
 					onChange={(e) => {
 						location.href = `/people?app=${encodeURIComponent(e.target.value)}`
 					}}
 				>
+					{selected === null && <option value="" disabled>Choose an application</option>}
 					{apps.map((app) => <option key={app.app} value={app.app}>{app.displayName ?? app.app}</option>)}
 				</select>
 			</label>

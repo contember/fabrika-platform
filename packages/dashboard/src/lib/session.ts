@@ -7,7 +7,7 @@ import {
 } from '@fabrika/control-contract'
 import { ACCOUNT_PAGE_PATH, SECOND_FACTOR_ENROL_PATH } from '@fabrika/iam-contract'
 import type { ConsoleCaller } from './console-access'
-import { administersPeople, type IamAdministration, iamAdministration, type SignedInPrincipal } from './iam'
+import { administeredPeopleApps, type IamAdministration, iamAdministration, type SignedInPrincipal } from './iam'
 
 const DISCOVERY_PATH = '/.well-known/fabrika-builder'
 
@@ -20,6 +20,8 @@ export interface ConsoleSession extends ConsoleCaller {
 	secondFactorUrl: string | null
 	/** The passkeys section of the person's IAM account page, where they add and remove passkeys; null without IAM's origin. */
 	passkeysUrl: string | null
+	/** The applications (`<app>@<env>`) whose own people the caller administers; null when IAM does not answer. */
+	peopleApps: readonly string[] | null
 }
 
 /** The installation facts control publishes on the console's own origin, or null when it publishes none. */
@@ -70,7 +72,7 @@ export async function readConsoleSession(fetcher: RpcFetch = fetch): Promise<Con
 	const [access, administration, people, discovery] = await Promise.all([
 		consoleAccess(fetcher),
 		iamAdministration(fetcher),
-		administersPeople(fetcher),
+		administeredPeopleApps(fetcher),
 		installationDiscovery(fetcher),
 	])
 	return {
@@ -82,7 +84,8 @@ export async function readConsoleSession(fetcher: RpcFetch = fetch): Promise<Con
 		passkeysUrl: discovery === null ? null : passkeysUrl(discovery.iamIssuer),
 		access,
 		iam: administration.status === 'unknown' ? null : administration.status === 'administrator' ? administration.scope : false,
-		administersPeople: people,
+		administersPeople: people === null ? null : people.length > 0,
+		peopleApps: people,
 	}
 }
 

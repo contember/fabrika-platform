@@ -26,8 +26,8 @@ export function AdminAccessSection({ state, onDone }: { state: SelfAdminState | 
 				<h2>Your admin access</h2>
 			</div>
 			<p className="section-note">
-				Admin holds every action of the application in that environment. Granting it to yourself is an ordinary grant, audited and revoked under your
-				account.
+				In every environment, not only the one chosen below. Admin holds every action of the application there; granting it to yourself is an ordinary
+				grant, audited and revoked under your account.
 			</p>
 			<ul className="self-admin">
 				{state.targets.map((target) => <SelfAdminRow key={target.app} principalId={state.principalId} target={target} onDone={onDone} />)}
