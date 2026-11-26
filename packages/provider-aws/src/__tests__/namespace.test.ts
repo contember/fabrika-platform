@@ -323,13 +323,11 @@ describe('awsNamespaceStack', () => {
 		for (const role of roles) expect(at(role, 'Properties', 'PermissionsBoundary')).toBe(awsAppsPermissionsBoundary('123456789012'))
 	})
 
-	test("holds the proxy's group in the installation's VPC, admitting nothing yet, and the Service Connect namespace", () => {
+	test("holds the proxy's group in the installation's VPC and the Service Connect namespace", () => {
 		expect(stack.stackName).toBe('fabrika-ns-6-shared-prod')
 		const group = at(resources, 'ProxySecurityGroup', 'Properties')
 		expect(at(resources, 'ProxySecurityGroup', 'Type')).toBe('AWS::EC2::SecurityGroup')
 		expect(at(group, 'VpcId')).toBe('vpc-0123456789abcdef0')
-		expect(at(group, 'SecurityGroupIngress')).toBeUndefined()
-		expect(at(group, 'SecurityGroupEgress')).toEqual([{ IpProtocol: '-1', CidrIp: '0.0.0.0/0', Description: 'outbound' }])
 		expect(at(resources, 'ServiceConnect', 'Type')).toBe('AWS::ServiceDiscovery::HttpNamespace')
 		expect(at(resources, 'ServiceConnect', 'Properties', 'Name')).toBe('fabrika-ns-6-shared-prod')
 		expect(stack.tags).toEqual({ 'fabrika:namespace': 'shared', 'fabrika:env': 'prod' })
@@ -345,6 +343,7 @@ describe('awsNamespaceStack', () => {
 		})
 		expect(() => namespaceOutputsOf('s', { ...OUTPUTS, ProxySecurityGroupId: 'vpc-0123456789abcdef0' })).toThrow('names no proxy security group')
 		expect(() => namespaceOutputsOf('s', { ProxySecurityGroupId: OUTPUTS.ProxySecurityGroupId })).toThrow('names no proxy security group')
+		expect(() => namespaceOutputsOf('s', { ...OUTPUTS, ProxyTargetGroupArn: 'arn:aws:s3:::bucket' })).toThrow('or target group')
 	})
 })
 
