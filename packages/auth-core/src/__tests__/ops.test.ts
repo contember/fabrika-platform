@@ -22,6 +22,7 @@ import {
 	OPS_DUMP_PART_SIZE,
 	OPS_EMPTY_TABLE_HASH,
 	OPS_METHOD,
+	OPS_MIGRATION_RECORD_KEY,
 	OPS_MODES,
 	OPS_OPERATIONS,
 	OPS_PREFIX,
@@ -61,6 +62,8 @@ import {
 	type OpsImportVerifyAck,
 	opsKeyDigest,
 	type OpsMigration,
+	type OpsMigrationFailure,
+	type OpsMigrationRecord,
 	opsPath,
 	type OpsPublishedState,
 	opsRefusal,
@@ -96,6 +99,8 @@ import {
 	parseOpsKeyDigests,
 	parseOpsMigrateAck,
 	parseOpsMigrateRequest,
+	parseOpsMigrationFailure,
+	parseOpsMigrationRecord,
 	parseOpsOperation,
 	parseOpsRestoreArmAck,
 	parseOpsRestorePrepareAck,
@@ -278,6 +283,91 @@ describe('the migration request', () => {
 			]
 		) {
 			expect(parseOpsMigrateAck(body)).toBeNull()
+		}
+	})
+})
+
+describe('the migration record', () => {
+	const record: OpsMigrationRecord = {
+		id: '0192a4c6-7b1e-7c3d-9e2f-000000000001',
+		version: '5a1c3f0e-1111-4c2d-9e3a-0123456789ab',
+		bookmark: '0000007b-0000b26e-00001538-0c3e87bb37b3db5cc52eedb93cd3b96b',
+		startDigest: 'b'.repeat(64),
+		files: [{ bundle: 'app', name: '20260101000000_notes.sql', checksum: 'a'.repeat(64) }],
+		at: AT,
+		outcome: null,
+		committedBookmark: null,
+		booted: null,
+	}
+	const committed: OpsMigrationRecord = {
+		...record,
+		outcome: 'committed',
+		committedBookmark: '0000007c-0000b26e-00001538-0c3e87bb37b3db5cc52eedb93cd3b96b',
+	}
+
+	test('lives beside the published state of its object', () => {
+		expect(OPS_MIGRATION_RECORD_KEY('application')).toBe('__fabrika/ops/application.migration.json')
+	})
+
+	test('parses each outcome, and a record without version metadata or a bookmark', () => {
+		const records: OpsMigrationRecord[] = [
+			record,
+			committed,
+			{ ...committed, booted: AT },
+			{ ...committed, outcome: 'rewound' },
+			{ ...record, outcome: 'rolled_back' },
+			{ ...record, outcome: 'diverged', booted: AT },
+			{ ...record, version: null, bookmark: null },
+		]
+		for (const body of records) {
+			expect(parseOpsMigrationRecord(body)).toEqual(body)
+		}
+	})
+
+	test('refuses a malformed field, an empty file list, and fields that disagree with the outcome', () => {
+		const bodies = [
+			...variants(record, { id: 'r1', version: 'a b', bookmark: '', startDigest: 'b', files: [], at: '2026-10-24', outcome: 'failed', booted: 7 }),
+			{ ...record, files: [{ bundle: 'app', name: '', checksum: 'a'.repeat(64) }] },
+			{ ...record, committedBookmark: committed.committedBookmark },
+			{ ...record, outcome: 'rolled_back', committedBookmark: committed.committedBookmark },
+			{ ...record, booted: AT },
+			{ ...committed, outcome: 'rewound', booted: AT },
+		]
+		for (const body of bodies) {
+			expect(parseOpsMigrationRecord(body)).toBeNull()
+		}
+	})
+
+	test('rides the migrate ack, which an older release answers without it', () => {
+		for (
+			const ack of [{ generation: 9, migrations: [migration], record: committed }, { generation: 9, migrations: [], record: null }, {
+				generation: 9,
+				migrations: [],
+			}]
+		) {
+			expect(parseOpsMigrateAck(ack)).toEqual(ack)
+		}
+		expect(parseOpsMigrateAck({ generation: 9, migrations: [], record: { ...record, id: 'r1' } })).toBeNull()
+	})
+
+	test('a failed migration names a reason its record agrees with', () => {
+		const agreeing: OpsMigrationFailure[] = [
+			{ refused: 'migration_failed', reason: 'record_unwritable', record },
+			{ refused: 'migration_failed', reason: 'rolled_back', record: { ...record, outcome: 'rolled_back' } },
+			{ refused: 'migration_failed', reason: 'committed', record: committed },
+		]
+		for (const body of agreeing) {
+			expect(parseOpsMigrationFailure(body)).toEqual(body)
+		}
+		const disagreeing = [
+			{ refused: 'migration_failed', reason: 'record_unwritable', record: committed },
+			{ refused: 'migration_failed', reason: 'rolled_back', record },
+			{ refused: 'migration_failed', reason: 'committed', record: { ...committed, booted: AT } },
+			{ refused: 'migration_failed', reason: 'diverged', record: { ...record, outcome: 'diverged' } },
+			...variants({ refused: 'migration_failed', reason: 'rolled_back', record: { ...record, outcome: 'rolled_back' } }, { refused: 'wrong_mode' }),
+		]
+		for (const body of disagreeing) {
+			expect(parseOpsMigrationFailure(body)).toBeNull()
 		}
 	})
 })
@@ -1073,6 +1163,25 @@ describe('the restore request', () => {
 			null,
 		]
 		for (const body of bodies) {
+			expect(parseOpsRestoreRequest(body)).toBeNull()
+		}
+	})
+})
+
+describe('the in-place rewind request', () => {
+	const RECORD = '0192a4c6-7b1e-7c3d-9e2f-000000000001'
+	const prepare: OpsRestorePrepare = { step: 'prepare', object: 'application', generation: 6, sentinel: SENTINEL, record: RECORD }
+	const arm: OpsRestoreArm = { step: 'arm', object: 'application', generation: 6, sentinel: SENTINEL, target: BOOKMARK, record: RECORD }
+	const verify: OpsRestoreVerify = { step: 'verify', object: 'application', sentinel: SENTINEL, record: RECORD }
+
+	test('names the migration record at each step', () => {
+		for (const request of [prepare, arm, verify]) {
+			expect(parseOpsRestoreRequest(request)).toEqual(request)
+		}
+	})
+
+	test('prepares by a time or by a record, never both, and refuses a record that is not a UUID', () => {
+		for (const body of [{ ...prepare, at: AT }, ...variants(prepare, { record: 'r1' }), { ...arm, record: '' }, { ...verify, record: null }]) {
 			expect(parseOpsRestoreRequest(body)).toBeNull()
 		}
 	})

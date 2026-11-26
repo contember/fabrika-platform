@@ -40,6 +40,7 @@ import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING } from '../clo
 import { opsAccess, type OpsTarget, serveOps } from '../cloudflare/ops'
 import { notesApp } from './cloudflare-fixture/src/app'
 import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
+import { isMigrationRecordKey, noMigrationRecord, RecordObjects } from './fixtures/migration-records'
 
 const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
 const OPS_KEY = 'ops-key-of-the-environment-0123456789abcdef'
@@ -129,6 +130,7 @@ async function start(options: StartOptions = {}): Promise<Started> {
 	options.seed?.(observed.database)
 	const tokens = workloadTokensFor(served.implementation)
 	const unused = () => Promise.reject(new Error('not called'))
+	const records = new RecordObjects()
 	const pending: Promise<unknown>[] = []
 	const state: ApplicationState = {
 		storage: observed.storage,
@@ -140,11 +142,12 @@ async function start(options: StartOptions = {}): Promise<Started> {
 		...served.variables,
 		FABRIKA_PROXY_SECRET: PROXY_SECRET,
 		IAM: { getJwks: () => keySource.getJwks(), mintFromKey: (input: { app: string; key: string }) => tokens.exchange(input) },
-		// No maintenance state, so the object reads `open`; no file call is expected.
+		// No maintenance state, so the object reads `open`; only its migration record is written, and no file call is expected.
 		[CLOUDFLARE_FILES_BINDING]: {
 			head: unused,
-			get: (key: string) => key.startsWith('__fabrika/ops/') ? Promise.resolve(null) : unused(),
-			put: unused,
+			get: (key: string) => isMigrationRecordKey(key) ? records.get(key) : key.startsWith('__fabrika/ops/') ? Promise.resolve(null) : unused(),
+			put: (key: string, body: unknown, options: { readonly onlyIf: { readonly etagMatches?: string; readonly etagDoesNotMatch?: string } }) =>
+				isMigrationRecordKey(key) ? records.put(key, body, options) : unused(),
 			delete: unused,
 		},
 		[FABRIKA_OPS_KEY_DIGESTS]: formatOpsKeyDigests(options.digests ?? [opsKeyDigest(OPS_KEY)]),
@@ -489,6 +492,8 @@ describe('a transition of an object that holds an import marker', () => {
 			bootFailure: () => Promise.resolve(null),
 			maintenance: () => Promise.resolve(barrier),
 			migrate: () => Promise.reject(new Error('not called')),
+			migrationRecords: () => noMigrationRecord,
+			version: null,
 		}
 		return { target, kv, barrier }
 	}

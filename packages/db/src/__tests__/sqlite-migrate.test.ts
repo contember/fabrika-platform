@@ -5,7 +5,15 @@ import { Database } from 'bun:sqlite'
 import { describe, expect, spyOn, test } from 'bun:test'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '../migrations-sqlite'
 import { execStatements } from '../sqlite-bun'
-import { migrateSqlite, type SqliteMigrationBundle, SqliteMigrationError, type SqliteMigrationTarget } from '../sqlite-migrate'
+import {
+	migrateSqlite,
+	planSqliteMigrations,
+	readSqliteLedger,
+	sqliteLedgerDigest,
+	type SqliteMigrationBundle,
+	SqliteMigrationError,
+	type SqliteMigrationTarget,
+} from '../sqlite-migrate'
 
 /** Each statement of a text runs, and the last one answers, as `sql.exec` would. */
 function target(db: Database): SqliteMigrationTarget {
@@ -250,5 +258,84 @@ describe('migrateSqlite', () => {
 			expect(error).toBeInstanceOf(SqliteMigrationError)
 			expect(String(error)).toContain(`app/${NOTES} changed after it was applied`)
 		})
+	})
+})
+
+describe('planSqliteMigrations', () => {
+	test('plans nothing and reads no ledger while every bundle matches its digest', async () => {
+		const db = open()
+		await migrateSqlite(target(db), [framework, app([notes])])
+		const plan = await planSqliteMigrations(target(db), [framework, app([notes])])
+		expect(plan).toMatchObject({ ledger: null, pending: [], writes: false })
+		expect(plan.apply()).toEqual([])
+	})
+
+	test('applies every pending file of both bundles in one transaction, with their ledger rows and digests', async () => {
+		const db = open()
+		const plan = await planSqliteMigrations(target(db), [framework, app([tags, notes])])
+		expect(plan.ledger).toEqual({ entries: [], digest: await sqliteLedgerDigest([]) })
+		expect(plan.pending.map((entry) => `${entry.bundle}/${entry.name}`)).toEqual([
+			...SQLITE_FRAMEWORK_MIGRATIONS.map((migration) => `fabrika/${migration.name}`),
+			`app/${NOTES}`,
+			`app/${TAGS}`,
+		])
+		let transactions = 0
+		const inner = target(db)
+		const counting: SqliteMigrationTarget = {
+			exec: inner.exec,
+			transactionSync(fn) {
+				transactions++
+				return inner.transactionSync(fn)
+			},
+		}
+		const counted = await planSqliteMigrations(counting, [framework, app([tags, notes])])
+		expect(counted.apply()).toHaveLength(plan.pending.length)
+		expect(transactions).toBe(1)
+		expect(tables(db)).toContain('tags')
+		const after = await readSqliteLedger(target(db))
+		expect(after.entries).toEqual([...plan.pending].sort((a, b) => (a.bundle < b.bundle ? -1 : a.bundle > b.bundle ? 1 : a.name < b.name ? -1 : 1)))
+		expect(after.digest).toBe(await sqliteLedgerDigest(plan.pending))
+		expect((await planSqliteMigrations(target(db), [framework, app([tags, notes])])).writes).toBe(false)
+		expect(digests(db).size).toBe(2)
+	})
+
+	test('a failing file rolls back every file of the set and leaves the ledger the plan started from', async () => {
+		const db = open()
+		await migrateSqlite(target(db), [framework, app([notes])])
+		const before = await readSqliteLedger(target(db))
+		const broken = { name: '20260103000000_broken.sql', sql: 'CREATE TABLE broken (id TEXT PRIMARY KEY);\nSELECT * FROM no_such_table;' }
+		const plan = await planSqliteMigrations(target(db), [framework, app([notes, tags, broken])])
+		expect(plan.ledger).toEqual(before)
+		expect(() => plan.apply()).toThrow(SqliteMigrationError)
+		expect(tables(db)).not.toContain('tags')
+		expect(tables(db)).not.toContain('broken')
+		expect(await readSqliteLedger(target(db))).toEqual(before)
+	})
+
+	test('a row the foreign key check returns rolls the whole set back', async () => {
+		const db = open()
+		// Deferred checks let the orphan in until the commit, where only `foreign_key_check` sees it first.
+		const orphan = {
+			name: TAGS,
+			sql: 'PRAGMA defer_foreign_keys = ON;\n' + tags.sql + "\nINSERT INTO tags (id, note_id) VALUES ('t', 'no-such-note');",
+		}
+		const plan = await planSqliteMigrations(target(db), [app([notes, orphan])])
+		let error: unknown
+		try {
+			plan.apply()
+		} catch (caught) {
+			error = caught
+		}
+		expect(error).toBeInstanceOf(SqliteMigrationError)
+		expect(String(error)).toContain('violates a foreign key')
+		expect(tables(db)).not.toContain('notes')
+		expect((await readSqliteLedger(target(db))).entries).toEqual([])
+	})
+
+	test('refuses an applied file whose text changed before anything runs', async () => {
+		const db = open()
+		await migrateSqlite(target(db), [app([notes])])
+		const error = await rejection(planSqliteMigrations(target(db), [app([{ ...notes, sql: `${notes.sql}\n-- edited` }, tags])]))
+		expect(error).toBeInstanceOf(SqliteMigrationError)
 	})
 })

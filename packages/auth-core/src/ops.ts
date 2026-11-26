@@ -111,6 +111,12 @@ export function OPS_STATE_KEY(object: string): string {
 	return `__fabrika/ops/${object}.json`
 }
 
+/** The R2 key, in the environment's bucket, of the migration record of `object` (ADR-0069 §3). */
+export function OPS_MIGRATION_RECORD_KEY(object: string): string {
+	if (parseApplicationObjectName(object) === null) throw new Error('a migration record key needs a valid object name')
+	return `__fabrika/ops/${object}.migration.json`
+}
+
 /** The maintenance modes, from the most permissive. */
 export const OPS_MODES = ['open', 'read-only', 'closed', 'inspect'] as const
 
@@ -177,10 +183,66 @@ export interface OpsMigration {
 	readonly appliedAt: string
 }
 
-/** Sent once the migrations ran and the application booted, with the new ledger. */
+/**
+ * Sent once the migrations ran and the application booted, with the new ledger. `record` is the object's migration
+ * record, `null` when it has none; a release before the migrating boot omits it.
+ */
 export interface OpsMigrateAck {
 	readonly generation: number
 	readonly migrations: readonly OpsMigration[]
+	readonly record?: OpsMigrationRecord | null
+}
+
+/** A file a migration record names: the ledger row's identity and checksum. */
+export interface OpsMigrationFile {
+	readonly bundle: string
+	readonly name: string
+	readonly checksum: string
+}
+
+/**
+ * What became of a record's transaction: `diverged`, the ledger holds some of its rows (a release before the gate
+ * migrated over it); `rewound`, an in-place rewind took the object back to the record's bookmark (ADR-0070 §9).
+ */
+export const OPS_MIGRATION_OUTCOMES = ['committed', 'rolled_back', 'diverged', 'rewound'] as const
+
+export type OpsMigrationOutcome = (typeof OPS_MIGRATION_OUTCOMES)[number]
+
+/**
+ * The migration record (ADR-0069 §3), stored in the environment's bucket and answered by `migrate`: what one migrating
+ * boot did, written before its transaction and completed after it.
+ */
+export interface OpsMigrationRecord {
+	/** A UUIDv7 per record; every later put of the record names it. */
+	readonly id: string
+	/** The id of the Worker version that wrote it; `null` where the runtime has no version metadata, which no rewind accepts. */
+	readonly version: string | null
+	/** The bookmark before the transaction, the only target of the in-place rewind; `null` where the runtime has none. */
+	readonly bookmark: string | null
+	/** The digest of the ledger the boot started from (`@fabrika/db`'s `sqliteLedgerDigest`). */
+	readonly startDigest: string
+	readonly files: readonly OpsMigrationFile[]
+	readonly at: string
+	readonly outcome: OpsMigrationOutcome | null
+	/** With `committed` (and `rewound` after it) only: the bookmark after the commit, or at the reconciliation that found it. */
+	readonly committedBookmark: string | null
+	/** When a version first booted over the outcome; never with `rewound`. */
+	readonly booted: string | null
+}
+
+/** Why a migrating boot failed; `record_unwritable` names only the put before the transaction. */
+export const OPS_MIGRATION_FAILURES = ['rolled_back', 'committed', 'record_unwritable'] as const
+
+export type OpsMigrationFailureReason = (typeof OPS_MIGRATION_FAILURES)[number]
+
+/** The status of a failed migrating boot, answered only by the release that holds the record. */
+export const OPS_MIGRATION_FAILED_STATUS = 422
+
+/** The body of a failed migrating boot: the record as it stands, or as the boot tried to write it. */
+export interface OpsMigrationFailure {
+	readonly refused: 'migration_failed'
+	readonly reason: OpsMigrationFailureReason
+	readonly record: OpsMigrationRecord
 }
 
 export interface OpsMaintenance {
@@ -302,10 +364,52 @@ export function parseOpsStaleRefusal(body: unknown): OpsStaleRefusal | null {
 }
 
 export function parseOpsMigrateAck(body: unknown): OpsMigrateAck | null {
-	if (!exactKeys(body, ['generation', 'migrations'])) return null
+	const withRecord = exactKeys(body, ['generation', 'migrations', 'record'])
+	if (!withRecord && !exactKeys(body, ['generation', 'migrations'])) return null
 	const generation = readGeneration(prop(body, 'generation'))
 	const migrations = readList(prop(body, 'migrations'), readMigration)
-	return generation === null || migrations === null ? null : { generation, migrations }
+	if (generation === null || migrations === null) return null
+	if (!withRecord) return { generation, migrations }
+	const record = readNullable(prop(body, 'record'), parseOpsMigrationRecord)
+	return record === undefined ? null : { generation, migrations, record }
+}
+
+/** A stored or answered migration record, parsed strictly: its fields must also agree with each other. */
+export function parseOpsMigrationRecord(body: unknown): OpsMigrationRecord | null {
+	const keys = ['id', 'version', 'bookmark', 'startDigest', 'files', 'at', 'outcome', 'committedBookmark', 'booted']
+	if (!exactKeys(body, keys)) return null
+	const id = readMatch(prop(body, 'id'), UUID)
+	const version = readNullable(prop(body, 'version'), (value) => readMatch(value, WORKER_VERSION_ID))
+	const bookmark = readNullable(prop(body, 'bookmark'), (value) => readMatch(value, OPAQUE_TOKEN))
+	const startDigest = readMatch(prop(body, 'startDigest'), SHA256_HEX)
+	const files = readList(prop(body, 'files'), readMigrationFile)
+	const at = readTimestamp(prop(body, 'at'))
+	const outcome = readNullable(prop(body, 'outcome'), (value) => readEnum(value, OPS_MIGRATION_OUTCOMES))
+	const committedBookmark = readNullable(prop(body, 'committedBookmark'), (value) => readMatch(value, OPAQUE_TOKEN))
+	const booted = readNullable(prop(body, 'booted'), readTimestamp)
+	if (
+		id === null || version === undefined || bookmark === undefined || startDigest === null || files === null || files.length === 0 || at === null
+		|| outcome === undefined || committedBookmark === undefined || booted === undefined
+	) {
+		return null
+	}
+	const committed = outcome === 'committed' || outcome === 'rewound'
+	if ((committedBookmark !== null && !committed) || (booted !== null && (outcome === null || outcome === 'rewound'))) return null
+	return { id, version, bookmark, startDigest, files, at, outcome, committedBookmark, booted }
+}
+
+/** A failed migrating boot's answer; its reason must be what its record says. */
+export function parseOpsMigrationFailure(body: unknown): OpsMigrationFailure | null {
+	if (!exactKeys(body, ['refused', 'reason', 'record']) || prop(body, 'refused') !== 'migration_failed') return null
+	const reason = readEnum(prop(body, 'reason'), OPS_MIGRATION_FAILURES)
+	const record = parseOpsMigrationRecord(prop(body, 'record'))
+	if (reason === null || record === null) return null
+	const agrees = reason === 'record_unwritable'
+		? record.outcome === null
+		: reason === 'committed'
+		? record.outcome === 'committed' && record.booted === null
+		: record.outcome === reason
+	return agrees ? { refused: 'migration_failed', reason, record } : null
 }
 
 export function parseOpsView(body: unknown): OpsView | null {
@@ -1016,13 +1120,27 @@ export function parseOpsImportDiscardAck(body: unknown): OpsImportDiscardAck | n
  * Writes the sentinel (the operation's id) into the object's KV storage, and answers the current bookmark and the
  * bookmark of `at`, which Control records before it arms anything.
  */
-export interface OpsRestorePrepare {
+export interface OpsRestorePrepareAt {
 	readonly step: 'prepare'
 	readonly object: string
 	readonly generation: number
 	readonly sentinel: string
 	readonly at: string
 }
+
+/**
+ * The in-place rewind of a failed migration (ADR-0070 §9): `record` names the object's migration record, whose bookmark
+ * is the target, and the object checks every guard of the rewind before it writes the sentinel.
+ */
+export interface OpsRestorePrepareRecord {
+	readonly step: 'prepare'
+	readonly object: string
+	readonly generation: number
+	readonly sentinel: string
+	readonly record: string
+}
+
+export type OpsRestorePrepare = OpsRestorePrepareAt | OpsRestorePrepareRecord
 
 /** Arms the restore of `target` for the next session, answers, then resets the object. */
 export interface OpsRestoreArm {
@@ -1031,13 +1149,19 @@ export interface OpsRestoreArm {
 	readonly generation: number
 	readonly sentinel: string
 	readonly target: string
+	/** The migration record of an in-place rewind, whose guards the object checks again; absent for a side restore. */
+	readonly record?: string
 }
 
-/** Reads, after the reset, whether the sentinel is still there. It writes nothing, so it carries no generation. */
+/**
+ * Reads, after the reset, whether the sentinel is still there; it carries no generation. With `record`, an in-place
+ * rewind's, an absent sentinel also records `rewound` in that migration record, its only write.
+ */
 export interface OpsRestoreVerify {
 	readonly step: 'verify'
 	readonly object: string
 	readonly sentinel: string
+	readonly record?: string
 }
 
 /** `POST /__fabrika/ops/restore`: one step of rewinding an `inspect` object that serves no traffic. */
@@ -1067,18 +1191,31 @@ export function parseOpsRestoreRequest(body: unknown): OpsRestoreRequest | null 
 	const object = parseApplicationObjectName(prop(body, 'object'))
 	const sentinel = readMatch(prop(body, 'sentinel'), UUID)
 	if (object === null || sentinel === null) return null
-	if (step === 'verify') return exactKeys(body, ['step', 'object', 'sentinel']) ? { step, object, sentinel } : null
+	if (step === 'verify') {
+		if (exactKeys(body, ['step', 'object', 'sentinel', 'record'])) {
+			const record = readMatch(prop(body, 'record'), UUID)
+			return record === null ? null : { step, object, sentinel, record }
+		}
+		return exactKeys(body, ['step', 'object', 'sentinel']) ? { step, object, sentinel } : null
+	}
 	const generation = readGeneration(prop(body, 'generation'))
 	if (generation === null) return null
 	if (step === 'prepare') {
+		if (exactKeys(body, ['step', 'object', 'generation', 'sentinel', 'record'])) {
+			const record = readMatch(prop(body, 'record'), UUID)
+			return record === null ? null : { step, object, generation, sentinel, record }
+		}
 		const at = readTimestamp(prop(body, 'at'))
 		return exactKeys(body, ['step', 'object', 'generation', 'sentinel', 'at']) && at !== null ? { step, object, generation, sentinel, at } : null
 	}
 	if (step === 'arm') {
 		const target = readMatch(prop(body, 'target'), OPAQUE_TOKEN)
-		return exactKeys(body, ['step', 'object', 'generation', 'sentinel', 'target']) && target !== null
-			? { step, object, generation, sentinel, target }
-			: null
+		if (target === null) return null
+		if (exactKeys(body, ['step', 'object', 'generation', 'sentinel', 'target', 'record'])) {
+			const record = readMatch(prop(body, 'record'), UUID)
+			return record === null ? null : { step, object, generation, sentinel, target, record }
+		}
+		return exactKeys(body, ['step', 'object', 'generation', 'sentinel', 'target']) ? { step, object, generation, sentinel, target } : null
 	}
 	return null
 }
@@ -1164,6 +1301,11 @@ export const OPS_DATA_REFUSALS = [
 	'verify_mismatch',
 	'bookmark_unavailable',
 	'row_too_large',
+	// The in-place rewind (ADR-0070 §9): the record is not the one named, or not `committed` without `booted`; the record
+	// has no version, or another Worker version runs than the one that wrote it; the target is not the record's bookmark.
+	'not_rewindable',
+	'version_changed',
+	'wrong_target',
 ] as const
 
 export type OpsDataRefusalReason = (typeof OPS_DATA_REFUSALS)[number]
@@ -1194,6 +1336,8 @@ const CONTRACT_NAME = /^[A-Za-z][A-Za-z0-9_]*$/
 const MIGRATION_BUNDLE = /^[a-z][a-z0-9-]*$/
 const MIGRATION_NAME = /^[a-zA-Z0-9][a-zA-Z0-9._-]*\.sql$/
 const MIGRATION_CHECKSUM = /^[0-9a-f]{64}$/
+/** A Worker version id as Cloudflare's version metadata answers it. */
+const WORKER_VERSION_ID = /^[A-Za-z0-9-]{1,64}$/
 const SHA256_HEX = /^[0-9a-f]{64}$/
 /** A dump id or a sentinel: a UUID as Control writes one. */
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
@@ -1281,6 +1425,14 @@ function readMigration(value: unknown): OpsMigration | null {
 	const checksum = readMatch(prop(value, 'checksum'), MIGRATION_CHECKSUM)
 	const appliedAt = readTimestamp(prop(value, 'appliedAt'))
 	return bundle === null || name === null || checksum === null || appliedAt === null ? null : { bundle, name, checksum, appliedAt }
+}
+
+function readMigrationFile(value: unknown): OpsMigrationFile | null {
+	if (!exactKeys(value, ['bundle', 'name', 'checksum'])) return null
+	const bundle = readMatch(prop(value, 'bundle'), MIGRATION_BUNDLE)
+	const name = readMatch(prop(value, 'name'), MIGRATION_NAME)
+	const checksum = readMatch(prop(value, 'checksum'), MIGRATION_CHECKSUM)
+	return bundle === null || name === null || checksum === null ? null : { bundle, name, checksum }
 }
 
 function readScheduler(value: unknown): OpsScheduler | null {

@@ -30,11 +30,13 @@ import {
 	CLOUDFLARE_APPLICATION_BINDING,
 	CLOUDFLARE_APPLICATION_CLASS,
 	CLOUDFLARE_FILES_BINDING,
+	CLOUDFLARE_VERSION_BINDING,
 	GENERATED_MIGRATIONS_FILE,
 	writeGeneratedMigrations,
 } from '../build'
 import { type ApplicationState, createContractWorker, FabrikaApplication } from '../cloudflare'
 import { r2MaintenanceStore } from '../cloudflare/maintenance'
+import { r2MigrationRecordStore } from '../cloudflare/migration-record'
 import { OPS_ENDPOINT } from '../cloudflare/ops'
 import { R2_PART_BYTES, r2FileObjectStore } from '../cloudflare/r2-files'
 import { type NotesApp, notesApp } from './cloudflare-fixture/src/app'
@@ -157,9 +159,13 @@ async function outsideBucket(target: Deployed): Promise<() => Promise<unknown>> 
 	if (typeof list !== 'function') {
 		throw new Error('no R2 bucket')
 	}
+	// The object's migration record lives beside the files; a test asks only about the files' objects.
 	return async () => {
 		const listed: unknown = await Reflect.apply(list, bucket, [])
-		return typeof listed === 'object' && listed !== null ? Reflect.get(listed, 'objects') : undefined
+		const objects: unknown = typeof listed === 'object' && listed !== null ? Reflect.get(listed, 'objects') : undefined
+		return Array.isArray(objects)
+			? objects.filter((object: unknown) => !String(Reflect.get(Object(object), 'key')).startsWith('__fabrika/ops/'))
+			: objects
 	}
 }
 
@@ -358,7 +364,14 @@ describe('the migrations', () => {
 			const served = notesApp({ runs: [] })
 			const migrations = await applicationMigrations(FIXTURE_ROOT)
 			createContractWorker(() => Promise.resolve({ default: served.implementation }), { migrations })
-			const env = { ...variablesOf(served), IAM: iamBinding(served), [CLOUDFLARE_FILES_BINDING]: files.env['FILES'] }
+			const version = { id: '5a1c3f0e-1111-4c2d-9e3a-0123456789ab', tag: '', timestamp: '2026-11-26T20:00:00.000Z' }
+			const env = {
+				...variablesOf(served),
+				IAM: iamBinding(served),
+				[CLOUDFLARE_FILES_BINDING]: files.env['FILES'],
+				[CLOUDFLARE_VERSION_BINDING]: version,
+			}
+			const records = r2MigrationRecordStore(files.env['FILES'], 'application')
 			const database = new BunDatabase(':memory:')
 			const pending: Promise<unknown>[] = []
 			const instance = (): ApplicationState => ({
@@ -378,9 +391,15 @@ describe('the migrations', () => {
 			const applied = ledger()
 			expect(applied.map((row) => `${row.bundle}/${row.name}`)).toContain('app/20261022120000_notes.sql')
 			expect(applied.some((row) => row.bundle === 'fabrika')).toBe(true)
+			// The migration record in the bucket, written by the version metadata's Worker, committed and booted.
+			const record = await records.read()
+			expect(record?.record).toMatchObject({ version: version.id, outcome: 'committed' })
+			expect(record?.record.booted).toEqual(expect.any(String))
+			expect(record?.record.files).toHaveLength(applied.length)
 
 			expect((await new FabrikaApplication(instance(), env).fetch(health())).status).toBe(200)
 			expect(ledger()).toEqual(applied)
+			expect(await records.read()).toEqual(record)
 		})
 	})
 
@@ -532,5 +551,42 @@ describe("the maintenance state in the environment's bucket", () => {
 		// The version this writer read is gone: its put is refused, and R2 keeps the newer state.
 		expect(await store.put({ generation: 3, mode: 'open' }, first)).toBeNull()
 		expect(await store.read()).toEqual({ state: { generation: 2, mode: 'closed' }, version: second })
+	})
+})
+
+describe("the migration record in the environment's bucket", () => {
+	test('reads absent as none, and writes only over the version it names', async () => {
+		const testEnv = await createTestEnv({ bindings: { FILES: 'r2' } })
+		deployed.push(testEnv)
+		const store = r2MigrationRecordStore(testEnv.env['FILES'], 'application')
+		const record = {
+			id: '0192f0c4-7a1e-7c3b-9d2a-5e6f7a8b9c0d',
+			version: null,
+			bookmark: null,
+			startDigest: '0'.repeat(64),
+			files: [{ bundle: 'app', name: '20261022120000_notes.sql', checksum: 'a'.repeat(64) }],
+			at: '2026-11-26T20:00:00.000Z',
+			outcome: null,
+			committedBookmark: null,
+			booted: null,
+		}
+		expect(await store.read()).toBeNull()
+		const first = await store.put(record, null)
+		if (first === null) throw new Error('the first put was refused')
+		// Create-only (`etagDoesNotMatch: '*'`) is left to the doubles: Lopata 0.30.1 reads '*' there as a literal etag.
+		const second = await store.put({ ...record, outcome: 'committed' }, first)
+		if (second === null) throw new Error('the put over the version it read was refused')
+		expect(await store.put({ ...record, outcome: 'rolled_back' }, first)).toBeNull()
+		expect(await store.read()).toEqual({ record: { ...record, outcome: 'committed' }, version: second })
+	})
+
+	test('a stored record that does not parse is a failure, never an absent record', async () => {
+		const testEnv = await createTestEnv({ bindings: { FILES: 'r2' } })
+		deployed.push(testEnv)
+		const bucket = testEnv.env['FILES']
+		const put: unknown = typeof bucket === 'object' && bucket !== null ? Reflect.get(bucket, 'put') : undefined
+		if (typeof put !== 'function') throw new Error('no bucket')
+		await Reflect.apply(put, bucket, ['__fabrika/ops/application.migration.json', '{"id":"r1"}'])
+		await expect(r2MigrationRecordStore(bucket, 'application').read()).rejects.toThrow('does not parse')
 	})
 })

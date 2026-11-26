@@ -83,6 +83,8 @@ async function object() {
 		bootFailure: () => Promise.resolve(null),
 		maintenance: () => Promise.resolve(barrier),
 		migrate: () => Promise.reject(new Error('not called')),
+		migrationRecords: () => ({ read: () => Promise.resolve(null), put: () => Promise.reject(new Error('not called')) }),
+		version: null,
 	}
 	const access = opsAccess({
 		[FABRIKA_OPS_KEY_DIGESTS]: formatOpsKeyDigests([opsKeyDigest(OPS_KEY)]),

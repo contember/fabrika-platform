@@ -14,6 +14,7 @@ import {
 	OPS_STALE_STATUS,
 	OPS_STATE_KEY,
 	opsKeyDigest,
+	type OpsMigrationRecord,
 	type OpsPublishedState,
 	type OpsRestoreRequest,
 	parseOpsDataRefusal,
@@ -32,9 +33,11 @@ import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { OPS_ENDPOINT, type OpsRecovery, type OpsTarget } from '../cloudflare/ops'
 import { serveRestore } from '../cloudflare/restore'
 import { ORIGIN, PROXY_SECRET } from './fixtures/implement/harness'
+import { memoryRecords, noMigrationRecord } from './fixtures/migration-records'
 
 /** A step on an object ordinary traffic does not reach: the clone a side restore names. */
-const restoreStep = (target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest) => serveRestore(target, barrier, step, false)
+const restoreStep = (target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest) =>
+	serveRestore(target, barrier, step, false, noMigrationRecord)
 
 const OBJECT = 'application'
 const SENTINEL = '0192f0c4-7a1e-7c3b-9d2a-5e6f7a8b9c0d'
@@ -73,6 +76,8 @@ interface HarnessOptions {
 	readonly lookup?: (position: number) => number | Promise<number>
 	/** Runs before `onNextSessionRestoreBookmark` answers; it rejects a bookmark the storage refuses. */
 	readonly arming?: (target: string) => Promise<void>
+	/** The Worker version that runs; `null` (no version metadata binding) by default. */
+	readonly version?: string | null
 }
 
 function harness(options: HarnessOptions = {}): Harness {
@@ -119,6 +124,8 @@ function harness(options: HarnessOptions = {}): Harness {
 		bootFailure: () => Promise.resolve(null),
 		maintenance: () => Promise.reject(new Error('not called')),
 		migrate: () => Promise.reject(new Error('not called')),
+		migrationRecords: () => noMigrationRecord,
+		version: options.version ?? null,
 	}
 	return { target, calls, kv }
 }
@@ -372,9 +379,9 @@ describe('the barrier', () => {
 
 	test('the stale refusal comes before serving_object, and serving_object before wrong_mode', async () => {
 		const { target } = harness()
-		const stale = await serveRestore(target, await barrierIn('open', GENERATION + 1), prepare(), true)
+		const stale = await serveRestore(target, await barrierIn('open', GENERATION + 1), prepare(), true, noMigrationRecord)
 		expect(stale.status).toBe(OPS_STALE_STATUS)
-		const serving = await serveRestore(target, await barrierIn('open'), prepare(), true)
+		const serving = await serveRestore(target, await barrierIn('open'), prepare(), true, noMigrationRecord)
 		expect(parseOpsDataRefusal(await body(serving))).toEqual({ refused: 'serving_object', table: null })
 	})
 
@@ -382,7 +389,7 @@ describe('the barrier', () => {
 		const { target, calls, kv } = harness()
 		const barrier = await barrierIn('inspect')
 		for (const step of [prepare(), arm(bookmark(AT_POSITION))]) {
-			const response = await serveRestore(target, barrier, step, true)
+			const response = await serveRestore(target, barrier, step, true, noMigrationRecord)
 			expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
 			expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'serving_object', table: null })
 		}
@@ -558,5 +565,162 @@ describe('through the object', () => {
 		// The next session after the reset starts at the target, before the sentinel was written.
 		const restored = original(new Map(), [])
 		expect(parseOpsRestoreVerifyAck(await body(await restored.fetch(restoreRequest(verifyClone))))?.sentinel).toBe('absent')
+	})
+})
+
+describe('the in-place rewind of a failed migration', () => {
+	const VERSION = '5a1c3f0e-1111-4c2d-9e3a-0123456789ab'
+	const RECORD = '0192f0c4-1111-7c3b-9d2a-5e6f7a8b9c0d'
+	/** Committed by the version that runs, never booted, naming its bookmark from before the transaction. */
+	const failed: OpsMigrationRecord = {
+		id: RECORD,
+		version: VERSION,
+		bookmark: bookmark(AT_POSITION),
+		startDigest: '0'.repeat(64),
+		files: [{ bundle: 'app', name: '20260101000000_notes.sql', checksum: 'a'.repeat(64) }],
+		at: '2026-11-26T20:00:00.000Z',
+		outcome: 'committed',
+		committedBookmark: bookmark(AT_POSITION + 1),
+		booted: null,
+	}
+
+	const rewindPrepare = (record = RECORD): OpsRestoreRequest => ({
+		step: 'prepare',
+		object: OBJECT,
+		generation: GENERATION,
+		sentinel: SENTINEL,
+		record,
+	})
+	const rewindArm = (target = bookmark(AT_POSITION), record = RECORD): OpsRestoreRequest => ({ ...arm(target), record })
+	const rewindVerify = (): OpsRestoreRequest => ({ ...verify(), record: RECORD })
+
+	/** A step on the object ordinary traffic reaches, the only one an in-place rewind names. */
+	const inPlace = (target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest, records: ReturnType<typeof memoryRecords>) =>
+		serveRestore(target, barrier, step, true, records)
+
+	test('prepare targets the bookmark of the record, arm resets the serving object, and verify records rewound', async () => {
+		const { target, calls, kv } = harness({ version: VERSION })
+		const records = memoryRecords(failed)
+		const barrier = await barrierIn('inspect')
+		const before = new Map(kv)
+		const prepared = parseOpsRestorePrepareAck(await body(await inPlace(target, barrier, rewindPrepare(), records)))
+		expect(prepared).toEqual({ step: 'prepare', current: bookmark(START), target: bookmark(AT_POSITION) })
+		// The target is the record's, never one looked up by time.
+		expect(calls.some((call) => call.kind === 'getBookmarkForTime')).toBe(false)
+		const armed = await inPlace(target, barrier, rewindArm(), records)
+		expect(parseOpsRestoreArmAck(await body(armed))?.step).toBe('arm')
+		await afterAnswer()
+		expect(recovered(calls).map((call) => call.kind)).toEqual(['onNextSessionRestoreBookmark', 'abort'])
+		resetTo(kv, before)
+		const verified = parseOpsRestoreVerifyAck(await body(await inPlace(target, barrier, rewindVerify(), records)))
+		expect(verified?.sentinel).toBe('absent')
+		expect(records.current?.record).toEqual({ ...failed, outcome: 'rewound' })
+		// A repeated verify answers the same and writes nothing more.
+		expect(parseOpsRestoreVerifyAck(await body(await inPlace(target, barrier, rewindVerify(), records)))?.sentinel).toBe('absent')
+		expect(records.written).toHaveLength(1)
+	})
+
+	test('a verify that finds the sentinel present leaves the record committed', async () => {
+		const { target } = harness({ version: VERSION })
+		const records = memoryRecords(failed)
+		const barrier = await barrierIn('inspect')
+		await inPlace(target, barrier, rewindPrepare(), records)
+		expect(parseOpsRestoreVerifyAck(await body(await inPlace(target, barrier, rewindVerify(), records)))?.sentinel).toBe('present')
+		expect(records.written).toEqual([])
+	})
+
+	test('a verify that cannot record rewound answers 503, and the next one records it', async () => {
+		const { target } = harness({ version: VERSION })
+		const records = memoryRecords(failed)
+		const barrier = await barrierIn('inspect')
+		records.failPuts(1)
+		expect((await inPlace(target, barrier, rewindVerify(), records)).status).toBe(503)
+		expect(records.current?.record.outcome).toBe('committed')
+		expect((await inPlace(target, barrier, rewindVerify(), records)).status).toBe(200)
+		expect(records.current?.record.outcome).toBe('rewound')
+	})
+
+	const notRewindable: readonly (readonly [string, OpsMigrationRecord | null])[] = [
+		['no record', null],
+		['a record of another id', { ...failed, id: OTHER_SENTINEL }],
+		['a rolled_back record', { ...failed, outcome: 'rolled_back', committedBookmark: null }],
+		['a diverged record', { ...failed, outcome: 'diverged', committedBookmark: null }],
+		['a record without an outcome', { ...failed, outcome: null, committedBookmark: null }],
+		['a rewound record', { ...failed, outcome: 'rewound' }],
+		['a booted record', { ...failed, booted: '2026-11-26T20:00:01.000Z' }],
+		['a record without a bookmark', { ...failed, bookmark: null }],
+	]
+	for (const [name, record] of notRewindable) {
+		test(`${name} refuses prepare and arm as not_rewindable, and nothing is written or armed`, async () => {
+			const { target, calls, kv } = harness({ version: VERSION })
+			const records = memoryRecords(record)
+			const barrier = await barrierIn('inspect')
+			for (const step of [rewindPrepare(), rewindArm()]) {
+				const response = await inPlace(target, barrier, step, records)
+				expect(response.status).toBe(OPS_DATA_REFUSED_STATUS)
+				expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'not_rewindable', table: null })
+			}
+			await afterAnswer()
+			expect(kv.size).toBe(0)
+			expect(calls).toEqual([])
+		})
+	}
+
+	const versions: readonly (readonly [string, string | null, string | null])[] = [
+		['a record written without version metadata', null, VERSION],
+		['an object that runs without version metadata', VERSION, null],
+		['another Worker version', VERSION, '5a1c3f0e-2222-4c2d-9e3a-0123456789ab'],
+	]
+	for (const [name, written, running] of versions) {
+		test(`${name} refuses prepare and arm as version_changed`, async () => {
+			const { target, calls } = harness({ version: running })
+			const records = memoryRecords({ ...failed, version: written })
+			const barrier = await barrierIn('inspect')
+			for (const step of [rewindPrepare(), rewindArm()]) {
+				const response = await inPlace(target, barrier, step, records)
+				expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'version_changed', table: null })
+			}
+			expect(calls).toEqual([])
+		})
+	}
+
+	test('an arm whose target is not the bookmark of the record is refused as wrong_target', async () => {
+		const { target, calls } = harness({ version: VERSION })
+		const records = memoryRecords(failed)
+		const response = await inPlace(target, await barrierIn('inspect'), rewindArm(bookmark(AT_POSITION - 1)), records)
+		expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'wrong_target', table: null })
+		await afterAnswer()
+		expect(calls).toEqual([])
+	})
+
+	test('the guards are checked again at arm: a record booted after prepare refuses it', async () => {
+		const { target, calls } = harness({ version: VERSION })
+		const records = memoryRecords(failed)
+		const barrier = await barrierIn('inspect')
+		expect((await inPlace(target, barrier, rewindPrepare(), records)).status).toBe(200)
+		records.replace({ ...failed, booted: '2026-11-26T20:00:01.000Z' })
+		const response = await inPlace(target, barrier, rewindArm(), records)
+		expect(parseOpsDataRefusal(await body(response))).toEqual({ refused: 'not_rewindable', table: null })
+		await afterAnswer()
+		expect(recovered(calls)).toEqual([])
+	})
+
+	test('a record that cannot be read answers 503 and arms nothing', async () => {
+		const { target, calls } = harness({ version: VERSION })
+		const records = memoryRecords(failed)
+		records.failRead()
+		expect((await inPlace(target, await barrierIn('inspect'), rewindArm(), records)).status).toBe(503)
+		await afterAnswer()
+		expect(recovered(calls)).toEqual([])
+	})
+
+	test('the barrier comes first: wrong_mode outside inspect and the stale refusal under another generation', async () => {
+		const { target, calls } = harness({ version: VERSION })
+		const records = memoryRecords(failed)
+		const open = await inPlace(target, await barrierIn('open'), rewindPrepare(), records)
+		expect(parseOpsDataRefusal(await body(open))).toEqual({ refused: 'wrong_mode', table: null })
+		const stale = await inPlace(target, await barrierIn('inspect', GENERATION + 1), rewindArm(), records)
+		expect(stale.status).toBe(OPS_STALE_STATUS)
+		expect(calls).toEqual([])
 	})
 })
