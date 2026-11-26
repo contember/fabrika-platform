@@ -33,6 +33,7 @@
 		"local:up": "bun run --filter @fabrika/local-stack up",
 		"local:status": "bun run --filter @fabrika/local-stack status",
 		"local:smoke": "bun run --filter @fabrika/local-stack smoke",
+		"local:seed": "bun run --filter @fabrika/local-stack seed",
 		"local:compat": "bun run --filter @fabrika/local-stack compat",
 		"local:reset": "bun run --filter @fabrika/local-stack reset",
 		"local:down": "bun run --filter @fabrika/local-stack down",

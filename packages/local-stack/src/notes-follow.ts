@@ -21,7 +21,7 @@ import { loadLocalSourceFixtures, readFixtureFiles } from './local-source-fixtur
 import { releaseFixtureSource } from './local-source-fixtures/generate'
 import { requireMachineKey } from './machine-key'
 import { MEMBERSHIP_KEY_VARIABLE, MEMBERSHIP_URL_VARIABLE, writeNotesMembershipTransport } from './membership-key'
-import { controlRequest, type EmulatorSnapshot, emulatorSnapshot, notesServiceId } from './notes-deploy'
+import { controlRequest, type EmulatorSnapshot, emulatorSnapshot, notesServiceId, prodNotesProject } from './notes-deploy'
 import { buildNotesSpa, LOCAL_NOTES_IAM_APP_ID, localAppsProxyManifest, STATE_DIR, writeAppsProxyConfig, writeNotesContractDigest } from './prepare'
 import { completedRunSchema } from './smoke-schemas'
 import { writeNotesWorkloadKeys } from './workload-keys'
@@ -102,7 +102,7 @@ async function checkReleaseSchema(options: Pick<ComposeOptions, 'browser'>, root
 export async function followNotesDeploy(options: Pick<ComposeOptions, 'browser'> = {}): Promise<string> {
 	const fixtures = await loadLocalSourceFixtures(resolve(STATE_DIR, LOCAL_SOURCE_FIXTURE_DIRECTORY))
 	const snapshot = await emulatorSnapshot()
-	const serviceId = notesServiceId(snapshot)
+	const serviceId = notesServiceId(snapshot, await prodNotesProject(requireMachineKey()))
 	const service = snapshot.services.find((candidate) => candidate.id === serviceId)
 	const version = snapshot.appVersions.find((candidate) => candidate.id === service?.activeAppVersionId)
 	if (version?.status !== 'ACTIVE' || version.name === undefined) throw new Error('the Zerops emulator has no active Notes version')

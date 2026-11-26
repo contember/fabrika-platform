@@ -8,6 +8,7 @@ import { createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
+import { z } from 'zod'
 import { composeOutput } from './compose'
 import { consoleRpc, type IamLogin, signInToConsole } from './console-approval'
 import {
@@ -130,40 +131,58 @@ export const poll = async <T>(
 	throw new Error(`timed out waiting for ${description}`)
 }
 
+/** A namespace this composition deploys into: `apps-prod` for `prod`, and the console seed's own for its second environment. */
+export interface LocalNamespace {
+	readonly id: string
+	readonly env: string
+}
+
+export const PROD_NAMESPACE: LocalNamespace = { id: 'apps-prod', env: 'prod' }
+
 /** Provisioning runs behind the control queue now, so the request only enqueues it (backlog 74). */
-const namespaceIsReady = async (machineKey: string): Promise<void> => {
+const namespaceIsReady = async (machineKey: string, id: string): Promise<void> => {
 	const namespace = await poll(
-		'deployment namespace apps-prod to become ready',
-		async () => namespaceViewSchema.parse(await controlRequest('namespaces.get', machineKey, { namespaceId: 'apps-prod' })),
+		`deployment namespace ${id} to become ready`,
+		async () => namespaceViewSchema.parse(await controlRequest('namespaces.get', machineKey, { namespaceId: id })),
 		(value) => value.state === 'ready' || value.state === 'failed',
 	)
 	if (namespace.state === 'failed') {
 		throw new Error(
-			`deployment namespace apps-prod failed to provision: ${String(namespace.lastErrorCode ?? 'unknown')}: ${
+			`deployment namespace ${id} failed to provision: ${String(namespace.lastErrorCode ?? 'unknown')}: ${
 				String(namespace.lastError ?? 'no reason recorded')
 			}`,
 		)
 	}
 }
 
-export const ensureNamespace = async (machineKey: string): Promise<void> => {
+export const ensureNamespace = async (machineKey: string, { id, env }: LocalNamespace = PROD_NAMESPACE): Promise<void> => {
 	const namespaces = await controlRequest('namespaces.list', machineKey)
-	const existing = itemsResponseSchema.parse(namespaces).items.map((item) => namespaceViewSchema.parse(item)).find((item) => item.id === 'apps-prod')
+	const existing = itemsResponseSchema.parse(namespaces).items.map((item) => namespaceViewSchema.parse(item)).find((item) => item.id === id)
 	if (existing?.state === 'ready') {
 		return
 	}
 	if (existing !== undefined) {
-		await controlRequest('namespaces.reconcile', machineKey, { namespaceId: 'apps-prod' })
-		await namespaceIsReady(machineKey)
+		await controlRequest('namespaces.reconcile', machineKey, { namespaceId: id })
+		await namespaceIsReady(machineKey, id)
 		return
 	}
-	const plan = await controlRequest('namespaces.plan', machineKey, { id: 'apps-prod', env: 'prod', preset: 'cheap' })
+	const plan = await controlRequest('namespaces.plan', machineKey, { id, env, preset: 'cheap' })
 	const namespace = namespacePlanSchema.parse(plan).namespace
 	if (namespace === undefined) {
 		throw new Error('namespace plan is missing namespace')
 	}
 	await controlRequest('namespaces.create', machineKey, namespace)
-	await namespaceIsReady(machineKey)
+	await namespaceIsReady(machineKey, id)
+}
+
+/** The Zerops target and the artifact compiled from the cheap Notes config for one environment, as a registration sends them. */
+export const notesEnvironmentEnvelopes = async (fixtures: LocalSourceManifest, env: string) => {
+	const sourceDescriptor = await createZeropsArtifactSourceDescriptor(fixtures.application.descriptorContents)
+	const manifest = compileFabrikaManifest(cheapNotesConfig, env, sourceDescriptor)
+	return {
+		target: { provider: 'zerops', version: 2, payload: {} },
+		artifact: { provider: 'zerops', version: zeropsArtifactCodec.version, payload: zeropsArtifactCodec.encode(manifest) },
+	}
 }
 
 /**
@@ -173,14 +192,7 @@ export const ensureNamespace = async (machineKey: string): Promise<void> => {
  */
 export const ensureNotesApp = async (machineKey: string, fixtures: LocalSourceManifest, login?: IamLogin): Promise<void> => {
 	const apps = await controlRequest('apps.list', machineKey)
-	const sourceDescriptor = await createZeropsArtifactSourceDescriptor(fixtures.application.descriptorContents)
-	const manifest = compileFabrikaManifest(cheapNotesConfig, 'prod', sourceDescriptor)
-	const target = { provider: 'zerops', version: 2, payload: {} }
-	const artifact = {
-		provider: 'zerops',
-		version: zeropsArtifactCodec.version,
-		payload: zeropsArtifactCodec.encode(manifest),
-	}
+	const { target, artifact } = await notesEnvironmentEnvelopes(fixtures, 'prod')
 	if (itemsResponseSchema.parse(apps).items.some((item) => namespaceViewSchema.parse(item).id === 'notes')) {
 		const app = appSourceSchema.parse(await controlRequest('apps.get', machineKey, { appId: NOTES_APP_ID }))
 		if (
@@ -275,10 +287,19 @@ export const emulatorSnapshot = async () =>
 
 export type EmulatorSnapshot = Awaited<ReturnType<typeof emulatorSnapshot>>
 
-export const notesServiceId = (snapshot: EmulatorSnapshot): string => {
-	const services = snapshot.services.filter((service) => service.name === NOTES_DEPLOY_SERVICE)
+const namespaceProjectSchema = z.object({ target: z.object({ payload: z.object({ projectId: z.string() }) }) })
+
+/** The Zerops project of `prod`'s namespace, as Control recorded it when it provisioned the namespace. */
+export const prodNotesProject = async (machineKey: string): Promise<string> =>
+	namespaceProjectSchema.parse(await controlRequest('namespaces.get', machineKey, { namespaceId: PROD_NAMESPACE.id })).target.payload.projectId
+
+/** The Notes deploy service of one namespace's project: the console seed deploys a second one, into its own. */
+export const notesServiceId = (snapshot: EmulatorSnapshot, projectId: string): string => {
+	const services = snapshot.services.filter((service) => service.name === NOTES_DEPLOY_SERVICE && service.projectId === projectId)
 	const service = services[0]
-	if (services.length !== 1 || service === undefined) throw new Error('Zerops emulator does not contain exactly one notes deploy service')
+	if (services.length !== 1 || service === undefined) {
+		throw new Error(`Zerops emulator does not contain exactly one notes deploy service in project ${projectId}`)
+	}
 	return service.id
 }
 
