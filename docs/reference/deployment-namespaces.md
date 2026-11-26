@@ -408,15 +408,32 @@ the provider's synchronous claims hook — before any provider mutation, so noth
 is created. Previously such a registration succeeded and its first deploy failed
 at proxy composition.
 
-The proxy routes each host to one member, so Control refuses a member that would be routed on a host another member of
-the namespace is routed on, compared without case, naming the sibling. Publishing a contract is what makes a member
-routed, so the refusal reaches a put of a published member (**409**, before the provider prepares anything) and a deploy
-about to publish (it fails before the contract is published); a new registration is judged at its first deploy. The provider decides which hosts a member is routed on (`memberHosts`; on
-Zerops the function the manifest compiler routes by): a member with an approved contract and a proxy target on its
-domain, a `dev` member only on its workspaces' `<workspace>.<domain>` hosts, and any other member on none. Dev
-environments of several applications may therefore share one wildcard base, and a member not yet published may name a
-routed sibling's host until its deploy. There is no database constraint behind the check, so two concurrent writes can
-both pass it; the namespace republish then refuses the duplicate host, naming it, until a put moves one of the two.
+A domain serves one application environment of the whole installation, in any namespace and on every provider,
+compared without case: registration and `apps.environments.put` refuse a domain another environment holds (**409**,
+before the provider prepares anything, naming no other environment), published or not, routed or not. The installation's
+own hosts, Control's (which serves the console) and IAM's issuer, and every name under them are refused the same way.
+A `dev` environment's domain is a wildcard base, so it holds every name under it against a standard environment, in
+either direction; the dev environments of several applications may share one base, each routed only on its own
+workspaces' `<workspace>.<domain>` hosts. The unique index `idx_app_envs_domain` (over every environment but the `dev`
+ones) decides two concurrent writes of one domain: the one that lost answers the same 409 and writes nothing.
+
+Control's migration `0044_unique_app_env_domain.sql` creates that index and fails, stopping Control's upgrade, on an
+installation where two environments other than `dev` ones already share a domain. Before the upgrade, list them in
+Control's database and give all but one another domain (or none):
+
+```sql
+SELECT lower(domain) AS domain, count(*) AS environments FROM app_envs
+WHERE domain IS NOT NULL AND domain <> '' AND kind <> 'dev' GROUP BY lower(domain) HAVING count(*) > 1;
+```
+
+An environment whose domain is, or lies under, Control's or IAM's host passes the migration, but every later put of it
+is refused until it names another domain; list those with `lower(domain)` equal to the host or ending in `.<host>`.
+
+The proxy also routes each host to one member, so Control refuses a member that would be routed on a host another
+member of the namespace is routed on, naming the sibling: at a put of a published member and at a deploy about to
+publish. The provider decides which hosts a member is routed on (`memberHosts`; on Zerops the function the manifest
+compiler routes by): a member with an approved contract and a proxy target on its domain, a `dev` member only on its
+workspaces' hosts, and any other member on none.
 
 The proxy source pin is persisted in the namespace target when the namespace is
 planned and every proxy build uploads exactly that source (ADR-0045). A target

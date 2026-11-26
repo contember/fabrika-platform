@@ -349,6 +349,7 @@ for (const backend of backends) {
 			const request = new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers })
 			return {
 				repositories: w.db,
+				reservedHosts: [],
 				provider: w.provider,
 				vault: () => Promise.resolve(w.vault),
 				auth: auth(w, who),

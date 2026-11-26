@@ -264,6 +264,7 @@ for (const backend of backends) {
 			/** Registration's use cases as the console calls them, with the mirror wired to IAM unless `port` says otherwise. */
 			const registry = (port: GrantApprovalPort | null = grantApproval): RegistryUseCaseContext => ({
 				repositories: db,
+				reservedHosts: [],
 				provider: PROVIDER,
 				auth: approver,
 				signal: new AbortController().signal,

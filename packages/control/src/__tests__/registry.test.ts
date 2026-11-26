@@ -594,6 +594,7 @@ describe('onboarding + registry CRUD', () => {
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,
+			reservedHosts: [],
 		}
 		const registered = await registerAppUseCase(context, {
 			id: 'beta-app',
@@ -664,6 +665,7 @@ describe('onboarding + registry CRUD', () => {
 		insertSourceConnection(sqlite, 'connection-acme', 'Acme', 101)
 		const context = (commits: CommitSource): RegistryUseCaseContext => ({
 			repositories: deps.repositories,
+			reservedHosts: [],
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,
@@ -1176,6 +1178,7 @@ describe('platform-owned names, bounded values, and literal hosts', () => {
 		const { deps } = await seededApp()
 		const context: RegistryUseCaseContext = {
 			repositories: deps.repositories,
+			reservedHosts: [],
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,
@@ -1224,6 +1227,7 @@ describe('the namespace proxy follows the registry', () => {
 	function context(deps: ControlRpcDeps, recording: ProxyRecording): RegistryUseCaseContext {
 		return {
 			repositories: deps.repositories,
+			reservedHosts: [],
 			provider: deps.provider,
 			auth: deps.auth,
 			signal: new AbortController().signal,

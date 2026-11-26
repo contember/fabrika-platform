@@ -280,5 +280,5 @@ export async function seedWorkspaceWorld(repositories: ControlRepositories, db: 
 /** A person's registry call from the console: a session request, no bearer. */
 export function registryContext(repositories: ControlRepositories, provider: ControlProvider = zeropsProvider) {
 	const admission = { request: new Request('https://control.test/api/rpc', { method: 'POST' }) }
-	return { repositories, provider, auth: allowAllAuth(), admission, signal: new AbortController().signal }
+	return { repositories, provider, auth: allowAllAuth(), admission, signal: new AbortController().signal, reservedHosts: [] }
 }

@@ -42,6 +42,8 @@ export interface RequestActionContext extends RequestKindContext {
 	readonly deploys?: () => Promise<OperationDeploys>
 	/** IAM's mirror of the approval gates, which an environment a registry write creates reaches before its row (ADR-0083 §4). */
 	readonly grantApproval?: GrantApprovalPort
+	/** The installation's own hosts, which no environment's domain may be or lie under (`reservedInstallationHosts`). */
+	readonly reservedHosts: readonly string[]
 }
 
 /** An execution acts as the approver, a person in the console, under the environment's lease (`RequestExecution.signal`). */

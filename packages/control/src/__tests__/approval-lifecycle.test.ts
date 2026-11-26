@@ -1099,6 +1099,7 @@ describe('protection survives the registry', () => {
 	function registry(w: World, caller: AuthContext, request = consoleRequest()): RegistryUseCaseContext {
 		return {
 			repositories: w.db,
+			reservedHosts: [],
 			provider: provider(w),
 			auth: caller,
 			signal: new AbortController().signal,

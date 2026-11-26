@@ -11,6 +11,7 @@ import { writeNewEnvironmentGates } from '../../approval/iam-mirror'
 import {
 	AppEnvChangedError,
 	appEnvCrossOrigins,
+	AppEnvDomainConflictError,
 	type AppEnvExpectation,
 	type AppEnvRow,
 	AppEnvTriggerRefConflictError,
@@ -21,6 +22,7 @@ import { fail } from '../domain'
 import { assertNamespaceHostsFree, namespaceMemberRouting, syncChangedNamespaceProxies } from '../namespaces'
 import { assertNoDevSandboxes, assertNoHeldResourceClaims, requireApp } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
+import { assertDomainAvailable } from './domain-ownership'
 import {
 	normalizeRegistration,
 	preparationFailure,
@@ -58,6 +60,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 	await requirePersonToPointTriggerRef(c, { appId, env, existing, triggerRef })
 	await requirePersonToPointDomain(c, { appId, env, existing, domain: input.domain ?? null })
 	const kind = await admitAppEnvPut(c, app, env, existing, input, triggerRef)
+	await assertDomainAvailable(c, { appId, env, kind }, input.domain)
 	const publicOrigin = canonicalOrigin(input.publicOrigin, existing?.public_origin ?? null)
 	await requirePersonToPointPublicOrigin(c, { appId, env, existing, publicOrigin })
 	const namespace = await resolveRegistrationNamespace(c, input.namespaceId, appId, env, existing)
@@ -132,6 +135,7 @@ export async function putAppEnvUseCase(c: RegistryUseCaseContext, appId: string,
 		if (cause instanceof NamespaceResourceClaimConflictError) fail(409, cause.message)
 		if (cause instanceof AppEnvChangedError) fail(409, `${cause.message}; retry`)
 		if (cause instanceof AppEnvTriggerRefConflictError) fail(409, cause.message)
+		if (cause instanceof AppEnvDomainConflictError) fail(409, cause.message)
 		throw cause
 	}
 	await c.auth.audit({

@@ -61,6 +61,7 @@ import { providerEnvelopeSchema } from './api/provider-envelope'
 import { createAppUseCase, deleteAppUseCase, getAppUseCase, listAppsUseCase, updateAppUseCase } from './api/registry/apps'
 import { deleteAppVarUseCase, listAppSecretsUseCase, listAppVarsUseCase, putAppVarUseCase } from './api/registry/configuration'
 import { type RegistryUseCaseContext } from './api/registry/context'
+import { reservedInstallationHosts } from './api/registry/domain-ownership'
 import { deleteAppEnvUseCase, listAppEnvsUseCase, putAppEnvUseCase, rotateTokenKeyUseCase } from './api/registry/environments'
 import { registerAppUseCase } from './api/registry/registration'
 import { resumeAppEnvUseCase, suspendAppEnvUseCase, type SuspensionUseCaseContext } from './api/registry/suspension'
@@ -688,6 +689,7 @@ export function createControlRpcRouter(
 			provider: deps.provider,
 			auth: ctx.auth,
 			signal: ctx.request.signal,
+			reservedHosts: reservedInstallationHosts(ctx.env),
 			...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
 			...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),
 			...(deps.commits === undefined ? {} : { commits: deps.commits }),
@@ -782,6 +784,7 @@ export function controlApprovalRequestContext(
 		provider: deps.provider,
 		auth: ctx.auth,
 		admission: { request: ctx.request },
+		reservedHosts: reservedInstallationHosts(ctx.env),
 		...(deps.vault === undefined ? {} : { vault: deps.vault }),
 		...(deps.catalogChanged === undefined ? {} : { catalogChanged: deps.catalogChanged }),
 		...(deps.namespaceProxyChanged === undefined ? {} : { namespaceProxyChanged: deps.namespaceProxyChanged }),

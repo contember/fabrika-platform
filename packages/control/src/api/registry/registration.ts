@@ -8,12 +8,13 @@ import { requirePersonToPointDomain, requirePersonToPointPublicOrigin, requirePe
 import { writeNewEnvironmentGates } from '../../approval/iam-mirror'
 import { approvedSnapshot } from '../../approval/snapshot'
 import { snapshotSurface } from '../../approval/surface'
-import { appEnvCrossOrigins, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
+import { appEnvCrossOrigins, AppEnvDomainConflictError, type AppEnvRow, type AppRow, NamespaceResourceClaimConflictError } from '../../db'
 import { normalizeRepoUrl } from '../../github/triggers/push-event'
 import { fail } from '../domain'
 import { parseStoredEnvelope } from '../provider-envelope'
 import { sourceBindingFields, toAppDto } from './apps'
 import { notifyCatalogChanged, type RegistryUseCaseContext } from './context'
+import { assertDomainAvailable } from './domain-ownership'
 import {
 	assertAppEnvironmentPart,
 	assertCrossOrigins,
@@ -33,6 +34,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	const triggerRef = triggerRefInput(input.triggerRef)
 	await requirePersonToPointTriggerRef(c, { appId: id, env, existing: null, triggerRef })
 	await requirePersonToPointDomain(c, { appId: id, env, existing: null, domain: input.domain ?? null })
+	await assertDomainAvailable(c, { appId: id, env, kind: 'standard' }, input.domain)
 	const crossOrigins = input.crossOrigins ?? []
 	assertCrossOrigins(crossOrigins, input.domain ?? null)
 	const normalized = normalizeRepoUrl(repoUrl)
@@ -95,7 +97,13 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 	try {
 		if (registration.environment.namespace === undefined) {
 			app = await c.repositories.registry.createApp(appInput)
-			appEnv = await c.repositories.registry.upsertAppEnv(environmentInput)
+			try {
+				appEnv = await c.repositories.registry.upsertAppEnv(environmentInput)
+			} catch (cause) {
+				// Two writes, so a lost domain race takes back the app the first one created.
+				if (cause instanceof AppEnvDomainConflictError) await c.repositories.registry.deleteApp(id)
+				throw cause
+			}
 		} else {
 			const created = await c.repositories.registry.createAppWithEnvironmentAndNamespaceResourceClaims(appInput, environmentInput, resourceClaims)
 			app = created.app
@@ -103,6 +111,7 @@ export async function registerAppUseCase(c: RegistryUseCaseContext, input: Regis
 		}
 	} catch (cause) {
 		if (cause instanceof NamespaceResourceClaimConflictError) fail(409, cause.message)
+		if (cause instanceof AppEnvDomainConflictError) fail(409, cause.message)
 		throw cause
 	}
 	if (preparation !== undefined) {

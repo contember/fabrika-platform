@@ -1,6 +1,6 @@
-// A namespace's entry point routes each host to one member. An environment put that would route a member on a host a
-// sibling is already routed on is refused before the provider is asked for anything; a member the entry point does not
-// route on its domain (no approved contract, or a dev member, routed only through its workspace sandboxes) holds no host.
+// A namespace's entry point routes each host to one member. An environment put that names a domain another environment
+// of the installation holds is refused before the provider is asked for anything, routed or not, in any namespace. Only
+// the dev members of several applications share one wildcard base: each is routed only through its workspaces' hosts.
 
 import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import type { ControlProvider, ProviderEnvelope, ProviderNamespaceMemberRouting } from '@fabrika/provider-contract'
@@ -95,6 +95,9 @@ async function publish(d1: SqlDatabase, appId: string, env: string): Promise<voi
 		.run()
 }
 
+const HELD = (domain: string): string =>
+	`domain ${domain} is already held by another application environment; a domain serves one environment of the installation`
+
 async function refusal(promise: Promise<unknown>): Promise<ControlApiError> {
 	try {
 		await promise
@@ -116,7 +119,7 @@ describe('a namespace routes each host to one member', () => {
 		)
 
 		expect(error.httpStatus).toBe(409)
-		expect(error.message).toBe('host shop.example.com is already routed to shop/live in deployment namespace apps-live')
+		expect(error.message).toBe(HELD('SHOP.example.com'))
 		expect(w.prepared).toEqual([])
 		expect((await w.repositories.registry.getAppEnv('other', 'live'))?.domain).toBe('other.example.com')
 		// Its own host, re-put, is still its own.
@@ -129,24 +132,64 @@ describe('a namespace routes each host to one member', () => {
 		expect(w.prepared).toEqual(['other/live'])
 	})
 
-	test('a member the proxy does not route shares a routed sibling host, in either direction', async () => {
+	test('a member the proxy does not route cannot name a sibling host either, routed or not', async () => {
 		const w = await world()
 		await w.member('shop', 'live', 'shop.example.com', { published: true })
+		await w.member('plain', 'live', 'plain.example.com', { published: false })
 		const put = (appId: string, domain: string, artifact = ARTIFACT) =>
 			putAppEnvUseCase(w.context, appId, 'live', { namespaceId: 'apps-live', domain, target: envelope({}), artifact })
 
-		// Not published yet, so the proxy routes nothing for it.
-		await put('other', 'SHOP.example.com')
+		// Not published, so the proxy would route nothing for it: the domain is still held installation-wide.
+		expect((await refusal(put('other', 'SHOP.example.com'))).message).toBe(HELD('SHOP.example.com'))
 		// A published member moving onto the host of a sibling the proxy does not route.
-		await w.member('plain', 'live', 'plain.example.com', { published: false })
-		await put('shop', 'plain.example.com')
-		await publish(w.d1, 'other', 'live')
-		// A published member without a proxy target holds no host, while the routed sibling holds it.
-		await put('shop', 'shop.example.com', envelope({ proxy: false }))
-		expect(w.prepared).toEqual(['other/live', 'shop/live', 'shop/live'])
-		expect((await refusal(put('shop', 'shop.example.com'))).message).toBe(
-			'host shop.example.com is already routed to other/live in deployment namespace apps-live',
+		expect((await refusal(put('shop', 'plain.example.com'))).message).toBe(HELD('plain.example.com'))
+		// A member without a proxy target holds its domain all the same.
+		expect((await refusal(put('other', 'plain.example.com', envelope({ proxy: false })))).message).toBe(HELD('plain.example.com'))
+		expect(w.prepared).toEqual([])
+		expect(await w.repositories.registry.getAppEnv('other', 'live')).toBeNull()
+		expect((await w.repositories.registry.getAppEnv('shop', 'live'))?.domain).toBe('shop.example.com')
+	})
+
+	test('a domain a member of another namespace holds is refused all the same', async () => {
+		const w = await world()
+		await w.member('shop', 'live', 'shop.example.com', { published: false })
+
+		const error = await refusal(
+			putAppEnvUseCase(w.context, 'other', 'dev', { namespaceId: 'apps-dev', domain: 'Shop.example.com', target: envelope({}), artifact: ARTIFACT }),
 		)
+
+		expect(error.httpStatus).toBe(409)
+		expect(error.message).toBe(HELD('Shop.example.com'))
+		expect(w.prepared).toEqual([])
+		expect(await w.repositories.registry.getAppEnv('other', 'dev')).toBeNull()
+	})
+
+	test('a dev wildcard base holds every name under it against a standard environment, in either direction', async () => {
+		const w = await world()
+		await w.member('shop', 'dev', 'dev.example.com', { kind: 'dev', published: true })
+		await w.member('plain', 'live', 'app.dev2.example.com', { published: false })
+		const live = (domain: string) =>
+			putAppEnvUseCase(w.context, 'other', 'live', { namespaceId: 'apps-live', domain, target: envelope({}), artifact: ARTIFACT })
+
+		expect((await refusal(live('dev.example.com'))).message).toBe(HELD('dev.example.com'))
+		expect((await refusal(live('0190a3f2-0000-7000-8000-000000000000.DEV.example.com'))).message).toBe(
+			HELD('0190a3f2-0000-7000-8000-000000000000.DEV.example.com'),
+		)
+		// A dev base above a standard environment's domain would serve that name as a workspace host.
+		const dev = await refusal(
+			putAppEnvUseCase(w.context, 'other', 'dev', {
+				namespaceId: 'apps-dev',
+				kind: 'dev',
+				domain: 'dev2.example.com',
+				target: envelope({}),
+				artifact: ARTIFACT,
+			}),
+		)
+		expect(dev.message).toBe(HELD('dev2.example.com'))
+		expect(w.prepared).toEqual([])
+		// A name beside the base, not under it, is free.
+		await live('notdev.example.com')
+		expect(w.prepared).toEqual(['other/live'])
 	})
 
 	test('dev members share one wildcard base: each is routed only on its workspaces hosts', async () => {

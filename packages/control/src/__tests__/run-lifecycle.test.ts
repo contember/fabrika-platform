@@ -1776,7 +1776,8 @@ describe('provider-neutral run lifecycle', () => {
 			providerTargetJson: JSON.stringify(envelope('memory', 'namespace')),
 			state: 'ready',
 		}, ['service:proxy'])
-		for (const { appId, domain } of [{ appId: 'other', domain: 'shop.example.com' }, { appId: 'app', domain: 'SHOP.example.com' }]) {
+		// Two domains, but the provider routes both on one host: the host a member is routed on is the provider's word.
+		for (const { appId, domain } of [{ appId: 'other', domain: 'shop.example.com' }, { appId: 'app', domain: 'SHOP.example.org' }]) {
 			await db.registry.upsertAppEnvWithNamespaceResourceClaims({
 				appId,
 				env: 'prod',
@@ -1796,9 +1797,10 @@ describe('provider-neutral run lifecycle', () => {
 			'prod',
 		).run()
 		const routed: string[][] = []
-		// A member with approved access is routed on its domain; the republish refuses a host twice, as the compiler does.
+		// A member with approved access is routed on its domain's first label under example.com; the republish refuses a
+		// host twice, as the compiler does.
 		const hostsOf = (member: { domain?: string; access?: ProviderApprovedAccess }): string[] =>
-			member.access === undefined || member.domain === undefined ? [] : [member.domain.toLowerCase()]
+			member.access === undefined || member.domain === undefined ? [] : [`${member.domain.toLowerCase().split('.')[0]}.example.com`]
 		const inputs: ProviderDeployInput[] = []
 		const provider: ControlProvider = {
 			...makeProvider(inputs, { state: 'succeeded' }),

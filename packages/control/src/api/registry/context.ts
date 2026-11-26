@@ -19,6 +19,8 @@ export interface RegistryUseCaseContext {
 	readonly commits?: CommitSource
 	/** IAM's mirror of the approval gates, which a new environment's reach before its row (ADR-0083 §4). */
 	readonly grantApproval?: GrantApprovalPort
+	/** The installation's own hosts, which no environment's domain may be or lie under (`reservedInstallationHosts`). */
+	readonly reservedHosts: readonly string[]
 }
 
 export function notifyCatalogChanged(c: RegistryUseCaseContext): void {

@@ -187,6 +187,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0041_iam_gate_mirrors.sql' },
 			{ bundle: 'control', name: '0042_workload_key_handoff.sql' },
 			{ bundle: 'control', name: '0043_workload_key_expiry_warning.sql' },
+			{ bundle: 'control', name: '0044_unique_app_env_domain.sql' },
 		])
 	})
 
