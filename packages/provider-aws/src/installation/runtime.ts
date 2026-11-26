@@ -105,11 +105,22 @@ const GROUPS: Readonly<Record<AwsPlatformTask, string>> = {
 const name = (value: string): JsonValue => [{ Key: 'Name', Value: value }]
 const groupId = (task: AwsPlatformTask): JsonValue => ({ 'Fn::GetAtt': [GROUPS[task], 'GroupId'] })
 
+/**
+ * A grant on a bucket of this account alone (`s3:ResourceAccount`): a bucket's name is global, so a grant by name would
+ * reach another account's bucket of that name if this one were ever gone.
+ */
+function ownBucket(actions: readonly string[], resources: readonly string[], accountId: string): JsonValue {
+	return { Effect: 'Allow', Action: [...actions], Resource: [...resources], Condition: { StringEquals: { 's3:ResourceAccount': accountId } } }
+}
+
 /** The private, TLS-only, encrypted bucket `bucket`. */
 function bucketResources(logical: string, bucket: string): Record<string, JsonValue> {
 	return {
 		[logical]: {
 			Type: 'AWS::S3::Bucket',
+			// Kept when the stack goes: its name is global and predictable, so a deleted one could be another account's next.
+			DeletionPolicy: 'Retain',
+			UpdateReplacePolicy: 'Retain',
 			Properties: {
 				BucketName: bucket,
 				PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true },
@@ -145,7 +156,7 @@ export function awsRuntimeStack(input: AwsRuntimeInput): AwsStack {
 	const resources: Record<string, JsonValue> = {
 		Namespace: {
 			Type: 'AWS::ServiceDiscovery::HttpNamespace',
-			Properties: { Name: AWS_PLATFORM_NAMESPACE, Description: "fabrika: the platform's services" },
+			Properties: { Name: AWS_PLATFORM_NAMESPACE, Description: 'fabrika: the platform services' },
 		},
 	}
 
@@ -251,8 +262,8 @@ export function awsRuntimeStack(input: AwsRuntimeInput): AwsStack {
 			AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', a, { like: `arn:aws:ecs:${r}:${a}:*` }),
 			Policies: [
 				policy('blobs', [
-					allow(['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'], [`arn:aws:s3:::${awsOperationsBucket(a)}/*`]),
-					allow(['s3:ListBucket'], [`arn:aws:s3:::${awsOperationsBucket(a)}`]),
+					ownBucket(['s3:GetObject', 's3:PutObject', 's3:DeleteObject', 's3:AbortMultipartUpload'], [`arn:aws:s3:::${awsOperationsBucket(a)}/*`], a),
+					ownBucket(['s3:ListBucket'], [`arn:aws:s3:::${awsOperationsBucket(a)}`], a),
 				]),
 			],
 		},

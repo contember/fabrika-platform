@@ -64,6 +64,9 @@ describe("the installation's database", () => {
 		}])
 		expect(resources.DatabaseGroup.Properties.SecurityGroupEgress).toEqual([{ IpProtocol: '-1', CidrIp: '127.0.0.1/32', Description: 'none' }])
 		expect(resources.DatabaseClientGroup.Properties.SecurityGroupIngress).toBeUndefined()
+		// Its members carry it beside their own group, and a task's groups add up: an allow-all egress here would open
+		// every member's.
+		expect(resources.DatabaseClientGroup.Properties.SecurityGroupEgress).toEqual([{ IpProtocol: '-1', CidrIp: '127.0.0.1/32', Description: 'none' }])
 	})
 
 	test('the instance: private, encrypted, backed up, protected from deletion, its passwords references Control cannot read', () => {

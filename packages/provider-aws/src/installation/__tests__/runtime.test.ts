@@ -126,6 +126,8 @@ describe("the platform services' foundation", () => {
 		const blobs = JSON.stringify(resources['OperationsTaskRole']?.Properties['Policies'])
 		expect(blobs).toContain('arn:aws:s3:::fabrika-operations-123456789012/*')
 		expect(blobs).not.toContain('run-logs')
+		// Both grants held to this account's bucket, which is kept when the stack goes: its name is global.
+		expect(blobs.split('"s3:ResourceAccount":"123456789012"')).toHaveLength(3)
 		for (const bucket of ['RunLogsBucket', 'OperationsBucket']) {
 			expect(resources[bucket]?.Properties['PublicAccessBlockConfiguration']).toEqual({
 				BlockPublicAcls: true,
@@ -134,6 +136,7 @@ describe("the platform services' foundation", () => {
 				RestrictPublicBuckets: true,
 			})
 			expect(JSON.stringify(resources[`${bucket}Policy`]?.Properties)).toContain('"aws:SecureTransport":"false"')
+			expect(JSON.parse(JSON.stringify(stack.template)).Resources[bucket]).toMatchObject({ DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' })
 		}
 		expect(resources['RunLogsBucket']?.Properties['BucketName']).toBe('fabrika-run-logs-123456789012')
 	})

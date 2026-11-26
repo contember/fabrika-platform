@@ -174,7 +174,13 @@ export function awsImagesStack(installation: { readonly accountId: string; reado
 								),
 								allow(['logs:CreateLogStream', 'logs:PutLogEvents'], [`arn:aws:logs:${region}:${accountId}:log-group:${AWS_IMAGES_LOG_GROUP}:*`]),
 								// The platform proxy's manifest, which the operator's command writes; nothing of Control's `sources/`.
-								allow(['s3:GetObject'], [`arn:aws:s3:::${awsSourcesBucket(accountId)}/platform/*`]),
+								// This account's bucket alone: a bucket's name is global.
+								{
+									Effect: 'Allow',
+									Action: ['s3:GetObject'],
+									Resource: [`arn:aws:s3:::${awsSourcesBucket(accountId)}/platform/*`],
+									Condition: { StringEquals: { 's3:ResourceAccount': accountId } },
+								},
 							]),
 						],
 					},

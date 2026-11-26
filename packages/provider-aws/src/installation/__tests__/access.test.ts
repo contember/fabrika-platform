@@ -248,6 +248,10 @@ describe("the installation's access", () => {
 			'arn:aws:s3:::fabrika-run-logs-123456789012/*',
 			'arn:aws:s3:::fabrika-run-logs-123456789012',
 		])
+		// Each held to this account's buckets: a bucket's name is global.
+		for (const statement of s3) expect(statement.Condition).toEqual({ StringEquals: { 's3:ResourceAccount': '123456789012' } })
+		const bucket = JSON.parse(JSON.stringify(awsAccessStack(input).template)).Resources.SourcesBucket
+		expect(bucket).toMatchObject({ DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' })
 	})
 
 	test('Control starts no task itself: the task runner does, which Control may invoke and nothing more', () => {

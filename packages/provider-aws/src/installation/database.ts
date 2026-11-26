@@ -122,8 +122,10 @@ export function awsDatabaseStack(network: AwsNetworkOutputs): AwsStack {
 		Properties: {
 			GroupDescription: 'fabrika: the platform services, the only database clients',
 			VpcId: network.vpcId,
-			// Rules of its own are none: it only names its members to the database's group. Its egress stays EC2's default,
-			// which the services' own groups decide over.
+			// No rule of its own: it only names its members to the database's group. Its default egress is replaced too.
+			// A task's groups add up, so EC2's allow-all here would open every member's egress whatever its own group
+			// says; each member's own group carries its 5432 rule (`runtime.ts`).
+			SecurityGroupEgress: [{ IpProtocol: '-1', CidrIp: '127.0.0.1/32', Description: 'none' }],
 			Tags: name('fabrika-database-clients'),
 		},
 	}

@@ -852,7 +852,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the roles an existing task definition names (the task runner's role holds it on the applications' and namespaces'
     roles), that Lambda reports a thrown error's `name` as its `errorType`, which source ARN ECS sends when a task takes
     Control's role, and
-    IAM Access Analyzer's external access findings on the bounded roles.
+    IAM Access Analyzer's external access findings on the bounded roles, and whether ECS accepts from Control's role a
+    `serviceRegistries` entry naming a Cloud Map service of the platform's namespace and Service Connect's clients take
+    such an instance (an accepted reach: no route joins the VPCs, so it could only make the platform's calls fail).
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

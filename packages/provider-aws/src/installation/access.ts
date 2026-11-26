@@ -43,7 +43,13 @@
 // - **Not in the platform's Service Connect namespace.** IAM, Control and Operations address each other in a namespace
 //   of their own (`runtime.ts`). A service Control creates or updates may name a Service Connect namespace, and
 //   Control's Cloud Map grants are held by a tag the platform's namespace does not carry; so Control's role is denied
-//   `CreateService` and `UpdateService` naming the platform's (`ecs:namespace`, by its ARN or its name).
+//   `CreateService` and `UpdateService` naming the platform's (`ecs:namespace`, by its ARN or its name). The remaining
+//   reach, accepted: a service may also name Cloud Map services in `serviceRegistries`, no condition key reads that, and
+//   ECS registers the tasks with its own role, so Control could perhaps register an application's tasks in a Cloud Map
+//   service of the platform's namespace (`iam`, which ECS creates for Service Connect). No route joins the two VPCs, so
+//   the effect is the platform's calls to such an address failing, never a request reaching the application. Step 13
+//   settles whether ECS accepts such a registry from Control's role and whether Service Connect's clients take the
+//   instance.
 // - **No task started by Control.** See the applications' network above: the task runner starts an init task, and
 //   every Lambda action on it but invoking it is denied, as on the certificate broker.
 // - **No certificate on a listener.** Elastic Load Balancing scopes `AddListenerCertificates` by the listener alone, so a
@@ -219,6 +225,7 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 	const targetGroups = `arn:aws:elasticloadbalancing:${r}:${a}:targetgroup/*`
 	const createdWith = (key: string, action: string): JsonValue => ({ StringEquals: { [key]: action } })
 	const tagged = (key: string): JsonValue => ({ Null: { [key]: 'false' } })
+	const ownAccount: JsonValue = { StringEquals: { 's3:ResourceAccount': a } }
 
 	return [
 		{
@@ -247,14 +254,13 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 				// A one-level listing of a path; Parameter Store scopes no listing by resource.
 				allow(['ssm:DescribeParameters'], ['*']),
 				allow(['codebuild:StartBuild', 'codebuild:BatchGetBuilds', 'codebuild:StopBuild', 'codebuild:ListBuildsForProject'], projects),
-				// The uploads, and the presigned read a build fetches its archive with, signed by Control.
-				allow(
-					['s3:PutObject', 's3:GetObject', 's3:AbortMultipartUpload'],
-					[`arn:aws:s3:::${awsSourcesBucket(a)}/sources/*`],
-				),
+				// The uploads, and the presigned read a build fetches its archive with, signed by Control. Every S3 grant is
+				// held to this account's buckets (`s3:ResourceAccount`): a name is global, so a grant by name alone would
+				// reach another account's bucket of that name if this one were ever gone.
+				allowIf(['s3:PutObject', 's3:GetObject', 's3:AbortMultipartUpload'], [`arn:aws:s3:::${awsSourcesBucket(a)}/sources/*`], ownAccount),
 				// The run logs Control keeps (`FABRIKA_CONTROL_RUN_LOGS_*`), in a bucket of their own.
-				allow(['s3:PutObject', 's3:GetObject', 's3:DeleteObject', 's3:AbortMultipartUpload'], [`arn:aws:s3:::${awsRunLogsBucket(a)}/*`]),
-				allow(['s3:ListBucket'], [`arn:aws:s3:::${awsRunLogsBucket(a)}`]),
+				allowIf(['s3:PutObject', 's3:GetObject', 's3:DeleteObject', 's3:AbortMultipartUpload'], [`arn:aws:s3:::${awsRunLogsBucket(a)}/*`], ownAccount),
+				allowIf(['s3:ListBucket'], [`arn:aws:s3:::${awsRunLogsBucket(a)}`], ownAccount),
 				// An IAM wildcard spans `:`, so a group's pattern covers its streams too.
 				allow(['logs:GetLogEvents', 'logs:FilterLogEvents'], logGroups),
 				allow(['acm:RequestCertificate', 'acm:DescribeCertificate'], ['*']),
@@ -453,6 +459,9 @@ export function awsAccessStack(input: AwsAccessInput): AwsStack {
 		},
 		SourcesBucket: {
 			Type: 'AWS::S3::Bucket',
+			// Kept when the stack goes: its name is global and predictable, so a deleted one could be another account's next.
+			DeletionPolicy: 'Retain',
+			UpdateReplacePolicy: 'Retain',
 			Properties: {
 				BucketName: awsSourcesBucket(accountId),
 				PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true },
