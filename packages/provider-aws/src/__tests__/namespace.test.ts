@@ -127,6 +127,10 @@ describe('awsNamespaceResources', () => {
 			buildRoleName: 'shared_prod_proxy_build',
 			buildLogGroup: '/fabrika/namespaces/shared/prod/proxy/build',
 			sourcePrefix: 'sources/_namespaces/shared/prod',
+			service: 'ns_shared_prod_proxy',
+			logGroup: '/fabrika/namespaces/shared/prod/proxy',
+			taskRoleName: 'shared_prod_proxy_task',
+			executionRoleName: 'shared_prod_proxy_execution',
 		})
 		// `a-b` + `c` and `a` + `b-c` would join to one name without the length.
 		expect(awsNamespaceResources('a-b', 'c').stackName).not.toBe(awsNamespaceResources('a', 'b-c').stackName)
@@ -222,6 +226,52 @@ describe('awsNamespaceStack', () => {
 		expect(at(project, 'LogsConfig')).toEqual({ CloudWatchLogs: { Status: 'ENABLED', GroupName: '/fabrika/namespaces/shared/prod/proxy/build' } })
 	})
 
+	test("holds the proxy's log group and two roles: a task role with no permission, an execution role reaching only its own", () => {
+		expect(at(resources, 'ProxyLogGroup', 'Properties', 'LogGroupName')).toBe('/fabrika/namespaces/shared/prod/proxy')
+		const ecsTrust = {
+			Version: '2012-10-17',
+			Statement: [{
+				Effect: 'Allow',
+				Principal: { Service: 'ecs-tasks.amazonaws.com' },
+				Action: 'sts:AssumeRole',
+				Condition: { StringEquals: { 'aws:SourceAccount': '123456789012' }, ArnLike: { 'aws:SourceArn': 'arn:aws:ecs:eu-central-1:123456789012:*' } },
+			}],
+		}
+		const task = at(resources, 'ProxyTaskRole', 'Properties')
+		expect(at(task, 'RoleName')).toBe('shared_prod_proxy_task')
+		expect(at(task, 'Path')).toBe('/fabrika/namespaces/')
+		expect(at(task, 'AssumeRolePolicyDocument')).toEqual(ecsTrust)
+		// The proxy calls no AWS API: its own code holds nothing.
+		expect(at(task, 'Policies')).toBeUndefined()
+		const execution = at(resources, 'ProxyExecutionRole', 'Properties')
+		expect(at(execution, 'RoleName')).toBe('shared_prod_proxy_execution')
+		expect(at(execution, 'AssumeRolePolicyDocument')).toEqual(ecsTrust)
+		expect(at(execution, 'Policies')).toEqual([{
+			PolicyName: 'execution',
+			PolicyDocument: {
+				Version: '2012-10-17',
+				Statement: [
+					{ Effect: 'Allow', Action: ['ecr:GetAuthorizationToken'], Resource: ['*'] },
+					{
+						Effect: 'Allow',
+						Action: ['ecr:BatchCheckLayerAvailability', 'ecr:GetDownloadUrlForLayer', 'ecr:BatchGetImage'],
+						Resource: ['arn:aws:ecr:eu-central-1:123456789012:repository/fabrika/namespaces/shared/prod/proxy'],
+					},
+					{
+						Effect: 'Allow',
+						Action: ['logs:CreateLogStream', 'logs:PutLogEvents'],
+						Resource: ['arn:aws:logs:eu-central-1:123456789012:log-group:/fabrika/namespaces/shared/prod/proxy:*'],
+					},
+					{
+						Effect: 'Allow',
+						Action: ['ssm:GetParameters'],
+						Resource: ['arn:aws:ssm:eu-central-1:123456789012:parameter/fabrika/namespaces/shared/prod/env/*'],
+					},
+				],
+			},
+		}])
+	})
+
 	test('every role the stack holds carries the boundary', () => {
 		const roles = Object.values(typeof resources === 'object' && resources !== null && !Array.isArray(resources) ? resources : {})
 			.filter((resource) => at(resource, 'Type') === 'AWS::IAM::Role')
@@ -298,6 +348,12 @@ describe('awsNamespaceCapabilities', () => {
 		// Nor an image the provider never read from ECR, which the proxy's service would run.
 		const image = target({ proxyImageDigest: `sha256:${'a'.repeat(64)}`, proxyImageManifestSha256: 'f'.repeat(64) })
 		expect(() => capabilities.normalize({ ...NAMESPACE, target: image })).toThrow('never submitted')
+		// Nor the proxy service's revision, which a later call would set the service to.
+		const revision = target({
+			proxyServiceTaskDefinitionArn: 'arn:aws:ecs:eu-central-1:123456789012:task-definition/ns_shared_prod_proxy:3',
+			proxyServiceFingerprint: 'a'.repeat(64),
+		})
+		expect(() => capabilities.normalize({ ...NAMESPACE, target: revision })).toThrow('never submitted')
 		expect(() => capabilities.normalize({ ...NAMESPACE, target: target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64) }) }))
 			.toThrow(
 				'never submitted',
@@ -436,6 +492,11 @@ describe('awsNamespaceCapabilities', () => {
 		})
 		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy build project', value: 'fabrika_ns_shared_prod', resource: true })
 		expect(planned?.presentation.instructions.join(' ')).toContain("deletes the proxy's images with their repository")
+		// The proxy's service lives outside the stack and holds its group, roles and log group: it goes first.
+		expect(planned?.presentation.instructions).toContain(
+			'When no environment uses the namespace, delete in this order: the ECS service ns_shared_prod_proxy in the cluster fabrika-apps; then the parameters under /fabrika/namespaces/shared/prod/env and the task definition family ns_shared_prod_proxy; then the stack fabrika-ns-6-shared-prod.',
+		)
+		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy service', value: 'fabrika-apps/ns_shared_prod_proxy', resource: true })
 		expect(() => operator?.plan({ id: 'shared', env: 'prod', preset: 'full' })).toThrow('only the cheap preset')
 		expect(() => operator?.plan({ id: 'shared', env: 'prod', preset: 'cheap', options: { size: 1 } })).toThrow('takes no options')
 	})

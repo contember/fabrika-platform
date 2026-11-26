@@ -102,13 +102,28 @@ describe('the AWS codecs', () => {
 		const built: AwsNamespaceTarget = { ...namespace, proxyImageDigest: `sha256:${'a'.repeat(64)}`, proxyImageManifestSha256: 'f'.repeat(64) }
 		expect(roundTrip(awsNamespaceTargetCodec, built)).toEqual({ decoded: built, json: built })
 		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyImageDigest: built.proxyImageDigest ?? '' })).toContain('proxyImageManifestSha256')
+		// The service: its revision with its image, and the update's mark only with them.
+		const revision = 'arn:aws:ecs:eu-central-1:123456789012:task-definition/ns_acme_prod_proxy:3'
+		const serving: AwsNamespaceTarget = {
+			...built,
+			proxyServiceTaskDefinitionArn: revision,
+			proxyServiceFingerprint: 'a'.repeat(64),
+			proxyServiceUpdated: true,
+		}
+		expect(roundTrip(awsNamespaceTargetCodec, serving)).toEqual({ decoded: serving, json: serving })
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyServiceTaskDefinitionArn: revision })).toContain('proxyServiceFingerprint')
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyServiceUpdated: true })).toContain('proxyServiceTaskDefinitionArn')
 		// The pin is required: a target without it is one this release does not read.
 		const { proxyCommitSha: _sha, ...unpinned } = namespace
 		expect(refused(awsNamespaceTargetCodec, unpinned)).toContain('proxyCommitSha')
 	})
 
 	test('a value of another form is refused, naming the field only', () => {
-		const cases: readonly { readonly codec: ProviderCodec<unknown>; readonly payload: { readonly [key: string]: string }; readonly field: string }[] = [
+		const cases: readonly {
+			readonly codec: ProviderCodec<unknown>
+			readonly payload: { readonly [key: string]: string | true }
+			readonly field: string
+		}[] = [
 			{ codec: awsAppTargetCodec, payload: { ...target, accountId: '12345' }, field: 'accountId' },
 			{ codec: awsAppTargetCodec, payload: { ...target, region: 'Frankfurt' }, field: 'region' },
 			{ codec: awsAppTargetCodec, payload: { ...target, cluster: 'a/b' }, field: 'cluster' },
@@ -136,7 +151,7 @@ describe('the AWS codecs', () => {
 		for (const { codec, payload, field } of cases) {
 			const message = refused(codec, { ...payload })
 			expect(message).toContain(field)
-			for (const value of Object.values(payload)) expect(message).not.toContain(value)
+			for (const value of Object.values(payload)) if (typeof value === 'string') expect(message).not.toContain(value)
 		}
 	})
 

@@ -90,6 +90,15 @@ export interface AwsNamespaceResources {
 	 * (`sources/<app>/<env>`) holds a namespace's archives, nor the other way round.
 	 */
 	readonly sourcePrefix: string
+	/**
+	 * The proxy's ECS service, `ns_<id>_<env>_proxy`, which is its task definition's family too: more parts than an
+	 * application's `<app>_<env>`, so the two never share a name in the cluster. Its log group, and its two roles: the
+	 * task role (no permission: the proxy calls no AWS API) and the execution role, never one role (ADR-0004).
+	 */
+	readonly service: string
+	readonly logGroup: string
+	readonly taskRoleName: string
+	readonly executionRoleName: string
 }
 
 /**
@@ -119,6 +128,10 @@ export function awsNamespaceResources(id: string, env: string): AwsNamespaceReso
 		buildRoleName: `${role}_proxy_build`,
 		buildLogGroup: `/fabrika/namespaces/${id}/${env}/proxy/build`,
 		sourcePrefix: `sources/_namespaces/${id}/${env}`,
+		service: `ns_${role}_proxy`,
+		logGroup: `/fabrika/namespaces/${id}/${env}/proxy`,
+		taskRoleName: `${role}_proxy_task`,
+		executionRoleName: `${role}${LONGEST_ROLE_SUFFIX}`,
 	}
 }
 
@@ -139,6 +152,8 @@ export function awsNamespaceStack(
 	const tags = [{ Key: 'fabrika:namespace', Value: namespace.id }, { Key: 'fabrika:env', Value: namespace.env }]
 	const repositoryArn = `arn:aws:ecr:${region}:${accountId}:repository/${resources.repository}`
 	const project = `arn:aws:codebuild:${region}:${accountId}:project/${resources.buildProject}`
+	// ECS names the task it takes a role for; any of this account and region, and only of ECS.
+	const ecs = { like: `arn:aws:ecs:${region}:${accountId}:*` }
 	const template: JsonValue = {
 		AWSTemplateFormatVersion: '2010-09-09',
 		Description: `fabrika: the deployment namespace ${namespace.id}/${namespace.env}`,
@@ -175,6 +190,42 @@ export function awsNamespaceStack(
 			ProxyBuildLogGroup: {
 				Type: 'AWS::Logs::LogGroup',
 				Properties: { LogGroupName: resources.buildLogGroup, RetentionInDays: AWS_LOG_RETENTION_DAYS, Tags: tags },
+			},
+			ProxyLogGroup: {
+				Type: 'AWS::Logs::LogGroup',
+				Properties: { LogGroupName: resources.logGroup, RetentionInDays: AWS_LOG_RETENTION_DAYS, Tags: tags },
+			},
+			// The proxy's own code runs as this role, which may call nothing: the proxy reaches IAM over HTTPS with its key and
+			// its applications through Service Connect, never an AWS API. Only ECS in this account and region may take it.
+			ProxyTaskRole: {
+				Type: 'AWS::IAM::Role',
+				Properties: {
+					RoleName: resources.taskRoleName,
+					Path: IAM_PATH,
+					PermissionsBoundary: awsAppsPermissionsBoundary(accountId),
+					AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', accountId, ecs),
+					Tags: tags,
+				},
+			},
+			// ECS starts the proxy's tasks with this one: it pulls this namespace's proxy images, writes the proxy's log group
+			// and reads the proxy's secrets (the IAM key, the per-application proxy secrets) under the namespace's `env/`.
+			ProxyExecutionRole: {
+				Type: 'AWS::IAM::Role',
+				Properties: {
+					RoleName: resources.executionRoleName,
+					Path: IAM_PATH,
+					PermissionsBoundary: awsAppsPermissionsBoundary(accountId),
+					AssumeRolePolicyDocument: trust('ecs-tasks.amazonaws.com', accountId, ecs),
+					Policies: [
+						policy('execution', [
+							allow(['ecr:GetAuthorizationToken'], ['*']),
+							allow(['ecr:BatchCheckLayerAvailability', 'ecr:GetDownloadUrlForLayer', 'ecr:BatchGetImage'], [repositoryArn]),
+							allow(['logs:CreateLogStream', 'logs:PutLogEvents'], [`arn:aws:logs:${region}:${accountId}:log-group:${resources.logGroup}:*`]),
+							allow(['ssm:GetParameters'], [`arn:aws:ssm:${region}:${accountId}:parameter${resources.parameterPath}/env/*`]),
+						]),
+					],
+					Tags: tags,
+				},
 			},
 			// The build's role, under the installation's boundary as every role Control's stacks create: it pushes to this
 			// namespace's repository, reads this namespace's source URL parameters and writes its own log group, nothing else.
@@ -322,6 +373,9 @@ function targetOf(
 		...(stored?.proxyBuildId === undefined ? {} : { proxyBuildId: stored.proxyBuildId }),
 		...(stored?.proxyImageDigest === undefined ? {} : { proxyImageDigest: stored.proxyImageDigest }),
 		...(stored?.proxyImageManifestSha256 === undefined ? {} : { proxyImageManifestSha256: stored.proxyImageManifestSha256 }),
+		...(stored?.proxyServiceTaskDefinitionArn === undefined ? {} : { proxyServiceTaskDefinitionArn: stored.proxyServiceTaskDefinitionArn }),
+		...(stored?.proxyServiceFingerprint === undefined ? {} : { proxyServiceFingerprint: stored.proxyServiceFingerprint }),
+		...(stored?.proxyServiceUpdated === undefined ? {} : { proxyServiceUpdated: stored.proxyServiceUpdated }),
 	}
 	return awsNamespaceTargetEnvelope(target)
 }
@@ -360,11 +414,15 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				{ label: 'Service Connect namespace', value: resources.serviceConnectNamespace, resource: true },
 				{ label: 'Proxy image repository', value: resources.repository, resource: true },
 				{ label: 'Proxy build project', value: resources.buildProject, resource: true },
+				{ label: 'Proxy service', value: `${installation.cluster}/${resources.service}`, resource: true },
 				// A policy choice, not a resource: the pin the proxy is built from until an operator moves it.
 				{ label: 'Proxy source', value: `${target.proxyRepository}@${target.proxyCommitSha}` },
 			],
 			instructions: [
-				'Control creates the stack. Removing the namespace leaves it in place: delete the stack when no environment uses it.',
+				"Control creates the stack and the proxy's service. Removing the namespace leaves both in place.",
+				// The service lives outside the stack and holds its security group, roles and log group: deleting the stack first
+				// removes the roles under a running service and then fails on the group its network interfaces hold.
+				`When no environment uses the namespace, delete in this order: the ECS service ${resources.service} in the cluster ${installation.cluster}; then the parameters under ${resources.parameterPath}/env and the task definition family ${resources.service}; then the stack ${resources.stackName}.`,
 				"Deleting the stack deletes the proxy's images with their repository: they are rebuilt from the namespace's pinned source.",
 			],
 		}
@@ -420,6 +478,8 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 			if (
 				submitted.proxyBuildToken !== undefined || submitted.proxyBuildManifestSha256 !== undefined || submitted.proxyBuildId !== undefined
 				|| submitted.proxyImageDigest !== undefined || submitted.proxyImageManifestSha256 !== undefined
+				|| submitted.proxyServiceTaskDefinitionArn !== undefined || submitted.proxyServiceFingerprint !== undefined
+				|| submitted.proxyServiceUpdated !== undefined
 			) {
 				throw new Error("aws: a namespace's proxy build and image are recorded by its provider, never submitted")
 			}

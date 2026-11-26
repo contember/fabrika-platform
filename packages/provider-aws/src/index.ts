@@ -75,4 +75,13 @@ export {
 	awsProxyBuildStart,
 } from './proxy-build'
 export { awsNamespaceMemberHosts, awsNamespaceProxyManifest, awsProxyUpstream } from './proxy-manifest'
+export {
+	AWS_PROXY_PORT,
+	type AwsProxyIam,
+	awsProxySecrets,
+	type AwsProxyServiceClients,
+	type AwsProxyServiceInput,
+	awsProxyTaskDefinition,
+	ensureAwsProxyService,
+} from './proxy-service'
 export { AWS_STACK_POLL_MS, AWS_STACK_TIMEOUT_MS, type AwsStack, ensureStack, type EnsureStackInput } from './stack'
