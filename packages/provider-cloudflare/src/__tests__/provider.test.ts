@@ -2816,6 +2816,29 @@ describe('a Custom Domain the deploy does not own', () => {
 		])
 	})
 
+	test("reads Cloudflare's Custom Domains answer, whose `errors` and `messages` are null", async () => {
+		// The shape Cloudflare answered on a production deploy, ids replaced.
+		const body = {
+			result: [{
+				id: 'domain-1',
+				zone_id: 'zone-1',
+				zone_name: 'example.com',
+				hostname: 'stage.example.com',
+				service: 'stage-demo-proxy',
+				environment: 'production',
+				cert_id: 'cert-1',
+				previews_enabled: false,
+				enabled: true,
+			}],
+			success: true,
+			errors: null,
+			messages: null,
+			result_info: { page: 1, per_page: 1, count: 1, total_count: 1 },
+		}
+		const result = await deploy(rec, config(), { cloudflareApi: () => Promise.resolve(Response.json(body)) })
+		expect(result.status).toBe('succeeded')
+	})
+
 	test('is not read on a dry run or for an environment without a domain', async () => {
 		const seen: string[] = []
 		const cloudflareApi = fakeCloudflareApi({ customDomains: [{ hostname: 'stage.example.com', service: 'prod-fabrika-iam' }], seen })

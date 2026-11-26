@@ -17,7 +17,8 @@ export interface CloudflareApi {
 const envelopeSchema = z.object({
 	success: z.boolean(),
 	result: z.unknown(),
-	errors: z.array(z.object({ code: z.number().optional(), message: z.string() }).passthrough()).optional(),
+	// The Workers Custom Domains list answers a success with `"errors": null`; zones and DNS records with `[]`.
+	errors: z.array(z.object({ code: z.number().optional(), message: z.string() }).passthrough()).nullish(),
 })
 const customDomainsSchema = z.array(z.object({ hostname: z.string(), service: z.string() }).passthrough())
 const zonesSchema = z.array(z.object({ id: z.string(), name: z.string() }).passthrough())

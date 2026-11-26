@@ -13,7 +13,17 @@ export interface FakeCloudflareAccount {
 	readonly sent?: Array<{ readonly authorization: string | null; readonly redirect: RequestRedirect | undefined }>
 }
 
-const answer = (result: unknown): Response => Response.json({ success: true, errors: [], result })
+const answer = (result: unknown): Response => Response.json({ success: true, errors: [], messages: [], result })
+
+/** The Workers Custom Domains list answers as Cloudflare does: `errors` and `messages` null, with `result_info`. */
+const customDomainsAnswer = (result: readonly unknown[]): Response =>
+	Response.json({
+		result,
+		success: true,
+		errors: null,
+		messages: null,
+		result_info: { page: 1, per_page: result.length, count: result.length, total_count: result.length },
+	})
 
 /** Cloudflare's API over a fake account, answering the reads the Custom Domain check makes. */
 export function fakeCloudflareApi(account: FakeCloudflareAccount = {}): CloudflareApiFetch {
@@ -24,7 +34,7 @@ export function fakeCloudflareApi(account: FakeCloudflareAccount = {}): Cloudfla
 		const path = parsed.pathname.replace('/client/v4', '')
 		if (path.endsWith('/workers/domains')) {
 			const hostname = parsed.searchParams.get('hostname')
-			return Promise.resolve(answer((account.customDomains ?? []).filter((domain) => domain.hostname === hostname)))
+			return Promise.resolve(customDomainsAnswer((account.customDomains ?? []).filter((domain) => domain.hostname === hostname)))
 		}
 		if (path === '/zones') {
 			const name = parsed.searchParams.get('name') ?? ''
