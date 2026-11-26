@@ -46,9 +46,12 @@ flowchart LR
   expires, so after a revocation a warm process may still admit that caller for up to the token's 300 s lifetime while
   a cold one already refuses ([`authorize.ts`](../../packages/proxy-core/src/authorize.ts),
   `TOKEN_REFRESH_SKEW_SECONDS` in [`token.ts`](../../packages/auth-core/src/token.ts)).
-- **Exposure is checked at each deploy, not continuously.** `verify-exposure` runs only as a deploy step; a subdomain
-  or a bucket made public in the Zerops GUI between deploys is not noticed until the next deploy of that environment
-  ([`plan.ts`](../../packages/provider-zerops/src/plan.ts)).
+- **Exposure is refused at each deploy and watched between deploys.** `verify-exposure` refuses a deploy
+  ([`plan.ts`](../../packages/provider-zerops/src/plan.ts)); Control's maintenance pass (every five minutes on Zerops)
+  runs the same read-back through the provider's `exposure.check` and raises one `FabrikaExposureDetected` error event
+  in the application's own Operations when what is exposed changes, so a subdomain or a bucket made public in the
+  Zerops GUI between deploys is reported within a pass. The pass does not undo the exposure; the next deploy refuses it
+  ([`exposure-watch.ts`](../../packages/control/src/exposure-watch.ts)).
 - **A caller cannot forge what the proxy asserts.** Before the decision, the proxy deletes every `X-Fabrika-*` hop
   header (`FABRIKA_HOP_HEADERS`: token, client address, endpoint, delegation grant, proxy secret), `X-Request-Id` and
   the forwarding headers ([`wire.ts`](../../packages/auth-core/src/wire.ts),

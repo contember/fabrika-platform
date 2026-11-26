@@ -261,7 +261,9 @@ cancel does not interrupt that. A bucket that already
 existed under its hostname has no evidence and is refused. Before activation, the deploy reads back `subdomainAccess`
 of every declared service from Zerops and checks every bucket's provenance. A failed check blocks
 activation and raises an Operations alert: an error event in the application's own Operations project,
-which its alert rules deliver.
+which its alert rules deliver. Something outside a run (an operator in the Zerops GUI, another token) can still
+expose a service between deploys, so Control's maintenance pass runs the same read-back and raises such an event
+when what is exposed changes; it reports and does not undo, and the next deploy refuses the exposure.
 
 Only CSP extensions in the contract are approvable, through the approval diff of
 [ADR-0050](0050-approved-access.md). No other exposure has an approval path.
