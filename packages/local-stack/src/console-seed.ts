@@ -1,7 +1,6 @@
-// The console's sample data on top of `local:smoke`: a second Notes environment on its own namespace, secrets in each
-// environment (Notes declares no variables), an approval policy on `prod` that differs from the strict preset, and a
-// deploy that waits for a person, so every part of an application's page has something to show. It writes only
-// through Control, as the signed-in person; a rerun adds nothing that is already there.
+// The console's sample data on top of `local:smoke`: a second Notes environment, secrets in each, a changed policy on
+// `prod` and a deploy waiting for a person. It writes through Control (as the signed-in person, the machine key for the
+// namespace, the GitHub webhook for the parked deploy); a rerun adds nothing that is already there.
 
 import { type ApprovalPolicy, type ApprovalSettings, STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
 import { randomUUID } from 'node:crypto'
@@ -27,11 +26,11 @@ import { STATE_DIR } from './prepare'
 
 const TEST_NAMESPACE: LocalNamespace = { id: 'apps-test', env: 'test' }
 
-/** `prod`'s policy: the strict preset with three changes, so the console has a changed rule of each kind to show. */
+/** `prod`'s policy: the strict preset with four changes, so the console has a changed rule of each kind to show. */
 const PROD_POLICY: ApprovalPolicy = { ...STRICT_POLICY, secrets: 'off', 'role-added': 'person' }
 const PROD_SETTINGS: ApprovalSettings = {
 	...STRICT_SETTINGS,
-	requestTtlHours: 24,
+	requestTtlHours: 72,
 	approvers: { ...STRICT_SETTINGS.approvers, 'deletes-data': 2 },
 }
 

@@ -2,13 +2,17 @@
 // registration from the compiled Zerops manifest, and the signed push to the keyed connection's scoped webhook.
 
 import { normalizeRepoUrl } from '@fabrika/control/repo-source'
-import { compileFabrikaManifest, createZeropsArtifactSourceDescriptor, zeropsArtifactCodec } from '@fabrika/provider-zerops'
+import {
+	compileFabrikaManifest,
+	createZeropsArtifactSourceDescriptor,
+	zeropsArtifactCodec,
+	zeropsNamespaceTargetCodec,
+} from '@fabrika/provider-zerops'
 import cheapNotesConfig from 'fabrika-example-zerops/fabrika.cheap.config'
 import { createHmac } from 'node:crypto'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { z } from 'zod'
 import { composeOutput } from './compose'
 import { consoleRpc, type IamLogin, signInToConsole } from './console-approval'
 import {
@@ -24,6 +28,7 @@ import {
 	environmentViewSchema,
 	errorResponseSchema,
 	namespacePlanSchema,
+	namespaceTargetViewSchema,
 	namespaceViewSchema,
 	runViewSchema,
 	webhookTriggeredSchema,
@@ -287,11 +292,16 @@ export const emulatorSnapshot = async () =>
 
 export type EmulatorSnapshot = Awaited<ReturnType<typeof emulatorSnapshot>>
 
-const namespaceProjectSchema = z.object({ target: z.object({ payload: z.object({ projectId: z.string() }) }) })
-
 /** The Zerops project of `prod`'s namespace, as Control recorded it when it provisioned the namespace. */
-export const prodNotesProject = async (machineKey: string): Promise<string> =>
-	namespaceProjectSchema.parse(await controlRequest('namespaces.get', machineKey, { namespaceId: PROD_NAMESPACE.id })).target.payload.projectId
+export const prodNotesProject = async (machineKey: string): Promise<string> => {
+	const view = namespaceTargetViewSchema.parse(await controlRequest('namespaces.get', machineKey, { namespaceId: PROD_NAMESPACE.id }))
+	if (view.target.provider !== 'zerops' || view.target.version !== zeropsNamespaceTargetCodec.version) {
+		throw new Error('Unexpected namespace target version')
+	}
+	const { projectId } = zeropsNamespaceTargetCodec.decode(view.target.payload)
+	if (projectId === undefined) throw new Error(`namespace ${PROD_NAMESPACE.id} has no Zerops project yet: run \`bun run local:smoke\` first`)
+	return projectId
+}
 
 /** The Notes deploy service of one namespace's project: the console seed deploys a second one, into its own. */
 export const notesServiceId = (snapshot: EmulatorSnapshot, projectId: string): string => {
