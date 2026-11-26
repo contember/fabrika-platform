@@ -30,6 +30,10 @@ On a provider that keeps secrets itself (Zerops), Control refuses an `app`-scope
 explicit env` (since `71abd1c4c`). So an `app`-scoped secret does not exist on Zerops; every value is per environment.
 No ADR records that as the decision.
 
+The console cannot tell beforehand: its secrets matrix offers an "All environments" column on every installation, and
+on Zerops a value set there ends in that refusal. Whichever way this is settled, the environment DTO needs an additive
+field saying who keeps its secret values, so the console can drop that column, or explain it, where the provider keeps them.
+
 ## Approach / acceptance
 
 Either record the refusal as the decision in ADR-0004 and delete this item, or replicate. The replicating option,

@@ -2,7 +2,7 @@ import { STRICT_POLICY, STRICT_SETTINGS } from '@fabrika/control-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
-import { secretDeleteConsequence, SecretsSection, secretWhereabouts } from '../components/app-detail/SecretsSection'
+import { secretDeleteConsequence, SecretsSection, secretWhereabouts, secretWrite } from '../components/app-detail/SecretsSection'
 import { varDeleteConsequence, VariablesSection } from '../components/app-detail/VariablesSection'
 import type { AppEnvDto, AppSecretDto, AppVarDto } from '../lib/api'
 import { cellAt, layersByName } from '../lib/config-layers'
@@ -10,8 +10,10 @@ import { cellAt, layersByName } from '../lib/config-layers'
 const environment = (env: string): AppEnvDto => ({
 	appId: 'notes',
 	env,
+	kind: 'standard',
 	domain: null,
 	publicOrigin: null,
+	crossOrigins: [],
 	triggerRef: 'refs/heads/main',
 	authoring: false,
 	protected: false,
@@ -22,9 +24,9 @@ const environment = (env: string): AppEnvDto => ({
 	deviationSubjects: [],
 	surface: [],
 	namespaceId: null,
-	provider: 'zerops',
-	target: { provider: 'zerops', version: 1, payload: {} },
-	artifact: { provider: 'zerops', version: 1, payload: {} },
+	provider: 'cloudflare',
+	target: { provider: 'cloudflare', version: 1, payload: {} },
+	artifact: { provider: 'cloudflare', version: 1, payload: {} },
 	createdAt: 0,
 })
 
@@ -85,6 +87,17 @@ describe('secrets as a matrix', () => {
 		expect(secretWhereabouts(legacy, 'prod')).toBe('Stored outside the vault, so a deploy cannot read it: set it again.')
 		expect(secretWhereabouts(vault, 'test')).toBe('Not set on test or for all environments: a deploy of test has no value for it.')
 		expect(secretWhereabouts(inherited, 'test')).toBe('Not set on test: it reads the value for all environments. A value here overrides it for test.')
+	})
+
+	test('a vault value is rotated in place; a layer kept by the provider, stored outside the vault or empty is set afresh', () => {
+		const [row] = layersByName([secret('K', 'prod'), secret('K', 'test', 'provider'), secret('K', null, 'legacy')])
+		if (row === undefined) throw new Error('a row expected')
+		expect(secretWrite(row, 'prod')).toBe('rotate')
+		expect(secretWrite(row, 'test')).toBe('set')
+		expect(secretWrite(row, null)).toBe('set')
+		const [missing] = layersByName([secret('K', 'prod')])
+		if (missing === undefined) throw new Error('a row expected')
+		expect(secretWrite(missing, 'test')).toBe('set')
 	})
 
 	test('deleting a layer says what the environments are left with', () => {

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api, ApiError, type AppEnvDto, type AppVarDto, type PutAppVarRequest } from '../../lib/api'
 import { cellAt, type LayeredName, layerLabel, layersByName } from '../../lib/config-layers'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -19,10 +19,27 @@ export function VariablesSection(
 	const [open, setOpen] = useState<VarLayer | null>(null)
 	const [adding, setAdding] = useState(false)
 	const [saved, setSaved] = useState<string | null>(null)
+	/** The cell button that opened the editor: focus goes back to it when the editor closes. */
+	const opener = useRef<HTMLButtonElement | null>(null)
 	const rows = layersByName(vars)
 
-	function done(message: string) {
+	function toggle(row: LayeredName<AppVarDto>, env: string | null, button: HTMLButtonElement) {
+		setSaved(null)
+		if (open?.row.name === row.name && open.env === env) {
+			close()
+			return
+		}
+		opener.current = button
+		setOpen({ row, env })
+	}
+
+	function close() {
 		setOpen(null)
+		opener.current?.focus()
+	}
+
+	function done(message: string) {
+		if (open !== null) close()
 		setAdding(false)
 		setSaved(message)
 		onDone()
@@ -33,7 +50,14 @@ export function VariablesSection(
 			<div className="section-head">
 				<h2>Variables</h2>
 				<span className="spacer" />
-				<button type="button" className="small" onClick={() => setAdding(true)}>
+				<button
+					type="button"
+					className="small"
+					onClick={() => {
+						setSaved(null)
+						setAdding(true)
+					}}
+				>
 					<Icon name="plus" size={13} />
 					Add variable
 				</button>
@@ -42,12 +66,19 @@ export function VariablesSection(
 				Plain configuration the app reads at run time, shown in clear to everyone who manages it. Each environment reads its own value or, without one,
 				the value for all environments. A token or password goes in Secrets.
 			</p>
-			{saved !== null && <p className="notice saved-note" role="status">{saved}</p>}
+			<p className={saved === null ? 'sr-only' : 'notice saved-note'} role="status">{saved}</p>
 			<LayerTable
 				rows={rows}
 				envs={envs}
 				empty={<EmptyState icon="schema" title="No variables" body="Plain configuration the app reads from its environment at run time." />}
-				cell={(row, env) => <VarCell row={row} env={env} open={open?.row.name === row.name && open.env === env} onOpen={() => setOpen({ row, env })} />}
+				cell={(row, env) => (
+					<VarCell
+						row={row}
+						env={env}
+						open={open?.row.name === row.name && open.env === env}
+						onOpen={(button) => toggle(row, env, button)}
+					/>
+				)}
 				after={(row, columns) =>
 					open?.row.name === row.name && (
 						<VarLayerEditor
@@ -57,7 +88,7 @@ export function VariablesSection(
 							envs={envs}
 							columns={columns}
 							onDone={done}
-							onClose={() => setOpen(null)}
+							onClose={close}
 						/>
 					)}
 			/>
@@ -66,12 +97,20 @@ export function VariablesSection(
 	)
 }
 
-function VarCell({ row, env, open, onOpen }: { row: LayeredName<AppVarDto>; env: string | null; open: boolean; onOpen: () => void }) {
+function VarCell(
+	{ row, env, open, onOpen }: { row: LayeredName<AppVarDto>; env: string | null; open: boolean; onOpen: (button: HTMLButtonElement) => void },
+) {
 	const own = env === null ? row.all : row.byEnv.get(env) ?? null
 	const inherits = own === null && env !== null && cellAt(row, env).kind === 'inherits'
 	const words = own !== null ? own.value : inherits ? 'reads the value for all environments' : 'not set'
 	return (
-		<button type="button" className="ghost small" aria-label={`${row.name} on ${layerLabel(env)}: ${words}`} aria-expanded={open} onClick={onOpen}>
+		<button
+			type="button"
+			className="ghost small"
+			aria-label={`${row.name} on ${layerLabel(env)}: ${words}`}
+			aria-expanded={open}
+			onClick={(event) => onOpen(event.currentTarget)}
+		>
 			{own !== null ? <code className="layer-value" title={own.value}>{own.value}</code> : <span className="muted">{inherits ? 'from all' : '—'}</span>}
 		</button>
 	)
@@ -134,7 +173,7 @@ function VarLayerEditor(
 	return (
 		<tr className="layer-editor">
 			<td colSpan={columns}>
-				<form className="form" onSubmit={save} onKeyDown={(event) => event.key === 'Escape' && !busy && onClose()}>
+				<form className="form" onSubmit={save} onKeyDown={(event) => event.key === 'Escape' && !busy && !deleting && onClose()}>
 					<p>
 						<strong>{row.name} on {where}</strong> {now !== null && <span className="muted">{now}</span>}
 					</p>

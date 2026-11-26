@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { api, ApiError, type AppEnvDto, type AppSecretDto } from '../../lib/api'
 import { cellAt, type LayeredName, layerLabel, layersByName } from '../../lib/config-layers'
 import { ConfirmDialog } from '../ConfirmDialog'
@@ -20,10 +20,27 @@ export function SecretsSection(
 	const [open, setOpen] = useState<SecretLayer | null>(null)
 	const [adding, setAdding] = useState(false)
 	const [saved, setSaved] = useState<string | null>(null)
+	/** The cell button that opened the editor: focus goes back to it when the editor closes. */
+	const opener = useRef<HTMLButtonElement | null>(null)
 	const rows = layersByName(secrets)
 
-	function done(message: string) {
+	function toggle(row: LayeredName<AppSecretDto>, env: string | null, button: HTMLButtonElement) {
+		setSaved(null)
+		if (open?.row.name === row.name && open.env === env) {
+			close()
+			return
+		}
+		opener.current = button
+		setOpen({ row, env })
+	}
+
+	function close() {
 		setOpen(null)
+		opener.current?.focus()
+	}
+
+	function done(message: string) {
+		if (open !== null) close()
 		setAdding(false)
 		setSaved(message)
 		onDone()
@@ -34,7 +51,14 @@ export function SecretsSection(
 			<div className="section-head">
 				<h2>Secrets</h2>
 				<span className="spacer" />
-				<button type="button" className="small" onClick={() => setAdding(true)}>
+				<button
+					type="button"
+					className="small"
+					onClick={() => {
+						setSaved(null)
+						setAdding(true)
+					}}
+				>
 					<Icon name="plus" size={13} />
 					Add secret
 				</button>
@@ -42,7 +66,7 @@ export function SecretsSection(
 			<p className="section-note">
 				Each environment reads its own value or, without one, the value for all environments. Values are write-only: nobody reads them back here.
 			</p>
-			{saved !== null && <p className="notice saved-note" role="status">{saved}</p>}
+			<p className={saved === null ? 'sr-only' : 'notice saved-note'} role="status">{saved}</p>
 			<LayerTable
 				rows={rows}
 				envs={envs}
@@ -52,7 +76,7 @@ export function SecretsSection(
 						row={row}
 						env={env}
 						open={open?.row.name === row.name && open.env === env}
-						onOpen={() => setOpen({ row, env })}
+						onOpen={(button) => toggle(row, env, button)}
 					/>
 				)}
 				after={(row, columns) =>
@@ -64,7 +88,7 @@ export function SecretsSection(
 							envs={envs}
 							columns={columns}
 							onDone={done}
-							onClose={() => setOpen(null)}
+							onClose={close}
 						/>
 					)}
 			/>
@@ -74,7 +98,9 @@ export function SecretsSection(
 }
 
 /** What a layer of a secret says: set (and where), taken from all environments, or missing. */
-function SecretCell({ row, env, open, onOpen }: { row: LayeredName<AppSecretDto>; env: string | null; open: boolean; onOpen: () => void }) {
+function SecretCell(
+	{ row, env, open, onOpen }: { row: LayeredName<AppSecretDto>; env: string | null; open: boolean; onOpen: (button: HTMLButtonElement) => void },
+) {
 	const state = secretCellState(row, env)
 	return (
 		<button
@@ -82,7 +108,7 @@ function SecretCell({ row, env, open, onOpen }: { row: LayeredName<AppSecretDto>
 			className="ghost small"
 			aria-label={`${row.name} on ${layerLabel(env)}: ${state.words}`}
 			aria-expanded={open}
-			onClick={onOpen}
+			onClick={(event) => onOpen(event.currentTarget)}
 		>
 			{state.mark}
 		</button>
@@ -121,6 +147,12 @@ export function secretDeleteConsequence(row: LayeredName<AppSecretDto>, env: str
 	return losing.length === 0 ? 'Every environment has its own value, so none loses it.' : `Then a deploy of ${losing.join(', ')} has no value for it.`
 }
 
+/** How a new value for a layer is written: a vault value is rotated in place; anything else is set afresh. */
+export function secretWrite(row: LayeredName<AppSecretDto>, env: string | null): 'rotate' | 'set' {
+	const own = env === null ? row.all : row.byEnv.get(env) ?? null
+	return own?.storage === 'vault' ? 'rotate' : 'set'
+}
+
 /** When a new value reaches the environments. */
 function takesEffect(env: string | null): string {
 	return env === null ? 'Each environment without its own value reads it from its next deploy.' : `${env} reads it from its next deploy.`
@@ -139,8 +171,7 @@ function SecretLayerEditor(
 ) {
 	const { row, env } = layer
 	const own = env === null ? row.all : row.byEnv.get(env) ?? null
-	// A vault value is rotated in place; anything else is set afresh.
-	const rotate = own?.storage === 'vault'
+	const rotate = secretWrite(row, env) === 'rotate'
 	const [value, setValue] = useState('')
 	const [deleting, setDeleting] = useState(false)
 	const [busy, setBusy] = useState(false)
@@ -164,7 +195,7 @@ function SecretLayerEditor(
 	return (
 		<tr className="layer-editor">
 			<td colSpan={columns}>
-				<form className="form" onSubmit={save} onKeyDown={(event) => event.key === 'Escape' && !busy && onClose()}>
+				<form className="form" onSubmit={save} onKeyDown={(event) => event.key === 'Escape' && !busy && !deleting && onClose()}>
 					<p>
 						<strong>{row.name} on {where}</strong> <span className="muted">{secretWhereabouts(row, env)}</span>
 					</p>
