@@ -43,7 +43,8 @@ describe('the build', () => {
 			'mkdir /tmp/fabrika-source',
 			'curl --fail --silent --show-error --proto =https --output /tmp/fabrika-source.tar.gz "$FABRIKA_SOURCE_URL"',
 			'unset FABRIKA_SOURCE_URL',
-			'tar --extract --gzip --file /tmp/fabrika-source.tar.gz --directory /tmp/fabrika-source --strip-components=1 --no-same-owner',
+			// Unpacked as it is: Control's archive holds the commit's tree at its root, so nothing is stripped.
+			'tar --extract --gzip --file /tmp/fabrika-source.tar.gz --directory /tmp/fabrika-source --no-same-owner',
 			`printf '%s' "$FABRIKA_DOCKERFILE" | base64 --decode > /tmp/fabrika-Dockerfile`,
 			// The Dockerfile's own ignore file, which ignores nothing: the application's `.dockerignore` filters nothing.
 			"printf '%s\\n' '# The platform builds the whole archive, so nothing is ignored.' > /tmp/fabrika-Dockerfile.dockerignore",
