@@ -332,16 +332,20 @@ parser ever reads it.
 1. **Generated files.** None change. Application resources come from return origins, not from `OAUTH_CONFIG`.
 2. **Environment variables.** None added, renamed or removed.
 3. **Provider state.** None. The IAM migrations (the label column, the audit columns, the mirror) are additive and run
-   on `upgrade` (ADR-0017). Existing grants keep working; they carry no label.
+   on `upgrade` (ADR-0017). Existing grants keep working; they carry no label. The `agent-write` mirror joins Control's
+   maintenance pass over `iam_gate_mirrors` (ADR-0083 §4). That pass skips an environment IAM has taken at its current
+   protection revision, so the mirror records which gates IAM took, and an environment taken before the upgrade, which
+   lacks `agent-write`, is written again with no operator step. Until then IAM serves `read` grants only there.
 4. **Floating pins.** None.
 
 An application can declare `agent` only after Control accepts it, but Control is not what protects every proxy:
 
 - **Zerops.** `fabrika platform upgrade` does not move a namespace proxy's source pin
-  ([`deployment-namespaces.md`](../reference/deployment-namespaces.md)). A proxy built from an older pin refuses a
-  manifest with an `agent` row, so the rebuild fails, the previous proxy keeps serving, and the deploy fails until the
-  operator re-pins (`fabrika control namespaces update --namespace=<id> --proxy-source=current`). The failure is loud and nothing is
-  served wrongly; the release notes and the migration guide name the step.
+  ([`deployment-namespaces.md`](../reference/deployment-namespaces.md)), and a proxy built from an older pin would refuse
+  a manifest with an `agent` row. Control refuses such a deploy before it publishes anything
+  (`assertNamespaceProxyReads`, `packages/provider-zerops/src/namespace/proxy-reads.ts`, which PR 3 teaches `agent`),
+  and its message names the re-pin, `fabrika control namespaces update --namespace=<id> --proxy-source=current`.
+  Nothing is served wrongly; the release notes and the migration guide name the step.
 - **Cloudflare.** The proxy Worker is bundled with its manifest at the environment's deploy
   ([`cloudflare-platform.md`](../reference/cloudflare-platform.md)), so the deploy that publishes an `agent` row carries
   the proxy code of the release that knows it. PR 3 confirms this against the deploy steps.
