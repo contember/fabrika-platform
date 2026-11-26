@@ -36,6 +36,7 @@ browserTest(
 		let verification = ''
 		let interval = 5
 		let refreshToken = ''
+		let listedBefore = 0
 
 		await step('a command-line client starts a device grant', {
 			intent: 'the client asks IAM for a device code, as `fabrika login` does',
@@ -79,11 +80,13 @@ browserTest(
 			await getPage().goto(`${IAM_URL}/auth/account`)
 			await expectOnIam('/auth/account')
 			await expect(byRole('heading', 'Your account', { exact: true, level: 1 })).toBeVisible()
-			const item = getPage().getByRole('listitem').filter({ hasText: 'The fabrika command-line client' }).filter({ hasText: resource })
-			await expect(item).toHaveCount(1)
-			await item.getByRole('button', { name: 'Revoke', exact: true }).click()
+			// The page lists newest first, so the first match is this run's grant; a reused stack may still hold an earlier run's.
+			const items = getPage().getByRole('listitem').filter({ hasText: 'The fabrika command-line client' }).filter({ hasText: resource })
+			await expect(items.first()).toBeVisible()
+			listedBefore = await items.count()
+			await items.first().getByRole('button', { name: 'Revoke', exact: true }).click()
 			await expect(getPage().getByRole('status')).toHaveText('Access revoked. It stops within five minutes.')
-			await expect(getPage().getByRole('listitem').filter({ hasText: resource })).toHaveCount(0)
+			await expect(items).toHaveCount(listedBefore - 1)
 		})
 
 		await step('the client can no longer refresh', {
@@ -101,7 +104,8 @@ browserTest(
 		})
 
 		await invariant('a revoked grant is no longer listed on the account page', async () => {
-			await expect(getPage().getByRole('listitem').filter({ hasText: resource })).toHaveCount(0)
+			const items = getPage().getByRole('listitem').filter({ hasText: 'The fabrika command-line client' }).filter({ hasText: resource })
+			await expect(items).toHaveCount(listedBefore - 1)
 		})
 	},
 )
