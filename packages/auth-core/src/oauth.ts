@@ -51,6 +51,11 @@ export function parseOAuthScopes(value: unknown): string[] | null {
 	return scopes
 }
 
+/** A scope dimension type, or a value of one, as a parameterized scope token carries it (`deploy:alpha`, `read:project=a`). */
+export function isScopeParameterText(value: unknown): value is string {
+	return typeof value === 'string' && value.length <= 100 && /^[A-Za-z0-9][A-Za-z0-9._@-]*$/.test(value)
+}
+
 function isUriText(value: unknown): value is string {
 	return typeof value === 'string' && value.length > 0 && value.length <= 2048 && !/[\s\\<>"{}|^`]/.test(value)
 		&& !/%(?![A-Fa-f0-9]{2})/.test(value) && /^https?:\/\/[^/?#]+(?:[/?#]|$)/i.test(value)

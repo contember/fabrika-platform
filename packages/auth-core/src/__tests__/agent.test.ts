@@ -9,13 +9,12 @@ const projectA = { type: 'project', value: 'a' }
 
 describe('the scope token of an agent grant (ADR-0090 §2)', () => {
 	test('reads read and write, plain or narrowed to one value, and writes them back', () => {
-		for (const token of ['read', 'write', 'read:project=a', 'write:project=0198-uuid', 'read:org=x=y']) {
+		for (const token of ['read', 'write', 'read:project=a', 'write:project=0198cafe-0000-7000-8000-000000000001', 'read:org=acme.eu']) {
 			const scope = parseAgentScope(token)
 			expect(scope).not.toBeNull()
 			if (scope !== null) expect(agentScopeToken(scope)).toBe(token)
 		}
 		expect(parseAgentScope('read:project=a')).toEqual({ mode: 'read', within: projectA })
-		expect(parseAgentScope('read:org=x=y')?.within).toEqual({ type: 'org', value: 'x=y' })
 	})
 
 	test('refuses another mode, a missing or reserved dimension, an empty or overlong value and non-token characters', () => {
@@ -30,9 +29,12 @@ describe('the scope token of an agent grant (ADR-0090 §2)', () => {
 				'read:~rel=owner',
 				'read:Project=a',
 				'read:project=a b',
+				'read:org=x=y',
+				'read:project=a:b',
+				'read:project=-a',
 				'read:project="a"',
 				'readwrite',
-				`read:project=${'a'.repeat(201)}`,
+				`read:project=${'a'.repeat(101)}`,
 			]
 		) {
 			expect(parseAgentScope(token)).toBeNull()
@@ -63,13 +65,18 @@ describe('narrowToValue (ADR-0090 §3)', () => {
 		{ action: 'task.write', scope: relationInsideScope({ relation: 'owner', dimension: 'org', node: 'x' }), source: 'grant' },
 	]
 
-	test('a global entry moves to the value, an entry at it stays, a relation is held inside it, and the rest is dropped', () => {
+	test('a global entry moves to the value, an entry or a relation held at it stays, and the rest is dropped', () => {
 		expect(narrowToValue(held, projectA)).toEqual([
 			{ action: 'task.read', scope: projectA, source: 'grant' },
 			{ action: 'task.write', scope: projectA, source: 'grant' },
-			{ action: 'task.read', scope: relationInsideScope({ relation: 'owner', dimension: 'project', node: 'a' }), source: 'grant' },
 			{ action: 'task.write', scope: relationInsideScope({ relation: 'owner', dimension: 'project', node: 'a' }), source: 'grant' },
 		])
+	})
+
+	test('a relation held anywhere is dropped, never moved inside the value', () => {
+		// A view bound to its member gives a hold anywhere nothing and a hold inside a node that node's rows (ADR-0076).
+		const anywhere: PermissionEntry[] = [{ action: 'task.read', scope: { type: '~rel', value: 'owner' }, source: 'grant' }]
+		expect(narrowToValue(anywhere, projectA)).toEqual([])
 	})
 
 	test('the narrowed set holds nothing in another project and no global grant', () => {

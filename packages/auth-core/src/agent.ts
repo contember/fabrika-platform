@@ -2,9 +2,9 @@
 // presents, the scope it approved and the narrowing of the person's permissions to one scope value.
 
 import type { CredentialedEndpointKind } from './contract'
-import { MAX_MEMBERSHIP_SCOPE_PART_LENGTH } from './membership'
-import { uniquePermissions } from './permissions'
-import { isReservedScopeType, parseRelationInside, type PermissionEntry, RELATION_SCOPE_TYPE, relationInsideScope, type Scope } from './types'
+import { isScopeParameterText } from './oauth'
+import { narrowPermissions, uniquePermissions } from './permissions'
+import { parseRelationInside, type PermissionEntry, type Scope } from './types'
 
 /** The public device client an agent obtains an application grant with. It is never served Control's resources. */
 export const AGENT_CLIENT_ID = 'agent-cli'
@@ -33,16 +33,12 @@ export interface AgentScope {
 /** A dimension name as a contract declares one. */
 const DIMENSION = /^[a-z][A-Za-z0-9_]*$/
 
-/** RFC 6749 scope-token characters. */
-const SCOPE_TOKEN = /^[\x21\x23-\x5b\x5d-\x7e]+$/
-
 /**
  * Read one scope token: `read`, `write`, or either narrowed to one value of a dimension, `read:<dimension>=<value>`.
- * The dimension is a contract's dimension name, never a reserved one; the value is 1 to
- * `MAX_MEMBERSHIP_SCOPE_PART_LENGTH` scope-token characters, opaque. Anything else is null.
+ * The dimension is a contract's dimension name; the value is opaque text of a parameterized scope
+ * (`isScopeParameterText`). Anything else is null.
  */
 export function parseAgentScope(token: string): AgentScope | null {
-	if (!SCOPE_TOKEN.test(token)) return null
 	const colon = token.indexOf(':')
 	const mode = colon === -1 ? token : token.slice(0, colon)
 	if (!isAgentScopeMode(mode)) return null
@@ -52,8 +48,7 @@ export function parseAgentScope(token: string): AgentScope | null {
 	if (equals === -1) return null
 	const type = rest.slice(0, equals)
 	const value = rest.slice(equals + 1)
-	if (!DIMENSION.test(type) || type.length > MAX_MEMBERSHIP_SCOPE_PART_LENGTH || isReservedScopeType(type)) return null
-	if (value === '' || value.length > MAX_MEMBERSHIP_SCOPE_PART_LENGTH) return null
+	if (!DIMENSION.test(type) || !isScopeParameterText(type) || !isScopeParameterText(value)) return null
 	return { mode, within: { type, value } }
 }
 
@@ -72,39 +67,27 @@ export function agentScopeAdmits(mode: AgentScopeMode, kind: string): boolean {
 }
 
 /**
- * The person's entries narrowed to the one scope value `within` (ADR-0090 §3). A global entry becomes the same action at
- * `within`; a relation held anywhere becomes the same relation held inside `within`; an entry at `within`, or a
- * relation held inside it, stays. Every other entry is dropped: one at another value, at another dimension, or at a
- * container of `within` or inside it, because which value lies in which is application data. Never adds an action.
+ * The person's entries narrowed to the one scope value `within` (ADR-0090 §3): `narrowPermissions` under `*` at `within`
+ * (a global entry becomes the same action there, an entry at `within` stays, every other scope is dropped), plus the
+ * relations the person holds inside `within`. A relation held anywhere (`~rel`) is dropped: an access view bound to
+ * its member reaches rows for a node that a hold anywhere does not reach (ADR-0076), so moving it inside `within` would
+ * widen it. Never adds an action or a reach the person does not hold.
  */
 export function narrowToValue(entries: readonly PermissionEntry[], within: Scope): PermissionEntry[] {
 	if (!DIMENSION.test(within.type)) throw new Error('a grant is narrowed to a value of a dimension')
-	const narrowed: PermissionEntry[] = []
-	for (const entry of entries) {
-		const scope = narrowedScope(entry.scope, within)
-		if (scope !== null) narrowed.push({ action: entry.action, scope, source: entry.source })
-	}
-	return uniquePermissions(narrowed)
+	const scope = { type: within.type, value: within.value }
+	const inside = entries.filter((entry) => entry.scope !== null && relationInside(entry.scope, within))
+	return uniquePermissions([...narrowPermissions(entries, [{ action: '*', scope }]), ...inside])
 }
 
 /** Whether every entry lies within `within`, as `narrowToValue` leaves them: a check a token's reader repeats. */
 export function liesWithinValue(entries: readonly PermissionEntry[], within: Scope): boolean {
-	return entries.every((entry) => entry.scope !== null && insideValue(entry.scope, within))
+	return entries.every((entry) =>
+		entry.scope !== null && ((entry.scope.type === within.type && entry.scope.value === within.value) || relationInside(entry.scope, within))
+	)
 }
 
-function narrowedScope(scope: Scope | null, within: Scope): Scope | null {
-	if (scope === null) return { type: within.type, value: within.value }
-	if (scope.type === RELATION_SCOPE_TYPE) {
-		// IAM derives no relation entry whose name holds `:`, which a `~relin` value could not name.
-		return scope.value === '' || scope.value.includes(':')
-			? null
-			: relationInsideScope({ relation: scope.value, dimension: within.type, node: within.value })
-	}
-	return insideValue(scope, within) ? { type: scope.type, value: scope.value } : null
-}
-
-function insideValue(scope: Scope, within: Scope): boolean {
-	if (scope.type === within.type) return scope.value === within.value
+function relationInside(scope: Scope, within: Scope): boolean {
 	const inside = parseRelationInside(scope)
 	return inside !== null && inside.dimension === within.type && inside.node === within.value
 }
