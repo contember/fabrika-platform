@@ -63,8 +63,11 @@ export interface RunRow {
 	approval_deadline: number | null
 	/** The first of two approvals (`approvers: 2`), bound to its digests like `approval_json`. */
 	partial_approval_json: string | null
-	/** Why the run failed without deploying: a person refused it, or nobody decided it before its deadline. */
-	failure_cause: 'rejected' | 'expired' | null
+	/**
+	 * Why the run failed without deploying: a person refused it, nobody decided it before its deadline, or the provider
+	 * reported that it stopped before its first migration or deploy (`untouched`).
+	 */
+	failure_cause: 'rejected' | 'expired' | 'untouched' | null
 	// `pending_access_json` is no longer read or written; the column stays until a later migration release drops it.
 }
 
@@ -595,15 +598,16 @@ export class RunRepository {
 	}
 
 	/**
-	 * Move a run to a terminal state (`succeeded` | `failed`): stamp `finished_at` + the exit code.
-	 * Returns true iff the row transitioned (it was still `running`/`pending`).
+	 * Move a run to a terminal state (`succeeded` | `failed`): stamp `finished_at` + the exit code, and `untouched` as the
+	 * `failure_cause` of a failed run the provider reports changed nothing. Returns true iff the row transitioned (it was
+	 * still `running`/`pending`).
 	 */
-	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null, fence: LeaseFence): Promise<boolean> {
+	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null, fence: LeaseFence, untouched = false): Promise<boolean> {
 		return this.mutateRun(
 			id,
-			`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?
+			`UPDATE runs SET status = ?, exit_code = ?, finished_at = ?, failure_cause = COALESCE(?, failure_cause)
 			WHERE id = ? AND status IN ('pending','running') AND cancel_requested_at IS NULL`,
-			[status, exitCode, this.now(), id],
+			[status, exitCode, this.now(), status === 'failed' && untouched ? 'untouched' : null, id],
 			fence,
 		)
 	}

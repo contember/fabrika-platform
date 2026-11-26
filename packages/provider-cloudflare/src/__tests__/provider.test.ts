@@ -37,6 +37,7 @@ import {
 } from '..'
 import { SCHEMA_CHECK_CONFIG_SINCE } from '../contract-support'
 import { deployOrder } from '../deploy-order'
+import { changedNothing } from '../plan'
 import type { PlatformIamTarget } from '../provider'
 import {
 	CLOUDFLARE_PROXY_WORKER_DIR,
@@ -601,6 +602,8 @@ describe('Cloudflare provider', () => {
 		expect(result.status).toBe('failed')
 		expect(result.steps.map((step) => step.status)).toEqual(['succeeded', 'succeeded', 'failed', 'skipped', 'skipped'])
 		expect(stepError(result, 'deploy-worker')).toBe('wrangler deploy failed (exit 1): deploy failed')
+		// A failed `wrangler deploy` may have published a version: the run is not reported untouched.
+		expect(changedNothing(result.steps)).toBe(false)
 		expect(rec.logs).toContain('  • deploy-worker — Deploy the Worker (`wrangler deploy`)')
 		expect(rec.logs).toContain('✗ deploy-worker: wrangler deploy failed (exit 1): deploy failed')
 		expect(rec.commands.map((command) => command.args[0])).toEqual([...CHECK_ARGS, 'deploy'])
@@ -2755,6 +2758,8 @@ describe('a Custom Domain the deploy does not own', () => {
 		expect(stepError(result, 'provision-resources')).toBe(
 			'cloudflare: stage.example.com is a Custom Domain of another Worker; the deploy does not take it over. Detach it in Cloudflare, or give the environment another domain',
 		)
+		// Failed in provisioning, after the checks: nothing that runs changed, so the run reports itself untouched.
+		expect(changedNothing(result.steps)).toBe(true)
 		expect(rec.provisions).toEqual([])
 		expect(touched()).toEqual([])
 		expect(seen).toHaveLength(1)

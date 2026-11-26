@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { runBackupSchedule } from '../backups'
 import {
 	DEPLOY_FAILED_CODE,
+	DEPLOY_NOT_STARTED_CODE,
 	MIGRATION_FAILED_CODE,
 	type OpsTarget,
 	recordedMaintenance,
@@ -81,6 +82,8 @@ interface ProviderState {
 	serves: boolean
 	outcome: ProviderDeployOutcome
 	settlement: 'succeeded' | 'failed' | 'running'
+	/** The settled run, when failed, stopped before its first migration or deploy. */
+	settledUntouched: boolean
 	/** Where in the object's requests each deploy happened, the migrations each one deployed, and any backup it was handed. */
 	deploys: { at: number; migrations: string[]; backup?: { readonly migrations: readonly string[] } }[]
 	reconciles: number
@@ -172,6 +175,7 @@ for (const backend of backends) {
 				serves: true,
 				outcome: { state: 'succeeded' },
 				settlement: 'succeeded',
+				settledUntouched: false,
 				deploys: [],
 				reconciles: 0,
 				migrations: [FIRST],
@@ -202,7 +206,7 @@ for (const backend of backends) {
 				reconcile: async () => {
 					holders.push(await holder())
 					state.reconciles++
-					return { state: state.settlement }
+					return { state: state.settlement, ...(state.settledUntouched ? { untouched: true } : {}) }
 				},
 			}
 			const deps = (): RunDeps => ({
@@ -318,6 +322,37 @@ for (const backend of backends) {
 			expect(timeline().at(-1)).toBe('deploy')
 			expect(await operations()).toMatchObject([{ state: 'failed', error_code: DEPLOY_FAILED_CODE, step: 'deploy', target_mode: 'read-only' }])
 			expect(await recordedMaintenance(b, TARGET)).toBe('unsettled')
+		})
+
+		test('a deploy that failed before it changed anything (a failed provision) opens the object again', async () => {
+			const { b, state, deps, run, log, deployFirst, timeline, operations } = await open()
+			await deployFirst()
+			state.deploys.length = 0
+			state.migrations = [FIRST, SECOND]
+			state.outcome = { state: 'failed', untouched: true }
+			const second = await run()
+			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
+			expect(timeline().slice(-2)).toEqual(['deploy', 'state application open @2'])
+			const [operation] = await operations()
+			expect(operation).toMatchObject({ state: 'failed', error_code: DEPLOY_NOT_STARTED_CODE, step: 'open', target_mode: 'open' })
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
+			expect((await b.repositories.runs.getRun(second))?.failure_cause).toBe('untouched')
+			expect(log(second)).toContain(`data operation ${operation?.id} failed at open (${DEPLOY_NOT_STARTED_CODE})`)
+		})
+
+		test('a deploy settled later as failed before it changed anything opens the object again', async () => {
+			const { b, state, deps, run, deployFirst, operations } = await open()
+			await deployFirst()
+			state.deploys.length = 0
+			state.migrations = [FIRST, SECOND]
+			state.outcome = { state: 'running' }
+			state.settlement = 'failed'
+			state.settledUntouched = true
+			const second = await run()
+			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
+			expect(state.reconciles).toBe(1)
+			expect(await operations()).toMatchObject([{ state: 'failed', error_code: DEPLOY_NOT_STARTED_CODE, target_mode: 'open' }])
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
 		})
 
 		test('a migration whose boot fails leaves the object read-only and the operation failed', async () => {

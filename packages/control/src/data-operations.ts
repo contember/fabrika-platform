@@ -189,7 +189,10 @@ export type DriveResult = 'succeeded' | 'failed' | 'interrupted' | 'paused' | 'l
  */
 export const BACKUP_FAILED_CODE = 'backup_failed'
 export const REHEARSAL_FAILED_CODE = 'rehearsal_failed'
-/** A migration's run ended before any provider accepted it, so nothing was deployed and the object was opened again. */
+/**
+ * A migration's run ended before any provider accepted it, or the provider reported that it stopped before its first
+ * migration or deploy (`untouched`), so nothing was deployed and the object was opened again.
+ */
 export const DEPLOY_NOT_STARTED_CODE = 'deploy_not_started'
 
 /**
@@ -901,9 +904,10 @@ class OperationDriver {
 	/**
 	 * A migration phase: `restrict` publishes `read-only`; `backup` takes the dump at that generation; `verify` rehearses
 	 * it while the object stays restricted; `deploy` runs the operation's run, or a successor reads how it ended; `migrate`
-	 * sends the request at the published generation; `open` publishes a new one. A failed dump or rehearsal, and a run
-	 * that ended before a provider accepted it, go to `open` and fail the operation once the object acknowledged it. A
-	 * failed deploy or migration fails the operation where it stands, the object restricted, for an operator to recover.
+	 * sends the request at the published generation; `open` publishes a new one. A failed dump or rehearsal, a run that
+	 * ended before a provider accepted it, and a failed run its provider reports `untouched`, go to `open` and fail the
+	 * operation once the object acknowledged it. Any other failed deploy, and a failed migration, fail the operation where
+	 * it stands, the object restricted, for an operator to recover.
 	 */
 	private async migrateStep(row: DataOperationRow): Promise<Step> {
 		const backup = await this.backupOf(row)
@@ -944,8 +948,8 @@ class OperationDriver {
 				const run = await this.migrationRun(row)
 				if (run.status === 'succeeded') return { kind: 'next', row: await this.advance(row, { step: 'migrate' }) }
 				if (run.status !== 'failed') return { kind: 'done', result: 'interrupted' }
-				// No provider accepted the run, so the object still runs the version it backed up.
-				if (run.external_run_id === null) return await reopen()
+				// No provider accepted the run, or it reported changing nothing: the object still runs the version it backed up.
+				if (run.external_run_id === null || run.failure_cause === 'untouched') return await reopen()
 				return await this.failed(row, DEPLOY_FAILED_CODE)
 			}
 			case 'migrate': {

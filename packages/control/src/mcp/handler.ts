@@ -366,7 +366,7 @@ function controlMcpServer(c: DevUseCaseContext, approvals: () => ApprovalRequest
 			+ 'person must decide it, approvalUrl and approvalDeadline. A manual deploy of a protected environment that you or a key '
 			+ 'asked for (fabrika control deploy names a 40-character commit SHA) waits in awaiting_approval: hand approvalUrl to the '
 			+ 'person, who approves or refuses it there; you cannot. Approval is only a step: poll until status is succeeded or '
-			+ 'failed. failureCause says why a run failed without deploying: rejected by a person, or expired past its deadline.',
+			+ 'failed. failureCause says why a run failed without deploying: rejected by a person, expired past its deadline, or untouched (it stopped before its first migration or deploy).',
 		inputSchema: toolInput(toolInputs.getRun),
 		annotations: READ_ONLY,
 	}, ({ runId }) => run('get_run', () => getRunUseCase(c, runId)))

@@ -430,6 +430,13 @@ describe('the Cloudflare runner port', () => {
 		expect(await startRunOnRunner(fakeRunner([], result), job())).toEqual({ state: 'failed', exitCode: 1 })
 	})
 
+	test('a failed run the runner reports untouched carries it; a succeeded one does not', async () => {
+		const failed: RelayResult = { lineCount: 1, status: { runId: 'run-1', state: 'failed', exitCode: 1, untouched: true, startedAt: 1 } }
+		expect(await startRunOnRunner(fakeRunner([], failed), job())).toEqual({ state: 'failed', exitCode: 1, untouched: true })
+		const succeeded: RelayResult = { lineCount: 1, status: { runId: 'run-1', state: 'succeeded', exitCode: 0, untouched: true, startedAt: 1 } }
+		expect(await startRunOnRunner(fakeRunner([], succeeded), job())).toEqual({ state: 'succeeded', exitCode: 0 })
+	})
+
 	test('a cancel presents the runner key', async () => {
 		const calls: RunnerCall[] = []
 		const runner = fakeRunner(calls, { lineCount: 0, status: { runId: 'run-1', state: 'failed', startedAt: 1 } })

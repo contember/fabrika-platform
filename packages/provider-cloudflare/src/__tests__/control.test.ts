@@ -20,7 +20,7 @@ import {
 	cloudflareStoredTargetCodec,
 	createCloudflareControlProvider,
 } from '..'
-import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunRecovery } from '../control'
+import { checkoutRelativeDirectory, cloudflareRunnerJobSchema, type CloudflareRunOutcome, type CloudflareRunRecovery } from '../control'
 import { splitManagedEnvironment } from '../managed-secrets'
 import type { RunnerIamReconcile } from '../runner-protocol'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
@@ -1121,6 +1121,31 @@ describe('Cloudflare control provider', () => {
 		if (provider.reconcile === undefined) throw new Error('missing recovery')
 
 		expect(await provider.reconcile(reconcileInput())).toEqual({ state: 'succeeded', exitCode: 0 })
+	})
+
+	test("a failed run's untouched report reaches Control on deploy and on reconcile; a succeeded run carries none", async () => {
+		const deploying = (outcome: CloudflareRunOutcome) =>
+			createCloudflareControlProvider({
+				accountId: 'account-1',
+				apiToken: 'token-1',
+				runnerKey: 'test-runner-key',
+				...sourceOptions,
+				prepareClone: async (source) => ({ repoUrl: source.repoUrl }),
+				startRun: async () => outcome,
+				cancelRun: async () => {},
+			})
+		expect(await deploying({ state: 'failed', exitCode: 1, untouched: true }).deploy({ ...deployInput(), dryRun: false })).toEqual({
+			state: 'failed',
+			exitCode: 1,
+			untouched: true,
+		})
+		expect(await deploying({ state: 'succeeded', exitCode: 0, untouched: true }).deploy({ ...deployInput(), dryRun: false })).toEqual({
+			state: 'succeeded',
+			exitCode: 0,
+		})
+		const recovering = recoveringProvider({ state: 'failed', exitCode: 1, untouched: true })
+		if (recovering.reconcile === undefined) throw new Error('missing recovery')
+		expect(await recovering.reconcile(reconcileInput())).toEqual({ state: 'failed', exitCode: 1, untouched: true })
 	})
 
 	test('a reconcile of a run still in flight leaves it running', async () => {

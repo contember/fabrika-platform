@@ -216,6 +216,11 @@ export interface ProviderTerminalOutcome {
 	readonly exitCode?: number
 	/** Whether provider-local release artifacts reached Operations. */
 	readonly artifactState?: 'complete' | 'incomplete' | 'not_applicable'
+	/**
+	 * A failed run that changed neither data nor any Worker or service: it stopped before its first migration or deploy.
+	 * Absent means unknown, and Control then assumes the run may have changed something.
+	 */
+	readonly untouched?: boolean
 }
 
 /** Running means external settlement is unresolved, including an ambiguous submission response. */
@@ -289,6 +294,8 @@ export interface ProviderReconcileOutcome {
 	readonly artifactState?: 'complete' | 'incomplete' | 'not_applicable'
 	/** The settled run was a preview: core projects it as a dry run. */
 	readonly dryRun?: boolean
+	/** See `ProviderTerminalOutcome.untouched`. */
+	readonly untouched?: boolean
 }
 
 /** Write one secret value to provider-managed storage. */

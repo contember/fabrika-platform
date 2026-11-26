@@ -235,6 +235,7 @@ const isFileNotFound = (err: unknown): boolean => typeof err === 'object' && err
 /** Validate the executor's outcome report; every rejection message quotes nothing from the file. */
 const outcomeFileSchema = z.object({
 	iamReconcile: z.object({ app: z.string().min(1), schemaJson: z.string().max(MAX_OUTCOME_FILE_BYTES) }).optional(),
+	untouched: z.boolean().optional(),
 })
 
 const parseOutcomeFile = (raw: string): RunnerOutcomeFile => {
@@ -267,6 +268,8 @@ export class Runner {
 	private error: string | undefined
 	private artifactState: RunnerStatus['artifactState']
 	private iamReconcile: RunnerIamReconcile | undefined
+	/** The run failed before the executor changed anything: the runner's own refusals, or the executor's report. */
+	private untouched = false
 	private readonly startedAt: number
 	private finishedAt: number | undefined
 	private done = false
@@ -411,6 +414,7 @@ export class Runner {
 			...(this.error !== undefined ? { error: this.error } : {}),
 			...(this.artifactState === undefined ? {} : { artifactState: this.artifactState }),
 			...(this.iamReconcile === undefined ? {} : { iamReconcile: this.iamReconcile }),
+			...(this.state === 'failed' && this.untouched ? { untouched: true } : {}),
 			...(this.job.dryRun === true ? { dryRun: true } : {}),
 			startedAt: this.startedAt,
 			...(this.finishedAt !== undefined ? { finishedAt: this.finishedAt } : {}),
@@ -575,6 +579,7 @@ export class Runner {
 		// bun installs unpinned versions; Control refuses to approve a contract application's commit without one.
 		const install = await this.step({ command: 'bun', args: [...CHECKOUT_INSTALL_ARGS], cwd: dir })
 		if (install.exitCode !== 0) {
+			this.untouched = true
 			this.finish('failed', {
 				error: `bun ${CHECKOUT_INSTALL_ARGS.join(' ')} failed (exit ${install.exitCode}); a bun.lock that does not match package.json fails it`,
 			})
@@ -613,6 +618,10 @@ export class Runner {
 			try {
 				// A dry run reports nothing to apply; Control may read this status back without knowing it was dry.
 				if (deploy.exitCode === 0 && this.job.dryRun !== true) outcome = await this.readOutcomeFile()
+				// A failed deploy keeps its failure whatever the file holds; an unusable file only leaves it not untouched.
+				if (deploy.exitCode !== 0 && this.job.dryRun !== true) {
+					this.untouched = (await this.readOutcomeFile().catch(() => undefined))?.untouched === true
+				}
 			} catch (err) {
 				const message = outcomeFailure(err)
 				this.finish('failed', { exitCode: deploy.exitCode, error: message })
@@ -632,8 +641,9 @@ export class Runner {
 		return this.status()
 	}
 
-	/** Refuse the job before (or instead of) further work; nothing has been recorded but the reason. */
+	/** Refuse the job before the executor runs; nothing has been recorded but the reason, and nothing was changed. */
 	private refuse(reason: string): RunnerStatus {
+		this.untouched = true
 		this.finish('failed', { error: reason })
 		this.emit('meta', reason)
 		return this.status()
