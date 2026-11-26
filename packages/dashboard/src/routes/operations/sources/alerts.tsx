@@ -57,7 +57,11 @@ export default createPage()
 				<div className="page-head">
 					<p className="eyebrow">Alert routing</p>
 					<h1>{data.source.displayName}</h1>
-					<p className="hint">Configure issue, health and telemetry notifications. Stored destinations remain redacted.</p>
+					<p className="hint">
+						{security === null
+							? 'Configure issue, health and telemetry notifications. Stored destinations remain redacted.'
+							: 'Configure sign-in security notifications. Stored destinations remain redacted.'}
+					</p>
 				</div>
 				{error && <p className="error-text" role="alert">{error}</p>}
 
@@ -67,7 +71,7 @@ export default createPage()
 							<div className="card-head">
 								<h2>Sign-in thresholds</h2>
 							</div>
-							<div className="card-body">
+							<div className="card-body form">
 								<label>
 									Refused sign-ins per account in 15 minutes
 									<input
