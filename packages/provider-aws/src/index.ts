@@ -54,11 +54,17 @@ export {
 	type AwsProxySource,
 } from './namespace'
 export {
+	AWS_PROXY_BUILD_FAILED,
 	type AwsProxyBuildAttemptInput,
 	type AwsProxyBuildClients,
+	type AwsProxyBuildFollowClients,
+	type AwsProxyBuildFollowed,
+	type AwsProxyBuildFollowInput,
 	awsProxyManifestFile,
 	type AwsProxySourceUpload,
+	followAwsProxyBuild,
 	startAwsProxyBuild,
+	withProxyPin,
 } from './proxy-attempt'
 export {
 	AWS_PROXY_BUILD_IMAGE,

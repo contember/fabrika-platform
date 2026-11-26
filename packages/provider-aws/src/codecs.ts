@@ -85,6 +85,8 @@ export type AwsNamespaceSizing = 'cheap' | 'full'
  * - The proxy build in flight (ADR-0044): `proxyBuildToken` and `proxyBuildManifestSha256` are recorded before anything
  *   of the attempt is written, the token being its archive's key, its URL parameter and `StartBuild`'s idempotency
  *   token; `proxyBuildId` once CodeBuild answered.
+ * - The proxy's image, once a build succeeded: `proxyImageDigest` (the pushed image's, read from ECR by the attempt's
+ *   tag) and `proxyImageManifestSha256` (the manifest it was built with), recorded together as the attempt is cleared.
  */
 export interface AwsNamespaceTarget {
 	readonly accountId: string
@@ -96,6 +98,8 @@ export interface AwsNamespaceTarget {
 	readonly proxyBuildToken?: string
 	readonly proxyBuildManifestSha256?: string
 	readonly proxyBuildId?: string
+	readonly proxyImageDigest?: string
+	readonly proxyImageManifestSha256?: string
 }
 
 /**
@@ -147,7 +151,12 @@ const namespaceTargetSchema = z.object({
 	proxyBuildToken: z.string().regex(TOKEN).optional(),
 	proxyBuildManifestSha256: z.string().regex(SHA256_HEX).optional(),
 	proxyBuildId: z.string().regex(BUILD_ID).optional(),
-}).strict().refine(
+	proxyImageDigest: z.string().regex(CONTRACT_DIGEST).optional(),
+	proxyImageManifestSha256: z.string().regex(SHA256_HEX).optional(),
+}).strict().refine((target) => (target.proxyImageDigest === undefined) === (target.proxyImageManifestSha256 === undefined), {
+	message: "the proxy's image is recorded with its manifest's digest",
+	path: ['proxyImageManifestSha256'],
+}).refine(
 	(target) => target.proxyBuildToken !== undefined || (target.proxyBuildManifestSha256 === undefined && target.proxyBuildId === undefined),
 	{
 		message: 'a proxy build is recorded with its token',

@@ -16,24 +16,41 @@
 //   under the token cannot push a second image: the repository's tags are immutable and the tag is the token's.
 // - A failure is a namespace error as Control records it (`namespaceFailure`), never an error object.
 //
-// Not yet: following the build to its end (its log, its verdict, the URL parameter's deletion, the image's digest), the
-// proxy's ECS service, and `republish`, which will call this. Nothing calls it yet. Until then an attempt's URL
-// parameter stays in Parameter Store, and so does that of an attempt a changed manifest replaced before its build was
-// recorded: the URL in it stops opening the archive after `AWS_SOURCE_URL_SECONDS`, but the parameter itself is not
-// deleted. The step that follows the build is to delete its own attempt's, and every other one under the namespace's
-// `builds/` path by listing it: a replaced attempt's token is no longer recorded anywhere.
+// - Following the build (`followAwsProxyBuild`): a build still running answers `pending`; one that succeeded records
+//   the pushed image's digest (read from ECR by the attempt's tag, never from the build's log) with the manifest it was
+//   built from, and clears the attempt; one that failed, or is gone, clears the attempt and fails with a stable code.
+//   Either end deletes the attempt's URL parameter. A namespace whose image is of the current manifest starts nothing.
+// - URL parameters: Parameter Store keeps one until it is deleted (only the URL in it expires, after
+//   `AWS_SOURCE_URL_SECONDS`). An attempt's goes when its build ends; a replaced attempt's when the start replaces it,
+//   since its token is recorded nowhere after, and `listNames` reads one level only, so `builds/` cannot be listed for it.
+//
+// Not yet: the proxy's ECS service, and `republish`, which will call both. Nothing calls them yet.
 //
 // UNVERIFIED: StartBuild's idempotency window and the archive's layout as CodeBuild unpacks it follow the API reference
 // and Control's archive tests; none was checked against an account.
 
-import type { ProviderDeploymentNamespace, ProviderNamespaceEvents, ProviderNamespaceMember } from '@fabrika/provider-contract'
+import {
+	type ProviderDeploymentNamespace,
+	ProviderNamespaceError,
+	type ProviderNamespaceEvents,
+	type ProviderNamespaceMember,
+} from '@fabrika/provider-contract'
 import type { CodeBuildBuild, CodeBuildClient } from './aws/codebuild'
+import type { EcrClient } from './aws/ecr'
 import { type S3ObjectAddress, type S3PartWriter, s3PresignedGet } from './aws/s3'
 import type { SsmClient } from './aws/ssm'
 import { type AwsCredentialSource, AwsError } from './aws/transport'
+import { awsImageTag } from './build'
 import type { AwsAppTarget, AwsNamespaceTarget } from './codecs'
 import { awsSourceUrlParameter } from './deploy'
-import { awsNamespaceResources, awsNamespaceTargetEnvelope, type AwsProxySource, checkNamespaceTarget, namespaceFailure } from './namespace'
+import {
+	type AwsNamespaceResources,
+	awsNamespaceResources,
+	awsNamespaceTargetEnvelope,
+	type AwsProxySource,
+	checkNamespaceTarget,
+	namespaceFailure,
+} from './namespace'
 import { AWS_PROXY_MANIFEST_PATH, awsProxyBuildStart } from './proxy-build'
 import { awsNamespaceProxyManifest } from './proxy-manifest'
 import { AWS_SOURCE_URL_SECONDS } from './run-attempt'
@@ -41,7 +58,7 @@ import { AWS_SOURCE_URL_SECONDS } from './run-attempt'
 /** The AWS calls the start of a proxy build makes. */
 export interface AwsProxyBuildClients {
 	readonly codeBuild: Pick<CodeBuildClient, 'startBuild' | 'findBuild'>
-	readonly ssm: Pick<SsmClient, 'putSecret'>
+	readonly ssm: Pick<SsmClient, 'putSecret' | 'deleteSecret'>
 	/** The part writer of an object in the sources bucket. */
 	readonly s3PartWriter: (address: S3ObjectAddress) => S3PartWriter
 	/** The credentials the build's presigned read is signed with. */
@@ -86,10 +103,30 @@ export async function sha256Hex(text: string): Promise<string> {
 	return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
+/** How long deleting an attempt's URL parameter may take. */
+const CLEANUP_TIMEOUT_MS = 10_000
+
+/** The Parameter Store name of one attempt's presigned read, under the namespace's `builds/` path. */
+function sourceUrlParameterOf(resources: AwsNamespaceResources, token: string): string {
+	return awsSourceUrlParameter(`${resources.parameterPath}/builds`, token)
+}
+
 /** `target` without a proxy build in flight. */
 function withoutBuild(target: AwsNamespaceTarget): AwsNamespaceTarget {
 	const { proxyBuildToken: _token, proxyBuildManifestSha256: _manifest, proxyBuildId: _id, ...rest } = target
 	return rest
+}
+
+/**
+ * `target` pinned to `commitSha`. The attempt and the image are keyed by the manifest alone, because the pin is theirs:
+ * a moved pin drops both, so the next start builds the new commit instead of skipping it (an image of the same
+ * manifest) or resuming an attempt of the old one. Every move of a pin goes through here (the operator's update, not
+ * built, is to); an unchanged pin keeps both.
+ */
+export function withProxyPin(target: AwsNamespaceTarget, commitSha: string): AwsNamespaceTarget {
+	if (commitSha === target.proxyCommitSha) return target
+	const { proxyImageDigest: _digest, proxyImageManifestSha256: _manifest, ...rest } = withoutBuild(target)
+	return { ...rest, proxyCommitSha: commitSha }
 }
 
 /**
@@ -118,6 +155,8 @@ async function start(input: AwsProxyBuildAttemptInput): Promise<ProviderDeployme
 		return target
 	}
 
+	// The image of this manifest is built, and nothing newer is in flight: there is nothing to start.
+	if (stored.proxyBuildToken === undefined && stored.proxyImageManifestSha256 === manifestSha256) return namespace
 	let attempt: AwsNamespaceTarget
 	if (stored.proxyBuildToken !== undefined && stored.proxyBuildManifestSha256 === manifestSha256) {
 		// This manifest's attempt is recorded: started, or to be found by its token before anything is sent again.
@@ -131,6 +170,13 @@ async function start(input: AwsProxyBuildAttemptInput): Promise<ProviderDeployme
 	} else {
 		const token = (input.newToken ?? (() => crypto.randomUUID()))()
 		attempt = await record({ ...withoutBuild(stored), proxyBuildToken: token, proxyBuildManifestSha256: manifestSha256 })
+		// The attempt it replaces is of an older manifest, and its token is recorded nowhere once replaced: its URL
+		// parameter goes now. Best effort; a build of it still queued then fails to fetch, and its image would be stale.
+		// That build is not stopped: one already past its fetch runs to its end and pushes an image under its own tag, which
+		// nothing reads (only the recorded attempt's tag is followed) and the repository's lifecycle rule expires.
+		if (stored.proxyBuildToken !== undefined) {
+			await clients.ssm.deleteSecret(sourceUrlParameterOf(resources, stored.proxyBuildToken), AbortSignal.timeout(CLEANUP_TIMEOUT_MS)).catch(() => false)
+		}
 	}
 	const token = attempt.proxyBuildToken
 	if (token === undefined) throw new Error('aws: the proxy build was not recorded before its upload')
@@ -155,7 +201,7 @@ async function start(input: AwsProxyBuildAttemptInput): Promise<ProviderDeployme
 	}
 
 	const url = await s3PresignedGet(clients.credentials, address, (input.now ?? (() => new Date()))(), AWS_SOURCE_URL_SECONDS)
-	const parameter = awsSourceUrlParameter(`${resources.parameterPath}/builds`, token)
+	const parameter = sourceUrlParameterOf(resources, token)
 	await clients.ssm.putSecret(parameter, url, signal)
 
 	await input.events.boundary()
@@ -177,4 +223,84 @@ async function start(input: AwsProxyBuildAttemptInput): Promise<ProviderDeployme
 	}
 	await record({ ...attempt, proxyBuildId: started.id })
 	return namespace
+}
+
+/** The calls that follow a proxy build to its end. */
+export interface AwsProxyBuildFollowClients {
+	readonly codeBuild: Pick<CodeBuildClient, 'getBuild'>
+	readonly ecr: Pick<EcrClient, 'findImage'>
+	readonly ssm: Pick<SsmClient, 'deleteSecret'>
+}
+
+export interface AwsProxyBuildFollowInput {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly installation: AwsAppTarget
+	readonly proxySource: AwsProxySource
+	readonly clients: AwsProxyBuildFollowClients
+	readonly events: ProviderNamespaceEvents
+	readonly signal: AbortSignal
+}
+
+/** Where a namespace's proxy build stands: still running, or its image recorded. */
+export interface AwsProxyBuildFollowed {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly state: 'pending' | 'built'
+}
+
+/** The stable code of a proxy build that ended without an image, or that CodeBuild no longer knows. */
+export const AWS_PROXY_BUILD_FAILED = 'awsProxyBuild'
+
+/**
+ * Reads the namespace's recorded proxy build once. Running, it answers `pending`; succeeded, it records the image the
+ * build pushed under the attempt's tag; failed or gone, it clears the attempt and throws `AWS_PROXY_BUILD_FAILED`, which
+ * is not retryable as it is: a new start builds again. A namespace with no build recorded answers `built` when its image
+ * is recorded, and throws otherwise.
+ */
+export async function followAwsProxyBuild(input: AwsProxyBuildFollowInput): Promise<AwsProxyBuildFollowed> {
+	try {
+		return await follow(input)
+	} catch (error) {
+		throw namespaceFailure(error)
+	}
+}
+
+async function follow(input: AwsProxyBuildFollowInput): Promise<AwsProxyBuildFollowed> {
+	const { clients, signal } = input
+	let namespace = input.namespace
+	const stored = checkNamespaceTarget(namespace, input.installation, input.proxySource)
+	const resources = awsNamespaceResources(namespace.id, namespace.env)
+	const token = stored.proxyBuildToken
+	const buildId = stored.proxyBuildId
+	const manifestSha256 = stored.proxyBuildManifestSha256
+	if (token === undefined || buildId === undefined || manifestSha256 === undefined) {
+		if (token === undefined && stored.proxyImageDigest !== undefined) return { namespace, state: 'built' }
+		throw new Error("aws: the namespace's proxy has no build started to follow")
+	}
+
+	const record = async (target: AwsNamespaceTarget): Promise<void> => {
+		namespace = { ...namespace, target: awsNamespaceTargetEnvelope(target) }
+		await input.events.checkpoint(namespace)
+	}
+	// The build no longer needs its presigned read once it ended, whatever its verdict.
+	const dropUrl = async (): Promise<void> => {
+		await clients.ssm.deleteSecret(sourceUrlParameterOf(resources, token), AbortSignal.timeout(CLEANUP_TIMEOUT_MS)).catch(() => false)
+	}
+	const ended = async (reason: string): Promise<never> => {
+		await dropUrl()
+		await record(withoutBuild(stored))
+		throw new ProviderNamespaceError(reason, AWS_PROXY_BUILD_FAILED, false)
+	}
+
+	const build = await clients.codeBuild.getBuild(buildId, signal)
+	if (build === null) return await ended(`aws: the proxy build ${buildId} is not one CodeBuild knows any more; start it again`)
+	if (build.status === 'in_progress') return { namespace, state: 'pending' }
+	if (build.status !== 'succeeded') return await ended(`aws: the proxy build ${buildId} is ${build.status}`)
+
+	// The digest from ECR by the attempt's own tag, never from the build's log, which the build's code writes.
+	const tag = awsImageTag(token)
+	const image = await clients.ecr.findImage(resources.repository, { tag }, signal)
+	if (image === null) return await ended(`aws: the proxy build ${buildId} succeeded but pushed no image tagged ${tag}`)
+	await dropUrl()
+	await record({ ...withoutBuild(stored), proxyImageDigest: image.digest, proxyImageManifestSha256: manifestSha256 })
+	return { namespace, state: 'built' }
 }

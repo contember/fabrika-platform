@@ -320,6 +320,8 @@ function targetOf(
 		...(stored?.proxyBuildToken === undefined ? {} : { proxyBuildToken: stored.proxyBuildToken }),
 		...(stored?.proxyBuildManifestSha256 === undefined ? {} : { proxyBuildManifestSha256: stored.proxyBuildManifestSha256 }),
 		...(stored?.proxyBuildId === undefined ? {} : { proxyBuildId: stored.proxyBuildId }),
+		...(stored?.proxyImageDigest === undefined ? {} : { proxyImageDigest: stored.proxyImageDigest }),
+		...(stored?.proxyImageManifestSha256 === undefined ? {} : { proxyImageManifestSha256: stored.proxyImageManifestSha256 }),
 	}
 	return awsNamespaceTargetEnvelope(target)
 }
@@ -415,8 +417,11 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 			if (submitted.proxyCommitSha !== proxySource.commitSha) {
 				throw new Error("aws: a namespace is pinned to the installation's proxy commit; another commit is not one a caller chooses")
 			}
-			if (submitted.proxyBuildToken !== undefined || submitted.proxyBuildManifestSha256 !== undefined || submitted.proxyBuildId !== undefined) {
-				throw new Error("aws: a namespace's proxy build is recorded by its provider, never submitted")
+			if (
+				submitted.proxyBuildToken !== undefined || submitted.proxyBuildManifestSha256 !== undefined || submitted.proxyBuildId !== undefined
+				|| submitted.proxyImageDigest !== undefined || submitted.proxyImageManifestSha256 !== undefined
+			) {
+				throw new Error("aws: a namespace's proxy build and image are recorded by its provider, never submitted")
 			}
 			return { ...namespace, target: targetOf(namespace, installation, proxySource) }
 		},
