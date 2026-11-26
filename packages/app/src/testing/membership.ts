@@ -7,6 +7,7 @@
 // checks and the kit's next token of that principal read it.
 
 import {
+	type AgentScope,
 	API_KEY_PREFIX,
 	appEnvironmentId,
 	type AppMemberItem,
@@ -73,6 +74,8 @@ export interface DirectoryCallers {
 	byCredential(app: string, credential: string): TestCaller | undefined
 	/** The job a link operation's credential (its workload key or token) belongs to, as IAM resolves it for `app`. */
 	jobByCredential(app: string, credential: string): KitJobCaller | undefined
+	/** What an agent's token holds its person to (ADR-0090): none for any other credential. */
+	agentOf(app: string, credential: string): AgentHold | undefined
 	/** Every caller with its role grants. */
 	all(): readonly { readonly caller: TestCaller; readonly memberships: readonly TestMembership[] }[]
 }
@@ -119,6 +122,8 @@ export interface KitMembership {
 	readonly asked: readonly AskedWrite[]
 	/** The permissions IAM signs for `caller` now: the test's grants, with the roles this stand-in assigned or revoked. */
 	permsOf(caller: TestCaller): readonly PermissionEntry[]
+	/** The same before a terminal narrows them: what IAM resolves for the person's agent (ADR-0090), at no terminal. */
+	ownPermsOf(caller: TestCaller): readonly PermissionEntry[]
 	/**
 	 * Closes the open invitation `invitationId` as accepted, as IAM's onboarding does, and answers what it gives. With
 	 * `recipient`, that person holds the role from now on; without one the kit makes the new person who holds it. As IAM,
@@ -221,6 +226,14 @@ interface KitLink {
 export interface MintedToken {
 	readonly caller: TestCaller
 	readonly expiresAt: number
+	/** The person's token an agent's grant was exchanged for (ADR-0090). */
+	readonly agent?: AgentHold
+}
+
+/** An agent's token: its signed entries, which IAM holds a membership request to, and its grant's scope mode. */
+export interface AgentHold {
+	readonly entries: readonly PermissionEntry[]
+	readonly mode: AgentScope['mode']
 }
 
 /**
@@ -245,6 +258,10 @@ export function credentialCallers(
 			const held = audience === app ? jobs.get(credential) : undefined
 			return held !== undefined && (held.expiresAt === null || held.expiresAt > now()) ? held.job : undefined
 		},
+		agentOf(audience, credential) {
+			const minted = audience === app ? tokens.get(credential) : undefined
+			return minted !== undefined && minted.expiresAt > now() ? minted.agent : undefined
+		},
 		all: memberships,
 	}
 }
@@ -264,16 +281,25 @@ const now = (): number => Math.floor(Date.now() / 1000)
 
 /**
  * The caller of a membership operation, as IAM resolves it: another application's connector calls none, a link holder
- * is never a member caller, and `userOnly` refuses a script, which creates no scope and manages no member.
+ * is never a member caller, `userOnly` refuses a script, which creates no scope and manages no member, and `writes`
+ * refuses an agent's token under a `read` grant (ADR-0090).
  */
-function memberCaller(callers: DirectoryCallers, input: MembershipCaller, userOnly: boolean): LabelledTestCaller | MembershipFailure {
+function memberCaller(
+	callers: DirectoryCallers,
+	input: MembershipCaller,
+	operation: { readonly userOnly: boolean; readonly writes: boolean },
+): LabelledTestCaller | MembershipFailure {
 	if (input.credential === null) return { ok: false, reason: 'missing_token' }
 	const caller = callers.byCredential(input.app, input.credential)
 	if (caller === undefined || caller.kind === 'app') return { ok: false, reason: 'invalid_token' }
 	if (caller.disabled) return { ok: false, reason: 'disabled' }
-	if (caller.kind === 'link' || (userOnly && caller.kind !== 'human')) return NOT_ALLOWED
+	if (caller.kind === 'link' || (operation.userOnly && caller.kind !== 'human')) return NOT_ALLOWED
+	if (operation.writes && callers.agentOf(input.app, input.credential)?.mode === 'read') return NOT_ALLOWED
 	return caller
 }
+
+const READS = { userOnly: false, writes: false } as const
+const WRITES = { userOnly: true, writes: true } as const
 
 const isFailure = (outcome: LabelledTestCaller | MembershipFailure): outcome is MembershipFailure => 'ok' in outcome
 
@@ -282,6 +308,8 @@ interface LinkCaller {
 	readonly id: string
 	readonly perms: readonly PermissionEntry[]
 	readonly issues: string | null
+	/** An agent's token (ADR-0090), which revokes its person's link only where it could issue one. */
+	readonly agent: boolean
 }
 
 function dimensionOf(artifact: ContractArtifact, type: string) {
@@ -302,7 +330,7 @@ function membershipsOf(callers: DirectoryCallers, principalId: string): readonly
 type PermsOf = (caller: TestCaller) => readonly PermissionEntry[]
 
 function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, permsOf: PermsOf, input: ListMembersInput): ListMembersResult {
-	const caller = memberCaller(callers, input, false)
+	const caller = memberCaller(callers, input, READS)
 	if (isFailure(caller)) return caller
 	const perms = [...permsOf(caller)]
 	const problem = membershipScopeProblem(input.scope)
@@ -336,7 +364,7 @@ function listMembers(artifact: ContractArtifact, callers: DirectoryCallers, perm
  * `members.manage` held globally, which alone sees addresses and last sign-ins.
  */
 function listAppMembers(artifact: ContractArtifact, callers: DirectoryCallers, permsOf: PermsOf, input: ListAppMembersInput): ListAppMembersResult {
-	const caller = memberCaller(callers, input, false)
+	const caller = memberCaller(callers, input, READS)
 	if (isFailure(caller)) return caller
 	const perms = [...permsOf(caller)]
 	const people = artifact.members
@@ -368,7 +396,7 @@ function listAppMembers(artifact: ContractArtifact, callers: DirectoryCallers, p
 }
 
 function findMember(artifact: ContractArtifact, callers: DirectoryCallers, permsOf: PermsOf, input: FindMemberInput): FindMemberResult {
-	const caller = memberCaller(callers, input, false)
+	const caller = memberCaller(callers, input, READS)
 	if (isFailure(caller)) return caller
 	const perms = [...permsOf(caller)]
 	const problem = membershipScopeProblem(input.scope)
@@ -487,6 +515,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	const live: DirectoryCallers = {
 		byCredential: (app, credential) => callers.byCredential(app, credential),
 		jobByCredential: (app, credential) => callers.jobByCredential(app, credential),
+		agentOf: (app, credential) => callers.agentOf(app, credential),
 		all: () => callers.all().map(({ caller, memberships }) => ({ caller, memberships: changes.heldBy(caller.id, memberships) })),
 	}
 
@@ -495,6 +524,16 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	 * terminal (`signedPermissions`).
 	 */
 	const permsOf = (caller: TestCaller): readonly PermissionEntry[] => signedPermissions(caller, ownPermsOf(caller))
+
+	/**
+	 * What IAM holds a membership request to: the caller's live permissions, and for an agent's token (ADR-0090) only
+	 * its own entries that the person still holds.
+	 */
+	const heldPermsOf = (caller: TestCaller, input: MembershipCaller): readonly PermissionEntry[] => {
+		const live = permsOf(caller)
+		const agent = input.credential === null ? undefined : callers.agentOf(input.app, input.credential)
+		return agent === undefined ? live : agent.entries.filter((entry) => permits([...live], entry.action, entry.scope ?? undefined))
+	}
 
 	/** The test's permissions of `caller`, less one entry for each action of a role it lost, plus those of each role it gained. */
 	const ownPermsOf = (caller: TestCaller): readonly PermissionEntry[] => {
@@ -596,10 +635,10 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	}
 
 	/** `members.manage` of the scope's dimension, held there: a value is checked as itself, flat. */
-	const manageProblem = (caller: TestCaller, scope: Scope): MembershipFailure | null => {
+	const manageProblem = (held: readonly PermissionEntry[], scope: Scope): MembershipFailure | null => {
 		const members = dimensionOf(artifact, scope.type)?.members
 		if (members === null || members === undefined) return invalid(`scope '${scope.type}' declares no members`)
-		return permits([...permsOf(caller)], members.manage, scope) ? null : NOT_ALLOWED
+		return permits([...held], members.manage, scope) ? null : NOT_ALLOWED
 	}
 
 	/** As IAM (ADR-0051): an external principal holds only a role the contract declares external. */
@@ -613,7 +652,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	 * and every action the role grants there, through a relation included, by a plain grant (`permits` reads no `~`
 	 * entry).
 	 */
-	const roleProblem = (caller: TestCaller, scope: Scope, role: string): MembershipFailure | null => {
+	const roleProblem = (caller: TestCaller, authority: readonly PermissionEntry[], scope: Scope, role: string): MembershipFailure | null => {
 		const declared = Object.hasOwn(artifact.roles, role) ? artifact.roles[role] : undefined
 		if (declared?.member === null || declared?.member === undefined || declared.member.scope !== scope.type) {
 			return invalid(`role '${role}' is not a membership role of scope '${scope.type}'`)
@@ -625,13 +664,13 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		)
 		const held = [...changes.rolesOf(caller.id, scope), ...appWide.map((grant) => grant.role)]
 		if (!declared.member.assignableBy.some((assigner) => held.includes(assigner))) return NOT_ALLOWED
-		const perms = [...permsOf(caller)]
+		const perms = [...authority]
 		const delegated = [...declared.grants, ...Object.values(declared.via ?? {}).flat()]
 		return delegated.every((action) => permits(perms, action, scope)) ? null : NOT_ALLOWED
 	}
 
 	const requestDelegation = (input: RequestDelegationInput): RequestDelegationResult => {
-		const caller = memberCaller(callers, input, true)
+		const caller = memberCaller(callers, input, WRITES)
 		if (isFailure(caller)) return caller
 		const row = artifact.endpoints.find((candidate) => candidate.id === input.endpoint)
 		const purpose = row === undefined ? null : endpointDelegation(artifact, row)
@@ -639,7 +678,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			return invalid(`endpoint '${input.endpoint}' declares no membership operation`)
 		}
 		const { action, access } = row.requirement
-		if (!permsOf(caller).some((entry) => matchAction(entry.action, action))) return NOT_ALLOWED
+		if (!heldPermsOf(caller, input).some((entry) => matchAction(entry.action, action))) return NOT_ALLOWED
 		const grant = `grant_${randomId()}`
 		const expiresAt = now() + DELEGATION_GRANT_TTL_SECONDS
 		grants.set(grant, { principalId: caller.id, endpoint: row.id, requestId: input.requestId, purpose, dimension: access.dimension, action, expiresAt })
@@ -648,7 +687,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 
 	/** A value of a top-level dimension, for a holder of the creating endpoint's action as a global grant. */
 	const createScope = (input: CreateScopeInput): CreateScopeResult => {
-		const caller = memberCaller(callers, input, true)
+		const caller = memberCaller(callers, input, WRITES)
 		if (isFailure(caller)) return caller
 		const spent = spend(caller, input, 'creates', input.dimension)
 		if ('ok' in spent) return spent
@@ -656,7 +695,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		if (dimension === undefined || dimension.creator === null || dimension.in !== null) {
 			return invalid(`scope '${input.dimension}' is not created by IAM: it needs a creator role and no containing scope`)
 		}
-		if (!permits([...permsOf(caller)], spent.action)) return NOT_ALLOWED
+		if (!permits([...heldPermsOf(caller, input)], spent.action)) return NOT_ALLOWED
 		const external = externalProblem(caller, dimension.creator)
 		if (external !== null) return external
 		const scope: Scope = { type: input.dimension, value: crypto.randomUUID() }
@@ -666,13 +705,13 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	}
 
 	const assignMember = (input: AssignMemberInput): AssignMemberResult => {
-		const caller = memberCaller(callers, input, true)
+		const caller = memberCaller(callers, input, WRITES)
 		if (isFailure(caller)) return caller
 		const spent = spend(caller, input, 'members', input.scope.type)
 		if ('ok' in spent) return spent
 		const scopeProblem = membershipScopeProblem(input.scope)
 		if (scopeProblem !== null) return invalid(scopeProblem)
-		const problem = manageProblem(caller, input.scope) ?? roleProblem(caller, input.scope, input.role)
+		const problem = manageProblem(heldPermsOf(caller, input), input.scope) ?? roleProblem(caller, heldPermsOf(caller, input), input.scope, input.role)
 		if (problem !== null) return problem
 		if ('principalId' in input.member) {
 			if (input.invitation !== undefined) return invalid('a label, a message, a locale and a resend go with an invitation by address')
@@ -716,18 +755,18 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	}
 
 	const revokeMember = (input: RevokeMemberInput): RevokeMemberResult => {
-		const caller = memberCaller(callers, input, true)
+		const caller = memberCaller(callers, input, WRITES)
 		if (isFailure(caller)) return caller
 		const spent = spend(caller, input, 'members', input.scope.type)
 		if ('ok' in spent) return spent
 		const scopeProblem = membershipScopeProblem(input.scope)
 		if (scopeProblem !== null) return invalid(scopeProblem)
-		const manage = manageProblem(caller, input.scope)
+		const manage = manageProblem(heldPermsOf(caller, input), input.scope)
 		if (manage !== null) return manage
 		if ('invitationId' in input.member) {
 			const invitation = invitationOf(input.member.invitationId, input.scope)
 			if (invitation === undefined) return NOT_FOUND
-			const problem = roleProblem(caller, input.scope, invitation.role)
+			const problem = roleProblem(caller, heldPermsOf(caller, input), input.scope, invitation.role)
 			if (problem !== null) return problem
 			asked.push({ operation: 'revokeMember', principalId: caller.id, scope: input.scope, member: input.member })
 			invitations.set(invitation.id, { ...invitation, closed: 'cancelled' })
@@ -739,7 +778,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		}
 		const roles = changes.rolesOf(input.member.principalId, input.scope).filter((role) => only === null || role === only)
 		for (const role of roles) {
-			const problem = roleProblem(caller, input.scope, role)
+			const problem = roleProblem(caller, heldPermsOf(caller, input), input.scope, role)
 			if (problem !== null) return problem
 		}
 		asked.push({ operation: 'revokeMember', principalId: caller.id, scope: input.scope, member: input.member })
@@ -774,10 +813,12 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const job = input.credential === null ? undefined : callers.jobByCredential(input.app, input.credential)
 		if (job !== undefined) {
 			if (job.issues === null) return NOT_ALLOWED
-			return { id: job.id, perms: job.actions.map((action) => ({ action, scope: null, source: 'grant' })), issues: job.issues }
+			return { id: job.id, perms: job.actions.map((action) => ({ action, scope: null, source: 'grant' })), issues: job.issues, agent: false }
 		}
-		const caller = memberCaller(callers, input, false)
-		return isFailure(caller) ? caller : { id: caller.id, perms: permsOf(caller), issues: null }
+		const caller = memberCaller(callers, input, { userOnly: false, writes: true })
+		if (isFailure(caller)) return caller
+		const agent = input.credential !== null && callers.agentOf(input.app, input.credential) !== undefined
+		return { id: caller.id, perms: heldPermsOf(caller, input), issues: null, agent }
 	}
 
 	/**
@@ -820,15 +861,20 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 			return members !== null && members !== undefined && permits([...caller.perms], members.manage, scope)
 		})
 		if (link.issuer !== caller.id && !manager) return NOT_ALLOWED
+		if (link.issuer === caller.id && caller.agent) {
+			// An agent's token reaches only its own entries: it revokes the person's link only where it could issue one (ADR-0090 §4).
+			const mount = Object.hasOwn(artifact.mounts, link.mount) ? artifact.mounts[link.mount] : undefined
+			if (mount?.kind !== 'link' || !link.chain.some((scope) => permits([...caller.perms], mount.issuedBy, scope))) return NOT_ALLOWED
+		}
 		links.set(link.id, { ...link, revoked: true })
 		asked.push({ operation: 'revokeLink', principalId: caller.id, id: input.id })
 		return { ok: true }
 	}
 
 	const rpc: IamMembershipRpc = {
-		listMembers: (input) => Promise.resolve(listMembers(artifact, live, permsOf, input)),
-		listAppMembers: (input) => Promise.resolve(listAppMembers(artifact, live, permsOf, input)),
-		findMember: (input) => Promise.resolve(findMember(artifact, live, permsOf, input)),
+		listMembers: (input) => Promise.resolve(listMembers(artifact, live, (caller) => heldPermsOf(caller, input), input)),
+		listAppMembers: (input) => Promise.resolve(listAppMembers(artifact, live, (caller) => heldPermsOf(caller, input), input)),
+		findMember: (input) => Promise.resolve(findMember(artifact, live, (caller) => heldPermsOf(caller, input), input)),
 		requestDelegation: (input) => Promise.resolve(requestDelegation(input)),
 		createScope: (input) => Promise.resolve(createScope(input)),
 		assignMember: (input) => Promise.resolve(assignMember(input)),
@@ -899,7 +945,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		const inviter = invitation.inviter === null ? undefined : callers.all().find(({ caller }) => caller.id === invitation.inviter)?.caller
 		const authority = inviter === undefined || inviter.disabled
 			? NOT_ALLOWED
-			: (manageProblem(inviter, invitation.scope) ?? roleProblem(inviter, invitation.scope, invitation.role))
+			: (manageProblem(permsOf(inviter), invitation.scope) ?? roleProblem(inviter, permsOf(inviter), invitation.scope, invitation.role))
 		if (authority !== null) {
 			throw new Error(
 				invitation.inviter === null
@@ -917,6 +963,7 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 		rpc,
 		asked,
 		permsOf,
+		ownPermsOf,
 		accept,
 		seedInvitation,
 		seedLink,

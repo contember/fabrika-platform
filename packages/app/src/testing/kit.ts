@@ -756,8 +756,13 @@ export function bootTestKit<C extends AnyContract>(
 	): Promise<{ readonly ok: true; readonly token: string; readonly expiresAt: number } | MintRefusal> {
 		if (caller.disabled) return { ok: false, reason: 'disabled' }
 		const now = Math.floor(Date.now() / 1000)
-		const own = uniquePermissions(standIn?.permsOf(caller) ?? signedPermissions(caller, caller.perms))
+		// IAM resolves an agent's token from the person's own live permissions, at no terminal (ADR-0090).
+		const terminal = agent === undefined ? caller.terminal : null
+		const own = uniquePermissions(
+			agent === undefined ? (standIn?.permsOf(caller) ?? signedPermissions(caller, caller.perms)) : (standIn?.ownPermsOf(caller) ?? caller.perms),
+		)
 		const within = agent?.act.scope.within ?? null
+		const permissions = within === null ? own : narrowToValue(own, within)
 		const claims = buildAccessClaims({
 			iss: TEST_ISSUER,
 			app: appId,
@@ -767,8 +772,8 @@ export function bootTestKit<C extends AnyContract>(
 			...(caller.link === null ? {} : { link: { mount: caller.link.mount, chain: [...caller.link.chain] } }),
 			label: caller.label,
 			...(caller.email === null ? {} : { email: caller.email }),
-			...(caller.terminal === null ? {} : { session: true, terminal: { id: caller.terminal.id, label: caller.terminal.label } }),
-			permissions: within === null ? own : narrowToValue(own, within),
+			...(terminal === null ? {} : { session: true, terminal: { id: terminal.id, label: terminal.label } }),
+			permissions,
 			issuedAt: now,
 			expiresAt: Math.min(now + TOKEN_TTL_SECONDS, agent?.notAfter ?? Number.POSITIVE_INFINITY),
 			...(agent === undefined ? {} : { act: agent.act }),
@@ -782,9 +787,12 @@ export function bootTestKit<C extends AnyContract>(
 			(payload) => new SignJWT({ ...payload }).setProtectedHeader({ alg: TOKEN_ALG, kid: KEY_ID }).sign(privateKey),
 		)
 		if (token.length > bound) return { ok: false, reason: 'token_too_large' }
-		// The stand-in's membership operations resolve a token to its caller's live permissions; an agent's token, which IAM
-		// holds to its own narrowed entries, is no membership credential here, so they refuse it (`invalid_token`).
-		if (agent === undefined) byToken.set(token, { caller, expiresAt: claims.exp })
+		// The stand-in's membership operations hold an agent's token to its own entries the person still holds, as IAM does.
+		byToken.set(token, {
+			caller,
+			expiresAt: claims.exp,
+			...(agent === undefined ? {} : { agent: { entries: permissions, mode: agent.act.scope.mode } }),
+		})
 		return { ok: true, token, expiresAt: claims.exp }
 	}
 

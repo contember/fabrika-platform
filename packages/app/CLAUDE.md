@@ -1144,9 +1144,10 @@ vocabulary (`packages/db/CLAUDE.md`).
   person's live permissions narrowed with auth-core's `narrowToValue`, as IAM does, and refuses a `write` grant
   (`write_refused`) as IAM does until `agent-write` is mirrored, unless the kit's `agentWrite` is `off`. The endpoint
   access kit sets it `off` and asks a row whose only caller is `agent` with an unnarrowed grant, `read` for a read-only
-  row and `write` otherwise. The exchanged token is no credential at `kitMembership`
-  (it resolves a token to live permissions, where IAM holds an agent to its token's entries), so membership operations
-  refuse it (`invalid_token`).
+  row and `write` otherwise. The exchanged token is signed from the person's own permissions with no terminal claims,
+  even for a caller on a terminal, as IAM's `mintFromGrant` resolves the person. `kitMembership` holds it as IAM does:
+  to its own entries the person still holds, a write refused under a `read` grant, and a link of the person revoked
+  only where the agent could issue one.
 - **A test caller on a terminal** (`testCaller(grants, { terminal })`, ADR-0067) is a person's session in a contract
   that declares `terminal`, as IAM refuses any other. Its token carries `session`, `amr` and `terminal`, and its
   permissions are `signedPermissions`: its own entries narrowed by the ceiling (auth-core's `narrowPermissions`, IAM's

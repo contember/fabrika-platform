@@ -86,7 +86,7 @@ const outsider = person('outsider', roleEntries('owner', OTHER))
 const coOwner = person('co-owner', roleEntries('owner', ACME))
 const connector = person('connector', [entry('notes.share', ACME), entry('notes.read', ACME), entry('notes.admin', ACME)], 'app')
 
-const standIn = (extra: readonly Held[] = []) =>
+const standIn = (extra: readonly Held[] = [], tokens: ReadonlyMap<string, MintedToken> = new Map()) =>
 	kitMembership(
 		artifact,
 		callersOf([
@@ -101,7 +101,7 @@ const standIn = (extra: readonly Held[] = []) =>
 			{ caller: outsider, memberships: [{ role: 'owner', scope: OTHER }] },
 			{ caller: holder, memberships: [] },
 			{ caller: connector, memberships: [] },
-		]),
+		], tokens),
 	)
 
 const as = (caller: TestCaller, requestId = 'req-1'): MembershipCaller => ({ app: APP, credential: caller.key, requestId })
@@ -421,6 +421,46 @@ describe('the stand-in resolves a credential as IAM does', () => {
 		expect(callers.byCredential(APP, 'live')).toBe(owner)
 		expect(callers.byCredential(APP, 'spent')).toBeUndefined()
 		expect(callers.byCredential('other@test', 'live')).toBeUndefined()
+	})
+})
+
+describe("an agent's token is held as IAM holds it (ADR-0090)", () => {
+	const until = Math.floor(Date.now() / 1000) + 3600
+	const agent = (caller: TestCaller, entries: readonly PermissionEntry[], mode: 'read' | 'write'): MintedToken => ({
+		caller,
+		expiresAt: until,
+		agent: { entries, mode },
+	})
+	const tokens = new Map<string, MintedToken>([
+		['agent-read', agent(owner, roleEntries('owner', ACME), 'read')],
+		['agent-write', agent(owner, roleEntries('owner', ACME), 'write')],
+		// Narrowed to another workspace: the owner's entries at ACME are dropped.
+		['agent-elsewhere', agent(owner, [], 'write')],
+		// The token names the owner's entries, but the person now holds the editor's only.
+		['agent-stale', agent(editor, roleEntries('owner', ACME), 'write')],
+	])
+	const asToken = (credential: string): MembershipCaller => ({ app: APP, credential, requestId: 'req-1' })
+
+	test("it reads with its own entries that the person still holds, and writes only under a 'write' grant", async () => {
+		const membership = standIn([], tokens)
+		expect((await membership.rpc.listMembers({ ...asToken('agent-read'), scope: ACME })).ok).toBe(true)
+		expect(await membership.rpc.listMembers({ ...asToken('agent-elsewhere'), scope: ACME })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect((await membership.rpc.listMembers({ ...as(owner), scope: ACME })).ok).toBe(true)
+		const invite = (credential: string) => membership.rpc.requestDelegation({ ...asToken(credential), endpoint: 'api.members.invite' })
+		expect(await invite('agent-read')).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await invite('agent-write')).toEqual(expect.objectContaining({ ok: true }))
+		expect(await invite('agent-elsewhere')).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await invite('agent-stale')).toEqual({ ok: false, reason: 'not_allowed' })
+		expect((await membership.rpc.listMembers({ ...asToken('agent-stale'), scope: ACME })).ok).toBe(true)
+	})
+
+	test("it revokes the person's link only where it could issue one", async () => {
+		const membership = standIn([], tokens)
+		const issued = await membership.rpc.issueLink({ ...as(owner), mount: 'shared', chain: [NOTE, ACME], days: 1 })
+		if (!issued.ok) throw new Error('the owner issues a link of the note')
+		expect(await membership.rpc.revokeLink({ ...asToken('agent-elsewhere'), id: issued.id })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await membership.rpc.revokeLink({ ...asToken('agent-read'), id: issued.id })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await membership.rpc.revokeLink({ ...asToken('agent-write'), id: issued.id })).toEqual({ ok: true })
 	})
 })
 
