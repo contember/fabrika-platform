@@ -1,23 +1,27 @@
 // The installation's database (the AWS idea's checklist, step 11): one RDS PostgreSQL instance that IAM, Control and
 // Operations share, from one stack the operator applies.
 //
-// - **One database for the three.** Their table names do not intersect, and each keeps its own migration ledger and
-//   advisory lock (ADR-0017), so one database holds them without coordination, as Zerops' light installation does. RDS
-//   backs it up daily with point-in-time recovery, so the reason Zerops gives Operations a database of its own (one
-//   backup schedule per service) does not apply.
+// - **One instance, a database and a user for each.** IAM, Control and Operations each connect as a user of their own
+//   (`fabrika_iam`, `fabrika_control`, `fabrika_operations`) that owns a database of the same name and can connect to
+//   no other, so a misused Control reads none of IAM's tables (its users, sessions and keys) nor Operations'. The
+//   instance's master user (`fabrika_admin`) creates them and is no service's: its password is read only by the
+//   operator's command, which runs `awsDatabaseSetupSteps` as a one-off task in the platform's network on install and
+//   on every upgrade (idempotent: it creates what is missing and sets each password to its parameter's). RDS backs the
+//   instance up daily with point-in-time recovery, so one instance serves the three.
 // - **In the platform's network** (`network.ts`), which no route joins to the applications': nothing an application or
 //   Control places can reach it, whatever group it carries.
 // - **Private subnets of its own.** Two /24s of the platform VPC's range, one per zone, apart from its tasks' and its
 //   balancer's subnets, with no route out: they use the VPC's main route table, which holds the local route alone.
 // - **Reached by the platform's services alone.** The database's group admits PostgreSQL only from the clients' group,
 //   which the platform's services carry and no application's stack names.
-// - **Its password never in a template.** The operator's command generates it into a Parameter Store SecureString
-//   under `/fabrika/platform/`, out of Control's reach, and the instance reads it through a dynamic reference; the
-//   services' database URLs are written beside it.
+// - **No password in a template.** The operator's command generates each (the master's and one per service) into a
+//   Parameter Store SecureString under `/fabrika/platform/database/`, out of Control's reach; the instance reads the
+//   master's through a dynamic reference. Each service's task reads its own parameter alone (the services' step).
 //
 // UNVERIFIED: the resources' properties, that `{{resolve:ssm-secure:…}}` is accepted for `MasterUserPassword`, the
 // engine version's availability and that RDS enforces TLS by default for PostgreSQL 15 and later follow the RDS and
-// CloudFormation references; none was checked against an account.
+// CloudFormation references; that RDS's master user may grant itself `SET` on a role it created and so create a
+// database that role owns follows PostgreSQL 16's rules for `CREATEROLE`. None was checked against an account.
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { blockAt, blocksOverlap } from '../cidr'
@@ -27,11 +31,37 @@ import { type AwsNetworkOutputs, checkAwsNetworkLayout } from './network'
 
 /** The database's stack's name: under `fabrika-platform-`, which no grant of Control's role names. */
 export const AWS_DATABASE_STACK = 'fabrika-platform-database'
-/** The database, and its master user, the three services connect as. */
-export const AWS_DATABASE_NAME = 'fabrika'
-export const AWS_DATABASE_USER = 'fabrika'
-/** The SecureString the instance's password is read from: under the platform's path, out of Control's reach. */
-export const AWS_DATABASE_PASSWORD_PARAMETER = `${AWS_PLATFORM_PATH}database-password`
+/** The instance's master user: it creates the services' users and databases, and no service connects as it. */
+export const AWS_DATABASE_ADMIN = 'fabrika_admin'
+/** The platform's Parameter Store path of the database's passwords, which no grant of Control's role names. */
+export const AWS_DATABASE_PARAMETERS = `${AWS_PLATFORM_PATH}database/`
+/** The SecureString the master's password is read from. */
+export const AWS_DATABASE_ADMIN_PASSWORD_PARAMETER = `${AWS_DATABASE_PARAMETERS}admin-password`
+
+/** A platform service with a database and a user of its own. */
+export type AwsDatabaseService = 'iam' | 'control' | 'operations'
+export const AWS_DATABASE_SERVICES: readonly AwsDatabaseService[] = ['iam', 'control', 'operations']
+
+/** A service's user, and the database it owns: the same name. */
+export function awsDatabaseRole(service: AwsDatabaseService): string {
+	return `fabrika_${service}`
+}
+
+/** The SecureString a service's password is read from, by the operator's command and that service's task alone. */
+export function awsDatabasePasswordParameter(service: AwsDatabaseService): string {
+	return `${AWS_DATABASE_PARAMETERS}${service}-password`
+}
+
+/**
+ * A password the operator's command generates: letters and digits alone, so it stands in a SQL literal and a URL as
+ * it is, and RDS takes it for the master (which refuses `/`, `'`, `"` and `@`).
+ */
+const PASSWORD = /^[A-Za-z0-9]{32,128}$/
+
+function checkPassword(password: string, whose: string): string {
+	if (!PASSWORD.test(password)) throw new Error(`aws: ${whose} database password is not 32 to 128 letters and digits`)
+	return password
+}
 /** The engine's major version. */
 export const AWS_DATABASE_ENGINE_VERSION = '17'
 /** A small installation's instance: burstable, two vCPUs, 1 GiB. */
@@ -118,9 +148,9 @@ export function awsDatabaseStack(network: AwsNetworkOutputs): AwsStack {
 			MaxAllocatedStorage: 100,
 			StorageType: 'gp3',
 			StorageEncrypted: true,
-			DBName: AWS_DATABASE_NAME,
-			MasterUsername: AWS_DATABASE_USER,
-			MasterUserPassword: `{{resolve:ssm-secure:${AWS_DATABASE_PASSWORD_PARAMETER}}}`,
+			// No initial database: the setup creates one per service, and the master works in `postgres`.
+			MasterUsername: AWS_DATABASE_ADMIN,
+			MasterUserPassword: `{{resolve:ssm-secure:${AWS_DATABASE_ADMIN_PASSWORD_PARAMETER}}}`,
 			DBSubnetGroupName: { Ref: 'DatabaseSubnets' },
 			VPCSecurityGroups: [{ 'Fn::GetAtt': ['DatabaseGroup', 'GroupId'] }],
 			PubliclyAccessible: false,
@@ -171,10 +201,88 @@ export function awsDatabaseOutputs(outputs: Readonly<Record<string, string>>): A
 }
 
 /**
- * The URL IAM, Control and Operations connect with: TLS required, the password escaped. It holds the password, so the
- * operator's command writes it into Parameter Store as a SecureString and never prints it.
+ * The URL a service connects with: as its own user, to its own database, TLS required. It holds the password, so it
+ * is built where the password is read and never printed.
  */
-export function awsDatabaseUrl(outputs: AwsDatabaseOutputs, password: string): string {
-	if (password.length < 16) throw new Error("aws: the database's password is shorter than 16 characters")
-	return `postgres://${AWS_DATABASE_USER}:${encodeURIComponent(password)}@${outputs.host}:${outputs.port}/${AWS_DATABASE_NAME}?sslmode=require`
+export function awsDatabaseUrl(outputs: AwsDatabaseOutputs, service: AwsDatabaseService, password: string): string {
+	const role = awsDatabaseRole(service)
+	return `postgres://${role}:${checkPassword(password, `${service}'s`)}@${outputs.host}:${outputs.port}/${role}?sslmode=require`
+}
+
+/** The master's URL, for the setup alone: to the `postgres` database, TLS required. */
+export function awsDatabaseAdminUrl(outputs: AwsDatabaseOutputs, password: string): string {
+	return `postgres://${AWS_DATABASE_ADMIN}:${checkPassword(password, "the master's")}@${outputs.host}:${outputs.port}/postgres?sslmode=require`
+}
+
+/**
+ * One step of the setup: a statement, or a probe that decides between creating an object and bringing an existing one
+ * to the same state. `label` names the object and never a password, so an error can carry it.
+ */
+export type AwsDatabaseSetupStep =
+	| { readonly kind: 'run'; readonly label: string; readonly statement: string }
+	| {
+		readonly kind: 'ensure'
+		readonly label: string
+		/** Answers a row when the object exists. */
+		readonly probe: string
+		readonly params: readonly string[]
+		readonly create: string
+		readonly update: string
+	}
+
+/**
+ * The setup the master runs, connected to `postgres`: for each service its user (created, or its password set to the
+ * parameter's), the master's `SET` on it (PostgreSQL 16 and later create a database another role owns only for a role
+ * that may `SET ROLE` to it), its database owned by it, and `CONNECT` on that database taken from everyone else.
+ * Idempotent, so install and every upgrade run it whole. Role and database names are this module's own; a password is
+ * letters and digits alone.
+ */
+export function awsDatabaseSetupSteps(passwords: Readonly<Record<AwsDatabaseService, string>>): readonly AwsDatabaseSetupStep[] {
+	return AWS_DATABASE_SERVICES.flatMap((service): AwsDatabaseSetupStep[] => {
+		const role = awsDatabaseRole(service)
+		const password = checkPassword(passwords[service], `${service}'s`)
+		return [
+			{
+				kind: 'ensure',
+				label: `the user ${role}`,
+				probe: 'SELECT 1 FROM pg_roles WHERE rolname = $1',
+				params: [role],
+				create: `CREATE ROLE "${role}" WITH LOGIN PASSWORD '${password}'`,
+				update: `ALTER ROLE "${role}" WITH LOGIN PASSWORD '${password}'`,
+			},
+			{ kind: 'run', label: `the master's SET on ${role}`, statement: `GRANT "${role}" TO CURRENT_USER WITH SET TRUE, INHERIT FALSE` },
+			{
+				kind: 'ensure',
+				label: `the database ${role}`,
+				probe: 'SELECT 1 FROM pg_database WHERE datname = $1',
+				params: [role],
+				create: `CREATE DATABASE "${role}" OWNER "${role}"`,
+				update: `ALTER DATABASE "${role}" OWNER TO "${role}"`,
+			},
+			{ kind: 'run', label: `the database ${role} closed to others`, statement: `REVOKE ALL ON DATABASE "${role}" FROM PUBLIC` },
+		]
+	})
+}
+
+/** The connection the setup runs on: the master's, to `postgres`, one statement at a time and outside a transaction. */
+export interface AwsDatabaseSession {
+	/** How many rows `text` answers with `params` bound. */
+	count(text: string, params: readonly string[]): Promise<number>
+	/** Runs one statement that takes no parameter. */
+	execute(statement: string): Promise<void>
+}
+
+/**
+ * Runs the setup's steps in order. A failing step is reported by its label alone: a statement carries a password, and
+ * a driver's error may quote it.
+ */
+export async function runAwsDatabaseSetup(session: AwsDatabaseSession, steps: readonly AwsDatabaseSetupStep[]): Promise<void> {
+	for (const step of steps) {
+		try {
+			if (step.kind === 'run') await session.execute(step.statement)
+			else await session.execute((await session.count(step.probe, step.params)) > 0 ? step.update : step.create)
+		} catch {
+			throw new Error(`aws: the database setup failed at ${step.label}`)
+		}
+	}
 }

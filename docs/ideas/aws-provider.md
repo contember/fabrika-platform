@@ -616,13 +616,19 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        exist).
     4. **The database** (built, `installation/database.ts`): one RDS PostgreSQL 17 instance (`db.t4g.micro`, 20 GiB
        gp3 growing to 100, encrypted, seven days of backups with point-in-time recovery, deletion-protected, a final
-       snapshot on delete) that IAM, Control and Operations share, as Zerops' light installation shares one: their
-       tables do not intersect and each keeps its own ledger and lock (ADR-0017). In the platform's VPC, in two private
+       snapshot on delete) that IAM, Control and Operations share, each as a user of its own (`fabrika_iam`,
+       `fabrika_control`, `fabrika_operations`) owning a database of the same name, `CONNECT` on it taken from everyone
+       else: a misused Control reads none of IAM's or Operations' tables. The master user (`fabrika_admin`) is no
+       service's; the operator's command runs the setup (`awsDatabaseSetupSteps`, idempotent: it creates what is
+       missing and sets each password to its parameter's) as a one-off task in the platform's network on install and on
+       every upgrade, before the services start. In the platform's VPC, in two private
        /24s of its own (`x.y.32.0`, `x.y.33.0`), apart from the tasks' and the balancers' subnets, with no route out, and
        no route to it from the applications' VPC. Reached on 5432
-       from the clients' group alone, which the platform's services carry. Its password is a SecureString under
-       `/fabrika/platform/`, which no grant of Control's role names, read by a dynamic reference; the services' URL
-       (TLS required) is written beside it.
+       from the clients' group alone, which the platform's services carry. Its passwords (the master's and one per
+       service) are SecureStrings under `/fabrika/platform/database/`, which no grant of Control's role names; the
+       instance reads the master's by a dynamic reference, and each service's execution role reads its own alone (the
+       services' step). Zerops differs: there IAM and Control connect as the one user of the `db` service, and
+       Operations has a database service of its own.
     5. **The platform's services**: Control, IAM, the console and the platform proxy on ECS, their images and
        variables. In the platform's VPC and cluster, under task definition families `fabrika_platform_*`, each
        service pinned to a revision ARN; the platform proxy's group admits only the platform balancer's group; no

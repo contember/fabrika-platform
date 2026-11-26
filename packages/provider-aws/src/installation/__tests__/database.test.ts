@@ -1,17 +1,25 @@
 // The installation's database: private subnets of its own apart from the tasks' and the balancers', reached only
-// from the clients' group, its password read from Parameter Store under the platform's path and never in the template,
-// kept on delete; its outputs read back, and the URL the platform's services connect with.
+// from the clients' group, its passwords read from Parameter Store under the platform's path and never in the template,
+// kept on delete; its outputs read back; a user and a database for each service, which the setup creates and closes to
+// the others, and the URL each service connects with.
 
 import { describe, expect, test } from 'bun:test'
 import { blocksOverlap } from '../../cidr'
 import { awsControlPolicies } from '../access'
 import {
-	AWS_DATABASE_PASSWORD_PARAMETER,
+	AWS_DATABASE_ADMIN_PASSWORD_PARAMETER,
+	AWS_DATABASE_SERVICES,
 	AWS_DATABASE_STACK,
+	awsDatabaseAdminUrl,
 	awsDatabaseOutputs,
+	awsDatabasePasswordParameter,
+	type AwsDatabaseService,
+	type AwsDatabaseSession,
+	awsDatabaseSetupSteps,
 	awsDatabaseStack,
 	awsDatabaseSubnetCidrs,
 	awsDatabaseUrl,
+	runAwsDatabaseSetup,
 } from '../database'
 import { awsNetworkOutputs } from '../network'
 
@@ -58,7 +66,7 @@ describe("the installation's database", () => {
 		expect(resources.DatabaseClientGroup.Properties.SecurityGroupIngress).toBeUndefined()
 	})
 
-	test('the instance: private, encrypted, backed up, protected from deletion, its password a reference Control cannot read', () => {
+	test('the instance: private, encrypted, backed up, protected from deletion, its passwords references Control cannot read', () => {
 		expect(stack.stackName).toBe(AWS_DATABASE_STACK)
 		expect(resources.Database).toMatchObject({ DeletionPolicy: 'Snapshot', UpdateReplacePolicy: 'Snapshot' })
 		expect(resources.Database.Properties).toMatchObject({
@@ -67,9 +75,13 @@ describe("the installation's database", () => {
 			StorageEncrypted: true,
 			DeletionProtection: true,
 			BackupRetentionPeriod: 7,
-			MasterUserPassword: '{{resolve:ssm-secure:/fabrika/platform/database-password}}',
+			MasterUsername: 'fabrika_admin',
+			MasterUserPassword: '{{resolve:ssm-secure:/fabrika/platform/database/admin-password}}',
 		})
-		expect(AWS_DATABASE_PASSWORD_PARAMETER.startsWith('/fabrika/platform/')).toBe(true)
+		expect(resources.Database.Properties.DBName).toBeUndefined()
+		for (const parameter of [AWS_DATABASE_ADMIN_PASSWORD_PARAMETER, ...AWS_DATABASE_SERVICES.map(awsDatabasePasswordParameter)]) {
+			expect(parameter.startsWith('/fabrika/platform/database/')).toBe(true)
+		}
 		// No grant of Control's role reaches the platform's parameters.
 		const grants = JSON.stringify(
 			awsControlPolicies({
@@ -85,15 +97,78 @@ describe("the installation's database", () => {
 		expect(grants).not.toContain('parameter/fabrika/platform')
 	})
 
-	test('the outputs are read back, one of another form refused, and the URL requires TLS with its password escaped', () => {
+	test('the outputs are read back, one of another form refused, and each URL names its own user and database over TLS', () => {
 		const outputs = awsDatabaseOutputs(OUTPUTS)
 		expect(outputs).toEqual({ host: OUTPUTS.DatabaseHost, port: 5432, clientGroupId: 'sg-0123456789abcdef4' })
 		expect(() => awsDatabaseOutputs({ ...OUTPUTS, DatabaseHost: 'example.com' })).toThrow('DatabaseHost')
 		expect(() => awsDatabaseOutputs({ ...OUTPUTS, DatabasePort: 'x' })).toThrow('DatabasePort')
 		expect(() => awsDatabaseOutputs({ ...OUTPUTS, DatabaseClientGroupId: '' })).toThrow('DatabaseClientGroupId')
-		expect(awsDatabaseUrl(outputs, 'p@ss/word:with#sigils')).toBe(
-			`postgres://fabrika:p%40ss%2Fword%3Awith%23sigils@${OUTPUTS.DatabaseHost}:5432/fabrika?sslmode=require`,
+		expect(awsDatabaseUrl(outputs, 'iam', PASSWORDS.iam)).toBe(
+			`postgres://fabrika_iam:${PASSWORDS.iam}@${OUTPUTS.DatabaseHost}:5432/fabrika_iam?sslmode=require`,
 		)
-		expect(() => awsDatabaseUrl(outputs, 'short')).toThrow('16 characters')
+		expect(awsDatabaseUrl(outputs, 'operations', PASSWORDS.operations)).toContain('/fabrika_operations?sslmode=require')
+		expect(awsDatabaseAdminUrl(outputs, ADMIN_PASSWORD)).toBe(
+			`postgres://fabrika_admin:${ADMIN_PASSWORD}@${OUTPUTS.DatabaseHost}:5432/postgres?sslmode=require`,
+		)
+		// Letters and digits alone, 32 at least: nothing to escape in a literal or a URL.
+		expect(() => awsDatabaseUrl(outputs, 'iam', 'short')).toThrow('32 to 128 letters and digits')
+		expect(() => awsDatabaseUrl(outputs, 'iam', `${PASSWORDS.iam}'`)).toThrow('letters and digits')
+	})
+})
+
+const PASSWORDS: Readonly<Record<AwsDatabaseService, string>> = {
+	iam: 'Iam0123456789abcdefghijABCDEFGHIJ',
+	control: 'Control0123456789abcdefghijABCDE',
+	operations: 'Operations0123456789abcdefghijAB',
+}
+const ADMIN_PASSWORD = 'Admin0123456789abcdefghijABCDEFG'
+
+/** A session that answers each probe from a set of existing names and records what ran. */
+function fakeSession(existing: ReadonlySet<string>, failOn?: string): { session: AwsDatabaseSession; ran: string[] } {
+	const ran: string[] = []
+	const session: AwsDatabaseSession = {
+		count: async (_text, params) => (params.some((param) => existing.has(param)) ? 1 : 0),
+		execute: async (statement) => {
+			if (failOn !== undefined && statement.includes(failOn)) throw new Error(`driver error quoting ${statement}`)
+			ran.push(statement)
+		},
+	}
+	return { session, ran }
+}
+
+describe("the services' users and databases", () => {
+	test('a fresh instance: each service gets a user, the master SET on it, a database it owns, closed to everyone else', async () => {
+		const { session, ran } = fakeSession(new Set())
+		await runAwsDatabaseSetup(session, awsDatabaseSetupSteps(PASSWORDS))
+		expect(ran.slice(0, 4)).toEqual([
+			`CREATE ROLE "fabrika_iam" WITH LOGIN PASSWORD '${PASSWORDS.iam}'`,
+			'GRANT "fabrika_iam" TO CURRENT_USER WITH SET TRUE, INHERIT FALSE',
+			'CREATE DATABASE "fabrika_iam" OWNER "fabrika_iam"',
+			'REVOKE ALL ON DATABASE "fabrika_iam" FROM PUBLIC',
+		])
+		expect(ran).toHaveLength(12)
+		for (const service of ['control', 'operations']) expect(ran).toContain(`CREATE DATABASE "fabrika_${service}" OWNER "fabrika_${service}"`)
+		// No service's user is granted another's role or database.
+		expect(ran.filter((statement) => statement.startsWith('GRANT')).every((statement) => statement.includes('TO CURRENT_USER'))).toBe(true)
+	})
+
+	test('an upgrade: what exists is brought to the same state, each password set to its parameter', async () => {
+		const { session, ran } = fakeSession(new Set(['fabrika_iam', 'fabrika_control', 'fabrika_operations']))
+		await runAwsDatabaseSetup(session, awsDatabaseSetupSteps(PASSWORDS))
+		expect(ran.some((statement) => statement.startsWith('CREATE'))).toBe(false)
+		expect(ran).toContain(`ALTER ROLE "fabrika_control" WITH LOGIN PASSWORD '${PASSWORDS.control}'`)
+		expect(ran).toContain('ALTER DATABASE "fabrika_control" OWNER TO "fabrika_control"')
+	})
+
+	test('a failing step is named by its label, never by its statement, which carries a password', async () => {
+		const { session } = fakeSession(new Set(), 'CREATE ROLE "fabrika_control"')
+		const failure = await runAwsDatabaseSetup(session, awsDatabaseSetupSteps(PASSWORDS)).catch((error: unknown) => error)
+		expect(failure).toBeInstanceOf(Error)
+		expect(String(failure)).toContain('the user fabrika_control')
+		expect(String(failure)).not.toContain(PASSWORDS.control)
+	})
+
+	test('a password of another form is refused before any statement is built', () => {
+		expect(() => awsDatabaseSetupSteps({ ...PASSWORDS, operations: "x'; DROP DATABASE fabrika_iam; --" })).toThrow('letters and digits')
 	})
 })
