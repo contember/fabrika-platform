@@ -324,7 +324,7 @@ describe('approval modes', () => {
 		expect(settingsSummary(STRICT_SETTINGS, STRICT_POLICY)).toBe(
 			'An agent asks to deploy merged commits only. A request waits 24 h for a decision. A key an agent asks for holds only actions the agent holds. '
 				+ `A passkey confirms deciding: ${categoryLabel('credentials')}. `
-				+ "An agent writing as a person takes a passkey; until IAM's approval page asks for one, agents only read here.",
+				+ "An agent writing as a person takes a passkey, confirmed on IAM's approval page.",
 		)
 		// A refused agent-write is in what waits, not in the settings.
 		expect(settingsSummary(STRICT_SETTINGS, { ...STRICT_POLICY, 'agent-write': 'refuse' })).not.toContain('agent writing')
