@@ -173,6 +173,28 @@ describe('ecsClient', () => {
 		await expect(ecsClient(options).registerTaskDefinition(definition)).rejects.toMatchObject({ code: 'invalid_answer' })
 	})
 
+	test('a definition that names X86_64 runs on it, and a Service Connect client publishes no service', async () => {
+		const registered = fakeAws(ECS, {
+			RegisterTaskDefinition: () => ({ taskDefinition: { taskDefinitionArn: TASK_DEFINITION, family: 'notes-prod', revision: 42 } }),
+		})
+		await ecsClient(registered.options).registerTaskDefinition({ ...definition, architecture: 'X86_64' })
+		expect(registered.calls[0]?.body).toMatchObject({ runtimePlatform: { cpuArchitecture: 'X86_64', operatingSystemFamily: 'LINUX' } })
+
+		const client = { namespaceArn: connect.namespaceArn }
+		const updated = fakeAws(ECS, { UpdateService: () => ({ service }) })
+		await ecsClient(updated.options).updateService(address, TASK_DEFINITION, serviceNetwork, client)
+		expect(updated.calls[0]?.body).toMatchObject({ serviceConnectConfiguration: { enabled: true, namespace: connect.namespaceArn } })
+		expect(updated.calls[0]?.body).not.toHaveProperty('serviceConnectConfiguration.services')
+		const created = fakeAws(ECS, { CreateService: () => ({ service }) })
+		await ecsClient(created.options).createService({ ...create, serviceConnect: client })
+		expect(created.calls[0]?.body).toMatchObject({ serviceConnectConfiguration: { enabled: true, namespace: connect.namespaceArn } })
+		expect(created.calls[0]?.body).not.toHaveProperty('serviceConnectConfiguration.services')
+		// A client's namespace is checked as a server's is.
+		await expect(ecsClient(updated.options).updateService(address, TASK_DEFINITION, serviceNetwork, { namespaceArn: 'ns-1' })).rejects.toThrow(
+			'the Service Connect namespace',
+		)
+	})
+
 	test('updates the service to the revision in the network with the circuit breaker on and ECS Exec off, and reads the service it answers', async () => {
 		const { options, calls } = fakeAws(ECS, { UpdateService: () => ({ service }) })
 		expect(await ecsClient(options).updateService(address, TASK_DEFINITION, serviceNetwork, connect)).toEqual(read)

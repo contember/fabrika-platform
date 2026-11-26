@@ -69,7 +69,7 @@ export interface EcsContainer {
 	readonly log: { readonly group: string; readonly region: string; readonly streamPrefix: string }
 }
 
-/** A Fargate task definition on ARM64 with `awsvpc` networking. */
+/** A Fargate task definition with `awsvpc` networking, on ARM64 unless it names its architecture. */
 export interface EcsTaskDefinition {
 	readonly family: string
 	/** The role the application's own code runs as. Never the execution role. */
@@ -86,6 +86,8 @@ export interface EcsTaskDefinition {
 	readonly memory: number
 	readonly containers: readonly EcsContainer[]
 	readonly tags: Readonly<Record<string, string>>
+	/** The CPU architecture the tasks run on; absent, ARM64. A namespace proxy's is X86_64: its binary is an x64 one. */
+	readonly architecture?: 'ARM64' | 'X86_64'
 }
 
 /** A registered revision. */
@@ -188,7 +190,7 @@ export interface EcsServiceCreate extends EcsServiceAddress {
 	/** The idempotency token, at most 36 characters: one per run, so a lost answer is settled by repeating the call. */
 	readonly clientToken: string
 	readonly tags: Readonly<Record<string, string>>
-	readonly serviceConnect: EcsServiceConnect
+	readonly serviceConnect: EcsServiceConnect | EcsServiceConnectClient
 }
 
 /** The name a container's port is published under, which Service Connect addresses it by. */
@@ -205,6 +207,14 @@ export interface EcsServiceConnect {
 	/** A DNS label: a lowercase letter, then lowercase letters, digits and hyphens, at most 63. */
 	readonly discoveryName: string
 	readonly port: number
+}
+
+/**
+ * A service in a Service Connect namespace as a client only: it resolves and dials the namespace's services, and
+ * publishes none of its own (a namespace proxy, which the balancer reaches, not another service).
+ */
+export interface EcsServiceConnectClient {
+	readonly namespaceArn: string
 }
 
 /** A service deployment's state; a circuit breaker's rollback is a state of the same deployment. */
@@ -252,7 +262,7 @@ export interface EcsClient {
 		address: EcsServiceAddress,
 		taskDefinitionArn: string,
 		network: EcsNetwork,
-		serviceConnect: EcsServiceConnect,
+		serviceConnect: EcsServiceConnect | EcsServiceConnectClient,
 		signal?: AbortSignal,
 	): Promise<EcsService>
 	/** The service, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
@@ -523,8 +533,10 @@ const DISCOVERY_NAME = /^[a-z][a-z0-9-]{0,62}$/
  * The `serviceConnectConfiguration` ECS takes, after every value was checked: the service publishes its named port
  * under its discovery name, at that name and port for the namespace's clients.
  */
-function serviceConnectOf(connect: EcsServiceConnect): Record<string, unknown> {
+function serviceConnectOf(connect: EcsServiceConnect | EcsServiceConnectClient): Record<string, unknown> {
 	if (!SERVICE_CONNECT_ARN.test(connect.namespaceArn)) refuse('the Service Connect namespace')
+	// A client publishes nothing: no service, so no name in the namespace that anything could dial.
+	if (!('discoveryName' in connect)) return { enabled: true, namespace: connect.namespaceArn }
 	if (!DISCOVERY_NAME.test(connect.discoveryName) || connect.discoveryName.endsWith('-')) refuse('the discovery name')
 	if (!Number.isInteger(connect.port) || connect.port < 1 || connect.port > 65535) refuse('the Service Connect port')
 	return {
@@ -581,7 +593,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 					requiresCompatibilities: ['FARGATE'],
 					cpu: String(definition.cpu),
 					memory: String(definition.memory),
-					runtimePlatform: { cpuArchitecture: 'ARM64', operatingSystemFamily: 'LINUX' },
+					runtimePlatform: { cpuArchitecture: definition.architecture ?? 'ARM64', operatingSystemFamily: 'LINUX' },
 					containerDefinitions: definition.containers.map((container) => containerOf(container, names)),
 					tags: tagsOf(definition.tags),
 				},

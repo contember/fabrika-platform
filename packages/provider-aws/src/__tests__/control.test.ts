@@ -15,7 +15,7 @@ import type {
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
-import type { EcsNetwork, EcsService, EcsServiceConnect } from '../aws/ecs'
+import type { EcsNetwork, EcsService, EcsServiceConnect, EcsServiceConnectClient } from '../aws/ecs'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, awsAppTargetCodec, awsNamespaceTargetCodec } from '../codecs'
 import {
@@ -101,7 +101,7 @@ class Recorder implements ProviderRunEvents {
 class Fake {
 	readonly calls: string[] = []
 	readonly networks: EcsNetwork[] = []
-	readonly connects: EcsServiceConnect[] = []
+	readonly connects: (EcsServiceConnect | EcsServiceConnectClient)[] = []
 	readonly parameters = new Map<string, string>([
 		[`${ENV_PATH}/${OLDEST}.API_TOKEN`, 'oldest'],
 		[`${ENV_PATH}/${OLDER}.API_TOKEN`, 'older'],

@@ -7,7 +7,7 @@
 import type { DeployStepResult, JsonValue, ProviderRunEvents } from '@fabrika/provider-contract'
 import { describe, expect, setSystemTime, test } from 'bun:test'
 import type { CodeBuildStatus } from '../aws/codebuild'
-import type { EcsNetwork, EcsService, EcsServiceConnect, EcsServiceDeploymentStatus } from '../aws/ecs'
+import type { EcsNetwork, EcsService, EcsServiceConnect, EcsServiceConnectClient, EcsServiceDeploymentStatus } from '../aws/ecs'
 import type { S3PartWriter } from '../aws/s3'
 import { AwsError } from '../aws/transport'
 import { awsDeploy, type AwsDeployInput } from '../deploy'
@@ -54,7 +54,7 @@ class FakeAws {
 	/** The networks a create, an update and each init task were sent. */
 	readonly networks: EcsNetwork[] = []
 	/** The Service Connect configurations a create and an update were sent. */
-	readonly connects: EcsServiceConnect[] = []
+	readonly connects: (EcsServiceConnect | EcsServiceConnectClient)[] = []
 	logPages: { readonly message: string; readonly cursor: string; readonly atEnd: boolean }[] = [
 		{ message: 'Step 1/9 : FROM oven/bun\nStep 2/9 : RUN bun install\n', cursor: 'f/2', atEnd: false },
 	]

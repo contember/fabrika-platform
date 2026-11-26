@@ -455,8 +455,18 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     namespace whose image is of the current manifest starts nothing, and `normalize` refuses a submitted image as it
     refuses a submitted build. The attempt and the image are keyed by the manifest alone because the pin is theirs:
     every move of a pin goes through `withProxyPin`, which drops both, so the moved pin's commit is built next.
-    Not yet: the proxy service (relaying the build's log into an operator's view; its ECS service in the Service Connect
-    namespace, on X86_64, running the recorded image; `republish`, which will start and follow the build),
+    **The proxy's service** (built, `src/proxy-service.ts`; nothing calls it yet): the namespace stack holds the proxy's
+    log group, a task role with no permission (the proxy calls no AWS API) and an execution role that pulls the
+    namespace's proxy images, writes that log group and reads the namespace's `env/` parameters, both under the boundary.
+    `ensureAwsProxyService` writes the IAM key and each routed member's proxy secret to SecureStrings under `env/`,
+    registers the recorded image's task definition on X86_64 (the issuer plain, every secret by ARN, a health check on
+    :8081), records the revision with its image before the call that sets the service to it, then creates the service
+    `ns_<id>_<env>_proxy` (its token derived from the image) or updates it, as a Service Connect client of the
+    namespace (no published name) in the installation's subnets behind the proxy's group, and records the update. A
+    service of this image already updated is answered with no call; a draining one is refused, retryably.
+    Not yet: the proxy service's rollout and its verdict, deleting the secrets of members no longer routed (once a rollout
+    succeeded, because a rollback reads an older revision's), Control's configuration of the IAM issuer and key, relaying
+    the build's log to an operator, and `republish`, which will start and follow the build and set the service; then
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
     application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
@@ -495,7 +505,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         `repository/fabrika/namespaces/*`, the log group writes on `log-group:/fabrika/namespaces/*`, and `iam:PassRole`
         on `role/fabrika/namespaces/*` with `iam:PassedToService = codebuild.amazonaws.com`; the project is already
         under `project/fabrika_*`. Running the build adds the SSM calls on `parameter/fabrika/namespaces/*` and the log
-        reads on `log-group:/fabrika/namespaces/*`;
+        reads on `log-group:/fabrika/namespaces/*`. The proxy's service adds `iam:PassRole` on
+        `role/fabrika/namespaces/*` with `iam:PassedToService = ecs-tasks.amazonaws.com` (its task definition names its two
+        roles); its ECS calls are on `service/<cluster>/*` already;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;

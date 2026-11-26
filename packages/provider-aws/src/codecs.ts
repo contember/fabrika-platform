@@ -100,6 +100,15 @@ export interface AwsNamespaceTarget {
 	readonly proxyBuildId?: string
 	readonly proxyImageDigest?: string
 	readonly proxyImageManifestSha256?: string
+	/**
+	 * The proxy's service (ADR-0044): `proxyServiceTaskDefinitionArn` and `proxyServiceImageDigest` (the revision
+	 * registered for an image, and that image) are recorded before the call that sets the service to it, so a retry
+	 * reuses the revision and `CreateService`'s token always comes with the same body; `proxyServiceUpdated` once the
+	 * call was answered.
+	 */
+	readonly proxyServiceTaskDefinitionArn?: string
+	readonly proxyServiceImageDigest?: string
+	readonly proxyServiceUpdated?: true
 }
 
 /**
@@ -153,7 +162,16 @@ const namespaceTargetSchema = z.object({
 	proxyBuildId: z.string().regex(BUILD_ID).optional(),
 	proxyImageDigest: z.string().regex(CONTRACT_DIGEST).optional(),
 	proxyImageManifestSha256: z.string().regex(SHA256_HEX).optional(),
-}).strict().refine((target) => (target.proxyImageDigest === undefined) === (target.proxyImageManifestSha256 === undefined), {
+	proxyServiceTaskDefinitionArn: z.string().regex(TASK_DEFINITION_ARN).optional(),
+	proxyServiceImageDigest: z.string().regex(CONTRACT_DIGEST).optional(),
+	proxyServiceUpdated: z.literal(true).optional(),
+}).strict().refine((target) => (target.proxyServiceTaskDefinitionArn === undefined) === (target.proxyServiceImageDigest === undefined), {
+	message: "the proxy service's revision is recorded with its image",
+	path: ['proxyServiceImageDigest'],
+}).refine((target) => target.proxyServiceUpdated === undefined || target.proxyServiceTaskDefinitionArn !== undefined, {
+	message: "the proxy service's update is recorded with its revision",
+	path: ['proxyServiceTaskDefinitionArn'],
+}).refine((target) => (target.proxyImageDigest === undefined) === (target.proxyImageManifestSha256 === undefined), {
 	message: "the proxy's image is recorded with its manifest's digest",
 	path: ['proxyImageManifestSha256'],
 }).refine(
