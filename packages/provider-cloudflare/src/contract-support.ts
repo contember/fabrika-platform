@@ -160,6 +160,19 @@ export const SCHEMA_CHECK_CONFIG_SINCE = '0.9.0-dev.23'
 export const namesSchemaCheckConfig = (release: string): boolean => releaseFrom(release, SCHEMA_CHECK_CONFIG_SINCE)
 
 /**
+ * The first framework release whose object records a migration bookmark before it migrates, migrates in one
+ * transaction and answers a failed migration with a 422 `migration_failed` (ADR-0069 §3). `release:validate` refuses a
+ * release at or above it whose framework source lacks that boot.
+ */
+export const MIGRATION_BOOKMARK_SINCE = '0.9.0-dev.49'
+
+/**
+ * Whether the Worker of release `release` binds its version metadata, and whether Control migrates it without a
+ * read-only window and a backup: its object records a bookmark it can be rewound to instead (ADR-0069 §3).
+ */
+export const recordsMigrationBookmark = (release: string): boolean => releaseFrom(release, MIGRATION_BOOKMARK_SINCE)
+
+/**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation
  * mail and token purposes all need the object's database or a Worker secret it never reads.
  */

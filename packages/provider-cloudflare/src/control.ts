@@ -31,6 +31,7 @@ import {
 	assertCloudflareContract,
 	assertStatelessEnvironment,
 	capsJobSegments,
+	recordsMigrationBookmark,
 	runsInObject,
 	servesDataOperations,
 	servesOps,
@@ -408,6 +409,8 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 	opsChannel: (access) => servesOps(applicationRelease(access)),
 	// From the release whose object holds the barrier; the 0.9.0 prereleases before it serve only `inspect`.
 	dataOperations: (access) => servesOps(applicationRelease(access)) && servesDataOperations(applicationRelease(access)),
+	// From the release whose object records a bookmark and binds its version metadata; the deploy writes that binding.
+	migrationBookmark: (access) => servesOps(applicationRelease(access)) && recordsMigrationBookmark(applicationRelease(access)),
 	normalizeRegistration,
 	// A key Control re-issues reaches the application Worker as a secret of a new version, without a deploy.
 	managedCredentials: {

@@ -2,6 +2,7 @@ import {
 	CLOUDFLARE_APPLICATION_BINDING,
 	CLOUDFLARE_APPLICATION_CLASS,
 	CLOUDFLARE_FILES_BINDING,
+	CLOUDFLARE_VERSION_BINDING,
 	type ContractCheck,
 	contractChecks,
 	GENERATED_ENTRY_FILE,
@@ -35,7 +36,7 @@ import { contractProxyTable, FABRIKA_PROXY_MANIFEST_JSON } from '@fabrika/proxy-
 import { createHash } from 'node:crypto'
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises'
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path'
-import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
+import { DurableObject, type GeneratedConfig, R2Bucket, ServiceReference, VersionMetadata, Worker } from 'oblaka-iac'
 import { assertLiteralAssets } from './assets'
 import type { CloudflareAppConfig } from './authoring'
 import {
@@ -57,6 +58,7 @@ import {
 	namesSchemaCheckConfig,
 	needsMinuteTick,
 	pinsGeneratedEntry,
+	recordsMigrationBookmark,
 	runsInObject,
 	servesAlarms,
 	servesOps,
@@ -125,7 +127,7 @@ type ApplicationTarget = Pick<
 >
 
 /** The bindings the platform writes into a contract application's Worker (ADR-0065). */
-const PLATFORM_BINDINGS: ReadonlySet<string> = new Set([CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING])
+const PLATFORM_BINDINGS: ReadonlySet<string> = new Set([CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_FILES_BINDING, CLOUDFLARE_VERSION_BINDING])
 
 /** An application never names a variable only the platform writes, whether or not this deploy writes it. */
 const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Worker, run: ApplicationTarget): void => {
@@ -140,6 +142,13 @@ const assertNoFrameworkVariables = (config: CloudflareAppConfig, application: Wo
 	const reserved = authored.find((name) => isFrameworkVariableName(name) || PLATFORM_BINDINGS.has(name))
 	if (reserved !== undefined) {
 		throw new Error(`cloudflare: application variable \`${reserved}\` is managed by Fabrika`)
+	}
+	// A Worker holds one version metadata binding, so an authored one under another name would be replaced by the platform's.
+	const version = Object.entries(application.options.bindings ?? {}).find(([, binding]) => binding instanceof VersionMetadata)
+	if (version !== undefined) {
+		throw new Error(
+			`cloudflare: application Worker binds version metadata as \`${version[0]}\`; only the platform binds it, as \`${CLOUDFLARE_VERSION_BINDING}\``,
+		)
 	}
 	if (application.options.triggers !== undefined) {
 		throw new Error(`cloudflare: application Worker \`${application.options.name}\` sets \`triggers\`; the platform writes its cron triggers`)
@@ -209,10 +218,17 @@ const repairTick = (run: ApplicationTarget): string => {
  * What the platform gives a contract application's Worker; the deployer writes exactly this and the bounds check it.
  * Only a release Control names serves alarms; a local deploy keeps the minute tick.
  */
-const applicationRuntime = (run: ApplicationTarget, contract: ContractArtifact, entry: string | null, alarms: boolean): ApplicationRuntime => ({
+const applicationRuntime = (
+	run: ApplicationTarget,
+	contract: ContractArtifact,
+	entry: string | null,
+	alarms: boolean,
+	version: boolean,
+): ApplicationRuntime => ({
 	filesBucket: filesBucketRemote(run),
 	crons: needsMinuteTick(contract) ? [alarms ? repairTick(run) : MINUTE_TICK] : [],
 	entry,
+	version,
 })
 
 /** Where the check step works: the application directory, beside its config and contract, and the config it reads. */
@@ -428,7 +444,8 @@ const objectVariables = (objects: ApplicationObjects): Readonly<Record<string, s
  * Bind the application's Durable Object, which runs the application over its SQLite, the environment's files bucket,
  * and its cron trigger (ADR-0065), and on a release that serves ops name its objects. The object is bound first, so
  * oblaka numbers its migration `v0001` whatever else the application binds, and the tag never moves. With `assets`,
- * the Worker also gets the Workers Assets the deploy stages the mounts' files into (`SPA_ASSETS`).
+ * the Worker also gets the Workers Assets the deploy stages the mounts' files into (`SPA_ASSETS`). A release that
+ * records a migration bookmark gets its version metadata, which names the version in the record (ADR-0069 §3).
  */
 const withApplicationRuntime = (
 	authored: Worker,
@@ -446,6 +463,7 @@ const withApplicationRuntime = (
 			[CLOUDFLARE_APPLICATION_BINDING]: new DurableObject({ name: `${run.appId}-application`, className: CLOUDFLARE_APPLICATION_CLASS }),
 			...application.options.bindings,
 			[CLOUDFLARE_FILES_BINDING]: new R2Bucket({ name: filesBucketName(run.appId) }),
+			...(runtime.version ? { [CLOUDFLARE_VERSION_BINDING]: new VersionMetadata() } : {}),
 		},
 		// Always written: wrangler leaves a Worker's schedules alone when `triggers` is absent, and clears them on `[]`.
 		triggers: { crons: [...runtime.crons] },
@@ -1014,7 +1032,10 @@ export const createCloudflareDeployer = (options: CloudflareDeployerOptions) => 
 	const objectRuntime = run.approved === undefined || (run.approved.framework !== undefined && runsInObject(run.approved.framework))
 	const entry = release !== undefined && pinsGeneratedEntry(release) ? resolve(loaded.cwd, GENERATED_ENTRY_FILE) : null
 	const alarms = release !== undefined && servesAlarms(release)
-	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime ? applicationRuntime(run, contract, entry, alarms) : null
+	const version = release !== undefined && recordsMigrationBookmark(release)
+	const runtime = platformResources === 'refuse' && contract !== null && objectRuntime
+		? applicationRuntime(run, contract, entry, alarms, version)
+		: null
 	const managed = withManagedEnvironment(loaded.config, proxied, run, contractEnvironment(run.managedEnvironment, served))
 	const identified = platformResources === 'refuse'
 		? withIamIdentity(managed.worker, appEnvironmentId(run.appId, run.env), run.iamService)
@@ -1189,5 +1210,5 @@ export const composeLocalApplication = (options: LocalApplicationOptions): Worke
 			'composeLocalApplication: the contract serves SPA files; stage them first with `await stageLocalAssets(contract, <application root>)` and pass its result as `assets`',
 		)
 	}
-	return withManifestVariable(withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true), false, spaAssets))
+	return withManifestVariable(withApplicationRuntime(connected, target, applicationRuntime(target, contract, null, true, false), false, spaAssets))
 }

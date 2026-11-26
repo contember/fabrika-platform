@@ -5,6 +5,7 @@ import {
 	capsJobSegments,
 	needsMinuteTick,
 	pinsGeneratedEntry,
+	recordsMigrationBookmark,
 	runsInObject,
 	servesAlarms,
 	servesDataOperations,
@@ -84,6 +85,31 @@ describe('the release gates', () => {
 			expect(servesRawSql(release)).toBe(false)
 		})
 	}
+})
+
+describe('recordsMigrationBookmark (ADR-0069 §3)', () => {
+	const cases: ReadonlyArray<readonly [string, boolean]> = [
+		['0.9.0-dev.49', true],
+		['0.9.0-dev.50', true],
+		['0.9.0', true],
+		['1.0.0', true],
+		['0.9.0-dev.48', false],
+		['0.9.0-dev.5', false],
+		['0.9.0-cloudflare.2', false],
+		['0.8.12', false],
+		...PUBLISHED_PRERELEASES.map((release): readonly [string, boolean] => [release, false]),
+	]
+	for (const [release, expected] of cases) {
+		test(`${release} ${expected ? 'records' : 'records no'} migration bookmark`, () => {
+			expect(recordsMigrationBookmark(release)).toBe(expected)
+		})
+	}
+
+	test("it reads the application's pin: a dev.48 pin under a newer checker, and an access without a pin, record none", () => {
+		expect(recordsMigrationBookmark(applicationRelease({ checker: '0.9.0', framework: '0.9.0-dev.48' }))).toBe(false)
+		expect(recordsMigrationBookmark(applicationRelease({ checker: '0.9.0' }))).toBe(false)
+		expect(recordsMigrationBookmark(applicationRelease({ checker: '0.9.0-dev.48', framework: '0.9.0-dev.49' }))).toBe(true)
+	})
 })
 
 describe("the gates read the application's pin (applicationRelease), never the newer reader", () => {
