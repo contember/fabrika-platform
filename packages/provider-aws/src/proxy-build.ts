@@ -13,8 +13,9 @@
 // - The buildspec is one constant, as an application's (`build.ts`): every value of an attempt travels as a build
 //   variable, the presigned URL by its Parameter Store name only.
 //
-// Not yet: the recipe itself (`packages/proxy/Dockerfile` is not in the repository yet), the upload and the start
-// (`republish`), and the proxy's ECS service.
+// A commit pinned before the recipe existed has none, and its build fails at the buildspec's check, naming the file.
+//
+// Not yet: the upload and the start (`republish`), and the proxy's ECS service.
 //
 // UNVERIFIED: the builder image's name and what it carries (`curl`, `tar`, the AWS CLI, a Docker with BuildKit) follow
 // CodeBuild's documentation of its standard x86 image; none was checked against an account.

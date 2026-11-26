@@ -178,6 +178,31 @@ jobs:
       - name: Build proxy
         run: bun run --filter @fabrika/proxy build:check
 
+  # The namespace proxy's image, as the AWS build makes it: the commit's archive plus a compiled manifest, built by
+  # `packages/proxy/Dockerfile` for linux/amd64 and started once. Nothing is pushed and no registry is logged in to.
+  proxy-image:
+    name: Build the proxy image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-install-${{ runner.os }}-${{ hashFiles('.bun-version', 'bun.lock') }}
+          restore-keys: bun-install-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build and start the proxy image
+        run: bun run --filter @fabrika/provider-aws proxy-image:check
+
   release-artifacts:
     name: Verify release artifacts
     runs-on: ubuntu-latest

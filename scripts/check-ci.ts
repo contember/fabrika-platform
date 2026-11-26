@@ -74,6 +74,11 @@ export const BUILD_STEPS: readonly CiStep[] = [
 	{ job: 'build', name: 'Build proxy', run: 'bun run --filter @fabrika/proxy build:check' },
 ]
 
+/** These need docker: the namespace proxy's image, built from the committed tree (`git archive HEAD`) and started once. */
+export const PROXY_IMAGE_STEPS: readonly CiStep[] = [
+	{ job: 'proxy-image', name: 'Build and start the proxy image', run: 'bun run --filter @fabrika/provider-aws proxy-image:check' },
+]
+
 /** These need npm on PATH, as the CI job gets it from `setup-node`. */
 export const RELEASE_ARTIFACT_STEPS: readonly CiStep[] = [
 	{ job: 'release-artifacts', name: 'Pack public packages', run: 'bun run release:pack --tag=v0.0.0-ci.0' },
@@ -331,6 +336,12 @@ const run = async (results: StepResult[], skipped: string[]): Promise<void> => {
 	await runTestMatrix(env, testBackends(await dockerAvailable(), skipped), results)
 
 	for (const step of BUILD_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
+
+	if (await dockerAvailable()) {
+		for (const step of PROXY_IMAGE_STEPS) await runStep(step, `${step.job}: ${step.name}`, env, results)
+	} else {
+		skipped.push(`the proxy-image job (${PROXY_IMAGE_STEPS.map((step) => step.name).join(', ')}): docker is not available`)
+	}
 
 	if (Bun.which('npm') === null) {
 		skipped.push(`the release-artifacts job (${RELEASE_ARTIFACT_STEPS.map((step) => step.name).join(', ')}): npm is not on PATH`)

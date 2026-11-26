@@ -10,6 +10,7 @@ import {
 	POSTGRES_SETTINGS_STEP_NAME,
 	POSTGRES_TEST_SETTINGS,
 	postgresImage,
+	PROXY_IMAGE_STEPS,
 	QUALITY_STEPS,
 	RELEASE_ARTIFACT_STEPS,
 	S3_START_STEP_NAME,
@@ -47,7 +48,7 @@ describe('check:ci', () => {
 		const backends = [INSTALL_STEP.name, S3_START_STEP_NAME, POSTGRES_SETTINGS_STEP_NAME]
 		const rest = ciRunSteps().filter((step) => !backends.includes(step.name))
 		const testSteps = TEST_STEPS.map(({ job, name, run }) => ({ job, name, run }))
-		expect(rest).toEqual([...QUALITY_STEPS, ...testSteps, ...BUILD_STEPS, ...RELEASE_ARTIFACT_STEPS])
+		expect(rest).toEqual([...QUALITY_STEPS, ...testSteps, ...BUILD_STEPS, ...PROXY_IMAGE_STEPS, ...RELEASE_ARTIFACT_STEPS])
 	})
 
 	test('runs the test steps in the shards ci.yml runs them in', () => {
