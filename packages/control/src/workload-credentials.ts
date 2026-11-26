@@ -306,6 +306,7 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 			pending: handoff.pending ? 1 : 0,
 			handed_by: handoff.pending ? handoff.handedBy : null,
 			held_expires_at: handoff.pending ? held : null,
+			expiry_warned_at: null,
 		}
 		let recorded: boolean
 		try {

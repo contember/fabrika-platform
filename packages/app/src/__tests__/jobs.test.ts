@@ -262,6 +262,32 @@ describe.skipIf(!hasPostgres)('the job runner on Postgres', () => {
 		const refused = await logged(() => bootApp(jobsApp(hooks), { database, workloadTokens: refusing }).jobs.run('sweep'))
 		expect(refused.result).toEqual({ status: 'failed', attempts: 1, code: 'unauthorized' })
 		expect(refused.lines).toContain("fabrika: IAM refused the key of the job 'sweep': invalid_key")
+		// With an Operations DSN the refusal is an issue of its own, beside the run's `JobFailed`.
+		const envelopes: string[] = []
+		const reporting = jobsApp(hooks)
+		const operationsFetch = async (request: Request): Promise<Response> => {
+			envelopes.push(await request.text())
+			return new Response(null, { status: 202 })
+		}
+		await quietly(() =>
+			bootApp(reporting, {
+				database,
+				workloadTokens: refusing,
+				environment: environment({
+					...frameworkEnvFor(reporting),
+					FABRIKA_OPERATIONS_DSN: 'https://0123456789abcdef0123456789abcdef@operations.test/42',
+				}),
+				operationsFetch,
+			}).jobs.run('sweep')
+		)
+		const events = envelopes.map((envelope) => JSON.parse(envelope.split('\n')[2] ?? 'null'))
+		expect(events).toContainEqual(expect.objectContaining({
+			level: 'error',
+			logger: 'fabrika.workloads',
+			fingerprint: ['fabrika-workload-key-refused', 'job', 'sweep'],
+			tags: { workload_kind: 'job', workload: 'sweep', reason: 'invalid_key' },
+		}))
+		expect(events).toContainEqual(expect.objectContaining({ logger: 'fabrika.jobs', fingerprint: ['fabrika-job-failed', 'sweep'] }))
 		const down = await logged(() => bootApp(jobsApp(hooks), { database, workloadTokens: unreachable }).jobs.run('sweep'))
 		expect(down.result).toEqual({ status: 'failed', attempts: 1, code: 'iam_unavailable' })
 		expect(down.lines.join('\n')).not.toContain('ECONNREFUSED')

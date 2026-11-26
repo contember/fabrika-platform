@@ -122,8 +122,10 @@ export class Vozka extends WorkerEntrypoint<WorkerBindings> {
 	override async scheduled(_controller: ScheduledController): Promise<void> {
 		const env = this.control
 		const { opsTransport } = opsTransportDeps(env)
+		const operations = env.OPERATIONS
 		await runMaintenance(env, {
 			provider: cloudflareControlProvider(this.env, env),
+			...(operations === undefined ? {} : { operationsIngest: (request: Request) => operations.fetch(request) }),
 			// Without a vault Control holds no ops key, so it reaches no object and drives no data operation.
 			...(opsTransport === undefined ? {} : {
 				backups: async () => {

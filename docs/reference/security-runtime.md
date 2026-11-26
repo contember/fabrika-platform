@@ -152,8 +152,10 @@ not admit, in this order ([`dispatch.ts`](../../packages/app/src/implement/dispa
   key from the approved contract and exchanges it for a token carrying only its declared actions. A deploy reissues a
   key with less than half of its 30 days left, and so does Control's maintenance pass, which writes it to the running
   version without a deploy where the provider can (Cloudflare); the replaced key stays valid until its own expiry. On
-  another provider an environment not deployed for 30 days loses its workloads' keys
-  ([`packages/control/src/workload-credentials.ts`](../../packages/control/src/workload-credentials.ts),
+  another provider an environment not deployed for 30 days loses its workloads' keys. A week before a key the running
+  version holds expires, Control warns the application's Operations daily, and a refused key is an Operations issue of its
+  own ([operations errors](operations-errors.md#application-server-reports),
+  [`packages/control/src/workload-credentials.ts`](../../packages/control/src/workload-credentials.ts),
   [`workload-key-rotation.ts`](../../packages/control/src/workload-key-rotation.ts),
   [ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)).
 - **Sessions.** A password login lasts 30 days, an OIDC login the cap below

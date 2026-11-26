@@ -34,6 +34,7 @@ import {
 	vault,
 	workloadCredentialDeps,
 } from './services'
+import { warnExpiringWorkloadKeys, type WorkloadKeyExpirySummary } from './workload-key-expiry'
 import { NO_WORKLOAD_KEY_ROTATION, rotateWorkloadKeys, rotatingProvider, type WorkloadKeyRotationSummary } from './workload-key-rotation'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
@@ -63,6 +64,8 @@ export interface MaintenanceSummary {
 	backups: BackupScheduleSummary
 	/** Workload keys renewed before expiry and handed to the running version without a deploy. */
 	workloadKeys: WorkloadKeyRotationSummary
+	/** Environments warned through their Operations that a key the running version holds is about to expire. */
+	workloadKeyExpiry: WorkloadKeyExpirySummary
 }
 
 /** Seams a test drives. Production passes neither and gets the real clock + the global `fetch`. */
@@ -83,6 +86,11 @@ export interface MaintenanceOptions {
 	backups?: () => Promise<BackupScheduleSummary>
 	/** The installation's provider: an approval request whose effect it keeps (a secret) is settled by reading it back. */
 	provider?: ControlProvider
+	/**
+	 * How Control reaches an application's Operations ingest. The Worker passes its Operations binding, which serves the
+	 * ingest hostname too; without it, the global `fetch` to the ingest origin.
+	 */
+	operationsIngest?: (request: Request) => Promise<Response>
 }
 
 /**
@@ -168,6 +176,14 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 			`workload keys: written=${workloadKeys.written} confirmed=${workloadKeys.confirmed} busy=${workloadKeys.busy} failed=${workloadKeys.failed}`,
 		)
 	}
+	const workloadKeyExpiry = await warnExpiringWorkloadKeys({
+		repositories: persistence,
+		ingest: options.operationsIngest ?? ((request) => fetch(request)),
+		now,
+	})
+	if (workloadKeyExpiry.warned > 0 || workloadKeyExpiry.failed > 0) {
+		console.info(`workload key expiry: warned=${workloadKeyExpiry.warned} failed=${workloadKeyExpiry.failed}`)
+	}
 	const dev = options.devIdle === undefined ? { parked: 0, removed: 0, failed: 0 } : await options.devIdle()
 	if (dev.parked > 0 || dev.removed > 0 || dev.failed > 0) {
 		console.info(`dev environments: parked=${dev.parked} removed=${dev.removed} failed=${dev.failed}`)
@@ -183,7 +199,22 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `errored=${backups.errored}`,
 		)
 	}
-	return { poll, reconcile, swept, parked, requests, requestedKeys, iamGates, operations, releases, mail, dev, backups, workloadKeys }
+	return {
+		poll,
+		reconcile,
+		swept,
+		parked,
+		requests,
+		requestedKeys,
+		iamGates,
+		operations,
+		releases,
+		mail,
+		dev,
+		backups,
+		workloadKeys,
+		workloadKeyExpiry,
+	}
 }
 
 /** Without a provider that writes managed credentials, or without a vault and IAM, keys reach an application only by a deploy. */

@@ -22,6 +22,7 @@ import { createFetchHandler } from '../bun/server'
 import { runDeployJob } from '../consumer'
 import { runMaintenance } from '../cron'
 import { AppEnvChangedError, type AppEnvInput, type ControlRepositories, createControlRepositories } from '../db'
+import type { WorkloadCredentialRow } from '../db/workload-credentials'
 import type { Env } from '../env'
 import { type PublishGitHubConnectionInput } from '../github/connections/model'
 import { githubAppCredentialSecretLabel, githubManifestStateSecretLabel, githubWebhookSecretLabel } from '../github/connections/secrets'
@@ -75,6 +76,7 @@ async function reset(): Promise<void> {
 			'repo_poll_state',
 			'app_vars',
 			'app_secrets',
+			'app_env_workload_credentials',
 			'app_envs',
 			'app_env_protection',
 			'deployment_namespaces',
@@ -184,6 +186,7 @@ describe.skipIf(!hasPostgres)('migrations-postgres — the runner', () => {
 			{ bundle: 'control', name: '0040_approval_request_deliveries.sql' },
 			{ bundle: 'control', name: '0041_iam_gate_mirrors.sql' },
 			{ bundle: 'control', name: '0042_workload_key_handoff.sql' },
+			{ bundle: 'control', name: '0043_workload_key_expiry_warning.sql' },
 		])
 	})
 
@@ -936,6 +939,55 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(updated.last_polled_at).toBe(stamped + 5)
 		expect(updated.last_error).toBe('feed HTTP 500')
 		expect((await db.polling.getRepoPollState('public-app', 'prod'))?.last_seen_sha).toBe('bbb')
+	})
+
+	test('workload keys: a compare-and-set record, the due and expiring queries, hand-over and warning marks', async () => {
+		await reset()
+		await db.registry.createApp({ id: 'acme', repoUrl: 'github.com/acme/app' })
+		await db.registry.upsertAppEnv(providerEnvironment('acme', 'prod'))
+		const keys = db.workloadCredentials
+		const at = now()
+		const row: WorkloadCredentialRow = {
+			app_id: 'acme',
+			env: 'prod',
+			kind: 'job',
+			name: 'sweep',
+			value_ref: 'ref-1',
+			credential_id: 'key-1',
+			expires_at: at + 3 * 86_400,
+			pending: 0,
+			handed_by: null,
+			held_expires_at: null,
+			expiry_warned_at: null,
+		}
+		expect(await keys.put(row, null)).toBe(true)
+		expect(await keys.put({ ...row, credential_id: 'key-x' }, null)).toBe(false)
+		expect(await keys.listDue(at + 15 * 86_400)).toEqual([{ app_id: 'acme', env: 'prod' }])
+		expect(await keys.listExpiring(at + 7 * 86_400, at - 86_400)).toEqual([
+			{ app_id: 'acme', env: 'prod', kind: 'job', name: 'sweep', credential_id: 'key-1', expires_at: at + 3 * 86_400 },
+		])
+		await keys.markExpiryWarned('acme', 'prod', 'job', 'sweep', 'key-1', at)
+		expect(await keys.listExpiring(at + 7 * 86_400, at - 86_400)).toEqual([])
+
+		// A renewal recorded pending: the running version holds key-1 until a succeeded run or a write hands key-2.
+		const renewed: WorkloadCredentialRow = {
+			...row,
+			value_ref: 'ref-2',
+			credential_id: 'key-2',
+			expires_at: at + 30 * 86_400,
+			pending: 1,
+			held_expires_at: row.expires_at,
+		}
+		expect(await keys.put(renewed, 'key-x')).toBe(false)
+		expect(await keys.put(renewed, 'key-1')).toBe(true)
+		expect((await keys.listExpiring(at + 7 * 86_400, at - 86_400)).map((key) => key.expires_at)).toEqual([at + 3 * 86_400])
+		const run = await db.runs.createRun({ id: uuidv7(), appId: 'acme', env: 'prod', ref: 'refs/heads/main', trigger: 'manual', actor: 'user:test' })
+		await keys.markHandedBy('acme', 'prod', 'job', 'sweep', 'key-2', run.id)
+		await raw.prepare("UPDATE runs SET status = 'succeeded' WHERE id = ?").bind(run.id).run()
+		expect(await keys.listExpiring(at + 7 * 86_400, at - 86_400)).toEqual([])
+		await keys.confirm('acme', 'prod', 'job', 'sweep', 'key-2')
+		expect(await keys.list('acme', 'prod')).toEqual([{ ...renewed, pending: 0, handed_by: null, held_expires_at: null }])
+		expect(await keys.listDue(at + 15 * 86_400)).toEqual([])
 	})
 
 	test('operations catalog: a reconcile is recorded only while its writer holds the catalog lease', async () => {

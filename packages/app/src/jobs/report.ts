@@ -1,5 +1,6 @@
 // What the framework tells Operations, through the ingest every application already has (`FABRIKA_OPERATIONS_DSN`, the
-// Sentry envelope): a failed or missed job run, a request that answered 5xx, and a process that crashed. Operations
+// Sentry envelope): a failed or missed job run, a request that answered 5xx, a process that crashed, and a workload key
+// IAM refused. Operations
 // groups a framework report by its fingerprint and raises its new-issue and regression alerts, so each kind of
 // failure becomes one issue. What was thrown travels scrubbed as the report's cause chain (ADR-0059).
 
@@ -52,7 +53,7 @@ export function operationsTarget(dsn: string): OperationsTarget | null {
 }
 
 /** The envelope's `logger`: which part of the framework reported. */
-export type ReportSource = 'fabrika.jobs' | 'fabrika.requests' | 'fabrika.process'
+export type ReportSource = 'fabrika.jobs' | 'fabrika.requests' | 'fabrika.process' | 'fabrika.workloads'
 
 export interface OperationsReporterOptions {
 	readonly target: OperationsTarget
