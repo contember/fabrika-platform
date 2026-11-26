@@ -16,13 +16,14 @@
 //   draining service is refused, retryably.
 // - The service lives outside the namespace's stack and holds its security group, roles and log group, so an
 //   operator deletes the service first, then its parameters, then the stack (the namespace's instructions say so).
-// - No published port, no balancer yet: the proxy's group admits nothing until the balancer's host rules come.
+// - Behind the balancer: the service registers its tasks in the namespace stack's target group at the public port, on
+//   every create and update; the proxy's group admits only the balancer's group.
 //
 // - The rollout (`followAwsProxyRollout`): read through the service's current service deployment, as an application's
 //   run reads its own (`run-attempt.ts`), because the service's reads lag an update. Only a successful deployment of the
 //   recorded revision deletes the secrets of members no longer routed (a rollback to an older revision reads them).
 //
-// Not yet: the balancer.
+// Not yet: the listener's host rules and certificates, which send each member's host to the target group.
 //
 // UNVERIFIED: that a Service Connect configuration with a namespace and no services makes the tasks clients of it, and
 // that busybox `wget` is in the image's Alpine base, follow ECS's and Alpine's documentation; neither was checked here.
@@ -39,6 +40,9 @@ import { parameterArn, type SsmClient } from './aws/ssm'
 import type { AwsAppTarget, AwsNamespaceTarget } from './codecs'
 import type { AwsInstallationNetwork } from './environment-stack'
 import {
+	AWS_PROXY_HEALTH_PATH,
+	AWS_PROXY_HEALTH_PORT,
+	AWS_PROXY_PORT,
 	type AwsNamespaceOutputs,
 	awsNamespaceResources,
 	awsNamespaceTargetEnvelope,
@@ -48,9 +52,7 @@ import {
 } from './namespace'
 import { sha256Hex } from './proxy-attempt'
 
-/** The proxy's public listener and its health listener (`packages/proxy/src/caddy.ts`'s defaults). */
-export const AWS_PROXY_PORT = 8080
-export const AWS_PROXY_HEALTH_PORT = 8081
+export { AWS_PROXY_HEALTH_PATH, AWS_PROXY_HEALTH_PORT, AWS_PROXY_PORT }
 /** The proxy's container. */
 export const AWS_PROXY_CONTAINER = 'proxy'
 /** The smallest Fargate task: the proxy is Caddy and one Bun binary. */
@@ -126,7 +128,7 @@ export function awsProxyTaskDefinition(input: AwsProxyTaskInput): EcsTaskDefinit
 			secrets,
 			// Caddy's health route alone, on its own listener: the public one answers only the routes of the manifest.
 			healthCheck: {
-				command: ['CMD', 'wget', '-q', '-O', '/dev/null', `http://127.0.0.1:${AWS_PROXY_HEALTH_PORT}/healthz`],
+				command: ['CMD', 'wget', '-q', '-O', '/dev/null', `http://127.0.0.1:${AWS_PROXY_HEALTH_PORT}${AWS_PROXY_HEALTH_PATH}`],
 				intervalSeconds: 10,
 				timeoutSeconds: 5,
 				retries: 3,
@@ -220,7 +222,12 @@ async function ensure(input: AwsProxyServiceInput): Promise<ProviderDeploymentNa
 	await input.events.boundary()
 	const address = { cluster: installation.cluster, service: resources.service }
 	const network = { subnets: input.network.subnets, securityGroups: [input.outputs.proxySecurityGroupId], publicIp: input.network.publicIp }
-	const serviceConnect = { namespaceArn: input.outputs.serviceConnectNamespaceArn }
+	// The balancer's target group is the namespace stack's own, which keeps it for the stack's life (only a changed VPC
+	// replaces it), so it is not in the fingerprint: it is sent on every create and update.
+	const serviceConnect = {
+		namespaceArn: input.outputs.serviceConnectNamespaceArn,
+		balancer: { targetGroupArn: input.outputs.proxyTargetGroupArn, container: AWS_PROXY_CONTAINER, port: AWS_PROXY_PORT },
+	}
 	const existing = await clients.ecs.describeService(address, signal)
 	if (existing?.status === 'draining') {
 		throw new ProviderNamespaceError(`aws: the proxy service ${resources.service} is being deleted; try again once it is gone`, 'awsProxyService', true)

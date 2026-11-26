@@ -11,7 +11,14 @@ import type { EcsService } from '../aws/ecs'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsAppsPermissionsBoundary } from '../environment-stack'
-import { awsNamespaceCapabilities, awsNamespaceResources, awsNamespaceStack, namespaceOutputsOf, readNamespaceOutputs } from '../namespace'
+import {
+	awsNamespaceCapabilities,
+	awsNamespaceResources,
+	awsNamespaceStack,
+	checkInstallationBalancer,
+	namespaceOutputsOf,
+	readNamespaceOutputs,
+} from '../namespace'
 import { AWS_PROXY_BUILD_IMAGE, AWS_PROXY_BUILDSPEC } from '../proxy-build'
 import { awsNamespaceMemberHosts } from '../proxy-manifest'
 import { awsEnvironmentResources } from '../resources'
@@ -24,6 +31,7 @@ const installation: AwsAppTarget = {
 	sourcesBucket: 'fabrika-sources-123456789012',
 }
 const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0'], publicIp: true }
+const balancer = { securityGroupId: 'sg-0123456789abcdef1', vpcCidr: '10.0.0.0/16' }
 /** The installation's proxy source; an older release's commit, which a namespace may keep. */
 const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
 const OLDER_COMMIT = 'fedcba9876543210fedcba9876543210fedcba98'
@@ -31,6 +39,7 @@ const STACK_ID = 'arn:aws:cloudformation:eu-central-1:123456789012:stack/fabrika
 const OUTPUTS = {
 	ProxySecurityGroupId: 'sg-0123456789abcdef7',
 	ServiceConnectNamespaceArn: 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-abcdefghij123456',
+	ProxyTargetGroupArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Proxy-1A2B3C4D/0123456789abcdef',
 }
 
 const target = (change: Record<string, string> = {}) => ({
@@ -106,7 +115,14 @@ class Fake {
 			},
 		},
 	}
-	readonly capabilities = awsNamespaceCapabilities({ installation, network, proxySource: PROXY_SOURCE, clients: this.clients, sleep: async () => {} })
+	readonly capabilities = awsNamespaceCapabilities({
+		installation,
+		network,
+		balancer,
+		proxySource: PROXY_SOURCE,
+		clients: this.clients,
+		sleep: async () => {},
+	})
 }
 
 const mutation = (namespace: ProviderDeploymentNamespace = NAMESPACE): ProviderNamespaceMutationInput => ({
@@ -158,8 +174,36 @@ describe('awsNamespaceResources', () => {
 })
 
 describe('awsNamespaceStack', () => {
-	const stack = awsNamespaceStack(NAMESPACE, installation, network)
+	const stack = awsNamespaceStack(NAMESPACE, installation, network, balancer)
 	const resources = at(stack.template, 'Resources')
+
+	test("admits only the balancer, scopes the proxy's egress, and holds the proxy's target group", () => {
+		const group = at(resources, 'ProxySecurityGroup', 'Properties')
+		expect(at(group, 'SecurityGroupIngress')).toEqual([
+			{ IpProtocol: 'tcp', FromPort: 8080, ToPort: 8080, SourceSecurityGroupId: 'sg-0123456789abcdef1', Description: 'the balancer' },
+			{ IpProtocol: 'tcp', FromPort: 8081, ToPort: 8081, SourceSecurityGroupId: 'sg-0123456789abcdef1', Description: "the balancer's health checks" },
+		])
+		expect(at(group, 'SecurityGroupEgress')).toEqual([
+			{ IpProtocol: 'tcp', FromPort: 3000, ToPort: 3000, CidrIp: '10.0.0.0/16', Description: 'the applications' },
+			{ IpProtocol: 'tcp', FromPort: 443, ToPort: 443, CidrIp: '0.0.0.0/0', Description: 'HTTPS: IAM, the image registry, logs' },
+		])
+		expect(at(resources, 'ProxyTargetGroup', 'Type')).toBe('AWS::ElasticLoadBalancingV2::TargetGroup')
+		expect(at(resources, 'ProxyTargetGroup', 'Properties')).toMatchObject({
+			TargetType: 'ip',
+			Protocol: 'HTTP',
+			Port: 8080,
+			VpcId: 'vpc-0123456789abcdef0',
+			HealthCheckPort: '8081',
+			HealthCheckPath: '/healthz',
+		})
+		expect(at(stack.template, 'Outputs', 'ProxyTargetGroupArn')).toEqual({ Value: { Ref: 'ProxyTargetGroup' } })
+	})
+
+	test("refuses a balancer's group or a VPC range of another form", () => {
+		expect(() => checkInstallationBalancer({ ...balancer, securityGroupId: 'sg-X' })).toThrow('security group')
+		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.0/8' })).toThrow('VPC range')
+		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '0.0.0.0/0' })).toThrow('VPC range')
+	})
 
 	test("holds the proxy's build: its repository, log group, a role under the boundary reaching only its own, and an x86 project", () => {
 		expect(at(resources, 'ProxyRepository', 'Type')).toBe('AWS::ECR::Repository')
@@ -297,6 +341,7 @@ describe('awsNamespaceStack', () => {
 		expect(namespaceOutputsOf('s', OUTPUTS)).toEqual({
 			proxySecurityGroupId: OUTPUTS.ProxySecurityGroupId,
 			serviceConnectNamespaceArn: OUTPUTS.ServiceConnectNamespaceArn,
+			proxyTargetGroupArn: OUTPUTS.ProxyTargetGroupArn,
 		})
 		expect(() => namespaceOutputsOf('s', { ...OUTPUTS, ProxySecurityGroupId: 'vpc-0123456789abcdef0' })).toThrow('names no proxy security group')
 		expect(() => namespaceOutputsOf('s', { ProxySecurityGroupId: OUTPUTS.ProxySecurityGroupId })).toThrow('names no proxy security group')
@@ -407,6 +452,7 @@ describe('awsNamespaceCapabilities', () => {
 		const capabilities = awsNamespaceCapabilities({
 			installation,
 			network,
+			balancer,
 			proxySource: PROXY_SOURCE,
 			clients: fake.clients,
 			sleep: async () => {
@@ -513,6 +559,7 @@ describe('readNamespaceOutputs', () => {
 		expect(await readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, PROXY_SOURCE, signal)).toEqual({
 			proxySecurityGroupId: OUTPUTS.ProxySecurityGroupId,
 			serviceConnectNamespaceArn: OUTPUTS.ServiceConnectNamespaceArn,
+			proxyTargetGroupArn: OUTPUTS.ProxyTargetGroupArn,
 		})
 		// A stack a reconcile is still at work on does not serve yet, and the deploy is told to run again.
 		fake.clients.cloudFormation.describeStack = async (stackId) => ({ stackId, status: 'UPDATE_IN_PROGRESS', outputs: {} })

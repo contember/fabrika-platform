@@ -26,6 +26,7 @@ const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789ab
 const outputs = {
 	proxySecurityGroupId: 'sg-0123456789abcdef7',
 	serviceConnectNamespaceArn: 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-abcdefghij123456',
+	proxyTargetGroupArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Proxy-1A2B3C4D/0123456789abcdef',
 }
 const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
 const IAM = { issuer: 'https://iam.example.com', key: 'iam-key-not-logged' }
@@ -201,7 +202,11 @@ describe('ensureAwsProxyService', () => {
 			taskDefinitionArn: REVISION,
 			desiredCount: 1,
 			network: { subnets: network.subnets, securityGroups: [outputs.proxySecurityGroupId], publicIp: true },
-			serviceConnect: { namespaceArn: outputs.serviceConnectNamespaceArn },
+			serviceConnect: {
+				namespaceArn: outputs.serviceConnectNamespaceArn,
+				// Behind the balancer: the namespace stack's target group, at the proxy's public port.
+				balancer: { targetGroupArn: outputs.proxyTargetGroupArn, container: 'proxy', port: 8080 },
+			},
 		})
 		expect(fake.creates[0]?.serviceConnect).not.toHaveProperty('discoveryName')
 	})

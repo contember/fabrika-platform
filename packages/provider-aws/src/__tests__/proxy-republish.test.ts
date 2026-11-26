@@ -160,6 +160,7 @@ class Fake {
 						outputs: {
 							ProxySecurityGroupId: 'sg-0123456789abcdef7',
 							ServiceConnectNamespaceArn: 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-abcdefghij123456',
+							ProxyTargetGroupArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Proxy-1A2B3C4D/0123456789abcdef',
 						},
 					}),
 				},

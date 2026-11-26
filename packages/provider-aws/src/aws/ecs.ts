@@ -215,7 +215,22 @@ export interface EcsServiceConnect {
  */
 export interface EcsServiceConnectClient {
 	readonly namespaceArn: string
+	/**
+	 * The balancer's target group its tasks register in, by their address, at `port` of `container`; sent on create and
+	 * on every update, so a service converges on its namespace's current group. ECS's service-linked role registers them.
+	 */
+	readonly balancer?: EcsBalancerTarget
 }
+
+/** Where a service's tasks are registered behind a load balancer. */
+export interface EcsBalancerTarget {
+	readonly targetGroupArn: string
+	readonly container: string
+	readonly port: number
+}
+
+/** How long ECS ignores the balancer's health checks of a task just started: the proxy's Caddy starts in seconds. */
+export const ECS_HEALTH_CHECK_GRACE_SECONDS = 60
 
 /** A service deployment's state; a circuit breaker's rollback is a state of the same deployment. */
 export type EcsServiceDeploymentStatus =
@@ -550,6 +565,23 @@ function serviceConnectOf(connect: EcsServiceConnect | EcsServiceConnectClient):
 	}
 }
 
+/** A target group's ARN: `targetgroup/<name of 1-32>/<16 hex digits>`. */
+export const TARGET_GROUP_ARN =
+	/^arn:aws(?:-[a-z]{1,10}){0,2}:elasticloadbalancing:[a-z0-9-]{1,32}:\d{12}:targetgroup\/[A-Za-z0-9-]{1,32}\/[0-9a-f]{16}$/
+
+/** The `loadBalancers` and health check grace a service with a balancer target is sent, after its values were checked. */
+function balancerOf(connect: EcsServiceConnect | EcsServiceConnectClient): Record<string, unknown> {
+	if (!('balancer' in connect) || connect.balancer === undefined) return {}
+	const { targetGroupArn, container, port } = connect.balancer
+	if (!TARGET_GROUP_ARN.test(targetGroupArn)) refuse('the target group')
+	if (!ECS_NAME.test(container)) refuse('the balanced container')
+	if (!Number.isInteger(port) || port < 1 || port > 65535) refuse('the balanced port')
+	return {
+		loadBalancers: [{ targetGroupArn, containerName: container, containerPort: port }],
+		healthCheckGracePeriodSeconds: ECS_HEALTH_CHECK_GRACE_SECONDS,
+	}
+}
+
 /**
  * How ECS rolls a service: a new task starts before an old one stops (at most twice the desired count, never below it),
  * and the circuit breaker rolls a deployment whose tasks do not come up back to the last one that did.
@@ -612,6 +644,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (!Number.isInteger(create.desiredCount) || create.desiredCount < 0 || create.desiredCount > MAX_DESIRED_COUNT) refuse('the desired count')
 			const networkConfiguration = awsvpcOf(create.network)
 			const serviceConnectConfiguration = serviceConnectOf(create.serviceConnect)
+			const balancer = balancerOf(create.serviceConnect)
 			const created = await json.call(
 				'CreateService',
 				{
@@ -626,6 +659,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 					deploymentConfiguration: DEPLOYMENT_CONFIGURATION,
 					networkConfiguration,
 					serviceConnectConfiguration,
+					...balancer,
 					clientToken: create.clientToken,
 					// No shell into a task: ECS Exec would reach the application's process around the proxy.
 					enableExecuteCommand: false,
@@ -648,6 +682,8 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (!TASK_DEFINITION_ARN.test(taskDefinitionArn)) refuse('the task definition')
 			const networkConfiguration = awsvpcOf(network)
 			const serviceConnectConfiguration = serviceConnectOf(serviceConnect)
+			// Sent on every update of a service with a balancer target, so one moved to a new target group follows it.
+			const balancer = balancerOf(serviceConnect)
 			const updated = await json.call(
 				'UpdateService',
 				{
@@ -658,6 +694,7 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 					networkConfiguration,
 					// Sent on every update, so a service moved to another namespace is published in the new one.
 					serviceConnectConfiguration,
+					...balancer,
 					// Sent on every update too: ECS Exec turned on out of band is turned off by the next deploy.
 					enableExecuteCommand: false,
 				},

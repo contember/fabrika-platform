@@ -227,7 +227,12 @@ class Fake {
 			describeStack: async (stackId) => ({
 				stackId,
 				status: 'CREATE_COMPLETE',
-				outputs: { SecurityGroupId: SECURITY_GROUP, ProxySecurityGroupId: PROXY_GROUP, ServiceConnectNamespaceArn: SERVICE_CONNECT },
+				outputs: {
+					SecurityGroupId: SECURITY_GROUP,
+					ProxySecurityGroupId: PROXY_GROUP,
+					ServiceConnectNamespaceArn: SERVICE_CONNECT,
+					ProxyTargetGroupArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Proxy-1A2B3C4D/0123456789abcdef',
+				},
 			}),
 			getTemplate: async () => JSON.stringify(awsEnvironmentStack('notes', 'prod', target, network, { securityGroupId: PROXY_GROUP }).template),
 			createStack: async () => {
@@ -255,6 +260,7 @@ class Fake {
 			baseImage: BASE_IMAGE,
 			installation: target,
 			network,
+			balancer: { securityGroupId: 'sg-0123456789abcdef1', vpcCidr: '10.0.0.0/16' },
 			proxySource: PROXY_SOURCE,
 			proxyIam: { issuer: 'https://iam.example.com', key: 'proxy-iam-key' },
 			source: this.source,
