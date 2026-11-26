@@ -21,7 +21,22 @@ import {
 	awsSourcesBucket,
 	checkAwsAccessInput,
 } from '../access'
-import { AWS_DEFAULT_PLATFORM_VPC_CIDR, awsNetworkLayout, awsNetworkStack } from '../network'
+import { awsBalancersStack } from '../balancers'
+import { AWS_DEFAULT_PLATFORM_VPC_CIDR, awsNetworkLayout, awsNetworkOutputs, awsNetworkStack } from '../network'
+
+const certificate = (n: number) => `arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
+/** A network's outputs over `prefix.0.0/16`, its subnet ids numbered from `first`. */
+const outputsOf = (prefix: string, first: number) => {
+	const subnet = (n: number) => `subnet-0123456789abcde${(first + n).toString(16)}`
+	return awsNetworkOutputs({
+		VpcId: `vpc-0123456789abcdef${first}`,
+		VpcCidr: `${prefix}.0.0/16`,
+		TaskSubnetIds: [subnet(0), subnet(1)].join(','),
+		TaskSubnetCidrs: `${prefix}.0.0/20,${prefix}.16.0/20`,
+		BalancerSubnetIds: [subnet(2), subnet(3)].join(','),
+		BalancerSubnetCidrs: `${prefix}.240.0/24,${prefix}.241.0/24`,
+	})
+}
 
 const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210'
 const BROKER = 'arn:aws:lambda:eu-central-1:123456789012:function:fabrika-certificate-broker'
@@ -150,7 +165,8 @@ describe("the installation's access", () => {
 		expect(denies.find((statement) => statement.Action.includes('ecs:CreateService'))).toMatchObject({
 			Action: ['ecs:CreateService', 'ecs:UpdateService'],
 			Resource: ['*'],
-			Condition: { ArnLike: { 'ecs:task-definition': platform } },
+			// By its ARN or by its family, whichever the request names.
+			Condition: { StringLike: { 'ecs:task-definition': [platform, 'fabrika_platform_*'] } },
 		})
 		// No application or namespace family falls under the prefix: an application's has one `_`, a namespace's starts `ns_`.
 		for (const family of ['notes_prod', 'notes_prod-init', 'ns_shared_prod_proxy', 'fabrika_prod']) {
@@ -164,6 +180,14 @@ describe("the installation's access", () => {
 			awsNetworkStack(awsNetworkLayout(), 'apps'),
 			awsNetworkStack(awsNetworkLayout(AWS_DEFAULT_PLATFORM_VPC_CIDR), 'platform'),
 			awsAccessStack(input),
+			// Its target group and groups above all: a tag-scoped grant on either would reach the platform's.
+			awsBalancersStack({
+				apps: outputsOf('10.80', 0),
+				platform: outputsOf('10.81', 4),
+				hosts: { iam: 'iam.example.com', control: 'control.example.com', operations: 'operations.example.com' },
+				certificates: { iam: certificate(1), control: certificate(2), operations: certificate(3) },
+				appsDefault: { host: 'apps.example.com', certificate: certificate(4) },
+			}),
 		]
 		for (const stack of stacks) {
 			const keys = new Set(Object.keys(stack.tags))

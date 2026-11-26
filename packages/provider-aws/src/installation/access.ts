@@ -349,7 +349,9 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 					Effect: 'Deny',
 					Action: ['ecs:CreateService', 'ecs:UpdateService'],
 					Resource: ['*'],
-					Condition: { ArnLike: { 'ecs:task-definition': platformTaskDefinitions } },
+					// The request may name the definition by its ARN or by its family (`family` or `family:revision`), so
+					// both forms; `StringLike`, as `ArnLike` would not match a bare family.
+					Condition: { StringLike: { 'ecs:task-definition': [platformTaskDefinitions, `${AWS_PLATFORM_FAMILY_PREFIX}*`] } },
 				},
 			],
 		},
