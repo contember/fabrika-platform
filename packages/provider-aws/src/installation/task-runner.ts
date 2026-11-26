@@ -6,8 +6,8 @@
 //
 // - starts the task in the applications' cluster and the applications' task subnets alone (its own configuration, never
 //   the request's), so the platform's network is never one it lands in; a security group the request names is accepted
-//   as it is, since ECS refuses a group of another VPC than the subnets' (AWS's `AwsVpcConfiguration`), and the
-//   platform's groups are all in the platform's;
+//   as it is, since EC2 attaches to a network interface only groups of the interface's own VPC (or ones associated with
+//   it), and the platform's groups are all in the platform's and never associated with the applications';
 // - refuses a platform task definition (`fabrika_platform_*`), as its role is denied one;
 // - overrides one container's command and nothing else: no role, no environment, no ECS Exec;
 // - answers the task as `RunTask` answers it, cut to what the deploy reads, so ECS's own tokens, metadata and dates stay

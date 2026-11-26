@@ -614,11 +614,27 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        adds IAM Access Analyzer's external access findings on `role/fabrika/apps/*` and `role/fabrika/namespaces/*` to
        detect one. The ECS service-linked role is ensured by the commands (a stack cannot create one that may already
        exist).
-    4. **The database**: RDS PostgreSQL for IAM, Control and Operations, in subnets of its own.
+    4. **The database** (built, `installation/database.ts`): one RDS PostgreSQL 17 instance (`db.t4g.micro`, 20 GiB
+       gp3 growing to 100, encrypted, seven days of backups with point-in-time recovery, deletion-protected, a final
+       snapshot on delete) that IAM, Control and Operations share, each as a user of its own (`fabrika_iam`,
+       `fabrika_control`, `fabrika_operations`) owning a database of the same name, `CONNECT` on it taken from everyone
+       else: a misused Control reads none of IAM's or Operations' tables. The master user (`fabrika_admin`) is no
+       service's; the operator's command runs the setup (`awsDatabaseSetupSteps`, idempotent: it creates what is
+       missing and sets each password to its parameter's) as a one-off task in the platform's network on install and on
+       every upgrade, before the services start. In the platform's VPC, in two private
+       /24s of its own (`x.y.32.0`, `x.y.33.0`), apart from the tasks' and the balancers' subnets, with no route out, and
+       no route to it from the applications' VPC. Reached on 5432
+       from the clients' group alone, which the platform's services carry. Its passwords (the master's and one per
+       service) are SecureStrings under `/fabrika/platform/database/`, which no grant of Control's role names; the
+       instance reads the master's by a dynamic reference, and each service's execution role reads its own alone (the
+       services' step). Zerops differs: there IAM and Control connect as the one user of the `db` service, and
+       Operations has a database service of its own.
     5. **The platform's services**: Control, IAM, the console and the platform proxy on ECS, their images and
        variables. In the platform's VPC and cluster, under task definition families `fabrika_platform_*`, each
        service pinned to a revision ARN; the platform proxy's group admits only the platform balancer's group; no
-       Service Connect namespace a service of Control's could join.
+       Service Connect namespace a service of Control's could join; no platform security group ever associated with the
+       applications' VPC (a security group VPC association would let a task there carry it, through the task runner
+       too).
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 
@@ -739,8 +755,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
           seconds, delivery is not bounded).
         - **(d) A task runner (chosen).** Control's role is denied `RunTask` and `StartTask` on `*` and may invoke the
           runner and nothing more of it. The runner starts the task in the applications' cluster and task subnets of its
-          own configuration, whatever the request names; a security group of the request is taken as it is, since ECS
-          refuses a group of another VPC than the subnets'. It overrides one container's command alone (no role, no
+          own configuration, whatever the request names; a security group of the request is taken as it is, since EC2
+          attaches to a network interface only groups of the interface's own VPC (or ones associated with it by a
+          security group VPC association, which step 5 never makes for a platform group). It overrides one container's command alone (no role, no
           environment, no ECS Exec), refuses a platform task definition (its role is denied one too), passes only the
           applications' and namespaces' roles, and answers the task cut to what the deploy reads. The deploy's init step
           is unchanged but for the call (`ecsClient`'s `runTask` invokes the runner), its client token included;
