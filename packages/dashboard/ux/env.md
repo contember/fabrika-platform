@@ -10,8 +10,8 @@ bun run local:seed      # a second environment, secrets, a changed policy on pro
 
 - **Sign-in.** The stack's development login signs a browser in as the local administrator when it opens the
   console; nothing is typed. Every task runs as that administrator.
-- **Ports.** The host ports are fixed, so one stack runs on the machine at a time and the two reviewers run one after
-  the other.
+- **Ports.** The host ports are fixed, so one stack runs on the machine at a time; the two reviewers share it, each in
+  its own browser session.
 - **Writes.** `t02-deploy`, `t05-rotate-secret` and `t08-grant-self` write data. The first two can run again on the
   same stack; `t08-grant-self` cannot, because the grant it makes stays. For a run with `--writes`, start from
   `local:reset`, then the three commands above.

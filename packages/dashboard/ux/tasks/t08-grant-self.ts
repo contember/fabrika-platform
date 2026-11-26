@@ -19,6 +19,9 @@ export const grantSelf: UxTask = {
 		await actor.click(
 			page.locator('.workspace tr').filter({ has: page.getByLabel('Admin on test expires') }).getByRole('button', { name: 'Grant me Admin' }),
 		)
-		await seen(page.getByText(/You hold Admin until|waits for/), 'the grant')
+		const own = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Your admin access' }) }).locator('tr').filter({
+			hasText: 'test',
+		})
+		await seen(own.getByText(/You hold Admin until|waits for another administrator/), 'the grant on test')
 	},
 }

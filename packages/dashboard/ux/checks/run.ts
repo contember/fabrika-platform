@@ -226,6 +226,9 @@ async function main(): Promise<number> {
 	const browser = await chromium.launch()
 	try {
 		const context = await signIn(browser, options.base)
+		const known = new Set([...pages.map((spec) => spec.id), ...tasks.map((task) => task.id)])
+		const unknown = [...options.only ?? []].filter((id) => !known.has(id))
+		if (unknown.length > 0) throw new Error(`--only names no page or task: ${unknown.join(', ')}`)
 		const selectedPages = pages.filter((spec) => options.only === null || options.only.has(spec.id))
 		const chosenTasks = tasks.filter((task) => options.only === null || options.only.has(task.id))
 		const selectedTasks = chosenTasks.filter((task) => options.writes || !task.mutates)

@@ -40,10 +40,10 @@ The run exits 1 when a gate fails. It refuses a `--base` that is not a local ori
 
 | Check                                                             | Measured by                                                                                                                | Threshold                        | Kind     |
 | ----------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | -------------------------------- | -------- |
-| Main task succeeds                                                | the task's reference path and success check                                                                                | 100 %                            | gate     |
+| Every task succeeds                                               | the task's reference path and success check                                                                                | 100 %                            | gate     |
 | Task budget                                                       | clicks, fills, key presses, states counted by `Actor`                                                                      | ≤ `budget` and ≤ baseline + 20 % | gate     |
 | Element inventory                                                 | `pages/*.ts`: a `technical` or `remove` element visible on the default view, a `primary` element missing or below the fold | 0                                | gate     |
-| Filled buttons per area                                           | the page or an open dialog holds at most one `button.primary`                                                              | ≤ 1                              | gate     |
+| Filled buttons per area                                           | each area (the page, a dialog) holds at most one `button.primary`; measured on the default view                            | ≤ 1                              | gate     |
 | Accessibility                                                     | `@axe-core/playwright`, WCAG 2.1 A/AA, default view                                                                        | 0 serious or critical            | gate     |
 | KLM time                                                          | modelled from the counted actions (Kieras)                                                                                 | trend                            | advisory |
 | Text and interactive elements above the fold, screens, lead facts | `measureLayout`                                                                                                            | trend                            | advisory |
@@ -56,7 +56,7 @@ one field, whatever its length; a key press is a `press` outside typing. The ref
 path, not a proven optimum.
 
 Every task runs as the local administrator. Not built yet: runs under a narrower permission set (a data reader, a
-manager of one application), the visible-field budget for forms, the keyboard walk, axe with dialogs open.
+manager of one application), the visible-field budget for forms, the keyboard walk, the page checks with a dialog open.
 
 ## Element triage
 
@@ -76,10 +76,10 @@ An element no task uses is a candidate, not a verdict: removing one needs a pers
 ## A round
 
 1. Exact checks on a freshly seeded stack.
-2. Two reviewers, one after the other on the same stack (its ports are fixed, `env.md`), with `review/brief.md` and
-   an assignment file: a Claude agent and a GPT agent. The assignment names the base URL, the browser session, the
+2. Two reviewers on the same stack (its ports are fixed, `env.md`), each in its own browser session, with
+   `review/brief.md` and an assignment file: a Claude agent and a GPT agent. The assignment names the base URL, the browser session, the
    tasks, the pages (with one canary and one clean page from `calibration/`, unlabelled) and the output path.
-   Reviewers get each task as a card, never the task files.
+   Reviewers get each task as a card, never the task files; `t08-grant-self` is left out, because its grant stays.
 3. The builder merges the findings: drops those without evidence or without a task or persona they are tied to,
    merges duplicates and sets a severity:
    - `blocker`: a gate fails, or a persona fails a main task;

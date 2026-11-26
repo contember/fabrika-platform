@@ -1,4 +1,4 @@
-import type { Locator, Page, Request } from 'playwright'
+import type { Locator, Page } from 'playwright'
 import { type Adapter, adapter } from './adapter'
 
 /** How long the network must stay quiet before an action counts as settled. */
@@ -53,15 +53,11 @@ export class Actor {
 	private lastActivity = Date.now()
 
 	constructor(private readonly page: Page) {
-		// A stream (a run's log, a live tail) never finishes; it is not a load the person waits for.
-		const counted = (request: Request): boolean => request.resourceType() !== 'eventsource' && request.resourceType() !== 'websocket'
-		const started = (request: Request): void => {
-			if (!counted(request)) return
+		const started = (): void => {
 			this.inFlight += 1
 			this.lastActivity = Date.now()
 		}
-		const ended = (request: Request): void => {
-			if (!counted(request)) return
+		const ended = (): void => {
 			this.inFlight = Math.max(0, this.inFlight - 1)
 			this.lastActivity = Date.now()
 		}
@@ -76,12 +72,6 @@ export class Actor {
 
 	async click(target: Locator): Promise<void> {
 		await target.click()
-		this.clicks += 1
-		await this.recordState()
-	}
-
-	async check(target: Locator): Promise<void> {
-		await target.check()
 		this.clicks += 1
 		await this.recordState()
 	}
@@ -124,6 +114,8 @@ export class Actor {
 	}
 
 	private async settle(): Promise<void> {
+		// The action's own request may start after it returns: the quiet period counts from the action, not from before it.
+		this.lastActivity = Date.now()
 		const deadline = Date.now() + SETTLE_TIMEOUT_MS
 		while (Date.now() < deadline) {
 			if (this.inFlight === 0 && Date.now() - this.lastActivity >= QUIET_MS) return

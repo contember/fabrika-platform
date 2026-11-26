@@ -12,6 +12,15 @@ export async function seen(target: Locator, what: string): Promise<void> {
 	}
 }
 
+/** Waits until nothing matches the locator: a check that something left the page, like a form after saving. */
+export async function gone(target: Locator, what: string): Promise<void> {
+	try {
+		await target.first().waitFor({ state: 'detached', timeout: TIMEOUT_MS })
+	} catch {
+		throw new Error(`still shown: ${what}`)
+	}
+}
+
 /** The element shows in the first viewport without scrolling. */
 export async function aboveFold(page: Page, target: Locator, what: string): Promise<void> {
 	await seen(target, what)

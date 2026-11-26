@@ -13,7 +13,7 @@ export const errors: UxTask = {
 	run: async (page, actor) => {
 		await openApp(page, actor)
 		await actor.click(environmentRow(page, 'prod').getByRole('link', { name: /open$/ }))
-		await page.waitForURL(/\/operations\/errors/)
-		await seen(page.locator('.workspace tr').nth(1), 'an error row')
+		await page.waitForURL(/\/operations\/errors\?.*source=/)
+		await seen(page.locator('.workspace a[href*="/operations/errors/"]'), 'an error of notes prod')
 	},
 }

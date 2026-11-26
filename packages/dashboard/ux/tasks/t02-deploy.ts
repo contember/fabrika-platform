@@ -14,6 +14,8 @@ export const deploy: UxTask = {
 		await openApp(page, actor)
 		await actor.click(environmentRow(page, 'test').getByRole('button', { name: /^Deploy/ }))
 		await page.waitForURL(/\/runs\/[^/]+$/)
-		await seen(page.getByText('test', { exact: true }), 'the run of test')
+		const head = page.locator('.page-head .subtitle')
+		await seen(head.getByText('notes', { exact: true }), 'the run of notes')
+		await seen(head.getByText('test', { exact: true }), 'the run of test')
 	},
 }
