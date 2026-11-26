@@ -1,6 +1,7 @@
 import { createPage, Link } from '@buzola/router'
 import { CONTROL_ACTIONS, OPS_ROW_COUNT_CAP, type OpsContentView, type OpsView } from '@fabrika/control-contract'
 import { type FormEvent, type ReactNode, useEffect, useState } from 'react'
+import { AppFrame, type AppFrameData, forgetEnvironmentStates, loadAppFrame, useEnvironmentStates } from '../../components/app/AppFrame'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { Chip, type Lamp, Status } from '../../components/Status'
@@ -19,9 +20,10 @@ import {
 	type DataRehearsalOutcome,
 	type MaintenanceMode,
 } from '../../lib/api'
-import { holdsGlobally, mayDo, opensApplications } from '../../lib/console-access'
+import { holdsAtApp, holdsGlobally, mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
 import { fmtDate } from '../../lib/format'
+import { consoleSession } from '../../lib/session'
 
 // An application environment's data (ADR-0069, ADR-0070): what its object reports, its backups, the operations Control
 // ran on it, and the maintenance, backup schedule, restore and recovery controls. consoleAccess only shows or hides a
@@ -268,9 +270,63 @@ export function recoveryChoice(
 
 export default createPage()
 	.params({ id: 'string', env: 'string' })
-	.loader(({ params }) => loadDataView(api, params.id, params.env))
-	.route('/apps/:id/environments/:env/data')
-	.render(({ data, params, invalidate }) => <DataPage appId={params.id} env={params.env} data={data} onChanged={invalidate} />)
+	.loader(async ({ params }) => {
+		const { access } = await consoleSession()
+		// A data reader may manage no application (card t1429-ctenar-dat): then the page stands alone, without the tabs.
+		const managesApp = access === null || holdsAtApp(access, CONTROL_ACTIONS.APP_MANAGE, params.id)
+		const [data, frame] = await Promise.all([loadDataView(api, params.id, params.env), managesApp ? loadAppFrame(params.id) : null])
+		return { data, frame }
+	})
+	.route('/apps/:id/data/:env')
+	.render(({ data, params, invalidate }) =>
+		data.frame === null
+			? <DataPage appId={params.id} env={params.env} data={data.data} onChanged={invalidate} />
+			: <DataTab frame={data.frame} env={params.env} data={data.data} onChanged={invalidate} />
+	)
+
+/** The Data tab of an application's page: one environment at a time, chosen above its sections. */
+function DataTab({ frame, env, data, onChanged }: {
+	frame: AppFrameData
+	env: string
+	data: Awaited<ReturnType<typeof loadDataView>>
+	onChanged: () => void
+}) {
+	const { app, envs } = frame
+	const states = useEnvironmentStates(envs)
+	function changed() {
+		forgetEnvironmentStates(app.id)
+		onChanged()
+	}
+	return (
+		<AppFrame app={app} envs={envs} tab="data" states={states}>
+			<div className="toolbar">
+				<div className="filter-group" role="group" aria-label="Environment">
+					{envs.map((candidate) => (
+						<Link
+							key={candidate.env}
+							to="apps/data"
+							params={{ id: app.id, env: candidate.env }}
+							className="filter-option"
+							aria-current={candidate.env === env ? 'page' : undefined}
+						>
+							{candidate.env}
+						</Link>
+					))}
+				</div>
+			</div>
+			<DataView
+				key={JSON.stringify([app.id, env])}
+				appId={app.id}
+				env={env}
+				view={data.view}
+				operations={data.operations}
+				backups={data.backups}
+				schedule={data.schedule}
+				onChanged={changed}
+			/>
+		</AppFrame>
+	)
+}
 
 export function DataPage(
 	{ appId, env, data, onChanged }: {

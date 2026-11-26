@@ -74,6 +74,12 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   (`components/DecisionFailureNotice.tsx`). Saving or turning off an environment's approvals goes the same way when
   `weakensStepUp` says the change takes a passkey (`lib/environment-protection.ts` `setEnvironmentProtection`, on
   `apps.environments.protectChallenge`): the prompt runs when the loosening is confirmed, before anything is sent.
+- **An application's page is one tab per task** (`components/app/AppFrame.tsx`, `routes/apps/*`): Overview, Deploys,
+  Data, Secrets and variables, Access, Approvals, Settings. The frame reads the application and its environments
+  (`app.manage` at the app, so `workspaceGate` opens `/apps/:id/*` to a manager of that one application), and each
+  environment's state on its own after the page (`lib/environment-state.ts`): a lamp never blocks a row. The Data tab is
+  `/apps/:id/data/:env`; a data reader without `app.manage` gets it without the frame, and the old
+  `/apps/:id/environments/:env/data` redirects to it.
 - **An application's page offers an IAM administrator "Grant me Admin" per environment** (`lib/self-admin.ts`,
   `components/app-detail/AdminAccessSection.tsx`): an ordinary `grants.create` of the built-in `admin` to the caller,
   no expiry by default (8 hours or 7 days selectable). It is offered where IAM knows the environment, it is not an

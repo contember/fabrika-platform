@@ -1,156 +1,195 @@
-import { createPage, Link, useNavigate } from '@buzola/router'
+import { createPage, Link } from '@buzola/router'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { useState } from 'react'
-import { AccessMapSection } from '../../components/app-detail/AccessMapSection'
-import { AdminAccessSection } from '../../components/app-detail/AdminAccessSection'
-import { ApprovalsSection } from '../../components/app-detail/ApprovalsSection'
-import { BuildConfigSection } from '../../components/app-detail/BuildConfigSection'
-import { DeviationsSection } from '../../components/app-detail/DeviationsSection'
-import { EnvironmentsSection } from '../../components/app-detail/EnvironmentsSection'
+import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { RecentRunsSection } from '../../components/app-detail/RecentRunsSection'
-import { SecretsSection } from '../../components/app-detail/SecretsSection'
-import { SurfaceSection } from '../../components/app-detail/SurfaceSection'
-import { VariablesSection } from '../../components/app-detail/VariablesSection'
-import { ConfirmDialog } from '../../components/ConfirmDialog'
-import { Icon } from '../../components/Icon'
-import { Chip } from '../../components/Status'
-import { api, type AppEnvDto } from '../../lib/api'
+import { AppFrame, loadAppFrame, useEnvironmentStates } from '../../components/app/AppFrame'
+import { DeployButton } from '../../components/app/DeployButton'
+import { WaitingApprovals } from '../../components/app/WaitingApprovals'
+import { RunStatus, Status } from '../../components/Status'
+import { EmptyState, Table } from '../../components/Table'
+import { api, type AppEnvDto, type RunDto } from '../../lib/api'
 import { mayDo } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
-import { fmtDate } from '../../lib/format'
-import { readSelfAdmin } from '../../lib/self-admin'
+import { type EnvironmentState, stateLabel, stateLamp } from '../../lib/environment-state'
+import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
+import { type OverviewRead, overviewRead } from '../../lib/overview'
 import { consoleSession } from '../../lib/session'
+import { operationsClient } from '../../operations/client'
 
-// App detail: the per-app registry + operations view: its meta, its environments (each with a
-// Deploy button + edit/delete), its secret references (names + layer + vault ref, values never shown),
-// and the most recent runs for this app. Add/edit/delete go through the typed registry procedures.
+// An application's Overview: each environment's state, what it runs, its last run and open errors, what waits for a
+// decision, and the newest runs. The environment states load one by one after the page (T1429, card t1429-stav-prostredi).
+
+const RECENT_RUNS = 5
+const ISSUE_LIMIT = 100
 
 export default createPage()
 	.params({ id: 'string' })
 	.loader(async ({ params }) => {
-		const environments = api.apps.environments.list({ appId: params.id })
-		const [app, envs, secrets, vars, runs, namespaces, installation, selfAdmin] = await Promise.all([
-			api.apps.get({ appId: params.id }),
-			environments,
-			api.apps.secrets.list({ appId: params.id }),
-			api.apps.variables.list({ appId: params.id }),
-			api.runs.list({ appId: params.id, limit: 10 }),
-			api.namespaces.list(),
-			api.installation(),
-			Promise.all([environments, consoleSession()]).then(([listed, session]) => readSelfAdmin(params.id, listed.items.map((env) => env.env), session)),
+		const { access } = await consoleSession()
+		const frame = await loadAppFrame(params.id)
+		const readsRuns = access === null || mayDo(access, CONTROL_ACTIONS.DEPLOY_READ)
+		const decides = access === null || mayDo(access, CONTROL_ACTIONS.ACCESS_APPROVE)
+		const readsErrors = access === null || mayDo(access, OPERATIONS_ACTIONS.READ)
+		const [runs, approvals, issues, published] = await Promise.all([
+			overviewRead(readsRuns, () => api.runs.list({ appId: params.id, limit: RECENT_RUNS })),
+			overviewRead(decides, () => api.approvals.list()),
+			overviewRead(readsErrors, () => operationsClient.issues({ status: 'open', window: 'all', sort: 'recent', limit: ISSUE_LIMIT })),
+			Promise.all(frame.envs.map(async (env) => [env.env, await publishedRun(env)] as const)),
 		])
 		return {
-			selfAdmin,
-			app,
-			envs: envs.items,
-			secrets: secrets.items,
-			vars: vars.items,
-			runs: runs.items,
-			namespaces: namespaces.items,
-			providerId: installation.provider,
+			...frame,
+			runs,
+			waiting: approvals.data?.items.filter((approval) => approval.run.appId === params.id) ?? [],
+			issues,
+			published: new Map(published),
 		}
 	})
 	.route('/apps/:id')
-	.render(({ data, invalidate }) => {
-		const { app, envs, secrets, vars, runs, namespaces, providerId, selfAdmin } = data
-		const [confirming, setConfirming] = useState(false)
-		const navigate = useNavigate()
-
-		async function deleteApp() {
-			await api.apps.delete({ appId: app.id })
-			navigate('apps')
-		}
-
+	.render(({ data }) => {
+		const { app, envs, runs, waiting, issues, published } = data
+		const states = useEnvironmentStates(envs)
 		return (
-			<>
-				<div className="page-head">
-					<Link to="apps" className="back-link">
-						<Icon name="chevron-left" size={14} />
-						All applications
-					</Link>
-					<h1>{app.id}</h1>
-					<div className="subtitle">
-						<code>{app.repoUrl}</code>
-						<span className="dot-sep">
-							default branch <code>{app.defaultBranch}</code>
-						</span>
-						<span className="dot-sep">created {fmtDate(app.createdAt)}</span>
-					</div>
-				</div>
-
-				<section className="panel">
+			<AppFrame app={app} envs={envs} tab="overview" states={states}>
+				<section>
 					<div className="section-head">
-						<h2>Work locally with the builder</h2>
+						<h2>Environments</h2>
 					</div>
-					<p>
-						Open your existing checkout of <code>{app.repoUrl}</code>. Run <code>fabrika builder init --url=&lt;console-origin&gt;</code>{' '}
-						for a new builder project, or <code>fabrika builder connect --url=&lt;console-origin&gt;</code> to connect an existing one. Select application
-						{' '}
-						<strong>{app.id}</strong> during approval.
-					</p>
-					<Link to="builder/authorize">Connection instructions and your issued builder keys</Link>
-				</section>
-				<BuildConfigSection app={app} providerId={providerId} onDone={invalidate} />
-				<EnvironmentsSection appId={app.id} envs={envs} namespaces={namespaces} providerId={providerId} onDone={invalidate} />
-				<DataLinks appId={app.id} envs={envs} />
-				<AdminAccessSection state={selfAdmin} onDone={invalidate} />
-				<ApprovalsSection appId={app.id} envs={envs} onDone={invalidate} />
-				<SurfaceSection envs={envs} />
-				<AccessMapSection envs={envs} />
-				<DeviationsSection envs={envs} />
-				<SecretsSection appId={app.id} secrets={secrets} envs={envs} onDone={invalidate} />
-				<VariablesSection appId={app.id} vars={vars} envs={envs} onDone={invalidate} />
-				<RecentRunsSection runs={runs} />
-
-				{
-					/* Past everything you might have come here to do, not in the page head, where every other
-				    screen puts its constructive CTA. */
-				}
-				<div className="danger-zone">
-					<div className="danger-zone-copy">
-						<strong>Delete this app</strong>
-						Removes its environments and secret references. Run history is kept.
-					</div>
-					<span className="spacer" />
-					<button type="button" className="danger" onClick={() => setConfirming(true)}>
-						<Icon name="trash" size={14} />
-						Delete app
-					</button>
-				</div>
-				{confirming && (
-					<ConfirmDialog
-						title="Delete app"
-						confirmLabel="Delete app"
-						body={
-							<p>
-								Delete app <strong>{app.id}</strong> and all its environments and secrets? Run history is kept.
-							</p>
+					<Table
+						colSpan={6}
+						isEmpty={envs.length === 0}
+						empty={
+							<EmptyState
+								icon="bay"
+								title="No environments yet"
+								body={
+									<>
+										Add one in <Link to="apps/settings" params={{ id: app.id }}>Settings</Link> to give this application an address.
+									</>
+								}
+							/>
 						}
-						onConfirm={deleteApp}
-						onClose={() => setConfirming(false)}
-					/>
-				)}
-			</>
+						head={
+							<tr>
+								<th>Environment</th>
+								<th className="grow">State</th>
+								<th>Running</th>
+								<th>Last run</th>
+								<th>Errors</th>
+								<th aria-label="Actions" />
+							</tr>
+						}
+					>
+						{envs.map((env) => (
+							<EnvironmentRow
+								key={env.env}
+								env={env}
+								state={states.get(env.env) ?? { kind: 'reading' }}
+								published={published.get(env.env) ?? null}
+								last={runs.data?.items.find((run) => run.env === env.env) ?? null}
+								issues={issues}
+							/>
+						))}
+					</Table>
+				</section>
+				{waiting.length > 0 && <WaitingApprovals waiting={waiting} />}
+				{runs.data !== null && <RecentRunsSection appId={app.id} runs={runs.data.items} />}
+			</AppFrame>
 		)
 	})
 
-function DataLinks({ appId, envs }: { appId: string; envs: AppEnvDto[] }) {
+/** The run an environment publishes, by its id: never a guess from the newest run. */
+async function publishedRun(env: AppEnvDto): Promise<RunDto | null> {
+	if (env.publishedRunId === null) return null
+	return api.runs.get({ runId: env.publishedRunId }).catch(() => null)
+}
+
+function EnvironmentRow({ env, state, published, last, issues }: {
+	env: AppEnvDto
+	state: EnvironmentState
+	published: RunDto | null
+	last: RunDto | null
+	issues: OverviewRead<Awaited<ReturnType<typeof operationsClient.issues>>>
+}) {
 	const access = useConsoleAccess()
-	const readable = envs.filter((env) => mayDo(access, CONTROL_ACTIONS.DATA_READ, { app: appId, env: env.env }))
-	if (readable.length === 0) return null
+	const open = issues.data?.items.filter((issue) => issue.source.appId === env.appId && issue.source.environment === env.env) ?? null
+	const readsErrors = mayDo(access, OPERATIONS_ACTIONS.READ, { app: env.appId, env: env.env })
 	return (
-		<section>
-			<div className="section-head">
-				<h2>Data</h2>
-			</div>
-			<p className="section-note">Each environment's database, jobs, files and maintenance state, as its application object reports them.</p>
-			<div className="toolbar">
-				{readable.map((env) => (
-					<Link key={env.env} to="apps/data" params={{ id: appId, env: env.env }}>
-						<Chip>{env.env}</Chip>
-					</Link>
-				))}
-			</div>
-		</section>
+		<tr>
+			<td>
+				<div className="cell-stack">
+					<strong>{env.env}</strong>
+					<span className="muted small">{env.publicOrigin?.replace(/^https?:\/\//, '') ?? env.domain ?? 'No public address'}</span>
+				</div>
+			</td>
+			<td>
+				<div className="cell-stack">
+					<Status lamp={stateLamp(state)}>{stateLabel(state)}</Status>
+					<StateCause appId={env.appId} env={env.env} state={state} />
+				</div>
+			</td>
+			<td>
+				{env.publishedRunId === null ? <span className="muted">Not published</span> : (
+					<div className="cell-stack">
+						<Link to="runs/detail" params={{ id: env.publishedRunId }}>
+							<code>{published === null ? 'Published run' : shortSha(published.commitSha)}</code>
+						</Link>
+						{published?.finishedAt != null && <span className="muted small">{fmtAgo(published.finishedAt)}</span>}
+					</div>
+				)}
+			</td>
+			<td>
+				{last === null ? <span className="muted">None</span> : (
+					<div className="cell-stack">
+						<Link to="runs/detail" params={{ id: last.id }}>
+							<RunStatus status={last.status} />
+						</Link>
+						<span className="muted small" title={fmtDate(last.createdAt)}>{fmtAgo(last.createdAt)}</span>
+					</div>
+				)}
+			</td>
+			<td>
+				{!readsErrors || open === null
+					? <span className="muted">Unknown</span>
+					: open.length === 0
+					? <span className="muted">None</span>
+					: (
+						<Link to="operations/errors" params={{ window: 'all', source: open[0]?.source.id ?? '' }}>
+							{open.length >= ISSUE_LIMIT ? `${ISSUE_LIMIT}+` : open.length} open
+						</Link>
+					)}
+			</td>
+			<td>
+				<DeployButton appId={env.appId} env={env.env} />
+			</td>
+		</tr>
 	)
+}
+
+/** One line under the lamp naming why it is not green, with the tab that acts on it. */
+function StateCause({ appId, env, state }: { appId: string; env: string; state: EnvironmentState }) {
+	switch (state.kind) {
+		case 'operation':
+			return (
+				<span className="small">
+					{state.operation.state === 'running' ? 'Started' : 'Failed'} {fmtAgo(state.operation.updatedAt)} at step {state.operation.step}.{' '}
+					<Link to="apps/data" params={{ id: appId, env }}>Open Data to recover</Link>
+				</span>
+			)
+		case 'boot-failure':
+			return (
+				<span className="small">
+					The application failed to boot. <Link to="apps/data" params={{ id: appId, env }}>Open Data</Link>
+				</span>
+			)
+		case 'mode':
+			return (
+				<span className="small">
+					Maintenance is on. <Link to="apps/data" params={{ id: appId, env }}>Open Data</Link>
+				</span>
+			)
+		case 'suspended':
+			return <span className="small muted">Control took it offline {fmtAgo(state.at)}.</span>
+		default:
+			return null
+	}
 }
