@@ -614,7 +614,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        adds IAM Access Analyzer's external access findings on `role/fabrika/apps/*` and `role/fabrika/namespaces/*` to
        detect one. The ECS service-linked role is ensured by the commands (a stack cannot create one that may already
        exist).
-    4. **The database**: RDS PostgreSQL for IAM, Control and Operations, in subnets of its own.
+    4. **The database** (built, `installation/database.ts`): one RDS PostgreSQL 17 instance (`db.t4g.micro`, 20 GiB
+       gp3 growing to 100, encrypted, seven days of backups with point-in-time recovery, deletion-protected, a final
+       snapshot on delete) that IAM, Control and Operations share, as Zerops' light installation shares one: their
+       tables do not intersect and each keeps its own ledger and lock (ADR-0017). In the platform's VPC, in two private
+       /24s of its own (`x.y.32.0`, `x.y.33.0`), apart from the tasks' and the balancers' subnets, with no route out, and
+       no route to it from the applications' VPC. Reached on 5432
+       from the clients' group alone, which the platform's services carry. Its password is a SecureString under
+       `/fabrika/platform/`, which no grant of Control's role names, read by a dynamic reference; the services' URL
+       (TLS required) is written beside it.
     5. **The platform's services**: Control, IAM, the console and the platform proxy on ECS, their images and
        variables. In the platform's VPC and cluster, under task definition families `fabrika_platform_*`, each
        service pinned to a revision ARN; the platform proxy's group admits only the platform balancer's group; no
