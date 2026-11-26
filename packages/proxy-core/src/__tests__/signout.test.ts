@@ -25,7 +25,7 @@ describe('the sign-out path', () => {
 		let mint: MintTokenResult = { ok: true, token: await signUserToken(), expiresAt: Math.floor(Date.now() / 1000) + 300 }
 		const iam = new FakeIam({ mintToken: () => mint })
 		const cache = new MemoryTokenCache()
-		const verify = createVerifyService({ manifest: manifestWith(HUMAN), iam, issuer: ISSUER, cache })
+		const verify = createVerifyService({ manifest: manifestWith(HUMAN), iam, revocations: iam, issuer: ISSUER, cache })
 
 		const warm = await verify(verifyRequest({ path: '/dashboard', cookie: `${SESSION_COOKIE}=${SESSION}` }))
 		expect(warm.status).toBe(204)

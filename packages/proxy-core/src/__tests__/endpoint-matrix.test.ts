@@ -154,6 +154,7 @@ function service(options: FakeIamOptions, delegations?: DelegationIssuer | null)
 	const verify = createVerifyService({
 		manifest: { apps: [contractAppWith(TABLE, RESERVED)] },
 		iam,
+		revocations: iam,
 		issuer: ISSUER,
 		cache: new MemoryTokenCache(),
 		...(delegations === undefined ? {} : { delegations }),

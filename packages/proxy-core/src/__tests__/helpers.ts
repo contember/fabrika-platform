@@ -14,6 +14,7 @@ import {
 	type EndpointRequirement,
 	type ExchangeAuthCodeResult,
 	type IamGrantRpc,
+	type IamRevocationRpc,
 	type InstallationCredentialedEndpoint,
 	type InstallationEndpointRow,
 	type Jwks,
@@ -25,6 +26,7 @@ import {
 	type PermissionEntry,
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
+	type RevocationsResult,
 	type TokenPrincipalType,
 } from '@fabrika/auth-core'
 import { exportJWK, generateKeyPair, type KeyLike, SignJWT } from 'jose'
@@ -175,10 +177,13 @@ export interface FakeIamOptions {
 	unreachable?: boolean
 	/** Fail ONLY the key set: a healthy mint surface whose JWKS cannot be fetched. */
 	jwksUnreachable?: boolean
+	/** The revocation feed's answer; by default nothing is revoked, at the current time. */
+	revocations?: RevocationsResult | (() => RevocationsResult)
 }
 
-export class FakeIam implements IamGateway {
+export class FakeIam implements IamGateway, IamRevocationRpc {
 	mintTokenCalls = 0
+	revocationsCalls = 0
 	mintFromKeyCalls = 0
 	jwksCalls = 0
 	exchangeCalls = 0
@@ -224,6 +229,16 @@ export class FakeIam implements IamGateway {
 		}
 		const canned = this.options.exchangeAuthCode
 		return Promise.resolve(typeof canned === 'function' ? canned() : (canned ?? { ok: false, reason: 'invalid_code' }))
+	}
+
+	revocations(): Promise<RevocationsResult> {
+		this.revocationsCalls++
+		if (this.options.unreachable === true) {
+			return Promise.reject(new Error('connect ECONNREFUSED'))
+		}
+		const canned = this.options.revocations
+		const answer = typeof canned === 'function' ? canned() : canned
+		return Promise.resolve(answer ?? { ok: true, now: Math.floor(Date.now() / 1000), complete: true, subjects: [] })
 	}
 
 	getJwks(): Promise<Jwks> {

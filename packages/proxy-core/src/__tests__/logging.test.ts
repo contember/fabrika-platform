@@ -34,6 +34,7 @@ describe('no secret material reaches the log', () => {
 		const verify = createVerifyService({
 			manifest: manifestWith(ROWS),
 			iam,
+			revocations: iam,
 			issuer: ISSUER,
 			cache: new MemoryTokenCache(),
 			logger,

@@ -14,7 +14,6 @@ import {
 	type MembershipFailure,
 	type OwnWorkloadKind,
 	PROXY_TOKEN_HEADER,
-	TOKEN_REFRESH_SKEW_SECONDS,
 	WORKLOAD_TOKEN_PATH,
 	workloadKeyVariable,
 } from '@fabrika/auth-core'
@@ -22,7 +21,7 @@ import { applicationSchema, type Database } from '@fabrika/db'
 import { FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations'
 import { openPostgres } from '@fabrika/db/postgres'
 import { MemoryFileObjects, unusedDatabase } from '@fabrika/platform/testing'
-import { Authorizer, MemoryTokenCache, type ResolvedApp } from '@fabrika/proxy-core'
+import { Authorizer, MemoryTokenCache, type ResolvedApp, REVOCATION_FEED_INTERVAL_SECONDS } from '@fabrika/proxy-core'
 import { type ContractProxyApp, contractProxyTable } from '@fabrika/proxy-core/manifest'
 import { SQL } from 'bun'
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
@@ -276,7 +275,7 @@ async function stack(): Promise<Stack> {
 			return token
 		},
 	}
-	const authorizer = new Authorizer({ iam: rpc, issuer: ISSUER, cache: new MemoryTokenCache(), now: () => state.clock })
+	const authorizer = new Authorizer({ iam: rpc, revocations: rpc, issuer: ISSUER, cache: new MemoryTokenCache(), now: () => state.clock })
 	return state
 }
 
@@ -342,22 +341,25 @@ describe.skipIf(!hasPostgres)('an anonymous visitor through the proxy and the re
 		expect(Array.isArray(listed) ? listed.map((item: unknown) => prop(item, 'id')) : listed).toEqual([own])
 	})
 
-	test('a link the job revoked keeps working only until the proxy must refresh its cached token', async () => {
+	test('a link the job revoked keeps working only until the proxy next reads the revocation feed', async () => {
 		const s = await stack()
 		await s.visit('/api/visitors.register', { body: { email: 'bo@example.test', name: 'Bo' } })
 		await s.runJob()
 		const superseded = s.world.lastKey('bo@example.test')
 		expect(resultOf(await s.visit('/p/api/me', { key: superseded, body: {} }))).toMatchObject({ name: 'Bo' })
+		// Served from the cache, which reads the feed: the proxy now holds a fresh read from before the revocation.
+		expect((await s.visit('/p/api/me', { key: superseded, body: {} })).status).toBe(200)
 
 		expect(resultOf(await s.visit('/api/visitors.resend', { body: { email: 'bo@example.test' } }))).toEqual({ received: true })
 		expect(await s.runJob()).toEqual({ status: 'succeeded', attempts: 1 })
 		const current = s.world.lastKey('bo@example.test')
 		expect(current).not.toBe(superseded)
 
-		// The proxy honours its cached token without asking IAM: a revoked link works for the rest of that token's life.
+		// Within the feed interval the proxy still serves its cached token for the revoked link…
+		s.clock += REVOCATION_FEED_INTERVAL_SECONDS - 1
 		expect((await s.visit('/p/api/me', { key: superseded, body: {} })).status).toBe(200)
-		// IAM stamps the token from the real clock, so the proxy's clock moves from now: a slow run must not leave it short.
-		s.clock = Math.floor(Date.now() / 1000) + 300 - TOKEN_REFRESH_SKEW_SECONDS
+		// …and at its end reads the revocation, mints again, and IAM refuses: not after the token's 300 s.
+		s.clock += 1
 		expect(await s.visit('/p/api/me', { key: superseded, body: {} })).toMatchObject({ status: 401 })
 		expect((await s.visit('/p/api/me', { key: current, body: {} })).status).toBe(200)
 	})

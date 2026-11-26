@@ -1,4 +1,12 @@
-import { answersFile, type EndpointCache, FABRIKA_HOP_HEADERS, type IamGrantRpc, parseEndpointHeader, rawRequestTarget } from '@fabrika/auth-core'
+import {
+	answersFile,
+	type EndpointCache,
+	FABRIKA_HOP_HEADERS,
+	type IamGrantRpc,
+	type IamRevocationRpc,
+	parseEndpointHeader,
+	rawRequestTarget,
+} from '@fabrika/auth-core'
 import type { DelegationIssuer, IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
 	admitsAgent,
@@ -122,6 +130,8 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 		delegations: isDelegationIssuer(env.IAM) ? env.IAM : null,
 		// A service binding stub answers every method name; one IAM does not serve rejects, and `callIam` makes that a 503.
 		grants: isGrantExchanger(env.IAM) ? env.IAM : null,
+		// The same holds for the revocation feed: an IAM without it rejects, and the proxy then serves no cached token.
+		revocations: isRevocationFeed(env.IAM) ? env.IAM : null,
 	})
 	const handler = proxyHandler(env, manifest, verify)
 	cached = { manifestJson, iam: env.IAM, issuer, handler }
@@ -312,6 +322,10 @@ function isDelegationIssuer(value: unknown): value is DelegationIssuer {
 
 function isGrantExchanger(value: unknown): value is IamGrantRpc {
 	return isObject(value) && typeof value['mintFromGrant'] === 'function'
+}
+
+function isRevocationFeed(value: unknown): value is IamRevocationRpc {
+	return isObject(value) && typeof value['revocations'] === 'function'
 }
 
 function isWorkerService(value: unknown): value is WorkerService {

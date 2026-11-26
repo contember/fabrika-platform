@@ -62,13 +62,15 @@ key — and a browser never attaches a bearer on its own.
 ### The proxy's surface is not the management surface
 
 The proxy never calls `IamRpc`. On the Bun composition it calls `/auth/mint/*` —
-`POST /auth/mint/session`, `/auth/mint/key`, `/auth/mint/exchange`, `/auth/mint/delegation` — guarded by
+`POST /auth/mint/session`, `/auth/mint/key`, `/auth/mint/exchange`, `/auth/mint/delegation`, `/auth/mint/grant`,
+`/auth/mint/revocations` — guarded by
 `FABRIKA_IAM_PROXY_KEY`, which is a different secret from the `FABRIKA_IAM_RPC_KEY`
 that guards `/rpc/*`. Either key left unset makes its surface answer 404 as though it
 were never mounted; neither surface exists at all in the Cloudflare composition,
 where both are service-binding method calls. `@fabrika/proxy` narrows the binding to
 four methods (`mintToken`, `mintFromKey`, `exchangeAuthCode`, `getJwks`), plus
-`requestDelegation` for contract applications' membership endpoints, structurally,
+`requestDelegation` for contract applications' membership endpoints and `revocations` for the token cache's
+revocation feed (ADR-0022), structurally,
 so it never imports IAM. IAM refuses `requestDelegation` over the application Worker's
 own binding, which the deployer marks (ADR-0022 rule 6), from the environment's first
 deploy on the release that writes the mark and only against code without the account

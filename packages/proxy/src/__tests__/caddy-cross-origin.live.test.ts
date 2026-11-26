@@ -136,6 +136,7 @@ describe.skipIf(CADDY === '')('the cross-origin chain in a running Caddy', () =>
 		const verify = createVerifyService({
 			manifest: { apps: manifest.apps.map((entry) => ({ ...entry, upstream: `127.0.0.1:${app.port}` })) },
 			iam,
+			revocations: iam,
 			issuer: ISSUER,
 			cache: new MemoryTokenCache(),
 		})

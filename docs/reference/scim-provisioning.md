@@ -53,5 +53,7 @@ External people (invited guests) and the installation's bootstrap administrators
 found, created or changed over SCIM: a POST of such a mailbox is 409.
 Every change is in the Access audit log, recorded under `scim` with the token's id.
 
-A browser that already holds an application's token keeps it until the token expires, at most 300 seconds after it
-was minted; every request after that asks IAM, which refuses it.
+A proxy that cached the person's application token stops serving it within 5 seconds, when it next reads IAM's
+revocation feed; the request after that asks IAM, which refuses it
+([ADR-0022](../decisions/0022-the-proxy-is-the-only-enforcement-point.md), "Revocation reaches a cached token").
+A proxy of a release before the feed serves a cached token until it expires, at most 300 seconds after it was minted.

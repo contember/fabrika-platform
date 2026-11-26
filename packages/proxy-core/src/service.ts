@@ -29,6 +29,7 @@ import {
 	ENDPOINT_HEADER,
 	HANDOFF_COOKIE_TTL_SECONDS,
 	type IamGrantRpc,
+	type IamRevocationRpc,
 	isCanonicalPath,
 	planEndpoint,
 	SESSION_COOKIE,
@@ -87,6 +88,8 @@ export interface VerifyServiceConfig {
 	delegations?: DelegationIssuer | null
 	/** Exchanges an agent's resource token for the person's application token; see `AuthorizerOptions.grants`. */
 	grants?: IamGrantRpc | null
+	/** IAM's revocation feed, without which no cached token is served; see `AuthorizerOptions.revocations`. */
+	revocations?: IamRevocationRpc | null
 }
 
 export type VerifyService = (request: Request) => Promise<Response>
@@ -129,6 +132,9 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	}
 	if (config.grants !== undefined) {
 		authorizerOptions.grants = config.grants
+	}
+	if (config.revocations !== undefined) {
+		authorizerOptions.revocations = config.revocations
 	}
 	const authorizer = new Authorizer(authorizerOptions)
 

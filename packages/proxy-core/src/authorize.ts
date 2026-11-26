@@ -36,6 +36,7 @@ import {
 	FORM_URLENCODED_TYPE,
 	formatEndpointHeader,
 	type IamGrantRpc,
+	type IamRevocationRpc,
 	isLocale,
 	type Locale,
 	LOCALE_COOKIE,
@@ -64,6 +65,7 @@ import {
 } from './manifest'
 import { agentResourceOf } from './oauth'
 import { FETCH_MODE_HEADER } from './pages'
+import { RevocationFeed } from './revocations'
 import { TokenVerifier } from './verifier'
 
 /** Every way a request can be refused. Coarse on purpose — these are logged, not returned to clients. */
@@ -198,8 +200,16 @@ export interface AuthorizerOptions {
 	iam: IamGateway
 	/** IAM's origin — verifies the token `iss` and is the base for the `/auth/login` bounce. */
 	issuer: string
-	/** `null` disables caching entirely. Decisions are identical either way; only the IAM call count changes. */
+	/**
+	 * `null` disables caching entirely. A cached token is served only while `revocations` reads fresh, so without a feed
+	 * the cache is never read either. Decisions are identical either way; only the IAM call count changes.
+	 */
 	cache?: TokenCache | null
+	/**
+	 * IAM's revocation feed (ADR-0022, "Revocation reaches a cached token"). Unset, or a read that fails, and the proxy
+	 * serves no cached token: every request is minted at IAM.
+	 */
+	revocations?: IamRevocationRpc | null
 	/** Unix seconds. Injectable for tests. */
 	now?: () => number
 	/**
@@ -265,11 +275,13 @@ type SessionAttempt =
 export class Authorizer {
 	private readonly verifier: TokenVerifier
 	private readonly cache: TokenCache | null
+	private readonly revocations: RevocationFeed
 	private readonly now: () => number
 
 	constructor(private readonly options: AuthorizerOptions) {
 		this.now = options.now ?? (() => Math.floor(Date.now() / 1000))
 		this.cache = options.cache ?? null
+		this.revocations = new RevocationFeed(options.revocations ?? null, this.now)
 		this.verifier = new TokenVerifier(() => options.iam.getJwks(), options.issuer, this.now)
 	}
 
@@ -525,7 +537,7 @@ export class Authorizer {
 		const cached = this.cache?.get(key)
 		if (cached !== undefined && cached.expiresAt - this.now() > TOKEN_REFRESH_SKEW_SECONDS) {
 			const verified = await this.verifier.verify(cached.token, audience)
-			if (verified.ok && verified.claims.act !== undefined) {
+			if (verified.ok && verified.claims.act !== undefined && await this.revocations.admits(verified.claims.sub, verified.claims.iat)) {
 				return { ok: true, token: cached.token, claims: verified.claims }
 			}
 			if (!verified.ok && verified.reason === 'unavailable') {
@@ -569,16 +581,16 @@ export class Authorizer {
 		const cached = this.cache?.get(key)
 		if (cached !== undefined && cached.expiresAt - this.now() > TOKEN_REFRESH_SKEW_SECONDS) {
 			const verified = await this.verifier.verify(cached.token, audienceOf(app))
-			if (verified.ok) {
+			if (verified.ok && await this.revocations.admits(verified.claims.sub, verified.claims.iat)) {
 				return { ok: true, token: cached.token, claims: verified.claims }
 			}
-			if (verified.reason === 'unavailable') {
+			if (!verified.ok && verified.reason === 'unavailable') {
 				// Nothing is wrong with the entry — we simply cannot check it. Keep it; a re-mint could
 				// not be verified either, so it would only add an IAM call to the same 503.
 				return { ok: false, denial: { outcome: 'deny', status: 503, reason: 'iam_unavailable' } }
 			}
-			// A cached entry that PROVED bad (rotated key, revoked issuer) is dropped, and we fall
-			// through to a fresh mint rather than trusting it.
+			// A cached entry that PROVED bad (rotated key, revoked issuer), or one the revocation feed cannot vouch for, is
+			// dropped, and we fall through to a fresh mint rather than trusting it.
 			this.cache?.delete(key)
 		}
 
@@ -620,14 +632,15 @@ export class Authorizer {
 		const cached = this.cache?.get(key)
 		if (cached !== undefined && cached.expiresAt - now > TOKEN_REFRESH_SKEW_SECONDS) {
 			const verified = await this.verifier.verify(cached.token, audienceOf(app))
-			if (verified.ok && verified.claims.ptype === 'user') {
+			if (verified.ok && verified.claims.ptype === 'user' && await this.revocations.admits(verified.claims.sub, verified.claims.iat)) {
 				return { ok: true, token: cached.token, claims: verified.claims }
 			}
 			if (!verified.ok && verified.reason === 'unavailable') {
 				// Nothing is wrong with the entry — we simply cannot check it. Keep it and say so.
 				return { ok: false, status: 'unavailable' }
 			}
-			// Only a token that PROVED bad is dropped (rotated key, revoked issuer, wrong principal).
+			// Only a token that PROVED bad is dropped (rotated key, revoked issuer, wrong principal), or one the revocation
+			// feed cannot vouch for (revoked since its mint, or the feed is stale).
 			this.cache?.delete(key)
 		}
 

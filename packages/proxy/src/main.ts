@@ -34,6 +34,8 @@ const service = createVerifyService({
 	delegations: iam,
 	// And the exchange of an agent's resource token for the person's application token (ADR-0090).
 	grants: iam,
+	// And the revocation feed, without which no cached token is served (ADR-0022).
+	revocations: iam,
 	issuer: env.iamUrl,
 	cache: env.cacheEnabled ? new MemoryTokenCache() : null,
 	logger: consoleLogger,

@@ -69,9 +69,9 @@ Entra ID is that provider; this decision is the Users part. Groups and their map
 - An organization blocks a person in its directory and IAM refuses that person's next mint as soon as the provider sends
   the change. The provider's own cycle dominates that delay: Entra's incremental cycle runs about every 40 minutes
   unless an administrator provisions the person on demand (`docs/reference/scim-provisioning.md`).
-- A token a proxy already cached stays valid until it expires, at most `DEFAULT_TOKEN_TTL_SECONDS` (300 s) after its
-  mint (ADR-0022, "Revocation takes effect within the token lifetime"). Closing that window is the proxy's work, not
-  IAM's, and a separate change.
+- A token a proxy already cached stops being served within `REVOCATION_FEED_INTERVAL_SECONDS` (5 s): the
+  deprovisioning disables the principal and revokes its sessions, keys and OAuth grants, and the proxy's revocation feed
+  reads those timestamps (ADR-0022, "Revocation reaches a cached token").
 - The surface is an installation service row of IAM's contract (`scim-root`, `scim`, both `protocol`): the proxy reads
   no credential and passes `Authorization` on. **Rollout:** migration `0044_scim_provisioning` is additive and runs on
   every IAM start; the Zerops platform proxy publishes the new rows from its generated manifest at the next

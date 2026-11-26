@@ -6,14 +6,19 @@
 // The deprovisioning witness: after `active=false` or DELETE, the very next mint from the person's existing session,
 // key or OAuth grant is refused, without waiting for any token lifetime.
 
+import { PROXY_TOKEN_HEADER, SESSION_COOKIE } from '@fabrika/auth-core'
 import type { SqlDatabase } from '@fabrika/platform'
+
 import { unusedDatabase } from '@fabrika/platform/testing'
+import { createVerifyService, MemoryTokenCache, REVOCATION_FEED_INTERVAL_SECONDS } from '@fabrika/proxy-core'
 import { Database } from 'bun:sqlite'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { manifestWith, serviceRow, verifyRequest } from '../../../proxy-core/src/__tests__/helpers'
 import { createIamApp } from '../app'
 import { createIamRepositories, createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
 import { prop } from '../json'
+import { createIamRpc } from '../rpc'
 import { stateOf } from '../scim/resource'
 import { saveUser } from '../scim/users'
 import { hashToken } from '../secret'
@@ -417,6 +422,43 @@ for (const [name, engineOf, available] of engines) {
 			})
 			const next = await accessOf(iam.engine, userId)
 			expect(await mints(iam.engine, next)).toMatchObject({ session: { ok: true }, key: { ok: true } })
+		})
+
+		test('through the proxy: the next application request after active=false is refused within the revocation feed interval', async () => {
+			const iam = await fresh()
+			const userId = String(prop(await json(await iam.scim('POST', '/Users', entraCreateUser('erin@testuser.com', 'erin@testuser.com'))), 'id'))
+			await iam.engine.db.prepare(`INSERT INTO grants (id, principal_id, permissions, app, created_at) VALUES (?, ?, '["notes.read"]', ?, ?)`)
+				.bind(id('g'), userId, APP, now()).run()
+			const { session } = await accessOf(iam.engine, userId)
+			// proxy-core's verify service with its token cache, over the RPC surface the proxy binds to on either runtime.
+			const rpc = createIamRpc(envOf(iam.engine), exec)
+			let clock = now()
+			const proxy = createVerifyService({
+				manifest: manifestWith([serviceRow('/*', ['human'])], { id: APP }),
+				iam: rpc,
+				revocations: rpc,
+				issuer: ORIGIN,
+				cache: new MemoryTokenCache(),
+				now: () => clock,
+			})
+			const request = () => proxy(verifyRequest({ app: APP, cookie: `${SESSION_COOKIE}=${session}` }))
+
+			const first = await request()
+			expect(first.status).toBe(204)
+			const cached = await request()
+			expect(cached.status).toBe(204)
+			expect(cached.headers.get(PROXY_TOKEN_HEADER)).toBe(first.headers.get(PROXY_TOKEN_HEADER))
+
+			expect((await iam.scim('PATCH', `/Users/${userId}`, entraDisable)).status).toBe(200)
+
+			// Within the interval the cached token is still served: that is the bound, not zero.
+			clock += REVOCATION_FEED_INTERVAL_SECONDS - 1
+			expect((await request()).headers.get(PROXY_TOKEN_HEADER)).toBe(first.headers.get(PROXY_TOKEN_HEADER))
+			// The first request once the feed's last read is an interval old, not once the cached token's 300 s run out.
+			clock += 1
+			const refused = await request()
+			expect(refused.status).not.toBe(204)
+			expect(refused.headers.get(PROXY_TOKEN_HEADER)).toBeNull()
 		})
 
 		test('the pre-compliance PATCH forms deactivate too: "False" as a string, and a pathless value object', async () => {

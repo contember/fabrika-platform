@@ -29,7 +29,7 @@ const future = (seconds = 300) => Math.floor(Date.now() / 1000) + seconds
 
 function service(endpoints: InstallationProxyEndpointRow[], options: FakeIamOptions = {}, cache: MemoryTokenCache | null = new MemoryTokenCache()) {
 	const iam = new FakeIam(options)
-	return { iam, verify: createVerifyService({ manifest: manifestWith(endpoints), iam, issuer: ISSUER, cache }) }
+	return { iam, verify: createVerifyService({ manifest: manifestWith(endpoints), iam, revocations: iam, issuer: ISSUER, cache }) }
 }
 
 describe('allow — the audience is the manifest id', () => {

@@ -34,7 +34,7 @@ const OPEN = [protocolRow('/*')]
 const PROTOCOL_THEN_HUMAN = [protocolRow('/public/*'), serviceRow('/*', ['human'])]
 
 function service(endpoints: InstallationProxyEndpointRow[], iam: FakeIam, cache: MemoryTokenCache | null = new MemoryTokenCache()): VerifyService {
-	return createVerifyService({ manifest: manifestWith(endpoints), iam, issuer: ISSUER, cache })
+	return createVerifyService({ manifest: manifestWith(endpoints), iam, revocations: iam, issuer: ISSUER, cache })
 }
 
 function iamWith(options: FakeIamOptions): FakeIam {

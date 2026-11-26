@@ -119,9 +119,11 @@ function agentToken(options: ResourceSignOptions = {}): Promise<string> {
 }
 
 function service(grants: FakeGrants, options: { rows?: ProxyEndpointRow[]; iam?: FakeIam; cache?: MemoryTokenCache } = {}) {
+	const iam = options.iam ?? new FakeIam()
 	return createVerifyService({
 		manifest: { apps: [contractAppWith(options.rows ?? ROWS)] },
-		iam: options.iam ?? new FakeIam(),
+		iam,
+		revocations: iam,
 		issuer: ISSUER,
 		cache: options.cache ?? new MemoryTokenCache(),
 		grants,
@@ -347,6 +349,7 @@ describe('the caller and the scope (ADR-0022 rule 3, step 5)', () => {
 		const verify = createVerifyService({
 			manifest: { apps: [contractAppWith(ROWS, [], { scheme: 'http' })] },
 			iam,
+			revocations: iam,
 			issuer: ISSUER,
 			cache: new MemoryTokenCache(),
 			grants,
