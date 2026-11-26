@@ -56,6 +56,7 @@ import {
 	rereadDataLoss,
 	runningSnapshot,
 } from './approval/publish'
+import { assertManualCommitReachable } from './approval/request'
 import { type AccessSnapshot, approvedAccess, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
@@ -808,6 +809,17 @@ async function deployUnder(
 			await invocation.write((fence) => runs.setRunCommit(runId, commitSha, fence))
 			startedRun = await invocation.boundary()
 			registration = { ...registration, app: providerAppAtCommit(registration.app, commitSha) }
+			if (decision !== null) {
+				await assertManualCommitReachable(deps.commits, {
+					app,
+					appEnv,
+					byPerson: startedByPerson(startedRun),
+					commitSha,
+					...(sourceBinding === undefined ? {} : { sourceBinding }),
+					signal: invocation.work.signal,
+				})
+				await invocation.boundary()
+			}
 			// A pending change is published nowhere (ADR-0050): parked here, the run reaches no proxy and no IAM.
 			const commits = deps.commits
 			if (commits === undefined) throw new Error('no commit source is configured to read the run snapshot')

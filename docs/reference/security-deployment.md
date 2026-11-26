@@ -105,9 +105,15 @@ What approval does not cover:
   ([`approval/requests/route.ts`](../../packages/control/src/approval/requests/route.ts)). Control presents an
   environment's ops key only at the domain a provider deployed it to, so a domain no deploy reached receives none
   ([`ops-key.ts`](../../packages/control/src/ops-key.ts)).
-- **Which commit.** A person's manual deploy of a protected environment from the console may name any branch, tag or
-  commit of the repository; Control does not check that it descends from the trigger ref. Approval judges the access
-  the commit declares, not how the commit was reviewed.
+- **Which commit.** A manual deploy of a protected environment, a person's included, deploys only a commit reachable
+  from the trigger branch or tag, or from the default branch when the trigger ref is a pattern or absent. Once the
+  provider resolved the commit, and before anything publishes, Control asks GitHub's compare through the connection's
+  token where one reads the repository, and fails the run when it cannot show it, a source error included
+  ([`approval/request.ts`](../../packages/control/src/approval/request.ts) `assertManualCommitReachable`, on every
+  provider). A non-person's request under `deployRequestCommits: any` is the one exception. A restore's own deploy is
+  exempt, as it redeploys what the environment ran. The compare's size bound below applies here too, so a commit far
+  enough behind the branch cannot be deployed by hand. Approval judges the access the commit declares, not how the
+  commit was reviewed.
 
 A non-person's manual deploy of a protected environment is its own approval request
 ([ADR-0050 §4](../decisions/0050-approved-access.md), [`approval/request.ts`](../../packages/control/src/approval/request.ts)):

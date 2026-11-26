@@ -208,6 +208,33 @@ describe('the GitHub tarball repository', () => {
 		])
 	})
 
+	test("whether a branch holds a commit is asked with the owner connection's token, so GitHub's anonymous limit never applies", async () => {
+		const fixture = await gitFixture()
+		const token = 'ghs_owner_connection'
+		const requests: Array<[string, string | null]> = []
+		const signal = new AbortController().signal
+		const asked = (compareStatus: 'identical' | 'ahead' | 'behind' | 'diverged') =>
+			sourceFor(fixture, {
+				credentials: {
+					repositoryToken: () => Promise.reject(new Error('an unbound read names no binding')),
+					ownerConnectionToken: async () => token,
+				},
+				compareStatus,
+				onMetadataRequest: (url) => requests.push([url, null]),
+				onMetadataAuthorization: (value) => {
+					const last = requests.at(-1)
+					if (last !== undefined) last[1] = value
+				},
+			}).requestedCommit({ repository, commitSha: fixture.commitSha, mergedInto: 'deploy/prod', signal })
+
+		expect(await asked('ahead')).toEqual({ message: 'fixture', merged: true })
+		expect(await asked('diverged')).toEqual({ message: 'fixture', merged: false })
+		expect(requests).toEqual([
+			[`https://api.github.com/repos/contember/fixture/compare/${fixture.commitSha}...deploy/prod?per_page=1`, `Bearer ${token}`],
+			[`https://api.github.com/repos/contember/fixture/compare/${fixture.commitSha}...deploy/prod?per_page=1`, `Bearer ${token}`],
+		])
+	})
+
 	test('fails closed without fetching when the bound connection has no credential', async () => {
 		const fixture = await gitFixture()
 		let metadata = 0

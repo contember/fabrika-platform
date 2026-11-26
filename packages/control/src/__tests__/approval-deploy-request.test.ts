@@ -283,7 +283,8 @@ describe('every bearer is a non-person', () => {
 		const created = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: COMMIT })
 		expect((await executeDeploy(deps(w), { runId: created.id })).status).toBe('succeeded')
 		expect(await run(w, created.id)).toMatchObject({ by_person: 1, request_json: null, park_reason: null })
-		expect(w.requested).toEqual([])
+		// Not a request, yet its commit must be one the trigger branch holds.
+		expect(w.requested.at(-1)).toMatchObject({ commitSha: COMMIT, mergedInto: 'deploy/prod' })
 	})
 
 	test('a run created before the record reads as its actor did: a user ran, a key is judged as a request', async () => {
@@ -444,6 +445,56 @@ describe('a request deploys the commit that passed the check', () => {
 		// A person's run of a ref records no commit until the source resolves it.
 		const person = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: 'refs/heads/main' })
 		expect((await run(w, person.id)).commit_sha).toBeNull()
+	})
+})
+
+describe('a manual deploy of a protected environment deploys only a commit its trigger ref holds', () => {
+	const FEATURE = 'd'.repeat(40)
+	const resolvingTo = (w: World, commitSha: string): RunDeps => ({
+		...deps(w),
+		provider: { ...provider(w), resolveSource: () => Promise.resolve({ commitSha }) },
+	})
+
+	test("a person's deploy of a commit the trigger branch does not hold fails before anything publishes", async () => {
+		const w = await world()
+		await published(w)
+		w.answer = (input) => Promise.resolve({ message: 'wip', merged: input.commitSha !== FEATURE })
+		const person = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: 'refs/heads/feature' })
+		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: person.id })).status).toBe('failed')
+		expect(w.requested.at(-1)).toMatchObject({ commitSha: FEATURE, mergedInto: 'deploy/prod' })
+		expect(w.deploys).toBe(0)
+		expect(w.logs.get(`runs/${person.id}/logs.ndjson`)).toContain(
+			`a manual deploy must be a commit reachable from \`deploy/prod\`; commit ${FEATURE} is not`,
+		)
+		expect((await w.db.runs.getLatestSucceededRun({ appId: 'notes', env: 'prod' }))?.commit_sha).toBe(COMMIT)
+	})
+
+	test('a commit the trigger branch holds deploys, and a source that does not answer fails the run', async () => {
+		const w = await world()
+		await published(w)
+		const held = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: FEATURE })
+		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: held.id })).status).toBe('succeeded')
+		expect(w.deploys).toBe(1)
+
+		w.answer = () => Promise.reject(new SourceFailure('rate_limited', 'resolve'))
+		const unanswered = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: FEATURE })
+		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: unanswered.id })).status).toBe('failed')
+		expect(w.deploys).toBe(1)
+		expect(w.logs.get(`runs/${unanswered.id}/logs.ndjson`)).toContain('the source did not answer whether commit')
+	})
+
+	test('an unprotected environment and a request under `deployRequestCommits: any` are not asked', async () => {
+		const w = await world()
+		await published(w)
+		await choose(w, 'prod', { ...STRICT_POLICY, 'deploy-request': 'off' }, { ...STRICT_SETTINGS, deployRequestCommits: 'any' })
+		w.answer = (input) => Promise.resolve({ message: 'wip', merged: input.mergedInto === null ? null : false })
+		const before = w.requested.length
+
+		const stage = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'stage', ref: 'refs/heads/feature' })
+		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: stage.id })).status).toBe('succeeded')
+		const request = await triggerDeployUseCase(runs(w, 'oauth'), { appId: 'notes', env: 'prod', ref: FEATURE })
+		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: request.id })).status).toBe('succeeded')
+		expect(w.requested.slice(before)).toEqual([])
 	})
 })
 

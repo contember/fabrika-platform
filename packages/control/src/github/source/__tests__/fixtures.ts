@@ -182,6 +182,8 @@ export interface SourceOptions {
 	location?: string
 	redirectResponse?: () => Response
 	descriptorResponse?: () => Response
+	/** The compare of a requested commit against the branch that must hold it; the fixture commit is ahead by default. */
+	compareStatus?: 'identical' | 'ahead' | 'behind' | 'diverged'
 	onDownload?: () => void
 	onMetadataRequest?: (url: string) => void
 	onMetadataAuthorization?: (value: string | null) => void
@@ -203,6 +205,9 @@ export function sourceFor(fixture: Fixture, options: SourceOptions = {}): Tarbal
 				if (url.includes('/commits/')) return Response.json({ sha: fixture.commitSha, commit: { tree: { sha: fixture.treeSha } } })
 				if (url.includes('/git/trees/')) return options.treeResponse?.() ?? Response.json({ sha: fixture.treeSha, truncated: false, tree: fixture.tree })
 				if (url.includes('/contents/')) return options.descriptorResponse?.() ?? new Response(descriptor)
+				if (url.includes('/compare/')) {
+					return Response.json({ status: options.compareStatus ?? 'ahead', base_commit: { sha: fixture.commitSha, commit: { message: 'fixture' } } })
+				}
 				return new Response(null, { status: 404 })
 			},
 		}),
