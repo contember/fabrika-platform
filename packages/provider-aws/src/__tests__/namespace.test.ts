@@ -24,6 +24,9 @@ const installation: AwsAppTarget = {
 	sourcesBucket: 'fabrika-sources-123456789012',
 }
 const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0'], publicIp: true }
+/** The installation's proxy source; an older release's commit, which a namespace may keep. */
+const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
+const OLDER_COMMIT = 'fedcba9876543210fedcba9876543210fedcba98'
 const STACK_ID = 'arn:aws:cloudformation:eu-central-1:123456789012:stack/fabrika-ns-6-shared-prod/0f1e2d3c'
 const OUTPUTS = {
 	ProxySecurityGroupId: 'sg-0123456789abcdef7',
@@ -38,6 +41,8 @@ const target = (change: Record<string, string> = {}) => ({
 		region: 'eu-central-1',
 		stackName: 'fabrika-ns-6-shared-prod',
 		sizing: 'cheap',
+		proxyRepository: 'contember/fabrika-platform',
+		proxyCommitSha: PROXY_SOURCE.commitSha,
 		...change,
 	}),
 })
@@ -101,7 +106,7 @@ class Fake {
 			},
 		},
 	}
-	readonly capabilities = awsNamespaceCapabilities({ installation, network, clients: this.clients, sleep: async () => {} })
+	readonly capabilities = awsNamespaceCapabilities({ installation, network, proxySource: PROXY_SOURCE, clients: this.clients, sleep: async () => {} })
 }
 
 const mutation = (namespace: ProviderDeploymentNamespace = NAMESPACE): ProviderNamespaceMutationInput => ({
@@ -121,6 +126,7 @@ describe('awsNamespaceResources', () => {
 			buildProject: 'fabrika_ns_shared_prod',
 			buildRoleName: 'shared_prod_proxy_build',
 			buildLogGroup: '/fabrika/namespaces/shared/prod/proxy/build',
+			sourcePrefix: 'sources/namespaces/shared/prod',
 		})
 		// `a-b` + `c` and `a` + `b-c` would join to one name without the length.
 		expect(awsNamespaceResources('a-b', 'c').stackName).not.toBe(awsNamespaceResources('a', 'b-c').stackName)
@@ -261,6 +267,32 @@ describe('awsNamespaceCapabilities', () => {
 		expect(() => capabilities.normalize({ ...NAMESPACE, target: { ...NAMESPACE.target, provider: 'zerops' } })).toThrow()
 	})
 
+	test("the proxy pin: a plan takes the installation's default, normalize keeps an older one, and another repository is refused", async () => {
+		const fake = new Fake()
+		const planned = fake.capabilities.operator?.plan({ id: 'shared', env: 'prod', preset: 'cheap' })
+		expect(planned?.namespace.target).toEqual(target())
+		// A pin outlives an upgrade: an older commit is kept as it is, never moved to the newer default (ADR-0045).
+		const older = { ...NAMESPACE, target: target({ proxyCommitSha: OLDER_COMMIT }) }
+		expect(fake.capabilities.normalize(older)).toEqual(older)
+		expect(await fake.capabilities.reconcile(mutation(older))).toEqual(older)
+		// The proxy is the enforcement point: it is built from the installation's platform repository alone.
+		const foreign = { ...NAMESPACE, target: target({ proxyRepository: 'someone/fabrika-platform' }) }
+		expect(() => fake.capabilities.normalize(foreign)).toThrow("pinned to another repository than this installation's platform repository")
+		await expect(fake.capabilities.provision(mutation(foreign))).rejects.toMatchObject({ code: 'awsTarget', retryable: false })
+		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy source', value: `contember/fabrika-platform@${PROXY_SOURCE.commitSha}` })
+	})
+
+	test('a proxy build in flight is carried through normalize and a reconcile, never dropped', async () => {
+		const token = '0f1e2d3c-4b5a-4968-8776-655443322110'
+		const building = {
+			...NAMESPACE,
+			target: target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64), proxyBuildId: `fabrika_ns_shared_prod:${token}` }),
+		}
+		const fake = new Fake()
+		expect(fake.capabilities.normalize(building)).toEqual(building)
+		expect(await fake.capabilities.provision(mutation(building))).toEqual(building)
+	})
+
 	test('provision creates the stack when absent; reconcile of a current stack changes nothing', async () => {
 		const fake = new Fake()
 		expect(await fake.capabilities.provision(mutation())).toEqual(NAMESPACE)
@@ -297,6 +329,7 @@ describe('awsNamespaceCapabilities', () => {
 		const capabilities = awsNamespaceCapabilities({
 			installation,
 			network,
+			proxySource: PROXY_SOURCE,
 			clients: fake.clients,
 			sleep: async () => {
 				clock += AWS_STACK_TIMEOUT_MS
@@ -390,22 +423,22 @@ describe('readNamespaceOutputs', () => {
 	test("reads a serving namespace's outputs, and names the remedy for one without a stack", async () => {
 		const fake = new Fake()
 		const signal = new AbortController().signal
-		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, signal)).rejects.toThrow(
+		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, PROXY_SOURCE, signal)).rejects.toThrow(
 			'the namespace shared has no stack yet; reconcile the namespace',
 		)
 		fake.stack = 'serving'
-		expect(await readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, signal)).toEqual({
+		expect(await readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, PROXY_SOURCE, signal)).toEqual({
 			proxySecurityGroupId: OUTPUTS.ProxySecurityGroupId,
 			serviceConnectNamespaceArn: OUTPUTS.ServiceConnectNamespaceArn,
 		})
 		// A stack a reconcile is still at work on does not serve yet, and the deploy is told to run again.
 		fake.clients.cloudFormation.describeStack = async (stackId) => ({ stackId, status: 'UPDATE_IN_PROGRESS', outputs: {} })
-		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, signal)).rejects.toThrow(
+		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, PROXY_SOURCE, signal)).rejects.toThrow(
 			"the namespace shared's stack is being created or updated (a reconcile is at work); deploy again once it serves",
 		)
 		// One an operator must repair says so.
 		fake.clients.cloudFormation.describeStack = async (stackId) => ({ stackId, status: 'UPDATE_ROLLBACK_FAILED', outputs: {} })
-		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, signal)).rejects.toThrow(
+		await expect(readNamespaceOutputs(fake.clients.cloudFormation, NAMESPACE, installation, PROXY_SOURCE, signal)).rejects.toThrow(
 			'is UPDATE_ROLLBACK_FAILED; an operator must repair or delete it',
 		)
 	})

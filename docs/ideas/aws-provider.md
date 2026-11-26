@@ -430,8 +430,22 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     :8080, the health route alone on :8081, trusted proxy ranges as a build argument), the auth service compiled for
     `bun-linux-x64-musl`, and an Alpine runtime that runs `start.sh` as an unprivileged user. The build fails on an
     image whose binary cannot load its libraries or whose configuration Caddy refuses.
-    Not yet: the proxy service (the namespace's pinned proxy source, the upload
-    and the build's start with its checkpoints; its ECS service in the Service Connect namespace, on X86_64; `republish`),
+    **The pin** (built): a namespace's target holds its proxy source, `proxyRepository` (`<owner>/<name>`) and
+    `proxyCommitSha`. A plan pins the installation's default (Control's `FABRIKA_AWS_PROXY_REPOSITORY` and
+    `FABRIKA_AWS_PROXY_COMMIT_SHA`); `normalize` and every lifecycle call keep a stored pin as it is, never moving it to
+    a newer default (ADR-0045), and refuse a pin of another repository than the installation's: the proxy is the
+    enforcement point, built from the platform repository alone. Moving a pin is an operator's update, not built.
+    **The build's start** (built, `src/proxy-attempt.ts`; nothing calls it yet): the attempt's token and the manifest's
+    sha256 are recorded in the target first; Control uploads the pinned commit with the manifest appended
+    (`proxy.manifest.json`) under `sources/namespaces/<id>/<env>/<token>.tar.gz` and answers the commit and the
+    manifest's sha256, both checked; the presigned read goes into a SecureString under the namespace's `builds/`; the
+    build starts under the token, and its id is recorded. A recorded attempt is found by its token before anything is
+    sent again (only when no build carries it are the upload and the start repeated, under the same token); a changed
+    manifest starts a new attempt. The archive holds the commit's tree at its root (Control's rewrite drops GitHub's
+    top-level directory), so the buildspec unpacks it as it is, for an application's build as for the proxy's.
+    Not yet: the proxy service (following the build to its end: its log, its verdict, the URL parameter's deletion
+    and the image's digest; its ECS service in the Service Connect namespace, on X86_64; `republish`, which will start
+    the build),
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
     application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
@@ -509,7 +523,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
 12. **`packages/control/src/aws/`** (built): the composition root over the neutral Bun host (`provider.ts`, the server,
     maintenance and migration entries), and `entrypoint-isolation.test.ts` extended to it. It reads
     `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (set by ECS), `FABRIKA_AWS_BASE_IMAGE` (the pinned Bun image) and the
-    four installation coordinates of step 9 and the network of step 10, and
+    four installation coordinates of step 9, the network of step 10 and the proxy source a namespace is pinned to
+    (`FABRIKA_AWS_PROXY_REPOSITORY`, `FABRIKA_AWS_PROXY_COMMIT_SHA`), and
     reads repositories through the unbound GitHub source. Nothing runs it until step 11 defines Control's task.
 13. **Tests**: the conformance suite over a fake AWS, renderer tests, and a live suite gated on
     `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack.

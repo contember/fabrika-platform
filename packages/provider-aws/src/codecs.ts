@@ -35,6 +35,12 @@ const BUILD_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{1,254}:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a
 const TOKEN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 /** A CloudFormation stack's name: a letter, then letters, digits and hyphens, at most 128. */
 const STACK_NAME = /^[A-Za-z][A-Za-z0-9-]{0,127}$/
+/** A GitHub repository as `awsSourceRepository` names it: `<owner>/<name>`, lowercased. */
+const GITHUB_REPOSITORY = /^[a-z0-9][a-z0-9._-]{0,99}\/[a-z0-9][a-z0-9._-]{0,99}$/
+/** A full git commit: 40 lowercase hex digits. */
+const COMMIT_SHA = /^[0-9a-f]{40}$/
+/** A sha256 digest as 64 lowercase hex digits. */
+const SHA256_HEX = /^[0-9a-f]{64}$/
 /** The contract digest the framework computes: `sha256:<64 hex>`. */
 const CONTRACT_DIGEST = /^sha256:[0-9a-f]{64}$/
 /** The contract's health endpoint: an absolute path the framework serves. */
@@ -69,12 +75,27 @@ export interface AwsAppArtifact {
 /** How a namespace is sized: one shared database instance for every application, or one per application. */
 export type AwsNamespaceSizing = 'cheap' | 'full'
 
-/** A namespace: the CloudFormation stack that holds its network, its proxy and, for `cheap`, its database. */
+/**
+ * A namespace: the CloudFormation stack that holds its network, its proxy and, for `cheap`, its database, and the
+ * source its proxy is built from.
+ *
+ * - `proxyRepository` and `proxyCommitSha` are the namespace's pinned proxy source (ADR-0045): the installation's public
+ *   platform repository (`<owner>/<name>`, as `awsSourceRepository` lowercases it) and a full commit. Planning copies the
+ *   installation's default; every later build uses the pin, never a newer default of an upgraded Control.
+ * - The proxy build in flight (ADR-0044): `proxyBuildToken` and `proxyBuildManifestSha256` are recorded before anything
+ *   of the attempt is written, the token being its archive's key, its URL parameter and `StartBuild`'s idempotency
+ *   token; `proxyBuildId` once CodeBuild answered.
+ */
 export interface AwsNamespaceTarget {
 	readonly accountId: string
 	readonly region: string
 	readonly stackName: string
 	readonly sizing: AwsNamespaceSizing
+	readonly proxyRepository: string
+	readonly proxyCommitSha: string
+	readonly proxyBuildToken?: string
+	readonly proxyBuildManifestSha256?: string
+	readonly proxyBuildId?: string
 }
 
 /**
@@ -121,7 +142,21 @@ const namespaceTargetSchema = z.object({
 	region: z.string().regex(REGION),
 	stackName: z.string().regex(STACK_NAME),
 	sizing: z.enum(['cheap', 'full']),
-}).strict()
+	proxyRepository: z.string().regex(GITHUB_REPOSITORY),
+	proxyCommitSha: z.string().regex(COMMIT_SHA),
+	proxyBuildToken: z.string().regex(TOKEN).optional(),
+	proxyBuildManifestSha256: z.string().regex(SHA256_HEX).optional(),
+	proxyBuildId: z.string().regex(BUILD_ID).optional(),
+}).strict().refine(
+	(target) => target.proxyBuildToken !== undefined || (target.proxyBuildManifestSha256 === undefined && target.proxyBuildId === undefined),
+	{
+		message: 'a proxy build is recorded with its token',
+		path: ['proxyBuildToken'],
+	},
+).refine((target) => (target.proxyBuildToken === undefined) === (target.proxyBuildManifestSha256 === undefined), {
+	message: "a proxy build's token is recorded with its manifest's digest",
+	path: ['proxyBuildManifestSha256'],
+})
 
 const runCheckpointSchema = z.object({
 	buildToken: z.string().regex(TOKEN).optional(),

@@ -51,7 +51,15 @@ export {
 	type AwsNamespaceResources,
 	awsNamespaceResources,
 	awsNamespaceStack,
+	type AwsProxySource,
 } from './namespace'
+export {
+	type AwsProxyBuildAttemptInput,
+	type AwsProxyBuildClients,
+	awsProxyManifestFile,
+	type AwsProxySourceUpload,
+	startAwsProxyBuild,
+} from './proxy-attempt'
 export {
 	AWS_PROXY_BUILD_IMAGE,
 	AWS_PROXY_BUILDSPEC,
