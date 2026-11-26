@@ -18,7 +18,7 @@ export async function authorizedSources(
 	options: OperationsOperatorOptions,
 	action: 'operations.read' | 'operations.triage' | 'operations.manage',
 ): Promise<SourceRow[]> {
-	const sources = await options.repositories.catalog.listControlSources()
+	const sources = await options.repositories.sources.list()
 	return filterOperationsSources(
 		options.auth,
 		action,

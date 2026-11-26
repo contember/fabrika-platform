@@ -7,6 +7,7 @@ import { IngestRateLimitsRepository } from './repositories/ingest-rate-limits.js
 import { ErrorIngestRepository, PostgresErrorIngestRepository, SqliteErrorIngestRepository } from './repositories/ingest.js'
 import { IssuesRepository } from './repositories/issues.js'
 import { OperatorRepository } from './repositories/operator.js'
+import { SecurityAlertsRepository } from './repositories/security.js'
 import { SourcesRepository } from './repositories/sources.js'
 
 export interface OperationsRepositories {
@@ -16,6 +17,7 @@ export interface OperationsRepositories {
 	issues: IssuesRepository
 	operator: OperatorRepository
 	alerts: AlertsRepository
+	security: SecurityAlertsRepository
 	ingestRateLimits: IngestRateLimitsRepository
 	deadEvents: DeadEventsRepository
 	artifacts: ArtifactsRepository
@@ -34,6 +36,7 @@ export function createSqliteOperationsRepositories(
 		issues: replacements.issues ?? new IssuesRepository(db, now),
 		operator: replacements.operator ?? new OperatorRepository(db, now),
 		alerts: replacements.alerts ?? new SqliteAlertsRepository(db, now),
+		security: replacements.security ?? new SecurityAlertsRepository(db, now),
 		ingestRateLimits: replacements.ingestRateLimits ?? new IngestRateLimitsRepository(db, now),
 		deadEvents: replacements.deadEvents ?? new DeadEventsRepository(db),
 		artifacts: replacements.artifacts ?? new ArtifactsRepository(db, now),
@@ -53,6 +56,7 @@ export function createPostgresOperationsRepositories(
 		issues: replacements.issues ?? new IssuesRepository(db, now),
 		operator: replacements.operator ?? new OperatorRepository(db, now),
 		alerts: replacements.alerts ?? new PostgresAlertsRepository(db, now),
+		security: replacements.security ?? new SecurityAlertsRepository(db, now),
 		ingestRateLimits: replacements.ingestRateLimits ?? new IngestRateLimitsRepository(db, now),
 		deadEvents: replacements.deadEvents ?? new DeadEventsRepository(db),
 		artifacts: replacements.artifacts ?? new ArtifactsRepository(db, now),
@@ -84,5 +88,7 @@ export type {
 	OperatorReleaseRow,
 } from './repositories/operator.js'
 export { OperatorRepository } from './repositories/operator.js'
+export type { SecurityAlertConfigRow } from './repositories/security.js'
+export { SecurityAlertsRepository } from './repositories/security.js'
 export type { IngestCredentialResolution, SourceRow } from './repositories/sources.js'
 export { SourcesRepository } from './repositories/sources.js'

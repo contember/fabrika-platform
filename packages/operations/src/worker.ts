@@ -9,8 +9,9 @@ import { SqliteHealthRepository } from './health-repository.js'
 import { OperationsHealthExecution } from './health-service.js'
 import type { OperationsHttpEnv } from './http.js'
 import { OperationsMaintenance, WebhookNotificationSender } from './maintenance.js'
-import { cloudflareBlobStore, cloudflareJobQueue } from './platform-cf.js'
+import { bindingSignInSignals, cloudflareBlobStore, cloudflareJobQueue } from './platform-cf.js'
 import { createSqliteOperationsRepositories } from './repositories.js'
+import { OperationsSecurityAlertProducer } from './security-alerts.js'
 import { StoredOperationsTelemetryAdapter } from './telemetry.js'
 
 interface OperationsWorkerBindings {
@@ -24,6 +25,7 @@ interface OperationsWorkerBindings {
 	FABRIKA_IAM_ISSUER?: string
 	/** The command-line client's resource this service verifies tokens for (`fabrika.config.ts`); absent, none. */
 	FABRIKA_OPERATIONS_OAUTH_RESOURCE?: string
+	/** IAM's full entrypoint (`Propustka`): `IamRpc`, and the sign-in signals `bindingSignInSignals` decodes. */
 	IAM?: IamRpc
 }
 
@@ -67,6 +69,7 @@ export class OperationsWorker extends WorkerEntrypoint<OperationsWorkerBindings>
 		}).run()
 		await new OperationsMaintenance(env.repositories.alerts, new WebhookNotificationSender(), {
 			alertProducer: new OperationsAlertProducer(env.repositories.alerts, env.repositories.ingest),
+			securityAlerts: new OperationsSecurityAlertProducer(env.repositories.alerts, env.repositories.security, bindingSignInSignals(this.env.IAM)),
 		}).run()
 	}
 }

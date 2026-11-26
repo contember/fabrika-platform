@@ -7,6 +7,7 @@ import {
 	healthCheckSchema,
 	issueMutationSchema,
 	issueStatusSchema,
+	securityAlertSchema,
 	spikeAlertSchema,
 } from './operator-input.js'
 
@@ -56,6 +57,7 @@ export const bulkIssueStatusInput = bulkIssueStatusSchema
 export const healthCheckMutationInput = sourceInput.extend({ input: healthCheckSchema })
 export const healthCheckUpdateInput = healthCheckDeleteInput.extend({ input: healthCheckSchema })
 export const spikeAlertInput = sourceInput.extend({ input: spikeAlertSchema })
+export const securityAlertInput = sourceInput.extend({ input: securityAlertSchema })
 export const alertRuleInput = sourceInput.extend({ kind: alertKindSchema, input: alertRuleSchema })
 export const alertChannelCreateInput = sourceInput.extend({ input: channelSchema.extend({ target: z.string() }) })
 export const alertChannelUpdateInput = alertChannelDeleteInput.extend({

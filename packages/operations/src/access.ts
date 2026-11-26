@@ -2,6 +2,7 @@ import type { AuthContext } from '@fabrika/auth'
 import type { PrincipalListItem, Scope } from '@fabrika/auth-core'
 import { OPERATIONS_ACTIONS, type OperationsAction } from '@fabrika/operations-contract/access'
 import type { IssueMutation } from '@fabrika/operations-contract/operator'
+import { INSTALLATION_SOURCE } from './installation-source.js'
 
 export interface OperationsSourceAccess {
 	id: string
@@ -13,13 +14,18 @@ export interface OperationsSourceAccess {
 const appScope = (appId: string): Scope => ({ type: 'app', value: appId })
 const environmentScope = (environment: string): Scope => ({ type: 'environment', value: environment })
 
-/** App and environment scope dimensions are independent grants, therefore source access is their union. */
+/**
+ * App and environment scope dimensions are independent grants, therefore source access is their union. A source under
+ * IAM's app id (the installation source) is the exception: only an app-scoped grant at that id or a global grant
+ * reaches it, never an environment-scoped grant, whatever its environment is called.
+ */
 export function canAccessOperationsSource(
 	auth: Pick<AuthContext, 'can'>,
 	action: OperationsAction,
 	source: Pick<OperationsSourceAccess, 'appId' | 'environment'>,
 ): boolean {
-	return auth.can(action, appScope(source.appId)) || auth.can(action, environmentScope(source.environment))
+	if (auth.can(action, appScope(source.appId))) return true
+	return source.appId !== INSTALLATION_SOURCE.appId && auth.can(action, environmentScope(source.environment))
 }
 
 export function filterOperationsSources<T extends Pick<OperationsSourceAccess, 'appId' | 'environment'>>(
@@ -32,7 +38,7 @@ export function filterOperationsSources<T extends Pick<OperationsSourceAccess, '
 	if (apps === null || environments === null) return [...sources]
 	const appSet = new Set(apps)
 	const environmentSet = new Set(environments)
-	return sources.filter((source) => appSet.has(source.appId) || environmentSet.has(source.environment))
+	return sources.filter((source) => appSet.has(source.appId) || (source.appId !== INSTALLATION_SOURCE.appId && environmentSet.has(source.environment)))
 }
 
 /** Replace caller-provided assignment labels with IAM's durable id + current display snapshot. */

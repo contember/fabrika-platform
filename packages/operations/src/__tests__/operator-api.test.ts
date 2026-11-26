@@ -2,8 +2,9 @@ import type { AuthContext, DomainEvent, PrincipalList } from '@fabrika/auth'
 import { EmptyQueue, MemoryBlobs } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import { SqliteHealthRepository } from '../health-repository.js'
+import { INSTALLATION_SOURCE } from '../installation-source.js'
 import { type OperationsOperatorOptions, OperationsOperatorUseCases } from '../operator-api.js'
-import { healthCheckSchema, issueMutationSchema } from '../operator-input.js'
+import { healthCheckSchema, issueMutationSchema, securityAlertSchema } from '../operator-input.js'
 import { persistIngest } from '../pipeline.js'
 import { createHarness } from './helpers/sqlite.js'
 
@@ -614,5 +615,52 @@ describe('Operations operator use cases', () => {
 			httpChecks: [{ path: '/health', current: { state: 'stale' } }],
 			telemetryState: 'unavailable',
 		})
+	})
+})
+
+describe('the installation source in the operator API', () => {
+	/** A caller holding every Operations action in exactly the given environments. */
+	function environmentAuth(environments: string[]): AuthContext {
+		return {
+			...auth({ apps: [] }),
+			can: (_action, scope) => scope?.type === 'environment' && environments.includes(scope.value),
+			scopedTo: (_action, dimension) => dimension === 'environment' ? environments : [],
+		}
+	}
+
+	test('is listed and configurable for an app-scoped grant at IAM and invisible to an environment-scoped one', async () => {
+		const harness = createHarness(() => 10_000)
+		const source = await harness.repositories.security.ensureInstallationSource()
+		if (source === null) throw new Error('installation source was not created')
+		const audits: DomainEvent[] = []
+		const operator = options(auth({ apps: [INSTALLATION_SOURCE.appId], audits }), harness)
+		expect((await operations(operator).sources()).items.map((item) => item.id)).toEqual([source.id])
+		expect((await operations(operator).alerts(source.id)).security).toEqual({ accountThreshold: 5, installationThreshold: 50 })
+		expect(await operations(operator).updateSecurityAlert(source.id, { accountThreshold: 3, installationThreshold: 20 })).toEqual({
+			accountThreshold: 3,
+			installationThreshold: 20,
+		})
+		expect((await operations(operator).alerts(source.id)).security).toEqual({ accountThreshold: 3, installationThreshold: 20 })
+		expect(audits.map((event) => event.action)).toEqual(['operations.alert.security'])
+
+		const byEnvironment = options(environmentAuth([INSTALLATION_SOURCE.environment, 'production']), harness)
+		expect((await operations(byEnvironment).sources()).items).toEqual([])
+		await expect(operations(byEnvironment).source(source.id)).rejects.toMatchObject({ httpStatus: 404 })
+		await expect(operations(byEnvironment).alerts(source.id)).rejects.toMatchObject({ httpStatus: 404 })
+	})
+
+	test('an application source has no sign-in thresholds', async () => {
+		const input = options(auth({ apps: ['app-a'] }))
+		await seedSource(input, 'source-a', 'app-a', 'fingerprint-a', 1_000)
+		expect((await operations(input).alerts('source-a')).security).toBeNull()
+		await expect(operations(input).updateSecurityAlert('source-a', { accountThreshold: 3, installationThreshold: 20 })).rejects.toMatchObject({
+			httpStatus: 400,
+		})
+	})
+
+	test('thresholds are positive integers the int4 columns hold', () => {
+		expect(securityAlertSchema.safeParse({ accountThreshold: 0, installationThreshold: 50 }).success).toBe(false)
+		expect(securityAlertSchema.safeParse({ accountThreshold: 5, installationThreshold: 2_000_000 }).success).toBe(false)
+		expect(securityAlertSchema.safeParse({ accountThreshold: 5, installationThreshold: 50 }).success).toBe(true)
 	})
 })

@@ -2,8 +2,10 @@ import { type SqlDatabase, uuidv7 } from '@fabrika/platform'
 import { HEALTH_ALERT_KINDS } from '../health.js'
 import { parseObject } from './values.js'
 
-// Health alerts carry the outage signal, so a backlog of issue alerts never delays them.
-const CLAIM_ORDER = `CASE WHEN kind IN (${HEALTH_ALERT_KINDS.map((kind) => `'${kind}'`).join(', ')}) THEN 0 ELSE 1 END, visible_at, id`
+// Health alerts carry the outage signal and security alerts an intrusion signal; both are few, and a backlog of issue
+// alerts never delays them.
+const PRIORITY_ALERT_KINDS = [...HEALTH_ALERT_KINDS, 'security']
+const CLAIM_ORDER = `CASE WHEN kind IN (${PRIORITY_ALERT_KINDS.map((kind) => `'${kind}'`).join(', ')}) THEN 0 ELSE 1 END, visible_at, id`
 
 export interface NotificationChannelRow {
 	id: string

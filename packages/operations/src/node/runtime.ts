@@ -8,6 +8,7 @@ import { OperationsHealthExecution } from '../health-service.js'
 import type { OperationsHttpEnv } from '../http.js'
 import { OperationsMaintenance, WebhookNotificationSender } from '../maintenance.js'
 import { createPostgresOperationsRepositories } from '../repositories.js'
+import { OperationsSecurityAlertProducer } from '../security-alerts.js'
 import { StoredOperationsTelemetryAdapter } from '../telemetry.js'
 import { createOperationsIngestQueue, PostgresOperationsConsumer } from './consumer.js'
 
@@ -30,14 +31,18 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 	const blobs = parseStorageConnection(source, 'FABRIKA_OPERATIONS_BLOB', { defaultRegion: 'auto', endpoint: 'optional', environment: source })
 	if (blobs === undefined) throw new Error('FABRIKA_OPERATIONS_BLOB_BUCKET is required')
 	const payloads = S3BlobStore.open(blobs)
+	const syncKey = requiredSecret(source, 'OPERATIONS_SYNC_KEY')
+	const iamConfig = resolveOperationsIamProcessConfig(source)
+	// One client per process: the SDK caches the JWKS per binding object, and the maintenance pass asks the same IAM.
+	const iamRpc = new HttpIamRpc({ origin: iamConfig.rpcOrigin, key: iamConfig.rpcKey })
 	const env: OperationsHttpEnv = {
 		repositories,
 		ingestQueue,
 		payloads,
 		publicHost: source['FABRIKA_OPERATIONS_PUBLIC_HOST'] ?? '',
-		syncKey: requiredSecret(source, 'OPERATIONS_SYNC_KEY'),
+		syncKey,
 		health: healthRepository,
-		iam: operationsIam(source),
+		iam: createOperationsIam({ IAM: iamRpc, FABRIKA_IAM_ISSUER: iamConfig.issuer }, iamConfig.oauthResource),
 	}
 	return {
 		env,
@@ -51,26 +56,12 @@ export function createOperationsRuntime(source: Record<string, string | undefine
 		}),
 		maintenance: new OperationsMaintenance(repositories.alerts, new WebhookNotificationSender(), {
 			alertProducer: new OperationsAlertProducer(repositories.alerts, repositories.ingest),
+			securityAlerts: new OperationsSecurityAlertProducer(repositories.alerts, repositories.security, iamRpc),
 		}),
 		async shutdown(): Promise<void> {
 			await db.close()
 		},
 	}
-}
-
-function operationsIam(source: Record<string, string | undefined>) {
-	// One path everywhere: the process verifies IAM-issued tokens and has no local mode to fall back on.
-	const config = resolveOperationsIamProcessConfig(source)
-	return createOperationsIam(
-		{
-			IAM: new HttpIamRpc({
-				origin: config.rpcOrigin,
-				key: config.rpcKey,
-			}),
-			FABRIKA_IAM_ISSUER: config.issuer,
-		},
-		config.oauthResource,
-	)
 }
 
 export interface OperationsIamProcessConfig {

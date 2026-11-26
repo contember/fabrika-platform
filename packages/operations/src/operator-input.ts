@@ -3,7 +3,7 @@ import { z } from 'zod'
 const nonempty = z.string().min(1)
 const positiveInteger = z.number().int().safe().positive()
 export const issueStatusSchema = z.enum(['open', 'resolved', 'ignored'])
-export const alertKindSchema = z.enum(['new_issue', 'regression', 'spike', 'failed_check', 'recovery', 'unhealthy_telemetry'])
+export const alertKindSchema = z.enum(['new_issue', 'regression', 'spike', 'failed_check', 'recovery', 'unhealthy_telemetry', 'security'])
 export const issueMutationSchema = z.discriminatedUnion('kind', [
 	z.object({ kind: z.literal('status'), status: issueStatusSchema }),
 	z.object({ kind: z.literal('comment'), text: nonempty }),
@@ -25,6 +25,9 @@ export const healthCheckSchema = z.object({
 	staleAfterMs: positiveInteger,
 })
 export const spikeAlertSchema = z.object({ threshold: positiveInteger, enabled: z.boolean() })
+// The columns are int4 on Postgres; a million refusals in fifteen minutes is already no threshold.
+const refusalThreshold = positiveInteger.max(1_000_000)
+export const securityAlertSchema = z.object({ accountThreshold: refusalThreshold, installationThreshold: refusalThreshold })
 export const alertRuleSchema = z.object({ enabled: z.boolean() })
 export const channelSchema = z.object({ scope: alertKindSchema, type: z.literal('webhook'), target: z.string().optional(), enabled: z.boolean() })
 
