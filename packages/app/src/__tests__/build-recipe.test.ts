@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -322,6 +322,14 @@ describe.each(SHELLS)('the build schema checks command under %s', (_label, shell
 	afterAll(async () => {
 		for (const root of roots) await rm(root, { recursive: true, force: true })
 	})
+
+	// The first exec of a binary nothing read yet can stall for seconds on CI; each test's 5 s should time only the command.
+	beforeAll(async () => {
+		const binary = Bun.which(shell[0] ?? '')
+		if (binary === null) throw new Error(`expected ${shell[0]} on PATH`)
+		await Bun.file(binary).bytes()
+		expect(await Bun.spawn([...shell, '-c', 'true']).exited).toBe(0)
+	}, 60_000)
 
 	const stub = async (path: string, body: string): Promise<void> => {
 		await writeFile(path, `#!/bin/sh\n${body}\n`)
