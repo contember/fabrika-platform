@@ -346,6 +346,15 @@ other environment, before the provider prepares anything, and the write maps a r
   on any provider, each pending key a succeeded run handed (`confirmHanded`), and a later run never takes over a
   `handed_by` a succeeded run holds: otherwise a provider without `managedCredentials` would keep every key pending,
   and a failed redeploy would hide the expiry of the key still running.
+- **The maintenance pass reads exposure back between deploys (`src/exposure-watch.ts`), where the provider declares
+  `exposure` (Zerops).** Under each environment's `<app>:<env>` lease, skipping one a run holds or still runs and every
+  `dev` environment, it calls `exposure.check`, bounded at `EXPOSURE_CHECK_TIMEOUT_MS`; a set of findings other than the
+  one recorded in `app_env_exposure_alerts` raises one `FabrikaExposureDetected` error event in the application's own
+  Operations, its fingerprint carrying the raise time so each raise is a new issue that `new_issue` rules notify
+  (`sendControlEvent`, `src/operations-event.ts`, the transport the workload-key warning uses) and is recorded once
+  Operations took it, refused it for good, or there is no ingest; a failed delivery is sent again by the next pass. The
+  same exposure is not raised again while it lasts; a check that finds none deletes the row. It only reports: the next
+  deploy's `verify-exposure` refuses the exposure.
 - **The membership transport key comes from the APPROVED contract too (`src/membership-transport.ts`, ADR-0022
   rule 6).** Behind a namespace proxy an application has no IAM binding, so while `needsMembershipTransport` holds for
   the approved contract (an endpoint with a delegation, one on, in or below a dimension with members, or a share-link

@@ -16,6 +16,7 @@ import type { BackupScheduleSummary } from './backups'
 import type { ControlRegistryRepository } from './db'
 import type { DevMaintenanceSummary } from './dev/service'
 import type { Env } from './env'
+import { exposureProvider, type ExposureWatchSummary, NO_EXPOSURE_WATCH, watchExposure } from './exposure-watch'
 import { type FetchFn, pollPublicRepos, type PollSummary } from './github/triggers/poll'
 import { type MailMaintenanceSummary, runMailMaintenance } from './mail-relay/maintenance'
 import type { OperationsCatalogSyncSummary } from './operations-catalog'
@@ -66,6 +67,8 @@ export interface MaintenanceSummary {
 	workloadKeys: WorkloadKeyRotationSummary
 	/** Environments warned through their Operations that a key the running version holds is about to expire. */
 	workloadKeyExpiry: WorkloadKeyExpirySummary
+	/** Environments read back for a service exposed past their proxy since their last deploy, and alerted on a change. */
+	exposure: ExposureWatchSummary
 }
 
 /** Seams a test drives. Production passes neither and gets the real clock + the global `fetch`. */
@@ -187,6 +190,12 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (workloadKeyExpiry.warned > 0 || workloadKeyExpiry.failed > 0) {
 		console.info(`workload key expiry: warned=${workloadKeyExpiry.warned} failed=${workloadKeyExpiry.failed}`)
 	}
+	const exposure = await checkExposure(env, options, now)
+	if (exposure.alerted > 0 || exposure.cleared > 0 || exposure.failed > 0) {
+		console.info(
+			`exposure: checked=${exposure.checked} alerted=${exposure.alerted} cleared=${exposure.cleared} busy=${exposure.busy} failed=${exposure.failed}`,
+		)
+	}
 	const dev = options.devIdle === undefined ? { parked: 0, removed: 0, failed: 0 } : await options.devIdle()
 	if (dev.parked > 0 || dev.removed > 0 || dev.failed > 0) {
 		console.info(`dev environments: parked=${dev.parked} removed=${dev.removed} failed=${dev.failed}`)
@@ -217,7 +226,21 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 		backups,
 		workloadKeys,
 		workloadKeyExpiry,
+		exposure,
 	}
+}
+
+/** Without a provider that reads exposure back outside a run, only a deploy reads it. */
+async function checkExposure(env: Env, options: MaintenanceOptions, now: () => number): Promise<ExposureWatchSummary> {
+	const provider = exposureProvider(options.provider)
+	if (provider === null) return { ...NO_EXPOSURE_WATCH }
+	return watchExposure({
+		repositories: repositories(env),
+		provider,
+		locks: locks(env),
+		ingest: options.operationsIngest ?? ((request) => fetch(request)),
+		now,
+	})
 }
 
 /** Without a provider that writes managed credentials, or without a vault and IAM, keys reach an application only by a deploy. */

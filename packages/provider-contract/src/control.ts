@@ -338,6 +338,23 @@ export interface ProviderManagedCredentials {
 	write(input: ProviderManagedCredentialsInput): Promise<void>
 }
 
+/** One way a service of an environment is reachable past the environment's proxy, in words an operator acts on. */
+export interface ProviderExposureFinding {
+	/** The service as the provider names it (a Zerops hostname). */
+	readonly service: string
+	readonly reason: string
+}
+
+/**
+ * The read-back a deploy runs before it activates a version (ADR-0043), for an environment between deploys: something
+ * outside a run (an operator, another token) may expose a service the last deploy verified. Mutation-free; empty when
+ * nothing is exposed; a service the environment declares but the provider has not created yet is no finding. Control's
+ * maintenance pass calls it under the environment's deploy lease and alerts the application's Operations on a change.
+ */
+export interface ProviderExposure {
+	check(input: { readonly environment: ProviderEnvironment; readonly signal: AbortSignal }): Promise<readonly ProviderExposureFinding[]>
+}
+
 /**
  * A namespace lifecycle failure an operator can act on.
  *
@@ -737,6 +754,8 @@ export interface ControlProvider {
 	readonly secrets?: ProviderManagedSecrets
 	/** Absent means a managed credential reaches an environment only with a deploy. */
 	readonly managedCredentials?: ProviderManagedCredentials
+	/** Absent means exposure is read back only by a deploy, if at all. */
+	readonly exposure?: ProviderExposure
 	readonly namespaces?: ProviderNamespaceCapabilities
 	/** MCP authoring (ADR-0049): an environment of this provider can be an authoring target. Absent means none can. */
 	readonly authoring?: ProviderAuthoring

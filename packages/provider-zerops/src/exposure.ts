@@ -2,7 +2,8 @@
 // access on, but an earlier enable survives it, and Zerops has no API to read a bucket policy back. So every declared
 // service must read `subdomainAccess: false`, and every bucket must be one the platform created private.
 
-import type { ZeropsImportResult } from './api'
+import { readableContent, type ZeropsApi, type ZeropsImportResult } from './api'
+import { type FabrikaManifest, manifestServiceHostnames } from './manifest'
 
 /**
  * The provenance marker: a service variable on the deploy service listing the object-storage service ids the platform
@@ -45,6 +46,75 @@ export const unprovenBucketReason = (input: { bucketId: string; deployService: s
 export interface ExposureFinding {
 	readonly hostname: string
 	readonly reason: string
+}
+
+/** A finding of the read-back; `absent` marks a declared service the project does not hold. */
+export interface ExposureReadFinding extends ExposureFinding {
+	readonly absent?: true
+}
+
+export interface ExposureRead {
+	/** In the order of the manifest's services. */
+	readonly findings: readonly ExposureReadFinding[]
+	/** The declared buckets of platform provenance. */
+	readonly bucketIds: readonly string[]
+	readonly marker: StorageProvenanceMarker
+}
+
+/** The hostnames of the object-storage services the manifest declares. */
+export const declaredBuckets = (artifact: FabrikaManifest): string[] =>
+	artifact.target.importDocument.services.filter((service) => isObjectStorageType(service.type)).map((service) => service.hostname)
+
+/**
+ * Read every declared service back: `subdomainAccess` must be exactly `false`, and a bucket must be one `created` (this
+ * run's import), the provenance marker on the deploy service, or the stored target's `createdBuckets` names. The deploy
+ * step and Control's maintenance pass (`exposure.check`) both judge by it.
+ */
+export async function readExposure(input: {
+	readonly api: Pick<ZeropsApi, 'findService' | 'listServiceEnv'>
+	readonly artifact: FabrikaManifest
+	readonly projectId: string
+	readonly serviceId: string
+	readonly created: ReadonlyMap<string, string>
+	readonly createdBuckets: readonly string[]
+	readonly signal: AbortSignal
+	/** Checked before each service read. */
+	readonly assertRunning: (signal: AbortSignal) => void
+}): Promise<ExposureRead> {
+	const { api, artifact, signal } = input
+	const buckets = declaredBuckets(artifact)
+	const records = buckets.length === 0 ? [] : await api.listServiceEnv({ serviceId: input.serviceId, signal })
+	const record = records.find((entry) => entry.key === STORAGE_PROVENANCE_KEY)
+	const marker: StorageProvenanceMarker = record === undefined ? 'absent' : record.sensitive ? 'sensitive' : 'readable'
+	const known = new Set([...parseStorageProvenance(readableContent(record)), ...input.createdBuckets])
+	const findings: ExposureReadFinding[] = []
+	const bucketIds: string[] = []
+	for (const hostname of manifestServiceHostnames(artifact)) {
+		input.assertRunning(signal)
+		const service = await api.findService({ projectId: input.projectId, hostname, signal })
+		if (service === null) {
+			findings.push({ hostname, reason: 'is absent after the import, so its exposure cannot be read back', absent: true })
+			continue
+		}
+		if (service.subdomainAccess !== false) {
+			findings.push({
+				hostname,
+				reason: service.subdomainAccess === true
+					? 'has a `.zerops.app` subdomain, which reaches it past the namespace proxy; disable it in Zerops'
+					: 'did not report its subdomain access',
+			})
+		}
+		if (!buckets.includes(hostname)) continue
+		if (input.created.get(hostname) === service.id || known.has(service.id)) {
+			bucketIds.push(service.id)
+		} else {
+			findings.push({
+				hostname,
+				reason: unprovenBucketReason({ bucketId: service.id, deployService: artifact.target.deployService, marker }),
+			})
+		}
+	}
+	return { findings, bucketIds, marker }
 }
 
 export const formatExposureFindings = (findings: readonly ExposureFinding[]): string =>

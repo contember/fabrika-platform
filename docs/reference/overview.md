@@ -376,7 +376,9 @@ process's database connections to the database's limit and raises the
 database's minimum RAM where that leaves too few. `verify-exposure` refuses the run, and raises an
 Operations alert, when a declared service has subdomain access or a bucket
 lacks the platform's provenance
-([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)). Control streams the archive to the reserved version's
+([ADR-0043](../decisions/0043-validate-and-render-one-zerops-descriptor-meaning.md)); Control's maintenance
+pass reads the same back between deploys and alerts the application's Operations when it changes
+(`packages/control/src/exposure-watch.ts`). Control streams the archive to the reserved version's
 presigned upload URL; the Zerops token never leaves control
 ([ADR-0029](../decisions/0029-github-app-sources.md)).
 

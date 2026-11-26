@@ -673,6 +673,28 @@ export class ControlRegistryRepository {
 			.run()
 	}
 
+	/** The exposure the maintenance pass last alerted the environment's Operations of, or null while it alerted none. */
+	async getExposureAlert(appId: string, env: string): Promise<string | null> {
+		const row = await this.d1
+			.prepare('SELECT exposure FROM app_env_exposure_alerts WHERE app_id = ? AND env = ?')
+			.bind(appId, env)
+			.first<{ exposure: string }>()
+		return row?.exposure ?? null
+	}
+
+	/** Record that the environment's Operations took the alert of `exposure` at `at` (unix seconds). */
+	async recordExposureAlert(appId: string, env: string, exposure: string, at: number): Promise<void> {
+		await this.d1
+			.prepare(`INSERT INTO app_env_exposure_alerts (app_id, env, exposure, alerted_at) VALUES (?, ?, ?, ?)
+				ON CONFLICT (app_id, env) DO UPDATE SET exposure = excluded.exposure, alerted_at = excluded.alerted_at`)
+			.bind(appId, env, exposure, at)
+			.run()
+	}
+
+	async clearExposureAlert(appId: string, env: string): Promise<void> {
+		await this.d1.prepare('DELETE FROM app_env_exposure_alerts WHERE app_id = ? AND env = ?').bind(appId, env).run()
+	}
+
 	/**
 	 * What a new environment of these coordinates starts from, as `APP_ENV_INSERT_SQL` takes it: the protection a deleted
 	 * one left, else the defaults (ADR-0050).

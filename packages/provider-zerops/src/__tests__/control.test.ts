@@ -2180,3 +2180,81 @@ describeControlProviderConformance('the Zerops control provider', {
 		}
 	},
 })
+
+describe('Zerops ControlProvider exposure check', () => {
+	const withBucket: ZeropsAppConfig = {
+		...config,
+		target: {
+			...config.target,
+			deployService: 'notes',
+			services: () => [{ hostname: 'notes', type: 'alpine/bun@1.3' }, { hostname: 'files', type: 'object-storage' }],
+		},
+	}
+	const bucketArtifact = {
+		provider: 'zerops',
+		version: zeropsArtifactCodec.version,
+		payload: zeropsArtifactCodec.encode(compileFabrikaManifest(withBucket, 'prod', SOURCE_DESCRIPTOR)),
+	}
+	const check = async (api: ZeropsApi, overrides: Partial<ProviderEnvironment> = {}) => {
+		const exposure = createTestControlProvider({ accessToken: 'zt-secret', api }).exposure
+		if (exposure === undefined) throw new Error('the Zerops provider reads exposure back')
+		return await exposure.check({ environment: environment(overrides), signal: new AbortController().signal })
+	}
+	const writes = (): string[] => [...recorded.calls, ...recorded.envWrites.map((write) => write.key), ...recorded.imports.map(() => 'import')]
+
+	test('an environment the last deploy verified reads unchanged, and the check writes nothing', async () => {
+		const api = makeApi(recorded)
+		const marker = { id: 'env-marker', key: 'FABRIKA_STORAGE_PROVENANCE', sensitive: false, content: 'bucket-1' }
+		const findings = await check({
+			...api,
+			listServiceEnv: async () => [marker],
+			findService: async ({ hostname }) => ({ id: hostname === 'files' ? 'bucket-1' : 'service-1', name: hostname, subdomainAccess: false }),
+		}, { artifact: bucketArtifact })
+
+		expect(findings).toEqual([])
+		expect(writes()).toEqual([])
+	})
+
+	test('a subdomain enabled since the deploy, or a bucket no evidence names, is a finding', async () => {
+		const api = makeApi(recorded)
+		const findings = await check({
+			...api,
+			listServiceEnv: async () => [],
+			findService: async ({ hostname }) => ({
+				id: hostname === 'files' ? 'bucket-9' : 'service-1',
+				name: hostname,
+				subdomainAccess: hostname === 'notes',
+			}),
+		}, { artifact: bucketArtifact })
+
+		expect(findings.map((finding) => finding.service)).toEqual(['notes', 'files'])
+		expect(findings[0]?.reason).toContain('`.zerops.app` subdomain')
+		expect(findings[1]?.reason).toContain('is a bucket the platform did not create private')
+		expect(writes()).toEqual([])
+	})
+
+	test('a bucket the registration created is vouched for by the stored target', async () => {
+		const api = makeApi(recorded)
+		const findings = await check({
+			...api,
+			listServiceEnv: async () => [],
+			findService: async ({ hostname }) => ({ id: hostname === 'files' ? 'bucket-1' : 'service-1', name: hostname, subdomainAccess: false }),
+		}, {
+			artifact: bucketArtifact,
+			target: {
+				provider: 'zerops',
+				version: zeropsStoredTargetCodec.version,
+				payload: zeropsStoredTargetCodec.encode({ serviceId: 'service-1', createdBuckets: ['bucket-1'] }),
+			},
+		})
+
+		expect(findings).toEqual([])
+	})
+
+	test('a declared service the project does not hold yet is left to the deploy that creates it', async () => {
+		const api = makeApi(recorded)
+		const findings = await check({ ...api, findService: async () => null })
+
+		expect(findings).toEqual([])
+	})
+})

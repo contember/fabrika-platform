@@ -228,7 +228,9 @@ bun test
   write later. A sensitive marker (releases up to v0.4.2) names nothing and is rewritten readable. An
   adopted bucket never gets evidence, and its refusal names the operator's remedies. A refusal fails the run before a
   version is reserved and raises an Operations alert through the application's own ingest DSN
-  (`alertExposure`, best-effort).
+  (`alertExposure`, best-effort). The read is `readExposure` (`src/exposure.ts`), the one judge: the control provider's
+  `exposure.check` runs it between deploys for Control's maintenance pass, with no import's evidence, and leaves out a
+  declared service the project does not hold yet. Never let the two drift apart.
 - **The run checkpoint is `{ appVersionId, triggered }` and recovery never resumes (ADR-0044).** `appVersionId`
   is recorded before the upload and `triggered` before the build request; a failed write there means no
   build request. `triggered: false` → delete the exact version (`deleteVersion`, `src/version-attempt.ts`;

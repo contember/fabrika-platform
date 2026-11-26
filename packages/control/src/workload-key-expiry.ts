@@ -4,10 +4,9 @@
 // At most one warning per key and day, the keys of one environment due together in one event, to the application's own
 // ingest; an expired key is reported as an error.
 
-import { operationsEnvelopeUrl } from '@fabrika/operations-contract/ingest'
 import type { ControlRepositories } from './db'
 import type { ExpiringWorkloadKey } from './db/workload-credentials'
-import { ingestOrigin } from './operations-catalog'
+import { sendControlEvent } from './operations-event'
 
 /** A key the running version holds with this little left is reported: a week of warning, after a week of renewals. */
 export const WORKLOAD_KEY_WARN_BELOW_SECONDS = 7 * 24 * 60 * 60
@@ -15,7 +14,6 @@ export const WORKLOAD_KEY_WARN_BELOW_SECONDS = 7 * 24 * 60 * 60
 export const WORKLOAD_KEY_WARN_EVERY_SECONDS = 24 * 60 * 60
 
 const DAY_SECONDS = 24 * 60 * 60
-const DELIVERY_TIMEOUT_MS = 5_000
 
 /** What one pass did, by environment. */
 export interface WorkloadKeyExpirySummary {
@@ -83,50 +81,27 @@ interface Warning {
  * log line stands, and the keys are not warned again that day.
  */
 async function report(deps: WorkloadKeyExpiryDeps, appId: string, env: string, warning: Warning): Promise<boolean> {
-	const ingest = await deps.repositories.operationsCatalog.getActiveIngestConfig(appId, env)
-	const origin = ingestOrigin(ingest)
-	if (ingest === null || ingest.ingest_project_id === null || origin === undefined) return true
-	const eventId = crypto.randomUUID().replaceAll('-', '')
-	const sentAt = new Date(deps.now() * 1000).toISOString()
-	const event = {
-		event_id: eventId,
-		timestamp: sentAt,
+	const delivery = await sendControlEvent(deps, appId, env, {
+		type: 'WorkloadKeyExpiring',
+		message: warning.message,
 		level: warning.level,
-		platform: 'javascript',
-		logger: 'fabrika.control',
 		fingerprint: ['fabrika-workload-key-expiring'],
 		tags: { expires_at: new Date(warning.expiresAt * 1000).toISOString() },
-		exception: { values: [{ type: 'WorkloadKeyExpiring', value: warning.message }] },
-		environment: env,
+	})
+	switch (delivery.outcome) {
+		case 'delivered':
+		case 'no-ingest':
+			return true
+		case 'refused':
+			console.error(`workload keys: the Operations of ${appId}/${env} refused the expiry warning with ${delivery.status}; not sent again today`)
+			return true
+		case 'failed':
+			// Never the error: it may quote the ingest URL; the line names the environment only.
+			console.error(
+				delivery.status === undefined
+					? `workload keys: the expiry warning of ${appId}/${env} could not reach its Operations; sent again next pass`
+					: `workload keys: the Operations of ${appId}/${env} answered the expiry warning with ${delivery.status}; sent again next pass`,
+			)
+			return false
 	}
-	const body = [JSON.stringify({ event_id: eventId, sent_at: sentAt }), JSON.stringify({ type: 'event' }), JSON.stringify(event), ''].join('\n')
-	let status: number
-	try {
-		const response = await deps.ingest(
-			new Request(operationsEnvelopeUrl(origin, ingest.ingest_project_id), {
-				method: 'POST',
-				headers: {
-					'content-type': 'application/x-sentry-envelope',
-					'x-sentry-auth': `Sentry sentry_version=7, sentry_key=${ingest.public_key}`,
-				},
-				body,
-				redirect: 'manual',
-				signal: AbortSignal.timeout(DELIVERY_TIMEOUT_MS),
-			}),
-		)
-		await response.body?.cancel()
-		status = response.status
-	} catch {
-		// The error may quote the ingest URL; the line names the environment only.
-		console.error(`workload keys: the expiry warning of ${appId}/${env} could not reach its Operations; sent again next pass`)
-		return false
-	}
-	if (status >= 200 && status < 300) return true
-	if (status >= 400 && status < 500 && status !== 429) {
-		// A refusal (a stale ingest key, a removed project) answers the same until its configuration changes.
-		console.error(`workload keys: the Operations of ${appId}/${env} refused the expiry warning with ${status}; not sent again today`)
-		return true
-	}
-	console.error(`workload keys: the Operations of ${appId}/${env} answered the expiry warning with ${status}; sent again next pass`)
-	return false
 }
