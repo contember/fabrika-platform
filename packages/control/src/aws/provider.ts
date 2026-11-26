@@ -19,8 +19,8 @@
 //   application in a subnet of a secondary block is not reachable from its proxy.
 // - `FABRIKA_AWS_BALANCER_LISTENER`: the balancer's HTTPS listener (an ARN), on which every namespace's stack serves its
 //   hosts: a certificate and a host rule each, forwarding to the namespace's proxy. Its default action is a fixed answer.
-// - `FABRIKA_AWS_INSTALLATION_HOSTS` (comma-separated): the installation's own hosts (IAM's, Control's, the console's,
-//   the platform proxy's), which no namespace's host rule may take.
+// - `FABRIKA_AWS_INSTALLATION_HOSTS` (comma-separated): the installation's own hosts (IAM's, Control's, which serves the
+//   console, Operations', and the applications' listener's default certificate's), which no namespace's host rule may take.
 // - `FABRIKA_AWS_BALANCER_SUBNET_CIDRS` (comma-separated IPv4 blocks inside the VPC's): the balancer's own subnets, the
 //   only addresses a namespace proxy trusts `X-Forwarded-For` from. No task may run in them: a trusted range that held a
 //   task would let it choose the client address its requests are seen from (`AwsInstallationBalancer`).

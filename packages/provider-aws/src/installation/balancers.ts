@@ -15,9 +15,11 @@
 // HTTP, and answer plain HTTP with a redirect to HTTPS. Their groups admit the internet on 80 and 443 and reach only the
 // tasks' subnets, on the proxies' ports.
 //
-// Each listener needs a default certificate: the platform's own hosts' certificates, which the operator validates before
-// the stack is applied, serve it. The applications' listener takes IAM's as its default, which a client without SNI is
-// answered with, together with the fixed answer.
+// Each listener needs a default certificate, which a balancer serves to every client whose SNI matches no other: the
+// platform's listener takes IAM's. The applications' listener takes a certificate of its own, for a host that is none of
+// the platform's (`appsDefault`), never a platform host's: with one, the applications' balancer would complete TLS for
+// that host, and a rule on its listener (which Control's role can write) would serve it. A client the default answers
+// gets the fixed 404 either way. All four certificates are the operator's, validated before the stack is applied.
 //
 // UNVERIFIED: the resources' properties, the attribute keys and the security policy's name follow the CloudFormation and
 // Elastic Load Balancing references; none was checked against an account.
@@ -48,6 +50,11 @@ export interface AwsBalancersInput {
 	readonly hosts: AwsPlatformRecord<string>
 	/** Each platform host's issued ACM certificate, in the installation's region. */
 	readonly certificates: AwsPlatformRecord<string>
+	/**
+	 * The applications' listener's default certificate and the host it is for: a host of its own (the applications'
+	 * domain's, say), none of the platform's, so the applications' balancer never completes TLS for a platform host.
+	 */
+	readonly appsDefault: { readonly host: string; readonly certificate: string }
 }
 
 /** `input` as given, or an error naming the part of another form (never a value). */
@@ -61,6 +68,13 @@ export function checkAwsBalancersInput(input: AwsBalancersInput): AwsBalancersIn
 	if (!certificates.every((arn) => CERTIFICATE_ARN.test(arn)) || new Set(certificates).size !== certificates.length) {
 		throw new Error("aws: the platform's certificates are not three distinct ACM certificate ARNs")
 	}
+	const { appsDefault } = input
+	if (
+		!CERTIFICATE_HOST.test(appsDefault.host) || hosts.includes(appsDefault.host) || !CERTIFICATE_ARN.test(appsDefault.certificate)
+		|| certificates.includes(appsDefault.certificate)
+	) {
+		throw new Error("aws: the applications' default certificate is not one of its own, for a host that is none of the platform's")
+	}
 	return input
 }
 
@@ -73,7 +87,7 @@ const NOT_FOUND: JsonValue = {
 
 /** The balancers' stack: both balancers, their groups and listeners, and the platform proxy's target group and rules. */
 export function awsBalancersStack(input: AwsBalancersInput): AwsStack {
-	const { network, hosts, certificates } = checkAwsBalancersInput(input)
+	const { network, hosts, certificates, appsDefault } = checkAwsBalancersInput(input)
 	const resources: Record<string, JsonValue> = {}
 	const balancer = (prefix: 'Apps' | 'Platform', label: string, defaultCertificate: string): void => {
 		resources[`${prefix}BalancerGroup`] = {
@@ -88,14 +102,16 @@ export function awsBalancersStack(input: AwsBalancersInput): AwsStack {
 					CidrIp: '0.0.0.0/0',
 					Description: port === 80 ? 'redirected to HTTPS' : 'HTTPS',
 				})),
-				// The proxies alone, in the tasks' subnets: the public port and the health route's.
-				SecurityGroupEgress: network.taskSubnetCidrs.map((cidr) => ({
-					IpProtocol: 'tcp',
-					FromPort: AWS_PROXY_PORT,
-					ToPort: AWS_PROXY_HEALTH_PORT,
-					CidrIp: cidr,
-					Description: 'the proxies',
-				})),
+				// The proxies alone, in the tasks' subnets: the public port and the health route's, each a rule of its own.
+				SecurityGroupEgress: network.taskSubnetCidrs.flatMap((cidr) =>
+					[AWS_PROXY_PORT, AWS_PROXY_HEALTH_PORT].map((port) => ({
+						IpProtocol: 'tcp',
+						FromPort: port,
+						ToPort: port,
+						CidrIp: cidr,
+						Description: port === AWS_PROXY_PORT ? 'the proxies' : 'the proxies health checks',
+					}))
+				),
 				Tags: name(`fabrika-${label}-balancer`),
 			},
 		}
@@ -135,7 +151,7 @@ export function awsBalancersStack(input: AwsBalancersInput): AwsStack {
 			},
 		}
 	}
-	balancer('Apps', 'applications', certificates.iam)
+	balancer('Apps', 'applications', appsDefault.certificate)
 	balancer('Platform', 'platform', certificates.iam)
 	resources['PlatformProxyTargetGroup'] = {
 		Type: 'AWS::ElasticLoadBalancingV2::TargetGroup',
@@ -225,13 +241,17 @@ export function awsBalancersOutputs(outputs: Readonly<Record<string, string>>): 
 
 /**
  * Control's variables for the applications' balancer (`packages/control/src/aws/provider.ts`): the group each
- * namespace proxy admits, the listener every namespace's hosts go on, and the platform's hosts, which no namespace may
- * take even on that listener.
+ * namespace proxy admits, the listener every namespace's hosts go on, and the installation's own hosts, which no
+ * namespace may take even on that listener: IAM's, Control's (the console's), Operations' and the applications' default
+ * certificate's.
  */
-export function awsBalancersEnvironment(outputs: AwsBalancersOutputs, hosts: AwsPlatformRecord<string>): Readonly<Record<string, string>> {
+export function awsBalancersEnvironment(
+	outputs: AwsBalancersOutputs,
+	input: Pick<AwsBalancersInput, 'hosts' | 'appsDefault'>,
+): Readonly<Record<string, string>> {
 	return {
 		FABRIKA_AWS_BALANCER_SECURITY_GROUP: outputs.appsBalancerGroupId,
 		FABRIKA_AWS_BALANCER_LISTENER: outputs.appsListenerArn,
-		FABRIKA_AWS_INSTALLATION_HOSTS: AWS_PLATFORM_SERVICES.map((service) => hosts[service]).join(','),
+		FABRIKA_AWS_INSTALLATION_HOSTS: [...AWS_PLATFORM_SERVICES.map((service) => input.hosts[service]), input.appsDefault.host].join(','),
 	}
 }

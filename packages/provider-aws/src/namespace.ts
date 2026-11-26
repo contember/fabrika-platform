@@ -206,7 +206,8 @@ export function awsNamespaceStack(
 							FromPort: AWS_PROXY_HEALTH_PORT,
 							ToPort: AWS_PROXY_HEALTH_PORT,
 							SourceSecurityGroupId: balancer.securityGroupId,
-							Description: "the balancer's health checks",
+							// No apostrophe: EC2 takes a rule's description in a-z, A-Z, 0-9, spaces and `._-:/()#,@[]+=&;{}!$*` alone.
+							Description: 'the balancer health checks',
 						},
 					],
 					// The proxy dials its applications in the VPC (each admits this group on its port), and IAM, the image
@@ -378,8 +379,9 @@ export interface AwsInstallationBalancer {
 	/** The balancer's HTTPS listener, which serves every namespace's hosts with their certificates (`host-rules.ts`). */
 	readonly listenerArn: string
 	/**
-	 * The installation's own hosts (IAM's, Control's, the console's, the platform proxy's): no namespace's host rule may
-	 * take one, whatever the listener's rules say. Lower-case.
+	 * The installation's own hosts (IAM's, Control's, which serves the console, Operations', and the applications'
+	 * listener's default certificate's): no namespace's host rule may take one, whatever the listener's rules say.
+	 * Lower-case.
 	 */
 	readonly installationHosts: readonly string[]
 	/**

@@ -564,7 +564,7 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     and `admin`, the GitHub OIDC role, Control's role with its permissions boundary, the sidecar workflow, and an
     operator guide. Decided (2026-11-26): the installation is built for AWS now, not from the neutral installation
     model (N9) first, and kept as data the model can absorb later; it creates its own VPC rather than adopting the
-    operator's; and the platform's own hosts (IAM, Control, the console) get a balancer of their own, apart from the
+    operator's; and the platform's own hosts (IAM, Control with the console, Operations) get a balancer of their own, apart from the
     applications' (about $16 a month), so no grant of Control's role reaches a listener that routes them. An
     installation is one AWS account (the tags name no installation). Its stacks are under `fabrika-platform-`, which
     no grant of Control's role names, and the operator applies them with their own credentials. In order, each its
@@ -580,8 +580,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        dropped, HTTPS (TLS 1.3 and forward-secret 1.2) with a fixed 404 as the default action and HTTP redirected,
        their groups reaching only the tasks' subnets on the proxies' ports. The platform's listener has a rule per
        platform host (IAM, Control, Operations) to the platform proxy's target group, each with its certificate; the
-       applications' listener has none of its own, and takes IAM's certificate as its default. The certificates are
-       the operator's, validated before the stack is applied. Control's balancer variables come from its outputs.
+       applications' listener has none of its own. Its default certificate is one of its own, for a host that is none
+       of the platform's (a balancer serves its default to every client whose SNI matches no other, so a platform
+       host's there would let a rule Control's role writes serve that host); that host joins the installation's own
+       hosts, which no namespace takes. The four certificates are the operator's, validated before the stack is
+       applied. Control's balancer variables come from its outputs.
     3. **Access**: the apps' permissions boundary, Control's role (the grants below), the ECS cluster, the sources
        bucket, the ECS service-linked role.
     4. **The database**: RDS PostgreSQL for IAM, Control and Operations, in subnets of its own.

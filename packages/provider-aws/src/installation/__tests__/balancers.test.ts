@@ -30,6 +30,7 @@ const input: AwsBalancersInput = {
 	}),
 	hosts: { iam: 'iam.example.com', control: 'control.example.com', operations: 'operations.example.com' },
 	certificates: { iam: certificate(1), control: certificate(2), operations: certificate(3) },
+	appsDefault: { host: 'apps.example.com', certificate: certificate(4) },
 }
 const OUTPUTS = {
 	AppsBalancerGroupId: 'sg-0123456789abcdef1',
@@ -67,23 +68,21 @@ describe("the installation's balancers", () => {
 				[80, '0.0.0.0/0'],
 				[443, '0.0.0.0/0'],
 			])
-			expect(group.SecurityGroupEgress).toEqual(layout.taskSubnetCidrs.map((cidr) => ({
-				IpProtocol: 'tcp',
-				FromPort: 8080,
-				ToPort: 8081,
-				CidrIp: cidr,
-				Description: 'the proxies',
-			})))
+			// One rule per port, never a range that would open whatever lies between them.
+			expect(group.SecurityGroupEgress).toEqual(layout.taskSubnetCidrs.flatMap((cidr) => [
+				{ IpProtocol: 'tcp', FromPort: 8080, ToPort: 8080, CidrIp: cidr, Description: 'the proxies' },
+				{ IpProtocol: 'tcp', FromPort: 8081, ToPort: 8081, CidrIp: cidr, Description: 'the proxies health checks' },
+			]))
 		}
 	})
 
 	test('every listener answers a host nothing names with a fixed 404, never a forward; HTTP redirects to HTTPS', () => {
-		for (const prefix of ['Apps', 'Platform']) {
+		for (const [prefix, defaultCertificate] of [['Apps', certificate(4)], ['Platform', certificate(1)]]) {
 			expect(resources[`${prefix}HttpsListener`].Properties).toMatchObject({
 				Port: 443,
 				Protocol: 'HTTPS',
 				SslPolicy: AWS_TLS_POLICY,
-				Certificates: [{ CertificateArn: certificate(1) }],
+				Certificates: [{ CertificateArn: defaultCertificate }],
 				DefaultActions: [{ Type: 'fixed-response', FixedResponseConfig: { StatusCode: '404' } }],
 			})
 			expect(resources[`${prefix}HttpListener`].Properties.DefaultActions).toEqual([
@@ -127,16 +126,29 @@ describe("the installation's balancers", () => {
 		expect(() => checkAwsBalancersInput({ ...input, certificates: { ...input.certificates, control: 'arn:aws:s3:::bucket' } })).toThrow('certificates')
 	})
 
+	test("the applications' listener never takes a platform host's certificate, nor a default for a platform host", () => {
+		// A balancer serves its default to every client whose SNI matches no other: a platform host's there would let the
+		// applications' balancer complete TLS for that host.
+		const appsCertificates = JSON.stringify(resources.AppsHttpsListener.Properties.Certificates)
+		for (const platformCertificate of Object.values(input.certificates)) expect(appsCertificates).not.toContain(platformCertificate)
+		for (const certificate of Object.values(input.certificates)) {
+			expect(() => checkAwsBalancersInput({ ...input, appsDefault: { ...input.appsDefault, certificate } })).toThrow("applications' default")
+		}
+		expect(() => checkAwsBalancersInput({ ...input, appsDefault: { ...input.appsDefault, host: 'iam.example.com' } })).toThrow("applications' default")
+		expect(() => checkAwsBalancersInput({ ...input, appsDefault: { ...input.appsDefault, host: 'Apps.example.com' } })).toThrow("applications' default")
+	})
+
 	test("the outputs are read back, and Control's variables pass its own check of the applications' balancer", () => {
 		const outputs = awsBalancersOutputs(OUTPUTS)
 		expect(outputs.appsListenerArn).toBe(LISTENER)
 		expect(() => awsBalancersOutputs({ ...OUTPUTS, AppsHttpsListenerArn: TARGET_GROUP })).toThrow('AppsHttpsListenerArn')
 		expect(() => awsBalancersOutputs({ ...OUTPUTS, PlatformBalancerDnsName: 'example.com' })).toThrow('PlatformBalancerDnsName')
-		const environment = awsBalancersEnvironment(outputs, input.hosts)
+		const environment = awsBalancersEnvironment(outputs, input)
 		expect(environment).toEqual({
 			FABRIKA_AWS_BALANCER_SECURITY_GROUP: 'sg-0123456789abcdef1',
 			FABRIKA_AWS_BALANCER_LISTENER: LISTENER,
-			FABRIKA_AWS_INSTALLATION_HOSTS: 'iam.example.com,control.example.com,operations.example.com',
+			// The applications' default certificate's host too: no namespace takes it.
+			FABRIKA_AWS_INSTALLATION_HOSTS: 'iam.example.com,control.example.com,operations.example.com,apps.example.com',
 		})
 		expect(
 			checkInstallationBalancer({

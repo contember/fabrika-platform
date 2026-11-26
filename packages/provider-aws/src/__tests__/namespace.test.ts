@@ -194,7 +194,7 @@ describe('awsNamespaceStack', () => {
 		const group = at(resources, 'ProxySecurityGroup', 'Properties')
 		expect(at(group, 'SecurityGroupIngress')).toEqual([
 			{ IpProtocol: 'tcp', FromPort: 8080, ToPort: 8080, SourceSecurityGroupId: 'sg-0123456789abcdef1', Description: 'the balancer' },
-			{ IpProtocol: 'tcp', FromPort: 8081, ToPort: 8081, SourceSecurityGroupId: 'sg-0123456789abcdef1', Description: "the balancer's health checks" },
+			{ IpProtocol: 'tcp', FromPort: 8081, ToPort: 8081, SourceSecurityGroupId: 'sg-0123456789abcdef1', Description: 'the balancer health checks' },
 		])
 		expect(at(group, 'SecurityGroupEgress')).toEqual([
 			{ IpProtocol: 'tcp', FromPort: 3000, ToPort: 3000, CidrIp: '10.0.0.0/16', Description: 'the applications' },
