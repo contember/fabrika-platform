@@ -26,7 +26,7 @@ export function AdminAccessSection({ state, onDone }: { state: SelfAdminState | 
 				<h2>Your admin access</h2>
 			</div>
 			<p className="section-note">
-				In every environment, not only the one chosen below. Admin holds every action of the application there; granting it to yourself is an ordinary
+				In every environment, not only the one chosen above. Admin holds every action of the application there; granting it to yourself is an ordinary
 				grant, audited and revoked under your account.
 			</p>
 			<ul className="self-admin">
@@ -77,7 +77,7 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 							>
 								{SELF_ADMIN_EXPIRIES.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
 							</select>
-							<button type="button" disabled={busy} onClick={() => void grant()}>
+							<button type="button" disabled={busy} aria-label={`Grant me Admin on ${target.env}`} onClick={() => void grant()}>
 								Grant me Admin
 							</button>
 						</div>

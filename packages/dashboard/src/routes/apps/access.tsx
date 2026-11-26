@@ -23,7 +23,6 @@ export default createPage()
 		const env = envs.find((candidate) => candidate.env === params.env)
 		return (
 			<AppFrame app={app} envs={envs} tab="access" states={states}>
-				<AdminAccessSection state={selfAdmin} onDone={invalidate} />
 				<div className="toolbar">
 					<div className="filter-group" role="group" aria-label="Environment">
 						{envs.map((candidate) => (
@@ -50,6 +49,7 @@ export default createPage()
 							<DeviationsSection env={env} />
 						</>
 					)}
+				<AdminAccessSection state={selfAdmin} onDone={invalidate} />
 			</AppFrame>
 		)
 	})
