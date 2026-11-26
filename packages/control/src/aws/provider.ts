@@ -13,9 +13,12 @@
 //   or `false`): the installation's network. Each environment's security group is created in the VPC, and its service
 //   and init tasks run in the subnets, with a public address only when the variable says `true` (public subnets with
 //   no NAT gateway); there is no default, because a wrong one leaves the tasks without a way out.
+// - `FABRIKA_AWS_PROXY_REPOSITORY` (an HTTPS GitHub URL) and `FABRIKA_AWS_PROXY_COMMIT_SHA` (a full commit): the
+//   installation's release of the public platform repository. A namespace being planned is pinned to it, and keeps
+//   its pin through an upgrade; no namespace may be pinned to another repository (ADR-0045).
 
 import { containerCredentials } from '@fabrika/platform-node'
-import { type AwsSourcePort, createAwsControlProvider } from '@fabrika/provider-aws'
+import { type AwsSourcePort, awsSourceRepository, createAwsControlProvider } from '@fabrika/provider-aws'
 import type { ControlProvider } from '@fabrika/provider-contract'
 import type { BunProviderComposition, GitHubSourceSeams } from '../bun/runtime'
 import type { Env } from '../env'
@@ -70,6 +73,11 @@ export function awsControlProvider(source: Record<string, string | undefined>, s
 			vpcId: required(source, 'FABRIKA_AWS_VPC_ID'),
 			subnets: required(source, 'FABRIKA_AWS_SUBNETS').split(',').map((subnet) => subnet.trim()),
 			publicIp: flag(source, 'FABRIKA_AWS_TASK_PUBLIC_IP'),
+		},
+		// The installation's release of the public platform repository: a planned namespace's proxy pin (ADR-0045).
+		proxySource: {
+			repository: awsSourceRepository(required(source, 'FABRIKA_AWS_PROXY_REPOSITORY')),
+			commitSha: required(source, 'FABRIKA_AWS_PROXY_COMMIT_SHA').trim(),
 		},
 		source: sourcePort,
 	})

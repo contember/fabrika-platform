@@ -52,6 +52,8 @@ const target: AwsAppTarget = {
 const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'], publicIp: true }
 /** The security group the environment's stack names as its output. */
 const SECURITY_GROUP = 'sg-0123456789abcdef9'
+/** The installation's proxy source: every namespace's pin names its repository. */
+const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
 /** The namespace the environment is placed in, and what its stack names. */
 const PROXY_GROUP = 'sg-0123456789abcdef7'
 const SERVICE_CONNECT = 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-abcdefghij123456'
@@ -66,6 +68,8 @@ const NAMESPACE: ProviderDeploymentNamespace = {
 			region: 'eu-central-1',
 			stackName: 'fabrika-ns-6-shared-prod',
 			sizing: 'cheap',
+			proxyRepository: 'contember/fabrika-platform',
+			proxyCommitSha: PROXY_SOURCE.commitSha,
 		}),
 	},
 }
@@ -124,6 +128,7 @@ class Fake {
 		upload: async (input) => {
 			this.uploads.push(`${input.repository.owner}/${input.repository.name}@${input.commitSha} ${input.archive.kind}`)
 			await input.parts.complete({ last: new Uint8Array([1]), parts: 1, bytes: 1 }, input.signal)
+			return { commitSha: input.commitSha }
 		},
 	}
 
@@ -250,6 +255,7 @@ class Fake {
 			baseImage: BASE_IMAGE,
 			installation: target,
 			network,
+			proxySource: PROXY_SOURCE,
 			source: this.source,
 			clients: this.clients,
 			sleep: async () => {},
@@ -357,6 +363,8 @@ describe('the AWS control provider', () => {
 					region: 'eu-central-1',
 					stackName: 'fabrika-ns-6-shared-prod',
 					sizing: 'cheap',
+					proxyRepository: 'contember/fabrika-platform',
+					proxyCommitSha: PROXY_SOURCE.commitSha,
 				}),
 			},
 		}
@@ -388,6 +396,34 @@ describe('the AWS control provider', () => {
 		const broken = new Fake()
 		expect(() => createAwsControlProvider({ ...broken.options(), network: { ...network, subnets: [] } })).toThrow('aws: the installation network')
 		expect(() => createAwsControlProvider({ ...broken.options(), network: { ...network, vpcId: 'vpc-X' } })).toThrow('aws: the installation network')
+	})
+
+	test("the installation's proxy source is checked at composition, and a namespace pinned to another repository is refused", async () => {
+		const options = new Fake().options()
+		expect(() => createAwsControlProvider({ ...options, proxySource: { ...PROXY_SOURCE, commitSha: 'main' } })).toThrow('not a full commit')
+		expect(() => createAwsControlProvider({ ...options, proxySource: { ...PROXY_SOURCE, repository: { owner: 'Contember', name: 'x' } } })).toThrow(
+			'proxy repository',
+		)
+		const fake = new Fake()
+		const foreign: ProviderDeploymentNamespace = {
+			...NAMESPACE,
+			target: {
+				provider: 'aws',
+				version: 1,
+				payload: awsNamespaceTargetCodec.encode({
+					accountId: '123456789012',
+					region: 'eu-central-1',
+					stackName: 'fabrika-ns-6-shared-prod',
+					sizing: 'cheap',
+					proxyRepository: 'someone/fabrika-platform',
+					proxyCommitSha: PROXY_SOURCE.commitSha,
+				}),
+			},
+		}
+		const input = deployInput()
+		await expect(fake.provider().deploy({ ...input, environment: { ...input.environment, namespace: foreign } })).rejects.toThrow(
+			"pinned to another repository than this installation's platform repository",
+		)
 	})
 
 	test('a run that throws while writing its secrets deletes what it wrote', async () => {

@@ -24,7 +24,14 @@ const target: AwsAppTarget = {
 	sourcesBucket: 'fabrika-sources-123456789012',
 }
 const artifact: AwsAppArtifact = { contractDigest: `sha256:${'a'.repeat(64)}`, healthPath: '/healthz' }
-const namespace: AwsNamespaceTarget = { accountId: '123456789012', region: 'eu-central-1', stackName: 'fabrika-ns-acme', sizing: 'cheap' }
+const namespace: AwsNamespaceTarget = {
+	accountId: '123456789012',
+	region: 'eu-central-1',
+	stackName: 'fabrika-ns-acme',
+	sizing: 'cheap',
+	proxyRepository: 'contember/fabrika-platform',
+	proxyCommitSha: '0123456789abcdef0123456789abcdef01234567',
+}
 const checkpoint: AwsRunCheckpoint = {
 	buildId: 'fabrika-notes-build:0f1e2d3c-4b5a-4968-8776-655443322110',
 	taskDefinitionArn: 'arn:aws:ecs:eu-central-1:123456789012:task-definition/notes-prod:42',
@@ -80,6 +87,22 @@ describe('the AWS codecs', () => {
 		expect(refused(awsRunCheckpointCodec, { buildToken: 'not-a-uuid' })).toContain('buildToken')
 	})
 
+	test("a namespace's proxy build is recorded with its token and its manifest's digest, never one without the other", () => {
+		const token = '0f1e2d3c-4b5a-4968-8776-655443322110'
+		const building: AwsNamespaceTarget = {
+			...namespace,
+			proxyBuildToken: token,
+			proxyBuildManifestSha256: 'f'.repeat(64),
+			proxyBuildId: `fabrika_ns_acme_prod:${token}`,
+		}
+		expect(roundTrip(awsNamespaceTargetCodec, building)).toEqual({ decoded: building, json: building })
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyBuildToken: token })).toContain('proxyBuildManifestSha256')
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyBuildId: building.proxyBuildId ?? '' })).toContain('proxyBuildToken')
+		// The pin is required: a target without it is one this release does not read.
+		const { proxyCommitSha: _sha, ...unpinned } = namespace
+		expect(refused(awsNamespaceTargetCodec, unpinned)).toContain('proxyCommitSha')
+	})
+
 	test('a value of another form is refused, naming the field only', () => {
 		const cases: readonly { readonly codec: ProviderCodec<unknown>; readonly payload: { readonly [key: string]: string }; readonly field: string }[] = [
 			{ codec: awsAppTargetCodec, payload: { ...target, accountId: '12345' }, field: 'accountId' },
@@ -91,6 +114,18 @@ describe('the AWS codecs', () => {
 			{ codec: awsAppArtifactCodec, payload: { ...artifact, healthPath: '/a/../b' }, field: 'healthPath' },
 			{ codec: awsNamespaceTargetCodec, payload: { ...namespace, sizing: 'huge' }, field: 'sizing' },
 			{ codec: awsNamespaceTargetCodec, payload: { ...namespace, stackName: '1stack' }, field: 'stackName' },
+			// The pin: a lowercased `<owner>/<name>` and a full commit, never a branch or a URL.
+			{
+				codec: awsNamespaceTargetCodec,
+				payload: { ...namespace, proxyRepository: 'https://github.com/contember/fabrika-platform' },
+				field: 'proxyRepository',
+			},
+			{ codec: awsNamespaceTargetCodec, payload: { ...namespace, proxyCommitSha: 'main' }, field: 'proxyCommitSha' },
+			{
+				codec: awsNamespaceTargetCodec,
+				payload: { ...namespace, proxyBuildToken: 'not-a-uuid', proxyBuildManifestSha256: 'f'.repeat(64) },
+				field: 'proxyBuildToken',
+			},
 			{ codec: awsRunCheckpointCodec, payload: { buildId: 'project:1' }, field: 'buildId' },
 			{ codec: awsRunCheckpointCodec, payload: { taskDefinitionArn: 'arn:aws:s3:::bucket' }, field: 'taskDefinitionArn' },
 		]

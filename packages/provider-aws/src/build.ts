@@ -31,7 +31,12 @@ export const BUILD_VARIABLES = {
 /**
  * The head of every buildspec, an application's and a namespace proxy's (`proxy-build.ts`): one shell, the registry's
  * login in its own region, and the archive fetched through its presigned URL (dropped from the shell once fetched) and
- * unpacked into `/tmp/fabrika-source`, its one top-level directory dropped.
+ * unpacked into `/tmp/fabrika-source` as it is.
+ *
+ * The archive holds the commit's tree at its root: Control's rewrite drops GitHub's one top-level directory and writes
+ * every entry, and an appended data file, at its repository path (`packages/control/src/github/source/archive.ts`, whose
+ * tests pin `zerops.yaml` and `proxy.manifest.json` at the root). So nothing is stripped here; `--strip-components=1`
+ * would drop every root file and cut a level from every other path.
  */
 export const BUILDSPEC_FETCH: readonly string[] = [
 	'version: 0.2',
@@ -45,12 +50,12 @@ export const BUILDSPEC_FETCH: readonly string[] = [
 	'      - mkdir /tmp/fabrika-source',
 	`      - curl --fail --silent --show-error --proto =https --output /tmp/fabrika-source.tar.gz "$${BUILD_VARIABLES.sourceUrl}"`,
 	`      - unset ${BUILD_VARIABLES.sourceUrl}`,
-	'      - tar --extract --gzip --file /tmp/fabrika-source.tar.gz --directory /tmp/fabrika-source --strip-components=1 --no-same-owner',
+	'      - tar --extract --gzip --file /tmp/fabrika-source.tar.gz --directory /tmp/fabrika-source --no-same-owner',
 ]
 
 /**
- * The buildspec of every application build. The archive has one top-level directory (Control refuses any other), which
- * `--strip-components=1` drops, so the build context is the commit's tree; the `Dockerfile` sits outside it, beside an
+ * The buildspec of every application build. The build context is the commit's tree, as the archive holds it at its root
+ * (`BUILDSPEC_FETCH`); the `Dockerfile` sits outside it, beside an
  * ignore file of its own that ignores nothing (`<Dockerfile>.dockerignore`, which BuildKit reads before the context's; one
  * comment line, so it cannot read as absent), so the
  * application's own `.dockerignore` filters nothing. The presigned URL is dropped from the shell once the archive is

@@ -55,7 +55,7 @@ import { AWS_PROVIDER, type AwsAppArtifact, awsAppArtifactCodec, type AwsAppTarg
 import { awsDeploy, type AwsDeployClients, awsSourceUrlParameter } from './deploy'
 import { AWS_APPLICATION_PORT } from './ecs-task'
 import { awsEnvironmentStack, type AwsInstallationNetwork, checkInstallationNetwork, ensureEnvironmentStack } from './environment-stack'
-import { awsNamespaceCapabilities, checkNamespaceTarget, readNamespaceOutputs } from './namespace'
+import { awsNamespaceCapabilities, type AwsProxySource, checkNamespaceTarget, readNamespaceOutputs } from './namespace'
 import { AWS_KEPT_IMAGES, type AwsEnvironmentResources, awsEnvironmentResources } from './resources'
 import { AWS_SOURCE_URL_SECONDS, awsRunAttempt, parseAwsCheckpoint } from './run-attempt'
 
@@ -102,10 +102,16 @@ export interface AwsSourcePort {
 	upload(input: {
 		readonly repository: AwsSourceRepository
 		readonly commitSha: string
-		readonly archive: { readonly kind: 'application'; readonly privateBinding?: ProviderSourceBinding }
+		/**
+		 * An application's commit; or a namespace proxy's, a public platform commit with one data file appended (the
+		 * manifest, ADR-0045), whose sha256 the answer names.
+		 */
+		readonly archive:
+			| { readonly kind: 'application'; readonly privateBinding?: ProviderSourceBinding }
+			| { readonly kind: 'platform'; readonly dataFile: { readonly path: string; readonly contents: string } }
 		readonly parts: S3PartWriter
 		readonly signal: AbortSignal
-	}): Promise<unknown>
+	}): Promise<{ readonly commitSha: string; readonly dataFileSha256?: string }>
 }
 
 /** The calls of one target: the deploy's, and the listing that deletes a secret no longer handed. */
@@ -135,6 +141,11 @@ export interface AwsControlProviderOptions {
 	 * Control's own configuration too, read by every deploy and stored by no environment.
 	 */
 	readonly network: AwsInstallationNetwork
+	/**
+	 * The installation's proxy source: its public platform repository and the commit of its release. A namespace being
+	 * planned is pinned to it, and no namespace's pin may name another repository (ADR-0045).
+	 */
+	readonly proxySource: AwsProxySource
 	readonly source: AwsSourcePort
 	readonly fetch?: (input: string, init: RequestInit) => Promise<Response>
 	/** The clients of a target's region; absent, the package's own over `fetch`. Tests pass fakes. */
@@ -162,6 +173,18 @@ export function awsSourceRepository(repoUrl: string): AwsSourceRepository {
 		throw new Error('aws: the source repository must be an HTTPS GitHub repository URL')
 	}
 	return { owner, name }
+}
+
+/** A full git commit. */
+const COMMIT_SHA = /^[0-9a-f]{40}$/
+
+/** The installation's proxy source as Control's configuration names it; a repository or commit of another form is refused. */
+export function checkProxySource(source: AwsProxySource): AwsProxySource {
+	if (!GITHUB_NAME.test(source.repository.owner) || !GITHUB_NAME.test(source.repository.name)) {
+		throw new Error("aws: the installation's proxy repository is not a GitHub repository this provider names")
+	}
+	if (!COMMIT_SHA.test(source.commitSha)) throw new Error("aws: the installation's proxy commit is not a full commit")
+	return { repository: { owner: source.repository.owner, name: source.repository.name }, commitSha: source.commitSha }
 }
 
 /** The private binding the source reads a repository with, as the source takes it. */
@@ -274,6 +297,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 	const installation = awsAppTargetCodec.decode(installationPayload)
 	const installationTarget = { provider: AWS_PROVIDER, version: awsAppTargetCodec.version, payload: installationPayload }
 	const network = checkInstallationNetwork(options.network)
+	const proxySource = checkProxySource(options.proxySource)
 	const targetOf = (environment: ProviderEnvironment): AwsAppTarget => {
 		const stored = decodeEnvelope('target', AWS_PROVIDER, environment.target, awsAppTargetCodec)
 		const differs = AWS_TARGET_FIELDS.filter((field) => stored[field] !== installation[field])
@@ -352,7 +376,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 	return {
 		id: AWS_PROVIDER,
 		// Every environment is placed in a namespace: its stack holds the proxy's group, which alone reaches an application.
-		namespaces: awsNamespaceCapabilities({ installation, network, clients: clientsOf(installation), sleep: options.sleep ?? pause }),
+		namespaces: awsNamespaceCapabilities({ installation, network, proxySource, clients: clientsOf(installation), sleep: options.sleep ?? pause }),
 		// The target a registrant submits is replaced by the installation's; nothing in it is theirs to choose.
 		normalizeRegistration: ({ app, environment }) => {
 			if (app.id !== environment.appId) throw new Error('aws: the environment belongs to another application')
@@ -364,7 +388,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			refuseUnsupported(access)
 			resourcesOf(environment, targetOf(environment))
 			// A placement of another installation never becomes the approved one either.
-			if (environment.namespace !== undefined) checkNamespaceTarget(environment.namespace, installation)
+			if (environment.namespace !== undefined) checkNamespaceTarget(environment.namespace, installation, proxySource)
 		},
 		resolveSource: async (input) => {
 			input.signal.throwIfAborted()
@@ -394,7 +418,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			// the only way to its application.
 			const namespace = input.environment.namespace
 			if (namespace === undefined) throw new Error('aws: the environment is placed in no namespace')
-			checkNamespaceTarget(namespace, installation)
+			checkNamespaceTarget(namespace, installation, proxySource)
 			if (!RUN_ID.test(input.runId)) throw new Error('aws: the run id is not one a parameter name carries')
 			const values = awsTaskValues(input)
 			const repository = awsSourceRepository(input.app.source.repoUrl)
@@ -485,7 +509,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			const log = (line: string): void => input.events.log(line)
 			if (input.dryRun) return { state: (await deployRun(undefined, null)).status, artifactState: 'not_applicable' }
 			// The namespace's proxy group, which the environment's group admits: its stack must serve before any deploy into it.
-			const proxy = await readNamespaceOutputs(clients.cloudFormation, namespace, installation, input.signal)
+			const proxy = await readNamespaceOutputs(clients.cloudFormation, namespace, installation, proxySource, input.signal)
 			// The environment's own resources next: its repository, log groups, roles, build project and security group.
 			// Nothing of the run exists yet, so a stack that does not settle fails the run with nothing to clean up.
 			const stack = await ensureEnvironmentStack({

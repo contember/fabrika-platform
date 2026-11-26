@@ -84,6 +84,12 @@ export interface AwsNamespaceResources {
 	readonly buildProject: string
 	readonly buildRoleName: string
 	readonly buildLogGroup: string
+	/**
+	 * Where the proxy's archives go in the sources bucket, `sources/_namespaces/<id>/<env>`: below Control's `sources/`
+	 * grant, under a segment no application id can take (`_` is not in one), so no application environment's prefix
+	 * (`sources/<app>/<env>`) holds a namespace's archives, nor the other way round.
+	 */
+	readonly sourcePrefix: string
 }
 
 /**
@@ -112,6 +118,7 @@ export function awsNamespaceResources(id: string, env: string): AwsNamespaceReso
 		buildProject: `fabrika_ns_${role}`,
 		buildRoleName: `${role}_proxy_build`,
 		buildLogGroup: `/fabrika/namespaces/${id}/${env}/proxy/build`,
+		sourcePrefix: `sources/_namespaces/${id}/${env}`,
 	}
 }
 
@@ -242,10 +249,21 @@ export interface AwsNamespaceClients {
 	readonly ssm: Pick<SsmClient, 'listNames'>
 }
 
+/**
+ * The source a namespace's proxy is built from: the installation's public platform repository and a full commit. The
+ * installation's is Control's configuration, its default for a namespace being planned (ADR-0045).
+ */
+export interface AwsProxySource {
+	readonly repository: { readonly owner: string; readonly name: string }
+	readonly commitSha: string
+}
+
 export interface AwsNamespaceOptions {
 	/** The installation's coordinates and network: Control's configuration, which every namespace is checked against. */
 	readonly installation: AwsAppTarget
 	readonly network: AwsInstallationNetwork
+	/** The installation's proxy source: a planned namespace's pin, and the only repository any pin may name. */
+	readonly proxySource: AwsProxySource
 	readonly clients: AwsNamespaceClients
 	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>
 	readonly now?: () => number
@@ -257,7 +275,11 @@ const SERVICE_CLAIM = 'service:'
 const PARAMETERS_CLAIM = 'parameters:'
 
 /** A namespace's target as this installation must hold it, or an error naming the field that differs. */
-export function checkNamespaceTarget(namespace: ProviderDeploymentNamespace, installation: AwsAppTarget): AwsNamespaceTarget {
+export function checkNamespaceTarget(
+	namespace: ProviderDeploymentNamespace,
+	installation: AwsAppTarget,
+	proxySource: AwsProxySource,
+): AwsNamespaceTarget {
 	const target = decodeEnvelope('namespace target', AWS_PROVIDER, namespace.target, awsNamespaceTargetCodec)
 	const resources = awsNamespaceResources(namespace.id, namespace.env)
 	if (target.accountId !== installation.accountId || target.region !== installation.region) {
@@ -265,17 +287,45 @@ export function checkNamespaceTarget(namespace: ProviderDeploymentNamespace, ins
 	}
 	if (target.stackName !== resources.stackName) throw new Error("aws: the namespace's target names another stack than its id and environment derive")
 	if (target.sizing !== AWS_CHEAP_PRESET) throw new Error('aws: only a cheap namespace is provisioned on AWS yet')
+	// The proxy is the installation's enforcement point: it is built from the installation's platform repository alone.
+	// The commit may be an older one than the installation's default: a pin outlives an upgrade (ADR-0045).
+	if (target.proxyRepository !== awsProxyRepositoryName(proxySource)) {
+		throw new Error("aws: the namespace's proxy is pinned to another repository than this installation's platform repository")
+	}
 	return target
 }
 
-/** The canonical target of a namespace of this installation. */
-function targetOf(namespace: Pick<ProviderDeploymentNamespace, 'id' | 'env'>, installation: AwsAppTarget): ProviderDeploymentNamespace['target'] {
+/** `<owner>/<name>` of the installation's platform repository, as a namespace's target records it. */
+export function awsProxyRepositoryName(proxySource: AwsProxySource): string {
+	return `${proxySource.repository.owner}/${proxySource.repository.name}`
+}
+
+/**
+ * The canonical target of a namespace of this installation. `stored` is the namespace's own target, whose pin and proxy
+ * build in flight it keeps; absent (a namespace being planned), the pin is the installation's default.
+ */
+function targetOf(
+	namespace: Pick<ProviderDeploymentNamespace, 'id' | 'env'>,
+	installation: AwsAppTarget,
+	proxySource: AwsProxySource,
+	stored?: AwsNamespaceTarget,
+): ProviderDeploymentNamespace['target'] {
 	const target: AwsNamespaceTarget = {
 		accountId: installation.accountId,
 		region: installation.region,
 		stackName: awsNamespaceResources(namespace.id, namespace.env).stackName,
 		sizing: AWS_CHEAP_PRESET,
+		proxyRepository: stored?.proxyRepository ?? awsProxyRepositoryName(proxySource),
+		proxyCommitSha: stored?.proxyCommitSha ?? proxySource.commitSha,
+		...(stored?.proxyBuildToken === undefined ? {} : { proxyBuildToken: stored.proxyBuildToken }),
+		...(stored?.proxyBuildManifestSha256 === undefined ? {} : { proxyBuildManifestSha256: stored.proxyBuildManifestSha256 }),
+		...(stored?.proxyBuildId === undefined ? {} : { proxyBuildId: stored.proxyBuildId }),
 	}
+	return awsNamespaceTargetEnvelope(target)
+}
+
+/** A namespace target as Control stores it. */
+export function awsNamespaceTargetEnvelope(target: AwsNamespaceTarget): ProviderDeploymentNamespace['target'] {
 	return { provider: AWS_PROVIDER, version: awsNamespaceTargetCodec.version, payload: awsNamespaceTargetCodec.encode(target) }
 }
 
@@ -284,7 +334,7 @@ function targetOf(namespace: Pick<ProviderDeploymentNamespace, 'id' | 'env'>, in
  * is still working on is retryable (`awsStackPending`), so Control leaves the namespace provisioning and a later
  * reconcile settles it; `awsStack` is a stack only an operator or a new template repairs.
  */
-function namespaceFailure(error: unknown): ProviderNamespaceError {
+export function namespaceFailure(error: unknown): ProviderNamespaceError {
 	if (error instanceof ProviderNamespaceError) return error
 	if (error instanceof AwsStackPending) return new ProviderNamespaceError(error.message, 'awsStackPending', true)
 	if (error instanceof AwsError) return new ProviderNamespaceError(`aws: ${error.operation} failed (${error.code})`, 'awsCall', error.retryable)
@@ -294,10 +344,11 @@ function namespaceFailure(error: unknown): ProviderNamespaceError {
 
 /** The namespace capabilities over this installation's account. */
 export function awsNamespaceCapabilities(options: AwsNamespaceOptions): ProviderNamespaceCapabilities {
-	const { installation, network, clients } = options
+	const { installation, network, clients, proxySource } = options
 
 	const present = (namespace: ProviderDeploymentNamespace): ProviderNamespacePresentation => {
 		const resources = awsNamespaceResources(namespace.id, namespace.env)
+		const target = awsNamespaceTargetCodec.decode(namespace.target.payload)
 		return {
 			preset: AWS_CHEAP_PRESET,
 			title: `AWS namespace ${namespace.id}`,
@@ -307,6 +358,8 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				{ label: 'Service Connect namespace', value: resources.serviceConnectNamespace, resource: true },
 				{ label: 'Proxy image repository', value: resources.repository, resource: true },
 				{ label: 'Proxy build project', value: resources.buildProject, resource: true },
+				// A policy choice, not a resource: the pin the proxy is built from until an operator moves it.
+				{ label: 'Proxy source', value: `${target.proxyRepository}@${target.proxyCommitSha}` },
 			],
 			instructions: [
 				'Control creates the stack. Removing the namespace leaves it in place: delete the stack when no environment uses it.',
@@ -316,8 +369,9 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 	}
 
 	const apply = async (input: ProviderNamespaceMutationInput): Promise<ProviderDeploymentNamespace> => {
+		let stored: AwsNamespaceTarget
 		try {
-			checkNamespaceTarget(input.namespace, installation)
+			stored = checkNamespaceTarget(input.namespace, installation, proxySource)
 		} catch (error) {
 			throw new ProviderNamespaceError(error instanceof Error ? error.message : 'aws: the namespace target is refused', 'awsTarget', false)
 		}
@@ -333,7 +387,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 		} catch (error) {
 			throw namespaceFailure(error)
 		}
-		return { ...input.namespace, target: targetOf(input.namespace, installation) }
+		return { ...input.namespace, target: targetOf(input.namespace, installation, proxySource, stored) }
 	}
 
 	const claimGone = async (key: string, signal: AbortSignal): Promise<boolean> => {
@@ -353,9 +407,18 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 
 	return {
 		normalize: (namespace) => {
-			// A target is the installation's, never a caller's: one of another form or for another account is refused.
-			checkNamespaceTarget(namespace, installation)
-			return { ...namespace, target: targetOf(namespace, installation) }
+			// Control normalizes only what a caller submits (a namespace created or adopted, a plan), never a stored namespace.
+			// So the target is the installation's, never a caller's: one of another form or for another account is refused,
+			// and so is a pin a caller chose. A new namespace is pinned to the installation's default (ADR-0045); only an
+			// operator's update moves a stored pin, and only to the default. The lifecycle calls (`apply`) keep a stored pin.
+			const submitted = checkNamespaceTarget(namespace, installation, proxySource)
+			if (submitted.proxyCommitSha !== proxySource.commitSha) {
+				throw new Error("aws: a namespace is pinned to the installation's proxy commit; another commit is not one a caller chooses")
+			}
+			if (submitted.proxyBuildToken !== undefined || submitted.proxyBuildManifestSha256 !== undefined || submitted.proxyBuildId !== undefined) {
+				throw new Error("aws: a namespace's proxy build is recorded by its provider, never submitted")
+			}
+			return { ...namespace, target: targetOf(namespace, installation, proxySource) }
 		},
 		namespaceResourceClaims: (namespace) => [`${STACK_CLAIM}${awsNamespaceResources(namespace.id, namespace.env).stackName}`],
 		// The hosts the proxy will route a member on, by its manifest's rule, so Control refuses two members on one host now.
@@ -390,7 +453,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 					id: input.id,
 					env: input.env,
 					...(input.exclusiveAppId === undefined ? {} : { exclusiveAppId: input.exclusiveAppId }),
-					target: targetOf(input, installation),
+					target: targetOf(input, installation, proxySource),
 				}
 				return { namespace, presentation: present(namespace) }
 			},
@@ -407,9 +470,10 @@ export async function readNamespaceOutputs(
 	cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack'>,
 	namespace: ProviderDeploymentNamespace,
 	installation: AwsAppTarget,
+	proxySource: AwsProxySource,
 	signal: AbortSignal,
 ): Promise<AwsNamespaceOutputs> {
-	const target = checkNamespaceTarget(namespace, installation)
+	const target = checkNamespaceTarget(namespace, installation, proxySource)
 	let outputs: Readonly<Record<string, string>> | null
 	try {
 		outputs = await readStackOutputs(cloudFormation, target.stackName, signal)
