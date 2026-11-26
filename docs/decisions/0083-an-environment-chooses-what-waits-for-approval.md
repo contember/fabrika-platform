@@ -85,6 +85,13 @@ in the console is their own evidence, as before:
 | `agent-grants`   | a grant an agent asks for at the application environment: one role its approved contract declares, for the agent or another principal, for at most 30 days (§4)                                               | `person` |
 | `credentials`    | a key an agent asks for, issued to someone other than the agent: exact Control actions at one application, for at most 30 days, encrypted to the agent's public key (§8)                                      | `person` |
 | `grants`         | a person's own console grant, grant edit or revocation in IAM (§4)                                                                                                                                            | `off`    |
+| `agent-write`    | a `write` grant a person approves on IAM's device page for an agent to act as them at the environment (ADR-0090 §5); modes `off` and `refuse` only                                                            | `off`    |
+
+`agent-write` is no action of Control's and has no pending item: the device page is already a person's decision on
+exactly that grant, so `plan` and `person` do not apply, and it takes no approvers. IAM judges it from Control's mirror
+(§4), when the person approves and at every exchange: `refuse` serves `read` grants only, and `off` serves `write`,
+confirmed with a passkey bound to the device attempt while its `stepUp` is `webauthn` (the default). Until the device
+page asks that passkey, IAM refuses `write` under `webauthn` as under `refuse`, so a protected environment fails closed.
 
 A write to the all-environments layer (`env: null`) is a write to every protected environment of the application, and
 the strictest of their modes applies; the request names them all. An `apps.update` reaches every environment of the
@@ -119,17 +126,17 @@ The settings are one nullable column beside it, `approval_settings`, holding the
 `approvers` takes every category but `grants`, whose two-person rule IAM keeps (§4). Each setting lands with the step
 that first uses it:
 
-| Setting                | Default                                        | Alternative                                                                                      |
-| ---------------------- | ---------------------------------------------- | ------------------------------------------------------------------------------------------------ |
-| `deployRequestCommits` | `merged`                                       | `any`: an unmerged commit may be requested, still never a workspace ref                          |
-| `requestTtlHours`      | 24, for requests and parked runs               | 1–168                                                                                            |
-| `requesterMayApprove`  | `true`, per category, grants and keys included | `false`: someone other than the requester's person decides                                       |
-| `approvers`            | 1, per category                                | 2: two different people decide, each on the same digest                                          |
-| `stepUp`               | `webauthn` for `credentials`, `none` elsewhere | `webauthn` (a passkey assertion bound to the decision) or `none`, any category but `grants`      |
-| `credentialCeiling`    | `requester`: actions the requester holds       | `approver`: actions the approver holds in Control, the page warning which exceed the requester's |
-| `planEvidence`         | `console`                                      | `console+github`, once the access-diff GitHub check is built                                     |
-| `planBinding`          | `transition`                                   | `after-state`                                                                                    |
-| `planTtlDays`          | 30                                             | 1–365                                                                                            |
+| Setting                | Default                                                          | Alternative                                                                                                                             |
+| ---------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `deployRequestCommits` | `merged`                                                         | `any`: an unmerged commit may be requested, still never a workspace ref                                                                 |
+| `requestTtlHours`      | 24, for requests and parked runs                                 | 1–168                                                                                                                                   |
+| `requesterMayApprove`  | `true`, per category, grants and keys included                   | `false`: someone other than the requester's person decides                                                                              |
+| `approvers`            | 1, per category                                                  | 2: two different people decide, each on the same digest                                                                                 |
+| `stepUp`               | `webauthn` for `credentials` and `agent-write`, `none` elsewhere | `webauthn` (a passkey assertion bound to the decision, or for `agent-write` to the device attempt) or `none`, any category but `grants` |
+| `credentialCeiling`    | `requester`: actions the requester holds                         | `approver`: actions the approver holds in Control, the page warning which exceed the requester's                                        |
+| `planEvidence`         | `console`                                                        | `console+github`, once the access-diff GitHub check is built                                                                            |
+| `planBinding`          | `transition`                                                     | `after-state`                                                                                                                           |
+| `planTtlDays`          | 30                                                               | 1–365                                                                                                                                   |
 
 The policy and the settings are kept in `app_env_protection` with the `protected` flag, so a recreated environment
 starts from the choice its deleted predecessor left (ADR-0050 §4). They apply only while the environment is protected;
@@ -169,11 +176,13 @@ no entry exists, and `plan` waits for a person exactly as `person` does: today's
 
 ### 4. A console grant waits as a grant request
 
-IAM keeps two gates per IAM application id `<app>@<env>` (`app_grant_approvals`): whether the environment's grants
-wait, because IAM is where a grant is written, and its `credentials` mode (`off` when unprotected), because IAM is
-where a key is issued (§8). Control is the only writer, and IAM enforces that: `grantApproval.set` answers only the
+IAM keeps three gates per IAM application id `<app>@<env>` (`app_grant_approvals`): whether the environment's grants
+wait, because IAM is where a grant is written; its `credentials` mode (`off` when unprotected), because IAM is where a
+key is issued (§8); and its `agentWrite` gate, because IAM is where an agent's grant is approved and exchanged
+(ADR-0090 §5): `open` when unprotected or under `off` without a passkey, `passkey` under `off` with `stepUp: webauthn`,
+`refuse` under `refuse`. Control is the only writer, and IAM enforces that: `grantApproval.set` answers only the
 provisioning key, never an installation administrator, who could otherwise switch a gate off, grant or issue, and
-switch it back. Every protection change of an environment writes both gates in one call under the environment's
+switch it back. Every protection change of an environment writes all three gates in one call under the environment's
 deployment lease, carrying the environment's protection revision, and IAM ignores a revision older than the one it
 holds, so a caller that lost the lease cannot undo its successor's gates. Control writes the stricter side first, gate
 by gate: a change that tightens either gate writes IAM the stricter of before and after (at the revision its own write
@@ -185,8 +194,11 @@ starting revision (registration, and an `apps.environments.put` that creates one
 of an application counts only the environments IAM knows, so a `prod` IAM did not know would not count. One that starts
 protected is not created when IAM does not take them (503). Control's maintenance pass writes the gates of every
 environment IAM has not taken at its current protection revision (`iam_gate_mirrors` records what IAM took), so a new
-environment whose write failed, a failed second write and an installation upgraded to the `credentials` mirror converge
-with no operator step; until then IAM reads an environment it knows and holds no mode for as `person`. A platform audience is refused: no grant at the console or IAM
+environment whose write failed, a failed second write and an installation upgraded to the `credentials` or `agentWrite`
+mirror converge with no operator step (the `agentWrite` upgrade forgets every recorded acknowledgement once, Control
+migration 0047); until then IAM reads an environment it knows and holds no mode for as `person`, and no `agentWrite`
+gate as `refuse`. A write without a gate, an older Control's, clears it, so IAM never keeps a looser gate Control no
+longer states; an IAM older than a gate refuses the field, and Control writes the others without it. A platform audience is refused: no grant at the console or IAM
 waits. `grants` waits when its mode is `person`.
 
 While an application's grants wait, `grants.create`, `grants.update`, `grants.delete`, `appPeople.grant` and

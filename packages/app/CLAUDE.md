@@ -1142,7 +1142,8 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **An agent's grant** (`kit.agentGrant(person, { scope, label })`, ADR-0090) is a resource token of `agent-cli` for
   the kit's origin. The kit's proxy exchanges it through the stand-in `mintFromGrant` (`grantExchange`), which signs the
   person's live permissions narrowed with auth-core's `narrowToValue`, as IAM does, and refuses a `write` grant
-  (`write_refused`) as IAM does until `agent-write` is mirrored, unless the kit's `agentWrite` is `off`. The endpoint
+  (`write_refused`) as IAM does where the environment's `agent-write` gate is not `open`, unless the kit's `agentWrite`
+  is `off`. The endpoint
   access kit sets it `off` and asks a row whose only caller is `agent` with an unnarrowed grant, `read` for a read-only
   row and `write` otherwise. The exchanged token is signed from the person's own permissions with no terminal claims,
   even for a caller on a terminal, as IAM's `mintFromGrant` resolves the person. `kitMembership` holds it as IAM does:

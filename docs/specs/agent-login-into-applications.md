@@ -393,13 +393,11 @@ follows the usual review round.
 - **`write` narrowed to fewer actions.** The page could let the person tick a subset of their actions for `write`, as a
   ceiling IAM applies at each exchange (`narrowPermissions`). Default: not in v1; the group's callers already bound what
   an agent reaches. The token answer's `scope` stays `write` either way, as in the shared profile.
-- **`agent-write` default under strict.** `off` with a passkey, as above, or `refuse`. Default: `off` with a passkey;
-  agents that replace a machine group write today without any person.
-- **One `act` claim with agent task keys.** [Agent task keys](agent-task-keys.md) put `act` on a resource token to the
-  console, refused on a native token; this design puts it on an application token. Neither is built (the task-key spec
-  says its first slice is, but `packages/auth-core/src/token.ts` has no `act`). Default: one claim with a common core
-  `{ sub, label }`, accepted in both places; whichever lands first defines the parser, and the audit columns
-  (`actor_id`, `actor_label`) serve both.
+- **`agent-write` default under strict.** Decided (2026-11-26): `off` with a passkey bound to the device attempt.
+  IAM refuses `write` at such an environment until the device page asks that passkey (fail closed).
+- **One `act` claim with agent task keys.** Decided (2026-11-26): one claim name, two shapes by token kind. This
+  design's agent shape is on an application token (built); [agent task keys](agent-task-keys.md) add the task shape on
+  a console resource token, and both write the audit columns `actor_id` and `actor_label`.
 - **The MCP surface of backlog 267.** Its tools could run on this exchange with an authorization-code client instead of
   `agent-cli`. Default: decided there, with its policy on application data reaching a third-party model.
 - **Scope values.** Decided by [ADR-0090](../decisions/0090-a-device-grant-reaches-an-application-as-the-person.md):

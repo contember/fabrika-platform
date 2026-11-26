@@ -161,9 +161,10 @@ keeps no copy of the task.
 
 ### No task token before its consumer
 
-A Control older than this feature would take a task token for the person's own grant: its `parseAccessClaims` builds
-its result from the fields it knows and drops `act` (`packages/auth-core/src/token.ts:337`), so target, globs and
-budgets would not apply. On Zerops, `platform deploy` builds IAM (with Operations) first, then the proxy, then Control
+A Control released before ADR-0090's agent grants would take a task token for the person's own grant: its
+`parseAccessClaims` builds its result from the fields it knows and drops `act`, so target, globs and budgets would not
+apply. A later Control refuses the token instead: its parser knows only the agent shape of `act` and refuses `act` on a
+resource token (`parseActClaims`, `packages/auth-core/src/token.ts`). On Zerops, `platform deploy` builds IAM (with Operations) first, then the proxy, then Control
 (`packages/provider-zerops/src/installation/deploy.ts:121`, `:836`), so every upgrade has that window, and a failed
 Control build keeps it open.
 
@@ -183,17 +184,22 @@ task's checks before it calls Operations.
 ### Audit
 
 `IamRpc.audit` already verifies the caller's token to find the app (`packages/iam/CLAUDE.md`, "`audit` records the app
-of the caller's verified token"). It also reads `act` from that verified token and writes it to two new
-`audit_events` columns, `actor_task_id` and `actor_label`, never from the event's own fields. IAM's own records of
+of the caller's verified token"), and already reads an agent grant's `act` from it into `audit_events.actor_id`
+(`oauth:<grant id>`) and `actor_label` (ADR-0090, IAM migration 0042). A task's `act` fills the same two columns:
+`actor_id` is `task:<task id>`, `actor_label` the task's label, never from the event's own fields. No column is added. IAM's own records of
 `tasks.*` write them too. The console's audit view shows "agent `<label>` for `<person>`". Delivery stays best-effort
 ([backlog 71](../backlog/71-deliver-domain-audit-events-durably.md)).
 
 ## API and contract changes
 
-- **`@fabrika/auth-core`.** `AccessTokenClaims.act?: { sub: string; label: string; target: { app: string; env: string }; budgets: { commits?: number; deploys?: number; workspaces?: number }; paths?: string[] }`
-  (the scopes stay in `oauth.scopes`).
-  `sub` is the task id. `buildAccessClaims`/`buildResourceAccessClaims` and `parseAccessClaims` accept it **only beside
-  OAuth claims**, and the parser refuses a malformed or misplaced one rather than dropping it. New constants: the
+- **`@fabrika/auth-core`.** One claim name, `act`, with two shapes by token kind. A person's application token the
+  proxy exchanged an agent's device grant for carries the agent shape, which exists (`AgentActClaims`,
+  `{ sub: 'agent-cli', grant, scope, label? }`, ADR-0090). A resource token to the console minted by a task exchange
+  carries the task shape: `{ sub: string; label: string; target: { app: string; env: string }; budgets: { commits?: number; deploys?: number; workspaces?: number }; paths?: string[] }`
+  (the scopes stay in `oauth.scopes`), with `sub` the task id. `AccessTokenClaims.act` becomes the union, told apart by
+  the token kind and never by probing fields: `parseAccessClaims` reads the task shape only beside OAuth claims and the
+  agent shape only on a person's application token outside a session, and refuses a malformed or misplaced one rather
+  than dropping it. `buildAccessClaims` builds only the agent shape, `buildResourceAccessClaims` only the task shape. New constants: the
   task-key token type URN, `TASK_KEY_PREFIX`, `TASK_TOKEN_TTL_SECONDS` (60), `MAX_TASK_LIFETIME_SECONDS` (24 h).
 - **`@fabrika/auth`.** `AuthContext.actor?: { taskId; label; target; budgets; paths }`, from `claims.act`.
   Optional and additive.
@@ -274,26 +280,30 @@ MCP is served only by the Bun host, so task keys work wherever `/mcp` does (Zero
 
 ## Slicing into PRs
 
-1. **The `act` claim and `pt_` redaction (S).** `auth-core` claim, builders, parser, constants; `AuthContext.actor`;
-   Operations' redaction of `pt_`. Nothing mints it yet. Witness: the claim tests and the redaction test above.
+1. **The task shape of `act` and `pt_` redaction (S).** `auth-core`'s task shape beside the agent shape, its builder,
+   the parser, constants; `AuthContext.actor`; Operations' redaction of `pt_`. Nothing mints it yet. Witness: the claim
+   tests (each shape refused on the other token kind) and the redaction test above.
 2. **Control enforcement (M).** Target, globs, budgets, attribution, migrations, and the capability report (which IAM
    ignores until PR 3). Inert without task tokens. Witness: Control tests with tokens the test signs.
 3. **IAM tasks and exchange (M).** `agent_tasks`, `task_consumers`, `tasks.*` and the gates test, the token-exchange
    grant gated on the report, the task CIMD document, the bucket. Witness: IAM tests on both engines, the
    mixed-release cases included.
-4. **Audit attribution (S).** The two columns, IAM reading `act` in `audit` and its own records; the audit view
-   column. Witness: the audit test above.
+4. **Audit attribution (S).** IAM writing a task's `act` to `actor_id` (`task:<id>`) and `actor_label` in `audit` and
+   its own records; the audit view column. Witness: the audit test above.
 5. **Console and docs (M).** The Tasks panel, `docs/reference/mcp-authoring.md` (how a runner uses a task key), the
    ADR. Witness: a browser test in `tests/browser` that issues, lists and revokes a task.
 
-PR 1 is built now and stays inactive: nothing mints `act` until PR 3. PRs 2–5 wait until a follow-up that needs a
-task key (the self-healing loop, an unattended Operations or review agent) is planned.
+None is built (checked 2026-11-26): `auth-core`'s `act` is the agent shape alone, and no `pt_` redaction exists.
+PR 1 stays inactive when it lands: nothing mints the task shape until PR 3. PRs 1–5 wait until a follow-up that needs
+a task key (the self-healing loop, an unattended Operations or review agent) is planned.
 
 ## Decisions
 
-- **Only slice 1 now** (review of 2026-11-04). The `act` claim, its parser and the `pt_` redaction land as an inactive
-  foundation; Control enforcement, IAM issuance and exchange, audit attribution and the console panel wait for the
-  follow-ups that need them.
+- **Nothing now** (review of 2026-11-04, corrected 2026-11-26). Slice 1 was planned as an inactive foundation but was
+  not built; it lands with the first follow-up that needs a task key, with the rest.
+- **One `act` claim, two shapes by token kind** (decided 2026-11-26, with the agent-login spec). The agent shape on an
+  application token and the task shape on a console resource token share the name and the audit columns
+  (`actor_id`, `actor_label`); no common core is parsed apart from the token kind.
 
 ## Open questions
 
