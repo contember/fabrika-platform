@@ -77,6 +77,8 @@ describe("the Applications list's State column", () => {
 		const html = cell('notes', { kind: 'read', items: envs }, new Map([[environmentKey('notes', 'prod'), { kind: 'mode', mode: 'closed' }]]))
 		expect(html).toContain('href="/apps/notes/data/prod"')
 		expect(html).toContain('href="/apps/notes/data/test"')
+		expect(html).toContain('title="Open the data of prod"')
+		expect(html).toContain('<span class="sr-only">, open its data</span>')
 		expect(html).toContain('status-stop')
 		expect(html).toContain('Closed')
 		// An environment whose state has not answered reads as such, and holds nothing else.
@@ -190,6 +192,8 @@ describe('the console overview', () => {
 		const html = render(<Applications data={data} states={STATES} />)
 		expect(html).toContain('<th>State</th>')
 		expect(html).toContain('href="/apps/crm/data/prod"')
+		// Each link names its environment for a screen reader, not only "Closed".
+		expect(html).toContain('<span class="sr-only">crm / prod data:</span>')
 		expect(html).toContain('Closed')
 		expect(html).toContain('Restore failed')
 		expect(html).toContain('Fails to boot')
@@ -218,7 +222,14 @@ describe('the console overview', () => {
 		expect(html.indexOf('crm / prod')).toBeLessThan(html.indexOf('notes / test'))
 	})
 
-	test('an environment that is not read yet, not readable, offline or serving needs no one', async () => {
+	test('an environment still being read says so instead of reporting nothing to do', async () => {
+		const data = await loadOverview(caller, fetchOverview)
+		const html = attention(data, new Map([[environmentKey('crm', 'prod'), { kind: 'reading' }]]))
+		expect(html).toContain('Checking environment states…')
+		expect(html).not.toContain('No attention items in the visible data.')
+	})
+
+	test('an environment that is not readable, offline or serving needs no one', async () => {
 		const data = await loadOverview(caller, fetchOverview)
 		const quiet: ReadonlyMap<string, EnvironmentState> = new Map([
 			[environmentKey('crm', 'prod'), { kind: 'suspended', at: 1_790_000_000 }],

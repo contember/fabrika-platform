@@ -118,6 +118,7 @@ function Environment({ env, data, state }: { env: AppEnvDto; data: OverviewData;
 				{mayDo(data.caller.access, CONTROL_ACTIONS.DATA_READ, { app: env.appId, env: env.env })
 					? (
 						<Link to="apps/data" params={{ id: env.appId, env: env.env }}>
+							<span className="sr-only">{env.appId} / {env.env} data:</span>
 							<Status lamp={stateLamp(state)}>{stateLabel(state)}</Status>
 						</Link>
 					)

@@ -71,7 +71,8 @@ export async function readEnvironmentState(
 export function stateLamp(state: EnvironmentState): Lamp {
 	switch (state.kind) {
 		case 'serving':
-			return state.published ? 'ok' : 'idle'
+			// Green only for a mode the object confirmed open; Control's own facts say published, not admitting.
+			return state.published && state.source === 'object' ? 'ok' : 'idle'
 		case 'operation':
 			return state.operation.state === 'running' ? 'run' : 'stop'
 		case 'reading':

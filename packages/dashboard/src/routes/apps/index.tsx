@@ -25,10 +25,21 @@ export default createPage()
 	.render(({ data }) => {
 		const [query, setQuery] = useState('')
 		const q = query.trim().toLowerCase()
-		const filtered = data.apps.filter((app) => q === '' || app.id.toLowerCase().includes(q) || app.repoUrl.toLowerCase().includes(q))
+		const filtered = useMemo(
+			() => data.apps.filter((app) => q === '' || app.id.toLowerCase().includes(q) || app.repoUrl.toLowerCase().includes(q)),
+			[data.apps, q],
+		)
 		const environments = useApplicationEnvironments(data.apps)
-		const allEnvs = useMemo(() => [...environments.values()].flatMap((read) => read.kind === 'read' ? read.items : []), [environments])
-		const states = useEnvironmentStatesAcross(allEnvs)
+		// A state is a live call to the environment's object: only the rows the search shows are asked.
+		const shownEnvs = useMemo(
+			() =>
+				filtered.flatMap((app) => {
+					const read = environments.get(app.id)
+					return read?.kind === 'read' ? read.items : []
+				}),
+			[filtered, environments],
+		)
+		const states = useEnvironmentStatesAcross(shownEnvs)
 
 		return (
 			<>

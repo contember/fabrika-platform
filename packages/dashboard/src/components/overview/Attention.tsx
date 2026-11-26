@@ -236,6 +236,7 @@ export function Attention({ data, states }: { data: OverviewData; states: Readon
 	const unavailable = [data.health, data.issues, data.approvals, data.failures, data.namespaces, data.mailHeld, data.mailFailed, data.keys]
 		.some((read) => read.problem === 'unavailable')
 		|| [...states.values()].some((state) => state.kind === 'unknown' && state.reason === 'unavailable')
+	const checking = [...states.values()].some((state) => state.kind === 'reading')
 	return (
 		<Panel title="Needs attention" meta={<span className="ov-section-note">Prioritized by impact</span>}>
 			<FilterGroup
@@ -271,7 +272,11 @@ export function Attention({ data, states }: { data: OverviewData; states: Readon
 				))}
 				{visible.length === 0 && (
 					<p className="ov-empty">
-						{unavailable ? 'No items in the available data. Some checks could not be read.' : 'No attention items in the visible data.'}
+						{checking
+							? 'Checking environment states…'
+							: unavailable
+							? 'No items in the available data. Some checks could not be read.'
+							: 'No attention items in the visible data.'}
 					</p>
 				)}
 			</div>

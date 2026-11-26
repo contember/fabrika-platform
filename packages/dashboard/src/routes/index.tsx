@@ -119,7 +119,7 @@ function unavailableValue(read: OverviewRead<unknown>) {
 	return <small>{read.problem === 'forbidden' ? 'No access' : 'Unknown'}</small>
 }
 
-function Readings({ data }: { data: OverviewData }) {
+export function Readings({ data }: { data: OverviewData }) {
 	const production = productionHealth(data)
 	const issues = data.issues.data
 	const inFlight = data.activeRuns.data?.items.length ?? 0
@@ -140,8 +140,10 @@ function Readings({ data }: { data: OverviewData }) {
 					<Link to="operations/health" className="instrument">
 						<Reading
 							label="Production incidents"
-							value={production.incidents}
-							note={<Status lamp={production.incidents > 0 ? 'stop' : 'idle'}>{production.monitored} visible environments monitored</Status>}
+							value={production.monitored === 0 ? <small>Not monitored</small> : production.incidents}
+							note={production.monitored === 0
+								? 'No visible production environment has a health check'
+								: <Status lamp={production.incidents > 0 ? 'stop' : 'idle'}>{production.monitored} visible environments monitored</Status>}
 						/>
 					</Link>
 				)}

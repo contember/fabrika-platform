@@ -18,6 +18,8 @@ import auditPage from '../routes/access/audit'
 import dataPage from '../routes/apps/data'
 import appPage from '../routes/apps/detail'
 import appsPage from '../routes/apps/index'
+import { Readings } from '../routes/index'
+import mailPage from '../routes/mail/index'
 import errorPage from '../routes/operations/errors/detail'
 import errorsPage from '../routes/operations/errors/index'
 import healthPage from '../routes/operations/health/index'
@@ -30,6 +32,7 @@ const pageRegistry = {
 	apps: appsPage.route,
 	'apps/detail': appPage.route,
 	'apps/data': dataPage.route,
+	mail: mailPage.route,
 	'operations/errors': errorsPage.route,
 	'operations/errors/detail': errorPage.route,
 	'operations/health': healthPage.route,
@@ -208,6 +211,22 @@ describe('overview data boundaries', () => {
 		expect(markup).toContain('abc123')
 		expect(markup).not.toContain('Not published')
 		expect(markup).not.toContain('never')
+	})
+
+	test('production incidents read "Not monitored", not 0, when no production environment has a health check', async () => {
+		const data = await loadOverview(caller, fetchOverview())
+		const router = new Router({
+			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+			adapter: createMemoryNavigationAdapter(),
+			pageRegistry,
+		})
+		const readings = () => renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(Readings, { data })))
+		data.health = { data: { sources: [{ ...source, httpChecks: [] }] }, problem: null }
+		expect(readings()).toContain('Not monitored')
+		expect(readings()).toContain('No visible production environment has a health check')
+		data.health = { data: { sources: [source] }, problem: null }
+		expect(readings()).not.toContain('Not monitored')
+		expect(readings()).toContain('1 visible environments monitored')
 	})
 
 	test('a source omitted by scoped authorization is unknown, not unmonitored', async () => {

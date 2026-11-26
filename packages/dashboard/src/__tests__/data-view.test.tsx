@@ -229,8 +229,9 @@ describe('a refusal is a plain not-allowed state, never an error', () => {
 
 	test('an environment without an ops channel says what the console cannot do there and when a deploy opens it', () => {
 		const html = markup(holding(['data.read']), { kind: 'no-channel' })
-		expect(html).toContain('Control has no ops channel to this environment.')
-		expect(html).toContain('a deploy at a current framework release opens it')
+		expect(html).toContain('The console cannot reach this environment')
+		expect(html).toContain('Maintenance, restore and recovery are not available here')
+		expect(html).toContain('a deploy at a current framework release makes them available')
 	})
 
 	test('the loader reads the view, the operations, the backups and their schedule, and maps 404 and 403 to not-allowed, 409 to no channel', async () => {
@@ -1037,6 +1038,8 @@ describe("an environment's state lamp", () => {
 		const published = await read({ 'data.view': refusal(409), 'data.operations.list': result({ items: [], nextCursor: null }) })
 		expect(published).toEqual({ kind: 'serving', published: true, source: 'control' })
 		expect(stateLabel(published)).toBe('Published')
+		expect(stateLamp(published)).toBe('idle')
+		expect(stateLamp({ kind: 'serving', published: true, source: 'object' })).toBe('ok')
 		expect(await read({ 'data.view': result(open), 'data.operations.list': result({ items: [operation('op-2')], nextCursor: null }) })).toEqual({
 			kind: 'operation',
 			operation: operation('op-2'),

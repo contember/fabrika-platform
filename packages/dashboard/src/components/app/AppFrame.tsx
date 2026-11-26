@@ -145,8 +145,9 @@ export function EnvironmentStates({ appId, envs, readable, states, label }: {
 					<li key={env.env}>
 						{readable.includes(env)
 							? (
-								<Link to="apps/data" params={{ id: appId, env: env.env }} className="app-env-state">
+								<Link to="apps/data" params={{ id: appId, env: env.env }} className="app-env-state" title={`Open the data of ${env.env}`}>
 									{content}
+									<span className="sr-only">, open its data</span>
 								</Link>
 							)
 							: <span className="app-env-state">{content}</span>}
