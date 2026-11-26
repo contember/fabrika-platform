@@ -1,8 +1,9 @@
 // Every terminal state of a failed bookmark migration has a way back to `open` (ADR-0069 §3, ADR-0070 §9). The matrix is
 // generated from the definitions of the states: the migration's steps with the modes each one holds, its failure
-// reasons, the rewind's outcomes with the states of its `arm`s, and the `dataLoss` line. For each cell, each recovery
-// action (every resolution, and an ordinary deploy) runs against a fresh environment, and at least one must leave the
-// environment open. Against the fake ops environment and a provider double, on SQLite always and on Postgres when
+// reasons, the rewind's outcomes with the states of its `arm`s, the `dataLoss` line, and whether the failed version
+// answered `ok` after all. A second part puts a roll back and open recovery over it, failed or interrupted at each of
+// its steps. For each cell, each recovery action (every resolution, and an ordinary deploy) runs against a fresh
+// environment, and at least one must leave the environment open. Against the fake ops environment and a provider double, on SQLite always and on Postgres when
 // FABRIKA_TEST_POSTGRES_URL is set.
 
 import { OPS_MIGRATION_FAILURES, type OpsMigrationFailureReason, sha256Hex } from '@fabrika/auth-core'
@@ -17,12 +18,24 @@ import {
 	MIGRATION_FAILED_CODE,
 	MIGRATION_REVERTED_CODE,
 	NEW_VERSION_DEADLINE_S,
+	NOT_REWOUND_CODE,
 	type OpsTarget,
 	recordedMaintenance,
 	REWIND_FAILED_CODE,
+	ROLLBACK_FAILED_CODE,
+	ROLLBACK_RECOVERY_STEPS,
+	type RollbackRecoveryStep,
 	startRecovery,
 } from '../data-operations'
-import { type ControlRepositories, createControlRepositories, type MaintenanceMode, REWIND_OUTCOMES, type RewindOutcome } from '../db'
+import {
+	type ControlRepositories,
+	createControlRepositories,
+	DATA_OPERATION_STATES,
+	type DataOperationState,
+	type MaintenanceMode,
+	REWIND_OUTCOMES,
+	type RewindOutcome,
+} from '../db'
 import type { CommitSource } from '../github/source/commit-files'
 import type { LeaseClock } from '../lease'
 import { VaultOpsKeys } from '../ops-key'
@@ -120,28 +133,108 @@ function rewindColumns(state: RewindState): {
 	}
 }
 
+/**
+ * Whether the failed version may have answered `ok` after all at `step` (`candidate_recovered`): `check` records it with
+ * the step it closes to, after the rollback deploy succeeded.
+ */
+function recoveredAt(step: BookmarkMigrationStep): readonly boolean[] {
+	switch (step) {
+		case 'restrict':
+			return [false, true]
+		case 'deploy':
+		case 'migrate':
+		case 'rewind':
+		case 'revert':
+		case 'check':
+			return [false]
+	}
+}
+
+/** A roll back and open recovery over the migration, stopped at one of its steps, in a state other than succeeded. */
+interface RecoveryState {
+	readonly step: RollbackRecoveryStep
+	readonly state: Exclude<DataOperationState, 'succeeded'>
+}
+
+const RECOVERY_STATES: readonly RecoveryState[] = ROLLBACK_RECOVERY_STEPS.flatMap((step) =>
+	DATA_OPERATION_STATES.flatMap((state) => state === 'succeeded' ? [] : [{ step, state }])
+)
+
+/** The code a roll back and open fails with at `step`; a refused fence (`stale_generation`) may stop it at any step. */
+function recoveryFailedWith(step: RollbackRecoveryStep): string {
+	switch (step) {
+		case 'restrict':
+			return NOT_REWOUND_CODE
+		case 'revert':
+			return ROLLBACK_FAILED_CODE
+		case 'reconcile':
+		case 'check':
+		case 'open':
+			return 'stale_generation'
+	}
+}
+
+/** The mode the recovery leaves the object in at `step`: `inspect` from its fence on, until its open is acknowledged. */
+function recoveryModeAt(step: RollbackRecoveryStep, migrationMode: MaintenanceMode): MaintenanceMode {
+	switch (step) {
+		case 'reconcile':
+			return migrationMode
+		case 'restrict':
+		case 'revert':
+		case 'check':
+		case 'open':
+			return 'inspect'
+	}
+}
+
 interface Cell {
 	readonly step: BookmarkMigrationStep
 	readonly mode: MaintenanceMode
 	readonly failure: OpsMigrationFailureReason | null
 	readonly rewind: RewindState
 	readonly dataLoss: boolean
+	readonly recovered: boolean
+	readonly recovery: RecoveryState | null
 }
 
-const CELLS: readonly Cell[] = BOOKMARK_MIGRATION_STEPS.flatMap((step) =>
+const FAILURES: readonly (OpsMigrationFailureReason | null)[] = [null, ...OPS_MIGRATION_FAILURES]
+
+const MIGRATION_CELLS: readonly Cell[] = BOOKMARK_MIGRATION_STEPS.flatMap((step) =>
 	modesAt(step).flatMap((mode) =>
-		[null, ...OPS_MIGRATION_FAILURES].flatMap((failure) =>
-			REWIND_STATES.flatMap((rewind) => [false, true].map((dataLoss) => ({ step, mode, failure, rewind, dataLoss })))
+		FAILURES.flatMap((failure) =>
+			REWIND_STATES.flatMap((rewind) =>
+				[false, true].flatMap((dataLoss) => recoveredAt(step).map((recovered) => ({ step, mode, failure, rewind, dataLoss, recovered, recovery: null })))
+			)
 		)
 	)
 )
 
+/** A roll back and open in each of its states, over a migration closed after each failure and each rewind state. */
+const RECOVERY_CELLS: readonly Cell[] = RECOVERY_STATES.flatMap((recovery) =>
+	FAILURES.flatMap((failure) =>
+		REWIND_STATES.map((rewind) => ({
+			step: 'restrict' as const,
+			mode: 'closed' as const,
+			failure,
+			rewind,
+			dataLoss: false,
+			recovered: false,
+			recovery,
+		}))
+	)
+)
+
+const CELLS: readonly Cell[] = [...MIGRATION_CELLS, ...RECOVERY_CELLS]
+
 /** The state ADR-0069 §3 leaves closed for an operator: committed, not rewound, with a `dataLoss` line. */
 const closedForOperator = (cell: Cell): boolean =>
-	cell.step === 'restrict' && cell.failure === 'committed' && cell.dataLoss && (cell.rewind === 'none' || cell.rewind === 'refused')
+	cell.recovery === null && cell.step === 'restrict' && cell.failure === 'committed' && cell.dataLoss && !cell.recovered
+	&& (cell.rewind === 'none' || cell.rewind === 'refused')
 
 const cellName = (cell: Cell): string =>
-	`${cell.step}/${cell.mode}, ${cell.failure ?? 'no failure'}, rewind ${cell.rewind}${cell.dataLoss ? ', dataLoss' : ''}`
+	`${cell.step}/${cell.mode}, ${cell.failure ?? 'no failure'}, rewind ${cell.rewind}${cell.dataLoss ? ', dataLoss' : ''}${
+		cell.recovered ? ', candidate recovered' : ''
+	}${cell.recovery === null ? '' : `; roll back and open ${cell.recovery.state} at ${cell.recovery.step}`}`
 
 interface Backend {
 	readonly repositories: ControlRepositories
@@ -246,12 +339,19 @@ for (const backend of backends) {
 				await b.repositories.runs.createRun({ id, appId, env: ENV, ref: 'main', trigger: 'manual', actor: 'user:test' })
 				return id
 			}
+			const seconds = Math.floor(clock / 1000)
+			/** A run that ended `status`, as a deploy of the last succeeded commit does. */
+			const ended = async (status: 'succeeded' | 'failed', barrier: boolean): Promise<string> => {
+				const id = await run()
+				await b.db
+					.prepare(`UPDATE runs SET status = ?, commit_sha = ?, migration_barrier = ?, external_run_id = ?, started_at = ?, finished_at = ?
+						WHERE id = ?`)
+					.bind(status, sha256Hex(appId).slice(0, 40), barrier ? 1 : null, `${id}-external`, seconds - 60, seconds - 30, id)
+					.run()
+				return id
+			}
 			// The last succeeded deploy, which a rollback redeploys.
-			const first = await run()
-			await b.db
-				.prepare(`UPDATE runs SET status = 'succeeded', commit_sha = ?, migration_barrier = 1, started_at = ?, finished_at = ? WHERE id = ?`)
-				.bind(sha256Hex(appId).slice(0, 40), Math.floor(clock / 1000) - 60, Math.floor(clock / 1000) - 30, first)
-				.run()
+			await ended('succeeded', true)
 			fake.ledger = [{ bundle: 'app', name: FIRST, checksum: sha256Hex(FIRST_TEXT), appliedAt: '2027-01-14T08:00:00.000Z' }]
 			fake.bundled = [FIRST]
 			fake.previous = null
@@ -259,14 +359,15 @@ for (const backend of backends) {
 			const generation = await b.repositories.dataOperations.allocateGeneration(appId, ENV)
 			const rewind = rewindColumns(cell.rewind)
 			const migration = uuidv7()
-			const seconds = Math.floor(clock / 1000)
 			const waits = cell.step === 'migrate' || cell.step === 'check'
+			// A recovered candidate answered after its rollback deploy succeeded.
+			const reverted = cell.recovered ? await ended('succeeded', false) : null
 			await b.db
 				.prepare(`INSERT INTO app_env_data_operations
 					(id, app_id, env, kind, step, target_mode, generation, state, error_code, actor, created_at, updated_at, finished_at, run_id,
 						records_bookmark, data_loss, deadline_at, migration_failure, deployed, candidate_version, rewind_record, rewind_current,
-						rewind_target, rewind_arms, rewind_verified, rewind_outcome, rewind_refusal)
-					VALUES (?, ?, ?, 'migrate', ?, ?, ?, 'failed', ?, 'user:test', ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+						rewind_target, rewind_arms, rewind_verified, rewind_outcome, rewind_refusal, revert_run_id, candidate_recovered)
+					VALUES (?, ?, ?, 'migrate', ?, ?, ?, 'failed', ?, 'user:test', ?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 				.bind(
 					migration,
 					appId,
@@ -291,9 +392,48 @@ for (const backend of backends) {
 					rewind.verified,
 					rewind.outcome,
 					rewind.refusal,
+					reverted,
+					cell.recovered ? 1 : 0,
 				)
 				.run()
 			fake.published.set(key(target, 'application'), { generation, mode: cell.mode })
+			// The operation a person recovers: the migration, or the roll back and open over it.
+			let stuck = migration
+			const recovery = cell.recovery
+			if (recovery !== null) {
+				stuck = uuidv7()
+				const recoveryGeneration = await b.repositories.dataOperations.allocateGeneration(appId, ENV)
+				const failed = recovery.state === 'failed'
+				// Its rollback run: none before `revert`, failed where `revert` failed, succeeded once `check` waits.
+				const rollback = recovery.step === 'check' || recovery.step === 'open'
+					? await ended('succeeded', false)
+					: recovery.step === 'revert' && failed
+					? await ended('failed', false)
+					: null
+				await b.db
+					.prepare(`INSERT INTO app_env_data_operations
+						(id, app_id, env, kind, step, target_mode, generation, state, error_code, actor, created_at, updated_at, finished_at,
+							recovers_operation_id, resolution, recovery_rollback, revert_run_id, deadline_at)
+						VALUES (?, ?, ?, 'recovery', ?, ?, ?, ?, ?, 'user:ops', ?, ?, ?, ?, 'open', 1, ?, ?)`)
+					.bind(
+						stuck,
+						appId,
+						ENV,
+						recovery.step,
+						recovery.step === 'open' ? 'open' : 'inspect',
+						recoveryGeneration,
+						recovery.state,
+						failed ? recoveryFailedWith(recovery.step) : null,
+						seconds,
+						seconds,
+						failed ? seconds : null,
+						migration,
+						rollback,
+						recovery.step === 'check' ? seconds + NEW_VERSION_DEADLINE_S : null,
+					)
+					.run()
+				fake.published.set(key(target, 'application'), { generation: recoveryGeneration, mode: recoveryModeAt(recovery.step, cell.mode) })
+			}
 			if (rewind.sentinel) {
 				fake.rewinds.set('application', { sentinels: new Map([[migration, { current: 'bookmark-0009', target: RECORD_BOOKMARK }]]), arms: rewind.arms })
 			}
@@ -311,7 +451,7 @@ for (const backend of backends) {
 				if (action === 'deploy') {
 					await executeDeploy(deps(), { runId: await run() })
 				} else {
-					await startRecovery(dataDeps(), { ...target, operationId: migration, resolution: action, actor: 'user:ops' })
+					await startRecovery(dataDeps(), { ...target, operationId: stuck, resolution: action, actor: 'user:ops' })
 				}
 				const published = fake.published.get(key(target, 'application'))
 				return (await recordedMaintenance(b, target)) === 'open' && published?.mode === 'open'

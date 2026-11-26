@@ -1172,6 +1172,35 @@ for (const backend of backends) {
 			expect(await recordedMaintenance(b, TARGET)).toBe('unsettled')
 		})
 
+		test('a recovered candidate holds its migration: roll back and open is refused; an open recovery and a fix-forward deploy are its exit', async () => {
+			const { b, fake, state, deps, run, deployFirst, candidateRun, operations, dataDeps } = await open()
+			await deployFirst()
+			state.failure = 'record_unwritable'
+			state.rollbackPreviousAnswers = 1
+			state.onRollback = () => {
+				fake.recovers = true
+				return Promise.resolve()
+			}
+			const second = await candidateRun([FIRST, SECOND])
+			await executeDeploy(deps(), { runId: second })
+			const [closed] = await operations()
+			if (closed === undefined) throw new Error('no migration')
+			expect(closed).toMatchObject({ state: 'failed', migration_failure: 'record_unwritable', candidate_recovered: 1 })
+			// The failed version's retried boot migrated: rolling back would run the old code over the candidate's schema.
+			expect(fake.ledger.map((row) => row.name)).toEqual([FIRST, SECOND])
+			expect(toDataOperationDto(closed)).toMatchObject({ rollbackAndOpen: false })
+			expect(await startRecovery(dataDeps(), { ...TARGET, operationId: closed.id, resolution: 'rollback', actor: 'user:ops' })).toEqual({
+				kind: 'refused',
+				reason: 'not_recoverable',
+			})
+			const opened = await startRecovery(dataDeps(), { ...TARGET, operationId: closed.id, resolution: 'open', actor: 'user:ops' })
+			expect(opened).toMatchObject({ kind: 'driven', operation: { state: 'succeeded' } })
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
+			state.rollbackPreviousAnswers = 0
+			const fix = await run()
+			expect(await executeDeploy(deps(), { runId: fix })).toEqual({ runId: fix, status: 'succeeded' })
+		})
+
 		test('without the version binding no ok can be told from the failed version: the wait runs to its deadline, then closes', async () => {
 			const { state, fake, deps, deployFirst, candidateRun, timeline, operations } = await open()
 			await deployFirst()

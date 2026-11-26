@@ -563,15 +563,17 @@ other environment, before the provider prepares anything, and the write maps a r
   resolution's CHECK; `recoveryResolution` reads it) recovers the migration under the chain of recoveries it is started
   on, and only the environment's newest bookmark migration. `rollbackOf` allows a failed one that is rewound, whose
   migration rolled back or whose record was unwritable, or whose run never deployed (`deploy_not_started`), and one
-  with an outstanding `arm`, which the recovery settles first. Its steps: `reconcile`; `restrict` publishes `inspect`
+  with an outstanding `arm`, which the recovery settles first; never one whose failed version answered `ok` after all
+  (`candidate_recovered`), which migrated whatever its failure said. Its steps: `reconcile`; `restrict` publishes `inspect`
   at its generation, settles an outstanding `arm` there (`settleArm`), fails `not_rewound` when `rollbackOf` no longer
   allows it, and ends the migration's run; `revert` names its own `revert_run_id` and deploys `getLatestDeployedRun`
   afresh (a failed rollback run is never resumed; a failure is `rollback_failed`, object `inspect`); `check` waits in
   `inspect` to the deadline counted from that deploy's success; `open` publishes `open` through the gate, which this
   recovery's settled rollback passes, and retires the chain. It never sends an `arm`. Nothing else resumes a failed
   migration. The deploy-request exemption and `rollbackReturn` read the recovery's record as they read a migration's.
-  `migration-recovery-exits.test.ts` generates every terminal state from `BOOKMARK_MIGRATION_STEPS`, the failure reasons
-  and `REWIND_OUTCOMES`, and requires an exit to `open` from each.
+  `migration-recovery-exits.test.ts` generates every terminal state from `BOOKMARK_MIGRATION_STEPS`, the failure reasons,
+  `REWIND_OUTCOMES`, `dataLoss` and `candidate_recovered`, and a roll back and open failed or interrupted at each of
+  `ROLLBACK_RECOVERY_STEPS` over it, and requires an exit to `open` from each.
   A refusal before any `arm` records `refused` and `rewind_refusal` and takes the branch below for a record it cannot
   rewind. `rolled_back`, `record_unwritable`, a rewound migration, and a `committed` one not rewound without
   `data_loss`, go to `revert`, the rollback deploy of `getLatestDeployedRun` (a succeeded run that recorded its

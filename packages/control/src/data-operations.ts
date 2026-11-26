@@ -290,6 +290,11 @@ export const REWOUND_BEFORE_ROLLBACK_CODE = 'rewound_before_rollback'
 export const NOT_REWOUND_CODE = 'not_rewound'
 export const ROLLBACK_FAILED_CODE = 'rollback_failed'
 
+/** The steps of a recovery that rolls back and opens, in order (`recoveryStep`). */
+export const ROLLBACK_RECOVERY_STEPS = ['reconcile', 'restrict', 'revert', 'check', 'open'] as const satisfies readonly DataOperationStep[]
+
+export type RollbackRecoveryStep = (typeof ROLLBACK_RECOVERY_STEPS)[number]
+
 /** The steps of a bookmark migration (ADR-0069 §3), in order. */
 export const BOOKMARK_MIGRATION_STEPS = ['deploy', 'migrate', 'rewind', 'revert', 'check', 'restrict'] as const satisfies readonly DataOperationStep[]
 
@@ -2301,10 +2306,13 @@ export function rewoundMayOpen(rollback: DataOperationRow, rollbackSucceeded: bo
 /**
  * Whether a recovery may roll `operation` back and open: a failed bookmark migration of which nothing migrated stays.
  * Its object is rewound, its migration rolled back in its own transaction, its record was never written, or its run
- * never deployed. `arm` while an in-place `arm` is outstanding: the recovery's own fence and `verify` decide first.
+ * never deployed. `arm` while an in-place `arm` is outstanding: the recovery's own fence and `verify` decide first. A
+ * failed version that answered `ok` after all (`candidate_recovered`) migrated whatever its failure said, so the old
+ * code would run over its schema.
  */
 export function rollbackOf(operation: DataOperationRow): 'eligible' | 'arm' | 'ineligible' {
 	if (operation.kind !== 'migrate' || operation.records_bookmark !== 1 || operation.state !== 'failed') return 'ineligible'
+	if (operation.candidate_recovered === 1) return 'ineligible'
 	if (outstandingArm(operation)) return 'arm'
 	if (operation.rewind_outcome === 'rewound') return 'eligible'
 	if (operation.migration_failure === 'rolled_back' || operation.migration_failure === 'record_unwritable') return 'eligible'

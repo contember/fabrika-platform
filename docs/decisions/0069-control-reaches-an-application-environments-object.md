@@ -328,15 +328,16 @@ new generation. Only a running operation resumes; a failed one is opened past.
 
 **Roll back and open** is the third choice, and the one way out of a failed bookmark migration whose data holds
 nothing of it: the object is rewound, its migration rolled back in its own transaction or never wrote its record, or
-its run never deployed. It recovers the migration under any recoveries that stopped on it, and only the environment's
+its run never deployed; and never once the failed version answered `ok` after all, since it then migrated. It recovers the migration under any recoveries that stopped on it, and only the environment's
 newest one. The recovery publishes `inspect` at its fresh generation instead of `closed`. An `arm` still outstanding is
 settled there first, as before any open (ADR-0070 §9); when `verify` finds the sentinel, the object still holds the
 migration, and the recovery fails for an `open` recovery instead. It then makes a fresh rollback deploy of the last
 succeeded run, never resuming one that failed, under the same deploy-request and approval exception as the
 operation's own rollback; keeps the object `inspect` to the deadline counted from that deploy's success; and opens it
 at a new generation. It never sends an `arm`. Its settled rollback lets a rewound object open, by any path, as the
-operation's own does. A committed migration that is not rewound has no such recovery: with a `dataLoss` line it stays
-`closed` until an operator opens it with a recovery and deploys a fix, which the open environment then accepts.
+operation's own does. A committed migration that is not rewound, and a failed version that answered `ok` after all, have no such recovery:
+the object stays `closed` until an operator opens it with a recovery and deploys a fix, which the open environment then
+accepts.
 
 **The fault matrix.** What each fault must lead to:
 
