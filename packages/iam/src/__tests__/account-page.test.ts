@@ -3,9 +3,10 @@
 // and skips cleanly otherwise.
 
 import { AGENT_CLIENT_ID, OAUTH_CLI_CLIENT_ID } from '@fabrika/auth-core'
+import { CONTROL_APP_ID, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import { uuidv7 } from '@fabrika/platform'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
-import { ACCOUNT_PATH } from '../auth/account'
+import { ACCOUNT_GRANTS_SHOWN, ACCOUNT_PATH } from '../auth/account'
 import { handleAuth } from '../auth/routes'
 import { createPostgresIamRepositories, type IamRepositories, type OAuthGrantRow } from '../db'
 import { randomToken } from '../oidc'
@@ -77,8 +78,9 @@ async function accountFixture(repositories: IamRepositories) {
 		principal_id: person,
 		session_id: f.sessionId,
 		client_id: OAUTH_CLI_CLIENT_ID,
-		app: 'control',
-		resource: 'https://control.example.test/api/rpc',
+		app: CONTROL_APP_ID,
+		resource: `https://console.example.test${CONTROL_RPC_PATH}`,
+		resources: JSON.stringify([`https://console.example.test${CONTROL_RPC_PATH}`, `https://console.example.test${CONTROL_OPERATIONS_RPC_PATH}`]),
 		scopes: '["deploy:alpha"]',
 	})
 	const revoked = await grant(repositories, {
@@ -132,7 +134,8 @@ async function accountFixture(repositories: IamRepositories) {
 		agent_label: 'not yours',
 	})
 	const send = (request: Request) => handleAuth(request, f.services, SIGNING_ENV, { waitUntil() {} }, null, 'req-account')
-	const get = (withSession = true) => send(new Request(`${ISSUER}${ACCOUNT_PATH}`, { headers: withSession ? { cookie: f.cookie } : {} }))
+	const get = (withSession = true, path: string = ACCOUNT_PATH, headers: Record<string, string> = {}) =>
+		send(new Request(`${ISSUER}${path}`, { headers: withSession ? { cookie: f.cookie, ...headers } : headers }))
 	const revoke = (id: string, headers: Record<string, string> = { cookie: f.cookie, origin: 'null', 'sec-fetch-site': 'same-origin' }) =>
 		send(
 			new Request(`${ISSUER}${ACCOUNT_PATH}`, {
@@ -141,7 +144,15 @@ async function accountFixture(repositories: IamRepositories) {
 				body: new URLSearchParams({ grant: id }),
 			}),
 		)
-	return { f, repositories, person, agentOrigin, ids: { agent, cli, revoked, expired, ended, foreign }, get, revoke }
+	return { f, repositories, person, agentOrigin, tag, ids: { agent, cli, revoked, expired, ended, foreign }, get, revoke }
+}
+
+/** Where a revocation sent the browser: back to the page, with its outcome named. */
+function outcome(response: Response): string | null {
+	expect(response.status).toBe(303)
+	const location = new URL(response.headers.get('location') ?? '', ISSUER)
+	expect(location.pathname).toBe(ACCOUNT_PATH)
+	return location.searchParams.get('done')
 }
 
 for (const engine of engines) {
@@ -165,6 +176,8 @@ for (const engine of engines) {
 			expect(html).toContain('Acts as you, including changes')
 			expect(html).toContain(a.agentOrigin)
 			expect(html).toContain('The fabrika command-line client')
+			// The console's resources read as the device page names them, not as the console's app id.
+			expect(html).toContain('<strong>Console, Operations</strong>')
 			expect(html).toContain('<code>deploy:alpha</code>')
 			const listed = Object.entries(a.ids).filter(([, id]) => html.includes(id)).map(([name]) => name)
 			expect(listed).toEqual(['agent', 'cli'])
@@ -173,14 +186,14 @@ for (const engine of engines) {
 
 		test('revokes an own grant once, records it as the person, and the page no longer lists it', async () => {
 			const a = await accountFixture(engine.repositories())
-			const first = await a.revoke(a.ids.agent)
-			expect(first.status).toBe(200)
-			const html = await first.text()
+			expect(outcome(await a.revoke(a.ids.agent))).toBe('revoked')
+			const html = await (await a.get(true, `${ACCOUNT_PATH}?done=revoked`)).text()
 			expect(html).toContain('Access revoked.')
 			expect(html).not.toContain(`value="${a.ids.agent}"`)
 			expect(html).toContain(`value="${a.ids.cli}"`)
 			expect((await a.repositories.oauth.grant(a.ids.agent))?.revoked_at).not.toBeNull()
-			expect(await (await a.revoke(a.ids.agent)).text()).toContain('That access had already ended.')
+			expect(outcome(await a.revoke(a.ids.agent))).toBe('already_ended')
+			expect(await (await a.get(true, `${ACCOUNT_PATH}?done=already_ended`)).text()).toContain('That access had already ended.')
 			const records = await a.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: a.ids.agent, limit: 5 })
 			expect(records).toHaveLength(1)
 			expect(records[0]?.principal_id).toBe(a.person)
@@ -189,14 +202,51 @@ for (const engine of engines) {
 
 		test("never revokes another person's grant, a cross-site post, or a post without a login", async () => {
 			const a = await accountFixture(engine.repositories())
-			expect(await (await a.revoke(a.ids.foreign)).text()).toContain('That access had already ended.')
-			expect(await (await a.revoke('')).text()).toContain('That access had already ended.')
+			expect(outcome(await a.revoke(a.ids.foreign))).toBe('already_ended')
+			expect(outcome(await a.revoke(''))).toBe('already_ended')
+			// An expired grant has already ended: nothing to revoke, and nothing recorded.
+			expect(outcome(await a.revoke(a.ids.expired))).toBe('already_ended')
+			expect((await a.repositories.oauth.grant(a.ids.expired))?.revoked_at).toBeNull()
 			const crossSite = await a.revoke(a.ids.agent, { cookie: a.f.cookie, origin: 'https://evil.example.test', 'sec-fetch-site': 'cross-site' })
 			expect(crossSite.status).toBe(403)
 			const signedOut = await a.revoke(a.ids.agent, { origin: 'null', 'sec-fetch-site': 'same-origin' })
 			expect(signedOut.status).toBe(303)
 			for (const id of [a.ids.foreign, a.ids.agent]) expect((await a.repositories.oauth.grant(id))?.revoked_at).toBeNull()
-			expect(await a.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: a.ids.foreign, limit: 5 })).toHaveLength(0)
+			for (const id of [a.ids.foreign, a.ids.expired]) {
+				expect(await a.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: id, limit: 5 })).toHaveLength(0)
+			}
+			// An outcome the page does not know shows no notice.
+			const unknown = await (await a.get(true, `${ACCOUNT_PATH}?done=<b>`)).text()
+			expect(unknown).not.toContain('role="status"')
+		})
+
+		test("the person's own language wins over the browser's", async () => {
+			const a = await accountFixture(engine.repositories())
+			await a.repositories.principals.setLocale(a.person, 'cs')
+			const html = await (await a.get(true, ACCOUNT_PATH, { 'accept-language': 'en' })).text()
+			expect(html).toContain('Váš účet')
+			expect(html).not.toContain('Your account')
+		})
+
+		test(`lists at most ${ACCOUNT_GRANTS_SHOWN} grants, newest first, and says more are live`, async () => {
+			const a = await accountFixture(engine.repositories())
+			let newest = ''
+			for (let index = 0; index < ACCOUNT_GRANTS_SHOWN; index++) {
+				newest = await grant(a.repositories, {
+					principal_id: a.person,
+					session_id: a.f.sessionId,
+					client_id: AGENT_CLIENT_ID,
+					app: `many-${a.tag}@prod`,
+					resource: `https://many-${a.tag}.example.test`,
+					scopes: '["read"]',
+				})
+			}
+			const html = await (await a.get()).text()
+			expect(html.match(/name="grant"/g)).toHaveLength(ACCOUNT_GRANTS_SHOWN)
+			expect(html).toContain(`value="${newest}"`)
+			// The two oldest live grants fall past the cut-off.
+			expect(html).not.toContain(`value="${a.ids.agent}"`)
+			expect(html).toContain(`Showing the ${ACCOUNT_GRANTS_SHOWN} most recent.`)
 		})
 	})
 }

@@ -135,13 +135,13 @@ export class OAuthRepository {
 	}
 
 	/**
-	 * Revoke a grant of `principalId` only; the person's own revocation names a grant id the browser sent. True when this
-	 * call revoked it, which is exactly when `audit` is written.
+	 * Revoke a live grant of `principalId` only; the person's own revocation names a grant id the browser sent. An expired
+	 * grant has already ended. True when this call revoked it, which is exactly when `audit` is written.
 	 */
 	async revokeOwnGrant(id: string, principalId: string, now: number, audit: AuditEventInput): Promise<boolean> {
 		const changed = await this.writer.run([{
-			sql: 'UPDATE oauth_grants SET revoked_at = ? WHERE id = ? AND principal_id = ? AND revoked_at IS NULL RETURNING id',
-			binds: [now, id, principalId],
+			sql: 'UPDATE oauth_grants SET revoked_at = ? WHERE id = ? AND principal_id = ? AND revoked_at IS NULL AND expires_at > ? RETURNING id',
+			binds: [now, id, principalId, now],
 		}], audit)
 		return changed.length > 0
 	}

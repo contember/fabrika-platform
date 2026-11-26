@@ -2,6 +2,7 @@
 // application included (ADR-0090), and its revocation. It lives here because the login cookie is IAM's (ADR-0023).
 
 import { AGENT_CLIENT_ID, agentScopeToken, OAUTH_CLI_CLIENT_ID, parseAppEnvironmentId } from '@fabrika/auth-core'
+import { CONTROL_APP_ID, CONTROL_CLI_RESOURCES } from '@fabrika/control-contract'
 import { IAM_APP } from '../admin/router'
 import { storedAgentScope } from '../agent-resource'
 import { INSTALLATION_PRESENTATION, parsePresentation } from '../app-presentation'
@@ -24,11 +25,17 @@ export const ACCOUNT_PATH = '/auth/account'
 /** The most grants the page lists, newest first; it says so when more are live. */
 export const ACCOUNT_GRANTS_SHOWN = 50
 
-type Notice = 'revoked' | 'already_ended'
+const NOTICES = ['revoked', 'already_ended'] as const
+
+type Notice = (typeof NOTICES)[number]
+
+/** The query parameter a revocation's redirect names its outcome in, so a reload of the page submits nothing again. */
+const NOTICE_PARAM = 'done'
 
 /**
- * GET lists the person's live grants; a same-origin POST revokes one of them by id. A browser with no login is sent to
- * sign in and back here, a POST included: nothing was revoked, and the person submits again.
+ * GET lists the person's live grants; a same-origin POST revokes one of them by id and redirects back with its outcome.
+ * A browser with no login is sent to sign in and back here, a POST included: nothing was revoked, and the person submits
+ * again.
  */
 export async function handleAccount(request: Request, services: Services, requestId: string): Promise<Response> {
 	if (request.method === 'POST' && !sameOrigin(request, services.config)) {
@@ -42,10 +49,14 @@ export async function handleAccount(request: Request, services: Services, reques
 			headers: redirectHeaders(`/auth/login?redirect=${encodeURIComponent(back)}`),
 		})
 	}
-	if (request.method === 'GET') return accountPage(request, services, login, null)
+	if (request.method === 'GET') {
+		const notice = new URL(request.url).searchParams.get(NOTICE_PARAM)
+		return accountPage(request, services, login, NOTICES.find((known) => known === notice) ?? null)
+	}
 	const form = await readForm(request)
 	const id = form?.get('grant') ?? ''
-	return accountPage(request, services, login, await revokeOwn(services, login, id, requestId) ? 'revoked' : 'already_ended')
+	const notice: Notice = await revokeOwn(services, login, id, requestId) ? 'revoked' : 'already_ended'
+	return new Response(null, { status: 303, headers: redirectHeaders(`${ACCOUNT_PATH}?${NOTICE_PARAM}=${notice}`) })
 }
 
 /** Revoke `id` when it is a live grant of the signed-in person; any other id, another person's included, changes nothing. */
@@ -110,6 +121,7 @@ function grantItem(catalog: Catalog, grant: OAuthGrantRow, appName: string): str
 			grant.agent_label === null ? '' : ` <small>${escapeHtml(text.agentWords)}</small>`
 		}`
 		: `<strong>${escapeHtml(grant.client_id === OAUTH_CLI_CLIENT_ID ? text.commandLine : text.client(grant.client_id))}</strong>`
+	const reaches = grant.app === CONTROL_APP_ID ? consoleLabel(grant) ?? appName : appName
 	const tokens = parseStoredPermissions(grant.scopes)
 	const scope = grant.client_id === AGENT_CLIENT_ID ? storedAgentScope(tokens) : null
 	const what = scope === null
@@ -117,11 +129,20 @@ function grantItem(catalog: Catalog, grant: OAuthGrantRow, appName: string): str
 		: `<p>${escapeHtml(text.mode(scope.mode))}${scope.within === null ? '' : ` <code>${escapeHtml(agentScopeToken(scope))}</code>`}</p>`
 	const resources = grantResources(grant).map((uri) => `<code>${escapeHtml(uri)}</code>`).join(' ')
 	return `<li>${who}
-		<p>${escapeHtml(text.reaches)}: <strong>${escapeHtml(appName)}</strong> ${resources}</p>
+		<p>${escapeHtml(text.reaches)}: <strong>${escapeHtml(reaches)}</strong> ${resources}</p>
 		${what}
 		<p>${escapeHtml(text.allowed)}: ${utc(grant.created_at)} · ${escapeHtml(text.ends)}: ${utc(grant.expires_at)}</p>
 		<form method="post" action="${ACCOUNT_PATH}"><input type="hidden" name="grant" value="${escapeHtml(grant.id)}">
 		<button type="submit">${escapeHtml(text.revoke)}</button></form></li>`
+}
+
+/** The names the device page gives the console's command-line resources (`Console`, `Operations`), for a grant on them. */
+function consoleLabel(grant: OAuthGrantRow): string | null {
+	const labels = grantResources(grant).flatMap((uri) => {
+		const path = URL.canParse(uri) ? new URL(uri).pathname : null
+		return CONTROL_CLI_RESOURCES.filter((entry) => entry.path === path).map((entry) => entry.label)
+	})
+	return labels.length === 0 ? null : labels.join(', ')
 }
 
 /** A Unix time as `YYYY-MM-DD HH:MM UTC`: one form in every language, and no clock of the reader's to guess. */
