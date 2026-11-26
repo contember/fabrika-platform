@@ -17,14 +17,23 @@ export interface MemoryRecords extends MigrationRecordStore {
 }
 
 export function memoryRecords(initial: OpsMigrationRecord | null = null): MemoryRecords {
-	let current: StoredRecord | null = initial === null ? null : { record: initial, version: 'v0' }
+	// The JSON text R2 holds: a put stores what it is given, and only a read parses it, as `r2MigrationRecordStore` does.
+	let stored: { readonly body: string; readonly version: string } | null = initial === null ? null : { body: JSON.stringify(initial), version: 'v0' }
 	let versions = 0
 	let failingPuts = 0
 	let failingRead = false
 	const written: OpsMigrationRecord[] = []
+	const parsed = (): StoredRecord | null => {
+		if (stored === null) return null
+		const record = parseOpsMigrationRecord(JSON.parse(stored.body))
+		if (record === null) {
+			throw new Error('the migration record in R2 does not parse')
+		}
+		return { record, version: stored.version }
+	}
 	return {
 		get current() {
-			return current
+			return parsed()
 		},
 		written,
 		failPuts(count) {
@@ -34,31 +43,26 @@ export function memoryRecords(initial: OpsMigrationRecord | null = null): Memory
 			failingRead = true
 		},
 		replace(record) {
-			current = record === null ? null : { record, version: `v${++versions}x` }
+			stored = record === null ? null : { body: JSON.stringify(record), version: `v${++versions}x` }
 		},
 		async read() {
 			if (failingRead) {
 				failingRead = false
 				throw new Error('R2 is unavailable')
 			}
-			return current
+			return parsed()
 		},
 		async put(record, version) {
 			if (failingPuts > 0) {
 				failingPuts--
 				throw new Error('R2 is unavailable')
 			}
-			if ((current?.version ?? null) !== version) {
+			if ((stored?.version ?? null) !== version) {
 				return null
 			}
-			// What R2 would store and give back: the wire's parser refuses a record the object should never write.
-			const stored = parseOpsMigrationRecord(JSON.parse(JSON.stringify(record)))
-			if (stored === null) {
-				throw new Error('the object put a migration record that does not parse')
-			}
-			current = { record: stored, version: `v${++versions}` }
-			written.push(stored)
-			return current.version
+			stored = { body: JSON.stringify(record), version: `v${++versions}` }
+			written.push(record)
+			return stored.version
 		},
 	}
 }
@@ -83,6 +87,15 @@ export class RecordObjects {
 	#skip = 0
 	#failing = 0
 
+	/** Runs before each put is applied, so a test can write the record as another writer would. */
+	beforePut: ((key: string) => void) | null = null
+	#failingReads = 0
+
+	/** Makes the next `count` reads throw. */
+	failReads(count: number): void {
+		this.#failingReads = count
+	}
+
 	/** Makes `count` puts throw, as an R2 outage does, after `after` more have landed. */
 	failPuts(count: number, after = 0): void {
 		this.#skip = after
@@ -90,12 +103,17 @@ export class RecordObjects {
 	}
 
 	get = (key: string) => {
+		if (this.#failingReads > 0) {
+			this.#failingReads--
+			return Promise.reject(new Error('R2 is unavailable'))
+		}
 		const stored = this.objects.get(key)
 		return Promise.resolve(stored === undefined ? null : { etag: stored.etag, text: () => Promise.resolve(stored.body) })
 	}
 
 	put = (key: string, body: unknown, options: { readonly onlyIf: { readonly etagMatches?: string; readonly etagDoesNotMatch?: string } }) => {
 		if (typeof body !== 'string') return Promise.reject(new Error('a migration record is JSON text'))
+		this.beforePut?.(key)
 		if (this.#skip > 0) {
 			this.#skip--
 		} else if (this.#failing > 0) {

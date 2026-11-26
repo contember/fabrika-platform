@@ -178,6 +178,25 @@ export async function migratingBoot(input: MigratingBootInput): Promise<Migratin
 }
 
 /**
+ * After a boot that failed outside the migrating boot (a module or a boot check that throws): the record a commit left
+ * without `booted`, reconciled first when it has no outcome. `migrate` answers it as the 422 `committed`, which is how
+ * Control learns of a migration the object committed but never served. `null` without one; record I/O throws
+ * `RecordPending`.
+ */
+export async function unbootedCommit(
+	input: Pick<MigratingBootInput, 'target' | 'store' | 'bookmark'>,
+): Promise<OpsMigrationRecord | null> {
+	let held = await readRecord(input.store)
+	if (held === null) {
+		return null
+	}
+	if (held.record.outcome === null) {
+		held = await reconcile(input.store, input.target, input.bookmark, held)
+	}
+	return held.record.outcome === 'committed' && held.record.booted === null ? held.record : null
+}
+
+/**
  * Step 5: `booted` into a record that lacks it, before the first ordinary event; a `rewound` record is never marked, so
  * the migration it undid never reads as served (ADR-0070 §9).
  */

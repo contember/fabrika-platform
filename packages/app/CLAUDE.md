@@ -1300,11 +1300,13 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   `PRAGMA foreign_key_check` (`planSqliteMigrations`), puts the outcome, and puts `booted` before the first ordinary
   event. A failed first put migrates nothing (`record_unwritable`, 503 to traffic); any later put that fails or
   conflicts admits nothing, and the next event reads the record and the ledger again, so it never migrates twice.
-  `migrate` acknowledges with the record, or answers the 422 `migration_failed`. A boot never marks a `rewound` record.
+  `migrate` acknowledges with the record, or answers the 422 `migration_failed`. A boot that fails elsewhere (the module,
+  a boot check) reads and reconciles the record: a commit without `booted` is the 422 `committed`, how Control learns
+  of a migration never served; record I/O there is a 503. A boot never marks a `rewound` record.
 - **The in-place rewind** (ADR-0070 §9, `restore.ts`): `prepare` and `arm` that name a record run on the serving
   object, in `inspect`, only while the record is that id, `committed`, not `booted`, has a bookmark and was written by
   the version that runs (`not_rewindable`, `version_changed`); `arm` only to the record's bookmark (`wrong_target`).
-  `verify` that finds the sentinel absent records `rewound`.
+  `verify` that finds the sentinel absent records `rewound` in a record still `committed` and never `booted`.
 - **The object answers only its own Worker.** A request without the environment's proxy secret is an empty 404 before
   anything else, the digests compared in constant time, so another Worker that binds the class learns nothing.
 - **It boots once per isolate.** The first request or tick that needs the application starts the boot in

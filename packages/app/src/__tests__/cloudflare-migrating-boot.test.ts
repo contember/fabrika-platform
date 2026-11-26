@@ -8,7 +8,15 @@ import { readSqliteLedger, type SqliteMigrationBundle, type SqliteMigrationTarge
 import { Database } from 'bun:sqlite'
 import { describe, expect, test } from 'bun:test'
 import { execStatements } from '../../../db/src/sqlite-bun'
-import { markBooted, migratingBoot, type MigratingBootInput, MigrationFailed, reconciledOutcome, RecordPending } from '../cloudflare/migration-record'
+import {
+	markBooted,
+	migratingBoot,
+	type MigratingBootInput,
+	MigrationFailed,
+	reconciledOutcome,
+	RecordPending,
+	unbootedCommit,
+} from '../cloudflare/migration-record'
 import { memoryRecords } from './fixtures/migration-records'
 
 const NOTES = { name: '20260101000000_notes.sql', sql: 'CREATE TABLE notes (id TEXT PRIMARY KEY, title TEXT NOT NULL);' }
@@ -245,6 +253,73 @@ describe('the migrating boot', () => {
 		if (version === null) throw new Error('expected the put to land')
 		expect(await markBooted(store, { record: rewound, version })).toEqual(rewound)
 		expect(store.current?.record.booted).toBeNull()
+	})
+})
+
+describe('a bookmark the storage cannot give', () => {
+	test('before the record holds the boot back with nothing written or migrated', async () => {
+		const db = open()
+		const store = memoryRecords()
+		const error = await rejection(migratingBoot(input(db, store, { bookmark: () => Promise.reject(new Error('no bookmark')) })))
+		expect(error).toBeInstanceOf(RecordPending)
+		expect(store.written).toEqual([])
+		expect(tables(db)).toEqual([])
+	})
+
+	test('after the commit holds the boot back; the next boot reconciles committed and migrates nothing again', async () => {
+		const db = open()
+		const store = memoryRecords()
+		let calls = 0
+		const failingSecond = () => (++calls === 2 ? Promise.reject(new Error('no bookmark')) : Promise.resolve('bm-0001'))
+		expect(await rejection(migratingBoot(input(db, store, { bookmark: failingSecond })))).toBeInstanceOf(RecordPending)
+		expect(store.current?.record.outcome).toBeNull()
+		expect(tables(db)).toContain('notes')
+		const ledger = await readSqliteLedger(target(db))
+		const next = await migratingBoot(input(db, store, { bookmark: () => Promise.resolve('bm-0009') }))
+		if (next.kind !== 'ready') throw new Error('expected ready')
+		expect(next.held?.record).toMatchObject({ outcome: 'committed', committedBookmark: 'bm-0009', booted: null })
+		expect(await readSqliteLedger(target(db))).toEqual(ledger)
+		expect(store.written).toHaveLength(2)
+	})
+})
+
+describe('the record a failed boot reads', () => {
+	const failedBoot = (db: Database, store: MigratingBootInput['store']) =>
+		unbootedCommit({ target: target(db), store, bookmark: () => Promise.resolve('bm-0042') })
+
+	test('a commit without booted is answered, also one a reset left without an outcome, which is reconciled first', async () => {
+		const db = open()
+		const store = memoryRecords()
+		const result = await migratingBoot(input(db, store))
+		if (result.kind !== 'ready' || result.held === null) throw new Error('expected a record')
+		expect(await failedBoot(db, store)).toEqual(result.held.record)
+		store.replace({ ...result.held.record, outcome: null, committedBookmark: null })
+		expect(await failedBoot(db, store)).toMatchObject({ id: result.held.record.id, outcome: 'committed', committedBookmark: 'bm-0042', booted: null })
+	})
+
+	test('no record, a booted one, or one that rolled back is not', async () => {
+		const db = open()
+		const store = memoryRecords()
+		expect(await failedBoot(db, store)).toBeNull()
+		const result = await migratingBoot(input(db, store))
+		if (result.kind !== 'ready' || result.held === null) throw new Error('expected a record')
+		await markBooted(store, result.held)
+		expect(await failedBoot(db, store)).toBeNull()
+		store.replace({
+			...result.held.record,
+			outcome: null,
+			committedBookmark: null,
+			files: [{ bundle: 'app', name: TAGS.name, checksum: 'b'.repeat(64) }],
+		})
+		expect(await failedBoot(db, store)).toBeNull()
+		expect(store.current?.record.outcome).toBe('rolled_back')
+	})
+
+	test('a record that cannot be read holds the answer back', async () => {
+		const db = open()
+		const store = memoryRecords()
+		store.failRead()
+		expect(await rejection(failedBoot(db, store))).toBeInstanceOf(RecordPending)
 	})
 })
 

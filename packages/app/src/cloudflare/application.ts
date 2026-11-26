@@ -18,7 +18,7 @@ import {
 import { isScopedDatabase, type LeaseFence, type Session } from '@fabrika/db/framework'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import { openSqlite, type SqliteCursor, type SqliteStorage } from '@fabrika/db/sqlite'
-import type { SqliteMigrationBundle } from '@fabrika/db/sqlite-migrate'
+import type { SqliteMigrationBundle, SqliteMigrationTarget } from '@fabrika/db/sqlite-migrate'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
 import type { RequestExecutionContext } from '../fetch.js'
@@ -34,7 +34,15 @@ import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
 import { importInProgress } from './import.js'
 import { type BarrierEvent, MaintenanceBarrier, r2MaintenanceStore } from './maintenance.js'
-import { markBooted, migratingBoot, MigrationFailed, type MigrationRecordStore, r2MigrationRecordStore, RecordPending } from './migration-record.js'
+import {
+	markBooted,
+	migratingBoot,
+	MigrationFailed,
+	type MigrationRecordStore,
+	r2MigrationRecordStore,
+	RecordPending,
+	unbootedCommit,
+} from './migration-record.js'
 import { CLOUDFLARE_ASSETS_BINDING, CLOUDFLARE_FILES_BINDING, CLOUDFLARE_VERSION_BINDING } from './names.js'
 import { type OpsAccess, opsAccess, type OpsMigrated, type OpsRecovery, type OpsStorage, serveOps } from './ops.js'
 import { r2FileObjectStore } from './r2-files.js'
@@ -298,7 +306,7 @@ async function migrate(
 	instance: InstanceMigration,
 ): Promise<OpsMigrationRecord | null> {
 	const result = await migratingBoot({
-		target: { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) },
+		target: migrationTarget(storage),
 		store: instance.records,
 		bundles: migrationBundles(migrations),
 		version: instance.version,
@@ -309,6 +317,10 @@ async function migrate(
 		throw new MigrationsPending('a migration is pending')
 	}
 	return await markBooted(instance.records, result.held)
+}
+
+function migrationTarget(storage: ApplicationStorage): SqliteMigrationTarget {
+	return { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) }
 }
 
 /** The bundles the object applies, in order: the framework's tables, then the application's. */
@@ -685,7 +697,7 @@ export class FabrikaApplication {
 				// The view reports the current boot: a failure an earlier attempt left is no longer the object's state.
 				this.#bootFailure = null
 				return { booted, record }
-			}, (failure: unknown): Outcome => {
+			}, async (failure: unknown): Promise<Outcome> => {
 				const migration = failure instanceof MigrationFailed
 					? { refused: 'migration_failed' as const, reason: failure.reason, record: failure.record }
 					: null
@@ -693,7 +705,20 @@ export class FabrikaApplication {
 				if (held || isMigrationsPending(failure) || failure instanceof ImportInProgress) {
 					return { pending: true, held, migration }
 				}
-				return this.#failed(failure, migration)
+				if (migration !== null) {
+					return this.#failed(failure, migration)
+				}
+				// A boot that failed outside the migrating boot may follow a commit that never booted (ADR-0069 §3).
+				let committed: OpsMigrationRecord | null
+				try {
+					committed = await unbootedCommit({ target: migrationTarget(this.#state.storage), store: instance.records, bookmark: instance.bookmark })
+				} catch (error) {
+					if (error instanceof RecordPending) {
+						return { pending: true, held: true, migration: null }
+					}
+					committed = null
+				}
+				return this.#failed(failure, committed === null ? null : { refused: 'migration_failed', reason: 'committed', record: committed })
 			})
 		})
 	}

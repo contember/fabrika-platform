@@ -12,6 +12,7 @@ import {
 	FABRIKA_OPS_KEY_DIGESTS,
 	formatOpsKeyDigests,
 	opsKeyDigest,
+	type OpsMigrationRecord,
 	type OpsPublishedState,
 	parseOpsMigrateAck,
 	parseOpsMigrationFailure,
@@ -1401,6 +1402,110 @@ describe('the migrating boot through the object', () => {
 			const { object } = await start({ bucket })
 			expect((await call(object, 'create', { workspaceId: 'w1', title: 'kept' })).status).toBe(200)
 			expect(bucket.records.record('application')).toMatchObject({ version: null, bookmark: null, committedBookmark: null, outcome: 'committed' })
+		})
+	})
+
+	const LOADER_FAILURE = () => Promise.reject(new Error('the module exploded while loading'))
+
+	test('a reset between the commit and its outcome: the next migrate reconciles committed, migrates nothing again, and boots', async () => {
+		await keepingProcessEnvironment(async () => {
+			const bucket = new Bucket()
+			bucket.set({ generation: 2, mode: 'read-only' })
+			// The record lands; the put of the outcome fails, as the end of the event after the commit would leave it.
+			bucket.records.failPuts(1, 1)
+			const { object, database } = await start({ bucket })
+			expect((await migrate(object)).status).toBe(503)
+			expect(hasTable(database, 'notes')).toBe(true)
+			expect(bucket.records.record('application')?.outcome).toBeNull()
+			const response = await migrate(object)
+			expect(response.status).toBe(200)
+			expect(parseOpsMigrateAck(await response.json())?.record).toMatchObject({ outcome: 'committed', booted: expect.any(String) })
+			expect(bucket.records.written).toHaveLength(3)
+		})
+	})
+
+	test('a commit never booted, then a boot that fails elsewhere: migrate is 422 committed with the record, and its I/O failure a 503', async () => {
+		await keepingProcessEnvironment(async () => {
+			const bucket = new Bucket()
+			bucket.set({ generation: 2, mode: 'read-only' })
+			const database = new BunDatabase(':memory:')
+			// The record and its outcome land; the put of booted fails, and the instance is gone before it lands.
+			bucket.records.failPuts(1, 2)
+			const first = await start({ bucket, database })
+			expect((await migrate(first.object)).status).toBe(503)
+			const committed = bucket.records.record('application')
+			if (committed === null) throw new Error('expected the record')
+			expect(committed).toMatchObject({ outcome: 'committed', booted: null })
+			// The next isolate cannot load the application.
+			const next = await start({ bucket, database, load: LOADER_FAILURE })
+			bucket.records.failReads(1)
+			expect((await migrate(next.object)).status).toBe(503)
+			const response = await migrate(next.object)
+			expect(response.status).toBe(422)
+			expect(parseOpsMigrationFailure(await response.json())).toEqual({
+				refused: 'migration_failed',
+				reason: 'committed',
+				record: committed,
+			})
+			await expect(call(next.object, 'titles', { workspaceId: 'w1' })).rejects.toThrow('the module exploded while loading')
+		})
+	})
+
+	test('a commit left without an outcome, then a boot that fails elsewhere: the record is reconciled and answered as committed', async () => {
+		await keepingProcessEnvironment(async () => {
+			const bucket = new Bucket()
+			bucket.set({ generation: 2, mode: 'read-only' })
+			const database = new BunDatabase(':memory:')
+			bucket.records.failPuts(1, 1)
+			expect((await migrate((await start({ bucket, database })).object)).status).toBe(503)
+			const next = await start({ bucket, database, load: LOADER_FAILURE, bookmarks: true })
+			const response = await migrate(next.object)
+			expect(response.status).toBe(422)
+			const failure = parseOpsMigrationFailure(await response.json())
+			expect(failure?.reason).toBe('committed')
+			expect(failure?.record).toMatchObject({ outcome: 'committed', committedBookmark: 'bm-00000001', booted: null })
+			expect(bucket.records.record('application')).toEqual(failure?.record ?? null)
+		})
+	})
+
+	test('a boot that fails with no record of a commit stays the empty 500', async () => {
+		await keepingProcessEnvironment(async () => {
+			const bucket = new Bucket()
+			bucket.set({ generation: 2, mode: 'read-only' })
+			const { object } = await start({ bucket, load: LOADER_FAILURE })
+			const response = await migrate(object)
+			expect(response.status).toBe(500)
+			expect(await response.text()).toBe('')
+		})
+	})
+
+	test('a record another writer put first: the put conflicts, nothing is admitted, and the next event reads it again and migrates', async () => {
+		await keepingProcessEnvironment(async () => {
+			const bucket = new Bucket()
+			const other: OpsMigrationRecord = {
+				id: '0192f0c4-7a1e-7c3b-9d2a-5e6f7a8b9c0d',
+				version: null,
+				bookmark: null,
+				startDigest: '0'.repeat(64),
+				files: [{ bundle: 'app', name: '20261022120000_notes.sql', checksum: 'a'.repeat(64) }],
+				at: '2026-11-26T20:00:00.000Z',
+				outcome: 'rolled_back',
+				committedBookmark: null,
+				booted: null,
+			}
+			bucket.records.beforePut = (key) => {
+				bucket.records.beforePut = null
+				bucket.records.objects.set(key, { body: JSON.stringify(other), etag: 'other' })
+			}
+			const { object, database } = await start({ bucket })
+			expect((await call(object, 'create', { workspaceId: 'w1', title: 'held' })).status).toBe(503)
+			expect(hasTable(database, 'notes')).toBe(false)
+			expect(bucket.records.record('application')).toEqual(other)
+			expect((await call(object, 'create', { workspaceId: 'w1', title: 'served' })).status).toBe(200)
+			const record = bucket.records.record('application')
+			expect(record).toMatchObject({ outcome: 'committed', booted: expect.any(String) })
+			expect(record?.id).not.toBe(other.id)
+			expect(noteTitles(database)).toEqual(['served'])
 		})
 	})
 })

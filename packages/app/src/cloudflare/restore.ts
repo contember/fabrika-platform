@@ -185,11 +185,14 @@ async function verify(recovery: OpsRecovery, sentinels: SentinelStore, step: Ops
 	return answer(parseOpsRestoreVerifyAck({ step: 'verify', sentinel: present ? 'present' : 'absent', bookmark: await recovery.getCurrentBookmark() }))
 }
 
-/** Whether the record named holds `rewound` now; a record of another id is left as it is, and so is one that never committed. */
+/**
+ * Whether the verify may answer: the record named, `committed` and never `booted`, now holds `rewound`. Any other record
+ * is left as it is: a booted one served traffic, and a booted `rewound` record would not parse.
+ */
 async function markedRewound(records: MigrationRecordStore, named: string): Promise<boolean> {
 	try {
 		const held = await records.read()
-		if (held === null || held.record.id !== named || held.record.outcome !== 'committed') {
+		if (held === null || held.record.id !== named || held.record.outcome !== 'committed' || held.record.booted !== null) {
 			return true
 		}
 		const rewound: OpsMigrationRecord = { ...held.record, outcome: 'rewound' }

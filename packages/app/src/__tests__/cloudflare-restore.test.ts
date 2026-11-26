@@ -29,11 +29,12 @@ import { describe, expect, test } from 'bun:test'
 import { bunSqliteStorage } from '../../../db/src/sqlite-bun'
 import { type ApplicationState, FabrikaApplication } from '../cloudflare'
 import { MaintenanceBarrier, type MaintenanceStore } from '../cloudflare/maintenance'
+import { r2MigrationRecordStore } from '../cloudflare/migration-record'
 import { CLOUDFLARE_FILES_BINDING } from '../cloudflare/names'
 import { OPS_ENDPOINT, type OpsRecovery, type OpsTarget } from '../cloudflare/ops'
 import { serveRestore } from '../cloudflare/restore'
 import { ORIGIN, PROXY_SECRET } from './fixtures/implement/harness'
-import { memoryRecords, noMigrationRecord } from './fixtures/migration-records'
+import { memoryRecords, noMigrationRecord, RecordObjects } from './fixtures/migration-records'
 
 /** A step on an object ordinary traffic does not reach: the clone a side restore names. */
 const restoreStep = (target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest) =>
@@ -627,6 +628,27 @@ describe('the in-place rewind of a failed migration', () => {
 		await inPlace(target, barrier, rewindPrepare(), records)
 		expect(parseOpsRestoreVerifyAck(await body(await inPlace(target, barrier, rewindVerify(), records)))?.sentinel).toBe('present')
 		expect(records.written).toEqual([])
+	})
+
+	test('through the R2 adapter, verify leaves a booted record as it is, and it still reads', async () => {
+		const { target } = harness({ version: VERSION })
+		const bucket = new RecordObjects()
+		const records = r2MigrationRecordStore(bucket, OBJECT)
+		const booted: OpsMigrationRecord = { ...failed, booted: '2026-11-26T20:00:01.000Z' }
+		expect(await records.put(booted, null)).not.toBeNull()
+		const response = await serveRestore(target, await barrierIn('inspect'), rewindVerify(), true, records)
+		expect(parseOpsRestoreVerifyAck(await body(response))?.sentinel).toBe('absent')
+		expect((await records.read())?.record).toEqual(booted)
+		expect(bucket.written).toHaveLength(1)
+	})
+
+	test('through the R2 adapter, verify marks a committed record that never booted rewound, and it reads back', async () => {
+		const { target } = harness({ version: VERSION })
+		const records = r2MigrationRecordStore(new RecordObjects(), OBJECT)
+		expect(await records.put(failed, null)).not.toBeNull()
+		const response = await serveRestore(target, await barrierIn('inspect'), rewindVerify(), true, records)
+		expect(response.status).toBe(200)
+		expect((await records.read())?.record).toEqual({ ...failed, outcome: 'rewound' })
 	})
 
 	test('a verify that cannot record rewound answers 503, and the next one records it', async () => {
