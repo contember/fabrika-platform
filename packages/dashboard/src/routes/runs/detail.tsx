@@ -90,7 +90,7 @@ export default createPage()
 						<Icon name="terminal" size={15} />
 						<h2>Log</h2>
 					</div>
-					<LogView runId={run.id} initialStatus={run.status} />
+					<LogView runId={run.id} initialStatus={run.status} onStatusChange={invalidate} />
 				</section>
 			</>
 		)

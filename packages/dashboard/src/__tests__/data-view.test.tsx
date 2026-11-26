@@ -215,8 +215,10 @@ describe('a refusal is a plain not-allowed state, never an error', () => {
 		for (const text of [...MANAGE_ONLY_TEXT, 'Show the error message']) expect(html).not.toContain(text)
 	})
 
-	test('an environment without an ops channel says to redeploy', () => {
-		expect(markup(holding(['data.read']), { kind: 'no-channel' })).toContain('Redeploy')
+	test('an environment without an ops channel says what the console cannot do there and when a deploy opens it', () => {
+		const html = markup(holding(['data.read']), { kind: 'no-channel' })
+		expect(html).toContain('Control has no ops channel to this environment.')
+		expect(html).toContain('a deploy at a current framework release opens it')
 	})
 
 	test('the loader reads the view, the operations, the backups and their schedule, and maps 404 and 403 to not-allowed, 409 to no channel', async () => {

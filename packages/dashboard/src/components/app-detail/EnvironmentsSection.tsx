@@ -168,6 +168,7 @@ function EnvironmentRow(
 							aria-controls={editing ? editorId : undefined}
 						>
 							{editing ? 'Editing' : 'Edit'}
+							<span className="sr-only">{` ${env.env}`}</span>
 						</button>
 					</div>
 					{confirming && (

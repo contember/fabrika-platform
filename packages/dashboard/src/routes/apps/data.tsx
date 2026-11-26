@@ -976,8 +976,8 @@ function ReadProblem({ read }: { read: Exclude<DataRead<unknown>, { kind: 'ok' }
 		case 'no-channel':
 			return (
 				<EmptyState
-					title="This environment has no ops channel yet."
-					body="It needs a domain and a deploy at a framework release that serves one. Redeploy it to enable this view."
+					title="Control has no ops channel to this environment."
+					body="Its provider serves none, or the release it runs predates one. Without it the console cannot show or change this environment's data, maintenance or recovery; deploys, secrets and errors work as usual. On a provider that serves one, a deploy at a current framework release opens it."
 				/>
 			)
 		case 'unavailable':

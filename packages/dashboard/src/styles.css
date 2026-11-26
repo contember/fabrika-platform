@@ -829,7 +829,8 @@ section {
 	color: var(--ink);
 }
 
-.section-head .spacer {
+.section-head .spacer,
+.toolbar .spacer {
 	flex: 1;
 }
 

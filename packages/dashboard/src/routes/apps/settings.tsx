@@ -42,9 +42,11 @@ export default createPage()
 						<h2>Work locally with the builder</h2>
 					</div>
 					<p>
-						Open your checkout of <code>{app.repoUrl}</code>. Run <code>fabrika builder init --url=&lt;console-origin&gt;</code>{' '}
-						for a new builder project, or <code>fabrika builder connect --url=&lt;console-origin&gt;</code> to connect an existing one, and select{' '}
-						<strong>{app.id}</strong> during approval. <Link to="builder/authorize">Connection instructions and your builder keys</Link>
+						Open your checkout of <code>{app.repoUrl}</code>. Run <code>fabrika builder init --url={location.origin}</code> for a new builder project, or
+						{' '}
+						<code>fabrika builder connect --url={location.origin}</code> to connect an existing one, and select <strong>{app.id}</strong> during approval.
+						{' '}
+						<Link to="builder/authorize">Connection instructions and your builder keys</Link>
 					</p>
 				</section>
 				<p className="muted small">Registered {fmtDate(app.createdAt)}.</p>

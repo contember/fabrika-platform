@@ -7,7 +7,7 @@ import { DeployButton } from '../../components/app/DeployButton'
 import { WaitingApprovals } from '../../components/app/WaitingApprovals'
 import { RunStatus, Status } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
-import { api, type AppEnvDto, type RunDto } from '../../lib/api'
+import { api, type AppEnvDto, type ApprovalDto, type RunDto } from '../../lib/api'
 import { holdsAtApp, mayDo } from '../../lib/console-access'
 import { type EnvironmentState, stateLabel, stateLamp } from '../../lib/environment-state'
 import { fmtAgo, fmtDate, shortSha } from '../../lib/format'
@@ -107,6 +107,7 @@ export default createPage()
 								published={perEnv.get(env.env)?.published ?? null}
 								last={perEnv.get(env.env)?.last ?? { data: null, problem: 'unavailable' }}
 								errors={errors.get(env.env) ?? { kind: 'unknown' }}
+								waiting={waiting.find((approval) => approval.run.env === env.env) ?? null}
 							/>
 						))}
 					</Table>
@@ -123,12 +124,13 @@ async function publishedRun(env: AppEnvDto): Promise<RunDto | null> {
 	return api.runs.get({ runId: env.publishedRunId }).catch(() => null)
 }
 
-function EnvironmentRow({ env, state, published, last, errors }: {
+function EnvironmentRow({ env, state, published, last, errors, waiting }: {
 	env: AppEnvDto
 	state: EnvironmentState
 	published: RunDto | null
 	last: OverviewRead<RunDto | null>
 	errors: OpenErrors
+	waiting: ApprovalDto | null
 }) {
 	return (
 		<tr>
@@ -142,6 +144,11 @@ function EnvironmentRow({ env, state, published, last, errors }: {
 				<div className="cell-stack">
 					<Status lamp={stateLamp(state)}>{stateLabel(state)}</Status>
 					<StateCause appId={env.appId} env={env.env} state={state} />
+					{waiting !== null && (
+						<span className="small">
+							A deploy waits for a decision. <Link to="approvals/detail" params={{ id: waiting.run.id }}>Review</Link>
+						</span>
+					)}
 				</div>
 			</td>
 			<td>

@@ -15,19 +15,24 @@ interface LogViewProps {
 	runId: string
 	/** Run status from the loaded run row; seeds whether we begin polling at all. */
 	initialStatus: RunStatus
+	/** The tail saw the run move to another status; the page re-reads the run row it shows above the log. */
+	onStatusChange?: () => void
 }
 
 function isTerminal(status: RunStatus): boolean {
 	return status === 'succeeded' || status === 'failed'
 }
 
-export function LogView({ runId, initialStatus }: LogViewProps) {
+export function LogView({ runId, initialStatus, onStatusChange }: LogViewProps) {
 	const [lines, setLines] = useState<LogLine[]>([])
 	const [status, setStatus] = useState<RunStatus>(initialStatus)
 	const [error, setError] = useState<string | null>(null)
 	const [autoScroll, setAutoScroll] = useState(true)
 	const cursorRef = useRef(0)
 	const bottomRef = useRef<HTMLDivElement | null>(null)
+	const seenStatus = useRef(initialStatus)
+	const statusChanged = useRef(onStatusChange)
+	statusChanged.current = onStatusChange
 
 	useEffect(() => {
 		let cancelled = false
@@ -42,6 +47,10 @@ export function LogView({ runId, initialStatus }: LogViewProps) {
 				}
 				cursorRef.current = res.cursor
 				setStatus(res.status)
+				if (res.status !== seenStatus.current) {
+					seenStatus.current = res.status
+					statusChanged.current?.()
+				}
 				setError(null)
 				if (res.done || isTerminal(res.status)) {
 					return // Terminal: stop polling.
