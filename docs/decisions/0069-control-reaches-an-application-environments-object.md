@@ -204,8 +204,7 @@ migration bookmark, does all of it inside the `blockConcurrencyWhile` that holds
 1. It runs every boot check that does not read the migrated schema: the module, the contract digest, the variables,
    the bindings, the handlers.
 2. It reads `getCurrentBookmark()` and writes the **migration record**, `__fabrika/ops/<object>.migration.json` in the
-   environment's bucket, by a put conditioned on the version it read: the bookmark, the version (its contract digest),
-   the ledger digest it starts from, the pending files of both bundles with their checksums, and the time. A failed put
+   environment's bucket, by a put conditioned on the version it read: the bookmark, the ledger digest it starts from, the pending files of both bundles with their checksums, and the time. A failed put
    migrates nothing: the event answers 503, `migrate` answers `migration_failed` with `record_unwritable`, and the next
    event tries again.
 3. It applies every pending file of both bundles, the framework's then the application's, with their ledger rows, in
@@ -213,6 +212,10 @@ migration bookmark, does all of it inside the `blockConcurrencyWhile` that holds
    failure, or a reset past the 30 s bound, leaves the ledger the boot started from.
 4. It records the outcome in the record: `committed` with the bookmark after the commit, or `rolled_back`.
 5. It boots, and records `booted` before it admits its first ordinary event. A failed put of `booted` admits nothing.
+
+Every boot at a gated release does step 5, migrating or not: one that finds a record without `booted` writes it before
+its first ordinary event. So a record without `booted` proves that no gated version served since the migration
+committed, and a release before the gate cannot rewind the object (ADR-0070 §9).
 
 The record lives in R2 for the reason the mode does: point-in-time recovery rewinds SQLite and KV. Nothing writes
 between the bookmark and the transaction, because no other event runs, so a rewind to that bookmark loses no write the
@@ -241,7 +244,8 @@ version never gives.
   boots over the schema it knows.
 - **`committed`, never `booted`.** Control publishes the object `inspect` and rewinds it in place to the record's
   bookmark (ADR-0070 §9), so the old code meets exactly its own schema. It then redeploys the last succeeded run's
-  commit and opens the object at a new generation.
+  commit and opens the object at a new generation. The rewind is a step before the redeploy, and an operation never
+  returns to it once the redeploy has started.
 - **Until the in-place rewind is built**, a `committed`, never-`booted` migration without a `dataLoss` line gets the
   redeploy alone: the runner tolerates a ledger ahead of the code. With a `dataLoss` line, or when the redeployed commit
   does not answer `ok` by the deadline, Control publishes the object `closed`, and the run fails as `migration_failed`
@@ -289,7 +293,7 @@ new generation.
 | The migration record cannot be written                                 | Nothing migrates; `migrate` answers `record_unwritable`; Control redeploys the last succeeded commit  |
 | The `migrate` answer comes from the old version                        | Its ledger lacks the candidate's files; Control asks again until the new version answers              |
 | The migration rolls back, or resets past 30 s                          | The ledger is unchanged; Control redeploys the last succeeded commit                                  |
-| The migration commits and the new version does not boot                | The in-place rewind to the record's bookmark, then the redeploy                                       |
+| The migration commits and the new version does not boot                | The in-place rewind to the record's bookmark, then the redeploy; until the rewind is built, see above |
 | The redeployed commit does not answer `ok` by the deadline             | Control publishes `closed`; the run fails as `migration_failed`, for an operator                      |
 | A migrate request carries a generation that is not the published one   | Refused                                                                                               |
 | Control dies mid-operation                                             | The environment stays in its published mode; a successor fences and resumes from the recorded step    |
