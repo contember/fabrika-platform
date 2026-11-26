@@ -295,16 +295,26 @@ export const CREDENTIALS_MODES = ['off', 'person', 'refuse'] as const
 export type CredentialsMode = (typeof CREDENTIALS_MODES)[number]
 
 /**
+ * What an environment does with an agent's `write` grant (ADR-0090 §5), as Control mirrors its `agent-write` category:
+ * `open` serves it, `passkey` serves it when the approving person confirms with a passkey, `refuse` never serves it.
+ */
+export const AGENT_WRITE_GATES = ['open', 'passkey', 'refuse'] as const
+
+export type AgentWriteGate = (typeof AGENT_WRITE_GATES)[number]
+
+/**
  * Control's mirror of an application environment's approval gates in IAM, set with the provisioning key (ADR-0083 §4,
- * §8): whether its console grants wait (`required`), and its `credentials` mode. `revision` is the environment's
- * protection revision: IAM ignores one older than it holds, and answers what it holds. A request without `credentials`
- * (an older Control's) clears IAM's mode, which then reads as `person`.
+ * §8, ADR-0090 §5): whether its console grants wait (`required`), its `credentials` mode and its `agentWrite` gate.
+ * `revision` is the environment's protection revision: IAM ignores one older than it holds, and answers what it holds. A
+ * request without `credentials` (an older Control's) clears IAM's mode, which then reads as `person`; one without
+ * `agentWrite` clears that gate, which then reads as `refuse`.
  */
 export interface SetGrantApprovalRequest {
 	app: string
 	required: boolean
 	revision: number
 	credentials?: CredentialsMode
+	agentWrite?: AgentWriteGate
 }
 
 // ── Apps (read-only; the live registry derived from the schema tables) ────────

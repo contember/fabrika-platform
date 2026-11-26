@@ -3,6 +3,7 @@
 // exchange read the same rules from one place.
 
 import { type AgentScope, type AgentScopeMode, DEFAULT_AGENT_SCOPE_MODE, isOAuthResourceUri, parseAgentScope } from '@fabrika/auth-core'
+import type { AgentWriteGate } from '@fabrika/iam-contract'
 import { normalizeOrigin } from './origin'
 import { reachesCrossAppAuthority } from './resolve'
 import type { Services } from './services'
@@ -43,19 +44,26 @@ export async function agentScopeDeclared(services: Services, app: string, scope:
 	return scope.within === null || await services.repositories.appSchema.getScope(app, scope.within.type) !== null
 }
 
+/** The environment's mirrored `agent-write` gate (ADR-0090 §5): `refuse` until Control has written one. */
+export function agentWriteGate(services: Services, app: string): Promise<AgentWriteGate> {
+	return services.repositories.grantRequests.agentWriteGate(app)
+}
+
 /**
- * Whether an environment serves an agent grant of `mode`. A `write` grant waits for Control's `agent-write` mirror
- * (ADR-0090 §5); until it exists no environment serves one. This is the one place the rule lives: the mirror replaces it.
+ * Whether an environment whose `agent-write` gate is `gate` serves an agent grant of `mode` (ADR-0090 §5). `read` is
+ * served everywhere; `write` only where the gate is `open`. A `passkey` gate refuses it too until the device page asks
+ * that passkey, so a protected environment fails closed. Read at the approval and at every exchange, so a gate that
+ * tightens ends a `write` grant at its next exchange.
  */
-export function agentModeServed(mode: AgentScopeMode): boolean {
-	return mode === 'read'
+export function agentModeServed(mode: AgentScopeMode, gate: AgentWriteGate): boolean {
+	return mode === 'read' || gate === 'open'
 }
 
 /**
  * The scopes a person may approve for `requested`, widest first: the request, or `read` for `write`, with the same
  * narrowing, and only modes the environment serves. Never wider than the request, and the narrowing never changes.
  */
-export function approvableAgentScopes(requested: AgentScope): AgentScope[] {
+export function approvableAgentScopes(requested: AgentScope, gate: AgentWriteGate): AgentScope[] {
 	const modes: AgentScopeMode[] = requested.mode === 'write' ? ['write', 'read'] : ['read']
-	return modes.filter(agentModeServed).map((mode) => ({ mode, within: requested.within }))
+	return modes.filter((mode) => agentModeServed(mode, gate)).map((mode) => ({ mode, within: requested.within }))
 }

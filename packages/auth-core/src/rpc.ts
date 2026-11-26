@@ -119,7 +119,7 @@ export type MintFromGrantResult =
 	| { ok: true; token: string; expiresAt: number }
 	/**
 	 * `invalid_grant`: the token, its grant, the approving login or the person no longer holds. `write_refused`: the
-	 * environment serves no `write` grant. `token_too_large`: a decided refusal, as for a key.
+	 * environment's `agent-write` gate serves no `write` grant. `token_too_large`: a decided refusal, as for a key.
 	 */
 	| { ok: false; reason: 'invalid_grant' | 'write_refused' | 'token_too_large' }
 

@@ -771,5 +771,28 @@ for (const backend of backends) {
 				{ required: false, revision: 3, credentials: 'person' },
 			])
 		})
+
+		test("the `agentWrite` gate is mirrored beside the mode, reads `refuse` until written, and an older Control's write clears it", async () => {
+			const w = await world()
+			const set = (input: Record<string, unknown>) => w.rpc(PROVISIONING_KEY, 'grantApproval.set', { app: APP, required: false, ...input })
+			expect(await w.repositories.grantRequests.agentWriteGate(APP)).toBe('refuse')
+			expect((await set({ revision: 1, credentials: 'off', agentWrite: 'open' })).result).toEqual({
+				app: APP,
+				required: false,
+				revision: 1,
+				credentials: 'off',
+				agentWrite: 'open',
+			})
+			expect(await w.repositories.grantRequests.agentWriteGate(APP)).toBe('open')
+			// An older revision changes nothing.
+			expect((await set({ revision: 0, agentWrite: 'refuse' })).result).toMatchObject({ revision: 1, agentWrite: 'open' })
+			expect((await set({ revision: 2, credentials: 'off', agentWrite: 'passkey' })).result).toMatchObject({ agentWrite: 'passkey' })
+			// A write without the gate, an older Control's, clears it: IAM reads `refuse`, never a looser gate left behind.
+			expect((await set({ revision: 3, credentials: 'off' })).result).toEqual({ app: APP, required: false, revision: 3, credentials: 'off' })
+			expect(await w.repositories.grantRequests.agentWriteGate(APP)).toBe('refuse')
+			expect((await set({ revision: 4, agentWrite: 'always' })).status).toBe(400)
+			const records = (await w.repositories.audit.listAuditEvents({ limit: 50 })).filter((row) => row.action === 'iam.grant_approval.set')
+			expect(records.map((row) => JSON.parse(row.metadata ?? 'null')).map((metadata) => metadata.agentWrite)).toEqual([undefined, 'passkey', 'open'])
+		})
 	})
 }

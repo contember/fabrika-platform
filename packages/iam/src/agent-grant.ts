@@ -2,7 +2,7 @@
 // calls it, on the mint surface, after it verified the agent's resource token for its own host.
 
 import { AGENT_CLIENT_ID, DEFAULT_TOKEN_TTL_SECONDS, type MintFromGrantInput, type MintFromGrantResult, narrowToValue } from '@fabrika/auth-core'
-import { agentModeServed } from './agent-resource'
+import { agentModeServed, agentWriteGate } from './agent-resource'
 import type { Env } from './env'
 import { grantAuthority, grantResources } from './oauth'
 import { unixNow } from './repositories/sql'
@@ -44,7 +44,9 @@ export async function mintFromGrant(services: Services, env: MintEnv, input: Min
 	const authority = await grantAuthority(services, grant, now, input.resource)
 	const scope = authority?.agent
 	if (authority === null || scope === undefined) return refused
-	if (!agentModeServed(scope.mode)) return { result: { ok: false, reason: 'write_refused' }, principalId: claims.sub }
+	if (!agentModeServed(scope.mode, await agentWriteGate(services, grant.app))) {
+		return { result: { ok: false, reason: 'write_refused' }, principalId: claims.sub }
+	}
 	const live = await resolveAuthorityAt(services, authority.principal, grant.app)
 	const permissions = scope.within === null ? live.permissions : narrowToValue(live.permissions, scope.within)
 	// A revocation may have landed while authority was resolved; read the grant once more, as `mintForGrant` does.

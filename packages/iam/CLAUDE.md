@@ -927,10 +927,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   the exchange. The agent's `agent_label` (at most 64 characters, no control character, `isAgentLabel`) travels from the
   attempt to the grant; every `iam.oauth.grant.create`/`revoke` record names the label, the approving login and the
   expiry (`grantRecord`). Like every OAuth path, it needs `OAUTH_CONFIG`.
-- **`write` IS SERVED NOWHERE UNTIL CONTROL MIRRORS `agent-write`** (ADR-0090 §5). `agentModeServed`
-  (`agent-resource.ts`) is the one place that rule lives; the mirror replaces it. The device page offers `read` for a
-  `write` request and says why (`approvableAgentScopes`: never wider than asked, the narrowing never dropped or changed),
-  and the exchange answers `write_refused`.
+- **`write` IS SERVED ONLY WHERE CONTROL'S `agent-write` GATE IS `open`** (ADR-0090 §5). Control mirrors each
+  environment's gate into `app_grant_approvals.agent_write` beside `credentials` (`open` unprotected, `passkey` by default
+  when protected, `refuse` when chosen); no row, NULL or a gate this release does not know reads `refuse`.
+  `agentModeServed` (`agent-resource.ts`) is the one place the rule lives, read at the device page and at every exchange,
+  so a gate that tightens ends a `write` grant at its next exchange. `passkey` refuses `write` too until the device page
+  asks the passkey: a protected environment fails closed. The device page offers `read` for a `write` request it cannot
+  serve and says why (`approvableAgentScopes`: never wider than asked, the narrowing never dropped or changed), and the
+  exchange answers `write_refused`.
 - **ONLY THE PROXY EXCHANGES AN AGENT'S GRANT, FOR THE PERSON'S APPLICATION TOKEN WITH `act`** (`mintFromGrant`,
   `agent-grant.ts`; `POST /auth/mint/grant` behind `proxyKey`, the `mint-grant` row; on Cloudflare refused over a binding
   marked `props.worker: 'application'`). It verifies the resource token (signature, `typ`, `aud` = the resource, `oauth.app`

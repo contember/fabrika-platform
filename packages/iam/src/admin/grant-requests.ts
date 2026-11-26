@@ -224,8 +224,9 @@ async function heldElsewhere(c: AdminContext, request: GrantRequestRow): Promise
 }
 
 /**
- * Set an application environment's gates (ADR-0083 §4, §8): whether its grant changes wait, and its `credentials` mode,
- * which IAM's own key issuance to a machine caller meets. Only Control sets them, with the provisioning key, whenever the
+ * Set an application environment's gates (ADR-0083 §4, §8, ADR-0090 §5): whether its grant changes wait, its
+ * `credentials` mode, which IAM's own key issuance to a machine caller meets, and its `agentWrite` gate, which an agent's
+ * `write` grant meets. Only Control sets them, with the provisioning key, whenever the
  * environment's protection changes and on its maintenance pass: an installation administrator who could switch them off
  * could grant or issue past them. Only an application environment id qualifies.
  */
@@ -238,14 +239,23 @@ export async function setGrantApprovalUseCase(c: AdminContext, input: SetGrantAp
 	}
 	const stored = await c.services.repositories.grantRequests.setGates(
 		input.app,
-		{ required: input.required, ...(input.credentials === undefined ? {} : { credentials: input.credentials }) },
+		{
+			required: input.required,
+			...(input.credentials === undefined ? {} : { credentials: input.credentials }),
+			...(input.agentWrite === undefined ? {} : { agentWrite: input.agentWrite }),
+		},
 		input.revision,
 		unixNow(),
 		adminEvent(c, {
 			action: 'iam.grant_approval.set',
 			resourceType: 'app',
 			resourceId: input.app,
-			metadata: { required: input.required, revision: input.revision, ...(input.credentials === undefined ? {} : { credentials: input.credentials }) },
+			metadata: {
+				required: input.required,
+				revision: input.revision,
+				...(input.credentials === undefined ? {} : { credentials: input.credentials }),
+				...(input.agentWrite === undefined ? {} : { agentWrite: input.agentWrite }),
+			},
 		}),
 	)
 	return {
@@ -253,6 +263,7 @@ export async function setGrantApprovalUseCase(c: AdminContext, input: SetGrantAp
 		required: stored.required,
 		revision: stored.revision,
 		...(stored.credentials === null ? {} : { credentials: stored.credentials }),
+		...(stored.agentWrite === null ? {} : { agentWrite: stored.agentWrite }),
 	}
 }
 
