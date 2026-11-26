@@ -12,7 +12,7 @@ import {
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
 import { Modal } from '../../components/Modal'
-import { Chip, type Lamp, Status } from '../../components/Status'
+import { Chip, type Lamp, Status, StatusLamp } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import {
 	api,
@@ -30,7 +30,8 @@ import {
 } from '../../lib/api'
 import { holdsAtApp, holdsGlobally, mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
-import { fmtDate } from '../../lib/format'
+import { type EnvironmentState, needsDataAttention } from '../../lib/environment-state'
+import { fmtAgo, fmtDate } from '../../lib/format'
 import { consoleSession } from '../../lib/session'
 
 // An application environment's data (ADR-0069, ADR-0070): what its object reports, its backups, the operations Control
@@ -293,6 +294,10 @@ export default createPage()
 			: <DataTab frame={data.frame} env={params.env} data={data.data} onChanged={invalidate} />
 	)
 
+function needsAttention(state: EnvironmentState | undefined): boolean {
+	return state !== undefined && needsDataAttention(state)
+}
+
 /** The Data tab of an application's page: one environment at a time, chosen above its sections. */
 function DataTab({ frame, env, data, onChanged }: {
 	frame: AppFrameData
@@ -321,6 +326,12 @@ function DataTab({ frame, env, data, onChanged }: {
 							aria-current={candidate.env === env ? 'page' : undefined}
 						>
 							{candidate.env}
+							{needsAttention(states.get(candidate.env)) && (
+								<>
+									<StatusLamp lamp="stop" />
+									<span className="sr-only">: needs attention</span>
+								</>
+							)}
 						</Link>
 					))}
 				</div>
@@ -447,13 +458,14 @@ export function DataSections(
 					onChanged={onChanged}
 				/>
 			)}
-			{view.kind === 'ok' ? <StateSection appId={appId} env={env} view={view.value} readsContent={readsContent} /> : <ReadProblem read={view} />}
+			{view.kind === 'ok'
+				? <StateSection appId={appId} env={env} view={view.value} backups={backups} schedule={schedule} readsContent={readsContent} />
+				: <ReadProblem read={view} />}
 			{view.kind === 'ok' && manages && (
 				<MaintenanceControl key={view.value.maintenance.mode} appId={appId} env={env} current={view.value.maintenance.mode} onChanged={onChanged} />
 			)}
 			{view.kind === 'ok' && manages && <RestoreControl appId={appId} env={env} onChanged={onChanged} />}
 			<BackupsSection appId={appId} env={env} backups={backups} schedule={schedule} manages={manages} onChanged={onChanged} />
-			{view.kind === 'ok' && <ContentsSections view={view.value} />}
 			<section>
 				<div className="section-head">
 					<h2>Operations</h2>
@@ -461,6 +473,7 @@ export function DataSections(
 				<p className="section-note">Maintenance, backups, migrations, restores and recoveries Control ran on this environment, newest first.</p>
 				{operations.kind === 'ok' ? <OperationsTable page={operations.value} /> : <ReadProblem read={operations} />}
 			</section>
+			{view.kind === 'ok' && <ContentsSections view={view.value} />}
 		</>
 	)
 }
@@ -536,7 +549,16 @@ function operationTitle(kind: DataOperationDto['kind']): string {
 	}
 }
 
-export function StateSection({ appId, env, view, readsContent }: { appId: string; env: string; view: DataViewDto; readsContent: boolean }) {
+export function StateSection(
+	{ appId, env, view, backups, schedule, readsContent }: {
+		appId: string
+		env: string
+		view: DataViewDto
+		backups: DataRead<CursorList<DataBackupDto>>
+		schedule: DataRead<DataBackupScheduleDto>
+		readsContent: boolean
+	},
+) {
 	const { maintenance, bootFailure } = view
 	return (
 		<section>
@@ -552,6 +574,9 @@ export function StateSection({ appId, env, view, readsContent }: { appId: string
 					<code>{view.release}</code>
 				</Field>
 				<Field label="Database size">{fmtBytes(view.database.sizeBytes)}</Field>
+				<Field label="Last backup">
+					<LastBackup backups={backups} schedule={schedule} />
+				</Field>
 				<Field label="Boot failure">
 					{bootFailure === null ? <span className="muted">none</span> : <Status lamp="stop">{fmtIso(bootFailure.at)}</Status>}
 				</Field>
@@ -587,6 +612,21 @@ export function BootFailureMessage({ appId, env }: { appId: string; env: string 
 /** The application's own error text: content, rendered as text only. */
 export function BootFailureText({ failure }: { failure: BootFailureContent }) {
 	return <pre>{failure.stack === null ? failure.message : `${failure.message}\n\n${failure.stack}`}</pre>
+}
+
+/** The newest backup that passed its trial import, and whether a daily one follows. */
+function LastBackup({ backups, schedule }: { backups: DataRead<CursorList<DataBackupDto>>; schedule: DataRead<DataBackupScheduleDto> }) {
+	const daily = schedule.kind === 'ok' ? <div className="muted small">daily {schedule.value.daily ? 'on' : 'off'}</div> : null
+	if (backups.kind !== 'ok') return <span className="muted">not readable</span>
+	const last = backups.value.items.find((backup) => backup.state === 'succeeded')
+	return (
+		<>
+			{last === undefined
+				? <span className="muted">none yet</span>
+				: <span title={fmtDate(last.createdAt)}>{fmtAgo(last.createdAt)}</span>}
+			{daily}
+		</>
+	)
 }
 
 /** The three modes a person sets, the current one chosen; `inspect` is a restore's, never offered. */
@@ -724,6 +764,11 @@ export function RestoreSituation({ operation }: { operation: DataOperationDto })
 				The clone keeps serving, and the original stays in <code>inspect</code>: nothing is lost. An operator decides what follows.
 			</p>
 		)
+	}
+	// Before `promote` the clone holds a copy and the original still serves, frozen at worst.
+	const step = RESTORE_STEPS.findIndex((entry) => entry.step === operation.step)
+	if (step >= 0 && step < RESTORE_STEPS.findIndex((entry) => entry.step === 'promote')) {
+		return <p>Nothing has changed the data yet: ordinary traffic still goes to the original object, which keeps its data.</p>
 	}
 	return null
 }
@@ -1026,7 +1071,7 @@ function BackupsTable({ page, daily }: { page: CursorList<DataBackupDto>; daily:
 								of <code>{backup.object}</code>
 							</div>
 						</td>
-						<td>
+						<td className="nowrap">
 							{fmtDate(backup.createdAt)}
 							{backup.preMigration && (
 								<div>
@@ -1112,7 +1157,7 @@ function ContentsSections({ view }: { view: DataViewDto }) {
 	return (
 		<details className="disclosure contents">
 			<summary>
-				<span className="disclosure-title">Contents</span>
+				<span className="disclosure-title">What the data holds</span>
 				<span className="muted">
 					{plural(view.database.tables.length, 'table')} · {plural(view.jobs.length, 'job')} · {plural(files, 'file')} ·{' '}
 					{plural(deliveries, 'webhook delivery', 'webhook deliveries')}
@@ -1279,7 +1324,7 @@ function OperationsTable({ page }: { page: CursorList<DataOperationDto> }) {
 								</div>
 							)}
 						</td>
-						<td>{fmtDate(operation.createdAt)}</td>
+						<td className="nowrap">{fmtDate(operation.createdAt)}</td>
 					</tr>
 				))}
 			</Table>

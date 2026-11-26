@@ -615,6 +615,18 @@ describe('capped counts, outages and content text', () => {
 })
 
 describe('backups', () => {
+	test('the facts name the newest backup that passed, and whether a daily one follows', () => {
+		const state = (backups: DataRead<CursorList<DataBackupDto>>, daily = schedule()) =>
+			renderToStaticMarkup(<StateSection appId="notes" env="prod" view={view()} backups={backups} schedule={daily} readsContent={false} />)
+		const html = state(backupPage([backup('bk-3', { state: 'failed', createdAt: 1_790_000_900 }), backup('bk-2', { createdAt: 1_790_000_000 })]))
+		expect(html).toContain('<h4>Last backup</h4>')
+		expect(html).toContain(`title="${fmtDate(1_790_000_000)}"`)
+		expect(html).toContain('daily on')
+		expect(state(backupPage([]), schedule(false))).toContain('none yet')
+		expect(state(backupPage([]), schedule(false))).toContain('daily off')
+		expect(state({ kind: 'not-allowed' })).toContain('not readable')
+	})
+
 	test('the list shows each backup: time, size, parts, rehearsal, failures as codes, and expiry past 30 days', () => {
 		const html = markup(
 			holding(['data.read']),
@@ -878,7 +890,14 @@ describe('following a running operation', () => {
 		const page_ = markup(holding(['data.manage']), undefined, page([failed]))
 		expect(page_.indexOf('The clone keeps serving')).toBeGreaterThan(-1)
 		expect(page_.indexOf('The clone keeps serving')).toBeLessThan(page_.indexOf('Where it stands'))
-		expect(renderToStaticMarkup(<RestoreSituation operation={restore({ step: 'import', state: 'failed', errorCode: 'import_failed' })} />)).toBe('')
+		// Before the clone is promoted, the original still serves and keeps its data; after it, without a known code, nothing is claimed.
+		expect(renderToStaticMarkup(<RestoreSituation operation={restore({ step: 'import', state: 'failed', errorCode: 'import_failed' })} />)).toContain(
+			'ordinary traffic still goes to the original object, which keeps its data',
+		)
+		expect(renderToStaticMarkup(<RestoreSituation operation={restore({ step: 'check', state: 'failed', errorCode: 'schema_check_failed' })} />)).toBe(
+			'',
+		)
+		expect(renderToStaticMarkup(<RestoreSituation operation={operation('op-9', { state: 'failed' })} />)).toBe('')
 	})
 
 	test('a running operation of another kind shows its step without the restore steps', () => {
