@@ -1,9 +1,11 @@
+import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
+import { BuzolaProvider } from '@buzola/router/react'
 import type { RpcFetch } from '@fabrika/app'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { readConsoleSession, signOutUrl } from '../lib/session'
-import { SecondFactor, SignedIn, SignOut } from '../routes/_layout'
+import { PasskeysItem, SecondFactor, SignedIn, SignOut } from '../routes/_layout'
 
 const DISCOVERY = { version: 1, controlOrigin: 'https://console.example.com', iamIssuer: 'https://iam.example.com', provider: 'zerops' }
 
@@ -112,6 +114,24 @@ describe('console session', () => {
 		expect(unknown.secondFactorUrl).toBeNull()
 	})
 
+	test("links the person's passkeys to the passkeys section of IAM's account page, and to the console's page without IAM's origin", async () => {
+		const session = await readConsoleSession(consoleFetch({ me: forbidden(), discovery: Response.json(DISCOVERY) }))
+		expect(session.passkeysUrl).toBe('https://iam.example.com/auth/account#passkeys')
+		expect(renderToStaticMarkup(createElement(PasskeysItem, { session, onOpen: () => {} }))).toContain(
+			'href="https://iam.example.com/auth/account#passkeys"',
+		)
+
+		const unknown = await readConsoleSession(consoleFetch({ me: meAnswer(), discovery: unavailable() }))
+		expect(unknown.passkeysUrl).toBeNull()
+		const router = new Router({
+			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+			adapter: createMemoryNavigationAdapter(),
+			pageRegistry: { 'account/passkeys': '/account/passkeys' },
+		})
+		expect(renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(PasskeysItem, { session: unknown, onOpen: () => {} }))))
+			.toContain('href="/account/passkeys"')
+	})
+
 	test('offers no sign-out when the installation publishes no IAM origin', async () => {
 		const unavailable = new Response('builder connection unavailable', { status: 503 })
 		expect((await readConsoleSession(consoleFetch({ me: meAnswer(), discovery: unavailable }))).signOutUrl).toBeNull()
@@ -126,6 +146,7 @@ describe('console session', () => {
 				principal: { id: 'user-1', label: 'Ada@Example.com' },
 				signOutUrl: signOutUrl('https://iam.example.com'),
 				secondFactorUrl: null,
+				passkeysUrl: null,
 				access: null,
 				iam: null,
 				administersPeople: null,
@@ -142,6 +163,7 @@ describe('console session', () => {
 				principal: { id: 'user-1', label: 'Ada@Example.com' },
 				signOutUrl: signOutUrl('https://iam.example.com'),
 				secondFactorUrl: null,
+				passkeysUrl: null,
 				access: null,
 				iam: null,
 				administersPeople: null,
@@ -153,7 +175,7 @@ describe('console session', () => {
 	})
 
 	test('renders only what it knows', () => {
-		const session = { principal: null, signOutUrl: null, secondFactorUrl: null, access: null, iam: null, administersPeople: null }
+		const session = { principal: null, signOutUrl: null, secondFactorUrl: null, passkeysUrl: null, access: null, iam: null, administersPeople: null }
 		expect(renderToStaticMarkup(createElement(SignedIn, { session }))).toBe('')
 		expect(renderToStaticMarkup(createElement(SignOut, { session }))).toBe('')
 	})

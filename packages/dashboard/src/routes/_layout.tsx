@@ -648,10 +648,7 @@ function AccountMenu({ session }: { session: ConsoleSession | null }) {
 					<Icon name="terminal" />
 					Your builder connections
 				</Link>
-				<Link to="account/passkeys" className="account-item" onClick={() => setOpen(false)}>
-					<Icon name="lock" />
-					Passkeys
-				</Link>
+				<PasskeysItem session={session} onOpen={() => setOpen(false)} />
 				{session !== null && <SecondFactor session={session} />}
 				<ThemeToggle />
 				{session !== null && <SignOut session={session} />}
@@ -659,6 +656,25 @@ function AccountMenu({ session }: { session: ConsoleSession | null }) {
 				<p className="account-version">fabrika {fabrikaVersion}</p>
 			</div>
 		</div>
+	)
+}
+
+/** The person's passkeys, on IAM's account page; without IAM's origin, the console's own page, which says so. */
+export function PasskeysItem({ session, onOpen }: { session: ConsoleSession | null; onOpen: () => void }) {
+	const url = session?.passkeysUrl ?? null
+	if (url === null) {
+		return (
+			<Link to="account/passkeys" className="account-item" onClick={onOpen}>
+				<Icon name="lock" />
+				Passkeys
+			</Link>
+		)
+	}
+	return (
+		<a href={url} className="account-item">
+			<Icon name="lock" />
+			Passkeys
+		</a>
 	)
 }
 

@@ -319,10 +319,13 @@ describe('the decision', () => {
 		expect(markup).toContain('>Refuse</button>')
 	})
 
-	test('a decision that takes a passkey says so before either button', () => {
+	test("a decision that takes a passkey says so before either button, and that it is confirmed on IAM's page", () => {
 		const markup = render({ stepUp: 'webauthn' })
 		expect(markup).toContain('Deciding this deploy takes one of your passkeys')
+		expect(markup).toContain('the console links to IAM&#x27;s page, where you confirm it with a passkey')
 		expect(markup).toContain('Approve and deploy')
+		// Nothing asks for the passkey before the person decides.
+		expect(markup).not.toContain('Open the passkey check')
 		expect(render({})).not.toContain('passkey')
 	})
 

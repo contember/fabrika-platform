@@ -1,76 +1,74 @@
-// The step-up on deciding a pending item (ADR-0050 §5), in the console: when deciding takes a passkey, the prompt runs
-// on a challenge for this one decision before the decision is posted, and carries its answer; a person with no passkey
-// is told so and where to register one. The browser is a stand-in that records what it was asked.
+// The step-up on deciding a pending item (ADR-0050 §5), in the console: when deciding takes a passkey, the page fetches a
+// challenge for this one decision and posts nothing until the person continues from IAM's step-up page; the decision then
+// carries the challenge's id and nothing else. A person with no passkey is told so and where to add one.
 
 import { buildRouteTree, createMemoryNavigationAdapter, Router } from '@buzola/router'
 import { BuzolaProvider } from '@buzola/router/react'
+import { RpcError } from '@fabrika/app'
 import type { ApprovalStepUp, ApprovalStepUpChallenge } from '@fabrika/control-contract'
-import type { PasskeyRequestOptions } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { createElement } from 'react'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { DecisionFailureNotice } from '../components/DecisionFailureNotice'
-import { decisionFailure, NoPasskeyError, postDecision } from '../lib/decision-step-up'
-import { type PasskeyCredentials, toBase64Url } from '../lib/webauthn'
+import { PasskeyCheckPrompt } from '../components/PasskeyCheckPrompt'
+import { decisionFailure, NoPasskeyError, startDecision } from '../lib/decision-step-up'
 
-const bytes = (...values: number[]) => Uint8Array.from(values).buffer
+const URL_OF_CHECK = 'https://iam.example.test/auth/step-up?challenge=challenge-1'
 
-const OPTIONS: PasskeyRequestOptions = {
-	challenge: toBase64Url(bytes(4, 5, 6)),
-	rpId: 'console.example.test',
-	timeout: 300_000,
-	allowCredentials: [{ type: 'public-key', id: toBase64Url(bytes(7, 7)) }],
-	userVerification: 'required',
-}
-
-const ASSERTED = {
-	type: 'public-key',
-	rawId: bytes(0xfb, 0xff),
-	response: { clientDataJSON: bytes(1), authenticatorData: bytes(2), signature: bytes(3), userHandle: null },
-}
-
-/** A browser, a challenge and a decision that record, in order, what each was asked. */
-function flow(options: { issued?: ApprovalStepUpChallenge; get?: () => Promise<unknown> } = {}) {
+/** A challenge and a decision that record, in order, what each was asked; `refuse` makes Control refuse the decision. */
+function flow(options: { issued?: ApprovalStepUpChallenge; refuse?: boolean } = {}) {
 	const steps: string[] = []
 	const posted: (ApprovalStepUp | undefined)[] = []
-	const credentials: PasskeyCredentials = {
-		create: () => Promise.reject(new Error('not asked')),
-		get: () => {
-			steps.push('passkey')
-			return options.get?.() ?? Promise.resolve(ASSERTED)
-		},
-	}
 	const challenge = () => {
 		steps.push('challenge')
-		return Promise.resolve(options.issued ?? { kind: 'challenge', challenge: { challengeId: 'challenge-1', expiresAt: 0, options: OPTIONS } })
+		return Promise.resolve(
+			options.issued ?? { kind: 'challenge', challenge: { challengeId: 'challenge-1', expiresAt: 1_700_000_000, url: URL_OF_CHECK } },
+		)
 	}
 	const post = (stepUp: ApprovalStepUp | undefined) => {
 		steps.push('decision')
 		posted.push(stepUp)
-		return Promise.resolve()
+		if (options.refuse === true) {
+			return Promise.reject(new RpcError({ type: 'forbidden', message: 'the passkey check failed, so nothing was decided; try again', httpStatus: 403 }))
+		}
+		return Promise.resolve('recorded')
 	}
-	return { steps, posted, credentials, challenge, post }
+	return { steps, posted, challenge, post }
 }
 
 describe('the decision', () => {
-	test('under webauthn the prompt runs first, on a challenge for this decision, and the decision carries its answer', async () => {
+	test('under none it is posted at once, with no challenge', async () => {
 		const f = flow()
-		await postDecision('webauthn', f.credentials, f.challenge, f.post, 'decision')
-		expect(f.steps).toEqual(['challenge', 'passkey', 'decision'])
-		expect(f.posted[0]?.challengeId).toBe('challenge-1')
-		expect(f.posted[0]?.credential).toMatchObject({ id: '-_8', type: 'public-key' })
-	})
-
-	test('under none it is posted as it is, with no prompt', async () => {
-		const f = flow()
-		await postDecision('none', f.credentials, f.challenge, f.post, 'decision')
+		expect(await startDecision('none', f.challenge, f.post, 'decision')).toEqual({ kind: 'posted', value: 'recorded' })
 		expect(f.steps).toEqual(['decision'])
 		expect(f.posted).toEqual([undefined])
 	})
 
-	test('a person without a passkey is told so and where to register one, and nothing is posted', async () => {
+	test("under webauthn nothing is posted until the person continues from IAM's page, and then only the challenge's id", async () => {
+		const f = flow()
+		const started = await startDecision('webauthn', f.challenge, f.post, 'decision')
+		expect(f.steps).toEqual(['challenge'])
+		if (started.kind !== 'confirm') throw new Error('expected a passkey check')
+		expect(started.check.url).toBe(URL_OF_CHECK)
+		expect(started.check.expiresAt).toBe(1_700_000_000)
+
+		expect(await started.check.post()).toBe('recorded')
+		expect(f.steps).toEqual(['challenge', 'decision'])
+		expect(f.posted).toEqual([{ challengeId: 'challenge-1' }])
+	})
+
+	test("a decision Control refuses, because the check was not answered, says so in Control's words and was posted once", async () => {
+		const f = flow({ refuse: true })
+		const started = await startDecision('webauthn', f.challenge, f.post, 'decision')
+		if (started.kind !== 'confirm') throw new Error('expected a passkey check')
+		const cause = await started.check.post().catch((error: unknown) => error)
+		expect(decisionFailure(cause)).toEqual({ message: 'the passkey check failed, so nothing was decided; try again', noPasskey: false })
+		expect(f.posted).toEqual([{ challengeId: 'challenge-1' }])
+	})
+
+	test('a person without a passkey is told so and where to add one, and nothing is posted', async () => {
 		const f = flow({ issued: { kind: 'no-passkey' } })
-		const cause = await postDecision('webauthn', f.credentials, f.challenge, f.post, 'decision').catch((error: unknown) => error)
+		const cause = await startDecision('webauthn', f.challenge, f.post, 'decision').catch((error: unknown) => error)
 		expect(cause).toBeInstanceOf(NoPasskeyError)
 		expect(f.steps).toEqual(['challenge'])
 		const failure = decisionFailure(cause)
@@ -82,21 +80,19 @@ describe('the decision', () => {
 		})
 		const markup = renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(DecisionFailureNotice, { failure })))
 		expect(markup).toContain('role="alert"')
-		expect(markup).toContain('You have no passkey, and this decision takes one.')
+		expect(markup).toContain('You have no passkey, and this decision takes one. Add one on your IAM account page, then decide.')
 		expect(markup).toContain('<a href="/account/passkeys">Account → Passkeys</a>')
 	})
+})
 
-	test('a cancelled prompt, or a browser without passkeys, posts nothing and says why', async () => {
-		const cancelled = flow({ get: () => Promise.reject(new DOMException('cancelled', 'NotAllowedError')) })
-		const cause = await postDecision('webauthn', cancelled.credentials, cancelled.challenge, cancelled.post, 'decision').catch((error: unknown) =>
-			error
-		)
-		expect(decisionFailure(cause)).toEqual({ message: 'The passkey prompt was cancelled or timed out. Try again.', noPasskey: false })
-		expect(cancelled.posted).toEqual([])
-
-		const none = flow()
-		const unsupported = await postDecision('webauthn', null, none.challenge, none.post, 'decision').catch((error: unknown) => error)
-		expect(decisionFailure(unsupported).message).toBe('This browser cannot use passkeys, so this decision cannot be confirmed here.')
-		expect(none.steps).toEqual([])
+describe('the passkey check', () => {
+	test("links to IAM's step-up page in a new tab, without an opener, beside Continue and Cancel", () => {
+		const check = { url: URL_OF_CHECK, expiresAt: 0, what: 'change' as const, post: () => Promise.reject(new Error('not continued')) }
+		const markup = renderToStaticMarkup(<PasskeyCheckPrompt check={check} onDone={() => {}} onCancel={() => {}} />)
+		expect(markup).toContain('Confirm this change with one of your passkeys on IAM&#x27;s page, then come back and continue.')
+		expect(markup).toContain(`<a href="${URL_OF_CHECK}" target="_blank" rel="noopener noreferrer">Open the passkey check</a>`)
+		expect(markup).toContain('>Continue</button>')
+		expect(markup).toContain('>Cancel</button>')
+		expect(markup).not.toContain('role="alert"')
 	})
 })

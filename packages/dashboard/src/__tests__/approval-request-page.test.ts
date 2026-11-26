@@ -112,8 +112,12 @@ describe('the approval request page', () => {
 		expect(html).toContain('>Approve</button>')
 	})
 
-	test('a decision that takes a passkey says so before either button', () => {
-		expect(decision({ ...REQUEST, stepUp: 'webauthn' }, 'user-bo')).toContain('Deciding this request takes one of your passkeys')
+	test("a decision that takes a passkey says so before either button, and that it is confirmed on IAM's page", () => {
+		const html = decision({ ...REQUEST, stepUp: 'webauthn' }, 'user-bo')
+		expect(html).toContain('Deciding this request takes one of your passkeys')
+		expect(html).toContain('the console links to IAM&#x27;s page, where you confirm it with a passkey')
+		expect(html).toContain('>Approve</button>')
+		expect(html).not.toContain('Open the passkey check')
 		expect(decision(REQUEST, 'user-bo')).not.toContain('passkey')
 	})
 

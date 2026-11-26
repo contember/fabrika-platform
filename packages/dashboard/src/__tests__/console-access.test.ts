@@ -172,6 +172,7 @@ test('the no-access page names who is signed in and offers signing in as someone
 			principal: { id: 'user-1', label: 'ada@example.com' },
 			signOutUrl: signOutUrl('https://iam.example.com'),
 			secondFactorUrl: null,
+			passkeysUrl: null,
 		},
 	}))
 	expect(markup).toContain('You have no access to this console yet')

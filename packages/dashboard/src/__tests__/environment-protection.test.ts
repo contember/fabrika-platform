@@ -34,7 +34,6 @@ import {
 	settingsSummary,
 	waitingSummary,
 } from '../lib/environment-protection'
-import { type PasskeyCredentials, toBase64Url } from '../lib/webauthn'
 
 const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	appId: 'notes',
@@ -162,7 +161,7 @@ describe('turning approvals on and off for an environment', () => {
 		const passkey = renderToStaticMarkup(
 			withRouter(createElement(UnprotectConsequences, { appId: 'notes', env: 'prod', parked: [], stepUp: 'webauthn' })),
 		)
-		expect(passkey).toContain('this change takes one of your passkeys: your browser asks for it when you confirm')
+		expect(passkey).toContain('this change takes one of your passkeys: when you confirm, the console links to IAM&#x27;s page')
 	})
 
 	test('a deploy parked on the environment stays parked: the confirmation names it and says it still needs a decision', () => {
@@ -191,8 +190,8 @@ describe('turning approvals on and off for an environment', () => {
 	test('the change calls apps.environments.protect with the environment and the new value', async () => {
 		const calls: { method: string; input: unknown }[] = []
 		const client = createControlClient(respondingFetch(calls, Response.json({ result: environment('prod', false) })))
-		const changed = await setEnvironmentProtection(client, environment('prod', false), false, undefined, null)
-		expect(changed.protected).toBe(false)
+		const changed = await setEnvironmentProtection(client, environment('prod', false), false, undefined)
+		expect(changed).toMatchObject({ kind: 'posted', value: { protected: false } })
 		expect(calls).toEqual([{ method: 'apps.environments.protect', input: { appId: 'notes', env: 'prod', protected: false } }])
 	})
 
@@ -200,7 +199,7 @@ describe('turning approvals on and off for an environment', () => {
 		const refused = async (status: number, message: string): Promise<string> => {
 			const client = createControlClient(respondingFetch([], Response.json({ error: { type: 'error', message } }, { status })))
 			try {
-				await setEnvironmentProtection(client, environment('prod', true), true, undefined, null)
+				await setEnvironmentProtection(client, environment('prod', true), true, undefined)
 			} catch (cause) {
 				return protectionFailure(cause, 'prod')
 			}
@@ -350,8 +349,8 @@ describe('approval modes', () => {
 		await setEnvironmentProtection(client, environment('prod', true), true, {
 			policy: { ...PERMISSIVE_POLICY, credentials: 'person' },
 			settings: permissive,
-		}, null)
-		await setEnvironmentProtection(client, environment('prod', true), true, undefined, null)
+		})
+		await setEnvironmentProtection(client, environment('prod', true), true, undefined)
 		expect(sent).toEqual([
 			{
 				method: 'apps.environments.protect',
@@ -364,85 +363,62 @@ describe('approval modes', () => {
 
 // ADR-0050 §5: a change that weakens what deciding takes where a passkey confirms it takes a passkey too.
 describe('a change that weakens a passkey on deciding', () => {
-	const bytes = (...values: number[]) => Uint8Array.from(values).buffer
 	const ISSUED: ApprovalStepUpChallenge = {
 		kind: 'challenge',
-		challenge: {
-			challengeId: 'challenge-1',
-			expiresAt: 0,
-			options: {
-				challenge: toBase64Url(bytes(4, 5, 6)),
-				rpId: 'console.example.test',
-				timeout: 300_000,
-				allowCredentials: [{ type: 'public-key', id: toBase64Url(bytes(7, 7)) }],
-				userVerification: 'required',
-			},
-		},
+		challenge: { challengeId: 'challenge-1', expiresAt: 0, url: 'https://iam.example.test/auth/step-up?challenge=challenge-1' },
 	}
 
-	/** A Control and a browser that record, in order, what each was asked; the challenge answers `issued`. */
+	/** A Control that records, in order, what it was asked; the challenge answers `issued`. */
 	function console(issued: ApprovalStepUpChallenge = ISSUED) {
-		const steps: string[] = []
 		const sent: { method: string; input: unknown }[] = []
 		const fetch: ControlFetch = (_input, init) => {
 			const body: { method: string; input: unknown } = JSON.parse(String(init?.body))
-			steps.push(body.method)
 			sent.push(body)
 			return Promise.resolve(Response.json({ result: body.method === 'apps.environments.protectChallenge' ? issued : environment('prod', true) }))
 		}
-		const credentials: PasskeyCredentials = {
-			create: () => Promise.reject(new Error('not asked')),
-			get: () => {
-				steps.push('passkey')
-				return Promise.resolve({
-					type: 'public-key',
-					rawId: bytes(0xfb, 0xff),
-					response: { clientDataJSON: bytes(1), authenticatorData: bytes(2), signature: bytes(3), userHandle: null },
-				})
-			},
-		}
-		return { steps, sent, client: createControlClient(fetch), credentials }
+		return { sent, methods: () => sent.map((call) => call.method), client: createControlClient(fetch) }
 	}
 
-	test('unprotecting, or dropping the passkey, runs the prompt first on a challenge for that change, which carries its answer', async () => {
+	test("unprotecting, or dropping the passkey, sends nothing until the person continues from IAM's check, then sends its id", async () => {
 		const off = console()
-		await setEnvironmentProtection(off.client, environment('prod', true), false, undefined, off.credentials)
-		expect(off.steps).toEqual(['apps.environments.protectChallenge', 'passkey', 'apps.environments.protect'])
-		expect(off.sent[0]).toEqual({ method: 'apps.environments.protectChallenge', input: { appId: 'notes', env: 'prod', protected: false } })
-		expect(off.sent[1]?.input).toMatchObject({ appId: 'notes', env: 'prod', protected: false, stepUp: { challengeId: 'challenge-1' } })
+		const started = await setEnvironmentProtection(off.client, environment('prod', true), false, undefined)
+		expect(off.sent).toEqual([{ method: 'apps.environments.protectChallenge', input: { appId: 'notes', env: 'prod', protected: false } }])
+		if (started.kind !== 'confirm') throw new Error('expected a passkey check')
+		expect(started.check.url).toBe('https://iam.example.test/auth/step-up?challenge=challenge-1')
+		await started.check.post()
+		expect(off.methods()).toEqual(['apps.environments.protectChallenge', 'apps.environments.protect'])
+		expect(off.sent[1]?.input).toEqual({ appId: 'notes', env: 'prod', protected: false, stepUp: { challengeId: 'challenge-1' } })
 
 		const dropped = console()
 		const settings = { ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' as const } }
-		await setEnvironmentProtection(dropped.client, environment('prod', true), true, { policy: STRICT_POLICY, settings }, dropped.credentials)
-		expect(dropped.steps).toEqual(['apps.environments.protectChallenge', 'passkey', 'apps.environments.protect'])
+		const pending = await setEnvironmentProtection(dropped.client, environment('prod', true), true, { policy: STRICT_POLICY, settings })
+		expect(dropped.methods()).toEqual(['apps.environments.protectChallenge'])
 		expect(dropped.sent[0]?.input).toEqual({ appId: 'notes', env: 'prod', protected: true, policy: STRICT_POLICY, settings })
+		expect(pending.kind).toBe('confirm')
 	})
 
-	test('a tightening, a change elsewhere and an unprotected environment are sent as they are', async () => {
+	test('a tightening, a change elsewhere and an unprotected environment are sent at once', async () => {
 		const c = console()
 		const tighter = { ...STRICT_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, credentials: 2 as const } }
-		await setEnvironmentProtection(c.client, environment('prod', true), true, { policy: STRICT_POLICY, settings: tighter }, c.credentials)
-		await setEnvironmentProtection(c.client, environment('prod', true), true, {
-			policy: { ...STRICT_POLICY, secrets: 'off' },
-			settings: STRICT_SETTINGS,
-		}, c.credentials)
-		await setEnvironmentProtection(
-			c.client,
-			environment('stage', false),
-			false,
-			{ policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS },
-			c.credentials,
-		)
-		expect(c.steps).toEqual(['apps.environments.protect', 'apps.environments.protect', 'apps.environments.protect'])
+		const results = [
+			await setEnvironmentProtection(c.client, environment('prod', true), true, { policy: STRICT_POLICY, settings: tighter }),
+			await setEnvironmentProtection(c.client, environment('prod', true), true, {
+				policy: { ...STRICT_POLICY, secrets: 'off' },
+				settings: STRICT_SETTINGS,
+			}),
+			await setEnvironmentProtection(c.client, environment('stage', false), false, { policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }),
+		]
+		expect(c.methods()).toEqual(['apps.environments.protect', 'apps.environments.protect', 'apps.environments.protect'])
+		expect(results.map((result) => result.kind)).toEqual(['posted', 'posted', 'posted'])
 	})
 
-	test('a person without a passkey is told so and where to register one, and nothing changes', async () => {
+	test('a person without a passkey is told so and pointed to their IAM account page, and nothing changes', async () => {
 		const c = console({ kind: 'no-passkey' })
-		const cause = await setEnvironmentProtection(c.client, environment('prod', true), false, undefined, c.credentials).catch((error: unknown) => error)
-		expect(c.steps).toEqual(['apps.environments.protectChallenge'])
+		const cause = await setEnvironmentProtection(c.client, environment('prod', true), false, undefined).catch((error: unknown) => error)
+		expect(c.methods()).toEqual(['apps.environments.protectChallenge'])
 		const failure = protectionChangeFailure(cause, 'prod', 'webauthn')
 		expect(failure).toEqual({
-			message: 'You have no passkey, and this change takes one. Register one under Account → Passkeys, then save again.',
+			message: 'You have no passkey, and this change takes one. Add one on your IAM account page, then save again.',
 			noPasskey: true,
 		})
 		const router = new Router({
