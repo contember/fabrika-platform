@@ -467,7 +467,11 @@ function bootFailure(error: unknown, scrubber: Scrubber): OpsBootFailureContent 
  */
 type Outcome =
 	| { readonly booted: Booted; readonly record: OpsMigrationRecord | null }
-	| { readonly failure: unknown; readonly migration: OpsMigrationFailure | null }
+	/**
+	 * `recordUnread`: the record that may name a commit never booted could not be read; ordinary events answer 503 under
+	 * the backoff, and `migrate` reads it again.
+	 */
+	| { readonly failure: unknown; readonly migration: OpsMigrationFailure | null; readonly recordUnread: boolean }
 	/** `held`: a record could not be read or written, which the next event repeats; `migrate` answers it 503. */
 	| { readonly pending: true; readonly held: boolean; readonly migration: OpsMigrationFailure | null }
 
@@ -608,6 +612,9 @@ export class FabrikaApplication {
 			return maintenanceRefusal()
 		}
 		if ('failure' in outcome) {
+			if (outcome.recordUnread) {
+				return maintenanceRefusal()
+			}
 			throw outcome.failure
 		}
 		const event = barrier.event()
@@ -679,7 +686,8 @@ export class FabrikaApplication {
 		if ('booted' in outcome) {
 			return { kind: 'booted', record: outcome.record }
 		}
-		return { kind: 'pending' in outcome && outcome.held ? 'unavailable' : 'failed', migration: outcome.migration }
+		const unavailable = 'pending' in outcome ? outcome.held : outcome.recordUnread
+		return { kind: unavailable ? 'unavailable' : 'failed', migration: outcome.migration }
 	}
 
 	/** Settles either way: a callback that rejects would reset the object, and every request answers the failure instead. */
@@ -714,7 +722,8 @@ export class FabrikaApplication {
 					committed = await unbootedCommit({ target: migrationTarget(this.#state.storage), store: instance.records, bookmark: instance.bookmark })
 				} catch (error) {
 					if (error instanceof RecordPending) {
-						return { pending: true, held: true, migration: null }
+						// Still the boot's failure, so its backoff holds; only the record is unknown.
+						return this.#failed(failure, null, true)
 					}
 					committed = null
 				}
@@ -723,10 +732,10 @@ export class FabrikaApplication {
 		})
 	}
 
-	#failed(failure: unknown, migration: OpsMigrationFailure | null): Outcome {
+	#failed(failure: unknown, migration: OpsMigrationFailure | null, recordUnread = false): Outcome {
 		this.#failedBoots++
 		this.#retryAt = Date.now() + Math.min(BOOT_RETRY_MS * 2 ** (this.#failedBoots - 1), BOOT_RETRY_CAP_MS)
-		return { failure, migration }
+		return { failure, migration, recordUnread }
 	}
 
 	/** The record of the object this instance is, which an event named before it boots; its version and bookmarks. */

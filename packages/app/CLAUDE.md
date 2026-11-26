@@ -1302,7 +1302,7 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   conflicts admits nothing, and the next event reads the record and the ledger again, so it never migrates twice.
   `migrate` acknowledges with the record, or answers the 422 `migration_failed`. A boot that fails elsewhere (the module,
   a boot check) reads and reconciles the record: a commit without `booted` is the 422 `committed`, how Control learns
-  of a migration never served; record I/O there is a 503. A boot never marks a `rewound` record.
+  of a migration never served; record I/O there is a 503 that keeps the boot's backoff. A boot never marks a `rewound` record.
 - **The in-place rewind** (ADR-0070 §9, `restore.ts`): `prepare` and `arm` that name a record run on the serving
   object, in `inspect`, only while the record is that id, `committed`, not `booted`, has a bookmark and was written by
   the version that runs (`not_rewindable`, `version_changed`); `arm` only to the record's bookmark (`wrong_target`).

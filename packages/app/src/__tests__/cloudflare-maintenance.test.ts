@@ -1468,6 +1468,37 @@ describe('the migrating boot through the object', () => {
 		})
 	})
 
+	test('a boot that keeps failing while the record cannot be read keeps its backoff: ordinary traffic is a 503 that loads nothing again', async () => {
+		await keepingProcessEnvironment(async () => {
+			const bucket = new Bucket()
+			const database = new BunDatabase(':memory:')
+			bucket.records.failPuts(1, 2)
+			expect((await call((await start({ bucket, database })).object, 'create', { workspaceId: 'w1', title: 'held' })).status).toBe(503)
+			bucket.set({ generation: 2, mode: 'open' })
+			const next = await start({ bucket, database, load: LOADER_FAILURE })
+			bucket.records.failReads(1_000)
+			let now = Date.parse('2026-11-26T20:00:00.000Z')
+			const clock = spyOn(Date, 'now').mockImplementation(() => now)
+			try {
+				for (let request = 0; request < 5; request++) {
+					expect((await call(next.object, 'titles', { workspaceId: 'w1' })).status).toBe(503)
+				}
+				expect(next.loads.count).toBe(1)
+				// Past the first backoff the next event boots again, once.
+				now += 1_001
+				for (let request = 0; request < 3; request++) {
+					expect((await call(next.object, 'titles', { workspaceId: 'w1' })).status).toBe(503)
+				}
+				expect(next.loads.count).toBe(2)
+				// An explicit migrate reads the record again, and answers 503 while it cannot.
+				expect((await migrate(next.object)).status).toBe(503)
+				expect(next.loads.count).toBe(3)
+			} finally {
+				clock.mockRestore()
+			}
+		})
+	})
+
 	test('a boot that fails with no record of a commit stays the empty 500', async () => {
 		await keepingProcessEnvironment(async () => {
 			const bucket = new Bucket()
