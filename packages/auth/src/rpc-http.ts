@@ -58,6 +58,7 @@ import type {
 	FindMemberResult,
 	IamMembershipRpc,
 	IamRpc,
+	IamSignInSignalsRpc,
 	IamTerminalRpc,
 	InspectDeviceAuthorizationInput,
 	InspectDeviceAuthorizationResult,
@@ -89,6 +90,8 @@ import type {
 	RevokeLinkResult,
 	RevokeMemberInput,
 	RevokeMemberResult,
+	SignInSignalsInput,
+	SignInSignalsResult,
 	TerminalFailure,
 } from '@fabrika/auth-core'
 import {
@@ -96,6 +99,7 @@ import {
 	parseDenyDeviceAuthorizationResult,
 	parseInspectDeviceAuthorizationResult,
 	parseListOwnDeviceAuthorizationsResult,
+	SIGN_IN_SIGNALS_LIMIT,
 } from '@fabrika/auth-core'
 import { parseJwks } from '@fabrika/jwks'
 import { z } from 'zod'
@@ -161,6 +165,16 @@ const findMemberSuccessSchema = z.object({
 const issueLinkSuccessSchema = z.object({ ...okEnvelope, key: z.string().min(1), id: z.string(), expiresAt: z.number().finite() })
 const revokedSuccessSchema = z.object(okEnvelope)
 const membershipMessageSchema = z.object({ message: z.string().catch('') })
+const count = z.number().int().nonnegative()
+const signInSignalsSuccessSchema = z.object({
+	...okEnvelope,
+	accounts: z.array(z.object({ principalId: z.string().min(1), refusals: count })).max(SIGN_IN_SIGNALS_LIMIT),
+	refusals: count,
+	reasons: z.array(z.object({ reason: z.string().min(1), refusals: count })).max(SIGN_IN_SIGNALS_LIMIT),
+	privileged: z.array(z.object({ id: z.string().min(1), principalId: z.string().min(1), reason: z.string().nullable(), at: count }))
+		.max(SIGN_IN_SIGNALS_LIMIT),
+	truncated: z.boolean(),
+})
 
 /** Default per-call timeout. A hung IAM must fail the request, not hold a connection open forever. */
 const DEFAULT_TIMEOUT_MS = 5_000
@@ -199,7 +213,7 @@ export class IamTransportError extends Error {
 	}
 }
 
-export class HttpIamRpc implements IamRpc, IamMembershipRpc {
+export class HttpIamRpc implements IamRpc, IamMembershipRpc, IamSignInSignalsRpc {
 	async inspectDeviceAuthorization(input: InspectDeviceAuthorizationInput): Promise<InspectDeviceAuthorizationResult> {
 		const result = parseInspectDeviceAuthorizationResult(await this.call('inspectDeviceAuthorization', input))
 		if (!result) throw new IamTransportError('inspectDeviceAuthorization')
@@ -284,6 +298,11 @@ export class HttpIamRpc implements IamRpc, IamMembershipRpc {
 			throw new IamTransportError('listPrincipals')
 		}
 		return { ok: true, ...result.data }
+	}
+
+	/** An IAM older than the method answers 404, which is `IamTransportError` like any unreachable IAM. */
+	async signInSignals(input: SignInSignalsInput): Promise<SignInSignalsResult> {
+		return decodeSignInSignals(await this.call('signInSignals', input))
 	}
 
 	readonly #membership = new DecodedIamMembership((method, input) => this.call(method, input))
@@ -477,6 +496,18 @@ export class HttpIamMembership extends DecodedIamMembership {
 		const endpoint = transportEndpoint(options, '/membership/')
 		super((method, input) => callJson(endpoint, method, input))
 	}
+}
+
+/**
+ * A `signInSignals` answer off any transport: `HttpIamRpc`, or a Workers binding to IAM's full entrypoint. A body that
+ * breaks the contract is `IamTransportError`, never a value of the declared type.
+ */
+export function decodeSignInSignals(body: unknown): SignInSignalsResult {
+	const reason = readFailure(body)
+	if (reason !== null) {
+		return { ok: false, reason: 'invalid_window' }
+	}
+	return decode(signInSignalsSuccessSchema, body, 'signInSignals')
 }
 
 /** The identification operations, by name, as a transport carries them. */

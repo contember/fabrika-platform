@@ -395,6 +395,66 @@ export class AuditRepository {
 		return results
 	}
 
+	/**
+	 * The refused and privileged sign-ins of one window, by `created_at` (`idx_auth_log_time`), for Operations' security
+	 * alerts. Refusals count `deny` rows at `app` whose reason is in `loginReasons`, plus a refused key at any app;
+	 * per account only `accountReasons` with a known principal. Each list holds at most `limit` rows.
+	 */
+	async signInSignals(input: {
+		since: number
+		until: number
+		app: string
+		accountReasons: readonly string[]
+		loginReasons: readonly string[]
+		keyReason: string
+		limit: number
+	}): Promise<{
+		accounts: { principalId: string; refusals: number }[]
+		refusals: number
+		reasons: { reason: string; refusals: number }[]
+		privileged: { id: string; principalId: string; reason: string | null; at: number }[]
+		truncated: boolean
+	}> {
+		const window = "kind = 'authenticate' AND created_at >= ? AND created_at <= ?"
+		const placeholders = (values: readonly string[]) => values.map(() => '?').join(', ')
+		const [accounts, reasons, privileged] = await Promise.all([
+			this.db
+				.prepare(`SELECT principal_id, COUNT(*) AS refusals FROM auth_log
+					WHERE ${window} AND decision = 'deny' AND app = ? AND principal_id IS NOT NULL
+						AND reason IN (${placeholders(input.accountReasons)})
+					GROUP BY principal_id ORDER BY refusals DESC, principal_id LIMIT ?`)
+				.bind(input.since, input.until, input.app, ...input.accountReasons, input.limit + 1)
+				.all<{ principal_id: string; refusals: number | string }>(),
+			this.db
+				.prepare(`SELECT reason, COUNT(*) AS refusals FROM auth_log
+					WHERE ${window} AND decision = 'deny'
+						AND ((app = ? AND reason IN (${placeholders(input.loginReasons)})) OR reason = ?)
+					GROUP BY reason ORDER BY reason`)
+				.bind(input.since, input.until, input.app, ...input.loginReasons, input.keyReason)
+				.all<{ reason: string; refusals: number | string }>(),
+			this.db
+				.prepare(`SELECT id, principal_id, reason, created_at FROM auth_log
+					WHERE ${window} AND decision = 'allow' AND app = ? AND privileged = 1 AND principal_id IS NOT NULL
+					ORDER BY created_at, id LIMIT ?`)
+				.bind(input.since, input.until, input.app, input.limit + 1)
+				.all<{ id: number | string; principal_id: string; reason: string | null; created_at: number | string }>(),
+		])
+		// Postgres answers COUNT(*) and the identity `id` as int8, which Bun decodes as strings.
+		const reasonCounts = reasons.results.map((row) => ({ reason: row.reason, refusals: Number(row.refusals) }))
+		return {
+			accounts: accounts.results.slice(0, input.limit).map((row) => ({ principalId: row.principal_id, refusals: Number(row.refusals) })),
+			refusals: reasonCounts.reduce((total, row) => total + row.refusals, 0),
+			reasons: reasonCounts,
+			privileged: privileged.results.slice(0, input.limit).map((row) => ({
+				id: String(row.id),
+				principalId: row.principal_id,
+				reason: row.reason,
+				at: Number(row.created_at),
+			})),
+			truncated: accounts.results.length > input.limit || privileged.results.length > input.limit,
+		}
+	}
+
 	// ── Retention (cron) ──────────────────────────────────────────────────────
 
 	/**

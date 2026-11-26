@@ -26,6 +26,7 @@ import type {
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
+	IamSignInSignalsRpc,
 	IamTerminalRpc,
 	IssueKeyInput,
 	IssueKeyResult,
@@ -41,6 +42,8 @@ import type {
 	PrincipalListItem,
 	RevokeKeyInput,
 	RevokeKeyResult,
+	SignInSignalsInput,
+	SignInSignalsResult,
 } from '@fabrika/auth-core'
 import { IAM_APP } from './admin/router'
 import { mintFromGrant } from './agent-grant'
@@ -65,11 +68,15 @@ import {
 } from './membership'
 import { acceptRequestId } from './request-id'
 import { buildServices, type Services } from './services'
+import { signInSignals } from './sign-in-signals'
 import { getSigner } from './signing'
 import { mintFromKey, mintToken } from './tokens'
 
 /** Build the RPC surface bound to one env + request context. */
-export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoffRpc & IamGrantRpc & IamMembershipRpc & IamTerminalRpc {
+export function createIamRpc(
+	env: Env,
+	ctx: RequestContext,
+): IamRpc & IamHandoffRpc & IamGrantRpc & IamMembershipRpc & IamTerminalRpc & IamSignInSignalsRpc {
 	// Built ONCE per RPC surface, not once per call (ARCH-1). It was constructed inside every method
 	// and, in `audit`, OUTSIDE the fail-closed try — so a configuration error there threw to the
 	// caller instead of failing closed. It also allocated an `OidcClient` and an email sender on the
@@ -294,6 +301,19 @@ export function createIamRpc(env: Env, ctx: RequestContext): IamRpc & IamHandoff
 					}),
 				)
 				return { ok: false, reason: 'invalid_grant' }
+			}
+		},
+
+		/**
+		 * Operations' read of refused and privileged sign-ins (`sign-in-signals.ts`). The transport is the authentication:
+		 * only IAM's full entrypoint and the management `/rpc/*` serve it. A failed read throws, so the caller retries.
+		 */
+		async signInSignals(input: SignInSignalsInput): Promise<SignInSignalsResult> {
+			try {
+				return await signInSignals(services, input)
+			} catch (err) {
+				logError('signInSignals failed', err)
+				throw new Error('sign-in signals could not be read')
 			}
 		},
 

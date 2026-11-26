@@ -60,7 +60,7 @@
 // Each key is independent, and each unset key 404s only its own surface: a deployment with a proxy
 // and no control plane sets `proxyKey` alone, and vice versa.
 
-import type { IamGrantRpc, IamHandoffRpc, IamMembershipRpc, IamRpc } from '@fabrika/auth-core'
+import type { IamGrantRpc, IamHandoffRpc, IamMembershipRpc, IamRpc, IamSignInSignalsRpc } from '@fabrika/auth-core'
 import { parseApproveDeviceAuthorizationInput, parseInspectDeviceAuthorizationInput, parseListOwnDeviceAuthorizationsInput } from '@fabrika/auth-core'
 import {
 	assignMemberSchema,
@@ -81,6 +81,7 @@ import {
 	revokeLinkSchema,
 	revokeMemberSchema,
 	RpcInputError,
+	signInSignalsSchema,
 } from './rpc-inputs'
 import { hashToken, timingSafeEqualHex } from './secret'
 
@@ -101,7 +102,7 @@ export function isRpcPath(pathname: string): boolean {
  * distinguish "denied" from "unreachable". Only transport faults use status codes — 401 (bad key),
  * 404 (no such method / surface disabled), 400 (undecodable body), 405 (not a POST).
  */
-export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershipRpc, rpcKey: string): Promise<Response> {
+export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershipRpc & IamSignInSignalsRpc, rpcKey: string): Promise<Response> {
 	if (rpcKey.trim() === '') {
 		return problem(404, 'not found')
 	}
@@ -167,6 +168,8 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershi
 				return json(await rpc.issueLink(issueLinkSchema.parse(body)))
 			case 'revokeLink':
 				return json(await rpc.revokeLink(revokeLinkSchema.parse(body)))
+			case 'signInSignals':
+				return json(await rpc.signInSignals(signInSignalsSchema.parse(body)))
 			default:
 				return problem(404, 'not found')
 		}

@@ -14,6 +14,7 @@ import type {
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
+	IamSignInSignalsRpc,
 	IssueKeyInput,
 	IssueKeyResult,
 	Jwks,
@@ -100,7 +101,7 @@ describe('RPC input normalization', () => {
 })
 
 /** Records the last input each method received, and answers with a canned result. */
-interface Recorder extends IamRpc, IamHandoffRpc, IamGrantRpc, IamMembershipRpc {
+interface Recorder extends IamRpc, IamHandoffRpc, IamGrantRpc, IamMembershipRpc, IamSignInSignalsRpc {
 	calls: { method: string; input: unknown }[]
 }
 
@@ -153,6 +154,10 @@ function recorder(canned: Canned = {}): Recorder {
 		revokeKey(input: RevokeKeyInput): Promise<RevokeKeyResult> {
 			note('revokeKey', input)
 			return Promise.resolve({ ok: true, revoked: true })
+		},
+		signInSignals(input) {
+			note('signInSignals', input)
+			return Promise.resolve({ ok: true, accounts: [], refusals: 0, reasons: [], privileged: [], truncated: false })
 		},
 		mintFromGrant(input) {
 			note('mintFromGrant', input)
@@ -358,6 +363,15 @@ describe('dispatch', () => {
 			diff: { a: [1, 2] },
 			metadata: { via: 'http' },
 		})
+	})
+
+	test('signInSignals is served on the management surface with exactly its window', async () => {
+		const { rpc, response } = call('signInSignals', { since: 100, until: 200, extra: true })
+		expect((await response).status).toBe(200)
+		expect(rpc.calls).toEqual([{ method: 'signInSignals', input: { since: 100, until: 200 } }])
+		const malformed = call('signInSignals', { since: '100', until: 200 })
+		expect((await malformed.response).status).toBe(400)
+		expect(malformed.rpc.calls).toEqual([])
 	})
 
 	test("a method's own denial is a 200 result, not an HTTP error", async () => {
