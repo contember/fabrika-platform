@@ -130,6 +130,12 @@ this one import.
   are plain vars. `wrangler deploy --secrets-file` (wrangler 4.74 or newer) reads them from a 0600 file in a
   directory of its own, removed however the deploy ends; never write one into a generated config. After the deploy,
   `deleteStaleSecrets` deletes each framework secret the Worker still holds that this deploy no longer writes.
+- **Control writes a re-issued workload key without a deploy** (`managedCredentials`, `src/worker-secrets.ts`): it reads
+  the platform proxy's settings (`<env>-<app>-proxy`), writes only to the Worker that proxy binds as `APP` and only when
+  that name is `<env>-<app>` or below it (not the proxy), and `PATCH`es its settings as `wrangler secret bulk` does: one
+  new version with the named secrets replaced and every other binding inherited by type and name. Cloudflare deploys it
+  at once; the object takes the values up when it restarts on the new version, minutes later, which Control's overlap
+  covers. The account token goes only to Cloudflare's API, with no redirect followed, and no value reaches an error.
 - **Control issues a proxy secret per environment** because the provider declares `applicationHopSecret`
   (`createCloudflareControlProvider`): the application Worker forwards every request to its object with it, and the
   object refuses a request without it.

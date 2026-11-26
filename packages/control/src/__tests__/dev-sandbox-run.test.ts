@@ -589,6 +589,8 @@ describe('a dev bootstrap beside the rest of the namespace', () => {
 			workloadCredentials: {
 				reconcile: (appId, _env, _contract, options) =>
 					Promise.resolve(void asked.push({ appId, workload: options?.additive === true })).then(() => ({ variables: {}, expiresAt: KEYS_EXPIRE_AT })),
+				renew: () => Promise.resolve([]),
+				confirm: () => Promise.resolve(),
 			},
 			membershipTransport: {
 				reconcile: (appId, _env, _needed, options) =>

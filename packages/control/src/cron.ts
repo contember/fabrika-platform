@@ -32,7 +32,9 @@ import {
 	repositories,
 	STALE_RUN_MAX_AGE_S,
 	vault,
+	workloadCredentialDeps,
 } from './services'
+import { NO_WORKLOAD_KEY_ROTATION, rotateWorkloadKeys, rotatingProvider, type WorkloadKeyRotationSummary } from './workload-key-rotation'
 
 /** What one maintenance pass did. Returned for the tests + the log line; counts only, never a URL. */
 export interface MaintenanceSummary {
@@ -59,6 +61,8 @@ export interface MaintenanceSummary {
 	dev: DevMaintenanceSummary
 	/** Restores and orphaned migrations taken over, daily backups carried on and started (ADR-0070 §8–§9). */
 	backups: BackupScheduleSummary
+	/** Workload keys renewed before expiry and handed to the running version without a deploy. */
+	workloadKeys: WorkloadKeyRotationSummary
 }
 
 /** Seams a test drives. Production passes neither and gets the real clock + the global `fetch`. */
@@ -157,6 +161,13 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 	if (mail.requeued > 0 || mail.purged > 0 || mail.collected > 0) {
 		console.info(`mail maintenance: requeued=${mail.requeued} purged=${mail.purged} collected=${mail.collected}`)
 	}
+	// Before the backups, which may spend the rest of the pass: an expired key stops the application's jobs.
+	const workloadKeys = await renewWorkloadKeys(env, options.provider, now)
+	if (workloadKeys.written > 0 || workloadKeys.confirmed > 0 || workloadKeys.busy > 0 || workloadKeys.failed > 0) {
+		console.info(
+			`workload keys: written=${workloadKeys.written} confirmed=${workloadKeys.confirmed} busy=${workloadKeys.busy} failed=${workloadKeys.failed}`,
+		)
+	}
 	const dev = options.devIdle === undefined ? { parked: 0, removed: 0, failed: 0 } : await options.devIdle()
 	if (dev.parked > 0 || dev.removed > 0 || dev.failed > 0) {
 		console.info(`dev environments: parked=${dev.parked} removed=${dev.removed} failed=${dev.failed}`)
@@ -172,7 +183,15 @@ export async function runMaintenance(env: Env, options: MaintenanceOptions = {})
 				+ `errored=${backups.errored}`,
 		)
 	}
-	return { poll, reconcile, swept, parked, requests, requestedKeys, iamGates, operations, releases, mail, dev, backups }
+	return { poll, reconcile, swept, parked, requests, requestedKeys, iamGates, operations, releases, mail, dev, backups, workloadKeys }
+}
+
+/** Without a provider that writes managed credentials, or without a vault and IAM, keys reach an application only by a deploy. */
+async function renewWorkloadKeys(env: Env, provider: ControlProvider | undefined, now: () => number): Promise<WorkloadKeyRotationSummary> {
+	const rotating = rotatingProvider(provider)
+	const { workloadCredentials } = workloadCredentialDeps(env)
+	if (rotating === null || workloadCredentials === undefined) return { ...NO_WORKLOAD_KEY_ROTATION }
+	return rotateWorkloadKeys({ repositories: repositories(env), credentials: workloadCredentials, provider: rotating, locks: locks(env), now })
 }
 
 /**

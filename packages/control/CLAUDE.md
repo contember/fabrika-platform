@@ -307,7 +307,21 @@ other environment, before the provider prepares anything, and the write maps a r
   `FABRIKA_<KIND>_<NAME>_KEY` (a public procedure's as `FABRIKA_PROCEDURE_<ID>_<8 hex>_KEY`) and redacted
   from the run log. Two workloads whose names map to one variable are refused. Without a vault, an issuer or a
   provisioning key a contract with a workload fails the run. What a key may do is IAM's: the schema reconcile
-  declares the actions. An environment not deployed for 30 days loses its workloads' keys.
+  declares the actions.
+- **The maintenance pass renews workload keys without a deploy (`src/workload-key-rotation.ts`), where the provider
+  declares `managedCredentials` (Cloudflare).** Under each environment's `<app>:<env>` lease, skipping one a run holds or
+  still runs, `renew` re-issues every recorded key of the approved contract with no more than half its 30 days left
+  (`keep` = the recorded key, so IAM keeps the one the running version holds valid until its own expiry), records it
+  `pending = 1` with `held_expires_at` (the expiry of the key still running), and the provider writes every pending key
+  to the running version; only then is the row confirmed. A deploy records each key it issues or reads back while
+  pending as `handed_by` its run, and the pass confirms one whose run succeeded without a write and writes one whose run
+  failed. A failed write is one `console.error` line (coordinates and the message, never a key) and stays pending for
+  the next pass. Before the pass the replaced key is never revoked: a pending key is re-issued only once it is itself
+  below the threshold, by which time the key it replaced has expired. The pass checks its lease before each IAM
+  issuance and record write, and a record write is a compare-and-set on the key it replaces, so a writer that lost
+  the race records nothing. `dev` environments are skipped (their sandboxes
+  are bootstrapped before expiry). A provider without the capability (Zerops, AWS) still renews only at a deploy, so an
+  environment of it not deployed for 30 days loses its workloads' keys.
 - **The membership transport key comes from the APPROVED contract too (`src/membership-transport.ts`, ADR-0022
   rule 6).** Behind a namespace proxy an application has no IAM binding, so while `needsMembershipTransport` holds for
   the approved contract (an endpoint with a delegation, one on, in or below a dimension with members, or a share-link

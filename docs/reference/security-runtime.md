@@ -150,8 +150,11 @@ not admit, in this order ([`dispatch.ts`](../../packages/app/src/implement/dispa
   redaction ([backlog 207](../backlog/207-three-service-log-lines-skip-redaction.md)).
 - **Jobs, webhooks, public procedures and connectors hold only declared authority, for at most 30 days.** Each gets a
   key from the approved contract and exchanges it for a token carrying only its declared actions. A deploy reissues a
-  key with less than half of its 30 days left, so an environment not deployed for 30 days loses its workloads' keys
+  key with less than half of its 30 days left, and so does Control's maintenance pass, which writes it to the running
+  version without a deploy where the provider can (Cloudflare); the replaced key stays valid until its own expiry. On
+  another provider an environment not deployed for 30 days loses its workloads' keys
   ([`packages/control/src/workload-credentials.ts`](../../packages/control/src/workload-credentials.ts),
+  [`workload-key-rotation.ts`](../../packages/control/src/workload-key-rotation.ts),
   [ADR-0063](../decisions/0063-a-public-procedure-runs-as-its-own-workload.md)).
 - **Sessions.** A password login lasts 30 days, an OIDC login the cap below
   ([`sessions.ts`](../../packages/iam/src/auth/sessions.ts)); an application
@@ -186,7 +189,7 @@ credentials, as environment variables of its own service or Worker, so code runn
 | Credential                                       | What it allows                                                                         | Lifetime and rotation                                                                                 | Where                                                                           |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
 | Proxy secret (`FABRIKA_PROXY_SECRET`)            | Proves a request came from the proxy, to this environment only                         | No rotation verb; by hand ([runbook](key-rotation.md#the-proxy-secret-of-an-application-environment)) | [`proxy-secret.ts`](../../packages/control/src/proxy-secret.ts)                 |
-| Workload keys (`FABRIKA_<KIND>_<NAME>_KEY`)      | A token with the declared actions of one job, webhook or public procedure              | 30 days, reissued by a deploy past half-life                                                          | [`workload-credentials.ts`](../../packages/control/src/workload-credentials.ts) |
+| Workload keys (`FABRIKA_<KIND>_<NAME>_KEY`)      | A token with the declared actions of one job, webhook or public procedure              | 30 days, reissued past half-life by a deploy, or by maintenance on Cloudflare                         | [`workload-credentials.ts`](../../packages/control/src/workload-credentials.ts) |
 | Connector keys (`FABRIKA_CONNECT_<IMPORT>_KEY`)  | Calls to the procedures another application exports to it                              | As workload keys; revoked when the last import goes                                                   | [`connectors.ts`](../../packages/control/src/connectors.ts)                     |
 | Membership transport key (`FABRIKA_IAM_RPC_KEY`) | Pins IAM's membership calls to this application; adds no authority, mints nothing      | As workload keys                                                                                      | [`membership-transport.ts`](../../packages/control/src/membership-transport.ts) |
 | Signed-token keys (`FABRIKA_TOKEN_KEYS`)         | Sign and verify the application's own signed tokens (`ctx.tokens.sign`, a token input) | Rotated on request (`apps.environments.rotateTokenKey`)                                               | [`tokens.ts`](../../packages/app/src/implement/tokens.ts)                       |
