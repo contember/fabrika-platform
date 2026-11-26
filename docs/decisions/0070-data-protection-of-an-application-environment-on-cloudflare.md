@@ -457,7 +457,11 @@ operator, and nothing was lost. Probe 7 exercised the in-place restore's failure
 (2026-11-26): an `arm` whose answer the abort loses still restores, so `verify` decides; an armed object that is not
 reset keeps its writes only until its next reset, which restores and discards them, so `arm` runs only in `inspect`; and
 the undo bookmark brings the rewound writes back. So a rewind that fails once an `arm` went out leaves the object
-`inspect` too: a refusal before the first `arm` alone rewound nothing for certain.
+`inspect` too: a refusal before the first `arm` alone rewound nothing for certain. Nothing opens the object while an
+`arm` is outstanding. Control first publishes a transition, which the object acknowledges only after the `arm`'s reset,
+since the `arm` holds the barrier's turn until it and `verify` takes none; then it `verify`s. A present sentinel spends
+the `arm`; an absent one is a rewound object, which opens only after a deploy succeeded since its migration; no usable
+answer keeps it shut.
 
 **Not built: an in-place restore of an object that served, and a whole-environment rollback.** Rewinding an object
 that served writes discards them, and restoring forward rests on the forward restore succeeding, which is unprobed.

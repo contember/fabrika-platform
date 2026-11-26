@@ -274,6 +274,14 @@ export const MIGRATION_UNCONFIRMED_CODE = 'migration_unconfirmed'
 export const MIGRATION_REVERTED_CODE = 'migration_reverted'
 
 /**
+ * The codes an open of the environment is refused with after an in-place rewind (ADR-0070 §9): an outstanding `arm`
+ * whose `verify` gave no usable answer, or an object that was rewound while the failed version is still the deployed
+ * one, whose boot would migrate again; the interrupted migration resumes to its rollback deploy instead.
+ */
+export const REWIND_UNRESOLVED_CODE = 'rewind_unresolved'
+export const REWOUND_BEFORE_ROLLBACK_CODE = 'rewound_before_rollback'
+
+/**
  * How long a bookmark migration waits for the new version's answer after a deploy: Cloudflare's `max_delay` of 300 s,
  * during which the old instance of an active object keeps answering, and a margin.
  */
@@ -1699,6 +1707,7 @@ class OperationDriver {
 			arms: async () => (await this.require(row.id)).rewind_arms,
 			arming: async (arms) => await this.records.rewindArming(row.id, arms, this.lease.fence()),
 			armed: async (undo) => await this.records.rewindArmed(row.id, undo, this.lease.fence()),
+			verified: async (arms) => await this.records.rewindVerified(row.id, arms, this.lease.fence()),
 		})
 		switch (rewound.kind) {
 			case 'rewound':
@@ -1737,11 +1746,15 @@ class OperationDriver {
 			readonly arms: () => Promise<number>
 			readonly arming: (arms: number) => Promise<boolean>
 			readonly armed: (undo: string) => Promise<boolean>
+			/** Records a `present` answer for arms a transition acknowledged since proved reset; absent for a side restore. */
+			readonly verified?: (arms: number) => Promise<boolean>
 		},
 	): Promise<Rewound> {
 		const { object, generation, sentinel, target, record } = rewind
 		const named = record === undefined ? {} : { record }
 		let arms = initialArms
+		// The caller fenced the object before this call, so the first `verify` observes the session after each earlier reset.
+		let proven = initialArms
 		for (;;) {
 			if (arms > 0) {
 				const verified = await this.restoreRequest({ step: 'verify', object, sentinel, ...named })
@@ -1749,6 +1762,8 @@ class OperationDriver {
 				if (verified.kind !== 'ok') return { kind: 'done', result: verified.kind }
 				if (verified.value.step !== 'verify') return { kind: 'failed', code: 'invalid_answer' }
 				if (verified.value.sentinel === 'absent') return { kind: 'rewound' }
+				if (arms <= proven && recorded.verified !== undefined) this.lease.assertWritten(await recorded.verified(arms))
+				proven = 0
 				if (arms >= MAX_ARMS) return { kind: 'failed', code: REWIND_FAILED_CODE }
 			}
 			this.lease.assertWritten(await recorded.arming(arms))
@@ -2034,8 +2049,15 @@ class OperationDriver {
 	 * fail with.
 	 */
 	private async publish(start: DataOperationRow, mode: OpsMode, named?: string): Promise<Published> {
-		const object = named ?? (await this.serving())
+		const serving = await this.serving()
+		const object = named ?? serving
 		let row = start
+		const cached = this.acknowledged.get(object)
+		if (mode === 'open' && object === serving && !(cached?.generation === row.generation && cached.mode === 'open')) {
+			const gated = await this.openGate(row)
+			if (gated.kind !== 'acked') return gated
+			row = gated.row
+		}
 		let adopted = false
 		let attempts = 0
 		while (attempts < ATTEMPTS) {
@@ -2061,6 +2083,55 @@ class OperationDriver {
 			attempts++
 		}
 		return { kind: 'interrupted' }
+	}
+
+	/**
+	 * Before the serving object is opened, by any operation (ADR-0070 §9): an outstanding in-place `arm` of the newest
+	 * bookmark migration may still restore at the object's next reset, which would discard what the open admits. `verify`
+	 * takes no barrier turn, so it may answer in the session that served the `arm`; a transition is acknowledged only
+	 * after the `arm`'s turn, which it holds until the reset. So a fence `inspect` at this record's generation first, then
+	 * `verify`: `present` spends the arm, `absent` is a rewound object, and no usable answer refuses the open. A rewound
+	 * object opens only once a deploy succeeded after its migration: the failed version would migrate again on its boot.
+	 */
+	private async openGate(start: DataOperationRow): Promise<Published> {
+		let migration = await this.records.latestBookmarkMigration(this.target.appId, this.target.env)
+		this.lease.assertHeld()
+		if (migration === null || migration.rewind_record === null) return { kind: 'acked', row: start }
+		let row = start
+		if (outstandingArm(migration)) {
+			const fenced = await this.publish(row, 'inspect')
+			if (fenced.kind !== 'acked') return fenced
+			row = fenced.row
+			const verified = await this.restoreRequest({
+				step: 'verify',
+				object: await this.serving(),
+				sentinel: migration.id,
+				record: migration.rewind_record,
+			})
+			if (verified.kind === 'paused' || verified.kind === 'interrupted') return { kind: 'interrupted' }
+			if (verified.kind === 'failed' || verified.value.step !== 'verify') return { kind: 'refused', code: REWIND_UNRESOLVED_CODE }
+			const arms = migration.rewind_arms
+			const fence = this.lease.fence()
+			this.lease.assertWritten(
+				verified.value.sentinel === 'present'
+					? await this.records.rewindVerified(migration.id, arms, fence)
+					: await this.records.rewindObserved(migration.id, arms, fence),
+			)
+			migration = await this.require(migration.id)
+			// The open goes out at a generation above the fence's.
+			row = await this.advance(row, { step: row.step, generation: await this.allocate() })
+		}
+		if (migration.rewind_outcome === 'rewound' && !(await this.deployedSince(migration))) return { kind: 'refused', code: REWOUND_BEFORE_ROLLBACK_CODE }
+		return { kind: 'acked', row }
+	}
+
+	/** Whether a deploy succeeded after `migration` started: its rollback deploy, or any later one. */
+	private async deployedSince(migration: DataOperationRow): Promise<boolean> {
+		const runs = this.deps.repositories.runs
+		const rollback = migration.revert_run_id === null ? null : await runs.getRun(migration.revert_run_id)
+		const latest = await runs.getLatestDeployedRun(this.target)
+		this.lease.assertHeld()
+		return rollback?.status === 'succeeded' || (latest !== null && latest.id > migration.id)
 	}
 
 	/**
@@ -2134,6 +2205,11 @@ class OperationDriver {
 		await this.fail(row, code, checkpoint)
 		return { kind: 'done', result: 'failed' }
 	}
+}
+
+/** An in-place `arm` was counted, and no `verify` after a proven reset answered for it. */
+function outstandingArm(migration: DataOperationRow): boolean {
+	return migration.rewind_record !== null && migration.rewind_outcome === null && migration.rewind_arms > migration.rewind_verified
 }
 
 const DATA_REFUSALS: ReadonlySet<string> = new Set(OPS_DATA_REFUSALS)

@@ -550,6 +550,12 @@ other environment, before the provider prepares anything, and the write maps a r
   `verify`s before another, at most 3; an answered `arm` records `rewind_undo`. An absent sentinel records
   `rewind_outcome = 'rewound'` and goes to `revert` with the object still `inspect`; three present ones, or a failure
   once an `arm` went out, fail `rewind_failed` with the object `inspect` (an armed object restores at its next reset).
+  `rewind_verified` counts the arms a `verify` answered `present` after a proven reset; an arm beyond it is outstanding.
+  `openGate`, in `publish` before every `open` of the serving object by any operation, first fences `inspect` (the object
+  acknowledges no transition in the session that served an `arm`, which holds the barrier's turn until its reset, while
+  `verify` takes no turn), then verifies: `present` spends the arm, `absent` records `rewound`, and no usable answer
+  refuses the open (`rewind_unresolved`). A rewound object opens only once a deploy succeeded after its migration
+  (`rewound_before_rollback`), so a recovery resumes the migration instead of opening.
   A refusal before any `arm` records `refused` and `rewind_refusal` and takes the branch below for a record it cannot
   rewind. `rolled_back`, `record_unwritable`, a rewound migration, and a `committed` one not rewound without
   `data_loss`, go to `revert`, the rollback deploy of `getLatestDeployedRun` (a succeeded run that recorded its

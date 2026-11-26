@@ -149,6 +149,7 @@ for (const backend of backends) {
 				rewind_target: null,
 				rewind_arms: 0,
 				rewind_undo: null,
+				rewind_verified: 0,
 				rewind_outcome: null,
 				rewind_refusal: null,
 			})

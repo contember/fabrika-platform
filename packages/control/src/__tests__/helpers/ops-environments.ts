@@ -59,7 +59,18 @@ export type Sent =
 		readonly generation: number
 		readonly part?: number
 	}
-	| { readonly op: 'restore'; readonly env: string; readonly object: string; readonly step: string; readonly generation: number | null }
+	| {
+		readonly op: 'restore'
+		readonly env: string
+		readonly object: string
+		readonly step: string
+		readonly generation: number | null
+		readonly sentinel: string
+		/** The migration record an in-place rewind names; `null` for a side restore's step. */
+		readonly record: string | null
+		/** The target an `arm` names; `null` for every other step. */
+		readonly target: string | null
+	}
 	| { readonly op: 'migrate'; readonly env: string; readonly object: string; readonly generation: number }
 
 /** What the fake does with one request: answer it, apply it and lose the answer, never receive it, or refuse it. */
@@ -140,6 +151,8 @@ export class FakeEnvironments implements OpsTransport {
 	/** Whether an `arm` resets the object, rewinding its KV (so its sentinel) and its ledger to `rewoundLedger`. */
 	resets = true
 	rewoundLedger: OpsMigration[] | null = null
+	/** The bookmark a failed migration's record names; `null` where the runtime has none. */
+	recordBookmark: string | null = RECORD_BOOKMARK
 	/** Whether the target time lies outside the recovery window. */
 	bookmarkUnavailable = false
 	/** The objects the deployed version lists, which the channel alone reaches (the uniform refusal otherwise); `null`: any. */
@@ -231,7 +244,8 @@ export class FakeEnvironments implements OpsTransport {
 		const version = this.versioned ? answering.version : null
 		if (failure !== null) {
 			const files = (pending.length > 0 ? pending : answering.bundled).map((name) => ({ bundle: 'app', name, checksum: this.checksumOf(name) }))
-			return { kind: 'failed', failure: { refused: 'migration_failed', reason: failure, record: failedRecord(failure, files, version), version } }
+			const record = { ...failedRecord(failure, files, version), bookmark: this.recordBookmark }
+			return { kind: 'failed', failure: { refused: 'migration_failed', reason: failure, record, version } }
 		}
 		return { kind: 'ok', value: { generation: request.generation, migrations: [...ledger], record: null, version } }
 	}
@@ -414,7 +428,16 @@ export class FakeEnvironments implements OpsTransport {
 	 */
 	async restore(target: OpsTarget, request: OpsRestoreRequest): Promise<OpsDataAnswer<OpsRestoreAck>> {
 		const generation = request.step === 'verify' ? null : request.generation
-		const sent: Sent = { op: 'restore', env: target.env, object: request.object, step: request.step, generation }
+		const sent: Sent = {
+			op: 'restore',
+			env: target.env,
+			object: request.object,
+			step: request.step,
+			generation,
+			sentinel: request.sentinel,
+			record: 'record' in request ? request.record ?? null : null,
+			target: request.step === 'arm' ? request.target : null,
+		}
 		this.sent.push(sent)
 		const fault = await this.fault(sent)
 		if (fault === 'down') return { kind: 'unavailable', reason: 'unreachable' }

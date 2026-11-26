@@ -89,6 +89,11 @@ export interface DataOperationRow {
 	rewind_arms: number
 	/** The undo bookmark an answered `arm` returned; `null` while none answered. */
 	rewind_undo: string | null
+	/**
+	 * How many arms a `verify` answered `present` after a transition proved their reset; an arm counted beyond it is
+	 * outstanding while the outcome is unknown.
+	 */
+	rewind_verified: number
 	/** `rewound` once `verify` found the sentinel gone; `refused` when the object refused the rewind. */
 	rewind_outcome: RewindOutcome | null
 	/** The object's reason for a refused rewind. */
@@ -352,6 +357,39 @@ export class DataOperationRepository {
 			[undo, this.now(), id],
 			fence,
 		)
+	}
+
+	/**
+	 * A `verify` after a proven reset found the sentinel of `arms` arms present: none of them restores any more. Written on
+	 * a finished operation too, by whoever holds the lease, since an open of the environment depends on it.
+	 */
+	async rewindVerified(id: string, arms: number, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_verified = ?, updated_at = ? WHERE id = ? AND rewind_arms = ? AND rewind_outcome IS NULL`,
+			[arms, this.now(), id, arms],
+			fence,
+		)
+	}
+
+	/** A `verify` found the sentinel of `arms` arms gone: the object was rewound. Written on a finished operation too. */
+	async rewindObserved(id: string, arms: number, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET rewind_outcome = 'rewound', rewind_verified = ?, updated_at = ?
+				WHERE id = ? AND rewind_arms = ? AND rewind_outcome IS NULL`,
+			[arms, this.now(), id, arms],
+			fence,
+		)
+	}
+
+	/** The environment's newest bookmark migration, in any state; `null` without one. */
+	async latestBookmarkMigration(appId: string, env: string): Promise<DataOperationRow | null> {
+		return await this.d1
+			.prepare(`SELECT * FROM app_env_data_operations WHERE app_id = ? AND env = ? AND kind = 'migrate' AND records_bookmark = 1
+				ORDER BY id DESC LIMIT 1`)
+			.bind(appId, env)
+			.first<DataOperationRow>()
 	}
 
 	/** The provider deployed a running bookmark migration's run. `false` once it finished, or off the lease. */

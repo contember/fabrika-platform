@@ -6,10 +6,11 @@
 
 import { type OpsDataRefusalReason, type OpsMigrationFailureReason, sha256Hex } from '@fabrika/auth-core'
 import { type BlobStore, type SqlDatabase, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
-import { abortableWait, type ControlProvider, type ProviderDeployOutcome } from '@fabrika/provider-contract'
+import { abortableWait, type ControlProvider, type ProviderDeployOutcome, ProviderInvocationAbort } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { runBackupSchedule } from '../backups'
 import {
+	type DataOperationDeps,
 	DEPLOY_FAILED_CODE,
 	DEPLOY_NOT_STARTED_CODE,
 	MIGRATION_FAILED_CODE,
@@ -19,6 +20,10 @@ import {
 	type OpsTarget,
 	recordedMaintenance,
 	REWIND_FAILED_CODE,
+	REWIND_UNRESOLVED_CODE,
+	REWOUND_BEFORE_ROLLBACK_CODE,
+	startMaintenance,
+	startRecovery,
 } from '../data-operations'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import type { RunTrigger } from '../db/runs'
@@ -59,6 +64,8 @@ const REWOUND_AT = (generation: number): string[] => [
 	`restore application arm @${generation}`,
 	'restore application verify',
 ]
+/** The id of the migration record a failed migrating boot answers with, in the fake. */
+const RECORD_ID = '0192c4a0-0000-7000-8000-00000000f00d'
 /** The object's refusals of an in-place rewind (ADR-0070 §9), each answered before it changes anything. */
 const REWIND_REFUSALS: readonly OpsDataRefusalReason[] = ['not_rewindable', 'version_changed', 'wrong_target', 'serving_object', 'wrong_mode']
 
@@ -305,6 +312,15 @@ for (const backend of backends) {
 					clock: () => clock,
 					wait: opsClock.wait,
 				})
+			/** What an operator's maintenance or recovery request drives with. */
+			const dataDeps = (): DataOperationDeps => ({
+				repositories: b.repositories,
+				lock: locks,
+				ops: fake,
+				deploys: operationDeploys(deps()),
+				clock: () => clock,
+				wait: opsClock.wait,
+			})
 			const advance = (ms: number): void => {
 				clock += ms
 			}
@@ -331,6 +347,7 @@ for (const backend of backends) {
 				advance,
 				stopInNextWait,
 				runStatus,
+				dataDeps,
 				clock: () => clock,
 			}
 		}
@@ -468,8 +485,10 @@ for (const backend of backends) {
 					return Promise.resolve()
 				}
 				let openedAt = 0
-				fake.fault = (sent) => {
+				const atArm: { readonly sent: Sent; readonly recorded: unknown }[] = []
+				fake.fault = async (sent) => {
 					if (sent.op === 'state' && sent.mode === 'open' && sent.generation === 3) openedAt = clock()
+					if (sent.op === 'restore' && sent.step === 'arm') atArm.push({ sent, recorded: (await operations())[0] })
 					return undefined
 				}
 				expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
@@ -494,7 +513,7 @@ for (const backend of backends) {
 					target_mode: 'open',
 					generation: 3,
 					migration_failure: 'committed',
-					rewind_record: '0192c4a0-0000-7000-8000-00000000f00d',
+					rewind_record: RECORD_ID,
 					rewind_current: 'bookmark-0009',
 					rewind_target: 'bookmark-0001',
 					rewind_arms: 1,
@@ -502,6 +521,14 @@ for (const backend of backends) {
 					rewind_outcome: 'rewound',
 					rewind_refusal: null,
 				})
+				// The arm names the record, its bookmark and the operation's sentinel, and goes out only once the bookmarks are recorded.
+				expect(atArm).toEqual([{
+					sent: expect.objectContaining({ sentinel: operation?.id, record: RECORD_ID, target: 'bookmark-0001', generation: 2 }),
+					recorded: expect.objectContaining({ rewind_record: RECORD_ID, rewind_current: 'bookmark-0009', rewind_target: 'bookmark-0001', rewind_arms: 1 }),
+				}])
+				expect(fake.sent.filter((sent) => sent.op === 'restore').map((sent) => sent.op === 'restore' && [sent.sentinel, sent.record])).toEqual(
+					Array.from({ length: 3 }, () => [operation?.id, RECORD_ID]),
+				)
 				const rollback = await b.repositories.runs.getRun(operation?.revert_run_id ?? '')
 				expect(rollback).toMatchObject({ status: 'succeeded', commit_sha: (await b.repositories.runs.getRun(first))?.commit_sha })
 				expect((await b.repositories.runs.getRun(second))?.status).toBe('failed')
@@ -625,20 +652,183 @@ for (const backend of backends) {
 			}
 		})
 
-		test('a record without its version is not rewound: the rollback deploy alone, or closed with a dataLoss line', async () => {
-			for (const candidate of [SECOND, DROPS]) {
-				const { fake, state, deps, deployFirst, candidateRun, operations } = await open()
-				await deployFirst()
-				fake.versioned = false
-				state.failure = 'committed'
-				const run = await candidateRun([FIRST, candidate])
-				expect(await executeDeploy(deps(), { runId: run })).toEqual({ runId: run, status: 'failed' })
-				expect(fake.requests().filter((request) => request.startsWith('restore') || request.includes('inspect @'))).toEqual([])
-				expect(await operations()).toMatchObject([{ error_code: MIGRATION_FAILED_CODE, rewind_record: null, rewind_outcome: null }])
-				await opened?.close()
-				opened = null
+		for (const missing of ['version', 'bookmark'] as const) {
+			test(`a record without its ${missing} is not rewound: the rollback deploy alone, or closed with a dataLoss line`, async () => {
+				for (const candidate of [SECOND, DROPS]) {
+					const { fake, state, deps, deployFirst, candidateRun, operations } = await open()
+					await deployFirst()
+					if (missing === 'version') fake.versioned = false
+					else fake.recordBookmark = null
+					state.failure = 'committed'
+					const run = await candidateRun([FIRST, candidate])
+					expect(await executeDeploy(deps(), { runId: run })).toEqual({ runId: run, status: 'failed' })
+					expect(fake.requests().filter((request) => request.startsWith('restore') || request.includes('inspect @'))).toEqual([])
+					// Without a version no ok tells the rollback from the failed version, so that one closes at its deadline too.
+					const reverted = candidate === SECOND && missing === 'bookmark'
+					expect(await operations()).toMatchObject([{
+						error_code: reverted ? MIGRATION_REVERTED_CODE : MIGRATION_FAILED_CODE,
+						rewind_record: null,
+						rewind_outcome: null,
+					}])
+					await opened?.close()
+					opened = null
+				}
+			})
+		}
+
+		test("a successor's verify that finds the sentinel present spends that arm, and the successor arms again", async () => {
+			const { b, fake, state, deps, locks, deployFirst, candidateRun, operations, steal, pass } = await open()
+			await deployFirst()
+			fake.rewoundLedger = [...fake.ledger]
+			state.failure = 'committed'
+			// The first arm never resets the object, and the lease is lost as it goes out.
+			fake.resets = false
+			fake.fault = async (sent: Sent) => {
+				if (sent.op === 'restore' && sent.step === 'arm') await steal()
+				return undefined
 			}
+			const second = await candidateRun([FIRST, SECOND])
+			await executeDeploy(deps(), { runId: second })
+			const [stuck] = await operations()
+			expect(stuck).toMatchObject({ state: 'running', step: 'rewind', rewind_arms: 1, rewind_verified: 0 })
+			fake.fault = () => undefined
+			fake.resets = true
+			fake.sent.length = 0
+			await locks.release(KEY, 'thief')
+			await pass()
+			await pass()
+			expect(fake.requests().slice(0, 4)).toEqual([
+				'state application inspect @3',
+				'restore application verify',
+				'restore application arm @3',
+				'restore application verify',
+			])
+			expect(await b.repositories.dataOperations.get(stuck?.id ?? '')).toMatchObject({
+				state: 'failed',
+				error_code: MIGRATION_REVERTED_CODE,
+				rewind_arms: 2,
+				rewind_verified: 1,
+				rewind_outcome: 'rewound',
+			})
 		})
+
+		test('a lease lost between counting an arm and sending it: the successor verifies first, then sends the only arm', async () => {
+			const { b, fake, state, deps, locks, deployFirst, candidateRun, operations, steal, pass } = await open()
+			await deployFirst()
+			fake.rewoundLedger = [...fake.ledger]
+			state.failure = 'committed'
+			const records = b.repositories.dataOperations
+			const arming = records.rewindArming.bind(records)
+			// The arm is counted; then the holder learns its lease is gone, before it sends the arm.
+			records.rewindArming = async (id, arms, fence) => {
+				await arming(id, arms, fence)
+				await steal()
+				throw new ProviderInvocationAbort('lease_lost')
+			}
+			const second = await candidateRun([FIRST, SECOND])
+			await executeDeploy(deps(), { runId: second })
+			const [stuck] = await operations()
+			expect(stuck).toMatchObject({ state: 'running', step: 'rewind', rewind_arms: 1 })
+			expect(fake.requests().filter((request) => request.includes(' arm '))).toEqual([])
+			records.rewindArming = arming
+			await locks.release(KEY, 'thief')
+			await pass()
+			await pass()
+			expect(fake.requests().filter((request) => request.startsWith('restore'))).toEqual([
+				'restore application prepare @2',
+				'restore application verify',
+				'restore application arm @3',
+				'restore application verify',
+			])
+			expect(await b.repositories.dataOperations.get(stuck?.id ?? '')).toMatchObject({
+				error_code: MIGRATION_REVERTED_CODE,
+				rewind_arms: 2,
+				rewind_verified: 1,
+				rewind_outcome: 'rewound',
+			})
+		})
+
+		for (const answer of ['present', 'absent', 'unusable'] as const) {
+			test(`an operator's open after a rewind_failed with an outstanding arm verifies it first: ${answer}`, async () => {
+				const { b, fake, state, deps, deployFirst, candidateRun, operations, dataDeps } = await open()
+				await deployFirst()
+				state.failure = 'committed'
+				fake.resets = false
+				const second = await candidateRun([FIRST, SECOND])
+				expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
+				const [failed] = await operations()
+				expect(failed).toMatchObject({ error_code: REWIND_FAILED_CODE, rewind_arms: 3, rewind_verified: 0 })
+				// The third arm restored at the reset after all; or the object gives no usable answer.
+				if (answer === 'absent') fake.rewinds.get('application')?.sentinels.delete(failed?.id ?? '')
+				if (answer === 'unusable') fake.fault = (sent) => sent.op === 'restore' && sent.step === 'verify' ? 'not_served' : undefined
+				fake.sent.length = 0
+				const opened_ = await startMaintenance(dataDeps(), { ...TARGET, mode: 'open', actor: 'user:ada' })
+				if (opened_.kind !== 'driven') throw new Error(`maintenance not driven: ${opened_.kind}`)
+				// A transition proves the arm's reset before the verify: the arm held the barrier's turn until it.
+				expect(fake.requests().slice(1, 3)).toEqual(['state application inspect @3', 'restore application verify'])
+				if (answer === 'present') {
+					expect(opened_.operation).toMatchObject({ state: 'succeeded', target_mode: 'open', generation: 4 })
+					expect(fake.requests().at(-1)).toBe('state application open @4')
+					expect(await b.repositories.dataOperations.get(failed?.id ?? '')).toMatchObject({ rewind_verified: 3, rewind_outcome: null })
+				} else {
+					expect(opened_.operation).toMatchObject({
+						state: 'failed',
+						error_code: answer === 'absent' ? REWOUND_BEFORE_ROLLBACK_CODE : REWIND_UNRESOLVED_CODE,
+					})
+					expect(fake.requests().filter((request) => request.includes(' open @'))).toEqual([])
+					expect(fake.published.get(`${APP}/${ENV}/application`)).toMatchObject({ mode: 'inspect' })
+					expect(await b.repositories.dataOperations.get(failed?.id ?? '')).toMatchObject({
+						rewind_verified: answer === 'absent' ? 3 : 0,
+						rewind_outcome: answer === 'absent' ? 'rewound' : null,
+					})
+				}
+			})
+
+			test(`a recovery that opens past a rewind stopped at an outstanding arm verifies it first: ${answer}`, async () => {
+				const { b, fake, state, deps, locks, deployFirst, candidateRun, operations, steal, dataDeps } = await open()
+				await deployFirst()
+				fake.rewoundLedger = [...fake.ledger]
+				state.failure = 'committed'
+				fake.resets = answer === 'absent'
+				fake.fault = async (sent: Sent) => {
+					if (sent.op === 'restore' && sent.step === 'arm') await steal()
+					return undefined
+				}
+				const second = await candidateRun([FIRST, SECOND])
+				await executeDeploy(deps(), { runId: second })
+				const [stuck] = await operations()
+				expect(stuck).toMatchObject({ state: 'running', step: 'rewind', rewind_arms: 1 })
+				fake.fault = (sent) => answer === 'unusable' && sent.op === 'restore' && sent.step === 'verify' ? 'not_served' : undefined
+				await locks.release(KEY, 'thief')
+				fake.sent.length = 0
+				const recovery = await startRecovery(dataDeps(), { ...TARGET, operationId: stuck?.id ?? '', resolution: 'open', actor: 'user:ops' })
+				if (recovery.kind !== 'driven') throw new Error(`recovery not driven: ${recovery.kind}`)
+				expect(fake.requests().slice(1, 4)).toEqual(['state application closed @3', 'state application inspect @4', 'restore application verify'])
+				if (answer === 'present') {
+					expect(recovery.operation).toMatchObject({ state: 'succeeded' })
+					expect(fake.requests().at(-1)).toBe('state application open @5')
+					expect(await b.repositories.dataOperations.get(stuck?.id ?? '')).toMatchObject({ state: 'failed', rewind_verified: 1 })
+					return
+				}
+				expect(recovery.operation).toMatchObject({
+					state: 'failed',
+					error_code: answer === 'absent' ? REWOUND_BEFORE_ROLLBACK_CODE : REWIND_UNRESOLVED_CODE,
+				})
+				expect(fake.requests().filter((request) => request.includes(' open @'))).toEqual([])
+				expect(await b.repositories.dataOperations.get(stuck?.id ?? '')).toMatchObject({ state: 'running', step: 'rewind' })
+				if (answer !== 'absent') return
+				// The rewound object goes on to its rollback deploy through a recovery that resumes it.
+				fake.fault = () => undefined
+				const resumed = await startRecovery(dataDeps(), { ...TARGET, operationId: stuck?.id ?? '', resolution: 'resume', actor: 'user:ops' })
+				if (resumed.kind !== 'driven') throw new Error(`recovery not driven: ${resumed.kind}`)
+				expect(state.deploys.filter((deploy) => deploy.rollback)).toHaveLength(1)
+				expect(await b.repositories.dataOperations.get(stuck?.id ?? '')).toMatchObject({
+					state: 'failed',
+					error_code: MIGRATION_REVERTED_CODE,
+					rewind_outcome: 'rewound',
+				})
+			})
+		}
 
 		for (const lostAt of ['prepare', 'arm', 'verify'] as const) {
 			test(`a lease lost at ${lostAt} stops the rewind; a successor fences inspect above it and carries on from the record`, async () => {
