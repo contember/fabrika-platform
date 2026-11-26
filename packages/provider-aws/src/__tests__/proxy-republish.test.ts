@@ -2,7 +2,7 @@
 // image and the service set; a recorded image set at once; and the reconcile that carries on work in flight, settling
 // it or failing retryably when the wait runs out.
 
-import { contractDigest } from '@fabrika/auth-core'
+import { contractDigest, proxySecretVariable } from '@fabrika/auth-core'
 import type {
 	ProviderApprovedAccess,
 	ProviderDeploymentNamespace,
@@ -19,6 +19,7 @@ import { awsAppArtifactCodec, type AwsAppTarget, type AwsNamespaceTarget, awsNam
 import { awsNamespaceTargetEnvelope } from '../namespace'
 import { awsProxyManifestFile, sha256Hex } from '../proxy-attempt'
 import { AWS_PROXY_PENDING, type AwsProxyRepublishContext, republishAwsProxy, withAwsProxyRepublish } from '../proxy-republish'
+import { AWS_PROXY_ROLLOUT_FAILED } from '../proxy-service'
 
 const installation: AwsAppTarget = {
 	accountId: '123456789012',
@@ -72,6 +73,9 @@ const service: EcsService = {
 class Fake {
 	readonly calls: string[] = []
 	pendingReads = 0
+	created = false
+	rollouts: ('in_progress' | 'completed' | 'failed')[] = []
+	parameters: string[] = []
 	sleeps = 0
 	clock = 0
 	readonly context: AwsProxyRepublishContext = {
@@ -107,12 +111,36 @@ class Fake {
 					},
 					createService: async () => {
 						this.calls.push('createService')
+						this.created = true
 						return service
 					},
 					updateService: async () => service,
-					describeService: async () => null,
+					// None until created; then the deployment of the revision, its rollout as `rollouts` says, read by read.
+					describeService: async () => {
+						if (!this.created) return null
+						const rolloutState = this.rollouts.shift() ?? 'completed'
+						return {
+							...service,
+							deployments: [{
+								id: 'ecs-svc/1',
+								status: 'primary',
+								taskDefinitionArn: service.taskDefinitionArn,
+								rolloutState,
+								runningCount: 1,
+								desiredCount: 1,
+								failedTasks: 0,
+							}],
+						}
+					},
 				},
-				ssm: { putSecret: async () => 1, deleteSecret: async () => true },
+				ssm: {
+					putSecret: async () => 1,
+					deleteSecret: async (name) => {
+						this.calls.push(`deleteSecret ${name}`)
+						return true
+					},
+					listNames: async () => this.parameters,
+				},
 				s3PartWriter: (): S3PartWriter => ({ partBytes: 8 * 1024 * 1024, writePart: async () => {}, complete: async () => {}, abort: async () => {} }),
 				cloudFormation: {
 					findStack: async () => ({ stackId: STACK_ID, status: 'CREATE_COMPLETE' }),
@@ -209,6 +237,78 @@ describe('republishAwsProxy', () => {
 		})
 		expect(result.settled).toBe(false)
 		expect(fake.calls).not.toContain('findImage')
+	})
+})
+
+describe("the proxy service's rollout", () => {
+	const built = namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST })
+	const ENV = '/fabrika/namespaces/shared/prod/env'
+
+	test('settles once the deployment of the revision completed, and only then deletes the secrets it no longer names', async () => {
+		const fake = new Fake()
+		fake.rollouts = ['in_progress']
+		// A member that left: its secret is still there, beside the key and the current member's.
+		fake.parameters = [`${ENV}/FABRIKA_IAM_KEY`, `${ENV}/${proxySecretVariable('notes@prod')}`, `${ENV}/${proxySecretVariable('gone@prod')}`]
+		const result = await republishAwsProxy(fake.context, {
+			namespace: built,
+			members: MEMBERS,
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'active',
+		})
+		expect(result.settled).toBe(true)
+		expect(fake.sleeps).toBe(1)
+		expect(fake.calls.filter((call) => call.startsWith('deleteSecret'))).toEqual([`deleteSecret ${ENV}/${proxySecretVariable('gone@prod')}`])
+		expect(decoded(result.namespace)).toMatchObject({ proxyServiceUpdated: true, proxyServiceRolledOut: true })
+	})
+
+	test("a rollout still in progress leaves 'started' unsettled, with no secret deleted", async () => {
+		const fake = new Fake()
+		fake.rollouts = ['in_progress']
+		fake.parameters = [`${ENV}/${proxySecretVariable('gone@prod')}`]
+		const result = await republishAwsProxy(fake.context, {
+			namespace: built,
+			members: MEMBERS,
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'started',
+		})
+		expect(result.settled).toBe(false)
+		expect(fake.calls.some((call) => call.startsWith('deleteSecret'))).toBe(false)
+		expect(decoded(result.namespace).proxyServiceRolledOut).toBeUndefined()
+	})
+
+	test('a rollout the circuit breaker rolled back fails with a stable code, not retryable, and deletes nothing', async () => {
+		const fake = new Fake()
+		fake.rollouts = ['failed']
+		fake.parameters = [`${ENV}/${proxySecretVariable('gone@prod')}`]
+		const failure = await republishAwsProxy(fake.context, {
+			namespace: built,
+			members: MEMBERS,
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'active',
+		})
+			.catch((error: unknown) => error)
+		expect(failure).toMatchObject({ code: AWS_PROXY_ROLLOUT_FAILED, retryable: false })
+		expect(fake.calls.some((call) => call.startsWith('deleteSecret'))).toBe(false)
+	})
+
+	test('a service that is gone drops the update, so the next pass creates it again', async () => {
+		const fake = new Fake()
+		const set = await republishAwsProxy(fake.context, { namespace: built, members: MEMBERS, events: fake.events, signal: fake.signal, wait: 'started' })
+		const { proxyServiceRolledOut: _rolled, ...unrolled } = decoded(set.namespace)
+		// Deleted out of band after its update was recorded.
+		const gone = new Fake()
+		const failure = await republishAwsProxy(gone.context, {
+			namespace: namespaceOf(unrolled),
+			members: MEMBERS,
+			events: gone.events,
+			signal: gone.signal,
+			wait: 'started',
+		})
+			.catch((error: unknown) => error)
+		expect(failure).toMatchObject({ code: 'awsProxyService', retryable: true })
 	})
 })
 

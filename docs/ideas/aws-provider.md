@@ -478,8 +478,14 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     (`awsProxyPending`) when the wait runs out; `provision` stays the stack's. Control's composition reads the proxies'
     IAM (`FABRIKA_AWS_PROXY_IAM_URL`, `FABRIKA_AWS_PROXY_IAM_KEY`, refused when malformed) and uploads the pinned
     platform commit with the manifest appended.
-    Not yet: the proxy service's rollout and its verdict, deleting the secrets of members no longer routed (once a rollout
-    succeeded, because a rollback reads an older revision's), relaying the build's log to an operator; then
+    **The rollout** (built, `followAwsProxyRollout`): a republish settles only once the service's primary deployment
+    is of the recorded revision and its rollout completed. Only then are the secrets under `env/` it no longer names
+    deleted (a rollback would start an older revision, which reads them), and `proxyServiceRolledOut` is recorded. A
+    rollout in progress polls within the same wait. One the circuit breaker rolled back fails with `awsProxyRollout`, not
+    retryable, because the same revision would fail again; a new image or secret is a new fingerprint and sets the
+    service anew. A service deleted out of band drops the update's mark, so the next pass creates it.
+    Not yet: relaying the build's log to an operator, and a needless build when an older manifest's build is in flight
+    while the current one's image is recorded; then
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
     application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
