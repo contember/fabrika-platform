@@ -62,7 +62,7 @@ export interface WorkloadCredentialsPort {
 	 * left, and answer each recorded key the running version may not hold yet, the re-issued ones included. IAM keeps the
 	 * replaced key valid until its own expiry (`keep`), so the running version works on until it holds the new one.
 	 */
-	renew(appId: string, env: string, artifact: ContractArtifact | null): Promise<readonly PendingWorkloadKey[]>
+	renew(appId: string, env: string, artifact: ContractArtifact | null, assertHeld?: () => void): Promise<readonly PendingWorkloadKey[]>
 	/** Record that the running version holds these keys; a record since replaced by another key is left as it is. */
 	confirm(appId: string, env: string, keys: readonly PendingWorkloadKey[]): Promise<void>
 }
@@ -210,7 +210,7 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		return { variables: keys, expiresAt }
 	}
 
-	async renew(appId: string, env: string, artifact: ContractArtifact | null): Promise<readonly PendingWorkloadKey[]> {
+	async renew(appId: string, env: string, artifact: ContractArtifact | null, assertHeld?: () => void): Promise<readonly PendingWorkloadKey[]> {
 		const recorded = await this.records.list(appId, env)
 		const slots = credentialSlots(appId, env, artifact).flatMap((slot) => {
 			// A key no deploy recorded is not the running version's: the next deploy issues it.
@@ -226,7 +226,7 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 			// A pending key this old outlived the key it replaced, which had less than the threshold left: `keep` loses nothing.
 			const current = row.expires_at - now > WORKLOAD_KEY_ROTATE_BELOW_SECONDS
 				? { row, key: row.pending === 1 ? await vault.getSecretForPurpose(row.value_ref, purpose) : null }
-				: await this.#issue(vault, appId, env, slot, row, now, { pending: true, handedBy: null })
+				: await this.#issue(vault, appId, env, slot, row, now, { pending: true, handedBy: null, ...(assertHeld === undefined ? {} : { assertHeld }) })
 			if (current.row.pending !== 1 || current.key === null) continue
 			pending.push({
 				kind: slot.kind,
@@ -280,9 +280,11 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		slot: CredentialSlot,
 		row: WorkloadCredentialRow | undefined,
 		now: number,
-		handoff: { readonly pending: boolean; readonly handedBy: string | null },
+		handoff: { readonly pending: boolean; readonly handedBy: string | null; readonly assertHeld?: () => void },
 	): Promise<{ readonly row: WorkloadCredentialRow; readonly key: string }> {
 		const purpose = workloadKeyPurpose(appId, env, slot.kind, slot.name)
+		// IAM revokes every key of the workload but `keep` and the new one: only the lease holder may issue.
+		handoff.assertHeld?.()
 		const issued = await this.issuer.issue({
 			app: slot.iamApp,
 			kind: slot.kind,
@@ -305,11 +307,18 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 			handed_by: handoff.pending ? handoff.handedBy : null,
 			held_expires_at: handoff.pending ? held : null,
 		}
+		let recorded: boolean
 		try {
-			await this.records.put(next)
+			handoff.assertHeld?.()
+			recorded = await this.records.put(next, row?.credential_id ?? null)
 		} catch (error) {
 			await vault.delete(ref)
 			throw error
+		}
+		if (!recorded) {
+			// Another writer recorded its own key meanwhile: that record stands, and this key is an orphan.
+			await vault.delete(ref)
+			throw new Error(`the key of the ${slot.kind} '${slot.name}' was replaced while it was issued; the next pass or deploy retries`)
 		}
 		if (row !== undefined) {
 			await vault.delete(row.value_ref)

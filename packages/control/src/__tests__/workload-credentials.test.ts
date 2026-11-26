@@ -112,12 +112,12 @@ describe('VaultWorkloadCredentials', () => {
 				delete: (appId, env, kind, name) => records.delete(appId, env, kind, name),
 				markHandedBy: (appId, env, kind, name, credentialId, run) => records.markHandedBy(appId, env, kind, name, credentialId, run),
 				confirm: (appId, env, kind, name, credentialId) => records.confirm(appId, env, kind, name, credentialId),
-				put: (row) => {
+				put: (row, replaces) => {
 					if (failNextPut) {
 						failNextPut = false
 						return Promise.reject(new Error('the database went away'))
 					}
-					return records.put(row)
+					return records.put(row, replaces)
 				},
 			},
 			() => Promise.resolve(vault),

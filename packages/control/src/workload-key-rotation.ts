@@ -87,7 +87,7 @@ async function rotateEnvironment(
 	// A run still running after its holder's lease went (a Control restart) may be writing the Worker itself.
 	if ((await deps.repositories.runs.listRuns({ appId, env, statuses: ['running'], limit: 1 })).length > 0) return 'busy'
 	const contract = approvedProviderAccess(row).access?.contract ?? null
-	const pending = await deps.credentials.renew(appId, env, contract)
+	const pending = await deps.credentials.renew(appId, env, contract, assertHeld)
 	const handed: PendingWorkloadKey[] = []
 	const unhanded: PendingWorkloadKey[] = []
 	for (const key of pending) {

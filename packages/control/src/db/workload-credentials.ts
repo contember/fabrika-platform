@@ -39,27 +39,48 @@ export class WorkloadCredentialRepository {
 		return results
 	}
 
-	/** Records the workload's current key, replacing the one before it. */
-	async put(row: WorkloadCredentialRow): Promise<void> {
-		await this.d1
-			.prepare(`INSERT INTO app_env_workload_credentials
-				(app_id, env, kind, name, value_ref, credential_id, expires_at, pending, handed_by, held_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-				ON CONFLICT (app_id, env, kind, name) DO UPDATE SET
-					value_ref = excluded.value_ref, credential_id = excluded.credential_id, expires_at = excluded.expires_at,
-					pending = excluded.pending, handed_by = excluded.handed_by, held_expires_at = excluded.held_expires_at`)
-			.bind(
-				row.app_id,
-				row.env,
-				row.kind,
-				row.name,
-				row.value_ref,
-				row.credential_id,
-				row.expires_at,
-				row.pending,
-				row.handed_by,
-				row.held_expires_at,
-			)
-			.run()
+	/**
+	 * Records the workload's current key in place of the key `replaces` (`null`: no key was recorded). `false` when the
+	 * record names another key by now: another writer recorded its own key meanwhile, and this one is not recorded.
+	 */
+	async put(row: WorkloadCredentialRow, replaces: string | null): Promise<boolean> {
+		const result = replaces === null
+			? await this.d1
+				.prepare(`INSERT INTO app_env_workload_credentials
+					(app_id, env, kind, name, value_ref, credential_id, expires_at, pending, handed_by, held_expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+					ON CONFLICT (app_id, env, kind, name) DO NOTHING`)
+				.bind(
+					row.app_id,
+					row.env,
+					row.kind,
+					row.name,
+					row.value_ref,
+					row.credential_id,
+					row.expires_at,
+					row.pending,
+					row.handed_by,
+					row.held_expires_at,
+				)
+				.run()
+			: await this.d1
+				.prepare(`UPDATE app_env_workload_credentials SET
+					value_ref = ?, credential_id = ?, expires_at = ?, pending = ?, handed_by = ?, held_expires_at = ?
+					WHERE app_id = ? AND env = ? AND kind = ? AND name = ? AND credential_id = ?`)
+				.bind(
+					row.value_ref,
+					row.credential_id,
+					row.expires_at,
+					row.pending,
+					row.handed_by,
+					row.held_expires_at,
+					row.app_id,
+					row.env,
+					row.kind,
+					row.name,
+					replaces,
+				)
+				.run()
+		return result.meta.changes > 0
 	}
 
 	/**

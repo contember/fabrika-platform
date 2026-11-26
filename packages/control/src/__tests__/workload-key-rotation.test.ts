@@ -55,8 +55,11 @@ class RunningVersion {
 class RecordingIssuer implements WorkloadKeyIssuer {
 	readonly issued: { kind: string; name: string; keep: string | null }[] = []
 	readonly valid = new Map<string, string>()
+	/** Runs inside IAM's issuance: what another writer does meanwhile. */
+	meanwhile: (() => Promise<void>) | null = null
 
-	issue(input: { app: string; kind: CredentialKind; name: string; expiresAt: number; keep: string | null }) {
+	async issue(input: { app: string; kind: CredentialKind; name: string; expiresAt: number; keep: string | null }) {
+		await this.meanwhile?.()
 		this.issued.push({ kind: input.kind, name: input.name, keep: input.keep })
 		const workload = `${input.app}/${input.kind}:${input.name}`
 		const key = `px_${input.kind}_${input.name}_${this.issued.length}`
@@ -64,7 +67,7 @@ class RecordingIssuer implements WorkloadKeyIssuer {
 			if (of === workload && held !== input.keep) this.valid.delete(held)
 		}
 		this.valid.set(key, workload)
-		return Promise.resolve({ key, credentialId: key, expiresAt: input.expiresAt })
+		return { key, credentialId: key, expiresAt: input.expiresAt }
 	}
 
 	revoke() {
@@ -272,6 +275,42 @@ describe('the maintenance pass renews workload keys without a deploy', () => {
 		expect(await rotateWorkloadKeys(w.deps)).toEqual({ written: 0, confirmed: 0, busy: 1, failed: 0 })
 		expect(issuer.issued).toHaveLength(2)
 		expect(w.running.writes).toEqual([])
+	})
+
+	test('a pass that no longer holds its lease issues no key', async () => {
+		const issuer = new RecordingIssuer()
+		const clock = { now: 1_800_000_000 }
+		const w = await world(issuer, clock)
+		await w.deploy()
+		clock.now += MAX_KEY_LIFETIME_SECONDS - 10 * DAY
+		const lost = () => {
+			throw new Error('the lease was lost')
+		}
+		await expect(w.credentials.renew('notes', 'prod', contract, lost)).rejects.toThrow('the lease was lost')
+		expect(issuer.issued).toHaveLength(2)
+		expect(w.records().map((row) => row['pending'])).toEqual([0, 0])
+	})
+
+	test('a key another writer recorded meanwhile is not overwritten, and the orphan leaves the vault', async () => {
+		const issuer = new RecordingIssuer()
+		const clock = { now: 1_800_000_000 }
+		const w = await world(issuer, clock)
+		await w.deploy()
+		clock.now += MAX_KEY_LIFETIME_SECONDS - 10 * DAY
+		const vaultRows = () => queryRows(w.harness.sqlite, 'SELECT count(*) AS n FROM vault')[0]?.['n']
+		const before = vaultRows()
+		issuer.meanwhile = async () => {
+			issuer.meanwhile = null
+			await w.harness.d1.prepare("UPDATE app_env_workload_credentials SET credential_id = 'px_another_writer' WHERE kind = 'job'").run()
+		}
+		await expect(w.credentials.renew('notes', 'prod', contract)).rejects.toThrow(
+			"the key of the job 'purgeDeleted' was replaced while it was issued; the next pass or deploy retries",
+		)
+		expect(w.records().map((row) => row['pending'])).toEqual([0, 0])
+		expect(queryRows(w.harness.sqlite, "SELECT credential_id FROM app_env_workload_credentials WHERE kind = 'job'")).toEqual([
+			{ credential_id: 'px_another_writer' },
+		])
+		expect(vaultRows()).toBe(before)
 	})
 
 	test('a provider that writes no managed credential renews nothing', () => {
