@@ -1,6 +1,6 @@
 import { Link } from '@buzola/router'
 import { CONTROL_ACTIONS } from '@fabrika/control-contract'
-import { type ReactNode, useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useMemo, useState } from 'react'
 import { api, type AppDto, type AppEnvDto, type ConsoleAccessDto } from '../../lib/api'
 import { holdsAtApp, mayDo, opensApplications } from '../../lib/console-access'
 import { useConsoleAccess } from '../../lib/console-caller'
@@ -52,7 +52,8 @@ interface HeldState {
 }
 const stateReads = new Map<string, HeldState>()
 
-const environmentKey = (appId: string, env: string) => `${appId}\u0000${env}`
+/** An environment's key among several applications' environments: its name alone repeats across applications. */
+export const environmentKey = (appId: string, env: string) => `${appId}\u0000${env}`
 const factsOf = (env: AppEnvDto) => `${env.publishedRunId ?? ''}\u0000${env.suspendedAt ?? ''}`
 
 function current(env: AppEnvDto): HeldState | null {
@@ -78,16 +79,17 @@ function shownStates(
 	previous: ReadonlyMap<string, EnvironmentState>,
 ): ReadonlyMap<string, EnvironmentState> {
 	return new Map(envs.map((env): [string, EnvironmentState] => {
-		if (!mayDo(access, CONTROL_ACTIONS.DATA_READ, { app: env.appId, env: env.env })) return [env.env, { kind: 'unknown', reason: 'not-allowed' }]
-		return [env.env, current(env)?.settled ?? previous.get(env.env) ?? { kind: 'reading' }]
+		const key = environmentKey(env.appId, env.env)
+		if (!mayDo(access, CONTROL_ACTIONS.DATA_READ, { app: env.appId, env: env.env })) return [key, { kind: 'unknown', reason: 'not-allowed' }]
+		return [key, current(env)?.settled ?? previous.get(key) ?? { kind: 'reading' }]
 	}))
 }
 
 /**
- * Each environment's state, read on its own: one that has not answered keeps what was shown, or reads `reading`, and
- * blocks nothing. An environment the caller may not read data in is not asked.
+ * Each environment's state, of one application or several, keyed by `environmentKey`: one that has not answered keeps
+ * what was shown, or reads `reading`, and blocks nothing. An environment the caller may not read data in is not asked.
  */
-export function useEnvironmentStates(envs: readonly AppEnvDto[]): ReadonlyMap<string, EnvironmentState> {
+export function useEnvironmentStatesAcross(envs: readonly AppEnvDto[]): ReadonlyMap<string, EnvironmentState> {
 	const access = useConsoleAccess()
 	const [states, setStates] = useState(() => shownStates(access, envs, new Map()))
 	useEffect(() => {
@@ -95,7 +97,7 @@ export function useEnvironmentStates(envs: readonly AppEnvDto[]): ReadonlyMap<st
 		setStates((previous) => shownStates(access, envs, previous))
 		for (const env of readableEnvironments(access, envs)) {
 			void heldState(env).read.then((state) => {
-				if (live) setStates((previous) => new Map(previous).set(env.env, state))
+				if (live) setStates((previous) => new Map(previous).set(environmentKey(env.appId, env.env), state))
 			})
 		}
 		return () => {
@@ -105,9 +107,54 @@ export function useEnvironmentStates(envs: readonly AppEnvDto[]): ReadonlyMap<st
 	return states
 }
 
+/** An environment's state from `useEnvironmentStatesAcross`; `reading` until it is in the map. */
+export function environmentStateOf(states: ReadonlyMap<string, EnvironmentState>, env: Pick<AppEnvDto, 'appId' | 'env'>): EnvironmentState {
+	return states.get(environmentKey(env.appId, env.env)) ?? { kind: 'reading' }
+}
+
+/** One application's environments' states, keyed by environment name. */
+export function useEnvironmentStates(envs: readonly AppEnvDto[]): ReadonlyMap<string, EnvironmentState> {
+	const states = useEnvironmentStatesAcross(envs)
+	return useMemo(() => new Map(envs.map((env) => [env.env, environmentStateOf(states, env)])), [envs, states])
+}
+
 /** Forget an environment's held state, after an action or a poll that may have changed it. */
 export function forgetEnvironmentState(appId: string, env: string) {
 	stateReads.delete(environmentKey(appId, env))
+}
+
+/** Each environment's name and state lamp, linked to its Data tab where the caller reads its data; `states` by name. */
+export function EnvironmentStates({ appId, envs, readable, states, label }: {
+	appId: string
+	envs: readonly AppEnvDto[]
+	readable: readonly AppEnvDto[]
+	states: ReadonlyMap<string, EnvironmentState>
+	label: string
+}) {
+	return (
+		<ul className="app-env-states" aria-label={label}>
+			{envs.map((env) => {
+				const state = states.get(env.env) ?? { kind: 'reading' }
+				const content = (
+					<>
+						<strong>{env.env}</strong>
+						<Status lamp={stateLamp(state)}>{stateLabel(state)}</Status>
+					</>
+				)
+				return (
+					<li key={env.env}>
+						{readable.includes(env)
+							? (
+								<Link to="apps/data" params={{ id: appId, env: env.env }} className="app-env-state">
+									{content}
+								</Link>
+							)
+							: <span className="app-env-state">{content}</span>}
+					</li>
+				)
+			})}
+		</ul>
+	)
 }
 
 /**
@@ -144,28 +191,7 @@ export function AppFrame({ app, envs, tab, states, children }: {
 				)}
 				<div className="page-head-row">
 					<h1>{app.id}</h1>
-					<ul className="app-env-states" aria-label="Environments">
-						{envs.map((env) => {
-							const state = states.get(env.env) ?? { kind: 'reading' }
-							const label = (
-								<>
-									<strong>{env.env}</strong>
-									<Status lamp={stateLamp(state)}>{stateLabel(state)}</Status>
-								</>
-							)
-							return (
-								<li key={env.env}>
-									{readable.includes(env)
-										? (
-											<Link to="apps/data" params={{ id: app.id, env: env.env }} className="app-env-state">
-												{label}
-											</Link>
-										)
-										: <span className="app-env-state">{label}</span>}
-								</li>
-							)
-						})}
-					</ul>
+					<EnvironmentStates appId={app.id} envs={envs} readable={readable} states={states} label="Environments" />
 				</div>
 				<div className="subtitle">
 					<code>{app.repoUrl}</code>
