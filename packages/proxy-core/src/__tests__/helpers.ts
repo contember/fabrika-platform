@@ -7,13 +7,18 @@
  */
 
 import {
+	accessTokenPayload,
+	type AgentActClaims,
 	buildAccessClaims,
 	buildResourceAccessClaims,
 	type EndpointRequirement,
 	type ExchangeAuthCodeResult,
+	type IamGrantRpc,
 	type InstallationCredentialedEndpoint,
 	type InstallationEndpointRow,
 	type Jwks,
+	type MintFromGrantInput,
+	type MintFromGrantResult,
 	type MintFromKeyResult,
 	type MintTokenResult,
 	type OAuthEndpointScopes,
@@ -91,6 +96,8 @@ export interface SignOptions {
 	key?: KeyLike
 	kid?: string
 	permissions?: PermissionEntry[]
+	/** The agent claim of a person's token IAM exchanged an agent's grant for (ADR-0090). */
+	act?: AgentActClaims
 }
 
 export async function signToken(options: SignOptions = {}): Promise<string> {
@@ -105,8 +112,9 @@ export async function signToken(options: SignOptions = {}): Promise<string> {
 		permissions: options.permissions ?? PERMS,
 		issuedAt: now,
 		expiresAt: now + (options.ttlSeconds ?? 300),
+		...(options.act === undefined ? {} : { act: options.act }),
 	})
-	return new SignJWT({ ...claims })
+	return new SignJWT({ ...accessTokenPayload(claims, 'entries') })
 		.setProtectedHeader({ alg: 'ES256', kid: options.kid ?? 'k1' })
 		.sign(options.key ?? primary.privateKey)
 }
@@ -119,6 +127,9 @@ export interface ResourceSignOptions {
 	typ?: string | null
 	ttlSeconds?: number
 	key?: KeyLike
+	/** Default an MCP client's metadata document URL. */
+	clientId?: string
+	permissions?: PermissionEntry[]
 }
 
 /** An OAuth resource access token, as IAM's token endpoint mints it for an MCP client. */
@@ -130,10 +141,10 @@ export async function signResourceToken(options: ResourceSignOptions = {}): Prom
 		resource: options.resource ?? RESOURCE,
 		subject: 'user-1',
 		label: 'a@b.cz',
-		permissions: PERMS,
+		permissions: options.permissions ?? PERMS,
 		issuedAt: now,
 		expiresAt: now + (options.ttlSeconds ?? 300),
-		clientId: 'https://client.example.com/metadata.json',
+		clientId: options.clientId ?? 'https://client.example.com/metadata.json',
 		scopes: options.scopes ?? ['mcp:read'],
 		grantId: 'grant-1',
 		tokenId: 'token-1',
@@ -221,6 +232,18 @@ export class FakeIam implements IamGateway {
 			return Promise.reject(new Error('connect ECONNREFUSED'))
 		}
 		return Promise.resolve(this.options.jwks ?? PUBLIC_JWKS)
+	}
+}
+
+/** IAM's exchange of an agent's resource token (ADR-0090), faked at the `IamGrantRpc` seam. */
+export class FakeGrants implements IamGrantRpc {
+	readonly seen: MintFromGrantInput[] = []
+
+	constructor(private readonly answer: MintFromGrantResult | (() => MintFromGrantResult) = { ok: false, reason: 'invalid_grant' }) {}
+
+	mintFromGrant(input: MintFromGrantInput): Promise<MintFromGrantResult> {
+		this.seen.push(input)
+		return Promise.resolve(typeof this.answer === 'function' ? this.answer() : this.answer)
 	}
 }
 

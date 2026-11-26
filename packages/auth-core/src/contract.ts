@@ -143,8 +143,11 @@ export interface EndpointTable {
 	readonly reservedPrefixes: readonly string[]
 }
 
-/** Who may call a credentialed endpoint. There is no public caller: anonymous traffic is a fixed endpoint kind. */
-export type Caller = 'human' | 'machine' | 'link' | `app:${string}`
+/**
+ * Who may call a credentialed endpoint. There is no public caller: anonymous traffic is a fixed endpoint kind. `agent` is a
+ * person's agent holding a device grant for the environment (ADR-0090).
+ */
+export type Caller = 'human' | 'machine' | 'agent' | 'link' | `app:${string}`
 
 /** `app:<id>`: the connector of the consuming application `<id>`. */
 export const APP_CALLER_PREFIX = 'app:'
@@ -153,7 +156,7 @@ export const APP_CALLER_PREFIX = 'app:'
 export const CONNECT_PREFIX = '/__fabrika/connect'
 
 /** An RPC mount's callers: a link holder reaches only its own link mount, and an `app:<id>` only an export. */
-export type RpcCaller = 'human' | 'machine'
+export type RpcCaller = 'human' | 'machine' | 'agent'
 
 export type EndpointMethod = 'GET' | 'POST'
 

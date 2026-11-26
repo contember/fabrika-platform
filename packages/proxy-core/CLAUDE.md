@@ -143,6 +143,16 @@ bun test   # deny-matrix (fail-closed), endpoint-matrix (application tables) and
   401/403, never a bounce; a refused `px_` key there keeps its status and reason and gets the challenge too
   (`withBearerChallenge`). A `protocol` row reads no credential like any anonymous kind; only its hop
   differs.
+- **An application row that lists `agent` is the one application row that reads a non-`px_` bearer** (ADR-0090). The
+  bearer is an agent's resource token of the request's host (`agentResourceOf`: resource `<scheme>://<host>`, no path),
+  verified locally as `verifyOAuthBearer` verifies one, with `oauth.app` the entry's audience and `client_id`
+  `agent-cli`; only then `exchangeGrant` calls IAM's `mintFromGrant` (`grants`, `POST /auth/mint/grant`) and caches the
+  person's token under the bearer's SHA-256 (`grantCacheCredential`), never past the resource token's `exp`. A refusal
+  is a 401 with the challenge (`token_too_large` 403, IAM unreachable 503), never the session; the exchanged token must
+  carry `act` for the presented token's person and grant. Its scope's mode must admit the row's kind (`agentScopeAdmits`),
+  else 403 `scope`. On every other application row such a bearer stays `invalid_key` with no IAM call. An entry with
+  such a row publishes RFC 9728 metadata at `/.well-known/oauth-protected-resource` through the metadata route, and its own
+  rows never serve that path; every other application serves it from its own rows as before.
 - **A cross-origin request is decided from the row and the entry, never by the application** (ADR-0022 "Cross-origin
   endpoints"). A contract application's row may carry `crossOrigin` (`environment` on a `query`, `mutation`, `public`
   or a 0.4/0.5/0.6 `form`; `any` on a `public` or `form` row only; a procedure declares it as `admission.origins`), and

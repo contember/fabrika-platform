@@ -27,6 +27,8 @@ import {
 	SESSION_COOKIE,
 } from '@fabrika/auth-core'
 import {
+	admitsAgent,
+	AGENT_METADATA_PATH,
 	APP_QUERY_PARAM,
 	CLIENT_ADDRESS_HEADER,
 	DEFAULT_VERIFY_PATH,
@@ -376,8 +378,9 @@ function proxySecretVariableOf(app: ProxyApp, ownsIamSession: boolean): string |
  *      replaced whether or not it was deleted, and it is never read back from the auth response: it
  *      describes the request as the EDGE saw it, and no inner hop gets a vote.
  *   2. `reverse_proxy` to the auth service — the `forward_auth` expansion. Before it, one terminal route
- *      per `oauthResources` entry sends its RFC 9728 metadata path to the auth service's metadata
- *      endpoint and returns that answer as-is, so the app never sees it. Caddy's `path` matcher is
+ *      per `oauthResources` entry, and one for an application that admits `agent` (its origin's, ADR-0090), sends
+ *      its RFC 9728 metadata path to the auth service's metadata endpoint and returns that answer as-is, so the app
+ *      never sees it. Caddy's `path` matcher is
  *      case-insensitive; the auth service compares host and raw path exactly and 404s anything else.
  *   3. `reverse_proxy` to the app. Reached only when step 2 answered 2xx; it strips every
  *      `__Host-px_*` cookie on that upstream hop, except IAM's login cookie on its owning route. For a
@@ -446,8 +449,8 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 						{ handler: 'headers', request: { set: { [CLIENT_ADDRESS_HEADER]: [CLIENT_IP_PLACEHOLDER] } } },
 					],
 				},
-				...(isApplicationEntry(app) ? [] : (app.oauthResources ?? [])).map((resource): CaddyRoute => ({
-					match: [{ path: [new URL(resource.resourceMetadata).pathname] }],
+				...metadataPaths(app).map((path): CaddyRoute => ({
+					match: [{ path: [path] }],
 					handle: [authRequest(app, authUpstream, OAUTH_METADATA_VERIFY_PATH)],
 					terminal: true,
 				})),
@@ -456,6 +459,12 @@ function appRoute(app: ProxyApp, authUpstream: string, ownsIamSession: boolean):
 			],
 		}],
 	}
+}
+
+/** The RFC 9728 metadata paths the entry's hosts publish: an installation's registered resources, an application's own. */
+function metadataPaths(app: ProxyApp): string[] {
+	if (isApplicationEntry(app)) return admitsAgent(app) ? [AGENT_METADATA_PATH] : []
+	return (app.oauthResources ?? []).map((resource) => new URL(resource.resourceMetadata).pathname)
 }
 
 /**

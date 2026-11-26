@@ -32,6 +32,8 @@ const service = createVerifyService({
 	iam,
 	// The same proxy surface serves the single-use grants of membership and scope-creating endpoints.
 	delegations: iam,
+	// And the exchange of an agent's resource token for the person's application token (ADR-0090).
+	grants: iam,
 	issuer: env.iamUrl,
 	cache: env.cacheEnabled ? new MemoryTokenCache() : null,
 	logger: consoleLogger,

@@ -42,8 +42,9 @@ own proxy is built. Its build context is the commit's repository root with the m
   Browser authentication starts from the host-only opaque `__Host-px_session`; the short-lived JWT
   exists only in the proxy cache and the injected header.
 - **A bearer on a credentialed row is a `px_` key.** Any other `Authorization` credential is a 401 with no IAM call,
-  except on an installation row that admits `oauth`, where it is verified as an OAuth resource token. A
-  share link is a `px_` key as a bearer.
+  except on an installation row that admits `oauth`, where it is verified as an OAuth resource token, and on an
+  application row that lists `agent`, where it is an agent's resource token of the host: verified locally first, and
+  only then exchanged at IAM for the person's token (ADR-0090). A share link is a `px_` key as a bearer.
 - **A `human` row reached without a usable session answers in the shape the caller can act on.** `Sec-Fetch-Mode: navigate`, or
   the header absent, → the 302 bounce; any other value → **401** with
   `{ error: { type: 'auth', message, loginUrl } }`, the envelope `@fabrika/app`'s browser RPC client

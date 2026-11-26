@@ -1,4 +1,5 @@
 import {
+	AGENT_CLIENT_ID,
 	buildResourceAccessClaims,
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
@@ -8,6 +9,8 @@ import {
 	type Jwks,
 	LOCALE_COOKIE,
 	LOCALE_PARAM,
+	type MintFromGrantInput,
+	type MintFromGrantResult,
 	PROXY_SECRET_HEADER,
 	requirementDigest,
 	RESOURCE_ACCESS_TOKEN_TYP,
@@ -31,6 +34,7 @@ import {
 	APP,
 	contractAppWith,
 	endpointRow,
+	FakeGrants,
 	FakeIam,
 	HOST,
 	installationAppWith,
@@ -38,6 +42,7 @@ import {
 	ISSUER,
 	protocolRow,
 	serviceRow,
+	signResourceToken as signAgentResourceToken,
 	signToken,
 	signUserToken,
 } from '../../../proxy-core/src/__tests__/helpers'
@@ -1235,5 +1240,71 @@ describe('where the proxy Worker reads its manifest', () => {
 		const env = environment([protocolRow('/public/*')])
 		expect(proxyWorkerEnv(env, 'baked').FABRIKA_PROXY_MANIFEST_JSON).toBe('baked')
 		expect(proxyWorkerEnv(env, undefined).FABRIKA_PROXY_MANIFEST_JSON).toBe(env.FABRIKA_PROXY_MANIFEST_JSON)
+	})
+})
+
+describe('Cloudflare proxy Worker — an application that admits agent (ADR-0090)', () => {
+	/** IAM's binding as PR 2 serves it: the mint surface plus the grant exchange. */
+	class GrantingIam extends FakeIam {
+		constructor(readonly grants: FakeGrants) {
+			super()
+		}
+
+		mintFromGrant(input: MintFromGrantInput): Promise<MintFromGrantResult> {
+			return this.grants.mintFromGrant(input)
+		}
+	}
+	const list = endpointRow({
+		id: 'api.notes.list',
+		kind: 'query',
+		method: 'GET',
+		path: '/api/notes.list',
+		callers: ['human', 'agent'],
+		requirement: { kind: 'member' },
+		admission: null,
+	})
+	const env = (iam: FakeIam, upstream: RecordingUpstream): CloudflareProxyEnv => ({
+		IAM: iam,
+		FABRIKA_IAM_ISSUER: ISSUER,
+		FABRIKA_PROXY_MANIFEST_JSON: encodeProxyManifestJson({ apps: [contractAppWith([list], [], { upstream: 'APP' })] }),
+		APP: upstream,
+	})
+
+	test('serves the metadata of the environment origin itself, without calling the application', async () => {
+		const upstream = new RecordingUpstream()
+		const response = await createCloudflareProxyHandler(env(new FakeIam(), upstream))(
+			new Request(`https://${HOST}/.well-known/oauth-protected-resource`),
+		)
+		expect(response.status).toBe(200)
+		expect(await response.json()).toEqual({
+			resource: `https://${HOST}`,
+			authorization_servers: [ISSUER],
+			scopes_supported: ['read', 'write'],
+			bearer_methods_supported: ['header'],
+		})
+		expect(upstream.calls).toBe(0)
+	})
+
+	test("exchanges an agent's resource token over the IAM binding and sends the person's token upstream", async () => {
+		const person = await signToken({ type: 'user', act: { sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: { mode: 'read', within: null } } })
+		const grants = new FakeGrants({ ok: true, token: person, expiresAt: Math.floor(Date.now() / 1000) + 300 })
+		const upstream = new RecordingUpstream()
+		const token = await signAgentResourceToken({ resource: `https://${HOST}`, clientId: AGENT_CLIENT_ID, scopes: ['read'], permissions: [] })
+		const response = await createCloudflareProxyHandler(env(new GrantingIam(grants), upstream))(
+			new Request(`https://${HOST}/api/notes.list`, { headers: { Authorization: `Bearer ${token}` } }),
+		)
+		expect(response.status).toBe(200)
+		expect(grants.seen.map((input) => input.resource)).toEqual([`https://${HOST}`])
+		expect(upstream.seen?.headers.get('Authorization')).toBe(`Bearer ${person}`)
+	})
+
+	test('an IAM binding without the exchange refuses the token as unavailable, never as a session', async () => {
+		const upstream = new RecordingUpstream()
+		const token = await signAgentResourceToken({ resource: `https://${HOST}`, clientId: AGENT_CLIENT_ID, scopes: ['read'], permissions: [] })
+		const response = await createCloudflareProxyHandler(env(new FakeIam(), upstream))(
+			new Request(`https://${HOST}/api/notes.list`, { headers: { Authorization: `Bearer ${token}` } }),
+		)
+		expect(response.status).toBe(503)
+		expect(upstream.calls).toBe(0)
 	})
 })

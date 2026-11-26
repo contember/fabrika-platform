@@ -6,8 +6,7 @@ import { isScopeParameterText } from './oauth'
 import { narrowPermissions, uniquePermissions } from './permissions'
 import { DIMENSION_NAME, parseRelationInside, type PermissionEntry, type Scope } from './types'
 
-/** The public device client an agent obtains an application grant with. It is never served Control's resources. */
-export const AGENT_CLIENT_ID = 'agent-cli'
+export { AGENT_CLIENT_ID } from './oauth'
 
 /** The caller a person's application token presents when the proxy exchanged an agent's grant for it. */
 export const AGENT_CALLER = 'agent'

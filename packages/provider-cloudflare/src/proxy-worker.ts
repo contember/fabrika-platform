@@ -1,6 +1,8 @@
-import { answersFile, type EndpointCache, FABRIKA_HOP_HEADERS, parseEndpointHeader, rawRequestTarget } from '@fabrika/auth-core'
+import { answersFile, type EndpointCache, FABRIKA_HOP_HEADERS, type IamGrantRpc, parseEndpointHeader, rawRequestTarget } from '@fabrika/auth-core'
 import type { DelegationIssuer, IamGateway, ProxyLogger, VerifyService } from '@fabrika/proxy-core'
 import {
+	admitsAgent,
+	AGENT_METADATA_PATH,
 	CLIENT_ADDRESS_HEADER,
 	consoleLogger,
 	createVerifyService,
@@ -118,6 +120,8 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 		logger,
 		// Until IAM's binding serves `requestDelegation`, no delegation grant is obtained here.
 		delegations: isDelegationIssuer(env.IAM) ? env.IAM : null,
+		// A service binding stub answers every method name; one IAM does not serve rejects, and `callIam` makes that a 503.
+		grants: isGrantExchanger(env.IAM) ? env.IAM : null,
 	})
 	const handler = proxyHandler(env, manifest, verify)
 	cached = { manifestJson, iam: env.IAM, issuer, handler }
@@ -277,8 +281,8 @@ function findApp(manifest: ProxyManifest, url: URL): ProxyApp | null {
  * answered by the metadata endpoint, which compares exactly and 404s a mismatch, and never reaches the endpoint table.
  */
 function isOAuthMetadataPath(app: ProxyApp, url: URL): boolean {
-	if (isApplicationEntry(app)) return false
 	const path = url.pathname.toLowerCase()
+	if (isApplicationEntry(app)) return admitsAgent(app) && path === AGENT_METADATA_PATH
 	return app.oauthResources?.some((resource) => new URL(resource.resourceMetadata).pathname.toLowerCase() === path) ?? false
 }
 
@@ -304,6 +308,10 @@ function isIamGateway(value: unknown): value is IamGateway {
 
 function isDelegationIssuer(value: unknown): value is DelegationIssuer {
 	return isObject(value) && typeof value['requestDelegation'] === 'function'
+}
+
+function isGrantExchanger(value: unknown): value is IamGrantRpc {
+	return isObject(value) && typeof value['mintFromGrant'] === 'function'
 }
 
 function isWorkerService(value: unknown): value is WorkerService {

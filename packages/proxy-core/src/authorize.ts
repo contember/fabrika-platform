@@ -6,8 +6,9 @@
  * method selects, and never reaches a credential. Then: `planEndpoint` → a `px_` key whose caller kind the endpoint admits, or else the session
  * when `human` may call → the requirement (`satisfies`) → admission → the delegation grant. There is no fall-through
  * to another endpoint. On an installation row that admits `oauth`, a bearer that is not a `px_` key is an OAuth
- * resource token, verified locally. A key or a session is exchanged with IAM once, cached, and thereafter verified
- * LOCALLY against the JWKS.
+ * resource token, verified locally. On an application row that lists `agent`, it is an agent's resource token of the
+ * environment, verified locally and then exchanged for the person's token (ADR-0090). A key, a session or an agent's
+ * grant is exchanged with IAM once, cached, and thereafter verified LOCALLY against the JWKS.
  *
  * A human miss becomes a bounce to IAM's `/auth/login`, in whichever shape the caller can act on: a
  * 302 for a document navigation, a 401 carrying the same URL in a JSON body for everything else (see
@@ -20,6 +21,11 @@
 
 import {
 	type AccessTokenClaims,
+	AGENT_CALLER,
+	AGENT_CLIENT_ID,
+	AGENT_SCOPE_MODES,
+	agentScopeAdmits,
+	agentScopeToken,
 	API_KEY_PREFIX,
 	AUTH_CODE_PARAM,
 	AUTH_HANDOFF_STATE_PARAM,
@@ -29,6 +35,7 @@ import {
 	FORM_MULTIPART_TYPE,
 	FORM_URLENCODED_TYPE,
 	formatEndpointHeader,
+	type IamGrantRpc,
 	isLocale,
 	type Locale,
 	LOCALE_COOKIE,
@@ -36,11 +43,12 @@ import {
 	planEndpoint,
 	sameOriginTarget,
 	satisfies,
+	type Scope,
 	SESSION_COOKIE,
 	TOKEN_REFRESH_SKEW_SECONDS,
 	type TokenCaller,
 } from '@fabrika/auth-core'
-import { cacheKey, type TokenCache } from './cache'
+import { cacheKey, grantCacheCredential, type TokenCache } from './cache'
 import { LOGIN_REDIRECT_PARAM, SIGNOUT_RELEASE_PATH } from './constants'
 import { carriesPlatformKey, readBearer, readCookie } from './credentials'
 import { createHandoffAttempt, type HandoffAttempt, handoffCookieName, setHandoffParams, unmatchedVerifier } from './handoff'
@@ -54,6 +62,7 @@ import {
 	oauthResourceOfRow,
 	type ProxyApp,
 } from './manifest'
+import { agentResourceOf } from './oauth'
 import { FETCH_MODE_HEADER } from './pages'
 import { TokenVerifier } from './verifier'
 
@@ -63,6 +72,12 @@ export type DenyReason =
 	| 'no_credential'
 	/** A bearer was presented and is not a valid `px_` key. */
 	| 'invalid_key'
+	/** IAM refused to exchange an agent's resource token: the grant is revoked or expired, or its login ended (ADR-0090). */
+	| 'invalid_grant'
+	/** IAM refused a `write` grant the environment does not let an agent use (ADR-0090). */
+	| 'write_refused'
+	/** An agent's token reached an endpoint kind its grant's scope does not admit (ADR-0090). */
+	| 'scope'
 	/** An `oauth` row's bearer is malformed, unverifiable, or minted for another resource or app. */
 	| 'invalid_token'
 	/** An `oauth` row's bearer verified but lacks a required scope. */
@@ -192,6 +207,11 @@ export interface AuthorizerOptions {
 	 * forwarded without one and IAM refuses the membership operation unless the framework obtained a grant itself.
 	 */
 	delegations?: DelegationIssuer | null
+	/**
+	 * Exchanges an agent's resource token for the person's application token (ADR-0090). Unset, such an exchange is
+	 * refused as IAM being unavailable.
+	 */
+	grants?: IamGrantRpc | null
 }
 
 /** Fetch metadata the browser writes and page script cannot: `same-origin` only for a request from this origin. */
@@ -214,11 +234,16 @@ type KeyAttempt = { ok: true; token: string; claims: AccessTokenClaims } | { ok:
 /** An OAuth resource token verified for a resource and its scopes, or the challenge that ends the request. */
 type OAuthAttempt = { ok: true; token: string; claims: AccessTokenClaims } | { ok: false; denial: Denial }
 
-/** The resource a row that admits `oauth` is bound to, and the scopes the row requires. */
-interface OAuthBinding {
-	readonly resource: OAuthProtectedResource
-	readonly scopes: readonly string[]
-}
+/**
+ * The resource a row's non-`px_` bearer is bound to: an installation row that admits `oauth`, with the scopes it requires,
+ * or an application row that lists `agent`, whose resource is the environment's origin (ADR-0090).
+ */
+type BearerBinding =
+	| { readonly kind: 'oauth'; readonly resource: OAuthProtectedResource; readonly scopes: readonly string[] }
+	| { readonly kind: 'agent'; readonly resource: OAuthProtectedResource }
+
+type OAuthBinding = Extract<BearerBinding, { kind: 'oauth' }>
+type AgentBinding = Extract<BearerBinding, { kind: 'agent' }>
 
 /** Who is behind a request to a credentialed endpoint, or the decision that ends it (a denial or the login bounce). */
 type EndpointCaller =
@@ -331,20 +356,24 @@ export class Authorizer {
 					forwardsAuthorization: forwardsAuthorization(row, request),
 				}
 		}
-		const oauth = oauthBindingOf(app, row)
-		if (oauth === 'unregistered') {
-			// The manifest parser refuses an `oauth` row without its resource; reaching this is a composition bug.
+		const callers: readonly TokenCaller[] = row.callers
+		const binding = bearerBindingOf(app, row, callers, request.url, this.options.issuer)
+		if (binding === 'unregistered') {
+			// The manifest parser refuses an `oauth` row without its resource, and the host is the entry's; reaching this
+			// is a composition bug.
 			return { outcome: 'deny', status: 403, reason: 'internal_error' }
 		}
-		const callers: readonly TokenCaller[] = row.callers
 		// A listed origin's request is never session-authenticated: a session does not cross origins.
-		const caller = await this.endpointCaller(app, oauth, callers, request, crossOrigin !== null)
+		const caller = await this.endpointCaller(app, binding, callers, request, crossOrigin !== null)
 		if (!caller.ok) {
 			return caller.decision
 		}
 		const kind = callerOf(caller.claims)
 		if (kind === null || !callers.includes(kind) || !callerAdmittedAt(kind, row.path)) {
-			return withBearerChallenge({ outcome: 'deny', status: 403, reason: 'caller_kind' }, oauth)
+			return withBearerChallenge({ outcome: 'deny', status: 403, reason: 'caller_kind' }, binding)
+		}
+		if (kind === AGENT_CALLER && (caller.claims.act === undefined || !agentScopeAdmits(caller.claims.act.scope.mode, row.kind))) {
+			return scopeDenial(row.kind, binding, caller.claims.act?.scope.within ?? null)
 		}
 		if (!satisfies(row.requirement, caller.claims.perms)) {
 			return { outcome: 'deny', status: 403, reason: 'insufficient_permission' }
@@ -372,12 +401,13 @@ export class Authorizer {
 	}
 
 	/**
-	 * A `px_` key wherever the request carries an `Authorization` header, and on a row that admits `oauth` any other
-	 * credential there as an OAuth resource token; otherwise the session, if `human` may call.
+	 * A `px_` key wherever the request carries an `Authorization` header; on a row that admits `oauth` any other
+	 * credential there as an OAuth resource token, and on a row that lists `agent` as an agent's resource token to
+	 * exchange. Otherwise the session, if `human` may call. None of them falls back to another.
 	 */
 	private async endpointCaller(
 		app: ProxyApp,
-		oauth: OAuthBinding | null,
+		binding: BearerBinding | null,
 		callers: readonly TokenCaller[],
 		request: ForwardedRequest,
 		crossOrigin: boolean,
@@ -385,20 +415,22 @@ export class Authorizer {
 		const authorization = request.headers.get('Authorization')
 		if (authorization !== null && authorization.trim() !== '') {
 			const bearer = readBearer(authorization)
-			if (oauth !== null && (bearer === null || !bearer.startsWith(API_KEY_PREFIX))) {
-				const verified = await this.verifyOAuthBearer(app, oauth, bearer)
+			if (binding !== null && (bearer === null || !bearer.startsWith(API_KEY_PREFIX))) {
+				const verified = binding.kind === 'oauth'
+					? await this.verifyOAuthBearer(app, binding, bearer)
+					: await this.exchangeGrant(app, binding, bearer, request.requestId)
 				return verified.ok ? { ok: true, token: verified.token, claims: verified.claims, session: false } : { ok: false, decision: verified.denial }
 			}
 			const key = bearer === null ? { ok: false, denial: invalidKey() } satisfies KeyAttempt : await this.exchangeKey(app, bearer, request.requestId)
 			return key.ok
 				? { ok: true, token: key.token, claims: key.claims, session: false }
-				: { ok: false, decision: withBearerChallenge(key.denial, oauth) }
+				: { ok: false, decision: withBearerChallenge(key.denial, binding) }
 		}
 		if (!callers.includes('human') || crossOrigin) {
 			// No session reaches an endpoint a person may not call, nor one called from another origin, so there is
 			// nothing to sign in to.
 			const denial: Denial = { outcome: 'deny', status: 401, reason: 'no_credential' }
-			return { ok: false, decision: oauth === null ? denial : { ...denial, challenge: { resource_metadata: oauth.resource.resourceMetadata } } }
+			return { ok: false, decision: binding === null ? denial : { ...denial, challenge: { resource_metadata: binding.resource.resourceMetadata } } }
 		}
 		const session = await this.authorizeSession(app, request)
 		if (session.ok) {
@@ -449,6 +481,10 @@ export class Authorizer {
 				? { ok: false, denial: { outcome: 'deny', status: 503, reason: 'iam_unavailable' } }
 				: { ok: false, denial: { outcome: 'deny', status: 401, reason: 'invalid_token', challenge: { ...challenge, error: 'invalid_token' } } }
 		}
+		if (verified.claims.oauth?.clientId === AGENT_CLIENT_ID) {
+			// The agent's client is served application environments only (ADR-0090 §1), whatever IAM minted.
+			return { ok: false, denial: { outcome: 'deny', status: 401, reason: 'invalid_token', challenge: { ...challenge, error: 'invalid_token' } } }
+		}
 		const granted = verified.claims.oauth?.scopes ?? []
 		if (!binding.scopes.every((scope) => granted.includes(scope))) {
 			const scope = binding.scopes.join(' ')
@@ -458,6 +494,69 @@ export class Authorizer {
 			}
 		}
 		return { ok: true, token: bearer, claims: verified.claims }
+	}
+
+	/**
+	 * An agent's resource token for this environment (ADR-0090), verified locally as `verifyOAuthBearer` verifies one —
+	 * `typ` `at+jwt`, `aud` the environment's origin, `oauth.app` the entry's audience — and minted by `agent-cli`; only
+	 * then exchanged at IAM for the person's application token, through the cache under the token's digest. A refusal is
+	 * a 401 with the challenge (`token_too_large` a 403, IAM unreachable a 503), never a session.
+	 */
+	private async exchangeGrant(app: ProxyApp, binding: AgentBinding, bearer: string | null, requestId: string): Promise<OAuthAttempt> {
+		const challenge: OAuthBearerChallenge = { resource_metadata: binding.resource.resourceMetadata }
+		if (bearer === null) {
+			return { ok: false, denial: { outcome: 'deny', status: 401, reason: 'no_credential', challenge } }
+		}
+		const refused = (reason: 'invalid_token' | 'invalid_grant' | 'write_refused'): OAuthAttempt => ({
+			ok: false,
+			denial: { outcome: 'deny', status: 401, reason, challenge: { ...challenge, error: 'invalid_token' } },
+		})
+		const unavailable: OAuthAttempt = { ok: false, denial: { outcome: 'deny', status: 503, reason: 'iam_unavailable' } }
+		const audience = audienceOf(app)
+		const presented = await this.verifier.verify(bearer, { kind: 'resource', app: audience, resource: binding.resource.resource })
+		if (!presented.ok) {
+			return presented.reason === 'unavailable' ? unavailable : refused('invalid_token')
+		}
+		if (presented.claims.oauth?.clientId !== AGENT_CLIENT_ID) {
+			return refused('invalid_token')
+		}
+
+		const key = cacheKey(app.id, 'grant', await grantCacheCredential(bearer))
+		const cached = this.cache?.get(key)
+		if (cached !== undefined && cached.expiresAt - this.now() > TOKEN_REFRESH_SKEW_SECONDS) {
+			const verified = await this.verifier.verify(cached.token, audience)
+			if (verified.ok && verified.claims.act !== undefined) {
+				return { ok: true, token: cached.token, claims: verified.claims }
+			}
+			if (!verified.ok && verified.reason === 'unavailable') {
+				return unavailable
+			}
+			this.cache?.delete(key)
+		}
+
+		const grants = this.options.grants ?? null
+		const minted = await this.callIam('mintFromGrant', () => {
+			if (grants === null) throw new IamUnavailableError('mintFromGrant')
+			return grants.mintFromGrant({ app: audience, resource: binding.resource.resource, token: bearer, requestId })
+		})
+		if (!minted.ok) {
+			return minted.reason === 'token_too_large'
+				? { ok: false, denial: { outcome: 'deny', status: 403, reason: minted.reason, challenge } }
+				: refused(minted.reason)
+		}
+		const verified = await this.verifier.verify(minted.token, audience)
+		if (!verified.ok) {
+			return verified.reason === 'unavailable' ? unavailable : refused('invalid_grant')
+		}
+		if (
+			verified.claims.act === undefined || verified.claims.sub !== presented.claims.sub
+			|| verified.claims.act.grant !== presented.claims.oauth?.grantId
+		) {
+			// IAM answered with a token that presents no agent, or another person or grant: never inject or cache it.
+			return refused('invalid_grant')
+		}
+		this.cache?.set(key, { token: minted.token, expiresAt: Math.min(minted.expiresAt, presented.claims.exp) })
+		return { ok: true, token: minted.token, claims: verified.claims }
 	}
 
 	/** Exchange a `px_` key for a verified token, through the cache. A non-`px_` bearer is refused with no IAM call. */
@@ -723,28 +822,59 @@ function invalidKey(): Denial {
 }
 
 /**
- * The resource and scopes of a row that admits `oauth`, `null` for any other row, and `unregistered` when the entry
- * has no resource on the row's path.
+ * The resource of a row's non-`px_` bearer: an installation row that admits `oauth`, with its scopes, or an application
+ * row that lists `agent`, at the request's host. `null` for any other row, and `unregistered` when the entry has no
+ * resource there.
  */
-function oauthBindingOf(app: ProxyApp, row: ManifestEndpointRow): OAuthBinding | null | 'unregistered' {
+function bearerBindingOf(
+	app: ProxyApp,
+	row: ManifestEndpointRow,
+	callers: readonly TokenCaller[],
+	url: URL,
+	issuer: string,
+): BearerBinding | null | 'unregistered' {
+	if (isApplicationEntry(app)) {
+		if (!callers.includes(AGENT_CALLER)) {
+			return null
+		}
+		// An origin that forms no resource (an `http` scheme off loopback) serves no agent; a person's session still works.
+		const resource = agentResourceOf(app, url, issuer)
+		return resource === null ? null : { kind: 'agent', resource }
+	}
 	const required = 'oauth' in row ? row.oauth : null
 	if (required === null) {
 		return null
 	}
-	const resource = 'installation' in app ? oauthResourceOfRow(app, row) : null
-	return resource === null ? 'unregistered' : { resource, scopes: required.scopes }
+	const resource = oauthResourceOfRow(app, row)
+	return resource === null ? 'unregistered' : { kind: 'oauth', resource, scopes: required.scopes }
 }
 
 /**
- * A refused `px_` key on a row that admits `oauth` still tells an OAuth client where the resource's metadata is
- * (RFC 6750 §3): a 401 as `invalid_token`, a 403 with no error code. Status and reason stay those of the key.
+ * A refused `px_` key on a row that admits `oauth` or lists `agent` still tells an OAuth client where the resource's
+ * metadata is (RFC 6750 §3): a 401 as `invalid_token`, a 403 with no error code. Status and reason stay those of the key.
  */
-function withBearerChallenge(denial: Denial, oauth: OAuthBinding | null): Denial {
-	if (oauth === null || (denial.status !== 401 && denial.status !== 403)) {
+function withBearerChallenge(denial: Denial, binding: BearerBinding | null): Denial {
+	if (binding === null || (denial.status !== 401 && denial.status !== 403)) {
 		return denial
 	}
-	const challenge: OAuthBearerChallenge = { resource_metadata: oauth.resource.resourceMetadata }
+	const challenge: OAuthBearerChallenge = { resource_metadata: binding.resource.resourceMetadata }
 	return { ...denial, challenge: denial.status === 401 ? { ...challenge, error: 'invalid_token' } : challenge }
+}
+
+/**
+ * An agent's token on a kind its scope does not admit: 403 `scope`, with the scope that would admit it as an
+ * `insufficient_scope` challenge (RFC 6750 §3.1) that keeps the grant's narrowing, or a plain challenge for a kind no scope admits (an SPA).
+ */
+function scopeDenial(kind: string, binding: BearerBinding | null, within: Scope | null): Denial {
+	const denial: Denial = { outcome: 'deny', status: 403, reason: 'scope' }
+	const needed = AGENT_SCOPE_MODES.find((mode) => agentScopeAdmits(mode, kind))
+	if (binding === null || needed === undefined) {
+		return withBearerChallenge(denial, binding)
+	}
+	return {
+		...denial,
+		challenge: { resource_metadata: binding.resource.resourceMetadata, error: 'insufficient_scope', scope: agentScopeToken({ mode: needed, within }) },
+	}
 }
 
 /** The media types a browser sends from any page without a CORS preflight, which therefore carry no origin check of their own. */
