@@ -225,17 +225,20 @@ describe('approval modes', () => {
 		const offered = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options.map((option) => option.category))
 		expect([...offered].sort()).toEqual([...POLICY_CATEGORIES].sort())
 		// A mode per category; a number of approvers, whether the requester's person decides and whether a passkey confirms
-		// the decision per category but `grants`; the commits a request may name; and what bounds a key an agent asks for.
-		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length * 3 + 2
+		// the decision per approver category; whether a passkey confirms an agent's write access; the commits a request may
+		// name; and what bounds a key an agent asks for.
+		const selects = POLICY_CATEGORIES.length + APPROVER_CATEGORIES.length * 3 + 1 + 2
 		expect(markup.match(/<select/g)).toHaveLength(selects)
-		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three; approvers one or two; the
-		// requester's person or someone else; a passkey or none; commits two; the key's ceiling two.
-		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + APPROVER_CATEGORIES.length * 6 + 2 + 2)
+		// 12 deploy-line categories take three modes, `grants` two, the 7 actions three, `agent-write` two; approvers one or
+		// two; the requester's person or someone else; a passkey or none; commits two; the key's ceiling two.
+		expect(markup.match(/<option/g)).toHaveLength(12 * 3 + 2 + 7 * 3 + 2 + APPROVER_CATEGORIES.length * 6 + 2 + 2 + 2)
 		expect(markup.match(/selected=""/g)).toHaveLength(selects)
 		expect(markup).toContain('<option value="refuse" selected="">Refused</option>')
 		expect(markup).toContain('<option value="person" selected="">A person approves</option>')
 		expect(markup).toContain('<option value="person" selected="">A person approves (default)</option>')
 		expect(markup).toContain('<option value="webauthn" selected="">Passkey to decide (default)</option>')
+		expect(markup).toContain('<option value="webauthn" selected="">Passkey to allow (default)</option>')
+		expect(markup).toContain('<option value="off" selected="">No approval (default)</option>')
 		expect(markup).toContain('Custom')
 	})
 
@@ -321,7 +324,7 @@ describe('approval modes', () => {
 		)
 		expect(settingsSummary(STRICT_SETTINGS)).toBe(
 			'An agent asks to deploy merged commits only. A request waits 24 h for a decision. A key an agent asks for holds only actions the agent holds. '
-				+ `A passkey confirms deciding: ${categoryLabel('credentials')}.`,
+				+ `A passkey confirms deciding: ${categoryLabel('credentials')}. A passkey confirms letting an agent write as a person.`,
 		)
 		expect(settingsSummary(PERMISSIVE_SETTINGS)).not.toContain('passkey')
 		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } })).toContain(
