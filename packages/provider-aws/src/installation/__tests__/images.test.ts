@@ -66,6 +66,7 @@ describe("the platform's images", () => {
 					vpcId: 'vpc-0123456789abcdef0',
 					taskSubnetIds: ['subnet-0123456789abcdef0'],
 					installationHosts: ['iam.example.com'],
+					platformNamespaceArn: 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-0123456789abcdef',
 				}).flatMap((managed) => managed.statements),
 			),
 		)

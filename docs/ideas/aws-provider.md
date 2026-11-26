@@ -646,8 +646,26 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        Control's reach. The commit id is the one anchor: GitHub serves any commit of the repository's fork network by
        id, so the repository named proves nothing, and the command takes the commit from the installation's own pinned
        release in the operator's checkout, never from anything Control can write (perhaps also checking that the
-       release's tag resolves to it). Then the services themselves, their task definitions pinning each image by the
-       digest it was pushed under, not by its tag, which the lifecycle policy can free again.
+       release's tag resolves to it). Then their foundation (built, `installation/runtime.ts`, the stack
+       `fabrika-platform-runtime`, applied before the access stack):
+       - **One identity per task.** Each task (IAM, Control, Operations, the platform proxy, the database setup) gets
+         an execution role of its own. It pulls its own image, writes its own log group and reads its own parameters
+         alone (`/fabrika/platform/<task>/*`, and a service's own database password). A secret two services share is
+         written once per reader, under each one's path. The setup alone reads the database's master password.
+       - **Task roles.** Control's is the access stack's. Operations' reaches its blob bucket alone. IAM, the proxy
+         and the setup take none.
+       - **One security group per task, the rules exact.** The proxy admits the platform balancer's group alone and
+         dials the three services. IAM admits the proxy, Control and Operations (their RPC). Control admits the proxy
+         and IAM (the mail relay). Operations admits the proxy and Control (the catalog sync). Each group's default
+         egress is replaced: what it calls, the database's subnets on 5432 and the internet on 443.
+       - **The platform's own Service Connect namespace** (`fabrika-platform`), in which the services address each
+         other as on Zerops (`iam:3000`). Control's role is denied `CreateService` and `UpdateService` naming it
+         (`ecs:namespace`, by its ARN, which the access stack takes from this stack's outputs, or its name).
+       - **Two private, TLS-only buckets**: Control's run logs (granted to Control's role) and Operations' blobs.
+
+       Then the services themselves, their task definitions pinning each image by the digest it was pushed under, not
+       by its tag, which the lifecycle policy can free again. The platform proxy routes the three hosts on one port, by
+       host, as a namespace proxy does: the platform balancer has one target group.
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 
@@ -834,7 +852,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the roles an existing task definition names (the task runner's role holds it on the applications' and namespaces'
     roles), that Lambda reports a thrown error's `name` as its `errorType`, which source ARN ECS sends when a task takes
     Control's role, and
-    IAM Access Analyzer's external access findings on the bounded roles.
+    IAM Access Analyzer's external access findings on the bounded roles, and whether ECS accepts from Control's role a
+    `serviceRegistries` entry naming a Cloud Map service of the platform's namespace and Service Connect's clients take
+    such an instance (an accepted reach: no route joins the VPCs, so it could only make the platform's calls fail).
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

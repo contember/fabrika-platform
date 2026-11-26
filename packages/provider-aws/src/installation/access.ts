@@ -40,6 +40,16 @@
 //   (`fabrika_platform_*`) denied, and so are `CreateService` and `UpdateService` naming one, as the task runner's role
 //   is denied running one: no application family can take that name (one has exactly one `_`, a namespace's starts
 //   `ns_`). A task definition Control registers can only pass the applications' and namespaces' roles (`iam:PassRole`).
+// - **Not in the platform's Service Connect namespace.** IAM, Control and Operations address each other in a namespace
+//   of their own (`runtime.ts`). A service Control creates or updates may name a Service Connect namespace, and
+//   Control's Cloud Map grants are held by a tag the platform's namespace does not carry; so Control's role is denied
+//   `CreateService` and `UpdateService` naming the platform's (`ecs:namespace`, by its ARN or its name). The remaining
+//   reach, accepted: a service may also name Cloud Map services in `serviceRegistries`, no condition key reads that, and
+//   ECS registers the tasks with its own role, so Control could perhaps register an application's tasks in a Cloud Map
+//   service of the platform's namespace (`iam`, which ECS creates for Service Connect). No route joins the two VPCs, so
+//   the effect is the platform's calls to such an address failing, never a request reaching the application. Step 13
+//   settles whether ECS accepts such a registry from Control's role and whether Service Connect's clients take the
+//   instance.
 // - **No task started by Control.** See the applications' network above: the task runner starts an init task, and
 //   every Lambda action on it but invoking it is denied, as on the certificate broker.
 // - **No certificate on a listener.** Elastic Load Balancing scopes `AddListenerCertificates` by the listener alone, so a
@@ -95,6 +105,17 @@ export function awsSourcesBucket(accountId: string): string {
 	return `fabrika-sources-${accountId}`
 }
 
+/** Control's run logs bucket (the runtime stack's, `runtime.ts`), which Control's role alone writes. */
+export function awsRunLogsBucket(accountId: string): string {
+	return `fabrika-run-logs-${accountId}`
+}
+
+/**
+ * The platform's Service Connect namespace (the runtime stack's), which IAM, Control and Operations address each other
+ * in. Control's role is denied naming it on a service it creates or updates.
+ */
+export const AWS_PLATFORM_NAMESPACE = 'fabrika-platform'
+
 export interface AwsAccessInput {
 	readonly accountId: string
 	readonly region: string
@@ -109,9 +130,13 @@ export interface AwsAccessInput {
 	 * attaches no certificate naming one. Lower-case.
 	 */
 	readonly installationHosts: readonly string[]
+	/** The platform's Service Connect namespace (`runtime.ts`'s output), which Control's role is denied naming. */
+	readonly platformNamespaceArn: string
 }
 
 const ACCOUNT_ID = /^\d{12}$/
+/** A Cloud Map namespace's ARN. */
+const NAMESPACE_ARN = /^arn:aws(?:-[a-z]{1,10}){0,2}:servicediscovery:[a-z0-9-]{1,32}:\d{12}:namespace\/ns-[a-z0-9]{1,64}$/
 const REGION = /^[a-z]{2}(?:-[a-z]+)+-\d$/
 
 /** `input` as given, or an error naming the part of another form (never a value). */
@@ -129,6 +154,9 @@ export function checkAwsAccessInput(input: AwsAccessInput): AwsAccessInput {
 	const hosts = input.installationHosts
 	if (hosts.length === 0 || !hosts.every((host) => CERTIFICATE_HOST.test(host)) || new Set(hosts).size !== hosts.length) {
 		throw new Error("aws: the installation's own hosts are none, one twice, or one that is not a lower-case host name")
+	}
+	if (!NAMESPACE_ARN.test(input.platformNamespaceArn) || !input.platformNamespaceArn.includes(`:${input.region}:${input.accountId}:`)) {
+		throw new Error("aws: the platform's namespace is not a Cloud Map namespace of this account and region")
 	}
 	return input
 }
@@ -197,6 +225,7 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 	const targetGroups = `arn:aws:elasticloadbalancing:${r}:${a}:targetgroup/*`
 	const createdWith = (key: string, action: string): JsonValue => ({ StringEquals: { [key]: action } })
 	const tagged = (key: string): JsonValue => ({ Null: { [key]: 'false' } })
+	const ownAccount: JsonValue = { StringEquals: { 's3:ResourceAccount': a } }
 
 	return [
 		{
@@ -225,11 +254,13 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 				// A one-level listing of a path; Parameter Store scopes no listing by resource.
 				allow(['ssm:DescribeParameters'], ['*']),
 				allow(['codebuild:StartBuild', 'codebuild:BatchGetBuilds', 'codebuild:StopBuild', 'codebuild:ListBuildsForProject'], projects),
-				// The uploads, and the presigned read a build fetches its archive with, signed by Control.
-				allow(
-					['s3:PutObject', 's3:GetObject', 's3:AbortMultipartUpload'],
-					[`arn:aws:s3:::${awsSourcesBucket(a)}/sources/*`],
-				),
+				// The uploads, and the presigned read a build fetches its archive with, signed by Control. Every S3 grant is
+				// held to this account's buckets (`s3:ResourceAccount`): a name is global, so a grant by name alone would
+				// reach another account's bucket of that name if this one were ever gone.
+				allowIf(['s3:PutObject', 's3:GetObject', 's3:AbortMultipartUpload'], [`arn:aws:s3:::${awsSourcesBucket(a)}/sources/*`], ownAccount),
+				// The run logs Control keeps (`FABRIKA_CONTROL_RUN_LOGS_*`), in a bucket of their own.
+				allowIf(['s3:PutObject', 's3:GetObject', 's3:DeleteObject', 's3:AbortMultipartUpload'], [`arn:aws:s3:::${awsRunLogsBucket(a)}/*`], ownAccount),
+				allowIf(['s3:ListBucket'], [`arn:aws:s3:::${awsRunLogsBucket(a)}`], ownAccount),
 				// An IAM wildcard spans `:`, so a group's pattern covers its streams too.
 				allow(['logs:GetLogEvents', 'logs:FilterLogEvents'], logGroups),
 				allow(['acm:RequestCertificate', 'acm:DescribeCertificate'], ['*']),
@@ -360,6 +391,14 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 					// both forms; `StringLike`, as `ArnLike` would not match a bare family.
 					Condition: { StringLike: { 'ecs:task-definition': [platformTaskDefinitions, `${AWS_PLATFORM_FAMILY_PREFIX}*`] } },
 				},
+				{
+					Effect: 'Deny',
+					Action: ['ecs:CreateService', 'ecs:UpdateService'],
+					Resource: ['*'],
+					// The platform's Service Connect namespace, by its ARN or its name, whichever the request names: no
+					// application's or namespace proxy's task joins the platform's services.
+					Condition: { StringLike: { 'ecs:namespace': [input.platformNamespaceArn, AWS_PLATFORM_NAMESPACE] } },
+				},
 			],
 		},
 	]
@@ -420,6 +459,9 @@ export function awsAccessStack(input: AwsAccessInput): AwsStack {
 		},
 		SourcesBucket: {
 			Type: 'AWS::S3::Bucket',
+			// Kept when the stack goes: its name is global and predictable, so a deleted one could be another account's next.
+			DeletionPolicy: 'Retain',
+			UpdateReplacePolicy: 'Retain',
 			Properties: {
 				BucketName: awsSourcesBucket(accountId),
 				PublicAccessBlockConfiguration: { BlockPublicAcls: true, BlockPublicPolicy: true, IgnorePublicAcls: true, RestrictPublicBuckets: true },

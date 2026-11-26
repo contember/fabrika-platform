@@ -13,6 +13,7 @@ import {
 	AWS_MAX_MANAGED_POLICY,
 	AWS_PLATFORM_CLUSTER,
 	AWS_PLATFORM_FAMILY_PREFIX,
+	AWS_PLATFORM_NAMESPACE,
 	awsAccessEnvironment,
 	type AwsAccessInput,
 	awsAccessStack,
@@ -23,6 +24,7 @@ import {
 } from '../access'
 import { awsBalancersStack } from '../balancers'
 import { AWS_DEFAULT_PLATFORM_VPC_CIDR, awsNetworkLayout, awsNetworkOutputs, awsNetworkStack } from '../network'
+import { awsRuntimeStack } from '../runtime'
 import { AWS_TASK_RUNNER_SOURCE } from '../task-runner'
 
 const certificate = (n: number) => `arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
@@ -42,6 +44,7 @@ const outputsOf = (prefix: string, first: number) => {
 const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210'
 const BROKER = 'arn:aws:lambda:eu-central-1:123456789012:function:fabrika-certificate-broker'
 const RUNNER = 'arn:aws:lambda:eu-central-1:123456789012:function:fabrika-task-runner'
+const NAMESPACE = 'arn:aws:servicediscovery:eu-central-1:123456789012:namespace/ns-0123456789abcdef'
 const HOSTS = ['iam.example.com', 'control.example.com', 'operations.example.com', 'apps.example.com']
 const input: AwsAccessInput = {
 	accountId: '123456789012',
@@ -50,6 +53,7 @@ const input: AwsAccessInput = {
 	vpcId: 'vpc-0123456789abcdef0',
 	taskSubnetIds: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'],
 	installationHosts: HOSTS,
+	platformNamespaceArn: NAMESPACE,
 }
 const installation = { accountId: '123456789012', region: 'eu-central-1', cluster: AWS_APPS_CLUSTER, sourcesBucket: awsSourcesBucket('123456789012') }
 
@@ -190,6 +194,13 @@ describe("the installation's access", () => {
 				certificates: { iam: certificate(1), control: certificate(2), operations: certificate(3) },
 				appsDefault: { host: 'apps.example.com', certificate: certificate(4) },
 			}),
+			// The platform services' groups, roles and namespace.
+			awsRuntimeStack({
+				accountId: '123456789012',
+				region: 'eu-central-1',
+				platform: outputsOf('10.81', 4),
+				balancers: { platformBalancerGroupId: 'sg-0123456789abcdef9' },
+			}),
 		]
 		for (const stack of stacks) {
 			const keys = new Set(Object.keys(stack.tags))
@@ -215,6 +226,32 @@ describe("the installation's access", () => {
 			['Deny', ['lambda:InvokeFunction'], [BROKER]],
 			['Deny', ['lambda:InvokeFunction'], [RUNNER]],
 		])
+	})
+
+	test("no service of Control's joins the platform's Service Connect namespace, named by its ARN or its name", () => {
+		const denies = control.filter((statement) => statement.Effect === 'Deny')
+		expect(denies.find((statement) => JSON.stringify(statement.Condition ?? {}).includes('ecs:namespace'))).toMatchObject({
+			Action: ['ecs:CreateService', 'ecs:UpdateService'],
+			Resource: ['*'],
+			Condition: { StringLike: { 'ecs:namespace': [NAMESPACE, AWS_PLATFORM_NAMESPACE] } },
+		})
+		expect(() => checkAwsAccessInput({ ...input, platformNamespaceArn: 'fabrika-platform' })).toThrow("platform's namespace")
+		expect(() => checkAwsAccessInput({ ...input, platformNamespaceArn: NAMESPACE.replace('123456789012', '210987654321') })).toThrow(
+			"platform's namespace",
+		)
+	})
+
+	test("Control's run logs: its own bucket alone, the platform's other buckets out of reach", () => {
+		const s3 = allows.filter((statement) => statement.Action.some((action) => action.startsWith('s3:')))
+		expect(s3.flatMap((statement) => statement.Resource)).toEqual([
+			`arn:aws:s3:::${awsSourcesBucket('123456789012')}/sources/*`,
+			'arn:aws:s3:::fabrika-run-logs-123456789012/*',
+			'arn:aws:s3:::fabrika-run-logs-123456789012',
+		])
+		// Each held to this account's buckets: a bucket's name is global.
+		for (const statement of s3) expect(statement.Condition).toEqual({ StringEquals: { 's3:ResourceAccount': '123456789012' } })
+		const bucket = JSON.parse(JSON.stringify(awsAccessStack(input).template)).Resources.SourcesBucket
+		expect(bucket).toMatchObject({ DeletionPolicy: 'Retain', UpdateReplacePolicy: 'Retain' })
 	})
 
 	test('Control starts no task itself: the task runner does, which Control may invoke and nothing more', () => {
