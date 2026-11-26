@@ -632,7 +632,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     5. **The platform's services**: Control, IAM, the console and the platform proxy on ECS, their images and
        variables. In the platform's VPC and cluster, under task definition families `fabrika_platform_*`, each
        service pinned to a revision ARN; the platform proxy's group admits only the platform balancer's group; no
-       Service Connect namespace a service of Control's could join.
+       Service Connect namespace a service of Control's could join; no platform security group ever associated with the
+       applications' VPC (a security group VPC association would let a task there carry it, through the task runner
+       too).
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 
@@ -753,8 +755,9 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
           seconds, delivery is not bounded).
         - **(d) A task runner (chosen).** Control's role is denied `RunTask` and `StartTask` on `*` and may invoke the
           runner and nothing more of it. The runner starts the task in the applications' cluster and task subnets of its
-          own configuration, whatever the request names; a security group of the request is taken as it is, since ECS
-          refuses a group of another VPC than the subnets'. It overrides one container's command alone (no role, no
+          own configuration, whatever the request names; a security group of the request is taken as it is, since EC2
+          attaches to a network interface only groups of the interface's own VPC (or ones associated with it by a
+          security group VPC association, which step 5 never makes for a platform group). It overrides one container's command alone (no role, no
           environment, no ECS Exec), refuses a platform task definition (its role is denied one too), passes only the
           applications' and namespaces' roles, and answers the task cut to what the deploy reads. The deploy's init step
           is unchanged but for the call (`ecsClient`'s `runTask` invokes the runner), its client token included;
