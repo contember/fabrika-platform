@@ -440,19 +440,23 @@ steps. The object accepts `prepare` and `arm` on itself only when all of these h
   ordinary event, so no gated version served since the commit. A release before the gate has no such exception, and
   refuses the rewind as it refuses any rewind of the serving object;
 - the target is the record's bookmark before the migration, and nothing else;
-- the request names the operation that owns the record (ADR-0069 §3): the one whose `migrate` first found it. A record
-  left by an earlier operation, which a release before the gate may have served over, belongs to that operation, and
-  a later one cannot rewind to it.
+- the object runs the Worker version the record names (ADR-0069 §3). Every upload after the migration, a deploy or a
+  secret or variable change, makes another version, so a record that a release before the gate may have served over
+  since, or that an earlier operation left, cannot be rewound.
 
-Control asks for the rewind only before the operation's own redeploy, and never returns to it after.
+Control asks for the rewind only within the operation whose `migrate` answered the record, before that operation's own
+redeploy, and never returns to it after. The version guard holds because the platform deploys only new versions,
+never an earlier one or a split (ADR-0069 §3). A refused rewind fails safe: nothing is rewound, and the operation takes
+ADR-0069 §3's branch for a record it cannot rewind. A `verify` that finds the sentinel gone records `rewound` in the
+record, so a later boot never marks a rewound migration `booted`, and the record is never rewound again.
 
 Control then redeploys the last succeeded run's commit and opens the object at a new generation. The undo bookmark `arm`
 answers is recorded like a side restore's. If `verify` finds the sentinel three times, the object stays `inspect` for an
 operator, and nothing was lost. Probe 7 exercised the in-place restore's failure boundaries on a live account
 (2026-11-26): an `arm` whose answer the abort loses still restores, so `verify` decides; an armed object that is not
 reset keeps its writes only until its next reset, which restores and discards them, so `arm` runs only in `inspect`; and
-the undo bookmark brings the rewound writes back. Until the rewind is built, ADR-0069 §3 redeploys without a rewind
-where no `dataLoss` line forbids it, and otherwise leaves the object `closed` for an operator to fix forward.
+the undo bookmark brings the rewound writes back. Until the rewind is built, every record is one ADR-0069 §3 cannot
+rewind.
 
 **Not built: an in-place restore of an object that served, and a whole-environment rollback.** Rewinding an object
 that served writes discards them, and restoring forward rests on the forward restore succeeding, which is unprobed.

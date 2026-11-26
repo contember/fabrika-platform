@@ -204,21 +204,41 @@ migration bookmark, does all of it inside the `blockConcurrencyWhile` that holds
 1. It runs every boot check that does not read the migrated schema: the module, the contract digest, the variables,
    the bindings, the handlers.
 2. It reads `getCurrentBookmark()` and writes the **migration record**, `__fabrika/ops/<object>.migration.json` in the
-   environment's bucket, by a put conditioned on the version it read: the bookmark, the ledger digest it starts from,
-   the pending files of both bundles with their checksums, and the time. A failed put migrates nothing: the event
-   answers 503, `migrate` answers `migration_failed` with `record_unwritable`, and the next event tries again.
+   environment's bucket, by a put conditioned on the version it read: a new record id (UUIDv7), the id of the Worker
+   version that writes it (Cloudflare's version metadata; `null` where the binding is absent, as in a local run, and
+   such a record is never rewound), the bookmark, the ledger digest it starts from, the pending files of both bundles
+   as `(bundle, file, checksum)`, and the time. A failed put migrates nothing: the event answers 503, `migrate` answers
+   `migration_failed` with `record_unwritable`, and the next event tries again. This is the only put that
+   `record_unwritable` names.
 3. It applies every pending file of both bundles, the framework's then the application's, with their ledger rows, in
    one `transactionSync` that ends with `PRAGMA foreign_key_check`; a row it returns rolls the whole set back. A
    failure leaves the ledger the boot started from. A transaction past the 30 s bound is not cut short: it commits,
    and the object resets before step 4.
 4. It records the outcome in the record: `committed` with the bookmark after the commit, or `rolled_back`.
-5. It boots, and records `booted` before it admits its first ordinary event. A failed put of `booted` admits nothing.
+5. It boots, and records `booted` before it admits its first ordinary event.
 
-Every boot at a gated release does step 5, migrating or not: one that finds a record without `booted` writes it before
-its first ordinary event. So a record without `booted` proves that no gated version served since the migration
-committed, and a release before the gate cannot rewind the object (ADR-0070 §9). A boot that finds a record without
-an outcome reads it from the ledger before step 5: a ledger that holds the record's files is `committed`, with the
-current bookmark; one that does not is `rolled_back`, and the boot migrates again under a new record.
+A put after step 3 (the outcome, a reconciled outcome, `booted`) never reports `record_unwritable` and never migrates
+again: the ledger already holds the outcome. When it fails, the instance admits no ordinary event, answers 503, and
+the next event repeats the put. Every put after step 2 names the record id and is conditioned on the version it read;
+on a conflict the instance reads the record again, and when the id is another, it drops its update and starts the boot
+over.
+
+Every boot at a gated release does step 5, migrating or not: one that finds a record without `booted`, and not
+`rewound` (ADR-0070 §9), writes it before its first ordinary event. So a record without `booted` proves that no gated
+version served since the migration committed, and a release before the gate cannot rewind the object (ADR-0070 §9).
+
+**A record without an outcome** is reconciled before anything else, before a boot plans a migration or replaces the
+record. The boot looks in the ledger for the record's own `(bundle, file, checksum)` rows only, not for the files its
+own code bundles, and ignores rows the record does not name. The transaction is atomic, so:
+
+- none of them: `rolled_back`;
+- every one, with its checksum: `committed`, with the current bookmark. That bookmark is the one at reconciliation,
+  not proof that nothing wrote since the commit; the rewind target stays the record's bookmark from before the
+  transaction;
+- some of them, or one with another checksum: `diverged`. Only a release before the gate, which commits each file on
+  its own, leaves that. A `diverged` record is never rewound, and the boot goes on by the ledger's ordinary rules.
+
+A record is replaced, by a later migrating boot under a new id, only once it has an outcome.
 
 The record lives in R2 for the reason the mode does: point-in-time recovery rewinds SQLite and KV. Nothing writes
 between the bookmark and the transaction, because no other event runs, so a rewind to that bookmark loses no write the
@@ -226,23 +246,38 @@ old version committed. A migrating boot must fit the 30 s that `blockConcurrency
 commits, but its reset fails every event it held back, so a data change that does not fit is a schema migration plus a
 backfill job, over two deploys.
 
+**The record names the Worker version that wrote it**, and only that version may rewind to it (ADR-0070 §9). Every
+upload makes a new version: a deploy of any commit or release, and also a secret or variable change, such as
+`wrangler secret put` or Control's write of a re-issued workload key. So once anything uploads after the migration,
+the record cannot be rewound. That fails safe: the object refuses the rewind, and the operation takes the branch for a
+record it cannot rewind (below).
+
+**No deployment of an earlier version, and no gradual deployment.** The guard compares version ids, so it cannot tell
+an object that ran the record's version all along from one that ran another version and came back to it. An object
+comes back to an earlier version id through any deployment that names one: a rollback (`wrangler rollback`, the
+dashboard), `wrangler versions deploy <id>`, or the steps of a gradual deployment, which assigns each object one of
+its versions and may move it between them as the split changes. A version before the gate could serve writes in
+between without writing `booted`. The rule therefore rests on the platform's own deploys: every one uploads a new
+version and deploys it alone (`wrangler deploy`), and the platform never deploys an existing version or a split. An
+application Worker is never deployed gradually. A deployment made outside the platform while an operation runs is
+outside this guarantee.
+
 **The migrating deploy.** A deploy that brings a pending migration to a candidate that records the bookmark runs as a
 `migrate` operation under the deploy lease and restricts nothing: the old version serves, writes included, until the
 new one has migrated. The operation runs its own deploy, then sends `POST /__fabrika/ops/migrate { generation }` at
-the published generation, naming the operation. In `open` that request starts the boot or awaits the one under way,
-and the object answers the ledger and the migration record. The first `migrate` that finds the record without an owner
-writes its operation's id into it, by the same conditional put; a record that already has another owner stays as it
-is. Only the owner may rewind to it (ADR-0070 §9), so a record left by an earlier operation is never rewound.
+the published generation. In `open` that request starts the boot or awaits the one under way, and the object answers
+the ledger and the migration record. Workload key rotation takes the same lease, so it uploads no version while the
+operation runs.
 
 **Which version answers.** Cloudflare updates an active object's code deferred by default: the old instance keeps
 accepting requests, ops requests included, until it hibernates or `max_delay` passes (300 s by default). An answer from
 an object that booted and whose ledger lacks the candidate's files therefore comes from the old version still running.
 It is never a rollback. Control asks again until an answer holds every candidate file with its checksum, or until
 `max_delay` plus a margin has passed. Only the new version answers `migration_failed` (422), with its record's outcome
-or `record_unwritable`, and only that answer is a failure. Past the deadline with no answer from the new version, the
-run fails as `migration_unconfirmed`, with nothing restricted, and the console says to read the view. A recovery's
-redeploy is a deferred code update too: Control waits, to the same deadline, for an `ok` answer, which the failing
-version never gives.
+(`rolled_back`, or `committed` without `booted`) or `record_unwritable`, and only that answer is a failure.
+Past the deadline with no answer from the new version, the run fails as `migration_unconfirmed`, with nothing
+restricted, and the console says to read the view. A recovery's redeploy is a deferred code update too: Control waits,
+to the same deadline, for an `ok` answer, which the failing version never gives.
 
 **When it fails**, the operation recovers on its own, under the same lease:
 
@@ -251,11 +286,13 @@ version never gives.
 - **`committed`, never `booted`.** Control publishes the object `inspect` and rewinds it in place to the record's
   bookmark (ADR-0070 §9), so the old code meets exactly its own schema. It then redeploys the last succeeded run's
   commit and opens the object at a new generation. The rewind is a step before the redeploy, and an operation never
-  returns to it once the redeploy has started.
-- **Until the in-place rewind is built**, a `committed`, never-`booted` migration without a `dataLoss` line gets the
-  redeploy alone: the runner tolerates a ledger ahead of the code. With a `dataLoss` line, or when the redeployed commit
-  does not answer `ok` by the deadline, Control publishes the object `closed`, and the run fails as `migration_failed`
-  for an operator to fix forward.
+  returns to it once the redeploy has started. Control asks for it only within the operation whose `migrate` answered
+  the record; the object's guards decide whether it may.
+- **A record it cannot rewind.** The object refuses the rewind (another version runs, or the record has no version),
+  or the rewind is not built. A `committed`, never-`booted` migration without a `dataLoss` line then gets the redeploy
+  alone: the runner tolerates a ledger ahead of the code. With a `dataLoss` line, or when the redeployed commit does
+  not answer `ok` by the deadline, Control publishes the object `closed`, and the run fails as `migration_failed` for
+  an operator to fix forward. Nothing is rewound, so no write is lost.
 - **`committed` and `booted`.** There is nothing to recover: the run succeeded. A migration found wrong later is undone
   by a side restore to the record's bookmark (ADR-0070 §9).
 
@@ -300,7 +337,12 @@ new generation.
 | The `migrate` answer comes from the old version                        | Its ledger lacks the candidate's files; Control asks again until the new version answers              |
 | The migration rolls back                                               | The ledger is unchanged; Control redeploys the last succeeded commit                                  |
 | The migration runs past 30 s                                           | It commits and the object resets; the next boot records `committed` from the ledger                   |
-| The migration commits and the new version does not boot                | The in-place rewind, then the redeploy; until it is built, "Until the in-place rewind is built" above |
+| A reconciled ledger holds some of the record's rows                    | `diverged`: the record is never rewound; the boot goes on by the ledger's rules                       |
+| The put of the outcome or of `booted` fails                            | Nothing is admitted; 503; the next event repeats the put and migrates nothing again                   |
+| A put after step 2 conflicts with a record of another id               | The instance drops its update and starts the boot over                                                |
+| The migration commits and the new version does not boot                | The in-place rewind, then the redeploy                                                                |
+| A version was uploaded after the migration (a deploy, a secret)        | The rewind is refused; "A record it cannot rewind" above                                              |
+| A deployment outside the platform brings back an earlier version       | Outside the guarantee: the platform deploys only new versions, never a split                          |
 | The redeployed commit does not answer `ok` by the deadline             | Control publishes `closed`; the run fails as `migration_failed`, for an operator                      |
 | A migrate request carries a generation that is not the published one   | Refused                                                                                               |
 | Control dies mid-operation                                             | The environment stays in its published mode; a successor fences and resumes from the recorded step    |
@@ -339,8 +381,13 @@ new generation.
   answer both 501, and a deploy of one never needs them. The migrating boot and its record are gated by
   `recordsMigrationBookmark`, which holds from the framework release that ships them; the gate is the candidate's
   release, because the new version is the one that takes the bookmark. A candidate before it gets the read-only phase.
+  The release step asserts the gate: `release:validate` refuses a release at or above the gate whose framework source
+  lacks the migrating boot, and a gate that names a release already tagged without it, so the gate never names a
+  release that shipped without the boot.
   - **Generated files.** No installation file changes. The application Worker's config, with the variables and the
     handler, and its proxy Worker, with the row, are generated by the environment's next deploy at a gated release.
+    From `recordsMigrationBookmark` the application Worker's config also binds Cloudflare's version metadata, which
+    the record names.
     `platform upgrade` alone changes no application (ADR-0062 rule 5), and the console says to redeploy to enable it.
   - **Environment variables.** That deploy writes `FABRIKA_OPS_KEY_DIGESTS`, `FABRIKA_APPLICATION_OBJECT` and
     `FABRIKA_APPLICATION_OBJECTS`. An environment on an older pin gets neither the row nor the variables, also on its
