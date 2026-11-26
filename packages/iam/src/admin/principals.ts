@@ -179,10 +179,13 @@ export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrinc
 			adminEvent(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id }),
 		)
 	} else {
-		// Re-enabling gives back a key's grants and what every key the principal issued for others holds (a key holds no
-		// more than its issuer covers); disabling narrows and is never judged (ADR-0083 §8).
+		// Re-enabling gives back what a key holds, a workload's being what the schema declares at its own environment, and
+		// what every key the principal issued for others holds (no more than its issuer covers); disabling narrows and is
+		// never judged (ADR-0083 §8).
 		if (row.disabled_at !== null) {
-			if (row.type === 'service') await requireCredentialsMode(c, await heldReach(c, id), 'enable')
+			const workload = await c.services.repositories.workloads.getByPrincipal(id)
+			if (workload !== null) await requireCredentialsMode(c, [{ app: workload.app, scope: null }], 'enable')
+			else if (row.type === 'service') await requireCredentialsMode(c, await heldReach(c, id), 'enable')
 			await requireCredentialsMode(c, await issuedKeysReach(c.services, id, { kind: 'all' }), 'enable')
 		}
 		await c.services.repositories.principals.enablePrincipal(

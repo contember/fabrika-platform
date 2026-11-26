@@ -355,8 +355,9 @@ applies or waits as a grant request (§4). `policies.create`, `policies.update` 
 every holder of a role at once: a grant names its role by key alone, so a policy created under the key of a role deleted
 or dropped by a reconcile reaches every key still naming it. IAM does not judge whether one widens a key, so a machine
 caller is refused there wherever the application's mode is `person` or `refuse`. Re-enabling a disabled key
-(`principals.update`) gives back its grants, so it judges their reach as a rotation does; disabling one narrows and is
-not judged. A key one principal issued for another holds no more than its issuer covers: nothing while the issuer is
+(`principals.update`) gives back its grants, so it judges their reach as a rotation does. A workload principal (a job,
+a webhook, a connector) holds no grant but what its schema declares at its own environment, so re-enabling one judges
+that environment. Disabling narrows and is not judged. A key one principal issued for another holds no more than its issuer covers: nothing while the issuer is
 disabled, its whole set while the issuer holds `iam.admin` at IAM, and otherwise what the issuer holds at the key's
 application. So re-enabling any principal, a user included, judges the reach of every live key it issued for someone
 else (a share link aside, whose issuance through its mount the mode does not judge), and a grant to any principal judges

@@ -14,6 +14,7 @@ import type { Env } from '../env'
 import { resolvePermissionsAt } from '../resolve'
 import { createIamRpc } from '../rpc'
 import { getSigner } from '../signing'
+import { resolveCredential } from '../tokens'
 import { adminTokenFor, createHarness, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 import { APP, membershipFixture, NOTES_SCHEMA, ORIGIN, PendingWork } from './helpers/membership'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
@@ -670,6 +671,44 @@ for (const backend of backends) {
 			// Where none of the keys it issued acts, a grant to it keeps its rule.
 			expect((await w.rpc(w.machine, 'grants.create', { principalId: w.ada.id, app: STAGE, roleKey: 'support' })).status).toBe(200)
 			expect((await w.rpc(PROVISIONING_KEY, 'grants.create', { principalId: w.ada.id, app: APP, roleKey: 'support' })).status).toBe(200)
+		})
+
+		test("re-enabling a job's principal a person disabled meets the mode of the job's own environment", async () => {
+			const w = await world()
+			const withJob: AppSchema = { ...NOTES_SCHEMA, workloads: [{ kind: 'job', name: 'nightly', actions: ['notes.read', 'notes.write'] }] }
+			expect((await w.f.putSchema(withJob, APP)).status).toBe(200)
+			await w.mirror(APP, 'person')
+			const issued =
+				(await w.rpc(PROVISIONING_KEY, 'workloads.issueKey', { app: APP, kind: 'job', name: 'nightly', expiresAt: now() + DAY, keep: null }))
+					.result
+			if (typeof issued !== 'object' || issued === null || !('principalId' in issued) || typeof issued.principalId !== 'string') {
+				throw new Error('no job key')
+			}
+			const principalId = issued.principalId
+			/** What the job's key holds at notes@prod, or null when it resolves nothing. */
+			const jobHolds = async (): Promise<string[] | null> => {
+				const [credential] = await w.repositories.credentials.listCredentialsForPrincipal(principalId)
+				if (credential === undefined) return null
+				const resolved = await resolveCredential(w.f.services, credential, APP)
+				return resolved.ok ? resolved.permissions.map((entry) => entry.action).sort() : null
+			}
+			expect(await jobHolds()).toEqual(['notes.read', 'notes.write'])
+			const disable = { principalId, disabled: true }
+			const enable = { principalId, disabled: false }
+			expect((await w.asAda('principals.update', disable)).status).toBe(200)
+			expect(await jobHolds()).toBeNull()
+
+			const refused = await w.rpc(w.machine, 'principals.update', enable)
+			expect([refused.status, refused.message.includes('`credentials` mode'), refused.message.includes(APP)]).toEqual([403, true, true])
+			expect(await jobHolds()).toBeNull()
+
+			expect((await w.asAda('principals.update', enable)).status).toBe(200)
+			expect(await jobHolds()).toEqual(['notes.read', 'notes.write'])
+			expect((await w.asAda('principals.update', disable)).status).toBe(200)
+			expect((await w.rpc(PROVISIONING_KEY, 'principals.update', enable)).status).toBe(200)
+			expect((await w.asAda('principals.update', disable)).status).toBe(200)
+			await w.mirror(APP, 'off')
+			expect((await w.rpc(w.machine, 'principals.update', enable)).status).toBe(200)
 		})
 
 		test("the mirror is Control's alone, fenced by the protection revision, and answers what IAM holds", async () => {
