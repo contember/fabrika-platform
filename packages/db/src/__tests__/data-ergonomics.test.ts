@@ -2,7 +2,7 @@
 // update of any non-empty subset of the columns, `over` lists two levels down through the stamped chain, and a `date`
 // column as `YYYY-MM-DD` end to end. Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset:
 //
-//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
+//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 postgres:17 -c listen_addresses=127.0.0.1
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/db/src/__tests__/data-ergonomics.test.ts
 
 import { openPostgres } from '@fabrika/db/postgres'

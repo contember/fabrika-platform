@@ -5,7 +5,7 @@
 // `bun test` has to be green on a laptop with no database, and the parts that carry the actual risk
 // (the placeholder tokeniser, the SPA fallback, waitUntil) are proved with no services at all.
 //
-//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
+//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 postgres:17 -c listen_addresses=127.0.0.1
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test
 //
 // Each file gets its OWN Postgres schema, applied via the `search_path` startup parameter so every

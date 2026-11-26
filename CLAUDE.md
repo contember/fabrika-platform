@@ -61,8 +61,10 @@ without a code change is made deterministic or deleted the same day; CI never re
 Suites that need a real backend **skip cleanly** when it is absent and say what to set to run them:
 `FABRIKA_TEST_POSTGRES_URL` (the Postgres driver and the IAM/control/Operations schemas) and
 `FABRIKA_TEST_S3_*` (the S3 blob store) each print the `docker run` that supplies one (the Postgres one on the host
-network, loopback only, data on tmpfs; where host networking is unavailable, drop `--network host`, `PGPORT` and
-`listen_addresses` and publish the port: `docker run --rm -d -p 127.0.0.1:55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17`);
+network, loopback only, data on tmpfs, and `-e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256`, without which the image
+trusts every loopback connection, so any local process connects without the password; where host networking is
+unavailable, drop `--network host`, `PGPORT` and `listen_addresses` and publish the port:
+`docker run --rm -d -p 127.0.0.1:55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17`);
 `FABRIKA_LIVE_ZEROPS_TOKEN` + `FABRIKA_LIVE_ZEROPS_PROJECT_ID` run the platform-facts table against a
 real Zerops account, which no container can stand in for — it creates and deletes throwaway services in
 that project, and `FABRIKA_LIVE_ZEROPS_SLOW=1` adds the build-length rows. `FABRIKA_LIVE_ZBOX_API_ORIGIN` +

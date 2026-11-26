@@ -2,7 +2,7 @@
 // committed only after its output passed validation, and every handle is bound to its invocation. Skips cleanly when
 // FABRIKA_TEST_POSTGRES_URL is unset:
 //
-//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
+//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres -e POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256 postgres:17 -c listen_addresses=127.0.0.1
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/app/src/__tests__/orm-dispatch.test.ts
 //
 // The file gets its own application schema `app_<id>`. The URL is a credential: it is never logged.
