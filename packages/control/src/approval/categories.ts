@@ -80,6 +80,11 @@ export function stricterGates(a: IamGates, b: IamGates): IamGates {
 	}
 }
 
+/** Whether IAM holding `held` is looser than `sent`; IAM reads a mode it holds none of as `person`. */
+export function looserCredentials(held: ActionMode | null, sent: ActionMode): boolean {
+	return CREDENTIALS_RANK[held ?? 'person'] < CREDENTIALS_RANK[sent]
+}
+
 export function sameGates(a: IamGates, b: IamGates): boolean {
 	return a.grants === b.grants && a.credentials === b.credentials
 }

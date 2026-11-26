@@ -338,6 +338,23 @@ for (const backend of backends) {
 			expect(await w.converge()).toMatchObject({ failed: 0 })
 		})
 
+		test('IAM holding a looser mode at a later revision: an environment that starts protected is not created (503)', async () => {
+			const w = await world()
+			// A later revision IAM keeps, as a stale write of a deleted environment of the same id would leave it.
+			await w.grantApproval.set('shop@prod', { grants: false, credentials: 'off' }, 99)
+			await expect(w.register('shop', 'prod')).rejects.toMatchObject({ httpStatus: 503 })
+			expect(await w.db.registry.getApp('shop')).toBeNull()
+
+			await w.register('blog', 'stage')
+			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'off' }, 99)
+			await expect(w.putEnv('blog', 'prod')).rejects.toMatchObject({ httpStatus: 503 })
+			expect(await w.db.registry.getAppEnv('blog', 'prod')).toBeNull()
+
+			// One IAM holds as strictly as it starts is created.
+			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'person' }, 100)
+			expect((await w.putEnv('blog', 'prod')).env).toBe('prod')
+		})
+
 		test('a protection change carries the mode to IAM, and a person in the console issues whatever it is', async () => {
 			const w = await world()
 			await w.converge()

@@ -8,13 +8,14 @@ import { RpcError } from '@fabrika/app'
 import { appEnvironmentId } from '@fabrika/auth-core'
 import { fail } from '../api/domain'
 import type { ControlRepositories } from '../db'
-import type { GrantApprovalPort } from './api'
-import { iamGatesOf } from './categories'
+import type { GrantApprovalPort, IamGatesHeld } from './api'
+import { iamGatesOf, looserCredentials } from './categories'
 
 /**
  * Write a new environment's gates to IAM, as it starts (`getStartingProtection`), before its row exists: until IAM knows
  * an environment, a key that acts in every environment of its application does not count it. One that starts protected
- * is not created when IAM does not take them (503); one that does not is, and the maintenance pass writes them later.
+ * is not created when IAM does not take them, or answers a looser `credentials` mode it holds at a later revision (503);
+ * one that does not start protected is, and the maintenance pass writes them later.
  * Without the provisioning key there is nothing to write, and IAM reads every environment it knows as `person`.
  */
 export async function writeNewEnvironmentGates(
@@ -25,13 +26,23 @@ export async function writeNewEnvironmentGates(
 	const port = deps.grantApproval
 	if (port === undefined) return
 	const start = await deps.repositories.registry.getStartingProtection(appId, env)
+	const sent = iamGatesOf(start)
+	let held: IamGatesHeld
 	try {
-		await port.set(appEnvironmentId(appId, env), iamGatesOf(start), start.protection_revision)
+		held = await port.set(appEnvironmentId(appId, env), sent, start.protection_revision)
 	} catch {
 		if (start.protected === 1) {
 			fail(503, `IAM did not take the approval settings of \`${env}\`, which starts protected, so nothing was created; try again`)
 		}
 		console.warn("IAM did not take a new environment's approval gates; the maintenance pass writes them")
+		return
+	}
+	// IAM keeps a later revision it already holds; a looser mode there would leave the new environment unguarded in IAM.
+	if (start.protected === 1 && looserCredentials(held.credentials, sent.credentials)) {
+		fail(
+			503,
+			`IAM holds a later revision of the approval settings of \`${env}\`, which starts protected, with a looser \`credentials\` mode, so nothing was created`,
+		)
 	}
 }
 
