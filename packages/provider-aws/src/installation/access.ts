@@ -20,6 +20,11 @@
 //   `ecs:RegisterTaskDefinition`, `cloudformation:ListStacks`, ACM's request) are granted on `*`; a task definition
 //   Control registers can still only pass the applications' and namespaces' roles (`iam:PassRole`).
 //
+// OPEN, the plan's decision on the platform's certificates: Elastic Load Balancing scopes `AddListenerCertificates` by
+// the listener alone, so this role can attach any certificate of the account, a platform host's among them, to the
+// applications' listener. The plan weighs accepting it against a certificate broker (recommended), TLS outside ACM for
+// the platform, and an account of its own.
+//
 // The grants follow the plan's step 11, narrowed to what the code calls: Control deletes no stack and reads no stack
 // event, so neither is granted.
 //

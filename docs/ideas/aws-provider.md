@@ -660,17 +660,39 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         `elasticloadbalancing:CreateRule`, `AddListenerCertificates` and `RemoveListenerCertificates`; on its rules
         (`listener-rule/app/<balancer>/<id>/<id>/*`) `ModifyRule`, `DeleteRule` and `SetRulePriorities` (a priority
         chosen anew is an in-place update); and `DescribeRules`, which, like every Elastic Load Balancing `Describe*`
-        action, takes no resource-level permission and is granted on `*` (it is read-only). OPEN, for step 11, and it
-        bounds the routing blast radius: on a listener the installation shares with the namespaces, `CreateRule` lets
-        Control put a rule for any host at any priority ahead of the installation's own routes, and
-        `RemoveListenerCertificates` lets it take any of the installation's non-default certificates off the listener;
-        `ModifyRule` and `DeleteRule` reach every rule unless the rules carry a tag, and whether CloudFormation's
-        `ListenerRule` tags a rule is UNVERIFIED. Tagging the rules (`AddTags` on `listener-rule/*` held to
-        `StringEquals` on `elasticloadbalancing:CreateAction` = `CreateRule`, as for target groups, and the two scoped
-        by the resource tag) bounds only `ModifyRule` and `DeleteRule`. Only a listener Control's role does not reach at
-        all (a second balancer for the installation's own hosts, about $16 a month) bounds the routing; step 11 decides
-        between the two knowing that. CloudFormation also needs `stack/fabrika-nh-*` beside `stack/fabrika-ns-*` for
-        the hosts stacks;
+        action, takes no resource-level permission and is granted on `*` (it is read-only). Decided (2026-11-26): the
+        platform's hosts are on a balancer of their own, which no grant reaches, so `CreateRule`, `ModifyRule` and
+        `DeleteRule` on the applications' listener reach only namespaces' routes (each namespace's own rules are its
+        hosts stack's, and the conflict check keeps one namespace off another's host while Control is sound).
+        CloudFormation also needs `stack/fabrika-nh-*` beside `stack/fabrika-ns-*` for the hosts stacks.
+
+        **The platform's certificates and `AddListenerCertificates`: OPEN, a decision for step 11.** Elastic Load
+        Balancing scopes `AddListenerCertificates` by the listener alone: its condition keys are the resource tags,
+        none names the certificate, and attaching one needs no ACM permission on it (the Service Authorization
+        Reference for Elastic Load Balancing V2 and the `AddListenerCertificates` API reference, read 2026-11-26). So a
+        Control role used against its code can attach the platform's own certificates (IAM's, Control's, Operations',
+        which live in the same account) to the applications' listener, add a rule for a platform host there, and so
+        serve that host under its real certificate from a namespace. It reaches nobody while the platform's DNS points
+        at the platform's balancer: it needs a DNS change or a network path to the applications' balancer as well. The
+        alternatives:
+        - **(a) Accept it and record it.** No cost. A compromised Control plus a DNS change or an on-path position
+          serves a platform host with a valid certificate.
+        - **(b) A certificate broker (recommended).** Control's role loses `AddListenerCertificates` and
+          `RemoveListenerCertificates`. A namespace's hosts stack attaches its certificates through a CloudFormation
+          custom resource backed by one small Lambda function in the access stack, whose role alone holds those two
+          actions on the applications' listener and `acm:DescribeCertificate`. It refuses any certificate whose
+          names include an installation host (its own configuration, which Control cannot change: Control is denied
+          every `lambda:` write on it and may only invoke it). With the default certificate already its own (step 2),
+          a rule for a platform host on the applications' listener then fails TLS. Cost: a Lambda invoked per hosts
+          stack change, nothing at rest; about a day's work with tests.
+        - **(c) No ACM certificate for the platform's hosts.** The platform's balancer becomes a Network Load Balancer
+          passing TLS through to the platform proxy, whose Caddy gets its certificates by ACME and keeps them in a
+          bucket only the platform reaches. Nothing in ACM can be attached. Cost: the platform proxy holds TLS and its
+          state, the client address needs the proxy protocol, a larger change of the proxy.
+        - **(d) The platform's balancer and certificates in an account of their own.** The strongest separation, and
+          the heaviest: a second account per installation, cross-account networking.
+          Until it is decided, the grants keep `AddListenerCertificates` and `RemoveListenerCertificates` on the
+          applications' listener alone, and the residual above stands;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
