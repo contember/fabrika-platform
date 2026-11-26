@@ -126,7 +126,7 @@ describe('awsNamespaceResources', () => {
 			buildProject: 'fabrika_ns_shared_prod',
 			buildRoleName: 'shared_prod_proxy_build',
 			buildLogGroup: '/fabrika/namespaces/shared/prod/proxy/build',
-			sourcePrefix: 'sources/namespaces/shared/prod',
+			sourcePrefix: 'sources/_namespaces/shared/prod',
 		})
 		// `a-b` + `c` and `a` + `b-c` would join to one name without the length.
 		expect(awsNamespaceResources('a-b', 'c').stackName).not.toBe(awsNamespaceResources('a', 'b-c').stackName)
@@ -267,14 +267,17 @@ describe('awsNamespaceCapabilities', () => {
 		expect(() => capabilities.normalize({ ...NAMESPACE, target: { ...NAMESPACE.target, provider: 'zerops' } })).toThrow()
 	})
 
-	test("the proxy pin: a plan takes the installation's default, normalize keeps an older one, and another repository is refused", async () => {
+	test("the proxy pin: a plan takes the installation's default, a reconcile keeps an older one, and another repository is refused", async () => {
 		const fake = new Fake()
 		const planned = fake.capabilities.operator?.plan({ id: 'shared', env: 'prod', preset: 'cheap' })
 		expect(planned?.namespace.target).toEqual(target())
-		// A pin outlives an upgrade: an older commit is kept as it is, never moved to the newer default (ADR-0045).
+		// What Control normalizes (a namespace created, adopted or planned) takes the default and goes through as it is.
+		const created = planned?.namespace ?? NAMESPACE
+		expect(fake.capabilities.normalize(created)).toEqual(created)
+		// A stored pin outlives an upgrade: the lifecycle keeps an older commit as it is, never moving it (ADR-0045).
 		const older = { ...NAMESPACE, target: target({ proxyCommitSha: OLDER_COMMIT }) }
-		expect(fake.capabilities.normalize(older)).toEqual(older)
 		expect(await fake.capabilities.reconcile(mutation(older))).toEqual(older)
+		expect(await fake.capabilities.provision(mutation(older))).toEqual(older)
 		// The proxy is the enforcement point: it is built from the installation's platform repository alone.
 		const foreign = { ...NAMESPACE, target: target({ proxyRepository: 'someone/fabrika-platform' }) }
 		expect(() => fake.capabilities.normalize(foreign)).toThrow("pinned to another repository than this installation's platform repository")
@@ -282,15 +285,31 @@ describe('awsNamespaceCapabilities', () => {
 		expect(planned?.presentation.facts).toContainEqual({ label: 'Proxy source', value: `contember/fabrika-platform@${PROXY_SOURCE.commitSha}` })
 	})
 
-	test('a proxy build in flight is carried through normalize and a reconcile, never dropped', async () => {
+	test('a caller submitting a namespace chooses neither its proxy commit nor a proxy build: normalize refuses both', () => {
+		const { capabilities } = new Fake()
+		// Any commit of the platform repository but the installation's: an older one with a known bug, or one only a fork holds.
+		expect(() => capabilities.normalize({ ...NAMESPACE, target: target({ proxyCommitSha: OLDER_COMMIT }) })).toThrow(
+			"pinned to the installation's proxy commit",
+		)
+		// A build the provider never recorded, which would make the start answer "started" without building.
+		const token = '0f1e2d3c-4b5a-4968-8776-655443322110'
+		const forged = target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64), proxyBuildId: `fabrika_ns_shared_prod:${token}` })
+		expect(() => capabilities.normalize({ ...NAMESPACE, target: forged })).toThrow('recorded by its provider, never submitted')
+		expect(() => capabilities.normalize({ ...NAMESPACE, target: target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64) }) }))
+			.toThrow(
+				'never submitted',
+			)
+	})
+
+	test('a proxy build in flight is carried through the lifecycle calls, never dropped', async () => {
 		const token = '0f1e2d3c-4b5a-4968-8776-655443322110'
 		const building = {
 			...NAMESPACE,
 			target: target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64), proxyBuildId: `fabrika_ns_shared_prod:${token}` }),
 		}
 		const fake = new Fake()
-		expect(fake.capabilities.normalize(building)).toEqual(building)
 		expect(await fake.capabilities.provision(mutation(building))).toEqual(building)
+		expect(await fake.capabilities.reconcile(mutation(building))).toEqual(building)
 	})
 
 	test('provision creates the stack when absent; reconcile of a current stack changes nothing', async () => {

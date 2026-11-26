@@ -85,8 +85,9 @@ export interface AwsNamespaceResources {
 	readonly buildRoleName: string
 	readonly buildLogGroup: string
 	/**
-	 * Where the proxy's archives go in the sources bucket, `sources/namespaces/<id>/<env>`: below Control's `sources/`
-	 * grant, and a part more than an application environment's (`sources/<app>/<env>`), so the two never meet.
+	 * Where the proxy's archives go in the sources bucket, `sources/_namespaces/<id>/<env>`: below Control's `sources/`
+	 * grant, under a segment no application id can take (`_` is not in one), so no application environment's prefix
+	 * (`sources/<app>/<env>`) holds a namespace's archives, nor the other way round.
 	 */
 	readonly sourcePrefix: string
 }
@@ -117,7 +118,7 @@ export function awsNamespaceResources(id: string, env: string): AwsNamespaceReso
 		buildProject: `fabrika_ns_${role}`,
 		buildRoleName: `${role}_proxy_build`,
 		buildLogGroup: `/fabrika/namespaces/${id}/${env}/proxy/build`,
-		sourcePrefix: `sources/namespaces/${id}/${env}`,
+		sourcePrefix: `sources/_namespaces/${id}/${env}`,
 	}
 }
 
@@ -406,10 +407,18 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 
 	return {
 		normalize: (namespace) => {
-			// A target is the installation's, never a caller's: one of another form or for another account is refused. Its pin
-			// is kept as it is, never moved to a newer default (ADR-0045).
-			const stored = checkNamespaceTarget(namespace, installation, proxySource)
-			return { ...namespace, target: targetOf(namespace, installation, proxySource, stored) }
+			// Control normalizes only what a caller submits (a namespace created or adopted, a plan), never a stored namespace.
+			// So the target is the installation's, never a caller's: one of another form or for another account is refused,
+			// and so is a pin a caller chose. A new namespace is pinned to the installation's default (ADR-0045); only an
+			// operator's update moves a stored pin, and only to the default. The lifecycle calls (`apply`) keep a stored pin.
+			const submitted = checkNamespaceTarget(namespace, installation, proxySource)
+			if (submitted.proxyCommitSha !== proxySource.commitSha) {
+				throw new Error("aws: a namespace is pinned to the installation's proxy commit; another commit is not one a caller chooses")
+			}
+			if (submitted.proxyBuildToken !== undefined || submitted.proxyBuildManifestSha256 !== undefined || submitted.proxyBuildId !== undefined) {
+				throw new Error("aws: a namespace's proxy build is recorded by its provider, never submitted")
+			}
+			return { ...namespace, target: targetOf(namespace, installation, proxySource) }
 		},
 		namespaceResourceClaims: (namespace) => [`${STACK_CLAIM}${awsNamespaceResources(namespace.id, namespace.env).stackName}`],
 		// The hosts the proxy will route a member on, by its manifest's rule, so Control refuses two members on one host now.

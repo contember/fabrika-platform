@@ -17,8 +17,11 @@
 // - A failure is a namespace error as Control records it (`namespaceFailure`), never an error object.
 //
 // Not yet: following the build to its end (its log, its verdict, the URL parameter's deletion, the image's digest), the
-// proxy's ECS service, and `republish`, which will call this. Nothing calls it yet. The URL parameter expires with its
-// URL (`AWS_SOURCE_URL_SECONDS`) until the build's end deletes it.
+// proxy's ECS service, and `republish`, which will call this. Nothing calls it yet. Until then an attempt's URL
+// parameter stays in Parameter Store, and so does that of an attempt a changed manifest replaced before its build was
+// recorded: the URL in it stops opening the archive after `AWS_SOURCE_URL_SECONDS`, but the parameter itself is not
+// deleted. The step that follows the build is to delete its own attempt's, and every other one under the namespace's
+// `builds/` path by listing it: a replaced attempt's token is no longer recorded anywhere.
 //
 // UNVERIFIED: StartBuild's idempotency window and the archive's layout as CodeBuild unpacks it follow the API reference
 // and Control's archive tests; none was checked against an account.

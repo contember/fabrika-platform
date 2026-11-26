@@ -432,12 +432,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     image whose binary cannot load its libraries or whose configuration Caddy refuses.
     **The pin** (built): a namespace's target holds its proxy source, `proxyRepository` (`<owner>/<name>`) and
     `proxyCommitSha`. A plan pins the installation's default (Control's `FABRIKA_AWS_PROXY_REPOSITORY` and
-    `FABRIKA_AWS_PROXY_COMMIT_SHA`); `normalize` and every lifecycle call keep a stored pin as it is, never moving it to
-    a newer default (ADR-0045), and refuse a pin of another repository than the installation's: the proxy is the
-    enforcement point, built from the platform repository alone. Moving a pin is an operator's update, not built.
+    `FABRIKA_AWS_PROXY_COMMIT_SHA`). Control normalizes only what a caller submits (a namespace created, adopted or
+    planned), so `normalize` refuses a commit other than the default and any `proxyBuild*` field: a caller never picks
+    the commit the enforcement point is built from (an older one, or one only a fork holds, which GitHub serves through
+    the parent repository) nor a build. The lifecycle calls keep a stored pin as it is, never moving it to a newer
+    default (ADR-0045). Every read refuses a pin of another repository than the installation's. Moving a pin is an
+    operator's update, only to the default, not built.
     **The build's start** (built, `src/proxy-attempt.ts`; nothing calls it yet): the attempt's token and the manifest's
     sha256 are recorded in the target first; Control uploads the pinned commit with the manifest appended
-    (`proxy.manifest.json`) under `sources/namespaces/<id>/<env>/<token>.tar.gz` and answers the commit and the
+    (`proxy.manifest.json`) under `sources/_namespaces/<id>/<env>/<token>.tar.gz` (a segment no application id can take) and answers the commit and the
     manifest's sha256, both checked; the presigned read goes into a SecureString under the namespace's `builds/`; the
     build starts under the token, and its id is recorded. A recorded attempt is found by its token before anything is
     sent again (only when no build carries it are the upload and the start repeated, under the same token); a changed

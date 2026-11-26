@@ -132,7 +132,7 @@ describe('startAwsProxyBuild', () => {
 		expect(fake.calls).toEqual([
 			// The token and the manifest's digest first, before anything of the attempt is written.
 			'checkpoint',
-			`s3PartWriter fabrika-sources-123456789012 sources/namespaces/shared/prod/${TOKEN}.tar.gz`,
+			`s3PartWriter fabrika-sources-123456789012 sources/_namespaces/shared/prod/${TOKEN}.tar.gz`,
 			`upload contember/fabrika-platform@${PROXY_SOURCE.commitSha} proxy.manifest.json`,
 			`putSecret ${PARAMETER} presigned`,
 			`startBuild fabrika_ns_shared_prod ${TOKEN}`,
@@ -182,7 +182,7 @@ describe('startAwsProxyBuild', () => {
 		// No new token: the upload and the start go again under the recorded one.
 		expect(lost.calls).toEqual([
 			`findBuild fabrika_ns_shared_prod ${TOKEN}`,
-			`s3PartWriter fabrika-sources-123456789012 sources/namespaces/shared/prod/${TOKEN}.tar.gz`,
+			`s3PartWriter fabrika-sources-123456789012 sources/_namespaces/shared/prod/${TOKEN}.tar.gz`,
 			`upload contember/fabrika-platform@${PROXY_SOURCE.commitSha} proxy.manifest.json`,
 			`putSecret ${PARAMETER} presigned`,
 			`startBuild fabrika_ns_shared_prod ${TOKEN}`,
