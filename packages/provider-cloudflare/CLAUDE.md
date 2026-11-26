@@ -421,13 +421,17 @@ Invariants:
   app deployment.
 - **Runner images are account-owned.** Every scaffolded workflow run builds the image from the exact
   `fabrika.ref` checkout into the target account. Upstream CI never publishes a shared runner image.
-- **An installation registers identity-bound external OAuth clients; MCP authoring is not supported yet** (ADR-0084,
-  `identity-clients.ts`).
+- **An installation imports identity-bound external OAuth clients into IAM; MCP authoring is not supported yet**
+  (ADR-0084, ADR-0089, `identity-clients.ts`).
   `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`, the Zerops variable, reaches IAM's stage and the control-plane stage;
   `parseCloudflareIdentityClients` refuses every entry that is not `external` with an `identity` as not supported yet
-  (MCP authoring on Cloudflare would lift that one check), an identity app that is IAM's, the console's or Operations' id (its roles reconcile would rewrite
-  that vocabulary) and an identity resource on a platform host, before the stage deploys. IAM's `fabrika.config.ts`
-  writes the list into `OAUTH_CONFIG`; the pair form reconciles their roles after IAM's vocabulary with
-  `@fabrika/installation-init`'s `reconcileIdentityApps`, the Zerops deploy's own.
+  (MCP authoring on Cloudflare would lift that one check), an identity app that is IAM's, the console's or Operations' id
+  and an identity resource on a platform host, before the stage deploys. `assertCloudflareMcpAuthoringOff` refuses
+  `FABRIKA_PLATFORM_MCP_AUTHORING=on` the same way in both stages; the change that brings MCP authoring to Cloudflare wires
+  that switch into the composition. IAM's `fabrika.config.ts` writes the list into `OAUTH_CONFIG`, which IAM serves
+  until it has imported the list, with the console's, IAM's and Operations' hostnames as `hosts`. The pair form calls
+  `@fabrika/installation-init`'s `importOAuthClientsOnce` after IAM's vocabulary (`importCloudflareOAuthClients`), the
+  Zerops deploy's own sequence: every run, with an empty list when the variable is unset; IAM writes on the first call
+  only, and the stage warns while the variable is still set. The roles reconcile of external applications is gone.
 - **Scaffold pushes never deploy.** Both initial and refresh commits use `[skip ci]`; init dispatches the
   workflow explicitly only after it writes the target GitHub Environment.

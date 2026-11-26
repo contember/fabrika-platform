@@ -1,6 +1,6 @@
 import type { OAuthResourceDto } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
-import { identityAppSchemas, mcpAuthoringOn, type McpClient, parseMcpClientsJson, platformIamOAuthConfig } from '../mcp'
+import { mcpAuthoringOn, type McpClient, parseMcpAuthoring, parseMcpClientsJson, platformIamOAuthConfig, resolveMcpAuthoring } from '../mcp'
 import type { PlatformProxyComposition, PlatformProxyManifestTemplate } from '../proxy-manifest'
 
 const CLAUDE: McpClient = {
@@ -83,33 +83,28 @@ describe('the MCP client list', () => {
 		expect(() => parseMcpClientsJson(JSON.stringify([{ ...OPS_TOOL, identity: { app: 'ops@prod', resource: 'https://ops.example.test' } }]))).toThrow()
 	})
 
-	test("an external application's roles become its IAM vocabulary, once per app, each granting no action", () => {
-		const roles = [{ key: 'admin-ops', name: 'Administrator' }, { key: 'viewer', name: 'Viewer' }]
-		const web = { ...OPS_TOOL, identity: { ...OPS_TOOL.identity, app: 'ops-tool', resource: 'https://ops.example.test', roles } }
+	test('clients of one external application must name one resource and one list of roles, as the registry holds', () => {
+		const roles = [{ key: 'viewer', name: 'Viewer' }]
+		const web = { ...OPS_TOOL, identity: { app: 'ops-tool', resource: 'https://ops.example.test', roles } }
 		const native = { ...web, clientId: 'https://ops.example.test/oauth/native.json' }
 		expect(parseMcpClientsJson(JSON.stringify([web, native]))).toEqual([web, native])
-		// An identity-only client without roles adds no vocabulary.
+		const unroled = { ...native, identity: { app: 'ops-tool', resource: 'https://ops.example.test' } }
+		expect(() => parseMcpClientsJson(JSON.stringify([web, unroled]))).toThrow('names another resource or other roles')
+		const elsewhere = { ...native, identity: { ...web.identity, resource: 'https://ops.example.test/native' } }
+		expect(() => parseMcpClientsJson(JSON.stringify([web, elsewhere]))).toThrow('names another resource or other roles')
+	})
+
+	test('two external applications must not name one identity resource, as the registry refuses', () => {
 		const other = {
 			...OPS_TOOL,
 			clientId: 'https://other.example.test/oauth/client.json',
-			identity: { app: 'other', resource: 'https://other.example.test' },
+			identity: { app: 'other-tool', resource: OPS_TOOL.identity?.resource ?? '' },
 		}
-		expect(identityAppSchemas([web, native, other]))
-			.toEqual([{
-				app: 'ops-tool',
-				schema: {
-					scopes: [],
-					actions: [],
-					roles: { 'admin-ops': { name: 'Administrator', permissions: [] }, viewer: { name: 'Viewer', permissions: [] } },
-				},
-			}])
-	})
-
-	test('two clients of one external application must declare the same roles', () => {
-		const roles = [{ key: 'viewer', name: 'Viewer' }]
-		const web = { ...OPS_TOOL, identity: { app: 'ops-tool', resource: 'https://ops.example.test', roles } }
-		const native = { ...OPS_TOOL, clientId: 'https://ops.example.test/oauth/native.json' }
-		expect(() => parseMcpClientsJson(JSON.stringify([web, native]))).toThrow('declares other roles')
+		expect(() => parseMcpClientsJson(JSON.stringify([OPS_TOOL, other]))).toThrow(
+			'`ops-tool` and `other-tool` name one identity resource, https://ops.example.test',
+		)
+		const apart = { ...other, identity: { app: 'other-tool', resource: 'https://other.example.test' } }
+		expect(parseMcpClientsJson(JSON.stringify([OPS_TOOL, apart]))).toEqual([OPS_TOOL, apart])
 	})
 
 	test('only a client that is not identity-only turns MCP authoring on', () => {
@@ -123,7 +118,38 @@ describe('the MCP client list', () => {
 	})
 })
 
+describe('the MCP authoring switch', () => {
+	const NAMES = { setting: 'FABRIKA_PLATFORM_MCP_AUTHORING', clients: 'FABRIKA_PLATFORM_MCP_CLIENTS_JSON' }
+
+	test('reads on and off, is absent when unset, and refuses anything else naming its source', () => {
+		expect(parseMcpAuthoring('on', NAMES.setting)).toBe(true)
+		expect(parseMcpAuthoring('off', NAMES.setting)).toBe(false)
+		expect(parseMcpAuthoring(undefined, NAMES.setting)).toBeUndefined()
+		for (const raw of ['true', 'ON', '1', 'yes']) {
+			expect(() => parseMcpAuthoring(raw, '--mcp-authoring')).toThrow('--mcp-authoring must be on or off')
+		}
+	})
+
+	test('set, it decides whatever the client list holds', () => {
+		expect(resolveMcpAuthoring(false, [CLAUDE], NAMES)).toEqual({ on: false })
+		expect(resolveMcpAuthoring(true, undefined, NAMES)).toEqual({ on: true })
+		expect(resolveMcpAuthoring(true, [OPS_TOOL], NAMES)).toEqual({ on: true })
+	})
+
+	test('unset, an authoring entry in the list still turns it on, with a warning that names the switch', () => {
+		const inferred = resolveMcpAuthoring(undefined, [OPS_TOOL, CLAUDE], NAMES)
+		expect(inferred.on).toBe(true)
+		expect(inferred.warning).toContain('set FABRIKA_PLATFORM_MCP_AUTHORING=on')
+		expect(inferred.warning).toContain('FABRIKA_PLATFORM_MCP_CLIENTS_JSON')
+		// Off stays off without the switch, so nothing needs saying.
+		expect(resolveMcpAuthoring(undefined, [OPS_TOOL], NAMES)).toEqual({ on: false })
+		expect(resolveMcpAuthoring(undefined, undefined, NAMES)).toEqual({ on: false })
+	})
+})
+
 describe("IAM's OAuth configuration", () => {
+	const HOSTS = ['iam.example.test', 'console.example.test', 'operations.example.test']
+
 	test('an external client gets the RFC 8707 resource with its scope ceiling, like any other client', () => {
 		expect(platformIamOAuthConfig(TEMPLATE, COMPOSITION, [EXTERNAL])).toEqual({
 			clients: [EXTERNAL],
@@ -133,15 +159,25 @@ describe("IAM's OAuth configuration", () => {
 				defaultScopes: ['authoring'],
 				scopeGrants: [{ scope: 'authoring', permissions: [{ action: 'deploy.read' }] }],
 			}],
+			hosts: HOSTS,
 		})
 	})
 
 	test('without MCP authoring, it names no client and only the command-line resources', () => {
-		expect(platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [])).toEqual({ clients: [], resources: [RPC_RESOURCE] })
+		expect(platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [])).toEqual({ clients: [], resources: [RPC_RESOURCE], hosts: HOSTS })
 	})
 
 	test('an identity-only client is listed with its binding, and adds no resource', () => {
-		expect(platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [OPS_TOOL])).toEqual({ clients: [OPS_TOOL], resources: [RPC_RESOURCE] })
+		expect(platformIamOAuthConfig(TEMPLATE, { ...COMPOSITION, mcp: false }, [OPS_TOOL])).toEqual({
+			clients: [OPS_TOOL],
+			resources: [RPC_RESOURCE],
+			hosts: HOSTS,
+		})
+	})
+
+	test("names every host of the installation once, the list IAM checks a registered application's resource against", () => {
+		const shared = { ...COMPOSITION, placement: { ...COMPOSITION.placement, operations: { hosts: ['console.example.test'] } } }
+		expect(platformIamOAuthConfig(TEMPLATE, { ...shared, mcp: false }, []).hosts).toEqual(['iam.example.test', 'console.example.test'])
 	})
 
 	test("an identity resource on a platform host, or under a platform service's app id, is refused", () => {

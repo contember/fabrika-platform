@@ -38,16 +38,17 @@ export { ghRepoExists, hasGhCli } from './gh'
 export { action, detail, fail, info, ok, step, url, warn } from './log'
 export {
 	type IamOAuthConfig,
-	type IdentityAppReconcileCall,
-	type IdentityAppSchema,
-	identityAppSchemas,
-	type IdentityAppsReconcile,
+	MCP_AUTHORING_VARIABLE,
+	MCP_CLIENTS_VARIABLE,
+	type McpAuthoring,
 	mcpAuthoringOn,
 	type McpClient,
+	parseMcpAuthoring,
 	parseMcpClientsJson,
 	platformIamOAuthConfig,
-	reconcileIdentityApps,
+	resolveMcpAuthoring,
 } from './mcp'
+export { importOAuthClientsOnce, type OAuthClientImport, type OAuthClientImportApi } from './oauth-import'
 export { type CommandEnv, describeArgument, readEnv, readFlag, requiredSetting, setting, shellWord } from './options'
 export { assertPinnedTag } from './pin'
 export { confirm } from './prompt'

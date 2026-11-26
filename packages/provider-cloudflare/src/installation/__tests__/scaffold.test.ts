@@ -140,6 +140,11 @@ describe('platform scaffold', () => {
 			expect(platformStep).toContain('FABRIKA_RUNNER_KEY: ${{ secrets.FABRIKA_RUNNER_KEY }}')
 			expect(platformStep).toContain('--runner-config=packages/runner-cloudflare/fabrika-runner.config.ts')
 			expect(platformStep).toContain('--worker-config=packages/control/fabrika.config.ts')
+			// Both stages that read the client list get it and the MCP authoring switch, which they refuse `on` (ADR-0089).
+			for (const step of [iamStep, platformStep]) {
+				expect(step).toContain('FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}')
+				expect(step).toContain('FABRIKA_PLATFORM_MCP_AUTHORING: ${{ vars.FABRIKA_PLATFORM_MCP_AUTHORING }}')
+			}
 			// The control plane holds the same mail transport as IAM, to hand it to applications that send installation mail.
 			for (const name of ['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_FROM_NAME']) {
 				expect(platformStep).toContain(`${name}: \${{ vars.${name} }}`)

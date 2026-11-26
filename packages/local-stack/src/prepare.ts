@@ -10,15 +10,18 @@ import {
 } from '@fabrika/auth-core'
 import { CONTROL_APP_ID } from '@fabrika/control-contract'
 import {
-	mcpAuthoringOn,
+	type McpAuthoring,
 	type McpClient,
 	OPERATIONS_OAUTH_RESOURCE_VARIABLE,
+	parseMcpAuthoring,
 	parseMcpClientsJson,
 	platformIamOAuthConfig,
 	platformOAuthResourceVerifiedBy,
 	type PlatformProxyComposition,
 	type PlatformProxyManifest,
 	platformServiceTableDigest,
+	readEnv as readSetting,
+	resolveMcpAuthoring,
 } from '@fabrika/installation-init'
 import { platformProxyManifestTemplate, resolvePlatformProxyManifest } from '@fabrika/platform-artifacts/proxy-manifest'
 import { decodeZeropsNamespaceProxySource, verifyZeropsNamespaceProxySource } from '@fabrika/provider-zerops'
@@ -267,7 +270,7 @@ export async function prepareLocalSourceConfiguration(directory: string = STATE_
  * the same `OPERATIONS_APP_ID`, which they must: a manifest may not name one app twice, so the
  * Cloudflare entry's old `vozka` was the one shape a shared manifest could never express.
  */
-const localComposition = (mcpClients: readonly McpClient[] | undefined): PlatformProxyComposition => ({
+const localComposition = (mcp: boolean): PlatformProxyComposition => ({
 	scheme: 'http',
 	placement: {
 		// IAM listens on the composition's public port here, because its issuer carries that port
@@ -279,29 +282,46 @@ const localComposition = (mcpClients: readonly McpClient[] | undefined): Platfor
 	publicPort: LOCAL_PUBLIC_PORT,
 	// Always an authorization server, like an https installation: the command-line client's device grant is served.
 	authorizationServer: IAM_ISSUER,
-	mcp: mcpAuthoringOn(mcpClients),
+	mcp,
 })
 
-export const localPlatformProxyManifest = (mcpClients?: readonly McpClient[]): PlatformProxyManifest =>
-	resolvePlatformProxyManifest(platformProxyManifestTemplate(), localComposition(mcpClients))
+export const localPlatformProxyManifest = (mcp = false): PlatformProxyManifest =>
+	resolvePlatformProxyManifest(platformProxyManifestTemplate(), localComposition(mcp))
+
+/** The local OAuth client list, in the shape of an installation's `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`. */
+export const LOCAL_OAUTH_CLIENTS_VARIABLE = 'FABRIKA_LOCAL_OAUTH_CLIENTS_JSON'
+/** The local MCP authoring switch, `on` or `off`, as an installation's `FABRIKA_PLATFORM_MCP_AUTHORING`. */
+export const LOCAL_MCP_AUTHORING_VARIABLE = 'FABRIKA_LOCAL_MCP_AUTHORING'
 
 /**
- * MCP authoring is OFF locally unless `FABRIKA_LOCAL_MCP_CLIENTS_JSON` names clients before `local:up`:
- * a managed client is a CIMD document IAM fetches over HTTPS, and no local one exists. Same JSON shape
- * and parser as an installation's `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`.
+ * The OAuth clients `local:up` imports into IAM's registry, as a deploy imports an installation's (ADR-0089); absent
+ * when unset. The variable's earlier name is refused rather than silently ignored.
  */
-export const readLocalMcpClients = (env: Record<string, string | undefined>): readonly McpClient[] | undefined => {
-	const raw = env['FABRIKA_LOCAL_MCP_CLIENTS_JSON']
-	return raw === undefined || raw.trim() === '' ? undefined : parseMcpClientsJson(raw)
+export const readLocalOAuthClients = (env: Record<string, string | undefined>): readonly McpClient[] | undefined => {
+	if (readSetting(env, 'FABRIKA_LOCAL_MCP_CLIENTS_JSON') !== undefined) {
+		throw new Error(`FABRIKA_LOCAL_MCP_CLIENTS_JSON is renamed ${LOCAL_OAUTH_CLIENTS_VARIABLE}, in the same shape`)
+	}
+	const raw = readSetting(env, LOCAL_OAUTH_CLIENTS_VARIABLE)
+	return raw === undefined ? undefined : parseMcpClientsJson(raw)
 }
 
-/** IAM's `FABRIKA_IAM_OAUTH_CONFIG` for the local composition: the command-line client's resources, and MCP's with clients. */
-export const localIamOAuthConfig = (mcpClients: readonly McpClient[] | undefined): string =>
-	JSON.stringify(platformIamOAuthConfig(platformProxyManifestTemplate(), localComposition(mcpClients), mcpClients ?? []))
+/**
+ * MCP authoring is OFF locally unless `FABRIKA_LOCAL_MCP_AUTHORING=on` before `local:up`, or, unset, the client list
+ * names an MCP client: a managed client is a CIMD document IAM fetches over HTTPS, and no local one exists.
+ */
+export const readLocalMcpAuthoring = (env: Record<string, string | undefined>, clients: readonly McpClient[] | undefined): McpAuthoring =>
+	resolveMcpAuthoring(parseMcpAuthoring(readSetting(env, LOCAL_MCP_AUTHORING_VARIABLE), LOCAL_MCP_AUTHORING_VARIABLE), clients, {
+		setting: LOCAL_MCP_AUTHORING_VARIABLE,
+		clients: LOCAL_OAUTH_CLIENTS_VARIABLE,
+	})
+
+/** IAM's `FABRIKA_IAM_OAUTH_CONFIG` for the local composition: the command-line client's resources, MCP's when it is on. */
+export const localIamOAuthConfig = (clients: readonly McpClient[] | undefined, mcp: boolean): string =>
+	JSON.stringify(platformIamOAuthConfig(platformProxyManifestTemplate(), localComposition(mcp), clients ?? []))
 
 /** The console's Operations RPC as the resource Operations accepts the command-line client's tokens for. */
 export const localOperationsOAuthResource = (): string => {
-	const resource = platformOAuthResourceVerifiedBy(platformProxyManifestTemplate(), localComposition(undefined), 'operations')
+	const resource = platformOAuthResourceVerifiedBy(platformProxyManifestTemplate(), localComposition(false), 'operations')
 	if (resource === undefined) throw new Error('the platform template names no OAuth resource Operations verifies')
 	return resource
 }
@@ -370,8 +390,8 @@ export const writeAppsProxyConfig = async (appsManifest: ProxyManifest): Promise
 	])
 }
 
-const generateProxyConfigs = async (mcpClients: readonly McpClient[] | undefined): Promise<void> => {
-	const platformManifest = localPlatformProxyManifest(mcpClients)
+const generateProxyConfigs = async (mcp: boolean): Promise<void> => {
+	const platformManifest = localPlatformProxyManifest(mcp)
 	await Promise.all([
 		writeJson('platform-proxy.manifest.json', platformManifest),
 		writeJson(
@@ -408,16 +428,18 @@ export const prepareLocalStack = async (): Promise<void> => {
 	await run(['bun', 'run', '--filter', '@fabrika/dashboard', 'build'])
 	await prepareLocalSecrets()
 	await prepareLocalSourceConfiguration()
-	const mcpClients = readLocalMcpClients(process.env)
-	// Rewritten on every prepare, so turning MCP off is unsetting the variable and running `local:up`.
-	await writeEnv(STATE_DIR, 'iam-oauth.env', { FABRIKA_IAM_OAUTH_CONFIG: localIamOAuthConfig(mcpClients) })
+	const clients = readLocalOAuthClients(process.env)
+	const authoring = readLocalMcpAuthoring(process.env, clients)
+	if (authoring.warning !== undefined) console.warn(authoring.warning)
+	// Rewritten on every prepare, so turning MCP off is switching it off and running `local:up`.
+	await writeEnv(STATE_DIR, 'iam-oauth.env', { FABRIKA_IAM_OAUTH_CONFIG: localIamOAuthConfig(clients, authoring.on) })
 	await writeEnv(STATE_DIR, 'control-table.env', {
-		[FABRIKA_SERVICE_TABLE_DIGEST]: platformServiceTableDigest(localPlatformProxyManifest(mcpClients), CONTROL_APP_ID),
+		[FABRIKA_SERVICE_TABLE_DIGEST]: platformServiceTableDigest(localPlatformProxyManifest(authoring.on), CONTROL_APP_ID),
 	})
 	await writeEnv(STATE_DIR, 'operations-oauth.env', { [OPERATIONS_OAUTH_RESOURCE_VARIABLE]: localOperationsOAuthResource() })
-	await generateProxyConfigs(mcpClients)
+	await generateProxyConfigs(authoring.on)
 	await prepareNotesApplication()
-	console.info(`Local stack prepared for ${IAM_ISSUER}; MCP authoring ${mcpAuthoringOn(mcpClients) ? 'on' : 'off'}`)
+	console.info(`Local stack prepared for ${IAM_ISSUER}; MCP authoring ${authoring.on ? 'on' : 'off'}`)
 }
 
 if (import.meta.main) {

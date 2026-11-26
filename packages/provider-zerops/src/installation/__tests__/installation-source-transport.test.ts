@@ -15,6 +15,7 @@ import { parsePlatformInstallArgs } from '../install-options'
 import { prepareInstallationSource } from '../installation-source'
 import { recordingInitLog } from '../log'
 import { uploadPlatformArchive, validatePlatformUploadUrl } from '../platform-upload'
+import { fakeIamAdmin } from './fake-iam-admin'
 import { fakeNamespaceProxySource, fakePlatformSource, fakeSourceCollaborators } from './fake-platform-source'
 import { fakeZerops, importedLightServices, platformServices, SUBDOMAINS } from './fake-zerops'
 
@@ -37,6 +38,7 @@ const fixture = () => {
 		...fakeSourceCollaborators,
 		api: zerops.api,
 		reconcileSchema: async () => {},
+		iamAdmin: fakeIamAdmin().iamAdmin,
 		sleep: async () => {},
 		log: recordingInitLog(),
 		signal: new AbortController().signal,

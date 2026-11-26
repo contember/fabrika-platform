@@ -52,8 +52,13 @@ Public because both provider packages are, and
   IAM's sign-in switches and OIDC client are the bring-up's alone: a deploy writes none of them.
 - `proxy-manifest.ts` — the platform proxy manifest TEMPLATE type, `resolvePlatformProxyManifest` and
   `platformServiceTableDigest`. The template itself is a provider's generated data (Zerops: `generated/`).
-- `mcp.ts` — the operator's MCP client list and IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it (ADR-0049), and
-  `reconcileIdentityApps`, the one reconcile of external applications' roles both providers' deploys call (ADR-0084).
+- `mcp.ts` — the operator's OAuth client list (`parseMcpClientsJson`), IAM's `FABRIKA_IAM_OAUTH_CONFIG` built from it
+  with the installation's hosts (ADR-0049, ADR-0089), and the MCP authoring switch (`parseMcpAuthoring`,
+  `resolveMcpAuthoring`: the switch decides; unset, this release alone infers it from the list and warns).
+- `oauth-import.ts` — `importOAuthClientsOnce`, the one import of that list into IAM's registry every provider's deploy
+  and `local:up` call (ADR-0089, release N), over the provisioning key's admin RPC client (`admin.ts`'s
+  `adminRpcStep`): with the list, or empty when its variable is unset; a failure fails the deploy; every deploy warns
+  while the variable is set, the importing one included.
 
 ## Invariants
 

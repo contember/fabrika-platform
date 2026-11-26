@@ -41,15 +41,19 @@ bun run test:browser  # the opice suites in tests/browser/
   use once the flag is off; the browser composition runs with it off. Never widen a local endpoint table to make
   something pass: a refusal here is a refusal in production.
 - **MCP authoring is OFF locally by default.** A managed MCP client is a CIMD document IAM fetches over
-  HTTPS, and there is no local one — do not add a fake CIMD server. Setting `FABRIKA_LOCAL_MCP_CLIENTS_JSON`
-  before `local:up` turns it on through the installation's own resolver: `prepareLocalStack` rewrites
-  `.state/iam-oauth.env` (empty = off) and the platform manifest on every run.
+  HTTPS, and there is no local one — do not add a fake CIMD server. `FABRIKA_LOCAL_MCP_AUTHORING=on` before `local:up`
+  turns it on through the installation's own resolver; unset, an MCP client in `FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` still
+  does, with a warning, as on an installation in this release (ADR-0089). `prepareLocalStack` rewrites
+  `.state/iam-oauth.env` and the platform manifest on every run. `registerLocalApps` imports
+  `FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` (an installation's client list, same shape) into IAM's registry through the
+  deploy's own `importOAuthClientsOnce`; IAM writes it on the first `up` after a reset only. Its earlier name,
+  `FABRIKA_LOCAL_MCP_CLIENTS_JSON`, is refused.
 - **`registerLocalApps` stands in for the deploy this composition does not have.** Since
   [ADR-0023](../../docs/decisions/0023-one-session-per-host.md) a session reaches an app's host ONLY
   through a one-time code for a REGISTERED return origin, and locally nothing deploys the console.
   `src/app-registration.ts` therefore makes the same `reconcileSchema` call a deploy makes — same
   endpoints, same admin credential — for `vozka` and `notes`, right after the composition reports
-  healthy. Every host then gets its own `__Host-px_session`. This is not a local-only mechanism, and
+  healthy, and the same OAuth client import. Every host then gets its own `__Host-px_session`. This is not a local-only mechanism, and
   there is no local-only branch in IAM or the proxy to support it; an app missing from that list is a
   400 naming its address at sign-in. `src/__tests__/app-registration.test.ts` pins the registered
   origins against the manifest hosts, because a drift between them is invisible until someone logs in.

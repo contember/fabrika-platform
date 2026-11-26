@@ -841,7 +841,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   `OAUTH_CONFIG` (on Bun the deploy var `FABRIKA_IAM_OAUTH_CONFIG`; on Cloudflare computed by `fabrika.config.ts` from
   the console's origin and the identity-bound clients of `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`, checked with
   `parseOAuthConfig` at deploy; unset = every OAuth path 404s, malformed
-  fails the boot) lists the resources with their scope ceilings, the installation's `hosts` (optional), and the CIMD
+  fails the boot) lists the resources with their scope ceilings, the installation's `hosts` (optional; both deploys write them), and the CIMD
   client ids (kind `claude`, `chatgpt` or `external`, a label only) with their exact redirect URIs, which IAM serves only
   until the registry's import, below. An unregistered client id is refused before any fetch, and a
   fetched metadata document can never add a redirect URI. A scope grant is a CEILING: the token's
@@ -870,7 +870,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   principal only), the token names them in `roles` and ends with the earliest of their grants, and a person holding
   none is refused at the consent (`access_denied`), the exchange and every refresh. The roles are the app's vocabulary,
   each granting no action: a registry client's are read from it (`origin = 'app'`), and an `OAUTH_CONFIG` client's are
-  reconciled by the deploy (`reconcileIdentityApps`, `@fabrika/installation-init`, on both clouds).
+  the ones an earlier release's deploy reconciled, which the import adopts. No deploy reconciles them any more: both
+  clouds' deploys call `importOAuthClientsOnce` (`@fabrika/installation-init`) instead.
 - **EVERY OAUTH PATH READS ITS CLIENT THROUGH `registeredClient` (`src/oauth-clients.ts`), FROM ONE SOURCE** (ADR-0089):
   the authorization request, client authentication at the token and revocation endpoints, and every exchange and
   refresh (`grantCeiling`). Until the deploy variable is imported (`oauth_registry` holds its one row) that is

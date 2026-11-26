@@ -2,6 +2,7 @@ import { reconcileSchema } from '@fabrika/auth'
 import { builtinEmailProviders } from '@fabrika/email/providers'
 import { OAUTH_CLIENT_PROVIDERS } from '@fabrika/iam-contract'
 import {
+	createIamAdminClient,
 	describeArgument,
 	info as consoleInfo,
 	ok as consoleOk,
@@ -214,6 +215,7 @@ ONE step — on Cloudflare the order lives in the scaffolded workflow instead, d
   3. deploy ${PLATFORM_CONCURRENT_DEPLOY.join(' + ')} together, then ${PLATFORM_SEQUENTIAL_DEPLOY.join(' → ')}, waiting for each to become ACTIVE
   4. ensure the proxy's public entry point
   5. reconcile the console's app schema and register its return origin with IAM
+  6. import the OAuth client list into IAM's registry, once (ADR-0089); every later deploy writes nothing
 
 The order is a security property, not just a dependency: the application enforces nothing
 (ADR-0022), so the proxy is deployed BEFORE control, and every environment write happens before any
@@ -237,7 +239,8 @@ Options (a flag beats the environment variable beside it):
   --operations-host=<host>          FABRIKA_PLATFORM_OPERATIONS_HOST
   --scheme=<http|https>             FABRIKA_PLATFORM_SCHEME         default https
   --source-dir=<checkout>           required                       clean full checkout running this CLI
-  --mcp-clients=<json>              FABRIKA_PLATFORM_MCP_CLIENTS_JSON  OAuth clients; MCP authoring is on with one not identity-only
+  --mcp-clients=<json>              FABRIKA_PLATFORM_MCP_CLIENTS_JSON  OAuth clients, imported into IAM once; delete it after
+  --mcp-authoring=<on|off>          FABRIKA_PLATFORM_MCP_AUTHORING     MCP authoring; unset infers it from --mcp-clients, this release only
   --plain-variables=<svc/KEY,...>   FABRIKA_PLATFORM_PLAIN_VARIABLES   readable variables that are not credentials
   --dry-run                                                         read everything, change nothing
 
@@ -250,10 +253,16 @@ On --scheme=https, IAM gets FABRIKA_IAM_OAUTH_CONFIG and the console's RPC admit
 client's OAuth bearers (its RFC 8628 device grant). On plain http neither happens and
 FABRIKA_IAM_OAUTH_CONFIG on iam is left as it is.
 
-MCP authoring (ADR-0049) is opt-in on top, and needs https. --mcp-clients takes a JSON array of the MCP
-clients this installation trusts: [{"provider":${MCP_CLIENT_PROVIDERS},"clientId":"<https CIMD URL>",
-"redirectUris":[...],"metadataUrl":"<https URL>"?}]. With it, the console's /mcp admits OAuth bearers too.
-Without it, /mcp admits only a signed-in person.
+MCP authoring (ADR-0049) is opt-in on top, and needs https: --mcp-authoring=on. With it, the console's /mcp
+admits OAuth bearers too; without it, /mcp admits only a signed-in person. Unset, this release still turns it on
+when --mcp-clients lists a client that is not identity-only, and warns; the next release reads only the switch.
+
+--mcp-clients takes the JSON array of OAuth clients an earlier release registered:
+[{"provider":${MCP_CLIENT_PROVIDERS},"clientId":"<https CIMD URL>","redirectUris":[...],"metadataUrl":"<https URL>"?,
+"identity":{...}?}]. Every deploy hands it to IAM's oauthClients.importOnce, which writes it into IAM's registry on
+the first call only (ADR-0089); with it unset, the import is empty. Once that has happened, IAM serves its registry, an
+IAM administrator registers external applications in the console, and the deploy warns while the variable is set.
+Delete it once this release is accepted on the installation.
 
 Credentials are read from the ENVIRONMENT ONLY and have no flag, so they cannot reach a CI log or a
 process listing:
@@ -394,6 +403,7 @@ const runDeploy = async (argv: readonly string[]): Promise<void> => {
 			...(input.apiBaseUrl === undefined ? {} : { baseUrl: input.apiBaseUrl }),
 		}),
 		reconcileSchema: consoleSchemaReconciler,
+		iamAdmin: createIamAdminClient,
 		sleep: defaultSleep,
 		log: consoleDeployLog(),
 		signal: neverAborted(),

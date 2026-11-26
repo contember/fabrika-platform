@@ -15,6 +15,7 @@ import { type InstallCollaborators, runInstall } from '../install'
 import { CREATE_PROJECT_FLAG, parsePlatformInstallArgs as parseArgs, type PlatformInstallInput } from '../install-options'
 import { recordingInitLog } from '../log'
 import { compileTopology, platformTopology } from '../topology/topology'
+import { fakeIamAdmin } from './fake-iam-admin'
 import { fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
 
@@ -92,6 +93,7 @@ const harness = (
 		...fakeSourceCollaborators,
 		api: options.wrap === undefined ? zerops.api : options.wrap(zerops.api),
 		reconcileSchema: async () => {},
+		iamAdmin: fakeIamAdmin().iamAdmin,
 		sleep: async (ms) => void sleeps.push(ms),
 		log,
 		prompts: {
@@ -191,6 +193,7 @@ describe('what it prints', () => {
 			...fakeSourceCollaborators,
 			api,
 			reconcileSchema: async () => {},
+			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log,
 			prompts: { confirm: async () => true },

@@ -149,7 +149,7 @@ const failed = (what: string, cause: unknown): Error => {
  * NEITHER, which a misdirected host can answer. The flow would then fail on a property of `undefined`
  * several calls later instead of on the wrong address.
  */
-const step = async <T>(what: string, call: () => Promise<T>): Promise<T> => {
+export const adminRpcStep = async <T>(what: string, call: () => Promise<T>): Promise<T> => {
 	let result: T
 	try {
 		result = await call()
@@ -166,7 +166,7 @@ const step = async <T>(what: string, call: () => Promise<T>): Promise<T> => {
 const findByEmail = async (client: FirstAdministratorApi, email: string): Promise<PrincipalListItem | undefined> => {
 	let before: string | undefined
 	for (let page = 0; page < MAX_PAGES; page += 1) {
-		const listed = await step(
+		const listed = await adminRpcStep(
 			'principals.list',
 			() => client.principals.list({ type: 'user', q: email, limit: PAGE_LIMIT, ...(before === undefined ? {} : { before }) }),
 		)
@@ -248,12 +248,12 @@ export const ensureFirstAdministrator = async (
 		)
 	}
 
-	const detail = await step('principals.get', () => client.principals.get({ principalId: principal.id }))
+	const detail = await adminRpcStep('principals.get', () => client.principals.get({ principalId: principal.id }))
 	const now = Math.floor(Date.now() / 1000)
 	const granted = detail.grants.some((grant) => isCrossAppAdminGrant(grant, now))
 	if (!granted) {
 		// `app: null` is the whole point: an app-scoped admin grant leaves the Access plane refusing.
-		await step('grants.create', () => client.grants.create({ principalId: principal.id, roleKey: ADMIN_ROLE_KEY, app: null }))
+		await adminRpcStep('grants.create', () => client.grants.create({ principalId: principal.id, roleKey: ADMIN_ROLE_KEY, app: null }))
 	}
 
 	return {
@@ -297,7 +297,7 @@ const ensureEnrollment = async (
 	if (state === 'pending' && !reissue) {
 		return { state: 'outstanding' }
 	}
-	const delivery = await step('passwords.issueEnrollment', () => client.passwords.issueEnrollment({ principalId }))
+	const delivery = await adminRpcStep('passwords.issueEnrollment', () => client.passwords.issueEnrollment({ principalId }))
 	return delivery.delivery === 'manual'
 		? { state: 'issued', url: delivery.url, expiresAt: delivery.expiresAt }
 		: { state: 'emailed', email: delivery.email, expiresAt: delivery.expiresAt }
