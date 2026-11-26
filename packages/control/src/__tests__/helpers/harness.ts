@@ -10,13 +10,19 @@ import { type ControlRepositories, type ControlRepositoryOptions, createControlR
 
 // ── Cumulative migrations (every migrations/*.sql, filename order) ─────────────
 
-function allMigrations(): string {
-	const dir = join(import.meta.dir, '..', '..', '..', 'migrations')
-	return readdirSync(dir)
-		.filter((f) => f.endsWith('.sql'))
+const MIGRATIONS_DIR = join(import.meta.dir, '..', '..', '..', 'migrations')
+
+/** The text of every migration whose filename `include` takes, in filename order. */
+export function migrationsText(include: (filename: string) => boolean = () => true): string {
+	return readdirSync(MIGRATIONS_DIR)
+		.filter((f) => f.endsWith('.sql') && include(f))
 		.sort()
-		.map((filename) => readFileSync(join(dir, filename), 'utf8'))
+		.map((filename) => readFileSync(join(MIGRATIONS_DIR, filename), 'utf8'))
 		.join('\n')
+}
+
+function allMigrations(): string {
+	return migrationsText()
 }
 
 // ── D1-compatible adapter over bun:sqlite (mirrors IAM's harness) ─────────
@@ -150,10 +156,10 @@ export interface Harness {
  * (unix SECONDS) overrides repository clocks so caller-stamped `*_at` assertions are deterministic.
  * `options` are the composition's other repository options, as a runtime root passes them.
  */
-export function createHarness(now?: () => number, options: Omit<ControlRepositoryOptions, 'now'> = {}): Harness {
+export function createHarness(now?: () => number, options: Omit<ControlRepositoryOptions, 'now'> = {}, migrations = migration): Harness {
 	const sqlite = new Database(':memory:')
 	sqlite.exec('PRAGMA foreign_keys = ON')
-	sqlite.exec(migration)
+	sqlite.exec(migrations)
 	const d1 = new TestD1Database(sqlite)
 	const repositories = createControlRepositories(d1, { ...options, ...(now === undefined ? {} : { now }) })
 	databases.set(repositories, d1)

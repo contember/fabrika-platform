@@ -151,6 +151,11 @@ export interface OperationDeploys {
 	servesDataOperations(target: OpsTarget): Promise<boolean>
 	/** Runs the pending run `runId` under `lease` with `objects` as its pointer, and settles it as far as it can. */
 	run(lease: Lease, runId: string, objects: ApplicationObjects): Promise<void>
+	/**
+	 * Ends a bookmark migration's own run as the migration ended (ADR-0069 §3): its provider's success alone leaves it
+	 * running. Nothing changes once it ended.
+	 */
+	finishRun(lease: Lease, runId: string, status: 'succeeded' | 'failed'): Promise<void>
 }
 
 export interface DataOperationDeps {
@@ -486,15 +491,15 @@ export function restoreClone(operationId: string): string {
 }
 
 /**
- * What a restore's deploys redeploy: the environment's newest succeeded run, at its commit; `null` while there is none.
- * A failed migration's rollback deploy leaves out the migration's own run (`except`), whose deploy succeeded.
+ * What a restore's deploys and a failed migration's rollback deploy redeploy: the environment's newest succeeded run that
+ * deployed a commit, never a dry run; `null` while there is none. The rollback leaves out the migration's own run.
  */
 async function redeployable(
 	deps: { repositories: Pick<ControlRepositories, 'runs'> },
 	target: OpsTarget,
 	except?: string,
 ): Promise<{ readonly ref: string; readonly commitSha: string } | null> {
-	const run = await deps.repositories.runs.getLatestSucceededRun({ ...target, ...(except === undefined ? {} : { except }) })
+	const run = await deps.repositories.runs.getLatestDeployedRun({ ...target, ...(except === undefined ? {} : { except }) })
 	return run === null || run.commit_sha === null ? null : { ref: run.ref, commitSha: run.commit_sha }
 }
 
@@ -654,6 +659,7 @@ export function toDataOperationDto(row: DataOperationRow): DataOperationDto {
 		recordsBookmark: row.records_bookmark === 1,
 		migrationFailure: row.migration_failure,
 		revertRunId: row.revert_run_id,
+		candidateRecovered: row.candidate_recovered === 1,
 	}
 }
 
@@ -716,11 +722,13 @@ type Pointer =
 	| { readonly kind: 'refused'; readonly code: string }
 
 /**
- * What waiting for the new version of a bookmark migration ended with: the answer it waited for, the new version's
- * `migration_failed`, the deadline, a refusal to fail with, the pass's end, or no published generation to ask at.
+ * What waiting for the new version of a bookmark migration ended with: the answer it waited for, the failed version's
+ * `ok` while its rollback deploys, the new version's `migration_failed`, the deadline, a refusal to fail with, or the
+ * pass's end.
  */
 type NewVersion =
 	| { readonly kind: 'answered'; readonly row: DataOperationRow }
+	| { readonly kind: 'recovered'; readonly row: DataOperationRow }
 	| { readonly kind: 'failed'; readonly row: DataOperationRow; readonly failure: OpsMigrationFailure }
 	| { readonly kind: 'deadline'; readonly row: DataOperationRow }
 	| { readonly kind: 'refused'; readonly code: string }
@@ -1055,83 +1063,113 @@ class OperationDriver {
 	 * file with its checksum, or `migration_failed`. Until then, or the deadline, the old version still answers. A failed
 	 * migration that nothing committed (`rolled_back`, `record_unwritable`), or a committed one without a `dataLoss`
 	 * line, gets the rollback deploy of the last succeeded commit (`revert`), and `check` waits to the same deadline for
-	 * its `ok`. A committed `dataLoss` migration, which no rewind can undo yet, and a rollback that does not answer, go to
-	 * `restrict`, which publishes `closed` and fails the operation for an operator.
+	 * an `ok` of another version than the failed one. A committed `dataLoss` migration, which no rewind can undo yet, a
+	 * rollback that does not answer, and a failed version that answers `ok` after all, go to `restrict`, which publishes
+	 * `closed` and fails the operation for an operator. The operation's run ends with it: succeeded only when it did.
 	 */
 	private async bookmarkMigrateStep(row: DataOperationRow): Promise<Step> {
-		const close = async (from: DataOperationRow): Promise<Step> => ({
+		const close = async (from: DataOperationRow, change: Pick<DataOperationAdvance, 'candidateRecovered'> = {}): Promise<Step> => ({
 			kind: 'next',
-			row: await this.advance(from, { step: 'restrict', targetMode: 'closed', generation: await this.allocate() }),
+			row: await this.advance(from, { step: 'restrict', targetMode: 'closed', generation: await this.allocate(), ...change }),
 		})
+		// The run is the migration's: it succeeds only with it, so a run that is not succeeded is never what a rollback redeploys.
+		const fail = async (from: DataOperationRow, code: string): Promise<Step> => {
+			const step = await this.failed(from, code)
+			await this.finishRun(from, 'failed')
+			return step
+		}
 		switch (row.step) {
 			case 'deploy': {
 				const deploy = this.runDeploy
 				this.runDeploy = undefined
 				if (deploy !== undefined) await deploy()
 				const run = await this.migrationRun(row)
-				if (run.status !== 'succeeded' && run.status !== 'failed') return { kind: 'done', result: 'interrupted' }
+				const current = await this.require(row.id)
 				// Nothing was restricted, so the environment stays open whichever way a deploy that never uploaded ended.
 				if (run.status === 'failed' && (run.external_run_id === null || run.failure_cause === 'untouched')) {
-					return await this.failed(row, DEPLOY_NOT_STARTED_CODE)
+					return await fail(current, DEPLOY_NOT_STARTED_CODE)
 				}
 				// A provider that failed after it uploaded may have left the new version to migrate: its answer decides.
-				return { kind: 'next', row: await this.advance(row, { step: 'migrate', deadlineAt: this.deadline() }) }
+				if (run.status !== 'failed' && current.deployed !== 1) return { kind: 'done', result: 'interrupted' }
+				return { kind: 'next', row: await this.advance(current, { step: 'migrate', deadlineAt: this.deadline() }) }
 			}
 			case 'migrate': {
 				const files = await this.runMigrationFiles(row)
-				const answer = await this.newVersion(row, 'migrate', (ack) => holdsEveryFile(ack.migrations, files))
-				if (answer.kind === 'refused') return await this.failed(row, answer.code)
+				const answer = await this.newVersion(row, 'migrate', (ack) => holdsEveryFile(ack.migrations, files) ? 'answered' : 'waiting')
+				if (answer.kind === 'refused') return await fail(row, answer.code)
 				if (answer.kind === 'paused') return { kind: 'done', result: 'paused' }
-				const deployed = (await this.migrationRun(answer.row)).status === 'succeeded'
-				if (answer.kind === 'answered') {
-					if (!deployed) return await this.failed(answer.row, DEPLOY_FAILED_CODE)
+				const deployed = answer.row.deployed === 1
+				if (answer.kind === 'answered' || answer.kind === 'recovered') {
+					if (!deployed) return await fail(answer.row, DEPLOY_FAILED_CODE)
 					await this.finish(answer.row)
+					await this.finishRun(answer.row, 'succeeded')
 					return { kind: 'done', result: 'succeeded' }
 				}
-				if (answer.kind === 'deadline') return await this.failed(answer.row, deployed ? MIGRATION_UNCONFIRMED_CODE : DEPLOY_FAILED_CODE)
+				if (answer.kind === 'deadline') return await fail(answer.row, deployed ? MIGRATION_UNCONFIRMED_CODE : DEPLOY_FAILED_CODE)
 				const reason = answer.failure.reason
+				// The answering version, so `check` tells the rollback's `ok` from this version's own once it boots after all.
+				const version = answer.failure.version ?? answer.failure.record.version
+				const failure = { migrationFailure: reason, ...(version === null ? {} : { candidateVersion: version }) }
 				// A committed migration is not rewound here (the in-place rewind, ADR-0070 §9, is built later): the old code may
 				// run over the migrated schema, unless a `dataLoss` line deleted what it reads.
 				if (reason === 'committed' && row.data_loss === 1) {
-					return await close(await this.advance(answer.row, { step: 'migrate', migrationFailure: reason }))
+					return await close(await this.advance(answer.row, { step: 'migrate', ...failure }))
 				}
-				return { kind: 'next', row: await this.advance(answer.row, { step: 'revert', migrationFailure: reason }) }
+				return { kind: 'next', row: await this.advance(answer.row, { step: 'revert', ...failure }) }
 			}
 			case 'revert': {
+				// The migration failed, so its run did; it ends first, as an environment runs one run at a time.
+				await this.finishRun(row, 'failed')
 				const reverted = await this.revertDeploy(row)
 				if (reverted === 'unsettled') return { kind: 'done', result: 'interrupted' }
 				if (reverted !== 'succeeded') return await close(row)
 				return { kind: 'next', row: await this.advance(row, { step: 'check', deadlineAt: this.deadline() }) }
 			}
 			case 'check': {
-				// The failing version never answers `ok`; any version that does booted over the schema it finds.
-				const answer = await this.newVersion(row, 'revert', () => true)
-				if (answer.kind === 'refused') return await this.failed(row, answer.code)
+				// Only another version's `ok` is the rollback's: the failed version retries its boot and may succeed after all.
+				// Without the failed version's id no answer can be told apart, so the wait runs to its deadline.
+				const candidate = row.candidate_version
+				const answer = await this.newVersion(
+					row,
+					'revert',
+					(ack) => candidate === null ? 'waiting' : ack.version === candidate ? 'recovered' : 'answered',
+				)
+				if (answer.kind === 'refused') return await fail(row, answer.code)
 				if (answer.kind === 'paused') return { kind: 'done', result: 'paused' }
-				if (answer.kind === 'answered') return await this.failed(answer.row, MIGRATION_REVERTED_CODE)
+				if (answer.kind === 'answered') return await fail(answer.row, MIGRATION_REVERTED_CODE)
+				// The failed version served after all while the rollback deployed: which one serves now is for an operator.
+				if (answer.kind === 'recovered') return await close(answer.row, { candidateRecovered: true })
 				return await close(answer.row)
 			}
 			case 'restrict': {
 				const published = await this.publish(row, 'closed')
-				if (published.kind === 'refused') return await this.failed(row, published.code)
+				if (published.kind === 'refused') return await fail(row, published.code)
 				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
-				return await this.failed(published.row, MIGRATION_FAILED_CODE)
+				return await fail(published.row, MIGRATION_FAILED_CODE)
 			}
 			default:
 				throw new Error(`a bookmark migration has no step ${row.step}`)
 		}
 	}
 
+	/** Ends a bookmark migration's own run with the migration; a successor without deploys leaves it to the reconciler. */
+	private async finishRun(row: DataOperationRow, status: 'succeeded' | 'failed'): Promise<void> {
+		if (row.run_id === null || this.deps.deploys === undefined) return
+		this.lease.assertHeld()
+		await this.deps.deploys.finishRun(this.lease, row.run_id, status)
+	}
+
 	/**
-	 * Ask `migrate` at the published generation, in `open`, until `accepts` takes a 200 of it, or the deadline the record
-	 * holds passes; it asks at least once. Any other answer is the old version still running, or no answer at all: a 500
-	 * of a failed boot that holds no record reads as unreachable. At `migrate` the new version's `migration_failed` ends
-	 * the wait; once a rollback was deployed (`revert`), it is the failing version still answering.
+	 * Ask `migrate` at the published generation, in `open`, until `judge` takes a 200 of it as the answer, or as the
+	 * failed version's own, or the deadline the record holds passes; it asks at least once. Any other answer is the old
+	 * version still running, or no answer at all: a 500 of a failed boot that holds no record reads as unreachable. At
+	 * `migrate` the new version's `migration_failed` ends the wait; once a rollback was deployed (`revert`), it is the
+	 * failing version still answering.
 	 */
 	private async newVersion(
 		start: DataOperationRow,
 		stage: 'migrate' | 'revert',
-		accepts: (ack: OpsMigrateAck) => boolean,
+		judge: (ack: OpsMigrateAck) => 'answered' | 'recovered' | 'waiting',
 	): Promise<NewVersion> {
 		const deadline = start.deadline_at
 		if (deadline === null) throw new Error('a bookmark migration waits with no deadline')
@@ -1146,7 +1184,10 @@ class OperationDriver {
 				this.lease.assertHeld()
 				const answer = await this.deps.ops.migrate(this.target, { object, generation: row.generation }, this.lease.signal)
 				this.lease.assertHeld()
-				if (answer.kind === 'ok' && answer.value.generation === row.generation && accepts(answer.value)) return { kind: 'answered', row }
+				if (answer.kind === 'ok' && answer.value.generation === row.generation) {
+					const judged = judge(answer.value)
+					if (judged !== 'waiting') return { kind: judged, row }
+				}
 				if (answer.kind === 'failed' && stage === 'migrate') return { kind: 'failed', row, failure: answer.failure }
 				if (answer.kind === 'stale') return { kind: 'refused', code: 'stale_generation' }
 			}

@@ -73,6 +73,12 @@ export interface DataOperationRow {
 	revert_run_id: string | null
 	/** Why the new version of a bookmark migration answered `migration_failed`, which decides its recovery. */
 	migration_failure: OpsMigrationFailureReason | null
+	/** 1 once the provider deployed a bookmark migration's run, which stays running until the migration ends. */
+	deployed: number
+	/** The Worker version that answered a bookmark migration's `migration_failed`; `null` while unknown. */
+	candidate_version: string | null
+	/** 1 when that version answered `ok` while the rollback deployed, so the operation closed for an operator. */
+	candidate_recovered: number
 }
 
 export interface DataOperationFields {
@@ -109,6 +115,10 @@ export interface DataOperationAdvance {
 	deadlineAt?: number
 	/** The reason the new version's `migration_failed` named, recorded once with the step it decides. */
 	migrationFailure?: OpsMigrationFailureReason
+	/** The Worker version that answered it. */
+	candidateVersion?: string
+	/** The failed version answered `ok` while the rollback deployed. */
+	candidateRecovered?: true
 }
 
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
@@ -240,6 +250,11 @@ export class DataOperationRepository {
 			sets.push('deadline_at = ?')
 			setValues.push(change.deadlineAt)
 		}
+		if (change.candidateVersion !== undefined) {
+			sets.push('candidate_version = ?')
+			setValues.push(change.candidateVersion)
+		}
+		if (change.candidateRecovered === true) sets.push('candidate_recovered = 1')
 		if (change.generation !== undefined) {
 			sets.push('generation = ?')
 			setValues.push(change.generation)
@@ -273,6 +288,33 @@ export class DataOperationRepository {
 			[runId, this.now(), id],
 			fence,
 		)
+	}
+
+	/** The provider deployed a running bookmark migration's run. `false` once it finished, or off the lease. */
+	async recordDeployed(id: string, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET deployed = 1, updated_at = ? WHERE id = ? AND state = 'running'`,
+			[this.now(), id],
+			fence,
+		)
+	}
+
+	/** The bookmark migration that deploys `runId` as its own run, in any state; `null` for every other run. */
+	async bookmarkMigrationOfRun(runId: string): Promise<DataOperationRow | null> {
+		return await this.d1
+			.prepare(`SELECT * FROM app_env_data_operations WHERE run_id = ? AND kind = 'migrate' AND records_bookmark = 1`)
+			.bind(runId)
+			.first<DataOperationRow>()
+	}
+
+	/** Whether a bookmark migration of the environment named `runId` as its rollback deploy. */
+	async namesRevertRun(appId: string, env: string, runId: string): Promise<boolean> {
+		const row = await this.d1
+			.prepare('SELECT id FROM app_env_data_operations WHERE app_id = ? AND env = ? AND revert_run_id = ?')
+			.bind(appId, env, runId)
+			.first<{ id: string }>()
+		return row !== null
 	}
 
 	/** A running operation succeeded. Terminal: `false` once it has finished or failed. */

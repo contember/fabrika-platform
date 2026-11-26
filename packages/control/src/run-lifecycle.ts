@@ -662,7 +662,39 @@ export function operationDeploys(deps: RunDeps): OperationDeploys {
 			const run = await deps.repositories.runs.getRun(runId)
 			if (run?.status === 'running') await settleUnderLease(deps, RunInvocation.underLease(deps, lease, run))
 		},
+		async finishRun(lease, runId, status) {
+			await finishMigrationRun(deps, lease, runId, status)
+		},
 	}
+}
+
+/**
+ * Whether the run whose provider just succeeded is a running bookmark migration's own (ADR-0069 §3): then it records
+ * the deploy on the operation and the run stays running, so it becomes no baseline before the migration succeeded.
+ */
+async function holdForMigration(deps: Pick<RunDeps, 'repositories'>, invocation: RunInvocation): Promise<boolean> {
+	const operation = await deps.repositories.dataOperations.bookmarkMigrationOfRun(invocation.runId)
+	if (operation?.state !== 'running') return false
+	await invocation.write((fence) => deps.repositories.dataOperations.recordDeployed(operation.id, fence))
+	return true
+}
+
+/** Ends a bookmark migration's run as its operation ended; a run already ended stays as it is. */
+async function finishMigrationRun(
+	deps: Pick<RunDeps, 'repositories' | 'operations'>,
+	lease: Lease,
+	runId: string,
+	status: 'succeeded' | 'failed',
+): Promise<void> {
+	const runs = deps.repositories.runs
+	lease.assertHeld()
+	const run = await runs.getRun(runId)
+	if (run === null || (run.status !== 'pending' && run.status !== 'running')) return
+	const written = run.cancel_requested_at === null
+		? await runs.markRunFinished(runId, status, null, lease.fence())
+		: await runs.markRunCancellationFinished(runId, status, lease.fence())
+	lease.assertWritten(written)
+	await projectTerminalRun(deps, runId, false, status)
 }
 
 async function deployUnder(
@@ -736,10 +768,12 @@ async function deployUnder(
 			)
 		}
 		// The environment, or its `deploy-request` mode, may have changed since the run was queued (ADR-0050 §4). A restore's
-		// own deploy is exempt: it redeploys the commit the environment already ran, so it brings no new code (ADR-0070 §9).
-		// The restore's record names the run, so the exemption holds also when the run parked and an approval queued it again.
+		// own deploy is exempt: it redeploys the commit the environment already ran, so it brings no new code (ADR-0070 §9);
+		// so is a failed migration's rollback deploy, which redeploys the last succeeded commit (ADR-0069 §3). The operation's
+		// record names the run before it is created, so the exemption holds also when an approval queued the run again.
 		const restoreDeploy = await deps.repositories.restores.namesRun(run.app_id, run.env, run.id)
-		const decision = run.trigger === 'manual' && !restoreDeploy
+		const operationRun = restoreDeploy || (await deps.repositories.dataOperations.namesRevertRun(run.app_id, run.env, run.id))
+		const decision = run.trigger === 'manual' && !operationRun
 			? protectedRunDecision(appEnv, { byPerson: startedByPerson(run), ref: run.ref })
 			: null
 		if (decision?.kind === 'refuse') throw new Error(decision.message)
@@ -1148,6 +1182,10 @@ async function deployUnder(
 				await invocation.boundary()
 			}
 			const finished = state
+			if (finished === 'succeeded' && !dryRun && (await holdForMigration(deps, invocation))) {
+				await retirePlatformKeys(deps, approvedRow, run)
+				return 'running'
+			}
 			const untouched = outcome.state === 'failed' && outcome.untouched === true
 			await invocation.write((fence) => runs.markRunFinished(runId, finished, exitCode, fence, untouched))
 			if (finished === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, run)
@@ -1755,8 +1793,11 @@ export type RunSettleDeps = Pick<RunDeps, 'repositories' | 'provider' | 'operati
 export const RUN_INTERRUPTED_REASON =
 	"deploy interrupted: Control restarted (or lost the run's lease) while the run was in progress, before the provider accepted it; run the deploy again"
 
-/** `untracked`: the provider cannot observe accepted work, so only a cancellation can settle it. */
-export type RunSettlement = 'succeeded' | 'failed' | 'running' | 'waiting' | 'untracked'
+/**
+ * `untracked`: the provider cannot observe accepted work, so only a cancellation can settle it. `held`: the provider
+ * deployed a bookmark migration's run, which ends with its operation.
+ */
+export type RunSettlement = 'succeeded' | 'failed' | 'running' | 'waiting' | 'untracked' | 'held'
 
 async function projectSettled(
 	deps: RunSettleDeps,
@@ -1797,6 +1838,19 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 	try {
 		const run = await invocation.read()
 		if (run === null || (run.status !== 'pending' && run.status !== 'running')) return null
+		// A bookmark migration's run ends with its operation; one whose operation ended, past its own end, ends here.
+		const migration = await deps.repositories.dataOperations.bookmarkMigrationOfRun(run.id)
+		if (migration !== null && migration.state !== 'running' && run.external_run_id !== null) {
+			const status = migration.state === 'succeeded' ? 'succeeded' : 'failed'
+			await invocation.write((fence) =>
+				run.cancel_requested_at === null
+					? deps.repositories.runs.markRunFinished(run.id, status, null, fence)
+					: deps.repositories.runs.markRunCancellationFinished(run.id, status, fence)
+			)
+			await projectSettled(deps, run.id, status)
+			return status
+		}
+		if (migration?.deployed === 1) return 'held'
 		if (invocation.cancelled) return await settleCancellation()
 		if (run.external_run_id === null) {
 			if (run.status === 'pending') return 'waiting'
@@ -1835,6 +1889,10 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 			await invocation.boundary()
 		}
 		const finished = state
+		if (finished === 'succeeded' && outcome.dryRun !== true && (await holdForMigration(deps, invocation))) {
+			await retirePlatformKeys(deps, appEnv, run)
+			return 'held'
+		}
 		const untouched = outcome.state === 'failed' && outcome.untouched === true
 		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, finished, exitCode, fence, untouched))
 		if (finished === 'succeeded' && outcome.dryRun !== true) await retirePlatformKeys(deps, appEnv, run)

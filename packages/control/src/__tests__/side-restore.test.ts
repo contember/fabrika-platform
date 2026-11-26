@@ -241,6 +241,7 @@ for (const backend of backends) {
 					wait: () => Promise.resolve(),
 					deploys: {
 						servesDataOperations: (target) => real.servesDataOperations(target),
+						finishRun: (lease, runId, status) => real.finishRun(lease, runId, status),
 						run: async (lease, runId, objects) => {
 							const [operation] = await operations()
 							const restore = operation === undefined ? null : await b.repositories.restores.get(operation.id)

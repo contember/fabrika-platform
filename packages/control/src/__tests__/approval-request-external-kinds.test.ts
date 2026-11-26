@@ -294,7 +294,7 @@ for (const backend of backends) {
 				republished: [],
 				interruptRepublish: false,
 				provider: shape === 'object' ? fakeControlProvider : keepingProvider(store, prepared),
-				deploys: { servesDataOperations: () => Promise.resolve(true), run: () => Promise.resolve() },
+				deploys: { servesDataOperations: () => Promise.resolve(true), run: () => Promise.resolve(), finishRun: () => Promise.resolve() },
 				get now() {
 					return clock.now
 				},
@@ -754,6 +754,8 @@ for (const backend of backends) {
 				const fence = () => ({ holder, nowMs: Date.now() })
 				expect(await w.db.runs.markRunStarted(id, `logs/${id}`, fence())).toBe(true)
 				expect(await w.db.runs.setRunCommit(id, 'a'.repeat(40), fence())).toBe(true)
+				// A deploy records whether its version holds the barrier; a dry run records nothing, and is never redeployed.
+				expect(await w.db.runs.recordRunMigrationBarrier(id, true, fence())).toBe(true)
 				expect(await w.db.runs.markRunFinished(id, 'succeeded', 0, fence())).toBe(true)
 				await w.locks.release(runLeaseKey('notes', 'prod'), holder)
 			}

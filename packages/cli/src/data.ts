@@ -174,6 +174,7 @@ const dataOperationSchema: z.ZodType<DataOperationDto, z.ZodTypeDef, unknown> = 
 	recordsBookmark: z.boolean().default(false),
 	migrationFailure: z.enum(OPS_MIGRATION_FAILURES).nullable().default(null),
 	revertRunId: z.string().uuid().nullable().default(null),
+	candidateRecovered: z.boolean().default(false),
 })
 
 interface Target {

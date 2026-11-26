@@ -277,7 +277,11 @@ It is never a rollback. Control asks again until an answer holds every candidate
 (`rolled_back`, or `committed` without `booted`) or `record_unwritable`, and only that answer is a failure.
 Past the deadline with no answer from the new version, the run fails as `migration_unconfirmed`, with nothing
 restricted, and the console says to read the view. A recovery's redeploy is a deferred code update too: Control waits,
-to the same deadline, for an `ok` answer, which the failing version never gives.
+to the same deadline, for an `ok` answer from another Worker version than the failing one. Both `migrate` answers name
+the version that answers (`version`, optional on the wire), because the failing version retries its boot and may still
+succeed, a `record_unwritable` once the bucket recovers. An `ok` from the failing version itself means it served after
+all while the redeploy ran: Control publishes `closed` for an operator. Without a known version it waits to the
+deadline and does the same. The run's status is the migration's: it succeeds only when the new version answered.
 
 **When it fails**, the operation recovers on its own, under the same lease:
 

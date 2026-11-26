@@ -425,6 +425,8 @@ export interface DataOperationDto {
 	readonly migrationFailure: OpsMigrationFailureReason | null
 	/** A bookmark migration's rollback deploy of the last succeeded commit; `null` until it is named. */
 	readonly revertRunId: string | null
+	/** The failed version of a bookmark migration answered `ok` while its rollback deployed, so the operation closed. */
+	readonly candidateRecovered: boolean
 }
 
 export const DATA_OPERATION_MAX_PAGE_SIZE = 100

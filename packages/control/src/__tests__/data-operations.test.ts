@@ -720,6 +720,7 @@ describe('data RPC', () => {
 		expect(typeof got.body === 'object' && got.body !== null ? Object.keys(got.body).sort() : null).toEqual([
 			'actor',
 			'appId',
+			'candidateRecovered',
 			'createdAt',
 			'env',
 			'errorCode',

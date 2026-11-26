@@ -117,9 +117,15 @@ export class FakeEnvironments implements OpsTransport {
 	 * `committed` one applies the files first.
 	 */
 	failure: OpsMigrationFailureReason | null = null
+	/** The deployed Worker version's id, which every `migrate` answer names; each `deployVersion` uploads a new one. */
+	version = 'version-0001'
 	/** The version the last `deployVersion` replaced, which still answers the next `previousAnswers` `migrate` requests. */
-	previous: { readonly bundled: readonly string[]; readonly failure: OpsMigrationFailureReason | null } | null = null
+	previous: { readonly bundled: readonly string[]; readonly failure: OpsMigrationFailureReason | null; readonly version: string } | null = null
 	previousAnswers = 0
+	/** A failed migrating boot succeeds when its version retries it (the record put lands after all): it answers `ok`. */
+	recovers = false
+	/** Whether the Worker has the version metadata binding: without it, every answer names the version `null`. */
+	versioned = true
 	/** Whether the application fails to boot: `migrate` then answers the 500 a failed boot is, which reads as unreachable. */
 	bootFails = false
 	/** The objects whose view reports a failed boot. */
@@ -148,10 +154,11 @@ export class FakeEnvironments implements OpsTransport {
 	 * object deferred, so the version it replaces answers the next `previousAnswers` `migrate` requests.
 	 */
 	deployVersion(bundled: readonly string[], failure: OpsMigrationFailureReason | null = null, previousAnswers = 0): void {
-		this.previous = { bundled: this.bundled, failure: this.failure }
+		this.previous = { bundled: this.bundled, failure: this.failure, version: this.version }
 		this.previousAnswers = previousAnswers
 		this.bundled = [...bundled]
 		this.failure = failure
+		this.version = `version-${String(Number(this.version.slice('version-'.length)) + 1).padStart(4, '0')}`
 	}
 
 	async inspect(target: OpsTarget, request: OpsInspectRequest): Promise<OpsAnswer<OpsInspection>> {
@@ -209,20 +216,24 @@ export class FakeEnvironments implements OpsTransport {
 		const published = this.published.get(key(target, request.object)) ?? null
 		if (published === null || published.generation !== request.generation || published.mode === 'inspect') return { kind: 'stale', published }
 		const ledger = this.ledgers.get(request.object) ?? this.ledger
-		const answering = this.previous !== null && this.previousAnswers > 0 ? this.previous : { bundled: this.bundled, failure: this.failure }
+		const answering = this.previous !== null && this.previousAnswers > 0
+			? this.previous
+			: { bundled: this.bundled, failure: this.failure, version: this.version }
 		if (answering !== this.previous) this.previous = null
 		else this.previousAnswers--
+		const failure = this.recovers ? null : answering.failure
 		const applied = new Set(ledger.map((row) => row.name))
 		const pending = answering.bundled.filter((name) => !applied.has(name))
-		if (answering.failure !== 'rolled_back' && answering.failure !== 'record_unwritable') {
+		if (failure !== 'rolled_back' && failure !== 'record_unwritable') {
 			for (const name of pending) ledger.push({ bundle: 'app', name, checksum: this.checksumOf(name), appliedAt: BOOT_FAILED_AT })
 		}
 		if (fault === 'lose') return { kind: 'unavailable', reason: 'unreachable' }
-		if (answering.failure !== null) {
+		const version = this.versioned ? answering.version : null
+		if (failure !== null) {
 			const files = (pending.length > 0 ? pending : answering.bundled).map((name) => ({ bundle: 'app', name, checksum: this.checksumOf(name) }))
-			return { kind: 'failed', failure: { refused: 'migration_failed', reason: answering.failure, record: failedRecord(answering.failure, files) } }
+			return { kind: 'failed', failure: { refused: 'migration_failed', reason: failure, record: failedRecord(failure, files, version), version } }
 		}
-		return { kind: 'ok', value: { generation: request.generation, migrations: [...ledger] } }
+		return { kind: 'ok', value: { generation: request.generation, migrations: [...ledger], record: null, version } }
 	}
 
 	private checksumOf(name: string): string {
@@ -456,10 +467,10 @@ export class FakeEnvironments implements OpsTransport {
 }
 
 /** The record a failed migrating boot answers with, as the object writes it for `reason`. */
-function failedRecord(reason: OpsMigrationFailureReason, files: OpsMigrationRecord['files']): OpsMigrationRecord {
+function failedRecord(reason: OpsMigrationFailureReason, files: OpsMigrationRecord['files'], version: string | null): OpsMigrationRecord {
 	return {
 		id: '0192c4a0-0000-7000-8000-00000000f00d',
-		version: 'version-0002',
+		version,
 		bookmark: 'bookmark-0001',
 		startDigest: digest('ledger'),
 		files,

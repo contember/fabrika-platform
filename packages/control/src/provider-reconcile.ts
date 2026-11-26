@@ -23,7 +23,7 @@ export async function reconcileProviderRuns(deps: ProviderReconcileDeps): Promis
 		try {
 			const settled = await settleUnfinishedRun(deps, invocation)
 			if (settled === 'waiting') summary.waiting++
-			else if (settled === 'untracked') summary.inProgress++
+			else if (settled === 'untracked' || settled === 'held') summary.inProgress++
 			else if (settled !== null) {
 				summary.checked++
 				if (settled === 'running') summary.inProgress++
