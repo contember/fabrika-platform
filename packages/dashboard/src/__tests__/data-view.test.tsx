@@ -362,13 +362,55 @@ describe('recovery', () => {
 		expect(recoveryChoice([operation('op-2'), operation('op-1', { state: 'succeeded' })])).toEqual({
 			operation: operation('op-2'),
 			resolutions: ['resume', 'open'],
+			stoppedBy: null,
 		})
 		expect(recoveryChoice([operation('op-2', { state: 'failed', errorCode: 'stale_generation' })])).toEqual({
 			operation: operation('op-2', { state: 'failed', errorCode: 'stale_generation' }),
 			resolutions: ['open'],
+			stoppedBy: null,
 		})
 		expect(recoveryChoice([operation('op-2', { state: 'succeeded' }), operation('op-1')])).toBeNull()
 		expect(recoveryChoice([])).toBeNull()
+	})
+
+	test('a refused open leads to the migration under it, which rolls back and opens when Control says it may', () => {
+		const migration = operation('0192f1aa-migrate', {
+			kind: 'migrate',
+			step: 'rewind',
+			targetMode: 'inspect',
+			state: 'failed',
+			errorCode: 'rewind_failed',
+			recordsBookmark: true,
+			migrationFailure: 'committed',
+			rewound: true,
+			rollbackAndOpen: true,
+		})
+		const refusedOpen = operation('0192f1aa-recover', {
+			kind: 'recovery',
+			step: 'open',
+			state: 'failed',
+			errorCode: 'rewound_before_rollback',
+			recoversOperationId: migration.id,
+			resolution: 'open',
+		})
+		const again = operation('0192f1aa-again', { ...refusedOpen, id: '0192f1aa-again', recoversOperationId: refusedOpen.id })
+		expect(recoveryChoice([again, refusedOpen, migration])).toEqual({ operation: migration, resolutions: ['rollback', 'open'], stoppedBy: again })
+		// An open of the environment refused for the same reason names no operation: the newest bookmark migration is the one.
+		const maintenance = operation('0192f1aa-open', { kind: 'maintenance', step: 'open', state: 'failed', errorCode: 'rewound_before_rollback' })
+		expect(recoveryChoice([maintenance, migration])?.operation).toBe(migration)
+		// Not eligible: only the open past it.
+		const kept = { ...migration, rewound: false, rollbackAndOpen: false }
+		expect(recoveryChoice([refusedOpen, kept])).toEqual({ operation: kept, resolutions: ['open'], stoppedBy: refusedOpen })
+		// A failed recovery whose operation is not on the page stays the target.
+		expect(recoveryChoice([refusedOpen])).toEqual({ operation: refusedOpen, resolutions: ['open'], stoppedBy: null })
+
+		const html = markup(holding(['data.manage']), undefined, page([refusedOpen, migration]))
+		expect(html).toContain('Migration failed at step <code>rewind</code>')
+		expect(html).toContain('The newest operation, recovery <code>-recover</code>, failed with <code>rewound_before_rollback</code>')
+		expect(html).toContain('class="primary">Roll back and open</button>')
+		expect(html).toContain('A later verify confirmed the rewind')
+		expect(html).not.toContain('The rewind is unconfirmed')
+		expect(html).toContain('>Recover and open</button>')
 	})
 
 	test('no recover control when nothing is stuck', () => {
@@ -387,6 +429,14 @@ describe('recovery', () => {
 		expect(open).toContain('<code>closed</code>')
 		expect(open).toContain('opens the application')
 		expect(open).toContain('does not continue')
+
+		const failed = operation('0192f1aa-migrate', { kind: 'migrate', step: 'rewind', state: 'failed', recordsBookmark: true, rollbackAndOpen: true })
+		const rollback = renderToStaticMarkup(<RecoveryEffect operation={failed} resolution="rollback" />)
+		expect(rollback).toContain('<code>inspect</code>')
+		expect(rollback).not.toContain('<code>closed</code>')
+		expect(rollback).toContain('deploys the last succeeded commit again, as a new run')
+		expect(rollback).toContain('when the data still holds the migration, the recovery stops')
+		expect(rollback).toContain('The migration operation <code>-migrate</code> stays failed')
 	})
 })
 
