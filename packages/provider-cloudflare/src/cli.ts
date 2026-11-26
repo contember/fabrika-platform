@@ -2,9 +2,12 @@
 
 import type { DeployStepResult } from '@fabrika/provider-contract'
 import type { AppCli } from '@fabrika/provider-contract/app-cli'
+import { writeFile } from 'node:fs/promises'
 import { parseCloudflareArgs } from './cli-args'
 import { deployCloudflareConfig } from './command'
+import { changedNothing } from './plan'
 import type { CloudflareDeployResult } from './provider'
+import { RUNNER_OUTCOME_FILE_ENV, type RunnerOutcomeFile } from './runner-protocol'
 
 const USAGE = `Internal Cloudflare app executor
 
@@ -67,15 +70,32 @@ export const runCloudflareCli = async (argv: readonly string[]): Promise<void> =
 		die(`Unknown command: ${command}\n\n${USAGE}`)
 	}
 	const env = args.env ?? die(`Missing --env=<env>\n\n${USAGE}`)
-	requireSuccessful(
-		await deployCloudflareConfig({
+	let result: CloudflareDeployResult
+	try {
+		result = await deployCloudflareConfig({
 			env,
 			configPath: args.config,
 			dryRun: args.dryRun,
 			managedVarNames: args.managedVarNames,
 			stateNamespace: process.env['CLOUDFLARE_STATE_NAMESPACE'],
-		}),
-	)
+		})
+	} catch (error) {
+		// `runSteps` keeps every step's error in its result, so a throw here comes before the first step.
+		if (!args.dryRun) await reportOutcome({ untouched: true })
+		throw error
+	}
+	if (result.status === 'failed' && !args.dryRun && changedNothing(result.steps)) await reportOutcome({ untouched: true })
+	requireSuccessful(result)
+}
+
+/**
+ * Tell the runner what a failed deploy left alone, so Control can end the maintenance it entered for the deploy. Only a
+ * runner names the file; a failed write leaves the report absent, which Control reads as "may have changed something".
+ */
+const reportOutcome = async (outcome: RunnerOutcomeFile): Promise<void> => {
+	const path = process.env[RUNNER_OUTCOME_FILE_ENV]
+	if (path === undefined || path === '') return
+	await writeFile(path, JSON.stringify(outcome), 'utf8').catch(() => {})
 }
 
 /**

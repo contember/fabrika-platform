@@ -19,6 +19,8 @@ export type RunnerIamReconcile = z.infer<typeof runnerIamReconcileSchema>
 /** What the executor leaves at `$FABRIKA_RUNNER_OUTCOME_FILE` for the runner to fold into its terminal status. */
 export interface RunnerOutcomeFile {
 	readonly iamReconcile?: RunnerIamReconcile
+	/** A failed deploy that stopped before its first migration or Worker deploy (`ProviderTerminalOutcome.untouched`). */
+	readonly untouched?: boolean
 }
 
 export const RUNNER_OUTCOME_FILE_ENV = 'FABRIKA_RUNNER_OUTCOME_FILE'
@@ -130,6 +132,8 @@ export const runnerStatusSchema = z.object({
 	iamReconcile: runnerIamReconcileSchema.optional(),
 	/** A preview: nothing was deployed and nothing may be applied from it. */
 	dryRun: z.boolean().optional(),
+	/** A failed run that changed neither data nor any Worker (`ProviderTerminalOutcome.untouched`). */
+	untouched: z.boolean().optional(),
 	startedAt: z.number().finite(),
 	finishedAt: z.number().finite().optional(),
 })

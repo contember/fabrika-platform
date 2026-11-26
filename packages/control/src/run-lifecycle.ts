@@ -1146,7 +1146,8 @@ async function deployUnder(
 				await invocation.boundary()
 			}
 			const finished = state
-			await invocation.write((fence) => runs.markRunFinished(runId, finished, exitCode, fence))
+			const untouched = outcome.state === 'failed' && outcome.untouched === true
+			await invocation.write((fence) => runs.markRunFinished(runId, finished, exitCode, fence, untouched))
 			if (finished === 'succeeded' && !dryRun) await retirePlatformKeys(deps, approvedRow, run)
 			await projectTerminalRun(deps, runId, dryRun, finished, outcome.artifactState)
 			return finished
@@ -1816,7 +1817,8 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 			await invocation.boundary()
 		}
 		const finished = state
-		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, finished, exitCode, fence))
+		const untouched = outcome.state === 'failed' && outcome.untouched === true
+		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, finished, exitCode, fence, untouched))
 		if (finished === 'succeeded' && outcome.dryRun !== true) await retirePlatformKeys(deps, appEnv, run)
 		await projectSettled(deps, run.id, finished, outcome)
 		return finished

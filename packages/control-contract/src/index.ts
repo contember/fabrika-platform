@@ -666,11 +666,14 @@ export interface RunDto {
 	approvalUrl?: string
 	/** When a parked run expires unless a person decided it (ADR-0050 §4); absent when it waits for no decision. */
 	approvalDeadline?: number
-	/** Why a run failed without deploying: a person refused it, or nobody decided it before its deadline. */
+	/**
+	 * Why a run failed without deploying: a person refused it, nobody decided it before its deadline, or it stopped before
+	 * its first migration or deploy (`untouched`).
+	 */
 	failureCause?: RunFailureCause
 }
 
-export type RunFailureCause = 'rejected' | 'expired'
+export type RunFailureCause = 'rejected' | 'expired' | 'untouched'
 
 /** What a change line is about (ADR-0050 §3). */
 export const CHANGE_SUBJECT_KINDS = [

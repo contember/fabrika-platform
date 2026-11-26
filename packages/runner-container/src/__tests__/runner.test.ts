@@ -717,6 +717,8 @@ describe('Runner pipeline', () => {
 		expect(status.state).toBe('failed')
 		expect(status.error).toContain('git clone failed')
 		expect(status.exitCode).toBeUndefined()
+		// Nothing ran that could change the environment: Control may end the maintenance it entered for the deploy.
+		expect(status.untouched).toBe(true)
 	})
 
 	test('a frozen install that fails stops the pipeline before the executor and names the lockfile', async () => {
@@ -728,6 +730,7 @@ describe('Runner pipeline', () => {
 		expect(rec[1]?.spec.args).toEqual(['install', '--frozen-lockfile'])
 		expect(status.state).toBe('failed')
 		expect(status.error).toBe('bun install --frozen-lockfile failed (exit 1); a bun.lock that does not match package.json fails it')
+		expect(status.untouched).toBe(true)
 	})
 
 	test('a rejected clone, install or deploy becomes a credential-safe terminal failure', async () => {
@@ -790,6 +793,8 @@ describe('Runner pipeline', () => {
 		const status = await new Runner(baseJob(), makeEnv(spawn)).run()
 		expect(status.state).toBe('failed')
 		expect(status.exitCode).toBe(1)
+		// The executor reported nothing, so the run may have changed something.
+		expect(status.untouched).toBeUndefined()
 	})
 
 	test('subscribers receive streamed lines live', async () => {
@@ -956,6 +961,25 @@ describe('executor outcome file', () => {
 			const succeeded = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify(outcome)))
 			expect(succeeded.status).toMatchObject({ state: 'succeeded', iamReconcile: outcome.iamReconcile })
 			expect(succeeded.status).not.toHaveProperty('artifactAccess')
+		})
+	})
+
+	test("a failed deploy carries the executor's untouched report; a succeeded one and an unusable file do not", async () => {
+		await withWorkspace(async (workspace) => {
+			const { status } = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify({ untouched: true })), 1)
+			expect(status).toMatchObject({ state: 'failed', exitCode: 1, untouched: true })
+			expect(await Bun.file(join(workspace, 'run-1.outcome.json')).exists()).toBe(false)
+		})
+		await withWorkspace(async (workspace) => {
+			const { status } = await runWithOutcome(workspace, (path) => writeFile(path, JSON.stringify({ untouched: true })))
+			expect(status.state).toBe('succeeded')
+			expect(status.untouched).toBeUndefined()
+		})
+		await withWorkspace(async (workspace) => {
+			const { status } = await runWithOutcome(workspace, (path) => writeFile(path, 'not json'), 1)
+			expect(status).toMatchObject({ state: 'failed', exitCode: 1 })
+			expect(status.untouched).toBeUndefined()
+			expect(status.error).toBeUndefined()
 		})
 	})
 

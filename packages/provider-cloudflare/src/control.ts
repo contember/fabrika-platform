@@ -384,6 +384,7 @@ const settleOutcome = async (
 		state: outcome.state,
 		...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
 		...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }),
+		...(outcome.state === 'failed' && outcome.untouched === true ? { untouched: true } : {}),
 	}
 	if (outcome.iamReconcile === undefined) return terminal
 	const failed: ProviderTerminalOutcome = { state: 'failed', ...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }) }
@@ -473,6 +474,7 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 			state: outcome.state,
 			...(outcome.exitCode === undefined ? {} : { exitCode: outcome.exitCode }),
 			...(outcome.artifactState === undefined ? {} : { artifactState: outcome.artifactState }),
+			...(outcome.untouched === true ? { untouched: true } : {}),
 			...(recovery.dryRun === true ? { dryRun: true } : {}),
 		}
 	},

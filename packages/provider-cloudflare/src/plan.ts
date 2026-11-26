@@ -3,6 +3,13 @@ import type { CloudflareAppConfig } from './authoring'
 
 export type CloudflareStepKind = 'build' | 'check' | 'provision-resources' | 'migrate' | 'deploy-worker' | 'reconcile-schema' | 'sync-secrets'
 
+/** The steps that change neither data nor any Worker: the build and the checks run locally, and provisioning only adds resources. */
+const UNTOUCHING_STEPS: ReadonlySet<string> = new Set(['build', 'check', 'provision-resources'])
+
+/** Whether a deploy that ran these steps changed nothing that runs: only untouching steps ran, by their ids. */
+export const changedNothing = (steps: readonly { readonly id: string; readonly status: 'succeeded' | 'failed' | 'skipped' }[]): boolean =>
+	steps.every((step) => step.status === 'skipped' || UNTOUCHING_STEPS.has(step.id))
+
 export interface CloudflareStep {
 	readonly id: string
 	readonly kind: CloudflareStepKind

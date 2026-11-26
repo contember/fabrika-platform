@@ -525,9 +525,11 @@ other environment, before the provider prepares anything, and the write maps a r
   with `pre_migration = 1`, rehearsed while the object stays restricted), `deploy` (the run's own deploy; a provider that
   answers `running` is settled under the same lease with `settleUnfinishedRun`, bounded), `migrate` at the published
   generation, `open` at a new one. The record keeps `run_id`, and a successor at `deploy` only reads that run's row. A
-  failed dump or rehearsal, or a run no provider accepted, reopens the object (`backup_failed`, `rehearsal_failed`,
-  `deploy_not_started`, read as `open`) and fails the run without a deploy. A run that failed after a provider accepted
-  it (`deploy_failed`) and a refused migration or failed boot (`migration_failed`) fail the operation with the object
+  failed dump or rehearsal, a run no provider accepted, or a failed run its provider reports `untouched` (it stopped
+  before its first migration or deploy, recorded as `runs.failure_cause = 'untouched'`), reopens the object
+  (`backup_failed`, `rehearsal_failed`, `deploy_not_started`, read as `open`) and fails the run without a deploy. Any
+  other run that failed after a provider accepted it (`deploy_failed`) and a refused migration or failed boot
+  (`migration_failed`) fail the operation with the object
   restricted, for an operator's recovery; no answer leaves it running (interrupted). The run's status is its deploy's
   (ADR-0044); the operation's outcome is the last line of the run's log. A running migration whose lease is free has
   lost its driver (the run's invocation holds the lease from its start to its settlement): the maintenance pass resumes
