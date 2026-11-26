@@ -929,7 +929,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   expiry (`grantRecord`). Like every OAuth path, it needs `OAUTH_CONFIG`.
 - **`write` IS SERVED ONLY WHERE CONTROL'S `agent-write` GATE IS `open`** (ADR-0090 §5). Control mirrors each
   environment's gate into `app_grant_approvals.agent_write` beside `credentials` (`open` unprotected, `passkey` by default
-  when protected, `refuse` when chosen); no row, NULL or a gate this release does not know reads `refuse`.
+  when protected, `refuse` when chosen); no row, NULL, a gate this release does not know, or one written at another
+  revision than the row's (`agent_write_revision`, which a rolled-back IAM does not move) reads `refuse`.
   `agentModeServed` (`agent-resource.ts`) is the one place the rule lives, read at the device page and at every exchange,
   so a gate that tightens ends a `write` grant at its next exchange. `passkey` refuses `write` too until the device page
   asks the passkey: a protected environment fails closed. The device page offers `read` for a `write` request it cannot

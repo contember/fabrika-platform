@@ -40,7 +40,12 @@ const backends = [
 		skip: false,
 		open: () => {
 			const h = createHarness()
-			return Promise.resolve({ repositories: h.repositories, close: () => Promise.resolve(h.sqlite.close()) })
+			return Promise.resolve({
+				repositories: h.repositories,
+				/** A raw write, as a release older than a column makes it. */
+				exec: (sql: string) => Promise.resolve(void h.sqlite.exec(sql)),
+				close: () => Promise.resolve(h.sqlite.close()),
+			})
 		},
 	},
 	{
@@ -48,7 +53,11 @@ const backends = [
 		skip: !hasPostgres,
 		open: async () => {
 			const pg = await createPostgres('iam_credentials_gate')
-			return { repositories: createPostgresIamRepositories(pg.db), close: () => pg.close() }
+			return {
+				repositories: createPostgresIamRepositories(pg.db),
+				exec: async (sql: string) => void await pg.db.prepare(sql).run(),
+				close: () => pg.close(),
+			}
 		},
 	},
 ] as const
@@ -194,7 +203,7 @@ for (const backend of backends) {
 				return resolved.ok ? resolved.caller.permissions.map((entry) => entry.action).sort() : null
 			}
 
-			return { f, repositories, env, ada, machine, rpc, asAda, bootstrap, mirror, keyOf, notesKey, controlKey, services, holds }
+			return { f, repositories, exec: opened.exec, env, ada, machine, rpc, asAda, bootstrap, mirror, keyOf, notesKey, controlKey, services, holds }
 		}
 
 		test("a px_ key with `iam.admin`: refused under `person`, naming Control's request path, and issued under `off`", async () => {
@@ -791,8 +800,21 @@ for (const backend of backends) {
 			expect((await set({ revision: 3, credentials: 'off' })).result).toEqual({ app: APP, required: false, revision: 3, credentials: 'off' })
 			expect(await w.repositories.grantRequests.agentWriteGate(APP)).toBe('refuse')
 			expect((await set({ revision: 4, agentWrite: 'always' })).status).toBe(400)
+
+			// An IAM rolled back below the gate moves the revision and leaves `agent_write` as it was: once upgraded again, IAM
+			// does not serve that stale gate, and Control's next write sets it at its own revision.
+			expect((await set({ revision: 5, credentials: 'off', agentWrite: 'open' })).result).toMatchObject({ agentWrite: 'open' })
+			await w.exec(`UPDATE app_grant_approvals SET revision = 6, required = 0 WHERE app = '${APP}'`)
+			expect(await w.repositories.grantRequests.agentWriteGate(APP)).toBe('refuse')
+			expect((await set({ revision: 6, credentials: 'off', agentWrite: 'open' })).result).toMatchObject({ revision: 6, agentWrite: 'open' })
+			expect(await w.repositories.grantRequests.agentWriteGate(APP)).toBe('open')
 			const records = (await w.repositories.audit.listAuditEvents({ limit: 50 })).filter((row) => row.action === 'iam.grant_approval.set')
-			expect(records.map((row) => JSON.parse(row.metadata ?? 'null')).map((metadata) => metadata.agentWrite)).toEqual([undefined, 'passkey', 'open'])
+			expect(records.map((row) => JSON.parse(row.metadata ?? 'null')).map((metadata) => metadata.agentWrite)).toEqual([
+				'open',
+				undefined,
+				'passkey',
+				'open',
+			])
 		})
 	})
 }

@@ -70,6 +70,7 @@ interface GateRow {
 	revision: number
 	credentials: string | null
 	agent_write: string | null
+	agent_write_revision: number | null
 }
 
 /**
@@ -78,7 +79,8 @@ interface GateRow {
  */
 function storedGates(row: GateRow): StoredGates {
 	const credentials = CREDENTIALS_MODES.find((mode) => mode === row.credentials) ?? null
-	const agentWrite = AGENT_WRITE_GATES.find((gate) => gate === row.agent_write) ?? null
+	// A gate written at another revision than the row's is stale: a release without the column moved the revision.
+	const agentWrite = row.agent_write_revision === row.revision ? AGENT_WRITE_GATES.find((gate) => gate === row.agent_write) ?? null : null
 	return { required: row.required === 1, revision: row.revision, credentials, agentWrite }
 }
 
@@ -116,8 +118,11 @@ export class GrantRequestRepository {
 				RETURNING app`,
 			binds: [gates.required ? 1 : 0, credentials, agentWrite, app, revision, gates.required ? 1 : 0, credentials, agentWrite],
 		}], audit)
-		const read = this.db.prepare('SELECT required, revision, credentials, agent_write FROM app_grant_approvals WHERE app = ?').bind(app)
-		const results = await this.db.batch<GateRow>([current, ...change.statements, read])
+		// The gate as written now holds at this revision, also when no gate changed and nothing is recorded.
+		const stamp = this.db.prepare('UPDATE app_grant_approvals SET agent_write_revision = revision WHERE app = ? AND revision = ?').bind(app, revision)
+		const read = this.db.prepare(`SELECT required, revision, credentials, agent_write, agent_write_revision FROM app_grant_approvals
+			WHERE app = ?`).bind(app)
+		const results = await this.db.batch<GateRow>([current, ...change.statements, stamp, read])
 		const [stored] = results[results.length - 1]?.results ?? []
 		if (stored === undefined) throw new Error('the grant gate row is missing after its upsert')
 		return storedGates(stored)
@@ -125,15 +130,17 @@ export class GrantRequestRepository {
 
 	/** Every application environment's mirrored `credentials` mode; null where Control has not written one yet. */
 	async credentialsModes(): Promise<Map<string, CredentialsMode | null>> {
-		const { results } = await this.db.prepare('SELECT app, required, revision, credentials, agent_write FROM app_grant_approvals').all<
-			GateRow & { app: string }
-		>()
+		const { results } = await this.db.prepare('SELECT app, required, revision, credentials, agent_write, agent_write_revision FROM app_grant_approvals')
+			.all<
+				GateRow & { app: string }
+			>()
 		return new Map(results.map((row) => [row.app, storedGates(row).credentials]))
 	}
 
 	/** An application environment's mirrored `agent-write` gate; `refuse` where Control has not written one (ADR-0090 §5). */
 	async agentWriteGate(app: string): Promise<AgentWriteGate> {
-		const row = await this.db.prepare('SELECT required, revision, credentials, agent_write FROM app_grant_approvals WHERE app = ?').bind(app).first<
+		const row = await this.db.prepare(`SELECT required, revision, credentials, agent_write, agent_write_revision FROM app_grant_approvals
+			WHERE app = ?`).bind(app).first<
 			GateRow
 		>()
 		return (row === null ? null : storedGates(row).agentWrite) ?? 'refuse'
