@@ -5,6 +5,8 @@
 import { appEnvironmentId, isAppEnvironmentPart, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type { CredentialsMode } from '@fabrika/iam-contract'
 import { PROVISIONING_ADMIN_ID } from './auth'
+import { principalStatus } from './db'
+import { reachesCrossAppAuthority } from './resolve'
 import type { Services } from './services'
 
 /** One grant of a key: the IAM application it holds actions at (null: every application) and its scope there. */
@@ -29,10 +31,11 @@ const RANK: Readonly<Record<CredentialsMode, number>> = { off: 0, person: 1, ref
 const STARTS_PROTECTED = 'prod'
 
 /**
- * What a machine caller does to what keys hold: issues a key, grants to a key (or edits its grant), or changes a role or
- * a named policy keys may hold. Each meets the mode the same way (ADR-0083 §8); only the refusal's wording differs.
+ * What a machine caller does to what keys hold: issues a key, grants to a key (or edits its grant), changes a role or a
+ * named policy keys may hold, re-enables a principal, or widens what a key's issuer covers. Each meets the mode the same
+ * way (ADR-0083 §8); only the refusal's wording differs.
  */
-export type KeyChange = 'issue' | 'grant' | 'role'
+export type KeyChange = 'issue' | 'grant' | 'role' | 'enable' | 'cover'
 
 /**
  * Why `issuer` may not make `change` reaching `reach`, or null when it may. A person and the provisioning key, the
@@ -84,6 +87,52 @@ const SUBJECT: Readonly<Record<KeyChange, string>> = {
 	issue: 'a key',
 	grant: 'a grant to a key',
 	role: 'a change of a role or policy keys may hold',
+	enable: 're-enabling a principal whose keys act',
+	cover: 'a grant that widens the keys a principal issued',
+}
+
+/**
+ * Which of an issuer's keys a change to the issuer widens (`issuerCoverage`, `issuerAuthority`): re-enabling it, or a
+ * cross-app grant to it, every one; `iam.admin` at IAM, every key bound to another principal, which keeps its whole set
+ * while its issuer holds it; a grant at one application, what they hold there.
+ */
+export type IssuerCover = { readonly kind: 'all' } | { readonly kind: 'admin' } | { readonly kind: 'app'; readonly app: string }
+
+/**
+ * Where the live keys `issuerId` issued for someone else act, as far as `cover` widens them. A key bound to another
+ * principal acts where its holder's grants do, inside its own app binding; one whose holder is disabled, missing or a
+ * workload holds nothing its issuer decides. An anonymous key acts where its inline grants do. A share link is issued
+ * through its mount, which the mode does not judge, so it is not counted.
+ */
+export async function issuedKeysReach(services: Services, issuerId: string, cover: IssuerCover): Promise<KeyReach[]> {
+	const { credentials, principals, workloads, grants } = services.repositories
+	const reach: KeyReach[] = []
+	for (const key of await credentials.listLiveIssuedForOthers(issuerId)) {
+		const bound = key.app
+		if (key.principal_id === null) {
+			if (cover.kind === 'admin' || bound === null) continue
+			for (const row of await credentials.getCredentialGrants(key.id)) reach.push({ app: bound, scope: scopeOf(row.scope_type, row.scope_value) })
+			continue
+		}
+		const holder = await principals.getPrincipalById(key.principal_id)
+		if (holder === null || principalStatus(holder) === 'disabled' || (await workloads.getByPrincipal(holder.id)) !== null) continue
+		for (const grant of await grants.listGrants(holder.id)) {
+			// A key bound to one app acts there alone, with the cross-app grants a platform audience sees.
+			const app = bound === null
+				? grant.app
+				: grant.app === bound || (grant.app === null && reachesCrossAppAuthority(services.config, bound))
+				? bound
+				: undefined
+			if (app !== undefined) reach.push({ app, scope: scopeOf(grant.scope_type, grant.scope_value) })
+		}
+	}
+	if (cover.kind !== 'app') return reach
+	// A grant at one application widens a key only there, a key that acts everywhere included.
+	return reach.flatMap((entry) => entry.app === cover.app ? [entry] : entry.app === null ? [{ app: cover.app, scope: entry.scope }] : [])
+}
+
+function scopeOf(type: string | null, value: string | null): KeyReach['scope'] {
+	return type === null || value === null ? null : { type, value }
 }
 
 /**

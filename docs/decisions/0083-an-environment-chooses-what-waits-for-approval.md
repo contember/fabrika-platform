@@ -356,7 +356,13 @@ every holder of a role at once: a grant names its role by key alone, so a policy
 or dropped by a reconcile reaches every key still naming it. IAM does not judge whether one widens a key, so a machine
 caller is refused there wherever the application's mode is `person` or `refuse`. Re-enabling a disabled key
 (`principals.update`) gives back its grants, so it judges their reach as a rotation does; disabling one narrows and is
-not judged. A person and the provisioning key keep their rule on all six.
+not judged. A key one principal issued for another holds no more than its issuer covers: nothing while the issuer is
+disabled, its whole set while the issuer holds `iam.admin` at IAM, and otherwise what the issuer holds at the key's
+application. So re-enabling any principal, a user included, judges the reach of every live key it issued for someone
+else (a share link aside, whose issuance through its mount the mode does not judge), and a grant to any principal judges
+the keys it widens: a global `iam.admin` grant at IAM, or its extension, every key bound to another principal; a grant at
+an application what those keys hold there; a cross-app grant all of them. A person and the provisioning key keep their
+rule on all six.
 
 Two issuances keep their rule, both made with the provisioning key, the operator's own credential, which the check
 exempts on every path: Control's own workload, membership and connector keys, which every deploy issues, and the

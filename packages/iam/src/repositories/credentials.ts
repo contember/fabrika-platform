@@ -216,6 +216,21 @@ export class CredentialRepository {
 	}
 
 	/**
+	 * The live keys `issuerId` issued for someone else, share links aside: a key bound to another principal, or an
+	 * anonymous one. Each holds no more than its issuer covers (`delegation.ts`).
+	 */
+	async listLiveIssuedForOthers(issuerId: string): Promise<CredentialRow[]> {
+		const { results } = await this.db
+			.prepare(`SELECT * FROM credentials
+				WHERE issued_by = ? AND link_mount IS NULL AND (principal_id IS NULL OR principal_id <> issued_by)
+				AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > ?)
+				ORDER BY created_at DESC, id DESC`)
+			.bind(issuerId, unixNow())
+			.all<CredentialRow>()
+		return results
+	}
+
+	/**
 	 * The live credential of each of a PAGE of principals, in one statement: an admin list needs each key's expiry, and
 	 * one query per row would cost 1+N round trips (SEC-22). Newest first, like `listCredentialsForPrincipal`; rotation
 	 * revokes every older key, so the first live row of a principal is its live credential.

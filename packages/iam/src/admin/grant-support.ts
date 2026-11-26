@@ -1,7 +1,7 @@
 import { isActionAllowed, isReservedScopeType, parseJsonStringArray, type RoleDef } from '@fabrika/auth-core'
 import { type CreateGrantRequest, type GrantDto, MAX_GRANT_SCOPE_VALUES } from '@fabrika/iam-contract'
 import { type GrantRow, type RoleRow } from '../db'
-import { BUILTIN_ROLES, isKnownRole } from '../roles'
+import { BUILTIN_ROLES, isKnownRole, makeRoleSource } from '../roles'
 import { type Services } from '../services'
 import { parseStoredPermissions } from '../stored-permissions'
 import { type AdminContext } from './context'
@@ -135,6 +135,17 @@ export function dbRoleToDef(row: RoleRow): RoleDef {
 }
 
 /** Load an app's DB roles into a role_key -> RoleDef map (empty for app=null). */
+/** The action patterns a grant names at `app`: its inline set, or its role's there; none for a role that resolves to nothing. */
+export async function grantPatterns(
+	c: AdminContext,
+	app: string | null,
+	grant: { readonly roleKey: string | null; readonly permissions: readonly string[] | null },
+): Promise<readonly string[]> {
+	if (grant.permissions !== null) return grant.permissions
+	if (grant.roleKey === null) return []
+	return makeRoleSource(await loadAppRoleMap(c, app)).getRole(app, grant.roleKey)?.permissions ?? []
+}
+
 async function loadAppRoleMap(c: AdminContext, app: string | null): Promise<Record<string, RoleDef>> {
 	const map: Record<string, RoleDef> = {}
 	if (app !== null) {

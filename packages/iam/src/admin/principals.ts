@@ -9,6 +9,7 @@ import {
 	type PrincipalListItem,
 	type UpdatePrincipalInput,
 } from '@fabrika/iam-contract'
+import { issuedKeysReach } from '../credentials-gate'
 import { type PrincipalRow, principalStatus } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import { resolvePermissionsAt } from '../resolve'
@@ -178,8 +179,12 @@ export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrinc
 			adminEvent(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id }),
 		)
 	} else {
-		// Re-enabling a key gives back its grants; disabling narrows and is never judged (ADR-0083 §8).
-		if (row.type === 'service' && row.disabled_at !== null) await requireCredentialsMode(c, await heldReach(c, id))
+		// Re-enabling gives back a key's grants and what every key the principal issued for others holds (a key holds no
+		// more than its issuer covers); disabling narrows and is never judged (ADR-0083 §8).
+		if (row.disabled_at !== null) {
+			if (row.type === 'service') await requireCredentialsMode(c, await heldReach(c, id), 'enable')
+			await requireCredentialsMode(c, await issuedKeysReach(c.services, id, { kind: 'all' }), 'enable')
+		}
 		await c.services.repositories.principals.enablePrincipal(
 			id,
 			adminEvent(c, { action: 'iam.principal.enable', resourceType: 'principal', resourceId: id }),

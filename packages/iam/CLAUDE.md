@@ -259,7 +259,12 @@ fails if that stops being true — it is the guard, not documentation of one.
   holds (a grant names its role by key alone, so a policy created under a deleted role's key reaches the keys still naming
   it); whether the change widens a key is not judged, so a machine caller is refused wherever the application's mode is
   not `off`. `principals.update` re-enabling a disabled service principal gives back its grants, so it judges their reach
-  as `apiKeys.rotate` does; disabling narrows and is not judged.
+  as `apiKeys.rotate` does; disabling narrows and is not judged. A key issued for another principal holds no more than
+  its issuer covers (`issuerCoverage`, `issuerAuthority` in `src/delegation.ts`), so `issuedKeysReach` in
+  `src/credentials-gate.ts` judges every live key a principal issued for someone else, share links aside: when any
+  principal, a user included, is re-enabled, and on a grant to any principal (`requireKeyGrantMode`): a global
+  `iam.admin` grant at IAM or its extension for every key bound to another principal, a grant at an application for what
+  those keys hold there, a cross-app grant for all of them.
   The provisioning key, which every deploy reconciles with, keeps its rule.
 - **A KEY LISTS EXACT ACTIONS OF ITS APP'S CATALOG, NO WILDCARD.** `issueKey` refuses `*` and
   `prefix.*` in every mode and requires each action verbatim in `app_actions`, before delegation —
