@@ -36,9 +36,13 @@ import {
 	RecoveryEffect,
 	RestoreDialog,
 	RestoreEffect,
+	type RestoreInstant,
+	restoreInstant,
 	RestoreOccurrences,
+	RestoreSituation,
 	scheduleOperationPoll,
 	setBackupSchedule,
+	shortId,
 	startMaintenance,
 	startRestore,
 	StateSection,
@@ -785,6 +789,18 @@ describe('the side restore', () => {
 		expect(markup(holding([], { type: 'app', value: 'blog', actions: ['data.manage'] }))).not.toContain('Restore…')
 	})
 
+	test('the restore starts at the time, or in a repeated hour only once one of its two instants is chosen', () => {
+		const choices: readonly [RestoreInstant, RestoreInstant] = [
+			{ at: '2026-10-25T00:30:00.000Z', offset: '+02:00', local: '2026-10-25 02:30', timeZone: 'Europe/Prague' },
+			{ at: '2026-10-25T01:30:00.000Z', offset: '+01:00', local: '2026-10-25 02:30', timeZone: 'Europe/Prague' },
+		]
+		expect(restoreInstant({ kind: 'ok', time: choices[0] }, null)).toEqual(choices[0])
+		expect(restoreInstant({ kind: 'ambiguous', choices }, null)).toBeNull()
+		expect(restoreInstant({ kind: 'ambiguous', choices }, choices[1].at)).toEqual(choices[1])
+		expect(restoreInstant({ kind: 'ambiguous', choices }, 'another instant')).toBeNull()
+		expect(restoreInstant({ kind: 'problem', problem: 'too old' }, choices[0].at)).toBeNull()
+	})
+
 	test('the restore dialog asks for the time first and offers no start until it names one instant', () => {
 		const html = renderToStaticMarkup(<RestoreDialog appId="notes" env="prod" onStarted={() => undefined} onClose={() => undefined} />)
 		expect(html).toContain('role="dialog"')
@@ -816,6 +832,10 @@ describe('the side restore', () => {
 	})
 })
 
+test('a short id tells apart UUIDv7 records made a moment apart: their heads are the same time', () => {
+	expect(shortId('019ac4f2-1b2c-7d10-8a11-5c3e9f1a2b01')).not.toBe(shortId('019ac4f2-1b40-7e22-9b33-0d4f8e2c3d02'))
+})
+
 describe('following a running operation', () => {
 	const restore = (overrides: Partial<DataOperationDto>) => operation('0192f1aa-restore', { kind: 'restore', targetMode: 'open', ...overrides })
 
@@ -844,18 +864,21 @@ describe('following a running operation', () => {
 	})
 
 	test('a restore that failed before the clone served shows the way back to the original', () => {
-		const html = renderToStaticMarkup(<OperationProgress operation={restore({ step: 'revert', state: 'running', errorCode: null })} />)
-		expect(html).toContain('putting the original back')
-		expect(stepRows(html)).toEqual([['revert', 'current'], ['open', 'pending']])
+		const back = restore({ step: 'revert', state: 'running', errorCode: null })
+		expect(renderToStaticMarkup(<RestoreSituation operation={back} />)).toContain('putting the original back')
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={back} />))).toEqual([['revert', 'current'], ['open', 'pending']])
 	})
 
 	test('a restore that failed after the clone served says the clone keeps serving, with its code', () => {
-		const html = renderToStaticMarkup(
-			<OperationProgress operation={restore({ step: 'rewind', state: 'failed', errorCode: 'bookmark_unavailable', finishedAt: 1_790_000_100 })} />,
-		)
+		const failed = restore({ step: 'rewind', state: 'failed', errorCode: 'bookmark_unavailable', finishedAt: 1_790_000_100 })
+		const html = renderToStaticMarkup(<OperationProgress operation={failed} />)
 		expect(html).toContain('<code>bookmark_unavailable</code>')
-		expect(html).toContain('The clone keeps serving')
 		expect(stepRows(html)[8]).toEqual(['rewind', 'stopped'])
+		// What the data is left in leads the page, outside the folded steps.
+		const page_ = markup(holding(['data.manage']), undefined, page([failed]))
+		expect(page_.indexOf('The clone keeps serving')).toBeGreaterThan(-1)
+		expect(page_.indexOf('The clone keeps serving')).toBeLessThan(page_.indexOf('Where it stands'))
+		expect(renderToStaticMarkup(<RestoreSituation operation={restore({ step: 'import', state: 'failed', errorCode: 'import_failed' })} />)).toBe('')
 	})
 
 	test('a running operation of another kind shows its step without the restore steps', () => {

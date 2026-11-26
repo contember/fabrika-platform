@@ -500,6 +500,7 @@ export function StuckOperation(
 							</>
 						)}
 					</p>
+					<RestoreSituation operation={operation} />
 					{manages
 						? (
 							<div className="toolbar">
@@ -555,13 +556,8 @@ export function StateSection({ appId, env, view, readsContent }: { appId: string
 					{bootFailure === null ? <span className="muted">none</span> : <Status lamp="stop">{fmtIso(bootFailure.at)}</Status>}
 				</Field>
 			</div>
-			{bootFailure !== null && (
-				<>
-					<p>The application last failed to boot at {fmtIso(bootFailure.at)}.</p>
-					{/* A new failure, after an invalidation, must not keep the message read for the last one. */}
-					{readsContent && <BootFailureMessage key={bootFailure.at} appId={appId} env={env} />}
-				</>
-			)}
+			{/* A new failure, after an invalidation, must not keep the message read for the last one. */}
+			{bootFailure !== null && readsContent && <BootFailureMessage key={bootFailure.at} appId={appId} env={env} />}
 		</section>
 	)
 }
@@ -710,6 +706,28 @@ export function RecoveryEffect({ operation, resolution }: { operation: DataOpera
 	)
 }
 
+/** Where a restore that went wrong left the data: the fact an operator needs before choosing a recovery. */
+export function RestoreSituation({ operation }: { operation: DataOperationDto }) {
+	if (operation.kind !== 'restore') return null
+	if (RESTORE_BACK_STEPS.some((entry) => entry.step === operation.step)) {
+		return (
+			<p>
+				{operation.state === 'running'
+					? 'The restore failed before the clone served: Control is putting the original back.'
+					: 'The restore failed before the clone served, on its way back to the original.'}
+			</p>
+		)
+	}
+	if (operation.errorCode !== null && CLONE_SERVING_CODES.includes(operation.errorCode)) {
+		return (
+			<p>
+				The clone keeps serving, and the original stays in <code>inspect</code>: nothing is lost. An operator decides what follows.
+			</p>
+		)
+	}
+	return null
+}
+
 /** An operation as it stands, and for a side restore each of its steps (ADR-0070 §9). */
 export function OperationProgress({ operation }: { operation: DataOperationDto }) {
 	return (
@@ -740,21 +758,8 @@ function RestoreSteps({ operation }: { operation: DataOperationDto }) {
 	const back = RESTORE_BACK_STEPS.some((entry) => entry.step === operation.step)
 	const steps = back ? RESTORE_BACK_STEPS : RESTORE_STEPS
 	const current = steps.findIndex((entry) => entry.step === operation.step)
-	const cloneServes = operation.errorCode !== null && CLONE_SERVING_CODES.includes(operation.errorCode)
 	return (
 		<>
-			{back && (
-				<p className="notice">
-					{operation.state === 'running'
-						? 'The restore failed before the clone served: Control is putting the original back.'
-						: 'The restore failed before the clone served, on its way back to the original.'}
-				</p>
-			)}
-			{cloneServes && (
-				<p className="notice">
-					The clone keeps serving, and the original stays in <code>inspect</code>: nothing is lost. An operator decides what follows.
-				</p>
-			)}
 			<Table
 				colSpan={3}
 				head={
@@ -817,6 +822,18 @@ function RestoreControl({ appId, env, onChanged }: { appId: string; env: string;
 	)
 }
 
+/** The instant a restore starts at: the time's own, or in a repeated hour the one chosen; none while it is not settled. */
+export function restoreInstant(time: RestoreTime, chosen: string | null): RestoreInstant | null {
+	switch (time.kind) {
+		case 'ok':
+			return time.time
+		case 'ambiguous':
+			return time.choices.find((choice) => choice.at === chosen) ?? null
+		case 'problem':
+			return null
+	}
+}
+
 /** The restore's time and, once it names one instant, what the restore does with it: one dialog, one confirmation. */
 export function RestoreDialog(
 	{ appId, env, onStarted, onClose }: { appId: string; env: string; onStarted: (outcome: DataAction) => void; onClose: () => void },
@@ -825,7 +842,7 @@ export function RestoreDialog(
 	const [chosen, setChosen] = useState<string | null>(null)
 	const [busy, setBusy] = useState(false)
 	const time = value === '' ? null : parseRestoreTime(value, Date.now(), browserTimeZone())
-	const instant = time?.kind === 'ok' ? time.time : time?.kind === 'ambiguous' ? (time.choices.find((choice) => choice.at === chosen) ?? null) : null
+	const instant = time === null ? null : restoreInstant(time, chosen)
 
 	function change(next: string) {
 		setValue(next)
@@ -836,8 +853,11 @@ export function RestoreDialog(
 		event.preventDefault()
 		if (instant === null) return
 		setBusy(true)
-		const next = await startRestore(api, appId, env, instant.at)
-		onStarted(next)
+		try {
+			onStarted(await startRestore(api, appId, env, instant.at))
+		} finally {
+			setBusy(false)
+		}
 		onClose()
 	}
 
@@ -852,7 +872,7 @@ export function RestoreDialog(
 				{time?.kind === 'problem' && <p className="error-text" role="alert">{time.problem}</p>}
 				{time?.kind === 'ambiguous' && (
 					<>
-						<p className="hint">{time.choices[0].local} occurs twice in {time.choices[0].timeZone}: the clocks go back. Choose which one.</p>
+						<p className="hint" role="status">{time.choices[0].local} occurs twice in {time.choices[0].timeZone}: the clocks go back. Choose which one.</p>
 						<RestoreOccurrences choices={time.choices} chosen={chosen} onChoose={setChosen} />
 					</>
 				)}
@@ -876,7 +896,7 @@ export function RestoreOccurrences(
 		<fieldset>
 			<legend>Which {choices[0]?.local}?</legend>
 			{choices.map((choice, index) => (
-				<label key={choice.at}>
+				<label key={choice.at} className="radio">
 					<input type="radio" name="restore-occurrence" value={choice.at} checked={chosen === choice.at} onChange={() => onChoose(choice.at)} />
 					{index === 0 ? 'The first' : 'The second'}, at UTC{choice.offset}: <code>{choice.at}</code>
 				</label>
@@ -1312,7 +1332,7 @@ function operationLamp(state: DataOperationState): Lamp {
 }
 
 /** A UUIDv7 starts with its time, so records made close together share a head: the tail tells them apart. */
-function shortId(id: string): string {
+export function shortId(id: string): string {
 	return id.slice(-8)
 }
 
