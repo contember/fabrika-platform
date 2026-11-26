@@ -63,7 +63,8 @@ A narrowed scope has the following rules:
 
 - The dimension must be one the environment's approved schema declares. IAM checks it at the device start
   (`invalid_scope`) and again at every exchange. The value is opaque: IAM never checks that it exists (ADR-0022 rule 6).
-  The value holds only characters an OAuth scope token admits, and is bounded like a grant's scope value.
+  The value is text of a parameterized scope, as the console's `deploy:<app>` already takes (`isScopeParameterText`: at
+  most 100 characters of `[A-Za-z0-9._@-]`, starting with a letter or digit).
 - The device page names the dimension and the value. Where the dimension lists values
   ([ADR-0085](0085-a-grant-holds-a-set-of-scope-values.md)), the page also shows the value's label; otherwise it says that
   nothing checks the value.
@@ -90,76 +91,108 @@ above, in the proxy's decision and again in the framework.
 
 **The narrowing.** For a grant narrowed to `D=v`, each of the person's live entries becomes:
 
-| Entry the person holds                                                      | Entry the token carries                              |
-| --------------------------------------------------------------------------- | ---------------------------------------------------- |
-| global (`scope: null`)                                                      | the same action at `D=v`                             |
-| at `D=v`                                                                    | unchanged                                            |
-| a relation held anywhere (`~rel`, ADR-0073)                                 | the same relation held inside `D=v` (`~relin r:D:v`) |
-| a relation held inside `D=v` (`~relin r:D:v`)                               | unchanged                                            |
-| at any other value of `D`, at any other dimension, any other `~relin` entry | dropped                                              |
+| Entry the person holds                                                | Entry the token carries  |
+| --------------------------------------------------------------------- | ------------------------ |
+| global (`scope: null`)                                                | the same action at `D=v` |
+| at `D=v`                                                              | unchanged                |
+| a relation held inside `D=v` (`~relin r:D:v`, ADR-0073)               | unchanged                |
+| a relation held anywhere (`~rel`)                                     | dropped                  |
+| at any other value of `D`, at any other dimension, any other `~relin` | dropped                  |
 
-The rule is one function in `@fabrika/auth-core`, used by IAM and by the test kit's stand-in IAM. It never adds an entry
-the person does not hold and never widens a scope. An entry at a container of `D=v`, or at a node inside it, is
-dropped, because IAM does not know which values lie in which: containment is application data. A person whose access
-to `v` comes only through such a grant gets a token that reaches nothing. They need a grant at `v` itself or a global
-one, and the device page shows the narrowed actions before they approve.
+It is `narrowPermissions` (the ceiling an OAuth scope and a terminal already apply) under `*` at `D=v`, plus the
+relations the person holds inside `D=v`: one function in `@fabrika/auth-core`, which IAM and the test kit's stand-in IAM
+both call. It never adds an entry or a reach the person does not hold.
+
+Three kinds of entry are dropped rather than moved to the value, and each fails closed:
+
+- **An entry at a container of `D=v`, or at a node inside it.** IAM does not know which values lie in which, because
+  containment is application data.
+- **A relation held anywhere.** An access view bound to its member gives such a hold nothing and gives a hold inside a
+  node that node's rows ([ADR-0076](0076-an-access-view-decides-the-rows-a-relation-reaches.md)), so moving it inside
+  `D=v` would widen it.
+- **Everything at another value or dimension.**
+
+A person whose access to `v` comes only through one of these gets a token that reaches less, or nothing. The device page
+shows the narrowed actions before they approve.
 
 **Invariant: a narrowed token carries no entry outside its value.** Every entry is global-turned-`D=v`, at `D=v`, or a
-relation inside `D=v`. Nothing outside the value is left for the proxy or the framework to read.
+relation the person holds inside `D=v`. `parseAccessClaims` refuses a token with `act` whose entries do not all lie
+there, so neither the proxy nor the framework reads one.
 
-### 4. Isolation: a token narrowed to project A reaches nothing in project B
+### 4. Isolation: a token narrowed to project A reaches what A's grants reach
 
-Every check that could reach B reads only the token's entries, so it fails for B:
+**The property:** a token narrowed to project A reaches exactly what a person would reach whose only grants were the
+person's own grants at A and their global grants moved to A. That is never more than the person reaches.
 
-- **The proxy.** An `app` row and an `anyOf` row need the action held as a global grant, and the token holds none: 403.
-  An action row needs the action in some scope, so it passes. What it reaches is decided below.
-- **The framework's access forms.** They read the token's entries alone:
-  - `in` with project B: no entry at B or at a container of B, so 403.
-  - `on` with an object in B: the chain names B and no entry matches, so 404.
-  - `over`: the `Within` holds A only, and the data layer matches each row's key or chain to A in the same statement.
-- **Relations.** A relation entry holds only inside A (`~relin`), and the data layer re-reads the relation rows per
-  statement, so a relation row in B counts for nothing.
-- **IAM's own writes.** A membership, link or delegation operation holds the caller to the token's entries intersected
-  with its live permissions (`resolveMemberCaller`), so it acts in A or nowhere. `createScope` needs the action as a
-  global entry, which a narrowed token never carries, so it creates no new top-level value. A `read` token is refused
-  every IAM write, as the spec says.
-- **Re-narrowed at every exchange.** A grant the person gains in B later is dropped at the next exchange, as is
-  everything else outside A.
+The checks that decide it read the token's entries alone:
 
-What the narrowing does not cover is what no token decides: a site that declares `unscoped` or `sql` reaches what it
-declares for every caller, and the approval diff shows those declarations. An `agent` caller gets such a site only on
-a group whose callers list `agent`.
+- **The proxy.**
+  - An `app` row and an `anyOf` row need the action held as a global grant, and the token holds none: 403.
+  - An action row needs the action in some scope, so it passes, and the access form decides what it reaches.
+  - A `member` row passes with any entry. Its handler gets no capability, so it reads only reference tables and what
+    it declares `unscoped`.
+- **The framework's access forms.**
+  - `in` and `on` mint a capability for an object in B only through an entry that matches B's chain, and the token has
+    none. Otherwise the data layer's own check refuses: 403 for `in`, 404 for `on`.
+  - `over` gets a `Within` of A, and the data layer matches each row to it in the same statement.
+- **Relations.** Only relations the person holds inside A remain. The data layer re-reads the relation rows per
+  statement.
+- **IAM's writes.**
+  - A membership, link or delegation operation holds the caller to the token's entries intersected with its live
+    permissions (`resolveMemberCaller`), checked at the target value.
+  - `createScope` needs the action as a global entry, which a narrowed token never carries, so it creates no new
+    top-level value.
+  - A link revocation by its issuer is not checked against the caller's entries today, so IAM holds an agent's token
+    to the links whose chain its entries reach: the mount's `issuedBy` on some value of the chain, as an issue checks.
+  - A `read` token is refused every IAM write, as the spec says.
+- **Re-narrowed at every exchange.** A grant the person gains in B later is dropped at the next exchange.
 
-The witness is a test that holds both halves. A token narrowed to project A calls a query and a mutation in A and gets
-answers. The same calls in project B get 403 or 404, and a list over projects returns A's rows only. It runs through
-the test kit, which uses the production proxy decision and `boot`.
+**What the application declares crosses values for every caller, and the narrowing keeps it.** A grant at A still
+reaches what the contract opens from A, as it would for a person whose only grant is at A:
+
+- a member reveal, which matches a grant at A to the ancestor the reveal names;
+- a `readThrough` or `writeThrough` path whose column names A on an object that lies in B;
+- an access view bound to a member, which maps A's node to the rows the view lists;
+- a job the request kicks, which runs with its own workload authority, and a `connect` import;
+- a site that declares `unscoped` or `sql`.
+
+The approval diff shows each of these. An `agent` caller reaches them only on a group whose callers list `agent`. The
+device page says that the grant reaches what the person's grants at A reach, and does not promise "nothing in B".
+
+**The witness** is a test of an application that declares none of these. A token narrowed to project A calls a query
+in A and gets an answer. The same calls in project B get 403 or 404, and a list over projects returns A's rows only.
+The test runs through the test kit, which uses the production proxy decision and `boot`.
 
 ### 5. What stays as the spec decides
 
 Several parts follow the spec unchanged:
 
-- `ctx.agent`, the audit actor columns and the IAM grant records with the agent's label;
+- `ctx.agent`, the audit actor columns (`IamRpc.audit` reads `act` from the verified token) and the IAM grant records
+  with the agent's label;
 - the `read` refusals of IAM writes and the token lifetimes (the grant up to a week and never past the approving
   login; an access token 300 s);
 - the rollout across proxy releases.
 
 The spec's two later steps, the `agent-write` category of protected environments and the person's own grant list,
-follow this decision. Until the `agent-write` mirror exists, IAM serves `read` grants only at an environment it holds
-no mirror for. The absence fails closed.
+follow this decision. IAM serves a `write` grant only at an environment whose `agent-write` mode Control has mirrored
+as `off`. Until that mirror exists, every environment serves `read` grants only: the absence fails closed, and the
+feature is read-only. The device page offers `read` for a `write` request, and says why.
 
 **ADR-0022, changed.** An OAuth resource token still reaches no application endpoint as a bearer. What reaches the
-application is the token the proxy exchanges it for, and only on a row that lists `agent`. ADR-0022's "Principal
-kinds" says so.
+application is the token the proxy exchanges it for, and only on a row that lists `agent`. ADR-0022's rule 3 (the
+exchange in step 3, the scope's kinds in step 5) and "Principal kinds" say so.
 
 ## Consequences
 
 - An agent works on one project with a grant a person approved in the browser, revocable within 300 s. It needs no
   service key and no machine-only group.
-- The application keeps every authorization check it runs for the person. The narrowing only removes entries, so
-  nothing the person cannot do becomes possible.
+- The application keeps every authorization check it runs for the person. The narrowing only removes entries and never
+  moves a relation, so nothing the person cannot do becomes possible.
 - A person who reaches a project only through a container grant (an organisation's role) gets nothing from a grant
   narrowed to that project. Granting them a role at the project, or approving an unnarrowed grant, are the ways out.
-  The device page shows the narrowed actions, so they see it before approving.
+  The same holds for a person whose relation access comes only from a global role: a narrowed grant carries none of
+  it. The device page shows the narrowed actions, so they see it before approving.
+- Until the `agent-write` mirror lands, an agent reads and does not write.
 - A grant names one resource and one scope. An agent that works on two projects holds two grants. Its credential
   helper keys its refresh tokens by origin and scope, an addition to the spec's custody step.
 - **Rollout.**
