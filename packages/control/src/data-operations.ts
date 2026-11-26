@@ -67,7 +67,7 @@ import {
 import type { DataOperationDto } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import { abortableWait, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
-import { isBundledMigration } from './approval/snapshot'
+import { isBundledMigration, parseSnapshot } from './approval/snapshot'
 import type {
 	BackupCheckpoint,
 	BackupPartRow,
@@ -960,6 +960,9 @@ class OperationDriver {
 				const migrated = await this.migrate(restricted.row)
 				if (migrated.kind === 'failed') return await this.failed(restricted.row, migrated.code)
 				if (migrated.kind !== 'ok') return { kind: 'done', result: migrated.kind }
+				// Cloudflare updates an active object's code deferred: the replaced version may still answer, with its own
+				// ledger. Only a ledger that holds every file the run bundles is the deployed version's.
+				if (!holdsEvery(migrated.value, await this.runMigrations(row))) return { kind: 'done', result: 'interrupted' }
 				return {
 					kind: 'next',
 					row: await this.advance(restricted.row, { step: 'open', targetMode: 'open', generation: await this.allocate() }),
@@ -1412,6 +1415,15 @@ class OperationDriver {
 		return (await this.migrationRun(row)).status === 'succeeded' ? null : DEPLOY_NOT_STARTED_CODE
 	}
 
+	/** The application migration files the operation's run bundles, from the snapshot read at its pinned commit. */
+	private async runMigrations(row: DataOperationRow): Promise<readonly string[]> {
+		const run = await this.migrationRun(row)
+		if (run.snapshot_json === null) throw new Error("a migration's run holds no snapshot")
+		const snapshot = parseSnapshot(await this.deps.repositories.runs.document(run.snapshot_json))
+		this.lease.assertHeld()
+		return snapshot.migrations.map(({ name }) => name).filter(isBundledMigration)
+	}
+
 	private async migrationRun(row: DataOperationRow): Promise<RunRow> {
 		if (row.run_id === null) throw new Error('a migration names no run')
 		const run = await this.deps.repositories.runs.getRun(row.run_id)
@@ -1425,13 +1437,17 @@ class OperationDriver {
 	 * it. The object answers a failed boot with a 500, which reads as unreachable, so once the attempts are spent its view
 	 * says whether its current boot failed.
 	 */
-	private async migrate(row: DataOperationRow, named?: string): Promise<DataResult<null>> {
+	private async migrate(row: DataOperationRow, named?: string): Promise<DataResult<readonly OpsMigration[]>> {
 		const object = named ?? (await this.serving())
 		for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
 			this.lease.assertHeld()
 			const answer = await this.deps.ops.migrate(this.target, { object, generation: row.generation }, this.lease.signal)
 			this.lease.assertHeld()
-			if (answer.kind === 'ok') return answer.value.generation === row.generation ? { kind: 'ok', value: null } : { kind: 'interrupted' }
+			if (answer.kind === 'ok') {
+				return answer.value.generation === row.generation
+					? { kind: 'ok', value: answer.value.migrations }
+					: { kind: 'interrupted' }
+			}
 			if (answer.kind === 'stale') return { kind: 'failed', code: 'stale_generation' }
 			if (answer.reason === 'not_served') return { kind: 'failed', code: MIGRATION_FAILED_CODE }
 			if (answer.reason !== 'unreachable') return { kind: 'interrupted' }
@@ -1776,6 +1792,12 @@ function reopenedRestoreCode(backup: BackupRow, restore: RestoreRow): string {
  * applied, the clone applied too, under the same checksum. The clone holds the original's data as it was frozen, and
  * the original at an earlier time can only miss migrations, never hold another.
  */
+/** Whether the object's ledger holds each of the application migration files `names`. */
+function holdsEvery(ledger: readonly OpsMigration[], names: readonly string[]): boolean {
+	const applied = new Set(ledger.filter((row) => row.bundle === APPLICATION_BUNDLE).map((row) => row.name))
+	return names.every((name) => applied.has(name))
+}
+
 function ledgerWithin(original: readonly OpsMigration[], clone: readonly OpsMigration[]): boolean {
 	const key = (row: OpsMigration): string => JSON.stringify([row.bundle, row.name, row.checksum])
 	const applied = new Set(clone.map(key))

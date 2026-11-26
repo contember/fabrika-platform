@@ -396,6 +396,32 @@ for (const backend of backends) {
 			expect(await recordedMaintenance(b, TARGET)).toBe('open')
 		})
 
+		test('a migrate answer from the version the deploy replaced is no success: the next pass migrates under the new one', async () => {
+			const { b, fake, state, deps, run, deployFirst, operations } = await open()
+			await deployFirst()
+			state.migrations = [FIRST, SECOND]
+			// Cloudflare updates an active object deferred: the replaced version, which bundles FIRST only, answers `migrate`.
+			fake.fault = (sent) => {
+				if (sent.op === 'migrate') fake.bundled = [FIRST]
+				return undefined
+			}
+			const second = await run()
+			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'succeeded' })
+			const [waiting] = await operations()
+			expect(waiting).toMatchObject({ kind: 'migrate', state: 'running', step: 'migrate', target_mode: 'read-only' })
+			expect(fake.ledger.map((row) => row.name)).toEqual([FIRST])
+			expect(await recordedMaintenance(b, TARGET)).not.toBe('open')
+			// The deployed version took over: the next maintenance pass migrates under it and opens.
+			fake.fault = () => undefined
+			fake.bundled = [FIRST, SECOND]
+			fake.sent.length = 0
+			const pass = () => runBackupSchedule({ repositories: b.repositories, lock: new SqlDeployLocks(b.db), ops: fake, provider: deps().provider })
+			expect(await pass()).toMatchObject({ resumed: 1, succeeded: 1 })
+			expect(fake.ledger.map((row) => row.name)).toEqual([FIRST, SECOND])
+			expect(await b.repositories.dataOperations.get(waiting?.id ?? '')).toMatchObject({ state: 'succeeded', step: 'open' })
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
+		})
+
 		test('a migration left without an answer resumes through a recovery at a fenced generation', async () => {
 			const { b, fake, state, deps, run, log, deployFirst, operations } = await open()
 			await deployFirst()
