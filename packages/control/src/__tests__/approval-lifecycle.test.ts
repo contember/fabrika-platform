@@ -1149,7 +1149,7 @@ describe('protection survives the registry', () => {
 		const permissive = { appId: 'notes', env: 'stage', protected: true, policy: PERMISSIVE_POLICY }
 		await setEnvironmentProtectionUseCase({
 			...approvals(w, human),
-			grantApproval: { set: (_app, gates, revision) => Promise.resolve({ revision, credentials: gates.credentials }) },
+			grantApproval: { set: (_app, gates, revision) => Promise.resolve({ revision, credentials: gates.credentials, agentWrite: gates.agentWrite }) },
 		}, permissive)
 		await protectAsConsole(approvals(w, human), { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
 
@@ -2499,7 +2499,7 @@ describe('approval categories', () => {
 				const now = before === undefined || before.revision <= revision ? { gates, revision } : before
 				held.set(app, now)
 				gate.afterSet?.()
-				return { revision: now.revision, credentials: now.gates.credentials }
+				return { revision: now.revision, credentials: now.gates.credentials, agentWrite: now.gates.agentWrite }
 			},
 		}
 		return gate
@@ -2713,7 +2713,7 @@ describe('approval categories', () => {
 		await publishedBase(w)
 		const gate = grantGate()
 		await setPolicy(w, 'prod', PERMISSIVE_POLICY, gate)
-		expect(gate.state?.gates).toEqual({ grants: false, credentials: 'off' })
+		expect(gate.state?.gates).toEqual({ grants: false, credentials: 'off', agentWrite: 'passkey' })
 		w.files = DELETES_NOTES
 		const result = await deploy(w, 'prod')
 		expect(result.status).toBe('succeeded')
@@ -2738,12 +2738,12 @@ describe('approval categories', () => {
 		const gate = grantGate()
 		const start = await revision()
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants'], gate)
-		const held: IamGates = { grants: true, credentials: 'person' }
+		const held: IamGates = { grants: true, credentials: 'person', agentWrite: 'passkey' }
 		expect(gate.calls).toEqual([['notes@prod', held, start + 1]])
 		expect(await revision()).toBe(start + 1)
 		await choose(w, 'prod', [...DEFAULT_APPROVAL_CATEGORIES, 'grants', 'csp'], gate)
 		await protectAsConsole({ ...approvals(w, auth()), grantApproval: gate }, { appId: 'notes', env: 'prod', protected: false }, 'p-ada')
-		const released: IamGates = { grants: false, credentials: 'off' }
+		const released: IamGates = { grants: false, credentials: 'off', agentWrite: 'open' }
 		expect(gate.calls).toEqual([['notes@prod', held, start + 1], ['notes@prod', held, start + 2], ['notes@prod', released, start + 3]])
 		expect(gate.state).toEqual({ gates: released, revision: await revision() })
 	})
@@ -2765,11 +2765,11 @@ describe('approval categories', () => {
 		const start = await revision()
 
 		await setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'refuse' }, gate)
-		expect(gate.calls).toEqual([['notes@prod', { grants: false, credentials: 'refuse' }, start + 1]])
+		expect(gate.calls).toEqual([['notes@prod', { grants: false, credentials: 'refuse', agentWrite: 'passkey' }, start + 1]])
 		expect(seen).toEqual(['person'])
 
 		await setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'off' }, gate)
-		expect(gate.calls.slice(1)).toEqual([['notes@prod', { grants: false, credentials: 'off' }, start + 2]])
+		expect(gate.calls.slice(1)).toEqual([['notes@prod', { grants: false, credentials: 'off', agentWrite: 'passkey' }, start + 2]])
 		expect(seen).toEqual(['person', 'off'])
 	})
 
@@ -2782,8 +2782,8 @@ describe('approval categories', () => {
 		gate.calls.length = 0
 		await setPolicy(w, 'prod', { ...STRICT_POLICY, credentials: 'refuse' }, gate)
 		expect(gate.calls).toEqual([
-			['notes@prod', { grants: true, credentials: 'refuse' }, revision + 1],
-			['notes@prod', { grants: false, credentials: 'refuse' }, revision + 1],
+			['notes@prod', { grants: true, credentials: 'refuse', agentWrite: 'passkey' }, revision + 1],
+			['notes@prod', { grants: false, credentials: 'refuse', agentWrite: 'passkey' }, revision + 1],
 		])
 	})
 
@@ -2816,8 +2816,8 @@ describe('approval categories', () => {
 		expect(await convergeIamGates({ repositories: w.db })).toEqual({ written: 0, failed: 0 })
 		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 2, failed: 0 })
 		expect(gate.calls).toEqual([
-			['notes@prod', { grants: false, credentials: 'person' }, await revision('prod')],
-			['notes@stage', { grants: false, credentials: 'off' }, await revision('stage')],
+			['notes@prod', { grants: false, credentials: 'person', agentWrite: 'passkey' }, await revision('prod')],
+			['notes@stage', { grants: false, credentials: 'off', agentWrite: 'open' }, await revision('stage')],
 		])
 		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 0, failed: 0 })
 
@@ -2828,7 +2828,7 @@ describe('approval categories', () => {
 		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 0, failed: 1 })
 		gate.fail = false
 		expect(await convergeIamGates({ repositories: w.db, grantApproval: gate })).toEqual({ written: 1, failed: 0 })
-		expect(gate.calls).toEqual([['notes@stage', { grants: false, credentials: 'refuse' }, await revision('stage')]])
+		expect(gate.calls).toEqual([['notes@stage', { grants: false, credentials: 'refuse', agentWrite: 'passkey' }, await revision('stage')]])
 	})
 
 	test('IAM that does not take the gate leaves Control unchanged; a release IAM missed is made by the next change', async () => {

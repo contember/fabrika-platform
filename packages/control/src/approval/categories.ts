@@ -4,6 +4,7 @@
 
 import {
 	type ActionMode,
+	AGENT_WRITE_CATEGORY,
 	APPROVAL_CATEGORIES,
 	type ApprovalCategory,
 	type ApprovalPolicy,
@@ -14,10 +15,12 @@ import {
 	DEFAULT_APPROVAL_CATEGORIES,
 	POLICY_CATEGORIES,
 	policyFromCategories,
+	STEP_UP_CATEGORIES,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 	waitingCategories,
 } from '@fabrika/control-contract'
+import type { AgentWriteGate } from '@fabrika/iam-contract'
 import { z } from 'zod'
 import type { AppEnvRow } from '../db'
 
@@ -59,25 +62,47 @@ export function grantsWait(row: Pick<AppEnvRow, 'protected' | 'approval_categori
 	return row.protected === 1 && appEnvPolicy(row).grants === 'person'
 }
 
-/** The environment's gates as IAM mirrors them (ADR-0083 §4, §8): its grant gate, and `credentials`, `off` when unprotected. */
-export function iamGatesOf(row: Pick<AppEnvRow, 'protected' | 'approval_categories' | 'approval_policy'>): IamGates {
-	return { grants: grantsWait(row), credentials: row.protected === 1 ? appEnvPolicy(row).credentials : 'off' }
+/**
+ * The environment's gates as IAM mirrors them (ADR-0083 §4, §8, ADR-0090 §5): its grant gate, `credentials`, and the
+ * `agent-write` mode with its passkey; `off` and `open` when unprotected.
+ */
+export function iamGatesOf(row: Pick<AppEnvRow, 'protected' | 'approval_categories' | 'approval_policy' | 'approval_settings'>): IamGates {
+	if (row.protected !== 1) return { grants: false, credentials: 'off', agentWrite: 'open' }
+	const policy = appEnvPolicy(row)
+	const agentWrite: AgentWriteGate = policy[AGENT_WRITE_CATEGORY] === 'refuse'
+		? 'refuse'
+		: appEnvSettings(row).stepUp[AGENT_WRITE_CATEGORY] === 'webauthn'
+		? 'passkey'
+		: 'open'
+	return { grants: grantsWait(row), credentials: policy.credentials, agentWrite }
 }
 
-/** What IAM holds of an environment's approval choice: whether its console grants wait, and its `credentials` mode. */
+/**
+ * What IAM holds of an environment's approval choice: whether its console grants wait, its `credentials` mode, and what
+ * it does with an agent's `write` grant.
+ */
 export interface IamGates {
 	readonly grants: boolean
 	readonly credentials: ActionMode
+	readonly agentWrite: AgentWriteGate
 }
 
 const CREDENTIALS_RANK: Readonly<Record<ActionMode, number>> = { off: 0, person: 1, refuse: 2 }
+
+const AGENT_WRITE_RANK: Readonly<Record<AgentWriteGate, number>> = { open: 0, passkey: 1, refuse: 2 }
 
 /** Each gate at the stricter of the two. */
 export function stricterGates(a: IamGates, b: IamGates): IamGates {
 	return {
 		grants: a.grants || b.grants,
 		credentials: CREDENTIALS_RANK[b.credentials] > CREDENTIALS_RANK[a.credentials] ? b.credentials : a.credentials,
+		agentWrite: AGENT_WRITE_RANK[b.agentWrite] > AGENT_WRITE_RANK[a.agentWrite] ? b.agentWrite : a.agentWrite,
 	}
+}
+
+/** Whether IAM holding `held` is looser than `sent`; IAM reads a gate it holds none of as `refuse`. */
+export function looserAgentWrite(held: AgentWriteGate | null, sent: AgentWriteGate): boolean {
+	return AGENT_WRITE_RANK[held ?? 'refuse'] < AGENT_WRITE_RANK[sent]
 }
 
 /** Whether IAM holding `held` is looser than `sent`; IAM reads a mode it holds none of as `person`. */
@@ -86,7 +111,7 @@ export function looserCredentials(held: ActionMode | null, sent: ActionMode): bo
 }
 
 export function sameGates(a: IamGates, b: IamGates): boolean {
-	return a.grants === b.grants && a.credentials === b.credentials
+	return a.grants === b.grants && a.credentials === b.credentials && a.agentWrite === b.agentWrite
 }
 
 /**
@@ -156,7 +181,7 @@ export function appEnvSettings(row: Pick<AppEnvRow, 'approval_settings'>): Appro
 export function storedSettings(settings: ApprovalSettings): { readonly settings: string | null } {
 	const approvers = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] !== STRICT_SETTINGS.approvers[category])
 	const mayApprove = APPROVER_CATEGORIES.filter((category) => settings.requesterMayApprove[category] !== STRICT_SETTINGS.requesterMayApprove[category])
-	const stepUp = APPROVER_CATEGORIES.filter((category) => settings.stepUp[category] !== STRICT_SETTINGS.stepUp[category])
+	const stepUp = STEP_UP_CATEGORIES.filter((category) => settings.stepUp[category] !== STRICT_SETTINGS.stepUp[category])
 	const stored = {
 		...(settings.deployRequestCommits === STRICT_SETTINGS.deployRequestCommits ? {} : { deployRequestCommits: settings.deployRequestCommits }),
 		...(settings.requestTtlHours === STRICT_SETTINGS.requestTtlHours ? {} : { requestTtlHours: settings.requestTtlHours }),

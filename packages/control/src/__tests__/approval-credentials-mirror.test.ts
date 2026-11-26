@@ -49,23 +49,28 @@ const PROVIDER: ControlProvider = { id: 'harbor', deploy: () => Promise.resolve(
  * strict and has no `credentials`, and it answers the grant gate it holds. `pass()` is a new port over the same IAM, as
  * each maintenance pass builds one; `requests` counts every call that reached IAM, refused ones included.
  */
-function olderIam(): {
+function olderIam(takes: 'grants' | 'credentials' = 'grants'): {
 	readonly port: GrantApprovalPort
 	pass(): GrantApprovalPort
 	readonly writes: unknown[]
 	readonly requests: { count: number }
 } {
 	const t = initRpc<Record<string, never>>()
-	const held = new Map<string, { required: boolean; revision: number }>()
+	const held = new Map<string, { required: boolean; revision: number; credentials?: 'off' | 'person' | 'refuse' }>()
 	const writes: unknown[] = []
+	const mode = z.enum(['off', 'person', 'refuse'])
+	const gates = z.object({ app: z.string(), required: z.boolean(), revision: z.number().int().nonnegative() })
+	const input = takes === 'grants' ? gates.strict() : gates.extend({ credentials: mode.optional() }).strict()
 	const router = t.router({
 		grantApproval: t.router({
 			set: t.procedure
-				.input(z.object({ app: z.string(), required: z.boolean(), revision: z.number().int().nonnegative() }).strict())
+				.input(input)
 				.mutation(({ input }) => {
 					writes.push(input)
 					const before = held.get(input.app)
-					const now = before === undefined || before.revision <= input.revision ? { required: input.required, revision: input.revision } : before
+					const credentials = mode.safeParse('credentials' in input ? input.credentials : undefined)
+					const sent = { required: input.required, revision: input.revision, ...(credentials.success ? { credentials: credentials.data } : {}) }
+					const now = before === undefined || before.revision <= input.revision ? sent : before
 					held.set(input.app, now)
 					return { app: input.app, ...now }
 				}),
@@ -259,7 +264,7 @@ for (const backend of backends) {
 			/** An application environment IAM already holds a vocabulary for, mirrored `off`, as a deploy of it leaves it. */
 			const knownToIam = async (app: string): Promise<void> => {
 				expect((await f.putSchema(NOTES_SCHEMA, app)).status).toBe(200)
-				await grantApproval.set(app, { grants: false, credentials: 'off' }, 0)
+				await grantApproval.set(app, { grants: false, credentials: 'off', agentWrite: 'open' }, 0)
 			}
 			/** Registration's use cases as the console calls them, with the mirror wired to IAM unless `port` says otherwise. */
 			const registry = (port: GrantApprovalPort | null = grantApproval): RegistryUseCaseContext => ({
@@ -277,7 +282,22 @@ for (const backend of backends) {
 			/** The `credentials` mode IAM holds of each environment. */
 			const iamModes = () => opened.iam.grantRequests.credentialsModes()
 
-			return { db, grantApproval, machine, provision, provisionAtControl, setCredentials, converge, adaToken, knownToIam, register, putEnv, iamModes }
+			return {
+				db,
+				iamRepositories: opened.iam,
+				inConsole,
+				grantApproval,
+				machine,
+				provision,
+				provisionAtControl,
+				setCredentials,
+				converge,
+				adaToken,
+				knownToIam,
+				register,
+				putEnv,
+				iamModes,
+			}
 		}
 
 		test('after an upgrade IAM refuses the machine key everywhere until the maintenance pass mirrors each mode', async () => {
@@ -292,7 +312,7 @@ for (const backend of backends) {
 		test('the pass marks an environment done only when IAM holds the revision and the mode it sent', async () => {
 			const w = await world()
 			// IAM holds notes@stage stricter, at a later revision than Control's: a tightening whose row write then failed.
-			await w.grantApproval.set(STAGE, { grants: false, credentials: 'person' }, 5)
+			await w.grantApproval.set(STAGE, { grants: false, credentials: 'person', agentWrite: 'passkey' }, 5)
 			expect(await w.converge()).toEqual({ written: 1, failed: 1 })
 			// Not marked, so the next pass writes it again; IAM keeps the stricter mode meanwhile.
 			expect(await w.converge()).toEqual({ written: 0, failed: 1 })
@@ -321,6 +341,40 @@ for (const backend of backends) {
 			}
 			expect(await w.converge()).toEqual({ written: 2, failed: 0 })
 			expect(await w.provision(w.machine, APP)).toBe(403)
+		})
+
+		test("each environment's `agent-write` gate reaches IAM: `open` unprotected, `passkey` by default, `refuse` when chosen", async () => {
+			const w = await world()
+			expect(await w.converge()).toEqual({ written: 2, failed: 0 })
+			const gateOf = (app: string) => w.iamRepositories.grantRequests.agentWriteGate(app)
+			expect([await gateOf(STAGE), await gateOf(APP)]).toEqual(['open', 'passkey'])
+			await setEnvironmentProtectionUseCase(w.inConsole, {
+				appId: 'notes',
+				env: 'prod',
+				protected: true,
+				policy: { ...STRICT_POLICY, 'agent-write': 'refuse' },
+				settings: NO_STEP_UP,
+			})
+			expect(await gateOf(APP)).toBe('refuse')
+			// Dropping its passkey loosens it, which takes a passkey itself: that change is the step-up suite's.
+			expect(await w.converge()).toEqual({ written: 1, failed: 0 })
+		})
+
+		test('an IAM that takes the `credentials` mode but not the `agent-write` gate is written without the gate alone', async () => {
+			const w = await world()
+			const older = olderIam('credentials')
+			const warn = spyOn(console, 'warn').mockImplementation(() => {})
+			try {
+				expect(await w.converge(older.pass())).toEqual({ written: 0, failed: 2 })
+				expect(older.writes.length).toBe(2)
+				expect(older.writes.every((write) => typeof write === 'object' && write !== null && 'credentials' in write && !('agentWrite' in write)))
+					.toBe(true)
+				expect(warn.mock.calls.map((call) => String(call[0]))).toEqual(['IAM does not take the agentWrite gate yet; writing grant gates without it'])
+			} finally {
+				warn.mockRestore()
+			}
+			// Unmirrored, so the pass after IAM's upgrade writes both.
+			expect(await w.converge()).toEqual({ written: 2, failed: 0 })
 		})
 
 		test('an application without `prod` counts it as `person`, and a registered or put `prod` reaches IAM before its row', async () => {
@@ -356,17 +410,17 @@ for (const backend of backends) {
 		test('IAM holding a looser mode at a later revision: an environment that starts protected is not created (503)', async () => {
 			const w = await world()
 			// A later revision IAM keeps, as a stale write of a deleted environment of the same id would leave it.
-			await w.grantApproval.set('shop@prod', { grants: false, credentials: 'off' }, 99)
+			await w.grantApproval.set('shop@prod', { grants: false, credentials: 'off', agentWrite: 'open' }, 99)
 			await expect(w.register('shop', 'prod')).rejects.toMatchObject({ httpStatus: 503, message: expect.stringContaining('a later revision') })
 			expect(await w.db.registry.getApp('shop')).toBeNull()
 
 			await w.register('blog', 'stage')
-			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'off' }, 99)
+			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'off', agentWrite: 'open' }, 99)
 			await expect(w.putEnv('blog', 'prod')).rejects.toMatchObject({ httpStatus: 503 })
 			expect(await w.db.registry.getAppEnv('blog', 'prod')).toBeNull()
 
 			// One IAM holds as strictly as it starts is created.
-			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'person' }, 100)
+			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'person', agentWrite: 'passkey' }, 100)
 			expect((await w.putEnv('blog', 'prod')).env).toBe('prod')
 		})
 
@@ -388,7 +442,7 @@ for (const backend of backends) {
 
 		test('a looser mode IAM answers at the revision Control sent is refused (503) without claiming a later revision', async () => {
 			const w = await world()
-			const looser: GrantApprovalPort = { set: (_app, _gates, revision) => Promise.resolve({ revision, credentials: 'off' }) }
+			const looser: GrantApprovalPort = { set: (_app, _gates, revision) => Promise.resolve({ revision, credentials: 'off', agentWrite: null }) }
 			const refused = await w.register('shop', 'prod', looser).then(() => null, (cause: unknown) => cause)
 			expect(refused).toMatchObject({ httpStatus: 503 })
 			const message = refused instanceof Error ? refused.message : ''

@@ -26,7 +26,7 @@ import {
 	requiredStepUp,
 	weakensStepUp,
 } from '@fabrika/control-contract'
-import type { CredentialsMode } from '@fabrika/iam-contract'
+import type { AgentWriteGate, CredentialsMode } from '@fabrika/iam-contract'
 import type { DeployLocks } from '@fabrika/platform'
 import { fail } from '../api/domain'
 import { toAppEnvDto } from '../api/registry/registration'
@@ -70,10 +70,14 @@ export interface GrantApprovalPort {
 	set(app: string, gates: IamGates, revision: number): Promise<IamGatesHeld>
 }
 
-/** What IAM answers it holds of an environment: its protection revision and its `credentials` mode, null for none. */
+/**
+ * What IAM answers it holds of an environment: its protection revision, its `credentials` mode and its `agentWrite`
+ * gate, each null for none.
+ */
 export interface IamGatesHeld {
 	readonly revision: number
 	readonly credentials: CredentialsMode | null
+	readonly agentWrite: AgentWriteGate | null
 }
 
 export interface ApprovalUseCaseContext extends ConsoleAdmission {
@@ -343,6 +347,7 @@ export async function setEnvironmentProtectionUseCase(c: ApprovalUseCaseContext,
 			protected: input.protected ? 1 : 0,
 			approval_categories: policy === undefined ? held.approval_categories : policy.categories,
 			approval_policy: policy === undefined ? held.approval_policy : policy.policy,
+			approval_settings: settings === undefined ? held.approval_settings : settings.settings,
 		})
 		// Without the provisioning key IAM reads every environment's `credentials` as `person`, which no write could raise.
 		const grantApproval = c.grantApproval

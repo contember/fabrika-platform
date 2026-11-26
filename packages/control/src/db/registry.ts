@@ -702,12 +702,14 @@ export class ControlRegistryRepository {
 	async getStartingProtection(
 		appId: string,
 		env: string,
-	): Promise<Pick<AppEnvRow, 'protected' | 'protection_revision' | 'approval_categories' | 'approval_policy'>> {
+	): Promise<Pick<AppEnvRow, 'protected' | 'protection_revision' | 'approval_categories' | 'approval_policy' | 'approval_settings'>> {
 		const kept = await this.d1
-			.prepare('SELECT protected, protection_revision, approval_categories, approval_policy FROM app_env_protection WHERE app_id = ? AND env = ?')
+			.prepare(`SELECT protected, protection_revision, approval_categories, approval_policy, approval_settings FROM app_env_protection
+				WHERE app_id = ? AND env = ?`)
 			.bind(appId, env)
-			.first<Pick<AppEnvRow, 'protected' | 'protection_revision' | 'approval_categories' | 'approval_policy'>>()
-		return kept ?? { protected: defaultProtected(env), protection_revision: 0, approval_categories: null, approval_policy: null }
+			.first<Pick<AppEnvRow, 'protected' | 'protection_revision' | 'approval_categories' | 'approval_policy' | 'approval_settings'>>()
+		return kept
+			?? { protected: defaultProtected(env), protection_revision: 0, approval_categories: null, approval_policy: null, approval_settings: null }
 	}
 
 	/** Every environment an operator marked as an MCP authoring target. */
