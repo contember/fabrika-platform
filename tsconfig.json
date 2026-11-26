@@ -26,6 +26,7 @@
 		{ "path": "./packages/daemon-kit/tsconfig.lib.json" },
 		{ "path": "./packages/daemon-kit/tsconfig.test.json" },
 		{ "path": "./packages/dashboard/tsconfig.build.json" },
+		{ "path": "./packages/dashboard/ux/tsconfig.build.json" },
 		{ "path": "./packages/db/tsconfig.lib.json" },
 		{ "path": "./packages/db/tsconfig.test.json" },
 		{ "path": "./packages/email/tsconfig.lib.json" },

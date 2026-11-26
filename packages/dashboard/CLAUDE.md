@@ -14,7 +14,11 @@ bun run dev          # vite on :18292, proxies /api → :18291 (run the worker's
 bun run typecheck    # gen + tsrs --build
 bun run build        # gen + tsc + vite build → dist/ (what the worker serves)
 bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
+bun run ux           # UX checks against the seeded local stack (ux/README.md); `ux tasks` prints the task cards
 ```
+
+A change to a console screen runs the UX review loop in `ux/` (personas, tasks, element map, exact checks, reviewer
+brief): its personas and tasks are approved by a person, and a screen is judged against them, not added to them.
 
 ## Invariants
 
