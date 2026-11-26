@@ -1,5 +1,6 @@
 import { createPage, Link } from '@buzola/router'
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useEnvironmentStatesAcross } from '../components/app/AppFrame'
 import { Icon } from '../components/Icon'
 import { InFlight, RecentChanges } from '../components/overview/Activity'
 import { Applications } from '../components/overview/Applications'
@@ -15,6 +16,7 @@ import {
 	OVERVIEW_ACCESS_REFRESH_MS,
 	type OverviewAccess,
 	type OverviewData,
+	overviewEnvironments,
 	type OverviewRead,
 	productionHealth,
 } from '../lib/overview'
@@ -50,6 +52,9 @@ export function Overview({ data, refresh }: { data: OverviewData; refresh: () =>
 		return () => window.clearInterval(timer)
 	}, [data.loadedAt, refresh])
 	const notices = readNotices(data)
+	// Each environment's data state is read after the page, on its own, and shared with the application's page.
+	const envs = useMemo(() => overviewEnvironments(data), [data])
+	const states = useEnvironmentStatesAcross(envs)
 	return (
 		<div className="overview">
 			<header className="ov-page-head">
@@ -85,8 +90,10 @@ export function Overview({ data, refresh }: { data: OverviewData; refresh: () =>
 			</header>
 			{notices.length > 0 && <p className="ov-read-notices" role="status">{notices.join(' · ')}. Other sections show their available data.</p>}
 			<Readings data={data} />
-			<Attention data={data} />
-			{data.apps.data?.items.length === 0 ? <Welcome hasNamespace={(data.namespaces.data?.items.length ?? 0) > 0} /> : <Applications data={data} />}
+			<Attention data={data} states={states} />
+			{data.apps.data?.items.length === 0
+				? <Welcome hasNamespace={(data.namespaces.data?.items.length ?? 0) > 0} />
+				: <Applications data={data} states={states} />}
 			<div className="ov-pair">
 				<InFlight data={data} />
 				<RecentChanges data={data} />

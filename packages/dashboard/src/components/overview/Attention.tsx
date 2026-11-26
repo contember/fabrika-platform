@@ -1,8 +1,19 @@
 import { Link } from '@buzola/router'
 import { type ReactNode, useState } from 'react'
+import { type EnvironmentState, needsDataAttention, stateLabel, stateLamp } from '../../lib/environment-state'
 import { fmtAgo, fmtDate } from '../../lib/format'
 import { runtimeHealth, unhealthyTelemetry } from '../../lib/health'
-import { boundedCount, expiringKey, isProduction, OVERVIEW_ISSUE_LIMIT, OVERVIEW_KEY_LIMIT, type OverviewData } from '../../lib/overview'
+import {
+	boundedCount,
+	expiringKey,
+	isProduction,
+	OVERVIEW_APP_LIMIT,
+	OVERVIEW_ISSUE_LIMIT,
+	OVERVIEW_KEY_LIMIT,
+	type OverviewData,
+	overviewEnvironments,
+} from '../../lib/overview'
+import { environmentStateOf } from '../app/AppFrame'
 import { FilterGroup } from '../FilterGroup'
 import { Icon } from '../Icon'
 import { type Lamp, StatusLamp } from '../Status'
@@ -13,6 +24,7 @@ type Destination =
 	| { to: 'operations/errors/detail'; params: { issueId: string } }
 	| { to: 'approvals/detail' | 'runs/detail' | 'namespaces/detail' | 'access/credentials/keys/detail'; params: { id: string } }
 	| { to: 'mail'; params: { state: string } }
+	| { to: 'apps/data'; params: { id: string; env: string } }
 
 type Kind = 'operations' | 'delivery' | 'mail' | 'access'
 interface AttentionItem {
@@ -48,11 +60,51 @@ function TargetLink({ target, children, className }: { target: Destination; chil
 			return <Link to={target.to} params={target.params} className={className}>{children}</Link>
 		case 'mail':
 			return <Link to={target.to} params={target.params} className={className}>{children}</Link>
+		case 'apps/data':
+			return <Link to={target.to} params={target.params} className={className}>{children}</Link>
 	}
 }
 
-function attentionItems(data: OverviewData): AttentionItem[] {
+/** Why an environment's data needs a person, for the states `needsDataAttention` names. */
+function dataAttentionContext(state: EnvironmentState): string {
+	switch (state.kind) {
+		case 'boot-failure':
+			return 'The application failed to boot'
+		case 'mode':
+			return 'Maintenance is on'
+		case 'operation':
+			return state.operation.state === 'running' ? 'A data operation is running' : 'A data operation failed and waits for recovery'
+		default:
+			return stateLabel(state)
+	}
+}
+
+/** When the state began, in epoch seconds, where it says. */
+function dataAttentionTime(state: EnvironmentState): number | null {
+	if (state.kind === 'boot-failure') return Date.parse(state.at) / 1000
+	if (state.kind === 'operation') return state.operation.updatedAt
+	return null
+}
+
+function attentionItems(data: OverviewData, states: ReadonlyMap<string, EnvironmentState>): AttentionItem[] {
 	const items: AttentionItem[] = []
+	for (const env of overviewEnvironments(data)) {
+		const state = environmentStateOf(states, env)
+		if (!needsDataAttention(state)) continue
+		const running = state.kind === 'operation' && state.operation.state === 'running'
+		items.push({
+			id: `data:${env.appId}:${env.env}`,
+			kind: 'operations',
+			lamp: stateLamp(state),
+			title: `${env.appId} / ${env.env}: ${stateLabel(state)}`,
+			context: dataAttentionContext(state),
+			time: dataAttentionTime(state),
+			action: 'Open data',
+			target: { to: 'apps/data', params: { id: env.appId, env: env.env } },
+			// A production boot failure is an outage, as a failed production check is; a running operation only asks to wait.
+			priority: running ? 3 : !isProduction(env.env) ? 2 : state.kind === 'boot-failure' ? 0 : 1,
+		})
+	}
 	for (const source of data.health.data?.sources ?? []) {
 		if (!source.source.enabled) continue
 		const health = runtimeHealth([source], data.loadedAt)
@@ -174,14 +226,16 @@ function attentionItems(data: OverviewData): AttentionItem[] {
 	return items.sort((left, right) => left.priority - right.priority || (right.time ?? 0) - (left.time ?? 0))
 }
 
-export function Attention({ data }: { data: OverviewData }) {
+/** `states` holds each environment's data state, keyed by `environmentKey` (`useEnvironmentStatesAcross`). */
+export function Attention({ data, states }: { data: OverviewData; states: ReadonlyMap<string, EnvironmentState> }) {
 	const [filter, setFilter] = useState<'all' | Kind>('all')
 	const [expanded, setExpanded] = useState(false)
-	const items = attentionItems(data)
+	const items = attentionItems(data, states)
 	const matching = items.filter((item) => filter === 'all' || item.kind === filter)
 	const visible = expanded ? matching : matching.slice(0, 8)
 	const unavailable = [data.health, data.issues, data.approvals, data.failures, data.namespaces, data.mailHeld, data.mailFailed, data.keys]
 		.some((read) => read.problem === 'unavailable')
+		|| [...states.values()].some((state) => state.kind === 'unknown' && state.reason === 'unavailable')
 	return (
 		<Panel title="Needs attention" meta={<span className="ov-section-note">Prioritized by impact</span>}>
 			<FilterGroup
@@ -227,6 +281,11 @@ export function Attention({ data }: { data: OverviewData }) {
 			{data.issues.data?.nextCursor != null && (
 				<p className="ov-section-note">
 					Showing the {OVERVIEW_ISSUE_LIMIT} most recently seen open errors. <Link to="operations/errors" params={{ window: 'all' }}>View all errors</Link>
+				</p>
+			)}
+			{(data.apps.data?.items.length ?? 0) > OVERVIEW_APP_LIMIT && (
+				<p className="ov-section-note">
+					Data state checks cover the first {OVERVIEW_APP_LIMIT} applications. <Link to="apps">View all applications</Link>
 				</p>
 			)}
 			{data.keys.data?.limited && (
