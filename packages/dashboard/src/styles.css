@@ -232,6 +232,13 @@ a:hover {
 	text-decoration-thickness: 1px;
 }
 
+/* A link inside running text keeps its underline: colour alone does not set it apart from the text (WCAG 1.4.1). */
+p a:not(.btn) {
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	text-decoration-thickness: 1px;
+}
+
 :focus-visible {
 	outline: 2px solid var(--blueprint);
 	outline-offset: 2px;

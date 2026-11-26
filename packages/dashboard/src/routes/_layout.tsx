@@ -635,11 +635,11 @@ function AccountMenu({ session }: { session: ConsoleSession | null }) {
 				className="account-trigger"
 				aria-expanded={open}
 				aria-controls="account-panel"
-				aria-label="Account and settings"
 				onClick={() => setOpen((value) => !value)}
 			>
 				{principal === null ? <Icon name="users" /> : <span className="avatar" aria-hidden="true">{initials(principal.label)}</span>}
 				<span className="account-name">{principal?.label ?? 'Account'}</span>
+				<span className="sr-only">: account and settings</span>
 				<Icon name="chevron-down" size={13} />
 			</button>
 			<div id="account-panel" className="account-panel" hidden={!open}>
