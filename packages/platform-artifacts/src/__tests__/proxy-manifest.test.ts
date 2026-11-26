@@ -119,9 +119,32 @@ describe('the service tables come from the modules that own them', () => {
 
 	test("IAM's published table serves every transport the installation's IAM process mounts", () => {
 		const ids = byId.get(PLATFORM_IAM_APP_ID)?.table?.endpoints.map((row) => row.id) ?? []
-		for (const id of ['mint-session', 'mint-key', 'mint-exchange', 'mint-delegation', 'mint-grant', 'membership', 'rpc', 'admin-rpc', 'health']) {
+		for (
+			const id of [
+				'mint-session',
+				'mint-key',
+				'mint-exchange',
+				'mint-delegation',
+				'mint-grant',
+				'mint-revocations',
+				'membership',
+				'rpc',
+				'admin-rpc',
+				'health',
+			]
+		) {
 			expect(ids).toContain(id)
 		}
+	})
+
+	test('the revocation feed row is additive: an older proxy reads it as one more row of a form it already serves', () => {
+		const rows = byId.get(PLATFORM_IAM_APP_ID)?.table?.endpoints ?? []
+		const strip = ({ id: _id, path: _path, ...rest }: (typeof rows)[number]) => rest
+		const grant = rows.find((row) => row.id === 'mint-grant')
+		const feed = rows.find((row) => row.id === 'mint-revocations')
+		if (grant === undefined || feed === undefined) throw new Error('missing row')
+		expect(feed.path).toBe('/auth/mint/revocations')
+		expect(strip(feed)).toEqual(strip(grant))
 	})
 
 	test('and the console is NOT anonymous — the drift this item exists for', () => {

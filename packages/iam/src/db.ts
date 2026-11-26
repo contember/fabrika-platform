@@ -15,6 +15,7 @@ import { OAuthRegistryRepository } from './repositories/oauth-registry'
 import { PasskeyRepository } from './repositories/passkeys'
 import { PasswordPolicyRepository } from './repositories/password-policy'
 import { PrincipalRepository } from './repositories/principals'
+import { RevocationRepository } from './repositories/revocations'
 import { ScimRepository } from './repositories/scim'
 import { SecondFactorRepository } from './repositories/second-factors'
 import { SessionRepository } from './repositories/sessions'
@@ -77,6 +78,7 @@ export {
 export { PasskeyRepository, type PasskeyRow } from './repositories/passkeys'
 export { PasswordPolicyRepository, type PasswordPolicyRow } from './repositories/password-policy'
 export { PrincipalRepository, type PrincipalRow, type PrincipalStatus, principalStatus } from './repositories/principals'
+export { RevocationRepository } from './repositories/revocations'
 export { ScimRepository, type ScimTokenRow, type ScimUserAttributes, type ScimUserRecord } from './repositories/scim'
 export { SecondFactorRepository, type SecondFactorRow, type SecondFactorStatus } from './repositories/second-factors'
 export {
@@ -121,6 +123,7 @@ export interface IamRepositories {
 	secondFactors: SecondFactorRepository
 	passkeys: PasskeyRepository
 	scim: ScimRepository
+	revocations: RevocationRepository
 }
 
 /**
@@ -156,6 +159,7 @@ export function createIamRepositories(
 		secondFactors: replacements.secondFactors ?? new SecondFactorRepository(db, writer),
 		passkeys: replacements.passkeys ?? new PasskeyRepository(db, writer),
 		scim: replacements.scim ?? new ScimRepository(db, writer),
+		revocations: replacements.revocations ?? new RevocationRepository(db),
 	}
 }
 

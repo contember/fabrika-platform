@@ -18,6 +18,7 @@ import type {
 	IamGrantRpc,
 	IamHandoffRpc,
 	IamMembershipRpc,
+	IamRevocationRpc,
 	IamRpc,
 	IamSignInSignalsRpc,
 	IamTerminalRpc,
@@ -47,6 +48,8 @@ import type {
 	MintTokenResult,
 	RequestDelegationInput,
 	RequestDelegationResult,
+	RevocationsInput,
+	RevocationsResult,
 	RevokeKeyInput,
 	RevokeKeyResult,
 	RevokeLinkInput,
@@ -156,12 +159,13 @@ export function iamEnv(bindings: WorkerBindings): Env {
 const NOT_ALLOWED: TerminalFailure = { ok: false, reason: 'not_allowed' }
 const DELEGATION_NOT_ALLOWED: MembershipFailure = { ok: false, reason: 'not_allowed' }
 const GRANT_NOT_ALLOWED: MintFromGrantResult = { ok: false, reason: 'invalid_grant' }
+const REVOCATIONS_NOT_ALLOWED: RevocationsResult = { ok: false, reason: 'not_allowed' }
 
 /** Every call builds its surface from the Worker's own bindings; see `PropustkaApplication` for why it is no getter. */
 function iamRpc(
 	bindings: WorkerBindings,
 	ctx: ExecutionContext,
-): IamRpc & IamHandoffRpc & IamGrantRpc & IamMembershipRpc & IamTerminalRpc & IamSignInSignalsRpc {
+): IamRpc & IamHandoffRpc & IamGrantRpc & IamRevocationRpc & IamMembershipRpc & IamTerminalRpc & IamSignInSignalsRpc {
 	return createIamRpc(iamEnv(bindings), ctx)
 }
 
@@ -174,6 +178,7 @@ export type IamApplicationRpc =
 	& Pick<IamRpc, 'getJwks' | 'mintToken' | 'mintFromKey' | 'listPrincipals' | 'audit'>
 	& IamHandoffRpc
 	& IamGrantRpc
+	& IamRevocationRpc
 	& IamMembershipRpc
 	& IamTerminalRpc
 
@@ -199,6 +204,11 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 	/** An agent's grant exchanged for its person's token (ADR-0090); like a delegation grant, only the proxy obtains one. */
 	mintFromGrant(input: MintFromGrantInput): Promise<MintFromGrantResult> {
 		return isApplicationWorkerBinding(this.ctx) ? Promise.resolve(GRANT_NOT_ALLOWED) : iamRpc(this.env, this.ctx).mintFromGrant(input)
+	}
+
+	/** The proxy's revocation feed (ADR-0022); like an agent's grant, the proxy's alone, never an application's. */
+	revocations(input: RevocationsInput): Promise<RevocationsResult> {
+		return isApplicationWorkerBinding(this.ctx) ? Promise.resolve(REVOCATIONS_NOT_ALLOWED) : iamRpc(this.env, this.ctx).revocations(input)
 	}
 
 	getJwks(): Promise<Jwks> {

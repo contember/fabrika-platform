@@ -99,6 +99,9 @@ export const inspectIdentificationSchema = z.object({ ...caller, id: z.string() 
 export const assertIdentitySchema = z.object({ ...caller, id: z.string(), principalId: z.string() }).catch(rejectRpcInput)
 export const cancelIdentificationSchema = z.object({ ...caller, id: z.string() }).catch(rejectRpcInput)
 // The window's bounds are the method's own decision (`invalid_window`); the transport checks the shape only.
+/** The proxy's revocation feed: where it last read up to, IAM's clock, or `null` for the whole window. */
+export const revocationsSchema = z.object({ since: z.number().finite().nullable() }).catch(rejectRpcInput)
+
 export const signInSignalsSchema = z.object({ since: z.number().finite(), refusalsSince: z.number().finite(), until: z.number().finite() }).catch(
 	rejectRpcInput,
 )

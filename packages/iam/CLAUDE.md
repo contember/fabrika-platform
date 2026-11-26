@@ -972,6 +972,14 @@ fails if that stops being true — it is the guard, not documentation of one.
   session refuses the next code exchange or refresh; an access token already minted stays valid until
   its `exp`, at most `DEFAULT_TOKEN_TTL_SECONDS`. `verifyAccessToken` (every native caller) refuses a
   resource token; only `verifyResourceAccessToken` reads one, for `/oauth/revoke` and for the agent exchange.
+- **THE REVOCATION FEED IS READ FROM THE TIMESTAMPS, NOT WRITTEN BESIDE THEM** (ADR-0022, `revocation-feed.ts`,
+  `repositories/revocations.ts`). `revocations({ since })` lists, newest first, every subject with `principals.disabled_at`,
+  `sessions.revoked_at`, `credentials.revoked_at` (an anonymous key is its own subject) or `oauth_grants.revoked_at`
+  within the last `REVOCATION_FEED_WINDOW_SECONDS`, at most `REVOCATION_FEED_MAX_SUBJECTS` with `complete: false` past
+  that. A new way to end a session, key, grant or principal must set one of those columns, or the proxy keeps serving
+  its cached token up to 300 s. Only the proxy reads it: `POST /auth/mint/revocations` behind `proxyKey` (the
+  `mint-revocations` row), and refused over a binding marked `props.worker: 'application'`. A failed read throws, so
+  the proxy fails closed.
 
 ## Patterns
 

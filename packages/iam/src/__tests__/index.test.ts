@@ -725,6 +725,7 @@ describe('the entrypoint an application binds', () => {
 		'mintFromKey',
 		'mintToken',
 		'requestDelegation',
+		'revocations',
 		'revokeLink',
 		'revokeMember',
 	]
@@ -858,6 +859,28 @@ describe('the entrypoint an application binds', () => {
 		expect(await proxy.worker.mintFromGrant(input)).toEqual({ ok: false, reason: 'invalid_grant' })
 		await Promise.all(proxy.ctx.promises)
 		expect(logged()).toEqual([{ reason: 'invalid_grant' }])
+	})
+
+	test("the revocation feed is refused to the application Worker's binding and answers its proxy's", async () => {
+		const db = freshDb()
+		const env: Env = { ...makeEnv(db), ...TEST_SIGNING_ENV, ISSUER: ORIGIN }
+		const bound = (props: unknown): InstanceType<typeof PropustkaApplication> => {
+			const worker: unknown = Reflect.construct(PropustkaApplication, [{ ...makeCtx(), props }, env])
+			if (!(worker instanceof PropustkaApplication)) throw new Error('failed to construct the mocked Worker entrypoint')
+			return worker
+		}
+		const now = Math.floor(Date.now() / 1000)
+		db.run(`INSERT INTO principals (id, type, email, label, created_at, disabled_at) VALUES ('gone', 'user', 'gone@example.test', 'gone', ?, ?)`, [
+			now,
+			now,
+		])
+		expect(await bound({ app: APP, worker: 'application' }).revocations({ since: null })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await bound({ app: APP }).revocations({ since: null })).toEqual({
+			ok: true,
+			now: expect.any(Number),
+			complete: true,
+			subjects: [{ subject: 'gone', at: now }],
+		})
 	})
 
 	test('the narrow class serves a call from its own bindings', async () => {

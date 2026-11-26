@@ -36,6 +36,7 @@ export function iamServiceContract(options: IamServiceOptions) {
 				'mint-exchange': mint('/auth/mint/exchange'),
 				'mint-delegation': mint('/auth/mint/delegation'),
 				'mint-grant': mint('/auth/mint/grant'),
+				'mint-revocations': mint('/auth/mint/revocations'),
 				'admin-rpc': s.protocol('POST', '/admin/rpc'),
 				'admin-root': s.protocol('*', '/admin'),
 				'admin': s.protocol('*', '/admin/*'),
