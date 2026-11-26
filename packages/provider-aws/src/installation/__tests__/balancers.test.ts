@@ -13,20 +13,31 @@ import {
 	awsBalancersStack,
 	checkAwsBalancersInput,
 } from '../balancers'
-import { awsNetworkLayout, awsNetworkOutputs } from '../network'
+import { AWS_DEFAULT_PLATFORM_VPC_CIDR, type AwsNetworkLayout, awsNetworkLayout, awsNetworkOutputs } from '../network'
 
 const certificate = (n: number) => `arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-${String(n).padStart(12, '0')}`
 const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210'
 const TARGET_GROUP = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:targetgroup/fabri-Platf-1A2B3C4D/0123456789abcdef'
 const layout = awsNetworkLayout()
+const platformLayout = awsNetworkLayout(AWS_DEFAULT_PLATFORM_VPC_CIDR)
+const APPS_BALANCER_SUBNETS = ['subnet-0123456789abcdef2', 'subnet-0123456789abcdef3']
+const PLATFORM_BALANCER_SUBNETS = ['subnet-0123456789abcdef6', 'subnet-0123456789abcdef7']
 const input: AwsBalancersInput = {
-	network: awsNetworkOutputs({
+	apps: awsNetworkOutputs({
 		VpcId: 'vpc-0123456789abcdef0',
 		VpcCidr: '10.80.0.0/16',
 		TaskSubnetIds: 'subnet-0123456789abcdef0,subnet-0123456789abcdef1',
 		TaskSubnetCidrs: '10.80.0.0/20,10.80.16.0/20',
-		BalancerSubnetIds: 'subnet-0123456789abcdef2,subnet-0123456789abcdef3',
+		BalancerSubnetIds: APPS_BALANCER_SUBNETS.join(','),
 		BalancerSubnetCidrs: '10.80.240.0/24,10.80.241.0/24',
+	}),
+	platform: awsNetworkOutputs({
+		VpcId: 'vpc-0123456789abcdef9',
+		VpcCidr: '10.81.0.0/16',
+		TaskSubnetIds: 'subnet-0123456789abcdef4,subnet-0123456789abcdef5',
+		TaskSubnetCidrs: '10.81.0.0/20,10.81.16.0/20',
+		BalancerSubnetIds: PLATFORM_BALANCER_SUBNETS.join(','),
+		BalancerSubnetCidrs: '10.81.240.0/24,10.81.241.0/24',
 	}),
 	hosts: { iam: 'iam.example.com', control: 'control.example.com', operations: 'operations.example.com' },
 	certificates: { iam: certificate(1), control: certificate(2), operations: certificate(3) },
@@ -47,11 +58,11 @@ describe("the installation's balancers", () => {
 
 	test("both are internet-facing in the balancers' own subnets, append X-Forwarded-For and drop invalid header fields", () => {
 		expect(awsBalancersStack(input).stackName).toBe(AWS_BALANCERS_STACK)
-		for (const prefix of ['Apps', 'Platform']) {
+		for (const [prefix, subnets] of [['Apps', APPS_BALANCER_SUBNETS], ['Platform', PLATFORM_BALANCER_SUBNETS]] satisfies [string, string[]][]) {
 			expect(resources[`${prefix}Balancer`].Properties).toMatchObject({
 				Type: 'application',
 				Scheme: 'internet-facing',
-				Subnets: ['subnet-0123456789abcdef2', 'subnet-0123456789abcdef3'],
+				Subnets: subnets,
 				SecurityGroups: [{ Ref: `${prefix}BalancerGroup` }],
 				LoadBalancerAttributes: [
 					{ Key: 'routing.http.xff_header_processing.mode', Value: 'append' },
@@ -62,14 +73,21 @@ describe("the installation's balancers", () => {
 	})
 
 	test("their groups admit the internet on 80 and 443, and reach only the tasks' subnets on the proxies' ports", () => {
-		for (const prefix of ['Apps', 'Platform']) {
+		for (
+			const [prefix, side, vpc] of [['Apps', layout, 'vpc-0123456789abcdef0'], ['Platform', platformLayout, 'vpc-0123456789abcdef9']] satisfies [
+				string,
+				AwsNetworkLayout,
+				string,
+			][]
+		) {
 			const group = resources[`${prefix}BalancerGroup`].Properties
+			expect(group.VpcId).toBe(vpc)
 			expect(group.SecurityGroupIngress.map((rule: { FromPort: number; CidrIp: string }) => [rule.FromPort, rule.CidrIp])).toEqual([
 				[80, '0.0.0.0/0'],
 				[443, '0.0.0.0/0'],
 			])
-			// One rule per port, never a range that would open whatever lies between them.
-			expect(group.SecurityGroupEgress).toEqual(layout.taskSubnetCidrs.flatMap((cidr) => [
+			// One rule per port, never a range that would open whatever lies between them; each into its own side's tasks.
+			expect(group.SecurityGroupEgress).toEqual(side.taskSubnetCidrs.flatMap((cidr) => [
 				{ IpProtocol: 'tcp', FromPort: 8080, ToPort: 8080, CidrIp: cidr, Description: 'the proxies' },
 				{ IpProtocol: 'tcp', FromPort: 8081, ToPort: 8081, CidrIp: cidr, Description: 'the proxies health checks' },
 			]))
@@ -111,12 +129,18 @@ describe("the installation's balancers", () => {
 			Certificates: [{ CertificateArn: certificate(2) }],
 		})
 		expect(resources.PlatformIamCertificate).toBeUndefined()
+		// In the platform's VPC: no task of the applications' network, which Control places, is an address of it.
 		expect(resources.PlatformProxyTargetGroup.Properties).toMatchObject({
 			TargetType: 'ip',
 			Port: 8080,
+			VpcId: 'vpc-0123456789abcdef9',
 			HealthCheckPort: '8081',
 			HealthCheckPath: '/healthz',
 		})
+	})
+
+	test("the two networks must be apart: the platform's balancer never shares the applications' VPC range", () => {
+		expect(() => checkAwsBalancersInput({ ...input, platform: input.apps })).toThrow('overlap')
 	})
 
 	test('hosts or certificates of another form, or one twice, are refused', () => {

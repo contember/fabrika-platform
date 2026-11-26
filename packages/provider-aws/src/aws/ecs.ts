@@ -14,6 +14,7 @@
 
 import { z } from 'zod'
 import { AwsError, awsJsonClient, type AwsJsonClientOptions, ECS } from './json'
+import type { AwsFunction } from './lambda'
 
 /** A cluster's, a service's, a task family's or a container's name. */
 const ECS_NAME = /^[A-Za-z0-9_-]{1,255}$/
@@ -286,7 +287,10 @@ export interface EcsClient {
 	describeServiceDeployment(arn: string, signal?: AbortSignal): Promise<EcsServiceDeployment | null>
 	/** The service revision `arn`, or `null` when ECS answers it `MISSING`. Any other failure is an error. */
 	describeServiceRevision(arn: string, signal?: AbortSignal): Promise<EcsServiceRevision | null>
-	/** Starts one task; a task ECS could not place (`failures`) is the error `task_not_started`. */
+	/**
+	 * Starts one task through the installation's task runner, in the applications' cluster and subnets whatever
+	 * `start` names; a task ECS could not place (`failures`) is the error `task_not_started`.
+	 */
 	runTask(start: EcsTaskStart, signal?: AbortSignal): Promise<EcsTaskRun>
 	/** The task `arn` in `cluster`, its `container`'s exit code read; `null` when ECS answers it `MISSING`. */
 	describeTask(cluster: string, arn: string, container: string, signal?: AbortSignal): Promise<EcsTaskRun | null>
@@ -592,8 +596,12 @@ const DEPLOYMENT_CONFIGURATION = {
 	minimumHealthyPercent: 100,
 }
 
-/** ECS at `options.origin`; the client is of the `ECS` service by construction. */
-export function ecsClient(options: AwsJsonClientOptions): EcsClient {
+/**
+ * ECS at `options.origin`; the client is of the `ECS` service by construction. A one-off task is started by
+ * `taskRunner` (`installation/task-runner.ts`), never by `RunTask` from this client's credentials: without one,
+ * `runTask` refuses.
+ */
+export function ecsClient(options: AwsJsonClientOptions, taskRunner?: AwsFunction): EcsClient {
 	const json = awsJsonClient(ECS, options)
 	return {
 		async registerTaskDefinition(definition, signal) {
@@ -757,19 +765,20 @@ export function ecsClient(options: AwsJsonClientOptions): EcsClient {
 			if (start.command.length === 0) refuse('the command')
 			if (!CLIENT_TOKEN.test(start.clientToken)) refuse('the client token')
 			if (!STARTED_BY.test(start.startedBy)) refuse('the starter')
-			const networkConfiguration = awsvpcOf(start.network)
+			// Checked as `RunTask` would take it, though the runner places the task in the cluster and the subnets of its
+			// own configuration: the applications', which are this installation's too.
+			awsvpcOf(start.network)
 			const operation = 'RunTask'
-			const answered = await json.call(
-				operation,
+			if (taskRunner === undefined) throw new AwsError(operation, 'no_task_runner', 0, null, false)
+			const answered = await taskRunner.invoke(
 				{
-					cluster: start.cluster,
 					taskDefinition: start.taskDefinitionArn,
-					launchType: 'FARGATE',
-					count: 1,
+					container: start.container,
+					command: [...start.command],
+					securityGroups: [...start.network.securityGroups],
+					publicIp: start.network.publicIp,
 					clientToken: start.clientToken,
 					startedBy: start.startedBy,
-					networkConfiguration,
-					overrides: { containerOverrides: [{ name: start.container, command: [...start.command] }] },
 				},
 				tasksSchema,
 				signal,

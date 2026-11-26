@@ -574,9 +574,20 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        gateway, no NAT gateway (every task gets a public address); Control's network variables from its outputs, which
        carry each subnet's range as AWS created it: no subnet named twice or as both kinds, no task's range over a
        balancer's, and the ranges the layout's, or nothing reaches Control. Any later subnet (the database's, an
-       interface endpoint's) stays out of the balancers' subnets too.
+       interface endpoint's) stays out of the balancers' subnets too. **Two such VPCs** (decided 2026-11-26): the
+       applications' (`10.80.0.0/16`: every application's and namespace proxy's tasks, the applications' balancer) and
+       the platform's (`10.81.0.0/16`: IAM's, Control's, Operations' and the platform proxy's tasks, the platform's
+       balancer, the database), two stacks whose ranges share no address, with no route, peering or gateway between
+       them. Control's role creates and updates the applications' services, and ECS joins a service to the target group
+       it names with ECS's own role (`AmazonECSServiceRolePolicy` holds `elasticloadbalancing:RegisterTargets` on `*`; no
+       ECS condition key names a target group). In one VPC an application's task could so join the platform proxy's
+       target group and be sent IAM's requests; in its own VPC with no route the platform's group cannot reach such a
+       target, no security group of the platform's VPC can be put on an application's task (that takes a security
+       group VPC association, which Control's role cannot make), and the database is out of the applications'
+       network. Control's network variables name the applications' VPC alone.
     2. **The balancers** (built, `installation/balancers.ts`): the applications' balancer and the platform's, both
-       internet-facing in the balancers' subnets, `xff_header_processing.mode` at `append` and invalid header fields
+       internet-facing in the balancers' subnets of their own side's VPC (the platform proxy's target group in the
+       platform's), `xff_header_processing.mode` at `append` and invalid header fields
        dropped, HTTPS (TLS 1.3 and forward-secret 1.2) with a fixed 404 as the default action and HTTP redirected,
        their groups reaching only the tasks' subnets on the proxies' ports. The platform's listener has a rule per
        platform host (IAM, Control, Operations) to the platform proxy's target group, each with its certificate; the
@@ -585,18 +596,37 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        host's there would let a rule Control's role writes serve that host); that host joins the installation's own
        hosts, which no namespace takes. The four certificates are the operator's, validated before the stack is
        applied. Control's balancer variables come from its outputs.
-    3. **Access**: the apps' permissions boundary, Control's role (the grants below), the ECS cluster, the sources
-       bucket, the ECS service-linked role.
+    3. **Access** (built, `installation/access.ts`): the apps' permissions boundary (the union of what an
+       environment's and a namespace proxy's roles are granted, which a test checks against the rendered stacks),
+       Control's role under `/fabrika/platform/` with the grants below in five managed policies (IAM's bound is 6,144
+       characters each), the applications' cluster `fabrika-apps` and the platform's own `fabrika-platform` (Control
+       reaches only the first, so it can never update its own service or IAM's), and the sources bucket (private,
+       TLS only, archives kept 7 days). Narrowed to what the code calls: no `DeleteStack`, no
+       `DescribeStackEvents`. Added to the grants below: denies on any IAM action on `role/fabrika/platform/*` and on
+       `iam:AttachRolePolicy`, and `ec2:CreateSecurityGroup` on the applications' VPC alone; `ecs:CreateService` and
+       `ecs:UpdateService` held to the applications' task subnets (`ecs:subnet`, present on a create); the platform's
+       task definition families (`fabrika_platform_*`, which no application or namespace family can take) denied to
+       `RegisterTaskDefinition` and any service naming one, and `RegisterTaskDefinition` on `task-definition/*`, not
+       `*`; the certificate broker; and the task runner (below): Control is denied `RunTask` and `StartTask` on `*`,
+       and an init task is started by a function Control may only invoke. The remaining reach: a
+       bounded role's trust policy is not held (no condition key reads one, and the stacks need `CreateRole` and
+       `UpdateAssumeRolePolicy`), so a misused Control could write a bounded role another account may take; step 13
+       adds IAM Access Analyzer's external access findings on `role/fabrika/apps/*` and `role/fabrika/namespaces/*` to
+       detect one. The ECS service-linked role is ensured by the commands (a stack cannot create one that may already
+       exist).
     4. **The database**: RDS PostgreSQL for IAM, Control and Operations, in subnets of its own.
     5. **The platform's services**: Control, IAM, the console and the platform proxy on ECS, their images and
-       variables.
+       variables. In the platform's VPC and cluster, under task definition families `fabrika_platform_*`, each
+       service pinned to a revision ARN; the platform proxy's group admits only the platform balancer's group; no
+       Service Connect namespace a service of Control's could join.
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 
     Control's role is scoped by the prefixes step 9 derives its names under,
     so AWS refuses what the code would never ask, and an application's own roles cannot be named outside them:
-    - ECS: `CreateService`, `UpdateService`, `DescribeServices`, the service deployment and revision reads, `RunTask`,
-      `DescribeTasks` on `service/<cluster>/*` and `task/<cluster>/*`, and `TagResource` only with the condition
+    - ECS: `CreateService`, `UpdateService`, `DescribeServices`, the service deployment and revision reads,
+      `DescribeTasks` on `service/<cluster>/*` and `task/<cluster>/*` (no `RunTask`: the task runner starts an init
+      task), and `TagResource` only with the condition
       `ecs:CreateAction = CreateService` (the tags of a service it creates); `RegisterTaskDefinition` (no resource scope
       in ECS), with `iam:PassRole` only on `role/fabrika/apps/*` and the condition
       `iam:PassedToService = ecs-tasks.amazonaws.com`. `CreateService` passes no role: the account's ECS service-linked
@@ -653,17 +683,67 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         `elasticloadbalancing:CreateRule`, `AddListenerCertificates` and `RemoveListenerCertificates`; on its rules
         (`listener-rule/app/<balancer>/<id>/<id>/*`) `ModifyRule`, `DeleteRule` and `SetRulePriorities` (a priority
         chosen anew is an in-place update); and `DescribeRules`, which, like every Elastic Load Balancing `Describe*`
-        action, takes no resource-level permission and is granted on `*` (it is read-only). OPEN, for step 11, and it
-        bounds the routing blast radius: on a listener the installation shares with the namespaces, `CreateRule` lets
-        Control put a rule for any host at any priority ahead of the installation's own routes, and
-        `RemoveListenerCertificates` lets it take any of the installation's non-default certificates off the listener;
-        `ModifyRule` and `DeleteRule` reach every rule unless the rules carry a tag, and whether CloudFormation's
-        `ListenerRule` tags a rule is UNVERIFIED. Tagging the rules (`AddTags` on `listener-rule/*` held to
-        `StringEquals` on `elasticloadbalancing:CreateAction` = `CreateRule`, as for target groups, and the two scoped
-        by the resource tag) bounds only `ModifyRule` and `DeleteRule`. Only a listener Control's role does not reach at
-        all (a second balancer for the installation's own hosts, about $16 a month) bounds the routing; step 11 decides
-        between the two knowing that. CloudFormation also needs `stack/fabrika-nh-*` beside `stack/fabrika-ns-*` for
-        the hosts stacks;
+        action, takes no resource-level permission and is granted on `*` (it is read-only). Decided (2026-11-26): the
+        platform's hosts are on a balancer of their own, which no grant reaches, so `CreateRule`, `ModifyRule` and
+        `DeleteRule` on the applications' listener reach only namespaces' routes (each namespace's own rules are its
+        hosts stack's, and the conflict check keeps one namespace off another's host while Control is sound).
+        CloudFormation also needs `stack/fabrika-nh-*` beside `stack/fabrika-ns-*` for the hosts stacks.
+
+        **The platform's certificates and `AddListenerCertificates`: decided 2026-11-26, (b) the broker** (built,
+        `installation/certificate-broker.ts`, its function and role in the access stack). Elastic Load
+        Balancing scopes `AddListenerCertificates` by the listener alone: its condition keys are the resource tags,
+        none names the certificate, and attaching one needs no ACM permission on it (the Service Authorization
+        Reference for Elastic Load Balancing V2 and the `AddListenerCertificates` API reference, read 2026-11-26). So a
+        Control role used against its code can attach the platform's own certificates (IAM's, Control's, Operations',
+        which live in the same account) to the applications' listener, add a rule for a platform host there, and so
+        serve that host under its real certificate from a namespace. It reaches nobody while the platform's DNS points
+        at the platform's balancer: it needs a DNS change or a network path to the applications' balancer as well. The
+        alternatives:
+        - **(a) Accept it and record it.** No cost. A compromised Control plus a DNS change or an on-path position
+          serves a platform host with a valid certificate.
+        - **(b) A certificate broker (chosen).** Control's role loses `AddListenerCertificates` and
+          `RemoveListenerCertificates`. A namespace's hosts stack attaches its certificates through a CloudFormation
+          custom resource backed by one small Lambda function in the access stack, whose role alone holds those two
+          actions on the applications' listener and `acm:DescribeCertificate`. It refuses any certificate whose
+          names include an installation host (its own configuration, which Control cannot change: Control is denied
+          every `lambda:` write on it and may only invoke it). With the default certificate already its own (step 2),
+          a rule for a platform host on the applications' listener then fails TLS. Cost: a Lambda invoked per hosts
+          stack change, nothing at rest; about a day's work with tests.
+        - **(c) No ACM certificate for the platform's hosts.** The platform's balancer becomes a Network Load Balancer
+          passing TLS through to the platform proxy, whose Caddy gets its certificates by ACME and keeps them in a
+          bucket only the platform reaches. Nothing in ACM can be attached. Cost: the platform proxy holds TLS and its
+          state, the client address needs the proxy protocol, a larger change of the proxy.
+        - **(d) The platform's balancer and certificates in an account of their own.** The strongest separation, and
+          the heaviest: a second account per installation, cross-account networking.
+          As built: Control's role is denied both listener certificate actions on `*`, may invoke the broker and nothing
+          more of it (a deny of every other action on its ARN), and a hosts stack names each certificate as a
+          `Custom::FabrikaListenerCertificate` of the broker. The broker's configuration (the applications' listener, the
+          installation's hosts) is its environment, written by the access stack; it attaches to that listener alone, and
+          refuses a certificate one of whose names, exactly or by a wildcard, is an installation host;
+      - **One-off tasks and `RunTask`: decided 2026-11-26, a task runner** (built, `installation/task-runner.ts`, its
+        function and role in the access stack). `RunTask` takes no condition key on the subnets or the security groups
+        (the service authorization reference lists `ecs:subnet` for `CreateService` and `UpdateService` alone, and no
+        ECS key names a group), and ECS attaches a task's interface with its own role. A role holding `RunTask` could
+        so start a task in the platform's network carrying any of the platform's groups (the database clients', the
+        platform proxy's) and reach the platform's services past their proxy. It could not read the database's
+        password (the roles Control may pass reach only the applications' parameters) nor take a platform role.
+        Alternatives weighed:
+        - **(a) The platform in a region of its own.** ECS places a task in its own region's subnets alone, and
+          Control's role names only the applications' region. Rejected: the operator chooses two regions, and the
+          proxies' calls to IAM cross them (10 to 25 ms within Europe).
+        - **(b) One-off tasks as a service of one task.** Control loses `RunTask`, and `ecs:subnet` holds the service.
+          Rejected: ECS restarts a task that exits, so the command would have to sleep after it and report its exit in
+          its log, and a task that crashes still runs again.
+        - **(c) Security groups and detection alone.** Rejected: whatever the platform's groups admit, `RunTask` may
+          attach that group; an EventBridge rule that stops such a task acts after it starts (Fargate takes tens of
+          seconds, delivery is not bounded).
+        - **(d) A task runner (chosen).** Control's role is denied `RunTask` and `StartTask` on `*` and may invoke the
+          runner and nothing more of it. The runner starts the task in the applications' cluster and task subnets of its
+          own configuration, whatever the request names; a security group of the request is taken as it is, since ECS
+          refuses a group of another VPC than the subnets'. It overrides one container's command alone (no role, no
+          environment, no ECS Exec), refuses a platform task definition (its role is denied one too), passes only the
+          applications' and namespaces' roles, and answers the task cut to what the deploy reads. The deploy's init step
+          is unchanged but for the call (`ecsClient`'s `runTask` invokes the runner), its client token included;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
@@ -718,7 +798,13 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     `FABRIKA_AWS_PROXY_IAM_KEY`), and
     reads repositories through the unbound GitHub source. Nothing runs it until step 11 defines Control's task.
 13. **Tests**: the conformance suite over a fake AWS, renderer tests, and a live suite gated on
-    `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack.
+    `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack. The live check also settles: which actions
+    CloudFormation calls with Control's credentials (a custom resource's invoke among them), the condition keys each
+    service evaluates (`ecs:subnet`'s values, `ecs:task-definition`), whether ECS checks `iam:PassRole` on `RunTask` for
+    the roles an existing task definition names (the task runner's role holds it on the applications' and namespaces'
+    roles), that Lambda reports a thrown error's `name` as its `errorType`, which source ARN ECS sends when a task takes
+    Control's role, and
+    IAM Access Analyzer's external access findings on the bounded roles.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 

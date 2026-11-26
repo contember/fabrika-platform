@@ -140,9 +140,14 @@ describe('host rules', () => {
 		expect(names[0]).toBe('Placeholder')
 		const certificate = names.find((name) => name.startsWith('HostCertificate')) ?? ''
 		const hostRule = names.find((name) => name.startsWith('HostRule')) ?? ''
+		// Through the certificate broker in the listener's account and region: Control's role attaches no certificate itself.
 		expect(template.Resources[certificate]).toEqual({
-			Type: 'AWS::ElasticLoadBalancingV2::ListenerCertificate',
-			Properties: { ListenerArn: LISTENER, Certificates: [{ CertificateArn: arn(1) }] },
+			Type: 'Custom::FabrikaListenerCertificate',
+			Properties: {
+				ServiceToken: 'arn:aws:lambda:eu-central-1:123456789012:function:fabrika-certificate-broker',
+				ListenerArn: LISTENER,
+				CertificateArn: arn(1),
+			},
 		})
 		expect(template.Resources[hostRule]).toEqual({
 			Type: 'AWS::ElasticLoadBalancingV2::ListenerRule',

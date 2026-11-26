@@ -3,9 +3,25 @@
 // refused rather than guessed.
 
 import { describe, expect, test } from 'bun:test'
+import type { z } from 'zod'
 import { ecsClient, type EcsContainer, type EcsService, type EcsServiceCreate, type EcsTaskDefinition } from '../aws/ecs'
-import { ECS } from '../aws/json'
+import { AwsError, ECS } from '../aws/json'
+import type { AwsFunction } from '../aws/lambda'
 import { awsError, fakeAws } from './helpers/fake-aws'
+
+/** A task runner that answers `answer` to every invocation, read with the caller's schema, and records what it was asked. */
+function fakeRunner(answer: unknown): { readonly runner: AwsFunction; readonly inputs: unknown[] } {
+	const inputs: unknown[] = []
+	const runner: AwsFunction = {
+		async invoke<T>(input: Readonly<Record<string, unknown>>, schema: z.ZodType<T>): Promise<T> {
+			inputs.push(input)
+			const read = schema.safeParse(answer)
+			if (!read.success) throw new AwsError('Invoke', 'invalid_answer', 200, null, false)
+			return read.data
+		},
+	}
+	return { runner, inputs }
+}
 
 const IMAGE = `123456789012.dkr.ecr.eu-central-1.amazonaws.com/fabrika/notes-prod@sha256:${'a'.repeat(64)}`
 const TASK_DEFINITION = 'arn:aws:ecs:eu-central-1:123456789012:task-definition/notes-prod:42'
@@ -376,11 +392,11 @@ describe('ecsClient', () => {
 		})
 	})
 
-	test("runs one Fargate task of a revision with one command overridden, in the service's network, and reads it back", async () => {
+	test('runs one task of a revision with one command overridden through the task runner, never RunTask itself, and reads it back', async () => {
 		const TASK = `arn:aws:ecs:eu-central-1:123456789012:task/fabrika-apps/${'a'.repeat(32)}`
 		const network = { subnets: ['subnet-0123456789abcdef0'], securityGroups: ['sg-0123456789abcdef0'], publicIp: false }
+		const placed = fakeRunner({ tasks: [{ taskArn: TASK, lastStatus: 'PROVISIONING', containers: [{ name: 'init' }] }], failures: [] })
 		const { options, calls } = fakeAws(ECS, {
-			RunTask: () => ({ tasks: [{ taskArn: TASK, lastStatus: 'PROVISIONING', containers: [{ name: 'init' }] }], failures: [] }),
 			DescribeTasks: () => ({
 				tasks: [{
 					taskArn: TASK,
@@ -391,7 +407,7 @@ describe('ecsClient', () => {
 				}],
 			}),
 		})
-		const ecs = ecsClient(options)
+		const ecs = ecsClient(options, placed.runner)
 		const start = {
 			cluster: 'fabrika-apps',
 			taskDefinitionArn: TASK_DEFINITION,
@@ -402,18 +418,18 @@ describe('ecsClient', () => {
 			startedBy: 'fabrika-run-token',
 		}
 		expect(await ecs.runTask(start)).toEqual({ arn: TASK, status: 'pending', exitCode: null, stopCode: null, reason: null })
-		expect(calls[0]?.body).toEqual({
-			cluster: 'fabrika-apps',
+		// The runner is asked for the revision, the command, the groups and the tokens; the cluster and the subnets are its own.
+		expect(placed.inputs).toEqual([{
 			taskDefinition: TASK_DEFINITION,
-			launchType: 'FARGATE',
-			count: 1,
+			container: 'init',
+			command: ['sh', '/app/fabrika/migrate.generated.sh'],
+			securityGroups: network.securityGroups,
+			publicIp: false,
 			clientToken: 'token-init-1',
 			startedBy: 'fabrika-run-token',
-			networkConfiguration: {
-				awsvpcConfiguration: { subnets: network.subnets, securityGroups: network.securityGroups, assignPublicIp: 'DISABLED' },
-			},
-			overrides: { containerOverrides: [{ name: 'init', command: ['sh', '/app/fabrika/migrate.generated.sh'] }] },
-		})
+		}])
+		// ECS itself is never asked to run a task.
+		expect(calls.some((call) => JSON.stringify(call).includes('RunTask'))).toBe(false)
 		// Both reasons, each cut at 300 characters.
 		expect(await ecs.describeTask('fabrika-apps', TASK, 'init')).toEqual({
 			arn: TASK,
@@ -422,14 +438,16 @@ describe('ecsClient', () => {
 			stopCode: 'EssentialContainerExited',
 			reason: `Essential container in task exited; ${'x'.repeat(300)}`,
 		})
+		expect(calls[0]?.body).toEqual({ cluster: 'fabrika-apps', tasks: [TASK] })
 		// A service with public addresses gives its one-off tasks one too.
-		const exposed = fakeAws(ECS, { RunTask: () => ({ tasks: [{ taskArn: TASK, lastStatus: 'PENDING' }] }) })
-		await ecsClient(exposed.options).runTask({ ...start, network: { ...network, publicIp: true } })
-		expect(JSON.stringify(exposed.calls[0]?.body)).toContain('"assignPublicIp":"ENABLED"')
-		expect(calls[1]?.body).toEqual({ cluster: 'fabrika-apps', tasks: [TASK] })
+		const exposed = fakeRunner({ tasks: [{ taskArn: TASK, lastStatus: 'PENDING' }] })
+		await ecsClient(options, exposed.runner).runTask({ ...start, network: { ...network, publicIp: true } })
+		expect(JSON.stringify(exposed.inputs[0])).toContain('"publicIp":true')
 
-		const unplaced = fakeAws(ECS, { RunTask: () => ({ tasks: [], failures: [{ arn: TASK_DEFINITION, reason: 'RESOURCE:MEMORY' }] }) })
-		await expect(ecsClient(unplaced.options).runTask(start)).rejects.toMatchObject({ code: 'task_not_started' })
+		const unplaced = fakeRunner({ tasks: [], failures: [{ arn: TASK_DEFINITION, reason: 'RESOURCE:MEMORY' }] })
+		await expect(ecsClient(options, unplaced.runner).runTask(start)).rejects.toMatchObject({ code: 'task_not_started' })
+		// Without a runner, no task is started at all.
+		await expect(ecsClient(options).runTask(start)).rejects.toMatchObject({ code: 'no_task_runner' })
 		const missing = fakeAws(ECS, { DescribeTasks: () => ({ tasks: [], failures: [{ arn: TASK, reason: 'MISSING' }] }) })
 		expect(await ecsClient(missing.options).describeTask('fabrika-apps', TASK, 'init')).toBeNull()
 		// A state ECS may add later, or a stopped task without the container it ran, is no answer.
@@ -440,7 +458,8 @@ describe('ecsClient', () => {
 			await expect(ecsClient(odd.options).describeTask('fabrika-apps', TASK, 'init')).rejects.toMatchObject({ code: 'invalid_answer' })
 		}
 		const refused = fakeAws(ECS, {})
-		const client = ecsClient(refused.options)
+		const unasked = fakeRunner({ tasks: [] })
+		const client = ecsClient(refused.options, unasked.runner)
 		for (
 			const change of [
 				{ clientToken: 'x'.repeat(65) },
@@ -454,6 +473,7 @@ describe('ecsClient', () => {
 		}
 		await expect(client.describeTask('fabrika-apps', 'not-an-arn', 'init')).rejects.toThrow('the task')
 		expect(refused.calls).toEqual([])
+		expect(unasked.inputs).toEqual([])
 	})
 
 	test('a state ECS may add later is an invalid answer, never a guess', async () => {

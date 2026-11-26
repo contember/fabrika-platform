@@ -4,13 +4,15 @@
 import { describe, expect, test } from 'bun:test'
 import { checkInstallationBalancer } from '../../namespace'
 import {
+	AWS_DEFAULT_PLATFORM_VPC_CIDR,
 	AWS_DEFAULT_VPC_CIDR,
-	AWS_NETWORK_STACK,
+	AWS_NETWORK_STACKS,
 	awsNetworkEnvironment,
 	awsNetworkLayout,
 	awsNetworkOutputs,
 	awsNetworkStack,
 	checkAwsNetworkLayout,
+	checkAwsNetworksApart,
 } from '../network'
 
 const OUTPUTS = {
@@ -53,11 +55,27 @@ describe("the installation's network", () => {
 		}
 	})
 
+	test("the applications' and the platform's VPCs share no address: an application's task is never an address of the platform's", () => {
+		const apps = awsNetworkLayout()
+		const platform = awsNetworkLayout(AWS_DEFAULT_PLATFORM_VPC_CIDR)
+		expect(() => checkAwsNetworksApart(apps, platform)).not.toThrow()
+		expect(() => checkAwsNetworksApart(apps, awsNetworkLayout(AWS_DEFAULT_VPC_CIDR))).toThrow('overlap')
+		// Each side's stack is its own, with no route, peering or gateway reaching the other.
+		const appsStack = JSON.stringify(awsNetworkStack(apps, 'apps').template)
+		const platformStack = JSON.stringify(awsNetworkStack(platform, 'platform').template)
+		expect(appsStack).not.toContain('10.81.')
+		expect(platformStack).not.toContain('10.80.')
+		for (const stack of [appsStack, platformStack]) {
+			for (const type of ['VPCPeeringConnection', 'TransitGateway', 'VPNGateway', 'NatGateway']) expect(stack).not.toContain(type)
+		}
+		expect(awsNetworkStack(apps, 'apps').stackName).toBe(AWS_NETWORK_STACKS.apps)
+		expect(awsNetworkStack(platform, 'platform').stackName).toBe(AWS_NETWORK_STACKS.platform)
+	})
+
 	test('the stack: a VPC, its gateway and public routes, and one subnet of each kind per zone, none with an address by default', () => {
-		const stack = awsNetworkStack(awsNetworkLayout())
-		expect(stack.stackName).toBe(AWS_NETWORK_STACK)
+		const stack = awsNetworkStack(awsNetworkLayout(), 'apps')
 		// Under `fabrika-platform-`, never a prefix Control's role reaches (`fabrika-app-`, `fabrika-ns-`, `fabrika-nh-`).
-		expect(stack.stackName.startsWith('fabrika-platform-')).toBe(true)
+		for (const name of Object.values(AWS_NETWORK_STACKS)) expect(name.startsWith('fabrika-platform-')).toBe(true)
 		const template = JSON.parse(JSON.stringify(stack.template))
 		const resources = template.Resources
 		expect(resources.Vpc.Properties).toMatchObject({ CidrBlock: '10.80.0.0/16', EnableDnsSupport: true, EnableDnsHostnames: true })
