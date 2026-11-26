@@ -551,8 +551,10 @@ for (const engine of engines) {
 			const records = await a.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: a.f.principal.id, limit: 5 })
 			expect(records.map((record) => JSON.parse(record.metadata ?? 'null'))).toEqual([{ reason: 'passkey_reset' }])
 
-			// A reset with nothing left to end records no revocation.
+			// A reset of a person with no passkey left ends nothing, not even a grant that names no passkey, and records nothing.
+			const afterwards = await a.directGrant('write', { passkey: { at: now - 60, credentialId: null } })
 			expect(await a.repositories.passkeys.reset(a.f.principal.id, resetRecords(a.f.principal.id), unixNow())).toEqual({ removed: 0, revoked: 0 })
+			expect((await a.repositories.oauth.grant(afterwards.grant.id))?.revoked_at).toBeNull()
 			expect(await a.repositories.audit.listAuditEvents({ action: 'iam.oauth.grant.revoke', resourceId: a.f.principal.id, limit: 5 })).toHaveLength(1)
 		})
 

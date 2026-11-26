@@ -232,7 +232,8 @@ export class OAuthRepository {
 
 	/**
 	 * Approve a pending attempt under the approver's IAM session. `scopes`, when given, replaces the requested scope tokens
-	 * with the ones the person approved. False when it was decided, or expired, meanwhile.
+	 * with the ones the person approved. False when it was decided, or expired, meanwhile, or when the confirming passkey
+	 * is no longer the approver's: a reset between the check and this write leaves no approval it would have denied.
 	 */
 	async approveDeviceAuthorization(
 		userCodeHash: string,
@@ -243,6 +244,7 @@ export class OAuthRepository {
 			`UPDATE oauth_device_authorizations SET status = 'approved', principal_id = ?, session_id = ?, grant_expires_at = ?,
 			scopes = COALESCE(?, scopes), passkey_confirmed_at = ?, passkey_credential_id = ?
 			WHERE user_code_hash = ? AND status = 'pending' AND expires_at > ?
+			AND (CAST(? AS TEXT) IS NULL OR EXISTS (SELECT 1 FROM passkeys WHERE principal_id = ? AND credential_id = ?))
 			RETURNING device_code_hash`,
 		)
 			.bind(
@@ -254,6 +256,9 @@ export class OAuthRepository {
 				approval.passkey?.credentialId ?? null,
 				userCodeHash,
 				now,
+				approval.passkey?.credentialId ?? null,
+				approval.principalId,
+				approval.passkey?.credentialId ?? null,
 			)
 			.first<{ device_code_hash: string }>()
 		return row !== null

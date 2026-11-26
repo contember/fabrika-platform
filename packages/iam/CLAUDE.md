@@ -770,7 +770,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   `iam.passkey.register`/`remove` in its own statement; `passkeys.reset` (`iam.admin`) writes `iam.passkey.reset` and, in
   the same batch, revokes the person's live grants and denies the approved attempts that a reset passkey confirmed (one
   `iam.oauth.grant.revoke`, `reason: 'passkey_reset'`; a grant confirmed before migration 0049 names no passkey and ends
-  too), and
+  too when a passkey is reset); an approval is written only while its confirming passkey is still held, and
   the maintenance pass writes one per passkey migration 0047 removed (`rp_moved`). Never log a challenge, a credential,
   a key or a verifier's message (it quotes the challenge).
 - **THE LOGIN COOKIE BELONGS TO IAM'S HOST AND NOWHERE ELSE (ADR-0023).** There is no

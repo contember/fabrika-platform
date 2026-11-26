@@ -252,12 +252,21 @@ for (const engine of engines) {
 			await confirmed(passkey?.credential_id ?? 'none', 'held')
 			await confirmed('a-passkey-removed-earlier', 'removed')
 			await confirmed(null, 'unrecorded')
+			const markup = `credential-${uuidv7()}`
+			await a.repositories.passkeys.insert(
+				{ id: uuidv7(), principalId: a.person, credentialId: markup, publicKey: 'AA', signCount: 0, transports: [], label: '<b>Key</b>', createdAt: at },
+				{ steppedUp: true, max: 10 },
+				{ requestId: 'req', principalId: a.person, principalLabel: a.person, app: 'iam', action: 'iam.passkey.register', resourceType: 'principal' },
+			)
+			await confirmed(markup, 'markup')
 			const html = await (await a.get()).text()
+			expect(html).toContain('<p>Confirmed with the passkey “&lt;b&gt;Key&lt;/b&gt;”: 2026-01-02 03:04 UTC</p>')
+			expect(html).not.toContain('<b>Key</b>')
 			expect(html).toContain('<p>Confirmed with the passkey “Laptop”: 2026-01-02 03:04 UTC</p>')
 			expect(html).toContain('<p>Confirmed with a passkey you have since removed: 2026-01-02 03:04 UTC</p>')
 			expect(html).toContain('<p>Confirmed with a passkey: 2026-01-02 03:04 UTC</p>')
 			// The grant no passkey confirmed says nothing of one.
-			expect(html.match(/Confirmed with/g)).toHaveLength(3)
+			expect(html.match(/Confirmed with/g)).toHaveLength(4)
 		})
 
 		test("the person's own language wins over the browser's", async () => {

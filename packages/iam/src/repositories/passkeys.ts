@@ -211,7 +211,8 @@ export class PasskeyRepository {
 	 * Remove every passkey and open challenge of the principal, with one record when a passkey was removed, and end what
 	 * those passkeys confirmed (ADR-0090 §5): the live agent grants, with one `revocation` record, and the approved
 	 * attempts not yet redeemed, which a poll then finds denied. A grant confirmed before IAM recorded which passkey
-	 * answered (no credential id) ends too. Answers how many passkeys it removed and how many grants it revoked.
+	 * answered (no credential id) ends too when the principal still holds a passkey. Answers how many passkeys it removed
+	 * and how many grants it revoked.
 	 */
 	async reset(
 		principalId: string,
@@ -219,7 +220,7 @@ export class PasskeyRepository {
 		now: number,
 	): Promise<{ removed: number; revoked: number }> {
 		const confirmedByHeld =
-			'passkey_confirmed_at IS NOT NULL AND (passkey_credential_id IS NULL OR passkey_credential_id IN (SELECT credential_id FROM passkeys WHERE principal_id = ?))'
+			'passkey_confirmed_at IS NOT NULL AND EXISTS (SELECT 1 FROM passkeys p WHERE p.principal_id = ? AND (passkey_credential_id IS NULL OR p.credential_id = passkey_credential_id))'
 		const challenges = this.db.prepare('DELETE FROM passkey_challenges WHERE principal_id = ?').bind(principalId)
 		const attempts = this.db
 			.prepare(`UPDATE oauth_device_authorizations SET status = 'denied' WHERE principal_id = ? AND status = 'approved' AND ${confirmedByHeld}`)
