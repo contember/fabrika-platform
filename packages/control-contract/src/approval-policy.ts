@@ -76,8 +76,16 @@ export const ACTION_CATEGORIES = ['deploy-request', 'secrets', 'variables', 'dat
 
 export type ActionCategory = (typeof ACTION_CATEGORIES)[number]
 
+/**
+ * A `write` grant a person approves for an agent to act as them at the environment (ADR-0090 §5). IAM judges it when
+ * the person approves and at every exchange, from Control's mirror; it is no action of Control's, so `gate` never meets it.
+ */
+export const AGENT_WRITE_CATEGORY = 'agent-write'
+
+export type AgentWriteCategory = typeof AGENT_WRITE_CATEGORY
+
 /** Every category an environment sets a mode for. */
-export const POLICY_CATEGORIES = [...APPROVAL_CATEGORIES, ...ACTION_CATEGORIES] as const
+export const POLICY_CATEGORIES = [...APPROVAL_CATEGORIES, ...ACTION_CATEGORIES, AGENT_WRITE_CATEGORY] as const
 
 export type PolicyCategory = (typeof POLICY_CATEGORIES)[number]
 
@@ -88,20 +96,25 @@ export type LineCategory = Exclude<ApprovalCategory, 'grants'>
 export const LINE_MODES = ['off', 'plan', 'person'] as const
 export const GRANT_MODES = ['off', 'person'] as const
 export const ACTION_MODES = ['off', 'person', 'refuse'] as const
+/** `plan` and `person` do not apply: the device page is already a person's decision on exactly this grant. */
+export const AGENT_WRITE_MODES = ['off', 'refuse'] as const
 
 export type LineMode = (typeof LINE_MODES)[number]
 export type GrantMode = (typeof GRANT_MODES)[number]
 export type ActionMode = (typeof ACTION_MODES)[number]
+export type AgentWriteMode = (typeof AGENT_WRITE_MODES)[number]
 
 /** A mode per category; the type holds the mode matrix, so the gate never meets a mode it cannot decide. */
 export type ApprovalPolicy =
 	& { readonly [K in LineCategory]: LineMode }
 	& { readonly grants: GrantMode }
 	& { readonly [K in ActionCategory]: ActionMode }
+	& { readonly 'agent-write': AgentWriteMode }
 
 /** The modes a category takes. */
 export function modesOf(category: PolicyCategory): readonly ApprovalMode[] {
 	if (category === 'grants') return GRANT_MODES
+	if (category === AGENT_WRITE_CATEGORY) return AGENT_WRITE_MODES
 	if (isActionCategory(category)) return ACTION_MODES
 	return LINE_MODES
 }
@@ -114,7 +127,7 @@ export function isActionCategory(category: PolicyCategory): category is ActionCa
  * The strict preset and the default: six of ADR-0050's closer-review reasons `plan`, `deletes-data` `person` (what it
  * deletes depends on production rows no reviewer saw), `role-external`, `public` and `csp` `person` (each lets someone
  * outside the organization reach the application, or the page reach another origin), `role-actions`, `role-added` and
- * `grants` `off`, and every action of a non-person `person`.
+ * `grants` `off`, every action of a non-person `person`, and `agent-write` `off` (its passkey is a setting).
  */
 export const STRICT_POLICY: ApprovalPolicy = {
 	'off-road': 'plan',
@@ -137,6 +150,7 @@ export const STRICT_POLICY: ApprovalPolicy = {
 	registry: 'person',
 	'agent-grants': 'person',
 	credentials: 'person',
+	'agent-write': 'off',
 }
 
 /** The permissive preset: nothing waits. The environment stays protected, so its lines are still classified and recorded. */
@@ -161,6 +175,7 @@ export const PERMISSIVE_POLICY: ApprovalPolicy = {
 	registry: 'off',
 	'agent-grants': 'off',
 	credentials: 'off',
+	'agent-write': 'off',
 }
 
 const lineMode = z.enum(LINE_MODES)
@@ -188,6 +203,7 @@ export const approvalPolicySchema = z.object({
 	registry: actionMode,
 	'agent-grants': actionMode,
 	credentials: actionMode,
+	'agent-write': z.enum(AGENT_WRITE_MODES),
 }) satisfies z.ZodType<ApprovalPolicy, z.ZodTypeDef, unknown>
 
 /**
@@ -273,14 +289,26 @@ export const DEPLOY_REQUEST_COMMITS = ['merged', 'any'] as const
 
 export type DeployRequestCommits = (typeof DEPLOY_REQUEST_COMMITS)[number]
 
-/** The categories whose pending items take one or two approvers (ADR-0083 §2). `grants` waits in IAM, under IAM's own rule. */
-export type ApproverCategory = Exclude<PolicyCategory, 'grants'>
+/**
+ * The categories whose pending items take one or two approvers (ADR-0083 §2). `grants` waits in IAM, under IAM's own
+ * rule, and `agent-write` has no pending item: the person approving the grant decides it on IAM's device page.
+ */
+export type ApproverCategory = Exclude<PolicyCategory, 'grants' | AgentWriteCategory>
 
 export function isApproverCategory(category: PolicyCategory): category is ApproverCategory {
-	return category !== 'grants'
+	return category !== 'grants' && category !== AGENT_WRITE_CATEGORY
 }
 
 export const APPROVER_CATEGORIES: readonly ApproverCategory[] = POLICY_CATEGORIES.filter(isApproverCategory)
+
+/** The categories that take a passkey setting: every approver category, and `agent-write`, whose passkey IAM's device page asks. */
+export type StepUpCategory = ApproverCategory | AgentWriteCategory
+
+export function isStepUpCategory(category: PolicyCategory): category is StepUpCategory {
+	return category !== 'grants'
+}
+
+export const STEP_UP_CATEGORIES: readonly StepUpCategory[] = POLICY_CATEGORIES.filter(isStepUpCategory)
 
 /** How many different people decide a pending item of a category. */
 export type ApproverCount = 1 | 2
@@ -309,14 +337,17 @@ export interface ApprovalSettings {
 	readonly approvers: { readonly [K in ApproverCategory]: ApproverCount }
 	/** `false`: someone other than the requester's person decides a pending item of the category (ADR-0083 §8). */
 	readonly requesterMayApprove: { readonly [K in ApproverCategory]: boolean }
-	/** `webauthn`: deciding a pending item of the category takes a passkey assertion bound to the decision (ADR-0050 §5). */
-	readonly stepUp: { readonly [K in ApproverCategory]: StepUpMode }
+	/**
+	 * `webauthn`: deciding a pending item of the category takes a passkey assertion bound to the decision (ADR-0050 §5);
+	 * for `agent-write`, approving an agent's `write` grant takes one bound to the device attempt (ADR-0090 §5).
+	 */
+	readonly stepUp: { readonly [K in StepUpCategory]: StepUpMode }
 }
 
 /**
  * The strict preset's settings, and the defaults: merged commits only, a day to decide, a key no wider than its
  * requester, one approver per category, the requester's own person may decide (D2), and a passkey on deciding a request
- * for a credential.
+ * for a credential and on approving an agent's `write` grant.
  */
 export const STRICT_SETTINGS: ApprovalSettings = {
 	deployRequestCommits: 'merged',
@@ -384,6 +415,7 @@ export const STRICT_SETTINGS: ApprovalSettings = {
 		registry: 'none',
 		'agent-grants': 'none',
 		credentials: 'webauthn',
+		'agent-write': 'webauthn',
 	},
 }
 
@@ -414,6 +446,7 @@ export const PERMISSIVE_SETTINGS: ApprovalSettings = {
 		registry: 'none',
 		'agent-grants': 'none',
 		credentials: 'none',
+		'agent-write': 'none',
 	},
 }
 
@@ -485,6 +518,7 @@ const stepUpSchema = z.object({
 	registry: stepUpMode,
 	'agent-grants': stepUpMode,
 	credentials: stepUpMode,
+	'agent-write': stepUpMode,
 })
 
 /** Settings checked against their bounds; a category or a setting this release does not know (a newer one's) is dropped. */
@@ -534,10 +568,17 @@ export interface ProtectionChoice {
  * one. An unprotected environment decides requests under `STRICT_SETTINGS` (ADR-0083 §2), so protecting it with less is
  * a weakening too.
  */
-export function weakensStepUp(held: ProtectionChoice, after: ProtectionChoice): ApproverCategory[] {
+export function weakensStepUp(held: ProtectionChoice, after: ProtectionChoice): StepUpCategory[] {
 	const before = decidingSettings(held)
 	const next = decidingSettings(after)
-	return APPROVER_CATEGORIES.filter((category) =>
+	// `agent-write` has no pending item an unprotected environment decides under the defaults: there it asks nothing, so
+	// only a protected environment's passkey, its protection and its mode loosen it.
+	const agentWrite = held.protected && held.settings.stepUp[AGENT_WRITE_CATEGORY] === 'webauthn' && (
+		!after.protected
+		|| after.settings.stepUp[AGENT_WRITE_CATEGORY] === 'none'
+		|| RANK[after.policy[AGENT_WRITE_CATEGORY]] < RANK[held.policy[AGENT_WRITE_CATEGORY]]
+	)
+	const approvers = APPROVER_CATEGORIES.filter((category) =>
 		before.stepUp[category] === 'webauthn' && (
 			next.stepUp[category] === 'none'
 			|| next.approvers[category] < before.approvers[category]
@@ -547,6 +588,7 @@ export function weakensStepUp(held: ProtectionChoice, after: ProtectionChoice): 
 			|| (held.protected && (!after.protected || RANK[after.policy[category]] < RANK[held.policy[category]]))
 		)
 	)
+	return agentWrite ? [...approvers, AGENT_WRITE_CATEGORY] : approvers
 }
 
 /** The settings a pending item of an environment is decided under: its own while protected, the defaults otherwise. */

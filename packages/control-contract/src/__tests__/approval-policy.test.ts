@@ -16,6 +16,7 @@ import {
 	requesterMayApprove,
 	requesterPersonId,
 	requiredStepUp,
+	STEP_UP_CATEGORIES,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 	waitingCategories,
@@ -29,7 +30,7 @@ const plain: CategorizedChange = { effect: 'widens', rule: 'endpoint.added', aud
 const legacyCloser: CategorizedChange = { effect: 'widens', review: 'closer' }
 
 describe('the strict and permissive presets', () => {
-	test('strict: six closer-review categories plan, deletes-data, external roles, public endpoints and CSP person, grants off', () => {
+	test('strict: six closer-review categories plan, deletes-data, external roles, public endpoints and CSP person, grants and agent-write off', () => {
 		expect(STRICT_POLICY).toEqual({
 			'off-road': 'plan',
 			'anyone-calls': 'plan',
@@ -51,6 +52,7 @@ describe('the strict and permissive presets', () => {
 			registry: 'person',
 			'agent-grants': 'person',
 			credentials: 'person',
+			'agent-write': 'off',
 		})
 	})
 
@@ -70,6 +72,7 @@ describe('the mode matrix', () => {
 		for (const category of APPROVAL_CATEGORIES.filter((c) => c !== 'grants')) expect(modesOf(category)).toEqual(['off', 'plan', 'person'])
 		expect(modesOf('grants')).toEqual(['off', 'person'])
 		for (const category of ACTION_CATEGORIES) expect(modesOf(category)).toEqual(['off', 'person', 'refuse'])
+		expect(modesOf('agent-write')).toEqual(['off', 'refuse'])
 	})
 })
 
@@ -179,9 +182,10 @@ describe('the ceiling of a key an agent asks for (ADR-0083 §2)', () => {
 })
 
 describe('the step-up on deciding (ADR-0050 §5)', () => {
-	test('the default asks a passkey only for a credential; the permissive preset asks none', () => {
-		expect(APPROVER_CATEGORIES.filter((category) => STRICT_SETTINGS.stepUp[category] === 'webauthn')).toEqual(['credentials'])
-		expect(APPROVER_CATEGORIES.filter((category) => PERMISSIVE_SETTINGS.stepUp[category] !== 'none')).toEqual([])
+	test("the default asks a passkey for a credential and an agent's write grant; the permissive preset asks none", () => {
+		expect(STEP_UP_CATEGORIES.filter((category) => STRICT_SETTINGS.stepUp[category] === 'webauthn')).toEqual(['credentials', 'agent-write'])
+		expect(STEP_UP_CATEGORIES.filter((category) => PERMISSIVE_SETTINGS.stepUp[category] !== 'none')).toEqual([])
+		expect(APPROVER_CATEGORIES).not.toContain('agent-write')
 		expect(approvalSettingsSchema.parse(PERMISSIVE_SETTINGS)).toEqual(PERMISSIVE_SETTINGS)
 	})
 
@@ -190,6 +194,8 @@ describe('the step-up on deciding (ADR-0050 §5)', () => {
 		expect(requiredStepUp(STRICT_SETTINGS, ['secrets', 'credentials'])).toBe('webauthn')
 		expect(requiredStepUp({ ...STRICT_SETTINGS, stepUp: { ...STRICT_SETTINGS.stepUp, 'off-road': 'webauthn' } }, ['off-road'])).toBe('webauthn')
 		expect(requiredStepUp(STRICT_SETTINGS, ['grants'])).toBe('none')
+		// The device page asks agent-write's passkey; no pending item of Control's waits on it.
+		expect(requiredStepUp(STRICT_SETTINGS, ['agent-write'])).toBe('none')
 		expect(requiredStepUp(STRICT_SETTINGS, [])).toBe('none')
 	})
 })
@@ -200,7 +206,7 @@ describe('a change of protection that weakens a passkey on deciding (ADR-0050 §
 	const deployPasskey = withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, 'deploy-request': 'webauthn' } })
 
 	test('each weakening of a webauthn category names it', () => {
-		expect(weakensStepUp(held, { ...held, protected: false })).toEqual(['credentials'])
+		expect(weakensStepUp(held, { ...held, protected: false })).toEqual(['credentials', 'agent-write'])
 		expect(weakensStepUp(held, withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, credentials: 'none' } }))).toEqual(['credentials'])
 		expect(weakensStepUp(held, { ...held, policy: { ...STRICT_POLICY, credentials: 'off' } })).toEqual(['credentials'])
 		const twoPeople = withSettings({ approvers: { ...STRICT_SETTINGS.approvers, credentials: 2 } })
@@ -212,9 +218,21 @@ describe('a change of protection that weakens a passkey on deciding (ADR-0050 §
 		])
 		const refused = { ...held, policy: { ...STRICT_POLICY, credentials: 'refuse' as const } }
 		expect(weakensStepUp(refused, held)).toEqual(['credentials'])
-		expect(weakensStepUp(held, { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toEqual(['credentials'])
+		expect(weakensStepUp(held, { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS })).toEqual(['credentials', 'agent-write'])
 		// A key no longer bounded by the requester's own actions.
 		expect(weakensStepUp(held, withSettings({ credentialCeiling: 'approver' }))).toEqual(['credentials'])
+	})
+
+	test('agent-write: dropping its passkey, refusing less or unprotecting the environment names it', () => {
+		expect(weakensStepUp(held, withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, 'agent-write': 'none' } }))).toEqual(['agent-write'])
+		const refused = { ...held, policy: { ...STRICT_POLICY, 'agent-write': 'refuse' as const } }
+		expect(weakensStepUp(refused, held)).toEqual(['agent-write'])
+		expect(weakensStepUp(held, refused)).toEqual([])
+		// An unprotected environment asks no passkey for an agent's write grant, so protecting it without one weakens nothing.
+		const unprotected = { protected: false, policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }
+		const noAgentPasskey = withSettings({ stepUp: { ...STRICT_SETTINGS.stepUp, 'agent-write': 'none' } })
+		expect(weakensStepUp(unprotected, noAgentPasskey)).toEqual([])
+		expect(weakensStepUp(noAgentPasskey, { ...noAgentPasskey, protected: false })).toEqual(['credentials'])
 	})
 
 	test('a tightening, a change elsewhere and an unprotected environment take none', () => {
