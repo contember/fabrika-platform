@@ -7,6 +7,7 @@ import { SourceDescriptorMismatch, SourceFailure, SourceRateLimited } from '../f
 import type { SourceResolveInput } from '../types'
 import {
 	codeloadUrl,
+	type CompareStatus,
 	DESCRIPTOR,
 	descriptor,
 	descriptorSha256,
@@ -261,12 +262,10 @@ describe('the GitHub tarball repository', () => {
 		await expect(merged('behind', 'e'.repeat(40))).rejects.toMatchObject({ code: 'archive_rejected' })
 	})
 
-	test('a tag named like the merge target branch cannot pass: the compare names the branch in full', async () => {
+	test('a tag named like the merge target branch cannot pass, nor a branch named like a merge target tag', async () => {
 		const fixture = await gitFixture()
 		const signal = new AbortController().signal
-		// The tag `deploy/prod` holds the commit and the branch does not; the short name resolves to the tag, as git's own order would.
-		const compareBases = { 'deploy/prod': 'identical', 'refs/tags/deploy/prod': 'identical', 'refs/heads/deploy/prod': 'diverged' } as const
-		const merged = async (trigger: string | null) =>
+		const merged = async (compareBases: Readonly<Record<string, CompareStatus>>, trigger: string | null) =>
 			(await sourceFor(fixture, { compareBases }).requestedCommit({
 				repository,
 				commitSha: fixture.commitSha,
@@ -274,11 +273,16 @@ describe('the GitHub tarball repository', () => {
 				signal,
 			})).merged
 
-		expect(await merged('refs/heads/deploy/prod')).toBe(false)
-		expect(await merged(null)).toBe(false)
-		expect(await merged('refs/heads/release/*')).toBe(false)
-		// A tag trigger compares the tag in full, so a same-named branch cannot pass either.
-		expect(await merged('refs/tags/deploy/prod')).toBe(true)
+		// The tag `deploy/prod` holds the commit and the branch does not; the short name resolves to the tag, as git's order would.
+		const tagHolds = { 'deploy/prod': 'identical', 'refs/tags/deploy/prod': 'identical', 'refs/heads/deploy/prod': 'diverged' } as const
+		expect(await merged(tagHolds, 'refs/heads/deploy/prod')).toBe(false)
+		expect(await merged(tagHolds, null)).toBe(false)
+		expect(await merged(tagHolds, 'refs/heads/release/*')).toBe(false)
+		expect(await merged(tagHolds, 'refs/tags/deploy/prod')).toBe(true)
+		// The branch holds it and the tag does not; the short name resolves to the branch, as GitHub's compare does.
+		const branchHolds = { 'deploy/prod': 'identical', 'refs/heads/deploy/prod': 'identical', 'refs/tags/deploy/prod': 'diverged' } as const
+		expect(await merged(branchHolds, 'refs/tags/deploy/prod')).toBe(false)
+		expect(await merged(branchHolds, 'refs/heads/deploy/prod')).toBe(true)
 	})
 
 	test('a short name is refused before GitHub is asked', async () => {
