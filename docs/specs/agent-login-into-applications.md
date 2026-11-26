@@ -247,8 +247,8 @@ approves a `write` grant for an agent at a protected environment:
 
 `plan` and `person` do not apply: the device page is already a person's decision on exactly this grant. `refuse` makes
 the environment serve `read` grants only. The category's `stepUp` setting defaults to `webauthn` under strict, so the
-person confirms a `write` grant at a protected environment with a passkey bound to the device attempt, once IAM's
-step-up of ADR-0083 §8 exists. Control mirrors the mode and the setting of every environment into IAM with the
+person confirms a `write` grant at a protected environment with a passkey bound to the device attempt, on the device
+page. Control mirrors the mode and the setting of every environment into IAM with the
 provisioning key, as it mirrors the `grants` mode (ADR-0083 §4); an unprotected environment mirrors as `off` with no
 step-up. IAM reads the mirror at approval and at every exchange, so switching a category to `refuse` stops existing
 `write` grants within 300 s. Where IAM holds no mirror (an older Control, an environment not yet mirrored) it serves
@@ -394,7 +394,8 @@ follows the usual review round.
   ceiling IAM applies at each exchange (`narrowPermissions`). Default: not in v1; the group's callers already bound what
   an agent reaches. The token answer's `scope` stays `write` either way, as in the shared profile.
 - **`agent-write` default under strict.** Decided (2026-11-26): `off` with a passkey bound to the device attempt.
-  IAM refuses `write` at such an environment until the device page asks that passkey (fail closed).
+  The device page asks that passkey before it approves `write`; a `write` grant without it is refused there (fail
+  closed).
 - **One `act` claim with agent task keys.** Decided (2026-11-26): one claim name, two shapes by token kind. This
   design's agent shape is on an application token (built); [agent task keys](agent-task-keys.md) add the task shape on
   a console resource token, and both write the audit columns `actor_id` and `actor_label`.

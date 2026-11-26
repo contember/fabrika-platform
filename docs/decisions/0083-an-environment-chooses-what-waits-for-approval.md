@@ -90,8 +90,8 @@ in the console is their own evidence, as before:
 `agent-write` is no action of Control's and has no pending item: the device page is already a person's decision on
 exactly that grant, so `plan` and `person` do not apply, and it takes no approvers. IAM judges it from Control's mirror
 (§4), when the person approves and at every exchange: `refuse` serves `read` grants only, and `off` serves `write`,
-confirmed with a passkey bound to the device attempt while its `stepUp` is `webauthn` (the default). Until the device
-page asks that passkey, IAM refuses `write` under `webauthn` as under `refuse`, so a protected environment fails closed.
+confirmed with a passkey bound to the device attempt while its `stepUp` is `webauthn` (the default). A `write` grant
+whose approval no passkey confirmed is refused there as under `refuse`, so a protected environment fails closed.
 
 A write to the all-environments layer (`env: null`) is a write to every protected environment of the application, and
 the strictest of their modes applies; the request names them all. An `apps.update` reaches every environment of the
