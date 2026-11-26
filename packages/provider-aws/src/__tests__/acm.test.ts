@@ -1,6 +1,6 @@
 // The Certificate Manager client against the fake endpoint: a certificate requested for one host by DNS under an
-// idempotency token, read back with its validation record, deleted; an answer of another form is refused, and an input
-// of another form is refused before anything is sent.
+// idempotency token and with no tags, read back with its validation record; no call that tags or deletes; an answer of
+// another form is refused, and an input of another form is refused before anything is sent.
 
 import { describe, expect, test } from 'bun:test'
 import { ACM, acmClient } from '../aws/acm'
@@ -21,14 +21,19 @@ const described = (change: Record<string, unknown> = {}) => ({
 })
 
 describe('acmClient', () => {
-	test('requests a certificate for one host, validated by DNS, under its idempotency token and tags', async () => {
+	test('requests a certificate for one host, validated by DNS, under its idempotency token and with no tags', async () => {
 		const { options, calls } = fakeAws(ACM, { RequestCertificate: () => ({ CertificateArn: ARN }) })
-		expect(await acmClient(options).requestCertificate({ host: HOST, token: 'a1b2c3', tags: { 'fabrika:namespace': 'shared' } })).toBe(ARN)
+		expect(await acmClient(options).requestCertificate({ host: HOST, token: 'a1b2c3' })).toBe(ARN)
+		// No tags: a tag would need a grant ACM cannot hold to the request that creates the certificate.
 		expect(calls).toEqual([{
 			operation: 'RequestCertificate',
 			target: 'CertificateManager.RequestCertificate',
-			body: { DomainName: HOST, ValidationMethod: 'DNS', IdempotencyToken: 'a1b2c3', Tags: [{ Key: 'fabrika:namespace', Value: 'shared' }] },
+			body: { DomainName: HOST, ValidationMethod: 'DNS', IdempotencyToken: 'a1b2c3' },
 		}])
+	})
+
+	test('the client neither tags nor deletes a certificate', () => {
+		expect(Object.keys(acmClient(fakeAws(ACM, {}).options)).sort()).toEqual(['describeCertificate', 'requestCertificate'])
 	})
 
 	test('reads a certificate back with its status, its validation record and what uses it', async () => {
@@ -70,27 +75,15 @@ describe('acmClient', () => {
 		}
 	})
 
-	test('deletes a certificate, and one that is not there answers false; one in use is refused by ACM', async () => {
-		const { options, calls } = fakeAws(ACM, { DeleteCertificate: () => ({}) })
-		expect(await acmClient(options).deleteCertificate(ARN)).toBe(true)
-		expect(calls[0]?.body).toEqual({ CertificateArn: ARN })
-		const gone = fakeAws(ACM, { DeleteCertificate: () => awsError('ResourceNotFoundException') })
-		expect(await acmClient(gone.options).deleteCertificate(ARN)).toBe(false)
-		const used = fakeAws(ACM, { DeleteCertificate: () => awsError('ResourceInUseException') })
-		await expect(acmClient(used.options).deleteCertificate(ARN)).rejects.toMatchObject({ code: 'ResourceInUseException' })
-	})
-
 	test('refuses an input of another form before anything is sent', async () => {
 		const { options, calls } = fakeAws(ACM, {})
 		const acm = acmClient(options)
 		for (const host of ['*.example.com', 'Notes.example.com', 'localhost', 'notes.example.com.', `${'a'.repeat(64)}.example.com`]) {
-			await expect(acm.requestCertificate({ host, token: 'a1', tags: {} })).rejects.toThrow('the host')
+			await expect(acm.requestCertificate({ host, token: 'a1' })).rejects.toThrow('the host')
 		}
-		await expect(acm.requestCertificate({ host: HOST, token: 'not-a-word', tags: {} })).rejects.toThrow('the idempotency token')
-		await expect(acm.requestCertificate({ host: HOST, token: 'a'.repeat(33), tags: {} })).rejects.toThrow('the idempotency token')
-		await expect(acm.requestCertificate({ host: HOST, token: 'a1', tags: { 'bad key!': 'x' } })).rejects.toThrow('the tags')
+		await expect(acm.requestCertificate({ host: HOST, token: 'not-a-word' })).rejects.toThrow('the idempotency token')
+		await expect(acm.requestCertificate({ host: HOST, token: 'a'.repeat(33) })).rejects.toThrow('the idempotency token')
 		await expect(acm.describeCertificate('arn:aws:s3:::bucket')).rejects.toThrow('the certificate')
-		await expect(acm.deleteCertificate('arn:aws:s3:::bucket')).rejects.toThrow('the certificate')
 		expect(calls).toEqual([])
 	})
 })

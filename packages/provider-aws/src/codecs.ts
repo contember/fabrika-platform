@@ -128,6 +128,8 @@ export interface AwsProxyCertificate {
 	/** The `CNAME` the operator adds, `name` to `value`; absent until ACM names it. */
 	readonly validationName?: string
 	readonly validationValue?: string
+	/** The host is no member's any more: its certificate is the operator's to delete, and the entry goes once it is gone. */
+	readonly departed?: true
 }
 
 /** The most hosts a namespace holds certificates for: a balancer's listener takes 25 besides its default one. */
@@ -196,6 +198,7 @@ const namespaceTargetSchema = z.object({
 				status: z.enum(CERTIFICATE_STATUS_ENUM),
 				validationName: z.string().regex(VALIDATION_RECORD).optional(),
 				validationValue: z.string().regex(VALIDATION_RECORD).optional(),
+				departed: z.literal(true).optional(),
 			}).strict().refine((certificate) => (certificate.validationName === undefined) === (certificate.validationValue === undefined), {
 				message: "a certificate's validation record is recorded whole",
 				path: ['validationValue'],

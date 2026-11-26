@@ -484,9 +484,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the namespace's presentation shows with "add it, and reconcile the namespace". Nothing waits for a certificate and
     nothing fails on one: validation waits on the operator's DNS, and a namespace that is not ready refuses deploys. One
     ACM no longer knows is requested anew; one that failed or timed out stays shown until the operator deletes it in
-    ACM. A departed host keeps its entry until its certificate is off the listener. At most 25 per namespace (a
-    listener's certificate quota besides its default one; the quota is the installation's, shared by every namespace).
-    Not yet: serving them on the listener, and deleting a departed host's.
+    ACM. The operator keeps the validation record in DNS: ACM's renewal uses it. Nothing tags or deletes a
+    certificate: a departed host's entry is marked `departed` and shown to the operator to delete, and the pass after
+    the delete forgets it. At most 25 entries per namespace, departed ones counted (a listener's certificate quota
+    besides its default one; the quota is the installation's, shared by every namespace): a host over it gets none
+    until a place is free, and the rest of the pass runs as ever. Not yet: serving them on the listener.
     **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
     members, one resumable step per pass from what the target records: an image of the current manifest sets the
     service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
@@ -563,11 +565,13 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         resource. That freezes a target group's tags: a later release that changes them would fail the namespace stack's
         update on every existing installation, so such a change brings its own upgrade step (a grant, or a replaced
         group). UNVERIFIED: that CloudFormation sends a new target group's tags inside `CreateTargetGroup` rather than with
-        a later `AddTags`; a later one would be denied, and the stack would fail closed. Its certificates add `acm:RequestCertificate` only with the request tag `fabrika:namespace`, `acm:AddTagsToCertificate`
-        (which a request with tags needs) only with `aws:TagKeys` within `fabrika:namespace` and `fabrika:env`, and
-        `acm:DescribeCertificate` on `certificate/*`. ACM has no create-action key, so that tag grant alone could tag an
-        existing certificate; the deletes that come with the listener's rules are therefore scoped by the resource tag and
-        refused by ACM for a certificate in use (the installation's default one is);
+        a later `AddTags`; a later one would be denied, and the stack would fail closed. Its certificates add
+        `acm:RequestCertificate` and `acm:DescribeCertificate`, and nothing else of ACM: no `AddTagsToCertificate`
+        (ACM has no condition that holds a tag write to the request creating the certificate, so it would let Control
+        tag any certificate of the account) and no `DeleteCertificate`. The certificates are requested untagged, and a
+        departed host's is the operator's to delete, as the namespace's presentation says. The reach that remains:
+        Control can request a public certificate for any host (it costs nothing and serves nothing until a rule names
+        it) and read every certificate's status and validation record (public DNS), never delete or tag one;
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
@@ -581,11 +585,22 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         create. The live check of step 13 settles it before the policy is written. A namespace's proxy group carries
         `fabrika:env` too (the namespace's), so the same grants cover it, and an environment's `ProxyIngress` rule is
         an `AuthorizeSecurityGroupIngress` on the environment's own group;
-      - Cloud Map, for a namespace's Service Connect namespace: `servicediscovery:CreateHttpNamespace` and
-        `TagResource` with `aws:RequestTag/fabrika:namespace` present, and `GetNamespace`, `GetOperation`,
+      - Cloud Map, for a namespace's Service Connect namespace: `servicediscovery:CreateHttpNamespace` with
+        `aws:RequestTag/fabrika:namespace` present (the tags travel in the create), and `GetNamespace`, `GetOperation`,
         `UpdateHttpNamespace`, `ListTagsForResource`, `UntagResource` and `DeleteNamespace` on `namespace/*` with
-        `aws:ResourceTag/fabrika:namespace` present. UNVERIFIED: which of these Cloud Map scopes by resource and which
-        by tag only.
+        `aws:ResourceTag/fabrika:namespace` present. No standalone `TagResource`: Cloud Map has no condition that holds a
+        tag write to the create, so a `TagResource` grant would let Control tag any Cloud Map namespace of the account
+        and then update or delete it. UNVERIFIED: which of these Cloud Map scopes by resource and which by tag only, and
+        whether a create with tags needs `TagResource` too; if it does, the namespace is created untagged and the
+        update and delete grants go (the operator deletes it with the stack), rather than any grant resting on a tag
+        Control could write.
+      - **Tags and installations.** Every grant scoped by a resource tag holds only while Control can write that tag in
+        the call that creates the resource and nowhere else: `ecs:CreateAction`, `ec2:CreateAction` and
+        `elasticloadbalancing:CreateAction` hold the tag writes of ECS, EC2 and ELB to their creates, and ACM and Cloud
+        Map get no tag write at all. IAM, ECR, CloudWatch Logs, SSM, CodeBuild, S3 and CloudFormation are scoped by
+        name prefix, never by tag. The tags name a namespace and an environment, not an installation, so two
+        installations in one account would reach each other's tagged resources: an installation is one account, or its
+        tags gain `fabrika:installation` and every tag condition a `StringEquals` on that installation's value;
     - **The boundary.** Role writes would let Control mint a role with any inline policy and run code under it. So
       `iam:CreateRole` and `iam:PutRolePolicy` are allowed only with the condition `iam:PermissionsBoundary` equal to
       `policy/fabrika/fabrika-apps-boundary`, which the installation stack creates and which allows only what an

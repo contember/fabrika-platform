@@ -42,7 +42,7 @@ import { ecrLifecyclePolicy } from './aws/ecr'
 import { type EcsClient, SERVICE_CONNECT_ARN, TARGET_GROUP_ARN } from './aws/ecs'
 import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
-import { AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
+import { AWS_MAX_PROXY_CERTIFICATES, AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
 import { AWS_APPLICATION_PORT } from './ecs-task'
 import { allow, AWS_LOG_RETENTION_DAYS, awsAppsPermissionsBoundary, type AwsInstallationNetwork, policy, trust } from './environment-stack'
 import { AWS_PROXY_BUILD_IMAGE, AWS_PROXY_BUILDSPEC } from './proxy-build'
@@ -391,11 +391,15 @@ export function awsProxyCertificatePresentation(target: AwsNamespaceTarget): {
 	const certificates = target.proxyCertificates ?? []
 	const instructions: string[] = []
 	for (const certificate of certificates) {
-		if (certificate.status === 'PENDING_VALIDATION') {
+		if (certificate.departed === true) {
+			instructions.push(
+				`The host ${certificate.host} is no member's any more: delete its certificate ${certificate.arn} in Certificate Manager once it is off the listener, and its DNS record; the next reconcile forgets it.`,
+			)
+		} else if (certificate.status === 'PENDING_VALIDATION') {
 			instructions.push(
 				certificate.validationName === undefined || certificate.validationValue === undefined
 					? `The certificate for ${certificate.host} was just requested: reconcile the namespace in a minute to read the DNS record it needs.`
-					: `The certificate of ${certificate.host} needs the DNS record ${certificate.validationName} CNAME ${certificate.validationValue}: add it, and reconcile the namespace once it is in place.`,
+					: `The certificate of ${certificate.host} needs the DNS record ${certificate.validationName} CNAME ${certificate.validationValue}: add it and keep it in place (Certificate Manager renews with it), and reconcile the namespace once it is in place.`,
 			)
 		} else if (certificate.status !== 'ISSUED') {
 			instructions.push(
@@ -403,12 +407,19 @@ export function awsProxyCertificatePresentation(target: AwsNamespaceTarget): {
 			)
 		}
 	}
+	if (certificates.length >= AWS_MAX_PROXY_CERTIFICATES) {
+		instructions.push(
+			`The namespace holds ${AWS_MAX_PROXY_CERTIFICATES} certificates, the listener's quota: a new host gets one only once a departed host's certificate is deleted.`,
+		)
+	}
 	return {
-		facts: certificates.map((certificate) => ({
-			label: `Certificate for ${certificate.host}`,
-			value: `${certificate.arn} (${certificate.status})`,
-			resource: true,
-		})),
+		facts: certificates.flatMap((certificate) => [
+			{ label: `Certificate for ${certificate.host}`, value: `${certificate.arn} (${certificate.status})`, resource: true },
+			// The record stays in DNS for as long as the certificate lives: renewal validates with it.
+			...(certificate.validationName === undefined || certificate.validationValue === undefined
+				? []
+				: [{ label: `DNS record for ${certificate.host}`, value: `${certificate.validationName} CNAME ${certificate.validationValue}` }]),
+		]),
 		instructions,
 	}
 }

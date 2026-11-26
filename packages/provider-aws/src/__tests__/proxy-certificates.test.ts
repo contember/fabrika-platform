@@ -8,7 +8,7 @@ import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { Certificate } from '../aws/acm'
-import { awsAppArtifactCodec, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from '../codecs'
+import { awsAppArtifactCodec, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec, type AwsProxyCertificate } from '../codecs'
 import { awsNamespaceTargetEnvelope, awsProxyCertificatePresentation } from '../namespace'
 import { awsProxyHosts, ensureAwsProxyCertificates } from '../proxy-certificates'
 
@@ -164,10 +164,18 @@ describe('ensureAwsProxyCertificates', () => {
 		// The notes member left; the crm certificate timed out.
 		const later = await fake.run(requested, [member('crm', 'crm.example.com')])
 		expect(fake.requests).toHaveLength(2)
-		expect(decoded(later).proxyCertificates?.map((certificate) => [certificate.host, certificate.status])).toEqual([
-			['crm.example.com', 'VALIDATION_TIMED_OUT'],
-			['notes.example.com', 'PENDING_VALIDATION'],
+		expect(decoded(later).proxyCertificates?.map((certificate) => [certificate.host, certificate.status, certificate.departed])).toEqual([
+			['crm.example.com', 'VALIDATION_TIMED_OUT', undefined],
+			['notes.example.com', 'PENDING_VALIDATION', true],
 		])
+		// Nothing here deletes: the operator does, and the pass after forgets the entry.
+		const notes = decoded(later).proxyCertificates?.find((certificate) => certificate.host === 'notes.example.com')
+		fake.certificates.delete(notes?.arn ?? '')
+		const forgotten = await fake.run(later, [member('crm', 'crm.example.com')])
+		expect(decoded(forgotten).proxyCertificates?.map((certificate) => certificate.host)).toEqual(['crm.example.com'])
+		// A host that comes back while its certificate lives is current again, under the same certificate.
+		const back = await fake.run(later, [member('crm', 'crm.example.com'), member('notes', 'notes.example.com')])
+		expect(decoded(back).proxyCertificates?.find((certificate) => certificate.host === 'notes.example.com')?.departed).toBeUndefined()
 	})
 
 	test('a certificate recorded for a host that reads back as another is refused', async () => {
@@ -178,11 +186,25 @@ describe('ensureAwsProxyCertificates', () => {
 		await expect(fake.run(requested, members)).rejects.toThrow("another host's")
 	})
 
-	test('more hosts than the listener takes are refused before anything is requested', async () => {
+	test('a host over the cap waits for a place, the pass still runs, and a departed one deleted makes room', async () => {
 		const fake = new Fake()
-		const members = Array.from({ length: 26 }, (_, index) => member(`app${index}`, `app${index}.example.com`))
-		await expect(fake.run(namespaceOf(PINNED), members)).rejects.toThrow('more than 25 certificates')
-		expect(fake.requests).toEqual([])
+		const members = Array.from(
+			{ length: 26 },
+			(_, index) => member(`app${String(index).padStart(2, '0')}`, `app${String(index).padStart(2, '0')}.example.com`),
+		)
+		const capped = await fake.run(namespaceOf(PINNED), members)
+		expect(fake.requests).toHaveLength(25)
+		expect(decoded(capped).proxyCertificates?.some((certificate) => certificate.host === 'app25.example.com')).toBe(false)
+		// app00 leaves and its certificate is deleted by the operator: app25 gets the place on the next pass.
+		const [, ...staying] = members
+		const left = await fake.run(capped, staying)
+		const departed = decoded(left).proxyCertificates?.find((certificate) => certificate.host === 'app00.example.com')
+		expect(departed?.departed).toBe(true)
+		expect(fake.requests).toHaveLength(25)
+		fake.certificates.delete(departed?.arn ?? '')
+		const roomy = await fake.run(left, staying)
+		expect(fake.requests).toHaveLength(26)
+		expect(decoded(roomy).proxyCertificates?.map((certificate) => certificate.host)).toContain('app25.example.com')
 	})
 })
 
@@ -195,21 +217,36 @@ describe('awsProxyCertificatePresentation', () => {
 				{ host: 'b.example.com', arn: ARN_2, status: 'PENDING_VALIDATION', validationName: RECORD.name, validationValue: RECORD.value },
 				{ host: 'c.example.com', arn: ARN_1.replace('001', '003'), status: 'ISSUED' },
 				{ host: 'd.example.com', arn: ARN_1.replace('001', '004'), status: 'FAILED' },
+				{ host: 'e.example.com', arn: ARN_1.replace('001', '005'), status: 'ISSUED', departed: true },
 			],
 		})
-		expect(presented.facts.map((fact) => fact.label)).toEqual([
-			'Certificate for a.example.com',
-			'Certificate for b.example.com',
-			'Certificate for c.example.com',
-			'Certificate for d.example.com',
+		expect(presented.facts.map((fact) => [fact.label, fact.resource])).toEqual([
+			['Certificate for a.example.com', true],
+			['Certificate for b.example.com', true],
+			// The record stays shown: renewal validates with it.
+			['DNS record for b.example.com', undefined],
+			['Certificate for c.example.com', true],
+			['Certificate for d.example.com', true],
+			['Certificate for e.example.com', true],
 		])
-		expect(presented.facts.every((fact) => fact.resource === true)).toBe(true)
 		expect(presented.instructions).toEqual([
 			'The certificate for a.example.com was just requested: reconcile the namespace in a minute to read the DNS record it needs.',
-			`The certificate of b.example.com needs the DNS record ${RECORD.name} CNAME ${RECORD.value}: add it, and reconcile the namespace once it is in place.`,
+			`The certificate of b.example.com needs the DNS record ${RECORD.name} CNAME ${RECORD.value}: add it and keep it in place (Certificate Manager renews with it), and reconcile the namespace once it is in place.`,
 			`The certificate for d.example.com is FAILED: delete ${
 				ARN_1.replace('001', '004')
 			} in Certificate Manager, then reconcile the namespace to request a new one.`,
+			`The host e.example.com is no member's any more: delete its certificate ${
+				ARN_1.replace('001', '005')
+			} in Certificate Manager once it is off the listener, and its DNS record; the next reconcile forgets it.`,
 		])
+	})
+
+	test('at the cap, the presentation says a new host waits for a departed one to be deleted', () => {
+		const full: AwsProxyCertificate[] = Array.from({ length: 25 }, (_, index) => ({
+			host: `h${index}.example.com`,
+			arn: `arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-${String(index).padStart(12, '0')}`,
+			status: 'ISSUED',
+		}))
+		expect(awsProxyCertificatePresentation({ ...PINNED, proxyCertificates: full }).instructions.at(-1)).toContain("the listener's quota")
 	})
 })
