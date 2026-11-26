@@ -550,6 +550,10 @@ describe("an environment's rules at a glance", () => {
 			'<dt>Secrets</dt><dd>No approval <span class="muted">(Strict: A person approves)</span> <span class="chip">not enforced yet</span> <span class="muted">Today it applies at once.</span></dd>',
 		)
 		expect(html).toContain('<details class="disclosure"><summary><span class="disclosure-title">Every rule on prod</span>')
+		// Rules Strict asks a person for but no request routes yet are named, not left to read as protection.
+		expect(html).toContain(
+			'<span class="chip">not enforced yet</span> <span class="muted">Variables, Data operations, Where a deploy points: stored, but no request routes them yet; the editor says what applies today.</span>',
+		)
 		expect(
 			renderToStaticMarkup(createElement(PolicySummary, { env: { env: 'prod', approvalPolicy: STRICT_POLICY, approvalSettings: STRICT_SETTINGS } })),
 		)

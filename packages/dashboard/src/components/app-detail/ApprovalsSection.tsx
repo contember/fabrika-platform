@@ -30,6 +30,7 @@ import {
 	loosenedSettings,
 	modeLabel,
 	nearestPreset,
+	notEnforcedYet,
 	parkedRunsAt,
 	policyChange,
 	type PolicyChoice,
@@ -186,6 +187,8 @@ export function ProtectionRow({ appId, env, onDone }: { appId: string; env: AppE
 export function PolicySummary({ env }: { env: Pick<AppEnvDto, 'env' | 'approvalPolicy' | 'approvalSettings'> }) {
 	const choice = { policy: env.approvalPolicy, settings: env.approvalSettings }
 	const { preset, differences } = nearestPreset(choice)
+	// A difference already carries its own mark; the rest of what is not enforced yet would otherwise read as protection.
+	const unenforced = notEnforcedYet(choice.policy).filter((option) => !differences.some((difference) => difference.key === option.category))
 	return (
 		<div className="policy-summary">
 			<div>
@@ -211,6 +214,14 @@ export function PolicySummary({ env }: { env: Pick<AppEnvDto, 'env' | 'approvalP
 						</div>
 					))}
 				</dl>
+			)}
+			{unenforced.length > 0 && (
+				<div className="small">
+					<Chip>not enforced yet</Chip>{' '}
+					<span className="muted">
+						{unenforced.map((option) => option.label).join(', ')}: stored, but no request routes them yet; the editor says what applies today.
+					</span>
+				</div>
 			)}
 			<details className="disclosure">
 				<summary>

@@ -289,6 +289,11 @@ export function decidingApplies(category: PolicyCategory, mode: ApprovalMode): b
 	return category === 'agent-write' ? mode === 'off' : mode === 'plan' || mode === 'person'
 }
 
+/** The rules whose stored mode asks for more than today's rule does: no request routes them yet (ADR-0083, Rollout). */
+export function notEnforcedYet(policy: ApprovalPolicy): readonly CategoryOption[] {
+	return ORDERED_OPTIONS.filter((option) => option.pending !== undefined && policy[option.category] !== 'off')
+}
+
 /** One rule or setting that differs between two choices, in the console's words. */
 export interface PolicyDifference {
 	readonly key: string
