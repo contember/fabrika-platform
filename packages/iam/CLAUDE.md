@@ -254,20 +254,23 @@ fails if that stops being true — it is the guard, not documentation of one.
   `person`. Every application such a key reaches counts its `<app>@prod` too, existing or not, because `prod`
   starts protected and a key keeps acting in one created after it. IAM itself, Operations and plain ids are not judged. A new issuing mutation joins the gate and the
   table in `admin-rpc-approval-categories.test.ts`.
-- **A MACHINE CALLER'S WIDENING OF A KEY MEETS THE SAME MODE.** `grants.create` and `grants.update` to a service
-  principal judge the grant's reach (`requireKeyGrantMode` in `src/admin/grants.ts`) before they apply or wait as a
-  grant request. `policies.create`, `policies.update` and `PUT /admin/apps/:app/schema` change what every holder of a role
-  holds (a grant names its role by key alone, so a policy created under a deleted role's key reaches the keys still naming
-  it); whether the change widens a key is not judged, so a machine caller is refused wherever the application's mode is
-  not `off`. `principals.update` re-enabling a disabled service principal gives back its grants, so it judges their reach
-  as `apiKeys.rotate` does; a workload principal's (a job, a webhook, a connector) holds what its schema declares at
-  its own environment, so its re-enabling judges that environment; disabling narrows and is not judged. A key issued for another principal holds no more than
-  its issuer covers (`issuerCoverage`, `issuerAuthority` in `src/delegation.ts`), so `issuedKeysReach` in
-  `src/credentials-gate.ts` judges every live key a principal issued for someone else, share links aside: when any
-  principal, a user included, is re-enabled, and on a grant to any principal (`requireKeyGrantMode`): a global
-  `iam.admin` grant at IAM or its extension for every key bound to another principal, a grant at an application for what
-  those keys hold there, a cross-app grant for all of them.
-  The provisioning key, which every deploy reconciles with, keeps its rule.
+- **A MACHINE CALLER'S WIDENING OF A KEY MEETS THE SAME MODE.** Each of these judges where the keys it widens act, before
+  it applies or waits as a grant request; the provisioning key, which every deploy reconciles with, keeps its rule.
+  - `grants.create` and `grants.update` to a service principal judge the grant's reach (`requireKeyGrantMode` in
+    `src/admin/grants.ts`).
+  - `policies.create`, `policies.update` and `PUT /admin/apps/:app/schema` change what every holder of a role holds (a
+    grant names its role by key alone, so a policy created under a deleted role's key reaches the keys still naming it);
+    whether the change widens a key is not judged, so a machine caller is refused wherever the application's mode is not
+    `off`.
+  - `principals.update` re-enabling a disabled principal: a service principal's grants, judged as `apiKeys.rotate` judges
+    them; a workload principal's (a job, a webhook, a connector) own environment, whose schema declares what it holds.
+    Disabling narrows and is not judged.
+  - A key issued for another principal holds no more than its issuer covers (`issuerCoverage`, `issuerAuthority` in
+    `src/delegation.ts`): nothing while the issuer is disabled, its whole set while the issuer holds `iam.admin` at IAM,
+    otherwise what the issuer holds at the key's application. So `issuedKeysReach` in `src/credentials-gate.ts` judges
+    every live key a principal issued for someone else, share links aside, when any principal, a user included, is
+    re-enabled, and on a grant to any principal: a global `iam.admin` grant at IAM, or its extension, for every key bound
+    to another principal; a grant at an application for what those keys hold there; a cross-app grant for all of them.
 - **A KEY LISTS EXACT ACTIONS OF ITS APP'S CATALOG, NO WILDCARD.** `issueKey` refuses `*` and
   `prefix.*` in every mode and requires each action verbatim in `app_actions`, before delegation —
   so an issuer holding `*` still cannot mint a key for an action the app never declared, and a key

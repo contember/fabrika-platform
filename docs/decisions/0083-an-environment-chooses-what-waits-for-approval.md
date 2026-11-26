@@ -401,7 +401,7 @@ could read. A request of such a kind is refused when it is created (400 naming t
 
 Every mutation of Control's router and of IAM's `/admin/rpc` is either gated by a category or listed as exempt with its
 reason. A table test over both routers fails when a new mutation is neither. IAM's table gates every issuing mutation,
-a grant to a key and the change of a role or policy by `credentials` (§8), a grant beside its `grants`, and lists the
+a grant to a key or to a key's issuer, re-enabling a principal and the change of a role or policy by `credentials` (§8), a grant beside its `grants`, and lists the
 provisioning key's two exceptions with their reason, and it checks that each gated one refuses a machine `iam.admin`
 key under `person`. No mode applies to the installation's own
 resources, which keep their rule: namespaces and the mail gate (`namespace.manage` and `mail.manage`, global, which no

@@ -26,8 +26,8 @@ const INSTALLATION = 'installation administration keeps its rule (ADR-0083 §9)'
 
 const IAM: Readonly<Record<string, Judged>> = {
 	'principals.invite': { exempt: INSTALLATION },
-	// Re-enabling a disabled key gives back its grants, so a machine caller meets the mode of where they act; disabling
-	// narrows, and a user keeps the installation's rule.
+	// Re-enabling a disabled principal gives back what its keys hold (a workload's at its own environment) and what the keys
+	// it issued for others hold, so a machine caller meets the mode of where they act; disabling narrows.
 	'principals.update': { category: 'credentials' },
 	'principals.promote': { exempt: INSTALLATION },
 	'sessions.revoke': { exempt: NARROWS },
@@ -35,7 +35,7 @@ const IAM: Readonly<Record<string, Judged>> = {
 	'passwords.issueEnrollment': { exempt: INSTALLATION },
 	'passwords.issueReset': { exempt: INSTALLATION },
 	'passwords.disable': { exempt: NARROWS },
-	// A machine caller's grant to a key meets `credentials` before it applies or waits.
+	// A machine caller's grant to a key, or to a key's issuer, meets `credentials` before it applies or waits.
 	'grants.create': { category: 'grants', also: 'credentials' },
 	'grants.update': { category: 'grants', also: 'credentials' },
 	'grants.delete': { category: 'grants' },
