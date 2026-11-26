@@ -251,6 +251,30 @@ for (const backend of backends) {
 			expect((await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeType: null, scopeValue: null }))).status).toBe(200)
 		})
 
+		test('an application with no `prod` yet counts its `prod` as `person`, which starts protected, until IAM holds its mode', async () => {
+			const w = await world()
+			await w.mirror(APP, 'off')
+			await w.mirror(STAGE, 'off')
+			expect((await w.f.putSchema(NOTES_SCHEMA, 'shop@stage')).status).toBe(200)
+			await w.mirror('shop@stage', 'off')
+			const atShop = w.controlKey({ scopeValue: 'shop' })
+			const before = await w.services()
+			const scoped = await w.rpc(w.machine, 'apiKeys.provision', atShop)
+			expect([scoped.status, scoped.message.includes('shop@prod')]).toEqual([403, true])
+			const global = await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeType: null, scopeValue: null }))
+			expect([global.status, global.message.includes('shop@prod')]).toEqual([403, true])
+			expect(await w.services()).toBe(before)
+
+			// A key at the one environment that exists is judged by its own mode, and a person issues the scoped one.
+			expect((await w.rpc(w.machine, 'apiKeys.provision', w.notesKey({ app: 'shop@stage' }))).status).toBe(200)
+			expect((await w.asAda('apiKeys.provision', atShop)).status).toBe(200)
+
+			// Once Control mirrors `shop@prod` as `off`, the machine caller issues both.
+			await w.mirror('shop@prod', 'off')
+			expect((await w.rpc(w.machine, 'apiKeys.provision', atShop)).status).toBe(200)
+			expect((await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeType: null, scopeValue: null }))).status).toBe(200)
+		})
+
 		test('the exceptions keep their rule: the provisioning key issues workload, membership and bootstrap keys', async () => {
 			const w = await world()
 			await w.mirror(APP, 'person')
@@ -402,7 +426,7 @@ for (const backend of backends) {
 			await w.mirror(STAGE, 'off')
 			expect((await w.f.putSchema(NOTES_SCHEMA, 'sandbox@dev')).status).toBe(200)
 			await w.mirror('sandbox@dev', 'off')
-			const sandbox = w.keyOf(await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeValue: 'sandbox' })))
+			const sandbox = w.keyOf(await w.asAda('apiKeys.provision', w.controlKey({ scopeValue: 'sandbox' })))
 			const [own] = await w.repositories.grants.listGrants(sandbox.principalId)
 			if (own === undefined) throw new Error('the key holds no grant')
 			const atNotes = { principalId: sandbox.principalId, app: CONSOLE, permissions: ['deploy.read'], scopeType: 'app', scopeValue: 'notes' }

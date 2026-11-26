@@ -262,7 +262,10 @@ for (const backend of backends) {
 				registerAppUseCase(registry(port), { id, repoUrl: `https://github.com/acme/${id}`, env, ...REGISTRATION })
 			const putEnv = (appId: string, env: string, port?: GrantApprovalPort | null) => putAppEnvUseCase(registry(port), appId, env, REGISTRATION)
 
-			return { db, grantApproval, machine, provision, provisionAtControl, setCredentials, converge, adaToken, knownToIam, register, putEnv }
+			/** The `credentials` mode IAM holds of each environment. */
+			const iamModes = () => opened.iam.grantRequests.credentialsModes()
+
+			return { db, grantApproval, machine, provision, provisionAtControl, setCredentials, converge, adaToken, knownToIam, register, putEnv, iamModes }
 		}
 
 		test('after an upgrade IAM refuses the machine key everywhere until the maintenance pass mirrors each mode', async () => {
@@ -305,19 +308,22 @@ for (const backend of backends) {
 			expect(await w.provision(w.machine, APP)).toBe(403)
 		})
 
-		test('a new environment reaches IAM before its row: a registered or put `prod` is judged at once', async () => {
+		test('an application without `prod` counts it as `person`, and a registered or put `prod` reaches IAM before its row', async () => {
 			const w = await world()
-			// Registration: IAM knows shop@stage as `off`; Control registers shop at prod.
+			// IAM knows shop@stage as `off` and no shop@prod: `prod` starts protected, so a machine caller issues no key
+			// reading every environment of shop, before or after Control registers it there.
 			await w.knownToIam('shop@stage')
-			expect(await w.provisionAtControl(w.machine, 'shop')).toBe(200)
+			expect(await w.provisionAtControl(w.machine, 'shop')).toBe(403)
 			await w.register('shop', 'prod')
+			expect((await w.iamModes()).get('shop@prod')).toBe('person')
 			expect(await w.provisionAtControl(w.machine, 'shop')).toBe(403)
 
 			// `apps.environments.put` that creates one.
 			await w.knownToIam('blog@stage')
 			await w.register('blog', 'stage')
-			expect(await w.provisionAtControl(w.machine, 'blog')).toBe(200)
+			expect(await w.provisionAtControl(w.machine, 'blog')).toBe(403)
 			await w.putEnv('blog', 'prod')
+			expect((await w.iamModes()).get('blog@prod')).toBe('person')
 			expect(await w.provisionAtControl(w.machine, 'blog')).toBe(403)
 		})
 

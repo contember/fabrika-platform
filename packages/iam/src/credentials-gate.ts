@@ -2,7 +2,7 @@
 // environment (ADR-0083 §8). This is authorization in IAM's own use cases, not an enforcement decision: the proxy stays
 // the only one (ADR-0022).
 
-import { parseAppEnvironmentId } from '@fabrika/auth-core'
+import { appEnvironmentId, isAppEnvironmentPart, parseAppEnvironmentId } from '@fabrika/auth-core'
 import type { CredentialsMode } from '@fabrika/iam-contract'
 import { PROVISIONING_ADMIN_ID } from './auth'
 import type { Services } from './services'
@@ -25,6 +25,9 @@ type Target = { readonly kind: 'env'; readonly id: string } | { readonly kind: '
 
 const RANK: Readonly<Record<CredentialsMode, number>> = { off: 0, person: 1, refuse: 2 }
 
+/** The environment every application starts protected in (Control's `defaultProtected`), so it counts before it exists. */
+const STARTS_PROTECTED = 'prod'
+
 /**
  * What a machine caller does to what keys hold: issues a key, grants to a key (or edits its grant), or changes a role or
  * a named policy keys may hold. Each meets the mode the same way (ADR-0083 §8); only the refusal's wording differs.
@@ -35,7 +38,8 @@ export type KeyChange = 'issue' | 'grant' | 'role'
  * Why `issuer` may not make `change` reaching `reach`, or null when it may. A person and the provisioning key, the
  * operator's own credential that Control's workload, membership and connector keys and the bootstrap's first machine
  * caller are issued with, keep their rule. Every other caller meets the strictest mode among the environments the key
- * acts in; an environment IAM has no mode for, Control not having written one yet, reads as `person`.
+ * acts in, an application's `prod` among them; an environment IAM has no mode for, Control not having written one yet,
+ * reads as `person`.
  */
 export async function credentialsRefusal(
 	services: Services,
@@ -95,10 +99,16 @@ function targetOf(services: Services, grant: KeyReach): Target | null {
 	return grant.scope?.type === 'app' ? { kind: 'app', app: grant.scope.value } : { kind: 'all' }
 }
 
+/**
+ * The environments a target acts in. Each application among them counts its `prod` as well, existing or not: a key keeps
+ * acting in a `prod` created after it, which starts protected, and IAM reads one it holds no mode for as `person`.
+ */
 function environmentsOf(target: Target, environments: ReadonlySet<string>): string[] {
 	if (target.kind === 'env') return [target.id]
-	if (target.kind === 'all') return [...environments]
-	return [...environments].filter((id) => parseAppEnvironmentId(id)?.app === target.app)
+	const listed = [...environments].filter((id) => target.kind === 'all' || parseAppEnvironmentId(id)?.app === target.app)
+	const apps = target.kind === 'all' ? listed.flatMap((id) => parseAppEnvironmentId(id)?.app ?? []) : [target.app]
+	const prods = apps.filter(isAppEnvironmentPart).map((app) => appEnvironmentId(app, STARTS_PROTECTED))
+	return [...new Set([...listed, ...prods])]
 }
 
 function describe(target: Target): string {
