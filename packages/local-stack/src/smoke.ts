@@ -53,6 +53,7 @@ import {
 	notesServiceId,
 	parseJson,
 	poll,
+	prodNotesProject,
 	requestJson,
 	triggerByScopedWebhook,
 	waitForParkOrProvider,
@@ -191,6 +192,7 @@ const proveRestartReconciliation = async (
 	webhookSecret: string,
 	fixtures: LocalSourceManifest,
 ): Promise<{ runId: string; commitSha: string; checkpoint: ZeropsRunState }> => {
+	const notesProject = await prodNotesProject(machineKey)
 	console.info(`Pushing immutable Notes commit ${fixtures.application.commitSha}`)
 	const runId = await triggerByScopedWebhook(webhookSecret, fixtures.application.commitSha)
 	await approveIfParked(machineKey, runId)
@@ -232,7 +234,7 @@ const proveRestartReconciliation = async (
 	const version = submitted.appVersions.find(item => item.id === checkpoint.appVersionId)
 	if (
 		receipt?.deleted !== false || receipt.receipt === undefined
-		|| version?.status !== 'BUILDING' || version.serviceStackId !== notesServiceId(submitted) || version.name !== runId
+		|| version?.status !== 'BUILDING' || version.serviceStackId !== notesServiceId(submitted, notesProject) || version.name !== runId
 		|| version.uploadedDescriptorSha256 !== fixtures.application.descriptorSha256 || version.buildSetup !== NOTES_DEPLOY_SERVICE
 		|| submitted.processes.filter(item => item.appVersionId === checkpoint.appVersionId && item.actionName === 'stack.build').length !== 1
 	) {
@@ -264,7 +266,7 @@ const proveRestartReconciliation = async (
 		|| snapshot.processes.filter(item => item.actionName === 'stack.build').length
 			!== submitted.processes.filter(item => item.actionName === 'stack.build').length
 		|| !isDeepStrictEqual(snapshot.uploadGrants.find(item => item.appVersionId === checkpoint.appVersionId), receipt)
-		|| snapshot.services.find(item => item.id === notesServiceId(snapshot))?.activeAppVersionId !== checkpoint.appVersionId
+		|| snapshot.services.find(item => item.id === notesServiceId(snapshot, notesProject))?.activeAppVersionId !== checkpoint.appVersionId
 	) {
 		throw new Error('Recovery changed the submitted version, receipt, checkpoint, or build count')
 	}
@@ -318,7 +320,7 @@ const proveManagedOperationsEnvironment = async (
 	checkpoint: ZeropsRunState,
 ): Promise<void> => {
 	const snapshot = await emulatorSnapshot()
-	const serviceId = notesServiceId(snapshot)
+	const serviceId = notesServiceId(snapshot, await prodNotesProject(requireMachineKey()))
 	const records = snapshot.serviceEnv.filter(record => record.serviceStackId === serviceId)
 	// Value and sensitivity: a credential is written sensitive, everything else readable.
 	const expected = new Map<string, readonly [string, boolean]>([
@@ -399,7 +401,7 @@ const soleSecret = (snapshot: EmulatorSnapshot, serviceId: string, key: string, 
  */
 const proveWorkloadKeys = async (): Promise<void> => {
 	const snapshot = await emulatorSnapshot()
-	const serviceId = notesServiceId(snapshot)
+	const serviceId = notesServiceId(snapshot, await prodNotesProject(requireMachineKey()))
 	const keys = new Map<string, string>()
 	for (const variable of notesWorkloadKeys().keys()) {
 		const key = soleSecret(snapshot, serviceId, variable, `${variable} on the Notes service`)
