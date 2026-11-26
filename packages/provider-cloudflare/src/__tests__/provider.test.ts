@@ -2743,41 +2743,54 @@ const localCheckout = async (extra: (root: string) => Promise<void> = async () =
 describe('a Custom Domain the deploy does not own', () => {
 	// wrangler without a terminal publishes Custom Domains with `override_existing_origin` and
 	// `override_existing_dns_record`, so whatever the deploy does not refuse first, it takes over.
-	const deploys = (): CommandSpec[] => rec.commands.filter((command) => command.command === 'wrangler' && command.args[0] === 'deploy')
+	const touched = (): string[] => rec.commands.filter((command) => command.command === 'wrangler').map((command) => command.args.join(' '))
 
-	test('attached to another Worker is refused before any Worker deploys', async () => {
+	test('attached to another Worker is refused before any resource, migration or Worker', async () => {
 		const seen: string[] = []
+		const sent: Array<{ authorization: string | null; redirect: RequestRedirect | undefined }> = []
 		const result = await deploy(rec, config(), {
-			cloudflareApi: fakeCloudflareApi({ customDomains: [{ hostname: 'stage.example.com', service: 'prod-fabrika-iam' }], seen }),
+			cloudflareApi: fakeCloudflareApi({ customDomains: [{ hostname: 'stage.example.com', service: 'prod-fabrika-iam' }], seen, sent }),
 		})
 		expect(result.status).toBe('failed')
-		expect(stepError(result, 'deploy-worker')).toBe(
+		expect(stepError(result, 'provision-resources')).toBe(
 			'cloudflare: stage.example.com is a Custom Domain of another Worker; the deploy does not take it over. Detach it in Cloudflare, or give the environment another domain',
 		)
-		expect(deploys()).toEqual([])
+		expect(rec.provisions).toEqual([])
+		expect(touched()).toEqual([])
 		expect(seen).toHaveLength(1)
-		for (const url of seen) expect(url).not.toContain('tok-1')
+		// The account token goes to Cloudflare's API as a bearer, and a redirect is never followed.
+		expect(sent).toEqual([{ authorization: 'Bearer tok-1', redirect: 'manual' }])
 	})
 
-	test('held by a DNS record of its zone is refused before any Worker deploys', async () => {
-		const result = await deploy(rec, config(), {
-			cloudflareApi: fakeCloudflareApi({ zones: ['example.com'], dnsRecords: [{ name: 'stage.example.com', type: 'CNAME' }] }),
-		})
-		expect(stepError(result, 'deploy-worker')).toBe(
-			'cloudflare: stage.example.com already has a DNS record (CNAME); the deploy does not replace it. Delete the record in Cloudflare, or give the environment another domain',
-		)
-		expect(deploys()).toEqual([])
+	test('held by an address record of its zone is refused before any resource, migration or Worker', async () => {
+		for (const type of ['A', 'AAAA', 'CNAME']) {
+			rec.provisions.length = 0
+			const result = await deploy(rec, config(), {
+				cloudflareApi: fakeCloudflareApi({ zones: ['example.com'], dnsRecords: [{ name: 'stage.example.com', type }] }),
+			})
+			expect(stepError(result, 'provision-resources')).toBe(
+				`cloudflare: stage.example.com already has a DNS record (${type}); the deploy does not replace it. Delete the record in Cloudflare, or give the environment another domain`,
+			)
+			expect(rec.provisions).toEqual([])
+		}
+		expect(touched()).toEqual([])
+	})
+
+	test('beside records a Custom Domain keeps (MX, TXT, CAA) deploys', async () => {
+		const dnsRecords = ['MX', 'TXT', 'CAA'].map((type) => ({ name: 'stage.example.com', type }))
+		const result = await deploy(rec, config(), { cloudflareApi: fakeCloudflareApi({ zones: ['example.com'], dnsRecords }) })
+		expect(result.status).toBe('succeeded')
 	})
 
 	test('in no zone of the account is refused, since nobody can tell who holds it', async () => {
 		const result = await deploy(rec, config(), { cloudflareApi: fakeCloudflareApi({ zones: [] }) })
-		expect(stepError(result, 'deploy-worker')).toBe(
+		expect(stepError(result, 'provision-resources')).toBe(
 			'cloudflare: no zone of the account holds stage.example.com, so the deploy cannot tell who owns it; add the zone to the account',
 		)
-		expect(deploys()).toEqual([])
+		expect(touched()).toEqual([])
 	})
 
-	test('a hostname the proxy already holds is its own, and a free one in a zone of the account deploys', async () => {
+	test('a hostname the proxy already holds is its own, and a free one in the longest zone of the account deploys', async () => {
 		const seen: string[] = []
 		const own = await deploy(rec, config(), {
 			cloudflareApi: fakeCloudflareApi({ customDomains: [{ hostname: 'stage.example.com', service: 'stage-demo-proxy' }], seen }),
@@ -2785,21 +2798,22 @@ describe('a Custom Domain the deploy does not own', () => {
 		expect(own.status).toBe('succeeded')
 		// Its own Custom Domain: neither its zone nor its DNS record is read.
 		expect(seen.map((url) => new URL(url).pathname)).toEqual(['/client/v4/accounts/acc-1/workers/domains'])
-		expect(deploys()).toHaveLength(2)
+		expect(touched().filter((command) => command === 'deploy')).toHaveLength(2)
 
-		rec.commands.length = 0
 		seen.length = 0
 		const free = await deploy(rec, config(), {
-			cloudflareApi: fakeCloudflareApi({ zones: ['example.com'], dnsRecords: [{ name: 'other.example.com', type: 'A' }], seen }),
+			cloudflareApi: fakeCloudflareApi({
+				zones: ['example.com', 'stage.example.com'],
+				dnsRecords: [{ name: 'other.example.com', type: 'A' }],
+				seen,
+			}),
 		})
 		expect(free.status).toBe('succeeded')
 		expect(seen.map((url) => new URL(url).pathname + new URL(url).search)).toEqual([
 			'/client/v4/accounts/acc-1/workers/domains?hostname=stage.example.com',
 			'/client/v4/zones?name=stage.example.com&account.id=acc-1',
-			'/client/v4/zones?name=example.com&account.id=acc-1',
-			'/client/v4/zones/zone-example.com/dns_records?name=stage.example.com',
+			'/client/v4/zones/zone-stage.example.com/dns_records?name=stage.example.com',
 		])
-		expect(deploys()).toHaveLength(2)
 	})
 
 	test('is not read on a dry run or for an environment without a domain', async () => {

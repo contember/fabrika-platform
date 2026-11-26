@@ -1,11 +1,7 @@
-// A deploy never takes over a Custom Domain or a DNS record it does not own. wrangler, run without a terminal as the
-// runner runs it, publishes a Worker's Custom Domains with `override_existing_origin` and `override_existing_dns_record`
-// set, which moves a hostname another Worker serves, or replaces a DNS record, without asking, and it has no flag to turn
-// that off. So before a Worker that routes a Custom Domain deploys, the deployer asks Cloudflare who holds the hostname,
-// and refuses one held by another Worker or by a DNS record. The account token goes only to Cloudflare's API, with no
-// redirect followed, and no error carries it.
+// wrangler without a terminal publishes Custom Domains with `override_existing_origin` and `override_existing_dns_record`
+// and cannot be told not to, so a deploy first asks Cloudflare who holds its hostname and refuses another Worker's
+// Custom Domain or a DNS record wrangler would replace. The account token goes to Cloudflare's API only, never redirected.
 
-import type { GeneratedConfig } from 'oblaka-iac'
 import { z } from 'zod'
 import type { CloudflareApiFetch } from './worker-secrets'
 
@@ -27,20 +23,12 @@ const customDomainsSchema = z.array(z.object({ hostname: z.string(), service: z.
 const zonesSchema = z.array(z.object({ id: z.string(), name: z.string() }).passthrough())
 const dnsRecordsSchema = z.array(z.object({ name: z.string(), type: z.string() }).passthrough())
 
-/** The hostnames a generated config publishes as Custom Domains (`routes` entries with `custom_domain: true`), lowercase. */
-export function customDomainHosts(config: GeneratedConfig['config']): string[] {
-	const routes: unknown = config.routes
-	if (!Array.isArray(routes)) return []
-	return routes.flatMap((route: unknown) => {
-		if (typeof route !== 'object' || route === null) return []
-		const pattern: unknown = Reflect.get(route, 'pattern')
-		return Reflect.get(route, 'custom_domain') === true && typeof pattern === 'string' ? [pattern.toLowerCase()] : []
-	})
-}
+/** The record types a Custom Domain replaces at its hostname; MX, TXT, CAA and the rest stay beside it. */
+const ADDRESS_RECORD_TYPES: ReadonlySet<string> = new Set(['A', 'AAAA', 'CNAME'])
 
 /**
  * Refuse each hostname that the Worker `script` would take over: a Custom Domain of another Worker, or, where no Custom
- * Domain holds it yet, a DNS record of its zone. A hostname the Worker already holds as a Custom Domain is its own, and
+ * Domain holds it yet, an A, AAAA or CNAME record of its zone. A hostname the Worker already holds as a Custom Domain is its own, and
  * its DNS record is the one Cloudflare manages for it.
  */
 export async function assertCustomDomainsOwned(api: CloudflareApi, script: string, hostnames: readonly string[]): Promise<void> {
@@ -66,7 +54,7 @@ export async function assertCustomDomainsOwned(api: CloudflareApi, script: strin
 			dnsRecordsSchema,
 			await cloudflareResult(api, dnsRecords, `/zones/${encodeURIComponent(zone)}/dns_records`, { name: hostname }),
 			dnsRecords,
-		).filter((record) => record.name.toLowerCase() === hostname)
+		).filter((record) => record.name.toLowerCase() === hostname && ADDRESS_RECORD_TYPES.has(record.type.toUpperCase()))
 		const first = records[0]
 		if (first !== undefined) {
 			throw new Error(

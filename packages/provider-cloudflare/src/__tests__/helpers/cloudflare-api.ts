@@ -9,14 +9,17 @@ export interface FakeCloudflareAccount {
 	readonly dnsRecords?: ReadonlyArray<{ readonly name: string; readonly type: string }>
 	/** Every URL asked for, in order. */
 	readonly seen?: string[]
+	/** Every request's `authorization` header and redirect mode, in order. */
+	readonly sent?: Array<{ readonly authorization: string | null; readonly redirect: RequestRedirect | undefined }>
 }
 
 const answer = (result: unknown): Response => Response.json({ success: true, errors: [], result })
 
 /** Cloudflare's API over a fake account, answering the reads the Custom Domain check makes. */
 export function fakeCloudflareApi(account: FakeCloudflareAccount = {}): CloudflareApiFetch {
-	return (url) => {
+	return (url, init) => {
 		account.seen?.push(url)
+		account.sent?.push({ authorization: new Headers(init.headers).get('authorization'), redirect: init.redirect })
 		const parsed = new URL(url)
 		const path = parsed.pathname.replace('/client/v4', '')
 		if (path.endsWith('/workers/domains')) {
