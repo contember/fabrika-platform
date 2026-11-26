@@ -76,6 +76,16 @@ export {
 } from './proxy-build'
 export { awsNamespaceMemberHosts, awsNamespaceProxyManifest, awsProxyUpstream } from './proxy-manifest'
 export {
+	AWS_PROXY_PENDING,
+	AWS_PROXY_POLL_MS,
+	AWS_PROXY_WAIT_MS,
+	type AwsProxyClients,
+	type AwsProxyRepublishContext,
+	type AwsProxyRuntime,
+	republishAwsProxy,
+	withAwsProxyRepublish,
+} from './proxy-republish'
+export {
 	AWS_PROXY_PORT,
 	type AwsProxyIam,
 	awsProxySecrets,

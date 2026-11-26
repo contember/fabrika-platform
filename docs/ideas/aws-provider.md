@@ -470,9 +470,16 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     then its `env/` parameters and task definition family, then the stack; the namespace's instructions say so. The
     proxy's group still allows all egress; it is scoped with the balancer's rules (TCP 443 to AWS and IAM, the
     applications' port).
+    **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
+    members, one resumable step per pass from what the target records: an image of the current manifest sets the
+    service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
+    attempt. `wait: 'started'` answers unsettled once a build is in flight; `'active'` polls it, bounded by
+    `AWS_PROXY_WAIT_MS`. `reconcile`, after the stack, carries on proxy work in flight the same way and fails retryably
+    (`awsProxyPending`) when the wait runs out; `provision` stays the stack's. Control's composition reads the proxies'
+    IAM (`FABRIKA_AWS_PROXY_IAM_URL`, `FABRIKA_AWS_PROXY_IAM_KEY`, refused when malformed) and uploads the pinned
+    platform commit with the manifest appended.
     Not yet: the proxy service's rollout and its verdict, deleting the secrets of members no longer routed (once a rollout
-    succeeded, because a rollback reads an older revision's), Control's configuration of the IAM issuer and key, relaying
-    the build's log to an operator, and `republish`, which will start and follow the build and set the service; then
+    succeeded, because a rollback reads an older revision's), relaying the build's log to an operator; then
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
     application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads
@@ -553,7 +560,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     maintenance and migration entries), and `entrypoint-isolation.test.ts` extended to it. It reads
     `AWS_CONTAINER_CREDENTIALS_RELATIVE_URI` (set by ECS), `FABRIKA_AWS_BASE_IMAGE` (the pinned Bun image) and the
     four installation coordinates of step 9, the network of step 10 and the proxy source a namespace is pinned to
-    (`FABRIKA_AWS_PROXY_REPOSITORY`, `FABRIKA_AWS_PROXY_COMMIT_SHA`), and
+    (`FABRIKA_AWS_PROXY_REPOSITORY`, `FABRIKA_AWS_PROXY_COMMIT_SHA`), the proxies' IAM (`FABRIKA_AWS_PROXY_IAM_URL`,
+    `FABRIKA_AWS_PROXY_IAM_KEY`), and
     reads repositories through the unbound GitHub source. Nothing runs it until step 11 defines Control's task.
 13. **Tests**: the conformance suite over a fake AWS, renderer tests, and a live suite gated on
     `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack.

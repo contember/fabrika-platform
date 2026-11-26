@@ -16,6 +16,8 @@
 // - `FABRIKA_AWS_PROXY_REPOSITORY` (an HTTPS GitHub URL) and `FABRIKA_AWS_PROXY_COMMIT_SHA` (a full commit): the
 //   installation's release of the public platform repository. A namespace being planned is pinned to it, and keeps
 //   its pin through an upgrade; no namespace may be pinned to another repository (ADR-0045).
+// - `FABRIKA_AWS_PROXY_IAM_URL` and `FABRIKA_AWS_PROXY_IAM_KEY`: the IAM every namespace proxy asks, and the key IAM knows
+//   as the proxies'. The key is a credential: it reaches each proxy through Parameter Store alone.
 
 import { containerCredentials } from '@fabrika/platform-node'
 import { type AwsSourcePort, awsSourceRepository, createAwsControlProvider } from '@fabrika/provider-aws'
@@ -78,6 +80,11 @@ export function awsControlProvider(source: Record<string, string | undefined>, s
 		proxySource: {
 			repository: awsSourceRepository(required(source, 'FABRIKA_AWS_PROXY_REPOSITORY')),
 			commitSha: required(source, 'FABRIKA_AWS_PROXY_COMMIT_SHA').trim(),
+		},
+		// The IAM every namespace proxy asks, and the key IAM knows as the proxies' (its `FABRIKA_IAM_PROXY_KEY`).
+		proxyIam: {
+			issuer: required(source, 'FABRIKA_AWS_PROXY_IAM_URL'),
+			key: required(source, 'FABRIKA_AWS_PROXY_IAM_KEY'),
 		},
 		source: sourcePort,
 	})
