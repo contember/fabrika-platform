@@ -17,7 +17,7 @@ const clamscan = process.env[CLAMSCAN_VAR] ?? ''
 if (clamscan === '') {
 	console.warn(
 		`clamscan.test.ts skipped its real-ClamAV half: set ${CLAMSCAN_VAR} to a clamscan binary, or to a wrapper that runs`
-			+ ' `docker run --rm -v "$dir:$dir:ro" --entrypoint clamscan clamav/clamav:1.4 "$@"` with $dir the directory of its last argument',
+			+ ' `docker run --rm --network none -v "$dir:$dir:ro" --entrypoint clamscan clamav/clamav:1.4 "$@"` with $dir the directory of its last argument',
 	)
 }
 

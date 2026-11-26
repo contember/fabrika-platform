@@ -1,8 +1,8 @@
 // Regenerates `src/pg-catalog-names.ts` as the union of every supported Postgres major: the first argument is the output
 // path, each further one the URL of a server of one major. Run it from `packages/platform-node` with one throwaway
 // container per major, then remove them; add a major here and in CI's `test` matrix together:
-//   docker run --rm -d --name pgcat-17 -p 127.0.0.1:55417:5432 -e POSTGRES_PASSWORD=postgres postgres:17
-//   docker run --rm -d --name pgcat-18 -p 127.0.0.1:55418:5432 -e POSTGRES_PASSWORD=postgres postgres:18
+//   docker run --rm -d --name pgcat-17 --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55417 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
+//   docker run --rm -d --name pgcat-18 --network host --tmpfs /var/lib/postgresql -e PGPORT=55418 -e POSTGRES_PASSWORD=postgres postgres:18 -c listen_addresses=127.0.0.1
 //   bun src/__tests__/helpers/generate-pg-catalog-names.ts src/pg-catalog-names.ts \
 //     postgres://postgres:postgres@127.0.0.1:55417/postgres postgres://postgres:postgres@127.0.0.1:55418/postgres
 //   docker rm -f pgcat-17 pgcat-18
