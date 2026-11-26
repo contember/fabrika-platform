@@ -370,7 +370,10 @@ rule on all six.
 Two issuances keep their rule, both made with the provisioning key, the operator's own credential, which the check
 exempts on every path: Control's own workload, membership and connector keys, which every deploy issues, and the
 bootstrap `POST /admin/api-keys`, which makes the first machine caller before any console or key exists. A
-non-provisioning key on that REST path meets the mode like any other caller.
+non-provisioning key on that REST path meets the mode like any other caller. The deploy exemption gives workload keys to
+whoever may deploy, so an environment's `deploy-request` should be at least as strict as its `credentials`, and a
+connector key lands at the owner environment from a consumer's deploy, bounded by the export the owner approved
+([backlog 305](../backlog/305-deploy-request-looser-than-credentials.md)).
 
 `apiKeys.provision` takes an expiry at most 30 days ahead, as every other issuance does; a later one or none is refused
 (400), not clamped, so the caller sees what it gets. The provisioning key is exempt: the local stack's machine key is
