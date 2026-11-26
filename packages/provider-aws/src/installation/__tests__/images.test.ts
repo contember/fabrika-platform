@@ -18,6 +18,12 @@ import {
 	IMAGES_VARIABLES,
 } from '../images'
 
+/** Whether IAM's pattern `pattern` (`*` any run, `?` one character) matches `value`. */
+function matches(pattern: string, value: string): boolean {
+	const source = [...pattern].map((char) => (char === '*' ? '.*' : char === '?' ? '.' : char.replace(/[.\\+^$|()[\]{}]/g, '\\$&'))).join('')
+	return new RegExp(`^${source}$`).test(value)
+}
+
 const COMMIT = '0123456789abcdef0123456789abcdef01234567'
 const MANIFEST = 'a'.repeat(64)
 const base = {
@@ -50,24 +56,55 @@ describe("the platform's images", () => {
 		expect(grants).not.toContain('fabrika/apps')
 	})
 
-	test("Control's role reaches none of it: not the repositories, the project, the role nor the manifests", () => {
-		const control = JSON.stringify(
-			awsControlPolicies({
-				accountId: '123456789012',
-				region: 'eu-central-1',
-				appsListenerArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210',
-				vpcId: 'vpc-0123456789abcdef0',
-				taskSubnetIds: ['subnet-0123456789abcdef0'],
-				installationHosts: ['iam.example.com'],
-			}).flatMap((managed) => managed.statements.filter((statement) => JSON.stringify(statement).includes('"Allow"'))),
+	test("Control's role reaches none of it: no grant that writes or starts matches the repositories, the project, the role or the manifests", () => {
+		const statements: readonly { Effect: string; Action: string | readonly string[]; Resource: string | readonly string[] }[] = JSON.parse(
+			JSON.stringify(
+				awsControlPolicies({
+					accountId: '123456789012',
+					region: 'eu-central-1',
+					appsListenerArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210',
+					vpcId: 'vpc-0123456789abcdef0',
+					taskSubnetIds: ['subnet-0123456789abcdef0'],
+					installationHosts: ['iam.example.com'],
+				}).flatMap((managed) => managed.statements),
+			),
 		)
-		for (const name of ['fabrika/platform', AWS_IMAGES_PROJECT, '/platform/']) expect(control).not.toContain(name)
+		const targets: readonly [string, readonly string[]][] = [
+			[
+				'arn:aws:ecr:eu-central-1:123456789012:repository/fabrika/platform/services',
+				['ecr:PutImage', 'ecr:InitiateLayerUpload', 'ecr:BatchGetImage', 'ecr:DeleteRepository', 'ecr:PutLifecyclePolicy'],
+			],
+			['arn:aws:ecr:eu-central-1:123456789012:repository/fabrika/platform/proxy', ['ecr:PutImage', 'ecr:InitiateLayerUpload', 'ecr:BatchDeleteImage']],
+			[
+				`arn:aws:codebuild:eu-central-1:123456789012:project/${AWS_IMAGES_PROJECT}`,
+				['codebuild:StartBuild', 'codebuild:UpdateProject', 'codebuild:DeleteProject'],
+			],
+			['arn:aws:iam::123456789012:role/fabrika/platform/fabrika-platform-images', ['iam:PassRole', 'iam:PutRolePolicy', 'iam:UpdateAssumeRolePolicy']],
+			['arn:aws:s3:::fabrika-sources-123456789012/platform/x/y/proxy.manifest.json', ['s3:PutObject', 's3:GetObject']],
+		]
+		const list = (value: string | readonly string[]): readonly string[] => (typeof value === 'string' ? [value] : value)
+		for (const [resource, actions] of targets) {
+			for (const action of actions) {
+				const granted = statements.some((statement) =>
+					statement.Effect === 'Allow'
+					&& list(statement.Action).some((pattern) => matches(pattern, action))
+					&& list(statement.Resource).some((pattern) => matches(pattern, resource))
+				)
+				expect({ action, resource, granted }).toEqual({ action, resource, granted: false })
+			}
+		}
+		// The matcher reads IAM's wildcards: a grant on `repository/fabrika/*` would reach the platform's repositories.
+		expect(matches('arn:aws:ecr:*:*:repository/fabrika/*', 'arn:aws:ecr:eu-central-1:123456789012:repository/fabrika/platform/proxy')).toBe(true)
 	})
 
 	test('the buildspec fetches the commit by its full id and checks it before building; every value is a variable', () => {
 		const spec = AWS_IMAGES_BUILDSPEC
 		expect(spec).toContain(`fetch --quiet --depth 1 "https://github.com/$${IMAGES_VARIABLES.repository}.git" "$${IMAGES_VARIABLES.commit}"`)
 		expect(spec.indexOf('rev-parse HEAD')).toBeLessThan(spec.indexOf('docker build'))
+		// The proxy's manifest is checked against the digest its tag names, after it is fetched and before any build.
+		const check = spec.indexOf(`echo "$${IMAGES_VARIABLES.manifestSha256}  /tmp/fabrika-source/proxy.manifest.json" | sha256sum -c -`)
+		expect(check).toBeGreaterThan(spec.indexOf('aws s3 cp'))
+		expect(check).toBeLessThan(spec.indexOf('docker build'))
 		expect(spec).toContain('packages/provider-aws/platform.Dockerfile')
 		expect(spec).toContain(`--build-arg ${IMAGES_VARIABLES.trustedProxies} --file /tmp/fabrika-source/packages/proxy/Dockerfile`)
 		for (const value of [COMMIT, '123456789012', 'contember']) expect(spec).not.toContain(value)
@@ -94,6 +131,7 @@ describe("the platform's images", () => {
 			FABRIKA_PLATFORM_IMAGE_KIND: { value: 'proxy' },
 			FABRIKA_IMAGE: { value: `123456789012.dkr.ecr.eu-central-1.amazonaws.com/fabrika/platform/proxy:${awsPlatformImageTag(COMMIT, image)}` },
 			FABRIKA_PROXY_MANIFEST_OBJECT: { value: `fabrika-sources-123456789012/${awsPlatformManifestKey(COMMIT, MANIFEST)}` },
+			FABRIKA_PROXY_MANIFEST_SHA256: { value: MANIFEST },
 			FABRIKA_PROXY_TRUSTED_PROXIES: { value: '10.80.240.0/24,10.80.241.0/24' },
 		})
 		expect(awsPlatformManifestKey(COMMIT, MANIFEST).startsWith('platform/')).toBe(true)

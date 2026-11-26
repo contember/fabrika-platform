@@ -9,10 +9,17 @@
 //   applications' VPC's. Tagged by the commit
 //   and the manifest's digest, so new hosts build a new image and an old one is never overwritten.
 //
-// The source is the public repository fetched by the commit's full id inside the build, and checked to be that commit
-// before anything is built: no archive passes through another hand. The proxy's manifest is an object the operator's
-// command writes under `platform/` of the sources bucket, which only the platform's build reads (Control's role writes
-// `sources/` alone). Everything here lives under `fabrika/platform/` and `fabrika-platform-`, out of Control's reach.
+// The source is fetched by the commit's full id inside the build, and checked to be that commit before anything is
+// built: no archive passes through another hand. The commit id is the one anchor. GitHub serves any commit of a
+// repository's fork network by id from the parent's URL, a commit pushed only to a fork among them, so the repository
+// named anchors nothing and the check proves the object is that commit, not that it is a release. So the command that
+// starts these builds (the commands piece) takes the commit from the installation's own pinned release, resolved in
+// the operator's checkout, never from anything Control can write; it may also check that the release's tag resolves
+// to it. The proxy's manifest is an object the operator's command writes under `platform/` of the sources bucket, which
+// only the platform's build reads (Control's role writes `sources/` alone), and the build checks it against the digest
+// its tag names before building. Each image's pushed digest is what a task definition pins (the services piece), not
+// its tag: a tag is immutable only while its image exists, and the lifecycle policy expires the oldest. Everything here
+// lives under `fabrika/platform/` and `fabrika-platform-`, out of Control's reach.
 //
 // UNVERIFIED: the resources' properties, that the x86 standard image carries git, the AWS CLI and a Docker with
 // BuildKit, and that GitHub serves a commit fetched by its full id follow the CodeBuild and GitHub documentation; none
@@ -51,8 +58,15 @@ export const IMAGES_VARIABLES = {
 	registry: 'FABRIKA_REGISTRY',
 	registryRegion: 'FABRIKA_REGISTRY_REGION',
 	manifestObject: 'FABRIKA_PROXY_MANIFEST_OBJECT',
+	manifestSha256: 'FABRIKA_PROXY_MANIFEST_SHA256',
 	trustedProxies: 'FABRIKA_PROXY_TRUSTED_PROXIES',
 } satisfies Readonly<Record<string, string>>
+
+/**
+ * The services' recipe in the commit. Its own ignore file (`platform.Dockerfile.dockerignore`) decides the context, so
+ * the console's sources, which the root's `.dockerignore` leaves out, are in it.
+ */
+export const AWS_SERVICES_DOCKERFILE = 'packages/provider-aws/platform.Dockerfile'
 
 const v = (name: string): string => `"$${name}"`
 const SOURCE = '/tmp/fabrika-source'
@@ -79,12 +93,16 @@ export const AWS_IMAGES_BUILDSPEC = [
 	`      - if [ ${
 		v(IMAGES_VARIABLES.kind)
 	} = proxy ]; then aws s3 cp --only-show-errors "s3://$${IMAGES_VARIABLES.manifestObject}" ${SOURCE}/proxy.manifest.json; fi`,
+	// The manifest is the platform proxy's whole endpoint table: the digest its tag and key name is checked, not assumed.
+	`      - if [ ${
+		v(IMAGES_VARIABLES.kind)
+	} = proxy ]; then echo "$${IMAGES_VARIABLES.manifestSha256}  ${SOURCE}/proxy.manifest.json" | sha256sum -c -; fi`,
 	'  build:',
 	'    commands:',
 	'      - set -euo pipefail',
 	`      - if [ ${
 		v(IMAGES_VARIABLES.kind)
-	} = services ]; then DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --file ${SOURCE}/packages/provider-aws/platform.Dockerfile --tag ${
+	} = services ]; then DOCKER_BUILDKIT=1 docker build --platform linux/amd64 --file ${SOURCE}/${AWS_SERVICES_DOCKERFILE} --tag ${
 		v(IMAGES_VARIABLES.image)
 	} ${SOURCE}; fi`,
 	`      - if [ ${
@@ -241,6 +259,7 @@ export function awsImagesBuildStart(input: AwsImagesBuildInput): CodeBuildStart 
 			[IMAGES_VARIABLES.registryRegion]: { value: region },
 			...(image.kind === 'services' ? {} : {
 				[IMAGES_VARIABLES.manifestObject]: { value: `${awsSourcesBucket(accountId)}/${awsPlatformManifestKey(input.commitSha, image.manifestSha256)}` },
+				[IMAGES_VARIABLES.manifestSha256]: { value: image.manifestSha256 },
 				[IMAGES_VARIABLES.trustedProxies]: { value: image.trustedProxies },
 			}),
 		},

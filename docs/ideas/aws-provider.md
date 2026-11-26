@@ -636,13 +636,18 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        applications' VPC (a security group VPC association would let a task there carry it, through the task runner
        too). Their images first (built, `installation/images.ts`): no release publishes an image, so the
        operator's account builds them, as Zerops builds the platform from source. One CodeBuild project under the
-       platform's names fetches the release commit by its full id from the public repository, checks it is that
-       commit, and builds either the services' image (`packages/provider-aws/platform.Dockerfile`: IAM, Control with
-       the console, Operations, each started by its task definition's command; tagged by the commit) or the platform
-       proxy's (`packages/proxy/Dockerfile` with the platform's manifest, which the operator's command writes under
-       `platform/` of the sources bucket, and the platform VPC's balancer subnets as its trusted ranges; tagged by the
-       commit and the manifest's digest). Both on x86, in immutable repositories under `fabrika/platform/`, out of
-       Control's reach. Then the services themselves.
+       platform's names fetches the release commit by its full id, checks it is that commit, and builds either the
+       services' image (`packages/provider-aws/platform.Dockerfile`, with an ignore file of its own that lets the
+       console's sources in: IAM, Control with the console, Operations, each started by its task definition's command;
+       tagged by the commit; CI's `platform-image` job builds it) or the platform proxy's (`packages/proxy/Dockerfile`
+       with the platform's manifest, which the operator's command writes under `platform/` of the sources bucket and
+       the build checks against its digest, and the platform VPC's balancer subnets as its trusted ranges; tagged by
+       the commit and the manifest's digest). Both on x86, in immutable repositories under `fabrika/platform/`, out of
+       Control's reach. The commit id is the one anchor: GitHub serves any commit of the repository's fork network by
+       id, so the repository named proves nothing, and the command takes the commit from the installation's own pinned
+       release in the operator's checkout, never from anything Control can write (perhaps also checking that the
+       release's tag resolves to it). Then the services themselves, their task definitions pinning each image by the
+       digest it was pushed under, not by its tag, which the lifecycle policy can free again.
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 

@@ -203,6 +203,29 @@ jobs:
       - name: Build and start the proxy image
         run: bun run --filter @fabrika/provider-aws proxy-image:check
 
+  platform-image:
+    name: Build the AWS platform services' image
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version-file: .bun-version
+
+      - uses: actions/cache@v6
+        with:
+          path: ~/.bun/install/cache
+          key: bun-install-${{ runner.os }}-${{ hashFiles('.bun-version', 'bun.lock') }}
+          restore-keys: bun-install-${{ runner.os }}-
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build the platform services' image and check what it holds
+        run: bun run --filter @fabrika/provider-aws platform-image:check
+
   release-artifacts:
     name: Verify release artifacts
     runs-on: ubuntu-latest
