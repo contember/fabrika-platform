@@ -76,9 +76,11 @@ this one import.
   `<env>-<app>` (stable across deploys; the object's alarm runs the jobs); otherwise, for a local deploy or a 0.9.0
   prerelease before the alarm, `* * * * *`.
   Without a job or a file kind it is `[]`, which clears an older tick (wrangler leaves schedules alone when `triggers`
-  is absent). The names are
-  `@fabrika/app/build`'s. `assertNoFrameworkVariables` refuses an authored binding of either name and authored
-  `triggers` before anything is generated; `assertApplicationRuntime` (`src/bounds.ts`) refuses any other object binding of that name or
+  is absent). From `recordsMigrationBookmark` it also binds the Worker's version metadata as `FABRIKA_VERSION`, which
+  names the version in the object's migration record (ADR-0069 §3). The names are
+  `@fabrika/app/build`'s. `assertNoFrameworkVariables` refuses an authored binding of any of those names, authored
+  version metadata under any name, and authored `triggers` before anything is generated; `assertVersionMetadata`
+  (`src/bounds.ts`) refuses a generated `version_metadata` other than the platform's, and any on an older release; `assertApplicationRuntime` (`src/bounds.ts`) refuses any other object binding of that name or
   class, a `script_name` on it, a migration history that does not open with that `v0001` or names the class again
   (a committed `wrangler.jsonc` with a history of its own), another `FABRIKA_FILES` bucket, and triggers the platform
   did not write.
@@ -95,6 +97,11 @@ this one import.
   the minor gates hold, every `releaseFrom` gate fails closed. An older Control still sends `checker` as the job's
   `framework`, so its runs keep that error until Control is upgraded; an older runner reads the pin as it read
   `checker`. `dataOperations` on the control provider answers `servesOps && servesDataOperations`.
+  `recordsMigrationBookmark` holds from `MIGRATION_BOOKMARK_SINCE` (`0.9.0-dev.49`, in the import-free
+  `src/migration-bookmark-gate.ts` the release script reads), the first release whose object records a bookmark and
+  migrates in one transaction; `migrationBookmark` on the control provider answers
+  `servesOps && recordsMigrationBookmark`, and Control then migrates without a read-only window (ADR-0069 §3).
+  `release:validate` refuses a release at or above that gate whose framework source lacks that boot.
 - **From `servesOps` the platform composes Control's ops channel** (ADR-0069, `src/provider.ts`): `platformProxied`
   builds the proxy's table with `contractProxyTable(…, { ops: true })`, which adds the canonical ops row, and
   `withApplicationRuntime` writes `FABRIKA_APPLICATION_OBJECT` and `FABRIKA_APPLICATION_OBJECTS` as plain vars from the

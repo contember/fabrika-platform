@@ -1,5 +1,5 @@
 import type { RpcProcedureContract } from '@fabrika/app'
-import type { ExportDescription, OpsContentView, OpsView } from '@fabrika/auth-core'
+import type { ExportDescription, OpsContentView, OpsMigrationFailureReason, OpsView } from '@fabrika/auth-core'
 import { z } from 'zod'
 import type {
 	ApprovalRequestDto,
@@ -361,7 +361,9 @@ export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery
  * operation from its recorded step, and `open` publishes the generation that opens the object. A side restore (ADR-0070
  * §9) also `list`s its clone with a deploy, `import`s the backup into it, `promote`s it (the clone `open`, the original
  * `inspect`), `point`s ordinary traffic at it with a deploy, waits for it to `serve`, `rewind`s the original to the
- * target time and `check`s the original's schema; `revert` points traffic back at the original with a deploy.
+ * target time and `check`s the original's schema; `revert` points traffic back at the original with a deploy. A
+ * migration without a read-only window (`recordsBookmark`) runs `deploy` and `migrate`, and on a failure `revert` (the
+ * rollback deploy), `check` (its `ok`) or `restrict` (`closed`, for an operator).
  */
 export type DataOperationStep =
 	| 'reconcile'
@@ -414,6 +416,17 @@ export interface DataOperationDto {
 	readonly resolution: DataOperationResolution | null
 	/** A `migrate` operation's deploy run; `null` for every other kind. */
 	readonly runId: string | null
+	/**
+	 * A `migrate` operation whose candidate records the migration bookmark: it restricts nothing and takes no backup, and
+	 * recovers a failed migration with a rollback deploy (ADR-0069 §3). `false` for the read-only phase and every other kind.
+	 */
+	readonly recordsBookmark: boolean
+	/** Why the new version of a bookmark migration answered `migration_failed`; `null` otherwise. */
+	readonly migrationFailure: OpsMigrationFailureReason | null
+	/** A bookmark migration's rollback deploy of the last succeeded commit; `null` until it is named. */
+	readonly revertRunId: string | null
+	/** The failed version of a bookmark migration answered `ok` while its rollback deployed, so the operation closed. */
+	readonly candidateRecovered: boolean
 }
 
 export const DATA_OPERATION_MAX_PAGE_SIZE = 100

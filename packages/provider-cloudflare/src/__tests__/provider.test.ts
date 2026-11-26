@@ -17,7 +17,7 @@ import { existsSync, symlinkSync } from 'node:fs'
 import { mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { D1Database, DurableObject, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, Worker } from 'oblaka-iac'
+import { D1Database, DurableObject, type GeneratedConfig, KVNamespace, Queue, R2Bucket, ServiceReference, VersionMetadata, Worker } from 'oblaka-iac'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { CloudflareAppConfig, CloudflareCollaborators, CommandResult, CommandRunner, CommandSpec, ProvisionInput } from '..'
 import {
@@ -37,6 +37,7 @@ import {
 } from '..'
 import { SCHEMA_CHECK_CONFIG_SINCE } from '../contract-support'
 import { deployOrder } from '../deploy-order'
+import { MIGRATION_BOOKMARK_SINCE } from '../migration-bookmark-gate'
 import { changedNothing } from '../plan'
 import type { PlatformIamTarget } from '../provider'
 import {
@@ -2008,6 +2009,43 @@ describe('the cron trigger of a release that serves alarms (servesAlarms)', () =
 				}),
 		})
 		await expect(deploy(rec, local, { checkoutContract: notesArtifact })).rejects.toThrow('sets `triggers` the platform did not write')
+		expect(rec.provisions).toEqual([])
+	})
+})
+
+describe('the version metadata of a release that records a migration bookmark (recordsMigrationBookmark, ADR-0069 §3)', () => {
+	const binds = (bindings: Record<string, Bindable>): CloudflareAppConfig =>
+		config({ resources: () => new Worker({ dir: '.', ...PRIVATE, name: 'demo', compatibility_flags: [], bindings, main: ENTRY }) })
+
+	test('a release from the gate binds its version metadata as `FABRIKA_VERSION`', async () => {
+		for (const framework of [MIGRATION_BOOKMARK_SINCE, '0.9.0', '0.9.3']) {
+			await deploy(rec, config(), { contract: notesArtifact, framework })
+			expect((await generatedConfig('stage-demo')).version_metadata).toEqual({ binding: 'FABRIKA_VERSION' })
+			rec.provisions.shift()
+		}
+	})
+
+	test('a release before the gate, a local deploy and an older pin bind none (ADR-0062)', async () => {
+		for (const framework of [...PUBLISHED_PRERELEASES, '0.9.0-dev.5', '0.9.0-dev.48', '0.8.1', null]) {
+			await deploy(rec, config(), { contract: notesArtifact, framework })
+			expect((await generatedConfig('stage-demo')).version_metadata).toBeUndefined()
+			rec.provisions.shift()
+		}
+		await deploy(rec, config({ schema: CONTRACT_SCHEMA }), { checkoutContract: notesArtifact })
+		expect((await generatedConfig('stage-demo')).version_metadata).toBeUndefined()
+	})
+
+	test('an application binds no version metadata of its own, on any release', async () => {
+		await expect(deploy(rec, binds({ FABRIKA_VERSION: new VersionMetadata() }), { contract: notesArtifact })).rejects.toThrow(
+			'application variable `FABRIKA_VERSION` is managed by Fabrika',
+		)
+		await expect(deploy(rec, binds({ VERSION: new VersionMetadata() }), { contract: notesArtifact })).rejects.toThrow(
+			'binds version metadata as `VERSION`; only the platform binds it',
+		)
+		for (const framework of ['0.9.0-dev.48', null]) {
+			await expect(deploy(rec, binds({ X: emitting({ version_metadata: { binding: 'FABRIKA_VERSION' } }) }), { contract: notesArtifact, framework }))
+				.rejects.toThrow('binds version metadata, which only the platform binds')
+		}
 		expect(rec.provisions).toEqual([])
 	})
 })

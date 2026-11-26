@@ -1,4 +1,10 @@
-import { CLOUDFLARE_APPLICATION_BINDING, CLOUDFLARE_APPLICATION_CLASS, CLOUDFLARE_FILES_BINDING, GENERATED_ENTRY_FILE } from '@fabrika/app/build'
+import {
+	CLOUDFLARE_APPLICATION_BINDING,
+	CLOUDFLARE_APPLICATION_CLASS,
+	CLOUDFLARE_FILES_BINDING,
+	CLOUDFLARE_VERSION_BINDING,
+	GENERATED_ENTRY_FILE,
+} from '@fabrika/app/build'
 import { type AppEnvironment, appEnvironmentId, FRAMEWORK_VARIABLE_NAMES, isFrameworkVariableName, parseAppEnvironmentId } from '@fabrika/auth-core'
 import { isProxyHost } from '@fabrika/proxy-core/manifest'
 import { dirname, resolve } from 'node:path'
@@ -72,6 +78,8 @@ export interface ApplicationRuntime {
 	 * null for a release whose Worker keeps its authored `main`.
 	 */
 	readonly entry: string | null
+	/** The Worker binds its version metadata as `FABRIKA_VERSION` (`recordsMigrationBookmark`); otherwise it binds none. */
+	readonly version: boolean
 }
 
 /**
@@ -117,6 +125,7 @@ const CONFIG_KEYS: ReadonlySet<string> = new Set([
 	'durable_objects',
 	'containers',
 	'workflows',
+	'version_metadata',
 ])
 
 /** The platform proxy's config also carries the `define` that bakes its manifest into the bundle. */
@@ -485,6 +494,21 @@ const assertApplicationRuntime = (worker: string, config: WranglerConfig, runtim
 }
 
 /**
+ * Only the platform binds version metadata: as `FABRIKA_VERSION`, into the application Worker of a release that records
+ * a migration bookmark. A config holds one such binding, so an authored one would replace the platform's.
+ */
+const assertVersionMetadata = (worker: string, binding: unknown, expected: boolean): void => {
+	if (binding === undefined && !expected) return
+	const keys = typeof binding === 'object' && binding !== null ? Object.keys(binding) : []
+	if (expected && keys.length === 1 && field(binding, 'binding') === CLOUDFLARE_VERSION_BINDING) return
+	throw new Error(
+		expected
+			? `cloudflare: Worker \`${worker}\` must bind its version metadata once, as \`${CLOUDFLARE_VERSION_BINDING}\`; the platform writes that binding`
+			: `cloudflare: Worker \`${worker}\` binds version metadata, which only the platform binds, on a release that records a migration bookmark`,
+	)
+}
+
+/**
  * A pinned release's Worker runs the entry the deploy regenerates, and nothing that entry does not export: a hand-written
  * `main` would skip the contract digest check, the hop secret and the framework's scheduling.
  */
@@ -553,6 +577,7 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		assertBoundedAssets(worker, config.assets)
 		assertProcessEnvironmentClosed(worker, config.compatibility_flags)
 		if (isPlatformProxy(generated, bounds)) {
+			assertVersionMetadata(worker, config.version_metadata, false)
 			assertRoutedHere(worker, config, bounds)
 			assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.proxy ?? {})
 			assertBakedManifest(worker, config.define, bounds.proxyManifest)
@@ -563,6 +588,7 @@ export const assertGeneratedConfigs = (configs: readonly GeneratedConfig[], boun
 		}
 		assertUnexposed(worker, config)
 		assertFrameworkVariables(worker, config.vars, bounds.frameworkVariables.application)
+		assertVersionMetadata(worker, config.version_metadata, bounds.application?.version ?? false)
 		if (bounds.application === null) continue
 		assertApplicationRuntime(worker, config, bounds.application)
 		if (bounds.application.entry !== null) assertGeneratedEntry(worker, generated, bounds.cwd, bounds.application.entry)

@@ -7,6 +7,7 @@ import {
 	type OpsContentView,
 	type OpsInspectRequest,
 	type OpsMaintenance,
+	type OpsMigrationRecord,
 	type OpsPublishedState,
 	type OpsStateAck,
 	type OpsStateRequest,
@@ -487,7 +488,12 @@ for (const backend of backends) {
 				const generation = await b.repositories.dataOperations.allocateGeneration(APP, ENV)
 				const restricting = { id: uuidv7(), appId: APP, env: ENV, step: 'deploy', targetMode: 'read-only', generation, actor: 'user:test' } as const
 				const own = await run(b)
-				expect(await b.repositories.dataOperations.create({ ...restricting, kind: 'migrate', runId: own }, lease.fence())).toMatchObject({ run_id: own })
+				expect(
+					await b.repositories.dataOperations.create(
+						{ ...restricting, kind: 'migrate', runId: own, recordsBookmark: false, dataLoss: false },
+						lease.fence(),
+					),
+				).toMatchObject({ run_id: own })
 				const unrelated = await run(b)
 				expect(await executeDeploy(deps, { runId: unrelated, dryRun: true })).toEqual({ runId: unrelated, status: 'deferred' })
 				expect(await executeDeployUnderLease(deps, { runId: own, dryRun: true }, lease)).toEqual({ runId: own, status: 'succeeded' })
@@ -562,6 +568,33 @@ describe('the HTTP ops transport', () => {
 			redirect: 'manual',
 			body: transition,
 		}])
+	})
+
+	test("`migrate`'s 422 is the new version's failed migrating boot, parsed strictly; its 500 is no answer", async () => {
+		const record: OpsMigrationRecord = {
+			id: '0192c4a0-0000-7000-8000-00000000f00d',
+			version: 'version-0002',
+			bookmark: 'bookmark-0001',
+			startDigest: 'a'.repeat(64),
+			files: [{ bundle: 'app', name: '0002_tags.sql', checksum: 'b'.repeat(64) }],
+			at: '2027-01-15T08:00:00.000Z',
+			outcome: 'rolled_back',
+			committedBookmark: null,
+			booted: null,
+		}
+		const request = { object: 'application', generation: 4 }
+		const failed = await transport(() => Response.json({ refused: 'migration_failed', reason: 'rolled_back', record }, { status: 422 }))
+		expect(await failed.ops.migrate(TARGET, request, signal)).toEqual({
+			kind: 'failed',
+			failure: { refused: 'migration_failed', reason: 'rolled_back', record },
+		})
+		// A reason its record does not bear out, and a dump step's refusal, are no answer to act on.
+		const disagrees = await transport(() => Response.json({ refused: 'migration_failed', reason: 'committed', record }, { status: 422 }))
+		expect(await disagrees.ops.migrate(TARGET, request, signal)).toEqual({ kind: 'unavailable', reason: 'invalid_answer' })
+		const dump = await transport(() => Response.json({ refused: 'wrong_mode', table: null }, { status: 422 }))
+		expect(await dump.ops.migrate(TARGET, request, signal)).toEqual({ kind: 'unavailable', reason: 'invalid_answer' })
+		const crashed = await transport(() => Response.json({ error: 'boot failed' }, { status: 500 }))
+		expect(await crashed.ops.migrate(TARGET, request, signal)).toEqual({ kind: 'unavailable', reason: 'unreachable' })
 	})
 
 	test('a key the object refuses uniformly moves on to the next candidate, newest first', async () => {
@@ -687,6 +720,7 @@ describe('data RPC', () => {
 		expect(typeof got.body === 'object' && got.body !== null ? Object.keys(got.body).sort() : null).toEqual([
 			'actor',
 			'appId',
+			'candidateRecovered',
 			'createdAt',
 			'env',
 			'errorCode',
@@ -694,8 +728,11 @@ describe('data RPC', () => {
 			'generation',
 			'id',
 			'kind',
+			'migrationFailure',
+			'recordsBookmark',
 			'recoversOperationId',
 			'resolution',
+			'revertRunId',
 			'runId',
 			'state',
 			'step',

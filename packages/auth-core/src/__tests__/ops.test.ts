@@ -350,6 +350,18 @@ describe('the migration record', () => {
 		expect(parseOpsMigrateAck({ generation: 9, migrations: [], record: { ...record, id: 'r1' } })).toBeNull()
 	})
 
+	test('the migrate answers name the answering Worker version, which an older release omits', () => {
+		for (const version of ['0192c4a0-0000-7000-8000-00000000beef', null]) {
+			const ack = { generation: 9, migrations: [migration], record: committed, version }
+			expect(parseOpsMigrateAck(ack)).toEqual(ack)
+			const failure: OpsMigrationFailure = { refused: 'migration_failed', reason: 'committed', record: committed, version }
+			expect(parseOpsMigrationFailure(failure)).toEqual(failure)
+		}
+		expect(parseOpsMigrateAck({ generation: 9, migrations: [], record: null, version: 'not a version id' })).toBeNull()
+		expect(parseOpsMigrateAck({ generation: 9, migrations: [], record: null, version: 7 })).toBeNull()
+		expect(parseOpsMigrationFailure({ refused: 'migration_failed', reason: 'committed', record: committed, version: '' })).toBeNull()
+	})
+
 	test('a failed migration names a reason its record agrees with', () => {
 		const agreeing: OpsMigrationFailure[] = [
 			{ refused: 'migration_failed', reason: 'record_unwritable', record },

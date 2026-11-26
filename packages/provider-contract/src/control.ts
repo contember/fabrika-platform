@@ -787,6 +787,12 @@ export interface ControlProvider {
 	 * provider is.
 	 */
 	dataOperations?(access: ProviderApprovedAccess): boolean
+	/**
+	 * Whether the object at this approved access, serving the data operations, records a migration bookmark before it
+	 * migrates and answers a failed migration itself, so a deploy migrates it without a read-only window or a backup
+	 * (ADR-0069 §3). Absent means no environment of this provider does.
+	 */
+	migrationBookmark?(access: ProviderApprovedAccess): boolean
 	/** Absent means the provider deploys public sources only. */
 	readonly source?: ProviderSourceCapabilities
 	/**

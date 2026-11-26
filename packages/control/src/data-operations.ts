@@ -10,6 +10,7 @@ import {
 	OPS_DATA_REFUSED_STATUS,
 	OPS_DUMP_MAX_PARTS,
 	OPS_METHOD,
+	OPS_MIGRATION_FAILED_STATUS,
 	OPS_REFUSAL_STATUS,
 	OPS_REHEARSAL_OBJECT,
 	OPS_STALE_STATUS,
@@ -32,6 +33,7 @@ import {
 	type OpsMigrateAck,
 	type OpsMigrateRequest,
 	type OpsMigration,
+	type OpsMigrationFailure,
 	type OpsMode,
 	type OpsOperation,
 	opsPath,
@@ -57,6 +59,7 @@ import {
 	parseOpsImportPartAck,
 	parseOpsImportVerifyAck,
 	parseOpsMigrateAck,
+	parseOpsMigrationFailure,
 	parseOpsRestoreArmAck,
 	parseOpsRestorePrepareAck,
 	parseOpsRestoreVerifyAck,
@@ -67,7 +70,7 @@ import {
 import type { DataOperationDto } from '@fabrika/control-contract'
 import { type DeployLocks, uuidv7 } from '@fabrika/platform'
 import { abortableWait, isLeaseLoss, ProviderInvocationAbort } from '@fabrika/provider-contract'
-import { isBundledMigration, parseSnapshot } from './approval/snapshot'
+import { isBundledMigration, type MigrationEntry, parseSnapshot } from './approval/snapshot'
 import type {
 	BackupCheckpoint,
 	BackupPartRow,
@@ -110,6 +113,12 @@ export type OpsAnswer<T> = { readonly kind: 'ok'; readonly value: T } | { readon
 /** A mutating request's answer: also the 409 stale refusal, naming what the object has published. */
 export type OpsFencedAnswer<T> = OpsAnswer<T> | { readonly kind: 'stale'; readonly published: OpsPublishedState | null }
 
+/**
+ * A `migrate` answer: also the 422 `migration_failed` of a release that records the migration bookmark, which only the
+ * new version answers, with its record (ADR-0069 §3).
+ */
+export type OpsMigrateAnswer = OpsFencedAnswer<OpsMigrateAck> | { readonly kind: 'failed'; readonly failure: OpsMigrationFailure }
+
 /** A dump step's answer: also the 422 refusal, with its reason and the table at fault. */
 export type OpsDataAnswer<T> = OpsFencedAnswer<T> | { readonly kind: 'refused'; readonly refusal: OpsDataRefusal }
 
@@ -126,7 +135,7 @@ export type OpsRestoreAck = OpsRestorePrepareAck | OpsRestoreArmAck | OpsRestore
 export interface OpsTransport {
 	inspect(target: OpsTarget, request: OpsInspectRequest, signal: AbortSignal): Promise<OpsAnswer<OpsInspection>>
 	state(target: OpsTarget, request: OpsStateRequest, signal: AbortSignal): Promise<OpsFencedAnswer<OpsStateAck>>
-	migrate(target: OpsTarget, request: OpsMigrateRequest, signal: AbortSignal): Promise<OpsFencedAnswer<OpsMigrateAck>>
+	migrate(target: OpsTarget, request: OpsMigrateRequest, signal: AbortSignal): Promise<OpsMigrateAnswer>
 	export(target: OpsTarget, request: OpsExportRequest, signal: AbortSignal): Promise<OpsDataAnswer<OpsExportAck>>
 	import(target: OpsTarget, request: OpsImportRequest, signal: AbortSignal): Promise<OpsDataAnswer<OpsImportAck>>
 	restore(target: OpsTarget, request: OpsRestoreRequest, signal: AbortSignal): Promise<OpsDataAnswer<OpsRestoreAck>>
@@ -134,13 +143,19 @@ export interface OpsTransport {
 
 /**
  * The deploys a restore runs itself under its lease (ADR-0070 §9): each redeploys what the environment runs now, with the
- * pointer the step names. Only a composition that can deploy hands it.
+ * pointer the step names; and the rollback deploy of a failed bookmark migration (ADR-0069 §3). Only a composition that
+ * can deploy hands it.
  */
 export interface OperationDeploys {
 	/** Whether the environment has a domain and its approved release is one the provider serves the data operations at. */
 	servesDataOperations(target: OpsTarget): Promise<boolean>
 	/** Runs the pending run `runId` under `lease` with `objects` as its pointer, and settles it as far as it can. */
 	run(lease: Lease, runId: string, objects: ApplicationObjects): Promise<void>
+	/**
+	 * Ends a bookmark migration's own run as the migration ended (ADR-0069 §3): its provider's success alone leaves it
+	 * running. Nothing changes once it ended.
+	 */
+	finishRun(lease: Lease, runId: string, status: 'succeeded' | 'failed'): Promise<void>
 }
 
 export interface DataOperationDeps {
@@ -148,7 +163,10 @@ export interface DataOperationDeps {
 	lock: DeployLocks
 	leaseClock?: LeaseClock
 	ops: OpsTransport
-	/** A restore's own deploys; without them a restore does not start, and one resumed at a deploy stays interrupted. */
+	/**
+	 * A restore's own deploys, and a bookmark migration's rollback deploy; without them neither starts, and one resumed at
+	 * a deploy stays interrupted.
+	 */
 	deploys?: OperationDeploys
 	/** The wait between a restore's `arm` and its `verify`, and before it inspects the clone; real time by default. */
 	wait?: (ms: number, signal: AbortSignal) => Promise<void>
@@ -157,6 +175,8 @@ export interface DataOperationDeps {
 	 * once it answers true the operation stops `paused`, running at its recorded progress, for a later pass.
 	 */
 	passSpent?: () => boolean
+	/** Milliseconds: the clock a bookmark migration's deadline is set and read by; real time by default. */
+	clock?: () => number
 }
 
 /**
@@ -243,6 +263,22 @@ const CLONE_OPENED_CODES: ReadonlySet<string | null> = new Set([
  */
 export const DEPLOY_FAILED_CODE = 'deploy_failed'
 export const MIGRATION_FAILED_CODE = 'migration_failed'
+
+/**
+ * The codes a bookmark migration (ADR-0069 §3) fails with while it restricted nothing, so the environment is open: no
+ * answer of the new version came by the deadline, or the migration failed and the rollback deploy of the last succeeded
+ * commit answers. One that cannot recover publishes `closed` and fails as `migration_failed`, for an operator.
+ */
+export const MIGRATION_UNCONFIRMED_CODE = 'migration_unconfirmed'
+export const MIGRATION_REVERTED_CODE = 'migration_reverted'
+
+/**
+ * How long a bookmark migration waits for the new version's answer after a deploy: Cloudflare's `max_delay` of 300 s,
+ * during which the old instance of an active object keeps answering, and a margin.
+ */
+export const NEW_VERSION_DEADLINE_S = 300 + 60
+/** The pause between `migrate` requests while the old version still answers. */
+const NEW_VERSION_POLL_MS = 10_000
 
 export type DataOperationOutcome =
 	| { readonly kind: 'busy' }
@@ -359,15 +395,23 @@ export interface StartMigrationInput {
 	readonly runId: string
 	/** Deploys that run under the operation's lease, and settles it as far as it can; the run's row then says how it ended. */
 	readonly deploy: () => Promise<void>
+	/** The candidate records the migration bookmark: the operation restricts nothing and takes no backup (ADR-0069 §3). */
+	readonly recordsBookmark: boolean
+	/** The candidate brings a migration with a `dataLoss` statement: a committed one gets no rollback deploy. */
+	readonly dataLoss: boolean
 }
 
 /**
- * The migration phase of a deploy (ADR-0069 §3, ADR-0070 §8), under the lease the run already holds, which stays the
- * run's: `read-only` at a fresh generation, the backup at that generation and its rehearsal, the run's deploy, the
- * `migrate` request at the published generation, then `open` at a new one. A failed backup or rehearsal opens the object
- * again before anything is deployed.
+ * The migrating deploy (ADR-0069 §3, ADR-0070 §8), under the lease the run already holds, which stays the run's. A
+ * candidate that records the migration bookmark restricts nothing and takes no backup: the run's deploy, then `migrate`
+ * at the published generation until the new version answers, and on its failure the rollback deploy of the last
+ * succeeded commit. An older candidate gets the read-only phase: `read-only` at a fresh generation, the backup at that
+ * generation and its rehearsal, the run's deploy, the `migrate` request at the published generation, then `open` at a
+ * new one; a failed backup or rehearsal opens the object again before anything is deployed.
  */
 export async function startMigration(deps: DataOperationDeps, lease: Lease, input: StartMigrationInput): Promise<DataOperationOutcome> {
+	// The rollback deploy is the operation's own recovery: without one, a failed migration could not recover.
+	if (input.recordsBookmark && deps.deploys === undefined) return { kind: 'refused', reason: 'no_deploys' }
 	const driver = new OperationDriver(deps, lease, input, input.deploy)
 	const latest = await latestOperation(deps, input)
 	if (latest?.state === 'running') return { kind: 'refused', reason: 'operation_running' }
@@ -380,12 +424,14 @@ export async function startMigration(deps: DataOperationDeps, lease: Lease, inpu
 		env: input.env,
 		kind: 'migrate',
 		runId: input.runId,
-		step: 'restrict',
-		targetMode: 'read-only',
+		recordsBookmark: input.recordsBookmark,
+		dataLoss: input.dataLoss,
+		step: input.recordsBookmark ? 'deploy' : 'restrict',
+		targetMode: input.recordsBookmark ? 'open' : 'read-only',
 		generation,
 		actor: input.actor,
 	})
-	await driver.backupOf(created)
+	if (!input.recordsBookmark) await driver.backupOf(created)
 	return await driver.run(created.id, false)
 }
 
@@ -444,12 +490,16 @@ export function restoreClone(operationId: string): string {
 	return `${DEFAULT_APPLICATION_OBJECT}-${operationId.toLowerCase()}`
 }
 
-/** What a restore's deploys redeploy: the environment's newest succeeded run, at its commit; `null` while there is none. */
+/**
+ * What a restore's deploys and a failed migration's rollback deploy redeploy: the environment's newest succeeded run that
+ * deployed a commit, never a dry run; `null` while there is none. The rollback leaves out the migration's own run.
+ */
 async function redeployable(
 	deps: { repositories: Pick<ControlRepositories, 'runs'> },
 	target: OpsTarget,
+	except?: string,
 ): Promise<{ readonly ref: string; readonly commitSha: string } | null> {
-	const run = await deps.repositories.runs.getLatestSucceededRun(target)
+	const run = await deps.repositories.runs.getLatestDeployedRun({ ...target, ...(except === undefined ? {} : { except }) })
 	return run === null || run.commit_sha === null ? null : { ref: run.ref, commitSha: run.commit_sha }
 }
 
@@ -547,8 +597,9 @@ export async function advanceDataOperation(deps: DataOperationDeps, operationId:
 /**
  * The mode Control's record leaves the environment in: `open` with no operation, the newest operation's target once it
  * succeeded, and `unsettled` while it runs or after it failed, when the object may hold any mode it was sent. A backup
- * that failed only after the object acknowledged `open` left it open. An operation the object's release did not serve
- * changed nothing, so the one before it decides.
+ * that failed only after the object acknowledged `open` left it open, and so did a bookmark migration that failed
+ * before it restricted anything. An operation the object's release did not serve changed nothing, so the one before it
+ * decides.
  */
 export async function recordedMaintenance(
 	deps: { repositories: Pick<ControlRepositories, 'dataOperations'> },
@@ -562,11 +613,17 @@ export async function recordedMaintenance(
 		})
 		const deciding = page.find((operation) => !(operation.state === 'failed' && operation.error_code === NOT_SERVED_CODE))
 		if (deciding?.state === 'succeeded') return deciding.target_mode
-		if (deciding !== undefined) return deciding.state === 'failed' && REOPENED_CODES.has(deciding.error_code) ? 'open' : 'unsettled'
+		if (deciding?.state === 'failed' && (REOPENED_CODES.has(deciding.error_code) || failedOpen(deciding))) return 'open'
+		if (deciding !== undefined) return 'unsettled'
 		const last = page.at(-1)
 		if (last === undefined || page.length < RECORDED_PAGE) return 'open'
 		before = last.id
 	}
+}
+
+/** A bookmark migration sends only `open` until it publishes `closed` to fail, so one that failed in `open` left it open. */
+function failedOpen(operation: DataOperationRow): boolean {
+	return operation.kind === 'migrate' && operation.records_bookmark === 1 && operation.target_mode === 'open'
 }
 
 /** How many operations `recordedMaintenance` reads at once while it looks past the ones that changed nothing. */
@@ -599,6 +656,10 @@ export function toDataOperationDto(row: DataOperationRow): DataOperationDto {
 		recoversOperationId: row.recovers_operation_id,
 		resolution: row.resolution,
 		runId: row.run_id,
+		recordsBookmark: row.records_bookmark === 1,
+		migrationFailure: row.migration_failure,
+		revertRunId: row.revert_run_id,
+		candidateRecovered: row.candidate_recovered === 1,
 	}
 }
 
@@ -659,6 +720,19 @@ type Pointer =
 	| { readonly kind: 'original' }
 	| { readonly kind: 'prepared'; readonly bookmarks: { readonly current: string; readonly target: string } }
 	| { readonly kind: 'refused'; readonly code: string }
+
+/**
+ * What waiting for the new version of a bookmark migration ended with: the answer it waited for, the failed version's
+ * `ok` while its rollback deploys, the new version's `migration_failed`, the deadline, a refusal to fail with, or the
+ * pass's end.
+ */
+type NewVersion =
+	| { readonly kind: 'answered'; readonly row: DataOperationRow }
+	| { readonly kind: 'recovered'; readonly row: DataOperationRow }
+	| { readonly kind: 'failed'; readonly row: DataOperationRow; readonly failure: OpsMigrationFailure }
+	| { readonly kind: 'deadline'; readonly row: DataOperationRow }
+	| { readonly kind: 'refused'; readonly code: string }
+	| { readonly kind: 'paused' }
 
 /** One holder's run of an operation. Every write is fenced on its lease, and each request goes out only while it holds it. */
 class OperationDriver {
@@ -910,6 +984,7 @@ class OperationDriver {
 	 * it stands, the object restricted, for an operator to recover.
 	 */
 	private async migrateStep(row: DataOperationRow): Promise<Step> {
+		if (row.records_bookmark === 1) return await this.bookmarkMigrateStep(row)
 		const backup = await this.backupOf(row)
 		const reopen = async (checkpoint?: BackupCheckpoint): Promise<Step> => ({
 			kind: 'next',
@@ -980,6 +1055,188 @@ class OperationDriver {
 			default:
 				throw new Error(`a migration has no step ${row.step}`)
 		}
+	}
+
+	/**
+	 * A bookmark migration (ADR-0069 §3), which restricts nothing. `deploy` runs the operation's run, or a successor reads
+	 * how it ended; `migrate` asks at the published generation, in `open`, until the new version answers: every candidate
+	 * file with its checksum, or `migration_failed`. Until then, or the deadline, the old version still answers. A failed
+	 * migration that nothing committed (`rolled_back`, `record_unwritable`), or a committed one without a `dataLoss`
+	 * line, gets the rollback deploy of the last succeeded commit (`revert`), and `check` waits to the same deadline for
+	 * an `ok` of another version than the failed one. A committed `dataLoss` migration, which no rewind can undo yet, a
+	 * rollback that does not answer, and a failed version that answers `ok` after all, go to `restrict`, which publishes
+	 * `closed` and fails the operation for an operator. The operation's run ends with it: succeeded only when it did.
+	 */
+	private async bookmarkMigrateStep(row: DataOperationRow): Promise<Step> {
+		const close = async (from: DataOperationRow, change: Pick<DataOperationAdvance, 'candidateRecovered'> = {}): Promise<Step> => ({
+			kind: 'next',
+			row: await this.advance(from, { step: 'restrict', targetMode: 'closed', generation: await this.allocate(), ...change }),
+		})
+		// The run is the migration's: it succeeds only with it, so a run that is not succeeded is never what a rollback redeploys.
+		const fail = async (from: DataOperationRow, code: string): Promise<Step> => {
+			const step = await this.failed(from, code)
+			await this.finishRun(from, 'failed')
+			return step
+		}
+		switch (row.step) {
+			case 'deploy': {
+				const deploy = this.runDeploy
+				this.runDeploy = undefined
+				if (deploy !== undefined) await deploy()
+				const run = await this.migrationRun(row)
+				const current = await this.require(row.id)
+				// Nothing was restricted, so the environment stays open whichever way a deploy that never uploaded ended.
+				if (run.status === 'failed' && (run.external_run_id === null || run.failure_cause === 'untouched')) {
+					return await fail(current, DEPLOY_NOT_STARTED_CODE)
+				}
+				// A provider that failed after it uploaded may have left the new version to migrate: its answer decides.
+				if (run.status !== 'failed' && current.deployed !== 1) return { kind: 'done', result: 'interrupted' }
+				return { kind: 'next', row: await this.advance(current, { step: 'migrate', deadlineAt: this.deadline() }) }
+			}
+			case 'migrate': {
+				const files = await this.runMigrationFiles(row)
+				const answer = await this.newVersion(row, 'migrate', (ack) => holdsEveryFile(ack.migrations, files) ? 'answered' : 'waiting')
+				if (answer.kind === 'refused') return await fail(row, answer.code)
+				if (answer.kind === 'paused') return { kind: 'done', result: 'paused' }
+				const deployed = answer.row.deployed === 1
+				if (answer.kind === 'answered' || answer.kind === 'recovered') {
+					if (!deployed) return await fail(answer.row, DEPLOY_FAILED_CODE)
+					await this.finish(answer.row)
+					await this.finishRun(answer.row, 'succeeded')
+					return { kind: 'done', result: 'succeeded' }
+				}
+				if (answer.kind === 'deadline') return await fail(answer.row, deployed ? MIGRATION_UNCONFIRMED_CODE : DEPLOY_FAILED_CODE)
+				const reason = answer.failure.reason
+				// The answering version, so `check` tells the rollback's `ok` from this version's own once it boots after all.
+				const version = answer.failure.version ?? answer.failure.record.version
+				const failure = { migrationFailure: reason, ...(version === null ? {} : { candidateVersion: version }) }
+				// A committed migration is not rewound here (the in-place rewind, ADR-0070 §9, is built later): the old code may
+				// run over the migrated schema, unless a `dataLoss` line deleted what it reads.
+				if (reason === 'committed' && row.data_loss === 1) {
+					return await close(await this.advance(answer.row, { step: 'migrate', ...failure }))
+				}
+				return { kind: 'next', row: await this.advance(answer.row, { step: 'revert', ...failure }) }
+			}
+			case 'revert': {
+				// The migration failed, so its run did; it ends first, as an environment runs one run at a time.
+				await this.finishRun(row, 'failed')
+				const reverted = await this.revertDeploy(row)
+				if (reverted === 'unsettled') return { kind: 'done', result: 'interrupted' }
+				if (reverted !== 'succeeded') return await close(row)
+				return { kind: 'next', row: await this.advance(row, { step: 'check', deadlineAt: this.deadline() }) }
+			}
+			case 'check': {
+				// Only another version's `ok` is the rollback's: the failed version retries its boot and may succeed after all.
+				// Without the failed version's id no answer can be told apart, so the wait runs to its deadline.
+				const candidate = row.candidate_version
+				const answer = await this.newVersion(
+					row,
+					'revert',
+					(ack) => candidate === null ? 'waiting' : ack.version === candidate ? 'recovered' : 'answered',
+				)
+				if (answer.kind === 'refused') return await fail(row, answer.code)
+				if (answer.kind === 'paused') return { kind: 'done', result: 'paused' }
+				if (answer.kind === 'answered') return await fail(answer.row, MIGRATION_REVERTED_CODE)
+				// The failed version served after all while the rollback deployed: which one serves now is for an operator.
+				if (answer.kind === 'recovered') return await close(answer.row, { candidateRecovered: true })
+				return await close(answer.row)
+			}
+			case 'restrict': {
+				const published = await this.publish(row, 'closed')
+				if (published.kind === 'refused') return await fail(row, published.code)
+				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
+				return await fail(published.row, MIGRATION_FAILED_CODE)
+			}
+			default:
+				throw new Error(`a bookmark migration has no step ${row.step}`)
+		}
+	}
+
+	/** Ends a bookmark migration's own run with the migration; a successor without deploys leaves it to the reconciler. */
+	private async finishRun(row: DataOperationRow, status: 'succeeded' | 'failed'): Promise<void> {
+		if (row.run_id === null || this.deps.deploys === undefined) return
+		this.lease.assertHeld()
+		await this.deps.deploys.finishRun(this.lease, row.run_id, status)
+	}
+
+	/**
+	 * Ask `migrate` at the published generation, in `open`, until `judge` takes a 200 of it as the answer, or as the
+	 * failed version's own, or the deadline the record holds passes; it asks at least once. Any other answer is the old
+	 * version still running, or no answer at all: a 500 of a failed boot that holds no record reads as unreachable. At
+	 * `migrate` the new version's `migration_failed` ends the wait; once a rollback was deployed (`revert`), it is the
+	 * failing version still answering.
+	 */
+	private async newVersion(
+		start: DataOperationRow,
+		stage: 'migrate' | 'revert',
+		judge: (ack: OpsMigrateAck) => 'answered' | 'recovered' | 'waiting',
+	): Promise<NewVersion> {
+		const deadline = start.deadline_at
+		if (deadline === null) throw new Error('a bookmark migration waits with no deadline')
+		const object = await this.serving()
+		let row = start
+		for (;;) {
+			if (this.deps.passSpent?.() === true) return { kind: 'paused' }
+			const published = await this.publish(row, 'open')
+			if (published.kind === 'refused') return { kind: 'refused', code: published.code }
+			if (published.kind === 'acked') {
+				row = published.row
+				this.lease.assertHeld()
+				const answer = await this.deps.ops.migrate(this.target, { object, generation: row.generation }, this.lease.signal)
+				this.lease.assertHeld()
+				if (answer.kind === 'ok' && answer.value.generation === row.generation) {
+					const judged = judge(answer.value)
+					if (judged !== 'waiting') return { kind: judged, row }
+				}
+				if (answer.kind === 'failed' && stage === 'migrate') return { kind: 'failed', row, failure: answer.failure }
+				if (answer.kind === 'stale') return { kind: 'refused', code: 'stale_generation' }
+			}
+			if (this.now() >= deadline * 1000) return { kind: 'deadline', row }
+			await (this.deps.wait ?? abortableWait)(NEW_VERSION_POLL_MS, this.lease.signal)
+		}
+	}
+
+	/** Unix seconds: when the new version's answer is overdue, counted from now. */
+	private deadline(): number {
+		return Math.ceil(this.now() / 1000) + NEW_VERSION_DEADLINE_S
+	}
+
+	private now(): number {
+		return (this.deps.clock ?? Date.now)()
+	}
+
+	/**
+	 * The rollback deploy of a failed bookmark migration: the run the record names, created the first time to redeploy the
+	 * last succeeded commit before the migration's own run, then run under this lease with the recorded pointer. As a
+	 * restore's deploy: `not_started` when no provider accepted it or there is nothing to redeploy, `unsettled` while no
+	 * outcome is known.
+	 */
+	private async revertDeploy(row: DataOperationRow): Promise<'succeeded' | 'failed' | 'not_started' | 'unsettled'> {
+		const deploys = this.deps.deploys
+		if (deploys === undefined) return 'unsettled'
+		let runId = row.revert_run_id
+		if (runId === null) {
+			runId = uuidv7()
+			this.lease.assertWritten(await this.records.nameRevertRun(row.id, runId, this.lease.fence()))
+		}
+		let run = await this.deps.repositories.runs.getRun(runId)
+		this.lease.assertHeld()
+		if (run === null) {
+			const source = await redeployable(this.deps, this.target, row.run_id ?? undefined)
+			this.lease.assertHeld()
+			if (source === null) return 'not_started'
+			run = await this.deps.repositories.runs.createRun({ id: runId, appId: row.app_id, env: row.env, ...source, trigger: 'manual', actor: row.actor })
+		}
+		if (run.status === 'pending' || run.status === 'running') {
+			await deploys.run(this.lease, runId, await this.objects())
+			this.lease.assertHeld()
+			run = await this.deps.repositories.runs.getRun(runId)
+			this.lease.assertHeld()
+			if (run === null) throw new Error("a migration's rollback run vanished")
+		}
+		if (run.status === 'succeeded') return 'succeeded'
+		if (run.status === 'awaiting_approval' || (run.status === 'failed' && run.external_run_id === null)) return 'not_started'
+		return run.status === 'failed' ? 'failed' : 'unsettled'
 	}
 
 	/**
@@ -1417,12 +1674,17 @@ class OperationDriver {
 
 	/** The application migration files the operation's run bundles, from the snapshot read at its pinned commit. */
 	private async runMigrations(row: DataOperationRow): Promise<readonly string[]> {
+		return (await this.runMigrationFiles(row)).map(({ name }) => name)
+	}
+
+	/** The application migration files the operation's run bundles, with the checksum the ledger records for each. */
+	private async runMigrationFiles(row: DataOperationRow): Promise<readonly MigrationEntry[]> {
 		const run = await this.migrationRun(row)
-		// A run stores its snapshot before its deploy starts, and this step follows a succeeded deploy.
+		// A run stores its snapshot before its deploy starts, and this step follows a deploy a provider accepted.
 		if (run.snapshot_json === null) throw new Error("a migration's run holds no snapshot")
 		const snapshot = parseSnapshot(await this.deps.repositories.runs.document(run.snapshot_json))
 		this.lease.assertHeld()
-		return snapshot.migrations.map(({ name }) => name).filter(isBundledMigration)
+		return snapshot.migrations.filter(({ name }) => isBundledMigration(name))
 	}
 
 	private async migrationRun(row: DataOperationRow): Promise<RunRow> {
@@ -1450,7 +1712,7 @@ class OperationDriver {
 					: { kind: 'interrupted' }
 			}
 			if (answer.kind === 'stale') return { kind: 'failed', code: 'stale_generation' }
-			if (answer.reason === 'not_served') return { kind: 'failed', code: MIGRATION_FAILED_CODE }
+			if (answer.kind === 'failed' || answer.reason === 'not_served') return { kind: 'failed', code: MIGRATION_FAILED_CODE }
 			if (answer.reason !== 'unreachable') return { kind: 'interrupted' }
 		}
 		const probe = await this.inspect(object)
@@ -1805,6 +2067,12 @@ function holdsEvery(ledger: readonly OpsMigration[], names: readonly string[]): 
 	return names.every((name) => applied.has(name))
 }
 
+/** Whether the object's ledger holds each of the application migration files `files`, with its checksum. */
+function holdsEveryFile(ledger: readonly OpsMigration[], files: readonly MigrationEntry[]): boolean {
+	const applied = new Map(ledger.filter((row) => row.bundle === APPLICATION_BUNDLE).map((row) => [row.name, row.checksum]))
+	return files.every((file) => applied.get(file.name) === file.checksum)
+}
+
 /** The checkpoint that fails a backup still running with `code`; none once it ended. */
 function failedBackup(backup: BackupRow, code: string): BackupCheckpoint | undefined {
 	return backup.state === 'running' ? { backupId: backup.id, outcome: 'failed', code } : undefined
@@ -1924,18 +2192,23 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 		}
 	}
 
-	async function fenced<T>(
-		target: OpsTarget,
-		operation: 'state' | 'migrate',
-		body: OpsStateRequest | OpsMigrateRequest,
-		signal: AbortSignal,
-		parse: (body: unknown) => T | null,
-	): Promise<OpsFencedAnswer<T>> {
-		const answer = await call(target, operation, body, signal)
+	async function state(target: OpsTarget, body: OpsStateRequest, signal: AbortSignal): Promise<OpsFencedAnswer<OpsStateAck>> {
+		const answer = await call(target, 'state', body, signal)
 		if (typeof answer === 'string') return { kind: 'unavailable', reason: answer }
 		// Only a dump step is refused with a reason.
 		if (answer.status === OPS_DATA_REFUSED_STATUS) return { kind: 'unavailable', reason: 'invalid_answer' }
-		return settled(answer, parse)
+		return settled(answer, parseOpsStateAck)
+	}
+
+	async function migrate(target: OpsTarget, body: OpsMigrateRequest, signal: AbortSignal): Promise<OpsMigrateAnswer> {
+		const answer = await call(target, 'migrate', body, signal)
+		if (typeof answer === 'string') return { kind: 'unavailable', reason: answer }
+		// The 422 of a failed migrating boot (ADR-0069 §3); a release before the gate never sends one.
+		if (answer.status === OPS_MIGRATION_FAILED_STATUS) {
+			const failure = parseOpsMigrationFailure(answer.body)
+			return failure === null ? { kind: 'unavailable', reason: 'invalid_answer' } : { kind: 'failed', failure }
+		}
+		return settled(answer, parseOpsMigrateAck)
 	}
 
 	async function data<T>(
@@ -1964,8 +2237,8 @@ export function httpOpsTransport(deps: HttpOpsTransportDeps): OpsTransport {
 				: nullable(parseOpsView(answer.body), (view) => ({ content: false, view }))
 			return inspection === null ? { kind: 'unavailable', reason: 'invalid_answer' } : { kind: 'ok', value: inspection }
 		},
-		state: (target, request, signal) => fenced(target, 'state', request, signal, parseOpsStateAck),
-		migrate: (target, request, signal) => fenced(target, 'migrate', request, signal, parseOpsMigrateAck),
+		state,
+		migrate,
 		export: (target, request, signal) => data(target, 'export', request, signal, (body) => parseExportAck(request, body)),
 		import: (target, request, signal) => data(target, 'import', request, signal, (body) => parseImportAck(request, body)),
 		restore: (target, request, signal) => data(target, 'restore', request, signal, (body) => parseRestoreAck(request, body)),

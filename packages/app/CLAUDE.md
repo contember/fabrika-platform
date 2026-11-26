@@ -1303,6 +1303,9 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   `migrate` acknowledges with the record, or answers the 422 `migration_failed`. A boot that fails elsewhere (the module,
   a boot check) reads and reconciles the record: a commit without `booted` is the 422 `committed`, how Control learns
   of a migration never served; record I/O there is a 503 that keeps the boot's backoff. A boot never marks a `rewound` record.
+  Both answers carry `version`, the id of the Worker version that answers (`null` without the binding), apart from the
+  record's writer: after a rollback deploy Control tells the rolled-back version from the candidate by it. Older
+  releases omit the field, so Control treats it as optional (ADR-0062).
 - **The in-place rewind** (ADR-0070 §9, `restore.ts`): `prepare` and `arm` that name a record run on the serving
   object, in `inspect`, only while the record is that id, `committed`, not `booted`, has a bookmark and was written by
   the version that runs (`not_rewindable`, `version_changed`); `arm` only to the record's bookmark (`wrong_target`).

@@ -162,6 +162,13 @@ describe('Cloudflare control provider', () => {
 		const { framework: _pin, ...unpinned } = APPROVED
 		expect(provider.opsChannel?.(unpinned)).toBe(true)
 		expect(provider.dataOperations?.(unpinned)).toBe(false)
+		// The migrating boot records a bookmark from its own gate; the checker never passes it (ADR-0069 §3).
+		expect(provider.migrationBookmark?.(APPROVED)).toBe(true)
+		expect(provider.migrationBookmark?.({ ...APPROVED, framework: '0.9.0-dev.49' })).toBe(true)
+		expect(provider.migrationBookmark?.({ ...APPROVED, framework: '0.9.0-dev.48' })).toBe(false)
+		expect(provider.migrationBookmark?.({ ...APPROVED, checker: '0.9.1', framework: '0.9.0-dev.5' })).toBe(false)
+		expect(provider.migrationBookmark?.({ ...APPROVED, checker: '0.8.2', framework: '0.8.2' })).toBe(false)
+		expect(provider.migrationBookmark?.(unpinned)).toBe(false)
 		const digests = `sha256:${'a'.repeat(64)}`
 		// A plain var lives in the generated config, so a deploy after a downgrade, which hands `null`, leaves it out.
 		expect(splitManagedEnvironment(parseManagedEnvironment({ FABRIKA_OPS_KEY_DIGESTS: digests }))).toEqual({

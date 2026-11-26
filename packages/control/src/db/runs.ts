@@ -228,6 +228,18 @@ export class RunRepository {
 			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(input.appId, input.env).first<RunRow>()
 	}
 
+	/**
+	 * The newest succeeded run that deployed a commit: no dry run, which records no migration barrier, and no run without a
+	 * commit. What a data operation's own deploys redeploy; `except` leaves out a migration's own run.
+	 */
+	async getLatestDeployedRun(input: { appId: string; env: string; except?: string }): Promise<RunRow | null> {
+		const except = input.except === undefined ? '' : ' AND id <> ?'
+		const binds = input.except === undefined ? [input.appId, input.env] : [input.appId, input.env, input.except]
+		return this.d1.prepare(`SELECT * FROM runs WHERE app_id = ? AND env = ? AND status = 'succeeded'
+			AND migration_barrier IS NOT NULL AND commit_sha IS NOT NULL${except}
+			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(...binds).first<RunRow>()
+	}
+
 	/** The newest succeeded run that stored a snapshot: the version the environment runs, past any dry run after it. */
 	async getLatestSucceededRunWithSnapshot(input: { appId: string; env: string }): Promise<RunRow | null> {
 		return this.d1.prepare(`SELECT * FROM runs WHERE app_id = ? AND env = ? AND status = 'succeeded' AND snapshot_json IS NOT NULL

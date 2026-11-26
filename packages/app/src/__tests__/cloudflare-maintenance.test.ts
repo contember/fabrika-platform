@@ -1325,7 +1325,10 @@ describe('the migrating boot through the object', () => {
 			const { object } = await start({ bucket, version: VERSION, bookmarks: true })
 			const response = await migrate(object)
 			expect(response.status).toBe(200)
-			const record = parseOpsMigrateAck(await response.json())?.record
+			const ack = parseOpsMigrateAck(await response.json())
+			// The answer names the version that answers, beside the version that wrote the record.
+			expect(ack?.version).toBe(VERSION.id)
+			const record = ack?.record
 			expect(record).toMatchObject({ version: VERSION.id, bookmark: 'bm-00000001', outcome: 'committed', committedBookmark: 'bm-00000002' })
 			expect(record?.booted).toEqual(expect.any(String))
 			expect(record?.files.map((file) => `${file.bundle}/${file.name}`)).toContain('app/20261022120000_notes.sql')
@@ -1446,6 +1449,7 @@ describe('the migrating boot through the object', () => {
 				refused: 'migration_failed',
 				reason: 'committed',
 				record: committed,
+				version: null,
 			})
 			await expect(call(next.object, 'titles', { workspaceId: 'w1' })).rejects.toThrow('the module exploded while loading')
 		})

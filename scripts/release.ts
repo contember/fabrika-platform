@@ -5,6 +5,7 @@ import { basename, dirname, join, relative, resolve } from 'node:path'
 import ts from 'typescript-platform'
 import { z } from 'zod'
 import { PUBLISH_FLOORS } from '../packages/control/src/approval/floors'
+import { MIGRATION_BOOKMARK_SINCE } from '../packages/provider-cloudflare/src/migration-bookmark-gate'
 import { checkConsumerDeclarations, declarationManifest, emitDeclarations, shipsDeclarations, tsconfigTypes } from './declarations'
 
 const ROOT = resolve(import.meta.dir, '..')
@@ -292,6 +293,97 @@ export const assertHotfixBelowFloors = (from: string, tag: string, floors: reado
 	throw new Error(
 		`v${tag} reaches the publish floor ${floor}, and v${from} is below it: the hotfix would not enforce what Control publishes from ${floor}. Take a version below ${floor}, or move the floor past the hotfix first.`,
 	)
+}
+
+/**
+ * What the framework source holds when it ships the migrating boot (ADR-0069 §3): the version metadata binding the
+ * record names, the boot that records a bookmark before it migrates, the ops answer of a failed migration, and the
+ * migration of every pending file in one transaction.
+ */
+export const MIGRATING_BOOT_MARKERS: readonly { readonly path: string; readonly text: string }[] = [
+	{ path: 'packages/app/src/cloudflare/names.ts', text: "CLOUDFLARE_VERSION_BINDING = 'FABRIKA_VERSION'" },
+	{ path: 'packages/app/src/cloudflare/migration-record.ts', text: 'export async function migratingBoot(' },
+	{ path: 'packages/app/src/cloudflare/application.ts', text: 'await migratingBoot(' },
+	{ path: 'packages/app/src/cloudflare/ops.ts', text: 'OPS_MIGRATION_FAILED_STATUS)' },
+	{ path: 'packages/db/src/sqlite-migrate.ts', text: "exec('PRAGMA foreign_key_check')" },
+]
+
+/** Reads a file of one source tree by its repository path; null when the tree has no such file. */
+export type SourceReader = (path: string) => Promise<string | null>
+
+/** The markers of the migrating boot a source tree lacks, as `<path>: <text>`. */
+export const missingMigratingBoot = async (read: SourceReader): Promise<readonly string[]> => {
+	const missing: string[] = []
+	for (const marker of MIGRATING_BOOT_MARKERS) {
+		const text = await read(marker.path)
+		if (text === null || !text.includes(marker.text)) missing.push(`${marker.path}: ${marker.text}`)
+	}
+	return missing
+}
+
+/**
+ * Control migrates a candidate at or above `recordsMigrationBookmark`'s gate without a read-only window, trusting its
+ * object to record a bookmark first (ADR-0069 Rollout). So a release at or above the gate must ship that boot, and the
+ * gate must not name a release already tagged without it. `gateSource` reads the gate's tag, or is null when no such
+ * tag exists or it is the release being validated.
+ */
+export const assertMigrationBookmarkGate = async (input: {
+	readonly tag: string
+	readonly version: string
+	readonly gate: string
+	readonly source: SourceReader
+	readonly gateSource: SourceReader | null
+}): Promise<void> => {
+	if (compareVersions(input.version, input.gate, 'migration bookmark gate') >= 0) {
+		const missing = await missingMigratingBoot(input.source)
+		if (missing.length > 0) {
+			throw new Error(
+				`${input.tag} is at or above the migration bookmark gate ${input.gate}, but its framework source lacks the migrating boot:\n${
+					missing.join('\n')
+				}\nShip the boot, or move MIGRATION_BOOKMARK_SINCE past this release.`,
+			)
+		}
+	}
+	if (input.gateSource === null) return
+	const missing = await missingMigratingBoot(input.gateSource)
+	if (missing.length > 0) {
+		throw new Error(
+			`the migration bookmark gate ${input.gate} names a release already tagged without the migrating boot:\n${
+				missing.join('\n')
+			}\nMove MIGRATION_BOOKMARK_SINCE to the first release that ships it.`,
+		)
+	}
+}
+
+/** A file of this checkout, or null when it has none. */
+const checkoutSource: SourceReader = async (path) => {
+	const file = Bun.file(join(ROOT, path))
+	return (await file.exists()) ? await file.text() : null
+}
+
+/** Whether `command` exits 0, its output discarded. */
+const succeeds = async (command: readonly string[]): Promise<boolean> => {
+	const process = Bun.spawn([...command], { cwd: ROOT, stdout: 'ignore', stderr: 'ignore', env: processEnv() })
+	return (await process.exited) === 0
+}
+
+/**
+ * The source of the gate's release tag on `origin`, or null when it is not tagged. A release checkout is shallow and
+ * carries no other tag, so a tag missing here is fetched by name, one commit deep only into a checkout already shallow.
+ */
+const gateTagSource = async (gate: string): Promise<SourceReader | null> => {
+	const ref = `refs/tags/v${gate}`
+	const [listed] = (await run(['git', 'ls-remote', '--tags', 'origin', ref])).stdout.trim().split(/\s+/)
+	if (listed === undefined || listed === '') return null
+	if (!(await succeeds(['git', 'cat-file', '-e', `${listed}^{commit}`]))) {
+		const shallow = (await run(['git', 'rev-parse', '--is-shallow-repository'])).stdout.trim() === 'true'
+		await run(['git', 'fetch', '--no-tags', ...(shallow ? ['--depth=1'] : []), 'origin', ref])
+	}
+	return async (path) => {
+		const process = Bun.spawn(['git', 'show', `${listed}:${path}`], { cwd: ROOT, stdout: 'pipe', stderr: 'ignore', env: processEnv() })
+		const [exitCode, stdout] = await Promise.all([process.exited, new Response(process.stdout).text()])
+		return exitCode === 0 ? stdout : null
+	}
 }
 
 const run = async (
@@ -1376,6 +1468,14 @@ const main = async (): Promise<void> => {
 	if (options.command === 'validate') {
 		assertTagMatchesSource(options.tag, options.version, sourceVersion)
 		assertTagReachesFloors(options.tag, options.version, PUBLISH_FLOOR_VERSIONS)
+		await assertMigrationBookmarkGate({
+			tag: options.tag,
+			version: options.version,
+			gate: MIGRATION_BOOKMARK_SINCE,
+			source: checkoutSource,
+			// The release being validated is its own gate's tag: its source is this checkout, which the first rule reads.
+			gateSource: options.version === MIGRATION_BOOKMARK_SINCE ? null : await gateTagSource(MIGRATION_BOOKMARK_SINCE),
+		})
 	}
 	if (options.command === 'validate' || options.command === 'pack') {
 		const publicNames = new Set(publicPackages.map((item) => item.name))

@@ -534,6 +534,34 @@ other environment, before the provider prepares anything, and the write maps a r
   (ADR-0044); the operation's outcome is the last line of the run's log. A running migration whose lease is free has
   lost its driver (the run's invocation holds the lease from its start to its settlement): the maintenance pass resumes
   it as a successor, and a held lease makes `advanceDataOperation` answer busy, so a live driver is never overtaken.
+- **A candidate that records the migration bookmark migrates without a read-only window** (`migrationBookmark` on the
+  provider, from the candidate's pin; `records_bookmark = 1`, `bookmarkMigrateStep`; ADR-0069 §3). No backup and no
+  restricted mode, `dataLoss` included: `deploy` (as above; a run no provider accepted, or `untouched`, fails
+  `deploy_not_started` and asks nothing), then `migrate`, which publishes `open` at the operation's generation and asks
+  `migrate` every 10 s until a 200 holds every candidate file with its snapshot checksum, or the record's `deadline_at`
+  (`max_delay` 300 s plus 60 s) passes. Any other 200, a 500 and no answer are the old version still running; past the
+  deadline the operation fails `migration_unconfirmed` (`deploy_failed` when the provider failed the run after it
+  uploaded; such a run is still asked, and its 422 enters the recovery below). Only the 422 `migration_failed`
+  (`parseOpsMigrationFailure`) is a failure, recorded as `migration_failure` with the answering Worker version
+  (`candidate_version`, the answer's `version`, else the record's): `rolled_back`, `record_unwritable`, and `committed`
+  without `data_loss`, go to `revert`, the rollback deploy of `getLatestDeployedRun` (a succeeded run that recorded its
+  migration barrier, so never a dry run, and not the operation's own), through `OperationDeploys.run` under the same
+  lease. `revert_run_id` is named before the run is created, and `deployUnder` exempts that run from the `deploy-request`
+  decision as it does a restore's deploys; its publication returns to the snapshot the redeployed run published
+  (`rollbackReturn`, `PublicationInput.returnTo`), which needs no new approval even where it widens. `check` then waits to a new deadline for a 200 of another version than
+  `candidate_version` and fails `migration_reverted`; without a known version it waits to the deadline. A 200 of the
+  failed version itself (its boot retried and succeeded) records `candidate_recovered` and goes to `restrict`. So do a
+  committed `dataLoss` migration (the in-place rewind is not built), a rollback that fails or is not accepted, and one
+  that does not answer by the deadline: `restrict` publishes `closed` at a new generation and fails `migration_failed`.
+  `recordedMaintenance` reads a failed bookmark migration whose target is still `open` as `open`. The maintenance pass
+  resumes each step; its time bound pauses a wait, which the next pass continues to the recorded deadline.
+  `RunDeps.opsClock` and `DataOperationDeps.clock`/`wait` let tests move that clock.
+- **A bookmark migration's run ends with the migration.** The provider's success records `deployed` on the operation and
+  leaves the run `running` (`holdForMigration`, in `deployUnder` and `settleUnfinishedRun`, which answers `held`), so it
+  is no baseline. The operation ends it through `OperationDeploys.finishRun`: `succeeded` only when the new version
+  answered, `failed` at `revert` (first, since an environment runs one run at a time) and at every failure. The
+  reconciler ends a `deployed` run whose operation ended without it (a recovery's `open`) as the operation did; a run
+  not known deployed first settles its provider's work, which may still activate, and then fails.
 - **A migration that may change stored data runs only behind a backup (ADR-0050, `deployUnder`).** The files are the candidate's
   `dataLoss` of any kind that the environment's last succeeded run did not deploy as they are now (`unheldDataChanges`,
   never the publication). A stored snapshot without `dataLoss` is classified again at its commit (`rereadDataLoss`), and

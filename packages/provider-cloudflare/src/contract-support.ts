@@ -10,6 +10,7 @@ import {
 	releaseFrom,
 } from '@fabrika/auth-core'
 import type { ProviderManagedEnvironment } from '@fabrika/provider-contract'
+import { MIGRATION_BOOKMARK_SINCE } from './migration-bookmark-gate'
 
 // Imported by `./control` (the `./runner` entry), so it stays clear of `oblaka-iac`.
 
@@ -158,6 +159,12 @@ export const SCHEMA_CHECK_CONFIG_SINCE = '0.9.0-dev.23'
 
 /** Whether the deploy may name a config of another name to the schema checks of an application on release `release`. */
 export const namesSchemaCheckConfig = (release: string): boolean => releaseFrom(release, SCHEMA_CHECK_CONFIG_SINCE)
+
+/**
+ * Whether the Worker of release `release` binds its version metadata, and whether Control migrates it without a
+ * read-only window and a backup: its object records a bookmark it can be rewound to instead (ADR-0069 §3).
+ */
+export const recordsMigrationBookmark = (release: string): boolean => releaseFrom(release, MIGRATION_BOOKMARK_SINCE)
 
 /**
  * Refuse what a stateless Worker of an older release cannot run: a job, a webhook, a public procedure, installation

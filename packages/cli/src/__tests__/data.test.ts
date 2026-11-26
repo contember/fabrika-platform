@@ -38,6 +38,10 @@ const OPERATION: DataOperationDto = {
 	recoversOperationId: null,
 	resolution: null,
 	runId: null,
+	recordsBookmark: false,
+	migrationFailure: null,
+	revertRunId: null,
+	candidateRecovered: false,
 }
 const STUCK_ID = '0192c4a0-0000-7000-8000-0000000000aa'
 const OPERATION_LINE = `${OPERATION.id}\tmaintenance\trunning\trestrict\tread-only\t8\t-\t2025-10-24T12:00:00.000Z`
