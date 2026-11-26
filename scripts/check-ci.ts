@@ -2,7 +2,7 @@
 // green CI run. `release.yml` calls that workflow as its `verify` job, so this is also the gate a tag must pass.
 //
 // Each job of the test matrix (PostgreSQL major × shard) gets its own throwaway PostgreSQL and SeaweedFS containers on
-// random loopback ports, as each CI job gets its own runner, and the jobs run concurrently, one per two available CPUs. A
+// free loopback ports, as each CI job gets its own runner, and the jobs run concurrently, one per two available CPUs. A
 // backend the environment already names is used as it is, by one job at a time. What cannot run here — no docker, no
 // npm — is skipped and named in the summary, never silently.
 // `scripts/__tests__/check-ci.test.ts` fails when these steps and `ci.yml` drift apart.
@@ -138,10 +138,10 @@ interface StepResult {
 
 class StepFailure extends Error {}
 
-const capture = async (command: readonly string[]): Promise<{ readonly exitCode: number; readonly stdout: string }> => {
+const capture = async (command: readonly string[]): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> => {
 	const child = Bun.spawn([...command], { cwd: ROOT, stdout: 'pipe', stderr: 'pipe' })
-	const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()])
-	return { exitCode, stdout }
+	const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+	return { exitCode, stdout, stderr }
 }
 
 const succeeds = async (command: readonly string[]): Promise<boolean> => (await capture(command)).exitCode === 0
@@ -182,19 +182,77 @@ const waitUntil = async (what: string, probe: readonly string[]): Promise<void> 
 	throw new StepFailure(`${what} was not ready after ${READINESS_ATTEMPTS} s`)
 }
 
+/** A loopback port no socket holds right now, picked by the OS. */
+const freeLoopbackPort = (): number => {
+	const listener = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data: () => {} } })
+	const { port } = listener
+	listener.stop(true)
+	return port
+}
+
+/** Another process may bind the free port before PostgreSQL does; the server then exits and a new port is tried. */
+const POSTGRES_PORT_ATTEMPTS = 3
+
+/** Only when docker reports it stopped: a failed inspect (an interrupted run) says nothing about the container. */
+const containerExited = async (name: string): Promise<boolean> => {
+	const { exitCode, stdout } = await capture(['docker', 'inspect', '--format', '{{.State.Running}}', name])
+	return exitCode === 0 && stdout.trim() === 'false'
+}
+
+/** PostgreSQL logs to stderr, which `docker logs` replays on its own stderr. */
+const containerLogs = async (name: string, tail: string): Promise<string> => {
+	const { stdout, stderr } = await capture(['docker', 'logs', '--tail', tail, name])
+	return stdout + stderr
+}
+
+/** True once this container's server answers on the port, false when the container exited first. */
+const postgresReady = async (name: string, major: string, port: number): Promise<boolean> => {
+	// On the host network another server may hold the port; only the container's own log proves its server bound it.
+	const listening = `listening on IPv4 address "127.0.0.1", port ${port}`
+	for (let attempt = 1; attempt <= READINESS_ATTEMPTS; attempt += 1) {
+		if (
+			(await containerLogs(name, 'all')).includes(listening)
+			// Over TCP: the entrypoint's temporary init server listens on the socket only, so it never answers this probe.
+			&& await succeeds(['docker', 'exec', name, 'pg_isready', '--host=127.0.0.1', `--port=${port}`, '--username=postgres'])
+		) return true
+		if (await containerExited(name)) return false
+		await Bun.sleep(1000)
+	}
+	throw new StepFailure(`PostgreSQL ${major} was not ready after ${READINESS_ATTEMPTS} s`)
+}
+
+/** PostgreSQL 18 moved its data directory under `/var/lib/postgresql`; earlier majors keep it in `data/` below. */
+const postgresDataDir = (major: string): string => Number(major) >= 18 ? '/var/lib/postgresql' : '/var/lib/postgresql/data'
+
+/** On the host network, so a run creates no bridge interface for it; it listens on loopback only, its data on tmpfs. */
 export const startPostgres = async (major: string): Promise<Backend> => {
-	const name = await startContainer(`fabrika-check-ci-postgres-${major}`, [
-		'--publish',
-		'127.0.0.1::5432',
-		'--env',
-		'POSTGRES_PASSWORD=postgres',
-		postgresImage(major),
-		'postgres',
-		...Object.entries(POSTGRES_TEST_SETTINGS).flatMap(([name, value]) => ['-c', `${name}=${value}`]),
-	])
-	// Over TCP: the entrypoint's temporary init server listens on the socket only, so it never answers this probe.
-	await waitUntil(`PostgreSQL ${major}`, ['docker', 'exec', name, 'pg_isready', '--host=127.0.0.1', '--username=postgres'])
-	return { env: { FABRIKA_TEST_POSTGRES_URL: `postgres://postgres:postgres@127.0.0.1:${await publishedPort(name, 5432)}/postgres` }, container: name }
+	for (let attempt = 1; attempt <= POSTGRES_PORT_ATTEMPTS; attempt += 1) {
+		const port = freeLoopbackPort()
+		const name = await startContainer(`fabrika-check-ci-postgres-${major}`, [
+			'--network',
+			'host',
+			'--tmpfs',
+			postgresDataDir(major),
+			'--env',
+			`PGPORT=${port}`,
+			'--env',
+			'POSTGRES_PASSWORD=postgres',
+			// initdb trusts loopback TCP by default; over the bridge, as in CI, a client came from the gateway and needed its password.
+			'--env',
+			'POSTGRES_INITDB_ARGS=--auth-host=scram-sha-256',
+			postgresImage(major),
+			'postgres',
+			'-c',
+			'listen_addresses=127.0.0.1',
+			...Object.entries(POSTGRES_TEST_SETTINGS).flatMap(([name, value]) => ['-c', `${name}=${value}`]),
+		])
+		if (await postgresReady(name, major, port)) {
+			return { env: { FABRIKA_TEST_POSTGRES_URL: `postgres://postgres:postgres@127.0.0.1:${port}/postgres` }, container: name }
+		}
+		console.warn(`PostgreSQL ${major} exited before it was ready on port ${port}:\n${await containerLogs(name, '20')}`)
+		await removeContainers([name])
+	}
+	throw new StepFailure(`PostgreSQL ${major} exited before it was ready, ${POSTGRES_PORT_ATTEMPTS} times; its log is printed above`)
 }
 
 export const startSeaweedfs = async (): Promise<Backend> => {
