@@ -454,6 +454,16 @@ describe("an agent's token is held as IAM holds it (ADR-0090)", () => {
 		expect((await membership.rpc.listMembers({ ...asToken('agent-stale'), scope: ACME })).ok).toBe(true)
 	})
 
+	test("a person signed in at a terminal: the agent is held to the person's own permissions, not the terminal's ceiling", async () => {
+		// The ceiling admits nothing; IAM's exchange resolves the person and carries no terminal.
+		const atDesk: LabelledTestCaller = { ...owner, terminal: { id: 'front-desk', label: 'Front desk', ceiling: [], perms: [] } }
+		const membership = standIn(
+			[{ caller: atDesk, memberships: [{ role: 'owner', scope: ACME }] }],
+			new Map([['agent-desk', agent(atDesk, roleEntries('owner', ACME), 'read')]]),
+		)
+		expect((await membership.rpc.listMembers({ ...asToken('agent-desk'), scope: ACME })).ok).toBe(true)
+	})
+
 	test("it revokes the person's link only where it could issue one", async () => {
 		const membership = standIn([], tokens)
 		const issued = await membership.rpc.issueLink({ ...as(owner), mount: 'shared', chain: [NOTE, ACME], days: 1 })

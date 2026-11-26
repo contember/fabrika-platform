@@ -530,9 +530,11 @@ export function kitMembership(artifact: ContractArtifact, callers: DirectoryCall
 	 * its own entries that the person still holds.
 	 */
 	const heldPermsOf = (caller: TestCaller, input: MembershipCaller): readonly PermissionEntry[] => {
-		const live = permsOf(caller)
 		const agent = input.credential === null ? undefined : callers.agentOf(input.app, input.credential)
-		return agent === undefined ? live : agent.entries.filter((entry) => permits([...live], entry.action, entry.scope ?? undefined))
+		if (agent === undefined) return permsOf(caller)
+		// An agent's token carries no terminal, so IAM holds it to the person's own permissions, not a terminal's ceiling.
+		const own = ownPermsOf(caller)
+		return agent.entries.filter((entry) => permits([...own], entry.action, entry.scope ?? undefined))
 	}
 
 	/** The test's permissions of `caller`, less one entry for each action of a role it lost, plus those of each role it gained. */
