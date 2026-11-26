@@ -48,8 +48,15 @@ import {
 import { lifecycleEnvelopeSchema } from './api/provider-envelope'
 import { dataLossBeyond } from './approval/diff'
 import { protectedRunDecision, startedByPerson } from './approval/human'
-import { appliedMigrations, type PublicationInput, type PublishedCandidate, publishRunSnapshot, rereadDataLoss } from './approval/publish'
-import { type AccessSnapshot, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
+import {
+	appliedMigrations,
+	type PublicationInput,
+	type PublishedCandidate,
+	publishRunSnapshot,
+	rereadDataLoss,
+	runningSnapshot,
+} from './approval/publish'
+import { type AccessSnapshot, approvedAccess, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
 	type DriveResult,
@@ -89,6 +96,7 @@ import {
 import { declaresPublicEgress, installationHosts } from './egress-hosts'
 import type { CommitSource } from './github/source/commit-files'
 import { SourceDescriptorMismatch, type SourceDescriptorMismatchDetail } from './github/source/failure'
+import { narrowingOf } from './iam-narrowing'
 import { type IamSchemaPort, isIamUnavailable } from './iam-schema'
 import type { InstallationBrandSource } from './installation-brand'
 import { acquireLease, type Lease, type LeaseClock, type LeaseFence, namespaceLeaseKey, runLeaseKey } from './lease'
@@ -1035,6 +1043,13 @@ async function deployUnder(
 				// in the control log there — flush first so ours can never land after a relay flush.
 				await runLogs.flush()
 				await invocation.boundary()
+				// Before the republish or the provider puts the new endpoint table before anyone (backlog 226). A dev
+				// bootstrap is skipped: the environment's last succeeded run may be another workspace's.
+				if (!dryRun && sandbox === null) {
+					await applyNarrowing(deps, startedRun, registration.environment.access, invocation.work.signal, (line) => runLogs.log(line))
+					await runLogs.flush()
+					await invocation.boundary()
+				}
 				if (namespaceLease !== null && namespaceId !== null) {
 					const queue = deps.queue
 					if (queue === undefined) throw new Error('a namespace republish needs the control queue')
@@ -1428,6 +1443,38 @@ async function applyApprovedSchema(
 		console.error(`recording the IAM digest of ${appEnv.app_id}/${appEnv.env} failed; the next schema write records it`)
 	}
 	return null
+}
+
+/**
+ * Write to IAM what the run's approved schema removes from the running version's, and nothing it adds, before anything
+ * publishes the new version (backlog 226). A failure, an unavailable IAM included, throws, so the run fails while the
+ * old version serves. The running version's schema is compiled from the snapshot of the environment's last succeeded run,
+ * the one IAM was last given; without one, or when it cannot be read, nothing is narrowed ahead.
+ */
+async function applyNarrowing(
+	deps: Pick<RunDeps, 'repositories' | 'iamSchema'>,
+	run: RunRow,
+	access: ProviderApprovedAccess | undefined,
+	signal: AbortSignal,
+	log: (line: string) => void,
+): Promise<void> {
+	if (access === undefined || deps.iamSchema === undefined) return
+	const running = await runningSnapshot(deps.repositories.runs, run)
+	const before = running === null ? undefined : approvedAccess(running)?.schema
+	if (before === undefined) return
+	const narrowing = narrowingOf(before, access.schema)
+	if (narrowing.kind === 'none') return
+	if (narrowing.kind === 'inexpressible') {
+		log('access: the narrowing does not form a schema on its own; IAM takes it with the whole schema once the version is live')
+		return
+	}
+	try {
+		await deps.iamSchema.apply({ app: appEnvironmentId(run.app_id, run.env), schema: narrowing.schema, signal })
+	} catch (error) {
+		signal.throwIfAborted()
+		throw new Error(`IAM did not take the narrowing of the authz schema, so the version is not published: ${failureReason(error)}`)
+	}
+	log('access: IAM took the narrowing of the authz schema before the version is published')
 }
 
 /** The environment's approved access as the provider reads it, read again after this run's publication. */

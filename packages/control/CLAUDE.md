@@ -274,7 +274,15 @@ other environment, before the provider prepares anything, and the write maps a r
   the run; on a reconcile or a cancellation an IAM that does not answer (no response, 5xx, 408, 429) leaves the run
   unsettled for the next pass, and a refusal fails it, with the reason appended to the run log. The port exists only
   when `FABRIKA_IAM_ISSUER` is set (`iamSchemaDeps`, `src/services.ts`); every composition that settles runs spreads it.
-  A provider never calls IAM's admin surface for an application, and nothing else here does per deploy.
+  A provider never calls IAM's admin surface for an application, and nothing else here does per deploy, with one
+  exception: before the namespace republish and `provider.deploy`, `applyNarrowing` writes what the approved schema
+  takes away from the roles and actions of the schema of the environment's last succeeded run, and nothing it adds
+  (`narrowingOf`, `src/iam-narrowing.ts`; backlog 226). Any failure there, an unavailable IAM included, fails the run
+  with nothing published, so no version serves while IAM still grants what a role lost. Every workload, link mount,
+  delegation, member declaration and terminal page of the running schema stays in that write: IAM revokes a dropped
+  workload's or mount's keys and deletes the membership transport key with the last of them, which no later write
+  restores, so a deploy that fails afterwards would leave the running version without them. A field the new schema
+  changes rather than removes keeps the running value. A dry run and a dev bootstrap narrow nothing ahead.
 - **The return origin is `app_envs.public_origin` (ADR-0022).** `projectedReturnOrigins` (`src/return-origins.ts`)
   reads it from the DEPLOYING environment only. Never collect another environment's origin: registered under
   `notes@prod`, a `stage` host would be handed production sessions. No origin → the field is ABSENT, not
