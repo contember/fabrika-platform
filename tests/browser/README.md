@@ -39,6 +39,13 @@ OPICE_AUTH_REFRESH=1 bun test --path-ignore-patterns=__opice-no-ignore__ tests/b
 bun run browser:down -- --volumes
 ```
 
+The stack runs on this checkout's ports (`FABRIKA_LOCAL_PORT_BASE`, default
+18080; see `docs/reference/local-development.md`), and the scenarios read their
+origins from `@fabrika/local-stack/ports`, so a second worktree runs the suite on
+its own base: `FABRIKA_LOCAL_PORT_BASE=18090 bun run browser:reset`, then the
+`bun test` above without the variable. The `FABRIKA_BROWSER_*` origin variables
+still override a scenario's origin.
+
 Do not run `browser:reset` while another scenario uses the shared stack. A reset
 invalidates every IAM session. Always use `OPICE_AUTH_REFRESH=1` after a reset.
 

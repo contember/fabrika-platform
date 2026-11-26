@@ -89,10 +89,24 @@ This command removes only this checkout's Compose volumes and
 
 Each checkout is its own Compose project, `fabrika-local-<directory>-<hash of the
 checkout's path>` (`COMPOSE_PROJECT` in `src/compose.ts`), so a worktree's
-volumes, networks and containers never meet another worktree's credentials. The
-host ports are fixed, so one stack runs at a time: run `local:down` in the
-worktree that runs one before `local:up` in another; `docker ps` names the
-project in each container's name.
+volumes, networks and containers never meet another worktree's credentials;
+`docker ps` names the project in each container's name.
+
+A stack publishes two host ports: the platform proxy on `FABRIKA_LOCAL_PORT_BASE`
+(default `18080`) and the apps proxy on the next one. Every public origin carries
+them (`packages/local-stack/src/ports.ts`), so a second worktree runs its own stack
+beside the first on another base:
+
+```bash
+FABRIKA_LOCAL_PORT_BASE=18090 bun run local:up   # console http://control.fabrika.localhost:18090, Notes on 18091
+```
+
+The first prepare records the base in `.state/ports.env`, so the checkout's later
+commands (`local:smoke`, `local:seed`, `test:browser`, a single `bun test` of a
+scenario) find their stack without the variable. A stack keeps its base: `up` with
+another base is refused, and a reset with the new base moves it
+(`FABRIKA_LOCAL_PORT_BASE=18100 bun run local:reset`). A base is a port from 1024
+to 65534, and two stacks need bases at least 2 apart.
 
 A stack started before this naming is the project `fabrika-local`, which
 `local:down` no longer reaches: stop it, and once no checkout needs its data
@@ -270,6 +284,8 @@ expects it. It leaves the Notes database holding the suite's rows; `local:up` ke
 
 ## Endpoints
 
+On the default base (another base moves both ports with it):
+
 | Component                | URL                                      |
 | ------------------------ | ---------------------------------------- |
 | Unified Fabrika console  | `http://control.fabrika.localhost:18080` |
@@ -277,7 +293,7 @@ expects it. It leaves the Notes database holding the suite's rows; `local:up` ke
 | Operations public ingest | `http://errors.fabrika.localhost:18080`  |
 | Notes example app        | `http://notes.fabrika.localhost:18081`   |
 
-Containers call the same URLs. Since Bun 1.4.1, a Bun `fetch` sends every `*.localhost` name to the container's own
+Containers call the same URLs, and listen on the same ports as the host publish. Since Bun 1.4.1, a Bun `fetch` sends every `*.localhost` name to the container's own
 loopback, so each container that calls one starts through `packages/local-stack/src/loopback-forward.ts`, which
 forwards loopback `:18080` to the platform proxy and `:18081` to the apps proxy (`entrypoint` in `compose.yaml`). IAM
 serves `:18080` itself and forwards only `:18081`, over `edge`: it asks Notes for a workspace's values as the granting

@@ -580,7 +580,7 @@ never prints the key. A user administrator grants an external application's role
 
 The local stack runs MCP off, and serves the command-line client's device grant always. Set
 `FABRIKA_LOCAL_MCP_AUTHORING=on` before `bun run local:up` to turn MCP on; the resource is then
-`http://control.fabrika.localhost:18080/mcp`; unset, it is off. Register local clients with
+`http://control.fabrika.localhost:18080/mcp` (on the default `FABRIKA_LOCAL_PORT_BASE`); unset, it is off. Register local clients with
 `fabrika control external-apps put` and `fabrika control oauth-clients put` against the local IAM
 (`FABRIKA_IAM_RPC_URL=http://iam.fabrika.localhost:18080`, and the provisioning key from
 `packages/local-stack/.state/iam.env`). `FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` is refused.
