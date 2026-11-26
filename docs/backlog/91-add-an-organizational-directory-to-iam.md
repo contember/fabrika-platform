@@ -63,7 +63,8 @@ Acceptance:
 - Multiple organizations or tenants in one IAM installation.
 - Permission inheritance through the organizational tree.
 - Nested groups, dynamic membership rules, deny policies, and delegated organizational administration.
-- A generic SCIM connector before a concrete provider and deletion/reconciliation contract are selected.
+- SCIM provisioning of groups before a concrete group-to-role mapping is decided. SCIM Users are provisioned already
+  ([ADR-0091](../decisions/0091-the-identity-provider-provisions-users-over-scim.md)); step 3 above builds on them.
 - Arbitrary HR profile fields or placing directory data into every access token.
 
 ## Touch points
