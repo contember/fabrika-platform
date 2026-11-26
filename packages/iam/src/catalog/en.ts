@@ -146,6 +146,26 @@ export const en: Catalog = {
 			unavailableTitle: 'Two-step sign-in is unavailable',
 			unavailableText: 'This installation cannot store authenticator keys yet. Ask its operator to set it up.',
 		},
+		account: {
+			title: 'Your account',
+			connectionsTitle: 'Connected agents and devices',
+			connectionsText:
+				'Each of these acts as you, with your own permissions, until it ends. Revoking one stops it within five minutes; what it already changed stays.',
+			none: 'Nothing is connected to your account.',
+			agent: (label) => (label === null ? 'An agent that gave no name' : `Agent “${label}”`),
+			agentWords: "The name is the agent's own words; nothing checks it.",
+			commandLine: 'The fabrika command-line client',
+			client: (clientId) => `Client ${clientId}`,
+			reaches: 'Reaches',
+			mode: (mode) => (mode === 'read' ? 'Reads what you can read, and changes nothing' : 'Acts as you, including changes'),
+			scopes: 'Scopes',
+			allowed: 'Allowed',
+			ends: 'Ends',
+			revoke: 'Revoke',
+			revoked: 'Access revoked. It stops within five minutes.',
+			alreadyEnded: 'That access had already ended.',
+			more: (shown) => `Showing the ${shown} most recent.`,
+		},
 		invitation: {
 			title: 'Accept invitation',
 			text:

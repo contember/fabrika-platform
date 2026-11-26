@@ -103,6 +103,30 @@ export interface PageText {
 		readonly unavailableTitle: string
 		readonly unavailableText: string
 	}
+	/** The signed-in person's own page (`/auth/account`): what acts as them through an OAuth grant, and its revocation. */
+	readonly account: {
+		readonly title: string
+		readonly connectionsTitle: string
+		readonly connectionsText: string
+		readonly none: string
+		/** An agent's grant at an application (ADR-0090); `label` is the agent's own name for itself, or null. */
+		readonly agent: (label: string | null) => string
+		readonly agentWords: string
+		readonly commandLine: string
+		/** Any other client, by its client id. */
+		readonly client: (clientId: string) => string
+		readonly reaches: string
+		/** What an agent grant's mode lets it do, in words. */
+		readonly mode: (mode: 'read' | 'write') => string
+		readonly scopes: string
+		readonly allowed: string
+		readonly ends: string
+		readonly revoke: string
+		readonly revoked: string
+		readonly alreadyEnded: string
+		/** More grants are live than the page lists; `shown` is how many it lists. */
+		readonly more: (shown: number) => string
+	}
 	readonly invitation: {
 		readonly title: string
 		readonly text: string

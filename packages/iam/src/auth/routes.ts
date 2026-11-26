@@ -13,6 +13,7 @@ import { generateRequestId } from '../request-id'
 import { SECOND_FACTOR_ENROL_PATH, SECOND_FACTOR_PATH } from '../second-factor-pages'
 import type { Services } from '../services'
 import { getSigner } from '../signing'
+import { ACCOUNT_PATH, handleAccount } from './account'
 import { methodNotAllowed, safeRedirect } from './http'
 import { handleInvitation } from './invitations'
 import { handleAccountChoice, handleLogin } from './login'
@@ -86,6 +87,9 @@ export async function handleAuth(
 	}
 	if (url.pathname === SECOND_FACTOR_ENROL_PATH) {
 		return request.method === 'GET' || request.method === 'POST' ? handleSecondFactorEnrolment(request, services, requestId) : methodNotAllowed()
+	}
+	if (url.pathname === ACCOUNT_PATH) {
+		return request.method === 'GET' || request.method === 'POST' ? handleAccount(request, services, requestId) : methodNotAllowed()
 	}
 	if (url.pathname === '/auth/logout') {
 		// Logging out is a state change, so it needs a method that can carry an origin check. A GET

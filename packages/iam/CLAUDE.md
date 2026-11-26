@@ -962,6 +962,13 @@ fails if that stops being true — it is the guard, not documentation of one.
   claim, the grant, its `iam.oauth.grant.create` record and its first refresh token in one batch guarded by the claim,
   so exactly one poll gives a grant. Polls are admitted once per
   interval (`slow_down` adds five seconds, at most 60); a spent device code presented again revokes its grant.
+- **A PERSON LISTS AND REVOKES THEIR OWN GRANTS ON `/auth/account`, AND ONLY THEIR OWN** (ADR-0090 step 6,
+  `auth/account.ts`). The page needs `currentLogin` (an active user's IAM login; none is a redirect to sign-in and back,
+  a POST included, which then revoked nothing). It lists the person's grants in force (`listLiveForPrincipal`: not
+  revoked, not expired, the approving login not revoked), newest first, at most `ACCOUNT_GRANTS_SHOWN`. The same-origin
+  POST revokes a grant by id with `revokeOwnGrant`, whose UPDATE names the person, so another person's id, an unknown
+  one and a spent one all answer "already ended" and change nothing. A revocation writes `iam.oauth.grant.revoke` under
+  the person, `reason: 'owner'`, in its own statement. Words come from the catalog in the person's language.
 - **THE CLIENT'S DOCUMENT, NEVER THE REQUEST, PICKS HOW THE CLIENT AUTHENTICATES** (`oauth-client-auth.ts`).
   A `none` document is a public client and is refused if it sends an assertion; a `private_key_jwt` document
   (ChatGPT) must send a JWT assertion at `/oauth/token` and `/oauth/revoke`, verified against the `jwks_uri`

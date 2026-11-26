@@ -15,6 +15,7 @@ import { isOAuthDeviceGrantLifetime, OAUTH_DEVICE_GRANT_LIFETIMES_SECONDS, type 
 import { applicationResource, approvableAgentScopes, storedAgentScope } from './agent-resource'
 import { parsePresentation } from './app-presentation'
 import { sessionEndsAt } from './auth'
+import { ACCOUNT_PATH } from './auth/account'
 import { readForm, redirectHeaders, sameOrigin } from './auth/http'
 import { currentSession } from './auth/sessions'
 import { type PrincipalRow, principalStatus } from './db'
@@ -86,7 +87,12 @@ export async function handleDevicePage(request: Request, services: Services, con
 		now,
 	)
 	if (!approved) return page(services, 'Expired', '<p>This request was decided already, or it has expired.</p>', 409)
-	return page(services, 'Access granted', '<p>The device has access. Return to your terminal; you can close this page.</p>')
+	return page(
+		services,
+		'Access granted',
+		`<p>The device has access. Return to your terminal; you can close this page.</p>
+		<p>Your <a href="${ACCOUNT_PATH}">account page</a> lists what has access to your account, and ends it.</p>`,
+	)
 }
 
 async function signedInPerson(
