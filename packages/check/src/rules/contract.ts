@@ -56,8 +56,10 @@ function memberAdmitsExternal(contract: ContractDeclaration<SchemaShape>, at: Po
 	const roles = external.map((name) => `'${name}'`).join(', ')
 	const sites: string[] = []
 	for (const [name, mount] of Object.entries(contract.mounts)) {
-		// A machine-only mount admits services, and an external principal is always a user.
-		if (mount.kind === 'rpc' && mount.callers.includes('human')) sites.push(...memberProcedures(mount.procedures, name))
+		// An external principal is always a user, who reaches a mount that lists `human` or, through an agent, `agent`.
+		if (mount.kind === 'rpc' && mount.callers.some((caller) => caller === 'human' || caller === 'agent')) {
+			sites.push(...memberProcedures(mount.procedures, name))
+		}
 		if (mount.kind === 'spa' && 'member' in mount.access) sites.push(name)
 	}
 	return sites.map((site): Finding => ({

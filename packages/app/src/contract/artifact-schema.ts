@@ -537,9 +537,6 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 				if (row.source.kind !== 'export' && row.callers.some((caller) => caller.startsWith('app:'))) {
 					context.addIssue({ code: 'custom', path: [index, 'callers'], message: 'an app:<id> caller reaches only an export row' })
 				}
-				if (row.callers.some((caller) => caller === AGENT_CALLER) && (row.source.kind !== 'mount' || !AGENT_ROW_KINDS.includes(row.kind))) {
-					context.addIssue({ code: 'custom', path: [index, 'callers'], message: 'an agent caller reaches only a procedure of an RPC mount (ADR-0090)' })
-				}
 				if (row.source.kind === 'export' && row.requirement?.kind !== 'action') {
 					context.addIssue({ code: 'custom', path: [index, 'requirement'], message: 'an export row requires an action' })
 				}
@@ -596,6 +593,16 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 		tokens: record(z.strictObject({ claims: shape, maxDays: z.int().positive().max(TOKEN_MAX_DAYS) })).optional(),
 	}).superRefine((artifact, context) => {
 		for (const row of artifact.endpoints) {
+			if (row.callers.some((caller) => caller === AGENT_CALLER)) {
+				const mount = row.source.kind === 'mount' ? artifact.mounts[row.source.name] : undefined
+				if (mount?.kind !== 'rpc' || !mount.callers.some((caller) => caller === AGENT_CALLER) || !AGENT_ROW_KINDS.includes(row.kind)) {
+					context.addIssue({
+						code: 'custom',
+						path: ['endpoints', artifact.endpoints.indexOf(row), 'callers'],
+						message: 'an agent caller reaches only a procedure of an RPC mount that lists agent (ADR-0090)',
+					})
+				}
+			}
 			// A row answering a file of an inline kind shows it, every other row that answers a file downloads it.
 			if (row.output?.type === 'file' && (row.response === 'inline-file') !== (artifact.fileKinds?.[row.output.kind]?.inline === true)) {
 				context.addIssue({ code: 'custom', path: ['endpoints'], message: `'${row.id}' is inline-file exactly when its file kind is inline` })
