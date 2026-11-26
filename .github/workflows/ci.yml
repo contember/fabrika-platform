@@ -183,7 +183,7 @@ jobs:
   proxy-image:
     name: Build the proxy image
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v6
 
