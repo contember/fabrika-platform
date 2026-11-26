@@ -15,9 +15,9 @@ import { iamMembershipKeyIssuer, needsMembershipTransport } from '@fabrika/contr
 import { notesContract } from 'fabrika-example-zerops/fabrika.config'
 import { resolve } from 'node:path'
 import { readStateEnv } from './machine-key'
+import { IAM_ORIGIN } from './ports'
 import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR, writeEnv } from './prepare'
 
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
 const NOTES_MEMBERSHIP_ENV_FILE = 'notes-membership.env'
 
 export const MEMBERSHIP_URL_VARIABLE = 'FABRIKA_IAM_RPC_URL'

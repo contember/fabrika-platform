@@ -1,6 +1,7 @@
+import { CONTROL_ORIGIN } from '@fabrika/local-stack/ports'
 import { browserTest, byLabel, byRole, expect, getPage, invariant, open, reload, step } from '@opice/harness'
 
-const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
+const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? CONTROL_ORIGIN
 const OPERATIONS_RPC_URL = `${BASE_URL}/operations/api/rpc`
 
 interface SourceSummary {

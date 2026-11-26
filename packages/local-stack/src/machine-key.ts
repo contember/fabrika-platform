@@ -17,11 +17,10 @@ import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
 import type { ControlRpcContract } from '@fabrika/control-contract'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { CONTROL_ORIGIN, IAM_ORIGIN } from './ports'
 import { STATE_DIR } from './prepare'
 import { itemsResponseSchema, machineKeyResponseSchema } from './response-schemas'
 
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
-const CONTROL_ORIGIN = 'http://control.fabrika.localhost:18080'
 const MACHINE_ENV_FILE = 'machine.env'
 const MACHINE_KEY_NAME = 'FABRIKA_LOCAL_MACHINE_KEY'
 

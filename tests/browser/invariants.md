@@ -2,7 +2,7 @@
 
 Every authored scenario must preserve these properties:
 
-1. Browser mutations use `http://control.fabrika.localhost:18080/operations/api/rpc`.
+1. Browser mutations use the console's `/operations/api/rpc` (`http://control.fabrika.localhost:18080` on the default port base).
    Tests do not call the private Operations operator API.
 2. Authenticated contexts hold one `__Host-px_session` PER HOST, each obtained
    through the real one-time-code handoff and each a distinct `sessions` row

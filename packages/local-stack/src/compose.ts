@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { basename, resolve } from 'node:path'
+import { localComposeEnv, readRecordedPortBase, refuseMovedBase } from './ports'
 import { COMPOSE_FILE, REPO_ROOT, STATE_DIR } from './prepare'
 
 /**
@@ -45,11 +46,20 @@ function browserEnvFile(): string[] {
 	return existsSync(path) ? ['--env-file', path] : []
 }
 
+/**
+ * The environment of a compose call: `compose.yaml` interpolates this checkout's ports (`ports.ts`). Only `down` may run
+ * on a base other than the recorded one, which a reset does before it moves the stack.
+ */
+export function composeEnv(args: readonly string[], extra: Record<string, string> = {}): Record<string, string | undefined> {
+	if (args[0] !== 'down') refuseMovedBase(readRecordedPortBase())
+	return { ...process.env, ...localComposeEnv(), ...extra }
+}
+
 export async function compose(args: string[], options: ComposeOptions = {}): Promise<void> {
 	const showOutput = options.showOutput ?? true
 	const child = Bun.spawn(composeCommand(args, options.browser ?? false), {
 		cwd: REPO_ROOT,
-		...(options.env === undefined ? {} : { env: { ...process.env, ...options.env } }),
+		env: composeEnv(args, options.env),
 		stdout: showOutput ? 'inherit' : 'ignore',
 		stderr: showOutput ? 'inherit' : 'ignore',
 		stdin: 'ignore',
@@ -63,6 +73,7 @@ export async function compose(args: string[], options: ComposeOptions = {}): Pro
 export async function composeOutput(args: string[], options: Pick<ComposeOptions, 'browser'> = {}): Promise<string> {
 	const child = Bun.spawn(composeCommand(args, options.browser ?? false), {
 		cwd: REPO_ROOT,
+		env: composeEnv(args),
 		stdout: 'pipe',
 		stderr: 'ignore',
 		stdin: 'ignore',

@@ -33,14 +33,13 @@ import { NOTES_FILES_SERVICE, notesContract } from 'fabrika-example-zerops/fabri
 import { randomUUID } from 'node:crypto'
 import { resolve } from 'node:path'
 import { isDeepStrictEqual } from 'node:util'
-import { COMPOSE_PROJECT } from './compose'
+import { COMPOSE_PROJECT, composeEnv } from './compose'
 import { approveInConsole, signInToConsole } from './console-approval'
 import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY, type LocalSourceManifest } from './local-source-contract'
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
 import { MEMBERSHIP_KEY_VARIABLE, MEMBERSHIP_URL_VARIABLE, membershipKeyAccepted, writeNotesMembershipTransport } from './membership-key'
 import {
-	CONTROL_ORIGIN,
 	controlRequest,
 	DURABLE_BUILD_WAIT_MS,
 	type EmulatorSnapshot,
@@ -58,7 +57,8 @@ import {
 	triggerByScopedWebhook,
 	waitForParkOrProvider,
 } from './notes-deploy'
-import { COMPOSE_FILE, LOCAL_NOTES_ENVIRONMENT, LOCAL_NOTES_IAM_APP_ID, LOCAL_OPERATIONS_ORIGIN, REPO_ROOT, STATE_DIR } from './prepare'
+import { CONTROL_ORIGIN, IAM_ORIGIN, NOTES_ORIGIN, OPERATIONS_ORIGIN, SIBLING_ORIGIN } from './ports'
+import { COMPOSE_FILE, LOCAL_NOTES_ENVIRONMENT, LOCAL_NOTES_IAM_APP_ID, REPO_ROOT, STATE_DIR } from './prepare'
 import { idResponseSchema, rpcResponseSchema } from './response-schemas'
 import {
 	activeOperationsConfigSchema,
@@ -75,9 +75,6 @@ import {
 } from './smoke-schemas'
 import { notesWorkloadKeys, workloadKeyExchanges, writeNotesWorkloadKeys } from './workload-keys'
 
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
-const NOTES_ORIGIN = 'http://notes.fabrika.localhost:18081'
-const OPERATIONS_ORIGIN = 'http://errors.fabrika.localhost:18080'
 const NOTES_ENVIRONMENT = LOCAL_NOTES_ENVIRONMENT
 const EXTERNAL_ACTIVATION_WAIT_MS = 11_000
 // Production runs the cron every 5 min; the smoke compresses that so the lease expiry dominates the wait.
@@ -88,7 +85,7 @@ const STORAGE_PROVENANCE_VARIABLE = 'FABRIKA_STORAGE_PROVENANCE'
 const compose = async (args: string[], expectSuccess = true, showOutput = true): Promise<number> => {
 	const process = Bun.spawn(
 		['docker', 'compose', '--project-name', COMPOSE_PROJECT, '--file', COMPOSE_FILE, ...args],
-		{ cwd: REPO_ROOT, stdout: showOutput ? 'inherit' : 'ignore', stderr: showOutput ? 'inherit' : 'ignore', stdin: 'ignore' },
+		{ cwd: REPO_ROOT, env: composeEnv(args), stdout: showOutput ? 'inherit' : 'ignore', stderr: showOutput ? 'inherit' : 'ignore', stdin: 'ignore' },
 	)
 	const exitCode = await process.exited
 	if (expectSuccess && exitCode !== 0) {
@@ -100,7 +97,7 @@ const compose = async (args: string[], expectSuccess = true, showOutput = true):
 const composeOutput = async (args: string[]): Promise<string> => {
 	const process = Bun.spawn(
 		['docker', 'compose', '--project-name', COMPOSE_PROJECT, '--file', COMPOSE_FILE, ...args],
-		{ cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' },
+		{ cwd: REPO_ROOT, env: composeEnv(args), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' },
 	)
 	const [output, failure, exitCode] = await Promise.all([
 		new Response(process.stdout).text(),
@@ -493,7 +490,7 @@ const proveIamAndNotes = async (provisioningKey: string): Promise<void> => {
 		})
 		const connectSrc = (listing.headers.get('content-security-policy') ?? '').split(';').map((part) => part.trim().split(/\s+/))
 			.find((directive) => directive[0] === 'connect-src')
-		if (listing.status !== 200 || connectSrc?.includes(LOCAL_OPERATIONS_ORIGIN) !== true) {
+		if (listing.status !== 200 || connectSrc?.includes(OPERATIONS_ORIGIN) !== true) {
 			throw new Error("the proxy's CSP for Notes does not let the browser report to the local Operations ingest")
 		}
 		const listed: unknown = await listing.json()
@@ -646,7 +643,7 @@ const proveControlTable = async (): Promise<void> => {
  */
 const FOREIGN_SITES = [
 	{ site: 'cross-site', origin: 'https://attacker.example' },
-	{ site: 'same-site', origin: 'http://sibling.fabrika.localhost:18080' },
+	{ site: 'same-site', origin: SIBLING_ORIGIN },
 ]
 
 const CONSOLE_MOUNTS = [

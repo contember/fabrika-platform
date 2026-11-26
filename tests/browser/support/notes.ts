@@ -2,11 +2,12 @@
 // a password from a one-time link, and is checked to be back in Notes. Every link comes from the captured mail.
 
 import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { IAM_ORIGIN, NOTES_ORIGIN } from '@fabrika/local-stack/ports'
 import { byRole, expect, getContext, getPage } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
 
-export const IAM_URL = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? 'http://iam.fabrika.localhost:18080'
-export const NOTES_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? 'http://notes.fabrika.localhost:18081'
+export const IAM_URL = process.env['FABRIKA_BROWSER_IAM_ORIGIN'] ?? IAM_ORIGIN
+export const NOTES_URL = process.env['FABRIKA_BROWSER_APP_URL'] ?? NOTES_ORIGIN
 
 export function newPassword(): string {
 	return `notes browser ${randomUUID()}`

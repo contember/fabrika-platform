@@ -17,7 +17,6 @@ import {
 import { loadLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { requireMachineKey } from './machine-key'
 import {
-	CONTROL_ORIGIN,
 	ensureNamespace,
 	ensureNotesApp,
 	envValue,
@@ -28,11 +27,10 @@ import {
 } from './notes-deploy'
 import { followNotesDeploy } from './notes-follow'
 import { adminRpc } from './password-person'
+import { CONTROL_ORIGIN, IAM_ORIGIN, NOTES_ORIGIN } from './ports'
 import { LOCAL_NOTES_IAM_APP_ID, STATE_DIR } from './prepare'
 import { createdNoteSchema, keyPrincipalSchema, notesListSchema } from './smoke-schemas'
 
-const IAM_ORIGIN = 'http://iam.fabrika.localhost:18080'
-const NOTES_ORIGIN = 'http://notes.fabrika.localhost:18081'
 const WORKSPACE = 'compat'
 /** The fixed identity `LOCAL_DEV_LOGIN` signs in (IAM's `LOCAL_DEV_ADMIN_EMAIL`). */
 const LOCAL_DEV_ADMIN_EMAIL = 'admin@local.test'

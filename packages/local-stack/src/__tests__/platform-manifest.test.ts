@@ -18,6 +18,7 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseOAuthConfig } from '../../../iam/src/oauth-config'
 import { localApps } from '../app-registration'
+import { IAM_ORIGIN, LOCAL_PORTS } from '../ports'
 import {
 	localIamOAuthConfig,
 	localOperationsOAuthResource,
@@ -25,6 +26,9 @@ import {
 	readLocalMcpAuthoring,
 	refuseLocalOAuthClients,
 } from '../prepare'
+import { readComposeFile } from './compose-file'
+
+const composeYaml = await readComposeFile('compose.yaml')
 
 /** What protects an entry: its service table's rows and reserved prefixes. */
 const accessOf = (app: InstallationProxyApp) => ({ endpoints: app.endpoints, reservedPrefixes: app.reservedPrefixes })
@@ -54,10 +58,10 @@ describe('the local platform manifest is the installation template, placed local
 		}
 	})
 
-	test('the upstreams are the installation ones except IAM, which the composition publishes on 18080', () => {
+	test("the upstreams are the installation ones except IAM, which the composition publishes on the checkout's platform port", () => {
 		const byId = new Map(localPlatformProxyManifest().apps.map((app) => [app.id, app.upstream]))
 		for (const app of PLATFORM_PROXY_APPS) {
-			const expected = app.service === 'iam' ? 'iam:18080' : app.upstream
+			const expected = app.service === 'iam' ? `iam:${LOCAL_PORTS.platform}` : app.upstream
 			expect(byId.get(app.id)).toBe(expected)
 		}
 	})
@@ -77,10 +81,9 @@ describe('what the local composition registers with IAM', () => {
 })
 
 describe('OAuth and MCP authoring in the local composition', () => {
-	// What control derives its MCP resource from: its `FABRIKA_CONTROL_DOMAIN` in compose.yaml.
+	// What control derives its MCP resource from: its `FABRIKA_CONTROL_DOMAIN` in compose.yaml, at the port compose is given.
 	const controlDomain = (): string => {
-		const compose = readFileSync(resolve(import.meta.dir, '..', '..', 'compose.yaml'), 'utf8')
-		const match = /FABRIKA_CONTROL_DOMAIN: (\S+)/.exec(compose)
+		const match = /FABRIKA_CONTROL_DOMAIN: (\S+)/.exec(composeYaml)
 		if (match?.[1] === undefined) throw new Error('compose.yaml names no FABRIKA_CONTROL_DOMAIN')
 		return match[1]
 	}
@@ -104,7 +107,7 @@ describe('OAuth and MCP authoring in the local composition', () => {
 		expect(consoleOf(true)?.endpoints).toEqual(tableOf(true))
 		expect(consoleOf(true)?.oauthResources?.map((entry) => entry.resource)).toEqual([...cliResources(origin), controlMcpResource(origin)])
 		for (const entry of consoleOf(true)?.oauthResources ?? []) {
-			expect(entry.authorizationServers).toEqual(['http://iam.fabrika.localhost:18080'])
+			expect(entry.authorizationServers).toEqual([IAM_ORIGIN])
 		}
 		const manifest = localPlatformProxyManifest(true)
 		expect(parseProxyManifestJson(encodeProxyManifestJson(manifest))).toEqual(manifest)

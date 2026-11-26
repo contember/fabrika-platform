@@ -1,3 +1,4 @@
+import { OPERATIONS_ORIGIN as LOCAL_OPERATIONS_ORIGIN } from '@fabrika/local-stack/ports'
 import { operationsEnvelopeUrl } from '@fabrika/operations-contract'
 import { getPage } from '@opice/harness'
 import { createHash, randomUUID } from 'node:crypto'
@@ -7,7 +8,7 @@ import { BROWSER_PRINCIPAL_KEY } from '../browser-auth'
 
 const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
 const FIXTURES_FILE = resolve(REPO_ROOT, 'packages', 'local-stack', '.state', 'browser-fixtures.json')
-const OPERATIONS_ORIGIN = process.env['FABRIKA_BROWSER_OPERATIONS_ORIGIN'] ?? 'http://errors.fabrika.localhost:18080'
+const OPERATIONS_ORIGIN = process.env['FABRIKA_BROWSER_OPERATIONS_ORIGIN'] ?? LOCAL_OPERATIONS_ORIGIN
 
 export type BrowserFixtureSourceName = 'visible' | 'hidden'
 

@@ -31,6 +31,7 @@ import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from
 import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { applicationFixtureRoot } from './local-source-fixtures/generate'
 import { MAIL_DIRECTORY } from './mail-capture'
+import { IAM_ORIGIN, LOCAL_PORT_BASE_VARIABLE, LOCAL_PORTS, OPERATIONS_ORIGIN, readRecordedPortBase, refuseMovedBase } from './ports'
 import { ensureLocalGitHubApps } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
@@ -38,9 +39,8 @@ export const LOCAL_STACK_DIR = resolve(REPO_ROOT, 'packages', 'local-stack')
 export const STATE_DIR = resolve(LOCAL_STACK_DIR, '.state')
 export const COMPOSE_FILE = resolve(LOCAL_STACK_DIR, 'compose.yaml')
 
-const LOCAL_PUBLIC_PORT = 18080
-const IAM_ISSUER = `http://iam.fabrika.localhost:${LOCAL_PUBLIC_PORT}`
-export const LOCAL_OPERATIONS_ORIGIN = `http://errors.fabrika.localhost:${LOCAL_PUBLIC_PORT}`
+const IAM_ISSUER = IAM_ORIGIN
+const IAM_UPSTREAM = `iam:${LOCAL_PORTS.platform}`
 
 const statePath = (name: string): string => resolve(STATE_DIR, name)
 
@@ -270,12 +270,12 @@ const localComposition = (mcp: boolean): PlatformProxyComposition => ({
 	scheme: 'http',
 	placement: {
 		// IAM listens on the composition's public port here, because its issuer carries that port
-		// (`http://iam.fabrika.localhost:18080`); an installation runs it on 3000 like the rest.
-		iam: { hosts: ['iam.fabrika.localhost'], upstream: 'iam:18080' },
+		// (`http://iam.fabrika.localhost:18080` by default); an installation runs it on 3000 like the rest.
+		iam: { hosts: ['iam.fabrika.localhost'], upstream: IAM_UPSTREAM },
 		control: { hosts: ['control.fabrika.localhost'] },
 		operations: { hosts: ['errors.fabrika.localhost'] },
 	},
-	publicPort: LOCAL_PUBLIC_PORT,
+	publicPort: LOCAL_PORTS.platform,
 	// Always an authorization server, like an https installation: the command-line client's device grant is served.
 	authorizationServer: IAM_ISSUER,
 	mcp,
@@ -336,7 +336,7 @@ export const localAppsProxyManifest = (table: ContractProxyTable = contractProxy
 			upstream: 'notes:3000',
 			scheme: 'http',
 			// The origin of the local ingest DSN; the proxy's CSP lets the browser report to it.
-			operationsOrigin: LOCAL_OPERATIONS_ORIGIN,
+			operationsOrigin: OPERATIONS_ORIGIN,
 			...table,
 		},
 	],
@@ -376,7 +376,7 @@ export const writeAppsProxyConfig = async (appsManifest: ProxyManifest): Promise
 			'apps-caddy.json',
 			buildCaddyConfig(appsManifest, {
 				authUpstream: '127.0.0.1:9000',
-				listen: [':18081'],
+				listen: [`:${LOCAL_PORTS.apps}`],
 				healthListen: [':19081'],
 			}),
 		),
@@ -390,14 +390,20 @@ const generateProxyConfigs = async (mcp: boolean): Promise<void> => {
 		writeJson(
 			'platform-caddy.json',
 			buildCaddyConfig(platformManifest, {
-				iamSessionOwner: { issuer: IAM_ISSUER, upstream: 'iam:18080' },
+				iamSessionOwner: { issuer: IAM_ISSUER, upstream: IAM_UPSTREAM },
 				authUpstream: '127.0.0.1:9000',
-				listen: [':18080'],
+				listen: [`:${LOCAL_PORTS.platform}`],
 				healthListen: [':19080'],
 			}),
 		),
 		writeAppsProxyConfig(localAppsProxyManifest()),
 	])
+}
+
+/** Records the base, so this checkout's later commands find its stack without the variable. */
+const recordLocalPorts = async (): Promise<void> => {
+	refuseMovedBase(readRecordedPortBase())
+	await writeEnv(STATE_DIR, 'ports.env', { [LOCAL_PORT_BASE_VARIABLE]: String(LOCAL_PORTS.platform) })
 }
 
 const run = async (command: string[]): Promise<void> => {
@@ -411,6 +417,8 @@ const run = async (command: string[]): Promise<void> => {
 export const prepareLocalStack = async (): Promise<void> => {
 	refuseLocalOAuthClients(process.env)
 	mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 })
+	// Before the console build, so a refused move costs nothing.
+	await recordLocalPorts()
 	// Made here, by the host's user, so a reset can remove the messages the IAM container writes as root.
 	mkdirSync(MAIL_DIRECTORY, { recursive: true, mode: 0o700 })
 	// Plain `bun run`, never wrapped in the developer's core-leasing helper: this also runs where that

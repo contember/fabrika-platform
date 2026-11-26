@@ -121,12 +121,18 @@ bun run test:browser  # the opice suites in tests/browser/
 - **Inside a container, a public host is reached through a loopback forward.** Since Bun 1.4.1, `fetch`, `WebSocket`
   and `Bun.connect` resolve every `*.localhost` name to the container's own loopback without asking the resolver, so
   the network aliases above no longer apply to them (`node:net` and `node:dns` still use the resolver). A Bun container
-  that calls a public URL (`control`, `operations`, `notes`, `apps-proxy-auth`, and `iam` for an application's value source on `:18081`, over `edge`) therefore starts through
-  `src/loopback-forward.ts`, its `entrypoint` in `compose.yaml`: loopback `:18080` goes to `platform-proxy-auth:18080`
-  and, for Notes and IAM, `:18081` to `apps-proxy-auth:18081`, the proxies that serve those hosts. Every URL the platform
+  that calls a public URL (`control`, `operations`, `notes`, `apps-proxy-auth`, and `iam` for an application's value source on the apps port, over `edge`) therefore starts through
+  `src/loopback-forward.ts`, its `entrypoint` in `compose.yaml`: loopback's platform port goes to `platform-proxy-auth`
+  and, for Notes and IAM, the apps port to `apps-proxy-auth`, the proxies that serve those hosts. Every URL the platform
   writes stays the public one, and a forward only targets a proxy the container's networks already reach. `iam` serves
-  `:18080` itself and the two proxy containers their own ports. A new container that calls a public host needs the same
+  the platform port itself and the two proxy containers their own ports. A new container that calls a public host needs the same
   entrypoint; never rewrite the URL to a service name instead.
+- **A checkout's ports come from `src/ports.ts` alone.** `FABRIKA_LOCAL_PORT_BASE` (default 18080) is the platform
+  port, the next one the apps port; prepare records the base in `.state/ports.env`, later commands read it back, and a
+  stack keeps its base until a reset. Each public origin carries its port and reaches a container's own loopback, so
+  the containers listen on these same ports: `compose.yaml` interpolates `FABRIKA_LOCAL_PLATFORM_PORT` and
+  `FABRIKA_LOCAL_APPS_PORT`, which only `compose.ts` (and `smoke.ts`) pass. Never write a literal port or origin again;
+  import it from `src/ports.ts`. `src/__tests__/ports.test.ts` refuses a fixed port in the compose files.
 - **The Zerops emulator is a test double for the API, not for the platform.** It exists so a deploy
   can be driven end-to-end without an account; a behavior it fakes is not evidence about Zerops. See
   `docs/reference/zerops-platform.md` for what is actually verified. Its behaviour is pinned by the

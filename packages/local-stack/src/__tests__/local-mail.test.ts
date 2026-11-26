@@ -11,6 +11,7 @@ import { describe, expect, test } from 'bun:test'
 import { relative, resolve } from 'node:path'
 import { z } from 'zod'
 import { LOCAL_EMAIL_PROVIDERS, MAIL_DIRECTORY, newestMatching } from '../mail-capture'
+import { readComposeFile } from './compose-file'
 
 const WORKSPACE = resolve(import.meta.dir, '..', '..', '..', '..')
 const MAIL_VARIABLES = ['FABRIKA_EMAIL_PROVIDER', 'FABRIKA_EMAIL_FROM', 'FABRIKA_EMAIL_DIRECTORY']
@@ -25,7 +26,7 @@ const Compose = z.object({
 	}),
 })
 
-const compose = Compose.parse(Bun.YAML.parse(await Bun.file(resolve(import.meta.dir, '..', '..', 'compose.yaml')).text()))
+const compose = Compose.parse(Bun.YAML.parse(await readComposeFile('compose.yaml')))
 const mailOf = (environment: Readonly<Record<string, unknown>>): Record<string, string> =>
 	Object.fromEntries(
 		Object.entries(environment).flatMap(([name, value]) => (name.startsWith('FABRIKA_EMAIL_') && typeof value === 'string' ? [[name, value]] : [])),

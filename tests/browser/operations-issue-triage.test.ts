@@ -1,9 +1,10 @@
+import { CONTROL_ORIGIN } from '@fabrika/local-stack/ports'
 import { browserTest, byLabel, byRole, el, expect, getPage, invariant, step } from '@opice/harness'
 import { randomUUID } from 'node:crypto'
 import type { Request } from 'playwright'
 import { type BrowserPrincipal, readBrowserPrincipal, sendErrorFixture } from './support/fixtures'
 
-const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? 'http://control.fabrika.localhost:18080'
+const BASE_URL = process.env['FABRIKA_BROWSER_BASE_URL'] ?? CONTROL_ORIGIN
 const SCENARIO_NAME = 'A scoped operator records and persists issue triage'
 const RUN_ID = randomUUID()
 const ISSUE_TITLE = `Browser triage ${RUN_ID}`

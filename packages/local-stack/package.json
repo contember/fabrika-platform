@@ -4,7 +4,8 @@
 	"type": "module",
 	"exports": {
 		".": "./src/zerops-emulator.ts",
-		"./browser-support": "./src/browser-support.ts"
+		"./browser-support": "./src/browser-support.ts",
+		"./ports": "./src/ports.ts"
 	},
 	"scripts": {
 		"emulator": "bun src/emulator-server.ts",
