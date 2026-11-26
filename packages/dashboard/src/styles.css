@@ -3725,6 +3725,77 @@ td.row-actions > * + * {
 	color: var(--lamp-stop);
 }
 
+/* An environment's stuck operation (Data tab): the first thing on the page, with its way out. */
+.stuck-operation-body {
+	display: grid;
+	gap: var(--s-2);
+	min-width: 0;
+}
+
+.stuck-operation-body h2 {
+	margin: 0;
+	font-size: var(--t-md);
+	color: var(--ink);
+}
+
+.stuck-operation-body p {
+	margin: 0;
+}
+
+/* A section folded under one summary line: diagnostic detail off the main path. */
+.disclosure {
+	margin-top: var(--s-3);
+}
+
+.disclosure > summary {
+	cursor: pointer;
+	font-size: var(--t-sm);
+	color: var(--ink-2);
+}
+
+.disclosure-title {
+	margin-right: var(--s-3);
+	font-weight: 600;
+	color: var(--ink);
+}
+
+.disclosure[open] > summary {
+	margin-bottom: var(--s-3);
+}
+
+/* A choice among a few modes, each with what it does; the current one carries a chip. */
+.mode-choice {
+	display: grid;
+	gap: var(--s-1);
+	margin: 0 0 var(--s-3);
+	padding: 0;
+	border: 0;
+	min-width: 0;
+}
+
+.mode-choice label {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--s-2);
+	padding: var(--s-1) 0;
+	cursor: pointer;
+}
+
+.mode-choice input {
+	flex-shrink: 0;
+	margin: var(--s-1) 0 0;
+}
+
+.mode-choice strong {
+	font-weight: 500;
+	color: var(--ink);
+	margin-right: var(--s-2);
+}
+
+.mode-choice .hint {
+	display: block;
+}
+
 /* ── Operations plane ─────────────────────────────────────────────────────── */
 
 .ops-capabilities {
