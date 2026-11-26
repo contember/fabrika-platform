@@ -244,8 +244,8 @@ other environment, before the provider prepares anything, and the write maps a r
 - **A domain serves one application environment of the whole installation** (`src/api/registry/domain-ownership.ts`).
   `register` and `apps.environments.put` refuse, with a 409 that names no other environment and before the provider
   prepares anything, a domain another environment holds (compared without case, in any namespace, on every provider),
-  and the installation's own hosts (`reservedInstallationHosts`: Control's, which serves the console, and IAM's issuer)
-  with every name under them. A `dev` environment's domain is a wildcard base: it holds every name under it against a
+  and the installation's own hosts (`reservedInstallationHosts`: Control's, which serves the console, IAM's issuer and
+  `OPERATIONS_ARTIFACT_ORIGIN`) with every name under them. A `dev` environment's domain is a wildcard base: it holds every name under it against a
   standard environment, and the dev environments of several applications may share one. `idx_app_envs_domain`
   (migration `0044`, every environment but `dev` ones) decides a race; the write maps it to `AppEnvDomainConflictError`.
 - **A variable value is one bounded line and a domain is a literal host.** `assertAppVarValue` (4096 chars;

@@ -18,6 +18,7 @@ import { rpcRequest, rpcResult } from './helpers/rpc'
 
 const CONSOLE = 'https://console.example.com'
 const IAM = 'https://iam.example.com'
+const OPERATIONS = 'https://ops.example.com'
 const HELD = 'is already held by another application environment; a domain serves one environment of the installation'
 
 const envelope = (kind: string): ProviderEnvelope => ({ provider: TEST_PROVIDER_ID, version: 1, payload: { kind } })
@@ -44,12 +45,14 @@ const register = (made: ControlRpcDeps, id: string, domain: string) =>
 	rpcResult(rpcRequest('register', { id, repoUrl: `https://github.com/acme/${id}`, env: 'prod', domain, ...placement }), made, {
 		consoleOrigin: CONSOLE,
 		iamIssuer: IAM,
+		operationsOrigin: OPERATIONS,
 	})
 
 const put = (made: ControlRpcDeps, appId: string, env: string, domain: string) =>
 	rpcResult(rpcRequest('apps.environments.put', { appId, env, environment: { domain, ...placement } }), made, {
 		consoleOrigin: CONSOLE,
 		iamIssuer: IAM,
+		operationsOrigin: OPERATIONS,
 	})
 
 async function errorOf(response: Response): Promise<string> {
@@ -102,11 +105,14 @@ describe('a domain held by another application environment', () => {
 })
 
 describe("the installation's own hosts", () => {
-	test('reads Control (the console) and IAM from the environment, lowercase, skipping what names no host', () => {
-		expect(reservedInstallationHosts({ FABRIKA_CONTROL_DOMAIN: 'Console.Example.com', FABRIKA_IAM_ISSUER: 'https://IAM.example.com/' })).toEqual([
-			'console.example.com',
-			'iam.example.com',
-		])
+	test('reads Control (the console), IAM and Operations from the environment, lowercase, skipping what names no host', () => {
+		expect(
+			reservedInstallationHosts({
+				FABRIKA_CONTROL_DOMAIN: 'Console.Example.com',
+				FABRIKA_IAM_ISSUER: 'https://IAM.example.com/',
+				OPERATIONS_ARTIFACT_ORIGIN: 'https://Ops.example.com',
+			}),
+		).toEqual(['console.example.com', 'iam.example.com', 'ops.example.com'])
 		expect(reservedInstallationHosts({ FABRIKA_IAM_ISSUER: 'not a url' })).toEqual([])
 		expect(reservedInstallationHosts({})).toEqual([])
 	})
@@ -114,7 +120,7 @@ describe("the installation's own hosts", () => {
 	test('are refused, with every name under them, to a registration and a put', async () => {
 		const { repositories } = createHarness()
 		const made = deps(repositories)
-		for (const domain of ['console.example.com', 'IAM.example.com', 'x.iam.example.com', 'a.b.console.example.com']) {
+		for (const domain of ['console.example.com', 'IAM.example.com', 'x.iam.example.com', 'a.b.console.example.com', 'ops.example.com']) {
 			const registered = await register(made, 'thief', domain)
 			expect(`${domain}: ${registered.status}`).toBe(`${domain}: 409`)
 			expect(await errorOf(registered)).toContain("the installation's own host")

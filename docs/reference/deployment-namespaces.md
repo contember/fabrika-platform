@@ -411,7 +411,8 @@ at proxy composition.
 A domain serves one application environment of the whole installation, in any namespace and on every provider,
 compared without case: registration and `apps.environments.put` refuse a domain another environment holds (**409**,
 before the provider prepares anything, naming no other environment), published or not, routed or not. The installation's
-own hosts, Control's (which serves the console) and IAM's issuer, and every name under them are refused the same way.
+own hosts, Control's (which serves the console), IAM's issuer and Operations' public origin, and every name under them
+are refused the same way.
 A `dev` environment's domain is a wildcard base, so it holds every name under it against a standard environment, in
 either direction; the dev environments of several applications may share one base, each routed only on its own
 workspaces' `<workspace>.<domain>` hosts. The unique index `idx_app_envs_domain` (over every environment but the `dev`
@@ -428,6 +429,8 @@ WHERE domain IS NOT NULL AND domain <> '' AND kind <> 'dev' GROUP BY lower(domai
 
 An environment whose domain is, or lies under, Control's or IAM's host passes the migration, but every later put of it
 is refused until it names another domain; list those with `lower(domain)` equal to the host or ending in `.<host>`.
+The rule under a dev base holds in code only, so a dev put and a standard put racing over one subtree can both pass;
+their hosts still cannot collide, because each workspace id is unique across the installation.
 
 The proxy also routes each host to one member, so Control refuses a member that would be routed on a host another
 member of the namespace is routed on, naming the sibling: at a put of a published member and at a deploy about to

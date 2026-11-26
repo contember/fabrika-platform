@@ -1,6 +1,6 @@
-// Who may name a domain. A domain routes one application environment of the whole installation, whatever its namespace
-// or provider, and the installation's own hosts (IAM, the console and Control) are no application's: a deploy to a held
-// domain would hand the holder's traffic, sessions and keys to another application. `idx_app_envs_domain` decides a race.
+// A domain routes one application environment of the installation, in any namespace and on any provider, and the
+// installation's own hosts are no application's: a deploy to a held domain would hand the holder's traffic, sessions and
+// keys to another application. `idx_app_envs_domain` decides a race.
 
 import type { AppEnvKind } from '@fabrika/control-contract'
 import type { ControlRepositories } from '../../db'
@@ -9,12 +9,14 @@ import { controlPublicOrigin } from '../../iam'
 import { fail } from '../domain'
 
 /**
- * The installation's own hosts, lowercase: Control's, which also serves the console, and IAM's issuer. A value that names
- * no host is skipped.
+ * The installation's own hosts, lowercase: Control's, which also serves the console, IAM's issuer, and Operations' public
+ * origin. A value that names no host is skipped.
  */
-export function reservedInstallationHosts(env: Pick<Env, 'FABRIKA_CONTROL_DOMAIN' | 'FABRIKA_IAM_ISSUER'>): readonly string[] {
+export function reservedInstallationHosts(
+	env: Pick<Env, 'FABRIKA_CONTROL_DOMAIN' | 'FABRIKA_IAM_ISSUER' | 'OPERATIONS_ARTIFACT_ORIGIN'>,
+): readonly string[] {
 	const hosts = new Set<string>()
-	for (const origin of [controlPublicOrigin(env), env.FABRIKA_IAM_ISSUER?.trim()]) {
+	for (const origin of [controlPublicOrigin(env), env.FABRIKA_IAM_ISSUER?.trim(), env.OPERATIONS_ARTIFACT_ORIGIN?.trim()]) {
 		if (origin === undefined || origin === '') continue
 		try {
 			const host = new URL(origin).hostname.toLowerCase()
