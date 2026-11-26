@@ -152,7 +152,7 @@ export function buildServices(env: Env): Services {
 				oidc: { enabled: oidcEnabled, sessionCapSeconds: parseOidcSessionSeconds(env.OIDC_SESSION_HOURS) },
 				password: { enabled: passwordEnabled, minLengthFloor: passwordMinLengthFloor(passwordCost) },
 			},
-			oauth: parseOAuthConfig(env.OAUTH_CONFIG, platformAudiencesFor(adminAudiences)),
+			oauth: parseOAuthConfig(env.OAUTH_CONFIG),
 			retention: parseRetention({ authLogDays: env.AUTH_LOG_RETENTION_DAYS, auditDays: env.AUDIT_RETENTION_DAYS }),
 			issuer: env.ISSUER,
 		},

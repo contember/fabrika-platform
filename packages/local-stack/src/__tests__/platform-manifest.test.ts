@@ -17,7 +17,6 @@ import { describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { parseOAuthConfig } from '../../../iam/src/oauth-config'
-import { DEFAULT_PLATFORM_AUDIENCES } from '../../../iam/src/services'
 import { localApps } from '../app-registration'
 import {
 	localIamOAuthConfig,
@@ -94,7 +93,7 @@ describe('OAuth and MCP authoring in the local composition', () => {
 		expect(readLocalMcpAuthoring({})).toBe(false)
 		expect(consoleOf()?.endpoints).toEqual(tableOf(false))
 		expect(consoleOf()?.oauthResources?.map((entry) => entry.resource)).toEqual(cliResources(origin))
-		const config = parseOAuthConfig(localIamOAuthConfig(false), DEFAULT_PLATFORM_AUDIENCES)
+		const config = parseOAuthConfig(localIamOAuthConfig(false))
 		expect(config?.resources.map((resource) => resource.resource)).toEqual(cliResources(origin))
 		// The composition's hosts, which IAM checks an external application registered at runtime against.
 		expect(config?.hosts).toEqual(['iam.fabrika.localhost', 'control.fabrika.localhost', 'errors.fabrika.localhost'])
@@ -122,7 +121,7 @@ describe('OAuth and MCP authoring in the local composition', () => {
 
 	test('MCP turned on, IAM gets a config its own parser accepts, for those same resources', () => {
 		const origin = controlDomain()
-		const config = parseOAuthConfig(localIamOAuthConfig(true), DEFAULT_PLATFORM_AUDIENCES)
+		const config = parseOAuthConfig(localIamOAuthConfig(true))
 		expect(config?.resources.map((resource) => [resource.app, resource.resource])).toEqual(
 			[...cliResources(origin), controlMcpResource(origin)].map((resource) => ['vozka', resource]),
 		)

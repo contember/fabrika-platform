@@ -20,7 +20,6 @@ import {
 	deleteExternalAppUseCase,
 	deleteOAuthClientUseCase,
 	getExternalAppUseCase,
-	importOAuthClientsUseCase,
 	listExternalAppsUseCase,
 	listOAuthClientsUseCase,
 	putExternalAppUseCase,
@@ -222,10 +221,6 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 			.input(z.object({ clientId: nonEmpty }).strict())
 			.require(ADMIN_ACTION)
 			.mutation(({ ctx, input }) => deleteOAuthClientUseCase(context(ctx), input)),
-		importOnce: t.procedure
-			.input(z.object({ clients: z.array(z.unknown()).max(64) }).strict())
-			.require(ADMIN_ACTION)
-			.mutation(({ ctx, input }) => importOAuthClientsUseCase(context(ctx), input)),
 	}),
 	policies: t.router({
 		list: t.procedure.input(appInput).query(({ ctx, input }) => adminUseCases.listPolicies(context(ctx), input)),

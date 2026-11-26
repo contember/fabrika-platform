@@ -1,8 +1,7 @@
-// The external application form (ADR-0089): the draft a person edits, the whole-aggregate request it becomes, what a
-// save would change that the page warns about, and IAM's refusal before the deploy imported its client list. The checks
-// here only say early what IAM refuses; IAM checks every write again.
+// The external application form (ADR-0089): the draft a person edits, the whole-aggregate request it becomes, and what a
+// save would change that the page warns about. The checks here only say early what IAM refuses; IAM checks every write
+// again.
 
-import { RpcError } from '@fabrika/app'
 import { displayNameProblem, isCimdClientId, isOAuthResourceUri } from '@fabrika/auth-core'
 import {
 	type ExternalAppDto,
@@ -11,7 +10,6 @@ import {
 	isOAuthIdentityRoleKey,
 	MAX_EXTERNAL_APP_CLIENTS,
 	MAX_OAUTH_IDENTITY_ROLES,
-	OAUTH_REGISTRY_NOT_IMPORTED,
 	type PutExternalAppRequest,
 } from '@fabrika/iam-contract'
 
@@ -175,9 +173,4 @@ export function revocationsToConfirm(consequences: DraftConsequences): string[] 
 	if (consequences.rolesDropped) lines.push('Without roles, every active user of the installation can sign in.')
 	if (consequences.rolesIntroduced) lines.push('Everyone is refused at their next sign-in or token refresh until you grant one of the new roles.')
 	return lines
-}
-
-/** IAM refuses every registry write until a deploy of this release imported the deploy variable's client list. */
-export function registryNotImported(cause: unknown): boolean {
-	return cause instanceof RpcError && cause.httpStatus === 409 && cause.message === OAUTH_REGISTRY_NOT_IMPORTED
 }

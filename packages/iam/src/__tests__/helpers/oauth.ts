@@ -34,8 +34,6 @@ export async function oauthFixture(
 		extraResources?: readonly OAuthResourceDto[]
 		/** Binds the registered client to its own identity resource; it is then served that one alone. */
 		identity?: OAuthIdentityResource
-		/** Registers the client in IAM's registry, marked imported, instead of `OAUTH_CONFIG` (ADR-0089). */
-		registry?: boolean
 	} = {},
 ) {
 	const principal = await repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.test`)
@@ -62,9 +60,8 @@ export async function oauthFixture(
 		metadataUrl: clientId,
 		...(options.identity === undefined ? {} : { identity: options.identity }),
 	}
-	if (options.registry === true) await register(repositories, registration)
+	await register(repositories, registration)
 	const config: OAuthConfig = {
-		clients: options.registry === true ? [] : [registration],
 		hosts: [],
 		resources: [{
 			app: 'control',
@@ -180,6 +177,7 @@ export async function oauthFixture(
 		sessionId,
 		clientId,
 		jwksUri,
+		registration,
 		config,
 		services,
 		fetched,
@@ -204,10 +202,9 @@ const registryEvent = (action: string): AuditEventInput => ({
 	resourceType: 'oauth_registry',
 })
 
-/** Write one client into the registry as its writers do, after an empty import when nothing was imported yet. */
+/** Write one client into IAM's registry as its writers do (ADR-0089). */
 export async function register(repositories: IamRepositories, client: ManagedOAuthClient): Promise<void> {
 	const registry = repositories.oauthRegistry
-	if (!(await registry.imported())) await registry.importOnce([], [], registryEvent('iam.oauth_registry.import'))
 	const write = { clientId: client.clientId, redirectUris: client.redirectUris, metadataUrl: null }
 	if (client.identity === undefined) {
 		await registry.putAuthoringClient({ ...write, label: client.provider }, registryEvent('iam.oauth_client.put'))

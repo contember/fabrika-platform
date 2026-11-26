@@ -166,7 +166,6 @@ const INPUTS: Record<string, unknown> = {
 	'oauthClients.list': null,
 	'oauthClients.put': { clientId: 'https://nowhere.example.com/client.json', label: 'claude', redirectUris: ['https://nowhere.example.com/cb'] },
 	'oauthClients.delete': { clientId: 'https://nowhere.example.com/client.json' },
-	'oauthClients.importOnce': { clients: [] },
 	'passkeys.list': null,
 	'passkeys.registrationOptions': null,
 	'passkeys.listOf': { principalId: 'nobody' },

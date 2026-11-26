@@ -1,7 +1,7 @@
 // The OAuth client registry of ADR-0089 through `/admin/rpc`, on SQLite and, with FABRIKA_TEST_POSTGRES_URL, on Postgres:
-// the import that runs once, the refusals before it, an external application's whole-aggregate writes with the
-// adoption of an earlier deploy's roles, the rules for its id and resource, the two writers that refuse each other's
-// clients, and the grants a removed client loses.
+// writes and serving with no earlier import, an external application's whole-aggregate writes with the adoption of an
+// earlier deploy's roles, the rules for its id and resource, the two writers that refuse each other's clients, and the
+// grants a removed client loses.
 
 import { IAM_APP_ID } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
@@ -12,8 +12,7 @@ import { type AuditEventInput, createIamRepositories, ExternalAppResourceTaken, 
 import type { Env } from '../env'
 import { prop } from '../json'
 import { registeredClient } from '../oauth-clients'
-import { type ManagedOAuthClient, type OAuthConfig, parseOAuthConfig } from '../oauth-config'
-import { DEFAULT_PLATFORM_AUDIENCES } from '../services'
+import { type OAuthConfig, parseOAuthConfig } from '../oauth-config'
 import { adminTokenFor, createHarness, makeServicesFor, TEST_SIGNING_KEYS } from './helpers/harness'
 import { createPostgres, hasPostgres, skipReason } from './helpers/postgres'
 
@@ -22,7 +21,6 @@ if (!hasPostgres) console.warn(`external-apps.test.ts (Postgres half) ${skipReas
 const ORIGIN = 'https://iam.example.com'
 const PROVISIONING_KEY = 'px_provisioning-key-of-the-registry-suite'
 const OAUTH_CONFIG = JSON.stringify({
-	clients: [],
 	resources: [{
 		app: 'vozka',
 		resource: 'https://console.example.com/mcp',
@@ -30,7 +28,7 @@ const OAUTH_CONFIG = JSON.stringify({
 	}],
 	hosts: ['console.example.com', 'operations.example.com'],
 })
-const CONFIG: OAuthConfig = configured(parseOAuthConfig(OAUTH_CONFIG, DEFAULT_PLATFORM_AUDIENCES))
+const CONFIG: OAuthConfig = configured(parseOAuthConfig(OAUTH_CONFIG))
 
 function configured(config: OAuthConfig | null): OAuthConfig {
 	if (config === null) throw new Error('no OAUTH_CONFIG')
@@ -214,128 +212,38 @@ async function reconciledRoles(repositories: IamRepositories, app: string): Prom
 
 for (const engine of ENGINES) {
 	describe.skipIf(engine.skip)(`the OAuth client registry on ${engine.name}`, () => {
-		test('before the import IAM serves OAUTH_CONFIG and refuses registry writes; after it, the registry only', async () => {
+		test('with no import ever run, both writers write and IAM serves what they wrote', async () => {
 			const f = await setup(engine)
-			const legacy: ManagedOAuthClient = {
+			expect((await f.provisioning('oauthClients.put', CLAUDE)).status).toBe(200)
+			expect(await registeredClient(f.services(), CLAUDE.clientId)).toEqual({
 				provider: 'claude',
 				clientId: CLAUDE.clientId,
 				redirectUris: CLAUDE.redirectUris,
 				metadataUrl: CLAUDE.clientId,
-			}
-			const config: OAuthConfig = { ...CONFIG, clients: [legacy] }
-			expect(await registeredClient(f.services(), config, CLAUDE.clientId)).toEqual(legacy)
-
-			const put = await f.call('externalApps.put', OPS)
-			expect(put.status).toBe(409)
-			expect(put.error).toContain('oauthClients.importOnce')
-			expect((await f.provisioning('oauthClients.put', CLAUDE)).status).toBe(409)
-
-			expect((await f.provisioning('oauthClients.importOnce', { clients: [] })).result).toEqual({
-				status: 'imported',
-				externalApps: [],
-				oauthClients: [],
 			})
-			// The configured client is no longer served once the mark exists.
-			expect(await registeredClient(f.services(), config, CLAUDE.clientId)).toBeNull()
-			expect((await f.call('externalApps.put', OPS)).status).toBe(200)
+			expect(
+				(await f.call('externalApps.put', { ...OPS, clients: [...OPS.clients, { ...DESKTOP, metadataUrl: 'https://ops.example.net/d.json' }] })).status,
+			)
+				.toBe(200)
+			const served = await registeredClient(f.services(), DESKTOP.clientId)
+			expect(served?.identity).toEqual({ app: OPS.app, resource: OPS.resource, roles: OPS.roles })
+			expect(served?.metadataUrl).toBe('https://ops.example.net/d.json')
+			expect(await registeredClient(f.services(), 'https://unknown.example.net/client.json')).toBeNull()
 		})
 
-		test("importOnce is the provisioning key's, writes once, and later calls write nothing", async () => {
+		test('registering adopts the roles an earlier deploy reconciled under the id, with their grants', async () => {
 			const f = await setup(engine)
-			const refused = await f.call('oauthClients.importOnce', { clients: [] })
-			expect(refused.status).toBe(403)
-			expect(await f.repositories.oauthRegistry.imported()).toBe(false)
-
-			// An earlier deploy reconciled the roles; a person holds one. The import adopts the vocabulary with the grant.
 			await reconciledRoles(f.repositories, OPS.app)
 			const person = await f.repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.com`)
 			const grant = await f.repositories.grants.createGrant({ principalId: person.id, app: OPS.app, roleKey: 'operator' })
-			const identity = { app: OPS.app, resource: OPS.resource, roles: [{ key: 'operator', name: 'Operator' }] }
-			const entries = [
-				{ provider: 'external', clientId: OPS.clients[0]?.clientId, redirectUris: OPS.clients[0]?.redirectUris, identity },
-				{ provider: 'external', ...DESKTOP, metadataUrl: 'https://ops.example.net/oauth/desktop-document.json', identity },
-				{ provider: CLAUDE.label, clientId: CLAUDE.clientId, redirectUris: CLAUDE.redirectUris },
-			]
-			const first = await f.provisioning('oauthClients.importOnce', { clients: entries })
-			expect(first.result).toEqual({
-				status: 'imported',
-				externalApps: [OPS.app],
-				oauthClients: [OPS.clients[0]?.clientId, DESKTOP.clientId, CLAUDE.clientId],
-			})
-			expect((await f.call('externalApps.get', { app: OPS.app })).result).toMatchObject({
-				app: OPS.app,
-				name: null,
-				resource: OPS.resource,
-				roles: [{ key: 'operator', name: 'Operator' }],
-				clients: [
-					{ clientId: DESKTOP.clientId, redirectUris: DESKTOP.redirectUris, metadataUrl: 'https://ops.example.net/oauth/desktop-document.json' },
-					{ clientId: OPS.clients[0]?.clientId, redirectUris: OPS.clients[0]?.redirectUris, metadataUrl: null },
-				],
-			})
+			expect((await f.call('externalApps.put', { ...OPS, roles: [{ key: 'operator', name: 'Operator' }] })).status).toBe(200)
 			expect((await f.repositories.grants.getActiveGrantsForApp(person.id, OPS.app, { includeCrossApp: false })).map((row) => row.id)).toEqual([
 				grant.id,
 			])
-			const served = await registeredClient(f.services(), CONFIG, DESKTOP.clientId)
-			expect(served?.identity).toEqual(identity)
-			expect(served?.metadataUrl).toBe('https://ops.example.net/oauth/desktop-document.json')
-
-			const again = await f.provisioning('oauthClients.importOnce', { clients: [] })
-			expect(again.result).toEqual({ status: 'already_imported' })
-			expect((await f.call('oauthClients.list', null)).result).toMatchObject({ items: { length: 3 } })
-			const imports = await f.repositories.audit.listAuditEvents({ action: 'iam.oauth_registry.import', limit: 10 })
-			expect(imports).toHaveLength(1)
-		})
-
-		test("an import adopts the roles an earlier deploy's schema reconcile wrote, with their grants and live sign-ins", async () => {
-			const f = await setup(engine)
-			// The schema an earlier release's deploy sent for an external application: its roles, each granting no action.
-			const schema = { scopes: [], actions: [], roles: Object.fromEntries(OPS.roles.map((role) => [role.key, { name: role.name, permissions: [] }])) }
-			expect(await f.putSchema(OPS.app, schema)).toBe(200)
-			const person = await f.repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.com`)
-			const grants = [
-				await f.repositories.grants.createGrant({ principalId: person.id, app: OPS.app, roleKey: 'operator' }),
-				await f.repositories.grants.createGrant({ principalId: person.id, app: OPS.app, roleKey: 'viewer' }),
-			]
-			const clientId = OPS.clients[0]?.clientId
-			if (clientId === undefined) throw new Error('OPS names no client')
-			const signIn = await f.oauthGrant(clientId, OPS.app)
-			const entries = [{
-				provider: 'external',
-				clientId,
-				redirectUris: OPS.clients[0]?.redirectUris,
-				identity: { app: OPS.app, resource: OPS.resource, roles: OPS.roles },
-			}]
-			const imported = await f.provisioning('oauthClients.importOnce', { clients: entries })
-			expect(imported).toEqual({ status: 200, result: { status: 'imported', externalApps: [OPS.app], oauthClients: [clientId] }, error: null })
-			expect((await f.repositories.grants.getActiveGrantsForApp(person.id, OPS.app, { includeCrossApp: false })).map((row) => row.id).sort())
-				.toEqual(grants.map((grant) => grant.id).sort())
-			expect(await f.revoked(signIn)).toBe(false)
-		})
-
-		test('an import that cannot adopt a vocabulary writes nothing, the mark included', async () => {
-			const f = await setup(engine)
-			await f.repositories.appSchema.reconcileAppSchema({ app: OPS.app, scopes: [], actions: [{ action: 'accounts.manage' }], roles: [] })
-			const identity = { app: OPS.app, resource: OPS.resource }
-			const refused = await f.provisioning('oauthClients.importOnce', {
-				clients: [{ provider: 'external', clientId: OPS.clients[0]?.clientId, redirectUris: OPS.clients[0]?.redirectUris, identity }],
-			})
-			expect(refused.status).toBe(409)
-			expect(refused.error).toContain('actions')
-			expect(await f.repositories.oauthRegistry.imported()).toBe(false)
-			expect(await f.repositories.oauthRegistry.listClients()).toEqual([])
-			// A malformed entry, or two clients of one app that disagree, are refused as well.
-			expect((await f.provisioning('oauthClients.importOnce', { clients: [{ provider: 'claude' }] })).status).toBe(400)
-			const disagreeing = [
-				{ provider: 'external', clientId: OPS.clients[0]?.clientId, redirectUris: OPS.clients[0]?.redirectUris, identity },
-				{ provider: 'external', ...DESKTOP, identity: { ...identity, roles: [{ key: 'viewer', name: 'Viewer' }] } },
-			]
-			expect((await f.provisioning('oauthClients.importOnce', { clients: disagreeing })).status).toBe(400)
-			expect(await f.repositories.oauthRegistry.imported()).toBe(false)
 		})
 
 		test('put replaces the whole application, get and apps.list show it, delete removes it with its vocabulary', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			const put = await f.call('externalApps.put', OPS)
 			expect(put.status).toBe(200)
 			expect(put.result).toMatchObject({ app: OPS.app, name: OPS.name, resource: OPS.resource, roles: OPS.roles })
@@ -347,7 +255,7 @@ for (const engine of ENGINES) {
 				['operator', '[]'],
 				['viewer', '[]'],
 			])
-			const served = await registeredClient(f.services(), CONFIG, OPS.clients[0]?.clientId ?? '')
+			const served = await registeredClient(f.services(), OPS.clients[0]?.clientId ?? '')
 			expect(served?.identity).toEqual({ app: OPS.app, resource: OPS.resource, roles: OPS.roles })
 
 			// Dropping the roles clears the vocabulary; a second client is added.
@@ -366,7 +274,6 @@ for (const engine of ENGINES) {
 
 		test("removing a client, or the application, revokes the client's grants", async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			await f.call('externalApps.put', { ...OPS, clients: [...OPS.clients, DESKTOP] })
 			const web = await f.oauthGrant(OPS.clients[0]?.clientId ?? '', OPS.app)
 			const desktop = await f.oauthGrant(DESKTOP.clientId, OPS.app)
@@ -388,7 +295,6 @@ for (const engine of ENGINES) {
 
 		test('a delete that finds the application gone writes nothing', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			await f.call('externalApps.put', OPS)
 			const events = registryEvents('test.delete')
 			expect(await f.repositories.oauthRegistry.deleteExternalApp(OPS.app, events)).toBe(true)
@@ -401,7 +307,6 @@ for (const engine of ENGINES) {
 
 		test('a new resource revokes the grants for the earlier one, which stay revoked when it comes back', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			await f.call('externalApps.put', OPS)
 			const grant = await f.oauthGrant(OPS.clients[0]?.clientId ?? '', OPS.app)
 			// An authoring client's grant for the application's resource goes as well.
@@ -419,7 +324,6 @@ for (const engine of ENGINES) {
 
 		test("a resource another application took meanwhile is the repository's typed refusal, and nothing is written", async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			await f.call('externalApps.put', OPS)
 			const write = { app: 'other-tool', displayName: null, resource: OPS.resource, roles: [], clients: [] }
 			const events = registryEvents('test.put')
@@ -429,7 +333,6 @@ for (const engine of ENGINES) {
 
 		test('the in-batch guard refuses a client id another writer owns, writing nothing', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			expect((await f.provisioning('oauthClients.put', CLAUDE)).status).toBe(200)
 			const write = {
 				app: OPS.app,
@@ -450,10 +353,9 @@ for (const engine of ENGINES) {
 
 		test('a registry row the client parser refuses is not served', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			await f.call('externalApps.put', OPS)
 			const clientId = OPS.clients[0]?.clientId ?? ''
-			expect(await registeredClient(f.services(), CONFIG, clientId)).not.toBeNull()
+			expect(await registeredClient(f.services(), clientId)).not.toBeNull()
 
 			// A role key the identity parser refuses (a built-in one), written past the use case.
 			await f.repositories.appSchema.reconcileAppSchema({
@@ -462,17 +364,16 @@ for (const engine of ENGINES) {
 				actions: [],
 				roles: [{ roleKey: 'admin', name: 'Admin', permissions: [] }],
 			})
-			expect(await registeredClient(f.services(), CONFIG, clientId)).toBeNull()
+			expect(await registeredClient(f.services(), clientId)).toBeNull()
 
 			await f.call('externalApps.put', OPS)
-			expect(await registeredClient(f.services(), CONFIG, clientId)).not.toBeNull()
+			expect(await registeredClient(f.services(), clientId)).not.toBeNull()
 			await f.exec("UPDATE oauth_clients SET redirect_uris = 'not json' WHERE client_id = ?", clientId)
-			expect(await registeredClient(f.services(), CONFIG, clientId)).toBeNull()
+			expect(await registeredClient(f.services(), clientId)).toBeNull()
 		})
 
 		test('a deploy cannot reconcile a schema under an external application, nor a registered id keep a foreign one', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			await f.call('externalApps.put', OPS)
 			const schema = { scopes: [], actions: [{ action: 'accounts.manage' }], roles: {} }
 			expect(await f.putSchema(OPS.app, schema)).toBe(409)
@@ -488,7 +389,6 @@ for (const engine of ENGINES) {
 
 		test('a user administrator, and an iam.admin key that is not the provisioning key, are refused', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			const userAdmin = await f.personWith(['iam.users.manage'])
 			expect((await f.call('me', null, userAdmin)).status).toBe(200)
 			const calls: [string, unknown][] = [
@@ -513,7 +413,6 @@ for (const engine of ENGINES) {
 			if (typeof apiKey !== 'string') throw new Error('no api key')
 			expect((await f.call('externalApps.list', null, apiKey)).status).toBe(200)
 			const provisioningOnly: [string, unknown][] = [
-				['oauthClients.importOnce', { clients: [] }],
 				['oauthClients.put', CLAUDE],
 				['oauthClients.delete', { clientId: CLAUDE.clientId }],
 			]
@@ -522,7 +421,6 @@ for (const engine of ENGINES) {
 
 		test('an id is adopted only with roles that grant no action and nothing else declared', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			await reconciledRoles(f.repositories, OPS.app)
 			expect((await f.call('externalApps.put', OPS)).status).toBe(200)
 
@@ -545,7 +443,6 @@ for (const engine of ENGINES) {
 
 		test("refuses an installation service's id, a resource on an installation host, and another application's resource", async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			const put = (changes: Record<string, unknown>) => f.call('externalApps.put', { ...OPS, clients: [], ...changes })
 			for (const app of ['vozka', 'propustka', 'operations', 'notes@prod', 'Ops']) expect([app, (await put({ app })).status]).toEqual([app, 400])
 			for (
@@ -568,7 +465,6 @@ for (const engine of ENGINES) {
 
 		test('each writer refuses a client id the other owns, and only the provisioning key writes an authoring client', async () => {
 			const f = await setup(engine)
-			await f.provisioning('oauthClients.importOnce', { clients: [] })
 			expect((await f.call('oauthClients.put', CLAUDE)).status).toBe(403)
 			expect((await f.provisioning('oauthClients.put', CLAUDE)).result).toMatchObject({ clientId: CLAUDE.clientId, externalApp: null })
 			expect((await f.call('externalApps.put', { ...OPS, clients: [{ clientId: CLAUDE.clientId, redirectUris: OPS.clients[0]?.redirectUris }] })).status)
@@ -591,10 +487,10 @@ for (const engine of ENGINES) {
 
 describe('OAUTH_CONFIG.hosts', () => {
 	const resources = [{ app: 'vozka', resource: 'https://console.example.com/mcp', scopeGrants: [{ scope: 's', permissions: [{ action: 'a' }] }] }]
-	const parse = (hosts: unknown) => parseOAuthConfig(JSON.stringify({ clients: [], resources, hosts }), DEFAULT_PLATFORM_AUDIENCES)
+	const parse = (hosts: unknown) => parseOAuthConfig(JSON.stringify({ resources, hosts }))
 
 	test('is optional, and lists hostnames', () => {
-		expect(parseOAuthConfig(JSON.stringify({ clients: [], resources }), DEFAULT_PLATFORM_AUDIENCES)?.hosts).toEqual([])
+		expect(parseOAuthConfig(JSON.stringify({ resources }))?.hosts).toEqual([])
 		expect(parse(['console.example.com', 'iam.example.com'])?.hosts).toEqual(['console.example.com', 'iam.example.com'])
 	})
 

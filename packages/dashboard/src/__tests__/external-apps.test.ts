@@ -1,16 +1,7 @@
-import { RpcError } from '@fabrika/app'
-import { type ExternalAppDto, OAUTH_REGISTRY_NOT_IMPORTED } from '@fabrika/iam-contract'
+import type { ExternalAppDto } from '@fabrika/iam-contract'
 import { describe, expect, test } from 'bun:test'
 import { auditActionLabel } from '../access/lib/audit-labels'
-import {
-	draftConsequences,
-	draftOf,
-	emptyDraft,
-	type ExternalAppDraft,
-	externalAppRequest,
-	registryNotImported,
-	revocationsToConfirm,
-} from '../access/lib/external-apps'
+import { draftConsequences, draftOf, emptyDraft, type ExternalAppDraft, externalAppRequest, revocationsToConfirm } from '../access/lib/external-apps'
 
 const WEB_CLIENT = 'https://ops.example.com/oauth/client.json'
 
@@ -142,14 +133,6 @@ describe('the confirmation before a save that ends sign-ins', () => {
 		expect(revocationsToConfirm(draftConsequences(STORED, draft({ roles: [] })))).toEqual([
 			'Without roles, every active user of the installation can sign in.',
 		])
-	})
-})
-
-describe('IAM before the deploy imported its client list', () => {
-	test("is told apart from any other conflict by IAM's own refusal", () => {
-		expect(registryNotImported(new RpcError({ type: 'conflict', message: OAUTH_REGISTRY_NOT_IMPORTED, httpStatus: 409 }))).toBe(true)
-		expect(registryNotImported(new RpcError({ type: 'conflict', message: 'the resource is taken', httpStatus: 409 }))).toBe(false)
-		expect(registryNotImported(new Error(OAUTH_REGISTRY_NOT_IMPORTED))).toBe(false)
 	})
 })
 

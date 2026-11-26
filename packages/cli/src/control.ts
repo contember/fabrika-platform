@@ -55,7 +55,6 @@ import {
 	MAX_EXTERNAL_APP_CLIENTS,
 	MAX_OAUTH_IDENTITY_ROLES,
 	OAUTH_CLIENT_PROVIDERS,
-	OAUTH_REGISTRY_NOT_IMPORTED,
 	type OAuthClientDto,
 	type PutExternalAppRequest,
 	type PutOAuthClientRequest,
@@ -324,8 +323,7 @@ and put back. Removing a client, changing the resource or deleting the applicati
     "redirectUris": ["https://claude.ai/api/mcp/auth_callback"] }
 
 \`label\` is claude, chatgpt or external. A client of an external application is written only through
-\`external-apps put\`, and \`oauth-clients\` refuses it. \`put\` checks the file before anything is sent. Until a platform
-deploy of this release has imported the installation's client list, IAM refuses both \`put\`s; deploy, then repeat.
+\`external-apps put\`, and \`oauth-clients\` refuses it. \`put\` checks the file before anything is sent.
 The console registers external applications too, under Access → External applications.
 
 Connecting a GitHub source is NOT here and will not be: App creation is a browser flow whose
@@ -1405,26 +1403,11 @@ const fileArgument = async (flags: Flags): Promise<{ readonly path: string; read
 	return { path, value: await readJsonFile(path) }
 }
 
-/** Every registry verb names the not-imported refusal's way out: deploy the platform first. */
-const registryCall = async <T>(call: () => Promise<T>): Promise<T> => {
-	try {
-		return await call()
-	} catch (error) {
-		if (error instanceof RpcError && error.httpStatus === 409 && error.message === OAUTH_REGISTRY_NOT_IMPORTED) {
-			throw new Error(
-				'IAM does not take registry writes yet: a platform deploy of this release has not imported the OAuth client list. '
-					+ 'Run the platform deploy, then repeat this command.',
-			)
-		}
-		throw error
-	}
-}
-
 const runExternalApps = async (verb: string | undefined, flags: Flags, env: Readonly<Record<string, string | undefined>>): Promise<void> => {
 	if (verb === 'put') {
 		const { path, value } = await fileArgument(flags)
 		const request = parseExternalAppFile(value, path)
-		const result = await registryCall(() => iamAdminClient(flags.values.get('iam-url'), env).externalApps.put(request))
+		const result = await iamAdminClient(flags.values.get('iam-url'), env).externalApps.put(request)
 		emit(flags, result, () => externalAppLine(result))
 		return
 	}
@@ -1453,7 +1436,7 @@ const runOAuthClients = async (verb: string | undefined, flags: Flags, env: Read
 	if (verb === 'put') {
 		const { path, value } = await fileArgument(flags)
 		const request = parseOAuthClientFile(value, path)
-		const result = await registryCall(() => iamAdminClient(flags.values.get('iam-url'), env).oauthClients.put(request))
+		const result = await iamAdminClient(flags.values.get('iam-url'), env).oauthClients.put(request)
 		emit(flags, result, () => oauthClientLine(result))
 		return
 	}

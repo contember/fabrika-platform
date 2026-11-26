@@ -1,7 +1,7 @@
 import type { OAuthClientProvider, OAuthIdentityRole } from '@fabrika/iam-contract'
 import type { SqlDatabase, SqlStatement } from '@fabrika/platform'
 import type { AppSchemaRepository, RoleRow } from './app-schema'
-import { type AuditEventInput, auditEventStatement, AuditWriter, type SqlChange } from './audit'
+import { type AuditEventInput, AuditWriter, type SqlChange } from './audit'
 import { unixNow } from './sql'
 
 /** An external application (ADR-0089): an app id with no deploy target and its identity resource. */
@@ -58,10 +58,12 @@ export class ExternalAppResourceTaken extends Error {
 	}
 }
 
-/** A client lookup: before the deploy variable's import the registry answers nothing (IAM serves `OAUTH_CONFIG`). */
-export type RegistryClientLookup =
-	| { imported: false }
-	| { imported: true; client: OAuthClientRow | null; resource: string | null; roles: RoleRow[] }
+/** A registered client, with its external application's resource and roles when it is bound to one. */
+export interface RegistryClientLookup {
+	client: OAuthClientRow
+	resource: string | null
+	roles: RoleRow[]
+}
 
 /** An MCP authoring client as a write stores it. */
 export type AuthoringClientWrite = OAuthClientWrite & { label: OAuthClientProvider }
@@ -77,38 +79,19 @@ export class OAuthRegistryRepository {
 		private readonly appSchema: AppSchemaRepository,
 	) {}
 
-	/** Whether the deploy variable was imported; until it is, IAM serves `OAUTH_CONFIG`'s clients. */
-	async imported(): Promise<boolean> {
-		return (await this.db.prepare('SELECT id FROM oauth_registry WHERE id = 1').first<{ id: number }>()) !== null
-	}
-
 	/** The registry's answer for one client id, with its application's resource and roles when it is bound to one. */
-	async lookupClient(clientId: string): Promise<RegistryClientLookup> {
+	async lookupClient(clientId: string): Promise<RegistryClientLookup | null> {
 		const row = await this.db
-			.prepare(`SELECT r.id AS registry, c.client_id, c.label, c.redirect_uris, c.metadata_url, c.external_app, c.created_at, c.updated_at,
-					e.resource
-				FROM oauth_registry r
-				LEFT JOIN oauth_clients c ON c.client_id = ?
+			.prepare(`SELECT c.client_id, c.label, c.redirect_uris, c.metadata_url, c.external_app, c.created_at, c.updated_at, e.resource
+				FROM oauth_clients c
 				LEFT JOIN external_apps e ON e.app = c.external_app
-				WHERE r.id = 1`)
+				WHERE c.client_id = ?`)
 			.bind(clientId)
-			.first<{ registry: number; resource: string | null } & { [K in keyof OAuthClientRow]: OAuthClientRow[K] | null }>()
-		if (row === null) return { imported: false }
-		const { client_id, label, redirect_uris, created_at, updated_at } = row
-		if (client_id === null || label === null || redirect_uris === null || created_at === null || updated_at === null) {
-			return { imported: true, client: null, resource: null, roles: [] }
-		}
-		const client: OAuthClientRow = {
-			client_id,
-			label,
-			redirect_uris,
-			metadata_url: row.metadata_url,
-			external_app: row.external_app,
-			created_at,
-			updated_at,
-		}
+			.first<OAuthClientRow & { resource: string | null }>()
+		if (row === null) return null
+		const { resource, ...client } = row
 		const roles = client.external_app === null ? [] : await this.appSchema.listRolesByOrigin(client.external_app, 'app')
-		return { imported: true, client, resource: row.resource, roles }
+		return { client, resource, roles }
 	}
 
 	async client(clientId: string): Promise<OAuthClientRow | null> {
@@ -215,32 +198,6 @@ export class OAuthRegistryRepository {
 		}], events.change)
 		const results = await this.db.batch([...revoke.statements, ...remove.statements])
 		return remove.rows(results, revoke.statements.length).length > 0
-	}
-
-	/**
-	 * The deploy variable's one import: every external application, every authoring client, their records and the mark,
-	 * in one transaction. False, writing nothing, when the mark exists already, a concurrent import's included.
-	 */
-	async importOnce(
-		apps: readonly { write: ExternalAppWrite; events: RegistryEvents }[],
-		authoring: readonly { write: AuthoringClientWrite; event: AuditEventInput }[],
-		audit: AuditEventInput,
-	): Promise<boolean> {
-		if (await this.imported()) return false
-		const statements: SqlStatement[] = [
-			// Plain INSERT: a concurrent import that marked first makes this one fail and roll back whole.
-			this.db.prepare('INSERT INTO oauth_registry (id, imported_at) VALUES (1, ?)').bind(unixNow()),
-			...apps.flatMap(({ write, events }) => this.externalAppStatements(write, events)),
-			...authoring.flatMap(({ write, event }) => this.writer.changed([this.authoringClientChange(write)], event).statements),
-			auditEventStatement(this.db, audit),
-		]
-		try {
-			await this.db.batch(statements)
-			return true
-		} catch (error) {
-			if (await this.imported()) return false
-			throw error
-		}
 	}
 
 	private externalAppStatements(write: ExternalAppWrite, events: RegistryEvents): SqlStatement[] {

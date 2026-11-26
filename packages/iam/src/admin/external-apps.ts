@@ -1,18 +1,14 @@
 // The OAuth client registry (ADR-0089): external applications, which an installation administrator registers with their
 // roles and clients, and MCP authoring clients, which only the provisioning key writes. Each writer refuses a client id
-// the other one owns. Until the deploy imported its client list (`importOnce`, release N), IAM serves `OAUTH_CONFIG`'s
-// clients and refuses a registry write, so an administrator's edit can never land before the import overwrites it.
+// the other one owns. IAM serves this registry only; a write needs no earlier import (ADR-0089 §5).
 
 import { displayNameProblem } from '@fabrika/auth-core'
 import {
 	type ExternalAppDto,
 	type ExternalAppInput,
 	IAM_APP_ID,
-	type ImportOAuthClientsRequest,
-	type ImportOAuthClientsResponse,
 	type ListResponse,
 	MAX_EXTERNAL_APP_CLIENTS,
-	OAUTH_REGISTRY_NOT_IMPORTED,
 	type OAuthClientDto,
 	type OAuthClientInput,
 	type OAuthIdentityResource,
@@ -49,7 +45,6 @@ export async function getExternalAppUseCase(c: AdminContext, input: ExternalAppI
 export async function putExternalAppUseCase(c: AdminContext, input: PutExternalAppRequest): Promise<ExternalAppDto> {
 	const config = requireOAuth(c)
 	const registry = c.services.repositories.oauthRegistry
-	if (!(await registry.imported())) return fail(409, OAUTH_REGISTRY_NOT_IMPORTED)
 	const nameProblem = displayNameProblem(input.name)
 	if (nameProblem !== null) return fail(400, `name ${nameProblem}`)
 	const roles = input.roles ?? []
@@ -108,7 +103,6 @@ export async function putOAuthClientUseCase(c: AdminContext, input: PutOAuthClie
 	requireProvisioningKey(c, 'writes an MCP authoring client')
 	requireOAuth(c)
 	const registry = c.services.repositories.oauthRegistry
-	if (!(await registry.imported())) return fail(409, OAUTH_REGISTRY_NOT_IMPORTED)
 	const client = parseManagedClientEntry({
 		provider: input.label,
 		clientId: input.clientId,
@@ -152,63 +146,6 @@ export async function deleteOAuthClientUseCase(c: AdminContext, input: OAuthClie
 	})
 	if (!deleted) return fail(404, 'unknown OAuth client')
 	return { ok: true }
-}
-
-/**
- * The deploy's one import of its client list (release N of ADR-0089), the provisioning key's alone. The first call writes
- * every entry bound to an application as an external application, adopting the roles earlier deploys reconciled under
- * its id, every other entry as an authoring client, and the mark, in one transaction. Every later call writes nothing.
- */
-export async function importOAuthClientsUseCase(c: AdminContext, input: ImportOAuthClientsRequest): Promise<ImportOAuthClientsResponse> {
-	requireProvisioningKey(c, 'imports the OAuth client list')
-	const registry = c.services.repositories.oauthRegistry
-	if (await registry.imported()) return { status: 'already_imported' }
-	const config = c.services.config.oauth ?? { clients: [], resources: [], hosts: [] }
-	const entries: ManagedOAuthClient[] = []
-	for (const [index, raw] of input.clients.entries()) {
-		const client = parseManagedClientEntry(raw)
-		if (client === null) return fail(400, `clients[${index}] is not a valid managed client`)
-		if (entries.some((known) => known.clientId === client.clientId)) return fail(400, `clients[${index}] repeats client id ${client.clientId}`)
-		entries.push(client)
-	}
-	const apps = new Map<string, { identity: OAuthIdentityResource; clients: ManagedOAuthClient[] }>()
-	for (const client of entries) {
-		const { identity } = client
-		if (identity === undefined) continue
-		const group = apps.get(identity.app)
-		if (group === undefined) {
-			apps.set(identity.app, { identity, clients: [client] })
-			continue
-		}
-		if (JSON.stringify(group.identity) !== JSON.stringify(identity)) {
-			return fail(400, `the clients of \`${identity.app}\` name different resources or roles`)
-		}
-		group.clients.push(client)
-	}
-	const writes: ExternalAppWrite[] = []
-	for (const { identity, clients } of apps.values()) {
-		if (writes.some((write) => write.resource === identity.resource)) return fail(400, `two applications name the resource ${identity.resource}`)
-		if (clients.length > MAX_EXTERNAL_APP_CLIENTS) return fail(400, `\`${identity.app}\` has more than ${MAX_EXTERNAL_APP_CLIENTS} clients`)
-		await checkExternalApp(c, config, identity, clients)
-		writes.push(externalAppWrite(identity, null, clients))
-	}
-	const authoring = entries.filter((client) => client.identity === undefined).map(authoringClientWrite)
-	const externalApps = writes.map((write) => write.app)
-	const oauthClients = entries.map((client) => client.clientId)
-	const imported = await registry.importOnce(
-		writes.map((write) => ({ write, events: registryEvents(c, 'iam.external_app.put', write) })),
-		authoring.map((write) => ({
-			write,
-			event: adminEvent(c, {
-				action: 'iam.oauth_client.put',
-				resourceType: 'oauth_client',
-				resourceId: write.clientId,
-				metadata: { label: write.label },
-			}),
-		})),
-		adminEvent(c, { action: 'iam.oauth_registry.import', resourceType: 'oauth_registry', metadata: { externalApps, oauthClients } }),
-	)
-	return imported ? { status: 'imported', externalApps, oauthClients } : { status: 'already_imported' }
 }
 
 /**

@@ -1,4 +1,3 @@
-import { OAUTH_REGISTRY_NOT_IMPORTED } from '@fabrika/iam-contract'
 import { afterAll, afterEach, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -154,14 +153,6 @@ describe('control external-apps', () => {
 		)
 		await expect(runControlCli('external-apps', ['put', `--file=${join(directory, 'missing.json')}`], undefined, ENV)).rejects.toThrow('No such file')
 		expect(sent).toEqual([])
-	})
-
-	test('says plainly that IAM takes no registry write before the deploy imported its client list', async () => {
-		fakeIam(() => Response.json({ error: { type: 'conflict', message: OAUTH_REGISTRY_NOT_IMPORTED } }, { status: 409 }))
-		const path = await file('app.json', APP_FILE)
-		await expect(runControlCli('external-apps', ['put', `--file=${path}`], undefined, ENV)).rejects.toThrow(
-			'IAM does not take registry writes yet: a platform deploy of this release has not imported the OAuth client list',
-		)
 	})
 
 	test("passes another refusal on as IAM's answer", async () => {

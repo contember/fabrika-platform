@@ -117,7 +117,7 @@ async function checkAuthorization(services: Services, config: OAuthConfig, input
 	const attempt = parseOAuthAuthorizationAttempt(input)
 	if (attempt.kind === 'invalid_request') return { kind: 'refused', message: 'The authorization request is malformed.' }
 	const coordinates = attempt.kind === 'valid' ? attempt.request : attempt.coordinates
-	const client = await establishClient(services, config, coordinates.client_id, coordinates.redirect_uri)
+	const client = await establishClient(services, coordinates.client_id, coordinates.redirect_uri)
 	if (client === null) return { kind: 'refused', message: 'The client or its redirect URI is not registered.' }
 	if (attempt.kind === 'invalid_scope') return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_scope' }) }
 	const identity = client.registration.identity
@@ -203,7 +203,7 @@ async function token(request: Request, services: Services, env: SigningEnv, conf
 	const input = parseOAuthTokenRequest(withAssertedClientId(fields, credential))
 	if (input === null) return protocolError('invalid_request', 400)
 	const issuer = services.config.issuer
-	const client = await authenticateOAuthClient(services, config, {
+	const client = await authenticateOAuthClient(services, {
 		clientId: input.client_id,
 		credential,
 		audiences: [`${issuer}${TOKEN_PATH}`, issuer],
@@ -224,7 +224,7 @@ async function revoke(request: Request, services: Services, env: SigningEnv, con
 	const input = parseOAuthRevocationRequest(withAssertedClientId(fields, credential))
 	if (input === null) return protocolError('invalid_request', 400)
 	const issuer = services.config.issuer
-	const authenticated = await authenticateRevokingClient(services, config, {
+	const authenticated = await authenticateRevokingClient(services, {
 		clientId: input.client_id,
 		credential,
 		audiences: [`${issuer}${REVOKE_PATH}`, `${issuer}${TOKEN_PATH}`, issuer],

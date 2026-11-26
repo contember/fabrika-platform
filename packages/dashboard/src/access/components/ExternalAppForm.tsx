@@ -12,12 +12,9 @@ import {
 	emptyDraft,
 	type ExternalAppDraft,
 	externalAppRequest,
-	registryNotImported,
 	revocationsToConfirm,
 	type RoleDraft,
 } from '../lib/external-apps'
-
-type SaveFailure = { readonly kind: 'not-imported' } | { readonly kind: 'refused'; readonly message: string }
 
 /**
  * An external application as one form: the record, its roles and its clients, saved whole with `externalApps.put`.
@@ -32,7 +29,7 @@ export function ExternalAppForm({ original, onSaved, onCancel, onEdit }: {
 }) {
 	const [draft, setDraft] = useState<ExternalAppDraft>(() => original === null ? emptyDraft() : draftOf(original))
 	const [problems, setProblems] = useState<ReadonlyMap<string, string>>(new Map())
-	const [failure, setFailure] = useState<SaveFailure | null>(null)
+	const [failure, setFailure] = useState<string | null>(null)
 	const [busy, setBusy] = useState(false)
 	/** A checked request whose save ends sign-ins, waiting for the person to confirm it. */
 	const [confirming, setConfirming] = useState<{ request: PutExternalAppRequest; lines: string[] } | null>(null)
@@ -79,11 +76,7 @@ export function ExternalAppForm({ original, onSaved, onCancel, onEdit }: {
 		try {
 			onSaved(await api.externalApps.put(request))
 		} catch (cause) {
-			setFailure(
-				registryNotImported(cause)
-					? { kind: 'not-imported' }
-					: { kind: 'refused', message: cause instanceof ApiError ? cause.message : 'The application could not be saved.' },
-			)
+			setFailure(cause instanceof ApiError ? cause.message : 'The application could not be saved.')
 		} finally {
 			setBusy(false)
 		}
@@ -304,8 +297,7 @@ export function ExternalAppForm({ original, onSaved, onCancel, onEdit }: {
 				)}
 			</fieldset>
 
-			{failure?.kind === 'not-imported' && <NotImportedNotice />}
-			{failure?.kind === 'refused' && <p className="error-text" role="alert">{failure.message}</p>}
+			{failure !== null && <p className="error-text" role="alert">{failure}</p>}
 			<div className="form-actions">
 				<button type="submit" className="primary" disabled={busy}>
 					{busy ? 'Saving…' : creating ? 'Register application' : 'Save changes'}
@@ -329,20 +321,6 @@ export function ExternalAppForm({ original, onSaved, onCancel, onEdit }: {
 				/>
 			)}
 		</form>
-	)
-}
-
-/** IAM's answer before the deploy imported the client list: nothing is wrong with the form, and nothing was saved. */
-export function NotImportedNotice() {
-	return (
-		<div className="notice notice-bad" role="alert">
-			<Icon name="alert" size={15} />
-			<div>
-				<strong>IAM does not take registrations yet.</strong>{' '}
-				It accepts them once a platform deploy of this release has imported the OAuth clients the installation was configured with. Until then it serves
-				those clients as before. Nothing was saved: deploy the platform, then save again.
-			</div>
-		</div>
 	)
 }
 

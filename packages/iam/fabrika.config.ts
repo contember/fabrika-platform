@@ -22,7 +22,7 @@ import {
 } from '@fabrika/provider-cloudflare'
 import { assertCloudflareMcpAuthoringOff, MCP_CLIENTS_VARIABLE, refuseMcpClientsVariable } from '@fabrika/provider-cloudflare/installation'
 import { parseOAuthConfig } from './src/oauth-config'
-import { parseAdminAudiences, platformAudiencesFor } from './src/services'
+import { parseAdminAudiences } from './src/services'
 
 // Keep the legacy Oblaka namespace so the first fabrika deploy continues the existing cf-state.
 const IAM_APP_ID = 'propustka'
@@ -123,7 +123,7 @@ const controlUrl = (source: EnvironmentSource): string | undefined => {
  * IAM's registry. Without a console origin OAuth stays off. The result passes IAM's own boot parser here, so a value IAM
  * would refuse stops the deploy instead.
  */
-const oauthConfig = (control: string | undefined, hosts: readonly string[], adminAudiences: string | undefined): string => {
+const oauthConfig = (control: string | undefined, hosts: readonly string[]): string => {
 	if (control === undefined) return ''
 
 	const resources: OAuthResourceDto[] = CONTROL_CLI_RESOURCES.map(({ path, grants }) => ({
@@ -137,7 +137,7 @@ const oauthConfig = (control: string | undefined, hosts: readonly string[], admi
 		client: 'cli',
 	}))
 	const config = JSON.stringify({ resources, hosts })
-	parseOAuthConfig(config, platformAudiencesFor(parseAdminAudiences(adminAudiences)))
+	parseOAuthConfig(config)
 	if (new TextEncoder().encode(config).length > WORKER_VARIABLE_MAX_BYTES) {
 		throw new Error(
 			`OAUTH_CONFIG, the command-line client's resources with the installation's hosts, is longer than a Worker variable `
@@ -167,6 +167,8 @@ const remoteConfig = (env: string, domain: string | undefined, source: Environme
 	const oidcClientId = source['FABRIKA_IAM_OIDC_CLIENT_ID']
 	const signingKeys = source['FABRIKA_IAM_SIGNING_KEYS']
 	const adminAudiences = source['FABRIKA_IAM_ADMIN_AUDIENCES']
+	// What IAM would refuse to boot with stops the deploy instead.
+	parseAdminAudiences(adminAudiences)
 	const missing: string[] = []
 	if (authentication.oidcEnabled) {
 		if (!humanEmailDomains) missing.push('FABRIKA_IAM_HUMAN_EMAIL_DOMAINS')
@@ -222,7 +224,7 @@ const buildVars = (config: RemoteConfig | 'local', source: EnvironmentSource): R
 
 	return {
 		HUMAN_EMAIL_DOMAINS: config.humanEmailDomains,
-		OAUTH_CONFIG: oauthConfig(config.controlUrl, config.hosts, config.adminAudiences),
+		OAUTH_CONFIG: oauthConfig(config.controlUrl, config.hosts),
 		// Only when named: an empty ADMIN_AUDIENCES means "no JWT may administer", so a `?? ''`
 		// default would lock the console out of every install instead of falling back to its app id.
 		...(config.adminAudiences === undefined ? {} : { ADMIN_AUDIENCES: config.adminAudiences }),

@@ -4,7 +4,6 @@ import { createLocalJWKSet, errors, type JSONWebKeySet, type JWTPayload, jwtVeri
 import type { EstablishedClient } from './oauth'
 import { clientJwks, clientMetadata } from './oauth-client'
 import { registeredClient } from './oauth-clients'
-import type { OAuthConfig } from './oauth-config'
 import { unixNow } from './repositories/sql'
 import type { Services } from './services'
 
@@ -23,13 +22,12 @@ type PrivateKeyJwtClient = Extract<OAuthClientMetadataDocument, { token_endpoint
  */
 export async function authenticateOAuthClient(
 	services: Services,
-	config: OAuthConfig,
 	input: { clientId: string; credential: OAuthClientCredential; audiences: string[] },
 ): Promise<EstablishedClient | null> {
 	// The CLI and agent clients are public: they hold no key, so they send no assertion.
 	if (input.clientId === OAUTH_CLI_CLIENT_ID) return input.credential.method === 'none' ? { kind: 'cli', clientId: input.clientId } : null
 	if (input.clientId === AGENT_CLIENT_ID) return input.credential.method === 'none' ? { kind: 'agent', clientId: AGENT_CLIENT_ID } : null
-	const registration = await registeredClient(services, config, input.clientId)
+	const registration = await registeredClient(services, input.clientId)
 	if (registration === null) return null
 	const metadata = await clientMetadata(registration)
 	if (metadata === null) return null
@@ -47,12 +45,11 @@ export async function authenticateOAuthClient(
  */
 export async function authenticateRevokingClient(
 	services: Services,
-	config: OAuthConfig,
 	input: { clientId: string; credential: OAuthClientCredential; audiences: string[] },
 ): Promise<boolean> {
-	if (input.credential.method !== 'none') return await authenticateOAuthClient(services, config, input) !== null
+	if (input.credential.method !== 'none') return await authenticateOAuthClient(services, input) !== null
 	if (input.clientId === OAUTH_CLI_CLIENT_ID || input.clientId === AGENT_CLIENT_ID) return true
-	const registration = await registeredClient(services, config, input.clientId)
+	const registration = await registeredClient(services, input.clientId)
 	if (registration === null) return false
 	const metadata = await clientMetadata(registration)
 	return metadata?.token_endpoint_auth_method !== 'private_key_jwt'
