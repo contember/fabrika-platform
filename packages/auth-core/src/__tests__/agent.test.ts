@@ -2,7 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { AGENT_CALLER, AGENT_CLIENT_ID, agentScopeAdmits, agentScopeToken, liesWithinValue, narrowToValue, parseAgentScope } from '../agent'
 import { permits } from '../permissions'
 import { callerOf } from '../requirement'
-import { type AgentActClaims, buildAccessClaims, parseAccessClaims } from '../token'
+import {
+	type AccessTokenClaims,
+	accessTokenPayload,
+	type AgentActClaims,
+	buildAccessClaims,
+	buildResourceAccessClaims,
+	parseAccessClaims,
+} from '../token'
 import { type PermissionEntry, relationInsideScope } from '../types'
 
 const projectA = { type: 'project', value: 'a' }
@@ -112,11 +119,15 @@ describe('the act claim of an agent token', () => {
 		expiresAt: 1300,
 	}
 	const narrowed = narrowToValue([{ action: 'task.read', scope: null, source: 'grant' }], projectA)
-	const act: AgentActClaims = { sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: 'read:project=a', label: 'my agent' }
+	const act: AgentActClaims = { sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: { mode: 'read', within: projectA }, label: 'my agent' }
+	const wire = (claims: AccessTokenClaims) => parseAccessClaims(JSON.parse(JSON.stringify(accessTokenPayload(claims, 'entries'))))
+	const good = () => JSON.parse(JSON.stringify(accessTokenPayload(buildAccessClaims({ ...base, permissions: narrowed, act }), 'entries')))
 
 	test('a person token with act round-trips it and presents the caller agent', () => {
 		const built = buildAccessClaims({ ...base, permissions: narrowed, act })
-		const parsed = parseAccessClaims(JSON.parse(JSON.stringify(built)))
+		const payload = JSON.parse(JSON.stringify(accessTokenPayload(built, 'entries')))
+		expect(payload.act).toEqual({ sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: 'read:project=a', label: 'my agent' })
+		const parsed = parseAccessClaims(payload)
 		expect(parsed?.act).toEqual(act)
 		expect(parsed === null ? null : callerOf(parsed)).toBe(AGENT_CALLER)
 		const plain = parseAccessClaims(JSON.parse(JSON.stringify(buildAccessClaims({ ...base, permissions: narrowed }))))
@@ -127,34 +138,61 @@ describe('the act claim of an agent token', () => {
 		const built = buildAccessClaims({
 			...base,
 			permissions: [{ action: 'task.read', scope: null, source: 'grant' }],
-			act: { sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: 'write' },
+			act: { sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: { mode: 'write', within: null } },
 		})
-		expect(parseAccessClaims(JSON.parse(JSON.stringify(built)))?.act).toEqual({ sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: 'write' })
+		expect(wire(built)?.act).toEqual({ sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: { mode: 'write', within: null } })
+		const compact = parseAccessClaims(JSON.parse(JSON.stringify(accessTokenPayload(built, 'compact'))))
+		expect(compact?.act?.scope).toEqual({ mode: 'write', within: null })
 	})
 
 	test('a narrowed token carrying an entry outside its value is refused, built or parsed', () => {
 		const wide: PermissionEntry[] = [...narrowed, { action: 'task.read', scope: null, source: 'grant' }]
 		expect(() => buildAccessClaims({ ...base, permissions: wide, act })).toThrow()
-		const payload = { ...JSON.parse(JSON.stringify(buildAccessClaims({ ...base, permissions: narrowed, act }))), perms: wide }
+		const payload = { ...good(), perms: wide }
 		expect(parseAccessClaims(payload)).toBeNull()
+		expect(parseAccessClaims({ ...good(), gperms: ['task.read'] })).toBeNull()
 		const other = { ...payload, perms: [{ action: 'task.read', scope: { type: 'project', value: 'b' }, source: 'grant' }] }
 		expect(parseAccessClaims(other)).toBeNull()
 	})
 
-	test('act is refused beside a session, a terminal, a service, a share link or a malformed field', () => {
+	test('act is refused beside a session, a terminal, a service, a share link, OAuth claims or a malformed field', () => {
 		expect(() => buildAccessClaims({ ...base, permissions: narrowed, act, session: true })).toThrow()
 		expect(() => buildAccessClaims({ ...base, type: 'service', email: undefined, permissions: narrowed, act })).toThrow()
-		const good = JSON.parse(JSON.stringify(buildAccessClaims({ ...base, permissions: narrowed, act })))
+		const { type: _type, email: _email, ...anonymous } = base
+		expect(() => buildAccessClaims({ ...anonymous, permissions: narrowed, act, link: { mount: 'shared', chain: [projectA] } })).toThrow()
+		expect(() => buildAccessClaims({ ...base, permissions: narrowed, act: { ...act, scope: { mode: 'read', within: { type: '~rel', value: 'a' } } } }))
+			.toThrow()
+		const { ptype: _ptype, email: _mailbox, ...linkless } = good()
+		const oauth = buildResourceAccessClaims({
+			iss: base.iss,
+			app: base.app,
+			resource: 'https://tasks.example.com',
+			subject: base.subject,
+			label: base.label,
+			permissions: narrowed,
+			issuedAt: base.issuedAt,
+			expiresAt: base.expiresAt,
+			clientId: 'https://client.example.com/metadata.json',
+			scopes: ['read'],
+			grantId: 'grant-1',
+			tokenId: 'token-1',
+		})
+		expect(parseAccessClaims(oauth)).not.toBeNull()
+		const wireAct = good().act
 		const refused: unknown[] = [
-			{ ...good, session: true },
-			{ ...good, amr: 'terminal_assertion', terminal: { id: 't', label: 'T' }, session: true },
-			{ ...good, ptype: 'service', email: undefined },
-			{ ...good, act: { ...act, sub: 'fabrika-cli' } },
-			{ ...good, act: { ...act, grant: '' } },
-			{ ...good, act: { ...act, scope: 'admin' } },
-			{ ...good, act: { ...act, label: 'x'.repeat(65) } },
-			{ ...good, act: { ...act, label: 7 } },
-			{ ...good, act: 'agent-cli' },
+			{ ...good(), session: true },
+			{ ...good(), amr: 'terminal_assertion', terminal: { id: 't', label: 'T' }, session: true },
+			{ ...good(), ptype: 'service', email: undefined },
+			{ ...linkless, link: { mount: 'shared', chain: [projectA] } },
+			{ ...oauth, act: wireAct },
+			{ ...good(), act: { ...wireAct, sub: 'fabrika-cli' } },
+			{ ...good(), act: { ...wireAct, grant: '' } },
+			{ ...good(), act: { ...wireAct, grant: ' grant-1 ' } },
+			{ ...good(), act: { ...wireAct, scope: 'admin' } },
+			{ ...good(), act: { ...wireAct, scope: { mode: 'read', within: null } } },
+			{ ...good(), act: { ...wireAct, label: 'x'.repeat(65) } },
+			{ ...good(), act: { ...wireAct, label: 7 } },
+			{ ...good(), act: 'agent-cli' },
 		]
 		for (const payload of refused) {
 			expect(parseAccessClaims(payload)).toBeNull()

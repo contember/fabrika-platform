@@ -1,4 +1,11 @@
-import { buildAccessClaims, matchesTokenAudience, parseAccessClaims, RESOURCE_ACCESS_TOKEN_TYP, TOKEN_ALG } from '@fabrika/auth-core'
+import {
+	accessTokenPayload,
+	buildAccessClaims,
+	matchesTokenAudience,
+	parseAccessClaims,
+	RESOURCE_ACCESS_TOKEN_TYP,
+	TOKEN_ALG,
+} from '@fabrika/auth-core'
 import { afterEach, describe, expect, jest, setSystemTime, spyOn, test } from 'bun:test'
 import { decodeJwt, decodeProtectedHeader } from 'jose'
 import { resolveAdmin } from '../admin/router'
@@ -440,16 +447,19 @@ describe('a resource token is never a native IAM credential', () => {
 		expect(await verifyAccessToken(signer, token, { issuer: ISSUER })).toBeNull()
 		expect(await verifyAccessToken(signer, token, { issuer: ISSUER, audience: RESOURCE })).toBeNull()
 		const now = Math.floor(Date.now() / 1000)
-		const native = await signer.sign(buildAccessClaims({
-			iss: ISSUER,
-			app: 'control',
-			subject: f.principal.id,
-			type: 'user',
-			label: f.principal.label,
-			permissions: [],
-			issuedAt: now,
-			expiresAt: now + 60,
-		}))
+		const native = await signer.sign(accessTokenPayload(
+			buildAccessClaims({
+				iss: ISSUER,
+				app: 'control',
+				subject: f.principal.id,
+				type: 'user',
+				label: f.principal.label,
+				permissions: [],
+				issuedAt: now,
+				expiresAt: now + 60,
+			}),
+			'entries',
+		))
 		expect(await verifyAccessToken(signer, native, { issuer: ISSUER, audience: 'control' })).not.toBeNull()
 		expect(await verifyResourceAccessToken(signer, native, { issuer: ISSUER })).toBeNull()
 	})

@@ -22,7 +22,7 @@
  * Pure: no jose, no I/O. Signing/verifying (key material) stays in the packages that own it.
  */
 
-import { AGENT_CLIENT_ID, liesWithinValue, parseAgentScope } from './agent'
+import { AGENT_CLIENT_ID, type AgentScope, agentScopeToken, liesWithinValue, parseAgentScope } from './agent'
 import { numberField, prop, stringField } from './json'
 import { isNormalizedMailbox } from './membership'
 import { isOAuthClientId, isOAuthResourceUri, parseOAuthScopes } from './oauth'
@@ -150,10 +150,18 @@ export interface AccessTokenClaims {
 }
 
 /**
- * The agent a person's application token acts for: the device client, the grant the person approved, its scope token
- * (`read`, `write`, or either narrowed to one value, ADR-0090 §2) and the label the agent gave itself, when it gave one.
+ * The agent a person's application token acts for: the device client, the grant the person approved, its parsed scope
+ * (ADR-0090 §2) and the label the agent gave itself, when it gave one.
  */
 export interface AgentActClaims {
+	sub: typeof AGENT_CLIENT_ID
+	grant: string
+	scope: AgentScope
+	label?: string
+}
+
+/** `AgentActClaims` as the token carries them: the scope as its scope token (`agentScopeToken`). */
+export interface AgentActPayload {
 	sub: typeof AGENT_CLIENT_ID
 	grant: string
 	scope: string
@@ -326,15 +334,23 @@ export function matchesTokenAudience(claims: AccessTokenClaims, profile: TokenAu
 export type AccessTokenLayout = 'entries' | 'compact'
 
 /** The signed payload: the claims, with the global grants of the compact layout in `gperms`. */
-export interface AccessTokenPayload extends AccessTokenClaims {
+export interface AccessTokenPayload extends Omit<AccessTokenClaims, 'act'> {
+	act?: AgentActPayload
 	/** The compact layout's global grants, by action name; absent in the entries layout and when there are none. */
 	gperms?: string[]
 }
 
 /** The payload that carries `claims` in `layout`. */
 export function accessTokenPayload(claims: AccessTokenClaims, layout: AccessTokenLayout): AccessTokenPayload {
+	const { act, ...rest } = claims
+	const payload: AccessTokenPayload = act === undefined ? rest : { ...rest, act: agentActPayload(act) }
 	const gperms = layout === 'compact' ? claims.perms.filter(isGlobalGrant).map((entry) => entry.action) : []
-	return gperms.length === 0 ? { ...claims } : { ...claims, perms: claims.perms.filter((entry) => !isGlobalGrant(entry)), gperms }
+	return gperms.length === 0 ? payload : { ...payload, perms: claims.perms.filter((entry) => !isGlobalGrant(entry)), gperms }
+}
+
+function agentActPayload(act: AgentActClaims): AgentActPayload {
+	const scope = agentScopeToken(act.scope)
+	return act.label === undefined ? { sub: act.sub, grant: act.grant, scope } : { sub: act.sub, grant: act.grant, scope, label: act.label }
 }
 
 /**
@@ -398,7 +414,7 @@ export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims 
 		claims.terminal = { id: params.terminal.id, label: params.terminal.label }
 	}
 	if (params.act !== undefined) {
-		const act = parseActClaims(params.act, params.permissions)
+		const act = parseActClaims(agentActPayload(params.act), params.permissions)
 		if (params.type !== 'user' || params.session !== undefined || params.terminal !== undefined || act === null || act === undefined) {
 			throw new Error("Only a person's token outside a session acts for an agent, under a scope its permissions lie within")
 		}
@@ -515,11 +531,11 @@ function parseActClaims(value: unknown, perms: readonly PermissionEntry[]): Agen
 	if (scope === null || (scope.within !== null && !liesWithinValue(perms, scope.within))) {
 		return undefined
 	}
-	return label === undefined ? { sub: AGENT_CLIENT_ID, grant, scope: token } : { sub: AGENT_CLIENT_ID, grant, scope: token, label }
+	return label === undefined ? { sub: AGENT_CLIENT_ID, grant, scope } : { sub: AGENT_CLIENT_ID, grant, scope, label }
 }
 
 function isActField(value: string): boolean {
-	return value.trim() !== '' && value.length <= MAX_AGENT_ACT_FIELD_LENGTH
+	return value !== '' && value.trim() === value && value.length <= MAX_AGENT_ACT_FIELD_LENGTH
 }
 
 /** A job, webhook or mount name, or an application id. */

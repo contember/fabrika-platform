@@ -20,6 +20,7 @@ import {
 	type CspSource,
 	type DeclaredEgress,
 	type DeclaredReach,
+	DIMENSION_NAME,
 	type DimensionArtifact,
 	dimensionValuesProblem,
 	directoryReach,
@@ -142,7 +143,6 @@ import { TOKEN_MAX_DAYS } from './token'
 import { hmacSchemeSchema, WEBHOOK_SCHEME_ALLOWED, webhookSchemeSchema } from './webhook-scheme'
 
 const NAME = /^[A-Za-z][A-Za-z0-9_]*$/
-const DIMENSION = /^[a-z][A-Za-z0-9_]*$/
 const ACTION = /^[A-Za-z][A-Za-z0-9_-]*(?:\.[A-Za-z][A-Za-z0-9_-]*)+$/
 /** Literal segments of unreserved URL characters, none starting with `.`: canonical without any decoding. */
 const LITERAL_PATH = /^(?:\/[A-Za-z0-9_~-][A-Za-z0-9._~-]*)+$/
@@ -528,8 +528,8 @@ class ArtifactBuilder {
 		const declared = this.#contract.dimensions
 		for (const [name, dimension] of Object.entries(declared)) {
 			const where = `dimension '${name}'`
-			if (!DIMENSION.test(name) || name === APP_SCOPE) {
-				this.#problem(where, `is not a dimension name (allowed: ${DIMENSION.source}, not '${APP_SCOPE}')`)
+			if (!DIMENSION_NAME.test(name) || name === APP_SCOPE) {
+				this.#problem(where, `is not a dimension name (allowed: ${DIMENSION_NAME.source}, not '${APP_SCOPE}')`)
 			}
 			if (dimension.in !== undefined && !Object.hasOwn(declared, dimension.in)) {
 				this.#problem(where, `lies in '${dimension.in}', which is not a dimension of the contract`)

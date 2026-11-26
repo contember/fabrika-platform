@@ -4,7 +4,7 @@
  * a failing value with a generated one rather than refusing the call.
  */
 
-import { type AuditInput, buildAccessClaims } from '@fabrika/auth-core'
+import { accessTokenPayload, type AuditInput, buildAccessClaims } from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
 import type { Env, RequestContext } from '../env'
@@ -44,15 +44,18 @@ function env(h: Harness): Env {
 
 const issuedAt = Math.floor(Date.now() / 1000)
 /** An anonymous share-link token for `reports`, as the proxy would inject it. */
-const REPORTS_TOKEN = await (await getSigner(TEST_SIGNING_ENV)).sign(buildAccessClaims({
-	iss: 'https://iam.example.test',
-	app: 'reports',
-	subject: 'cred-1',
-	label: 'share link',
-	permissions: [],
-	issuedAt,
-	expiresAt: issuedAt + 300,
-}))
+const REPORTS_TOKEN = await (await getSigner(TEST_SIGNING_ENV)).sign(accessTokenPayload(
+	buildAccessClaims({
+		iss: 'https://iam.example.test',
+		app: 'reports',
+		subject: 'cred-1',
+		label: 'share link',
+		permissions: [],
+		issuedAt,
+		expiresAt: issuedAt + 300,
+	}),
+	'entries',
+))
 
 function auditEvent(requestId: string): AuditInput {
 	return { credential: REPORTS_TOKEN, requestId, principalId: null, principalLabel: 'share link', action: 'report.view', resourceType: 'report' }

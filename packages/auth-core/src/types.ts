@@ -46,6 +46,9 @@ export interface Scope {
 	value: string
 }
 
+/** A dimension's name as a contract declares it; also the dimension of a scope an agent's grant is narrowed to. */
+export const DIMENSION_NAME = /^[a-z][A-Za-z0-9_]*$/
+
 /**
  * The pseudo-scope of a relation entry: `{ type: '~rel', value: <relation> }` means the action is held where a row of
  * the application names the principal in that relation. No dimension may start with `~`, so no reader that compares

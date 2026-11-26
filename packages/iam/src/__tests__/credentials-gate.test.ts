@@ -2,7 +2,7 @@
 // application environment, and `apiKeys.provision` keys expire within 30 days. On SQLite always, and on Postgres when
 // FABRIKA_TEST_POSTGRES_URL is set.
 
-import { type AppSchema, buildAccessClaims, type IssueKeyInput } from '@fabrika/auth-core'
+import { accessTokenPayload, type AppSchema, buildAccessClaims, type IssueKeyInput } from '@fabrika/auth-core'
 import { IAM_APP_ID, IAM_APP_SCHEMA } from '@fabrika/iam-contract'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -377,18 +377,21 @@ for (const backend of backends) {
 			if (person === null) throw new Error('no person')
 			const sessionAt = async (app: string, terminal?: { id: string; label: string }) => {
 				const issuedAt = now()
-				return (await getSigner(TEST_SIGNING_ENV)).sign(buildAccessClaims({
-					iss: ORIGIN,
-					app,
-					subject: person.id,
-					type: 'user',
-					label: person.label,
-					session: true,
-					...(terminal === undefined ? {} : { terminal }),
-					permissions: await resolvePermissionsAt(w.f.services, person, app),
-					issuedAt,
-					expiresAt: issuedAt + 300,
-				}))
+				return (await getSigner(TEST_SIGNING_ENV)).sign(accessTokenPayload(
+					buildAccessClaims({
+						iss: ORIGIN,
+						app,
+						subject: person.id,
+						type: 'user',
+						label: person.label,
+						session: true,
+						...(terminal === undefined ? {} : { terminal }),
+						permissions: await resolvePermissionsAt(w.f.services, person, app),
+						issuedAt,
+						expiresAt: issuedAt + 300,
+					}),
+					'entries',
+				))
 			}
 			expect(await rpc.issueKey(ask(await sessionAt(CONSOLE), service))).toMatchObject({ ok: true })
 

@@ -4,7 +4,7 @@
 import type { CredentialedEndpointKind } from './contract'
 import { isScopeParameterText } from './oauth'
 import { narrowPermissions, uniquePermissions } from './permissions'
-import { parseRelationInside, type PermissionEntry, type Scope } from './types'
+import { DIMENSION_NAME, parseRelationInside, type PermissionEntry, type Scope } from './types'
 
 /** The public device client an agent obtains an application grant with. It is never served Control's resources. */
 export const AGENT_CLIENT_ID = 'agent-cli'
@@ -30,9 +30,6 @@ export interface AgentScope {
 	readonly within: Scope | null
 }
 
-/** A dimension name as a contract declares one. */
-const DIMENSION = /^[a-z][A-Za-z0-9_]*$/
-
 /**
  * Read one scope token: `read`, `write`, or either narrowed to one value of a dimension, `read:<dimension>=<value>`.
  * The dimension is a contract's dimension name; the value is opaque text of a parameterized scope
@@ -48,7 +45,7 @@ export function parseAgentScope(token: string): AgentScope | null {
 	if (equals === -1) return null
 	const type = rest.slice(0, equals)
 	const value = rest.slice(equals + 1)
-	if (!DIMENSION.test(type) || !isScopeParameterText(type) || !isScopeParameterText(value)) return null
+	if (!DIMENSION_NAME.test(type) || !isScopeParameterText(type) || !isScopeParameterText(value)) return null
 	return { mode, within: { type, value } }
 }
 
@@ -74,7 +71,7 @@ export function agentScopeAdmits(mode: AgentScopeMode, kind: string): boolean {
  * widen it. Never adds an action or a reach the person does not hold.
  */
 export function narrowToValue(entries: readonly PermissionEntry[], within: Scope): PermissionEntry[] {
-	if (!DIMENSION.test(within.type)) throw new Error('a grant is narrowed to a value of a dimension')
+	if (!DIMENSION_NAME.test(within.type)) throw new Error('a grant is narrowed to a value of a dimension')
 	const scope = { type: within.type, value: within.value }
 	const inside = entries.filter((entry) => entry.scope !== null && relationInside(entry.scope, within))
 	return uniquePermissions([...narrowPermissions(entries, [{ action: '*', scope }]), ...inside])

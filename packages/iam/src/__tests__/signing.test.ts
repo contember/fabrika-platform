@@ -1,4 +1,4 @@
-import { buildAccessClaims, parseAccessClaims, type PermissionEntry, TOKEN_ALG } from '@fabrika/auth-core'
+import { accessTokenPayload, buildAccessClaims, parseAccessClaims, type PermissionEntry, TOKEN_ALG } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { createLocalJWKSet, exportJWK, generateKeyPair, jwtVerify } from 'jose'
 import { parseSigningKeys, Signer } from '../signing'
@@ -34,7 +34,7 @@ describe('Signer.fromPrivateJwks', () => {
 		const jwk = await privateJwk('key-1')
 		const signer = await Signer.fromPrivateJwks([jwk])
 
-		const token = await signer.sign(principalClaims())
+		const token = await signer.sign(accessTokenPayload(principalClaims(), 'entries'))
 
 		// Verify EXACTLY as the SDK will: a local JWKS built from signer.jwks(), checking iss + aud.
 		const localJwks = createLocalJWKSet(signer.jwks())
@@ -63,7 +63,7 @@ describe('Signer.fromPrivateJwks', () => {
 		expect(signer.jwks().keys.map((k) => k.kid)).toEqual(['active', 'next'])
 
 		// A token verifies against the multi-key set, and its header kid is the active one.
-		const token = await signer.sign(principalClaims())
+		const token = await signer.sign(accessTokenPayload(principalClaims(), 'entries'))
 		const [headerB64] = token.split('.')
 		const header: unknown = JSON.parse(Buffer.from(headerB64 ?? '', 'base64url').toString())
 		expect(header && typeof header === 'object' && 'kid' in header && header.kid).toBe('active')
@@ -79,7 +79,7 @@ describe('Signer.fromPrivateJwks', () => {
 describe('Signer.ephemeral', () => {
 	test('mints a verifiable token without configured keys (local dev)', async () => {
 		const signer = await Signer.ephemeral()
-		const token = await signer.sign(principalClaims())
+		const token = await signer.sign(accessTokenPayload(principalClaims(), 'entries'))
 		const { payload } = await jwtVerify(token, createLocalJWKSet(signer.jwks()), { issuer: ISS, audience: 'example-app' })
 		expect(parseAccessClaims(payload)?.sub).toBe('user-1')
 	})

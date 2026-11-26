@@ -1,4 +1,4 @@
-import { type AppSchema, buildAccessClaims, type WorkloadKind } from '@fabrika/auth-core'
+import { accessTokenPayload, type AppSchema, buildAccessClaims, type WorkloadKind } from '@fabrika/auth-core'
 import type { Scope } from '@fabrika/auth-core'
 import { EmailDeliveryError, type EmailDeliveryErrorCode, type EmailDeliveryResult, type EmailMessage, type EmailSender } from '@fabrika/email'
 import type { SqlDatabase } from '@fabrika/platform'
@@ -155,16 +155,19 @@ export interface Person {
 export async function mintedToken(services: Services, principal: PrincipalRow, app: string): Promise<string> {
 	const now = Math.floor(Date.now() / 1000)
 	const signer = await getSigner(TEST_SIGNING_ENV)
-	return signer.sign(buildAccessClaims({
-		iss: ORIGIN,
-		app,
-		subject: principal.id,
-		type: principal.type,
-		label: principal.label,
-		permissions: await resolvePermissionsAt(services, principal, app),
-		issuedAt: now,
-		expiresAt: now + 300,
-	}))
+	return signer.sign(accessTokenPayload(
+		buildAccessClaims({
+			iss: ORIGIN,
+			app,
+			subject: principal.id,
+			type: principal.type,
+			label: principal.label,
+			permissions: await resolvePermissionsAt(services, principal, app),
+			issuedAt: now,
+			expiresAt: now + 300,
+		}),
+		'entries',
+	))
 }
 
 /** A job's or a webhook's principal, its `px_` key, and the token IAM signs from that key now. */
