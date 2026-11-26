@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { composeEnv } from '../compose'
 import {
@@ -9,6 +10,8 @@ import {
 	parseLocalPortBase,
 	parsePortsFile,
 	PLATFORM_PORT_VARIABLE,
+	readRecordedPortBase,
+	refuseMovedBase,
 	resolveLocalPorts,
 } from '../ports'
 
@@ -42,9 +45,33 @@ describe("a checkout's host ports", () => {
 	})
 })
 
+describe("a stack's recorded base", () => {
+	const withStateDir = (files: Record<string, string>, check: (dir: string) => void): void => {
+		const dir = mkdtempSync(resolve(tmpdir(), 'local-ports-'))
+		try {
+			for (const [name, text] of Object.entries(files)) writeFileSync(resolve(dir, name), text)
+			check(dir)
+		} finally {
+			rmSync(dir, { recursive: true, force: true })
+		}
+	}
+
+	test('is the record, else the default for a stack prepared before the record, else none', () => {
+		withStateDir({ 'ports.env': `${LOCAL_PORT_BASE_VARIABLE}=18090\n`, 'iam.env': '' }, (dir) => expect(readRecordedPortBase(dir)).toBe(18090))
+		withStateDir({ 'iam.env': '' }, (dir) => expect(readRecordedPortBase(dir)).toBe(18080))
+		withStateDir({}, (dir) => expect(readRecordedPortBase(dir)).toBeUndefined())
+	})
+
+	test('refuses another base until a reset, and accepts its own or none', () => {
+		expect(() => refuseMovedBase(18090, { platform: 18100, apps: 18101 })).toThrow('runs on FABRIKA_LOCAL_PORT_BASE=18090, not 18100')
+		refuseMovedBase(18090, { platform: 18090, apps: 18091 })
+		refuseMovedBase(undefined, { platform: 18100, apps: 18101 })
+	})
+})
+
 describe('the composition takes its ports from the checkout', () => {
 	test('every compose call passes both ports', () => {
-		expect(composeEnv()).toMatchObject({ [PLATFORM_PORT_VARIABLE]: String(LOCAL_PORTS.platform), [APPS_PORT_VARIABLE]: String(LOCAL_PORTS.apps) })
+		expect(composeEnv(['down'])).toMatchObject({ [PLATFORM_PORT_VARIABLE]: String(LOCAL_PORTS.platform), [APPS_PORT_VARIABLE]: String(LOCAL_PORTS.apps) })
 	})
 
 	test('no compose file names a fixed public port, and both publishes are the variables', () => {

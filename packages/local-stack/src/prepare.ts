@@ -31,7 +31,7 @@ import { LOCAL_SOURCE_FIXTURE_DIRECTORY, LOCAL_SOURCE_PLATFORM_REPOSITORY } from
 import { prepareLocalSourceFixtures } from './local-source-fixtures/fixture'
 import { applicationFixtureRoot } from './local-source-fixtures/generate'
 import { MAIL_DIRECTORY } from './mail-capture'
-import { IAM_ORIGIN, LOCAL_PORT_BASE_VARIABLE, LOCAL_PORTS, OPERATIONS_ORIGIN, readRecordedPortBase } from './ports'
+import { IAM_ORIGIN, LOCAL_PORT_BASE_VARIABLE, LOCAL_PORTS, OPERATIONS_ORIGIN, readRecordedPortBase, refuseMovedBase } from './ports'
 import { ensureLocalGitHubApps } from './source-connection-fixture'
 
 export const REPO_ROOT = resolve(import.meta.dir, '..', '..', '..')
@@ -400,18 +400,9 @@ const generateProxyConfigs = async (mcp: boolean): Promise<void> => {
 	])
 }
 
-/**
- * Records the base, so this checkout's later commands find its stack without the variable. A stack keeps the base it
- * was first prepared on: its databases hold the origins (registered return origins, the issuer of every token).
- */
+/** Records the base, so this checkout's later commands find its stack without the variable. */
 const recordLocalPorts = async (): Promise<void> => {
-	const recorded = readRecordedPortBase()
-	if (recorded !== undefined && recorded !== LOCAL_PORTS.platform) {
-		throw new Error(
-			`this checkout's stack runs on ${LOCAL_PORT_BASE_VARIABLE}=${recorded}, not ${LOCAL_PORTS.platform}; `
-				+ 'reset it (local:reset or browser:reset) with the new base to move it',
-		)
-	}
+	refuseMovedBase(readRecordedPortBase())
 	await writeEnv(STATE_DIR, 'ports.env', { [LOCAL_PORT_BASE_VARIABLE]: String(LOCAL_PORTS.platform) })
 }
 

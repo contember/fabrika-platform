@@ -85,7 +85,7 @@ const STORAGE_PROVENANCE_VARIABLE = 'FABRIKA_STORAGE_PROVENANCE'
 const compose = async (args: string[], expectSuccess = true, showOutput = true): Promise<number> => {
 	const process = Bun.spawn(
 		['docker', 'compose', '--project-name', COMPOSE_PROJECT, '--file', COMPOSE_FILE, ...args],
-		{ cwd: REPO_ROOT, env: composeEnv(), stdout: showOutput ? 'inherit' : 'ignore', stderr: showOutput ? 'inherit' : 'ignore', stdin: 'ignore' },
+		{ cwd: REPO_ROOT, env: composeEnv(args), stdout: showOutput ? 'inherit' : 'ignore', stderr: showOutput ? 'inherit' : 'ignore', stdin: 'ignore' },
 	)
 	const exitCode = await process.exited
 	if (expectSuccess && exitCode !== 0) {
@@ -97,7 +97,7 @@ const compose = async (args: string[], expectSuccess = true, showOutput = true):
 const composeOutput = async (args: string[]): Promise<string> => {
 	const process = Bun.spawn(
 		['docker', 'compose', '--project-name', COMPOSE_PROJECT, '--file', COMPOSE_FILE, ...args],
-		{ cwd: REPO_ROOT, env: composeEnv(), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' },
+		{ cwd: REPO_ROOT, env: composeEnv(args), stdout: 'pipe', stderr: 'pipe', stdin: 'ignore' },
 	)
 	const [output, failure, exitCode] = await Promise.all([
 		new Response(process.stdout).text(),

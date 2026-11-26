@@ -8,8 +8,9 @@ import { resolve } from 'node:path'
  */
 export const LOCAL_PORT_BASE_VARIABLE = 'FABRIKA_LOCAL_PORT_BASE'
 export const DEFAULT_LOCAL_PORT_BASE = 18080
+const STATE_DIR = resolve(import.meta.dir, '..', '.state')
 /** What `prepareLocalStack` records, so every later command of this checkout finds its stack without the variable. */
-export const PORTS_FILE = resolve(import.meta.dir, '..', '.state', 'ports.env')
+export const PORTS_FILE = resolve(STATE_DIR, 'ports.env')
 
 /** The variables `compose.yaml` interpolates; every compose call of this package passes them. */
 export const PLATFORM_PORT_VARIABLE = 'FABRIKA_LOCAL_PLATFORM_PORT'
@@ -34,9 +35,28 @@ export function parsePortsFile(text: string): number {
 	return parseLocalPortBase(match[1] ?? '', PORTS_FILE)
 }
 
-/** The base this checkout's stack was prepared on, or undefined before its first prepare. */
-export const readRecordedPortBase = (file: string = PORTS_FILE): number | undefined =>
-	existsSync(file) ? parsePortsFile(readFileSync(file, 'utf8')) : undefined
+/**
+ * The base this checkout's stack was prepared on, or undefined before its first prepare. A stack prepared before the
+ * record existed (it has credentials, `iam.env`, but no `ports.env`) ran on the default.
+ */
+export function readRecordedPortBase(stateDir: string = STATE_DIR): number | undefined {
+	const file = resolve(stateDir, 'ports.env')
+	if (existsSync(file)) return parsePortsFile(readFileSync(file, 'utf8'))
+	return existsSync(resolve(stateDir, 'iam.env')) ? DEFAULT_LOCAL_PORT_BASE : undefined
+}
+
+/**
+ * A stack keeps the base it was prepared on: its databases hold the origins (registered return origins, the issuer of
+ * every token), and a command on another base would recreate some containers on other ports. A reset moves it.
+ */
+export function refuseMovedBase(recorded: number | undefined, ports: LocalPorts = LOCAL_PORTS): void {
+	if (recorded !== undefined && recorded !== ports.platform) {
+		throw new Error(
+			`this checkout's stack runs on ${LOCAL_PORT_BASE_VARIABLE}=${recorded}, not ${ports.platform}; `
+				+ 'unset the variable, or reset the stack (local:reset or browser:reset) with the new base to move it',
+		)
+	}
+}
 
 /** The variable when set, else the base this checkout's stack was prepared on, else the default. */
 export function resolveLocalPorts(env: Record<string, string | undefined>, recorded: number | undefined): LocalPorts {

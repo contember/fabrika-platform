@@ -94,7 +94,7 @@ Per-package dev/build commands live in each package's own CLAUDE.md.
 - Run `bun install` in each new worktree; `node_modules` is not shared.
 - Each worktree's local Docker stack is its own compose project, `fabrika-local-<directory>-<path hash>`, with its own
   volumes and `.state/`. Its host ports are `FABRIKA_LOCAL_PORT_BASE` (default 18080) and the next one, recorded in
-  `.state/ports.env` on the first `local:up`, so a second worktree runs its own stack on another base
+  `.state/ports.env` by its first `local:up`, `browser:up` or reset, so a second worktree runs its own stack on another base
   (`FABRIKA_LOCAL_PORT_BASE=18090 bun run local:up`). Never take down a stack another session runs. A stack started before this
   naming is the project `fabrika-local` ([`local-development.md`](./docs/reference/local-development.md) removes it).
 
