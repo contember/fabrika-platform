@@ -446,9 +446,16 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     sent again (only when no build carries it are the upload and the start repeated, under the same token); a changed
     manifest starts a new attempt. The archive holds the commit's tree at its root (Control's rewrite drops GitHub's
     top-level directory), so the buildspec unpacks it as it is, for an application's build as for the proxy's.
-    Not yet: the proxy service (following the build to its end: its log, its verdict, the URL parameter's deletion
-    and the image's digest; its ECS service in the Service Connect namespace, on X86_64; `republish`, which will start
-    the build),
+    **Following the build** (built, `followAwsProxyBuild`; nothing calls it yet): one read of the recorded build. Running,
+    it is `pending`; succeeded, the image ECR holds under the attempt's tag (never a digest from the build's log) is
+    recorded with the manifest it was built from (`proxyImageDigest`, `proxyImageManifestSha256`) and the attempt is
+    cleared; failed, gone or without an image, the attempt is cleared and the failure is `awsProxyBuild`, not retryable as
+    it is (a new start builds again). Either end deletes the attempt's URL parameter: Parameter Store keeps one until it
+    is deleted. A replaced attempt's goes when the start replaces it, its token being recorded nowhere after. A
+    namespace whose image is of the current manifest starts nothing, and `normalize` refuses a submitted image as it
+    refuses a submitted build.
+    Not yet: the proxy service (relaying the build's log into an operator's view; its ECS service in the Service Connect
+    namespace, on X86_64, running the recorded image; `republish`, which will start and follow the build),
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
     application; an instance per `full` namespace). Until the proxy runs, an application is reachable from nothing. CloudFormation answers a missing stack
     with `ValidationError`, which only its message tells apart from a malformed call, and the query client never reads

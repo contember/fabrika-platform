@@ -295,6 +295,9 @@ describe('awsNamespaceCapabilities', () => {
 		const token = '0f1e2d3c-4b5a-4968-8776-655443322110'
 		const forged = target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64), proxyBuildId: `fabrika_ns_shared_prod:${token}` })
 		expect(() => capabilities.normalize({ ...NAMESPACE, target: forged })).toThrow('recorded by its provider, never submitted')
+		// Nor an image the provider never read from ECR, which the proxy's service would run.
+		const image = target({ proxyImageDigest: `sha256:${'a'.repeat(64)}`, proxyImageManifestSha256: 'f'.repeat(64) })
+		expect(() => capabilities.normalize({ ...NAMESPACE, target: image })).toThrow('never submitted')
 		expect(() => capabilities.normalize({ ...NAMESPACE, target: target({ proxyBuildToken: token, proxyBuildManifestSha256: 'f'.repeat(64) }) }))
 			.toThrow(
 				'never submitted',

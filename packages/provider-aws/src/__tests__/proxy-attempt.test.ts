@@ -10,11 +10,12 @@ import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { CodeBuildBuild, CodeBuildStart } from '../aws/codebuild'
+import type { EcrImage, EcrImageReference } from '../aws/ecr'
 import type { S3PartWriter } from '../aws/s3'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsNamespaceTargetEnvelope } from '../namespace'
-import { awsProxyManifestFile, sha256Hex, startAwsProxyBuild } from '../proxy-attempt'
+import { AWS_PROXY_BUILD_FAILED, awsProxyManifestFile, followAwsProxyBuild, sha256Hex, startAwsProxyBuild } from '../proxy-attempt'
 import { AWS_PROXY_BUILDSPEC } from '../proxy-build'
 
 const installation: AwsAppTarget = {
@@ -91,6 +92,10 @@ class Fake {
 					putSecret: async (name: string, value: string) => {
 						this.calls.push(`putSecret ${name} ${value.startsWith('https://') ? 'presigned' : 'other'}`)
 						return 1
+					},
+					deleteSecret: async (name: string) => {
+						this.calls.push(`deleteSecret ${name}`)
+						return true
 					},
 				},
 				s3PartWriter: (address: { readonly bucket: string; readonly key: string }): S3PartWriter => {
@@ -213,6 +218,23 @@ describe('startAwsProxyBuild', () => {
 		// The namespace's own pin, an older commit than the installation's default, is what is uploaded.
 		expect(fake.calls).toContain(`upload contember/fabrika-platform@${older} proxy.manifest.json`)
 		expect(fake.calls).toContain(`startBuild fabrika_ns_shared_prod ${SECOND_TOKEN}`)
+		// The replaced attempt's URL parameter goes as it is replaced: its token is recorded nowhere after.
+		expect(fake.calls.slice(0, 2)).toEqual(['checkpoint', `deleteSecret ${PARAMETER}`])
+	})
+
+	test('a namespace whose image is of the current manifest starts nothing', async () => {
+		const fake = new Fake()
+		const built = namespaceOf({
+			...PINNED,
+			proxyImageDigest: `sha256:${'a'.repeat(64)}`,
+			proxyImageManifestSha256: await sha256Hex(awsProxyManifestFile('shared', MEMBERS)),
+		})
+		expect(await startAwsProxyBuild(fake.input(built))).toEqual(built)
+		expect(fake.calls).toEqual([])
+		// A member changed: the image is of an older manifest, so a build starts, the image kept until the new one is pushed.
+		await startAwsProxyBuild(fake.input(built, [member({ domain: 'notes.example.org' })]))
+		expect(fake.checkpoints[0]?.proxyImageDigest).toBe(`sha256:${'a'.repeat(64)}`)
+		expect(fake.calls).toContain(`startBuild fabrika_ns_shared_prod ${TOKEN}`)
 	})
 
 	test('a lost start is settled by the token: found, it is recorded; not found, the failure stands', async () => {
@@ -248,5 +270,105 @@ describe('startAwsProxyBuild', () => {
 		) => error)
 		expect(failure).toBeInstanceOf(ProviderNamespaceError)
 		expect(foreign.calls).toEqual([])
+	})
+})
+
+describe('followAwsProxyBuild', () => {
+	const DIGEST = `sha256:${'b'.repeat(64)}`
+	const MANIFEST = 'c'.repeat(64)
+	const started = namespaceOf({ ...PINNED, proxyBuildToken: TOKEN, proxyBuildManifestSha256: MANIFEST, proxyBuildId: BUILD_ID })
+
+	/** A fake of the follow's calls: the build's answer, the image ECR answers, what each received. */
+	const follow = (build: CodeBuildBuild | null, image: EcrImage | null = { digest: DIGEST, tags: [`run-${TOKEN}`], pushedAt: new Date() }) => {
+		const calls: string[] = []
+		const checkpoints: AwsNamespaceTarget[] = []
+		const run = (namespace: ProviderDeploymentNamespace = started) =>
+			followAwsProxyBuild({
+				namespace,
+				installation,
+				proxySource: PROXY_SOURCE,
+				clients: {
+					codeBuild: {
+						getBuild: async (id: string) => {
+							calls.push(`getBuild ${id}`)
+							return build
+						},
+					},
+					ecr: {
+						findImage: async (name: string, reference: EcrImageReference) => {
+							calls.push(`findImage ${name} ${'tag' in reference ? reference.tag : reference.digest}`)
+							return image
+						},
+					},
+					ssm: {
+						deleteSecret: async (name: string) => {
+							calls.push(`deleteSecret ${name}`)
+							return true
+						},
+					},
+				},
+				events: {
+					checkpoint: async (recorded: ProviderDeploymentNamespace) => {
+						calls.push('checkpoint')
+						checkpoints.push(awsNamespaceTargetCodec.decode(recorded.target.payload))
+					},
+					boundary: async () => {},
+				},
+				signal: new AbortController().signal,
+			})
+		return { calls, checkpoints, run }
+	}
+
+	test('a build still running is pending, with nothing recorded or deleted', async () => {
+		const fake = follow(build(BUILD_ID))
+		expect(await fake.run()).toEqual({ namespace: started, state: 'pending' })
+		expect(fake.calls).toEqual([`getBuild ${BUILD_ID}`])
+	})
+
+	test('a build that succeeded records the image ECR holds under the attempt tag, clears the attempt and drops its URL', async () => {
+		const fake = follow({ ...build(BUILD_ID), status: 'succeeded' })
+		const followed = await fake.run()
+		expect(followed.state).toBe('built')
+		expect(fake.calls).toEqual([
+			`getBuild ${BUILD_ID}`,
+			`findImage fabrika/namespaces/shared/prod/proxy run-${TOKEN}`,
+			`deleteSecret ${PARAMETER}`,
+			'checkpoint',
+		])
+		expect(fake.checkpoints).toEqual([{ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST }])
+		expect(awsNamespaceTargetCodec.decode(followed.namespace.target.payload)).toEqual({
+			...PINNED,
+			proxyImageDigest: DIGEST,
+			proxyImageManifestSha256: MANIFEST,
+		})
+		// Followed again, the image is recorded and nothing is in flight: built, with no call.
+		const again = follow(null)
+		expect((await again.run(followed.namespace)).state).toBe('built')
+		expect(again.calls).toEqual([])
+	})
+
+	test('a build that failed, is gone, or pushed no image clears the attempt, drops its URL and fails with a stable code', async () => {
+		const cases: readonly [CodeBuildBuild | null, EcrImage | null, string][] = [
+			[{ ...build(BUILD_ID), status: 'failed' }, null, `aws: the proxy build ${BUILD_ID} is failed`],
+			[{ ...build(BUILD_ID), status: 'timed_out' }, null, `aws: the proxy build ${BUILD_ID} is timed_out`],
+			[null, null, 'is not one CodeBuild knows any more'],
+			[{ ...build(BUILD_ID), status: 'succeeded' }, null, `pushed no image tagged run-${TOKEN}`],
+		]
+		for (const [answer, image, message] of cases) {
+			const fake = follow(answer, image)
+			const failure = await fake.run().catch((error: unknown) => error)
+			expect(failure).toBeInstanceOf(ProviderNamespaceError)
+			expect(failure).toMatchObject({ code: AWS_PROXY_BUILD_FAILED, retryable: false })
+			expect(failure instanceof Error ? failure.message : '').toContain(message)
+			expect(fake.calls).toContain(`deleteSecret ${PARAMETER}`)
+			// The pin stays; the attempt is cleared, so a new start builds again.
+			expect(fake.checkpoints).toEqual([PINNED])
+		}
+	})
+
+	test('a namespace with no build started and no image is refused, calling nothing', async () => {
+		const fake = follow(null)
+		await expect(fake.run(namespaceOf(PINNED))).rejects.toMatchObject({ message: "aws: the namespace's proxy has no build started to follow" })
+		expect(fake.calls).toEqual([])
 	})
 })

@@ -98,6 +98,10 @@ describe('the AWS codecs', () => {
 		expect(roundTrip(awsNamespaceTargetCodec, building)).toEqual({ decoded: building, json: building })
 		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyBuildToken: token })).toContain('proxyBuildManifestSha256')
 		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyBuildId: building.proxyBuildId ?? '' })).toContain('proxyBuildToken')
+		// The image: its digest with the manifest it was built from, never one without the other.
+		const built: AwsNamespaceTarget = { ...namespace, proxyImageDigest: `sha256:${'a'.repeat(64)}`, proxyImageManifestSha256: 'f'.repeat(64) }
+		expect(roundTrip(awsNamespaceTargetCodec, built)).toEqual({ decoded: built, json: built })
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyImageDigest: built.proxyImageDigest ?? '' })).toContain('proxyImageManifestSha256')
 		// The pin is required: a target without it is one this release does not read.
 		const { proxyCommitSha: _sha, ...unpinned } = namespace
 		expect(refused(awsNamespaceTargetCodec, unpinned)).toContain('proxyCommitSha')
