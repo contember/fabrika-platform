@@ -788,6 +788,7 @@ export function controlApprovalRequestContext(
 		...(deps.lock === undefined ? {} : { lock: deps.lock }),
 		...(deps.lock === undefined || deps.opsTransport === undefined ? {} : { maintenance: { lock: deps.lock, ops: deps.opsTransport } }),
 		...(runDeps === undefined ? {} : { deploys: async () => operationDeploys(await runDeps()) }),
+		...(deps.grantApproval === undefined ? {} : { grantApproval: deps.grantApproval }),
 		...(consoleOrigin === undefined ? {} : { consoleOrigin }),
 		...passkeyStepUp(ctx),
 		...iamGrantsDeps(ctx.env),

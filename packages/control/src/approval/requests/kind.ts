@@ -14,6 +14,7 @@ import type { OperationDeploys, OpsTransport } from '../../data-operations'
 import type { ApprovalRequestRow, ControlRepositories } from '../../db'
 import type { Lease } from '../../lease'
 import type { Vault } from '../../vault'
+import type { GrantApprovalPort } from '../api'
 import type { ConsoleAdmission } from '../human'
 import type { IamApprover, IamGrantsReader, IamRequestedKeys } from './iam'
 
@@ -39,6 +40,8 @@ export interface RequestActionContext extends RequestKindContext {
 	readonly maintenance?: { readonly lock: DeployLocks; readonly ops: OpsTransport }
 	/** A restore's own deploys; absent, a restore is refused. */
 	readonly deploys?: () => Promise<OperationDeploys>
+	/** IAM's mirror of the approval gates, which an environment a registry write creates reaches before its row (ADR-0083 §4). */
+	readonly grantApproval?: GrantApprovalPort
 }
 
 /** An execution acts as the approver, a person in the console, under the environment's lease (`RequestExecution.signal`). */

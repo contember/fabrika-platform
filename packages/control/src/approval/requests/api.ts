@@ -409,6 +409,7 @@ function executionContext(c: ApprovalRequestContext): RequestExecutionContext {
 		...(c.iamApprover === undefined ? {} : { iamApprover: c.iamApprover }),
 		...(c.maintenance === undefined ? {} : { maintenance: c.maintenance }),
 		...(c.deploys === undefined ? {} : { deploys: c.deploys }),
+		...(c.grantApproval === undefined ? {} : { grantApproval: c.grantApproval }),
 	}
 }
 
