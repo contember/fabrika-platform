@@ -286,6 +286,32 @@ for (const engine of ENGINES) {
 			expect(imports).toHaveLength(1)
 		})
 
+		test("an import adopts the roles an earlier deploy's schema reconcile wrote, with their grants and live sign-ins", async () => {
+			const f = await setup(engine)
+			// The schema an earlier release's deploy sent for an external application: its roles, each granting no action.
+			const schema = { scopes: [], actions: [], roles: Object.fromEntries(OPS.roles.map((role) => [role.key, { name: role.name, permissions: [] }])) }
+			expect(await f.putSchema(OPS.app, schema)).toBe(200)
+			const person = await f.repositories.principals.createUser(uuidv7(), `${uuidv7()}@example.com`)
+			const grants = [
+				await f.repositories.grants.createGrant({ principalId: person.id, app: OPS.app, roleKey: 'operator' }),
+				await f.repositories.grants.createGrant({ principalId: person.id, app: OPS.app, roleKey: 'viewer' }),
+			]
+			const clientId = OPS.clients[0]?.clientId
+			if (clientId === undefined) throw new Error('OPS names no client')
+			const signIn = await f.oauthGrant(clientId, OPS.app)
+			const entries = [{
+				provider: 'external',
+				clientId,
+				redirectUris: OPS.clients[0]?.redirectUris,
+				identity: { app: OPS.app, resource: OPS.resource, roles: OPS.roles },
+			}]
+			const imported = await f.provisioning('oauthClients.importOnce', { clients: entries })
+			expect(imported).toEqual({ status: 200, result: { status: 'imported', externalApps: [OPS.app], oauthClients: [clientId] }, error: null })
+			expect((await f.repositories.grants.getActiveGrantsForApp(person.id, OPS.app, { includeCrossApp: false })).map((row) => row.id).sort())
+				.toEqual(grants.map((grant) => grant.id).sort())
+			expect(await f.revoked(signIn)).toBe(false)
+		})
+
 		test('an import that cannot adopt a vocabulary writes nothing, the mark included', async () => {
 			const f = await setup(engine)
 			await f.repositories.appSchema.reconcileAppSchema({ app: OPS.app, scopes: [], actions: [{ action: 'accounts.manage' }], roles: [] })

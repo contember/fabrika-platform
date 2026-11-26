@@ -140,23 +140,13 @@ export class OAuthRegistryRepository {
 	 * by kind; empty when the id may be adopted as an external application, with every grant of its roles.
 	 */
 	async foreignVocabulary(app: string): Promise<string[]> {
-		const { results } = await this.db
-			.prepare(`SELECT 'actions' AS kind FROM app_actions WHERE app = ?
-				UNION SELECT 'scopes' AS kind FROM app_scopes WHERE app = ?
-				UNION SELECT 'roles granting actions' AS kind FROM roles WHERE app = ?
-					AND (permissions <> '[]' OR member_scope IS NOT NULL OR assignable_by IS NOT NULL OR external <> 0 OR via IS NOT NULL)
-				UNION SELECT 'a contract' AS kind FROM contract_apps WHERE app = ?
-				UNION SELECT 'link mounts' AS kind FROM app_link_mounts WHERE app = ?
-				UNION SELECT 'delegated endpoints' AS kind FROM app_delegated_endpoints WHERE app = ?
-				UNION SELECT 'workloads' AS kind FROM app_workloads WHERE app = ?
-				UNION SELECT 'people' AS kind FROM app_members WHERE app = ?
-				UNION SELECT 'a terminal page' AS kind FROM app_terminals WHERE app = ?
-				UNION SELECT 'e-mail templates' AS kind FROM app_mail_templates WHERE app = ?
-				UNION SELECT 'return origins' AS kind FROM app_return_origins WHERE app = ?
-				UNION SELECT 'agent callers' AS kind FROM app_agents WHERE app = ?`)
-			.bind(app, app, app, app, app, app, app, app, app, app, app, app)
-			.all<{ kind: string }>()
-		return results.map((row) => row.kind).sort()
+		// One row with a column per kind: D1 refuses a compound SELECT of more than five terms.
+		const columns = FOREIGN_VOCABULARY.map(({ rows }, index) => `CASE WHEN EXISTS (${rows}) THEN 1 ELSE 0 END AS k${index}`)
+		const row = await this.db
+			.prepare(`SELECT ${columns.join(', ')}`)
+			.bind(...FOREIGN_VOCABULARY.map(() => app))
+			.first<Record<string, unknown>>()
+		return FOREIGN_VOCABULARY.filter((_, index) => Number(row?.[`k${index}`]) === 1).map(({ kind }) => kind).sort()
 	}
 
 	/**
@@ -333,6 +323,26 @@ export class OAuthRegistryRepository {
 		}
 	}
 }
+
+/** What IAM may hold under an app id beyond an external application's roles: each kind, and the rows that show it. */
+const FOREIGN_VOCABULARY: readonly { kind: string; rows: string }[] = [
+	{ kind: 'actions', rows: 'SELECT 1 FROM app_actions WHERE app = ?' },
+	{ kind: 'scopes', rows: 'SELECT 1 FROM app_scopes WHERE app = ?' },
+	{
+		kind: 'roles granting actions',
+		rows: `SELECT 1 FROM roles WHERE app = ?
+			AND (permissions <> '[]' OR member_scope IS NOT NULL OR assignable_by IS NOT NULL OR external <> 0 OR via IS NOT NULL)`,
+	},
+	{ kind: 'a contract', rows: 'SELECT 1 FROM contract_apps WHERE app = ?' },
+	{ kind: 'link mounts', rows: 'SELECT 1 FROM app_link_mounts WHERE app = ?' },
+	{ kind: 'delegated endpoints', rows: 'SELECT 1 FROM app_delegated_endpoints WHERE app = ?' },
+	{ kind: 'workloads', rows: 'SELECT 1 FROM app_workloads WHERE app = ?' },
+	{ kind: 'people', rows: 'SELECT 1 FROM app_members WHERE app = ?' },
+	{ kind: 'a terminal page', rows: 'SELECT 1 FROM app_terminals WHERE app = ?' },
+	{ kind: 'e-mail templates', rows: 'SELECT 1 FROM app_mail_templates WHERE app = ?' },
+	{ kind: 'return origins', rows: 'SELECT 1 FROM app_return_origins WHERE app = ?' },
+	{ kind: 'agent callers', rows: 'SELECT 1 FROM app_agents WHERE app = ?' },
+]
 
 function placeholders(values: readonly unknown[]): string {
 	return values.map(() => '?').join(', ')
