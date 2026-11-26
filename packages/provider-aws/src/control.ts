@@ -194,9 +194,12 @@ export function checkProxySource(source: AwsProxySource): AwsProxySource {
 	return { repository: { owner: source.repository.owner, name: source.repository.name }, commitSha: source.commitSha }
 }
 
+/** The hosts a plain-http IAM issuer may name: the machine itself. */
+const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]'])
+
 /**
- * The proxies' IAM as Control's configuration names it: an absolute http(s) URL (the proxy reads its origin) and a
- * key. A malformed one fails the composition, naming the field only, never the key.
+ * The proxies' IAM as Control's configuration names it: an absolute https URL (or plain http to a loopback host; the
+ * proxy reads its origin) and a key. A malformed one fails the composition, naming the field only, never the key.
  */
 export function checkProxyIam(iam: AwsProxyIam): AwsProxyIam {
 	let issuer: URL
@@ -207,6 +210,10 @@ export function checkProxyIam(iam: AwsProxyIam): AwsProxyIam {
 	}
 	if ((issuer.protocol !== 'https:' && issuer.protocol !== 'http:') || issuer.username !== '' || issuer.password !== '') {
 		throw new Error("aws: the proxies' IAM issuer is not an http(s) URL without credentials")
+	}
+	// The proxies send their IAM key to the issuer across the network: plain http only to a loopback host (a local stack).
+	if (issuer.protocol === 'http:' && !LOOPBACK_HOSTS.has(issuer.hostname)) {
+		throw new Error("aws: the proxies' IAM issuer is plain http to a host that is not loopback; the key would travel unencrypted")
 	}
 	if (iam.key.trim() === '') throw new Error("aws: the proxies' IAM key is empty")
 	return { issuer: issuer.origin, key: iam.key }

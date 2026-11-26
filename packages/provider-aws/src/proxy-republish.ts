@@ -9,7 +9,8 @@
 //
 // `wait: 'started'` returns unsettled once a build of the current manifest is in flight, and Control hands the namespace
 // to a reconcile job; `wait: 'active'` follows the build, polling, until the service is set or `AWS_PROXY_WAIT_MS` ran
-// out. The namespace's `reconcile` continues a republish in flight the same way, and fails retryably
+// out. The namespace's `reconcile` republishes the same way whenever there are members or a recorded image (a reconcile
+// is how Control publishes a change it could not while the namespace was busy), and fails retryably
 // (`awsProxyPending`) when the wait runs out, so a later reconcile takes it up again.
 //
 // Not yet: the service's rollout and its verdict, and deleting the secrets of members no longer routed once a rollout
@@ -132,8 +133,12 @@ export const AWS_PROXY_PENDING = 'awsProxyPending'
 
 /**
  * The namespace capabilities with the proxy's republish: `republish` drives the proxy to the members, and `reconcile`,
- * after the stack, carries on proxy work in flight (waiting as `active` does) and fails retryably when it does not
- * settle in time. `provision` stays the stack's alone: a namespace's proxy is built once it has members.
+ * after the stack, republishes too (waiting as `active` does) and fails retryably when it does not settle in time.
+ * Control queues a reconcile to publish a member change it could not publish while the namespace was busy
+ * (`NamespaceProxyBusyError`), and a changed IAM key or issuer reaches the proxy only through one, so a reconcile drives
+ * the proxy to the current members whenever the namespace has members or a recorded image (so the last member's
+ * removal converges too), not only when a build is in flight. On a converged namespace that is the stack read and a
+ * fingerprint that matches, with no call. `provision` stays the stack's alone: a proxy is built once there are members.
  */
 export function withAwsProxyRepublish(base: ProviderNamespaceCapabilities, context: AwsProxyRepublishContext): ProviderNamespaceCapabilities {
 	const run = async (input: AwsProxyRepublishInput) => {
@@ -148,7 +153,7 @@ export function withAwsProxyRepublish(base: ProviderNamespaceCapabilities, conte
 		republish: (input) => run({ namespace: input.namespace, members: input.members, events: input.events, signal: input.signal, wait: input.wait }),
 		reconcile: async (input) => {
 			const namespace = await base.reconcile(input)
-			if (!awsProxyInFlight(namespace, context)) return namespace
+			if (input.members.length === 0 && !awsProxyRecorded(namespace, context)) return namespace
 			const result = await run({ namespace, members: input.members, events: input.events, signal: input.signal, wait: 'active' })
 			if (!result.settled) {
 				throw new ProviderNamespaceError("aws: the namespace's proxy build is still running; a later reconcile carries on", AWS_PROXY_PENDING, true)
@@ -158,11 +163,8 @@ export function withAwsProxyRepublish(base: ProviderNamespaceCapabilities, conte
 	}
 }
 
-/** Whether the namespace's target records proxy work a reconcile is to carry on: a build in flight, or an image not set. */
-export function awsProxyInFlight(
-	namespace: ProviderDeploymentNamespace,
-	context: Pick<AwsProxyRepublishContext, 'installation' | 'proxySource'>,
-): boolean {
+/** Whether the namespace's target records any proxy of its own: a build in flight, or an image. */
+function awsProxyRecorded(namespace: ProviderDeploymentNamespace, context: Pick<AwsProxyRepublishContext, 'installation' | 'proxySource'>): boolean {
 	const target = checkNamespaceTarget(namespace, context.installation, context.proxySource)
-	return target.proxyBuildToken !== undefined || (target.proxyImageDigest !== undefined && target.proxyServiceUpdated !== true)
+	return target.proxyBuildToken !== undefined || target.proxyImageDigest !== undefined
 }

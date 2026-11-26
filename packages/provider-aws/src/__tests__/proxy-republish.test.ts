@@ -228,15 +228,50 @@ describe('withAwsProxyRepublish', () => {
 	})
 	const mutation = (namespace: ProviderDeploymentNamespace, fake: Fake) => ({ namespace, members: MEMBERS, signal: fake.signal, events: fake.events })
 
-	test('provision stays the stack alone, and a reconcile with nothing in flight calls nothing of the proxy', async () => {
+	test('provision stays the stack alone, and a reconcile of a namespace with no member and no proxy calls nothing of it', async () => {
 		const fake = new Fake()
 		const seen: string[] = []
 		const capabilities = withAwsProxyRepublish(base(seen), fake.context)
 		await capabilities.provision(mutation(namespaceOf(PINNED), fake))
-		await capabilities.reconcile(mutation(namespaceOf(PINNED), fake))
+		await capabilities.reconcile({ ...mutation(namespaceOf(PINNED), fake), members: [] })
 		expect(seen).toEqual(['provision', 'reconcile'])
 		expect(fake.calls).toEqual([])
 		expect(capabilities.republish).toBeDefined()
+	})
+
+	test('a reconcile publishes a member change Control queued it for: an image of an older manifest is built again', async () => {
+		// The change a busy namespace could not publish (`NamespaceProxyBusyError`): the service runs an older manifest's image.
+		const fake = new Fake()
+		const older = namespaceOf({
+			...PINNED,
+			proxyImageDigest: `sha256:${'d'.repeat(64)}`,
+			proxyImageManifestSha256: 'e'.repeat(64),
+			proxyServiceTaskDefinitionArn: 'arn:aws:ecs:eu-central-1:123456789012:task-definition/ns_shared_prod_proxy:1',
+			proxyServiceFingerprint: 'f'.repeat(64),
+			proxyServiceUpdated: true,
+		})
+		const reconciled = await withAwsProxyRepublish(base([]), fake.context).reconcile(mutation(older, fake))
+		expect(fake.calls).toEqual(['upload', 'startBuild', 'getBuild', 'findImage', 'registerTaskDefinition', 'createService'])
+		expect(decoded(reconciled)).toMatchObject({ proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyServiceUpdated: true })
+
+		// The last member's removal converges too: a recorded image and no member builds the proxy of none.
+		const emptied = new Fake()
+		await withAwsProxyRepublish(base([]), emptied.context).reconcile({ ...mutation(older, emptied), members: [] })
+		expect(emptied.calls).toContain('startBuild')
+	})
+
+	test('a reconcile of a converged namespace reads the stack and makes no proxy call', async () => {
+		const fake = new Fake()
+		const set = await republishAwsProxy(fake.context, {
+			namespace: namespaceOf({ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST }),
+			members: MEMBERS,
+			events: fake.events,
+			signal: fake.signal,
+			wait: 'started',
+		})
+		const again = new Fake()
+		expect(await withAwsProxyRepublish(base([]), again.context).reconcile(mutation(set.namespace, again))).toEqual(set.namespace)
+		expect(again.calls).toEqual([])
 	})
 
 	test('a reconcile carries on a build in flight: to the service when it ends, or a retryable failure when it does not', async () => {

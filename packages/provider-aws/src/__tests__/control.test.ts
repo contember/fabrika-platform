@@ -407,6 +407,9 @@ describe('the AWS control provider', () => {
 		expect(() => createAwsControlProvider({ ...options, proxyIam: { issuer: 'https://user:pass@iam.example.com', key: 'k' } })).toThrow(
 			'without credentials',
 		)
+		// Plain http would carry the key unencrypted across the network: only to a loopback host.
+		expect(() => createAwsControlProvider({ ...options, proxyIam: { issuer: 'http://iam.example.com', key: 'k' } })).toThrow('not loopback')
+		expect(createAwsControlProvider({ ...options, proxyIam: { issuer: 'http://127.0.0.1:18080', key: 'k' } }).namespaces).toBeDefined()
 		expect(() => createAwsControlProvider({ ...options, proxyIam: { issuer: 'https://iam.example.com', key: ' ' } })).toThrow(
 			"the proxies' IAM key is empty",
 		)
