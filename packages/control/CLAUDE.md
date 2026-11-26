@@ -873,7 +873,8 @@ other environment, before the provider prepares anything, and the write maps a r
   again when a manual run starts, from `startedByPerson` (the column, or the actor's `user:` prefix on an older row),
   and fails the run into its log. Once the provider resolved the commit, `deployUnder` also runs
   `assertManualCommitReachable` for every manual run of a protected environment, a person's included: the commit must be
-  reachable from `mergeTarget` through `deps.commits`, or the run fails before anything publishes (a request under
+  reachable from `mergeTarget` (always a full ref; `reachableFrom` refuses a short name, which GitHub may resolve to a
+  same-named tag) through `deps.commits`, or the run fails before anything publishes (a request under
   `deployRequestCommits: any` skips it). A request parks whatever its lines (`park_reason = 'requested'`). A park sets
   `approval_deadline` (`requestTtlHours`); approve and reject check it in their own conditional write (410 past it), and
   `sweepParkedRuns` in the maintenance cron fails a run past it (`failure_cause = 'expired'`) and gives a run parked

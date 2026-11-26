@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
+import { mergeTarget } from '../../../approval/request'
 import type { GitHubSourceCredentialRequest, GitHubSourceCredentials } from '../../connections/credentials'
 import { createGitHubSource, createUnboundGitHubSource } from '..'
 import type { SourceBytes } from '../archive'
@@ -225,12 +226,12 @@ describe('the GitHub tarball repository', () => {
 					const last = requests.at(-1)
 					if (last !== undefined) last[1] = value
 				},
-			}).requestedCommit({ repository, commitSha: fixture.commitSha, mergedInto: 'deploy/prod', signal })
+			}).requestedCommit({ repository, commitSha: fixture.commitSha, mergedInto: 'refs/heads/deploy/prod', signal })
 
 		expect(await asked('behind')).toEqual({ message: 'fixture', merged: true })
 		expect(await asked('diverged')).toEqual({ message: 'fixture', merged: false })
 		// The branch is compared with the commit, so a commit the branch holds brings no files however far behind it is.
-		const compare = `https://api.github.com/repos/contember/fixture/compare/deploy/prod...${fixture.commitSha}?per_page=1`
+		const compare = `https://api.github.com/repos/contember/fixture/compare/refs/heads/deploy/prod...${fixture.commitSha}?per_page=1`
 		const commit = `https://api.github.com/repos/contember/fixture/commits/${fixture.commitSha}`
 		expect([...requests].sort(([a], [b]) => a.localeCompare(b))).toEqual([
 			[commit, `Bearer ${token}`],
@@ -247,7 +248,7 @@ describe('the GitHub tarball repository', () => {
 			(await sourceFor(fixture, { compareStatus, ...(compareMergeBase === undefined ? {} : { compareMergeBase }) }).requestedCommit({
 				repository,
 				commitSha: fixture.commitSha,
-				mergedInto: 'deploy/prod',
+				mergedInto: 'refs/heads/deploy/prod',
 				signal,
 			})).merged
 
@@ -258,6 +259,37 @@ describe('the GitHub tarball repository', () => {
 		expect(await merged('diverged')).toBe(false)
 		// An answer that claims the branch holds the commit but names another merge base is no answer.
 		await expect(merged('behind', 'e'.repeat(40))).rejects.toMatchObject({ code: 'archive_rejected' })
+	})
+
+	test('a tag named like the merge target branch cannot pass: the compare names the branch in full', async () => {
+		const fixture = await gitFixture()
+		const signal = new AbortController().signal
+		// The tag `deploy/prod` holds the commit and the branch does not; the short name resolves to the tag, as git's own order would.
+		const compareBases = { 'deploy/prod': 'identical', 'refs/tags/deploy/prod': 'identical', 'refs/heads/deploy/prod': 'diverged' } as const
+		const merged = async (trigger: string | null) =>
+			(await sourceFor(fixture, { compareBases }).requestedCommit({
+				repository,
+				commitSha: fixture.commitSha,
+				mergedInto: mergeTarget({ trigger_ref: trigger }, { default_branch: 'deploy/prod' }),
+				signal,
+			})).merged
+
+		expect(await merged('refs/heads/deploy/prod')).toBe(false)
+		expect(await merged(null)).toBe(false)
+		expect(await merged('refs/heads/release/*')).toBe(false)
+		// A tag trigger compares the tag in full, so a same-named branch cannot pass either.
+		expect(await merged('refs/tags/deploy/prod')).toBe(true)
+	})
+
+	test('a short name is refused before GitHub is asked', async () => {
+		const fixture = await gitFixture()
+		let metadata = 0
+		const source = sourceFor(fixture, { onMetadataRequest: (url) => url.includes('/compare/') && metadata++ })
+		for (const mergedInto of ['deploy/prod', 'heads/deploy/prod', 'refs/heads', 'refs//prod', 'refs/heads/a...b', 'refs/heads/../tags/x']) {
+			await expect(source.requestedCommit({ repository, commitSha: fixture.commitSha, mergedInto, signal: new AbortController().signal }))
+				.rejects.toMatchObject({ code: 'archive_rejected' })
+		}
+		expect(metadata).toBe(0)
 	})
 
 	test('fails closed without fetching when the bound connection has no credential', async () => {

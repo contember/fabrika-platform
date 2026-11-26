@@ -127,7 +127,9 @@ A non-person's manual deploy of a protected environment is its own approval requ
 - **The commit must be merged by default.** Under `deployRequestCommits: merged` Control asks GitHub's compare whether
   the commit is reachable from the trigger branch or tag, or from the default branch when the trigger ref is a
   pattern or absent, and answers 400 when it cannot show it, a source error included. `any` admits any commit.
-  Control compares the branch with the commit, so for a commit the branch holds GitHub lists no files, however far
+  The compare names the ref in full (`refs/heads/<branch>`, or the trigger's `refs/tags/<tag>`): GitHub resolves a
+  short name to a branch or a same-named tag by an order it does not document, so whoever may push a tag or branch of
+  that name could otherwise pass the check. Control compares the branch with the commit, so for a commit the branch holds GitHub lists no files, however far
   behind it is. A diverged commit brings its own changed files with their patches (up to 300), of which Control reads
   at most 7 MiB; past that it is refused as a source that did not answer (`archive_rejected`), as it would be anyway.
 - **It expires.** The run's `approval_deadline` is its park time plus `requestTtlHours` (1–168, 24 by default), and

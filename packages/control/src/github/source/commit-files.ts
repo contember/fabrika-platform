@@ -33,7 +33,7 @@ export interface RequestedCommitInput {
 	readonly commitSha: string
 	/** Absent for a public repository (ADR-0029). */
 	readonly sourceBinding?: ProviderSourceBinding
-	/** The branch or tag (its short name) that must hold the commit; null when any commit may be asked for. */
+	/** The full ref (`refs/heads/…`, `refs/tags/…`) that must hold the commit; null when any commit may be asked for. */
 	readonly mergedInto: string | null
 	readonly signal: AbortSignal
 }

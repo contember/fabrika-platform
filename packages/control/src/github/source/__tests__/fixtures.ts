@@ -183,14 +183,21 @@ export interface SourceOptions {
 	redirectResponse?: () => Response
 	descriptorResponse?: () => Response
 	/** The compare of the branch that must hold a requested commit with it; the branch holds it (`behind`) by default. */
-	compareStatus?: 'identical' | 'ahead' | 'behind' | 'diverged'
+	compareStatus?: CompareStatus
 	/** The merge base the compare names; the requested commit when the branch holds it, another commit otherwise. */
 	compareMergeBase?: string
+	/**
+	 * The compare's status per base as GitHub resolves it (`deploy/prod`, `refs/tags/deploy/prod`, …), in place of
+	 * `compareStatus`; a base it does not name is a 404, as GitHub answers a ref the repository lacks.
+	 */
+	compareBases?: Readonly<Record<string, CompareStatus>>
 	onDownload?: () => void
 	onMetadataRequest?: (url: string) => void
 	onMetadataAuthorization?: (value: string | null) => void
 	onDownloadAuthorization?: (url: string, value: string | null) => void
 }
+
+export type CompareStatus = 'identical' | 'ahead' | 'behind' | 'diverged'
 
 export function sourceFor(fixture: Fixture, options: SourceOptions = {}): TarballRepositorySource {
 	return new TarballRepositorySource({
@@ -208,7 +215,9 @@ export function sourceFor(fixture: Fixture, options: SourceOptions = {}): Tarbal
 				if (url.includes('/git/trees/')) return options.treeResponse?.() ?? Response.json({ sha: fixture.treeSha, truncated: false, tree: fixture.tree })
 				if (url.includes('/contents/')) return options.descriptorResponse?.() ?? new Response(descriptor)
 				if (url.includes('/compare/')) {
-					const status = options.compareStatus ?? 'behind'
+					const base = new URL(url).pathname.split('/compare/')[1]?.split('...')[0]?.split('/').map(decodeURIComponent).join('/') ?? ''
+					const status = options.compareBases === undefined ? options.compareStatus ?? 'behind' : options.compareBases[base]
+					if (status === undefined) return new Response(null, { status: 404 })
 					const mergeBase = options.compareMergeBase ?? (status === 'behind' || status === 'identical' ? fixture.commitSha : 'e'.repeat(40))
 					return Response.json({ status, merge_base_commit: { sha: mergeBase } })
 				}

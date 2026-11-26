@@ -284,7 +284,7 @@ describe('every bearer is a non-person', () => {
 		expect((await executeDeploy(deps(w), { runId: created.id })).status).toBe('succeeded')
 		expect(await run(w, created.id)).toMatchObject({ by_person: 1, request_json: null, park_reason: null })
 		// Not a request, yet its commit must be one the trigger branch holds.
-		expect(w.requested.at(-1)).toMatchObject({ commitSha: COMMIT, mergedInto: 'deploy/prod' })
+		expect(w.requested.at(-1)).toMatchObject({ commitSha: COMMIT, mergedInto: 'refs/heads/deploy/prod' })
 	})
 
 	test('a run created before the record reads as its actor did: a user ran, a key is judged as a request', async () => {
@@ -381,9 +381,10 @@ describe('a requested commit must be merged by default', () => {
 		const refused = await status(triggerDeployUseCase(runs(w, 'oauth'), { appId: 'notes', env: 'prod', ref: COMMIT }))
 		expect(refused).toEqual({
 			status: 400,
-			message: `environment \`prod\` is protected: a deploy an agent or a key asks for must be merged into \`deploy/prod\`; commit ${COMMIT} is not`,
+			message:
+				`environment \`prod\` is protected: a deploy an agent or a key asks for must be merged into \`refs/heads/deploy/prod\`; commit ${COMMIT} is not`,
 		})
-		expect(w.requested.map((input) => input.mergedInto)).toEqual(['deploy/prod'])
+		expect(w.requested.map((input) => input.mergedInto)).toEqual(['refs/heads/deploy/prod'])
 		expect(w.queued).toEqual([])
 	})
 
@@ -404,7 +405,7 @@ describe('a requested commit must be merged by default', () => {
 		expect(refused.status).toBe(400)
 		expect(refused.message).toContain('the source did not answer whether commit')
 		expect(refused.message).toContain('(rate_limited)')
-		expect(w.requested.map((input) => input.mergedInto)).toEqual(['main'])
+		expect(w.requested.map((input) => input.mergedInto)).toEqual(['refs/heads/main'])
 	})
 
 	test('any: an unmerged commit is admitted, and an unreadable message leaves it unread', async () => {
@@ -461,10 +462,10 @@ describe('a manual deploy of a protected environment deploys only a commit its t
 		w.answer = (input) => Promise.resolve({ message: 'wip', merged: input.commitSha !== FEATURE })
 		const person = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: 'refs/heads/feature' })
 		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: person.id })).status).toBe('failed')
-		expect(w.requested.at(-1)).toMatchObject({ commitSha: FEATURE, mergedInto: 'deploy/prod' })
+		expect(w.requested.at(-1)).toMatchObject({ commitSha: FEATURE, mergedInto: 'refs/heads/deploy/prod' })
 		expect(w.deploys).toBe(0)
 		expect(w.logs.get(`runs/${person.id}/logs.ndjson`)).toContain(
-			`a manual deploy must be a commit reachable from \`deploy/prod\`; commit ${FEATURE} is not`,
+			`a manual deploy must be a commit reachable from \`refs/heads/deploy/prod\`; commit ${FEATURE} is not`,
 		)
 		expect((await w.db.runs.getLatestSucceededRun({ appId: 'notes', env: 'prod' }))?.commit_sha).toBe(COMMIT)
 	})
@@ -505,7 +506,7 @@ describe('a manual deploy of a protected environment deploys only a commit its t
 		w.answer = (input) => Promise.resolve({ message: 'wip', merged: input.commitSha !== FEATURE })
 		const agent = await triggerDeployUseCase(runs(w, 'oauth'), { appId: 'notes', env: 'prod', ref: 'refs/heads/feature' })
 		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: agent.id })).status).toBe('failed')
-		expect(w.requested.at(-1)).toMatchObject({ commitSha: FEATURE, mergedInto: 'deploy/prod' })
+		expect(w.requested.at(-1)).toMatchObject({ commitSha: FEATURE, mergedInto: 'refs/heads/deploy/prod' })
 		expect(w.deploys).toBe(0)
 	})
 

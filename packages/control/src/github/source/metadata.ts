@@ -89,22 +89,23 @@ export class GitHubMetadataClient {
 	}
 
 	/**
-	 * Whether an exact commit is reachable from a branch or tag (its short name): one compare of the branch with the commit,
-	 * which is behind it or identical, with the commit as the merge base, exactly when the branch holds it. In that order the
-	 * answer lists no files for a held commit, however far behind the branch it is.
+	 * Whether an exact commit is reachable from a full ref (`refs/heads/…`, `refs/tags/…`): one compare of the ref with the
+	 * commit, which is behind it or identical, with the commit as the merge base, exactly when the ref holds it. In that
+	 * order the answer lists no files for a held commit, however far behind the ref it is. A short name is refused: GitHub
+	 * would pick a branch or a same-named tag by an order it does not document.
 	 */
 	async reachableFrom(
 		repository: SourceRepository,
 		commitSha: string,
-		head: string,
+		ref: string,
 		token: string | undefined,
 		signal: AbortSignal,
 	): Promise<boolean> {
-		if (!OBJECT_ID_PATTERN.test(commitSha) || !safeRefName(head)) throw rejected('resolve')
+		if (!OBJECT_ID_PATTERN.test(commitSha) || !fullRefName(ref)) throw rejected('resolve')
 		// One commit per page: only the status and the merge base are read. A diverged commit's own files still come.
 		const parsed = compareSchema.safeParse(
 			await this.requestJson(
-				`${prefix(repository)}/compare/${head.split('/').map(encodeURIComponent).join('/')}...${commitSha}?per_page=1`,
+				`${prefix(repository)}/compare/${ref.split('/').map(encodeURIComponent).join('/')}...${commitSha}?per_page=1`,
 				token,
 				signal,
 				'resolve',
@@ -383,7 +384,12 @@ function rejected(stage: GitHubMetadataStage): SourceFailure {
 	return new SourceFailure('archive_rejected', stage)
 }
 
-/** A branch or tag name as a compare path takes it: no empty, `.` or `..` segment, and no `...` that would split the range. */
-function safeRefName(name: string): boolean {
-	return name !== '' && !name.includes('...') && name.split('/').every((segment) => segment !== '' && segment !== '.' && segment !== '..')
+/**
+ * A full ref as a compare path takes it: `refs/<namespace>/<name>`, no empty, `.` or `..` segment, and no `...` that would
+ * split the range.
+ */
+function fullRefName(ref: string): boolean {
+	const segments = ref.split('/')
+	return segments.length >= 3 && segments[0] === 'refs' && !ref.includes('...')
+		&& segments.every((segment) => segment !== '' && segment !== '.' && segment !== '..')
 }
