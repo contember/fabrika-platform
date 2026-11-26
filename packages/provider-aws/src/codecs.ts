@@ -10,7 +10,7 @@ import { z } from 'zod'
 import { CERTIFICATE_ARN, CERTIFICATE_HOST, CERTIFICATE_STATUS_ENUM, type CertificateStatus, RECORD_NAME as VALIDATION_RECORD } from './aws/acm'
 
 /** An IPv4 CIDR block: the VPC range a proxy behind the balancer trusts forwarding headers from. */
-const IPV4_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:[0-9]|[12]\d|3[0-2])$/
+export const IPV4_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:[0-9]|[12]\d|3[0-2])$/
 
 /** The provider id an envelope and an authored config carry. */
 export const AWS_PROVIDER = 'aws'

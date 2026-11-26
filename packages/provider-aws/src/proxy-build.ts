@@ -22,6 +22,7 @@
 
 import type { CodeBuildStart } from './aws/codebuild'
 import { awsImageTag, BUILD_VARIABLES, BUILDSPEC_FETCH, PARAMETER_NAME, REPOSITORY_URI } from './build'
+import { IPV4_CIDR } from './codecs'
 import { AWS_BUILD_QUEUED_TIMEOUT_MINUTES, AWS_BUILD_TIMEOUT_MINUTES } from './run-attempt'
 
 /** The recipe of the proxy's image, a path of the pinned commit. */
@@ -33,8 +34,6 @@ export const AWS_PROXY_MANIFEST_PATH = 'proxy.manifest.json'
  * headers from (`packages/proxy/Dockerfile`). Docker reads a `--build-arg` without a value from the environment.
  */
 export const AWS_PROXY_TRUSTED_PROXIES = 'FABRIKA_PROXY_TRUSTED_PROXIES'
-/** An IPv4 CIDR block, as the trusted range is passed: no list, no space, nothing a shell would read. */
-const TRUSTED_RANGE = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:[0-9]|[12]\d|3[0-2])$/
 /** The proxy's builder: Amazon Linux on x86, because the proxy's binary is an x64 one. */
 export const AWS_PROXY_BUILD_IMAGE = 'aws/codebuild/amazonlinux-x86_64-standard:5.0'
 
@@ -76,7 +75,8 @@ export function awsProxyBuildStart(input: AwsProxyBuildInput): CodeBuildStart {
 	const [, account, region] = REPOSITORY_URI.exec(input.repositoryUri) ?? []
 	if (account === undefined || region === undefined) throw new Error('AWS proxy build: the repository is not one this provider builds with')
 	if (!PARAMETER_NAME.test(input.sourceUrlParameter)) throw new Error('AWS proxy build: the source URL parameter is not one this provider builds with')
-	if (!TRUSTED_RANGE.test(input.trustedProxies)) throw new Error('AWS proxy build: the trusted range is not one IPv4 block')
+	// One IPv4 block: no list, no space, nothing a shell would read.
+	if (!IPV4_CIDR.test(input.trustedProxies)) throw new Error('AWS proxy build: the trusted range is not one IPv4 block')
 	return {
 		project: input.project,
 		token: input.buildToken,
