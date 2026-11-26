@@ -209,18 +209,22 @@ migration bookmark, does all of it inside the `blockConcurrencyWhile` that holds
    answers 503, `migrate` answers `migration_failed` with `record_unwritable`, and the next event tries again.
 3. It applies every pending file of both bundles, the framework's then the application's, with their ledger rows, in
    one `transactionSync` that ends with `PRAGMA foreign_key_check`; a row it returns rolls the whole set back. A
-   failure, or a reset past the 30 s bound, leaves the ledger the boot started from.
+   failure leaves the ledger the boot started from. A transaction past the 30 s bound is not cut short: it commits,
+   and the object resets before step 4.
 4. It records the outcome in the record: `committed` with the bookmark after the commit, or `rolled_back`.
 5. It boots, and records `booted` before it admits its first ordinary event. A failed put of `booted` admits nothing.
 
 Every boot at a gated release does step 5, migrating or not: one that finds a record without `booted` writes it before
 its first ordinary event. So a record without `booted` proves that no gated version served since the migration
-committed, and a release before the gate cannot rewind the object (ADR-0070 §9).
+committed, and a release before the gate cannot rewind the object (ADR-0070 §9). A boot that finds a record without
+an outcome reads it from the ledger before step 5: a ledger that holds the record's files is `committed`, with the
+current bookmark; one that does not is `rolled_back`, and the boot migrates again under a new record.
 
 The record lives in R2 for the reason the mode does: point-in-time recovery rewinds SQLite and KV. Nothing writes
 between the bookmark and the transaction, because no other event runs, so a rewind to that bookmark loses no write the
-old version committed. A migrating boot must fit the 30 s that `blockConcurrencyWhile` allows; a data change that does
-not fit is a schema migration plus a backfill job, over two deploys.
+old version committed. A migrating boot must fit the 30 s that `blockConcurrencyWhile` allows. One that does not still
+commits, but its reset fails every event it held back, so a data change that does not fit is a schema migration plus a
+backfill job, over two deploys.
 
 **The migrating deploy.** A deploy that brings a pending migration to a candidate that records the bookmark runs as a
 `migrate` operation under the deploy lease and restricts nothing: the old version serves, writes included, until the
@@ -294,7 +298,8 @@ new generation.
 | A restricted cold start finds a pending migration                      | The application does not boot until the operation's migrate request                                   |
 | The migration record cannot be written                                 | Nothing migrates; `migrate` answers `record_unwritable`; Control redeploys the last succeeded commit  |
 | The `migrate` answer comes from the old version                        | Its ledger lacks the candidate's files; Control asks again until the new version answers              |
-| The migration rolls back, or resets past 30 s                          | The ledger is unchanged; Control redeploys the last succeeded commit                                  |
+| The migration rolls back                                               | The ledger is unchanged; Control redeploys the last succeeded commit                                  |
+| The migration runs past 30 s                                           | It commits and the object resets; the next boot records `committed` from the ledger                   |
 | The migration commits and the new version does not boot                | The in-place rewind, then the redeploy; until it is built, "Until the in-place rewind is built" above |
 | The redeployed commit does not answer `ok` by the deadline             | Control publishes `closed`; the run fails as `migration_failed`, for an operator                      |
 | A migrate request carries a generation that is not the published one   | Refused                                                                                               |

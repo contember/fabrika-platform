@@ -446,12 +446,13 @@ steps. The object accepts `prepare` and `arm` on itself only when all of these h
 
 Control asks for the rewind only before the operation's own redeploy, and never returns to it after.
 
-Control then redeploys the last succeeded run's commit and opens the object at a new generation. The undo bookmark
-`arm` answers is recorded like a side restore's. If `verify` finds the sentinel three times, the object stays `inspect`
-for an operator, and nothing was lost. This rewind is built only once probe 7 has exercised the in-place restore's
-failure boundaries on a live account: a lost `arm` answer, a reset that does not come, and the undo bookmark. Until
-then, ADR-0069 §3 redeploys without a rewind where no `dataLoss` line forbids it, and otherwise leaves the object
-`closed` for an operator to fix forward.
+Control then redeploys the last succeeded run's commit and opens the object at a new generation. The undo bookmark `arm`
+answers is recorded like a side restore's. If `verify` finds the sentinel three times, the object stays `inspect` for an
+operator, and nothing was lost. Probe 7 exercised the in-place restore's failure boundaries on a live account
+(2026-11-26): an `arm` whose answer the abort loses still restores, so `verify` decides; an armed object that is not
+reset keeps its writes only until its next reset, which restores and discards them, so `arm` runs only in `inspect`; and
+the undo bookmark brings the rewound writes back. Until the rewind is built, ADR-0069 §3 redeploys without a rewind
+where no `dataLoss` line forbids it, and otherwise leaves the object `closed` for an operator to fix forward.
 
 **Not built: an in-place restore of an object that served, and a whole-environment rollback.** Rewinding an object
 that served writes discards them, and restoring forward rests on the forward restore succeeding, which is unprobed.
