@@ -8,12 +8,13 @@ export const environmentForm: UxTask = {
 	goal: "Open the form to change notes test's address and placement. Do not save.",
 	success: "The form for test's address and placement is open.",
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 3, fills: 0, keyPresses: 0, states: 3 },
 	mutates: false,
 	run: async (page, actor) => {
 		await openApp(page, actor)
 		await openTab(page, actor, 'Settings')
 		await actor.click(environmentRow(page, 'test').getByRole('button', { name: 'Edit' }))
-		await seen(page.getByLabel(/Domain|Address|Public origin/).first(), 'the address field')
+		await seen(page.getByLabel('Routing domain'), 'the address field')
+		await seen(page.getByLabel('Placement'), 'the placement field')
 	},
 }

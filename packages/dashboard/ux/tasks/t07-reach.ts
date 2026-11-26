@@ -8,7 +8,7 @@ export const reach: UxTask = {
 	goal: 'Which endpoints of notes are public, and which roles reach the application?',
 	success: "The application's surface and its access by role are shown.",
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 2, fills: 0, keyPresses: 0, states: 3 },
 	mutates: false,
 	run: async (page, actor) => {
 		await openApp(page, actor)

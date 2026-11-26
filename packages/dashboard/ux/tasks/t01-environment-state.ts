@@ -8,7 +8,7 @@ export const environmentState: UxTask = {
 	goal: 'Is each environment of notes up, what does it run, and does anything need your attention?',
 	success: "Each environment's state, the commit it runs and the decision waiting on it show without scrolling.",
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 1, fills: 0, keyPresses: 0, states: 2 },
 	mutates: false,
 	run: async (page, actor) => {
 		await openApp(page, actor)

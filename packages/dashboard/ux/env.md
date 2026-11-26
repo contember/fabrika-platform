@@ -12,8 +12,9 @@ bun run local:seed      # a second environment, secrets, a changed policy on pro
   console; nothing is typed. Every task runs as that administrator.
 - **Ports.** The host ports are fixed, so one stack runs on the machine at a time and the two reviewers run one after
   the other.
-- **Writes.** `t02-deploy`, `t05-rotate-secret` and `t08-grant-self` write data. Each can run again on the same stack;
-  for a measurement comparable with the baseline, start from `local:reset`, then the three commands above.
+- **Writes.** `t02-deploy`, `t05-rotate-secret` and `t08-grant-self` write data. The first two can run again on the
+  same stack; `t08-grant-self` cannot, because the grant it makes stays. For a run with `--writes`, start from
+  `local:reset`, then the three commands above.
 - **Data states.** The local stack is the Zerops composition, which has no ops channel, so an environment's Data page
   shows no maintenance or recovery state. A round that judges those states says so and uses demo answers in the
   browser, labelled as such.

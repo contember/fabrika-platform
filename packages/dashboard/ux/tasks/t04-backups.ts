@@ -8,7 +8,7 @@ export const backups: UxTask = {
 	goal: 'When was notes prod last backed up, and are daily backups on?',
 	success: "prod's backups and the daily backup setting are shown.",
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 2, fills: 0, keyPresses: 0, states: 3 },
 	mutates: false,
 	run: async (page, actor) => {
 		await openApp(page, actor)

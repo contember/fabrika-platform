@@ -123,7 +123,9 @@ export async function axeSummary(page: Page): Promise<AxeSummary> {
 	return {
 		serious: severe.filter((violation) => violation.impact === 'serious').length,
 		critical: severe.filter((violation) => violation.impact === 'critical').length,
-		rules: severe.map((violation) => `${violation.id} (${violation.nodes.length})`),
+		rules: severe.map((violation) =>
+			`${violation.id} (${violation.nodes.length}: ${violation.nodes.slice(0, 3).map((node) => node.target.join(' ')).join(', ')})`
+		),
 	}
 }
 

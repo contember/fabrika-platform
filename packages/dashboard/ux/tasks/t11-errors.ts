@@ -8,7 +8,7 @@ export const errors: UxTask = {
 	goal: "See notes prod's open errors.",
 	success: 'The list of open errors of notes prod is shown.',
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 2, fills: 0, keyPresses: 0, states: 3 },
 	mutates: false,
 	run: async (page, actor) => {
 		await openApp(page, actor)

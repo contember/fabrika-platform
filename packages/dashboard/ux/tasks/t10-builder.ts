@@ -8,7 +8,7 @@ export const builder: UxTask = {
 	goal: 'Find how to connect the local builder to notes.',
 	success: 'The builder instructions for notes are shown.',
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 2, fills: 0, keyPresses: 0, states: 3 },
 	mutates: false,
 	run: async (page, actor) => {
 		await openApp(page, actor)

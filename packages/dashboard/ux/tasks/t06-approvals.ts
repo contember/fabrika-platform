@@ -8,7 +8,7 @@ export const approvals: UxTask = {
 	goal: 'Find what waits for your decision on notes, and which kinds of change need approval on prod.',
 	success: "The waiting deploy and prod's approval rules are shown.",
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 2, fills: 0, keyPresses: 0, states: 3 },
 	mutates: false,
 	run: async (page, actor) => {
 		await openApp(page, actor)

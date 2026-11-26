@@ -8,11 +8,13 @@ export const grantSelf: UxTask = {
 	goal: 'Grant yourself admin on notes test for 8 hours.',
 	success: 'You hold Admin on test until a time 8 hours from now, or the grant waits for approval.',
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 4, fills: 0, keyPresses: 0, states: 3 },
 	mutates: true,
 	run: async (page, actor) => {
 		await openApp(page, actor)
 		await openTab(page, actor, 'Access')
+		const expiry = page.getByLabel('Admin on test expires')
+		if ((await expiry.count()) === 0) throw new Error('Admin on test is already held: run on a freshly seeded stack (env.md)')
 		await actor.select(page.getByLabel('Admin on test expires'), '8 hours')
 		await actor.click(
 			page.locator('.workspace tr').filter({ has: page.getByLabel('Admin on test expires') }).getByRole('button', { name: 'Grant me Admin' }),

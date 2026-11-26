@@ -8,7 +8,7 @@ export const rotateSecret: UxTask = {
 	goal: 'Rotate PAYMENT_API_KEY on notes prod to a new value.',
 	success: 'The secret shows saved, with no error.',
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 4, fills: 1, keyPresses: 0, states: 3 },
 	mutates: true,
 	run: async (page, actor) => {
 		await openApp(page, actor)

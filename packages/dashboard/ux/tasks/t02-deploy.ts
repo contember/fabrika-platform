@@ -8,7 +8,7 @@ export const deploy: UxTask = {
 	goal: 'Deploy notes test and follow the run.',
 	success: 'The new run of test is open and shows its progress.',
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 2, fills: 0, keyPresses: 0, states: 3 },
 	mutates: true,
 	run: async (page, actor) => {
 		await openApp(page, actor)

@@ -20,7 +20,7 @@ export interface UxTask {
 	readonly success: string
 	/** The console route where the task starts. */
 	readonly start: string
-	/** Null until the first run measures the reference path; a person may lower it later. */
+	/** The first measured reference path, or what a person approves; null for a new task until a run measures it. */
 	readonly budget: TaskBudget | null
 	/** The reference path writes data; it runs only with `--writes` on a freshly seeded stack. */
 	readonly mutates: boolean

@@ -8,7 +8,7 @@ export const incident: UxTask = {
 	goal: 'notes prod misbehaves. Find what state it is in and the place where you would recover it or set maintenance.',
 	success: "prod's Data page is open with its state and its operations.",
 	start: '/apps',
-	budget: null,
+	budget: { clicks: 2, fills: 0, keyPresses: 0, states: 3 },
 	mutates: false,
 	run: async (page, actor) => {
 		await openApp(page, actor)
