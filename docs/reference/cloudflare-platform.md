@@ -79,12 +79,14 @@ it to fact without a probe.
   after the deploy finished, then from a new instance on the new code, with no failed request between; an object idle
   for 40 s answered on the new code 30 s after the deploy; a request in flight for 200 s across the deploy finished on
   the old code, and its write succeeded. Not probed: an event still running when its instance is replaced.
-- **Every upload is a new Worker version.** Documented, not verified live: a deploy, and also a secret or variable
-  change (`wrangler secret put`, the settings `PATCH` Control's key write sends), creates a new version with its own
-  id, which the version metadata binding (`version_metadata`) reads to the Worker and its Durable Objects; only a
-  rollback (`wrangler rollback`, the dashboard) deploys an earlier version id again. A gradual deployment splits
-  traffic between two versions; `wrangler deploy` deploys one version at 100%. Not probed: the binding inside a
-  Durable Object on a live account (ADR-0069 §3 relies on it).
+- **Every upload is a new Worker version.** Documented, not verified live: a deploy, and also a secret or settings
+  change (`wrangler secret put`, the settings `PATCH` Control's key write sends), creates a new version with its own id,
+  which the version metadata binding (`version_metadata`) exposes to the Worker. `wrangler deploy` deploys the new
+  version at 100%; that the settings `PATCH` does too is assumed. An earlier version id runs again only through a
+  deployment that names it: a rollback, `wrangler versions deploy`, or a gradual deployment, under which each Durable
+  Object runs one of the versions at a time and may move between them as the split changes
+  ([gradual deployments](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/gradual-deployments/)).
+  Not probed: the binding inside a Durable Object on a live account (ADR-0069 §3 relies on it).
 - **Point-in-time recovery covers SQL and KV.** Documented: it restores both the SQLite data and the KV data of the
   object, to any point in the last 30 days; `getCurrentBookmark()` names the current point. Probed live (2026-11-26): a
   bookmark taken before `deleteAll()` restores the tables and the KV value it deleted.

@@ -444,10 +444,11 @@ steps. The object accepts `prepare` and `arm` on itself only when all of these h
   secret or variable change, makes another version, so a record that a release before the gate may have served over
   since, or that an earlier operation left, cannot be rewound.
 
-Control asks for the rewind only for the record its own `migrate` answered, before the operation's own redeploy, and
-never returns to it after. Before `arm` it reads the Worker's active deployment from Cloudflare and refuses to arm
-unless that deployment is the record's version at 100%: the object sees only its own version, not a split. A refused
-rewind fails safe: nothing is rewound, and the operation takes ADR-0069 §3's branch for a record it cannot rewind.
+Control asks for the rewind only within the operation whose `migrate` answered the record, before that operation's own
+redeploy, and never returns to it after. The version guard holds because the platform deploys only new versions,
+never an earlier one or a split (ADR-0069 §3). A refused rewind fails safe: nothing is rewound, and the operation takes
+ADR-0069 §3's branch for a record it cannot rewind. A `verify` that finds the sentinel gone records `rewound` in the
+record, so a later boot never marks a rewound migration `booted`, and the record is never rewound again.
 
 Control then redeploys the last succeeded run's commit and opens the object at a new generation. The undo bookmark `arm`
 answers is recorded like a side restore's. If `verify` finds the sentinel three times, the object stays `inspect` for an
