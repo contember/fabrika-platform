@@ -534,6 +534,22 @@ other environment, before the provider prepares anything, and the write maps a r
   (ADR-0044); the operation's outcome is the last line of the run's log. A running migration whose lease is free has
   lost its driver (the run's invocation holds the lease from its start to its settlement): the maintenance pass resumes
   it as a successor, and a held lease makes `advanceDataOperation` answer busy, so a live driver is never overtaken.
+- **A candidate that records the migration bookmark migrates without a read-only window** (`migrationBookmark` on the
+  provider, from the candidate's pin; `records_bookmark = 1`, `bookmarkMigrateStep`; ADR-0069 §3). No backup and no
+  restricted mode, `dataLoss` included: `deploy` (as above; a run no provider accepted, or `untouched`, fails
+  `deploy_not_started` and asks nothing), then `migrate`, which publishes `open` at the operation's generation and asks
+  `migrate` every 10 s until a 200 holds every candidate file with its snapshot checksum, or the record's `deadline_at`
+  (`max_delay` 300 s plus 60 s) passes. Any other 200, a 500 and no answer are the old version still running; past the
+  deadline the operation fails `migration_unconfirmed` (`deploy_failed` when the run failed). Only the 422
+  `migration_failed` (`parseOpsMigrationFailure`) is a failure, recorded as `migration_failure`: `rolled_back`,
+  `record_unwritable`, and `committed` without `data_loss`, go to `revert`, the rollback deploy of the newest succeeded
+  run other than the operation's own (`getLatestSucceededRun` with `except`, through `OperationDeploys.run` under the
+  same lease; `revert_run_id` is named before the run is created), then `check` waits to a new deadline for any 200 and
+  fails `migration_reverted`. A committed `dataLoss` migration (the in-place rewind is not built), a rollback that fails
+  or is not accepted, and one that does not answer by the deadline go to `restrict`, which publishes `closed` at a new
+  generation and fails `migration_failed`. `recordedMaintenance` reads a failed bookmark migration whose target is still
+  `open` as `open`. The maintenance pass resumes each step; its time bound pauses a wait, which the next pass continues
+  to the recorded deadline. `RunDeps.opsClock` and `DataOperationDeps.clock`/`wait` let tests move that clock.
 - **A migration that may change stored data runs only behind a backup (ADR-0050, `deployUnder`).** The files are the candidate's
   `dataLoss` of any kind that the environment's last succeeded run did not deploy as they are now (`unheldDataChanges`,
   never the publication). A stored snapshot without `dataLoss` is classified again at its commit (`rereadDataLoss`), and

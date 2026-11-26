@@ -138,6 +138,8 @@ export interface RunDeps {
 	provider: ControlProvider
 	lock: DeployLocks
 	leaseClock?: LeaseClock
+	/** The clock a migrating deploy sets its deadline by and waits on for the new version (ADR-0069 §3); real time by default. */
+	opsClock?: LeaseClock
 	/** Where a namespace rebuild a deploy could not settle is handed to a `reconcile` job. */
 	queue?: Pick<JobQueue<ControlJobMessage>, 'send'>
 	logs: Pick<BlobStore, 'put'>
@@ -1155,19 +1157,30 @@ async function deployUnder(
 		const guarded = barrierInstalled ? await guardedMigrations(deps, approvedRow, invocation.work.signal) : null
 		if (guarded === null) return { runId, status: await deployRun() }
 		const pending = guarded.pending.length === 1 ? '1 application migration' : `${guarded.pending.length} application migrations`
-		runLogs.log(
-			`${pending} the environment has not applied: the deploy runs as a migrate data operation (read-only, backup, verify, deploy, migrate, open)`,
-		)
+		// The candidate's object records a bookmark before it migrates, so nothing is restricted (ADR-0069 §3).
+		const recordsBookmark = approvedAccess !== undefined && deps.provider.migrationBookmark?.(approvedAccess) === true
+		const steps = recordsBookmark ? 'deploy, migrate; on a failure, a rollback deploy' : 'read-only, backup, verify, deploy, migrate, open'
+		runLogs.log(`${pending} the environment has not applied: the deploy runs as a migrate data operation (${steps})`)
 		await runLogs.flush()
 		let deployed = false
+		const opsClock = deps.opsClock
 		const migration = await startMigration(
-			{ repositories: deps.repositories, lock: deps.lock, ops: guarded.ops, ...(deps.leaseClock === undefined ? {} : { leaseClock: deps.leaseClock }) },
+			{
+				repositories: deps.repositories,
+				lock: deps.lock,
+				ops: guarded.ops,
+				deploys: operationDeploys(deps),
+				...(deps.leaseClock === undefined ? {} : { leaseClock: deps.leaseClock }),
+				...(opsClock === undefined ? {} : { clock: () => opsClock.now(), wait: (ms: number, signal: AbortSignal) => opsClock.wait(ms, signal) }),
+			},
 			invocation.lease,
 			{
 				appId: app.id,
 				env: appEnv.env,
 				actor: run.actor ?? MIGRATION_ACTOR,
 				runId,
+				recordsBookmark,
+				dataLoss: deletingFiles.length > 0,
 				deploy: async () => {
 					deployed = true
 					let status: DeployStatus
@@ -1293,9 +1306,14 @@ async function settleUnderLease(deps: RunDeps, invocation: RunInvocation): Promi
 /** The run log's line for a migration's end: identifiers, steps and codes only. */
 function operationLine(result: DriveResult, operation: DataOperationRow, recorded: OpsMode | 'unsettled'): string {
 	const named = `data operation ${operation.id}`
-	const after = recorded === 'open' ? 'the environment is open again' : 'the environment stays restricted until an operator recovers it'
+	const after = recorded === 'open' ? 'the environment is open' : 'the environment stays restricted until an operator recovers it'
 	if (result === 'succeeded') return `${named} succeeded: the migrations ran and the environment is open`
-	if (result === 'failed') return `${named} failed at ${operation.step} (${operation.error_code ?? 'unknown'}); ${after}`
+	if (result === 'failed') {
+		// The reason the new version named, and the rollback deploy, are identifiers and codes too.
+		const failure = operation.migration_failure === null ? '' : `, the new version's migration ${operation.migration_failure}`
+		const revert = operation.revert_run_id === null ? '' : `, rollback deploy ${operation.revert_run_id}`
+		return `${named} failed at ${operation.step} (${operation.error_code ?? 'unknown'}${failure}${revert}); ${after}`
+	}
 	return `${named} stopped at ${operation.step} without an answer from the environment's object; ${after}`
 }
 

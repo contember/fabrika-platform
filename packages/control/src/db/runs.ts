@@ -222,10 +222,15 @@ export class RunRepository {
 			ORDER BY id DESC LIMIT 1`).bind(input.appId, input.env, input.ref).first<RunRow>()
 	}
 
-	/** The run that last finished successfully in one environment: what it runs now. */
-	async getLatestSucceededRun(input: { appId: string; env: string }): Promise<RunRow | null> {
-		return this.d1.prepare(`SELECT * FROM runs WHERE app_id = ? AND env = ? AND status = 'succeeded'
-			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(input.appId, input.env).first<RunRow>()
+	/**
+	 * The run that last finished successfully in one environment: what it runs now. `except` leaves one run out: a failed
+	 * migration's own run, whose deploy succeeded, when its rollback deploy looks for the commit that ran before it.
+	 */
+	async getLatestSucceededRun(input: { appId: string; env: string; except?: string }): Promise<RunRow | null> {
+		const except = input.except === undefined ? '' : ' AND id <> ?'
+		const binds = input.except === undefined ? [input.appId, input.env] : [input.appId, input.env, input.except]
+		return this.d1.prepare(`SELECT * FROM runs WHERE app_id = ? AND env = ? AND status = 'succeeded'${except}
+			ORDER BY finished_at DESC, id DESC LIMIT 1`).bind(...binds).first<RunRow>()
 	}
 
 	/** The newest succeeded run that stored a snapshot: the version the environment runs, past any dry run after it. */

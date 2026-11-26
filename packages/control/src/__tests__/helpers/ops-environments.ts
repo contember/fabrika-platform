@@ -12,9 +12,10 @@ import {
 	type OpsExportRequest,
 	type OpsImportRequest,
 	type OpsInspectRequest,
-	type OpsMigrateAck,
 	type OpsMigrateRequest,
 	type OpsMigration,
+	type OpsMigrationFailureReason,
+	type OpsMigrationRecord,
 	type OpsPublishedState,
 	type OpsRestoreRequest,
 	type OpsStateAck,
@@ -32,6 +33,7 @@ import type {
 	OpsFencedAnswer,
 	OpsImportAck,
 	OpsInspection,
+	OpsMigrateAnswer,
 	OpsRestoreAck,
 	OpsTarget,
 	OpsTransport,
@@ -108,6 +110,16 @@ export class FakeEnvironments implements OpsTransport {
 	ledger: OpsMigration[] = []
 	/** The application migrations the deployed release bundles: `migrate` applies the ones the ledger lacks. */
 	bundled: string[] = []
+	/** The checksum each bundled file's ledger row records, as the object hashes the file's text; `digest(name)` by default. */
+	readonly checksums = new Map<string, string>()
+	/**
+	 * Why the deployed version's migrating boot fails (ADR-0069 §3): `migrate` answers its 422 with the record, and a
+	 * `committed` one applies the files first.
+	 */
+	failure: OpsMigrationFailureReason | null = null
+	/** The version the last `deployVersion` replaced, which still answers the next `previousAnswers` `migrate` requests. */
+	previous: { readonly bundled: readonly string[]; readonly failure: OpsMigrationFailureReason | null } | null = null
+	previousAnswers = 0
 	/** Whether the application fails to boot: `migrate` then answers the 500 a failed boot is, which reads as unreachable. */
 	bootFails = false
 	/** The objects whose view reports a failed boot. */
@@ -129,6 +141,17 @@ export class FakeEnvironments implements OpsTransport {
 
 	private unlisted(object: string): boolean {
 		return this.listed !== null && !this.listed.has(object)
+	}
+
+	/**
+	 * A deploy of a version bundling `bundled`, whose migrating boot fails with `failure`. Cloudflare updates an active
+	 * object deferred, so the version it replaces answers the next `previousAnswers` `migrate` requests.
+	 */
+	deployVersion(bundled: readonly string[], failure: OpsMigrationFailureReason | null = null, previousAnswers = 0): void {
+		this.previous = { bundled: this.bundled, failure: this.failure }
+		this.previousAnswers = previousAnswers
+		this.bundled = [...bundled]
+		this.failure = failure
 	}
 
 	async inspect(target: OpsTarget, request: OpsInspectRequest): Promise<OpsAnswer<OpsInspection>> {
@@ -174,9 +197,9 @@ export class FakeEnvironments implements OpsTransport {
 
 	/**
 	 * Boots the object and applies the bundled migrations its ledger lacks, only under the published generation and not
-	 * in `inspect`; a failed boot answers the 500 that reads as unreachable.
+	 * in `inspect`; a failed boot answers the 500 that reads as unreachable, and a failed migrating boot its 422.
 	 */
-	async migrate(target: OpsTarget, request: OpsMigrateRequest): Promise<OpsFencedAnswer<OpsMigrateAck>> {
+	async migrate(target: OpsTarget, request: OpsMigrateRequest): Promise<OpsMigrateAnswer> {
 		const sent: Sent = { op: 'migrate', env: target.env, object: request.object, generation: request.generation }
 		this.sent.push(sent)
 		const fault = await this.fault(sent)
@@ -186,12 +209,24 @@ export class FakeEnvironments implements OpsTransport {
 		const published = this.published.get(key(target, request.object)) ?? null
 		if (published === null || published.generation !== request.generation || published.mode === 'inspect') return { kind: 'stale', published }
 		const ledger = this.ledgers.get(request.object) ?? this.ledger
+		const answering = this.previous !== null && this.previousAnswers > 0 ? this.previous : { bundled: this.bundled, failure: this.failure }
+		if (answering !== this.previous) this.previous = null
+		else this.previousAnswers--
 		const applied = new Set(ledger.map((row) => row.name))
-		for (const name of this.bundled) {
-			if (!applied.has(name)) ledger.push({ bundle: 'app', name, checksum: digest(name), appliedAt: BOOT_FAILED_AT })
+		const pending = answering.bundled.filter((name) => !applied.has(name))
+		if (answering.failure !== 'rolled_back' && answering.failure !== 'record_unwritable') {
+			for (const name of pending) ledger.push({ bundle: 'app', name, checksum: this.checksumOf(name), appliedAt: BOOT_FAILED_AT })
 		}
 		if (fault === 'lose') return { kind: 'unavailable', reason: 'unreachable' }
+		if (answering.failure !== null) {
+			const files = (pending.length > 0 ? pending : answering.bundled).map((name) => ({ bundle: 'app', name, checksum: this.checksumOf(name) }))
+			return { kind: 'failed', failure: { refused: 'migration_failed', reason: answering.failure, record: failedRecord(answering.failure, files) } }
+		}
 		return { kind: 'ok', value: { generation: request.generation, migrations: [...ledger] } }
+	}
+
+	private checksumOf(name: string): string {
+		return this.checksums.get(name) ?? digest(name)
 	}
 
 	async export(target: OpsTarget, request: OpsExportRequest): Promise<OpsDataAnswer<OpsExportAck>> {
@@ -417,6 +452,21 @@ export class FakeEnvironments implements OpsTransport {
 			const object = sent.op === 'import' && sent.object !== 'rehearsal' ? ` ${sent.object}` : ''
 			return [`${sent.op}${object} ${sent.step}${part} @${sent.generation}`]
 		})
+	}
+}
+
+/** The record a failed migrating boot answers with, as the object writes it for `reason`. */
+function failedRecord(reason: OpsMigrationFailureReason, files: OpsMigrationRecord['files']): OpsMigrationRecord {
+	return {
+		id: '0192c4a0-0000-7000-8000-00000000f00d',
+		version: 'version-0002',
+		bookmark: 'bookmark-0001',
+		startDigest: digest('ledger'),
+		files,
+		at: BOOT_FAILED_AT,
+		outcome: reason === 'record_unwritable' ? null : reason,
+		committedBookmark: reason === 'committed' ? 'bookmark-0002' : null,
+		booted: null,
 	}
 }
 

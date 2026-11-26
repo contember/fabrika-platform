@@ -3,6 +3,7 @@
 
 import { RpcError } from '@fabrika/app'
 import {
+	OPS_MIGRATION_FAILURES,
 	OPS_ROW_COUNT_CAP,
 	type OpsContentView,
 	type OpsView,
@@ -169,6 +170,10 @@ const dataOperationSchema: z.ZodType<DataOperationDto, z.ZodTypeDef, unknown> = 
 	resolution: z.enum(['resume', 'open']).nullable(),
 	// Absent from a Control before the migration phase.
 	runId: z.string().uuid().nullable().default(null),
+	// Absent from a Control before the migrating deploy without a read-only window.
+	recordsBookmark: z.boolean().default(false),
+	migrationFailure: z.enum(OPS_MIGRATION_FAILURES).nullable().default(null),
+	revertRunId: z.string().uuid().nullable().default(null),
 })
 
 interface Target {

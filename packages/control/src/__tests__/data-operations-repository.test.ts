@@ -136,6 +136,11 @@ for (const backend of backends) {
 				recovers_operation_id: null,
 				resolution: null,
 				run_id: null,
+				records_bookmark: 0,
+				data_loss: 0,
+				deadline_at: null,
+				revert_run_id: null,
+				migration_failure: null,
 			})
 			expect(await operations.get(refused.id)).toEqual(created)
 		})

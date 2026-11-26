@@ -1,3 +1,4 @@
+import type { OpsMigrationFailureReason } from '@fabrika/auth-core'
 import type { SqlDatabase } from '@fabrika/platform'
 import { type LeaseFence, runLeaseKey } from '../lease'
 import { type BackupCheckpoint, backupCheckpoint } from './backups'
@@ -12,7 +13,8 @@ export type DataOperationKind = 'maintenance' | 'backup' | 'migrate' | 'recovery
  * `restrict` and `open` publish a generation; `backup`, `verify`, `deploy` and `migrate` run between them. A recovery
  * first `reconcile`s the record with the object's published state, and `resume` hands back to the interrupted operation.
  * A restore also `list`s its clone, `import`s into it, `promote`s it, `point`s ordinary traffic at it, waits for it to
- * `serve`, `rewind`s the original and `check`s its schema; `revert` points traffic back at the original.
+ * `serve`, `rewind`s the original and `check`s its schema; `revert` points traffic back at the original. A bookmark
+ * migration's `revert` is its rollback deploy, `check` waits for its `ok`, and `restrict` publishes `closed`.
  */
 export type DataOperationStep =
 	| 'reconcile'
@@ -61,6 +63,16 @@ export interface DataOperationRow {
 	resolution: DataOperationResolution | null
 	/** The run a `migrate` operation deploys, of the same environment; `null` for every other kind. */
 	run_id: string | null
+	/** 1 for a `migrate` operation whose candidate records the migration bookmark: it restricts nothing (ADR-0069 §3). */
+	records_bookmark: number
+	/** 1 for a `migrate` operation whose candidate brings a migration with a `dataLoss` statement. */
+	data_loss: number
+	/** Unix seconds: how long a bookmark migration waits at `migrate` or `check` for an answer of the new version. */
+	deadline_at: number | null
+	/** The rollback deploy of a failed bookmark migration, named once before it is created. */
+	revert_run_id: string | null
+	/** Why the new version of a bookmark migration answered `migration_failed`, which decides its recovery. */
+	migration_failure: OpsMigrationFailureReason | null
 }
 
 export interface DataOperationFields {
@@ -80,7 +92,7 @@ export type DataOperationInput =
 	& (
 		| { kind: Exclude<DataOperationKind, 'recovery' | 'migrate' | 'restore'> }
 		| { kind: 'recovery'; recovers: { operationId: string; resolution: DataOperationResolution } }
-		| { kind: 'migrate'; runId: string }
+		| { kind: 'migrate'; runId: string; recordsBookmark: boolean; dataLoss: boolean }
 		| { kind: 'restore'; restore: { at: string; original: string; clone: string } }
 	)
 
@@ -93,6 +105,10 @@ export interface DataOperationAdvance {
 	generation?: number
 	/** The environment's pointer, recorded in the same batch only once the operation moved (a restore's deploys). */
 	objects?: { readonly serving: string; readonly listed: readonly string[] }
+	/** Unix seconds: the wait of the step it moves to (`deadline_at`). */
+	deadlineAt?: number
+	/** The reason the new version's `migration_failed` named, recorded once with the step it decides. */
+	migrationFailure?: OpsMigrationFailureReason
 }
 
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,63}$/
@@ -135,8 +151,8 @@ export class DataOperationRepository {
 			this.d1
 				.prepare(`INSERT INTO app_env_data_operations
 					(id, app_id, env, kind, step, target_mode, generation, state, error_code, actor, created_at, updated_at, finished_at,
-						recovers_operation_id, resolution, run_id)
-				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?, ?
+						recovers_operation_id, resolution, run_id, records_bookmark, data_loss)
+				SELECT ?, ?, ?, ?, ?, ?, ?, 'running', NULL, ?, ?, ?, NULL, ?, ?, ?, ?, ?
 				WHERE EXISTS (SELECT 1 FROM deploy_locks WHERE lock_key = ? AND holder = ? AND expires_at > ?)
 				RETURNING *`)
 				.bind(
@@ -153,6 +169,8 @@ export class DataOperationRepository {
 					input.kind === 'recovery' ? input.recovers.operationId : null,
 					input.kind === 'recovery' ? input.recovers.resolution : null,
 					input.kind === 'migrate' ? input.runId : null,
+					input.kind === 'migrate' && input.recordsBookmark ? 1 : 0,
+					input.kind === 'migrate' && input.dataLoss ? 1 : 0,
 					key,
 					fence.holder,
 					fence.nowMs,
@@ -214,6 +232,14 @@ export class DataOperationRepository {
 			sets.push('target_mode = ?')
 			setValues.push(change.targetMode)
 		}
+		if (change.migrationFailure !== undefined) {
+			sets.push('migration_failure = ?')
+			setValues.push(change.migrationFailure)
+		}
+		if (change.deadlineAt !== undefined) {
+			sets.push('deadline_at = ?')
+			setValues.push(change.deadlineAt)
+		}
 		if (change.generation !== undefined) {
 			sets.push('generation = ?')
 			setValues.push(change.generation)
@@ -237,6 +263,16 @@ export class DataOperationRepository {
 			this.d1.prepare(`UPDATE app_env_data_operations SET ${sets.join(', ')} WHERE ${matched} RETURNING id`).bind(...setValues, ...matchedValues),
 		])
 		return (results[2]?.results.length ?? 0) > 0
+	}
+
+	/** Names the rollback deploy of a running bookmark migration, once. `false` once named, finished, or off the lease. */
+	async nameRevertRun(id: string, runId: string, fence: LeaseFence): Promise<boolean> {
+		return await this.mutate(
+			id,
+			`UPDATE app_env_data_operations SET revert_run_id = ?, updated_at = ? WHERE id = ? AND state = 'running' AND revert_run_id IS NULL`,
+			[runId, this.now(), id],
+			fence,
+		)
 	}
 
 	/** A running operation succeeded. Terminal: `false` once it has finished or failed. */
