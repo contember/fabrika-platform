@@ -1028,7 +1028,9 @@ describe('following a running operation', () => {
 			['restrict', 'not taken'],
 		])
 		const situation = renderToStaticMarkup(<MigrationSituation operation={failed} />)
-		expect(situation).toContain('the migration stays applied')
+		expect(situation).toContain('The rewind is unconfirmed')
+		expect(situation).toContain('may still take at the next restart')
+		expect(situation).not.toContain('stays applied')
 		expect(situation).toContain('stays in inspect')
 		expect(situation).not.toContain('The clone keeps serving')
 	})

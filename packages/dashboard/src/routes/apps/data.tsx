@@ -836,7 +836,7 @@ function migrationEffect(operation: DataOperationDto): string {
 		case 'migration_reverted':
 			return 'The last succeeded commit serves again, and the environment is open. The failed version needs a fix before it is deployed again.'
 		case 'rewind_failed':
-			return 'The rewind did not take, so the migration stays applied. The environment stays in inspect, so nothing writes over the data. An operator decides what follows.'
+			return 'The rewind is unconfirmed: it may not have taken, or may still take at the next restart. The environment stays in inspect, so nothing writes over the data; Control verifies the rewind before anything opens it. An operator decides what follows.'
 		case 'migration_failed':
 			return operation.candidateRecovered
 				? 'The failed version booted after all while the rollback deployed, so either version may serve. The environment is closed: an operator decides what follows.'
