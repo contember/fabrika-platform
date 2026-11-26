@@ -25,6 +25,7 @@ import {
 	AGENT_CLIENT_ID,
 	AGENT_SCOPE_MODES,
 	agentScopeAdmits,
+	agentScopeToken,
 	API_KEY_PREFIX,
 	AUTH_CODE_PARAM,
 	AUTH_HANDOFF_STATE_PARAM,
@@ -42,6 +43,7 @@ import {
 	planEndpoint,
 	sameOriginTarget,
 	satisfies,
+	type Scope,
 	SESSION_COOKIE,
 	TOKEN_REFRESH_SKEW_SECONDS,
 	type TokenCaller,
@@ -371,7 +373,7 @@ export class Authorizer {
 			return withBearerChallenge({ outcome: 'deny', status: 403, reason: 'caller_kind' }, binding)
 		}
 		if (kind === AGENT_CALLER && (caller.claims.act === undefined || !agentScopeAdmits(caller.claims.act.scope.mode, row.kind))) {
-			return scopeDenial(row.kind, binding)
+			return scopeDenial(row.kind, binding, caller.claims.act?.scope.within ?? null)
 		}
 		if (!satisfies(row.requirement, caller.claims.perms)) {
 			return { outcome: 'deny', status: 403, reason: 'insufficient_permission' }
@@ -479,6 +481,10 @@ export class Authorizer {
 				? { ok: false, denial: { outcome: 'deny', status: 503, reason: 'iam_unavailable' } }
 				: { ok: false, denial: { outcome: 'deny', status: 401, reason: 'invalid_token', challenge: { ...challenge, error: 'invalid_token' } } }
 		}
+		if (verified.claims.oauth?.clientId === AGENT_CLIENT_ID) {
+			// The agent's client is served application environments only (ADR-0090 §1), whatever IAM minted.
+			return { ok: false, denial: { outcome: 'deny', status: 401, reason: 'invalid_token', challenge: { ...challenge, error: 'invalid_token' } } }
+		}
 		const granted = verified.claims.oauth?.scopes ?? []
 		if (!binding.scopes.every((scope) => granted.includes(scope))) {
 			const scope = binding.scopes.join(' ')
@@ -493,8 +499,8 @@ export class Authorizer {
 	/**
 	 * An agent's resource token for this environment (ADR-0090), verified locally as `verifyOAuthBearer` verifies one —
 	 * `typ` `at+jwt`, `aud` the environment's origin, `oauth.app` the entry's audience — and minted by `agent-cli`; only
-	 * then exchanged at IAM for the person's application token, through the cache under the token's digest. Every
-	 * refusal is a 401 with the challenge, never a session.
+	 * then exchanged at IAM for the person's application token, through the cache under the token's digest. A refusal is
+	 * a 401 with the challenge (`token_too_large` a 403, IAM unreachable a 503), never a session.
 	 */
 	private async exchangeGrant(app: ProxyApp, binding: AgentBinding, bearer: string | null, requestId: string): Promise<OAuthAttempt> {
 		const challenge: OAuthBearerChallenge = { resource_metadata: binding.resource.resourceMetadata }
@@ -542,8 +548,11 @@ export class Authorizer {
 		if (!verified.ok) {
 			return verified.reason === 'unavailable' ? unavailable : refused('invalid_grant')
 		}
-		if (verified.claims.act === undefined) {
-			// IAM answered with a token that presents no agent; trusting it would let the grant act as the person's session.
+		if (
+			verified.claims.act === undefined || verified.claims.sub !== presented.claims.sub
+			|| verified.claims.act.grant !== presented.claims.oauth?.grantId
+		) {
+			// IAM answered with a token that presents no agent, or another person or grant: never inject or cache it.
 			return refused('invalid_grant')
 		}
 		this.cache?.set(key, { token: minted.token, expiresAt: Math.min(minted.expiresAt, presented.claims.exp) })
@@ -828,8 +837,9 @@ function bearerBindingOf(
 		if (!callers.includes(AGENT_CALLER)) {
 			return null
 		}
+		// An origin that forms no resource (an `http` scheme off loopback) serves no agent; a person's session still works.
 		const resource = agentResourceOf(app, url, issuer)
-		return resource === null ? 'unregistered' : { kind: 'agent', resource }
+		return resource === null ? null : { kind: 'agent', resource }
 	}
 	const required = 'oauth' in row ? row.oauth : null
 	if (required === null) {
@@ -853,15 +863,18 @@ function withBearerChallenge(denial: Denial, binding: BearerBinding | null): Den
 
 /**
  * An agent's token on a kind its scope does not admit: 403 `scope`, with the scope that would admit it as an
- * `insufficient_scope` challenge (RFC 6750 §3.1), or a plain challenge for a kind no scope admits (an SPA).
+ * `insufficient_scope` challenge (RFC 6750 §3.1) that keeps the grant's narrowing, or a plain challenge for a kind no scope admits (an SPA).
  */
-function scopeDenial(kind: string, binding: BearerBinding | null): Denial {
+function scopeDenial(kind: string, binding: BearerBinding | null, within: Scope | null): Denial {
 	const denial: Denial = { outcome: 'deny', status: 403, reason: 'scope' }
 	const needed = AGENT_SCOPE_MODES.find((mode) => agentScopeAdmits(mode, kind))
 	if (binding === null || needed === undefined) {
 		return withBearerChallenge(denial, binding)
 	}
-	return { ...denial, challenge: { resource_metadata: binding.resource.resourceMetadata, error: 'insufficient_scope', scope: needed } }
+	return {
+		...denial,
+		challenge: { resource_metadata: binding.resource.resourceMetadata, error: 'insufficient_scope', scope: agentScopeToken({ mode: needed, within }) },
+	}
 }
 
 /** The media types a browser sends from any page without a CORS preflight, which therefore carry no origin check of their own. */

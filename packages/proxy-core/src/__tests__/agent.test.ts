@@ -9,6 +9,7 @@ import {
 	type AgentActClaims,
 	type BodyAdmission,
 	type MintFromGrantResult,
+	narrowToValue,
 	OAUTH_CLI_CLIENT_ID,
 	parseAgentScope,
 	SESSION_COOKIE,
@@ -20,6 +21,7 @@ import { formatOAuthBearerChallenge, type OAuthBearerChallenge, type ProxyEndpoi
 import { AGENT_METADATA_PATH, OAUTH_METADATA_VERIFY_PATH } from '../oauth'
 import { createVerifyService } from '../service'
 import {
+	anonymousRow,
 	APP,
 	contractAppWith,
 	endpointRow,
@@ -28,6 +30,7 @@ import {
 	foreignPrivateKey,
 	HOST,
 	ISSUER,
+	PERMS,
 	type ResourceSignOptions,
 	signResourceToken,
 	signToken,
@@ -87,6 +90,8 @@ const MACHINE_ONLY = endpointRow({
 })
 
 const ROWS: ProxyEndpointRow[] = [LIST, CREATE, SHELL, ADMIN, MACHINE_ONLY]
+/** An application's own public row at the metadata path. */
+const WELL_KNOWN = anonymousRow({ id: 'well-known', kind: 'public', method: 'GET', path: AGENT_METADATA_PATH, admission: null })
 
 const JSON_POST = (path: string, bearer?: string): VerifyRequestOptions => ({
 	method: 'POST',
@@ -183,9 +188,33 @@ describe('the exchange on a row that lists agent', () => {
 		}
 	})
 
-	test('an exchange that answers a token without act is refused, so a grant never acts as a session', async () => {
-		const grants = new FakeGrants(await exchanged('read', { act: null }))
-		expectChallenge(await service(grants)(verifyRequest(JSON_POST('/api/notes.list', await agentToken()))), 401, { error: 'invalid_token' })
+	test('an exchange that answers a token without act, or for another person or grant, is refused and not cached', async () => {
+		const expiresAt = Math.floor(Date.now() / 1000) + 300
+		const answers: MintFromGrantResult[] = [
+			await exchanged('read', { act: null }),
+			{ ok: true, token: await signToken({ type: 'user', subject: 'user-2', act: act('read') }), expiresAt },
+			{ ok: true, token: await signToken({ type: 'user', act: { ...act('read'), grant: 'grant-2' } }), expiresAt },
+		]
+		for (const answer of answers) {
+			const grants = new FakeGrants(answer)
+			const verify = service(grants)
+			const token = await agentToken()
+			for (let i = 0; i < 2; i++) {
+				expectChallenge(await verify(verifyRequest(JSON_POST('/api/notes.list', token))), 401, { error: 'invalid_token' })
+			}
+			expect(grants.seen).toHaveLength(2)
+		}
+	})
+
+	test('the cached exchange never outlives the resource token it was exchanged for', async () => {
+		const grants = new FakeGrants(await exchanged())
+		const verify = service(grants)
+		const token = await agentToken({ ttlSeconds: 25 })
+		for (let i = 0; i < 2; i++) {
+			expect((await verify(verifyRequest(JSON_POST('/api/notes.list', token)))).status).toBe(204)
+		}
+		// IAM's answer lives 300 s, the resource token 25 s: inside the refresh skew, so each request exchanges again.
+		expect(grants.seen).toHaveLength(2)
 	})
 
 	test('an exchange IAM cannot answer is 503, and an IAM that refuses the token as too large is 403', async () => {
@@ -259,6 +288,14 @@ describe('the caller and the scope (ADR-0022 rule 3, step 5)', () => {
 		expectChallenge(await verify(verifyRequest(JSON_POST('/api/notes.create', token))), 403, { error: 'insufficient_scope', scope: 'write' })
 	})
 
+	test('the insufficient_scope challenge keeps the narrowing the person approved', async () => {
+		const within = { type: 'project', value: 'a' }
+		const token = await signToken({ type: 'user', act: act('read:project=a'), permissions: narrowToValue(PERMS, within) })
+		const verify = service(new FakeGrants({ ok: true, token, expiresAt: Math.floor(Date.now() / 1000) + 300 }))
+		const response = await verify(verifyRequest(JSON_POST('/api/notes.create', await agentToken())))
+		expectChallenge(response, 403, { error: 'insufficient_scope', scope: 'write:project=a' })
+	})
+
 	test('a write grant reaches the mutation, and a narrowed one is read by its mode', async () => {
 		expect((await service(new FakeGrants(await exchanged('write')))(verifyRequest(JSON_POST('/api/notes.create', await agentToken())))).status).toBe(
 			204,
@@ -303,6 +340,28 @@ describe('the caller and the scope (ADR-0022 rule 3, step 5)', () => {
 		}))
 		expect(response.status).toBe(204)
 	})
+
+	test('an origin that forms no resource (http off loopback) serves no agent, and a session still reaches the row', async () => {
+		const grants = new FakeGrants(await exchanged())
+		const iam = new FakeIam({ mintToken: { ok: true, token: await signUserToken(), expiresAt: Math.floor(Date.now() / 1000) + 300 } })
+		const verify = createVerifyService({
+			manifest: { apps: [contractAppWith(ROWS, [], { scheme: 'http' })] },
+			iam,
+			issuer: ISSUER,
+			cache: new MemoryTokenCache(),
+			grants,
+		})
+		const refused = await verify(verifyRequest(JSON_POST('/api/notes.list', await agentToken())))
+		expect(refused.status).toBe(401)
+		expect(refused.headers.get('WWW-Authenticate')).toBeNull()
+		expect(grants.seen).toHaveLength(0)
+		const session = await verify(verifyRequest({
+			...JSON_POST('/api/notes.list'),
+			cookie: `${SESSION_COOKIE}=session`,
+			headers: { 'Content-Type': 'application/json', 'Sec-Fetch-Site': 'same-origin' },
+		}))
+		expect(session.status).toBe(204)
+	})
 })
 
 describe('the protected-resource metadata (RFC 9728)', () => {
@@ -320,9 +379,10 @@ describe('the protected-resource metadata (RFC 9728)', () => {
 	test('another casing of the path is 404 at the metadata endpoint, and the path is never the application’s', async () => {
 		const verify = service(new FakeGrants())
 		expect((await verify(verifyRequest({ endpoint: OAUTH_METADATA_VERIFY_PATH, path: AGENT_METADATA_PATH.toUpperCase() }))).status).toBe(404)
-		for (const rows of [ROWS, [ADMIN]]) {
-			const decision = await service(new FakeGrants(), { rows })(verifyRequest({ path: AGENT_METADATA_PATH }))
-			expect(decision.status).toBe(404)
-		}
+		expect((await service(new FakeGrants(), { rows: [...ROWS, WELL_KNOWN] })(verifyRequest({ path: AGENT_METADATA_PATH }))).status).toBe(404)
+	})
+
+	test('an application that lists agent nowhere serves the path from its own rows, as before', async () => {
+		expect((await service(new FakeGrants(), { rows: [ADMIN, WELL_KNOWN] })(verifyRequest({ path: AGENT_METADATA_PATH }))).status).toBe(204)
 	})
 })

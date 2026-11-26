@@ -120,7 +120,7 @@ export function createCloudflareProxyHandler(env: CloudflareProxyEnv, logger: Pr
 		logger,
 		// Until IAM's binding serves `requestDelegation`, no delegation grant is obtained here.
 		delegations: isDelegationIssuer(env.IAM) ? env.IAM : null,
-		// Until IAM's binding serves `mintFromGrant`, an agent's resource token is refused as IAM unavailable.
+		// A service binding stub answers every method name; one IAM does not serve rejects, and `callIam` makes that a 503.
 		grants: isGrantExchanger(env.IAM) ? env.IAM : null,
 	})
 	const handler = proxyHandler(env, manifest, verify)

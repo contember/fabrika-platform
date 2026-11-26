@@ -91,7 +91,8 @@ application environment is a resource exactly when the application's approved sc
 The proxy serves the protected resource metadata on such a host at `/.well-known/oauth-protected-resource`, before it
 selects an endpoint, as it serves `/__fabrika/auth/callback`:
 `{ resource, authorization_servers: [<IAM issuer>], scopes_supported: ['read', 'write'], bearer_methods_supported: ['header'] }`.
-On a host whose application admits no `agent`, the path answers 404. A refused bearer on a row that lists `agent`
+On a host whose application admits no `agent`, the proxy leaves the path to the application's own rows, as before
+(ADR-0090, ADR-0062); where it admits `agent`, those rows never serve it. A refused bearer on a row that lists `agent`
 carries `WWW-Authenticate: Bearer resource_metadata="https://<host>/.well-known/oauth-protected-resource"`.
 
 A grant names exactly one resource. An agent that works on `stage` and on `prod` holds two grants, each approved on its

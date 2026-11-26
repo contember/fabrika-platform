@@ -1,4 +1,4 @@
-import { SESSION_COOKIE } from '@fabrika/auth-core'
+import { AGENT_CLIENT_ID, SESSION_COOKIE } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { PROXY_TOKEN_HEADER } from '../constants'
 import { formatOAuthBearerChallenge, type InstallationProxyEndpointRow, type OAuthBearerChallenge } from '../manifest'
@@ -44,6 +44,12 @@ describe('a row that admits oauth', () => {
 		expect(response.status).toBe(204)
 		expect(response.headers.get(PROXY_TOKEN_HEADER)).toBe(token)
 		expect(iam.mintTokenCalls + iam.mintFromKeyCalls).toBe(0)
+	})
+
+	test("the agent's device client is refused on an installation row, whatever IAM minted (ADR-0090 §1)", async () => {
+		const iam = new FakeIam()
+		const response = await service(iam)(verifyRequest({ path: '/mcp', bearer: await signResourceToken({ clientId: AGENT_CLIENT_ID }) }))
+		expectChallenge(response, 401, { error: 'invalid_token' })
 	})
 
 	test('no Authorization header is a 401 challenge without an error code, even with a session cookie', async () => {

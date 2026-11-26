@@ -68,7 +68,7 @@ import {
 import type { DelegationIssuer, IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
 import { formatOAuthBearerChallenge, isApplicationEntry, type ManifestEndpointRow, type ProxyApp, type ProxyManifest } from './manifest'
-import { AGENT_METADATA_PATH, findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
+import { admitsAgent, AGENT_METADATA_PATH, findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
 import { errorAnswer, isPageNavigation, type PageContent, pageResponse, renderPage } from './pages'
 
 export interface VerifyServiceConfig {
@@ -178,9 +178,9 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 				const answer = oauthMetadataResponse(metadata, forwarded.method)
 				return isApplicationEntry(resolved.app) ? withPolicy(answer, policy) : answer
 			}
-			// An application environment's resource metadata (ADR-0090) is never the application's to serve: the metadata
-			// route answers it on an entry that admits `agent`, and every other application answers 404.
-			if (isApplicationEntry(resolved.app) && forwarded.url.pathname === AGENT_METADATA_PATH) {
+			// On an entry that lists `agent` the resource metadata (ADR-0090) is the metadata route's, never the application's;
+			// every other application serves the path exactly as before.
+			if (admitsAgent(resolved.app) && forwarded.url.pathname === AGENT_METADATA_PATH) {
 				return withPolicy(textResponse(404, 'not found'), policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
 			}
 
