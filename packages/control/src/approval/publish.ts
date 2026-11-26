@@ -193,6 +193,11 @@ export interface PublicationInput {
 	 * whatever its lines, with the reason `requested`, unless a person's approval covers its digests.
 	 */
 	readonly requested?: boolean
+	/**
+	 * The digest of the snapshot a failed migration's rollback deploy returns to: the one the run it redeploys published
+	 * (ADR-0069 §3). A candidate with that digest is published without an approval, since the environment ran it.
+	 */
+	readonly returnTo?: string
 }
 
 export type PublicationResult =
@@ -250,8 +255,10 @@ export async function publishRunSnapshot(
 		logClassification(input.log, classification, appEnv.env)
 		const serialized = JSON.stringify(classification)
 		const requested = classification.protected && input.requested === true
+		const returning = input.returnTo !== undefined && classification.candidateDigest === input.returnTo
 		if (
-			classification.protected && (requested || gate({ lines: classification.changes }, classificationPolicy(classification)).kind !== 'pass')
+			classification.protected && !returning
+			&& (requested || gate({ lines: classification.changes }, classificationPolicy(classification)).kind !== 'pass')
 			&& !approves(run, classification)
 		) {
 			// Each park waits afresh: a run classified again with other digests is a new item for the person (ADR-0050 §4).
@@ -268,6 +275,7 @@ export async function publishRunSnapshot(
 			return { kind: 'parked', classification }
 		}
 		await invocation.write((fence) => runs.recordRunClassification(run.id, serialized, fence))
+		if (returning) input.log('access: a rollback deploy returns to the snapshot the environment ran before; it needs no new approval')
 		const expected = { generation: active.generation, protectionRevision: appEnv.protection_revision }
 		if (await runs.publishRunSnapshot(run.id, expected, serializePublished(candidate), invocation.fence())) {
 			input.log(`access: published as generation ${active.generation + 1} of \`${appEnv.env}\``)

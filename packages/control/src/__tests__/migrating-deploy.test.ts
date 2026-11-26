@@ -57,9 +57,18 @@ const vault = await createTestVault()
 /** The text of an application migration file, as the commit holds it. */
 const migrationText = (name: string): string => name === DROPS ? 'DROP TABLE t_notes;' : `CREATE TABLE t_${name.slice(15, -4)} (id TEXT PRIMARY KEY);`
 
+/** A contract with a page anyone opens: removing it narrows, bringing it back widens (the `public` category). */
+const WITH_SITE = `import { defineContract } from '@fabrika/app/contract'
+
+export const contract = defineContract({ app: '${APP}', dimensions: {}, actions: {}, roles: {} }, (c) => ({
+	health: c.health('/healthz'),
+	site: c.spa('/site', { dir: 'dist/site', access: { public: true } }),
+}))
+`
+
 /** The commit a run deploys: the contract and these application migrations. */
-function tree(migrations: readonly string[]): Record<string, string> {
-	const files: Record<string, string> = { 'fabrika.contract.ts': healthOnly(APP) }
+function tree(migrations: readonly string[], contract: string): Record<string, string> {
+	const files: Record<string, string> = { 'fabrika.contract.ts': contract }
 	for (const name of migrations) files[`db/migrations/${name}`] = migrationText(name)
 	return files
 }
@@ -84,6 +93,8 @@ interface ProviderState {
 	deploys: { at: number; runId: string; migrations: readonly string[]; rollback: boolean }[]
 	/** Called at each rollback deploy, before it returns. */
 	onRollback: () => Promise<void>
+	/** The contract the next resolved commit holds. */
+	contract: string
 }
 
 interface Backend {
@@ -152,17 +163,20 @@ for (const backend of backends) {
 					return Promise.resolve()
 				},
 			}
-			// Each commit is its migrations; a run pinned to a recorded commit deploys that commit's.
+			// Each commit is its contract and migrations; a run pinned to a recorded commit deploys that commit's.
 			const commitMigrations = new Map<string, readonly string[]>()
-			const commitOf = (migrations: readonly string[]): string => {
-				const sha = sha256Hex(migrations.join('\n')).slice(0, 40)
+			const commitContracts = new Map<string, string>()
+			const commitOf = (migrations: readonly string[], contract: string): string => {
+				const sha = sha256Hex(`${contract}\n${migrations.join('\n')}`).slice(0, 40)
 				commitMigrations.set(sha, [...migrations])
+				commitContracts.set(sha, contract)
 				return sha
 			}
 			const commits: CommitSource = {
 				anonymousReadability: () => Promise.resolve('readable'),
 				requestedCommit: (input) => memoryCommits().requestedCommit(input),
-				open: (input) => memoryCommits(tree(commitMigrations.get(input.commitSha) ?? [])).open(input),
+				open: (input) =>
+					memoryCommits(tree(commitMigrations.get(input.commitSha) ?? [], commitContracts.get(input.commitSha) ?? healthOnly(APP))).open(input),
 			}
 			const state: ProviderState = {
 				migrations: [FIRST],
@@ -176,13 +190,14 @@ for (const backend of backends) {
 				settlement: 'succeeded',
 				deploys: [],
 				onRollback: () => Promise.resolve(),
+				contract: healthOnly(APP),
 			}
 			let candidate: string | null = null
 			const provider: ControlProvider = {
 				id: TEST_PROVIDER_ID,
 				normalizeRegistration: (input) => input,
 				source: { binding: 'connection' },
-				resolveSource: (input) => Promise.resolve({ commitSha: input.expectedCommitSha ?? commitOf(state.migrations) }),
+				resolveSource: (input) => Promise.resolve({ commitSha: input.expectedCommitSha ?? commitOf(state.migrations, state.contract) }),
 				opsChannel: () => true,
 				dataOperations: () => true,
 				migrationBookmark: () => state.bookmark,
@@ -732,6 +747,45 @@ for (const backend of backends) {
 			expect(stuck).toMatchObject({ state: 'running', step: 'migrate', deployed: 1 })
 			expect(await runStatus(second)).toBe('running')
 			await b.db.prepare("UPDATE app_env_data_operations SET state = 'failed', error_code = 'superseded' WHERE id = ?").bind(stuck?.id ?? '').run()
+			expect(await reconcileProviderRuns(deps())).toMatchObject({ failed: 1 })
+			expect(await runStatus(second)).toBe('failed')
+		})
+
+		test('a rollback that widens back what the failed candidate narrowed returns to the run it redeploys: no new approval', async () => {
+			const { b, state, deps, locks, log, deployFirst, candidateRun, operations, runStatus } = await open()
+			state.contract = WITH_SITE
+			await deployFirst()
+			expect((await fixtureProtect(b.repositories.registry, locks, TARGET, true))?.protected).toBe(1)
+			// The candidate removes the public page, then its migration fails: the rollback brings the page back.
+			state.contract = healthOnly(APP)
+			state.failure = 'rolled_back'
+			const second = await candidateRun([FIRST, SECOND], 'webhook')
+			expect(await executeDeploy(deps(), { runId: second })).toEqual({ runId: second, status: 'failed' })
+			const [operation] = await operations()
+			expect(operation).toMatchObject({ state: 'failed', error_code: MIGRATION_REVERTED_CODE, target_mode: 'open' })
+			const rollback = operation?.revert_run_id ?? ''
+			expect(await runStatus(rollback)).toBe('succeeded')
+			expect(log(rollback)).toContain('access: a rollback deploy returns to the snapshot the environment ran before; it needs no new approval')
+			expect(state.deploys.filter((deploy) => deploy.rollback)).toHaveLength(1)
+		})
+
+		test('a recovery during an unfinished provider deploy leaves the run to its provider: it blocks other deploys until it settles', async () => {
+			const { b, state, deps, run, deployFirst, candidateRun, operations, runStatus } = await open()
+			await deployFirst()
+			state.outcome = { state: 'running' }
+			state.settlement = 'running'
+			const second = await candidateRun([FIRST, SECOND])
+			await executeDeploy(deps(), { runId: second })
+			const [stuck] = await operations()
+			expect(stuck).toMatchObject({ state: 'running', step: 'deploy', deployed: 0 })
+			// An operator's recovery opens the environment and retires the operation while the provider still deploys.
+			await b.db.prepare("UPDATE app_env_data_operations SET state = 'failed', error_code = 'superseded' WHERE id = ?").bind(stuck?.id ?? '').run()
+			expect(await reconcileProviderRuns(deps())).toMatchObject({ inProgress: 1, failed: 0 })
+			expect(await runStatus(second)).toBe('running')
+			const next = await run()
+			expect(await executeDeploy(deps(), { runId: next })).toEqual({ runId: next, status: 'deferred' })
+			// Once the provider's work settles, the run ends as its migration did: not succeeded.
+			state.settlement = 'succeeded'
 			expect(await reconcileProviderRuns(deps())).toMatchObject({ failed: 1 })
 			expect(await runStatus(second)).toBe('failed')
 		})

@@ -547,7 +547,8 @@ other environment, before the provider prepares anything, and the write maps a r
   without `data_loss`, go to `revert`, the rollback deploy of `getLatestDeployedRun` (a succeeded run that recorded its
   migration barrier, so never a dry run, and not the operation's own), through `OperationDeploys.run` under the same
   lease. `revert_run_id` is named before the run is created, and `deployUnder` exempts that run from the `deploy-request`
-  decision as it does a restore's deploys. `check` then waits to a new deadline for a 200 of another version than
+  decision as it does a restore's deploys; its publication returns to the snapshot the redeployed run published
+  (`rollbackReturn`, `PublicationInput.returnTo`), which needs no new approval even where it widens. `check` then waits to a new deadline for a 200 of another version than
   `candidate_version` and fails `migration_reverted`; without a known version it waits to the deadline. A 200 of the
   failed version itself (its boot retried and succeeded) records `candidate_recovered` and goes to `restrict`. So do a
   committed `dataLoss` migration (the in-place rewind is not built), a rollback that fails or is not accepted, and one
@@ -559,7 +560,8 @@ other environment, before the provider prepares anything, and the write maps a r
   leaves the run `running` (`holdForMigration`, in `deployUnder` and `settleUnfinishedRun`, which answers `held`), so it
   is no baseline. The operation ends it through `OperationDeploys.finishRun`: `succeeded` only when the new version
   answered, `failed` at `revert` (first, since an environment runs one run at a time) and at every failure. The
-  reconciler ends a run whose operation ended without it (a recovery's `open`) as the operation did.
+  reconciler ends a `deployed` run whose operation ended without it (a recovery's `open`) as the operation did; a run
+  not known deployed first settles its provider's work, which may still activate, and then fails.
 - **A migration that may change stored data runs only behind a backup (ADR-0050, `deployUnder`).** The files are the candidate's
   `dataLoss` of any kind that the environment's last succeeded run did not deploy as they are now (`unheldDataChanges`,
   never the publication). A stored snapshot without `dataLoss` is classified again at its commit (`rereadDataLoss`), and

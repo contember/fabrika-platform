@@ -308,13 +308,12 @@ export class DataOperationRepository {
 			.first<DataOperationRow>()
 	}
 
-	/** Whether a bookmark migration of the environment named `runId` as its rollback deploy. */
-	async namesRevertRun(appId: string, env: string, runId: string): Promise<boolean> {
-		const row = await this.d1
-			.prepare('SELECT id FROM app_env_data_operations WHERE app_id = ? AND env = ? AND revert_run_id = ?')
+	/** The bookmark migration of the environment that named `runId` as its rollback deploy; `null` for any other run. */
+	async revertedBy(appId: string, env: string, runId: string): Promise<DataOperationRow | null> {
+		return await this.d1
+			.prepare('SELECT * FROM app_env_data_operations WHERE app_id = ? AND env = ? AND revert_run_id = ?')
 			.bind(appId, env, runId)
-			.first<{ id: string }>()
-		return row !== null
+			.first<DataOperationRow>()
 	}
 
 	/** A running operation succeeded. Terminal: `false` once it has finished or failed. */

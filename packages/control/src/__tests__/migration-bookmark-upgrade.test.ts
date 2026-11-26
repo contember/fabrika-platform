@@ -43,7 +43,7 @@ describe("Control's migration 0048 over operations recorded before it", () => {
 		expect(await recordedMaintenance({ repositories }, { appId: 'crm', env: 'prod' })).toBe('open')
 		// Its run is not held by a bookmark migration, so the reconciler settles it by its provider as before.
 		expect(await repositories.dataOperations.bookmarkMigrationOfRun(run)).toBeNull()
-		expect(await repositories.dataOperations.namesRevertRun('crm', 'prod', run)).toBe(false)
+		expect(await repositories.dataOperations.revertedBy('crm', 'prod', run)).toBeNull()
 		harness.sqlite.close()
 	})
 })

@@ -57,7 +57,15 @@ import {
 	runningSnapshot,
 } from './approval/publish'
 import { assertManualCommitReachable } from './approval/request'
-import { type AccessSnapshot, approvedAccess, approvedProviderAccess, approvedSnapshot, type ProviderAccessFields } from './approval/snapshot'
+import {
+	type AccessSnapshot,
+	approvedAccess,
+	approvedProviderAccess,
+	approvedSnapshot,
+	parseSnapshot,
+	type ProviderAccessFields,
+	snapshotDigest,
+} from './approval/snapshot'
 import { connectorAddresses } from './connectors'
 import {
 	type DriveResult,
@@ -669,6 +677,21 @@ export function operationDeploys(deps: RunDeps): OperationDeploys {
 }
 
 /**
+ * What a failed migration's rollback deploy returns to: the snapshot the run it redeploys published, which the
+ * environment ran before the migration, found by the same selection that chose the run's commit.
+ */
+async function rollbackReturn(
+	runs: ControlRepositories['runs'],
+	run: RunRow,
+	operation: DataOperationRow,
+): Promise<{ readonly returnTo?: string }> {
+	if (operation.run_id === null) return {}
+	const source = await runs.getLatestDeployedRun({ appId: run.app_id, env: run.env, except: operation.run_id })
+	if (source === null || source.commit_sha !== run.commit_sha || source.snapshot_json === null) return {}
+	return { returnTo: snapshotDigest(parseSnapshot(await runs.document(source.snapshot_json))) }
+}
+
+/**
  * Whether the run whose provider just succeeded is a running bookmark migration's own (ADR-0069 §3): then it records
  * the deploy on the operation and the run stays running, so it becomes no baseline before the migration succeeded.
  */
@@ -772,7 +795,8 @@ async function deployUnder(
 		// so is a failed migration's rollback deploy, which redeploys the last succeeded commit (ADR-0069 §3). The operation's
 		// record names the run before it is created, so the exemption holds also when an approval queued the run again.
 		const restoreDeploy = await deps.repositories.restores.namesRun(run.app_id, run.env, run.id)
-		const operationRun = restoreDeploy || (await deps.repositories.dataOperations.namesRevertRun(run.app_id, run.env, run.id))
+		const reverting = await deps.repositories.dataOperations.revertedBy(run.app_id, run.env, run.id)
+		const operationRun = restoreDeploy || reverting !== null
 		const decision = run.trigger === 'manual' && !operationRun
 			? protectedRunDecision(appEnv, { byPerson: startedByPerson(run), ref: run.ref })
 			: null
@@ -884,6 +908,7 @@ async function deployUnder(
 				}),
 				log: (line) => runLogs.log(line),
 				requested: decision?.kind === 'request',
+				...(reverting === null ? {} : await rollbackReturn(deps.repositories.runs, run, reverting)),
 			}
 			const publication = await publishRunSnapshot({ repositories: deps.repositories, commits }, {
 				signal: invocation.work.signal,
@@ -1838,9 +1863,11 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 	try {
 		const run = await invocation.read()
 		if (run === null || (run.status !== 'pending' && run.status !== 'running')) return null
-		// A bookmark migration's run ends with its operation; one whose operation ended, past its own end, ends here.
+		// A bookmark migration's run ends with its operation. Only a run its provider is known to have deployed is settled
+		// from the operation alone; any other first settles its provider's work, which may still activate.
 		const migration = await deps.repositories.dataOperations.bookmarkMigrationOfRun(run.id)
-		if (migration !== null && migration.state !== 'running' && run.external_run_id !== null) {
+		if (migration?.deployed === 1) {
+			if (migration.state === 'running') return 'held'
 			const status = migration.state === 'succeeded' ? 'succeeded' : 'failed'
 			await invocation.write((fence) =>
 				run.cancel_requested_at === null
@@ -1850,7 +1877,6 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 			await projectSettled(deps, run.id, status)
 			return status
 		}
-		if (migration?.deployed === 1) return 'held'
 		if (invocation.cancelled) return await settleCancellation()
 		if (run.external_run_id === null) {
 			if (run.status === 'pending') return 'waiting'
@@ -1888,11 +1914,12 @@ export async function settleUnfinishedRun(deps: RunSettleDeps, invocation: RunIn
 			}
 			await invocation.boundary()
 		}
-		const finished = state
-		if (finished === 'succeeded' && outcome.dryRun !== true && (await holdForMigration(deps, invocation))) {
+		if (state === 'succeeded' && outcome.dryRun !== true && (await holdForMigration(deps, invocation))) {
 			await retirePlatformKeys(deps, appEnv, run)
 			return 'held'
 		}
+		// A migration that ended while its provider still deployed did not succeed: the run fails with it.
+		const finished = state === 'succeeded' && migration !== null && migration.state !== 'running' ? 'failed' : state
 		const untouched = outcome.state === 'failed' && outcome.untouched === true
 		await invocation.write((fence) => deps.repositories.runs.markRunFinished(run.id, finished, exitCode, fence, untouched))
 		if (finished === 'succeeded' && outcome.dryRun !== true) await retirePlatformKeys(deps, appEnv, run)
