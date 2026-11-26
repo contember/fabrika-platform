@@ -15,13 +15,14 @@ import {
 } from '../database'
 import { awsNetworkOutputs } from '../network'
 
+// The platform's network: the database is never in the applications'.
 const network = awsNetworkOutputs({
-	VpcId: 'vpc-0123456789abcdef0',
-	VpcCidr: '10.80.0.0/16',
-	TaskSubnetIds: 'subnet-0123456789abcdef0,subnet-0123456789abcdef1',
-	TaskSubnetCidrs: '10.80.0.0/20,10.80.16.0/20',
-	BalancerSubnetIds: 'subnet-0123456789abcdef2,subnet-0123456789abcdef3',
-	BalancerSubnetCidrs: '10.80.240.0/24,10.80.241.0/24',
+	VpcId: 'vpc-0123456789abcdef9',
+	VpcCidr: '10.81.0.0/16',
+	TaskSubnetIds: 'subnet-0123456789abcdef4,subnet-0123456789abcdef5',
+	TaskSubnetCidrs: '10.81.0.0/20,10.81.16.0/20',
+	BalancerSubnetIds: 'subnet-0123456789abcdef6,subnet-0123456789abcdef7',
+	BalancerSubnetCidrs: '10.81.240.0/24,10.81.241.0/24',
 })
 const OUTPUTS = {
 	DatabaseHost: 'fabrika-database-abcdefgh.c1a2b3c4d5e6.eu-central-1.rds.amazonaws.com',
@@ -35,14 +36,14 @@ describe("the installation's database", () => {
 
 	test("its two subnets lie apart from the tasks' and the balancers', with no route of their own", () => {
 		const cidrs = awsDatabaseSubnetCidrs(network)
-		expect(cidrs).toEqual(['10.80.32.0/24', '10.80.33.0/24'])
+		expect(cidrs).toEqual(['10.81.32.0/24', '10.81.33.0/24'])
 		for (const cidr of cidrs) {
 			for (const other of [...network.taskSubnetCidrs, ...network.balancerSubnetCidrs]) expect(blocksOverlap(cidr, other)).toBe(false)
 		}
-		expect(resources.DatabaseSubnet1.Properties).toMatchObject({ VpcId: network.vpcId, CidrBlock: '10.80.33.0/24', MapPublicIpOnLaunch: false })
+		expect(resources.DatabaseSubnet1.Properties).toMatchObject({ VpcId: network.vpcId, CidrBlock: '10.81.33.0/24', MapPublicIpOnLaunch: false })
 		expect(Object.values(resources).some((resource) => JSON.stringify(resource).includes('SubnetRouteTableAssociation'))).toBe(false)
 		// A task's subnet over where the database's go is refused, not overlapped.
-		expect(() => awsDatabaseSubnetCidrs({ ...network, taskSubnetCidrs: ['10.80.0.0/20', '10.80.32.0/20'] })).toThrow('overlap')
+		expect(() => awsDatabaseSubnetCidrs({ ...network, taskSubnetCidrs: ['10.81.0.0/20', '10.81.32.0/20'] })).toThrow('overlap')
 	})
 
 	test("PostgreSQL is reached from the clients' group alone, and the database's group starts nothing", () => {
@@ -75,7 +76,9 @@ describe("the installation's database", () => {
 				accountId: '123456789012',
 				region: 'eu-central-1',
 				appsListenerArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210',
-				vpcId: network.vpcId,
+				// Control's: the applications' network.
+				vpcId: 'vpc-0123456789abcdef0',
+				taskSubnetIds: ['subnet-0123456789abcdef0'],
 				installationHosts: ['iam.example.com'],
 			}).map((managed) => managed.statements.filter((statement) => JSON.stringify(statement).includes('"Allow"'))),
 		)

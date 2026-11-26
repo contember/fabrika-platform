@@ -5,9 +5,10 @@
 //   advisory lock (ADR-0017), so one database holds them without coordination, as Zerops' light installation does. RDS
 //   backs it up daily with point-in-time recovery, so the reason Zerops gives Operations a database of its own (one
 //   backup schedule per service) does not apply.
-// - **Private subnets of its own.** Two /24s of the VPC's range, one per zone, apart from the tasks' and the balancers'
-//   subnets (a balancer's subnet holds nothing but its nodes, which a namespace proxy's trust rests on), with no route
-//   out: they use the VPC's main route table, which holds the local route alone.
+// - **In the platform's network** (`network.ts`), which no route joins to the applications': nothing an application or
+//   Control places can reach it, whatever group it carries.
+// - **Private subnets of its own.** Two /24s of the platform VPC's range, one per zone, apart from its tasks' and its
+//   balancer's subnets, with no route out: they use the VPC's main route table, which holds the local route alone.
 // - **Reached by the platform's services alone.** The database's group admits PostgreSQL only from the clients' group,
 //   which the platform's services carry and no application's stack names.
 // - **Its password never in a template.** The operator's command generates it into a Parameter Store SecureString
