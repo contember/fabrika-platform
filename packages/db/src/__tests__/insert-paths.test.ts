@@ -2,7 +2,7 @@
 // changes a row its condition read, on any hop of the path, whether the row met the test or not. Skips cleanly (with a
 // reason) when FABRIKA_TEST_POSTGRES_URL is unset:
 //
-//   docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/db
 //
 // The URL is a credential: it is never logged.

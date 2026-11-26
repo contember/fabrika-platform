@@ -13,9 +13,9 @@
  *
  *   cpu-lease run -n 4 --no-smt -- bash -c '
  *     CPUS=$(grep Cpus_allowed_list /proc/self/status | awk "{print \$2}")
+ *     PORT=55440
  *     docker run -d --rm --name relation-bench-pg --cpuset-cpus=$CPUS --shm-size=512m -e POSTGRES_PASSWORD=postgres \
- *       -p 127.0.0.1::5432 postgres:18-alpine -c shared_buffers=256MB -c work_mem=16MB
- *     PORT=$(docker port relation-bench-pg 5432/tcp | head -1 | cut -d: -f2)
+ *       --network host -e PGPORT=$PORT postgres:18-alpine -c listen_addresses=127.0.0.1 -c shared_buffers=256MB -c work_mem=16MB
  *     BENCH_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:$PORT/postgres bun packages/db/bench/relation-predicates.ts
  *     docker stop relation-bench-pg'
  *

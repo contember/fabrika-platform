@@ -5,7 +5,7 @@
 // What is lost by skipping is stated plainly in the skip message, because a silently empty suite is
 // worse than no suite.
 //
-//   docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/control
 //
 // Each fixture gets its OWN Postgres schema, selected through the `search_path` startup parameter so

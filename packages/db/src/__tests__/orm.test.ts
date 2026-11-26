@@ -1,7 +1,7 @@
 // The mini-ORM on a REAL Postgres: the handles `ctx.db` holds, each running in one invocation's transaction. Skips
 // cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset:
 //
-//   docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+//   docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
 //   FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/db/src/__tests__/orm.test.ts
 //
 // The handles are untyped here (the framework builds them); `orm-types.ts` types them for a handler.

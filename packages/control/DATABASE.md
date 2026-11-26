@@ -83,7 +83,9 @@ lifecycle stay in `CLAUDE.md`.
 bunx wrangler d1 migrations apply DB --local      # SQLite/D1
 bun run migrate:postgres                          # migrations-postgres/ (FABRIKA_CONTROL_DATABASE_URL)
 
-# The Postgres-backed tests SKIP unless a database is configured:
-docker run --rm -d -p 55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+# The Postgres-backed tests SKIP unless a database is configured. The host network adds no network interface per
+# container start. Where it is unavailable (Docker Desktop without host networking), publish the port instead:
+#   docker run --rm -d -p 127.0.0.1:55433:5432 -e POSTGRES_PASSWORD=postgres postgres:17
+docker run --rm -d --network host --tmpfs /var/lib/postgresql/data -e PGPORT=55433 -e POSTGRES_PASSWORD=postgres postgres:17 -c listen_addresses=127.0.0.1
 FABRIKA_TEST_POSTGRES_URL=postgres://postgres:postgres@127.0.0.1:55433/postgres bun test packages/control
 ```
