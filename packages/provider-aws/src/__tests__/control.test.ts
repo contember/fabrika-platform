@@ -153,6 +153,7 @@ class Fake {
 			},
 			describeCertificate: async () => null,
 		},
+		elb: { describeRules: async () => [] },
 		ecr: {
 			ensureRepository: async (name) => {
 				this.calls.push(`ensureRepository ${name}`)
@@ -267,7 +268,11 @@ class Fake {
 			baseImage: BASE_IMAGE,
 			installation: target,
 			network,
-			balancer: { securityGroupId: 'sg-0123456789abcdef1', vpcCidr: '10.0.0.0/16' },
+			balancer: {
+				securityGroupId: 'sg-0123456789abcdef1',
+				vpcCidr: '10.0.0.0/16',
+				listenerArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika/0123456789abcdef/fedcba9876543210',
+			},
 			proxySource: PROXY_SOURCE,
 			proxyIam: { issuer: 'https://iam.example.com', key: 'proxy-iam-key' },
 			source: this.source,

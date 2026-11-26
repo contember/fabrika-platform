@@ -3,11 +3,15 @@
 // nothing yet, and the Service Connect namespace), provision and reconcile applying it, the claims of a namespace and of
 // an environment placed in it, and each claim read back before Control may release it.
 
-import type { JsonValue, ProviderDeploymentNamespace, ProviderNamespaceMutationInput } from '@fabrika/provider-contract'
+import { contractDigest } from '@fabrika/auth-core'
+import type { JsonValue, ProviderDeploymentNamespace, ProviderNamespaceMember, ProviderNamespaceMutationInput } from '@fabrika/provider-contract'
 import { ProviderNamespaceError } from '@fabrika/provider-contract'
 import { describe, expect, test } from 'bun:test'
+import { schemaFromContract } from '../../../app/src/contract/platform'
+import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import type { StackDescription, StackSummary } from '../aws/cloudformation'
 import type { EcsService } from '../aws/ecs'
+import type { ListenerRule } from '../aws/elb'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsAppsPermissionsBoundary } from '../environment-stack'
@@ -15,6 +19,7 @@ import {
 	awsNamespaceCapabilities,
 	awsNamespaceResources,
 	awsNamespaceStack,
+	awsNamespaceTargetEnvelope,
 	checkInstallationBalancer,
 	namespaceOutputsOf,
 	readNamespaceOutputs,
@@ -31,7 +36,8 @@ const installation: AwsAppTarget = {
 	sourcesBucket: 'fabrika-sources-123456789012',
 }
 const network = { vpcId: 'vpc-0123456789abcdef0', subnets: ['subnet-0123456789abcdef0'], publicIp: true }
-const balancer = { securityGroupId: 'sg-0123456789abcdef1', vpcCidr: '10.0.0.0/16' }
+const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika/0123456789abcdef/fedcba9876543210'
+const balancer = { securityGroupId: 'sg-0123456789abcdef1', vpcCidr: '10.0.0.0/16', listenerArn: LISTENER }
 /** The installation's proxy source; an older release's commit, which a namespace may keep. */
 const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
 const OLDER_COMMIT = 'fedcba9876543210fedcba9876543210fedcba98'
@@ -114,7 +120,15 @@ class Fake {
 				return this.parameters
 			},
 		},
+		elb: {
+			describeRules: async (listenerArn: string): Promise<readonly ListenerRule[]> => {
+				this.calls.push(`describeRules ${listenerArn}`)
+				return this.rules
+			},
+		},
 	}
+	/** The installation listener's rules, which a served host's priority is chosen against. */
+	rules: readonly ListenerRule[] = []
 	readonly capabilities = awsNamespaceCapabilities({
 		installation,
 		network,
@@ -208,6 +222,7 @@ describe('awsNamespaceStack', () => {
 		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.16/27' })).toThrow('network address')
 		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.32/27' })).toEqual({ ...balancer, vpcCidr: '10.0.0.32/27' })
 		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '172.31.0.0/16' }).vpcCidr).toBe('172.31.0.0/16')
+		expect(() => checkInstallationBalancer({ ...balancer, listenerArn: 'arn:aws:s3:::bucket' })).toThrow('listener')
 	})
 
 	test("holds the proxy's build: its repository, log group, a role under the boundary reaching only its own, and an x86 project", () => {
@@ -431,6 +446,45 @@ describe('awsNamespaceCapabilities', () => {
 		fake.calls.length = 0
 		expect(await fake.capabilities.reconcile(mutation())).toEqual(NAMESPACE)
 		expect(fake.calls).toEqual(['findStack fabrika-ns-6-shared-prod', 'describeStack'])
+	})
+
+	test("a member's issued certificate is served on the listener: its priority chosen and recorded, its rule rendered", async () => {
+		const fake = new Fake()
+		const contract = { ...notesArtifact, tables: {}, jobs: {}, files: {}, fileKinds: {} }
+		const member: ProviderNamespaceMember = {
+			appId: 'notes',
+			env: 'prod',
+			domain: 'notes.example.com',
+			artifact: {
+				provider: 'aws',
+				version: 1,
+				payload: awsAppArtifactCodec.encode({ contractDigest: contractDigest(contract), healthPath: '/healthz' }),
+			},
+			access: { contract, contractDigest: contractDigest(contract), schema: schemaFromContract(contract), checker: '0.9.1' },
+			proxySecret: 'notes-proxy-secret',
+		}
+		const certificate = 'arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-000000000001'
+		const certified = {
+			...NAMESPACE,
+			target: awsNamespaceTargetEnvelope({
+				...awsNamespaceTargetCodec.decode(NAMESPACE.target.payload),
+				proxyCertificates: [{ host: 'notes.example.com', arn: certificate, status: 'ISSUED' }],
+			}),
+		}
+		const applied = await fake.capabilities.provision({ ...mutation(certified), members: [member] })
+		const [recorded] = awsNamespaceTargetCodec.decode(applied.target.payload).proxyCertificates ?? []
+		expect(recorded?.priority).toMatch(/^[1-9]\d{0,4}$/)
+		expect(fake.calls).toContain(`describeRules ${LISTENER}`)
+		const template: JsonValue = JSON.parse(fake.template)
+		expect(at(template, 'Resources', `HostRule${recorded?.priority}`, 'Properties', 'Conditions')).toEqual([
+			{ Field: 'host-header', HostHeaderConfig: { Values: ['notes.example.com'] } },
+		])
+		expect(at(template, 'Resources', `HostCertificate${recorded?.priority}`, 'Properties', 'Certificates')).toEqual([{ CertificateArn: certificate }])
+		// No member, no rule: a provision without the member renders none, and reads no listener.
+		const bare = new Fake()
+		await bare.capabilities.provision(mutation(certified))
+		expect(bare.calls).not.toContain(`describeRules ${LISTENER}`)
+		expect(Object.keys(at(JSON.parse(bare.template), 'Resources') ?? {}).some((key) => key.startsWith('Host'))).toBe(false)
 	})
 
 	test('a failed stack call is a namespace error with a stable code, never the error object', async () => {

@@ -11,8 +11,9 @@
 // - One ACM no longer knows (deleted out of band) is requested anew on the same pass. One that failed or timed out
 //   stays recorded and shown: requesting another would loop on what made it fail (a CAA record, DNS never added); the
 //   operator deletes it in ACM, and the next pass requests a new one.
-// - Nothing here tags or deletes a certificate (`aws/acm.ts`). A host that left keeps its entry, marked `departed`,
-//   which the presentation hands to the operator to delete; the pass after the delete forgets it.
+// - Nothing here tags or deletes a certificate (`aws/acm.ts`). A host that left keeps its entry, marked `departed`:
+//   the namespace's stack drops its rule and its listener certificate (`host-rules.ts`), and the presentation hands
+//   the certificate to the operator to delete; the pass after the delete forgets it.
 // - At most `AWS_MAX_PROXY_CERTIFICATES` entries, departed ones counted (they hold a place on the listener until
 //   deleted): a host over it gets no certificate this pass, and the rest of the pass runs as ever.
 //

@@ -130,6 +130,8 @@ export interface AwsProxyCertificate {
 	readonly validationValue?: string
 	/** The host is no member's any more: its certificate is the operator's to delete, and the entry goes once it is gone. */
 	readonly departed?: true
+	/** The priority of the host's rule on the installation's listener (`host-rules.ts`), as digits; only while it is served. */
+	readonly priority?: string
 }
 
 /** The most hosts a namespace holds certificates for: a balancer's listener takes 25 besides its default one. */
@@ -199,6 +201,7 @@ const namespaceTargetSchema = z.object({
 				validationName: z.string().regex(VALIDATION_RECORD).optional(),
 				validationValue: z.string().regex(VALIDATION_RECORD).optional(),
 				departed: z.literal(true).optional(),
+				priority: z.string().regex(/^[1-9]\d{0,4}$/).refine((priority) => Number(priority) <= 50_000).optional(),
 			}).strict().refine((certificate) => (certificate.validationName === undefined) === (certificate.validationValue === undefined), {
 				message: "a certificate's validation record is recorded whole",
 				path: ['validationValue'],
@@ -208,6 +211,10 @@ const namespaceTargetSchema = z.object({
 		.refine((certificates) => new Set(certificates.map((certificate) => certificate.host)).size === certificates.length, {
 			message: 'one certificate per host',
 		})
+		.refine((certificates) => {
+			const priorities = certificates.flatMap((certificate) => (certificate.priority === undefined ? [] : [certificate.priority]))
+			return new Set(priorities).size === priorities.length
+		}, { message: 'one host per rule priority' })
 		.optional(),
 }).strict().refine((target) => target.proxyServiceRolledOut === undefined || target.proxyServiceUpdated === true, {
 	message: "the proxy service's rollout is recorded after its update",

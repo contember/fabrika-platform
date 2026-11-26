@@ -32,7 +32,9 @@ import {
 	type ProviderDeploymentNamespace,
 	type ProviderNamespaceCapabilities,
 	ProviderNamespaceError,
+	type ProviderNamespaceEvents,
 	type ProviderNamespaceFact,
+	type ProviderNamespaceMember,
 	type ProviderNamespaceMutationInput,
 	type ProviderNamespacePresentation,
 	type ProviderRegistration,
@@ -40,11 +42,13 @@ import {
 import type { CloudFormationClient } from './aws/cloudformation'
 import { ecrLifecyclePolicy } from './aws/ecr'
 import { type EcsClient, SERVICE_CONNECT_ARN, TARGET_GROUP_ARN } from './aws/ecs'
+import { type ElbClient, LISTENER_ARN } from './aws/elb'
 import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
 import { AWS_MAX_PROXY_CERTIFICATES, AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
 import { AWS_APPLICATION_PORT } from './ecs-task'
 import { allow, AWS_LOG_RETENTION_DAYS, awsAppsPermissionsBoundary, type AwsInstallationNetwork, policy, trust } from './environment-stack'
+import { assignHostRulePriorities, type AwsHostRule, awsHostRules, hostRuleResources, servedCertificates } from './host-rules'
 import { AWS_PROXY_BUILD_IMAGE, AWS_PROXY_BUILDSPEC } from './proxy-build'
 import { awsNamespaceMemberHosts } from './proxy-manifest'
 import { AWS_KEPT_IMAGES, awsEnvironmentResources } from './resources'
@@ -156,6 +160,8 @@ export function awsNamespaceStack(
 	installation: Pick<AwsAppTarget, 'accountId' | 'region'>,
 	network: Pick<AwsInstallationNetwork, 'vpcId'>,
 	balancer: AwsInstallationBalancer,
+	/** The hosts the listener serves for the namespace (`awsHostRules`); none until a certificate is issued. */
+	hostRules: readonly AwsHostRule[] = [],
 ): AwsStack {
 	const resources = awsNamespaceResources(namespace.id, namespace.env)
 	const { accountId, region } = installation
@@ -323,6 +329,7 @@ export function awsNamespaceStack(
 					Tags: tags,
 				},
 			},
+			...hostRuleResources(balancer.listenerArn, hostRules),
 		},
 		Outputs: {
 			[PROXY_SECURITY_GROUP_OUTPUT]: { Value: { 'Fn::GetAtt': ['ProxySecurityGroup', 'GroupId'] } },
@@ -356,6 +363,8 @@ export function namespaceOutputsOf(name: string, outputs: Readonly<Record<string
 export interface AwsInstallationBalancer {
 	readonly securityGroupId: string
 	readonly vpcCidr: string
+	/** The balancer's HTTPS listener, which serves every namespace's hosts with their certificates (`host-rules.ts`). */
+	readonly listenerArn: string
 }
 
 /** An IPv4 CIDR block of a VPC's size (a /16 to a /28). */
@@ -377,6 +386,7 @@ export function checkInstallationBalancer(balancer: AwsInstallationBalancer): Aw
 	if (!VPC_CIDR.test(balancer.vpcCidr) || !isNetworkAddress(balancer.vpcCidr)) {
 		throw new Error("aws: the installation's VPC range is not an IPv4 block of a VPC's size named by its network address")
 	}
+	if (!LISTENER_ARN.test(balancer.listenerArn)) throw new Error("aws: the installation's balancer names a listener of another form")
 	return balancer
 }
 
@@ -424,11 +434,70 @@ export function awsProxyCertificatePresentation(target: AwsNamespaceTarget): {
 	}
 }
 
+/**
+ * The hosts the namespace's members are routed on, as its stack renders them: an approved member's domain. A member the
+ * manifest would refuse (no domain) has none here; the republish refuses it with the manifest.
+ */
+export function awsServedHosts(members: readonly ProviderNamespaceMember[]): readonly string[] {
+	const routable = members.filter((member) => member.access !== undefined && member.domain !== undefined && member.domain !== '')
+	return [...new Set(routable.flatMap((member) => awsNamespaceMemberHosts(member)))].sort()
+}
+
+export interface EnsureAwsNamespaceStackInput {
+	readonly namespace: ProviderDeploymentNamespace
+	readonly members: readonly ProviderNamespaceMember[]
+	readonly installation: AwsAppTarget
+	readonly network: AwsInstallationNetwork
+	readonly balancer: AwsInstallationBalancer
+	readonly proxySource: AwsProxySource
+	readonly clients: Pick<AwsNamespaceClients, 'cloudFormation' | 'elb'>
+	readonly events: ProviderNamespaceEvents
+	readonly signal: AbortSignal
+	readonly sleep: (ms: number, signal: AbortSignal) => Promise<void>
+	readonly now?: () => number
+}
+
+/**
+ * Brings the namespace's stack to its template, its served hosts' rules included, and answers the namespace as
+ * recorded. With a host to serve, the listener's rules are read first and each served host's priority is chosen against
+ * them (`assignHostRulePriorities`), recorded before the stack is rendered with it. The namespace's `apply` and its
+ * republish both come here, so both render the same template.
+ */
+export async function ensureAwsNamespaceStack(input: EnsureAwsNamespaceStackInput): Promise<ProviderDeploymentNamespace> {
+	const { installation, balancer, clients, signal } = input
+	let namespace = input.namespace
+	const stored = checkNamespaceTarget(namespace, installation, input.proxySource)
+	const hosts = awsServedHosts(input.members)
+	let certificates = stored.proxyCertificates ?? []
+	const toServe = servedCertificates(certificates, hosts).length > 0
+	const recorded = certificates.some((certificate) => certificate.priority !== undefined)
+	if (toServe || recorded) {
+		const rules = toServe ? await clients.elb.describeRules(balancer.listenerArn, signal) : []
+		const assigned = assignHostRulePriorities(certificates, hosts, rules)
+		if (JSON.stringify(assigned) !== JSON.stringify(certificates)) {
+			certificates = assigned
+			namespace = { ...namespace, target: awsNamespaceTargetEnvelope({ ...stored, proxyCertificates: assigned }) }
+			await input.events.checkpoint(namespace)
+		}
+	}
+	await ensureStack({
+		cloudFormation: clients.cloudFormation,
+		stack: awsNamespaceStack(namespace, installation, input.network, balancer, awsHostRules(certificates, hosts)),
+		signal,
+		sleep: input.sleep,
+		...(input.now === undefined ? {} : { now: input.now }),
+		log: () => {},
+	})
+	return namespace
+}
+
 /** The calls the namespace lifecycle makes. */
 export interface AwsNamespaceClients {
 	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'>
 	readonly ecs: Pick<EcsClient, 'describeService'>
 	readonly ssm: Pick<SsmClient, 'listNames'>
+	/** The installation listener's rules, which a served host's rule priority is chosen against. */
+	readonly elb: Pick<ElbClient, 'describeRules'>
 }
 
 /**
@@ -572,19 +641,31 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 		} catch (error) {
 			throw new ProviderNamespaceError(error instanceof Error ? error.message : 'aws: the namespace target is refused', 'awsTarget', false)
 		}
+		let applied: ProviderDeploymentNamespace
 		try {
-			await ensureStack({
-				cloudFormation: clients.cloudFormation,
-				stack: awsNamespaceStack(input.namespace, installation, network, balancer),
+			applied = await ensureAwsNamespaceStack({
+				namespace: input.namespace,
+				members: input.members,
+				installation,
+				network,
+				balancer,
+				proxySource,
+				clients,
+				events: input.events,
 				signal: input.signal,
 				sleep: options.sleep,
 				...(options.now === undefined ? {} : { now: options.now }),
-				log: () => {},
 			})
 		} catch (error) {
 			throw namespaceFailure(error)
 		}
-		return { ...input.namespace, target: targetOf(input.namespace, installation, proxySource, stored) }
+		// The stored target, with what the stack step recorded (the hosts' rule priorities).
+		const { proxyCertificates } = checkNamespaceTarget(applied, installation, proxySource)
+		const { proxyCertificates: _previous, ...rest } = stored
+		return {
+			...input.namespace,
+			target: targetOf(input.namespace, installation, proxySource, proxyCertificates === undefined ? rest : { ...rest, proxyCertificates }),
+		}
 	}
 
 	const claimGone = async (key: string, signal: AbortSignal): Promise<boolean> => {

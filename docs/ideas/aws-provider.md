@@ -475,20 +475,29 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     the installation balancer's group, on :8080 and :8081, and its egress is TCP 443 anywhere (IAM, ECR, logs) and the
     applications' port in the VPC's range. Control reads the balancer's group and the range from
     `FABRIKA_AWS_BALANCER_SECURITY_GROUP` and `FABRIKA_AWS_VPC_CIDR` (the VPC's primary block, its network address; a
-    secondary block is not covered), which the installation's stack will give. Not yet: the listener's host rules, and
-    Caddy's `trusted_proxies` set to the VPC's range, so a request's client address is the caller's, not the balancer's.
+    secondary block is not covered), which the installation's stack will give. Not yet: Caddy's `trusted_proxies` set
+    to the VPC's range, so a request's client address is the caller's, not the balancer's.
     **The certificates** (built, `src/proxy-certificates.ts`, `src/aws/acm.ts`): every republish and reconcile first
     requests a public ACM certificate, validated by DNS, for each routed host that has none, and records it in the
     namespace target as ACM answers (its idempotency token derived from the namespace, the host and the certificate it
-    replaces). It reads every recorded one of a current host again: its status and the `CNAME` the operator adds, which
-    the namespace's presentation shows with "add it, and reconcile the namespace". Nothing waits for a certificate and
-    nothing fails on one: validation waits on the operator's DNS, and a namespace that is not ready refuses deploys. One
-    ACM no longer knows is requested anew; one that failed or timed out stays shown until the operator deletes it in
+    replaces). It reads every recorded one again: its status and the `CNAME` the operator adds, which the namespace's
+    presentation shows with "add it and keep it in place, and reconcile the namespace". Nothing waits for a certificate
+    and nothing fails on one: validation waits on the operator's DNS, and a namespace that is not ready refuses
+    deploys. One ACM no longer knows is requested anew; one that failed or timed out stays shown until the operator deletes it in
     ACM. The operator keeps the validation record in DNS: ACM's renewal uses it. Nothing tags or deletes a
     certificate: a departed host's entry is marked `departed` and shown to the operator to delete, and the pass after
     the delete forgets it. At most 25 entries per namespace, departed ones counted (a listener's certificate quota
     besides its default one; the quota is the installation's, shared by every namespace): a host over it gets none
-    until a place is free, and the rest of the pass runs as ever. Not yet: serving them on the listener.
+    until a place is free, and the rest of the pass runs as ever.
+    **The host rules** (built, `src/host-rules.ts`, `src/aws/elb.ts`): the namespace stack holds, for each current host
+    whose certificate is issued, the certificate on the installation's HTTPS listener (`FABRIKA_AWS_BALANCER_LISTENER`)
+    and a host-header rule forwarding to the namespace's target group, named by the rule's priority. A priority is unique
+    per listener, which every namespace shares: each host's is chosen against the listener's rules as read, from a hash
+    of the host to the next free one, and recorded with its certificate, so it stays put; one another rule has taken
+    since is chosen anew before the stack is rendered. Two namespaces choosing one free priority at once fail one stack
+    update, and its next reconcile chooses again. The namespace's `apply` and its republish render through the same step
+    (`ensureAwsNamespaceStack`), from the target and the members, so both send the same template. A departed host's
+    rule and listener certificate leave the stack; its certificate is the operator's to delete (above).
     **Republish** (built, `src/proxy-republish.ts`): the namespace capability's `republish` drives the proxy to the
     members, one resumable step per pass from what the target records: an image of the current manifest sets the
     service (settled); a build of it in flight is followed; otherwise a build of it starts, replacing an older
@@ -571,7 +580,16 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
         tag any certificate of the account) and no `DeleteCertificate`. The certificates are requested untagged, and a
         departed host's is the operator's to delete, as the namespace's presentation says. The reach that remains:
         Control can request a public certificate for any host (it costs nothing and serves nothing until a rule names
-        it) and read every certificate's status and validation record (public DNS), never delete or tag one;
+        it) and read every certificate's status and validation record (public DNS), never delete or tag one. Its host
+        rules add, on the installation's listener alone (`listener/app/<balancer>/<id>/<id>`, never `*`),
+        `elasticloadbalancing:CreateRule`, `AddListenerCertificates` and `RemoveListenerCertificates`, and
+        `DescribeRules`; and `ModifyRule` and `DeleteRule` on its rules (`listener-rule/app/<balancer>/<id>/<id>/*`).
+        OPEN, for step 11: those two cannot be scoped to a namespace's own rules unless the rules carry a tag, and
+        whether CloudFormation's `ListenerRule` tags a rule is UNVERIFIED. Without one, Control's role reaches every rule
+        of the listener, the installation's own routes (Control's, IAM's) among them. Step 11 either tags the rules and
+        scopes the two by the resource tag, with `AddTags` on `listener-rule/*` held to `StringEquals` on
+        `elasticloadbalancing:CreateAction` = `CreateRule` as for target groups, or keeps the installation's own hosts on
+        a listener Control's role does not reach (a second balancer);
       - EC2, for the environment's security group: `CreateSecurityGroup` on the installation's `vpc/<id>` and on
         `security-group/*` with `aws:RequestTag/fabrika:env` present; `CreateTags` only with
         `ec2:CreateAction = CreateSecurityGroup`, so Control can never tag an installation group into its reach;
