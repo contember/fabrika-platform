@@ -173,7 +173,8 @@ const signInSignalsSuccessSchema = z.object({
 	reasons: z.array(z.object({ reason: z.string().min(1), refusals: count })).max(SIGN_IN_SIGNALS_LIMIT),
 	privileged: z.array(z.object({ id: z.string().min(1), principalId: z.string().min(1), reason: z.string().nullable(), at: count }))
 		.max(SIGN_IN_SIGNALS_LIMIT),
-	truncated: z.boolean(),
+	accountsTruncated: z.boolean(),
+	privilegedTruncated: z.boolean(),
 })
 
 /** Default per-call timeout. A hung IAM must fail the request, not hold a connection open forever. */

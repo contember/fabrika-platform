@@ -58,13 +58,25 @@ export class OperationsMaintenance {
 		const spikes = await this.alertProducer?.detectSpikes() ?? { evaluated: 0, enqueued: 0, deduplicated: 0 }
 		const prunedClaims = await this.alerts.pruneClaims()
 		// Before the outbox claim, so its alerts leave in this pass.
-		const security = await this.securityAlerts?.run() ?? { status: 'unconfigured' }
+		const security = await this.runSecurityAlerts()
 		const claimed = await this.alerts.claimNotifications({ limit: this.batchSize, leaseMs: this.leaseMs })
 		for (const notification of claimed) {
 			if (signal?.aborted) break
 			await this.deliver(notification, signal)
 		}
 		return { prunedClaims, notifications: claimed.length, spikes, security }
+	}
+
+	/** A failing security step never holds up delivery of the alerts already in the outbox, health alerts included. */
+	private async runSecurityAlerts(): Promise<SecurityAlertProductionResult> {
+		if (this.securityAlerts === undefined) return { status: 'unconfigured' }
+		try {
+			return await this.securityAlerts.run()
+		} catch {
+			// The error is not logged: it may carry a statement or a URL.
+			console.warn('operations security alerts failed; the next pass retries')
+			return { status: 'skipped', reason: 'failed' }
+		}
 	}
 
 	private async deliver(notification: ClaimedNotification, signal?: AbortSignal): Promise<void> {

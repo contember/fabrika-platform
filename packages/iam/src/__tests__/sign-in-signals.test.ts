@@ -73,7 +73,7 @@ function contract(name: string, setup: () => Promise<{ db: SqlDatabase; reposito
 	test(`${name}: counts only credential guesses, per known account and installation-wide, and lists privileged sign-ins`, async () => {
 		const { db, repositories } = await setup()
 		await seed(db, ROWS)
-		const result = await signInSignals(makeServicesFor(repositories), { since: T - WINDOW, until: T })
+		const result = await signInSignals(makeServicesFor(repositories), { since: T - WINDOW, refusalsSince: T - WINDOW, until: T })
 		if (!result.ok) throw new Error('expected an answer')
 		expect(result.accounts).toEqual([{ principalId: 'account-a', refusals: 4 }])
 		expect(result.refusals).toBe(8)
@@ -84,13 +84,35 @@ function contract(name: string, setup: () => Promise<{ db: SqlDatabase; reposito
 			{ reason: 'second_factor_invalid', refusals: 1 },
 		])
 		expect(result.privileged).toEqual([{ id: expect.any(String), principalId: 'account-a', reason: 'password_login', at: T - 10 }])
-		expect(result.truncated).toBe(false)
+		expect(result.accountsTruncated).toBe(false)
+		expect(result.privilegedTruncated).toBe(false)
+	})
+
+	test(`${name}: counts refusals from refusalsSince only, and lists privileged sign-ins from since`, async () => {
+		const { db, repositories } = await setup()
+		await seed(db, [
+			deny('password_invalid', 'account-a', 'propustka', T - 2 * WINDOW),
+			deny('password_invalid', 'account-a', 'propustka', T - 10),
+			{ app: 'propustka', principalId: 'account-a', decision: 'allow', reason: 'password_login', privileged: 1, at: T - 2 * WINDOW },
+		])
+		const result = await signInSignals(makeServicesFor(repositories), { since: T - 3 * WINDOW, refusalsSince: T - WINDOW, until: T })
+		if (!result.ok) throw new Error('expected an answer')
+		expect(result.accounts).toEqual([{ principalId: 'account-a', refusals: 1 }])
+		expect(result.refusals).toBe(1)
+		expect(result.privileged.map((signIn) => signIn.at)).toEqual([T - 2 * WINDOW])
 	})
 
 	test(`${name}: refuses a reversed, fractional or longer-than-a-day window`, async () => {
 		const { repositories } = await setup()
 		const services = makeServicesFor(repositories)
-		for (const window of [{ since: T, until: T - 1 }, { since: T - 0.5, until: T }, { since: T - 24 * 60 * 60 - 1, until: T }]) {
+		for (
+			const window of [
+				{ since: T, refusalsSince: T, until: T - 1 },
+				{ since: T - 0.5, refusalsSince: T, until: T },
+				{ since: T - 24 * 60 * 60 - 1, refusalsSince: T, until: T },
+				{ since: T - 1, refusalsSince: T + 1, until: T },
+			]
+		) {
 			expect(await signInSignals(services, window)).toEqual({ ok: false, reason: 'invalid_window' })
 		}
 	})

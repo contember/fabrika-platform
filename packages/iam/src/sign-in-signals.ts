@@ -41,16 +41,17 @@ function reasonsOf(bucket: 'account' | 'installation'): string[] {
 	return Object.entries(COUNTED_LOGIN_REFUSALS).flatMap(([reason, counted]) => counted === bucket ? [reason] : [])
 }
 
+const isWindow = (from: number, until: number): boolean =>
+	Number.isSafeInteger(from) && Number.isSafeInteger(until) && from >= 0 && from <= until && until - from <= SIGN_IN_SIGNALS_MAX_WINDOW_SECONDS
+
 /** Read the sign-in signals of one window. A window that is not whole seconds, reversed or longer than a day is refused. */
 export async function signInSignals(services: Services, input: SignInSignalsInput): Promise<SignInSignalsResult> {
-	const { since, until } = input
-	if (!Number.isSafeInteger(since) || !Number.isSafeInteger(until) || since < 0 || until < since) {
-		return { ok: false, reason: 'invalid_window' }
-	}
-	if (until - since > SIGN_IN_SIGNALS_MAX_WINDOW_SECONDS) return { ok: false, reason: 'invalid_window' }
+	const { since, refusalsSince, until } = input
+	if (!isWindow(since, until) || !isWindow(refusalsSince, until)) return { ok: false, reason: 'invalid_window' }
 	const accountReasons = reasonsOf('account')
 	const summary = await services.repositories.audit.signInSignals({
 		since,
+		refusalsSince,
 		until,
 		app: IAM_APP,
 		accountReasons,

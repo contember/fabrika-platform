@@ -137,19 +137,24 @@ export interface IamGrantRpc {
 /** The longest window `signInSignals` answers: a reader that fell further behind reads the last day only. */
 export const SIGN_IN_SIGNALS_MAX_WINDOW_SECONDS = 24 * 60 * 60
 
-/** The most accounts and privileged sign-ins one answer lists; `truncated` says a list was cut. */
+/** The most accounts and privileged sign-ins one answer lists; `accountsTruncated`/`privilegedTruncated` say a list was cut. */
 export const SIGN_IN_SIGNALS_LIMIT = 500
 
 export interface SignInSignalsInput {
-	/** Unix seconds, inclusive, by `auth_log.created_at`: the reader overlaps windows, never resumes from an id. */
+	/**
+	 * Unix seconds, inclusive, by `auth_log.created_at`: where privileged sign-ins are listed from. The reader overlaps
+	 * windows, never resumes from an id.
+	 */
 	since: number
+	/** Unix seconds, inclusive, by `auth_log.created_at`: where refusals are counted from, so a threshold has one window. */
+	refusalsSince: number
 	/** Unix seconds, inclusive. */
 	until: number
 }
 
 export interface SignInAccountRefusals {
 	principalId: string
-	/** Refused password sign-ins of this known account in the window. */
+	/** Refused password sign-ins of this known account from `refusalsSince`. */
 	refusals: number
 }
 
@@ -172,12 +177,14 @@ export type SignInSignalsResult =
 		ok: true
 		/** Per known account, the most first. */
 		accounts: SignInAccountRefusals[]
-		/** Every counted refusal in the window, unknown accounts and refused `px_` keys included. */
+		/** Every counted refusal from `refusalsSince`, unknown accounts and refused `px_` keys included. */
 		refusals: number
 		reasons: SignInRefusalReason[]
-		/** Allowed sign-ins of a principal that administers at IAM, oldest first. */
+		/** Allowed sign-ins of a principal that administers at IAM from `since`, oldest first. */
 		privileged: PrivilegedSignIn[]
-		truncated: boolean
+		accountsTruncated: boolean
+		/** The list stops at its oldest `SIGN_IN_SIGNALS_LIMIT`; a reader resumes after the last one it got. */
+		privilegedTruncated: boolean
 	}
 	| { ok: false; reason: 'invalid_window' }
 

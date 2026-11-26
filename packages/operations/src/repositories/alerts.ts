@@ -134,6 +134,11 @@ export abstract class AlertsRepository {
 		return row !== null
 	}
 
+	/** Give a claim back, so a producer whose alert did not reach the outbox claims it again on its next pass. */
+	async releaseClaim(key: string): Promise<void> {
+		await this.db.prepare('DELETE FROM alert_claims WHERE claim_key = ?').bind(key).run()
+	}
+
 	async liveClaims(keys: string[]): Promise<Set<string>> {
 		if (keys.length === 0) return new Set()
 		const { results } = await this.db

@@ -770,15 +770,19 @@ describe('the entrypoint an application binds', () => {
 			reason: 'invalid_key',
 		})
 		await settle(ctx)
-		expect(await worker.signInSignals({ since, until: since + 120 })).toEqual({
+		expect(await worker.signInSignals({ since, refusalsSince: since, until: since + 120 })).toEqual({
 			ok: true,
 			accounts: [],
 			refusals: 1,
 			reasons: [{ reason: 'invalid_key', refusals: 1 }],
 			privileged: [],
-			truncated: false,
+			accountsTruncated: false,
+			privilegedTruncated: false,
 		})
-		expect(await worker.signInSignals({ since: since + 120, until: since })).toEqual({ ok: false, reason: 'invalid_window' })
+		expect(await worker.signInSignals({ since: since + 120, refusalsSince: since + 120, until: since })).toEqual({
+			ok: false,
+			reason: 'invalid_window',
+		})
 	})
 
 	// A getter returning the env or the RPC object is reachable over RPC (`env.IAM.rpc.issueKey(…)`).

@@ -402,6 +402,7 @@ export class AuditRepository {
 	 */
 	async signInSignals(input: {
 		since: number
+		refusalsSince: number
 		until: number
 		app: string
 		accountReasons: readonly string[]
@@ -413,7 +414,8 @@ export class AuditRepository {
 		refusals: number
 		reasons: { reason: string; refusals: number }[]
 		privileged: { id: string; principalId: string; reason: string | null; at: number }[]
-		truncated: boolean
+		accountsTruncated: boolean
+		privilegedTruncated: boolean
 	}> {
 		const window = "kind = 'authenticate' AND created_at >= ? AND created_at <= ?"
 		const placeholders = (values: readonly string[]) => values.map(() => '?').join(', ')
@@ -423,14 +425,14 @@ export class AuditRepository {
 					WHERE ${window} AND decision = 'deny' AND app = ? AND principal_id IS NOT NULL
 						AND reason IN (${placeholders(input.accountReasons)})
 					GROUP BY principal_id ORDER BY refusals DESC, principal_id LIMIT ?`)
-				.bind(input.since, input.until, input.app, ...input.accountReasons, input.limit + 1)
+				.bind(input.refusalsSince, input.until, input.app, ...input.accountReasons, input.limit + 1)
 				.all<{ principal_id: string; refusals: number | string }>(),
 			this.db
 				.prepare(`SELECT reason, COUNT(*) AS refusals FROM auth_log
 					WHERE ${window} AND decision = 'deny'
 						AND ((app = ? AND reason IN (${placeholders(input.loginReasons)})) OR reason = ?)
 					GROUP BY reason ORDER BY reason`)
-				.bind(input.since, input.until, input.app, ...input.loginReasons, input.keyReason)
+				.bind(input.refusalsSince, input.until, input.app, ...input.loginReasons, input.keyReason)
 				.all<{ reason: string; refusals: number | string }>(),
 			this.db
 				.prepare(`SELECT id, principal_id, reason, created_at FROM auth_log
@@ -451,7 +453,8 @@ export class AuditRepository {
 				reason: row.reason,
 				at: Number(row.created_at),
 			})),
-			truncated: accounts.results.length > input.limit || privileged.results.length > input.limit,
+			accountsTruncated: accounts.results.length > input.limit,
+			privilegedTruncated: privileged.results.length > input.limit,
 		}
 	}
 

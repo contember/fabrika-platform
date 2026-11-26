@@ -1,7 +1,7 @@
 import type { IamSignInSignalsRpc, PrivilegedSignIn, SignInSignalsResult } from '@fabrika/auth-core'
 import type { AlertsRepository, NotificationChannelRow, SecurityAlertsRepository, SourceRow } from './repositories.js'
 
-/** Refused sign-ins are counted over this window before each pass's mark, and an alert repeats at most this often. */
+/** Refused sign-ins are counted over this window before each pass's time, and an alert repeats at most this often. */
 export const SECURITY_REFUSAL_WINDOW_MS = 15 * 60_000
 export const SECURITY_ALERT_REPEAT_MS = 60 * 60_000
 export const DEFAULT_ACCOUNT_REFUSAL_THRESHOLD = 5
@@ -13,7 +13,7 @@ export type SecurityAlertProductionResult =
 	| { status: 'evaluated'; enqueued: number; deduplicated: number }
 	/** No `security` rule with a channel on the installation source: IAM is not asked. */
 	| { status: 'unconfigured' }
-	| { status: 'skipped'; reason: 'no_installation_source' | 'iam_not_configured' | 'iam_unavailable' }
+	| { status: 'skipped'; reason: 'no_installation_source' | 'iam_not_configured' | 'iam_unavailable' | 'failed' }
 
 export interface SecurityAlertLogger {
 	warn(message: string): void
@@ -31,9 +31,10 @@ let reportedMissingIam = false
 
 /**
  * Raises `security` alerts on the installation source from IAM's sign-in signals: refused sign-ins per account and
- * installation-wide over the counting window, and each privileged sign-in. Each pass reads from its stored mark minus the
- * window, so passes overlap; claims and outbox dedup keys keep the overlap from alerting twice. When IAM does not
- * answer, the mark stays and the next pass reads the same time again.
+ * installation-wide over the counting window before now (never longer, so a pass after an outage counts no more than a
+ * normal one), and each privileged sign-in since the stored mark minus the window, so passes overlap; claims and outbox
+ * dedup keys keep the overlap from alerting twice. When IAM does not answer, the mark stays and the next pass reads the
+ * same time again; a cut privileged list moves the mark only to its last listed sign-in.
  */
 export class OperationsSecurityAlertProducer {
 	private readonly now: () => number
@@ -71,7 +72,11 @@ export class OperationsSecurityAlertProducer {
 		const since = Math.max(mark - SECURITY_REFUSAL_WINDOW_MS, until - MAX_LOOKBACK_MS)
 		let signals: SignInSignalsResult | null
 		try {
-			signals = await this.iam.signInSignals({ since: Math.floor(since / 1_000), until: Math.floor(until / 1_000) })
+			signals = await this.iam.signInSignals({
+				since: Math.floor(since / 1_000),
+				refusalsSince: Math.floor((until - SECURITY_REFUSAL_WINDOW_MS) / 1_000),
+				until: Math.floor(until / 1_000),
+			})
 		} catch {
 			// An unreachable IAM and one older than the method look alike here; the error is not logged, it may quote a URL.
 			signals = null
@@ -80,9 +85,11 @@ export class OperationsSecurityAlertProducer {
 			this.logger.warn('operations security alerts skipped: IAM did not answer the sign-in signals; the next pass retries')
 			return { status: 'skipped', reason: 'iam_unavailable' }
 		}
-		if (signals.truncated) this.logger.warn('operations security alerts: IAM cut the sign-in signals at its limit')
-		const result = await this.raise(source, signals, { since, until })
-		await this.security.advance(until)
+		if (signals.accountsTruncated) this.logger.warn('operations security alerts: IAM cut the refusing accounts at its limit')
+		const result = await this.raise(source, signals, { since: until - SECURITY_REFUSAL_WINDOW_MS, until })
+		const last = signals.privileged.at(-1)
+		// The next pass lists the rest; the overlap and the auth_log id dedup keep the re-read from alerting twice.
+		await this.security.advance(signals.privilegedTruncated && last !== undefined ? last.at * 1_000 : until)
 		return { status: 'evaluated', ...result }
 	}
 
@@ -97,6 +104,19 @@ export class OperationsSecurityAlertProducer {
 		const channels = (await this.alerts.listChannels(source.id)).filter((channel) => channel.scope === 'security' && channel.enabled === 1)
 		const repeatWindow = Math.floor(window.until / SECURITY_ALERT_REPEAT_MS)
 		const outcome = { enqueued: 0, deduplicated: 0 }
+		/** Enqueue under a claim; a failed enqueue gives the claim back, so the next pass raises the alert again. */
+		const enqueueClaimed = async (claim: string, key: string, payload: Record<string, unknown>) => {
+			if (!await this.alerts.tryClaim(claim, SECURITY_ALERT_REPEAT_MS)) {
+				outcome.deduplicated++
+				return
+			}
+			try {
+				await enqueue(key, payload)
+			} catch (error) {
+				await this.alerts.releaseClaim(claim)
+				throw error
+			}
+		}
 		const enqueue = async (key: string, payload: Record<string, unknown>) => {
 			for (const channel of channels) {
 				if (await this.enqueue(source, channel, `${key}:${channel.id}`, payload)) outcome.enqueued++
@@ -106,39 +126,35 @@ export class OperationsSecurityAlertProducer {
 
 		for (const account of signals.accounts) {
 			if (account.refusals < accountThreshold) continue
-			if (!await this.alerts.tryClaim(`security:account:${source.id}:${account.principalId}`, SECURITY_ALERT_REPEAT_MS)) {
-				outcome.deduplicated++
-				continue
-			}
-			await enqueue(`security:account:${source.id}:${account.principalId}:${repeatWindow}`, {
-				text: `Fabrika Operations: ${account.refusals} refused sign-ins for account ${account.principalId} (threshold ${accountThreshold})`,
-				type: 'security',
-				signal: 'account_refusals',
-				sourceId: source.id,
-				principalId: account.principalId,
-				refusals: account.refusals,
-				threshold: accountThreshold,
-				since: window.since,
-				until: window.until,
-			})
+			await enqueueClaimed(
+				`security:account:${source.id}:${account.principalId}`,
+				`security:account:${source.id}:${account.principalId}:${repeatWindow}`,
+				{
+					text: `Fabrika Operations: ${account.refusals} refused sign-ins for account ${account.principalId} (threshold ${accountThreshold})`,
+					type: 'security',
+					signal: 'account_refusals',
+					sourceId: source.id,
+					principalId: account.principalId,
+					refusals: account.refusals,
+					threshold: accountThreshold,
+					since: window.since,
+					until: window.until,
+				},
+			)
 		}
 
 		if (signals.refusals >= installationThreshold) {
-			if (await this.alerts.tryClaim(`security:installation:${source.id}`, SECURITY_ALERT_REPEAT_MS)) {
-				await enqueue(`security:installation:${source.id}:${repeatWindow}`, {
-					text: `Fabrika Operations: ${signals.refusals} refused sign-ins across the installation (threshold ${installationThreshold})`,
-					type: 'security',
-					signal: 'installation_refusals',
-					sourceId: source.id,
-					refusals: signals.refusals,
-					threshold: installationThreshold,
-					reasons: signals.reasons,
-					since: window.since,
-					until: window.until,
-				})
-			} else {
-				outcome.deduplicated++
-			}
+			await enqueueClaimed(`security:installation:${source.id}`, `security:installation:${source.id}:${repeatWindow}`, {
+				text: `Fabrika Operations: ${signals.refusals} refused sign-ins across the installation (threshold ${installationThreshold})`,
+				type: 'security',
+				signal: 'installation_refusals',
+				sourceId: source.id,
+				refusals: signals.refusals,
+				threshold: installationThreshold,
+				reasons: signals.reasons,
+				since: window.since,
+				until: window.until,
+			})
 		}
 
 		for (const signIn of signals.privileged) {

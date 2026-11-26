@@ -157,7 +157,7 @@ function recorder(canned: Canned = {}): Recorder {
 		},
 		signInSignals(input) {
 			note('signInSignals', input)
-			return Promise.resolve({ ok: true, accounts: [], refusals: 0, reasons: [], privileged: [], truncated: false })
+			return Promise.resolve({ ok: true, accounts: [], refusals: 0, reasons: [], privileged: [], accountsTruncated: false, privilegedTruncated: false })
 		},
 		mintFromGrant(input) {
 			note('mintFromGrant', input)
@@ -366,10 +366,10 @@ describe('dispatch', () => {
 	})
 
 	test('signInSignals is served on the management surface with exactly its window', async () => {
-		const { rpc, response } = call('signInSignals', { since: 100, until: 200, extra: true })
+		const { rpc, response } = call('signInSignals', { since: 100, refusalsSince: 150, until: 200, extra: true })
 		expect((await response).status).toBe(200)
-		expect(rpc.calls).toEqual([{ method: 'signInSignals', input: { since: 100, until: 200 } }])
-		const malformed = call('signInSignals', { since: '100', until: 200 })
+		expect(rpc.calls).toEqual([{ method: 'signInSignals', input: { since: 100, refusalsSince: 150, until: 200 } }])
+		const malformed = call('signInSignals', { since: 100, until: 200 })
 		expect((await malformed.response).status).toBe(400)
 		expect(malformed.rpc.calls).toEqual([])
 	})

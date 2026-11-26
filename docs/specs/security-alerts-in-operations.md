@@ -7,7 +7,7 @@ design and how it is built.
 
 ## TLDR
 
-- **Pull.** Operations' minute maintenance pass asks IAM for one bounded summary, `signInSignals({ since, until })`,
+- **Pull.** Operations' minute maintenance pass asks IAM for one bounded summary, `signInSignals({ since, refusalsSince, until })`,
   over the IAM channel it already holds. Only IAM's full entrypoint serves it, never `PropustkaApplication`.
 - **A `security` alert kind on an installation source.** Operations creates one source of the installation itself
   (`origin = 'installation'`); only an app-scoped grant at IAM's app id or a global grant reaches it.
@@ -34,14 +34,16 @@ design and how it is built.
 entrypoint cannot grow it by accident. The default `Propustka` class and the management `/rpc/*` serve it;
 `index.test.ts` pins that `PropustkaApplication` does not.
 
-The input is a window by `created_at` in unix seconds, both ends inclusive, at most a day. Reading by `created_at` with
-an overlap, never `id > cursor`, because the Postgres identity is not commit-ordered. The answer
-(`packages/iam/src/sign-in-signals.ts`, `AuditRepository.signInSignals`):
+The input is two windows by `created_at` in unix seconds, both ends inclusive, each at most a day: `since`..`until`
+for privileged sign-ins and `refusalsSince`..`until` for refusals. Operations always asks for refusals over the last 15
+minutes, so a pass after an outage counts the same span as any other and old refusals do not add up to a threshold.
+Reading by `created_at` with an overlap, never `id > cursor`, because the Postgres identity is not commit-ordered. The
+answer (`packages/iam/src/sign-in-signals.ts`, `AuditRepository.signInSignals`):
 
 - `accounts`: refused password sign-ins per known `principal_id`, at IAM;
 - `refusals` and `reasons`: every counted refusal, in total and by reason;
-- `privileged`: the `allow` rows at IAM with `privileged = 1` (id, principal, reason, time);
-- `truncated`: a list passed its limit of 500.
+- `privileged`: the `allow` rows at IAM with `privileged = 1` (id, principal, reason, time), oldest first;
+- `accountsTruncated`, `privilegedTruncated`: that list passed its limit of 500.
 
 **Which refusals count** is an allow-list typed over `LoginRefusal` (`COUNTED_LOGIN_REFUSALS`), so a new reason fails
 the typecheck until it is decided:
@@ -53,7 +55,9 @@ the typecheck until it is decided:
 | `invalid_key` (a refused or revoked `px_` key, any app)                                                                                       | the installation                                   |
 | everything else (`login_cross_origin`, `password_malformed`, `handoff_refused`, `oidc_*`, `terminal_assertion_*`, application token refusals) | nowhere: not a credential guess at IAM             |
 
-IAM migration 0043 indexes `auth_log(created_at)`, so the per-minute read does not scan the retention period.
+IAM migration 0043 indexes `auth_log(created_at)`, so the per-minute read does not scan the retention period. The
+`CREATE INDEX` is not concurrent: it holds writes to `auth_log` (sign-ins) while it builds, for a time that grows with
+the table.
 
 ### Operations: the installation source and the producer
 
@@ -67,9 +71,13 @@ IAM migration 0043 indexes `auth_log(created_at)`, so the per-minute read does n
   1. Without an enabled `security` rule and channel on the source it asks nothing and clears its mark, so enabling
      later raises nothing for the time before.
   2. Without IAM it skips and says so once per process.
-  3. It asks IAM for the window from its mark minus 15 minutes to now, capped at the last day.
-  4. When IAM does not answer or lacks the method, it logs one line (no error object, no key) and keeps the mark.
-  5. It raises the alerts below, then moves the mark forward.
+  3. It asks IAM for privileged sign-ins from its mark minus 15 minutes to now, capped at the last day (the last 15
+     minutes while it has no mark), and for refusals over the last 15 minutes.
+  4. When IAM does not answer within 5 seconds (Cloudflare) or lacks the method, it logs one line (no error object, no
+     key) and keeps the mark. A failure of the producer never stops the outbox delivery of the same pass.
+  5. It raises the alerts below, then moves the mark forward: to now, or to the last listed privileged sign-in when
+     that list was cut, so the next pass reads the rest. A cut account list is logged; the alerts on its 500 accounts
+     still fire.
 - **Alerts**, each enqueued per enabled `security` channel through the existing outbox:
 
   | Signal                  | Fires when                                   | Repeat                                                       |
@@ -78,7 +86,7 @@ IAM migration 0043 indexes `auth_log(created_at)`, so the per-minute read does n
   | `installation_refusals` | the total reaches the installation threshold | a one-hour claim; dedup key per hour                         |
   | `privileged_sign_in`    | each privileged `allow` row                  | dedup key per `auth_log` id                                  |
 
-  Overlapping windows therefore alert once. Payloads carry principal ids, counts, thresholds, reasons and times; never
+  Overlapping windows therefore alert once. A claim whose enqueue fails is released, so the next pass raises it. Payloads carry principal ids, counts, thresholds, reasons and times; never
   an email, an address or a credential.
 - **Priority**: the outbox claims `security` with the health kinds, ahead of issue alerts.
 - **Storage** (migration 0002, both dialects): `security_alert_config` (the thresholds) and the one-row
@@ -98,7 +106,9 @@ page of the installation source shows the thresholds and offers only the `securi
 IAM's migration 0043 and Operations' migration 0002 run with each service's deploy. The first maintenance pass after
 the Operations deploy creates the installation source. Nothing in the environment, the Zerops crontab, `zerops.yaml`,
 the import YAMLs or the Cloudflare bindings changes. An Operations upgraded before IAM logs one line per pass while
-configured and catches up from its mark (up to a day) once IAM serves the method.
+configured. Its mark stays empty until the first answer, so the first pass after IAM serves the method reads the last 15
+minutes; privileged sign-ins in the time before are not raised. IAM 0043 holds `auth_log` writes while the index
+builds (see above).
 
 ## Tests
 

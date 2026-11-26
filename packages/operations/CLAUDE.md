@@ -84,9 +84,9 @@ on upgrade; the catalog reconcile and `getByCoordinate` touch only `origin = 'co
 app/environment union**: only an app-scoped grant at IAM's app id or a global grant reaches it (`access.ts`), never an
 environment-scoped grant. It carries the `security` kind (`security-alerts.ts`): with an enabled `security` rule and
 channel there, each pass asks IAM's full entrypoint for its sign-in signals (`IamSignInSignalsRpc`; the `IAM` binding on
-Cloudflare, the process's one `HttpIamRpc` on Bun) from the stored mark minus the fifteen-minute counting window, raises
+Cloudflare, the process's one `HttpIamRpc` on Bun) for privileged sign-ins from the stored mark minus fifteen minutes and for refusals over the last fifteen minutes, raises
 an alert per account and installation-wide at the thresholds (`security_alert_config`, defaults 5 and 50, each claimed
-for an hour) and per privileged sign-in (deduplicated by its `auth_log` id), and only then advances the mark. An IAM
+for an hour) and per privileged sign-in (deduplicated by its `auth_log` id), and only then advances the mark (to the last listed privileged sign-in when that list was cut). An IAM
 that does not answer, or is older than the method, leaves the mark and logs one line; without a rule and channel IAM is
 not asked and the mark is cleared. Payloads carry principal ids, counts, reasons and times, never an email or address.
 Logs may contain the notification id and attempt number, never the target,
