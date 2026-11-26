@@ -1,6 +1,7 @@
 // The endpoint forms only an installation service's table may use (ADR-0022 "Installation entries"). Types only,
 // like the contract artifact: each reader parses them, and no application contract can declare them.
 
+import type { AGENT_CALLER } from './agent'
 import type { BodyAdmission, Caller, EndpointMethod } from './contract'
 
 /** Any method. The ambiguity check treats it as overlapping every method of the same path shape. */
@@ -11,8 +12,8 @@ export type InstallationEndpointMethod = EndpointMethod | typeof ANY_METHOD
 /** The caller an OAuth resource token presents. Only an installation row may admit it. */
 export const OAUTH_CALLER = 'oauth'
 
-/** Every caller a verified token can present: an application caller, or `oauth`. */
-export type TokenCaller = Caller | typeof OAUTH_CALLER
+/** Every caller a verified token can present: an application caller, `oauth`, or an agent's exchanged grant. */
+export type TokenCaller = Caller | typeof OAUTH_CALLER | typeof AGENT_CALLER
 
 export type InstallationCaller = 'human' | 'machine' | typeof OAUTH_CALLER
 

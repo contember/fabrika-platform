@@ -22,6 +22,7 @@
  * Pure: no jose, no I/O. Signing/verifying (key material) stays in the packages that own it.
  */
 
+import { AGENT_CLIENT_ID, liesWithinValue, parseAgentScope } from './agent'
 import { numberField, prop, stringField } from './json'
 import { isNormalizedMailbox } from './membership'
 import { isOAuthClientId, isOAuthResourceUri, parseOAuthScopes } from './oauth'
@@ -137,11 +138,30 @@ export interface AccessTokenClaims {
 	amr?: TerminalAuthenticationMethod
 	/** The terminal the person is signed in on; present exactly when `amr` is. */
 	terminal?: TerminalTokenClaims
+	/**
+	 * Present only on a person's application token the proxy exchanged an agent's device grant for (ADR-0090), never on a
+	 * session's: the agent acts as the person, under the grant's scope.
+	 */
+	act?: AgentActClaims
 	/** Present only on an OAuth resource token (`aud` is then a resource URI, not an app id). */
 	oauth?: OAuthTokenClaims
 	/** Present only on a share-link token, which has no `ptype`: `sub` is then the link key's id. */
 	link?: LinkTokenClaims
 }
+
+/**
+ * The agent a person's application token acts for: the device client, the grant the person approved, its scope token
+ * (`read`, `write`, or either narrowed to one value, ADR-0090 §2) and the label the agent gave itself, when it gave one.
+ */
+export interface AgentActClaims {
+	sub: typeof AGENT_CLIENT_ID
+	grant: string
+	scope: string
+	label?: string
+}
+
+/** The longest grant id and agent label an `act` claim carries. */
+export const MAX_AGENT_ACT_FIELD_LENGTH = 64
 
 /** The `amr` value of a session an application asserted at a terminal. */
 export const TERMINAL_AUTHENTICATION_METHOD = 'terminal_assertion'
@@ -237,6 +257,8 @@ export interface AccessTokenParams {
 	session?: true
 	/** The terminal of a person's session asserted on one; sets `amr` too, and requires a user `type` and `session`. */
 	terminal?: TerminalTokenClaims
+	/** The agent a person's exchanged token acts for; requires a user `type`, no `session` and no `terminal`. */
+	act?: AgentActClaims
 	permissions: PermissionEntry[]
 	issuedAt: number
 	expiresAt: number
@@ -375,6 +397,13 @@ export function buildAccessClaims(params: AccessTokenParams): AccessTokenClaims 
 		claims.amr = TERMINAL_AUTHENTICATION_METHOD
 		claims.terminal = { id: params.terminal.id, label: params.terminal.label }
 	}
+	if (params.act !== undefined) {
+		const act = parseActClaims(params.act, params.permissions)
+		if (params.type !== 'user' || params.session !== undefined || params.terminal !== undefined || act === null || act === undefined) {
+			throw new Error("Only a person's token outside a session acts for an agent, under a scope its permissions lie within")
+		}
+		claims.act = act
+	}
 	if (params.link !== undefined) {
 		if (params.type !== undefined) throw new Error('A share-link token has no principal type')
 		claims.link = { mount: params.link.mount, chain: params.link.chain.map((scope) => ({ type: scope.type, value: scope.value })) }
@@ -430,6 +459,10 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 	if (terminal === undefined || (terminal !== null && (ptype !== 'user' || session !== true || oauth !== null))) {
 		return null
 	}
+	const act = parseActClaims(prop(payload, 'act'), perms)
+	if (act === undefined || (act !== null && (ptype !== 'user' || session !== undefined || terminal !== null || oauth !== null))) {
+		return null
+	}
 	const claims: AccessTokenClaims = { iss, aud, sub, iat, exp, perms, label }
 	if (ptype !== null) {
 		claims.ptype = ptype
@@ -447,6 +480,9 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 		claims.amr = TERMINAL_AUTHENTICATION_METHOD
 		claims.terminal = terminal
 	}
+	if (act !== null) {
+		claims.act = act
+	}
 	if (oauth !== null) {
 		claims.oauth = oauth
 	}
@@ -454,6 +490,36 @@ export function parseAccessClaims(payload: unknown): AccessTokenClaims | null {
 		claims.link = link
 	}
 	return claims
+}
+
+/**
+ * Absent → null; the agent client, a grant id, a scope token and an optional label, with every entry of a narrowed
+ * scope inside its value → the claims; anything else → undefined. The narrowing is IAM's at the exchange; reading it
+ * again here keeps a token that carries an entry outside its value from reaching any reader.
+ */
+function parseActClaims(value: unknown, perms: readonly PermissionEntry[]): AgentActClaims | null | undefined {
+	if (value === undefined) {
+		return null
+	}
+	const client = stringField(value, 'sub')
+	const grant = stringField(value, 'grant')
+	const token = stringField(value, 'scope')
+	const label = prop(value, 'label')
+	if (client !== AGENT_CLIENT_ID || grant === undefined || token === undefined || !isActField(grant)) {
+		return undefined
+	}
+	if (label !== undefined && (typeof label !== 'string' || !isActField(label))) {
+		return undefined
+	}
+	const scope = parseAgentScope(token)
+	if (scope === null || (scope.within !== null && !liesWithinValue(perms, scope.within))) {
+		return undefined
+	}
+	return label === undefined ? { sub: AGENT_CLIENT_ID, grant, scope: token } : { sub: AGENT_CLIENT_ID, grant, scope: token, label }
+}
+
+function isActField(value: string): boolean {
+	return value.trim() !== '' && value.length <= MAX_AGENT_ACT_FIELD_LENGTH
 }
 
 /** A job, webhook or mount name, or an application id. */

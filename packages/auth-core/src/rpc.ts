@@ -99,6 +99,35 @@ export interface IamHandoffRpc {
 	exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult>
 }
 
+// ── An agent's device grant at an application (ADR-0090) ──────────────────────
+//
+// The proxy verifies an agent's resource token for its own host first, then asks IAM for the approving person's
+// application token: the person's live permissions, narrowed when the grant names one scope value, with `act`. Like the
+// handoff it is on the proxy's surface only, never on `IamRpc`, which every application holds.
+
+export interface MintFromGrantInput {
+	/** The application environment `<app>@<env>` the proxy fronts. */
+	app: string
+	/** The resource the proxy serves the request on: the host's origin. */
+	resource: string
+	/** The agent's resource access token, as it arrived as the bearer. */
+	token: string
+	requestId: string
+}
+
+export type MintFromGrantResult =
+	| { ok: true; token: string; expiresAt: number }
+	/**
+	 * `invalid_grant`: the token, its grant, the approving login or the person no longer holds. `write_refused`: the
+	 * environment serves no `write` grant. `token_too_large`: a decided refusal, as for a key.
+	 */
+	| { ok: false; reason: 'invalid_grant' | 'write_refused' | 'token_too_large' }
+
+/** The exchange of an agent's grant, as a contract of its own: only the proxy calls it. */
+export interface IamGrantRpc {
+	mintFromGrant(input: MintFromGrantInput): Promise<MintFromGrantResult>
+}
+
 /**
  * Where the proxy answers the handoff, on every app host it fronts. Reserved: an app route at this
  * path is shadowed by the proxy and never reaches the upstream, so it is deliberately namespaced.

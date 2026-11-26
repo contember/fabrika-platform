@@ -1,3 +1,4 @@
+import { AGENT_CALLER } from './agent'
 import { type ActionRequirement, APP_CALLER_PREFIX, type CapabilityRequirement, CONNECT_PREFIX, type EndpointRequirement } from './contract'
 import { type AuthenticatedRequirement, OAUTH_CALLER, type TokenCaller } from './installation-endpoint'
 import { permits } from './permissions'
@@ -37,12 +38,16 @@ function holdsAction(requirement: ActionRequirement | CapabilityRequirement, per
 /**
  * The caller kind a verified token presents: a `user` principal is `human`, a `service` principal is `machine`, a
  * connector key of application `<id>` is `app:<id>`, and a token bound to no principal is a share link. An OAuth
- * resource token is `oauth`, which only an installation row admits. A job, webhook or public procedure token is no
- * caller: `null` is refused by every endpoint.
+ * resource token is `oauth`, which only an installation row admits. A person's token that acts for an agent (`act`,
+ * ADR-0090) is `agent`, admitted only where a row lists it. A job, webhook or public procedure token is no caller:
+ * `null` is refused by every endpoint.
  */
 export function callerOf(claims: AccessTokenClaims): TokenCaller | null {
 	if (claims.oauth !== undefined) {
 		return OAUTH_CALLER
+	}
+	if (claims.act !== undefined) {
+		return AGENT_CALLER
 	}
 	switch (claims.ptype) {
 		case 'user':

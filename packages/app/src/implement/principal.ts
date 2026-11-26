@@ -2,6 +2,7 @@
 
 import {
 	type AccessTokenClaims,
+	AGENT_CALLER,
 	APP_CALLER_PREFIX,
 	type Caller,
 	callerOf,
@@ -94,8 +95,10 @@ export function presentedBy(claims: AccessTokenClaims): Presented | Unpresented 
 			return { caller, principal: { kind: 'service', id: claims.sub, label: claims.label ?? claims.sub } }
 		case 'link':
 			return { caller, principal: { kind: 'link', credentialId: claims.sub } }
-		// An OAuth token reaches only an installation entry, which no application serves.
+		// An OAuth token reaches only an installation entry, which no application serves. An agent's token reaches only a
+		// group that lists `agent`, which no contract declares yet (ADR-0090).
 		case OAUTH_CALLER:
+		case AGENT_CALLER:
 		case null:
 			return 'no_caller'
 		default:

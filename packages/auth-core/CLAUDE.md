@@ -9,11 +9,12 @@ Published (`publishConfig.access: public`), so it ships to npm with `@fabrika/au
 
 ```bash
 bun run typecheck
-bun test               # app-environment · canonical-path · client-address · contract-canonical · device · egress · endpoint-digest · endpoints · environment · framework-release · framework-variables · iam-mail · json · locale · managed-environment · ops · ops-dump · permissions · requirement · resource-token · sha256 · token · wire · workloads
+bun test               # agent · app-environment · canonical-path · client-address · contract-canonical · device · egress · endpoint-digest · endpoints · environment · framework-release · framework-variables · iam-mail · json · locale · managed-environment · ops · ops-dump · permissions · requirement · resource-token · sha256 · token · wire · workloads
 ```
 
 | Module                     | What it owns                                                                                                                                                                                                                                                                                              |
 | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.ts`                 | An agent's device grant at an application (ADR-0090): `AGENT_CLIENT_ID`, `AGENT_CALLER`, the scope token (`parseAgentScope`: `read`, `write`, either narrowed to `<dimension>=<value>`), the kinds each mode admits, and `narrowToValue`, IAM's narrowing of a person's entries to one value.             |
 | `app-environment.ts`       | `appEnvironmentId` / `parseAppEnvironmentId` — the IAM id `<app>@<env>` — and `FABRIKA_IAM_APP_ID`, the name it travels under.                                                                                                                                                                            |
 | `canonical-path.ts`        | `isCanonicalPath` — the one rule every hop refuses a path by — the raw request target readers, and `sameOriginTarget`, the one rule for a redirect or return path that must stay on its origin.                                                                                                           |
 | `client-address.ts`        | `clientAddressKey` — the client a per-client abuse bucket counts: an IPv4 address or an IPv6 /64, from the first header value.                                                                                                                                                                            |
@@ -87,6 +88,12 @@ bun test               # app-environment · canonical-path · client-address · 
   both or neither** (ADR-0067 §6), only beside `ptype: 'user'` and `session`; `parseAccessClaims` refuses the token
   otherwise. Its `perms` may carry source `terminal`. A parser older than that source refuses such a token whole, so
   only an application whose framework knows terminals may be an asserter.
+- **A person's token that acts for an agent carries `act: { sub: 'agent-cli', grant, scope, label? }`** (ADR-0090), only
+  beside `ptype: 'user'`, without `session`, `terminal`, OAuth claims or a link; `buildAccessClaims` throws and
+  `parseAccessClaims` refuses it otherwise. A narrowed scope (`read:<dimension>=<value>`) requires every entry to lie
+  within that value (`liesWithinValue`), so a reader refuses a token that carries more. `callerOf` maps it to `agent`.
+  A parser older than `act` ignores the claim and reads a `human` token, so the proxy exchanges a grant only on a row
+  that lists `agent`, which only a framework that knows it can declare.
 - **A share-link token has no `ptype` and carries `link: { mount, chain }`.** `principalKind` reads the
   kind ADR-0022 rule 3 checks (`user`, `service`, `link`); a plain anonymous token has none, so no
   contract mount admits it. `parseAccessClaims` rejects a link claim next to a `ptype` or OAuth claims.
