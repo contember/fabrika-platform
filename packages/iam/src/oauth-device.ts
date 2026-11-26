@@ -152,16 +152,14 @@ export async function startDeviceAuthorization(
 	request: OAuthDeviceAuthorizationRequest,
 	clientAddress: string | null,
 ): Promise<DeviceStartOutcome> {
-	const target = request.client_id === OAUTH_CLI_CLIENT_ID
-		? cliRequestTarget(config, request)
-		: request.client_id === AGENT_CLIENT_ID
-		? await agentRequestTarget(services, request)
-		: UNAUTHORIZED_CLIENT
-	if ('ok' in target) return target
-	// The address bucket first: a start it refuses must not count against the bucket every other client shares.
+	if (request.client_id !== OAUTH_CLI_CLIENT_ID && request.client_id !== AGENT_CLIENT_ID) return UNAUTHORIZED_CLIENT
+	// The address bucket before the target, which the agent client resolves from the database, so a flood of refused
+	// targets is throttled too; and before the client bucket, so a start it refuses does not count against every client.
 	if (clientAddress !== null && await spentBucket(services, `oauth-device-start:address:${clientAddress}`, STARTS_PER_ADDRESS, START_WINDOW_SECONDS)) {
 		return { ok: false, error: 'temporarily_unavailable' }
 	}
+	const target = request.client_id === OAUTH_CLI_CLIENT_ID ? cliRequestTarget(config, request) : await agentRequestTarget(services, request)
+	if ('ok' in target) return target
 	if (await spentBucket(services, `oauth-device-start:client:${request.client_id}`, STARTS_PER_CLIENT, CLIENT_BLOCK_SECONDS)) {
 		return { ok: false, error: 'temporarily_unavailable' }
 	}

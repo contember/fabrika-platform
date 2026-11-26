@@ -3,12 +3,21 @@
 // entries; `audit` records the agent from the verified token; and no administration path accepts the token.
 // Postgres runs when FABRIKA_TEST_POSTGRES_URL is set and skips cleanly otherwise.
 
-import { accessTokenPayload, AGENT_CLIENT_ID, type AgentScopeMode, buildAccessClaims, narrowToValue, type Scope } from '@fabrika/auth-core'
+import {
+	accessTokenPayload,
+	AGENT_CLIENT_ID,
+	type AgentScopeMode,
+	type AppSchema,
+	type AppScopeDef,
+	buildAccessClaims,
+	narrowToValue,
+	type Scope,
+} from '@fabrika/auth-core'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { handleAdmin, resolveAdmin } from '../admin/router'
 import { createPostgresIamRepositories, type IamRepositories } from '../db'
-import { assignMember, createScope, issueLink, listMembers, requestDelegation, revokeLink, revokeMember } from '../membership'
+import { assignMember, createScope, findMember, issueLink, listMembers, requestDelegation, revokeLink, revokeMember } from '../membership'
 import { resolvePermissionsAt } from '../resolve'
 import { createIamRpc } from '../rpc'
 import { getSigner } from '../signing'
@@ -21,6 +30,7 @@ import {
 	INVITE_ENDPOINT,
 	type MembershipFixture,
 	membershipFixture,
+	NOTES_SCHEMA,
 	ORIGIN,
 	type Person,
 } from './helpers/membership'
@@ -113,6 +123,31 @@ for (const engine of engines) {
 			// The refusal is the scope's: the same token under `write` obtains the grant.
 			const write = call(await agentToken(f, owner, 'write', workspace))
 			expect(await requestDelegation(f.services, CALLER_ENV, f.ctx, { ...write, endpoint: INVITE_ENDPOINT })).toMatchObject({ ok: true })
+		})
+
+		test('a token narrowed to one workspace lists and finds members there, and at another workspace neither', async () => {
+			const f = await membershipFixture(engine.repositories())
+			const owner = await f.person(`narrow-owner-${crypto.randomUUID()}`)
+			const lookups: AppSchema = {
+				...NOTES_SCHEMA,
+				scopes: NOTES_SCHEMA.scopes.map((dimension): AppScopeDef =>
+					dimension.type === 'workspace' ? { ...dimension, lookups: ['notes.read'] } : dimension
+				),
+			}
+			expect((await f.putSchema(lookups)).status).toBe(200)
+			const first = await workspaceOf(f, owner)
+			const second = await workspaceOf(f, owner)
+			const refused: { ok: false; reason: 'not_allowed' } = { ok: false, reason: 'not_allowed' }
+			const lookup = { principalId: owner.id, action: 'notes.read' }
+
+			const narrowed = await agentToken(f, owner, 'read', first)
+			expect(await listMembers(f.services, CALLER_ENV, f.ctx, { ...call(narrowed), scope: first })).toMatchObject({ ok: true })
+			expect(await findMember(f.services, CALLER_ENV, f.ctx, { ...call(narrowed), ...lookup, scope: first })).toMatchObject({ ok: true })
+			expect(await listMembers(f.services, CALLER_ENV, f.ctx, { ...call(narrowed), scope: second })).toEqual(refused)
+			expect(await findMember(f.services, CALLER_ENV, f.ctx, { ...call(narrowed), ...lookup, scope: second })).toEqual(refused)
+			// The person reaches both: the narrowing, not a missing membership, keeps the token out of the second.
+			const own = await owner.token()
+			expect(await listMembers(f.services, CALLER_ENV, f.ctx, { ...call(own), scope: second })).toMatchObject({ ok: true })
 		})
 
 		test("an agent revokes its person's link only where its entries could issue one", async () => {

@@ -152,8 +152,9 @@ export class OAuthRegistryRepository {
 				UNION SELECT 'people' AS kind FROM app_members WHERE app = ?
 				UNION SELECT 'a terminal page' AS kind FROM app_terminals WHERE app = ?
 				UNION SELECT 'e-mail templates' AS kind FROM app_mail_templates WHERE app = ?
-				UNION SELECT 'return origins' AS kind FROM app_return_origins WHERE app = ?`)
-			.bind(app, app, app, app, app, app, app, app, app, app, app)
+				UNION SELECT 'return origins' AS kind FROM app_return_origins WHERE app = ?
+				UNION SELECT 'agent callers' AS kind FROM app_agents WHERE app = ?`)
+			.bind(app, app, app, app, app, app, app, app, app, app, app, app)
 			.all<{ kind: string }>()
 		return results.map((row) => row.kind).sort()
 	}

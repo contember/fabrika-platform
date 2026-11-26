@@ -514,8 +514,9 @@ export function parseOAuthTokenRequest(value: unknown): OAuthTokenRequest | null
 }
 
 /**
- * A device authorization request: its client, at least one scope and one to `MAX_OAUTH_DEVICE_RESOURCES` distinct
- * resources. `resource` is the one parameter that may repeat (RFC 8707 §2), so the caller collects it into a list.
+ * A device authorization request: its client, at least one scope (the agent client may name none) and one to
+ * `MAX_OAUTH_DEVICE_RESOURCES` distinct resources. `resource` is the one parameter that may repeat (RFC 8707 §2), so the
+ * caller collects it into a list.
  */
 export function parseOAuthDeviceAuthorizationRequest(
 	value: { fields: Record<string, string>; resources: string[] },
@@ -524,8 +525,8 @@ export function parseOAuthDeviceAuthorizationRequest(
 	const scope = field(value.fields, 'scope')
 	if (!isOAuthClientId(clientId)) return null
 	const agent = clientId === AGENT_CLIENT_ID
-	if (typeof scope !== 'string' && !(agent && scope === undefined)) return null
-	const scopes = typeof scope === 'string' ? parseOAuthScopes(scope.split(' ')) : []
+	// The agent client may omit the scope, and a parameter without a value is omitted (RFC 6749 §3.1); IAM then picks `read`.
+	const scopes = agent && (scope === undefined || scope === '') ? [] : typeof scope === 'string' ? parseOAuthScopes(scope.split(' ')) : null
 	const resources = value.resources
 	if (
 		scopes === null || (scopes.length === 0 && !agent) || resources.length === 0 || resources.length > MAX_OAUTH_DEVICE_RESOURCES

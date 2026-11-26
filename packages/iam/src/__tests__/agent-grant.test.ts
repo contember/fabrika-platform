@@ -9,6 +9,7 @@ import { decodeJwt } from 'jose'
 import { mintFromGrant } from '../agent-grant'
 import { createPostgresIamRepositories, type IamRepositories, type OAuthGrantRow } from '../db'
 import { mintForGrant } from '../oauth'
+import { startDeviceAuthorization } from '../oauth-device'
 import { unixNow } from '../repositories/sql'
 import { hashToken } from '../secret'
 import { getSigner } from '../signing'
@@ -21,7 +22,7 @@ if (!hasPostgres) {
 }
 
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code'
-const ACTIONS = ['task.read', 'task.write', 'task.list']
+const ACTIONS = ['task.read', 'task.write', 'task.list', 'task.archive']
 
 let postgres: PostgresFixture | null = null
 let active: Awaited<ReturnType<typeof oauthFixture>> | null = null
@@ -112,7 +113,7 @@ async function agentFixture(repositories: IamRepositories) {
 	}
 
 	/** A grant of the agent client as the device flow records one, and the resource token it mints now. */
-	async function directGrant(scope: string, options: { sessionId?: string; label?: string | null } = {}) {
+	async function directGrant(scope: string, options: { sessionId?: string; label?: string | null; expiresAt?: number } = {}) {
 		const now = unixNow()
 		const grant: OAuthGrantRow = {
 			id: uuidv7(),
@@ -124,7 +125,7 @@ async function agentFixture(repositories: IamRepositories) {
 			resources: JSON.stringify([origin]),
 			scopes: JSON.stringify([scope]),
 			created_at: now,
-			expires_at: now + 1800,
+			expires_at: options.expiresAt ?? now + 1800,
 			revoked_at: null,
 			agent_label: options.label === undefined ? 'release bot' : options.label,
 		}
@@ -139,10 +140,41 @@ async function agentFixture(repositories: IamRepositories) {
 		return { grant, token: access.access_token }
 	}
 
+	/** A resource token of the agent client for `grant` that lives five minutes, whatever the grant and its login allow. */
+	async function fiveMinuteToken(grant: OAuthGrantRow, scope: string): Promise<string> {
+		const now = unixNow()
+		return (await getSigner(SIGNING_ENV)).signResourceToken(buildResourceAccessClaims({
+			iss: ISSUER,
+			app,
+			resource: origin,
+			subject: f.principal.id,
+			label: f.principal.label,
+			permissions: [],
+			issuedAt: now,
+			expiresAt: now + 300,
+			clientId: AGENT_CLIENT_ID,
+			scopes: [scope],
+			grantId: grant.id,
+			tokenId: uuidv7(),
+		}))
+	}
+
+	/** The device flow through approval of `scope`: the first resource token, its refresh token and the grant id. */
+	async function approved(scope: string): Promise<{ access: string; refresh: string; grantId: string }> {
+		const { deviceCode, userCode } = await started({ scope })
+		expect((await page({ user_code: userCode, decision: 'approve', lifetime: '3600', scope })).status).toBe(200)
+		const tokens: unknown = await (await poll(deviceCode)).json()
+		const access = Reflect.get(Object(tokens), 'access_token')
+		const refresh = Reflect.get(Object(tokens), 'refresh_token')
+		const grantId = typeof access === 'string' ? parseAccessClaims(decodeJwt(access))?.oauth?.grantId : undefined
+		if (typeof access !== 'string' || typeof refresh !== 'string' || grantId === undefined) throw new Error('no tokens')
+		return { access, refresh, grantId }
+	}
+
 	const exchange = (token: string, overrides: { app?: string; resource?: string } = {}) =>
 		mintFromGrant(f.services, SIGNING_ENV, { app, resource: origin, token, requestId: 'req-agent', ...overrides }).then((outcome) => outcome.result)
 
-	return { f, repositories, app, origin, start, page, poll, started, directGrant, exchange }
+	return { f, repositories, app, origin, start, page, poll, started, approved, directGrant, fiveMinuteToken, exchange }
 }
 
 async function json(response: Response): Promise<unknown> {
@@ -273,12 +305,32 @@ for (const engine of engines) {
 			expect(await error(a.start({}, [a.origin], OAUTH_CLI_CLIENT_ID))).toBe('invalid_request')
 			expect(await error(a.start({ scope: 'read' }, [a.origin], OAUTH_CLI_CLIENT_ID))).toBe('invalid_target')
 
-			// No scope asks for read; the label is optional.
+			// No scope asks for read, and so does an empty one (RFC 6749 §3.1); the label is optional.
 			const { deviceCode } = await a.started({})
 			const attempt = await a.repositories.oauth.deviceAuthorization(await hashToken(deviceCode))
 			expect(attempt?.scopes).toBe('["read"]')
 			expect(attempt?.agent_label).toBeNull()
 			expect(attempt?.app).toBe(a.app)
+			const empty = await a.repositories.oauth.deviceAuthorization(await hashToken((await a.started({ scope: '' })).deviceCode))
+			expect(empty?.scopes).toBe('["read"]')
+			expect(await error(a.start({ scope: '' }, [a.origin], OAUTH_CLI_CLIENT_ID))).toBe('invalid_request')
+		})
+
+		test('a flood of refused targets from one address is throttled before the targets are looked up', async () => {
+			const a = await agentFixture(engine.repositories())
+			const address = `address-${uuidv7()}`
+			const bogus = { client_id: AGENT_CLIENT_ID, scope: [], resources: [`https://bogus-${uuidv7().slice(-12)}.example.test`] }
+			const outcomes: string[] = []
+			for (let attempt = 0; attempt < 31; attempt++) {
+				const outcome = await startDeviceAuthorization(a.f.services, a.f.config, bogus, address)
+				outcomes.push(outcome.ok ? 'ok' : outcome.error)
+			}
+			expect(outcomes.slice(0, 30).every((error) => error === 'invalid_target')).toBe(true)
+			expect(outcomes[30]).toBe('temporarily_unavailable')
+			// The spent bucket refuses a valid target from that address too, and no other address.
+			const valid = { client_id: AGENT_CLIENT_ID, scope: [], resources: [a.origin] }
+			expect(await startDeviceAuthorization(a.f.services, a.f.config, valid, address)).toEqual({ ok: false, error: 'temporarily_unavailable' })
+			expect((await startDeviceAuthorization(a.f.services, a.f.config, valid, `${address}-other`)).ok).toBe(true)
 		})
 
 		test('the page offers read for a write request, keeps the narrowing, and says that nothing checks an unlisted value', async () => {
@@ -367,6 +419,94 @@ for (const engine of engines) {
 			// A disabled person's grant exchanges for nothing.
 			await a.repositories.principals.disablePrincipal(a.f.principal.id)
 			expect(await a.exchange(unnarrowed.token)).toEqual({ ok: false, reason: 'invalid_grant' })
+		})
+
+		test('a grant the person gains at another project after approval never reaches the narrowed token', async () => {
+			const a = await agentFixture(engine.repositories())
+			const { token } = await a.directGrant('read:project=a')
+			const narrowed = async () => {
+				const exchanged = await a.exchange(token)
+				if (!exchanged.ok) throw new Error(`refused: ${exchanged.reason}`)
+				return parseAccessClaims(decodeJwt(exchanged.token))?.perms ?? []
+			}
+			const before = await narrowed()
+			const b = { type: 'project', value: 'b' }
+			await a.repositories.grants.createGrant({
+				principalId: a.f.principal.id,
+				app: a.app,
+				permissions: ['task.write', 'task.archive'],
+				scopeType: 'project',
+				scopeValue: 'b',
+			})
+			const after = await narrowed()
+			expect(after).toEqual(before)
+			for (const action of ['task.read', 'task.write', 'task.archive', 'task.list']) {
+				expect(permits(after, action, b)).toBe(false)
+			}
+			// The person's own set holds them at b: the narrowing, not a missing grant, keeps them out.
+			const { token: whole } = await a.directGrant('read')
+			const unnarrowed = await a.exchange(whole)
+			if (!unnarrowed.ok) throw new Error(`refused: ${unnarrowed.reason}`)
+			expect(permits(parseAccessClaims(decodeJwt(unnarrowed.token))?.perms ?? [], 'task.archive', b)).toBe(true)
+		})
+
+		test('a replayed refresh token revokes the grant, and the console CLI client neither refreshes nor revokes it', async () => {
+			const a = await agentFixture(engine.repositories())
+			const refreshAs = (clientId: string, refreshToken: string) =>
+				a.f.post('/oauth/token', { grant_type: 'refresh_token', client_id: clientId, refresh_token: refreshToken, resource: a.origin })
+
+			const first = await a.approved('read')
+			// RFC 7009 answers 200 to a foreign token, and the grant stays.
+			expect((await a.f.post('/oauth/revoke', { client_id: OAUTH_CLI_CLIENT_ID, token: first.refresh })).status).toBe(200)
+			expect((await a.f.post('/oauth/revoke', { client_id: OAUTH_CLI_CLIENT_ID, token: first.access })).status).toBe(200)
+			expect((await a.repositories.oauth.grant(first.grantId))?.revoked_at).toBeNull()
+			const cliRefresh = await refreshAs(OAUTH_CLI_CLIENT_ID, first.refresh)
+			expect(cliRefresh.status).toBe(400)
+			expect(field(await json(cliRefresh), 'access_token')).toBeUndefined()
+
+			const second = await a.approved('read')
+			const rotated = await refreshAs(AGENT_CLIENT_ID, second.refresh)
+			expect(rotated.status).toBe(200)
+			expect((await a.repositories.oauth.grant(second.grantId))?.revoked_at).toBeNull()
+			const replay = await refreshAs(AGENT_CLIENT_ID, second.refresh)
+			expect(field(await json(replay), 'error')).toBe('invalid_grant')
+			expect((await a.repositories.oauth.grant(second.grantId))?.revoked_at).not.toBeNull()
+			expect(await a.exchange(second.access)).toEqual({ ok: false, reason: 'invalid_grant' })
+		})
+
+		test('the exchanged token ends no later than the grant, its login or the authority it carries', async () => {
+			const a = await agentFixture(engine.repositories())
+			const expiry = async (grant: OAuthGrantRow, scope: string) => {
+				const exchanged = await a.exchange(await a.fiveMinuteToken(grant, scope))
+				if (!exchanged.ok) throw new Error(`refused: ${exchanged.reason}`)
+				expect(parseAccessClaims(decodeJwt(exchanged.token))?.exp).toBe(exchanged.expiresAt)
+				return exchanged.expiresAt
+			}
+			const now = unixNow()
+
+			const shortGrant = await a.directGrant('read', { expiresAt: now + 100 })
+			expect(await expiry(shortGrant.grant, 'read')).toBe(now + 100)
+
+			const login = await a.repositories.sessions.createSession({
+				tokenHash: uuidv7(),
+				principalId: a.f.principal.id,
+				authenticationMethod: 'password',
+				expiresAt: now + 120,
+			})
+			const shortLogin = await a.directGrant('read', { sessionId: login })
+			expect(await expiry(shortLogin.grant, 'read')).toBe(now + 120)
+
+			// task.archive at a rests on a grant that ends in 90 seconds; nothing else supports it.
+			await a.repositories.grants.createGrant({
+				principalId: a.f.principal.id,
+				app: a.app,
+				permissions: ['task.archive'],
+				scopeType: 'project',
+				scopeValue: 'a',
+				expiresAt: now + 90,
+			})
+			const deadline = await a.directGrant('read:project=a')
+			expect(await expiry(deadline.grant, 'read:project=a')).toBe(now + 90)
 		})
 	})
 }

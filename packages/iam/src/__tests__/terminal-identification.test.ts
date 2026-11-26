@@ -4,10 +4,14 @@
 
 import { HttpIamTerminals } from '@fabrika/auth'
 import {
+	accessTokenPayload,
+	AGENT_CLIENT_ID,
+	type AgentScopeMode,
 	AUTH_CALLBACK_PATH,
 	AUTH_CODE_PARAM,
 	AUTH_HANDOFF_CHALLENGE_PARAM,
 	AUTH_HANDOFF_STATE_PARAM,
+	buildAccessClaims,
 	IDENTIFICATION_QUERY_PARAMETER,
 	SESSION_COOKIE,
 	type TerminalCaller,
@@ -25,7 +29,8 @@ import { pkceChallenge, randomToken } from '../oidc'
 import { createIamRpc } from '../rpc'
 import { hashToken } from '../secret'
 import type { Services } from '../services'
-import { adminTokenFor, createHarness, type Harness, seedService, seedUser, TEST_SIGNING_KEYS } from './helpers/harness'
+import { getSigner } from '../signing'
+import { adminTokenFor, createHarness, type Harness, seedService, seedUser, TEST_SIGNING_ENV, TEST_SIGNING_KEYS } from './helpers/harness'
 
 const ORIGIN = 'https://iam.example.com'
 const APP = 'attendance@prod'
@@ -135,6 +140,23 @@ async function identification(s: Scenario): Promise<string> {
 async function caller(s: Scenario, app = APP, tokenApp = app): Promise<TerminalCaller> {
 	const workload = seedService(s.h.sqlite, { commonName: `public-${uuidv7()}` })
 	return { app, credential: await adminTokenFor(s.h.repositories, workload, { issuer: ORIGIN, app: tokenApp, session: false }), requestId: uuidv7() }
+}
+
+/** A person's token for the app that an agent holds under `mode` (ADR-0090), as the proxy's exchange signs it. */
+async function agentCaller(s: Scenario, mode: AgentScopeMode): Promise<TerminalCaller> {
+	const issuedAt = now()
+	const claims = buildAccessClaims({
+		iss: ORIGIN,
+		app: APP,
+		subject: s.person,
+		type: 'user',
+		label: 'ann@example.com',
+		permissions: [],
+		issuedAt,
+		expiresAt: issuedAt + 300,
+		act: { sub: AGENT_CLIENT_ID, grant: uuidv7(), scope: { mode, within: null } },
+	})
+	return { app: APP, credential: await (await getSigner(TEST_SIGNING_ENV)).sign(accessTokenPayload(claims, 'entries')), requestId: uuidv7() }
 }
 
 /** The terminal's browser completes an asserted identification at IAM; answers the proxy callback it is sent to. */
@@ -359,6 +381,18 @@ describe('the identification operations', () => {
 			ok: false,
 			reason: 'invalid_token',
 		})
+	})
+
+	test('a token an agent holds under read inspects, but neither asserts nor cancels (ADR-0090 §4)', async () => {
+		const s = await scenario()
+		const rpc = createIamRpc(env(s.h), s.ctx)
+		const id = await identification(s)
+		const read = await agentCaller(s, 'read')
+		expect((await rpc.inspectIdentification({ ...read, id })).ok).toBe(true)
+		expect(await rpc.assertIdentity({ ...read, id, principalId: s.person })).toEqual({ ok: false, reason: 'not_allowed' })
+		expect(await rpc.cancelIdentification({ ...read, id })).toEqual({ ok: false, reason: 'not_allowed' })
+		// The identification is still open: the refusal consumed nothing.
+		expect((await rpc.assertIdentity({ ...(await caller(s)), id, principalId: s.person })).ok).toBe(true)
 	})
 
 	test('cancel ends an open identification once', async () => {
