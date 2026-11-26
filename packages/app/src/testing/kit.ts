@@ -177,6 +177,11 @@ export interface TestKitOptions {
 	 * Control; a page on one of them may call such an endpoint with a key. None when omitted.
 	 */
 	readonly crossOrigins?: readonly string[]
+	/**
+	 * The environment's `agent-write` mode as Control mirrors it into IAM (ADR-0090 §5): `off` serves an agent's `write`
+	 * grant; `refuse`, the default, serves `read` grants only, as IAM does where it holds no mirror.
+	 */
+	readonly agentWrite?: 'off' | 'refuse'
 }
 
 export interface TestAgentGrantOptions {
@@ -225,8 +230,8 @@ export interface TestKit<C extends AnyContract> {
 	 * `person` approves an agent's device grant at this environment (ADR-0090): answers the grant's id and the resource
 	 * token the agent presents as a bearer, `Authorization: Bearer <token>`. The kit's proxy exchanges it at the kit's IAM
 	 * for the person's token, with the person's live permissions narrowed to the scope's value, as IAM does. `scope` is
-	 * `read` (the default), `write`, or either narrowed to one value: `read:<dimension>=<value>`. As IAM until an
-	 * environment's `agent-write` mode is mirrored, the exchange of a `write` grant is refused. Throws where IAM refuses
+	 * `read` (the default), `write`, or either narrowed to one value: `read:<dimension>=<value>`. The exchange of a `write`
+	 * grant is refused unless the kit's `agentWrite` is `off`. Throws where IAM refuses
 	 * the grant: a contract whose groups list no `agent`, a scope it does not read, an undeclared dimension, a caller that
 	 * is not a person of this kit.
 	 */
@@ -852,9 +857,8 @@ export function bootTestKit<C extends AnyContract>(
 			) {
 				return { ok: false, reason: 'invalid_grant' }
 			}
-			// IAM serves a `write` grant only where Control mirrored the environment's `agent-write` as `off`, and no mirror
-			// exists yet (ADR-0090 §5).
-			if (held.act.scope.mode === 'write') return { ok: false, reason: 'write_refused' }
+			// IAM serves a `write` grant only where Control mirrored the environment's `agent-write` as `off` (ADR-0090 §5).
+			if (held.act.scope.mode === 'write' && options.agentWrite !== 'off') return { ok: false, reason: 'write_refused' }
 			const minted = await mint(held.person, { act: held.act, notAfter: verified.exp })
 			if (minted.ok) return minted
 			return minted.reason === 'token_too_large' ? { ok: false, reason: 'token_too_large' } : { ok: false, reason: 'invalid_grant' }

@@ -1142,7 +1142,9 @@ vocabulary (`packages/db/CLAUDE.md`).
 - **An agent's grant** (`kit.agentGrant(person, { scope, label })`, ADR-0090) is a resource token of `agent-cli` for
   the kit's origin. The kit's proxy exchanges it through the stand-in `mintFromGrant` (`grantExchange`), which signs the
   person's live permissions narrowed with auth-core's `narrowToValue`, as IAM does, and refuses a `write` grant
-  (`write_refused`) as IAM does until `agent-write` is mirrored. The exchanged token is no credential at `kitMembership`
+  (`write_refused`) as IAM does until `agent-write` is mirrored, unless the kit's `agentWrite` is `off`. The endpoint
+  access kit sets it `off` and asks a row whose only caller is `agent` with an unnarrowed grant, `read` for a read-only
+  row and `write` otherwise. The exchanged token is no credential at `kitMembership`
   (it resolves a token to live permissions, where IAM holds an agent to its token's entries), so membership operations
   refuse it (`invalid_token`).
 - **A test caller on a terminal** (`testCaller(grants, { terminal })`, ADR-0067) is a person's session in a contract

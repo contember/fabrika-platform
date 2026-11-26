@@ -92,10 +92,70 @@ The device page shows the scope, and the narrowed actions for a narrowed one; th
 `write` request, never the reverse. Every environment serves `read` grants only until its `agent-write` mode is
 mirrored into IAM.
 
-Any RFC 8628 client obtains it: the metadata names the authorization server, whose device authorization endpoint takes
-`client_id=agent-cli`, `resource=https://<host>`, the `scope` and an optional `agent_label` (the name the application
-shows for the agent, at most 64 characters). The refresh token rotates as above. The `fabrika` CLI has no command for an
-application grant yet. The agent presents the access token as a bearer to the application, `Authorization: Bearer <token>`. The proxy verifies
+Any RFC 8628 client obtains it. The `fabrika` CLI has no command for an application grant yet; the requests below
+drive it with curl. Every request is a form post (`application/x-www-form-urlencoded`) without a client secret, every
+answer is JSON, and an error answers `{ "error": "<code>" }` with status 400 (401 for `invalid_client`). Follow no
+redirect: a 3xx is a failure.
+
+1. **Discovery.** `GET https://<host>/.well-known/oauth-protected-resource` names the authorization server in
+   `authorization_servers[0]`, the issuer. `GET <issuer>/.well-known/oauth-authorization-server` names the endpoints;
+   on an installation they are `<issuer>/oauth/device_authorization`, `<issuer>/oauth/token` and `<issuer>/oauth/revoke`.
+
+2. **Device authorization.** `scope` is one token from the table above, `read` when omitted. `agent_label` is the name
+   the application shows for the agent: not blank, no surrounding space, no control character, at most 64 characters.
+
+   ```bash
+   curl -sS "$ISSUER/oauth/device_authorization" \
+     --data-urlencode client_id=agent-cli \
+     --data-urlencode resource=https://<host> \
+     --data-urlencode scope=read:project=p-1 \
+     --data-urlencode agent_label='Release notes agent'
+   ```
+
+   It answers `device_code`, `user_code`, `verification_uri`, `verification_uri_complete`, `expires_in` and
+   `interval`. Show the person `verification_uri_complete`, or `verification_uri` and `user_code`. `invalid_target`
+   means the host is no application resource (no group of its approved contract lists `agent`), `invalid_scope` a
+   scope the client cannot ask for or a dimension the environment does not declare, and 429 with `retry-after` too many
+   starts.
+
+3. **The token poll.** Every `interval` seconds, until the person decides or `expires_in` passes:
+
+   ```bash
+   curl -sS "$ISSUER/oauth/token" \
+     --data-urlencode grant_type=urn:ietf:params:oauth:grant-type:device_code \
+     --data-urlencode client_id=agent-cli \
+     --data-urlencode device_code="$DEVICE_CODE" \
+     --data-urlencode resource=https://<host>
+   ```
+
+   `authorization_pending` means poll again, `slow_down` poll less often, `access_denied` the person refused,
+   `expired_token` the code expired. Success answers `access_token`, `token_type: "Bearer"`, `expires_in`, `scope` (the
+   scope the person approved) and `refresh_token`. The device code is spent by that answer.
+
+4. **The refresh.** Before the access token expires:
+
+   ```bash
+   curl -sS "$ISSUER/oauth/token" \
+     --data-urlencode grant_type=refresh_token \
+     --data-urlencode client_id=agent-cli \
+     --data-urlencode refresh_token="$REFRESH_TOKEN" \
+     --data-urlencode resource=https://<host>
+   ```
+
+   It answers a new access token and a new `refresh_token`; keep the new one at once. A second use of a spent refresh
+   token revokes the grant, and `invalid_grant` means the grant has ended.
+
+5. **The revocation** (RFC 7009) of the access token or the refresh token revokes the whole grant, and answers 200 also
+   for a token it does not know:
+
+   ```bash
+   curl -sS "$ISSUER/oauth/revoke" \
+     --data-urlencode client_id=agent-cli \
+     --data-urlencode token="$REFRESH_TOKEN" \
+     --data-urlencode token_type_hint=refresh_token
+   ```
+
+The agent presents the access token as a bearer to the application, `Authorization: Bearer <token>`. The proxy verifies
 it, exchanges it at IAM for the person's own application token, and calls the procedure with that: the application
 sees the person (`ctx.principal`) and the agent (`ctx.agent`). At each exchange IAM reads the person's live permissions
 and narrows them to the grant's value: a global grant becomes the same action at the value, a grant at the value stays,

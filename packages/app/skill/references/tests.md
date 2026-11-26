@@ -140,7 +140,8 @@ if (postgres !== null) {
   key (`createClient(contract, 'api', { fetch: kit.fetch, key: caller.key })`).
 - `await kit.agentGrant(person, { scope: 'read:project=p-1' })` answers `{ grant, token }`: a person's agent, for a
   group that lists `agent`. Pass `token` as the client's `key`; the kit's proxy exchanges it for the person's token
-  narrowed to the value. Assert that the agent reaches the value and is refused at another one.
+  narrowed to the value. Assert that the agent reaches the value and is refused at another one. The kit refuses a
+  `write` grant, as IAM does by default; `testKit(app, { agentWrite: 'off' })` serves it.
 - Build a scope you reuse with `kit.scope('org', 'acme')` (`acme` above). An object literal stored in a variable
   widens its `type` to `string`, which tsc refuses as a grant's `scope`; a dimension the contract lacks is a type error.
 - A caller's `id` is `<kind>-<n>` and its `label` `<kind>-<n>@<app>.test`, `n` counting the kit's callers; pass
