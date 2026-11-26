@@ -1,3 +1,4 @@
+import { REVOCATION_FEED_WINDOW_SECONDS } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { hashToken } from '../secret'
 import { createHarness, seedUser } from './helpers/harness'
@@ -59,7 +60,7 @@ describe('sessions db', () => {
 		expect((await h.repositories.sessions.listSessionsForPrincipal(principal, { limit: 50 })).length).toBe(2)
 	})
 
-	test('prune removes expired and revoked sessions', async () => {
+	test('prune removes expired sessions and those revoked a token lifetime ago, and keeps one the revocation feed still reads', async () => {
 		const h = createHarness()
 		const principal = seedUser(h.sqlite, { sub: 'g-5', email: 'i@j.cz' })
 		await h.repositories.sessions.createSession({ tokenHash: await hashToken('live'), principalId: principal, idpSub: 'g-5', expiresAt: FUTURE })
@@ -67,9 +68,15 @@ describe('sessions db', () => {
 		const revokedHash = await hashToken('killed')
 		await h.repositories.sessions.createSession({ tokenHash: revokedHash, principalId: principal, idpSub: 'g-5', expiresAt: FUTURE })
 		await h.repositories.sessions.revokeSessionByHash(revokedHash)
+		const justRevokedHash = await hashToken('just-killed')
+		await h.repositories.sessions.createSession({ tokenHash: justRevokedHash, principalId: principal, idpSub: 'g-5', expiresAt: FUTURE })
+		await h.repositories.sessions.revokeSessionByHash(justRevokedHash)
+		const now = Math.floor(Date.now() / 1000)
+		h.sqlite.prepare('UPDATE sessions SET revoked_at = ? WHERE token_hash = ?').run(now - REVOCATION_FEED_WINDOW_SECONDS - 1, revokedHash)
 
-		const removed = await h.repositories.sessions.pruneSessions(Math.floor(Date.now() / 1000))
+		const removed = await h.repositories.sessions.pruneSessions(now)
 		expect(removed).toBe(2)
-		expect((await h.repositories.sessions.listSessionsForPrincipal(principal, { limit: 50 })).length).toBe(1)
+		expect((await h.repositories.sessions.listSessionsForPrincipal(principal, { limit: 50 })).length).toBe(2)
+		expect((await h.repositories.revocations.since(now - 60, 10)).map((row) => row.subject)).toEqual([principal])
 	})
 })

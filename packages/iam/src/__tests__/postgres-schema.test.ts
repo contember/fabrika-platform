@@ -11,7 +11,7 @@
 //
 // Skips cleanly (with a reason) when FABRIKA_TEST_POSTGRES_URL is unset — see helpers/postgres.ts.
 
-import { accessTokenPayload, buildAccessClaims } from '@fabrika/auth-core'
+import { accessTokenPayload, buildAccessClaims, REVOCATION_FEED_WINDOW_SECONDS } from '@fabrika/auth-core'
 import { createBackgroundTasks, type PostgresDatabase } from '@fabrika/platform-node'
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { readFileSync } from 'node:fs'
@@ -646,7 +646,10 @@ describe.skipIf(!hasPostgres)('src/db.ts — the whole query surface, unmodified
 		expect(await db.sessions.getActiveSessionByHash('sess-1')).toBeNull()
 		expect(await db.sessions.listSessionsForPrincipal(p.id, { limit: 50 })).toHaveLength(2)
 
-		expect(await db.sessions.pruneSessions(now())).toBe(2)
+		// The expired one goes; the one just revoked stays for the revocation feed.
+		expect(await db.sessions.pruneSessions(now())).toBe(1)
+		expect(await db.sessions.listSessionsForPrincipal(p.id, { limit: 50 })).toHaveLength(1)
+		expect(await db.sessions.pruneSessions(now() + REVOCATION_FEED_WINDOW_SECONDS + 1)).toBe(1)
 		expect(await db.sessions.listSessionsForPrincipal(p.id, { limit: 50 })).toHaveLength(0)
 	})
 

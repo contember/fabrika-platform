@@ -1,3 +1,4 @@
+import { REVOCATION_FEED_WINDOW_SECONDS } from '@fabrika/auth-core'
 import { type SqlDatabase, type SqlStatement, uuidv7 } from '@fabrika/platform'
 
 import { type AuditEventInput, AuditWriter, type AuthLogInput, authLogStatement, guardedInsert, type SqlChange, type SqlGuard } from './audit'
@@ -337,11 +338,14 @@ export class SessionRepository {
 		return { sql: 'UPDATE sessions SET revoked_at = ? WHERE principal_id = ? AND revoked_at IS NULL RETURNING id', binds: [unixNow(), principalId] }
 	}
 
-	/** Prune expired or revoked sessions (cron). Returns the number removed. */
+	/**
+	 * Prune expired or revoked sessions (cron). Returns the number removed. A revoked session stays for a token lifetime:
+	 * the proxy's revocation feed reads its `revoked_at`, and its OAuth grants go with it (ADR-0022).
+	 */
 	async pruneSessions(now: number): Promise<number> {
 		const result = await this.db
-			.prepare('DELETE FROM sessions WHERE expires_at < ? OR revoked_at IS NOT NULL')
-			.bind(now)
+			.prepare('DELETE FROM sessions WHERE (expires_at < ? OR revoked_at IS NOT NULL) AND (revoked_at IS NULL OR revoked_at < ?)')
+			.bind(now, now - REVOCATION_FEED_WINDOW_SECONDS)
 			.run()
 		return result.meta.changes ?? 0
 	}

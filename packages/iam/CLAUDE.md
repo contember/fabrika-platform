@@ -976,8 +976,8 @@ fails if that stops being true — it is the guard, not documentation of one.
   `repositories/revocations.ts`). `revocations({ since })` lists, newest first, every subject with `principals.disabled_at`,
   `sessions.revoked_at`, `credentials.revoked_at` (an anonymous key is its own subject) or `oauth_grants.revoked_at`
   within the last `REVOCATION_FEED_WINDOW_SECONDS`, at most `REVOCATION_FEED_MAX_SUBJECTS` with `complete: false` past
-  that. A new way to end a session, key, grant or principal must set one of those columns, or the proxy keeps serving
-  its cached token up to 300 s. Only the proxy reads it: `POST /auth/mint/revocations` behind `proxyKey` (the
+  that. A new way to end a session, key, grant or principal must set one of those columns, and a prune must keep the row
+  for that window (`pruneSessions` keeps a revoked session), or the proxy keeps serving its cached token up to 300 s. Only the proxy reads it: `POST /auth/mint/revocations` behind `proxyKey` (the
   `mint-revocations` row), and refused over a binding marked `props.worker: 'application'`. A failed read throws, so
   the proxy fails closed.
 
