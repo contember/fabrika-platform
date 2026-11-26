@@ -236,8 +236,8 @@ async function devicePasskeyBinding(userCodeHash: string, scope: AgentScope, lif
 
 /**
  * The passkey check of an approval that takes one (ADR-0090 §5). Without an answer in the form, a page that asks the
- * passkey and posts the same decision back with it; with one, the time the passkey answered, or a refusal page. The
- * challenge is spent by its first answer, right or wrong.
+ * passkey and posts the same decision back with it; with one, the time the passkey answered, or a refusal page. An
+ * answer that reaches verification spends the challenge, right or wrong; a malformed one leaves it to expire.
  */
 async function confirmWithPasskey(
 	services: Services,

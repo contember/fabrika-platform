@@ -434,6 +434,10 @@ for (const engine of engines) {
 			expect(longer.status).toBe(403)
 			expect(await longer.text()).toContain('The passkey was not accepted')
 			expect((await a.page({ ...(await ask()).fields, credential: 'not an answer' })).status).toBe(403)
+			const other = await a.started({ scope: 'write:project=a' })
+			const elsewhere = await answer(await ask(), { user_code: other.userCode })
+			expect(elsewhere.status).toBe(403)
+			expect((await a.repositories.oauth.deviceAuthorization(await hashToken(other.deviceCode)))?.status).toBe('pending')
 			expect((await a.repositories.oauth.deviceAuthorization(await hashToken(deviceCode)))?.status).toBe('pending')
 
 			const page = await ask()
