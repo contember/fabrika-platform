@@ -323,8 +323,7 @@ describe.each(SHELLS)('the build schema checks command under %s', (_label, shell
 		for (const root of roots) await rm(root, { recursive: true, force: true })
 	})
 
-	// A CI runner's first exec of a binary nothing read before waits on its disk: 0.1-1.5 s for BusyBox, once over 17 s.
-	// The whole binary is read into the page cache here, so each test's 5 s measures the command, not that first read.
+	// The first exec of a binary nothing read yet can stall for seconds on CI; each test's 5 s should time only the command.
 	beforeAll(async () => {
 		const binary = Bun.which(shell[0] ?? '')
 		if (binary === null) throw new Error(`expected ${shell[0]} on PATH`)
