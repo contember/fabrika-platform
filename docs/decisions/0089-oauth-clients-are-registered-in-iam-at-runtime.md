@@ -72,13 +72,10 @@ it has is IAM's: an app id, a vocabulary of roles, a resource, and OAuth clients
      accepts registry writes whether or not an import ever ran, so an installation that skipped release N registers
      its applications in the console.
 
-Per-application OAuth resources, tokens a deployed application accepts, are not part of this decision: they need
-`oauth` rows on contract application entries in the proxy ([ADR-0022](0022-the-proxy-is-the-only-enforcement-point.md)),
-a caller kind in the framework, and a protocol change an older framework release must tolerate
-([ADR-0062](0062-a-platform-release-serves-older-framework-releases.md)), and which endpoints admit them is the
-application's approved contract, not runtime data. They include the device grant for an application's own API, which
-today issues tokens only for the console's RPC resources. A later ADR decides them; a client allowed to call an
-application's API would be one more kind of client row.
+Per-application OAuth resources, tokens a deployed application accepts, are not part of this decision. Which
+endpoints admit them is the application's approved contract, not runtime data, so
+[ADR-0090](0090-a-device-grant-reaches-an-application-as-the-person.md) decides them: an application environment is a
+resource of the built-in device client `agent-cli`, with no client row.
 
 **Invariant:** IAM reads the OAuth clients it serves from its own database. Only an installation administrator writes an
 external application and its clients; only the provisioning key writes an authoring client.

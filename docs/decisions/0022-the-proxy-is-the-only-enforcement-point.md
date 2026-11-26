@@ -276,7 +276,11 @@ endpoint:
    `Authorization` with `Bearer <the minted token>`, the value it also sends as `X-Fabrika-Token`. A key
    bound to no application would otherwise let the application act as its principal at any other
    application (rule 6). A request without `Authorization`, a session's, gains none, because the
-   application tells a bearer from a session by the header's presence.
+   application tells a bearer from a session by the header's presence. On a row that lists the caller `agent`, a bearer
+   that is not a `px_` key is verified locally as an OAuth resource token of this host and exchanged at IAM for the
+   approving person's application token, which carries `act`
+   ([ADR-0090](0090-a-device-grant-reaches-an-application-as-the-person.md)); it is replaced the same way and is
+   equally terminal. On every other application row such a bearer is refused without asking IAM.
 4. **No key.** When `human` is a caller, the proxy uses the session, or answers with the login
    redirect of rule 4. When `human` is not a caller, the answer is 401, never a login redirect.
 5. **Requirement.** The token must satisfy the endpoint's requirement: `member` (any permission of this
@@ -284,7 +288,9 @@ endpoint:
    entry without a scope), because the endpoint reaches data of the whole application, for `anyOf` any one of its
    actions held as a global grant, and for `capabilities` each of its actions in some scope ([ADR-0012](0012-fabrika-app-runtime.md) §10). Otherwise the answer is 403. A
    `capabilities` requirement derives no delegation.
-   This is `satisfies` of `@fabrika/auth-core`; the application repeats it as authorization and adds no check.
+   This is `satisfies` of `@fabrika/auth-core`; the application repeats it as authorization and adds no check. A token
+   with `act` also needs the row's kind to be one its scope admits (`read`: `query`, `download`; `write` adds
+   `mutation` and `upload`), or the answer is 403.
 6. **Admission.** A session-authenticated request that is not `GET` must carry
    `Sec-Fetch-Site: same-origin`. A request with a body must carry one of the row's declared content types:
    `application/json` by default, `multipart/form-data` for a procedure with file fields, and
@@ -364,8 +370,8 @@ The proxy then decides, in the same pass as every other request of a contract ap
 3. **Bearer only.** A request from a listed origin to an `environment` row is never session-authenticated: without
    `Authorization` it is 401 (`no_credential`), never a login bounce, and the session cookie is not read. Without
    `Allow-Credentials` the browser would not expose such an answer anyway; the proxy ignoring the cookie is the second
-   guard. The caller is a `px_` key: an application row admits no OAuth resource token, so the question of OAuth
-   callers does not arise here. The `cross_site` rule of step 6 is unchanged for every other request.
+   guard. The caller is a `px_` key or an agent's exchanged grant (ADR-0090); no OAuth resource token reaches the
+   application itself. The `cross_site` rule of step 6 is unchanged for every other request.
 4. **The application answers nothing about CORS.** The proxy deletes every `Access-Control-*` header from a contract
    application's answer (`REMOVED_RESPONSE_HEADERS`), so a handler cannot open its own endpoint to another origin,
    and the framework does the same in-process. On Zerops the auth service tells Caddy which origin to admit, and
@@ -399,8 +405,11 @@ form.
 admits a session or a `user` key; `machine` a `service` key; `link` a `link` key; `app:<id>` the
 connector key of application `<id>`, and only on export paths. Job, webhook and public keys are accepted by no
 mount. The proxy refuses an unknown kind, on cached paths too. An OAuth resource token is no `px_` key:
-`callerOf` maps it to the caller `oauth`, which only an installation entry's row may admit, so every
-application endpoint refuses it.
+`callerOf` maps it to the caller `oauth`, which only an installation entry's row may admit, so no
+application endpoint admits it as its credential. On an application row that lists the caller `agent`, the proxy
+exchanges a resource token of its host at IAM for the approving person's application token, which carries `act` and
+which `callerOf` maps to `agent` ([ADR-0090](0090-a-device-grant-reaches-an-application-as-the-person.md)); the
+application sees only that token.
 
 A workload token carries its kind in `ptype` and names its workload in `workload`: the job's or the
 webhook's name, a public procedure's endpoint id, or for `app` the consuming application's id. `callerOf` maps `app`

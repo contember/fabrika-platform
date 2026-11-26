@@ -111,3 +111,4 @@ a commit message suffices.
 | [0087](0087-an-spa-mount-is-installable-under-its-own-access.md)                        | An SPA mount is installable as an application, under its own access (proposed)                            |
 | [0088](0088-a-push-says-only-that-something-happened.md)                                | A push says only that something happened; the text is read under the session (proposed)                   |
 | [0089](0089-oauth-clients-are-registered-in-iam-at-runtime.md)                          | OAuth clients and external applications are registered in IAM at runtime                                  |
+| [0090](0090-a-device-grant-reaches-an-application-as-the-person.md)                     | A device grant reaches an application as the person, narrowed to one scope value                          |
