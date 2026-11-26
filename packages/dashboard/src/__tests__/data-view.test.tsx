@@ -992,6 +992,69 @@ describe('following a running operation', () => {
 		)
 	})
 
+	test('a committed migration rewound in place shows the rewind before the rollback deploy, and what the data is left in', () => {
+		const rewinding = migration({ step: 'rewind', targetMode: 'inspect', migrationFailure: 'committed' })
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={rewinding} />))).toEqual([
+			['rewind', 'current'],
+			['revert', 'pending'],
+			['check', 'pending'],
+			['restrict', 'pending'],
+		])
+		expect(renderToStaticMarkup(<MigrationSituation operation={rewinding} />)).toContain('the environment is in inspect')
+
+		const deploying = migration({ step: 'check', targetMode: 'inspect', migrationFailure: 'committed', revertRunId: 'run-back', rewound: true })
+		const deployingHtml = renderToStaticMarkup(<MigrationSituation operation={deploying} />)
+		expect(deployingHtml).toContain('rewound the data to just before the migration')
+		expect(deployingHtml).toContain('the environment opens once that version answers')
+
+		const reverted = migration({ ...deploying, targetMode: 'open', state: 'failed', errorCode: 'migration_reverted' })
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={reverted} />))).toEqual([
+			['rewind', 'done'],
+			['revert', 'done'],
+			['check', 'stopped'],
+			['restrict', 'not taken'],
+		])
+		expect(renderToStaticMarkup(<MigrationSituation operation={reverted} />)).toContain('The last succeeded commit serves again')
+	})
+
+	test('a rewind that failed after three arms leaves the environment in inspect, which the console says', () => {
+		const failed = migration({ step: 'rewind', targetMode: 'inspect', migrationFailure: 'committed', state: 'failed', errorCode: 'rewind_failed' })
+		const html = renderToStaticMarkup(<OperationProgress operation={failed} />)
+		expect(html).toContain('<code>rewind_failed</code>')
+		expect(stepRows(html)).toEqual([
+			['rewind', 'stopped'],
+			['revert', 'not taken'],
+			['check', 'not taken'],
+			['restrict', 'not taken'],
+		])
+		const situation = renderToStaticMarkup(<MigrationSituation operation={failed} />)
+		expect(situation).toContain('the migration stays applied')
+		expect(situation).toContain('stays in inspect')
+		expect(situation).not.toContain('The clone keeps serving')
+	})
+
+	test('a refused rewind names the refusal and leaves the step out; with a dataLoss line it closes without a rollback deploy', () => {
+		const closed = migration({
+			step: 'restrict',
+			targetMode: 'closed',
+			state: 'failed',
+			errorCode: 'migration_failed',
+			migrationFailure: 'committed',
+			rewindRefusal: 'version_changed',
+		})
+		const html = renderToStaticMarkup(<MigrationSituation operation={closed} />)
+		expect(html).toContain('refused to rewind the migration (<code>version_changed</code>), so nothing was rewound')
+		expect(html).toContain('The environment is closed')
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={closed} />))).toEqual([['restrict', 'stopped']])
+
+		const reverting = migration({ step: 'revert', migrationFailure: 'committed', rewindRefusal: 'not_rewindable', revertRunId: 'run-back' })
+		expect(stepRows(renderToStaticMarkup(<OperationProgress operation={reverting} />))).toEqual([
+			['revert', 'current'],
+			['check', 'pending'],
+			['restrict', 'pending'],
+		])
+	})
+
 	test('the page reads again while the newest operation runs, and not once it finished', () => {
 		const scheduled: number[] = []
 		const schedule = (_callback: () => void, delayMs: number) => {

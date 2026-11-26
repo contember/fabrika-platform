@@ -97,8 +97,9 @@ const MIGRATE_STEPS: readonly { readonly step: DataOperationStep; readonly effec
 	{ step: 'migrate', effect: 'Control waits until the new version answers that it migrated.' },
 ]
 
-/** The way back after the new version's migration failed. */
+/** The way back after the new version's migration failed; `rewind` only for a committed migration it rewinds. */
 const MIGRATE_BACK_STEPS: readonly { readonly step: DataOperationStep; readonly effect: string }[] = [
+	{ step: 'rewind', effect: 'The object is set to inspect and its data rewound to just before the migration.' },
 	{ step: 'revert', effect: 'A rollback deploy of the last succeeded commit.' },
 	{ step: 'check', effect: 'Control waits until the rolled-back version answers.' },
 	{ step: 'restrict', effect: 'The environment is closed for an operator.' },
@@ -808,6 +809,12 @@ export function MigrationSituation({ operation }: { operation: DataOperationDto 
 					The new version answered <code>{failure}</code>. {MIGRATION_FAILURES[failure]}
 				</p>
 			)}
+			{operation.rewound && <p>Control rewound the data to just before the migration, so the last succeeded commit meets its own schema.</p>}
+			{operation.rewindRefusal !== null && (
+				<p>
+					The object refused to rewind the migration (<code>{operation.rewindRefusal}</code>), so nothing was rewound.
+				</p>
+			)}
 			<p>{migrationEffect(operation)}</p>
 		</>
 	)
@@ -815,15 +822,21 @@ export function MigrationSituation({ operation }: { operation: DataOperationDto 
 
 function migrationEffect(operation: DataOperationDto): string {
 	if (operation.state === 'running') {
-		return operation.step === 'revert' || operation.step === 'check'
-			? 'Control is deploying the last succeeded commit back; the environment stays open.'
-			: 'The environment stays open while the new version migrates: there is no read-only window and no backup.'
+		if (operation.step === 'rewind') return 'Control is rewinding the data; the environment is in inspect, so nothing reads or writes it.'
+		if (operation.step !== 'revert' && operation.step !== 'check') {
+			return 'The environment stays open while the new version migrates: there is no read-only window and no backup.'
+		}
+		return operation.rewound || operation.rewindRefusal !== null
+			? 'Control is deploying the last succeeded commit back; the environment opens once that version answers.'
+			: 'Control is deploying the last succeeded commit back; the environment stays open.'
 	}
 	switch (operation.errorCode) {
 		case 'migration_unconfirmed':
 			return 'The new version did not confirm its migration before the deadline. The environment stays open; the next deploy asks again.'
 		case 'migration_reverted':
 			return 'The last succeeded commit serves again, and the environment is open. The failed version needs a fix before it is deployed again.'
+		case 'rewind_failed':
+			return 'The rewind did not take, so the migration stays applied. The environment stays in inspect, so nothing writes over the data. An operator decides what follows.'
 		case 'migration_failed':
 			return operation.candidateRecovered
 				? 'The failed version booted after all while the rollback deployed, so either version may serve. The environment is closed: an operator decides what follows.'
@@ -867,10 +880,11 @@ function RestoreSteps({ operation }: { operation: DataOperationDto }) {
 
 function MigrationSteps({ operation }: { operation: DataOperationDto }) {
 	if (!MIGRATE_BACK_STEPS.some((entry) => entry.step === operation.step)) return <StepsTable operation={operation} steps={MIGRATE_STEPS} />
-	// A committed migration that lost data goes straight to `restrict`, without a rollback deploy.
-	const steps = operation.revertRunId === null && operation.step === 'restrict'
-		? MIGRATE_BACK_STEPS.filter((entry) => entry.step === 'restrict')
-		: MIGRATE_BACK_STEPS
+	// A refused rewind changed nothing: the situation names the refusal, and the table leaves the step out.
+	const rewind = operation.step === 'rewind' || operation.rewound
+	// A committed migration that lost data and is not rewound goes straight to `restrict`, without a rollback deploy.
+	const closedAtOnce = operation.revertRunId === null && operation.step === 'restrict'
+	const steps = MIGRATE_BACK_STEPS.filter((entry) => entry.step === 'rewind' ? rewind : !closedAtOnce || entry.step === 'restrict')
 	return <StepsTable operation={operation} steps={steps} />
 }
 
