@@ -57,33 +57,37 @@ const environment = (env: string, surface: SurfaceEndpointDto[]): AppEnvDto => (
 })
 
 // The real route of a run, so the summary's link resolves to the path the console serves.
-const section = (envs: readonly AppEnvDto[]): string =>
+const section = (env: AppEnvDto): string =>
 	renderToStaticMarkup(createElement(BuzolaProvider, {
 		router: new Router({
 			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
 			adapter: createMemoryNavigationAdapter(),
 			pageRegistry: { 'runs/detail': '/runs/:id' },
 		}),
-	}, createElement(SurfaceSection, { envs })))
+	}, createElement(SurfaceSection, { env })))
 
 describe('the surface in the console', () => {
 	test('the summary counts the endpoints of each reach, most exposed first, and names only the reaches there are', () => {
 		expect(surfaceSummary([FORM, GET, SPA, { ...SPA, id: 'app.prefix', path: '/' }])).toBe('1 for anyone · 1 for machines · 2 for signed-in people')
 	})
 
-	test('each published environment opens on a row per endpoint; one with nothing published is left out', () => {
-		const markup = section([environment('prod', [FORM, GET]), environment('dev', [])])
-		const summaries = [...markup.matchAll(/<summary>(.*?)<\/summary>/g)].map((match) => match[1] ?? '')
-		expect(summaries).toEqual([
-			'<span class="chip">prod</span><code>prod.notes.example.test</code>'
-			+ '<span>1 for anyone · 1 for machines, published by <a href="/runs/01a144a6-prod">run <code>01a144a6</code></a></span>',
-		])
+	test('an environment shows its address, its counts by reach and a row per endpoint; only the public ones are in view at first', () => {
+		const markup = section(environment('prod', [FORM, GET]))
+		const folded = markup.slice(markup.indexOf('<details class="surface">'))
+		expect(folded).toContain('<summary>Show the other 1 endpoint, for machines</summary>')
+		expect(folded).not.toContain('anyone')
+		expect(markup).toContain(
+			'<p class="surface-summary"><code>prod.notes.example.test</code>'
+				+ '<span>1 for anyone · 1 for machines, published by <a href="/runs/01a144a6-prod">run <code>01a144a6</code></a></span></p>',
+		)
 		expect(markup).toContain('<span class="chip chip-accent">anyone</span>')
 		expect(markup).toContain('<td><span class="muted">nothing</span></td><td><span>no rate limit and no challenge</span></td>')
 		expect(markup).toContain('<td><span class="muted small">human, machine</span> with <code>notes.read</code> (on <code>note</code>)</td>')
 	})
 
-	test('an application with nothing published shows no section', () => {
-		expect(section([environment('prod', [])])).toBe('')
+	test('an environment with nothing published says so', () => {
+		const markup = section(environment('dev', []))
+		expect(markup).toContain('Nothing is published on dev yet.')
+		expect(markup).not.toContain('<table')
 	})
 })

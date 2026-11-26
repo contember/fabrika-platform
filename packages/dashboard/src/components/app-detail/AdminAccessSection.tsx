@@ -11,10 +11,8 @@ import {
 	type SelfAdminState,
 	type SelfAdminTarget,
 } from '../../lib/self-admin'
-import { Icon } from '../Icon'
 import { PendingGrantNotice, pendingOf } from '../PendingGrant'
 import { Chip } from '../Status'
-import { Table } from '../Table'
 
 /**
  * Your own Admin in each environment of this application, for an IAM administrator. The button issues an ordinary grant
@@ -25,23 +23,15 @@ export function AdminAccessSection({ state, onDone }: { state: SelfAdminState | 
 	return (
 		<section>
 			<div className="section-head">
-				<Icon name="shield" size={15} />
 				<h2>Your admin access</h2>
 			</div>
-			<p className="hint">
-				At a contract application, Admin holds every action its approved contract declares; at any other application, every action. Granting it to
-				yourself is an ordinary grant: Access lists it under your account, the audit log records it, and you revoke it there like any other.
+			<p className="section-note">
+				Admin holds every action of the application in that environment. Granting it to yourself is an ordinary grant, audited and revoked under your
+				account.
 			</p>
-			<Table
-				head={
-					<tr>
-						<th>Env</th>
-						<th className="grow">Admin</th>
-					</tr>
-				}
-			>
+			<ul className="self-admin">
 				{state.targets.map((target) => <SelfAdminRow key={target.app} principalId={state.principalId} target={target} onDone={onDone} />)}
-			</Table>
+			</ul>
 		</section>
 	)
 }
@@ -70,11 +60,9 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 	}
 
 	return (
-		<tr>
-			<td>
-				<Chip>{target.env}</Chip>
-			</td>
-			<td>
+		<li>
+			<Chip>{target.env}</Chip>
+			<div>
 				{pending !== null
 					? <PendingGrantNotice request={pending} />
 					: target.held !== null
@@ -95,8 +83,8 @@ function SelfAdminRow({ principalId, target, onDone }: { principalId: string; ta
 						</div>
 					)}
 				{error && <div className="error-text small" role="alert">{error}</div>}
-			</td>
-		</tr>
+			</div>
+		</li>
 	)
 }
 

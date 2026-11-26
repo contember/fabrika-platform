@@ -31,6 +31,11 @@ export function dataTabEnvironment(envs: readonly Pick<AppEnvDto, 'env'>[], stat
 	return attention?.env ?? envs.find((env) => env.env === 'prod')?.env ?? envs[0]?.env ?? null
 }
 
+/** The environment the Access tab opens on: `prod` when there is one, else the first. Null without one. */
+export function accessTabEnvironment(envs: readonly Pick<AppEnvDto, 'env'>[]): string | null {
+	return envs.find((env) => env.env === 'prod')?.env ?? envs[0]?.env ?? null
+}
+
 /** The environments whose data the caller may read; Control decides each read either way. */
 export function readableEnvironments<T extends Pick<AppEnvDto, 'appId' | 'env'>>(access: ConsoleAccessDto | null, envs: readonly T[]): T[] {
 	return envs.filter((env) => mayDo(access, CONTROL_ACTIONS.DATA_READ, { app: env.appId, env: env.env }))
@@ -119,6 +124,7 @@ export function AppFrame({ app, envs, tab, states, children }: {
 	const access = useConsoleAccess()
 	const readable = readableEnvironments(access, envs)
 	const dataEnv = dataTabEnvironment(readable, states)
+	const accessEnv = accessTabEnvironment(envs)
 	const dataAttention = readable.some((env) => {
 		const state = states.get(env.env)
 		return state !== undefined && needsDataAttention(state)
@@ -183,7 +189,9 @@ export function AppFrame({ app, envs, tab, states, children }: {
 					</Link>
 				)}
 				<Link to="apps/secrets" params={{ id: app.id }} aria-current={current('secrets')}>Secrets and variables</Link>
-				<Link to="apps/access" params={{ id: app.id }} aria-current={current('access')}>Access</Link>
+				{accessEnv === null
+					? <Link to="apps/access-default" params={{ id: app.id }} aria-current={current('access')}>Access</Link>
+					: <Link to="apps/access" params={{ id: app.id, env: accessEnv }} aria-current={current('access')}>Access</Link>}
 				<Link to="apps/approvals" params={{ id: app.id }} aria-current={current('approvals')}>Approvals</Link>
 				<Link to="apps/settings" params={{ id: app.id }} aria-current={current('settings')}>Settings</Link>
 			</nav>
