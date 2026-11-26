@@ -22,6 +22,9 @@ import {
 	APPROVAL_CATEGORY_GROUPS,
 	categoryLabel,
 	type CategoryOption,
+	ceilingLabel,
+	commitsLabel,
+	decidingApplies,
 	decidingText,
 	loosened,
 	loosenedSettings,
@@ -198,6 +201,12 @@ export function PolicySummary({ env }: { env: Pick<AppEnvDto, 'env' | 'approvalP
 							<dt>{difference.label}</dt>
 							<dd>
 								{difference.value} <span className="muted">({preset.label}: {difference.other})</span>
+								{difference.pending !== undefined && (
+									<>
+										{' '}
+										<Chip>not enforced yet</Chip> <span className="muted">{difference.pending}</span>
+									</>
+								)}
 							</dd>
 						</div>
 					))}
@@ -225,18 +234,24 @@ function AllRules({ choice }: { choice: PolicyChoice }) {
 						<dt>{option.label}</dt>
 						<dd>
 							{modeLabel(mode)}
-							{deciding !== null && mode !== 'off' && mode !== 'refuse' && <span className="muted">{` · ${deciding}`}</span>}
+							{deciding !== null && decidingApplies(option.category, mode) && <span className="muted">{` · ${deciding}`}</span>}
+							{option.pending !== undefined && (
+								<>
+									{' '}
+									<Chip>not enforced yet</Chip> <span className="muted">{option.pending}</span>
+								</>
+							)}
 						</dd>
 					</div>
 				)
 			})}
 			<div>
 				<dt>Commits an agent may ask to deploy</dt>
-				<dd>{choice.settings.deployRequestCommits === 'merged' ? 'Merged commits' : 'Any commit'}</dd>
+				<dd>{commitsLabel(choice.settings)}</dd>
 			</div>
 			<div>
 				<dt>Actions a key an agent asks for may hold</dt>
-				<dd>{choice.settings.credentialCeiling === 'requester' ? "The agent's own" : "The approver's"}</dd>
+				<dd>{ceilingLabel(choice.settings)}</dd>
 			</div>
 			<div>
 				<dt>Hours a request waits for a decision</dt>
@@ -297,6 +312,7 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 	}
 
 	function discard() {
+		setBase(nearestPreset(saved).preset.name)
 		setChosen(saved.policy)
 		setSettings(saved.settings)
 		setTtlText(String(saved.settings.requestTtlHours))
@@ -353,7 +369,15 @@ export function PolicyEditor({ appId, env, onDone, onCancel }: { appId: string; 
 						? `As ${preset.label} says: ${preset.hint}.`
 						: `${fromPreset.length} ${fromPreset.length === 1 ? 'change' : 'changes'} from ${preset.label}`}
 				</span>
+				<span className="spacer" />
+				<span className="muted small" aria-hidden="true">• marks {preset.label}'s choice</span>
 			</div>
+			<p className="section-note">
+				<strong>No approval</strong>: applies at once and is recorded.{' '}
+				<strong>A plan or a person</strong>: an approved plan entry that covers the change lets it through; what the plan does not cover waits for a
+				person. <strong>A person approves</strong>: only a person's decision; a plan never counts.{' '}
+				<strong>Refused</strong>: an agent or a key may not do it at all.
+			</p>
 			{APPROVAL_CATEGORY_GROUPS.map((group) => (
 				<RuleGroup
 					key={group.title}
@@ -510,14 +534,9 @@ function RuleGroup(
 														checked={policy[category] === mode}
 														disabled={locked}
 														onChange={() => onChoose(category, mode)}
-														aria-label={`${option.label}: ${modeLabel(mode)}`}
+														aria-label={`${option.label}: ${modeLabel(mode)}${preset.policy[category] === mode ? ` (${preset.label})` : ''}`}
 													/>
-													{preset.policy[category] === mode && (
-														<span className="preset-mark" title={`${preset.label}'s choice`}>
-															<span aria-hidden="true">•</span>
-															<span className="sr-only">{` (${preset.label})`}</span>
-														</span>
-													)}
+													{preset.policy[category] === mode && <span className="preset-mark" title={`${preset.label}'s choice`} aria-hidden="true">•</span>}
 												</label>
 											)}
 										</td>
@@ -628,11 +647,10 @@ function RequestSettings(
 		onTtl: (text: string) => void
 	},
 ) {
-	const changed = [
-		settings.deployRequestCommits !== preset.settings.deployRequestCommits,
-		settings.credentialCeiling !== preset.settings.credentialCeiling,
-		settings.requestTtlHours !== preset.settings.requestTtlHours,
-	].filter(Boolean).length
+	const commitsChanged = settings.deployRequestCommits !== preset.settings.deployRequestCommits
+	const ceilingChanged = settings.credentialCeiling !== preset.settings.credentialCeiling
+	const ttlChanged = settings.requestTtlHours !== preset.settings.requestTtlHours
+	const changed = [commitsChanged, ceilingChanged, ttlChanged].filter(Boolean).length
 	const [open] = useState(changed > 0)
 	return (
 		<details className="rule-group" open={open}>
@@ -641,53 +659,107 @@ function RequestSettings(
 				<span className="muted">3 settings, {changed === 0 ? `all as ${preset.label}` : `${changed} changed from ${preset.label}`}</span>
 			</summary>
 			<div className="form">
-				<label>
-					Commits an agent may ask to deploy
-					<select
-						value={settings.deployRequestCommits}
-						disabled={locked}
-						onChange={(event) => onSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
-					>
-						<option value="merged">Merged commits</option>
-						<option value="any">Any commit</option>
-					</select>
-					<span className="hint">
-						Merged means reachable from the trigger branch, or the default branch when it is a pattern; never a workspace branch, whichever is chosen.
-					</span>
-				</label>
-				<label>
-					Actions a key an agent asks for may hold
-					<select
-						value={settings.credentialCeiling}
-						disabled={locked}
-						onChange={(event) => onSettings({ ...settings, credentialCeiling: event.target.value === 'approver' ? 'approver' : 'requester' })}
-					>
-						<option value="requester">The agent's own</option>
-						<option value="approver">The approver's</option>
-					</select>
-					<span className="hint">
-						The agent's own: only actions the agent holds at the application when it asks. The approver's: any action the approver holds; the request page
-						marks those the agent lacks.
-					</span>
-				</label>
-				<label>
-					Hours a request waits for a decision
-					<input
-						type="number"
-						min={REQUEST_TTL_HOURS.min}
-						max={REQUEST_TTL_HOURS.max}
-						value={ttlText}
-						disabled={locked}
-						aria-invalid={!ttlValid}
-						onChange={(event) => onTtl(event.target.value)}
-					/>
-					<span className="hint">
-						{`${REQUEST_TTL_HOURS.min}–${REQUEST_TTL_HOURS.max}, ${REQUEST_TTL_HOURS.default} by default; past it, the request expires.`}
-					</span>
-					{!ttlValid && <span className="error-text small">A whole number of hours from {REQUEST_TTL_HOURS.min} to {REQUEST_TTL_HOURS.max}.</span>}
-				</label>
+				<div className={commitsChanged ? 'request-setting changed' : 'request-setting'}>
+					<label>
+						Commits an agent may ask to deploy
+						<select
+							value={settings.deployRequestCommits}
+							disabled={locked}
+							onChange={(event) => onSettings({ ...settings, deployRequestCommits: event.target.value === 'any' ? 'any' : 'merged' })}
+						>
+							<option value="merged">Merged commits</option>
+							<option value="any">Any commit</option>
+						</select>
+						<span className="hint">
+							Merged means reachable from the trigger branch, or the default branch when it is a pattern; never a workspace branch, whichever is chosen.
+						</span>
+					</label>
+					{commitsChanged && (
+						<PresetValue
+							preset={preset}
+							text={commitsLabel(preset.settings)}
+							label="Commits an agent may ask to deploy"
+							locked={locked}
+							onReset={() => onSettings({ ...settings, deployRequestCommits: preset.settings.deployRequestCommits })}
+						/>
+					)}
+				</div>
+				<div className={ceilingChanged ? 'request-setting changed' : 'request-setting'}>
+					<label>
+						Actions a key an agent asks for may hold
+						<select
+							value={settings.credentialCeiling}
+							disabled={locked}
+							onChange={(event) => onSettings({ ...settings, credentialCeiling: event.target.value === 'approver' ? 'approver' : 'requester' })}
+						>
+							<option value="requester">The agent's own</option>
+							<option value="approver">The approver's</option>
+						</select>
+						<span className="hint">
+							The agent's own: only actions the agent holds at the application when it asks. The approver's: any action the approver holds; the request page
+							marks those the agent lacks.
+						</span>
+					</label>
+					{ceilingChanged && (
+						<PresetValue
+							preset={preset}
+							text={ceilingLabel(preset.settings)}
+							label="Actions a key an agent asks for may hold"
+							locked={locked}
+							onReset={() => onSettings({ ...settings, credentialCeiling: preset.settings.credentialCeiling })}
+						/>
+					)}
+				</div>
+				<div className={ttlChanged ? 'request-setting changed' : 'request-setting'}>
+					<label>
+						Hours a request waits for a decision
+						<input
+							type="number"
+							min={REQUEST_TTL_HOURS.min}
+							max={REQUEST_TTL_HOURS.max}
+							value={ttlText}
+							disabled={locked}
+							aria-invalid={!ttlValid}
+							onChange={(event) => onTtl(event.target.value)}
+						/>
+						<span className="hint">
+							{`${REQUEST_TTL_HOURS.min}–${REQUEST_TTL_HOURS.max}, ${REQUEST_TTL_HOURS.default} by default; past it, the request expires.`}
+						</span>
+						{!ttlValid && <span className="error-text small">A whole number of hours from {REQUEST_TTL_HOURS.min} to {REQUEST_TTL_HOURS.max}.</span>}
+					</label>
+					{ttlChanged && (
+						<PresetValue
+							preset={preset}
+							text={`${preset.settings.requestTtlHours} h`}
+							label="Hours a request waits for a decision"
+							locked={locked}
+							onReset={() => onTtl(String(preset.settings.requestTtlHours))}
+						/>
+					)}
+				</div>
 			</div>
 		</details>
+	)
+}
+
+/** A request setting that differs from the preset: what the preset says, and a way back to it. */
+function PresetValue({ preset, text, label, locked, onReset }: {
+	preset: (typeof PRESETS)[number]
+	text: string
+	label: string
+	locked: boolean
+	onReset: () => void
+}) {
+	return (
+		<div className="small">
+			<span className="muted">
+				{preset.label}: {text}
+			</span>{' '}
+			<button type="button" className="ghost small" disabled={locked} onClick={onReset}>
+				Reset to {preset.label}
+				<span className="sr-only">{`: ${label}`}</span>
+			</button>
+		</div>
 	)
 }
 

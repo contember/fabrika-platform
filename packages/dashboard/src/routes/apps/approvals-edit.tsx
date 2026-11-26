@@ -22,7 +22,7 @@ export default createPage()
 		const back = () => navigate('apps/approvals', { params: { id: app.id } })
 		return (
 			<AppFrame app={app} envs={envs} tab="approvals" states={states}>
-				<div className="page-head">
+				<div>
 					<Link to="apps/approvals" params={{ id: app.id }} className="back-link">
 						<Icon name="chevron-left" size={14} />
 						Approvals

@@ -6,6 +6,7 @@ import {
 	PERMISSIVE_POLICY,
 	PERMISSIVE_SETTINGS,
 	POLICY_CATEGORIES,
+	type PolicyCategory,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
@@ -18,7 +19,6 @@ import { type AppEnvDto, type ApprovalDto, type ConsoleAccessDto, type ControlFe
 import { ConsoleAccessContext } from '../lib/console-caller'
 import {
 	APPROVAL_CATEGORY_GROUPS,
-	categoryLabel,
 	decidingText,
 	loosened,
 	loosenedSettings,
@@ -34,9 +34,9 @@ import {
 	requesterBlocks,
 	requestTtl,
 	setEnvironmentProtection,
-	settingsSummary,
-	waitingSummary,
 } from '../lib/environment-protection'
+
+const strictChoice: PolicyChoice = { policy: STRICT_POLICY, settings: STRICT_SETTINGS }
 
 const environment = (env: string, isProtected: boolean): AppEnvDto => ({
 	appId: 'notes',
@@ -248,8 +248,9 @@ describe('approval modes', () => {
 		expect(radios(markup, 'grants').find((input) => input.includes('checked=""'))).toContain(
 			'aria-label="Console grants and revocations: A person approves"',
 		)
-		// The preset's choice is marked once per category, for the eye and for a screen reader.
-		expect(markup.match(/<span class="sr-only"> \(Strict\)<\/span>/g)).toHaveLength(POLICY_CATEGORIES.length)
+		// The preset's choice is marked once per category, for the eye and in the radio's name.
+		expect(markup.match(/aria-label="[^"]*: [^"]* \(Strict\)"/g)).toHaveLength(POLICY_CATEGORIES.length)
+		expect(markup.match(/<span class="preset-mark"[^>]*aria-hidden="true">•<\/span>/g)).toHaveLength(POLICY_CATEGORIES.length)
 		// No dropdowns per rule: who decides is one cell, opened on demand.
 		expect(markup.match(/<select/g)).toHaveLength(2)
 		expect(markup).toContain('1 person · passkey')
@@ -292,9 +293,9 @@ describe('approval modes', () => {
 		const markup = editor(environment('prod', true))
 		expect(markup).toContain('Actions a key an agent asks for may hold<select>')
 		expect(markup).toContain('<option value="requester" selected="">The agent&#x27;s own</option>')
-		expect(settingsSummary({ ...STRICT_SETTINGS, credentialCeiling: 'approver' }, STRICT_POLICY)).toContain(
-			'A key an agent asks for may hold any action its approver holds.',
-		)
+		expect(policyDifferences({ policy: STRICT_POLICY, settings: { ...STRICT_SETTINGS, credentialCeiling: 'approver' } }, strictChoice)).toEqual([
+			{ key: 'credentialCeiling', label: 'Actions a key an agent asks for may hold', value: "The approver's", other: "The agent's own" },
+		])
 	})
 
 	test('a change that loosens any category asks first; one that tightens does not', () => {
@@ -342,26 +343,20 @@ describe('approval modes', () => {
 		expect(['0', '169', '1.5', '', 'x'].map(requestTtl)).toEqual([null, null, null, null, null])
 	})
 
-	test('a reader who cannot change the policy reads what waits', () => {
-		expect(waitingSummary(PERMISSIVE_POLICY)).toBe('Nothing waits.')
-		expect(waitingSummary({ ...PERMISSIVE_POLICY, 'deletes-data': 'person', registry: 'refuse' })).toBe(
-			'Waits for a person: Migrations that may change stored data; refused to an agent: Where a deploy points.',
+	test('a reader who cannot change the policy reads every rule, with who decides where it takes effect', () => {
+		const html = renderToStaticMarkup(
+			createElement(PolicySummary, { env: { env: 'prod', approvalPolicy: STRICT_POLICY, approvalSettings: STRICT_SETTINGS } }),
 		)
-		expect(settingsSummary(STRICT_SETTINGS, STRICT_POLICY)).toBe(
-			'An agent asks to deploy merged commits only. A request waits 24 h for a decision. A key an agent asks for holds only actions the agent holds. '
-				+ `A passkey confirms deciding: ${categoryLabel('credentials')}. `
-				+ "An agent writing as a person takes a passkey, confirmed on IAM's approval page.",
+		// An agent writes as a person with no approval, after its person's passkey.
+		expect(html).toContain('<dt>An agent writing as a person</dt><dd>No approval<span class="muted"> · passkey</span></dd>')
+		expect(html).toContain('<dt>A key an agent asks for</dt><dd>A person approves<span class="muted"> · 1 person · passkey</span></dd>')
+		// Under no approval nobody decides, so no one is named.
+		expect(html).toContain('<dt>A new role</dt><dd>No approval</dd>')
+		// A rule no request routes yet says what applies today.
+		expect(html).toContain(
+			'<dt>Variables</dt><dd>A person approves<span class="muted"> · 1 person</span> <span class="chip">not enforced yet</span> <span class="muted">Today it applies at once.</span></dd>',
 		)
-		// A refused agent-write is in what waits, not in the settings.
-		expect(settingsSummary(STRICT_SETTINGS, { ...STRICT_POLICY, 'agent-write': 'refuse' })).not.toContain('agent writing')
-		expect(settingsSummary(PERMISSIVE_SETTINGS, STRICT_POLICY)).not.toContain('passkey')
-		expect(settingsSummary({ ...PERMISSIVE_SETTINGS, approvers: { ...STRICT_SETTINGS.approvers, 'deploy-request': 2 } }, STRICT_POLICY)).toContain(
-			'An agent may ask to deploy any commit.',
-		)
-		expect(
-			settingsSummary({ ...STRICT_SETTINGS, requesterMayApprove: { ...STRICT_SETTINGS.requesterMayApprove, 'deploy-request': false } }, STRICT_POLICY),
-		)
-			.toContain("Someone other than the requester's person decides: A deploy started by an agent or a key.")
+		expect(html).toContain('<dt>Hours a request waits for a decision</dt><dd>24 h</dd>')
 	})
 
 	test('the protection call sends the policy and settings only when given', async () => {
@@ -511,7 +506,7 @@ describe("an environment's rules at a glance", () => {
 				value: 'A person approves · 2 people',
 				other: 'A person approves · 1 person',
 			},
-			{ key: 'secrets', label: 'Secrets', value: 'No approval', other: 'A person approves' },
+			{ key: 'secrets', label: 'Secrets', value: 'No approval', other: 'A person approves', pending: 'Today it applies at once.' },
 			{ key: 'requestTtlHours', label: 'Hours a request waits for a decision', value: '48 h', other: '24 h' },
 		])
 	})
@@ -519,7 +514,30 @@ describe("an environment's rules at a glance", () => {
 	test('the nearest preset is the one with fewer differences, Strict on a tie', () => {
 		expect(nearestPreset(strict).preset.name).toBe('strict')
 		expect(nearestPreset({ policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }).preset.name).toBe('permissive')
-		expect(nearestPreset({ policy: { ...PERMISSIVE_POLICY, secrets: 'person' }, settings: PERMISSIVE_SETTINGS }).differences).toHaveLength(1)
+		const nearPermissive = nearestPreset({ policy: { ...PERMISSIVE_POLICY, secrets: 'person' }, settings: PERMISSIVE_SETTINGS })
+		expect([nearPermissive.preset.name, nearPermissive.differences.length]).toEqual(['permissive', 1])
+		// Nine rules as Permissive says and one as neither does: ten differences from each.
+		const fromPermissive: readonly PolicyCategory[] = [
+			'anyone-calls',
+			'get-mutation',
+			'people',
+			'adoption',
+			'terminal',
+			'deletes-data',
+			'role-external',
+			'public',
+			'csp',
+		]
+		const halfway: PolicyChoice = {
+			policy: fromPermissive.reduce((policy, category) => ({ ...policy, [category]: PERMISSIVE_POLICY[category] }), {
+				...STRICT_POLICY,
+				'off-road': 'person',
+			}),
+			settings: STRICT_SETTINGS,
+		}
+		const permissive: PolicyChoice = { policy: PERMISSIVE_POLICY, settings: PERMISSIVE_SETTINGS }
+		expect([policyDifferences(halfway, strictChoice).length, policyDifferences(halfway, permissive).length]).toEqual([10, 10])
+		expect(nearestPreset(halfway).preset.name).toBe('strict')
 	})
 
 	test('the summary leads with the preset and lists only what differs; every rule is one disclosure', () => {
@@ -527,7 +545,10 @@ describe("an environment's rules at a glance", () => {
 			createElement(PolicySummary, { env: { env: 'prod', approvalPolicy: { ...STRICT_POLICY, secrets: 'off' }, approvalSettings: STRICT_SETTINGS } }),
 		)
 		expect(html).toContain('<strong>Strict</strong><span class="muted">, 1 change</span>')
-		expect(html).toContain('<dt>Secrets</dt><dd>No approval <span class="muted">(Strict: A person approves)</span></dd>')
+		// A rule no request routes yet says so where it differs, not only in the editor.
+		expect(html).toContain(
+			'<dt>Secrets</dt><dd>No approval <span class="muted">(Strict: A person approves)</span> <span class="chip">not enforced yet</span> <span class="muted">Today it applies at once.</span></dd>',
+		)
 		expect(html).toContain('<details class="disclosure"><summary><span class="disclosure-title">Every rule on prod</span>')
 		expect(
 			renderToStaticMarkup(createElement(PolicySummary, { env: { env: 'prod', approvalPolicy: STRICT_POLICY, approvalSettings: STRICT_SETTINGS } })),

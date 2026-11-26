@@ -192,10 +192,6 @@ export function modeLabel(mode: ApprovalMode): string {
 	}
 }
 
-export function isDefaultMode(category: PolicyCategory, mode: ApprovalMode): boolean {
-	return STRICT_POLICY[category] === mode
-}
-
 /** The categories a change of policy loosens: their mode lets more through than before. */
 export function loosened(before: ApprovalPolicy, after: ApprovalPolicy): PolicyCategory[] {
 	return POLICY_CATEGORIES.filter((category) => APPROVAL_MODES.indexOf(after[category]) < APPROVAL_MODES.indexOf(before[category]))
@@ -268,9 +264,7 @@ export interface PolicyChoice {
 }
 
 /** Every category in the console's order. */
-export const ORDERED_CATEGORIES: readonly PolicyCategory[] = APPROVAL_CATEGORY_GROUPS.flatMap((group) =>
-	group.options.map((option) => option.category)
-)
+const ORDERED_OPTIONS: readonly CategoryOption[] = APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options)
 
 /**
  * Who decides a category's pending item and what confirms it, in a few words: "1 person" by default, then only what
@@ -287,29 +281,39 @@ export function decidingText(category: PolicyCategory, settings: ApprovalSetting
 	return parts.length === 0 ? 'no passkey' : parts.join(' · ')
 }
 
+/**
+ * Whether who decides takes effect under a mode: a rule waits for a person only under `plan` or `person`, while an
+ * agent writes as a person under `off`, after the passkey its person confirms.
+ */
+export function decidingApplies(category: PolicyCategory, mode: ApprovalMode): boolean {
+	return category === 'agent-write' ? mode === 'off' : mode === 'plan' || mode === 'person'
+}
+
 /** One rule or setting that differs between two choices, in the console's words. */
 export interface PolicyDifference {
 	readonly key: string
 	readonly label: string
 	readonly value: string
 	readonly other: string
+	/** What applies today to a category no request routes yet, whatever its stored mode says. */
+	readonly pending?: string
 }
 
 /** What `choice` says differently from `base`: each category whose mode or deciding differs, then each request setting. */
 export function policyDifferences(choice: PolicyChoice, base: PolicyChoice): PolicyDifference[] {
-	const rules = ORDERED_CATEGORIES.flatMap((category): PolicyDifference[] => {
+	const rules = ORDERED_OPTIONS.flatMap(({ category, pending }): PolicyDifference[] => {
 		const mode = choice.policy[category]
 		const baseMode = base.policy[category]
 		const deciding = decidingText(category, choice.settings)
 		const baseDeciding = decidingText(category, base.settings)
 		if (mode === baseMode && deciding === baseDeciding) return []
-		const decidingDiffers = deciding !== baseDeciding
-		return [{
-			key: category,
-			label: categoryLabel(category),
-			value: decidingDiffers && deciding !== null ? `${modeLabel(mode)} · ${deciding}` : modeLabel(mode),
-			other: decidingDiffers && baseDeciding !== null ? `${modeLabel(baseMode)} · ${baseDeciding}` : modeLabel(baseMode),
-		}]
+		// Who decides is named where it differs and takes effect, or where it is the only difference.
+		const named = (text: string | null, ruleMode: ApprovalMode) =>
+			text !== null && deciding !== baseDeciding && (decidingApplies(category, ruleMode) || mode === baseMode)
+				? `${modeLabel(ruleMode)} · ${text}`
+				: modeLabel(ruleMode)
+		const difference = { key: category, label: categoryLabel(category), value: named(deciding, mode), other: named(baseDeciding, baseMode) }
+		return [pending === undefined ? difference : { ...difference, pending }]
 	})
 	const settings: PolicyDifference[] = [
 		...(choice.settings.deployRequestCommits === base.settings.deployRequestCommits ? [] : [{
@@ -334,11 +338,13 @@ export function policyDifferences(choice: PolicyChoice, base: PolicyChoice): Pol
 	return [...rules, ...settings]
 }
 
-function commitsLabel(settings: ApprovalSettings): string {
+/** The commits an agent may ask to deploy, in the console's words. */
+export function commitsLabel(settings: ApprovalSettings): string {
 	return settings.deployRequestCommits === 'merged' ? 'Merged commits' : 'Any commit'
 }
 
-function ceilingLabel(settings: ApprovalSettings): string {
+/** The actions a key an agent asks for may hold, in the console's words. */
+export function ceilingLabel(settings: ApprovalSettings): string {
 	return settings.credentialCeiling === 'requester' ? "The agent's own" : "The approver's"
 }
 
@@ -356,41 +362,9 @@ export function requestTtl(text: string): number | null {
 	return Number.isInteger(hours) && hours >= REQUEST_TTL_HOURS.min && hours <= REQUEST_TTL_HOURS.max ? hours : null
 }
 
-/** The settings in the console's words, for a reader who cannot change them. */
-export function settingsSummary(settings: ApprovalSettings, policy: ApprovalPolicy): string {
-	const two = APPROVER_CATEGORIES.filter((category) => settings.approvers[category] === 2).map(categoryLabel)
-	const others = APPROVER_CATEGORIES.filter((category) => !settings.requesterMayApprove[category]).map(categoryLabel)
-	const passkey = APPROVER_CATEGORIES.filter((category) => settings.stepUp[category] === 'webauthn').map(categoryLabel)
-	return [
-		settings.deployRequestCommits === 'merged' ? 'An agent asks to deploy merged commits only.' : 'An agent may ask to deploy any commit.',
-		`A request waits ${settings.requestTtlHours} h for a decision.`,
-		settings.credentialCeiling === 'requester'
-			? 'A key an agent asks for holds only actions the agent holds.'
-			: 'A key an agent asks for may hold any action its approver holds.',
-		...(two.length === 0 ? [] : [`Two people decide: ${two.join(', ')}.`]),
-		...(others.length === 0 ? [] : [`Someone other than the requester's person decides: ${others.join(', ')}.`]),
-		...(passkey.length === 0 ? [] : [`A passkey confirms deciding: ${passkey.join(', ')}.`]),
-		...(policy['agent-write'] === 'off' && settings.stepUp['agent-write'] === 'webauthn'
-			? ["An agent writing as a person takes a passkey, confirmed on IAM's approval page."]
-			: []),
-	].join(' ')
-}
-
 /** Whether a run's change waits for a person under the categories it was classified under (ADR-0083 §3). */
 export function changeWaits(approval: Pick<ApprovalDto, 'changes' | 'categories'>): boolean {
 	return gate({ lines: approval.changes }, policyFromCategories(approval.categories)).kind !== 'pass'
-}
-
-/** The categories whose mode is not `off`, in the console's order, for a reader who cannot change them. */
-export function waitingSummary(policy: ApprovalPolicy): string {
-	const named = (mode: ApprovalMode) =>
-		APPROVAL_CATEGORY_GROUPS.flatMap((group) => group.options).filter((option) => policy[option.category] === mode).map((option) => option.label)
-	const parts = [
-		...(named('plan').length > 0 ? [`a plan or a person: ${named('plan').join(', ')}`] : []),
-		...(named('person').length > 0 ? [`a person: ${named('person').join(', ')}`] : []),
-		...(named('refuse').length > 0 ? [`refused to an agent: ${named('refuse').join(', ')}`] : []),
-	]
-	return parts.length === 0 ? 'Nothing waits.' : `Waits for ${parts.join('; ')}.`
 }
 
 /** The deploys of one environment that wait for a person; turning approvals off decides none of them. */

@@ -2883,6 +2883,11 @@ td {
 	min-width: 0;
 }
 
+/* A row whose rules unfold keeps its environment, status and actions level with the rules' first line. */
+tr:has(> td > .policy-summary) > :is(th, td) {
+	vertical-align: top;
+}
+
 .policy-differences {
 	display: flex;
 	flex-direction: column;
@@ -2998,6 +3003,19 @@ td {
 	min-width: 0;
 }
 
+/* A request setting that differs from the preset, marked as a changed rule is. */
+.request-setting {
+	display: flex;
+	flex-direction: column;
+	gap: var(--s-1);
+}
+
+.request-setting.changed {
+	padding: var(--s-2) var(--s-3);
+	box-shadow: inset 3px 0 0 var(--blueprint);
+	background: var(--blueprint-wash);
+}
+
 /* Stays in view while the rules scroll, so the count of unsaved changes and Save are always at hand. */
 .save-bar {
 	position: sticky;
@@ -3071,7 +3089,7 @@ tbody tr:last-child :is(td, th) {
 	border-bottom: none;
 }
 
-tbody tr:hover td {
+tbody tr:hover > :is(td, th) {
 	background: var(--rule-soft);
 }
 
