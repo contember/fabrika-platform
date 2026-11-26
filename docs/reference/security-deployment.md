@@ -415,10 +415,10 @@ know takes it. `ApprovalDto.stepUp` and `ApprovalRequestDto.stepUp` say which ap
   takes away from the running version's roles and actions (read from the snapshot of the environment's last succeeded
   run) goes to IAM before the new version is published, and a failure there fails the run while the old version serves
   (`applyNarrowing`, `packages/control/src/run-lifecycle.ts`). The full schema follows once the version is live. While
-  that write fails, IAM holds the narrowed running schema: what the new version adds is not in force, and neither is a
-  narrowing the write ahead leaves out. Those are a removed workload, link mount, delegation, member declaration or
-  terminal page; a narrowing that does not form a valid schema on its own; and every narrowing of a dev bootstrap or of
-  an environment without a readable last succeeded run.
+  that write fails, IAM holds the running schema, narrowed where the write ahead applied: what the new version adds is
+  not in force, and neither is a narrowing the write ahead leaves out. Those are a removed workload, link mount,
+  delegation, member declaration or terminal page; a narrowing that does not form a valid schema on its own; and every
+  narrowing of a dev bootstrap or of an environment without a readable last succeeded run.
 
 ## The platform's own releases
 
