@@ -1,5 +1,6 @@
 import type { PageSpec } from '../checks/types'
 import {
+	applicationAccess,
 	applicationApprovals,
 	applicationApprovalsEdit,
 	applicationData,
@@ -14,5 +15,6 @@ export const pages: readonly PageSpec[] = [
 	applicationApprovals,
 	applicationApprovalsEdit,
 	applicationSecrets,
+	applicationAccess,
 	applicationSettings,
 ]

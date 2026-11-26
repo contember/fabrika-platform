@@ -13,7 +13,7 @@ export const reach: UxTask = {
 	run: async (page, actor) => {
 		await openApp(page, actor)
 		await openTab(page, actor, 'Access')
-		await seen(page.getByRole('heading', { name: 'Surface' }), 'surface')
-		await seen(page.getByRole('heading', { name: 'Access by role' }), 'access by role')
+		await seen(page.getByRole('heading', { name: 'Endpoints' }), 'endpoints')
+		await seen(page.getByRole('heading', { name: 'Roles' }), 'roles')
 	},
 }

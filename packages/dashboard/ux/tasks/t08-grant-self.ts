@@ -16,10 +16,8 @@ export const grantSelf: UxTask = {
 		const expiry = page.getByLabel('Admin on test expires')
 		if ((await expiry.count()) === 0) throw new Error('Admin on test is already held: run on a freshly seeded stack (env.md)')
 		await actor.select(page.getByLabel('Admin on test expires'), '8 hours')
-		await actor.click(
-			page.locator('.workspace tr').filter({ has: page.getByLabel('Admin on test expires') }).getByRole('button', { name: 'Grant me Admin' }),
-		)
-		const own = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Your admin access' }) }).locator('tr').filter({
+		await actor.click(page.locator('li').filter({ has: page.getByLabel('Admin on test expires') }).getByRole('button', { name: 'Grant me Admin' }))
+		const own = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Your admin access' }) }).locator('li').filter({
 			hasText: 'test',
 		})
 		await seen(own.getByText(/You hold Admin until|waits for another administrator/), 'the grant on test')
