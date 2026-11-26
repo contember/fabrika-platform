@@ -364,6 +364,8 @@ export function htmlPage(page: {
 	readonly content: string
 	readonly status?: number
 	readonly formActionOrigin?: string
+	/** A page's own script, run after the shared one under the same nonce: a fixed string, never built from input. */
+	readonly script?: string
 }): Response {
 	const formAction = page.formActionOrigin === undefined ? `'self'` : `'self' ${page.formActionOrigin}`
 	const nonce = randomNonce()
@@ -374,7 +376,9 @@ export function htmlPage(page: {
 	<style nonce="${nonce}">${PAGE_STYLE}</style></head><body>${
 			pageBody(page.content, { runsOn: escapeHtml(catalogFor(page.locale).pages.runsOn) }, page.brand)
 		}
-	<script nonce="${nonce}">var actionToken=document.getElementById('action-token');if(actionToken&&!actionToken.value){var fragment=new URLSearchParams(location.hash.slice(1));var token=fragment.get('token');if(token){actionToken.value=token;history.replaceState(null,'',location.pathname+location.search);}}document.querySelectorAll('[data-show]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.dataset.show);if(!input)return;var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?button.dataset.labelHide:button.dataset.labelShow;} );});</script></body></html>`
+	<script nonce="${nonce}">var actionToken=document.getElementById('action-token');if(actionToken&&!actionToken.value){var fragment=new URLSearchParams(location.hash.slice(1));var token=fragment.get('token');if(token){actionToken.value=token;history.replaceState(null,'',location.pathname+location.search);}}document.querySelectorAll('[data-show]').forEach(function(button){button.addEventListener('click',function(){var input=document.getElementById(button.dataset.show);if(!input)return;var show=input.type==='password';input.type=show?'text':'password';button.textContent=show?button.dataset.labelHide:button.dataset.labelShow;} );});${
+			page.script ?? ''
+		}</script></body></html>`
 	return new Response(html, {
 		status: page.status ?? 200,
 		headers: {

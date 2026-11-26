@@ -9,6 +9,7 @@
 // overlapping cron is harmless either way.
 
 import type { Env, RequestContext } from './env'
+import { recordMovedPasskeys } from './passkeys'
 import { buildServices } from './services'
 
 const DAY_SECONDS = 24 * 60 * 60
@@ -23,7 +24,8 @@ export const INVITATION_RETENTION_SECONDS = 7 * 24 * 60 * 60 // 7 days past expi
 
 /**
  * Prune old auth-log rows, audit rows past an operator's retention, password action tokens, login throttles, spent handoff codes and delegation
- * grants, old invitations, dead sessions, ended terminal identifications and unanswered passkey challenges. Registered through `waitUntil` because a Worker scheduled
+ * grants, old invitations, dead sessions, ended terminal identifications and unanswered passkey challenges, and record the passkeys
+ * migration 0047 removed. Registered through `waitUntil` because a Worker scheduled
  * handler that returns before its writes settle is cut off; in a process the supervised promise means a
  * failure is logged rather than fatal.
  */
@@ -50,6 +52,8 @@ export function runIamMaintenance(env: Env, ctx: RequestContext, now: number = D
 			services.repositories.terminals.pruneIdentifications(nowSeconds),
 			// Passkey challenges live five minutes and are single-use; this sweeps the ones nobody answered.
 			services.repositories.passkeys.pruneChallenges(nowSeconds),
+			// Passkeys migration 0047 removed: each gets its `iam.passkey.reset` record (reason `rp_moved`), then goes.
+			recordMovedPasskeys(services),
 		]).then(() => undefined),
 	)
 }

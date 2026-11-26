@@ -127,6 +127,46 @@ export interface PageText {
 		/** More grants are live than the page lists; `shown` is how many it lists. */
 		readonly more: (shown: number) => string
 	}
+	/**
+	 * A person's passkeys (WebAuthn), on IAM's own pages: the section of the account page, the pages that add and remove
+	 * one, and the step-up page a console decision opens.
+	 */
+	readonly passkeys: {
+		readonly title: string
+		readonly text: string
+		readonly none: string
+		readonly added: string
+		readonly lastUsed: string
+		readonly neverUsed: string
+		readonly remove: string
+		readonly addTitle: string
+		readonly label: string
+		readonly labelHint: string
+		readonly add: string
+		readonly addedNotice: string
+		readonly removedNotice: string
+		readonly refusedNotice: string
+		readonly busyNotice: string
+		readonly duplicateNotice: string
+		readonly limitNotice: string
+		readonly labelNotice: string
+		readonly confirmTitle: string
+		readonly confirmAddText: string
+		/** Removing the passkey named `label` takes a check with one the person holds. */
+		readonly confirmRemoveText: (label: string) => string
+		readonly createTitle: string
+		/** The browser is about to create the passkey the person named `label`. */
+		readonly createText: (label: string) => string
+		readonly continue: string
+		readonly unsupported: string
+		readonly failed: string
+		readonly back: string
+		readonly stepUpTitle: string
+		readonly stepUpText: string
+		readonly stepUpDone: string
+		readonly stepUpGone: string
+		readonly stepUpRefused: string
+	}
 	readonly invitation: {
 		readonly title: string
 		readonly text: string

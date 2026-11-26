@@ -25,6 +25,22 @@ export interface ConsumedPasskeyChallenge {
 	expires_at: number
 }
 
+/** A step-up challenge answered on IAM's page and consumed by its issuer: its binding and the answer it recorded. */
+export interface AnsweredPasskeyChallenge {
+	binding: string
+	expires_at: number
+	answered_credential_id: string
+	answered_at: number
+}
+
+/** A passkey that migration 0047 removed because it answered on the console's host, still to be recorded. */
+export interface MovedPasskeyRow {
+	id: string
+	principal_id: string
+	label: string
+	created_at: number
+}
+
 export interface NewPasskey {
 	id: string
 	principalId: string
@@ -83,12 +99,49 @@ export class PasskeyRepository {
 		return row === null ? null : row.id
 	}
 
-	/** Remove and answer the principal's challenge of `kind`; null when there is none, spent or never issued. */
+	/**
+	 * Remove and answer the principal's unanswered challenge of `kind`; null when there is none, spent, answered on the
+	 * step-up page or never issued.
+	 */
 	async consumeChallenge(principalId: string, kind: PasskeyChallengeKind, id: string): Promise<ConsumedPasskeyChallenge | null> {
 		return this.db
-			.prepare('DELETE FROM passkey_challenges WHERE id = ? AND principal_id = ? AND kind = ? RETURNING challenge, binding, expires_at')
+			.prepare(`DELETE FROM passkey_challenges WHERE id = ? AND principal_id = ? AND kind = ? AND answered_at IS NULL
+				RETURNING challenge, binding, expires_at`)
 			.bind(id, principalId, kind)
 			.first<ConsumedPasskeyChallenge>()
+	}
+
+	/** The principal's unanswered assertion challenge, read without spending it; null when there is none. */
+	async openAssertionChallenge(principalId: string, id: string): Promise<ConsumedPasskeyChallenge | null> {
+		return this.db
+			.prepare(`SELECT challenge, binding, expires_at FROM passkey_challenges
+				WHERE id = ? AND principal_id = ? AND kind = 'assertion' AND answered_at IS NULL`)
+			.bind(id, principalId)
+			.first<ConsumedPasskeyChallenge>()
+	}
+
+	/** Record the answer of an open assertion challenge; false when it was answered, spent or expired meanwhile. */
+	async markAnswered(principalId: string, id: string, credentialId: string, at: number): Promise<boolean> {
+		const row = await this.db
+			.prepare(`UPDATE passkey_challenges SET answered_credential_id = ?, answered_at = ?
+				WHERE id = ? AND principal_id = ? AND kind = 'assertion' AND answered_at IS NULL AND expires_at > ? RETURNING id`)
+			.bind(credentialId, at, id, principalId, at)
+			.first<{ id: string }>()
+		return row !== null
+	}
+
+	/** Spend one of the principal's challenges, answered or not. */
+	async dropChallenge(principalId: string, id: string): Promise<void> {
+		await this.db.prepare('DELETE FROM passkey_challenges WHERE id = ? AND principal_id = ?').bind(id, principalId).run()
+	}
+
+	/** Remove and answer the principal's answered assertion challenge; null when it is unanswered, spent or never issued. */
+	async consumeAnswered(principalId: string, id: string): Promise<AnsweredPasskeyChallenge | null> {
+		return this.db
+			.prepare(`DELETE FROM passkey_challenges WHERE id = ? AND principal_id = ? AND kind = 'assertion' AND answered_at IS NOT NULL
+				RETURNING binding, expires_at, answered_credential_id, answered_at`)
+			.bind(id, principalId)
+			.first<AnsweredPasskeyChallenge>()
 	}
 
 	/**
@@ -160,6 +213,21 @@ export class PasskeyRepository {
 		const removal = this.writer.changed([{ sql: 'DELETE FROM passkeys WHERE principal_id = ? RETURNING id', binds: [principalId] }], audit)
 		const results = await this.db.batch([challenges, ...removal.statements])
 		return removal.rows(results, 1).length
+	}
+
+	/** The passkeys migration 0047 removed and nothing has recorded yet, oldest first, at most `limit`. */
+	async listMoved(limit: number): Promise<MovedPasskeyRow[]> {
+		const { results } = await this.db
+			.prepare('SELECT * FROM passkeys_rp_moved ORDER BY created_at, id LIMIT ?')
+			.bind(limit)
+			.all<MovedPasskeyRow>()
+		return results
+	}
+
+	/** Record one removed passkey and forget it; false when another pass recorded it first. */
+	async recordMoved(id: string, audit: AuditEventInput): Promise<boolean> {
+		const rows = await this.writer.run([{ sql: 'DELETE FROM passkeys_rp_moved WHERE id = ? RETURNING id', binds: [id] }], audit)
+		return rows.length > 0
 	}
 
 	/** Drop the challenges nobody answered in time. */
