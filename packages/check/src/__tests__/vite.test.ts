@@ -69,6 +69,7 @@ const runPage = (root: string, answer: unknown): z.infer<typeof page> => {
 }
 
 describe('a Vite build of the SPA through the plugin', () => {
+	// Two Vite builds, each in a process of its own: about 3 s on an idle machine, past 5 s on a loaded one.
 	test('holds the client and the contract and none of the handlers, which a build without the plugin bundles', () => {
 		const plain = materialize(spaTree())
 		const unsliced = viteBuild(plain, 'plain')
@@ -86,7 +87,7 @@ describe('a Vite build of the SPA through the plugin', () => {
 		const code = scripts(sliced)
 		expect(code).toContain('/api')
 		for (const text of HANDLER_TEXT) expect(code).not.toContain(text)
-	})
+	}, 30_000)
 
 	// Two Vite builds, each in a process of its own: about 3 s on an idle machine, past 5 s on a loaded one.
 	test('holds no table policy parse, which a build without the plugin bundles', () => {
