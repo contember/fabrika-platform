@@ -24,7 +24,8 @@ const APPLICATION_BINDING = 'APP'
 const envelopeSchema = z.object({
 	success: z.boolean(),
 	result: z.unknown(),
-	errors: z.array(z.object({ code: z.number().optional(), message: z.string() }).passthrough()).optional(),
+	// Some Cloudflare endpoints answer a success with `"errors": null` (the Workers Custom Domains list does).
+	errors: z.array(z.object({ code: z.number().optional(), message: z.string() }).passthrough()).nullish(),
 })
 const bindingSchema = z.object({ type: z.string(), name: z.string() }).passthrough()
 const settingsSchema = z.object({ bindings: z.array(bindingSchema) }).passthrough()
