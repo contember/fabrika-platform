@@ -13,6 +13,7 @@ import { Worker } from 'oblaka-iac'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { type CloudflareDeployRun, createCloudflareDeployer, defaultCloudflareCollaborators, generateWranglerConfigs, type ProvisionInput } from '..'
 import { CLOUDFLARE_PROXY_WORKER_DIR } from '../proxy'
+import { fakeCloudflareApi } from './helpers/cloudflare-api'
 
 let checkout: string
 
@@ -72,6 +73,7 @@ const deployCheckout = async (
 		apiToken: 'token',
 		collaborators: {
 			...defaultCloudflareCollaborators,
+			cloudflareApi: fakeCloudflareApi(),
 			// The application Worker holds no secret yet, so the deploy has none to sweep.
 			runCommand: async (spec) => ({ exitCode: 0, stdout: spec.args[0] === 'secret' ? '[]' : '', stderr: '' }),
 			provision: async (input) => {

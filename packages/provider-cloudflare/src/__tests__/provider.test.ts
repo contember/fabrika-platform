@@ -48,6 +48,8 @@ import {
 	proxyManifestJson,
 } from '../proxy'
 import type { RunnerOutcomeFile } from '../runner-protocol'
+import type { CloudflareApiFetch } from '../worker-secrets'
+import { fakeCloudflareApi } from './helpers/cloudflare-api'
 import { PUBLISHED_PRERELEASES } from './published-prereleases'
 
 /** Every directory a fixture linked the CLI in: a frozen install of the same checkout links it there again. */
@@ -181,6 +183,7 @@ const makeCollaborators = (
 	writeOutcome: async (outcome) => {
 		rec.outcomes.push(outcome)
 	},
+	cloudflareApi: fakeCloudflareApi(),
 })
 
 const deploy = (
@@ -228,6 +231,8 @@ const deploy = (
 		readonly platformIam?: PlatformIamTarget
 		/** The pointer Control records; none by default. */
 		readonly applicationObjects?: ApplicationObjects
+		/** Cloudflare's API; by default every hostname is free in a zone of the account. */
+		readonly cloudflareApi?: CloudflareApiFetch
 	} = {},
 ) => {
 	const contract = options.contract ?? (options.platformResources === 'allow' || options.checkoutContract !== undefined ? undefined : notesArtifact)
@@ -237,16 +242,19 @@ const deploy = (
 	return createCloudflareDeployer({
 		accountId: 'acc-1',
 		apiToken: 'tok-1',
-		collaborators: makeCollaborators(
-			rec,
-			served,
-			options.commandResult,
-			options.checkoutDir,
-			options.runCommand,
-			options.generatedServices,
-			options.checkoutContract,
-			options.configPath,
-		),
+		collaborators: {
+			...makeCollaborators(
+				rec,
+				served,
+				options.commandResult,
+				options.checkoutDir,
+				options.runCommand,
+				options.generatedServices,
+				options.checkoutContract,
+				options.configPath,
+			),
+			...(options.cloudflareApi === undefined ? {} : { cloudflareApi: options.cloudflareApi }),
+		},
 		...(options.platformResources === undefined ? {} : { platformResources: options.platformResources }),
 		...(options.platformIam === undefined ? {} : { platformIam: options.platformIam }),
 		reconcileSchema: async (input) => {
@@ -2731,6 +2739,78 @@ const localCheckout = async (extra: (root: string) => Promise<void> = async () =
 	await extra(root)
 	return root
 }
+
+describe('a Custom Domain the deploy does not own', () => {
+	// wrangler without a terminal publishes Custom Domains with `override_existing_origin` and
+	// `override_existing_dns_record`, so whatever the deploy does not refuse first, it takes over.
+	const deploys = (): CommandSpec[] => rec.commands.filter((command) => command.command === 'wrangler' && command.args[0] === 'deploy')
+
+	test('attached to another Worker is refused before any Worker deploys', async () => {
+		const seen: string[] = []
+		const result = await deploy(rec, config(), {
+			cloudflareApi: fakeCloudflareApi({ customDomains: [{ hostname: 'stage.example.com', service: 'prod-fabrika-iam' }], seen }),
+		})
+		expect(result.status).toBe('failed')
+		expect(stepError(result, 'deploy-worker')).toBe(
+			'cloudflare: stage.example.com is a Custom Domain of another Worker; the deploy does not take it over. Detach it in Cloudflare, or give the environment another domain',
+		)
+		expect(deploys()).toEqual([])
+		expect(seen).toHaveLength(1)
+		for (const url of seen) expect(url).not.toContain('tok-1')
+	})
+
+	test('held by a DNS record of its zone is refused before any Worker deploys', async () => {
+		const result = await deploy(rec, config(), {
+			cloudflareApi: fakeCloudflareApi({ zones: ['example.com'], dnsRecords: [{ name: 'stage.example.com', type: 'CNAME' }] }),
+		})
+		expect(stepError(result, 'deploy-worker')).toBe(
+			'cloudflare: stage.example.com already has a DNS record (CNAME); the deploy does not replace it. Delete the record in Cloudflare, or give the environment another domain',
+		)
+		expect(deploys()).toEqual([])
+	})
+
+	test('in no zone of the account is refused, since nobody can tell who holds it', async () => {
+		const result = await deploy(rec, config(), { cloudflareApi: fakeCloudflareApi({ zones: [] }) })
+		expect(stepError(result, 'deploy-worker')).toBe(
+			'cloudflare: no zone of the account holds stage.example.com, so the deploy cannot tell who owns it; add the zone to the account',
+		)
+		expect(deploys()).toEqual([])
+	})
+
+	test('a hostname the proxy already holds is its own, and a free one in a zone of the account deploys', async () => {
+		const seen: string[] = []
+		const own = await deploy(rec, config(), {
+			cloudflareApi: fakeCloudflareApi({ customDomains: [{ hostname: 'stage.example.com', service: 'stage-demo-proxy' }], seen }),
+		})
+		expect(own.status).toBe('succeeded')
+		// Its own Custom Domain: neither its zone nor its DNS record is read.
+		expect(seen.map((url) => new URL(url).pathname)).toEqual(['/client/v4/accounts/acc-1/workers/domains'])
+		expect(deploys()).toHaveLength(2)
+
+		rec.commands.length = 0
+		seen.length = 0
+		const free = await deploy(rec, config(), {
+			cloudflareApi: fakeCloudflareApi({ zones: ['example.com'], dnsRecords: [{ name: 'other.example.com', type: 'A' }], seen }),
+		})
+		expect(free.status).toBe('succeeded')
+		expect(seen.map((url) => new URL(url).pathname + new URL(url).search)).toEqual([
+			'/client/v4/accounts/acc-1/workers/domains?hostname=stage.example.com',
+			'/client/v4/zones?name=stage.example.com&account.id=acc-1',
+			'/client/v4/zones?name=example.com&account.id=acc-1',
+			'/client/v4/zones/zone-example.com/dns_records?name=stage.example.com',
+		])
+		expect(deploys()).toHaveLength(2)
+	})
+
+	test('is not read on a dry run or for an environment without a domain', async () => {
+		const seen: string[] = []
+		const cloudflareApi = fakeCloudflareApi({ customDomains: [{ hostname: 'stage.example.com', service: 'prod-fabrika-iam' }], seen })
+		expect((await deploy(rec, config(), { dryRun: true, cloudflareApi })).status).toBe('succeeded')
+		expect((await deploy(rec, config(), { domain: null, cloudflareApi })).status).toBe('succeeded')
+		expect(seen).toEqual([])
+		expect(rec.logs).toContain('  [dry-run] would check that no other Worker or DNS record holds stage.example.com')
+	})
+})
 
 describe('the order of the first deploy (deployOrder)', () => {
 	test('deploys the application Worker before the proxy that binds it as `APP`, although oblaka lists the proxy first', async () => {

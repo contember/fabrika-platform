@@ -331,6 +331,14 @@ this one import.
   `DeploymentBounds.connectors` admits exactly that binding, by name and remote, on the application Worker. An
   authored binding under a framework name is refused like an authored variable. Control writes the import's
   `_KEY` (a Worker secret) and `_URL` as managed values.
+- **An application's deploy takes over no Custom Domain or DNS record it does not own** (`src/custom-domains.ts`).
+  wrangler without a terminal publishes Custom Domains with `override_existing_origin` and
+  `override_existing_dns_record` set and has no flag to turn them off, so `deploy-worker`, before any Worker of the run
+  deploys, reads each Custom Domain hostname of the generated configs (`platformResources: 'refuse'` only, never on a dry
+  run): a Custom Domain attached to another Worker, a DNS record at the hostname where no Custom Domain of the Worker
+  holds it, or a hostname in no zone of the account fails the step. The reads go through the `cloudflareApi`
+  collaborator with the account token, no redirect followed. Another Worker changing the hostname between the read and
+  wrangler's write is not caught; Control's registry is what keeps two environments off one domain.
 - **Proxy invocation logs stay disabled.** The reserved handoff callback carries a one-time code in
   its query string, and Cloudflare's automatic invocation metadata is outside the proxy's redaction
   layer. Structured application logs remain enabled and redact request queries.

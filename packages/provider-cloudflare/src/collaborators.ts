@@ -7,6 +7,7 @@ import { join, resolve } from 'node:path'
 import { type Definition, deploy as oblakaDeploy, type DeployResult as OblakaDeployResult } from 'oblaka-iac'
 import { type CloudflareAppConfig, isCloudflareAppConfig } from './authoring'
 import { RUNNER_OUTCOME_FILE_ENV, type RunnerOutcomeFile } from './runner-protocol'
+import type { CloudflareApiFetch } from './worker-secrets'
 
 export interface CommandSpec {
 	readonly command: string
@@ -58,6 +59,8 @@ export interface CloudflareCollaborators {
 	readonly runCommand: CommandRunner
 	readonly provision: OblakaProvisioner
 	readonly writeOutcome: OutcomeWriter
+	/** Cloudflare's API, read before a Custom Domain deploys (`assertCustomDomainsOwned`). */
+	readonly cloudflareApi: CloudflareApiFetch
 }
 
 export const loadCloudflareConfig = async (cwd: string, configPath: string): Promise<LoadedCloudflareConfig & { readonly absolutePath: string }> => {
@@ -153,6 +156,7 @@ export const defaultCloudflareCollaborators: CloudflareCollaborators = {
 	runCommand: defaultRunCommand,
 	provision: defaultProvision,
 	writeOutcome: defaultWriteOutcome,
+	cloudflareApi: (url, init) => fetch(url, init),
 }
 
 export type { SchemaReconciler }

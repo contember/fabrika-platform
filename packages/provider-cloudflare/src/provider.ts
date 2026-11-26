@@ -62,6 +62,7 @@ import {
 	servesOps,
 	servesRawSql,
 } from './contract-support'
+import { assertCustomDomainsOwned, customDomainHosts } from './custom-domains'
 import { deployOrder } from './deploy-order'
 import { localWorkloadKeyVariables } from './local-workload-keys'
 import { parseSecretNames, splitManagedEnvironment, staleManagedSecrets, withSecretsFile } from './managed-secrets'
@@ -671,6 +672,20 @@ const wranglerDeploy = async (env: StepEnv, cwd: string, secrets: Readonly<Recor
 	})
 }
 
+/** Refuse a Custom Domain of `generated` that another Worker or a DNS record holds, before wrangler would take it over. */
+const assertOwnedDomains = async (env: StepEnv, generated: GeneratedConfig): Promise<void> => {
+	const hostnames = customDomainHosts(generated.config)
+	if (hostnames.length === 0) return
+	const script = generated.config.name ?? ''
+	if (env.run.dryRun) {
+		env.run.log(`  [dry-run] would check that no other Worker or DNS record holds ${hostnames.join(', ')}`)
+		return
+	}
+	assertRunning(env.run.signal)
+	const { accountId, apiToken } = env.credentials
+	await assertCustomDomainsOwned({ accountId, apiToken, fetch: env.cf.cloudflareApi, signal: env.run.signal }, script, hostnames)
+}
+
 /** Delete the framework secrets the application Worker holds that this deploy no longer writes, as Zerops removes them. */
 const deleteStaleSecrets = async (env: StepEnv, cwd: string): Promise<void> => {
 	const { run, credentials, cf } = env
@@ -800,6 +815,9 @@ const runStep = async (spec: CloudflareStep, env: StepEnv): Promise<void> => {
 				await wranglerDeploy(env, dir, env.managedSecrets)
 				return
 			}
+			// An application's deploy takes no hostname another Worker or a DNS record holds, which wrangler would take over;
+			// checked before any Worker deploys, so a refusal leaves the environment as it was.
+			if (env.platformResources === 'refuse') { for (const generated of configs) await assertOwnedDomains(env, generated) }
 			const application = `${run.env}-${applicationWorker(worker).options.name}`
 			let applicationDir: string | undefined
 			for (const generated of deployOrder(configs)) {
