@@ -1,20 +1,28 @@
 import { Link } from '@buzola/router'
+import { CONTROL_ACTIONS } from '@fabrika/control-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import { useState } from 'react'
 import type { AppEnvDto } from '../../lib/api'
 import { mayDo, mayOpen } from '../../lib/console-access'
+import { type EnvironmentState, stateLabel, stateLamp } from '../../lib/environment-state'
 import { fmtAgo, shortSha } from '../../lib/format'
 import { runtimeHealth, unhealthyTelemetry } from '../../lib/health'
-import { boundedCount, environmentSources, isProduction, OVERVIEW_APP_LIMIT, type OverviewData } from '../../lib/overview'
+import { boundedCount, environmentSources, isProduction, OVERVIEW_APP_LIMIT, type OverviewData, overviewEnvironments } from '../../lib/overview'
+import { environmentStateOf } from '../app/AppFrame'
 import { FilterGroup } from '../FilterGroup'
 import { Chip, Status } from '../Status'
 import { Panel } from './Panel'
 
-export function Applications({ data, initialFilter = 'all' }: { data: OverviewData; initialFilter?: 'all' | 'production' }) {
+/** `states` holds each environment's data state, keyed by `environmentKey` (`useEnvironmentStatesAcross`). */
+export function Applications({ data, states, initialFilter = 'all' }: {
+	data: OverviewData
+	states: ReadonlyMap<string, EnvironmentState>
+	initialFilter?: 'all' | 'production'
+}) {
 	const [productionOnly, setProductionOnly] = useState(initialFilter === 'production')
 	const allApps = data.apps.data?.items ?? []
 	const apps = allApps.slice(0, OVERVIEW_APP_LIMIT)
-	const allEnvs = [...data.environments.values()].flatMap((read) => read.data?.items ?? [])
+	const allEnvs = overviewEnvironments(data)
 	const envCount = allEnvs.length
 	const monitored = allEnvs.filter((env) => runtimeHealth(environmentSources(data, env.appId, env.env), data.loadedAt).monitored).length
 	const failedReads = [...data.environments.values()].some((read) => read.problem !== null)
@@ -40,6 +48,7 @@ export function Applications({ data, initialFilter = 'all' }: { data: OverviewDa
 					<thead>
 						<tr>
 							<th className="grow">Application / environment</th>
+							<th>State</th>
 							<th>Runtime health</th>
 							<th>Published release</th>
 							<th>Errors</th>
@@ -56,14 +65,14 @@ export function Applications({ data, initialFilter = 'all' }: { data: OverviewDa
 										<td>
 											<Link to="apps/detail" params={{ id: app.id }}>{app.id}</Link>
 										</td>
-										<td colSpan={3} className="muted">
+										<td colSpan={4} className="muted">
 											{read?.data == null ? 'Environments could not be read' : 'No environments configured'}
 										</td>
 									</tr>
 								)
 							}
 							return read.data.items.filter((env) => !productionOnly || isProduction(env.env)).map((env) => (
-								<Environment key={`${app.id}:${env.env}`} env={env} data={data} />
+								<Environment key={`${app.id}:${env.env}`} env={env} data={data} state={environmentStateOf(states, env)} />
 							))
 						})}
 					</tbody>
@@ -85,7 +94,7 @@ export function Applications({ data, initialFilter = 'all' }: { data: OverviewDa
 	)
 }
 
-function Environment({ env, data }: { env: AppEnvDto; data: OverviewData }) {
+function Environment({ env, data, state }: { env: AppEnvDto; data: OverviewData; state: EnvironmentState }) {
 	const sources = environmentSources(data, env.appId, env.env)
 	const health = runtimeHealth(sources, data.loadedAt)
 	const telemetryUnknown = sources === null || sources.length === 0 || sources.some(unhealthyTelemetry)
@@ -104,6 +113,16 @@ function Environment({ env, data }: { env: AppEnvDto; data: OverviewData }) {
 					<Chip>{env.env}</Chip>
 				</div>
 				<span className="ov-domain">{env.publicOrigin?.replace(/^https?:\/\//, '') ?? env.domain ?? 'No public address'}</span>
+			</td>
+			<td>
+				{mayDo(data.caller.access, CONTROL_ACTIONS.DATA_READ, { app: env.appId, env: env.env })
+					? (
+						<Link to="apps/data" params={{ id: env.appId, env: env.env }}>
+							<span className="sr-only">{env.appId} / {env.env} data:</span>
+							<Status lamp={stateLamp(state)}>{stateLabel(state)}</Status>
+						</Link>
+					)
+					: <Status lamp={stateLamp(state)}>{stateLabel(state)}</Status>}
 			</td>
 			<td>
 				<Status lamp={health.lamp}>{health.label}</Status>

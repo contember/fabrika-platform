@@ -15,8 +15,11 @@ import { healthCheckState, healthLamp, needsMonitoringAttention, runtimeHealth }
 import { deployHistory, environmentSources, expiringKey, loadOverview, OVERVIEW_ACCESS_REFRESH_MS, OVERVIEW_APP_LIMIT } from '../lib/overview'
 import { DEFAULT_ISSUE_FILTERS, ErrorsView } from '../operations/views/Errors'
 import auditPage from '../routes/access/audit'
+import dataPage from '../routes/apps/data'
 import appPage from '../routes/apps/detail'
 import appsPage from '../routes/apps/index'
+import { Readings } from '../routes/index'
+import mailPage from '../routes/mail/index'
 import errorPage from '../routes/operations/errors/detail'
 import errorsPage from '../routes/operations/errors/index'
 import healthPage from '../routes/operations/health/index'
@@ -28,6 +31,8 @@ const pageRegistry = {
 	'access/audit': auditPage.route,
 	apps: appsPage.route,
 	'apps/detail': appPage.route,
+	'apps/data': dataPage.route,
+	mail: mailPage.route,
 	'operations/errors': errorsPage.route,
 	'operations/errors/detail': errorPage.route,
 	'operations/health': healthPage.route,
@@ -124,7 +129,9 @@ function renderTable(data: Awaited<ReturnType<typeof loadOverview>>, filter: 'al
 		adapter: createMemoryNavigationAdapter(),
 		pageRegistry,
 	})
-	return renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(Applications, { data, initialFilter: filter })))
+	return renderToStaticMarkup(
+		createElement(BuzolaProvider, { router }, createElement(Applications, { data, states: new Map(), initialFilter: filter })),
+	)
 }
 
 function fetchOverview(overrides: Record<string, unknown> = {}, calls: string[] = [], refuse: string[] = []): RpcFetch {
@@ -198,12 +205,28 @@ describe('overview data boundaries', () => {
 				adapter: createMemoryNavigationAdapter(),
 				pageRegistry,
 			}),
-		}, createElement(Applications, { data })))
+		}, createElement(Applications, { data, states: new Map() })))
 		expect(markup).toContain('href="/runs/old-publication"')
 		expect(calls).toContain('/api/rpc:runs.get')
 		expect(markup).toContain('abc123')
 		expect(markup).not.toContain('Not published')
 		expect(markup).not.toContain('never')
+	})
+
+	test('production incidents read "Not monitored", not 0, when no production environment has a health check', async () => {
+		const data = await loadOverview(caller, fetchOverview())
+		const router = new Router({
+			routes: buildRouteTree([{ path: '/', component: () => null, isIndex: true }]),
+			adapter: createMemoryNavigationAdapter(),
+			pageRegistry,
+		})
+		const readings = () => renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(Readings, { data })))
+		data.health = { data: { sources: [{ ...source, httpChecks: [] }] }, problem: null }
+		expect(readings()).toContain('Not monitored')
+		expect(readings()).toContain('No visible production environment has a health check')
+		data.health = { data: { sources: [source] }, problem: null }
+		expect(readings()).not.toContain('Not monitored')
+		expect(readings()).toContain('1 visible environments monitored')
 	})
 
 	test('a source omitted by scoped authorization is unknown, not unmonitored', async () => {
@@ -220,7 +243,7 @@ describe('overview data boundaries', () => {
 			adapter: createMemoryNavigationAdapter(),
 			pageRegistry,
 		})
-		const table = renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(Applications, { data })))
+		const table = renderToStaticMarkup(createElement(BuzolaProvider, { router }, createElement(Applications, { data, states: new Map() })))
 		expect(table).toContain('window=all')
 		expect(table).toContain('source=source')
 		const page = { items: [], nextCursor: null, summary: { total: 0, open: 0, ignored: 0, resolved: 0 } }

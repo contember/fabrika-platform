@@ -1,5 +1,5 @@
 import { createRpcClient, RpcError, type RpcFetch } from '@fabrika/app'
-import { CONTROL_ACTIONS, type RunDto } from '@fabrika/control-contract'
+import { type AppEnvDto, CONTROL_ACTIONS, type RunDto } from '@fabrika/control-contract'
 import type { ApiKeyDetail, IamAdminRpcContract } from '@fabrika/iam-contract'
 import { OPERATIONS_ACTIONS } from '@fabrika/operations-contract/access'
 import type { OperationsSourceHealthDto } from '@fabrika/operations-contract/operator-api'
@@ -129,6 +129,11 @@ export async function loadOverview(caller: ConsoleCaller, fetcher: RpcFetch = fe
 }
 
 export type OverviewData = Awaited<ReturnType<typeof loadOverview>>
+
+/** Every environment the overview read, of the applications whose environments it reads. */
+export function overviewEnvironments(data: Pick<OverviewData, 'environments'>): AppEnvDto[] {
+	return [...data.environments.values()].flatMap((read) => read.data?.items ?? [])
+}
 
 export function isProduction(environment: string): boolean {
 	return /^(prod|production)$/i.test(environment)
