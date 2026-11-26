@@ -51,7 +51,7 @@ describe("the installation's database", () => {
 			FromPort: 5432,
 			ToPort: 5432,
 			SourceSecurityGroupId: { 'Fn::GetAtt': ['DatabaseClientGroup', 'GroupId'] },
-			Description: "the platform's services",
+			Description: 'the platform services',
 		}])
 		expect(resources.DatabaseGroup.Properties.SecurityGroupEgress).toEqual([{ IpProtocol: '-1', CidrIp: '127.0.0.1/32', Description: 'none' }])
 		expect(resources.DatabaseClientGroup.Properties.SecurityGroupIngress).toBeUndefined()
@@ -76,6 +76,7 @@ describe("the installation's database", () => {
 				region: 'eu-central-1',
 				appsListenerArn: 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210',
 				vpcId: network.vpcId,
+				installationHosts: ['iam.example.com'],
 			}).map((managed) => managed.statements.filter((statement) => JSON.stringify(statement).includes('"Allow"'))),
 		)
 		expect(grants).not.toContain('parameter/fabrika/platform')

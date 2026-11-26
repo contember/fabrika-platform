@@ -71,14 +71,16 @@ export function awsDatabaseStack(network: AwsNetworkOutputs): AwsStack {
 	resources['DatabaseSubnets'] = {
 		Type: 'AWS::RDS::DBSubnetGroup',
 		Properties: {
-			DBSubnetGroupDescription: "fabrika: the platform database's subnets",
+			// No apostrophe in any description here: EC2 takes a group's and a rule's in a-z, A-Z, 0-9, spaces and
+			// `._-:/()#,@[]+=&;{}!$*` alone.
+			DBSubnetGroupDescription: 'fabrika: the platform database subnets',
 			SubnetIds: cidrs.map((_, index) => ({ Ref: `DatabaseSubnet${index}` })),
 		},
 	}
 	resources['DatabaseClientGroup'] = {
 		Type: 'AWS::EC2::SecurityGroup',
 		Properties: {
-			GroupDescription: "fabrika: the platform's services, the database's only clients",
+			GroupDescription: 'fabrika: the platform services, the only database clients',
 			VpcId: network.vpcId,
 			// Rules of its own are none: it only names its members to the database's group. Its egress stays EC2's default,
 			// which the services' own groups decide over.
@@ -95,7 +97,7 @@ export function awsDatabaseStack(network: AwsNetworkOutputs): AwsStack {
 				FromPort: 5432,
 				ToPort: 5432,
 				SourceSecurityGroupId: { 'Fn::GetAtt': ['DatabaseClientGroup', 'GroupId'] },
-				Description: "the platform's services",
+				Description: 'the platform services',
 			}],
 			// It answers; it starts nothing.
 			SecurityGroupEgress: [{ IpProtocol: '-1', CidrIp: '127.0.0.1/32', Description: 'none' }],
