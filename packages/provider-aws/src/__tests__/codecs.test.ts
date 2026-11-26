@@ -39,7 +39,9 @@ const checkpoint: AwsRunCheckpoint = {
 }
 
 /** The message a decode of `payload` fails with. */
-function refused<T>(codec: ProviderCodec<T>, payload: JsonValue): string {
+function refused<T>(codec: ProviderCodec<T>, value: object): string {
+	// As Control would hand it over: JSON text read back.
+	const payload: JsonValue = JSON.parse(JSON.stringify(value))
 	try {
 		codec.decode(payload)
 	} catch (error) {
@@ -117,6 +119,32 @@ describe('the AWS codecs', () => {
 		expect(roundTrip(awsNamespaceTargetCodec, { ...serving, proxyServiceRolledOut: true }).decoded).toMatchObject({ proxyServiceRolledOut: true })
 		const { proxyServiceUpdated: _updated, ...notUpdated } = serving
 		expect(refused(awsNamespaceTargetCodec, { ...notUpdated, proxyServiceRolledOut: true })).toContain('proxyServiceUpdated')
+		// The hosts' certificates: a list of flat records, one per host, a validation record whole or not at all.
+		const arn = 'arn:aws:acm:eu-central-1:123456789012:certificate/0f1e2d3c-4b5a-6978-8a9b-0c1d2e3f4a5b'
+		const certified: AwsNamespaceTarget = {
+			...namespace,
+			proxyCertificates: [
+				{ host: 'a.example.com', arn, status: 'ISSUED' },
+				{
+					host: 'b.example.com',
+					arn,
+					status: 'PENDING_VALIDATION',
+					validationName: '_3f2a9c.b.example.com.',
+					validationValue: '_7b1d.abcdefgh.acm-validations.aws.',
+				},
+			],
+		}
+		expect(roundTrip(awsNamespaceTargetCodec, certified)).toEqual({ decoded: certified, json: certified })
+		const [first] = certified.proxyCertificates ?? []
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyCertificates: [first, first] })).toContain('proxyCertificates')
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyCertificates: [{ ...first, validationName: '_a.example.com.' }] })).toContain(
+			'validationValue',
+		)
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyCertificates: [{ ...first, status: 'NEW' }] })).toContain('status')
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyCertificates: [{ ...first, host: '*.example.com' }] })).toContain('host')
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyCertificates: [{ ...first, extra: 'x' }] })).toContain('extra')
+		const many = Array.from({ length: 26 }, (_, index) => ({ ...first, host: `h${index}.example.com` }))
+		expect(refused(awsNamespaceTargetCodec, { ...namespace, proxyCertificates: many })).toContain('proxyCertificates')
 		// The pin is required: a target without it is one this release does not read.
 		const { proxyCommitSha: _sha, ...unpinned } = namespace
 		expect(refused(awsNamespaceTargetCodec, unpinned)).toContain('proxyCommitSha')
@@ -125,7 +153,7 @@ describe('the AWS codecs', () => {
 	test('a value of another form is refused, naming the field only', () => {
 		const cases: readonly {
 			readonly codec: ProviderCodec<unknown>
-			readonly payload: { readonly [key: string]: string | true }
+			readonly payload: object
 			readonly field: string
 		}[] = [
 			{ codec: awsAppTargetCodec, payload: { ...target, accountId: '12345' }, field: 'accountId' },

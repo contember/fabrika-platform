@@ -17,7 +17,10 @@
 // A rollout the circuit breaker rolled back fails with `awsProxyRollout`, not retryable: the same revision would fail
 // again, and a new image or secret (a new fingerprint) is what sets the service anew.
 //
-// Not yet: the balancer's host rules and certificates.
+// Every pass first requests the certificates of hosts that have none and reads the recorded ones again
+// (`ensureAwsProxyCertificates`); nothing waits for one, because validation waits on the operator's DNS.
+//
+// Not yet: the listener's host rules, and serving the certificates on it.
 
 import {
 	type ProviderDeploymentNamespace,
@@ -40,6 +43,7 @@ import {
 	sha256Hex,
 	startAwsProxyBuild,
 } from './proxy-attempt'
+import { type AwsProxyCertificateClients, ensureAwsProxyCertificates } from './proxy-certificates'
 import {
 	type AwsProxyIam,
 	type AwsProxyRolloutClients,
@@ -58,6 +62,7 @@ export type AwsProxyClients =
 	& Omit<AwsProxyBuildClients, 'credentials'>
 	& AwsProxyBuildFollowClients
 	& AwsProxyServiceClients
+	& AwsProxyCertificateClients
 	& {
 		readonly codeBuild: AwsProxyBuildClients['codeBuild'] & AwsProxyBuildFollowClients['codeBuild']
 		readonly ecs: AwsProxyServiceClients['ecs'] & AwsProxyRolloutClients['ecs']
@@ -103,7 +108,9 @@ export async function republishAwsProxy(
 	const giveUpAt = now() + (input.wait === 'active' ? (runtime.waitMs ?? AWS_PROXY_WAIT_MS) : 0)
 	const manifestSha256 = await sha256Hex(awsProxyManifestFile(input.namespace.id, input.members))
 	const common = { installation, proxySource, events: input.events, signal: input.signal }
-	let namespace = input.namespace
+	// The hosts' certificates first: their DNS validation is the operator's, and the longer they have the better. Nothing
+	// here waits for one.
+	let namespace = await ensureAwsProxyCertificates({ ...common, namespace: input.namespace, members: input.members, clients: runtime.clients })
 	for (;;) {
 		const target = checkNamespaceTarget(namespace, installation, proxySource)
 		if (target.proxyBuildToken === undefined && target.proxyImageManifestSha256 === manifestSha256) {

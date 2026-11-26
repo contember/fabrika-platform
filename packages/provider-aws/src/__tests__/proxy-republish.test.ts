@@ -12,6 +12,7 @@ import type {
 import { describe, expect, test } from 'bun:test'
 import { schemaFromContract } from '../../../app/src/contract/platform'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
+import type { Certificate } from '../aws/acm'
 import type { CodeBuildBuild } from '../aws/codebuild'
 import type { EcsService, EcsServiceDeploymentStatus } from '../aws/ecs'
 import type { S3PartWriter } from '../aws/s3'
@@ -84,6 +85,9 @@ class Fake {
 	deleteFails = false
 	sleeps = 0
 	clock = 0
+	/** ACM's certificates by ARN, and each request's host and token, apart from `calls`. */
+	readonly certificates = new Map<string, Certificate>()
+	readonly requests: { readonly host: string; readonly token: string }[] = []
 	readonly context: AwsProxyRepublishContext = {
 		installation,
 		proxySource: PROXY_SOURCE,
@@ -91,6 +95,18 @@ class Fake {
 		runtime: {
 			iam: { issuer: 'https://iam.example.com', key: 'proxy-iam-key' },
 			clients: {
+				acm: {
+					// A token repeated answers the certificate it requested, as ACM does within its hour.
+					requestCertificate: async ({ host, token }) => {
+						const index = this.requests.findIndex((request) => request.token === token)
+						const number = index === -1 ? this.requests.length + 1 : index + 1
+						if (index === -1) this.requests.push({ host, token })
+						const arn = `arn:aws:acm:eu-central-1:123456789012:certificate/00000000-0000-4000-8000-${String(number).padStart(12, '0')}`
+						if (index === -1) this.certificates.set(arn, { arn, host, status: 'PENDING_VALIDATION', validation: null, inUseBy: [] })
+						return arn
+					},
+					describeCertificate: async (arn) => this.certificates.get(arn) ?? null,
+				},
 				codeBuild: {
 					startBuild: async (start) => {
 						this.calls.push('startBuild')

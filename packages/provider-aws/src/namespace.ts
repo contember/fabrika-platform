@@ -32,6 +32,7 @@ import {
 	type ProviderDeploymentNamespace,
 	type ProviderNamespaceCapabilities,
 	ProviderNamespaceError,
+	type ProviderNamespaceFact,
 	type ProviderNamespaceMutationInput,
 	type ProviderNamespacePresentation,
 	type ProviderRegistration,
@@ -41,7 +42,7 @@ import { ecrLifecyclePolicy } from './aws/ecr'
 import { type EcsClient, SERVICE_CONNECT_ARN, TARGET_GROUP_ARN } from './aws/ecs'
 import type { SsmClient } from './aws/ssm'
 import { AwsError } from './aws/transport'
-import { AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
+import { AWS_MAX_PROXY_CERTIFICATES, AWS_PROVIDER, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from './codecs'
 import { AWS_APPLICATION_PORT } from './ecs-task'
 import { allow, AWS_LOG_RETENTION_DAYS, awsAppsPermissionsBoundary, type AwsInstallationNetwork, policy, trust } from './environment-stack'
 import { AWS_PROXY_BUILD_IMAGE, AWS_PROXY_BUILDSPEC } from './proxy-build'
@@ -379,6 +380,50 @@ export function checkInstallationBalancer(balancer: AwsInstallationBalancer): Aw
 	return balancer
 }
 
+/**
+ * What the namespace's presentation says of its certificates (`ensureAwsProxyCertificates`): a fact per host, and for a
+ * pending one the record the operator adds, then a reconcile; for one that failed, the way out.
+ */
+export function awsProxyCertificatePresentation(target: AwsNamespaceTarget): {
+	readonly facts: readonly ProviderNamespaceFact[]
+	readonly instructions: readonly string[]
+} {
+	const certificates = target.proxyCertificates ?? []
+	const instructions: string[] = []
+	for (const certificate of certificates) {
+		if (certificate.departed === true) {
+			instructions.push(
+				`The host ${certificate.host} is no member's any more: delete its certificate ${certificate.arn} in Certificate Manager once it is off the listener, and its DNS record; the next reconcile forgets it.`,
+			)
+		} else if (certificate.status === 'PENDING_VALIDATION') {
+			instructions.push(
+				certificate.validationName === undefined || certificate.validationValue === undefined
+					? `The certificate for ${certificate.host} was just requested: reconcile the namespace in a minute to read the DNS record it needs.`
+					: `The certificate of ${certificate.host} needs the DNS record ${certificate.validationName} CNAME ${certificate.validationValue}: add it and keep it in place (Certificate Manager renews with it), and reconcile the namespace once it is in place.`,
+			)
+		} else if (certificate.status !== 'ISSUED') {
+			instructions.push(
+				`The certificate for ${certificate.host} is ${certificate.status}: delete ${certificate.arn} in Certificate Manager, then reconcile the namespace to request a new one.`,
+			)
+		}
+	}
+	if (certificates.length >= AWS_MAX_PROXY_CERTIFICATES) {
+		instructions.push(
+			`The namespace holds ${AWS_MAX_PROXY_CERTIFICATES} certificates, the listener's quota: a new host gets one only once a departed host's certificate is deleted.`,
+		)
+	}
+	return {
+		facts: certificates.flatMap((certificate) => [
+			{ label: `Certificate for ${certificate.host}`, value: `${certificate.arn} (${certificate.status})`, resource: true },
+			// The record stays in DNS for as long as the certificate lives: renewal validates with it.
+			...(certificate.validationName === undefined || certificate.validationValue === undefined
+				? []
+				: [{ label: `DNS record for ${certificate.host}`, value: `${certificate.validationName} CNAME ${certificate.validationValue}` }]),
+		]),
+		instructions,
+	}
+}
+
 /** The calls the namespace lifecycle makes. */
 export interface AwsNamespaceClients {
 	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'>
@@ -464,6 +509,7 @@ function targetOf(
 		...(stored?.proxyServiceFingerprint === undefined ? {} : { proxyServiceFingerprint: stored.proxyServiceFingerprint }),
 		...(stored?.proxyServiceUpdated === undefined ? {} : { proxyServiceUpdated: stored.proxyServiceUpdated }),
 		...(stored?.proxyServiceRolledOut === undefined ? {} : { proxyServiceRolledOut: stored.proxyServiceRolledOut }),
+		...(stored?.proxyCertificates === undefined ? {} : { proxyCertificates: stored.proxyCertificates }),
 	}
 	return awsNamespaceTargetEnvelope(target)
 }
@@ -493,6 +539,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 	const present = (namespace: ProviderDeploymentNamespace): ProviderNamespacePresentation => {
 		const resources = awsNamespaceResources(namespace.id, namespace.env)
 		const target = awsNamespaceTargetCodec.decode(namespace.target.payload)
+		const certificates = awsProxyCertificatePresentation(target)
 		return {
 			preset: AWS_CHEAP_PRESET,
 			title: `AWS namespace ${namespace.id}`,
@@ -505,6 +552,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				{ label: 'Proxy service', value: `${installation.cluster}/${resources.service}`, resource: true },
 				// A policy choice, not a resource: the pin the proxy is built from until an operator moves it.
 				{ label: 'Proxy source', value: `${target.proxyRepository}@${target.proxyCommitSha}` },
+				...certificates.facts,
 			],
 			instructions: [
 				"Control creates the stack and the proxy's service. Removing the namespace leaves both in place.",
@@ -512,6 +560,7 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				// removes the roles under a running service and then fails on the group its network interfaces hold.
 				`When no environment uses the namespace, delete in this order: the ECS service ${resources.service} in the cluster ${installation.cluster}; then the parameters under ${resources.parameterPath}/env and the task definition family ${resources.service}; then the stack ${resources.stackName}.`,
 				"Deleting the stack deletes the proxy's images with their repository: they are rebuilt from the namespace's pinned source.",
+				...certificates.instructions,
 			],
 		}
 	}
@@ -568,8 +617,9 @@ export function awsNamespaceCapabilities(options: AwsNamespaceOptions): Provider
 				|| submitted.proxyImageDigest !== undefined || submitted.proxyImageManifestSha256 !== undefined
 				|| submitted.proxyServiceTaskDefinitionArn !== undefined || submitted.proxyServiceFingerprint !== undefined
 				|| submitted.proxyServiceUpdated !== undefined || submitted.proxyServiceRolledOut !== undefined
+				|| submitted.proxyCertificates !== undefined
 			) {
-				throw new Error("aws: a namespace's proxy build and image are recorded by its provider, never submitted")
+				throw new Error("aws: a namespace's proxy build, image and certificates are recorded by its provider, never submitted")
 			}
 			return { ...namespace, target: targetOf(namespace, installation, proxySource) }
 		},

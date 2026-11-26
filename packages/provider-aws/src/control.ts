@@ -40,6 +40,7 @@ import {
 	type ProviderSourceBinding,
 	reconcileRun,
 } from '@fabrika/provider-contract'
+import { ACM, type AcmClient, acmClient } from './aws/acm'
 import { type CloudFormationClient, cloudFormationClient } from './aws/cloudformation'
 import { codeBuildClient } from './aws/codebuild'
 import { ecrClient } from './aws/ecr'
@@ -128,6 +129,8 @@ export type AwsControlClients = Omit<AwsDeployClients, 'credentials' | 'ssm'> & 
 	readonly ssm: Pick<SsmClient, 'putSecret' | 'deleteSecret' | 'listNames'>
 	/** The stacks' calls: an environment's (`ensureEnvironmentStack`) and a namespace's (`namespace.ts`). */
 	readonly cloudFormation: Pick<CloudFormationClient, 'findStack' | 'describeStack' | 'getTemplate' | 'createStack' | 'updateStack'>
+	/** A namespace proxy's certificates (`proxy-certificates.ts`). */
+	readonly acm: Pick<AcmClient, 'requestCertificate' | 'describeCertificate'>
 }
 
 export interface AwsControlProviderOptions {
@@ -331,6 +334,7 @@ export function createAwsControlProvider(options: AwsControlProviderOptions): Co
 			logs: logsClient(at(LOGS)),
 			ssm: ssmClient(at(SSM)),
 			cloudFormation: cloudFormationClient(at(CLOUDFORMATION)),
+			acm: acmClient(at(ACM)),
 			s3PartWriter: (address) => s3PartWriter(clientOptions(s3BucketOrigin(target.sourcesBucket, target.region), target.region), address),
 		}
 	})

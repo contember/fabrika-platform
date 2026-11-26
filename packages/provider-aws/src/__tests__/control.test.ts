@@ -146,6 +146,13 @@ class Fake {
 	}
 
 	readonly clients = (_target: AwsAppTarget): AwsControlClients => ({
+		// No deploy asks for a certificate: a namespace's republish does (`proxy-republish.test.ts`).
+		acm: {
+			requestCertificate: async () => {
+				throw new Error('no certificate is requested here')
+			},
+			describeCertificate: async () => null,
+		},
 		ecr: {
 			ensureRepository: async (name) => {
 				this.calls.push(`ensureRepository ${name}`)
