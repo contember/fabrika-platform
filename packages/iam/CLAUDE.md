@@ -249,8 +249,9 @@ fails if that stops being true — it is the guard, not documentation of one.
   no OAuth, link or terminal claim, at a registered admin audience, as `resolveAdmin` counts one; `ResolvedCaller.person`
   on the RPC path) and `provisioning-admin` pass; anyone else is refused (403) where the strictest environment
   the key acts in is `person` or `refuse`. An `<app>@<env>` id is one environment; an admin audience every environment
-  of its `app` scope's application, or all; a cross-app key all. A missing mode, or an id with no known environment,
-  reads as `person`. Every application such a key reaches counts its `<app>@prod` too, existing or not, because `prod`
+  of its `app` scope's application, or all; a cross-app key all. A missing mode, an id with no known environment, and
+  a key reaching every application whatever the known modes (IAM cannot know an application registered later) read as
+  `person`. Every application such a key reaches counts its `<app>@prod` too, existing or not, because `prod`
   starts protected and a key keeps acting in one created after it. IAM itself, Operations and plain ids are not judged. A new issuing mutation joins the gate and the
   table in `admin-rpc-approval-categories.test.ts`.
 - **A MACHINE CALLER'S WIDENING OF A KEY MEETS THE SAME MODE.** `grants.create` and `grants.update` to a service

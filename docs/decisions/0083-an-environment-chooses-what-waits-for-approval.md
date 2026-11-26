@@ -341,10 +341,12 @@ someone else (a self-bound key is the caller's own identity). A key at an applic
 at Control's console audience acts in every environment of the application its `app` scope names, or of every
 application under any other scope, and a cross-app key in every environment: such a key takes the strictest mode among
 them. An environment IAM holds no mode for reads as `person`. Among them is each application's `prod`, whether it exists
-or not: `prod` starts protected, and a key issued before it exists would act in it for up to 30 days. The cost: a
+or not: `prod` starts protected, and a key issued before it exists would act in it for up to 30 days. For the same
+reason a key reaching every application (a Control key with no `app` scope, or a cross-app key) reads as `person` at
+least, whatever the modes of the environments IAM knows: IAM cannot know an application registered later. The cost: a
 machine caller other than the provisioning key issues no Control key scoped to an application whose `prod` IAM holds no
-mode for (Control has not mirrored one), nor a key reaching every application while any of them lacks one; a person
-issues it in the console, or the agent asks through Control. A key at one environment is judged by that environment
+mode for (Control has not mirrored one), and no global or cross-app key at all; a person issues it in the console, or
+the agent asks through Control. A key at one environment is judged by that environment
 alone. Under `person` IAM answers 403 naming Control's request path (`approvals.requests.create` of kind
 `iam.apiKeys.provision`, or `fabrika control access request-key`); under `refuse`, 403. A person in the console issues as before. A key at IAM itself or Operations reaches no application and
 keeps the installation's rule (§9). This is authorization in IAM's use cases, not an enforcement decision (ADR-0022).

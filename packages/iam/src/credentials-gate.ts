@@ -27,6 +27,12 @@ type Target = { readonly kind: 'env'; readonly id: string } | { readonly kind: '
 
 const RANK: Readonly<Record<CredentialsMode, number>> = { off: 0, person: 1, refuse: 2 }
 
+/** One environment a target acts in, or a description of where, with the mode it is judged by. */
+interface Judged {
+	readonly id: string
+	readonly mode: CredentialsMode
+}
+
 /** The environment every application starts protected in (Control's `defaultProtected`), so it counts before it exists. */
 const STARTS_PROTECTED = 'prod'
 
@@ -42,7 +48,7 @@ export type KeyChange = 'issue' | 'grant' | 'role' | 'enable' | 'cover'
  * operator's own credential that Control's workload, membership and connector keys and the bootstrap's first machine
  * caller are issued with, keep their rule. Every other caller meets the strictest mode among the environments the key
  * acts in, an application's `prod` among them; an environment IAM has no mode for, Control not having written one yet,
- * reads as `person`.
+ * and every application at once read as `person`.
  */
 export async function credentialsRefusal(
 	services: Services,
@@ -62,9 +68,11 @@ export async function credentialsRefusal(
 	let strictest: CredentialsMode = 'off'
 	const at = new Set<string>()
 	for (const target of targets) {
-		const ids = environmentsOf(target, environments)
-		// No environment known for the target: nothing says it is unprotected, so it reads as `person`.
-		const judged = ids.length === 0 ? [{ id: describe(target), mode: 'person' as const }] : ids.map((id) => ({ id, mode: modes.get(id) ?? 'person' }))
+		const known = environmentsOf(target, environments).map((id): Judged => ({ id, mode: modes.get(id) ?? 'person' }))
+		// IAM cannot know an application registered later, whose `prod` starts protected: a key reaching every application
+		// reads as `person`, and so does a target with no environment known, since nothing says it is unprotected.
+		const unknown: Judged = { id: describe(target), mode: 'person' }
+		const judged = target.kind === 'all' || known.length === 0 ? [...known, unknown] : known
 		for (const { id, mode } of judged) {
 			if (RANK[mode] > RANK[strictest]) {
 				strictest = mode

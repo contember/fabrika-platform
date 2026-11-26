@@ -255,8 +255,10 @@ for (const backend of backends) {
 			expect([global.status, global.message.includes('shop@prod')]).toEqual([403, true])
 			const crossApp = await w.rpc(w.machine, 'apiKeys.provision', { label: 'everything', type: 'service', permissions: ['*'], expiresAt: now() + DAY })
 			expect([crossApp.status, crossApp.message.includes('shop@prod')]).toEqual([403, true])
+			// Once IAM holds `off` for it too, the key at every application still reads `person`: IAM cannot know a later one.
 			await w.mirror('shop@prod', 'off')
-			expect((await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeType: null, scopeValue: null }))).status).toBe(200)
+			const still = await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeType: null, scopeValue: null }))
+			expect([still.status, still.message.includes('every application'), still.message.includes('shop@prod')]).toEqual([403, true, false])
 		})
 
 		test('an application with no `prod` yet counts its `prod` as `person`, which starts protected, until IAM holds its mode', async () => {
@@ -277,10 +279,41 @@ for (const backend of backends) {
 			expect((await w.rpc(w.machine, 'apiKeys.provision', w.notesKey({ app: 'shop@stage' }))).status).toBe(200)
 			expect((await w.asAda('apiKeys.provision', atShop)).status).toBe(200)
 
-			// Once Control mirrors `shop@prod` as `off`, the machine caller issues both.
+			// Once Control mirrors `shop@prod` as `off`, the machine caller issues the scoped one; one at every application reads `person`.
 			await w.mirror('shop@prod', 'off')
 			expect((await w.rpc(w.machine, 'apiKeys.provision', atShop)).status).toBe(200)
-			expect((await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeType: null, scopeValue: null }))).status).toBe(200)
+			expect((await w.rpc(w.machine, 'apiKeys.provision', w.controlKey({ scopeType: null, scopeValue: null }))).status).toBe(403)
+		})
+
+		test('a key reaching every application reads `person` for a machine caller, every known environment `off` or not', async () => {
+			const w = await world()
+			await w.mirror(APP, 'off')
+			await w.mirror(STAGE, 'off')
+			const global = w.controlKey({ scopeType: null, scopeValue: null })
+			const crossApp = { label: 'everything', type: 'service', app: null, roleKey: 'admin', expiresAt: now() + DAY }
+			const before = await w.services()
+			// An application registered after the key starts with a protected `prod` the key would act in for up to 30 days.
+			for (const key of [global, crossApp]) {
+				const refused = await w.rpc(w.machine, 'apiKeys.provision', key)
+				expect([refused.status, refused.message.includes('every application'), refused.message.includes('`credentials` mode')]).toEqual([403, true, true])
+			}
+			expect(await w.services()).toBe(before)
+			// A key at one application is judged by its environments alone.
+			expect((await w.rpc(w.machine, 'apiKeys.provision', w.controlKey())).status).toBe(200)
+
+			// A grant reaching every application, and re-enabling a key that holds one, read the same.
+			const scoped = w.keyOf(await w.asAda('apiKeys.provision', w.controlKey()))
+			const widened = await w.rpc(w.machine, 'grants.create', { principalId: scoped.principalId, app: CONSOLE, permissions: ['deploy.read'] })
+			expect([widened.status, widened.message.includes('every application')]).toEqual([403, true])
+			const wide = w.keyOf(await w.asAda('apiKeys.provision', global))
+			expect((await w.asAda('principals.update', { principalId: wide.principalId, disabled: true })).status).toBe(200)
+			expect((await w.rpc(w.machine, 'principals.update', { principalId: wide.principalId, disabled: false })).status).toBe(403)
+
+			// A person and the provisioning key issue it; `refuse` anywhere still wins.
+			expect((await w.asAda('apiKeys.provision', crossApp)).status).toBe(200)
+			expect((await w.bootstrap(PROVISIONING_KEY, { label: 'first machine', type: 'service', roleKey: 'admin' })).status).toBe(201)
+			await w.mirror(STAGE, 'refuse')
+			expect((await w.rpc(w.machine, 'apiKeys.provision', global)).message).toContain('`refuse`')
 		})
 
 		test('the exceptions keep their rule: the provisioning key issues workload, membership and bootstrap keys', async () => {
