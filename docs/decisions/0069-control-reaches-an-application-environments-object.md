@@ -194,15 +194,60 @@ request retries the read without waiting for an eviction. Pending migrations the
 
 | Mode                  | A cold start with a pending migration                                                                |
 | --------------------- | ---------------------------------------------------------------------------------------------------- |
-| `open`                | migrates, then boots, as today                                                                       |
+| `open`                | records the bookmark, migrates in one transaction, then boots (the migrating boot below)             |
 | `read-only`, `closed` | neither migrates nor boots; ordinary requests answer 503 with `Retry-After`; ops requests are served |
 | `inspect`             | never migrates and never boots                                                                       |
 
-**The migration phase.** A deploy that brings a pending migration runs inside a maintenance operation: `read-only`,
-then a consistent backup and its verification, then the operation's own deploy, then
-`POST /__fabrika/ops/migrate { generation }`. The object runs the pending migrations under that generation, the only
-writes the fence admits in a restricted mode, boots, and acknowledges with the new ledger. The operation then opens the
-object at a new generation.
+**The migrating boot.** A cold start in `open` that finds a pending migration, at a release that records the
+migration bookmark, does all of it inside the `blockConcurrencyWhile` that holds every other event back:
+
+1. It runs every boot check that does not read the migrated schema: the module, the contract digest, the variables,
+   the bindings, the handlers.
+2. It reads `getCurrentBookmark()` and writes the **migration record**, `__fabrika/ops/<object>.migration.json` in the
+   environment's bucket, by a put conditioned on the version it read: the bookmark, the ledger digest it starts from,
+   the pending files of both bundles with their checksums, and the time. A failed put migrates nothing: the event
+   answers 503, and the next one tries again.
+3. It applies every pending file of both bundles, the framework's then the application's, with their ledger rows, in
+   one `transactionSync` that ends with `PRAGMA foreign_key_check`; a row it returns rolls the whole set back. A
+   failure, or a reset past the 30 s bound, leaves the ledger the boot started from.
+4. It records the outcome in the record: `committed` with the bookmark after the commit, or `rolled_back`.
+5. It boots, and records `booted` before it admits its first ordinary event. A failed put of `booted` admits nothing.
+
+The record lives in R2 for the reason the mode does: point-in-time recovery rewinds SQLite and KV. Nothing writes
+between the bookmark and the transaction, because no other event runs, so a rewind to that bookmark loses no write the
+old version committed. A migrating boot must fit the 30 s that `blockConcurrencyWhile` allows; a data change that does
+not fit is a schema migration plus a backfill job, over two deploys.
+
+**The migrating deploy.** A deploy that brings a pending migration to a candidate that records the bookmark runs as a
+`migrate` operation under the deploy lease and restricts nothing: the old version serves, writes included, until the
+new one has migrated. The operation runs its own deploy, then sends `POST /__fabrika/ops/migrate { generation }` at
+the published generation. In `open` that request starts the boot or awaits the one under way, and the object answers
+the ledger and the migration record.
+
+**Which version answers.** Cloudflare updates an active object's code deferred by default: the old instance keeps
+accepting requests, ops requests included, until it hibernates or `max_delay` passes (300 s by default). An answer from
+an object that booted and whose ledger lacks the candidate's files therefore comes from the old version still running.
+It is never a rollback. Control asks again until an answer holds every candidate file with its checksum, or until
+`max_delay` plus a margin has passed. Only the new version answers `migration_failed` (422) with its record's outcome,
+and only that answer is a failure. Past the deadline with no answer from the new version, the run fails as
+`migration_unconfirmed`, with nothing restricted, and the console says to read the view.
+
+**When it fails**, the operation recovers on its own, under the same lease:
+
+- **`rolled_back`.** Control redeploys the last succeeded run's commit. The ledger is the old one, so the old version
+  boots over the schema it knows.
+- **`committed`, never `booted`, and the migration has no `dataLoss` line.** Control redeploys the last succeeded run's
+  commit, which boots over a superset of its schema.
+- **`committed`, never `booted`, and a `dataLoss` line.** Control publishes the object `inspect` and rewinds it in
+  place to the record's bookmark (ADR-0070 §9). It then redeploys the last succeeded run's commit and opens the object
+  at a new generation. Until the rewind is built, the object stays `closed` for an operator to fix forward.
+- **`committed` and `booted`.** There is nothing to recover: the run succeeded. A migration found wrong later is undone
+  by a side restore to the record's bookmark (ADR-0070 §9).
+
+**The read-only migration phase.** A candidate whose release serves the barrier but does not record the bookmark keeps
+the earlier phase: `read-only`, a consistent backup and its rehearsal, the operation's own deploy, `migrate` under that
+generation (the only writes the fence admits in a restricted mode), then `open` at a new generation. Its `migrate`
+answer is read by the same version rule.
 
 **Leases.** An operation holds the environment's deploy lease. Each step it records and each deploy it starts checks
 first that the lease is still its own; a lost lease stops the operation at its next check. Control refuses a deploy of
@@ -236,6 +281,10 @@ new generation.
 | An alarm fires in `read-only` or `closed`                              | It runs nothing and writes nothing                                                                    |
 | A webhook arrives while not `open`                                     | 503; the sender retries                                                                               |
 | A restricted cold start finds a pending migration                      | The application does not boot until the operation's migrate request                                   |
+| The migration record cannot be written                                 | Nothing migrates; 503 until a later event writes it; past the deadline the run is unconfirmed         |
+| The `migrate` answer comes from the old version                        | Its ledger lacks the candidate's files; Control asks again until the new version answers              |
+| The migration rolls back, or resets past 30 s                          | The ledger is unchanged; Control redeploys the last succeeded commit                                  |
+| The migration commits and the new version does not boot                | The redeploy; with a `dataLoss` line, the in-place rewind to the bookmark first                       |
 | A migrate request carries a generation that is not the published one   | Refused                                                                                               |
 | Control dies mid-operation                                             | The environment stays in its published mode; a successor fences and resumes from the recorded step    |
 | Two Control instances drive one environment                            | Only the lease holder records progress; at the object the higher published generation wins            |
@@ -251,8 +300,11 @@ new generation.
 - Control can inspect an environment, freeze it and know that it is frozen. Backups, exports, an importer and a side
   restore build on this channel and this barrier; each is decided where it is built.
 - Every framework write path carries a fence check, and every invocation is counted. A new write path that skips the
-  fence breaks the barrier's invariant. An application migration runs only in `open` or in an operation's migration
-  phase.
+  fence breaks the barrier's invariant. An application migration runs only at a cold start in `open`, or in the
+  read-only migration phase of a release that does not record the bookmark.
+- A migrating deploy restricts nothing. Ordinary events wait for the migration, at most about 30 s, instead of getting
+  503 for the length of a backup. Control's run may wait up to `max_delay` for the new version to take over; its own
+  requests keep the old instance awake, so the switch can take the whole 300 s.
 - Upload quiescence covers a request's staged files; a put inside a writing handler relies on the best-effort
   release, so an eviction mid-handler can leave unreferenced bytes until backlog 236 lands.
 - Maintenance depends on R2's availability at a cold start: an environment whose bucket cannot be read answers 503,
@@ -267,14 +319,17 @@ new generation.
 - The channel and the barrier are Cloudflare-only: on Zerops an application has no object, and nothing changes.
 - **Rollout.** The channel ships in framework 0.9.0, gated by `servesOps`, which equals `runsInObject`. The barrier
   (`state`, `migrate`) is gated apart, by `servesDataOperations` from `0.9.0-dev.5`: the prereleases published before it
-  answer both 501, and a deploy of one never needs them.
+  answer both 501, and a deploy of one never needs them. The migrating boot and its record are gated by
+  `recordsMigrationBookmark`, which holds from the framework release that ships them; the gate is the candidate's
+  release, because the new version is the one that takes the bookmark. A candidate before it gets the read-only phase.
   - **Generated files.** No installation file changes. The application Worker's config, with the variables and the
     handler, and its proxy Worker, with the row, are generated by the environment's next deploy at a gated release.
     `platform upgrade` alone changes no application (ADR-0062 rule 5), and the console says to redeploy to enable it.
   - **Environment variables.** That deploy writes `FABRIKA_OPS_KEY_DIGESTS`, `FABRIKA_APPLICATION_OBJECT` and
     `FABRIKA_APPLICATION_OBJECTS`. An environment on an older pin gets neither the row nor the variables, also on its
     next unchanged deploy, and a deploy after a downgrade removes them (`deleteStaleSecrets`).
-  - **Provider state.** An existing object has no R2 state object and reads as `open`. Without the object variables
+  - **Provider state.** An existing object has no R2 state object and reads as `open`. It has no migration record
+    until its first migrating boot at a gated release, which writes one. Without the object variables
     it keeps the name `application`. Control's `app_env_data_operations` table and its generation counter arrive
     through Control's own migrations on upgrade and start empty.
   - **Floating pins.** None.
@@ -297,3 +352,14 @@ new generation.
   committed `wrangler.jsonc`, so each new environment would need a Control redeploy.
 - **Fencing by the lease alone.** Simpler: the lease already excludes a second deploy. Rejected: a lease stops its
   holder's next step, not a request already sent, so only a generation the object compares can refuse a late request.
+- **A read-only window before every migration**, for a consistent backup, as the earlier phase did. Rejected for a
+  release that records the bookmark: the window protected only the dump's consistency, which grows with the database,
+  while old and new code never touch one object together and the cold start migrates before the new code serves. The
+  bookmark names the same point without a freeze, and one transaction removes the partial ledger that a failure left
+  when each file committed on its own.
+- **The old version applies the new migrations before the deploy**, sent over the ops channel. The old version would
+  serve while the schema changes. Rejected: every migration would have to suit the old code, which a `dataLoss`
+  migration never does, and the protocol would be new.
+- **`code_update_strategy: immediate`**, so the new version takes over at once and Control waits for nothing. Rejected:
+  it resets an active object with requests in flight; the deferred default gives them time to finish, and the wait is
+  bounded.

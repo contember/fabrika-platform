@@ -42,8 +42,10 @@ The constraints:
 
 **Control protects an environment's data with consistent backups that it takes, verifies by importing them, and keeps
 in the environment's bucket. Framework code writes and loads every dump over the ops channel in bounded steps that
-Control drives. The one recovery flow built is a side restore: the data moves into a clone that takes over serving,
-and point-in-time recovery is applied only to the frozen original.**
+Control drives. A migrating deploy takes no backup: its restore point is the point-in-time-recovery bookmark the
+migrating boot records. The recovery flow for old data is a side restore: the data moves into a clone that takes over
+serving, and point-in-time recovery is applied only to the frozen original. The one rewind of the serving object is
+that of a migration that committed and never booted.**
 
 ### 1. Two kinds of dump
 
@@ -170,7 +172,8 @@ whose `CHECK`s constrain other columns.
 
 `fabrika-check` runs the same rule over the schema an application's migrations build in memory (rule `backup-schema`),
 with the same reader (`describeOpsDumpSchema`), so a schema the backup refuses is found before the migration that makes
-it deploys: once deployed, every later migration deploy is refused at its pre-migration backup.
+it deploys: once deployed, every later backup is refused at `begin`, the daily one and the pre-migration one of the
+read-only migration phase alike.
 
 An acyclic graph is always accepted, and so is a cycle of one table or several whose deferred columns are nullable,
 named by no `CHECK` and unreferenced.
@@ -315,7 +318,7 @@ object. The schema rule refuses an `INITIALLY DEFERRED` key, the one kind SQLite
 clear the marker `discard` requires. Control fences `rehearsal` in `inspect` at the backup operation's generation first. Every deploy at a gated release lists `rehearsal` in
 `FABRIKA_APPLICATION_OBJECTS`, so the ops channel reaches it; ordinary traffic never does. A rehearsal that finds the
 object not fresh, after an earlier one died, discards it first. A backup whose rehearsal fails is recorded as failed.
-The verification of the migration phase (ADR-0069 §3) is this rehearsal.
+The read-only migration phase (ADR-0069 §3) verifies its backup with this rehearsal.
 
 ### 8. Schedule
 
@@ -330,9 +333,13 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
   a failed backup ended the environment is due again. A backup starts only from the schedule and only while Control's
   record leaves the object `open`.
 - **Before a migration.** A deploy that brings a pending application migration to an environment at a gated release
-  runs as one operation under the deploy lease: `read-only`, the backup, its rehearsal, the operation's own deploy, the
-  migration request, then `open` at a new generation. A failed backup or rehearsal reopens the object and does not
-  deploy. A migration is pending when one of the candidate's application migration files is missing from the object's
+  runs as one `migrate` operation under the deploy lease. When the candidate's release records the migration bookmark
+  (ADR-0069 §3), the operation takes no backup and restricts nothing: the old version serves until the new one has
+  migrated, and the restore point is the bookmark its record holds. This holds for a `dataLoss` migration too: it gets
+  no dump and no window. The operation's deploy, the version check of the `migrate` answer, and the automatic recovery
+  are ADR-0069 §3's. A candidate before that release gets the read-only migration phase: `read-only`, the backup, its
+  rehearsal, the operation's own deploy, the migration request, then `open` at a new generation; a failed backup or
+  rehearsal reopens the object and does not deploy. A migration is pending when one of the candidate's application migration files is missing from the object's
   ledger, which Control reads with `inspect`; the published snapshot proves nothing, because a published file has not
   run while its version never booted. The rule applies once the version running installed the ops channel, which
   Control knows from the last succeeded deploy, not from the latest publication: a publication precedes the provider,
@@ -340,10 +347,11 @@ The verification of the migration phase (ADR-0069 §3) is this rehearsal.
   one deployed without a domain) gets a plain deploy, and the object migrates on its cold start. An object whose
   installed channel does not answer gets no deploy. A migration that may change stored data (any `dataLoss` statement) gets no plain deploy: without an
   installed barrier Control refuses the run ([ADR-0050](0050-approved-access.md)). The operation's deploy is the run's
-  own. A deploy or a migration that fails leaves the object restricted, for a recovery, except a deploy that no
+  own. In the read-only phase, a deploy or a migration that fails leaves the object restricted, for a recovery, except a deploy that no
   provider accepted or whose provider reports it failed before its first migration or deploy (`untouched`: a failed
   build, check or provisioning): nothing that runs changed, so Control opens the object again.
-- **Opting out** stops the daily backup only. The pre-migration backup belongs to the migration phase and always runs.
+- **Opting out** stops the daily backup only. A migrating deploy's bookmark, and the read-only phase's backup, belong
+  to the migration and always run.
 - An environment on an older release gets no backups, and the console says so.
 
 ### 9. Side restore
@@ -372,7 +380,9 @@ write; Control's maintenance pass owns it and drives it a bounded stretch at a t
    for the clone's boot.
 6. **Rewind the original**, once the clone serves. `POST /__fabrika/ops/restore` runs three steps:
    - **`prepare`** writes the sentinel, the operation's id, into the original's KV storage, and answers the current
-     bookmark and the bookmark of T (`getBookmarkForTime`). Control persists the target bookmark, the pre-restore
+     bookmark and the bookmark of T (`getBookmarkForTime`). When the operation restores to a migration's record, it
+     names the record's bookmark instead of a time, and `prepare` answers it as the target: `getBookmarkForTime` is
+     approximate, and the record's bookmark is the exact point before the migration's transaction. Control persists the target bookmark, the pre-restore
      bookmark and the sentinel before it arms anything.
    - **`arm`** calls `onNextSessionRestoreBookmark(target)`, answers the undo bookmark, and then aborts the object, so
      its next session starts restored. The answer may be lost to the reset.
@@ -396,8 +406,9 @@ original `inspect`, the environment is open on a broken deploy, which an ordinar
 Only the rewind needs the boot answer. Otherwise the original, pointed back first. While a restore's deploy has no
 outcome, or an answer is unclear, the recovery waits.
 
-**Invariant: point-in-time recovery never touches the object of ordinary traffic.** The object refuses `prepare` and
-`arm` as `serving_object` while it is `FABRIKA_APPLICATION_OBJECT`, and as `wrong_mode` unless it is `inspect`.
+**Invariant: point-in-time recovery never touches the object of ordinary traffic, except to rewind a migration that
+committed and never booted.** The object refuses `prepare` and `arm` as `serving_object` while it is
+`FABRIKA_APPLICATION_OBJECT`, and as `wrong_mode` unless it is `inspect`. The one exception is below.
 
 | Failure                                          | Outcome                                                                                                  |
 | ------------------------------------------------ | -------------------------------------------------------------------------------------------------------- |
@@ -417,9 +428,23 @@ outcome, or an answer is unclear, the recovery waits.
 | The files bucket is shared                       | The original runs no sweep; the tombstones keep the bytes its rows at T reference, for the window        |
 | The original keeps billing storage               | Until it is deleted                                                                                      |
 
-**Not built: an in-place restore and a whole-environment rollback.** Rewinding the serving object, exporting, and
-restoring forward rests on the forward restore succeeding, which is unprobed, and an undo bookmark lost in transit has
-no recovery. Both wait until probe 7 has exercised every failure boundary on a live account.
+**The in-place rewind of a failed migration.** A migration that committed but whose version never booted
+(ADR-0069 §3) is rewound on the object that serves, to the bookmark its migration record holds, by the same three
+steps. The object accepts `prepare` and `arm` on itself only when all of these hold, checked in the barrier's turn:
+
+- it is published `inspect` under the operation's generation, so nothing boots or writes;
+- its migration record says `committed` and has no `booted`, so no ordinary event ran since the commit, and the rewind
+  loses no write;
+- the target is the record's bookmark before the migration, and nothing else.
+
+Control then redeploys the last succeeded run's commit and opens the object at a new generation. The undo bookmark
+`arm` answers is recorded like a side restore's. If `verify` finds the sentinel three times, the object stays `inspect`
+for an operator, and nothing was lost. This rewind is built only once probe 7 has exercised the in-place restore's
+failure boundaries on a live account: a lost `arm` answer, a reset that does not come, and the undo bookmark. Until then,
+such an object stays `closed` for an operator to fix forward.
+
+**Not built: an in-place restore of an object that served, and a whole-environment rollback.** Rewinding an object
+that served writes discards them, and restoring forward rests on the forward restore succeeding, which is unprobed.
 
 ### 10. The timers view
 
@@ -453,7 +478,11 @@ included, refuses one whose `JSON.stringify` exceeds 4 MiB in UTF-8.
 - Each daily backup puts the environment in `read-only` for as long as the export takes. Measured live (2026-11-20) on
   a 909-byte dump of 13 tables: the whole backup, the rehearsal after `open` included, took 14 s; tens of MB are
   unmeasured.
-- An environment's bucket holds 30 daily backups and the pre-migration ones. Every part but the last takes 8 MiB, so a
+- A migrating deploy at a release that records the bookmark is never read-only. The price: reading the rows from
+  before a migration takes a side restore (6.5 min live, with its own read-only backup), or the last daily backup, up
+  to a day old. A bookmark is kept 30 days, as a dump is. It is gone with a deleted class or namespace, and nobody has
+  checked whether it survives `deleteAll()`. Neither a bookmark nor a dump is a copy outside the account.
+- An environment's bucket holds 30 daily backups, and the pre-migration ones of the read-only phase. Every part but the last takes 8 MiB, so a
   dump of small, compressible rows is mostly padding.
 - A schema the rule refuses (§2) cannot be backed up: a `WITHOUT ROWID` or virtual table, a table whose rowid no name
   reads, an `INITIALLY DEFERRED` foreign key, or a cycle of foreign keys whose columns cannot be `NULL` for a while.
@@ -472,7 +501,9 @@ included, refuses one whose `JSON.stringify` exceeds 4 MiB in UTF-8.
 - On Zerops an application has no object, and nothing changes.
 - **Rollout.** Backups, the migration phase and the side restore ship in framework 0.9.0, gated by
   `servesDataOperations`, which holds from `0.9.0-dev.5`: the 0.9.0 prereleases published before it serve the channel's
-  `inspect` but not `state` or `migrate`, so their environments keep plain deploys and get no backup (ADR-0062).
+  `inspect` but not `state` or `migrate`, so their environments keep plain deploys and get no backup (ADR-0062). A
+  migrating deploy without a backup, and the in-place rewind, follow ADR-0069's `recordsMigrationBookmark` gate on the
+  candidate's release; a candidate before it keeps the read-only phase.
   - **Generated files.** No installation file changes. The environment's next deploy at a gated release writes the R2
     lifecycle rule and lists `rehearsal`; `platform upgrade` alone changes no application.
   - **Environment variables.** That deploy writes `FABRIKA_APPLICATION_OBJECTS` with `rehearsal`; a side restore's
@@ -505,5 +536,12 @@ included, refuses one whose `JSON.stringify` exceeds 4 MiB in UTF-8.
   record would hold key values, which are content.
 - **Moving deleted files to a prefix.** Rejected: a restored row keeps its file's original key, which would no longer
   hold the bytes. Deletions are tombstoned for the retention window instead.
-- **In-place point-in-time recovery.** One object and no pointer deploy. Rejected for now: it rewinds the only database
-  that serves, and its safety rests on an unprobed forward restore (§9).
+- **In-place point-in-time recovery.** One object and no pointer deploy. Rejected for an object that served: it rewinds
+  the writes that were right along with the wrong ones, and restoring forward is unprobed (§9). Accepted only for a
+  migration that never booted, where nothing was written to lose.
+- **A consistent backup before every migration**, under `read-only`. It gives a copy of the old rows that can be read
+  without touching the serving object. Rejected for a release that records the bookmark: the window grows with the
+  database, and the bookmark names the same point without one. Reading old rows on the rare recovery costs a side
+  restore instead.
+- **A dump only for a `dataLoss` migration**, consistent or fuzzy. Rejected: the bookmark is already the exact restore
+  point, and keeping a second path for some migrations costs more than the side restore it would save.
