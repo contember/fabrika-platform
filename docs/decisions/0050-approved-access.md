@@ -588,17 +588,20 @@ outside the `deploy.*` wildcard, so the `operator` role does not grant it.
   other than the requester's person (`requesterMayApprove: false`), or two different people on the same digests
   (`approvers: 2`), per category; the item stays parked after the first approval, and a rejection by either refuses it.
 - **A second factor on deciding.** `stepUp: webauthn` on a category makes deciding a pending item of it take a WebAuthn
-  assertion bound to that decision. IAM keeps the person's passkeys. The approval page calls Control's
-  `approvals.challenge` (or `approvals.requests.challenge`), and Control calls IAM over its IAM client for a single-use
-  challenge, which IAM issues to the approver bound to the item's kind, id and digest and to the decision; the page
-  posts the assertion with the decision. Control asks IAM, with the approver's console token, to verify it against
-  the binding it builds from the item it decides, and accepts the decision only when IAM verified it: the challenge was
-  issued to the same person with the same binding, unused and unexpired (five minutes). An assertion for one item never
+  assertion bound to that decision. IAM keeps the person's passkeys, and IAM is their relying party: every ceremony
+  runs on IAM's own pages, where the person signs in, so an application's person registers there too and one passkey
+  serves every step-up. The approval page calls Control's `approvals.challenge` (or `approvals.requests.challenge`), and
+  Control calls IAM over its IAM client for a single-use challenge, which IAM issues to the approver bound to the item's
+  kind, id and digest and to the decision. The person answers it on IAM's step-up page, which the console opens in a new
+  tab; IAM verifies the assertion there and records the answer on the challenge. The page then posts the decision with
+  the challenge's id. Control asks IAM, with the approver's console token, to verify the answer against the binding it
+  builds from the item it decides, and accepts the decision only when IAM verified it: the challenge was issued to the
+  same person with the same binding, answered, unused and unexpired (five minutes). An answer for one item never
   decides another, and none decides twice. The step-up travels with the decision, not in the console token: the proxy
   keeps a minted token for up to five minutes, in each instance's own cache, so a token refreshed after the assertion
   would reach Control too late, and the token's `amr` claim already names a terminal assertion, whose parser refuses any
   other value. It is `webauthn` for `credentials` by default and `none` elsewhere. A person with no passkey cannot
-  decide such an item, and the page says how to register one.
+  decide such an item, and the page links their IAM account page, where they register one.
 - **Weakening the second factor takes it too.** On a protected environment, a change of the protection that weakens
   what deciding a category with `stepUp: webauthn` takes (turning protection off, `stepUp` to `none`, a lower mode, fewer
   approvers, the requester's person let approve, and for `deploy-request` an unmerged commit admitted) takes a passkey
