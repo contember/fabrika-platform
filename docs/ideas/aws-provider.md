@@ -585,8 +585,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        host's there would let a rule Control's role writes serve that host); that host joins the installation's own
        hosts, which no namespace takes. The four certificates are the operator's, validated before the stack is
        applied. Control's balancer variables come from its outputs.
-    3. **Access**: the apps' permissions boundary, Control's role (the grants below), the ECS cluster, the sources
-       bucket, the ECS service-linked role.
+    3. **Access** (built, `installation/access.ts`): the apps' permissions boundary (the union of what an
+       environment's and a namespace proxy's roles are granted, which a test checks against the rendered stacks),
+       Control's role under `/fabrika/platform/` with the grants below in five managed policies (IAM's bound is 6,144
+       characters each), the applications' cluster `fabrika-apps` and the platform's own `fabrika-platform` (Control
+       reaches only the first, so it can never update its own service or IAM's), and the sources bucket (private,
+       TLS only, archives kept 7 days). Narrowed to what the code calls: no `DeleteStack`, no
+       `DescribeStackEvents`. Added to the grants below: denies on any IAM action on `role/fabrika/platform/*` and on
+       `iam:AttachRolePolicy`, and `ec2:CreateSecurityGroup` on the installation's VPC alone. The ECS
+       service-linked role is ensured by the commands (a stack cannot create one that may already exist).
     4. **The database**: RDS PostgreSQL for IAM, Control and Operations, in subnets of its own.
     5. **The platform's services**: Control, IAM, the console and the platform proxy on ECS, their images and
        variables.
