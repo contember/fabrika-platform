@@ -47,7 +47,8 @@ the service that owns identity.
 - **THE SDK ISSUES AND REDEEMS NOTHING.** An app reaches a credential only as the token the proxy
   injected. A share link is a `px_` key the proxy exchanges on an endpoint whose callers include `link`,
   so it arrives as an anonymous token (ADR-0022); a link of a contract link mount also carries `link: { mount, chain }`,
-  exposed as `AuthContext.link`. `issueLink` returns the key IAM issued — the SDK only asked for it.
+  exposed as `AuthContext.link`. A person's agent (ADR-0090) arrives as the person's token with `act`, exposed as
+  `AuthContext.agent`. `issueLink` returns the key IAM issued — the SDK only asked for it.
   `HttpIamRpc` still carries `issueKey` / `revokeKey` because they are `IamRpc` members other callers
   use, not SDK surface.
 - **`audit` forwards the verified token, not an app id.** `AuthContext.audit` sends the token it was

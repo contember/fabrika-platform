@@ -1,4 +1,4 @@
-import type { AccessTokenClaims, DomainEvent, LinkTokenClaims, OAuthTokenClaims, PermissionEntry, Scope } from '@fabrika/auth-core'
+import type { AccessTokenClaims, AgentActClaims, DomainEvent, LinkTokenClaims, OAuthTokenClaims, PermissionEntry, Scope } from '@fabrika/auth-core'
 import { isWorkloadKind, permits, scopedValues } from '@fabrika/auth-core'
 import { readCredentials } from './request'
 import type { AuthContext, IamBinding, ListPrincipalsFailure, PrincipalIdentity, PrincipalList } from './types'
@@ -27,6 +27,7 @@ class RealAuthContext implements AuthContext {
 		private readonly anonymousTokenId: string | null,
 		readonly oauth: OAuthTokenClaims | undefined,
 		readonly link: LinkTokenClaims | undefined,
+		readonly agent: AgentActClaims | undefined,
 	) {}
 
 	can(action: string, scope?: Scope): boolean {
@@ -81,6 +82,7 @@ export function buildAuthContext(binding: IamBinding, token: string, claims: Acc
 		principal === null ? claims.sub : null,
 		claims.oauth,
 		claims.link,
+		claims.act,
 	)
 }
 
