@@ -1,0 +1,72 @@
+{
+	"revision": "2a387e2bd",
+	"viewport": "1440x900",
+	"tasks": {
+		"t01-environment-state": {
+			"clicks": 1,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 2
+		},
+		"t02-deploy": {
+			"clicks": 2,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t03-incident": {
+			"clicks": 2,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t04-backups": {
+			"clicks": 2,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t05-rotate-secret": {
+			"clicks": 4,
+			"fills": 1,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t06-approvals": {
+			"clicks": 2,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t07-reach": {
+			"clicks": 2,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t08-grant-self": {
+			"clicks": 4,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t09-environment-form": {
+			"clicks": 3,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t10-builder": {
+			"clicks": 2,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		},
+		"t11-errors": {
+			"clicks": 2,
+			"fills": 0,
+			"keyPresses": 0,
+			"states": 3
+		}
+	}
+}
