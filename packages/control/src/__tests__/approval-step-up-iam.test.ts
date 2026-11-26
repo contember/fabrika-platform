@@ -13,11 +13,11 @@ import {
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
-import type { PasskeyChallenge, PasskeyCreationOptions, PasskeyDto } from '@fabrika/iam-contract'
 import { type HttpService, SqlDeployLocks, uuidv7 } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import { describe, expect, test } from 'bun:test'
-import { adminTokenFor, CONSOLE_APP, createHarness as createIamHarness, TEST_SIGNING_KEYS } from '../../../iam/src/__tests__/helpers/harness'
+import { adminTokenFor, createHarness as createIamHarness, TEST_SIGNING_KEYS } from '../../../iam/src/__tests__/helpers/harness'
+import { answerTestStepUp, registerTestPasskey } from '../../../iam/src/__tests__/helpers/passkey-pages'
 import { TestAuthenticator } from '../../../iam/src/__tests__/helpers/webauthn'
 import { createIamApp } from '../../../iam/src/app'
 import type { IamRepositories } from '../../../iam/src/db'
@@ -58,40 +58,13 @@ function iamTransport(repositories: IamRepositories): HttpService {
 	}
 }
 
-/** Register a passkey for `principalId` through IAM's ceremony, as the console's Account → Passkeys page does. */
-async function registerPasskey(transport: HttpService, token: string, authenticator: TestAuthenticator): Promise<PasskeyDto> {
-	const rpc = async (method: string, input: unknown): Promise<unknown> => {
-		const response = await transport.fetch(
-			new Request(`${ISSUER}/admin/rpc`, {
-				method: 'POST',
-				headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-				body: JSON.stringify({ method, input }),
-			}),
-		)
-		const body: { result?: unknown } = await response.json()
-		if (response.status !== 200) throw new Error(`${method}: ${response.status}`)
-		return body.result
-	}
-	const issued = await rpc('passkeys.registrationOptions', null)
-	if (!isCreation(issued)) throw new Error('no creation options')
-	const credential = await authenticator.register(issued.options, CONSOLE)
-	const passkey = await rpc('passkeys.register', { challengeId: issued.challengeId, label: 'Laptop', credential })
-	if (typeof passkey !== 'object' || passkey === null || !('id' in passkey) || typeof passkey.id !== 'string') throw new Error('no passkey')
-	return { id: passkey.id, label: 'Laptop', createdAt: 0, lastUsedAt: null }
-}
-
-function isCreation(value: unknown): value is PasskeyChallenge<PasskeyCreationOptions> {
-	return typeof value === 'object' && value !== null && 'challengeId' in value && 'options' in value
-}
-
 async function setup() {
 	const iam = createIamHarness()
-	await iam.repositories.handoff.setReturnOrigins(CONSOLE_APP, [CONSOLE])
 	const transport = iamTransport(iam.repositories)
 	const ada = (await iam.repositories.principals.createUser('sub-ada', 'ada@example.test')).id
 	const eve = (await iam.repositories.principals.createUser('sub-eve', 'eve@example.test')).id
 	const authenticator = await TestAuthenticator.create()
-	await registerPasskey(transport, await adminTokenFor(iam.repositories, ada, { issuer: ISSUER }), authenticator)
+	await registerTestPasskey(iam.repositories, ISSUER, ada, authenticator)
 
 	const control = createHarness()
 	const db: ControlRepositories = control.repositories
@@ -153,10 +126,12 @@ async function setup() {
 		return { repositories: db, queue: { send: () => Promise.resolve() }, lock: locks, ...await consoleCall(principalId) }
 	}
 
-	/** Answer a challenge Control obtained from IAM with ada's authenticator. */
+	/** Answer a challenge Control obtained from IAM with ada's authenticator, on IAM's step-up page. */
 	async function answer(issued: ApprovalStepUpChallenge): Promise<ApprovalStepUp> {
 		if (issued.kind !== 'challenge') throw new Error('ada holds a passkey')
-		return { challengeId: issued.challenge.challengeId, credential: await authenticator.assert(issued.challenge.options, CONSOLE) }
+		expect(issued.challenge.url).toBe(`${ISSUER}/auth/step-up?challenge=${issued.challenge.challengeId}`)
+		await answerTestStepUp(iam.repositories, ISSUER, ada, authenticator, issued.challenge.challengeId)
+		return { challengeId: issued.challenge.challengeId }
 	}
 
 	function close(): void {
@@ -164,12 +139,7 @@ async function setup() {
 		control.sqlite.close()
 	}
 
-	/** IAM forgets the console's origin, so no passkey can be bound to it. */
-	async function forgetConsoleOrigin(): Promise<void> {
-		await iam.repositories.handoff.setReturnOrigins(CONSOLE_APP, [])
-	}
-
-	return { db, ada, eve, authenticator, audited, credentialRequest, context, protection, answer, forgetConsoleOrigin, close }
+	return { db, ada, eve, authenticator, audited, credentialRequest, context, protection, answer, close }
 }
 
 const refusal = async (promise: Promise<unknown>): Promise<{ status: number; message: string }> => {
@@ -242,12 +212,6 @@ describe('the step-up through the real IAM', () => {
 			expect(await refusal(challengeApprovalRequestUseCase(await s.context(s.ada), challenge))).toEqual({
 				status: 429,
 				message: 'too many open passkey challenges; try again in a few minutes',
-			})
-
-			await s.forgetConsoleOrigin()
-			expect(await refusal(challengeApprovalRequestUseCase(await s.context(s.eve), challenge))).toEqual({
-				status: 409,
-				message: 'the console has no registered origin, so a passkey cannot be bound to it',
 			})
 		} finally {
 			s.close()

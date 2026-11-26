@@ -16,7 +16,7 @@ import {
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 } from '@fabrika/control-contract'
-import { type PasskeyChallenge, type PasskeyCreationOptions, recipientKeyThumbprint, type RecipientPublicKey } from '@fabrika/iam-contract'
+import { recipientKeyThumbprint, type RecipientPublicKey } from '@fabrika/iam-contract'
 import { type DeployLocks, type HttpService, type SqlDatabase, SqlDeployLocks } from '@fabrika/platform'
 import { unusedDatabase } from '@fabrika/platform/testing'
 import type { JsonValue } from '@fabrika/provider-contract'
@@ -30,6 +30,7 @@ import {
 	TEST_SIGNING_KEYS,
 } from '../../../iam/src/__tests__/helpers/harness'
 import { membershipFixture, ORIGIN as IAM_ORIGIN, type Person } from '../../../iam/src/__tests__/helpers/membership'
+import { answerTestStepUp, registerTestPasskey } from '../../../iam/src/__tests__/helpers/passkey-pages'
 import { createPostgres as createIamPostgres, hasPostgres as hasIamPostgres } from '../../../iam/src/__tests__/helpers/postgres'
 import { TestAuthenticator } from '../../../iam/src/__tests__/helpers/webauthn'
 import { createIamApp } from '../../../iam/src/app'
@@ -148,10 +149,6 @@ const status = async (promise: Promise<unknown>): Promise<{ status: number; mess
 		if (error instanceof ControlApiError) return { status: error.httpStatus, message: error.message }
 		throw error
 	}
-}
-
-function isCreation(value: unknown): value is PasskeyChallenge<PasskeyCreationOptions> {
-	return typeof value === 'object' && value !== null && 'challengeId' in value && 'options' in value
 }
 
 /** What the console printed while `run` ran, every level. */
@@ -301,26 +298,7 @@ for (const backend of backends) {
 
 			async function registerPasskey(who: Person): Promise<TestAuthenticator> {
 				const authenticator = await TestAuthenticator.create()
-				const token = await adminTokenFor(opened.iam, who.id, { issuer: IAM_ORIGIN })
-				const rpc = async (method: string, input: unknown): Promise<unknown> => {
-					const response = await transport.fetch(
-						new Request(`${IAM_ORIGIN}/admin/rpc`, {
-							method: 'POST',
-							headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-							body: JSON.stringify({ method, input }),
-						}),
-					)
-					const body: { result?: unknown } = await response.json()
-					if (response.status !== 200) throw new Error(`${method}: ${response.status}`)
-					return body.result
-				}
-				const issued = await rpc('passkeys.registrationOptions', null)
-				if (!isCreation(issued)) throw new Error('no creation options')
-				await rpc('passkeys.register', {
-					challengeId: issued.challengeId,
-					label: 'Laptop',
-					credential: await authenticator.register(issued.options, CONSOLE),
-				})
+				await registerTestPasskey(opened.iam, IAM_ORIGIN, who.id, authenticator)
 				return authenticator
 			}
 			const adaPasskey = await registerPasskey(ada)
@@ -332,10 +310,8 @@ for (const backend of backends) {
 				const decision = { id, decision: 'approve' as const, inputDigest: read.inputDigest }
 				const issued = await challengeApprovalRequestUseCase(c, decision)
 				if (issued.kind !== 'challenge') throw new Error('ada holds a passkey')
-				const stepUp: ApprovalStepUp = {
-					challengeId: issued.challenge.challengeId,
-					credential: await adaPasskey.assert(issued.challenge.options, CONSOLE),
-				}
+				await answerTestStepUp(opened.iam, IAM_ORIGIN, ada.id, adaPasskey, issued.challenge.challengeId)
+				const stepUp: ApprovalStepUp = { challengeId: issued.challenge.challengeId }
 				return decideApprovalRequestUseCase(c, { ...decision, stepUp })
 			}
 
