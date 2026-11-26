@@ -252,7 +252,7 @@ describe('narrowingOf', () => {
 		expect(narrowingOf(base, after)).toEqual({ kind: 'none' })
 	})
 
-	test('a dimension that stops listing its members keeps the declaration, and a creator goes with its role', () => {
+	test('a dimension that stops listing its members keeps the declaration, and a creator the new schema drops goes', () => {
 		const after: AppSchema = {
 			...base,
 			scopes: [{ type: 'workspace' }],
@@ -263,7 +263,7 @@ describe('narrowingOf', () => {
 
 		if (narrowing.kind !== 'narrowing') throw new Error(`expected a narrowing, got ${narrowing.kind}`)
 		// IAM deletes the membership transport key with the last dimension that lists members, which a later write does not
-		// bring back; the creator role, granted at a value's creation, goes.
+		// bring back; the creator, granted its role at a value's creation, goes.
 		expect(narrowing.schema.scopes).toEqual([{ type: 'workspace', members: { manage: 'notes.manage', list: 'notes.read' } }])
 		expect(Object.keys(narrowing.schema.roles)).toEqual(['owner'])
 	})
@@ -320,6 +320,44 @@ describe('narrowingOf', () => {
 		expect(narrowing.schema.workloads).toEqual(procedure.workloads)
 		expect(narrowing.schema.actions.map((action) => action.action)).toEqual(['notes.read', 'notes.write', 'notes.manage', 'notes.send'])
 		expect(narrowing.schema.roles.owner?.permissions).toEqual(['notes.read'])
+	})
+
+	test('a kept delegation that creates values keeps its creator, and the creator role, holding nothing', () => {
+		const creating: AppSchema = { ...base, delegations: { 'api.create': { action: 'notes.write', dimension: 'workspace', purpose: 'creates' } } }
+		const after: AppSchema = {
+			...base,
+			scopes: [{ type: 'workspace', members: { manage: 'notes.manage', list: 'notes.read' } }],
+			roles: { reader: { name: 'reader', permissions: [] } },
+		}
+
+		const narrowing = narrowingOf(creating, after)
+
+		if (narrowing.kind !== 'narrowing') throw new Error(`expected a narrowing, got ${narrowing.kind}`)
+		expect(narrowing.schema.scopes[0]?.creator).toBe('owner')
+		expect(narrowing.schema.roles.owner).toEqual({ name: 'owner', permissions: [], member: { scope: 'workspace', assignableBy: [] } })
+		expect(narrowing.schema.roles.reader?.permissions).toEqual([])
+	})
+
+	test("a job that issues a kept mount's links keeps the mount's actions while a role narrows", () => {
+		const issuing: AppSchema = {
+			...base,
+			actions: [...base.actions, { action: 'notes.share' }],
+			links: { view: { dimension: 'workspace', grants: ['notes.read'], issuedBy: 'notes.share', maxDays: 30 } },
+			workloads: [{ kind: 'job', name: 'sharer', actions: ['notes.read', 'notes.share'], issues: 'view' }],
+		}
+		const after: AppSchema = {
+			...issuing,
+			actions: [...base.actions, { action: 'notes.link' }],
+			roles: { ...base.roles, reader: { name: 'reader', permissions: [] } },
+			links: { view: { dimension: 'workspace', grants: ['notes.read'], issuedBy: 'notes.link', maxDays: 30 } },
+			workloads: [{ kind: 'job', name: 'sharer', actions: ['notes.read', 'notes.link'], issues: 'view' }],
+		}
+
+		const narrowing = narrowingOf(issuing, after)
+
+		if (narrowing.kind !== 'narrowing') throw new Error(`expected a narrowing, got ${narrowing.kind}`)
+		expect(narrowing.schema.workloads).toEqual(issuing.workloads)
+		expect(narrowing.schema.roles.reader?.permissions).toEqual([])
 	})
 
 	test('an unchanged schema narrows nothing, an empty assigner list included', () => {

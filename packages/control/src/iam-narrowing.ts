@@ -3,7 +3,7 @@
 // version still serves; the whole schema, widenings included, follows once the version is live (`applyApprovedSchema`).
 
 import { appSchemaSchema } from '@fabrika/auth'
-import type { AppSchema, AppScopeDef, AppWorkloadDef, RoleDef } from '@fabrika/auth-core'
+import type { AppLinkMountDef, AppSchema, AppScopeDef, AppWorkloadDef, RoleDef } from '@fabrika/auth-core'
 
 /**
  * `none`: the new schema narrows nothing the ahead write may take away. `narrowing`: the running schema with those
@@ -27,21 +27,29 @@ export type Narrowing =
  * them grants only actions the roles and keys carry, so the window until the whole write is the one before this change.
  */
 export function narrowingOf(before: AppSchema, after: AppSchema): Narrowing {
+	// A kept delegation that creates values of a dimension needs its creator role.
+	const created = new Set(
+		Object.values(before.delegations ?? {}).filter((delegation) => delegation.purpose === 'creates').map((delegation) => delegation.dimension),
+	)
+	const scopes = before.scopes.map((scope) =>
+		narrowScope(scope, after.scopes.find((candidate) => candidate.type === scope.type) ?? { type: scope.type }, created)
+	)
+	const creators = new Set(scopes.flatMap((scope) => (scope.creator === undefined ? [] : [scope.creator])))
 	const roles: Record<string, RoleDef> = {}
 	for (const [key, role] of Object.entries(before.roles)) {
 		const next = Object.hasOwn(after.roles, key) ? after.roles[key] : undefined
-		if (next !== undefined) roles[key] = narrowRole(role, next)
+		// A removed role a kept creator still names stays, holding nothing; it stays external, as IAM refuses an internal
+		// role an external principal holds.
+		const held = next ?? (creators.has(key) ? emptied(role) : undefined)
+		if (held !== undefined) roles[key] = narrowRole(role, held)
 	}
-	const workloads = before.workloads?.map((workload) => narrowWorkload(workload, after.workloads ?? []))
-	const scopes = before.scopes.map((scope) =>
-		narrowScope(scope, after.scopes.find((candidate) => candidate.type === scope.type) ?? { type: scope.type }, roles)
-	)
 	const links = before.links === undefined ? undefined : Object.fromEntries(
 		Object.entries(before.links).map(([mount, link]) => {
 			const next = after.links !== undefined && Object.hasOwn(after.links, mount) ? after.links[mount] : undefined
 			return [mount, next === undefined ? link : { ...link, maxDays: Math.min(link.maxDays, next.maxDays) }]
 		}),
 	)
+	const workloads = before.workloads?.map((workload) => narrowWorkload(workload, after.workloads ?? [], links ?? {}))
 
 	// An action stays while the new schema declares it, or while something kept from the running one still names it.
 	const named = new Set(after.actions.map((action) => action.action))
@@ -92,16 +100,33 @@ function narrowRole(role: RoleDef, next: RoleDef): RoleDef {
 	}
 }
 
-/** A workload `after` still declares keeps the actions both name; one whose actions all change keeps its own. */
-function narrowWorkload(workload: AppWorkloadDef, after: readonly AppWorkloadDef[]): AppWorkloadDef {
-	const next = after.find((candidate) => candidate.kind === workload.kind && candidate.name === workload.name)
-	const actions = next === undefined ? [] : intersect(workload.actions, next.actions)
-	return actions.length === 0 ? workload : { ...workload, actions }
+/** `role` holding no action, as the new schema would declare it if it kept the role for its name alone. */
+function emptied(role: RoleDef): RoleDef {
+	const held: RoleDef = { name: role.name, permissions: [] }
+	if (role.external === true) held.external = true
+	return held
 }
 
-function narrowScope(scope: AppScopeDef, next: AppScopeDef, roles: Readonly<Record<string, RoleDef>>): AppScopeDef {
+/**
+ * A workload `after` still declares keeps the actions both name; one whose actions all change keeps its own. A job that
+ * issues links of a kept mount keeps the mount's `issuedBy` and grants, which IAM requires it to hold.
+ */
+function narrowWorkload(
+	workload: AppWorkloadDef,
+	after: readonly AppWorkloadDef[],
+	links: Readonly<Record<string, AppLinkMountDef>>,
+): AppWorkloadDef {
+	const next = after.find((candidate) => candidate.kind === workload.kind && candidate.name === workload.name)
+	const mount = workload.issues !== undefined && Object.hasOwn(links, workload.issues) ? links[workload.issues] : undefined
+	const issuing = mount === undefined ? [] : [mount.issuedBy, ...mount.grants]
+	const kept = next === undefined ? [] : intersect(workload.actions, next.actions)
+	if (kept.length === 0) return workload
+	return { ...workload, actions: workload.actions.filter((action) => kept.includes(action) || issuing.includes(action)) }
+}
+
+function narrowScope(scope: AppScopeDef, next: AppScopeDef, created: ReadonlySet<string>): AppScopeDef {
 	const narrowed: AppScopeDef = { ...scope }
-	if (scope.creator !== undefined && (next.creator === undefined || !Object.hasOwn(roles, scope.creator))) delete narrowed.creator
+	if (next.creator === undefined && !created.has(scope.type)) delete narrowed.creator
 	const lookups = intersect(scope.lookups ?? [], next.lookups ?? [])
 	if (lookups.length === 0) delete narrowed.lookups
 	else if (scope.lookups !== undefined) narrowed.lookups = lookups
