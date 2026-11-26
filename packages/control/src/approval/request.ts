@@ -39,13 +39,15 @@ export function deployRequester(request: StoredDeployRequest): RequesterPerson {
 	return { personId: requesterPersonId(request.principal), label: request.principal.label }
 }
 
-/** The branch or tag (short name) a requested commit must be merged into: the trigger ref, or the default branch. */
+/**
+ * The full ref a requested commit must be reachable from: the trigger ref, or the default branch for none or a pattern.
+ * Never a short name, which GitHub resolves to a branch or a same-named tag by an order it does not document.
+ */
 export function mergeTarget(appEnv: Pick<AppEnvRow, 'trigger_ref'>, app: Pick<AppRow, 'default_branch'>): string {
 	const trigger = appEnv.trigger_ref
-	if (trigger === null || isRefPattern(trigger)) return app.default_branch
-	if (trigger.startsWith('refs/heads/')) return trigger.slice('refs/heads/'.length)
-	if (trigger.startsWith('refs/tags/')) return trigger.slice('refs/tags/'.length)
-	return trigger
+	if (trigger === null || isRefPattern(trigger)) return `refs/heads/${app.default_branch}`
+	// A bare row stored before `canonicalTriggerRef` is a branch, as that function reads one.
+	return trigger.startsWith('refs/') ? trigger : `refs/heads/${trigger}`
 }
 
 /**

@@ -518,7 +518,8 @@ A push or a poll is unaffected: a person pushed.
 A non-person's manual run of a protected environment names a 40-character commit SHA, never a ref: a ref names whatever
 its branch holds when the run starts, not what the person approves. Under `deployRequestCommits: merged`, the default,
 the commit must be reachable from the environment's trigger ref, or from the application's default branch when the
-trigger ref is a pattern; Control asks the source when the run is created and refuses (400) a commit it cannot show
+trigger ref is a pattern, named in full (`refs/heads/…`, `refs/tags/…`) so a same-named tag or branch cannot stand in
+for it; Control asks the source when the run is created and refuses (400) a commit it cannot show
 merged. `any` admits an unmerged commit. Every manual run of a protected environment, a person's included, is checked once more
 when it starts: once the provider resolved its commit, and before anything publishes, the source must show that commit
 reachable from the same ref, or the run fails (`assertManualCommitReachable`); only a request under `any` skips it. A
