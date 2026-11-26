@@ -293,8 +293,7 @@ describe('OAuth on the console, resolved', () => {
 	})
 
 	test("IAM's config names every registered resource, a preset's parameter, and MCP's default scope", () => {
-		const config = platformIamOAuthConfig(platformProxyManifestTemplate(), mcp, [])
-		expect(config.clients).toEqual([])
+		const config = platformIamOAuthConfig(platformProxyManifestTemplate(), mcp)
 		expect(config.resources.map((entry) => entry.resource)).toEqual([
 			...CLI_RESOURCES.map((entry) => entry.resource),
 			controlMcpResource(consoleOrigin),

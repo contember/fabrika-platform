@@ -122,7 +122,7 @@ describe('the generated Zerops sidecar repository', () => {
 			expect(workflow).toContain('group: platform-deploy')
 			expect(workflow).toContain('cancel-in-progress: false')
 			expect(workflow).toContain("paths: ['fabrika.ref', '.github/workflows/platform.yml']")
-			// The client list stays through the release that imports it; the MCP authoring switch beside it (ADR-0089).
+			// The client list stays through the release that refuses it, so the refusal sees it; the authoring switch beside it (ADR-0089).
 			expect(workflow).toContain('FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}')
 			expect(workflow).toContain('FABRIKA_PLATFORM_MCP_AUTHORING: ${{ vars.FABRIKA_PLATFORM_MCP_AUTHORING }}')
 		})

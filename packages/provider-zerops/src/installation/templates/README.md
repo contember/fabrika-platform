@@ -90,8 +90,8 @@ installation already holds.
 | `FABRIKA_PLATFORM_CONSOLE_HOST`     | no       | Where the console answers publicly.                                                                        |
 | `FABRIKA_PLATFORM_OPERATIONS_HOST`  | no       | Where Operations ingest answers publicly.                                                                  |
 | `FABRIKA_ZEROPS_API_URL`            | no       | Region API base, when this installation is not on the default one.                                         |
-| `FABRIKA_PLATFORM_MCP_AUTHORING`    | no       | `on` or `off`: MCP authoring. Unset is off, unless the client list names an MCP client (this release).     |
-| `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` | no       | The OAuth client list an earlier release registered (JSON array), imported into IAM once. Then delete it.  |
+| `FABRIKA_PLATFORM_MCP_AUTHORING`    | no       | `on` or `off`: MCP authoring. Unset is off.                                                                |
+| `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` | never    | Refused: IAM's registry holds the OAuth clients, so a deploy with this set stops and names the ways out.   |
 | `FABRIKA_PLATFORM_PLAIN_VARIABLES`  | no       | Readable service variables checked and found not to be credentials, as `<service>/<KEY>`, comma-separated. |
 
 The three host variables go together: **all three, or none.** Naming none derives them from the
@@ -100,12 +100,13 @@ this a custom-domain installation — the domains are bound to the project balan
 deploy publishes no subdomain, because that would add a second public address nobody asked for.
 
 `FABRIKA_PLATFORM_MCP_AUTHORING=on` turns on MCP authoring (ADR-0049, ADR-0089). OAuth clients live in IAM's
-registry: an IAM administrator registers external applications in the console. `FABRIKA_PLATFORM_MCP_CLIENTS_JSON`
-is the list earlier releases read; every deploy hands it to IAM once, which imports it on the first call only, and warns
-while it is set. Once this release is accepted, delete it, and set `FABRIKA_PLATFORM_MCP_AUTHORING=on` if MCP authoring
-was on. A workflow generated before the switch existed does not forward it. `platform upgrade` rewrites such a workflow
-at its next roll; to forward it sooner, add this line to the `env:` of the _Deploy the platform_ step in
-`.github/workflows/platform.yml`:
+registry: an IAM administrator registers external applications in the console, and the operator registers authoring
+clients with `fabrika control oauth-clients`. `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` is the list earlier releases read; a
+deploy refuses it while it is set. Release v0.9.0-dev.47 imports it into the registry: upgrade through that release
+first to keep the clients, then delete the variable. Otherwise delete it, deploy, and register the applications again
+(registering adopts their existing roles). A workflow generated before the switch existed does not forward the switch.
+`platform upgrade` rewrites such a workflow at its next roll; to forward it sooner, add this line to the `env:` of the
+_Deploy the platform_ step in `.github/workflows/platform.yml`:
 
 ```yaml
 FABRIKA_PLATFORM_MCP_AUTHORING: ${{ vars.FABRIKA_PLATFORM_MCP_AUTHORING }}

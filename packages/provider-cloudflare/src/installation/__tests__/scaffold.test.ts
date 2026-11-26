@@ -140,7 +140,7 @@ describe('platform scaffold', () => {
 			expect(platformStep).toContain('FABRIKA_RUNNER_KEY: ${{ secrets.FABRIKA_RUNNER_KEY }}')
 			expect(platformStep).toContain('--runner-config=packages/runner-cloudflare/fabrika-runner.config.ts')
 			expect(platformStep).toContain('--worker-config=packages/control/fabrika.config.ts')
-			// Both stages that read the client list get it and the MCP authoring switch, which they refuse `on` (ADR-0089).
+			// Both stages that refuse the former client list get it, and the MCP authoring switch, which they refuse `on` (ADR-0089).
 			for (const step of [iamStep, platformStep]) {
 				expect(step).toContain('FABRIKA_PLATFORM_MCP_CLIENTS_JSON: ${{ vars.FABRIKA_PLATFORM_MCP_CLIENTS_JSON }}')
 				expect(step).toContain('FABRIKA_PLATFORM_MCP_AUTHORING: ${{ vars.FABRIKA_PLATFORM_MCP_AUTHORING }}')

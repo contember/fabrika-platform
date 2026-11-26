@@ -22,7 +22,6 @@ import { provisioningDocument } from '../install-provisioning'
 import { renderInstallationSecretsFile } from '../install-secrets'
 import { recordingInitLog } from '../log'
 import { generatedArtifacts } from '../topology/artifacts'
-import { fakeIamAdmin } from './fake-iam-admin'
 import { fakeNamespaceProxySource, fakeSourceCollaborators } from './fake-platform-source'
 import { type FakeServiceSpec, type FakeZerops, fakeZerops, importedLightServices } from './fake-zerops'
 
@@ -87,7 +86,6 @@ const harness = (options: {
 		api: zerops.api,
 		storeSecrets: async (text) => void stored.push(text),
 		reconcileSchema: async (call) => void reconciled.push(call),
-		iamAdmin: fakeIamAdmin().iamAdmin,
 		sleep: async () => {},
 		log,
 		prompts: {
@@ -246,7 +244,6 @@ describe('pass 1', () => {
 			uploadFetch: fixture.zerops.uploadFetch,
 			api: traced,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log: recordingInitLog(),
 			prompts: { confirm: async () => true },
@@ -284,7 +281,6 @@ describe('pass 1', () => {
 				...fakeSourceCollaborators,
 				api: noPorts,
 				reconcileSchema: async () => {},
-				iamAdmin: fakeIamAdmin().iamAdmin,
 				sleep: async () => {},
 				log: recordingInitLog(),
 				prompts: { confirm: async () => true },
@@ -662,7 +658,6 @@ describe('what it refuses', () => {
 			api: zerops.api,
 			...fakeSourceCollaborators,
 			reconcileSchema: async () => {},
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log,
 			prompts: { confirm: async () => true },
@@ -834,7 +829,6 @@ describe('every outward step is confirmed', () => {
 			...fakeSourceCollaborators,
 			api: { ...api, getAppVersion: async (call) => ({ ...await api.getAppVersion(call), status: 'ACTIVE' }) },
 			reconcileSchema: async (call) => void fixture.reconciled.push(call),
-			iamAdmin: fakeIamAdmin().iamAdmin,
 			sleep: async () => {},
 			log: fixture.log,
 			signal: new AbortController().signal,

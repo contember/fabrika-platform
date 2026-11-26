@@ -1,4 +1,4 @@
-import type { Confirmations, IamAdminConnection, OAuthClientImportApi } from '@fabrika/installation-init'
+import type { Confirmations } from '@fabrika/installation-init'
 import type { SchemaReconciler } from '@fabrika/provider-contract'
 import type { Sleeper, ZeropsApi } from '../index'
 import type { CheckerPublication } from './checker-release'
@@ -16,8 +16,6 @@ export interface InstallCollaborators {
 	readonly uploadFetch: PlatformUploadFetch
 	readonly api: ZeropsApi
 	readonly reconcileSchema: SchemaReconciler
-	/** IAM's admin surface, for the OAuth client import the deploy ends with (ADR-0089). */
-	readonly iamAdmin: (connection: IamAdminConnection) => OAuthClientImportApi
 	readonly sleep: Sleeper
 	readonly log: InitLog
 	readonly prompts: InstallPrompts

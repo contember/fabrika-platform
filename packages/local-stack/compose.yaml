@@ -94,8 +94,8 @@ services:
     entrypoint: [bun, /workspace/packages/local-stack/src/loopback-forward.ts, 18081=apps-proxy-auth:18081, --]
     # The production server with the `directory` provider registered (`src/iam-server.ts`); its mail goes through Control.
     command: [sh, -c, "bun packages/iam/src/node/migrate.ts && exec bun packages/local-stack/src/iam-server.ts"]
-    # `iam-oauth.env` is rewritten by every prepare: the command-line client's resources, MCP's with
-    # FABRIKA_LOCAL_MCP_AUTHORING=on, and the clients of FABRIKA_LOCAL_OAUTH_CLIENTS_JSON until `up` imports them.
+    # `iam-oauth.env` is rewritten by every prepare: the command-line client's resources, and MCP's with
+    # FABRIKA_LOCAL_MCP_AUTHORING=on. OAuth clients are rows in IAM's registry.
     env_file:
       - path: .state/iam.env
       - path: .state/iam-oauth.env

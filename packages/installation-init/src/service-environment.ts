@@ -194,7 +194,7 @@ export interface DeployedServiceInput extends PlatformPlacementInput {
  * The per-installation configuration a deploy writes, derived from where the installation answers.
  *
  * IAM's OAuth configuration is present when the installation serves OAuth, and then rewritten by every deploy, so
- * turning MCP off removes its resource and clients. Without it the variable is left as it is, and the manifest, whose
+ * turning MCP off removes its resource. Without it the variable is left as it is, and the manifest, whose
  * rows then admit no OAuth token, is what turns OAuth off.
  */
 export const deployedServiceEnvironment = (input: DeployedServiceInput): PlatformServiceEnvironment => {

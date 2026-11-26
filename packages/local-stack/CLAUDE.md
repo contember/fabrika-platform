@@ -42,12 +42,10 @@ bun run test:browser  # the opice suites in tests/browser/
   something pass: a refusal here is a refusal in production.
 - **MCP authoring is OFF locally by default.** A managed MCP client is a CIMD document IAM fetches over
   HTTPS, and there is no local one — do not add a fake CIMD server. `FABRIKA_LOCAL_MCP_AUTHORING=on` before `local:up`
-  turns it on through the installation's own resolver; unset, an MCP client in `FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` still
-  does, with a warning, as on an installation in this release (ADR-0089). `prepareLocalStack` rewrites
-  `.state/iam-oauth.env` and the platform manifest on every run. `registerLocalApps` imports
-  `FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` (an installation's client list, same shape) into IAM's registry through the
-  deploy's own `importOAuthClientsOnce`; IAM writes it on the first `up` after a reset only. Its earlier name,
-  `FABRIKA_LOCAL_MCP_CLIENTS_JSON`, is refused.
+  turns it on; unset is off. `prepareLocalStack` rewrites `.state/iam-oauth.env` and the platform manifest on every run.
+  OAuth clients are rows in IAM's registry (ADR-0089): register a local one with `fabrika control external-apps put` or
+  `fabrika control oauth-clients put` against the local IAM. `FABRIKA_LOCAL_OAUTH_CLIENTS_JSON` and its earlier name,
+  `FABRIKA_LOCAL_MCP_CLIENTS_JSON`, are refused.
 - **`registerLocalApps` stands in for the deploy this composition does not have.** Since
   [ADR-0023](../../docs/decisions/0023-one-session-per-host.md) a session reaches an app's host ONLY
   through a one-time code for a REGISTERED return origin, and locally nothing deploys the console.

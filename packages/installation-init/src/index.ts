@@ -40,15 +40,10 @@ export {
 	type IamOAuthConfig,
 	MCP_AUTHORING_VARIABLE,
 	MCP_CLIENTS_VARIABLE,
-	type McpAuthoring,
-	mcpAuthoringOn,
-	type McpClient,
 	parseMcpAuthoring,
-	parseMcpClientsJson,
 	platformIamOAuthConfig,
-	resolveMcpAuthoring,
+	refuseMcpClientsVariable,
 } from './mcp'
-export { importOAuthClientsOnce, type OAuthClientImport, type OAuthClientImportApi } from './oauth-import'
 export { type CommandEnv, describeArgument, readEnv, readFlag, requiredSetting, setting, shellWord } from './options'
 export { assertPinnedTag } from './pin'
 export { confirm } from './prompt'

@@ -255,7 +255,7 @@ test('a Cloudflare IAM deploy serves the command-line client the very resources 
 		placement: { iam: { hosts: [IAM_HOST] }, control: { hosts: [CONSOLE_HOST] }, operations: { hosts: ['operations.example.test'] } },
 		mcp: false,
 		authorizationServer: ISSUER,
-	}, [])
+	})
 	const cloudflare = buildIamWorker({ env: 'prod', domain: IAM_HOST }, {
 		FABRIKA_IAM_OIDC_ENABLED: 'false',
 		FABRIKA_IAM_PASSWORD_ENABLED: 'true',

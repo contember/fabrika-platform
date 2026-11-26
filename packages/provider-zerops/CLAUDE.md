@@ -467,13 +467,13 @@ Invariants:
   [`mcp-authoring.md`](../../docs/reference/mcp-authoring.md)). On `--scheme=https` the composition names IAM as its
   authorization server: `resolvePlatformProxyManifest` publishes the console's `oauth.table` (the two RPC rows admit
   the command-line client's resource token) and registers `oauth.resources`, and `deployedServiceEnvironment` writes
-  `FABRIKA_IAM_OAUTH_CONFIG` for the SAME resource URIs (`platformIamOAuthConfig`, no MCP client), and
+  `FABRIKA_IAM_OAUTH_CONFIG` for the SAME resource URIs (`platformIamOAuthConfig`), and
   `FABRIKA_OPERATIONS_OAUTH_RESOURCE` on `operations` for the resource marked `verifiedBy: 'operations'`
   (`platformOAuthResourceVerifiedBy`), the only OAuth resource Operations accepts. With MCP
-  authoring on (`FABRIKA_PLATFORM_MCP_AUTHORING` / `--mcp-authoring=on`; unset, this release alone infers it from an
-  authoring entry in `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` / `--mcp-clients` and warns) it publishes `oauth.mcp.table` and
-  registers the MCP resource too. The config lists the variable's clients, which IAM serves until it has imported them,
-  and the installation's hostnames as `hosts` (ADR-0089). On plain http the manifest carries the plain `table`, and both OAuth variables
+  authoring on (`FABRIKA_PLATFORM_MCP_AUTHORING` / `--mcp-authoring=on`; unset is off) it publishes `oauth.mcp.table`
+  and registers the MCP resource too. The config names no client, which are rows in IAM's registry, and carries the
+  installation's hostnames as `hosts` (ADR-0089). `FABRIKA_PLATFORM_MCP_CLIENTS_JSON` / `--mcp-clients` is refused
+  while the options are parsed (`refuseMcpClientsVariable`), before anything is deployed. On plain http the manifest carries the plain `table`, and both OAuth variables
   are left untouched, with a warning for each still set (`OAUTH_LEFTOVERS`) — never cleared, because an empty write on
   Zerops is unverified. Control's half is
   `FABRIKA_SERVICE_TABLE_DIGEST`, which `deployedServiceEnvironment` writes from the resolved manifest

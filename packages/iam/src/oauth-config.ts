@@ -37,7 +37,8 @@ const RESOURCE_KEYS = ['app', 'resource', 'defaultScopes', 'scopeGrants', 'clien
 export function parseOAuthConfig(raw: string | undefined, platformAudiences: ReadonlySet<string>): OAuthConfig | null {
 	if (raw === undefined || raw.trim() === '') return null
 	const value = parseJsonOrNull(raw)
-	const rawClients = prop(value, 'clients')
+	// Absent: a deploy that writes no clients, which this IAM reads as none.
+	const rawClients = prop(value, 'clients') ?? []
 	const rawResources = prop(value, 'resources')
 	if (
 		!hasOnlyKeys(value, CONFIG_KEYS) || !Array.isArray(rawClients) || rawClients.length > MAX_CLIENTS

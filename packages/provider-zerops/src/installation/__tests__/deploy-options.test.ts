@@ -3,7 +3,6 @@
 // Its most load-bearing property is negative: there is NO flag that carries a credential, so an
 // unknown flag has to be an error rather than something the parser ignores.
 
-import type { McpClient } from '@fabrika/installation-init'
 import { describe, expect, test } from 'bun:test'
 import { parsePlatformDeployArgs as parseArgs } from '../deploy-options'
 
@@ -107,55 +106,21 @@ describe('the rest', () => {
 })
 
 describe('MCP authoring', () => {
-	const CLIENT: McpClient = {
-		provider: 'chatgpt',
-		clientId: 'https://chatgpt.com/oauth/client.json',
-		redirectUris: ['https://chatgpt.com/connector_platform_oauth_redirect'],
-	}
 	const BASE = ['--project-id=p1', '--env=stage']
+	const CLIENTS = JSON.stringify([{ provider: 'chatgpt', clientId: 'https://chatgpt.com/oauth/client.json', redirectUris: [] }])
 
-	test('is off unless a client list is supplied', () => {
-		expect(parsePlatformDeployArgs(BASE, ENV).mcpClients).toBeUndefined()
+	test('the former client list is refused from the environment or a flag, before anything else is read', () => {
+		expect(() => parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: CLIENTS })).toThrow(
+			'FABRIKA_PLATFORM_MCP_CLIENTS_JSON is set, and this release no longer reads it',
+		)
+		expect(() => parsePlatformDeployArgs([...BASE, `--mcp-clients=${CLIENTS}`], ENV)).toThrow('--mcp-clients is set')
+		// Refused even where the rest of the input would be refused too, so the operator learns about it first.
+		expect(() => parsePlatformDeployArgs([], { FABRIKA_PLATFORM_MCP_CLIENTS_JSON: '[]' })).toThrow('FABRIKA_PLATFORM_MCP_CLIENTS_JSON is set')
 	})
 
-	test('takes the client list from the environment or a flag', () => {
-		const raw = JSON.stringify([CLIENT])
-		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: raw }).mcpClients).toEqual([CLIENT])
-		expect(parsePlatformDeployArgs([...BASE, `--mcp-clients=${raw}`], ENV).mcpClients).toEqual([CLIENT])
-	})
-
-	test('keeps an explicit metadata URL', () => {
-		const withMetadata = { ...CLIENT, metadataUrl: 'https://chatgpt.com/oauth/metadata.json' }
-		const raw = JSON.stringify([withMetadata])
-		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: raw }).mcpClients).toEqual([withMetadata])
-	})
-
-	test.each([
-		['not JSON', '[{'],
-		['not an array', JSON.stringify(CLIENT)],
-		['an empty list', '[]'],
-		['an unknown provider', JSON.stringify([{ ...CLIENT, provider: 'other' }])],
-		['a non-https client id', JSON.stringify([{ ...CLIENT, clientId: 'http://chatgpt.com/oauth/client.json' }])],
-		['no redirect URI', JSON.stringify([{ ...CLIENT, redirectUris: [] }])],
-		['an unknown key', JSON.stringify([{ ...CLIENT, clientSecret: 'x' }])],
-		['a non-https metadata URL', JSON.stringify([{ ...CLIENT, metadataUrl: 'http://chatgpt.com/m.json' }])],
-		['a repeated client id', JSON.stringify([CLIENT, CLIENT])],
-		[
-			'more clients than IAM accepts',
-			JSON.stringify(Array.from({ length: 17 }, (_, index) => ({ ...CLIENT, clientId: `https://chatgpt.com/oauth/client-${index}.json` }))),
-		],
-	])('refuses %s', (_name, raw) => {
-		expect(() => parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: raw })).toThrow(/MCP client/)
-	})
-
-	test('accepts as many clients as IAM does', () => {
-		const sixteen = Array.from({ length: 16 }, (_, index) => ({ ...CLIENT, clientId: `https://chatgpt.com/oauth/client-${index}.json` }))
-		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify(sixteen) }).mcpClients).toHaveLength(16)
-	})
-
-	test('refuses plain http, because Control reads its bare domain as https', () => {
-		const env = { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: JSON.stringify([CLIENT]) }
-		expect(() => parsePlatformDeployArgs([...BASE, '--scheme=http'], env)).toThrow('--scheme=https')
+	test('a blank client list is unset, as a workflow passes an unset variable', () => {
+		expect(parsePlatformDeployArgs(BASE, { ...ENV, FABRIKA_PLATFORM_MCP_CLIENTS_JSON: '' }).mcpAuthoring).toBeUndefined()
+		expect(parsePlatformDeployArgs([...BASE, '--mcp-clients='], ENV).mcpAuthoring).toBeUndefined()
 	})
 
 	test('the switch comes from the environment or a flag, the flag first, and is absent when unset', () => {

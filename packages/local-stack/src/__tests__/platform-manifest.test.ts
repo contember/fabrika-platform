@@ -10,7 +10,7 @@
 
 import { CONTROL_APP_ID, CONTROL_OPERATIONS_RPC_PATH, CONTROL_RPC_PATH } from '@fabrika/control-contract'
 import { controlMcpResource, controlServiceContract, controlServiceDigest } from '@fabrika/control/service'
-import { type McpClient, platformServiceTableDigest } from '@fabrika/installation-init'
+import { platformServiceTableDigest } from '@fabrika/installation-init'
 import { PLATFORM_PROXY_APPS, type PlatformProxyApp, platformProxyManifestTemplate } from '@fabrika/platform-artifacts/proxy-manifest'
 import { encodeProxyManifestJson, type InstallationProxyApp, parseProxyManifestJson, serviceProxyTable } from '@fabrika/proxy-core/manifest'
 import { describe, expect, test } from 'bun:test'
@@ -24,7 +24,7 @@ import {
 	localOperationsOAuthResource,
 	localPlatformProxyManifest,
 	readLocalMcpAuthoring,
-	readLocalOAuthClients,
+	refuseLocalOAuthClients,
 } from '../prepare'
 
 /** What protects an entry: its service table's rows and reserved prefixes. */
@@ -78,11 +78,6 @@ describe('what the local composition registers with IAM', () => {
 })
 
 describe('OAuth and MCP authoring in the local composition', () => {
-	const CLIENT: McpClient = {
-		provider: 'claude',
-		clientId: 'https://claude.ai/oauth/mcp-oauth-client-metadata',
-		redirectUris: ['https://claude.ai/api/mcp/auth_callback'],
-	}
 	// What control derives its MCP resource from: its `FABRIKA_CONTROL_DOMAIN` in compose.yaml.
 	const controlDomain = (): string => {
 		const compose = readFileSync(resolve(import.meta.dir, '..', '..', 'compose.yaml'), 'utf8')
@@ -96,12 +91,10 @@ describe('OAuth and MCP authoring in the local composition', () => {
 
 	test('MCP is off by default, while the command-line client is served: its RPC resources are registered with IAM', () => {
 		const origin = controlDomain()
-		expect(readLocalOAuthClients({})).toBeUndefined()
-		expect(readLocalMcpAuthoring({}, undefined)).toEqual({ on: false })
+		expect(readLocalMcpAuthoring({})).toBe(false)
 		expect(consoleOf()?.endpoints).toEqual(tableOf(false))
 		expect(consoleOf()?.oauthResources?.map((entry) => entry.resource)).toEqual(cliResources(origin))
-		const config = parseOAuthConfig(localIamOAuthConfig(undefined, false), DEFAULT_PLATFORM_AUDIENCES)
-		expect(config?.clients).toEqual([])
+		const config = parseOAuthConfig(localIamOAuthConfig(false), DEFAULT_PLATFORM_AUDIENCES)
 		expect(config?.resources.map((resource) => resource.resource)).toEqual(cliResources(origin))
 		// The composition's hosts, which IAM checks an external application registered at runtime against.
 		expect(config?.hosts).toEqual(['iam.fabrika.localhost', 'control.fabrika.localhost', 'errors.fabrika.localhost'])
@@ -129,8 +122,7 @@ describe('OAuth and MCP authoring in the local composition', () => {
 
 	test('MCP turned on, IAM gets a config its own parser accepts, for those same resources', () => {
 		const origin = controlDomain()
-		const config = parseOAuthConfig(localIamOAuthConfig([CLIENT], true), DEFAULT_PLATFORM_AUDIENCES)
-		expect(config?.clients.map((client) => client.clientId)).toEqual([CLIENT.clientId])
+		const config = parseOAuthConfig(localIamOAuthConfig(true), DEFAULT_PLATFORM_AUDIENCES)
 		expect(config?.resources.map((resource) => [resource.app, resource.resource])).toEqual(
 			[...cliResources(origin), controlMcpResource(origin)].map((resource) => ['vozka', resource]),
 		)
@@ -142,20 +134,18 @@ describe('OAuth and MCP authoring in the local composition', () => {
 		expect(compose).toContain('- path: .state/operations-oauth.env')
 	})
 
-	test('the client list is parsed at the boundary, and its earlier name is refused rather than ignored', () => {
-		expect(readLocalOAuthClients({ FABRIKA_LOCAL_OAUTH_CLIENTS_JSON: JSON.stringify([CLIENT]) })).toEqual([CLIENT])
-		expect(() => readLocalOAuthClients({ FABRIKA_LOCAL_OAUTH_CLIENTS_JSON: '[]' })).toThrow(/MCP client/)
-		expect(() => readLocalOAuthClients({ FABRIKA_LOCAL_MCP_CLIENTS_JSON: JSON.stringify([CLIENT]) })).toThrow(
-			'FABRIKA_LOCAL_MCP_CLIENTS_JSON is renamed FABRIKA_LOCAL_OAUTH_CLIENTS_JSON',
-		)
+	test('the local client list is refused under either name, naming where clients are registered instead', () => {
+		refuseLocalOAuthClients({})
+		refuseLocalOAuthClients({ FABRIKA_LOCAL_OAUTH_CLIENTS_JSON: ' ' })
+		for (const name of ['FABRIKA_LOCAL_OAUTH_CLIENTS_JSON', 'FABRIKA_LOCAL_MCP_CLIENTS_JSON']) {
+			expect(() => refuseLocalOAuthClients({ [name]: '[]' })).toThrow(`${name} is no longer read`)
+			expect(() => refuseLocalOAuthClients({ [name]: '[]' })).toThrow('`fabrika control external-apps put`')
+		}
 	})
 
-	test('the switch decides; unset, an MCP client in the list turns authoring on with a warning; a malformed switch is refused', () => {
-		expect(readLocalMcpAuthoring({ FABRIKA_LOCAL_MCP_AUTHORING: 'on' }, undefined)).toEqual({ on: true })
-		expect(readLocalMcpAuthoring({ FABRIKA_LOCAL_MCP_AUTHORING: 'off' }, [CLIENT])).toEqual({ on: false })
-		const inferred = readLocalMcpAuthoring({}, [CLIENT])
-		expect(inferred.on).toBe(true)
-		expect(inferred.warning).toContain('set FABRIKA_LOCAL_MCP_AUTHORING=on')
-		expect(() => readLocalMcpAuthoring({ FABRIKA_LOCAL_MCP_AUTHORING: 'true' }, undefined)).toThrow('FABRIKA_LOCAL_MCP_AUTHORING must be on or off')
+	test('the switch alone decides, unset is off, and a malformed switch is refused', () => {
+		expect(readLocalMcpAuthoring({ FABRIKA_LOCAL_MCP_AUTHORING: 'on' })).toBe(true)
+		expect(readLocalMcpAuthoring({ FABRIKA_LOCAL_MCP_AUTHORING: 'off' })).toBe(false)
+		expect(() => readLocalMcpAuthoring({ FABRIKA_LOCAL_MCP_AUTHORING: 'true' })).toThrow('FABRIKA_LOCAL_MCP_AUTHORING must be on or off')
 	})
 })

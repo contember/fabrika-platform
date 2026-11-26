@@ -123,7 +123,7 @@ describe('the sign-in methods', () => {
 			iamUpstream: 'iam:3000',
 			provisioningKey: 'px_admin',
 			controlTableDigest: 'digest',
-			oauthConfig: { clients: [], resources: [], hosts: [] },
+			oauthConfig: { resources: [], hosts: [] },
 		})
 		for (const service of SERVICES) {
 			expect([...env[service].keys()].filter((key) => key.includes('OIDC') || key.includes('PASSWORD'))).toEqual([])
@@ -140,7 +140,7 @@ describe('the deployed environment', () => {
 			iamUpstream: 'iam:3000',
 			provisioningKey: 'px_admin',
 			controlTableDigest: 'digest',
-			...(oauth ? { oauthConfig: { clients: [], resources: [], hosts: [] } } : {}),
+			...(oauth ? { oauthConfig: { resources: [], hosts: [] } } : {}),
 		})
 
 	test('the IAM proxy secret is an HMAC of the provisioning key, the same on IAM and the proxy', () => {
@@ -153,7 +153,7 @@ describe('the deployed environment', () => {
 
 	test("IAM's OAuth configuration is written only when MCP authoring is on", () => {
 		expect(deployed(false).iam.has(IAM_OAUTH_CONFIG_VARIABLE)).toBe(false)
-		expect(deployed(true).iam.get(IAM_OAUTH_CONFIG_VARIABLE)).toBe(JSON.stringify({ clients: [], resources: [], hosts: [] }))
+		expect(deployed(true).iam.get(IAM_OAUTH_CONFIG_VARIABLE)).toBe(JSON.stringify({ resources: [], hosts: [] }))
 	})
 })
 
@@ -217,7 +217,7 @@ describe('the variable names an installation carries', () => {
 				iamUpstream: 'iam:3000',
 				provisioningKey: 'px_admin',
 				controlTableDigest: 'digest',
-				...(oauth ? { oauthConfig: { clients: [], resources: [], hosts: [] } } : {}),
+				...(oauth ? { oauthConfig: { resources: [], hosts: [] } } : {}),
 			})
 		const env = deployed(true)
 		expect(names(env.iam)).toEqual(['ENVIRONMENT', IAM_OAUTH_CONFIG_VARIABLE, IAM_PROXY_SECRET_VARIABLE, 'ISSUER'])
