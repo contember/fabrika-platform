@@ -3847,6 +3847,49 @@ td.row-actions > * + * {
 	color: var(--lamp-stop);
 }
 
+/* What a change on the Secrets and variables tab did, above the matrix it changed. */
+.saved-note {
+	margin: 0 0 var(--s-3);
+}
+
+/* One layer of a secret or a variable: a button that opens the layer, its state or value inside. The layer columns
+   share one width, so secrets and variables line up. */
+th.layer-head {
+	width: 11rem;
+	min-width: 11rem;
+}
+
+.layer-cell {
+	white-space: nowrap;
+}
+
+.layer-cell > button {
+	min-width: 6.5rem;
+	justify-content: flex-start;
+}
+
+.layer-value {
+	display: inline-block;
+	max-width: 10rem;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	vertical-align: bottom;
+}
+
+/* A layer's editor opens under its name's row, across the matrix. */
+.layer-editor > td {
+	padding: var(--s-3) var(--s-4);
+	background: var(--recess);
+}
+
+.layer-editor p {
+	margin: 0;
+}
+
+.form-actions .spacer {
+	flex: 1;
+}
+
 /* An environment's stuck operation (Data tab): the first thing on the page, with its way out. */
 .stuck-operation-body {
 	display: grid;

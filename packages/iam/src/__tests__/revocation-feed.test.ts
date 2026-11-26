@@ -125,7 +125,8 @@ for (const [name, engineOf, available] of engines) {
 			const t = now()
 			await principal(db, t - REVOCATION_FEED_WINDOW_SECONDS - 5)
 			const recent = await principal(db, t - 3)
-			const current = await principal(db, t)
+			// Stamped ahead of IAM's clock (a writer's clock may run fast), so no second boundary the test crosses moves it out of the present.
+			const current = await principal(db, t + 60)
 
 			// Nothing older than a token lifetime can end a cached token, whatever the cursor asks.
 			for (const since of [null, 0, t - 10_000]) {
@@ -136,7 +137,7 @@ for (const [name, engineOf, available] of engines) {
 			const fromCursor = await read(t - 1)
 			if (!fromCursor.ok) throw new Error('refused')
 			expect(fromCursor.subjects.map((s) => s.subject)).toEqual([current])
-			// A cursor ahead of IAM's clock still reads the present second.
+			// A cursor ahead of IAM's clock is held to the present, so it still reads what was stamped from now on.
 			const ahead = await read(t + 600)
 			if (!ahead.ok) throw new Error('refused')
 			expect(ahead.subjects.map((s) => s.subject)).toEqual([current])

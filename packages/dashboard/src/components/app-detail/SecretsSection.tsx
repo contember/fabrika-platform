@@ -1,91 +1,235 @@
-import { useState } from 'react'
-import { api, ApiError, type AppEnvDto, type AppSecretDto, type PutAppSecretRequest, type SetSecretValueRequest } from '../../lib/api'
+import { useRef, useState } from 'react'
+import { api, ApiError, type AppEnvDto, type AppSecretDto } from '../../lib/api'
+import { cellAt, type LayeredName, layerLabel, layersByName } from '../../lib/config-layers'
 import { ConfirmDialog } from '../ConfirmDialog'
 import { Icon } from '../Icon'
-import { EmptyState, Table } from '../Table'
+import { Modal } from '../Modal'
+import { Status } from '../Status'
+import { EmptyState } from '../Table'
+import { LayerTable } from './LayerTable'
+
+/** The layer an editor works on: one name on one environment, or (`env` null) on all of them. */
+interface SecretLayer {
+	readonly row: LayeredName<AppSecretDto>
+	readonly env: string | null
+}
 
 export function SecretsSection(
 	{ appId, secrets, envs, onDone }: { appId: string; secrets: AppSecretDto[]; envs: AppEnvDto[]; onDone: () => void },
 ) {
+	const [open, setOpen] = useState<SecretLayer | null>(null)
+	const [adding, setAdding] = useState(false)
+	const [saved, setSaved] = useState<string | null>(null)
+	/** The cell button that opened the editor: focus goes back to it when the editor closes. */
+	const opener = useRef<HTMLButtonElement | null>(null)
+	const rows = layersByName(secrets)
+
+	function toggle(row: LayeredName<AppSecretDto>, env: string | null, button: HTMLButtonElement) {
+		setSaved(null)
+		if (open?.row.name === row.name && open.env === env) {
+			close()
+			return
+		}
+		opener.current = button
+		setOpen({ row, env })
+	}
+
+	function close() {
+		setOpen(null)
+		opener.current?.focus()
+	}
+
+	function done(message: string) {
+		if (open !== null) close()
+		setAdding(false)
+		setSaved(message)
+		onDone()
+	}
+
 	return (
 		<section>
 			<div className="section-head">
-				<Icon name="lock" size={15} />
 				<h2>Secrets</h2>
+				<span className="spacer" />
+				<button
+					type="button"
+					className="small"
+					onClick={() => {
+						setSaved(null)
+						setAdding(true)
+					}}
+				>
+					<Icon name="plus" size={13} />
+					Add secret
+				</button>
 			</div>
 			<p className="section-note">
-				Secrets deployed with this app. The <code>*</code>{' '}
-				layer applies to every env; an env-specific entry overrides it. Values are write-only: only names and where each value is kept are shown.
+				Each environment reads its own value or, without one, the value for all environments. Values are write-only: nobody reads them back here.
 			</p>
-			<Table
-				colSpan={4}
-				isEmpty={secrets.length === 0}
+			<p className={saved === null ? 'sr-only' : 'notice saved-note'} role="status">{saved}</p>
+			<LayerTable
+				rows={rows}
+				envs={envs}
 				empty={<EmptyState icon="lock" title="No secrets" body="Add a secret to deliver its value to every deploy of this app." />}
-				head={
-					<tr>
-						<th>Name</th>
-						<th>Layer</th>
-						<th className="grow">Stored in</th>
-						<th />
-					</tr>
-				}
-			>
-				{secrets.map((secret) => <SecretRow key={`${secret.env ?? '*'}/${secret.name}`} appId={appId} secret={secret} onDone={onDone} />)}
-			</Table>
-			<AddSecretForm appId={appId} envs={envs} onDone={onDone} />
+				cell={(row, env) => (
+					<SecretCell
+						row={row}
+						env={env}
+						open={open?.row.name === row.name && open.env === env}
+						onOpen={(button) => toggle(row, env, button)}
+					/>
+				)}
+				after={(row, columns) =>
+					open?.row.name === row.name && (
+						<SecretLayerEditor
+							key={`${row.name}/${open.env ?? '*'}`}
+							appId={appId}
+							layer={{ row, env: open.env }}
+							envs={envs}
+							columns={columns}
+							onDone={done}
+							onClose={close}
+						/>
+					)}
+			/>
+			{adding && <AddSecretDialog appId={appId} envs={envs} onDone={done} onClose={() => setAdding(false)} />}
 		</section>
 	)
 }
 
-function SecretRow({ appId, secret, onDone }: { appId: string; secret: AppSecretDto; onDone: () => void }) {
-	const [confirming, setConfirming] = useState(false)
-	const [settingValue, setSettingValue] = useState(false)
-	/** A vault value is rotated in place; anything else is set afresh. */
-	const inVault = secret.storage === 'vault'
+/** What a layer of a secret says: set (and where), taken from all environments, or missing. */
+function SecretCell(
+	{ row, env, open, onOpen }: { row: LayeredName<AppSecretDto>; env: string | null; open: boolean; onOpen: (button: HTMLButtonElement) => void },
+) {
+	const state = secretCellState(row, env)
+	return (
+		<button
+			type="button"
+			className="small"
+			aria-label={`${row.name} on ${layerLabel(env)}: ${state.words}`}
+			aria-expanded={open}
+			onClick={(event) => onOpen(event.currentTarget)}
+		>
+			{state.mark}
+		</button>
+	)
+}
 
-	async function remove() {
-		await api.apps.secrets.delete({ appId, name: secret.name, env: secret.env })
-		onDone()
+/** A cell's mark and the words a screen reader hears for it. */
+export function secretCellState(row: LayeredName<AppSecretDto>, env: string | null): { mark: React.ReactNode; words: string } {
+	const own = env === null ? row.all : row.byEnv.get(env) ?? null
+	if (own !== null && own.storage === 'legacy') {
+		return { mark: <Status lamp="stop">set again</Status>, words: 'stored outside the vault, set it again' }
 	}
+	if (own !== null) return { mark: <Status lamp="ok">set</Status>, words: 'set' }
+	if (env === null) return { mark: <span className="muted">not set</span>, words: 'not set' }
+	if (cellAt(row, env).kind === 'inherits') return { mark: <span className="muted">from all</span>, words: 'reads the value for all environments' }
+	return { mark: <Status lamp="run">missing</Status>, words: 'missing' }
+}
 
-	if (settingValue) {
-		return (
-			<SetSecretValueRow
-				appId={appId}
-				secret={secret}
-				rotate={inVault}
-				onDone={() => {
-					setSettingValue(false)
-					onDone()
-				}}
-				onCancel={() => setSettingValue(false)}
-			/>
-		)
+/** Where a layer's value is now, in a sentence. */
+export function secretWhereabouts(row: LayeredName<AppSecretDto>, env: string | null): string {
+	const own = env === null ? row.all : row.byEnv.get(env) ?? null
+	if (own !== null) {
+		if (own.storage === 'vault') return "Set, sealed in Control's vault."
+		if (own.storage === 'provider') return `Set, kept by the hosting of ${env ?? 'each environment'}, not by Control.`
+		return 'Stored outside the vault, so a deploy cannot read it: set it again.'
+	}
+	if (env === null) return 'Not set for all environments. A value here reaches every environment without its own.'
+	if (row.all !== null) return `Not set on ${env}: it reads the value for all environments. A value here overrides it for ${env}.`
+	return `Not set on ${env} or for all environments: a deploy of ${env} has no value for it.`
+}
+
+/** What deleting a layer leaves the environments with. */
+export function secretDeleteConsequence(row: LayeredName<AppSecretDto>, env: string | null, envs: readonly AppEnvDto[]): string {
+	if (env !== null) return row.all !== null ? `${env} then reads the value for all environments.` : `A deploy of ${env} then has no value for it.`
+	const losing = envs.filter((candidate) => !row.byEnv.has(candidate.env)).map((candidate) => candidate.env)
+	return losing.length === 0 ? 'Every environment has its own value, so none loses it.' : `Then a deploy of ${losing.join(', ')} has no value for it.`
+}
+
+/** How a new value for a layer is written: a vault value is rotated in place; anything else is set afresh. */
+export function secretWrite(row: LayeredName<AppSecretDto>, env: string | null): 'rotate' | 'set' {
+	const own = env === null ? row.all : row.byEnv.get(env) ?? null
+	return own?.storage === 'vault' ? 'rotate' : 'set'
+}
+
+/** When a new value reaches the environments. */
+function takesEffect(env: string | null): string {
+	return env === null ? 'Each environment without its own value reads it from its next deploy.' : `${env} reads it from its next deploy.`
+}
+
+/** One layer's value, edited in a row under its name: set or rotate it, or delete it after a confirmation. */
+function SecretLayerEditor(
+	{ appId, layer, envs, columns, onDone, onClose }: {
+		appId: string
+		layer: SecretLayer
+		envs: readonly AppEnvDto[]
+		columns: number
+		onDone: (message: string) => void
+		onClose: () => void
+	},
+) {
+	const { row, env } = layer
+	const own = env === null ? row.all : row.byEnv.get(env) ?? null
+	const rotate = secretWrite(row, env) === 'rotate'
+	const [value, setValue] = useState('')
+	const [deleting, setDeleting] = useState(false)
+	const [busy, setBusy] = useState(false)
+	const [error, setError] = useState<string | null>(null)
+	const where = layerLabel(env)
+
+	async function save(event: React.FormEvent) {
+		event.preventDefault()
+		setBusy(true)
+		setError(null)
+		const input = { appId, name: row.name, value, env }
+		try {
+			await (rotate ? api.vault.rotate(input) : api.vault.set(input))
+			onDone(`${row.name} on ${where}: new value saved. ${takesEffect(env)}`)
+		} catch (cause) {
+			setError(cause instanceof ApiError ? cause.message : 'Save failed.')
+			setBusy(false)
+		}
 	}
 
 	return (
-		<tr>
-			<td>
-				<code>{secret.name}</code>
-			</td>
-			<td>{secret.env === null ? <span className="muted">* (all envs)</span> : secret.env}</td>
-			<td>
-				<SecretStorage secret={secret} />
-			</td>
-			<td className="row-actions">
-				<button type="button" className="small" onClick={() => setSettingValue(true)}>{inVault ? 'Rotate' : 'Set value'}</button>
-				<button type="button" className="danger small" onClick={() => setConfirming(true)}>Delete</button>
-				{confirming && (
+		<tr className="layer-editor">
+			<td colSpan={columns}>
+				<form className="form" onSubmit={save} onKeyDown={(event) => event.key === 'Escape' && !busy && !deleting && onClose()}>
+					<p>
+						<strong>{row.name} on {where}</strong> <span className="muted">{secretWhereabouts(row, env)}</span>
+					</p>
+					<label>
+						{rotate ? 'New value' : 'Secret value'}
+						<input type="password" required autoFocus value={value} onChange={(event) => setValue(event.target.value)} autoComplete="new-password" />
+						<span className="hint">Never shown again. {takesEffect(env)}</span>
+					</label>
+					<div className="form-actions">
+						<button type="submit" className="primary" disabled={busy || value === ''}>{busy ? 'Saving…' : rotate ? 'Rotate' : 'Save'}</button>
+						<button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+						{own !== null && (
+							<>
+								<span className="spacer" />
+								<button type="button" className="danger ghost" onClick={() => setDeleting(true)} disabled={busy}>Delete…</button>
+							</>
+						)}
+					</div>
+					{error !== null && <p className="error-text" role="alert">{error}</p>}
+				</form>
+				{deleting && (
 					<ConfirmDialog
 						title="Delete secret"
 						confirmLabel="Delete"
 						body={
 							<p>
-								Delete secret <strong>{secret.name}</strong> ({secret.env ?? 'all envs'})?
+								Delete <strong>{row.name}</strong> on {where}? {secretDeleteConsequence(row, env, envs)}
 							</p>
 						}
-						onConfirm={remove}
-						onClose={() => setConfirming(false)}
+						onConfirm={async () => {
+							await api.apps.secrets.delete({ appId, name: row.name, env })
+							onDone(`${row.name} on ${where} deleted.`)
+						}}
+						onClose={() => setDeleting(false)}
 					/>
 				)}
 			</td>
@@ -93,134 +237,55 @@ function SecretRow({ appId, secret, onDone }: { appId: string; secret: AppSecret
 	)
 }
 
-function SecretStorage({ secret }: { secret: AppSecretDto }) {
-	if (secret.storage === 'vault') return <code>{secret.valueRef}</code>
-	if (secret.storage === 'provider') return <span className="muted">Provider-managed</span>
-	return <span className="error-text small">Stored outside the vault. Set it again</span>
-}
-
-/**
- * Inline write-only setter for an app secret's VALUE. PUT (set) stores a fresh vault entry and upserts
- * the `vault:<id>` ref onto the (app, env, name) row; PATCH (rotate) re-encrypts the existing entry.
- * The value is sent once and never read back; the field clears on success. `env` rides the body.
- */
-function SetSecretValueRow(
-	{ appId, secret, rotate, onDone, onCancel }: { appId: string; secret: AppSecretDto; rotate: boolean; onDone: () => void; onCancel: () => void },
+function AddSecretDialog(
+	{ appId, envs, onDone, onClose }: { appId: string; envs: readonly AppEnvDto[]; onDone: (message: string) => void; onClose: () => void },
 ) {
-	const [value, setValue] = useState('')
-	const [busy, setBusy] = useState(false)
-	const [error, setError] = useState<string | null>(null)
-
-	async function save() {
-		setBusy(true)
-		setError(null)
-		try {
-			const body: SetSecretValueRequest = { value, env: secret.env }
-			// PUT sets a new vault entry; PATCH rotates the value behind the existing vault ref.
-			const input = { appId, name: secret.name, value: body.value, env: body.env }
-			await (rotate ? api.vault.rotate(input) : api.vault.set(input))
-			setValue('')
-			onDone()
-		} catch (cause) {
-			setError(cause instanceof ApiError ? cause.message : 'Save failed.')
-			setBusy(false)
-		}
-	}
-
-	return (
-		<tr>
-			<td>
-				<code>{secret.name}</code>
-			</td>
-			<td>{secret.env === null ? <span className="muted">* (all envs)</span> : secret.env}</td>
-			<td>
-				<input
-					type="password"
-					aria-label="Secret value"
-					value={value}
-					onChange={(e) => setValue(e.target.value)}
-					placeholder={rotate ? 'New value' : 'Secret value'}
-					autoComplete="off"
-				/>
-				<span className="hint">Stored encrypted in the vault. Never shown again.</span>
-				{error && <div className="error-text small">{error}</div>}
-			</td>
-			<td className="row-actions">
-				<button type="button" className="primary small" onClick={save} disabled={busy || value === ''}>
-					{busy ? 'Saving…' : rotate ? 'Rotate' : 'Set'}
-				</button>
-				<button type="button" className="small" onClick={onCancel} disabled={busy}>Cancel</button>
-			</td>
-		</tr>
-	)
-}
-
-function AddSecretForm({ appId, envs, onDone }: { appId: string; envs: AppEnvDto[]; onDone: () => void }) {
-	const [open, setOpen] = useState(false)
 	const [name, setName] = useState('')
 	const [value, setValue] = useState('')
-	/** '' = the all-env (*) layer; otherwise an env name. */
-	const [env, setEnv] = useState('')
+	/** '' = the layer for all environments; otherwise an environment's name. */
+	const [layer, setLayer] = useState('')
 	const [busy, setBusy] = useState(false)
 	const [error, setError] = useState<string | null>(null)
 
-	function reset() {
-		setName('')
-		setValue('')
-		setEnv('')
-	}
-
-	async function submit(e: React.FormEvent) {
-		e.preventDefault()
+	async function submit(event: React.FormEvent) {
+		event.preventDefault()
 		setBusy(true)
 		setError(null)
+		const env = layer === '' ? null : layer
 		try {
-			const body: PutAppSecretRequest = { name: name.trim(), value, env: env === '' ? null : env }
-			await api.apps.secrets.put({ appId, secret: body })
-			reset()
-			setOpen(false)
-			onDone()
+			await api.apps.secrets.put({ appId, secret: { name: name.trim(), value, env } })
+			onDone(`${name.trim()} added for ${layerLabel(env)}. ${takesEffect(env)}`)
 		} catch (cause) {
 			setError(cause instanceof ApiError ? cause.message : 'Save failed.')
-		} finally {
 			setBusy(false)
 		}
 	}
 
-	if (!open) {
-		return (
-			<div className="add-row">
-				<button type="button" className="small" onClick={() => setOpen(true)}>
-					<Icon name="plus" size={13} />
-					Add secret
-				</button>
-			</div>
-		)
-	}
-
 	return (
-		<form className="panel form inline" onSubmit={submit}>
-			<label>
-				Name
-				<input required value={name} onChange={(e) => setName(e.target.value)} placeholder="STRIPE_KEY" autoComplete="off" />
-			</label>
-			<label>
-				Layer
-				<select value={env} onChange={(e) => setEnv(e.target.value)}>
-					<option value="">* (all envs)</option>
-					{envs.map((e) => <option key={e.env} value={e.env}>{e.env}</option>)}
-				</select>
-			</label>
-			<label>
-				Value
-				<input type="password" required value={value} onChange={(e) => setValue(e.target.value)} placeholder="Secret value" autoComplete="off" />
-				<span className="hint">Stored encrypted. Never shown again.</span>
-			</label>
-			<div className="form-actions">
-				<button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Add secret'}</button>
-				<button type="button" onClick={() => setOpen(false)} disabled={busy}>Cancel</button>
-			</div>
-			{error && <p className="error-text" role="alert">{error}</p>}
-		</form>
+		<Modal title="Add a secret" onClose={busy ? undefined : onClose}>
+			<form className="form" onSubmit={submit}>
+				<label>
+					Name
+					<input required autoFocus value={name} onChange={(event) => setName(event.target.value)} placeholder="STRIPE_KEY" autoComplete="off" />
+				</label>
+				<label>
+					Environment
+					<select value={layer} onChange={(event) => setLayer(event.target.value)}>
+						<option value="">All environments</option>
+						{envs.map((env) => <option key={env.env} value={env.env}>{env.env}</option>)}
+					</select>
+				</label>
+				<label>
+					Value
+					<input type="password" required value={value} onChange={(event) => setValue(event.target.value)} autoComplete="new-password" />
+					<span className="hint">Never shown again.</span>
+				</label>
+				<div className="form-actions">
+					<button type="submit" className="primary" disabled={busy}>{busy ? 'Saving…' : 'Add secret'}</button>
+					<button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+				</div>
+				{error !== null && <p className="error-text" role="alert">{error}</p>}
+			</form>
+		</Modal>
 	)
 }
