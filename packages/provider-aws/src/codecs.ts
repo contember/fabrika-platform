@@ -9,8 +9,12 @@ import { type JsonValue, MAX_PROVIDER_STATE_BYTES, type ProviderCodec } from '@f
 import { z } from 'zod'
 import { CERTIFICATE_ARN, CERTIFICATE_HOST, CERTIFICATE_STATUS_ENUM, type CertificateStatus, RECORD_NAME as VALIDATION_RECORD } from './aws/acm'
 
-/** An IPv4 CIDR block: the VPC range a proxy behind the balancer trusts forwarding headers from. */
-export const IPV4_CIDR = /^(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:[0-9]|[12]\d|3[0-2])$/
+const IPV4_BLOCK = String.raw`(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\/(?:[0-9]|[12]\d|3[0-2])`
+/**
+ * The ranges a proxy behind the balancer trusts forwarding headers from (its own subnets'), as the build passes them: one
+ * to eight IPv4 CIDR blocks joined by commas, no space, nothing a shell would read.
+ */
+export const IPV4_CIDR_LIST = new RegExp(`^${IPV4_BLOCK}(?:,${IPV4_BLOCK}){0,7}$`)
 
 /** The provider id an envelope and an authored config carry. */
 export const AWS_PROVIDER = 'aws'
@@ -208,8 +212,8 @@ const namespaceTargetSchema = z.object({
 	proxyBuildToken: z.string().regex(TOKEN).optional(),
 	proxyBuildManifestSha256: z.string().regex(SHA256_HEX).optional(),
 	proxyBuildId: z.string().regex(BUILD_ID).optional(),
-	proxyBuildTrustedProxies: z.string().regex(IPV4_CIDR).optional(),
-	proxyImageTrustedProxies: z.string().regex(IPV4_CIDR).optional(),
+	proxyBuildTrustedProxies: z.string().regex(IPV4_CIDR_LIST).optional(),
+	proxyImageTrustedProxies: z.string().regex(IPV4_CIDR_LIST).optional(),
 	proxyImageDigest: z.string().regex(CONTRACT_DIGEST).optional(),
 	proxyImageManifestSha256: z.string().regex(SHA256_HEX).optional(),
 	proxyServiceTaskDefinitionArn: z.string().regex(TASK_DEFINITION_ARN).optional(),

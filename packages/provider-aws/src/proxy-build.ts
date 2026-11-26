@@ -22,7 +22,7 @@
 
 import type { CodeBuildStart } from './aws/codebuild'
 import { awsImageTag, BUILD_VARIABLES, BUILDSPEC_FETCH, PARAMETER_NAME, REPOSITORY_URI } from './build'
-import { IPV4_CIDR } from './codecs'
+import { IPV4_CIDR_LIST } from './codecs'
 import { AWS_BUILD_QUEUED_TIMEOUT_MINUTES, AWS_BUILD_TIMEOUT_MINUTES } from './run-attempt'
 
 /** The recipe of the proxy's image, a path of the pinned commit. */
@@ -66,7 +66,7 @@ export interface AwsProxyBuildInput {
 	readonly sourceUrlParameter: string
 	/** The namespace's proxy repository (`<account>.dkr.ecr.<region>.amazonaws.com/<name>`). */
 	readonly repositoryUri: string
-	/** The range Caddy trusts forwarding headers from: the VPC's, behind the balancer. */
+	/** The ranges Caddy trusts forwarding headers from, comma-joined: the balancer's own subnets'. */
 	readonly trustedProxies: string
 }
 
@@ -75,8 +75,8 @@ export function awsProxyBuildStart(input: AwsProxyBuildInput): CodeBuildStart {
 	const [, account, region] = REPOSITORY_URI.exec(input.repositoryUri) ?? []
 	if (account === undefined || region === undefined) throw new Error('AWS proxy build: the repository is not one this provider builds with')
 	if (!PARAMETER_NAME.test(input.sourceUrlParameter)) throw new Error('AWS proxy build: the source URL parameter is not one this provider builds with')
-	// One IPv4 block: no list, no space, nothing a shell would read.
-	if (!IPV4_CIDR.test(input.trustedProxies)) throw new Error('AWS proxy build: the trusted range is not one IPv4 block')
+	// IPv4 blocks joined by commas: no space, nothing a shell would read.
+	if (!IPV4_CIDR_LIST.test(input.trustedProxies)) throw new Error('AWS proxy build: the trusted ranges are not one to eight IPv4 blocks')
 	return {
 		project: input.project,
 		token: input.buildToken,

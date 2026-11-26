@@ -26,8 +26,8 @@ const installation: AwsAppTarget = {
 }
 const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
 const TOKEN = '0f1e2d3c-4b5a-4968-8776-655443322110'
-/** The VPC's range, which the proxy behind the balancer trusts forwarding headers from. */
-const TRUSTED = '10.0.0.0/16'
+/** The balancer's own subnets, which the proxy behind it trusts forwarding headers from. */
+const TRUSTED = '10.0.240.0/24,10.0.241.0/24'
 const SECOND_TOKEN = '1a2b3c4d-5e6f-4a5b-8c7d-9e8f7a6b5c4d'
 const BUILD_ID = `fabrika_ns_shared_prod:${TOKEN}`
 const PARAMETER = `/fabrika/namespaces/shared/prod/builds/${TOKEN}/source-url`
@@ -255,6 +255,45 @@ describe('startAwsProxyBuild', () => {
 		expect(fake.calls).toContain(`startBuild fabrika_ns_shared_prod ${TOKEN}`)
 	})
 
+	test('an image of other trusted ranges, or of none recorded, is built again with the current ones, the image kept meanwhile', async () => {
+		const manifestSha256 = await sha256Hex(awsProxyManifestFile('shared', MEMBERS))
+		const image = { proxyImageDigest: `sha256:${'a'.repeat(64)}`, proxyImageManifestSha256: manifestSha256 }
+		for (const older of [{ ...PINNED, ...image, proxyImageTrustedProxies: '10.0.0.0/16' }, { ...PINNED, ...image }]) {
+			const fake = new Fake()
+			await startAwsProxyBuild(fake.input(namespaceOf(older)))
+			expect(fake.checkpoints[0]).toEqual({
+				...older,
+				proxyBuildToken: TOKEN,
+				proxyBuildManifestSha256: manifestSha256,
+				proxyBuildTrustedProxies: TRUSTED,
+			})
+			expect(fake.calls).toContain(`startBuild fabrika_ns_shared_prod ${TOKEN}`)
+			expect(fake.starts[0]?.variables['FABRIKA_PROXY_TRUSTED_PROXIES']).toEqual({ value: TRUSTED })
+		}
+	})
+
+	test('an attempt of other trusted ranges is replaced by one under a new token, and its URL parameter goes', async () => {
+		const fake = new Fake()
+		fake.tokens = [SECOND_TOKEN]
+		const manifestSha256 = await sha256Hex(awsProxyManifestFile('shared', MEMBERS))
+		const recorded = namespaceOf({
+			...PINNED,
+			proxyBuildToken: TOKEN,
+			proxyBuildManifestSha256: manifestSha256,
+			proxyBuildTrustedProxies: '10.0.0.0/16',
+			proxyBuildId: BUILD_ID,
+		})
+		await startAwsProxyBuild(fake.input(recorded))
+		expect(fake.checkpoints[0]).toEqual({
+			...PINNED,
+			proxyBuildToken: SECOND_TOKEN,
+			proxyBuildManifestSha256: manifestSha256,
+			proxyBuildTrustedProxies: TRUSTED,
+		})
+		expect(fake.calls.slice(0, 2)).toEqual(['checkpoint', `deleteSecret ${PARAMETER}`])
+		expect(fake.calls).toContain(`startBuild fabrika_ns_shared_prod ${SECOND_TOKEN}`)
+	})
+
 	test('a lost start is settled by the token: found, it is recorded; not found, the failure stands', async () => {
 		const found = new Fake()
 		found.startFails = new AwsError('StartBuild', 'ServiceUnavailable', 503, null, true)
@@ -364,6 +403,19 @@ describe('followAwsProxyBuild', () => {
 		const again = follow(null)
 		expect((await again.run(followed.namespace)).state).toBe('built')
 		expect(again.calls).toEqual([])
+	})
+
+	test("a build that succeeded carries the attempt's trusted ranges to the image", async () => {
+		const fake = follow({ ...build(BUILD_ID), status: 'succeeded' })
+		const followed = await fake.run(namespaceOf({
+			...PINNED,
+			proxyBuildToken: TOKEN,
+			proxyBuildManifestSha256: MANIFEST,
+			proxyBuildTrustedProxies: TRUSTED,
+			proxyBuildId: BUILD_ID,
+		}))
+		expect(followed.state).toBe('built')
+		expect(fake.checkpoints).toEqual([{ ...PINNED, proxyImageDigest: DIGEST, proxyImageManifestSha256: MANIFEST, proxyImageTrustedProxies: TRUSTED }])
 	})
 
 	test('a build that failed, is gone, or pushed no image clears the attempt, drops its URL and fails with a stable code', async () => {

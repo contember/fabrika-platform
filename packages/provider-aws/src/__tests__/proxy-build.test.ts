@@ -20,7 +20,7 @@ const input: AwsProxyBuildInput = {
 	buildToken: TOKEN,
 	sourceUrlParameter: SOURCE_URL_PARAMETER,
 	repositoryUri: `${REGISTRY}/fabrika/namespaces/shared/prod/proxy`,
-	trustedProxies: '10.0.0.0/16',
+	trustedProxies: '10.0.240.0/24,10.0.241.0/24',
 }
 
 const buildspecSchema = z.object({
@@ -64,7 +64,7 @@ describe('the proxy build', () => {
 				[BUILD_VARIABLES.image]: { value: `${REGISTRY}/fabrika/namespaces/shared/prod/proxy:run-${TOKEN}` },
 				[BUILD_VARIABLES.registry]: { value: REGISTRY },
 				[BUILD_VARIABLES.registryRegion]: { value: 'eu-central-1' },
-				FABRIKA_PROXY_TRUSTED_PROXIES: { value: '10.0.0.0/16' },
+				FABRIKA_PROXY_TRUSTED_PROXIES: { value: '10.0.240.0/24,10.0.241.0/24' },
 			},
 			timeoutMinutes: AWS_BUILD_TIMEOUT_MINUTES,
 			queuedTimeoutMinutes: AWS_BUILD_QUEUED_TIMEOUT_MINUTES,
@@ -78,11 +78,15 @@ describe('the proxy build', () => {
 		expect(calls[0]?.body).toMatchObject({ projectName: 'fabrika_ns_shared_prod', idempotencyToken: TOKEN, sourceTypeOverride: 'NO_SOURCE' })
 	})
 
-	test('refuses a repository or source URL parameter of another form', () => {
+	test('refuses a repository, source URL parameter or trusted ranges of another form', () => {
 		const refusals: readonly [Partial<AwsProxyBuildInput>, string][] = [
 			[{ repositoryUri: 'docker.io/library/caddy' }, 'the repository'],
 			[{ repositoryUri: `${REGISTRY}/a//b` }, 'the repository'],
 			[{ sourceUrlParameter: 'https://bucket.example/source.tar.gz' }, 'the source URL parameter'],
+			[{ trustedProxies: '' }, 'the trusted ranges'],
+			[{ trustedProxies: '10.0.240.0/24, 10.0.241.0/24' }, 'the trusted ranges'],
+			[{ trustedProxies: '10.0.240.0/24;id' }, 'the trusted ranges'],
+			[{ trustedProxies: Array.from({ length: 9 }, (_, i) => `10.0.${240 + i}.0/24`).join(',') }, 'the trusted ranges'],
 		]
 		for (const [change, message] of refusals) expect(() => awsProxyBuildStart({ ...input, ...change })).toThrow(message)
 	})

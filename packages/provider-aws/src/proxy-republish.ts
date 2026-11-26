@@ -116,8 +116,9 @@ export async function republishAwsProxy(
 	const now = runtime.now ?? Date.now
 	const giveUpAt = now() + (input.wait === 'active' ? (runtime.waitMs ?? AWS_PROXY_WAIT_MS) : 0)
 	const manifestSha256 = await sha256Hex(awsProxyManifestFile(input.namespace.id, input.members))
-	// Behind the balancer, the client is the address it forwards: Caddy trusts the header from the VPC's range alone.
-	const trustedProxies = context.balancer.vpcCidr
+	// Behind the balancer, the client is the address it forwards: Caddy trusts the header from the balancer's own subnets
+	// alone, never from a range a task runs in (`AwsInstallationBalancer.balancerSubnetCidrs`).
+	const trustedProxies = context.balancer.balancerSubnetCidrs.join(',')
 	const common = { installation, proxySource, events: input.events, signal: input.signal }
 	// The hosts' certificates first: their DNS validation is the operator's, and the longer they have the better. Nothing
 	// here waits for one.

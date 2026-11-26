@@ -41,6 +41,7 @@ const balancer = {
 	vpcCidr: '10.0.0.0/16',
 	listenerArn: LISTENER,
 	installationHosts: ['console.example.com', 'iam.example.com'],
+	balancerSubnetCidrs: ['10.0.240.0/24', '10.0.241.0/24'],
 }
 /** The installation's proxy source; an older release's commit, which a namespace may keep. */
 const PROXY_SOURCE = { repository: { owner: 'contember', name: 'fabrika-platform' }, commitSha: '0123456789abcdef0123456789abcdef01234567' }
@@ -217,13 +218,38 @@ describe('awsNamespaceStack', () => {
 		// A block with host bits is not how AWS names a VPC's.
 		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.5.7/16' })).toThrow('network address')
 		expect(() => checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.16/27' })).toThrow('network address')
-		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '10.0.0.32/27' })).toEqual({ ...balancer, vpcCidr: '10.0.0.32/27' })
-		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '172.31.0.0/16' }).vpcCidr).toBe('172.31.0.0/16')
+		const small = { ...balancer, vpcCidr: '10.0.0.32/27', balancerSubnetCidrs: ['10.0.0.48/28'] }
+		expect(checkInstallationBalancer(small)).toEqual(small)
+		expect(checkInstallationBalancer({ ...balancer, vpcCidr: '172.31.0.0/16', balancerSubnetCidrs: ['172.31.240.0/24'] }).vpcCidr).toBe('172.31.0.0/16')
 		expect(() => checkInstallationBalancer({ ...balancer, listenerArn: 'arn:aws:s3:::bucket' })).toThrow('listener')
 		// The installation's own hosts: at least one, each a lower-case host name, none twice.
 		for (const installationHosts of [[], ['Console.example.com'], ['*.example.com'], ['a.example.com', 'a.example.com']]) {
 			expect(() => checkInstallationBalancer({ ...balancer, installationHosts })).toThrow("installation's own hosts")
 		}
+	})
+
+	test("the balancer's own subnets, which the proxy trusts forwarding headers from, lie inside the VPC and leave room for the tasks", () => {
+		for (
+			const balancerSubnetCidrs of [
+				[],
+				// The VPC's whole range would trust every task in it.
+				['10.0.0.0/16'],
+				// Outside the VPC, wider than a subnet, with host bits, or of another form.
+				['10.1.0.0/24'],
+				['0.0.0.0/0'],
+				['10.0.240.7/24'],
+				['10.0.240.0/24 '],
+				// Two that overlap, or one twice.
+				['10.0.240.0/24', '10.0.240.128/25'],
+				['10.0.240.0/24', '10.0.240.0/24'],
+				// More than one per availability zone of any region.
+				Array.from({ length: 9 }, (_, i) => `10.0.${240 + i}.0/24`),
+			]
+		) {
+			expect(() => checkInstallationBalancer({ ...balancer, balancerSubnetCidrs })).toThrow("balancer's subnet ranges")
+		}
+		const eight = Array.from({ length: 8 }, (_, i) => `10.0.${240 + i}.0/24`)
+		expect(checkInstallationBalancer({ ...balancer, balancerSubnetCidrs: eight }).balancerSubnetCidrs).toEqual(eight)
 	})
 
 	test("holds the proxy's build: its repository, log group, a role under the boundary reaching only its own, and an x86 project", () => {
