@@ -66,7 +66,8 @@ browserTest(
 			manual: 'Return to the terminal. It reports that it is signed in.',
 		}, async () => {
 			await expect.poll(async () => {
-				const answer = await oauthPost('/oauth/token', { grant_type: DEVICE_GRANT, client_id: OAUTH_CLI_CLIENT_ID, device_code: deviceCode })
+				// As the command-line client polls: the resource names which of the approved resources the token is for.
+				const answer = await oauthPost('/oauth/token', { grant_type: DEVICE_GRANT, client_id: OAUTH_CLI_CLIENT_ID, device_code: deviceCode, resource })
 				if (answer.status !== 200) return false
 				refreshToken = tokenSchema.parse(await answer.json()).refresh_token
 				return true
