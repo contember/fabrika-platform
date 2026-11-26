@@ -182,7 +182,7 @@ export interface SourceOptions {
 	location?: string
 	redirectResponse?: () => Response
 	descriptorResponse?: () => Response
-	/** The compare of a requested commit against the branch that must hold it; the fixture commit is ahead by default. */
+	/** The compare of the branch that must hold a requested commit with it; the branch holds it (`behind`) by default. */
 	compareStatus?: 'identical' | 'ahead' | 'behind' | 'diverged'
 	onDownload?: () => void
 	onMetadataRequest?: (url: string) => void
@@ -202,11 +202,13 @@ export function sourceFor(fixture: Fixture, options: SourceOptions = {}): Tarbal
 				const url = input.toString()
 				options.onMetadataRequest?.(url)
 				options.onMetadataAuthorization?.(new Headers(init?.headers).get('authorization'))
-				if (url.includes('/commits/')) return Response.json({ sha: fixture.commitSha, commit: { tree: { sha: fixture.treeSha } } })
+				if (url.includes('/commits/')) return Response.json({ sha: fixture.commitSha, commit: { message: 'fixture', tree: { sha: fixture.treeSha } } })
 				if (url.includes('/git/trees/')) return options.treeResponse?.() ?? Response.json({ sha: fixture.treeSha, truncated: false, tree: fixture.tree })
 				if (url.includes('/contents/')) return options.descriptorResponse?.() ?? new Response(descriptor)
 				if (url.includes('/compare/')) {
-					return Response.json({ status: options.compareStatus ?? 'ahead', base_commit: { sha: fixture.commitSha, commit: { message: 'fixture' } } })
+					const status = options.compareStatus ?? 'behind'
+					const mergeBase = status === 'behind' || status === 'identical' ? fixture.commitSha : 'e'.repeat(40)
+					return Response.json({ status, merge_base_commit: { sha: mergeBase } })
 				}
 				return new Response(null, { status: 404 })
 			},

@@ -486,15 +486,37 @@ describe('a manual deploy of a protected environment deploys only a commit its t
 	test('an unprotected environment and a request under `deployRequestCommits: any` are not asked', async () => {
 		const w = await world()
 		await published(w)
-		await choose(w, 'prod', { ...STRICT_POLICY, 'deploy-request': 'off' }, { ...STRICT_SETTINGS, deployRequestCommits: 'any' })
+		await choose(w, 'prod', STRICT_POLICY, { ...STRICT_SETTINGS, deployRequestCommits: 'any' })
 		w.answer = (input) => Promise.resolve({ message: 'wip', merged: input.mergedInto === null ? null : false })
 		const before = w.requested.length
 
 		const stage = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'stage', ref: 'refs/heads/feature' })
 		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: stage.id })).status).toBe('succeeded')
 		const request = await triggerDeployUseCase(runs(w, 'oauth'), { appId: 'notes', env: 'prod', ref: FEATURE })
-		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: request.id })).status).toBe('succeeded')
-		expect(w.requested.slice(before)).toEqual([])
+		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: request.id })).status).toBe('awaiting_approval')
+		// Only the request's creation reads the commit's message; nothing asks whether a branch holds it.
+		expect(w.requested.slice(before).map((input) => input.mergedInto)).toEqual([null])
+	})
+
+	test("a non-person's run that parks for nobody is checked, whatever `deployRequestCommits` says", async () => {
+		const w = await world()
+		await published(w)
+		await choose(w, 'prod', { ...STRICT_POLICY, 'deploy-request': 'off' }, { ...STRICT_SETTINGS, deployRequestCommits: 'any' })
+		w.answer = (input) => Promise.resolve({ message: 'wip', merged: input.commitSha !== FEATURE })
+		const agent = await triggerDeployUseCase(runs(w, 'oauth'), { appId: 'notes', env: 'prod', ref: 'refs/heads/feature' })
+		expect((await executeDeploy(resolvingTo(w, FEATURE), { runId: agent.id })).status).toBe('failed')
+		expect(w.requested.at(-1)).toMatchObject({ commitSha: FEATURE, mergedInto: 'deploy/prod' })
+		expect(w.deploys).toBe(0)
+	})
+
+	test('a provider that resolves no commit cannot deploy a protected environment by hand', async () => {
+		const w = await world()
+		await published(w)
+		const unresolved: RunDeps = { ...deps(w), provider: { ...provider(w), resolveSource: undefined } }
+		const person = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: 'refs/heads/main' })
+		expect((await executeDeploy(unresolved, { runId: person.id })).status).toBe('failed')
+		expect(w.logs.get(`runs/${person.id}/logs.ndjson`)).toContain('the provider resolves no commit to check')
+		expect(w.deploys).toBe(0)
 	})
 })
 

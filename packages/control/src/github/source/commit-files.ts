@@ -102,7 +102,7 @@ export function gitHubCommitSource(metadata: GitHubMetadataClient, credentials: 
 	}
 }
 
-/** One read for a requested commit: a compare against the branch that must hold it, or the commit alone. */
+/** A requested commit's message, and whether the branch that must hold it does: one compare beside the commit read. */
 export async function readRequestedCommit(
 	metadata: GitHubMetadataClient,
 	repository: SourceRepository,
@@ -110,8 +110,11 @@ export async function readRequestedCommit(
 	input: Pick<RequestedCommitInput, 'commitSha' | 'mergedInto' | 'signal'>,
 ): Promise<RequestedCommit> {
 	if (input.mergedInto === null) return { message: await metadata.commitMessage(repository, input.commitSha, token, input.signal), merged: null }
-	const compared = await metadata.reachableFrom(repository, input.commitSha, input.mergedInto, token, input.signal)
-	return { message: compared.message, merged: compared.reachable }
+	const [message, merged] = await Promise.all([
+		metadata.commitMessage(repository, input.commitSha, token, input.signal),
+		metadata.reachableFrom(repository, input.commitSha, input.mergedInto, token, input.signal),
+	])
+	return { message, merged }
 }
 
 /** One resolution of `HEAD` without a token: only a 404 is a verdict, because GitHub hides a private repository so. */

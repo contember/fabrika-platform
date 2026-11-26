@@ -50,16 +50,18 @@ export function mergeTarget(appEnv: Pick<AppEnvRow, 'trigger_ref'>, app: Pick<Ap
 
 /**
  * A manual run of a protected environment deploys only a commit reachable from its merge target, whoever started it,
- * checked once the provider resolved the commit and before anything publishes. A non-person's request under
- * `deployRequestCommits: any` is the exception the environment chose; a person approves each one. The source is asked
- * through the same credentials as the commit's files, and anything but a yes fails the run.
+ * checked once the provider resolved the commit and before anything publishes. A request (a non-person's run that parks
+ * for a person) under `deployRequestCommits: any` is the exception the environment chose: a person approves each one. A
+ * non-person's run under `deploy-request: off` parks for nobody, so it is checked. The source is asked through the same
+ * credentials as the commit's files, and anything but a yes fails the run.
  */
 export async function assertManualCommitReachable(
 	commits: CommitSource | undefined,
 	input: {
 		readonly app: AppRow
 		readonly appEnv: AppEnvRow
-		readonly byPerson: boolean
+		/** The run parks for a person (`protectedRunDecision` answered `request`). */
+		readonly request: boolean
 		readonly commitSha: string
 		readonly sourceBinding?: ProviderSourceBinding
 		readonly signal: AbortSignal
@@ -67,7 +69,7 @@ export async function assertManualCommitReachable(
 ): Promise<void> {
 	const { app, appEnv, commitSha } = input
 	if (appEnv.protected !== 1) return
-	if (!input.byPerson && appEnvSettings(appEnv).deployRequestCommits === 'any') return
+	if (input.request && appEnvSettings(appEnv).deployRequestCommits === 'any') return
 	const target = mergeTarget(appEnv, app)
 	const refused = `environment \`${appEnv.env}\` is protected: a manual deploy must be a commit reachable from \`${target}\``
 	if (commits === undefined) throw new Error(`${refused}, and Control has no source to ask whether commit ${commitSha} is`)

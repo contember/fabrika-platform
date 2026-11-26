@@ -763,6 +763,11 @@ async function deployUnder(
 		const resolveSource = deps.provider.resolveSource
 		/** The snapshot this run published, and how to classify its data changes again when it predates the classifier. */
 		let published: { readonly candidate: PublishedCandidate; readonly reread: () => Promise<readonly MigrationDataLoss[] | null> } | null = null
+		if (decision !== null && appEnv.protected === 1 && !dryRun && resolveSource === undefined) {
+			throw new Error(
+				`environment \`${appEnv.env}\` is protected: a manual deploy must be a commit its trigger ref holds, and the provider resolves no commit to check`,
+			)
+		}
 		if (!dryRun && resolveSource !== undefined) {
 			await invocation.boundary()
 			const expectedCommitSha = startedRun.commit_sha === null
@@ -813,7 +818,7 @@ async function deployUnder(
 				await assertManualCommitReachable(deps.commits, {
 					app,
 					appEnv,
-					byPerson: startedByPerson(startedRun),
+					request: decision.kind === 'request',
 					commitSha,
 					...(sourceBinding === undefined ? {} : { sourceBinding }),
 					signal: invocation.work.signal,

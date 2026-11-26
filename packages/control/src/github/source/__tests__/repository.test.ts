@@ -227,11 +227,16 @@ describe('the GitHub tarball repository', () => {
 				},
 			}).requestedCommit({ repository, commitSha: fixture.commitSha, mergedInto: 'deploy/prod', signal })
 
-		expect(await asked('ahead')).toEqual({ message: 'fixture', merged: true })
+		expect(await asked('behind')).toEqual({ message: 'fixture', merged: true })
 		expect(await asked('diverged')).toEqual({ message: 'fixture', merged: false })
-		expect(requests).toEqual([
-			[`https://api.github.com/repos/contember/fixture/compare/${fixture.commitSha}...deploy/prod?per_page=1`, `Bearer ${token}`],
-			[`https://api.github.com/repos/contember/fixture/compare/${fixture.commitSha}...deploy/prod?per_page=1`, `Bearer ${token}`],
+		// The branch is compared with the commit, so a commit the branch holds brings no files however far behind it is.
+		const compare = `https://api.github.com/repos/contember/fixture/compare/deploy/prod...${fixture.commitSha}?per_page=1`
+		const commit = `https://api.github.com/repos/contember/fixture/commits/${fixture.commitSha}`
+		expect([...requests].sort(([a], [b]) => a.localeCompare(b))).toEqual([
+			[commit, `Bearer ${token}`],
+			[commit, `Bearer ${token}`],
+			[compare, `Bearer ${token}`],
+			[compare, `Bearer ${token}`],
 		])
 	})
 
