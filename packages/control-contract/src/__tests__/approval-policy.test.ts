@@ -16,7 +16,6 @@ import {
 	requesterMayApprove,
 	requesterPersonId,
 	requiredStepUp,
-	REVIEW_REASONS,
 	STRICT_POLICY,
 	STRICT_SETTINGS,
 	waitingCategories,
@@ -30,7 +29,7 @@ const plain: CategorizedChange = { effect: 'widens', rule: 'endpoint.added', aud
 const legacyCloser: CategorizedChange = { effect: 'widens', review: 'closer' }
 
 describe('the strict and permissive presets', () => {
-	test('strict: six closer-review categories plan, deletes-data person, permissions and grants off, actions person', () => {
+	test('strict: six closer-review categories plan, deletes-data, external roles, public endpoints and CSP person, grants off', () => {
 		expect(STRICT_POLICY).toEqual({
 			'off-road': 'plan',
 			'anyone-calls': 'plan',
@@ -40,10 +39,10 @@ describe('the strict and permissive presets', () => {
 			terminal: 'plan',
 			'deletes-data': 'person',
 			'role-actions': 'off',
-			'role-external': 'off',
+			'role-external': 'person',
 			'role-added': 'off',
-			public: 'off',
-			csp: 'off',
+			public: 'person',
+			csp: 'person',
 			grants: 'off',
 			'deploy-request': 'person',
 			secrets: 'person',
@@ -121,7 +120,7 @@ describe('the conversion from the earlier category list', () => {
 	})
 
 	test('an added category becomes person, a removed one off; the actions keep their defaults', () => {
-		const policy = policyFromCategories([...REVIEW_REASONS.filter((reason) => reason !== 'people'), 'role-actions', 'grants'])
+		const policy = policyFromCategories([...DEFAULT_APPROVAL_CATEGORIES.filter((category) => category !== 'people'), 'role-actions', 'grants'])
 		expect(policy).toEqual({ ...STRICT_POLICY, people: 'off', 'role-actions': 'person', grants: 'person' })
 	})
 

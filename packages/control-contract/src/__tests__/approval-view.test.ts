@@ -228,9 +228,12 @@ describe('approval categories', () => {
 		})
 	}
 
-	test('the defaults are the closer-review reasons, so a line without one never waits by default', () => {
-		expect([...DEFAULT_APPROVAL_CATEGORIES]).toEqual([...REVIEW_REASONS])
+	test('the defaults are the closer-review reasons, an external role, a public endpoint and a CSP origin', () => {
+		expect([...DEFAULT_APPROVAL_CATEGORIES]).toEqual([...REVIEW_REASONS, 'role-external', 'public', 'csp'])
 		expect(waitsForApproval([line({ effect: 'widens', rule: 'role.grants' })], DEFAULT_APPROVAL_CATEGORIES)).toBe(false)
+		expect(waitsForApproval([line({ effect: 'widens', rule: 'role.external' })], DEFAULT_APPROVAL_CATEGORIES)).toBe(true)
+		expect(waitsForApproval([line({ effect: 'widens', rule: 'endpoint.public' })], DEFAULT_APPROVAL_CATEGORIES)).toBe(true)
+		expect(waitsForApproval([line({ effect: 'widens', rule: 'csp.source' })], DEFAULT_APPROVAL_CATEGORIES)).toBe(true)
 		expect(waitsForApproval([line({ effect: 'widens', rule: 'x', review: 'closer', reason: 'people' })], DEFAULT_APPROVAL_CATEGORIES)).toBe(true)
 	})
 

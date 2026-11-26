@@ -23,8 +23,11 @@ export const APPROVAL_CATEGORIES = [...REVIEW_REASONS, 'role-actions', 'role-ext
 
 export type ApprovalCategory = (typeof APPROVAL_CATEGORIES)[number]
 
-/** What a protected environment waits for when nobody chose otherwise: ADR-0050's closer-review reasons, nothing more. */
-export const DEFAULT_APPROVAL_CATEGORIES: readonly ApprovalCategory[] = REVIEW_REASONS
+/**
+ * What a protected environment waits for when nobody chose otherwise: ADR-0050's closer-review reasons, a role opened to
+ * external principals, an endpoint anyone opens and a CSP origin.
+ */
+export const DEFAULT_APPROVAL_CATEGORIES: readonly ApprovalCategory[] = [...REVIEW_REASONS, 'role-external', 'public', 'csp']
 
 /** The fields of a line that place it in a category. */
 export type CategorizedChange = Pick<AccessChangeDto, 'effect' | 'review' | 'reason' | 'rule' | 'audience'>
@@ -109,8 +112,9 @@ export function isActionCategory(category: PolicyCategory): category is ActionCa
 
 /**
  * The strict preset and the default: six of ADR-0050's closer-review reasons `plan`, `deletes-data` `person` (what it
- * deletes depends on production rows no reviewer saw), the permission categories and `grants` `off`, and every action
- * of a non-person `person`.
+ * deletes depends on production rows no reviewer saw), `role-external`, `public` and `csp` `person` (each lets someone
+ * outside the organization reach the application, or the page reach another origin), `role-actions`, `role-added` and
+ * `grants` `off`, and every action of a non-person `person`.
  */
 export const STRICT_POLICY: ApprovalPolicy = {
 	'off-road': 'plan',
@@ -121,10 +125,10 @@ export const STRICT_POLICY: ApprovalPolicy = {
 	terminal: 'plan',
 	'deletes-data': 'person',
 	'role-actions': 'off',
-	'role-external': 'off',
+	'role-external': 'person',
 	'role-added': 'off',
-	public: 'off',
-	csp: 'off',
+	public: 'person',
+	csp: 'person',
 	grants: 'off',
 	'deploy-request': 'person',
 	secrets: 'person',

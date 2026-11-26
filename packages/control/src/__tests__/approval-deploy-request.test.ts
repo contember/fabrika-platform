@@ -249,9 +249,14 @@ const status = async (promise: Promise<unknown>): Promise<{ status: number; mess
 	}
 }
 
-/** `prod` runs `BASE`, deployed by a person, so a request of the same commit changes no line. */
+/**
+ * `prod` runs `BASE`, deployed by a person, so a request of the same commit changes no line. Its health check is an
+ * endpoint anyone opens, a `public` line, so a person approves the first deploy.
+ */
 async function published(w: World): Promise<void> {
 	const created = await triggerDeployUseCase(runs(w, 'console'), { appId: 'notes', env: 'prod', ref: 'refs/heads/main' })
+	expect((await executeDeploy(deps(w), { runId: created.id })).status).toBe('awaiting_approval')
+	await decide(w, created.id, 'approve')
 	expect((await executeDeploy(deps(w), { runId: created.id })).status).toBe('succeeded')
 	w.deploys = 0
 }
