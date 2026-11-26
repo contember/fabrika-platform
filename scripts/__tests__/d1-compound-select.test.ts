@@ -3,12 +3,15 @@ import { readFileSync } from 'fs'
 import { join, resolve } from 'path'
 import ts from 'typescript-platform'
 
-// D1 refuses a compound SELECT of more than five terms ("too many terms in compound SELECT"), while bun:sqlite and
-// Postgres, which the tests run on, accept it, so a longer one fails only on Cloudflare. Ask several questions in one
-// row instead: a column per question, `CASE WHEN EXISTS (…) THEN 1 ELSE 0 END`.
+// workerd's SQLite, behind both D1 and Durable Object storage, refuses a compound SELECT of more than five terms ("too
+// many terms in compound SELECT"), while bun:sqlite and Postgres, which the tests run on, accept it, so a longer one
+// fails only on Cloudflare. Ask several questions in one row instead: a column per question, `CASE WHEN EXISTS (…) THEN
+// 1 ELSE 0 END`.
 //
-// This scan counts UNION, INTERSECT and EXCEPT in each string or template literal of the source. A compound SELECT
-// assembled at runtime (`.join(' UNION ')`) is not seen, so the limit still applies to it by review.
+// This scan counts UNION, INTERSECT and EXCEPT in each string or template literal of the source, summed over the
+// literal, so two short compounds in one literal may be refused though workerd accepts them. Not seen: a compound
+// assembled at runtime (`.join(' UNION ')`) or from concatenated literals, and SQL in lower case; the limit still applies
+// to those by review.
 
 const root = resolve(import.meta.dir, '../..')
 const D1_MAX_COMPOUND_TERMS = 5
