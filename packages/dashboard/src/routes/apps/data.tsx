@@ -11,6 +11,7 @@ import {
 } from '../../components/app/AppFrame'
 import { ConfirmDialog } from '../../components/ConfirmDialog'
 import { Icon } from '../../components/Icon'
+import { Modal } from '../../components/Modal'
 import { Chip, type Lamp, Status } from '../../components/Status'
 import { EmptyState, Table } from '../../components/Table'
 import {
@@ -92,10 +93,11 @@ const RESTORE_BACK_STEPS: readonly { readonly step: DataOperationStep; readonly 
 /** The restore failures that leave the clone serving and the original in inspect (`packages/control/CLAUDE.md`). */
 const CLONE_SERVING_CODES: readonly string[] = ['bookmark_unavailable', 'rewind_failed', 'unexpected_schema']
 
-const MAINTENANCE_MODES: readonly { readonly mode: MaintenanceMode; readonly effect: string }[] = [
-	{ mode: 'read-only', effect: 'reads only: a writing endpoint answers 503, and no job runs' },
-	{ mode: 'closed', effect: "nothing but Control's ops requests" },
-	{ mode: 'open', effect: 'everything, as usual' },
+const MAINTENANCE_MODES: readonly { readonly mode: MaintenanceMode; readonly label: string; readonly effect: string; readonly offered: boolean }[] = [
+	{ mode: 'open', label: 'Open', effect: 'everything, as usual', offered: true },
+	{ mode: 'read-only', label: 'Read-only', effect: 'reads only: a writing endpoint answers 503, and no job runs', offered: true },
+	{ mode: 'closed', label: 'Closed', effect: "nothing but Control's ops requests", offered: true },
+	{ mode: 'inspect', label: 'Inspect', effect: 'nothing: a restore keeps it for inspection', offered: false },
 ]
 
 async function dataRead<T>(read: () => Promise<T>): Promise<DataRead<T>> {
@@ -431,20 +433,24 @@ export function DataSections(
 ) {
 	const stuck = operations.kind === 'ok' ? recoveryChoice(operations.value.items) : null
 
+	// The page opens on the state: a stuck operation and its recovery first, then the facts, then the controls.
 	return (
 		<>
-			{view.kind === 'ok' ? <StateSection appId={appId} env={env} view={view.value} readsContent={readsContent} /> : <ReadProblem read={view} />}
 			{stuck !== null && (
-				<section>
-					<div className="section-head">
-						<h2>{stuck.operation.state === 'running' ? 'Running operation' : 'Failed operation'}</h2>
-						<span className="spacer" />
-						{manages && <RecoverControl key={stuck.operation.id} appId={appId} env={env} stuck={stuck} onChanged={onChanged} />}
-					</div>
-					<OperationProgress operation={stuck.operation} />
-				</section>
+				<StuckOperation
+					key={stuck.operation.id}
+					appId={appId}
+					env={env}
+					stuck={stuck}
+					mode={view.kind === 'ok' ? view.value.maintenance.mode : null}
+					manages={manages}
+					onChanged={onChanged}
+				/>
 			)}
-			{view.kind === 'ok' && manages && <MaintenanceControl appId={appId} env={env} current={view.value.maintenance.mode} onChanged={onChanged} />}
+			{view.kind === 'ok' ? <StateSection appId={appId} env={env} view={view.value} readsContent={readsContent} /> : <ReadProblem read={view} />}
+			{view.kind === 'ok' && manages && (
+				<MaintenanceControl key={view.value.maintenance.mode} appId={appId} env={env} current={view.value.maintenance.mode} onChanged={onChanged} />
+			)}
 			{view.kind === 'ok' && manages && <RestoreControl appId={appId} env={env} onChanged={onChanged} />}
 			<BackupsSection appId={appId} env={env} backups={backups} schedule={schedule} manages={manages} onChanged={onChanged} />
 			{view.kind === 'ok' && <ContentsSections view={view.value} />}
@@ -457,6 +463,76 @@ export function DataSections(
 			</section>
 		</>
 	)
+}
+
+/** The newest operation while it runs or after it failed: what it left the environment in, and the way out. */
+export function StuckOperation(
+	{ appId, env, stuck, mode, manages, onChanged }: {
+		appId: string
+		env: string
+		stuck: { readonly operation: DataOperationDto; readonly resolutions: readonly DataOperationResolution[] }
+		mode: MaintenanceMode | null
+		manages: boolean
+		onChanged: () => void
+	},
+) {
+	const { operation } = stuck
+	const failed = operation.state === 'failed'
+	const effect = mode === null ? undefined : MAINTENANCE_MODES.find((entry) => entry.mode === mode)?.effect
+	return (
+		<section className="stuck-operation" aria-labelledby="stuck-operation-title">
+			<div className={failed ? 'notice notice-bad' : 'notice'}>
+				<Icon name={failed ? 'alert' : 'clock'} size={16} />
+				<div className="stuck-operation-body">
+					<h2 id="stuck-operation-title">
+						{operationTitle(operation.kind)} {failed ? 'failed' : 'running'} at step <code>{operation.step}</code>
+					</h2>
+					<p>
+						{failed ? 'Stopped' : 'Started'} {fmtDate(failed ? operation.updatedAt : operation.createdAt)}
+						{operation.errorCode !== null && (
+							<>
+								{' '}with <code>{operation.errorCode}</code>
+							</>
+						)}
+						.{mode !== null && effect !== undefined && (
+							<>
+								{' '}The environment is <code>{mode}</code>: the application admits {effect}.
+							</>
+						)}
+					</p>
+					{manages
+						? (
+							<div className="toolbar">
+								<RecoverControl appId={appId} env={env} stuck={stuck} primary={failed} onChanged={onChanged} />
+							</div>
+						)
+						: <p className="hint">Only a holder of data management on this environment can recover it.</p>}
+				</div>
+			</div>
+			<details className="disclosure">
+				<summary>
+					<span className="disclosure-title">Where it stands</span>
+					<span className="muted">its record and {operation.kind === 'restore' ? 'every step of the restore' : 'its step'}</span>
+				</summary>
+				<OperationProgress operation={operation} />
+			</details>
+		</section>
+	)
+}
+
+function operationTitle(kind: DataOperationDto['kind']): string {
+	switch (kind) {
+		case 'maintenance':
+			return 'Maintenance'
+		case 'backup':
+			return 'Backup'
+		case 'migrate':
+			return 'Migration'
+		case 'recovery':
+			return 'Recovery'
+		case 'restore':
+			return 'Restore'
+	}
 }
 
 export function StateSection({ appId, env, view, readsContent }: { appId: string; env: string; view: DataViewDto; readsContent: boolean }) {
@@ -475,19 +551,17 @@ export function StateSection({ appId, env, view, readsContent }: { appId: string
 					<code>{view.release}</code>
 				</Field>
 				<Field label="Database size">{fmtBytes(view.database.sizeBytes)}</Field>
+				<Field label="Boot failure">
+					{bootFailure === null ? <span className="muted">none</span> : <Status lamp="stop">{fmtIso(bootFailure.at)}</Status>}
+				</Field>
 			</div>
-			<div className="section-head">
-				<h2>Boot failure</h2>
-			</div>
-			{bootFailure === null
-				? <p className="muted">No boot failure recorded.</p>
-				: (
-					<>
-						<p>The application last failed to boot at {fmtIso(bootFailure.at)}.</p>
-						{/* A new failure, after an invalidation, must not keep the message read for the last one. */}
-						{readsContent && <BootFailureMessage key={bootFailure.at} appId={appId} env={env} />}
-					</>
-				)}
+			{bootFailure !== null && (
+				<>
+					<p>The application last failed to boot at {fmtIso(bootFailure.at)}.</p>
+					{/* A new failure, after an invalidation, must not keep the message read for the last one. */}
+					{readsContent && <BootFailureMessage key={bootFailure.at} appId={appId} env={env} />}
+				</>
+			)}
 		</section>
 	)
 }
@@ -519,13 +593,14 @@ export function BootFailureText({ failure }: { failure: BootFailureContent }) {
 	return <pre>{failure.stack === null ? failure.message : `${failure.message}\n\n${failure.stack}`}</pre>
 }
 
+/** The three modes a person sets, the current one chosen; `inspect` is a restore's, never offered. */
 function MaintenanceControl({ appId, env, current, onChanged }: { appId: string; env: string; current: MaintenanceMode; onChanged: () => void }) {
-	const [mode, setMode] = useState<MaintenanceMode>(current === 'open' ? 'read-only' : 'open')
+	const [mode, setMode] = useState<MaintenanceMode>(current)
 	const [busy, setBusy] = useState(false)
 	const [outcome, setOutcome] = useState<DataAction | null>(null)
-	const effect = MAINTENANCE_MODES.find((entry) => entry.mode === mode)?.effect
 
-	async function start() {
+	async function start(event: FormEvent) {
+		event.preventDefault()
 		setBusy(true)
 		const next = await startMaintenance(api, appId, env, mode)
 		setOutcome(next)
@@ -538,30 +613,39 @@ function MaintenanceControl({ appId, env, current, onChanged }: { appId: string;
 			<div className="section-head">
 				<h2>Maintenance</h2>
 			</div>
-			<div className="toolbar">
-				<select
-					aria-label="Mode"
-					value={mode}
-					onChange={(event) => setMode(MAINTENANCE_MODES.find((entry) => entry.mode === event.target.value)?.mode ?? mode)}
-					disabled={busy}
-				>
-					{MAINTENANCE_MODES.map((entry) => <option key={entry.mode} value={entry.mode}>{entry.mode}</option>)}
-				</select>
-				<button type="button" onClick={start} disabled={busy || outcome?.kind === 'not-in-release'}>
-					{busy ? 'Starting…' : 'Start maintenance'}
-				</button>
-				{effect !== undefined && <span className="hint">The application admits {effect}.</span>}
-			</div>
+			<form onSubmit={start}>
+				<fieldset className="mode-choice" disabled={busy}>
+					<legend className="sr-only">What the application admits</legend>
+					{MAINTENANCE_MODES.filter((entry) => entry.offered).map((entry) => (
+						<label key={entry.mode}>
+							<input type="radio" name={`maintenance-${env}`} value={entry.mode} checked={mode === entry.mode} onChange={() => setMode(entry.mode)} />
+							<span>
+								<strong>{entry.label}</strong>
+								{entry.mode === current && <Chip>current</Chip>}
+								<span className="hint">Admits {entry.effect}.</span>
+							</span>
+						</label>
+					))}
+				</fieldset>
+				{current === 'inspect' && <p className="hint">The environment is in inspect, where a restore left it.</p>}
+				<div className="toolbar">
+					<button type="submit" disabled={busy || mode === current || outcome?.kind === 'not-in-release'}>
+						{busy ? 'Applying…' : 'Apply'}
+					</button>
+				</div>
+			</form>
 			{outcome !== null && <ActionOutcome outcome={outcome} />}
 		</section>
 	)
 }
 
 export function RecoverControl(
-	{ appId, env, stuck, onChanged }: {
+	{ appId, env, stuck, primary, onChanged }: {
 		appId: string
 		env: string
 		stuck: { readonly operation: DataOperationDto; readonly resolutions: readonly DataOperationResolution[] }
+		/** A failed operation's single way out is the page's main step. */
+		primary: boolean
 		onChanged: () => void
 	},
 ) {
@@ -576,11 +660,11 @@ export function RecoverControl(
 
 	return (
 		<>
-			{stuck.resolutions.map((resolution) => (
+			{stuck.resolutions.map((resolution, index) => (
 				<button
 					key={resolution}
 					type="button"
-					className="small"
+					className={primary && index === 0 ? 'primary' : undefined}
 					onClick={() => setConfirming(resolution)}
 					disabled={outcome?.kind === 'not-in-release'}
 				>
@@ -707,44 +791,10 @@ function stepState(index: number, current: number, state: DataOperationState): {
 }
 
 function RestoreControl({ appId, env, onChanged }: { appId: string; env: string; onChanged: () => void }) {
-	const [value, setValue] = useState('')
-	const [problem, setProblem] = useState<string | null>(null)
-	const [choices, setChoices] = useState<readonly RestoreInstant[] | null>(null)
-	const [chosen, setChosen] = useState<string | null>(null)
-	const [confirming, setConfirming] = useState<RestoreInstant | null>(null)
+	const [open, setOpen] = useState(false)
 	const [outcome, setOutcome] = useState<DataAction | null>(null)
 
-	function change(next: string) {
-		setValue(next)
-		setChoices(null)
-		setChosen(null)
-	}
-
-	function review(event: FormEvent) {
-		event.preventDefault()
-		const time = parseRestoreTime(value, Date.now(), browserTimeZone())
-		if (time.kind === 'problem') {
-			setProblem(time.problem)
-			setChoices(null)
-			return
-		}
-		if (time.kind === 'ambiguous') {
-			const picked = time.choices.find((choice) => choice.at === chosen)
-			if (picked === undefined) {
-				setChoices(time.choices)
-				setProblem(`${time.choices[0].local} occurs twice in ${time.choices[0].timeZone}: the clocks go back. Choose which one.`)
-				return
-			}
-			setProblem(null)
-			setConfirming(picked)
-			return
-		}
-		setProblem(null)
-		setConfirming(time.time)
-	}
-
-	async function restore(at: string) {
-		const next = await startRestore(api, appId, env, at)
+	function started(next: DataAction) {
 		setOutcome(next)
 		if (next.kind === 'done') onChanged()
 	}
@@ -758,23 +808,63 @@ function RestoreControl({ appId, env, onChanged }: { appId: string; env: string;
 				Bring back the data as it was at a time within the last {RESTORE_WINDOW_DAYS}{' '}
 				days. The application keeps serving its current data from a copy; the data of that time is kept beside it for inspection.
 			</p>
-			<form className="toolbar" onSubmit={review}>
-				<input type="datetime-local" aria-label="Restore time" value={value} onChange={(event) => change(event.target.value)} />
-				<button type="submit" disabled={outcome?.kind === 'not-in-release'}>Restore to this time…</button>
-			</form>
-			{problem !== null && <p className="error-text" role="alert">{problem}</p>}
-			{choices !== null && <RestoreOccurrences choices={choices} chosen={chosen} onChoose={setChosen} />}
+			<div className="toolbar">
+				<button type="button" onClick={() => setOpen(true)} disabled={outcome?.kind === 'not-in-release'}>Restore…</button>
+			</div>
 			{outcome !== null && <ActionOutcome outcome={outcome} />}
-			{confirming !== null && (
-				<ConfirmDialog
-					title="Restore the data"
-					confirmLabel="Start the restore"
-					body={<RestoreEffect time={confirming} />}
-					onConfirm={() => restore(confirming.at)}
-					onClose={() => setConfirming(null)}
-				/>
-			)}
+			{open && <RestoreDialog appId={appId} env={env} onStarted={started} onClose={() => setOpen(false)} />}
 		</section>
+	)
+}
+
+/** The restore's time and, once it names one instant, what the restore does with it: one dialog, one confirmation. */
+export function RestoreDialog(
+	{ appId, env, onStarted, onClose }: { appId: string; env: string; onStarted: (outcome: DataAction) => void; onClose: () => void },
+) {
+	const [value, setValue] = useState('')
+	const [chosen, setChosen] = useState<string | null>(null)
+	const [busy, setBusy] = useState(false)
+	const time = value === '' ? null : parseRestoreTime(value, Date.now(), browserTimeZone())
+	const instant = time?.kind === 'ok' ? time.time : time?.kind === 'ambiguous' ? (time.choices.find((choice) => choice.at === chosen) ?? null) : null
+
+	function change(next: string) {
+		setValue(next)
+		setChosen(null)
+	}
+
+	async function start(event: FormEvent) {
+		event.preventDefault()
+		if (instant === null) return
+		setBusy(true)
+		const next = await startRestore(api, appId, env, instant.at)
+		onStarted(next)
+		onClose()
+	}
+
+	return (
+		<Modal title="Restore the data" onClose={busy ? undefined : onClose}>
+			<form className="form" onSubmit={start}>
+				<label>
+					Restore time
+					<input type="datetime-local" value={value} onChange={(event) => change(event.target.value)} required autoFocus />
+					<span className="hint">Your local time, within the last {RESTORE_WINDOW_DAYS} days.</span>
+				</label>
+				{time?.kind === 'problem' && <p className="error-text" role="alert">{time.problem}</p>}
+				{time?.kind === 'ambiguous' && (
+					<>
+						<p className="hint">{time.choices[0].local} occurs twice in {time.choices[0].timeZone}: the clocks go back. Choose which one.</p>
+						<RestoreOccurrences choices={time.choices} chosen={chosen} onChoose={setChosen} />
+					</>
+				)}
+				{instant !== null && <RestoreEffect time={instant} />}
+				<div className="modal-actions">
+					<button type="button" onClick={onClose} disabled={busy}>Cancel</button>
+					<button type="submit" className="danger strong" disabled={busy || instant === null}>
+						{busy ? 'Starting…' : 'Start the restore'}
+					</button>
+				</div>
+			</form>
+		</Modal>
 	)
 }
 
@@ -837,13 +927,15 @@ export function BackupsSection(
 				<h2>Backups</h2>
 			</div>
 			<p className="section-note">
-				Consistent backups of the application object, newest first. A backup succeeds only once its rehearsal, an import into a scratch object, passed.
-				Control keeps each for {RESTORE_WINDOW_DAYS} days and offers none older for a restore.
+				Control backs up this environment's data before each migration and, unless turned off, once a day. A backup counts only after a trial import of it
+				passed. Each is kept for {RESTORE_WINDOW_DAYS} days, the reach of a restore.
 			</p>
 			{schedule.kind === 'ok' && (
 				<ScheduleControl key={String(schedule.value.daily)} appId={appId} env={env} schedule={schedule.value} manages={manages} onChanged={onChanged} />
 			)}
-			{backups.kind === 'ok' ? <BackupsTable page={backups.value} /> : <ReadProblem read={backups} />}
+			{backups.kind === 'ok'
+				? <BackupsTable page={backups.value} daily={schedule.kind === 'ok' ? schedule.value.daily : null} />
+				: <ReadProblem read={backups} />}
 		</section>
 	)
 }
@@ -887,13 +979,14 @@ function ScheduleControl(
 	)
 }
 
-function BackupsTable({ page }: { page: CursorList<DataBackupDto> }) {
+/** `daily` is the schedule, `null` when it could not be read: the empty list says what produces the first backup. */
+function BackupsTable({ page, daily }: { page: CursorList<DataBackupDto>; daily: boolean | null }) {
 	return (
 		<>
 			<Table
 				colSpan={6}
 				isEmpty={page.items.length === 0}
-				empty={<EmptyState title="No backups yet" />}
+				empty={<EmptyState title="No backups yet" body={emptyBackupsBody(daily)} />}
 				head={
 					<tr>
 						<th className="grow">Backup</th>
@@ -952,6 +1045,13 @@ function BackupsTable({ page }: { page: CursorList<DataBackupDto> }) {
 	)
 }
 
+function emptyBackupsBody(daily: boolean | null): string | undefined {
+	if (daily === null) return undefined
+	return daily
+		? 'The first one is taken by the next daily backup or the next migration.'
+		: 'Daily backups are off: the first one is taken before the next migration.'
+}
+
 export function ActionOutcome({ outcome }: { outcome: DataAction }) {
 	switch (outcome.kind) {
 		case 'done':
@@ -985,9 +1085,19 @@ function ReadProblem({ read }: { read: Exclude<DataRead<unknown>, { kind: 'ok' }
 	}
 }
 
+/** Diagnostic, not on the incident path: folded under one line of counts. */
 function ContentsSections({ view }: { view: DataViewDto }) {
+	const files = view.files.reduce((sum, entry) => sum + entry.count, 0)
+	const deliveries = view.webhooks.reduce((sum, entry) => sum + entry.count, 0)
 	return (
-		<>
+		<details className="disclosure contents">
+			<summary>
+				<span className="disclosure-title">Contents</span>
+				<span className="muted">
+					{plural(view.database.tables.length, 'table')} · {plural(view.jobs.length, 'job')} · {plural(files, 'file')} ·{' '}
+					{plural(deliveries, 'webhook delivery', 'webhook deliveries')}
+				</span>
+			</summary>
 			<section>
 				<div className="section-head">
 					<h2>Tables</h2>
@@ -1107,7 +1217,7 @@ function ContentsSections({ view }: { view: DataViewDto }) {
 					))}
 				</Table>
 			</section>
-		</>
+		</details>
 	)
 }
 
@@ -1201,13 +1311,18 @@ function operationLamp(state: DataOperationState): Lamp {
 	}
 }
 
+/** A UUIDv7 starts with its time, so records made close together share a head: the tail tells them apart. */
 function shortId(id: string): string {
-	return id.slice(0, 8)
+	return id.slice(-8)
 }
 
 /** The object's timestamps are ISO 8601; the console's formatter takes epoch seconds. */
 function fmtIso(iso: string): string {
 	return fmtDate(Date.parse(iso) / 1000)
+}
+
+function plural(count: number, one: string, many = `${one}s`): string {
+	return `${count.toLocaleString()} ${count === 1 ? one : many}`
 }
 
 function fmtMs(ms: number): string {

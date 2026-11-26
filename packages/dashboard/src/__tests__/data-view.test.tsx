@@ -31,10 +31,10 @@ import {
 	OperationProgress,
 	parseRestoreTime,
 	readBootFailure,
-	RecoverControl,
 	recoverOperation,
 	recoveryChoice,
 	RecoveryEffect,
+	RestoreDialog,
 	RestoreEffect,
 	RestoreOccurrences,
 	scheduleOperationPoll,
@@ -42,6 +42,7 @@ import {
 	startMaintenance,
 	startRestore,
 	StateSection,
+	StuckOperation,
 } from '../routes/apps/data'
 
 const view = (overrides: Partial<DataViewDto> = {}): DataViewDto => ({
@@ -153,7 +154,7 @@ function fakeControl(calls: Call[], answers: Record<string, () => Response>): Co
 const refusal = (status: number, message = 'refused') => () => Response.json({ error: { type: 'error', message } }, { status })
 const result = (value: unknown) => () => Response.json({ result: value })
 
-const MANAGE_ONLY_TEXT = ['Start maintenance', 'Recover', 'Turn off daily backups', 'Restore to this time']
+const MANAGE_ONLY_TEXT = ['What the application admits', 'Recover and', 'Turn off daily backups', 'Restore…']
 
 describe('the data view shows what the environment reports', () => {
 	test('mode, generation, size, table counts, jobs, files, webhooks and the boot failure time', () => {
@@ -197,7 +198,9 @@ describe('the data view shows what the environment reports', () => {
 	})
 
 	test('no boot failure reads as none', () => {
-		expect(markup(holding(['data.read']), { kind: 'ok', value: view({ bootFailure: null }) })).toContain('No boot failure recorded')
+		expect(markup(holding(['data.read']), { kind: 'ok', value: view({ bootFailure: null }) })).toContain(
+			'<h4>Boot failure</h4><span class="muted">none</span>',
+		)
 	})
 })
 
@@ -312,6 +315,26 @@ describe('controls follow consoleAccess', () => {
 		expect(html).not.toContain('value="inspect"')
 	})
 
+	test('the maintenance control starts on the current mode, and Apply waits for another', () => {
+		const html = markup(holding(['data.manage']))
+		expect(html).toMatch(/checked="" value="read-only"/)
+		expect(html).not.toMatch(/checked="" value="open"/)
+		expect(html).toContain('<button type="submit" disabled="">Apply</button>')
+		const inspect = markup(holding(['data.manage']), { kind: 'ok', value: view({ maintenance: { mode: 'inspect', generation: 9, published: true } }) })
+		expect(inspect).not.toContain('checked=""')
+		expect(inspect).toContain('where a restore left it')
+	})
+
+	test('a failed operation leads the page, with its code, and its recovery is the one filled button', () => {
+		const failed = page([operation('op-2', { kind: 'restore', step: 'import', state: 'failed', errorCode: 'import_failed' })])
+		const html = markup(holding(['data.manage']), undefined, failed)
+		expect(html.indexOf('Restore failed at step <code>import</code>')).toBeLessThan(html.indexOf('<h4>Mode</h4>'))
+		expect(html).toContain('<code>import_failed</code>')
+		expect(html).toContain('class="notice notice-bad"')
+		expect(html.match(/class="primary"/g)).toEqual(['class="primary"'])
+		expect(html).toContain('class="primary">Recover and open</button>')
+	})
+
 	test('the content view shows only to a global data.content.read holder, and only when a boot failed', () => {
 		expect(markup(holding(['data.read', 'data.content.read']))).toContain('Show the error message')
 		expect(markup(null)).not.toContain('Show the error message')
@@ -345,7 +368,7 @@ describe('recovery', () => {
 		expect(resume).toContain('<code>closed</code>')
 		expect(resume).toContain('resumes')
 		expect(resume).toContain('<code>restrict</code>')
-		expect(resume).toContain('<code>0192f1aa</code>')
+		expect(resume).toContain('<code>aa-stuck</code>')
 
 		const open = renderToStaticMarkup(<RecoveryEffect operation={stuck} resolution="open" />)
 		expect(open).toContain('<code>closed</code>')
@@ -530,7 +553,7 @@ describe('state stays with its environment, failure and operation', () => {
 					manages: true,
 					readsContent: false,
 				}),
-				RecoverControl,
+				StuckOperation,
 			).map((element) => element.key)
 		expect(keyFor('op-2')).toEqual(['op-2'])
 		expect(keyFor('op-3')).toEqual(['op-3'])
@@ -608,7 +631,7 @@ describe('backups', () => {
 				backup('0192f1cc-running', { state: 'running', rehearsal: 'pending', sizeBytes: null, parts: null, object: 'application-0192f1dd' }),
 			], '0192f1cc-running'),
 		)
-		expect(html).toContain('<code>0192f1aa</code>')
+		expect(html).toContain('<code>a-backup</code>')
 		expect(html).toContain(fmtDate(1_790_000_000))
 		expect(html).toContain('50.0 MiB')
 		expect(html).toContain('>7<')
@@ -755,10 +778,19 @@ describe('the side restore', () => {
 		expect(html).toContain('kept for inspection')
 	})
 
-	test('the restore form shows only to a data.manage holder at the environment', () => {
-		expect(markup(holding(['data.manage']))).toContain('type="datetime-local"')
-		expect(markup(holding(['data.read']))).not.toContain('type="datetime-local"')
-		expect(markup(holding([], { type: 'app', value: 'blog', actions: ['data.manage'] }))).not.toContain('type="datetime-local"')
+	test('the restore shows only to a data.manage holder at the environment, as a button that opens its dialog', () => {
+		expect(markup(holding(['data.manage']))).toContain('Restore…')
+		expect(markup(holding(['data.manage']))).not.toContain('type="datetime-local"')
+		expect(markup(holding(['data.read']))).not.toContain('Restore…')
+		expect(markup(holding([], { type: 'app', value: 'blog', actions: ['data.manage'] }))).not.toContain('Restore…')
+	})
+
+	test('the restore dialog asks for the time first and offers no start until it names one instant', () => {
+		const html = renderToStaticMarkup(<RestoreDialog appId="notes" env="prod" onStarted={() => undefined} onClose={() => undefined} />)
+		expect(html).toContain('role="dialog"')
+		expect(html).toContain('type="datetime-local"')
+		expect(html).toMatch(/<button type="submit" class="danger strong" disabled="">Start the restore<\/button>/)
+		expect(html).not.toContain('side restore')
 	})
 
 	test('starting a restore calls data.start with kind restore; a refusal is shown as Control says, a 404 as not allowed', async () => {
@@ -795,7 +827,7 @@ describe('following a running operation', () => {
 
 	test('a running restore shows its kind, step, generation and every step of the restore, done, current and pending', () => {
 		const html = renderToStaticMarkup(<OperationProgress operation={restore({ step: 'import', generation: 9 })} />)
-		expect(html).toContain('restore <code>0192f1aa</code>')
+		expect(html).toContain('restore <code>-restore</code>')
 		expect(html).toContain('>9<')
 		expect(stepRows(html)).toEqual([
 			['list', 'done'],
@@ -828,7 +860,7 @@ describe('following a running operation', () => {
 
 	test('a running operation of another kind shows its step without the restore steps', () => {
 		const html = renderToStaticMarkup(<OperationProgress operation={operation('0192f1aa-maint', { step: 'restrict' })} />)
-		expect(html).toContain('maintenance <code>0192f1aa</code>')
+		expect(html).toContain('maintenance <code>aa-maint</code>')
 		expect(html).toContain('<code>restrict</code>')
 		expect(stepRows(html)).toEqual([])
 	})
@@ -836,13 +868,15 @@ describe('following a running operation', () => {
 	test('the page shows the running operation with the recovery choices to a data.manage holder only', () => {
 		const running = page([restore({ step: 'point' })])
 		const manager = markup(holding(['data.manage']), undefined, running)
-		expect(manager).toContain('Running operation')
+		expect(manager).toContain('Restore running at step <code>point</code>')
+		expect(manager.indexOf('Restore running')).toBeLessThan(manager.indexOf('<h4>Mode</h4>'))
 		expect(manager).toContain('Recover and resume')
 		expect(manager).toContain('Recover and open')
 		const reader = markup(holding(['data.read']), undefined, running)
-		expect(reader).toContain('Running operation')
+		expect(reader).toContain('Restore running at step')
 		expect(reader).not.toContain('Recover and')
-		expect(markup(holding(['data.manage']), undefined, page([restore({ step: 'check', state: 'succeeded' })]))).not.toContain('Running operation')
+		expect(reader).toContain('Only a holder of data management on this environment can recover it.')
+		expect(markup(holding(['data.manage']), undefined, page([restore({ step: 'check', state: 'succeeded' })]))).not.toContain('Restore running')
 	})
 
 	test('the page reads again while the newest operation runs, and not once it finished', () => {
