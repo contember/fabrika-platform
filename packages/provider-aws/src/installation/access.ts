@@ -8,18 +8,36 @@
 // - **Its prefixes alone.** Every grant names `fabrika/apps/` or `fabrika/namespaces/` (roles, repositories, log
 //   groups, parameters), the `fabrika_` projects, the `fabrika-app-`, `fabrika-ns-` and `fabrika-nh-` stacks, the
 //   applications' cluster and the applications' listener. The platform's own resources are under `fabrika/platform/`,
-//   the `fabrika-platform-` stacks, a cluster of their own (`fabrika-platform`) and a balancer of their own, none of
-//   which a grant names; and an explicit deny keeps Control off the platform's roles whatever else is granted.
+//   the `fabrika-platform-` stacks, a cluster of their own (`fabrika-platform`), task definition families of their own
+//   (`fabrika_platform_`) and a balancer of their own, none of which a grant names; and explicit denies keep Control
+//   off the platform's roles and task definitions whatever else is granted.
+// - **The applications' network alone** (decided 2026-11-26, `network.ts`). ECS joins a service to the target group it
+//   names with ECS's own role, and no condition key of this policy names a target group, so the platform's target
+//   group is in a VPC of its own with no route from the applications'. A service Control creates or updates is held
+//   to the applications' task subnets (`ecs:subnet`); a security group Control creates is in the applications' VPC
+//   alone. `RunTask` has no subnet key, so an init task's subnets are held by the code alone: in the applications'
+//   VPC, which is all that reaches anything (a task of any subnet there is no address of the platform's network).
 // - **No role past the boundary.** `iam:CreateRole` and `iam:PutRolePolicy` only with `iam:PermissionsBoundary` equal to
 //   the boundary, which allows only what an environment's and a namespace proxy's roles need. No `AttachRolePolicy`, so
 //   no managed policy reaches a role Control writes. Control is denied removing or replacing a boundary, and every write
-//   to a policy under `fabrika/`, so it can neither lift the boundary nor widen it.
-// - **No tag written into its reach.** A tag write is granted only in the call that creates the resource
-//   (`ecs:CreateAction`, `ec2:CreateAction`, `elasticloadbalancing:CreateAction`); ACM and Cloud Map get none.
+//   to a policy under `fabrika/`, so it can neither lift the boundary nor widen it. What the boundary does not hold is
+//   who may take such a role: no condition key reads a trust policy, and the stacks need `CreateRole` and
+//   `UpdateAssumeRolePolicy`. A misused Control could so write a bounded role another account may take, which outlives
+//   its own credentials; within the boundary that reaches every application's parameters and repositories. Step 13
+//   names the detection: IAM Access Analyzer's external access findings on `role/fabrika/apps/*` and
+//   `role/fabrika/namespaces/*`.
+// - **No tag written into its reach.** A grant reads a tag of ECS, EC2, Elastic Load Balancing and Cloud Map
+//   resources alone, and a tag write of those is granted only in the call that creates the resource
+//   (`ecs:CreateAction`, `ec2:CreateAction`, `elasticloadbalancing:CreateAction`); Cloud Map and ACM get none. IAM, ECR
+//   and CloudWatch Logs tags are written standalone, and no grant reads one. The tag conditions test presence
+//   (`fabrika:env`, `fabrika:namespace`), not an installation's value, so no stack of the platform's may carry either
+//   key: none does, which a test pins.
 // - **Actions that take no resource** (the `Describe*` of EC2 and Elastic Load Balancing, `ecr:GetAuthorizationToken`,
-//   `ecs:RegisterTaskDefinition`, `cloudformation:ListStacks`, ACM's request) are granted on `*`; a task definition
-//   Control registers can still only pass the applications' and namespaces' roles (`iam:PassRole`).
-//
+//   `cloudformation:ListStacks`, ACM's request) are granted on `*`.
+// - **Task definitions.** `RegisterTaskDefinition` and `RunTask` are granted on `task-definition/*` with the
+//   platform's families (`fabrika_platform_*`) denied, and so are `CreateService` and `UpdateService` naming one: no
+//   application family can take that name (one has exactly one `_`, a namespace's starts `ns_`). A task definition
+//   Control registers can only pass the applications' and namespaces' roles (`iam:PassRole`).
 // - **No certificate on a listener.** Elastic Load Balancing scopes `AddListenerCertificates` by the listener alone, so a
 //   role holding it could attach any certificate of the account, a platform host's among them, to the applications'
 //   listener. Control's role holds neither listener certificate action: a namespace's certificates go on through the
@@ -57,6 +75,11 @@ export const AWS_PLATFORM_CLUSTER = 'fabrika-platform'
 export const AWS_CONTROL_ROLE = 'fabrika-control'
 /** The platform's IAM path: its roles and policies, out of Control's reach. */
 export const AWS_PLATFORM_PATH = '/fabrika/platform/'
+/**
+ * The platform's task definition families start with it: two `_`, which no application family holds (exactly one) and
+ * no namespace proxy's starts with (`ns_`). Control is denied every task definition action on them.
+ */
+export const AWS_PLATFORM_FAMILY_PREFIX = 'fabrika_platform_'
 /** How long an uploaded source archive is kept: a build fetches it within the hour, a retry within the day. */
 export const AWS_SOURCES_DAYS = 7
 /** The most characters IAM takes in one managed policy. */
@@ -72,8 +95,10 @@ export interface AwsAccessInput {
 	readonly region: string
 	/** The applications' HTTPS listener (`balancers.ts`), the only listener Control's role reaches. */
 	readonly appsListenerArn: string
-	/** The installation's VPC (`network.ts`), the only one Control creates a security group in. */
+	/** The applications' VPC (`network.ts`), the only one Control creates a security group in. */
 	readonly vpcId: string
+	/** The applications' task subnets (`network.ts`), the only ones a service Control creates or updates runs in. */
+	readonly taskSubnetIds: readonly string[]
 	/**
 	 * The installation's own hosts (`awsBalancersEnvironment`'s `FABRIKA_AWS_INSTALLATION_HOSTS`): the certificate broker
 	 * attaches no certificate naming one. Lower-case.
@@ -92,6 +117,10 @@ export function checkAwsAccessInput(input: AwsAccessInput): AwsAccessInput {
 		throw new Error("aws: the applications' listener is not a listener of this account and region")
 	}
 	if (!/^vpc-[0-9a-f]{8,17}$/.test(input.vpcId)) throw new Error("aws: the installation's VPC id is of another form")
+	const subnets = input.taskSubnetIds
+	if (subnets.length === 0 || !subnets.every((id) => /^subnet-[0-9a-f]{8,17}$/.test(id)) || new Set(subnets).size !== subnets.length) {
+		throw new Error("aws: the applications' task subnets are none, one twice, or one of another form")
+	}
 	const hosts = input.installationHosts
 	if (hosts.length === 0 || !hosts.every((host) => CERTIFICATE_HOST.test(host)) || new Set(hosts).size !== hosts.length) {
 		throw new Error("aws: the installation's own hosts are none, one twice, or one that is not a lower-case host name")
@@ -150,6 +179,9 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 	const { accountId: a, region: r, appsListenerArn } = checkAwsAccessInput(input)
 	const both = (shape: (prefix: string) => string): string[] => ['apps', 'namespaces'].map(shape)
 	const cluster = `arn:aws:ecs:${r}:${a}:cluster/${AWS_APPS_CLUSTER}`
+	const services = `arn:aws:ecs:${r}:${a}:service/${AWS_APPS_CLUSTER}/*`
+	const taskDefinitions = `arn:aws:ecs:${r}:${a}:task-definition/*`
+	const platformTaskDefinitions = `arn:aws:ecs:${r}:${a}:task-definition/${AWS_PLATFORM_FAMILY_PREFIX}*`
 	const boundary = awsAppsPermissionsBoundary(a)
 	const roles = both((prefix) => `arn:aws:iam::${a}:role/fabrika/${prefix}/*`)
 	const projects = [`arn:aws:codebuild:${r}:${a}:project/fabrika_*`]
@@ -166,17 +198,22 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 		{
 			name: 'fabrika-control-runtime',
 			statements: [
-				allow(
-					['ecs:CreateService', 'ecs:UpdateService', 'ecs:DescribeServices'],
-					[`arn:aws:ecs:${r}:${a}:service/${AWS_APPS_CLUSTER}/*`],
-				),
+				// A service in the applications' task subnets alone: named on its create (its key present, every value one
+				// of them), and on an update that names any (one that names none keeps the subnets its create was held to).
+				allowIf(['ecs:CreateService'], [services], {
+					'ForAllValues:StringEquals': { 'ecs:subnet': [...input.taskSubnetIds] },
+					Null: { 'ecs:subnet': 'false' },
+				}),
+				allowIf(['ecs:UpdateService'], [services], { 'ForAllValues:StringEquals': { 'ecs:subnet': [...input.taskSubnetIds] } }),
+				allow(['ecs:DescribeServices'], [services]),
 				allow(['ecs:DescribeServiceDeployments'], [`arn:aws:ecs:${r}:${a}:service-deployment/${AWS_APPS_CLUSTER}/*`]),
 				allow(['ecs:DescribeServiceRevisions'], [`arn:aws:ecs:${r}:${a}:service-revision/${AWS_APPS_CLUSTER}/*`]),
 				allow(['ecs:DescribeTasks'], [`arn:aws:ecs:${r}:${a}:task/${AWS_APPS_CLUSTER}/*`]),
-				// A task runs in the applications' cluster alone, whatever task definition it names.
-				allowIf(['ecs:RunTask'], [`arn:aws:ecs:${r}:${a}:task-definition/*`], { ArnEquals: { 'ecs:cluster': cluster } }),
-				// ECS scopes no task definition's registration; what one can pass is held by `iam:PassRole` below.
-				allow(['ecs:RegisterTaskDefinition'], ['*']),
+				// A task runs in the applications' cluster alone; the platform's families are denied below. `RunTask` has no
+				// subnet key: the code places an init task in the applications' task subnets.
+				allowIf(['ecs:RunTask'], [taskDefinitions], { ArnEquals: { 'ecs:cluster': cluster } }),
+				// What a registered definition can pass is held by `iam:PassRole` below; the platform's families are denied.
+				allow(['ecs:RegisterTaskDefinition'], [taskDefinitions]),
 				// Tags only as ECS creates the service, the task definition or the task they belong to.
 				allowIf(['ecs:TagResource'], ['*'], { StringEquals: { 'ecs:CreateAction': ['CreateService', 'RegisterTaskDefinition', 'RunTask'] } }),
 				allowIf(['iam:PassRole'], roles, { StringEquals: { 'iam:PassedToService': ['ecs-tasks.amazonaws.com', 'codebuild.amazonaws.com'] } }),
@@ -306,6 +343,14 @@ export function awsControlPolicies(input: AwsAccessInput): readonly AwsManagedPo
 				{ Effect: 'Deny', NotAction: ['lambda:InvokeFunction'], Resource: [awsCertificateBrokerArn(appsListenerArn)] },
 				// No listener certificate, whatever else is granted: only the broker attaches one.
 				deny(['elasticloadbalancing:AddListenerCertificates', 'elasticloadbalancing:RemoveListenerCertificates'], ['*']),
+				// The platform's task definitions: never registered into, run, or named by a service of Control's.
+				deny(['ecs:RegisterTaskDefinition', 'ecs:RunTask'], [platformTaskDefinitions]),
+				{
+					Effect: 'Deny',
+					Action: ['ecs:CreateService', 'ecs:UpdateService'],
+					Resource: ['*'],
+					Condition: { ArnLike: { 'ecs:task-definition': platformTaskDefinitions } },
+				},
 			],
 		},
 	]
@@ -329,7 +374,10 @@ export function awsAccessStack(input: AwsAccessInput): AwsStack {
 			Properties: {
 				RoleName: AWS_CONTROL_ROLE,
 				Path: AWS_PLATFORM_PATH,
-				// Control's task in the platform's cluster alone takes it.
+				// An ECS task of this account and region takes it: the source ARN is any ECS one here. What keeps an
+				// application's task from taking it is that no one but the operator's stacks may pass it (Control is denied
+				// `iam:PassRole` on the platform's roles). Narrowing the source to the platform's cluster waits on step 13
+				// showing which source ARN ECS sends.
 				AssumeRolePolicyDocument: {
 					Version: '2012-10-17',
 					Statement: [{

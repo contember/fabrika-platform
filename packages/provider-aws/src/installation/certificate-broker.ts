@@ -54,7 +54,13 @@ exports.make = (deps) => async (event) => {
 			const [l, c] = id.split('|')
 			if (l === listener && c) await deps.remove(listener, c)
 		} else {
+			// Fail closed on its own checks: no configuration refuses everything, as does a certificate of another form,
+			// account or region than the listener's.
+			const where = /^arn:([^:]+):elasticloadbalancing:([^:]+):(\d{12}):listener\//.exec(listener || '')
+			if (!where || reserved().length === 0) throw new Error('the broker is not configured')
 			if (props.ListenerArn !== listener) throw new Error('not the applications listener')
+			const own = new RegExp('^arn:' + where[1] + ':acm:' + where[2] + ':' + where[3] + ':certificate/[0-9a-f-]{36}$')
+			if (typeof props.CertificateArn !== 'string' || !own.test(props.CertificateArn)) throw new Error('not a certificate of this account and region')
 			const names = await deps.names(props.CertificateArn)
 			if (names.length === 0) throw new Error('the certificate names no host')
 			const hit = reserved().find((host) => names.some((name) => covers(name, host)))

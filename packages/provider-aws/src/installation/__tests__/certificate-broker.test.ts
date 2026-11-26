@@ -123,6 +123,31 @@ describe('the certificate broker', () => {
 		expect(answers[0]).toMatchObject({ Status: 'FAILED', Reason: 'not the applications listener', PhysicalResourceId: 'none' })
 	})
 
+	test('it fails closed by its own checks: no configuration refuses all, and so does a certificate of another account or region', async () => {
+		for (
+			const certificate of [
+				CERTIFICATE.replace('123456789012', '210987654321'),
+				CERTIFICATE.replace('eu-central-1', 'us-east-1'),
+				'arn:aws:iam::123456789012:server-certificate/notes',
+			]
+		) {
+			const { calls, answers, deps } = fake(['notes.example.org'])
+			await make(deps)(event('Create', { ListenerArn: LISTENER, CertificateArn: certificate }))
+			expect(calls).toEqual(['respond https://cloudformation-custom-resource-response.example/presigned'])
+			expect(answers[0]).toMatchObject({ Status: 'FAILED', Reason: 'not a certificate of this account and region' })
+		}
+		const reserved = process.env['RESERVED_HOSTS']
+		process.env['RESERVED_HOSTS'] = ''
+		try {
+			const { calls, answers, deps } = fake(['notes.example.org'])
+			await make(deps)(event('Create', { ListenerArn: LISTENER, CertificateArn: CERTIFICATE }))
+			expect(calls.some((call) => call.startsWith('add'))).toBe(false)
+			expect(answers[0]).toMatchObject({ Status: 'FAILED', Reason: 'the broker is not configured' })
+		} finally {
+			process.env['RESERVED_HOSTS'] = reserved
+		}
+	})
+
 	test('a delete removes what it attached, and a delete of a failed create removes nothing', async () => {
 		const removed = fake([])
 		await make(removed.deps)(event('Delete', { ListenerArn: LISTENER, CertificateArn: CERTIFICATE }, `${LISTENER}|${CERTIFICATE}`))

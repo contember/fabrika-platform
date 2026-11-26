@@ -1,18 +1,24 @@
-// The installation's own network (the AWS idea's checklist, step 11): one VPC in two availability zones, created by the
-// installation, never adopted. Its stack is the operator's to apply (`fabrika platform install`), with the operator's
-// credentials; Control's role reaches no `fabrika-platform-*` stack.
+// The installation's own networks (the AWS idea's checklist, step 11): two VPCs, each in two availability zones,
+// created by the installation, never adopted, each from a stack the operator applies (`fabrika platform install`) with
+// the operator's credentials; Control's role reaches no `fabrika-platform-*` stack.
 //
-// - **Two kinds of subnet, apart.** The tasks' subnets (Control's, the platform's services', every application's and
-//   namespace proxy's) and the balancers' subnets, which hold nothing but the balancers' nodes (and a NAT gateway, if an
-//   installation ever adds one). A namespace proxy trusts `X-Forwarded-For` from the balancers' subnets alone
+// - **The platform's network apart from the applications'** (decided 2026-11-26). Control's role creates and updates
+//   the applications' services, and ECS joins a service's tasks to whatever target group it names with ECS's own role:
+//   no condition key of Control's policy names a target group. In one VPC an application's task could so join the
+//   platform proxy's target group and be sent IAM's, Control's and Operations' requests. Two VPCs whose ranges share no
+//   address, with no route between them (`checkAwsNetworksApart`), leave such a target unreachable, keep every security
+//   group of the platform's VPC off an application's task, and keep the database out of the applications' network.
+// - **Two kinds of subnet, apart, in each.** The tasks' subnets and the balancers' subnets, which hold nothing but the
+//   balancers' nodes (and a NAT gateway, if an installation ever adds one). A namespace proxy trusts `X-Forwarded-For` from the balancers' subnets alone
 //   (`AwsInstallationBalancer.balancerSubnetCidrs`); a task in one of them could choose the client address its requests
 //   are seen from. So the layout is fixed here, the two kinds never overlap (`checkAwsNetworkLayout`), and Control is
 //   told both (`awsNetworkEnvironment`).
 // - **Public subnets, no NAT gateway.** Every task gets a public address (`FABRIKA_AWS_TASK_PUBLIC_IP=true`) behind an
 //   ingress-free or proxy-only security group: cheaper than a NAT gateway up to about seven tasks. The balancers are
 //   internet-facing, so their subnets route to the internet gateway as well.
-// - **The VPC's range is the operator's choice** (a /16, so it can avoid a range the operator peers with); the subnets
-//   are derived from it: the tasks' two /20s at its start, the balancers' two /24s near its end.
+// - **Each VPC's range is the operator's choice** (a /16, so it can avoid a range the operator peers with); the subnets
+//   are derived from it: the tasks' two /20s at its start, the balancers' two /24s near its end. Control's variables
+//   name the applications' network alone (`awsNetworkEnvironment`).
 //
 // UNVERIFIED: the resources' properties follow the CloudFormation reference; none was checked against an account. So
 // does that `Fn::GetAZs` answers at least two zones, which it may not: it answers only the zones where the account's
@@ -24,17 +30,27 @@ import type { JsonValue } from '@fabrika/provider-contract'
 import { blockAt, blockContains, blockOf, blocksOverlap, isNetworkAddress, VPC_CIDR } from '../cidr'
 import type { AwsStack } from '../stack'
 
-/** The network stack's name: under `fabrika-platform-`, which no grant of Control's role names. */
-export const AWS_NETWORK_STACK = 'fabrika-platform-network'
-/** The VPC's range when the operator names none. */
+/**
+ * The installation's two networks: the applications' (every application's and namespace proxy's tasks, and the
+ * applications' balancer) and the platform's (IAM's, Control's, Operations' and the platform proxy's tasks, the
+ * platform's balancer, the database).
+ */
+export type AwsNetworkSide = 'apps' | 'platform'
+/** Each network's stack: under `fabrika-platform-`, which no grant of Control's role names. */
+export const AWS_NETWORK_STACKS: Readonly<Record<AwsNetworkSide, string>> = {
+	apps: 'fabrika-platform-network-apps',
+	platform: 'fabrika-platform-network-platform',
+}
+/** Each VPC's range when the operator names none: two /16s apart. */
 export const AWS_DEFAULT_VPC_CIDR = '10.80.0.0/16'
+export const AWS_DEFAULT_PLATFORM_VPC_CIDR = '10.81.0.0/16'
 /** The availability zones the network spans: two, the fewest an Application Load Balancer takes. */
 const ZONES = 2
 
 /** The installation's address plan: the VPC's range and each kind of subnet's, one per zone. */
 export interface AwsNetworkLayout {
 	readonly vpcCidr: string
-	/** The tasks' subnets: Control's, the platform's services', every application's and namespace proxy's. */
+	/** The tasks' subnets: the applications' and namespace proxies', or the platform's services', by the network's side. */
 	readonly taskSubnetCidrs: readonly string[]
 	/** The balancers' own subnets: nothing else runs in them, so a namespace proxy can trust what comes from them. */
 	readonly balancerSubnetCidrs: readonly string[]
@@ -77,21 +93,31 @@ export function checkAwsNetworkLayout(layout: AwsNetworkLayout): AwsNetworkLayou
 const zone = (index: number): JsonValue => ({ 'Fn::Select': [index, { 'Fn::GetAZs': '' }] })
 const name = (value: string): JsonValue => [{ Key: 'Name', Value: value }]
 
-/** The network's stack: the VPC, its internet gateway and one public route table, and the subnets of `layout`. */
-export function awsNetworkStack(layout: AwsNetworkLayout): AwsStack {
+/**
+ * `apps` and `platform` as given, or an error: two VPCs whose ranges share no address, so nothing of one is ever an
+ * address of the other (no route joins them, and none could be added without a grant Control's role does not hold).
+ */
+export function checkAwsNetworksApart(apps: AwsNetworkLayout, platform: AwsNetworkLayout): void {
+	checkAwsNetworkLayout(apps)
+	checkAwsNetworkLayout(platform)
+	if (blocksOverlap(apps.vpcCidr, platform.vpcCidr)) throw new Error("aws: the applications' and the platform's VPC ranges overlap")
+}
+
+/** The network's stack of one side: the VPC, its internet gateway and one public route table, and the subnets of `layout`. */
+export function awsNetworkStack(layout: AwsNetworkLayout, side: AwsNetworkSide): AwsStack {
 	checkAwsNetworkLayout(layout)
 	const resources: Record<string, JsonValue> = {
 		Vpc: {
 			Type: 'AWS::EC2::VPC',
 			// DNS names inside the VPC: the database's endpoint and the tasks' registry and API calls resolve through them.
-			Properties: { CidrBlock: layout.vpcCidr, EnableDnsSupport: true, EnableDnsHostnames: true, Tags: name('fabrika') },
+			Properties: { CidrBlock: layout.vpcCidr, EnableDnsSupport: true, EnableDnsHostnames: true, Tags: name(`fabrika-${side}`) },
 		},
-		InternetGateway: { Type: 'AWS::EC2::InternetGateway', Properties: { Tags: name('fabrika') } },
+		InternetGateway: { Type: 'AWS::EC2::InternetGateway', Properties: { Tags: name(`fabrika-${side}`) } },
 		InternetGatewayAttachment: {
 			Type: 'AWS::EC2::VPCGatewayAttachment',
 			Properties: { VpcId: { Ref: 'Vpc' }, InternetGatewayId: { Ref: 'InternetGateway' } },
 		},
-		PublicRouteTable: { Type: 'AWS::EC2::RouteTable', Properties: { VpcId: { Ref: 'Vpc' }, Tags: name('fabrika-public') } },
+		PublicRouteTable: { Type: 'AWS::EC2::RouteTable', Properties: { VpcId: { Ref: 'Vpc' }, Tags: name(`fabrika-${side}-public`) } },
 		PublicDefaultRoute: {
 			Type: 'AWS::EC2::Route',
 			// The route names the gateway, which only answers once it is attached.
@@ -110,18 +136,18 @@ export function awsNetworkStack(layout: AwsNetworkLayout): AwsStack {
 			Properties: { SubnetId: { Ref: logical }, RouteTableId: { Ref: 'PublicRouteTable' } },
 		}
 	}
-	layout.taskSubnetCidrs.forEach((cidr, index) => subnet(`TaskSubnet${index}`, cidr, index, `fabrika-tasks-${index}`))
-	layout.balancerSubnetCidrs.forEach((cidr, index) => subnet(`BalancerSubnet${index}`, cidr, index, `fabrika-balancers-${index}`))
+	layout.taskSubnetCidrs.forEach((cidr, index) => subnet(`TaskSubnet${index}`, cidr, index, `fabrika-${side}-tasks-${index}`))
+	layout.balancerSubnetCidrs.forEach((cidr, index) => subnet(`BalancerSubnet${index}`, cidr, index, `fabrika-${side}-balancers-${index}`))
 	const join = (prefix: string, count: number, value: (logical: string) => JsonValue): JsonValue => ({
 		'Fn::Join': [',', Array.from({ length: count }, (_, index) => value(`${prefix}${index}`))],
 	})
 	const ids = (logical: string): JsonValue => ({ Ref: logical })
 	const ranges = (logical: string): JsonValue => ({ 'Fn::GetAtt': [logical, 'CidrBlock'] })
 	return {
-		stackName: AWS_NETWORK_STACK,
+		stackName: AWS_NETWORK_STACKS[side],
 		template: {
 			AWSTemplateFormatVersion: '2010-09-09',
-			Description: "fabrika: the installation's network",
+			Description: `fabrika: the installation's ${side === 'apps' ? "applications'" : "platform's"} network`,
 			Resources: resources,
 			// The ranges as AWS created them, beside the ids: Control is told what the subnets are, checked again
 			// (`awsNetworkEnvironment`), never only what the layout meant them to be.
@@ -134,7 +160,7 @@ export function awsNetworkStack(layout: AwsNetworkLayout): AwsStack {
 				BalancerSubnetCidrs: { Value: join('BalancerSubnet', layout.balancerSubnetCidrs.length, ranges) },
 			},
 		},
-		tags: { 'fabrika:platform': 'network' },
+		tags: { 'fabrika:platform': `network-${side}` },
 	}
 }
 
@@ -185,8 +211,9 @@ export function awsNetworkOutputs(outputs: Readonly<Record<string, string>>): Aw
 const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((value, index) => value === b[index])
 
 /**
- * Control's variables for the network (`packages/control/src/aws/provider.ts`): where its tasks run, with a public
- * address, and the ranges a namespace proxy is scoped to and trusts, all from what AWS created. Refused when those
+ * Control's variables for the applications' network (`packages/control/src/aws/provider.ts`): where the tasks it starts
+ * run, with a public address, and the ranges a namespace proxy is scoped to and trusts, all from what AWS created. The
+ * platform's network is never Control's to place anything in. Refused when those
  * ranges are not the layout's: a stack that drifted, or was applied from another layout, never reaches Control.
  */
 export function awsNetworkEnvironment(layout: AwsNetworkLayout, outputs: AwsNetworkOutputs): Readonly<Record<string, string>> {

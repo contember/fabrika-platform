@@ -12,6 +12,7 @@ import {
 	AWS_APPS_CLUSTER,
 	AWS_MAX_MANAGED_POLICY,
 	AWS_PLATFORM_CLUSTER,
+	AWS_PLATFORM_FAMILY_PREFIX,
 	awsAccessEnvironment,
 	type AwsAccessInput,
 	awsAccessStack,
@@ -20,6 +21,7 @@ import {
 	awsSourcesBucket,
 	checkAwsAccessInput,
 } from '../access'
+import { AWS_DEFAULT_PLATFORM_VPC_CIDR, awsNetworkLayout, awsNetworkStack } from '../network'
 
 const LISTENER = 'arn:aws:elasticloadbalancing:eu-central-1:123456789012:listener/app/fabrika-apps/0123456789abcdef/fedcba9876543210'
 const BROKER = 'arn:aws:lambda:eu-central-1:123456789012:function:fabrika-certificate-broker'
@@ -29,6 +31,7 @@ const input: AwsAccessInput = {
 	region: 'eu-central-1',
 	appsListenerArn: LISTENER,
 	vpcId: 'vpc-0123456789abcdef0',
+	taskSubnetIds: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'],
 	installationHosts: HOSTS,
 }
 const installation = { accountId: '123456789012', region: 'eu-central-1', cluster: AWS_APPS_CLUSTER, sourcesBucket: awsSourcesBucket('123456789012') }
@@ -122,6 +125,51 @@ describe("the installation's access", () => {
 					expect([LISTENER, `${LISTENER.replace(':listener/', ':listener-rule/')}/*`]).toContain(resource)
 				}
 			}
+		}
+	})
+
+	test("a service Control creates or updates runs in the applications' task subnets alone", () => {
+		const subnets = { 'ecs:subnet': ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'] }
+		expect(allows.find((statement) => statement.Action.includes('ecs:CreateService'))?.Condition).toEqual({
+			'ForAllValues:StringEquals': subnets,
+			// Present on a create: a `ForAllValues` test of no value at all would pass.
+			Null: { 'ecs:subnet': 'false' },
+		})
+		expect(allows.find((statement) => statement.Action.includes('ecs:UpdateService'))?.Condition).toEqual({ 'ForAllValues:StringEquals': subnets })
+		expect(() => checkAwsAccessInput({ ...input, taskSubnetIds: [] })).toThrow('task subnets')
+		expect(() => checkAwsAccessInput({ ...input, taskSubnetIds: ['subnet-X'] })).toThrow('task subnets')
+	})
+
+	test("the platform's task definitions are never registered into, run, or named by a service of Control's", () => {
+		const platform = 'arn:aws:ecs:eu-central-1:123456789012:task-definition/fabrika_platform_*'
+		const denies = control.filter((statement) => statement.Effect === 'Deny')
+		expect(denies.find((statement) => statement.Action.includes('ecs:RegisterTaskDefinition'))).toMatchObject({
+			Action: ['ecs:RegisterTaskDefinition', 'ecs:RunTask'],
+			Resource: [platform],
+		})
+		expect(denies.find((statement) => statement.Action.includes('ecs:CreateService'))).toMatchObject({
+			Action: ['ecs:CreateService', 'ecs:UpdateService'],
+			Resource: ['*'],
+			Condition: { ArnLike: { 'ecs:task-definition': platform } },
+		})
+		// No application or namespace family falls under the prefix: an application's has one `_`, a namespace's starts `ns_`.
+		for (const family of ['notes_prod', 'notes_prod-init', 'ns_shared_prod_proxy', 'fabrika_prod']) {
+			expect(matches(`${AWS_PLATFORM_FAMILY_PREFIX}*`, family)).toBe(false)
+		}
+		expect(matches('fabrika_platform_*', 'fabrika_platform_iam')).toBe(true)
+	})
+
+	test("no stack of the platform's tags a resource with a key Control's grants read", () => {
+		const stacks = [
+			awsNetworkStack(awsNetworkLayout(), 'apps'),
+			awsNetworkStack(awsNetworkLayout(AWS_DEFAULT_PLATFORM_VPC_CIDR), 'platform'),
+			awsAccessStack(input),
+		]
+		for (const stack of stacks) {
+			const keys = new Set(Object.keys(stack.tags))
+			const resources = Object.values<{ Properties?: { Tags?: readonly { Key: string }[] } }>(JSON.parse(JSON.stringify(stack.template)).Resources)
+			for (const resource of resources) for (const tag of resource.Properties?.Tags ?? []) keys.add(tag.Key)
+			expect([...keys].filter((key) => key === 'fabrika:env' || key === 'fabrika:namespace')).toEqual([])
 		}
 	})
 

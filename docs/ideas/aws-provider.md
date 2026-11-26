@@ -574,9 +574,20 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        gateway, no NAT gateway (every task gets a public address); Control's network variables from its outputs, which
        carry each subnet's range as AWS created it: no subnet named twice or as both kinds, no task's range over a
        balancer's, and the ranges the layout's, or nothing reaches Control. Any later subnet (the database's, an
-       interface endpoint's) stays out of the balancers' subnets too.
+       interface endpoint's) stays out of the balancers' subnets too. **Two such VPCs** (decided 2026-11-26): the
+       applications' (`10.80.0.0/16`: every application's and namespace proxy's tasks, the applications' balancer) and
+       the platform's (`10.81.0.0/16`: IAM's, Control's, Operations' and the platform proxy's tasks, the platform's
+       balancer, the database), two stacks whose ranges share no address, with no route, peering or gateway between
+       them. Control's role creates and updates the applications' services, and ECS joins a service to the target group
+       it names with ECS's own role (`AmazonECSServiceRolePolicy` holds `elasticloadbalancing:RegisterTargets` on `*`; no
+       ECS condition key names a target group). In one VPC an application's task could so join the platform proxy's
+       target group and be sent IAM's requests; in its own VPC with no route the platform's group cannot reach such a
+       target, no security group of the platform's VPC can be put on an application's task (that takes a security
+       group VPC association, which Control's role cannot make), and the database is out of the applications'
+       network. Control's network variables name the applications' VPC alone.
     2. **The balancers** (built, `installation/balancers.ts`): the applications' balancer and the platform's, both
-       internet-facing in the balancers' subnets, `xff_header_processing.mode` at `append` and invalid header fields
+       internet-facing in the balancers' subnets of their own side's VPC (the platform proxy's target group in the
+       platform's), `xff_header_processing.mode` at `append` and invalid header fields
        dropped, HTTPS (TLS 1.3 and forward-secret 1.2) with a fixed 404 as the default action and HTTP redirected,
        their groups reaching only the tasks' subnets on the proxies' ports. The platform's listener has a rule per
        platform host (IAM, Control, Operations) to the platform proxy's target group, each with its certificate; the
@@ -592,11 +603,22 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        reaches only the first, so it can never update its own service or IAM's), and the sources bucket (private,
        TLS only, archives kept 7 days). Narrowed to what the code calls: no `DeleteStack`, no
        `DescribeStackEvents`. Added to the grants below: denies on any IAM action on `role/fabrika/platform/*` and on
-       `iam:AttachRolePolicy`, and `ec2:CreateSecurityGroup` on the installation's VPC alone. The ECS
-       service-linked role is ensured by the commands (a stack cannot create one that may already exist).
+       `iam:AttachRolePolicy`, and `ec2:CreateSecurityGroup` on the applications' VPC alone; `ecs:CreateService` and
+       `ecs:UpdateService` held to the applications' task subnets (`ecs:subnet`, present on a create); the platform's
+       task definition families (`fabrika_platform_*`, which no application or namespace family can take) denied to
+       `RegisterTaskDefinition`, `RunTask` and any service naming one, and `RegisterTaskDefinition` on
+       `task-definition/*`, not `*`; the certificate broker. `RunTask` has no subnet key, so an init task's subnets are
+       the code's; anywhere in the applications' VPC reaches nothing of the platform's. The remaining reach: a
+       bounded role's trust policy is not held (no condition key reads one, and the stacks need `CreateRole` and
+       `UpdateAssumeRolePolicy`), so a misused Control could write a bounded role another account may take; step 13
+       adds IAM Access Analyzer's external access findings on `role/fabrika/apps/*` and `role/fabrika/namespaces/*` to
+       detect one. The ECS service-linked role is ensured by the commands (a stack cannot create one that may already
+       exist).
     4. **The database**: RDS PostgreSQL for IAM, Control and Operations, in subnets of its own.
     5. **The platform's services**: Control, IAM, the console and the platform proxy on ECS, their images and
-       variables.
+       variables. In the platform's VPC and cluster, under task definition families `fabrika_platform_*`, each
+       service pinned to a revision ARN; the platform proxy's group admits only the platform balancer's group; no
+       Service Connect namespace a service of Control's could join.
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 
@@ -751,7 +773,11 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     `FABRIKA_AWS_PROXY_IAM_KEY`), and
     reads repositories through the unbound GitHub source. Nothing runs it until step 11 defines Control's task.
 13. **Tests**: the conformance suite over a fake AWS, renderer tests, and a live suite gated on
-    `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack.
+    `FABRIKA_LIVE_AWS_*` that creates and deletes a throwaway stack. The live check also settles: which actions
+    CloudFormation calls with Control's credentials (a custom resource's invoke among them), the condition keys each
+    service evaluates (`ecs:subnet`'s values, `ecs:task-definition`), whether ECS checks `iam:PassRole` on `RunTask` for
+    the roles an existing task definition names, which source ARN ECS sends when a task takes Control's role, and
+    IAM Access Analyzer's external access findings on the bounded roles.
 14. **Docs**: `docs/reference/aws-platform.md` for the facts a live account settles, an ADR for the provider's shape,
     `provider-bundles.md` and `installing-on-aws.md`.
 
