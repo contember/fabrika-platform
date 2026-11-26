@@ -45,6 +45,7 @@ import { MaintenanceBarrier, r2MaintenanceStore } from '../cloudflare/maintenanc
 import type { OpsTarget } from '../cloudflare/ops'
 import { r2FileObjectStore } from '../cloudflare/r2-files'
 import { serveRestore } from '../cloudflare/restore'
+import { noMigrationRecord } from './fixtures/migration-records'
 
 const CONTRACT_DIGEST = `sha256:${'c'.repeat(64)}`
 const BOOKMARK = '0000000a-00000001-00004f6b-8a4c1f5d0e9b2a37'
@@ -843,13 +844,19 @@ describe('a consistent dump spans the generations of one stretch of modes that w
 		seedTwoParts(target)
 		const { uploadId, first } = await begunAcrossGenerations(target)
 		await target.barrier.transition({ generation: 3, mode: 'inspect' })
-		const armed = await serveRestore(restoringTarget(target), target.barrier, {
-			step: 'arm',
-			object: 'application',
-			generation: 3,
-			sentinel: DUMP,
-			target: BOOKMARK,
-		}, false)
+		const armed = await serveRestore(
+			restoringTarget(target),
+			target.barrier,
+			{
+				step: 'arm',
+				object: 'application',
+				generation: 3,
+				sentinel: DUMP,
+				target: BOOKMARK,
+			},
+			false,
+			noMigrationRecord,
+		)
 		expect(armed.status).toBe(200)
 
 		const response = await exportStep(target.source, target.barrier, {
@@ -908,5 +915,7 @@ function restoringTarget(target: Harness): OpsTarget {
 		bootFailure: () => Promise.resolve(null),
 		maintenance: () => Promise.reject(new Error('not called')),
 		migrate: () => Promise.reject(new Error('not called')),
+		migrationRecords: () => noMigrationRecord,
+		version: null,
 	}
 }

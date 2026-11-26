@@ -100,7 +100,9 @@ src/
     r2-files.ts       r2FileObjectStore: the FileObjectStore port over the FABRIKA_FILES bucket (conditional puts,
                       multipart above R2_PART_BYTES, the etag as the version)
     names.ts          the class and binding names the provider shares: FabrikaApplication, FABRIKA_APPLICATION,
-                      FABRIKA_FILES, ASSETS (re-exported by @fabrika/app/build)
+                      FABRIKA_FILES, ASSETS, FABRIKA_VERSION (re-exported by @fabrika/app/build)
+    migration-record.ts  the migrating boot (ADR-0069 §3): the record in the bucket, its reconciliation, every
+                      pending file in one transaction, `booted`
     ops.ts            Control's ops channel at the object (ADR-0069): authentication, the uniform refusal, the
                       inspect view read from storage alone, `state` and `migrate` over the barrier; routes `export`,
                       `import`, `restore` and `timers` (ADR-0070) to their modules
@@ -113,7 +115,8 @@ src/
                       step; the import marker in KV commits with each step's rows
     restore.ts        the original object's point-in-time restore (ADR-0070 §9): prepare keeps the operation's
                       sentinel and bookmarks under its own KV key, arm arms the restore and resets the object in the
-                      barrier's turn, verify reads the sentinel
+                      barrier's turn, verify reads the sentinel; a step naming a migration record is the in-place
+                      rewind on the serving object, under its guards
     tracker.ts        the ops operation `timers` (ADR-0070 §10): the isolate's live timers and `waitUntil` promises
                       with scrubbed, bounded stacks, while switched on
   bun.ts              Bun handler, background-task tracking, graceful drain; serveContract; the local `directory`
@@ -1289,13 +1292,28 @@ object directly over `bunSqliteStorage` (the IAM binding, the assets, the crash 
   rolls back. The fence throws `MaintenanceFenceError`, a `DatabaseError` `@fabrika/db` passes through unchanged, which
   dispatch answers as `maintenanceRefusal()` (503 with `Retry-After`) and records as no failure. Outside `open` the object applies no migration; a boot that finds one pending refuses ordinary traffic
   until `migrate` runs it under the published generation.
+- **A migrating boot writes a record first** (ADR-0069 §3, `cloudflare/migration-record.ts`). After the application's
+  `boot()`, the object reads `__fabrika/ops/<object>.migration.json` in `FABRIKA_FILES`; a record without an outcome is
+  reconciled from its own ledger rows (none `rolled_back`, all `committed`, else `diverged`, which only marks it).
+  With files pending it puts a new record (id, the `FABRIKA_VERSION` binding's id or `null`, the bookmark, the files)
+  by a conditional put, applies every pending file of both bundles in one `transactionSync` that ends in
+  `PRAGMA foreign_key_check` (`planSqliteMigrations`), puts the outcome, and puts `booted` before the first ordinary
+  event. A failed first put migrates nothing (`record_unwritable`, 503 to traffic); any later put that fails or
+  conflicts admits nothing, and the next event reads the record and the ledger again, so it never migrates twice.
+  `migrate` acknowledges with the record, or answers the 422 `migration_failed`. A boot that fails elsewhere (the module,
+  a boot check) reads and reconciles the record: a commit without `booted` is the 422 `committed`, how Control learns
+  of a migration never served; record I/O there is a 503 that keeps the boot's backoff. A boot never marks a `rewound` record.
+- **The in-place rewind** (ADR-0070 §9, `restore.ts`): `prepare` and `arm` that name a record run on the serving
+  object, in `inspect`, only while the record is that id, `committed`, not `booted`, has a bookmark and was written by
+  the version that runs (`not_rewindable`, `version_changed`); `arm` only to the record's bookmark (`wrong_target`).
+  `verify` that finds the sentinel absent records `rewound` in a record still `committed` and never `booted`.
 - **The object answers only its own Worker.** A request without the environment's proxy secret is an empty 404 before
   anything else, the digests compared in constant time, so another Worker that binds the class learns nothing.
 - **It boots once per isolate.** The first request or tick that needs the application starts the boot in
   `blockConcurrencyWhile`, and every later event shares it; the boot settles either way: a
   failed boot answers every request with its failure, is reported once, and is not kept, so the next instance boots
-  again. For an application with a data layer, before the boot and for every later instance of the isolate, it applies (in `open`) `SQLITE_FRAMEWORK_MIGRATIONS` and the
-  application's bundle through `migrateSqlite`, then binds the layer to `openSqlite` over a storage it resolves
+  again. For an application with a data layer, after the boot and for every later instance of the isolate, it applies (in `open`) `SQLITE_FRAMEWORK_MIGRATIONS` and the
+  application's bundle through the migrating boot, then binds the layer to `openSqlite` over a storage it resolves
   per event from the object's `AsyncLocalStorage` scope (the layer binds once; a statement outside any event throws),
   so two objects in one isolate never share a database. It captures the environment without `IAM` and `ASSETS` (`CLOUDFLARE_ASSETS_BINDING`), and boots with
   `requireProxySecret`, `clientAddress: 'vouched'` (the proxy Worker sets the client address from `CF-Connecting-IP`),

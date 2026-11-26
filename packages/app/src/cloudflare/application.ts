@@ -9,6 +9,8 @@ import {
 	FABRIKA_PROXY_SECRET,
 	OPS_PREFIX,
 	type OpsBootFailureContent,
+	type OpsMigrationFailure,
+	type OpsMigrationRecord,
 	type OpsMode,
 	parseApplicationObjects,
 	PROXY_SECRET_HEADER,
@@ -16,7 +18,7 @@ import {
 import { isScopedDatabase, type LeaseFence, type Session } from '@fabrika/db/framework'
 import { SQLITE_FRAMEWORK_MIGRATIONS } from '@fabrika/db/migrations-sqlite'
 import { openSqlite, type SqliteCursor, type SqliteStorage } from '@fabrika/db/sqlite'
-import { migrateSqlite, type SqliteMigrationBundle, type SqliteMigrationTarget } from '@fabrika/db/sqlite-migrate'
+import type { SqliteMigrationBundle, SqliteMigrationTarget } from '@fabrika/db/sqlite-migrate'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { timingSafeEqual } from 'node:crypto'
 import type { RequestExecutionContext } from '../fetch.js'
@@ -32,8 +34,17 @@ import { environmentScrubber, type Scrubber } from '../jobs/scrub.js'
 import { bindingAssets, bindingKeySource, bindingMembership, bindingTerminals, bindingWorkloadTokens, connectBindings } from './bindings.js'
 import { importInProgress } from './import.js'
 import { type BarrierEvent, MaintenanceBarrier, r2MaintenanceStore } from './maintenance.js'
-import { CLOUDFLARE_ASSETS_BINDING, CLOUDFLARE_FILES_BINDING } from './names.js'
-import { type OpsAccess, opsAccess, type OpsRecovery, type OpsStorage, serveOps } from './ops.js'
+import {
+	markBooted,
+	migratingBoot,
+	MigrationFailed,
+	type MigrationRecordStore,
+	r2MigrationRecordStore,
+	RecordPending,
+	unbootedCommit,
+} from './migration-record.js'
+import { CLOUDFLARE_ASSETS_BINDING, CLOUDFLARE_FILES_BINDING, CLOUDFLARE_VERSION_BINDING } from './names.js'
+import { type OpsAccess, opsAccess, type OpsMigrated, type OpsRecovery, type OpsStorage, serveOps } from './ops.js'
 import { r2FileObjectStore } from './r2-files.js'
 import { trackPending } from './tracker.js'
 
@@ -125,8 +136,21 @@ function objectRecovery(state: ApplicationState): OpsRecovery | null {
 	}
 }
 
-/** The framework's bindings: IAM's application entrypoint and the Workers Assets of the SPA. No handler sees them. */
-const FRAMEWORK_BINDINGS: ReadonlySet<string> = new Set(['IAM', CLOUDFLARE_ASSETS_BINDING])
+/**
+ * The framework's bindings: IAM's application entrypoint, the Workers Assets of the SPA and the version metadata. No
+ * handler sees them.
+ */
+const FRAMEWORK_BINDINGS: ReadonlySet<string> = new Set(['IAM', CLOUDFLARE_ASSETS_BINDING, CLOUDFLARE_VERSION_BINDING])
+
+/** A version id is what the binding's `id` holds; anything else, or no binding (a local run), is no version. */
+const WORKER_VERSION_ID = /^[A-Za-z0-9-]{1,64}$/
+
+/** The id of the Worker version that runs, from the version metadata binding; `null` without it. */
+function workerVersion(env: Readonly<Record<string, unknown>>): string | null {
+	const metadata = env[CLOUDFLARE_VERSION_BINDING]
+	const id: unknown = typeof metadata === 'object' && metadata !== null ? Reflect.get(metadata, 'id') : undefined
+	return typeof id === 'string' && WORKER_VERSION_ID.test(id) ? id : null
+}
 
 /**
  * The application this isolate booted, once: its module is loaded once, and its `scoped(tables)` layer binds once, to
@@ -227,6 +251,13 @@ function fencedStorage(): SqliteStorage {
 /** Whether migrations may be applied: in `open` and the migration phase; a restricted cold start only looks. */
 type MigrationPolicy = 'apply' | 'refuse'
 
+/** What an instance's migrating boot reads and writes beside its storage: its record, its version, its bookmarks. */
+interface InstanceMigration {
+	readonly records: MigrationRecordStore
+	readonly version: string | null
+	readonly bookmark: () => Promise<string | null>
+}
+
 /** A restricted cold start found a migration to apply: the application does not boot until the operation's migrate. */
 class MigrationsPending extends Error {
 	override readonly name = 'MigrationsPending'
@@ -247,24 +278,6 @@ function isMigrationsPending(error: unknown): boolean {
 	return error instanceof MigrationsPending || (error instanceof Error && error.cause instanceof MigrationsPending)
 }
 
-/**
- * The migration runner's target that applies nothing: it answers the runner's reads, and the first write it would make
- * (the ledger's DDL, a migration, a digest) throws `MigrationsPending` instead.
- */
-function refusingTarget(storage: ApplicationStorage): SqliteMigrationTarget {
-	return {
-		exec(query, ...bindings) {
-			if (!/^\s*select\b/i.test(query)) {
-				throw new MigrationsPending('a migration is pending')
-			}
-			return storage.sql.exec(query, ...bindings)
-		},
-		transactionSync() {
-			throw new MigrationsPending('a migration is pending')
-		},
-	}
-}
-
 /** What the object classes of this isolate boot: the generated entrypoint's `createContractWorker` registers it. */
 export function registerApplication(load: ImplementationLoader, options: ContractWorkerOptions): void {
 	registered = { load, options, booted: null, failureReported: false, watchingRejections: false }
@@ -282,14 +295,32 @@ function globalRejectionEvents(): CrashEvents {
 }
 
 /**
- * The framework's tables, then the application's, each migration once: a booted storage applies nothing. Under
- * `refuse` a pending migration throws `MigrationsPending` before anything is written.
+ * The instance's migrating boot (ADR-0069 §3), after the isolate's boot checks: the framework's tables, then the
+ * application's, in one transaction under a migration record, and `booted` before the first ordinary event. Under
+ * `refuse` a pending migration throws `MigrationsPending` before anything is written. Answers the record.
  */
-async function migrate(storage: ApplicationStorage, migrations: readonly ApplicationMigration[], policy: MigrationPolicy): Promise<void> {
-	const target: SqliteMigrationTarget = policy === 'apply'
-		? { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) }
-		: refusingTarget(storage)
-	await migrateSqlite(target, migrationBundles(migrations))
+async function migrate(
+	storage: ApplicationStorage,
+	migrations: readonly ApplicationMigration[],
+	policy: MigrationPolicy,
+	instance: InstanceMigration,
+): Promise<OpsMigrationRecord | null> {
+	const result = await migratingBoot({
+		target: migrationTarget(storage),
+		store: instance.records,
+		bundles: migrationBundles(migrations),
+		version: instance.version,
+		bookmark: instance.bookmark,
+		apply: policy === 'apply',
+	})
+	if (result.kind === 'pending') {
+		throw new MigrationsPending('a migration is pending')
+	}
+	return await markBooted(instance.records, result.held)
+}
+
+function migrationTarget(storage: ApplicationStorage): SqliteMigrationTarget {
+	return { exec: (query, ...bindings) => storage.sql.exec(query, ...bindings), transactionSync: (fn) => storage.transactionSync(fn) }
 }
 
 /** The bundles the object applies, in order: the framework's tables, then the application's. */
@@ -300,19 +331,19 @@ function migrationBundles(migrations: readonly ApplicationMigration[]): readonly
 	]
 }
 
+/**
+ * The isolate's boot: the module and every boot check, none of which reads the database, so they all run before an
+ * instance migrates (ADR-0069 §3 step 1); the data layer binds to the storage of the event that runs.
+ */
 async function bootApplication(
 	setup: ApplicationSetup,
 	state: ApplicationState,
 	env: Readonly<Record<string, unknown>>,
 	environment: CapturedEnvironment,
 	crashes: CrashReporter | null,
-	policy: MigrationPolicy,
 ): Promise<Booted> {
 	const { default: implementation } = await setup.load()
 	const migrates = isScopedDatabase(implementation.database)
-	if (migrates) {
-		await migrate(state.storage, setup.options.migrations ?? [], policy)
-	}
 	const database = migrates ? openSqlite(fencedStorage()) : undefined
 	const app = boot(implementation, {
 		environment,
@@ -342,17 +373,25 @@ async function bootApplication(
 	return booted
 }
 
+/** The isolate's booted application with this instance's storage migrated, and the instance's migration record. */
+interface Attached {
+	readonly booted: Booted
+	readonly record: OpsMigrationRecord | null
+}
+
 /**
  * The isolate's booted application with this instance's storage migrated, or the first boot. Reports the first failure
  * of a streak as `boot_failed`, whichever instance or step it comes from; an attachment that succeeds ends the streak.
+ * A pending migration and a record put that did not land are no failure.
  */
 async function attach(
 	setup: ApplicationSetup | null,
 	state: ApplicationState,
 	env: Readonly<Record<string, unknown>>,
 	policy: MigrationPolicy,
+	instance: InstanceMigration,
 	failed: (failure: OpsBootFailureContent) => void,
-): Promise<Booted> {
+): Promise<Attached> {
 	if (setup === null) {
 		throw new Error('no contract application is registered: the generated entrypoint calls createContractWorker before an object starts')
 	}
@@ -363,11 +402,12 @@ async function attach(
 	const environment = captureEnvironment(Object.fromEntries(Object.entries(env).filter(([name]) => !FRAMEWORK_BINDINGS.has(name))))
 	const crashes = environmentCrashReporter(environment, setup.options.operationsFetch)
 	try {
-		const booted = await attachOnce(setup, state, env, environment, crashes, policy)
+		const booted = await attachOnce(setup, state, env, environment, crashes)
+		const record = booted.migrates ? await migrate(state.storage, setup.options.migrations ?? [], policy, instance) : null
 		setup.failureReported = false
-		return booted
+		return { booted, record }
 	} catch (error) {
-		if (isMigrationsPending(error)) {
+		if (isMigrationsPending(error) || error instanceof RecordPending || (error instanceof MigrationFailed && error.reason === 'record_unwritable')) {
 			throw error
 		}
 		const scrubber = environmentScrubber(environment)
@@ -389,10 +429,9 @@ async function attachOnce(
 	env: Readonly<Record<string, unknown>>,
 	environment: CapturedEnvironment,
 	crashes: CrashReporter | null,
-	policy: MigrationPolicy,
 ): Promise<Booted> {
 	if (setup.booted === null) {
-		const booting = bootApplication(setup, state, env, environment, crashes, policy)
+		const booting = bootApplication(setup, state, env, environment, crashes)
 		setup.booted = booting
 		// A failed boot is not kept: the next object instance boots again and fails with the same problems.
 		booting.catch(() => {
@@ -400,11 +439,7 @@ async function attachOnce(
 		})
 		return await booting
 	}
-	const booted = await setup.booted
-	if (booted.migrates) {
-		await migrate(state.storage, setup.options.migrations ?? [], policy)
-	}
-	return booted
+	return await setup.booted
 }
 
 /**
@@ -426,10 +461,19 @@ function bootFailure(error: unknown, scrubber: Scrubber): OpsBootFailureContent 
 }
 
 /**
- * `pending`: a restricted cold start found a migration to apply, or the object holds an import marker, so the
- * application did not boot; that is no failure.
+ * `pending`: a restricted cold start found a migration to apply, the object holds an import marker, or a migration
+ * record could not be read or written, so the application did not boot; that is no failure. `migration` is what a
+ * `migrate` request answers of a migrating boot that failed with a record.
  */
-type Outcome = { readonly booted: Booted } | { readonly failure: unknown } | { readonly pending: true }
+type Outcome =
+	| { readonly booted: Booted; readonly record: OpsMigrationRecord | null }
+	/**
+	 * `recordUnread`: the record that may name a commit never booted could not be read; ordinary events answer 503 under
+	 * the backoff, and `migrate` reads it again.
+	 */
+	| { readonly failure: unknown; readonly migration: OpsMigrationFailure | null; readonly recordUnread: boolean }
+	/** `held`: a record could not be read or written, which the next event repeats; `migrate` answers it 503. */
+	| { readonly pending: true; readonly held: boolean; readonly migration: OpsMigrationFailure | null }
 
 /** The wait after an instance's first failed boot before an event boots again; it doubles with each failure, to the cap. */
 const BOOT_RETRY_MS = 1_000
@@ -537,6 +581,8 @@ export class FabrikaApplication {
 					return barrier
 				},
 				migrate: () => this.#migrated(),
+				migrationRecords: (object) => r2MigrationRecordStore(this.#env[CLOUDFLARE_FILES_BINDING], object),
+				version: workerVersion(this.#env),
 			})
 			if (before !== null && before !== 'open') {
 				await this.#reopened()
@@ -566,6 +612,9 @@ export class FabrikaApplication {
 			return maintenanceRefusal()
 		}
 		if ('failure' in outcome) {
+			if (outcome.recordUnread) {
+				return maintenanceRefusal()
+			}
 			throw outcome.failure
 		}
 		const event = barrier.event()
@@ -622,35 +671,86 @@ export class FabrikaApplication {
 		return this.#barrier
 	}
 
-	/** The migration phase's boot: applies the pending migrations whatever the mode; `false` when the boot failed. */
-	async #migrated(): Promise<boolean> {
+	/**
+	 * `migrate`: starts the boot, which applies the pending migrations whatever the mode, or awaits the one under way, and
+	 * answers how it ended.
+	 */
+	async #migrated(): Promise<OpsMigrated> {
 		const current = this.#outcome === null ? null : await this.#outcome
 		if (current !== null && 'booted' in current) {
-			return true
+			return { kind: 'booted', record: current.record }
 		}
-		const outcome = this.#boot('apply')
-		this.#outcome = outcome
-		return 'booted' in this.#settled(outcome, await outcome)
+		const boot = this.#boot('apply')
+		this.#outcome = boot
+		const outcome = this.#settled(boot, await boot)
+		if ('booted' in outcome) {
+			return { kind: 'booted', record: outcome.record }
+		}
+		const unavailable = 'pending' in outcome ? outcome.held : outcome.recordUnread
+		return { kind: unavailable ? 'unavailable' : 'failed', migration: outcome.migration }
 	}
 
 	/** Settles either way: a callback that rejects would reset the object, and every request answers the failure instead. */
 	#boot(policy: MigrationPolicy): Promise<Outcome> {
-		return this.#state.blockConcurrencyWhile(() =>
-			attach(this.#setup, this.#state, this.#env, policy, (failure) => {
+		return this.#state.blockConcurrencyWhile(async () => {
+			let instance: InstanceMigration
+			try {
+				instance = this.#instanceMigration()
+			} catch (failure) {
+				return this.#failed(failure, null)
+			}
+			return await attach(this.#setup, this.#state, this.#env, policy, instance, (failure) => {
 				this.#bootFailure = failure
-			}).then((booted): Outcome => {
+			}).then(({ booted, record }): Outcome => {
 				// The view reports the current boot: a failure an earlier attempt left is no longer the object's state.
 				this.#bootFailure = null
-				return { booted }
-			}, (failure: unknown): Outcome => {
-				if (isMigrationsPending(failure) || failure instanceof ImportInProgress) {
-					return { pending: true }
+				return { booted, record }
+			}, async (failure: unknown): Promise<Outcome> => {
+				const migration = failure instanceof MigrationFailed
+					? { refused: 'migration_failed' as const, reason: failure.reason, record: failure.record }
+					: null
+				const held = failure instanceof RecordPending || migration?.reason === 'record_unwritable'
+				if (held || isMigrationsPending(failure) || failure instanceof ImportInProgress) {
+					return { pending: true, held, migration }
 				}
-				this.#failedBoots++
-				this.#retryAt = Date.now() + Math.min(BOOT_RETRY_MS * 2 ** (this.#failedBoots - 1), BOOT_RETRY_CAP_MS)
-				return { failure }
+				if (migration !== null) {
+					return this.#failed(failure, migration)
+				}
+				// A boot that failed outside the migrating boot may follow a commit that never booted (ADR-0069 §3).
+				let committed: OpsMigrationRecord | null
+				try {
+					committed = await unbootedCommit({ target: migrationTarget(this.#state.storage), store: instance.records, bookmark: instance.bookmark })
+				} catch (error) {
+					if (error instanceof RecordPending) {
+						// Still the boot's failure, so its backoff holds; only the record is unknown.
+						return this.#failed(failure, null, true)
+					}
+					committed = null
+				}
+				return this.#failed(failure, committed === null ? null : { refused: 'migration_failed', reason: 'committed', record: committed })
 			})
-		)
+		})
+	}
+
+	#failed(failure: unknown, migration: OpsMigrationFailure | null, recordUnread = false): Outcome {
+		this.#failedBoots++
+		this.#retryAt = Date.now() + Math.min(BOOT_RETRY_MS * 2 ** (this.#failedBoots - 1), BOOT_RETRY_CAP_MS)
+		return { failure, migration, recordUnread }
+	}
+
+	/** The record of the object this instance is, which an event named before it boots; its version and bookmarks. */
+	#instanceMigration(): InstanceMigration {
+		const object = this.#recorded()
+		if (object === null) {
+			throw new Error('an object instance booted before any verified event named it')
+		}
+		const { storage } = this.#state
+		const { getCurrentBookmark } = storage
+		return {
+			records: r2MigrationRecordStore(this.#env[CLOUDFLARE_FILES_BINDING], object),
+			version: workerVersion(this.#env),
+			bookmark: async () => (getCurrentBookmark === undefined ? null : await getCurrentBookmark.call(storage)),
+		}
 	}
 
 	/**

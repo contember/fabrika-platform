@@ -1,13 +1,17 @@
 // One step of the original object's point-in-time restore (ADR-0070): the ops operation `restore`, served before the application boots.
+// A step that names a migration record is the in-place rewind of a failed migration (ADR-0070 §9): on the object that
+// serves, to the record's bookmark, only while every guard of the rewind holds.
 
 import {
 	OPS_DATA_REFUSED_STATUS,
 	OPS_STALE_STATUS,
 	type OpsDataRefusal,
 	type OpsDataRefusalReason,
+	type OpsMigrationRecord,
 	type OpsMode,
 	type OpsRestoreArm,
-	type OpsRestorePrepare,
+	type OpsRestorePrepareAt,
+	type OpsRestorePrepareRecord,
 	type OpsRestoreRequest,
 	type OpsRestoreVerify,
 	type OpsStaleRefusal,
@@ -17,6 +21,7 @@ import {
 } from '@fabrika/auth-core'
 import { jsonResponse } from '../errors.js'
 import type { MaintenanceBarrier, TurnStep } from './maintenance.js'
+import { type MigrationRecordStore, type StoredRecord, update } from './migration-record.js'
 import type { OpsRecovery, OpsStorage, OpsTarget } from './ops.js'
 
 /**
@@ -30,9 +35,17 @@ const ABORT_REASON = 'fabrika: point-in-time restore armed'
 /**
  * One step of the original object's point-in-time restore (ADR-0070 §9 step 6). `prepare` and `arm` run in the
  * barrier's turn, only under the published generation, on an object that is not the one ordinary traffic reaches
- * (`serving`), while it is `inspect`; `verify` writes nothing and runs in any mode.
+ * (`serving`), while it is `inspect`; `verify` writes nothing but an in-place rewind's outcome, and runs in any mode. A
+ * step that names a migration record (`records`, the object's) may run on the serving object instead, under the rewind's
+ * guards.
  */
-export async function serveRestore(target: OpsTarget, barrier: MaintenanceBarrier, step: OpsRestoreRequest, serving: boolean): Promise<Response> {
+export async function serveRestore(
+	target: OpsTarget,
+	barrier: MaintenanceBarrier,
+	step: OpsRestoreRequest,
+	serving: boolean,
+	records: MigrationRecordStore,
+): Promise<Response> {
 	const { recovery } = target
 	if (recovery === null) {
 		return jsonResponse({ refused: 'not_implemented' }, 501)
@@ -40,22 +53,85 @@ export async function serveRestore(target: OpsTarget, barrier: MaintenanceBarrie
 	const sentinels = kvSentinels(target.storage)
 	switch (step.step) {
 		case 'prepare':
-			return await inTurn(barrier, step.generation, serving, () => prepare(recovery, sentinels, step))
-		case 'arm':
-			return await inTurn(barrier, step.generation, serving, async () => {
+			if ('record' in step) {
+				return await inTurn(
+					barrier,
+					step.generation,
+					false,
+					() => rewindable(records, step.record, target.version, async (record) => await prepare(recovery, sentinels, step, async () => record)),
+				)
+			}
+			return await inTurn(
+				barrier,
+				step.generation,
+				serving,
+				() => prepare(recovery, sentinels, step, async () => await recovery.getBookmarkForTime(Date.parse(step.at))),
+			)
+		case 'arm': {
+			const armed = async () => {
 				await barrier.restrictedWrite()
 				return await arm(recovery, step)
-			})
+			}
+			const { record } = step
+			if (record === undefined) {
+				return await inTurn(barrier, step.generation, serving, armed)
+			}
+			return await inTurn(
+				barrier,
+				step.generation,
+				false,
+				() =>
+					rewindable(
+						records,
+						record,
+						target.version,
+						async (bookmark) => bookmark === step.target ? await armed() : answered(dataRefusal('wrong_target')),
+					),
+			)
+		}
 		case 'verify':
-			return await verify(recovery, sentinels, step)
+			return await verify(recovery, sentinels, step, records)
 	}
+}
+
+/**
+ * The guards of the in-place rewind (ADR-0070 §9), checked in the barrier's turn after `inTurn` found the object
+ * `inspect` under the published generation: the record is the one named, `committed` and never `booted`, written by the
+ * Worker version that runs, which is known, and names its bookmark from before the transaction. `work` gets that
+ * bookmark, the only target the rewind may have.
+ */
+async function rewindable(
+	records: MigrationRecordStore,
+	named: string,
+	version: string | null,
+	work: (bookmark: string) => Promise<TurnStep<Response>>,
+): Promise<TurnStep<Response>> {
+	let held: StoredRecord | null
+	try {
+		held = await records.read()
+	} catch {
+		return answered(new Response(null, { status: 503 }))
+	}
+	const record = held?.record
+	if (record === undefined || record.id !== named || record.outcome !== 'committed' || record.booted !== null || record.bookmark === null) {
+		return answered(dataRefusal('not_rewindable'))
+	}
+	if (record.version === null || record.version !== version) {
+		return answered(dataRefusal('version_changed'))
+	}
+	return await work(record.bookmark)
 }
 
 /**
  * The first prepare of an operation reads the current bookmark, then the target's, and keeps both under its sentinel
  * key; a retried one answers what it kept. A target not lexically before the current bookmark would keep the sentinel.
  */
-async function prepare(recovery: OpsRecovery, sentinels: SentinelStore, step: OpsRestorePrepare): Promise<TurnStep<Response>> {
+async function prepare(
+	recovery: OpsRecovery,
+	sentinels: SentinelStore,
+	step: OpsRestorePrepareAt | OpsRestorePrepareRecord,
+	targetBookmark: () => Promise<string>,
+): Promise<TurnStep<Response>> {
 	const kept = await sentinels.read(step.sentinel)
 	if (kept !== undefined) {
 		return answered(answer(parseOpsRestorePrepareAck(kept)))
@@ -63,7 +139,7 @@ async function prepare(recovery: OpsRecovery, sentinels: SentinelStore, step: Op
 	const current = await recovery.getCurrentBookmark()
 	let target: string
 	try {
-		target = await recovery.getBookmarkForTime(Date.parse(step.at))
+		target = await targetBookmark()
 	} catch {
 		return answered(dataRefusal('bookmark_unavailable'))
 	}
@@ -96,10 +172,35 @@ async function arm(recovery: OpsRecovery, step: OpsRestoreArm): Promise<TurnStep
 	return { value: response, holdUntil: reset }
 }
 
-/** Present while the KV holds this operation's key: a restore to a target before its `prepare` removed it. */
-async function verify(recovery: OpsRecovery, sentinels: SentinelStore, step: OpsRestoreVerify): Promise<Response> {
+/**
+ * Present while the KV holds this operation's key: a restore to a target before its `prepare` removed it. An in-place
+ * rewind's absent sentinel first records `rewound` in the migration record it named, so no later boot marks the undone
+ * migration `booted`; a record that could not be marked answers 503, and Control asks again.
+ */
+async function verify(recovery: OpsRecovery, sentinels: SentinelStore, step: OpsRestoreVerify, records: MigrationRecordStore): Promise<Response> {
 	const present = (await sentinels.read(step.sentinel)) !== undefined
+	if (!present && step.record !== undefined && !(await markedRewound(records, step.record))) {
+		return new Response(null, { status: 503 })
+	}
 	return answer(parseOpsRestoreVerifyAck({ step: 'verify', sentinel: present ? 'present' : 'absent', bookmark: await recovery.getCurrentBookmark() }))
+}
+
+/**
+ * Whether the verify may answer: the record named, `committed` and never `booted`, now holds `rewound`. Any other record
+ * is left as it is: a booted one served traffic, and a booted `rewound` record would not parse.
+ */
+async function markedRewound(records: MigrationRecordStore, named: string): Promise<boolean> {
+	try {
+		const held = await records.read()
+		if (held === null || held.record.id !== named || held.record.outcome !== 'committed' || held.record.booted !== null) {
+			return true
+		}
+		const rewound: OpsMigrationRecord = { ...held.record, outcome: 'rewound' }
+		await update(records, held, rewound)
+		return true
+	} catch {
+		return false
+	}
 }
 
 /**

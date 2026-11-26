@@ -21,6 +21,7 @@ import { type JobClock, SEGMENT_FINISH_RESERVE_MS } from '../jobs/runner'
 import { tables } from './cloudflare-fixture/src/db/tables'
 import { vocabulary } from './cloudflare-fixture/src/vocabulary'
 import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
+import { isMigrationRecordKey, RecordObjects } from './fixtures/migration-records'
 
 const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
 const MINUTE = 60_000
@@ -109,11 +110,14 @@ class Alarm {
 /** The environment's bucket: only each object's maintenance state, which a test sets; absent is `open`. */
 function bucketOf(states: Map<string, OpsPublishedState>) {
 	const unused = () => Promise.reject(new Error('not called'))
+	const records = new RecordObjects()
 	return {
 		head: unused,
-		put: unused,
+		put: (key: string, body: unknown, options: { readonly onlyIf: { readonly etagMatches?: string; readonly etagDoesNotMatch?: string } }) =>
+			isMigrationRecordKey(key) ? records.put(key, body, options) : unused(),
 		delete: unused,
 		get: (key: string) => {
+			if (isMigrationRecordKey(key)) return records.get(key)
 			const object = /^__fabrika\/ops\/([a-z0-9-]+)\.json$/.exec(key)?.[1]
 			if (object === undefined) return unused()
 			const stored = states.get(object)

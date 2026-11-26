@@ -67,6 +67,7 @@ import { OPS_ENDPOINT, type OpsTarget } from '../cloudflare/ops'
 import { notesApp as fixtureApp } from './cloudflare-fixture/src/app'
 import type { NotesWorld } from './cloudflare-fixture/src/world'
 import { frameworkEnvFor, keepingProcessEnvironment, keySource, ORIGIN, PROXY_SECRET, workloadTokensFor } from './fixtures/implement/harness'
+import { isMigrationRecordKey, noMigrationRecord, RecordObjects } from './fixtures/migration-records'
 
 const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
 
@@ -1097,6 +1098,8 @@ describe('the ops seam', () => {
 			bootFailure: () => Promise.resolve(null),
 			maintenance: () => Promise.reject(new Error('not called')),
 			migrate: () => Promise.reject(new Error('not called')),
+			migrationRecords: () => noMigrationRecord,
+			version: null,
 		}
 	}
 
@@ -1200,11 +1203,18 @@ describe('an object that holds an import marker', () => {
 	/** Published `open`, so only the marker refuses what follows. */
 	const OPEN: OpsPublishedState = { generation: 2, mode: 'open' }
 
-	/** The environment's bucket: the published state of the serving object, no file. */
+	/** The environment's bucket: the published state of the serving object and its migration record, no file. */
 	function stateBucket() {
 		const unused = () => Promise.reject(new Error('not called'))
 		const state = { etag: 'v2', text: () => Promise.resolve(JSON.stringify(OPEN)) }
-		return { head: unused, get: (key: string) => Promise.resolve(key === `__fabrika/ops/${SERVING}.json` ? state : null), put: unused, delete: unused }
+		const records = new RecordObjects()
+		return {
+			head: unused,
+			get: (key: string) => isMigrationRecordKey(key) ? records.get(key) : Promise.resolve(key === `__fabrika/ops/${SERVING}.json` ? state : null),
+			put: (key: string, body: unknown, options: { readonly onlyIf: { readonly etagMatches?: string; readonly etagDoesNotMatch?: string } }) =>
+				isMigrationRecordKey(key) ? records.put(key, body, options) : unused(),
+			delete: unused,
+		}
 	}
 
 	function health(): Request {

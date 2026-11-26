@@ -11,12 +11,15 @@ import {
 	formatEndpointHeader,
 	OPS_DATA_REFUSED_STATUS,
 	OPS_METHOD,
+	OPS_MIGRATION_FAILED_STATUS,
 	OPS_ROW_COUNT_CAP,
 	OPS_STALE_STATUS,
 	type OpsBootFailureContent,
 	type OpsContentView,
 	type OpsDataRefusal,
 	opsKeyDigest,
+	type OpsMigrationFailure,
+	type OpsMigrationRecord,
 	type OpsOperation,
 	type OpsPublishedState,
 	opsRefusal,
@@ -30,6 +33,7 @@ import {
 	parseOpsKeyDigests,
 	parseOpsMigrateAck,
 	parseOpsMigrateRequest,
+	parseOpsMigrationFailure,
 	parseOpsOperation,
 	parseOpsRestoreRequest,
 	parseOpsStateRequest,
@@ -46,6 +50,7 @@ import { jsonResponse } from '../errors.js'
 import { serveExport } from './export.js'
 import { importInProgress, serveImport } from './import.js'
 import type { MaintenanceBarrier, TransitionResult } from './maintenance.js'
+import type { MigrationRecordStore } from './migration-record.js'
 import { serveRestore } from './restore.js'
 import { serveTimers } from './tracker.js'
 
@@ -135,9 +140,22 @@ export interface OpsTarget {
 	bootFailure(): Promise<OpsBootFailureContent | null>
 	/** The barrier of the object named `object`, read from R2 on a cold start; rejects while R2 cannot be read. */
 	maintenance(object: string): Promise<MaintenanceBarrier>
-	/** Runs the pending migrations and boots the application; `false` when the boot failed. */
-	migrate(): Promise<boolean>
+	/** Runs the pending migrations and boots the application, or awaits the boot under way. */
+	migrate(): Promise<OpsMigrated>
+	/** The migration record of `object` (ADR-0069 §3), which the in-place rewind checks and marks. */
+	migrationRecords(object: string): MigrationRecordStore
+	/** The id of the Worker version that runs; `null` without the version metadata binding. */
+	readonly version: string | null
 }
+
+/**
+ * How a `migrate` boot ended: booted, with the object's migration record; failed; or held back (`unavailable`: a
+ * record put that did not land, which the next event repeats). `migration` is set when a migrating boot failed with a
+ * record, which only a release that writes records answers.
+ */
+export type OpsMigrated =
+	| { readonly kind: 'booted'; readonly record: OpsMigrationRecord | null }
+	| { readonly kind: 'failed' | 'unavailable'; readonly migration: OpsMigrationFailure | null }
 
 /**
  * Answers an ops request the Worker forwarded with the proxy secret, which the object checked before. Authentication
@@ -189,7 +207,7 @@ export async function serveOps(request: Request, access: OpsAccess | null, targe
 		}
 		case 'restore': {
 			const step = parseOpsRestoreRequest(body)
-			return step === null ? opsRefusal() : await serveRestore(target, barrier, step, object === access.objects.object)
+			return step === null ? opsRefusal() : await serveRestore(target, barrier, step, object === access.objects.object, target.migrationRecords(object))
 		}
 		case 'timers': {
 			const timers = parseOpsTimersRequest(body)
@@ -214,17 +232,28 @@ function transitionAnswer(result: TransitionResult): Response {
 	}
 }
 
-/** Runs the migrations under the published generation and acknowledges with the new ledger; a failed boot is a 500. */
+/**
+ * Runs the migrations under the published generation and acknowledges with the new ledger and the record. A migrating
+ * boot that failed with a record is the 422 `migration_failed`; any other failed boot a 500, a held one a 503.
+ */
 async function migrateAnswer(target: OpsTarget, barrier: MaintenanceBarrier, generation: number): Promise<Response> {
 	const result = await barrier.migrate(generation, () => target.migrate())
 	if (result.kind === 'stale') {
 		return staleRefusal(result.published)
 	}
-	if (!result.value) {
-		return new Response(null, { status: 500 })
+	const migrated = result.value
+	if (migrated.kind !== 'booted') {
+		if (migrated.migration !== null) {
+			const failure = parseOpsMigrationFailure(migrated.migration)
+			if (failure === null) {
+				throw new Error("the object's migration failure does not parse as the wire's answer")
+			}
+			return jsonResponse(failure, OPS_MIGRATION_FAILED_STATUS)
+		}
+		return new Response(null, { status: migrated.kind === 'failed' ? 500 : 503 })
 	}
 	const migrations = tableNames(target.storage).includes(MIGRATION_LEDGER) ? migrationLedger(target.storage) : []
-	const ack = parseOpsMigrateAck({ generation, migrations })
+	const ack = parseOpsMigrateAck({ generation, migrations, record: migrated.record })
 	if (ack === null) {
 		throw new Error("the object's migration ledger does not parse as the wire's acknowledgement")
 	}

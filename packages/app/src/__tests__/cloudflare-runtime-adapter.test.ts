@@ -36,14 +36,25 @@ import {
 	token,
 	workloadTokensFor,
 } from './fixtures/implement/harness'
+import { isMigrationRecordKey, RecordObjects } from './fixtures/migration-records'
 
 const FIXTURE_ROOT = join(import.meta.dir, 'cloudflare-fixture')
 const DSN = 'https://0123456789abcdef0123456789abcdef@operations.test/42'
 
-/** The environment's bucket holding no maintenance state, so every object reads `open`; no file call is expected. */
+/**
+ * The environment's bucket holding no maintenance state, so every object reads `open`; only the migration record is
+ * written, and no file call is expected.
+ */
 function filesBucket() {
 	const unused = () => Promise.reject(new Error('not called'))
-	return { head: unused, get: (key: string) => key.startsWith('__fabrika/ops/') ? Promise.resolve(null) : unused(), put: unused, delete: unused }
+	const records = new RecordObjects()
+	return {
+		head: unused,
+		get: (key: string) => isMigrationRecordKey(key) ? records.get(key) : key.startsWith('__fabrika/ops/') ? Promise.resolve(null) : unused(),
+		put: (key: string, body: unknown, options: { readonly onlyIf: { readonly etagMatches?: string; readonly etagDoesNotMatch?: string } }) =>
+			isMigrationRecordKey(key) ? records.put(key, body, options) : unused(),
+		delete: unused,
+	}
 }
 
 interface Started {

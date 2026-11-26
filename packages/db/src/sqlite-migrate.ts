@@ -2,7 +2,8 @@
 // database when its Durable Object boots (ADR-0065), in a ledger in the same database. The identity and the
 // checksum rule are the Postgres runner's (ADR-0017): `(bundle, name)`, and the SHA-256 of an applied file's text.
 // Every new object instance runs it, so a bundle whose files match the digest recorded for it is not read further.
-// Runs inside a Worker: no Bun import.
+// `migrateSqlite` commits each file on its own; `planSqliteMigrations` applies every pending file of every bundle in one
+// transaction, which the migrating boot of an application's object uses (ADR-0069 §3). Runs inside a Worker: no Bun import.
 
 /** What the runner needs of the database; a Durable Object's `storage.sql.exec` and `storage.transactionSync` fit it. */
 export interface SqliteMigrationTarget {
@@ -239,4 +240,104 @@ export async function migrateSqlite(
 		}
 	}
 	return { applied }
+}
+
+/** One row of the ledger, as a migration record names it: the identity and the checksum, without the time it ran. */
+export interface SqliteLedgerEntry {
+	readonly bundle: string
+	readonly name: string
+	readonly checksum: string
+}
+
+/** The ledger's rows in `(bundle, name)` order, and their digest. */
+export interface SqliteLedger {
+	readonly entries: readonly SqliteLedgerEntry[]
+	readonly digest: string
+}
+
+/** The SHA-256 of the rows' `bundle name checksum` lines in `(bundle, name)` order: neither part holds a space or a newline. */
+export async function sqliteLedgerDigest(entries: readonly SqliteLedgerEntry[]): Promise<string> {
+	const sorted = [...entries].sort((a, b) => compareNames(a.bundle, b.bundle) || compareNames(a.name, b.name))
+	return await checksumOf(sorted.map((entry) => `${entry.bundle} ${entry.name} ${entry.checksum}\n`).join(''))
+}
+
+/** The ledger as it stands; empty while the table does not exist. */
+export async function readSqliteLedger(target: SqliteMigrationTarget): Promise<SqliteLedger> {
+	const entries = [...readLedger(target)].map(([identity, checksum]): SqliteLedgerEntry => {
+		const slash = identity.indexOf('/')
+		return { bundle: identity.slice(0, slash), name: identity.slice(slash + 1), checksum }
+	}).sort((a, b) => compareNames(a.bundle, b.bundle) || compareNames(a.name, b.name))
+	return { entries, digest: await sqliteLedgerDigest(entries) }
+}
+
+/** What the database needs to reach the bundles: nothing, a digest only, or pending files. */
+export interface SqliteMigrationPlan {
+	/** The ledger the plan starts from; `null` when every bundle matched its digest and the ledger was not read. */
+	readonly ledger: SqliteLedger | null
+	/** The files to apply, the bundles in the order given and each bundle's files in name order. */
+	readonly pending: readonly SqliteLedgerEntry[]
+	/** Whether `apply` writes anything: a pending file, or a bundle digest that is out of date. */
+	readonly writes: boolean
+	/**
+	 * Applies every pending file with its ledger row, and records every out-of-date bundle digest, in one transaction
+	 * that ends with `PRAGMA foreign_key_check`: a failing file or a row the check returns rolls the whole set back.
+	 * Answers the identities it applied.
+	 */
+	apply(): readonly string[]
+}
+
+/** Plans the bundles against the ledger without writing; refuses what `migrateSqlite` refuses, before anything runs. */
+export async function planSqliteMigrations(target: SqliteMigrationTarget, bundles: readonly SqliteMigrationBundle[]): Promise<SqliteMigrationPlan> {
+	const planned = await plan(bundles)
+	const digests = readDigests(target, planned)
+	const stale = planned.filter((bundle) => digests.get(bundle.bundle) !== bundle.digest)
+	if (stale.length === 0) {
+		return { ledger: null, pending: [], writes: false, apply: () => [] }
+	}
+	const ledger = await readSqliteLedger(target)
+	const recorded = new Map(ledger.entries.map((entry) => [`${entry.bundle}/${entry.name}`, entry.checksum]))
+	verify(planned, recorded)
+	const pending = stale.flatMap((bundle) => bundle.migrations.filter((migration) => !recorded.has(`${migration.bundle}/${migration.name}`)))
+	return {
+		ledger,
+		pending: pending.map(({ bundle, name, checksum }) => ({ bundle, name, checksum })),
+		writes: true,
+		apply: () => applyAtomically(target, stale, pending),
+	}
+}
+
+class ForeignKeyViolation extends Error {
+	override readonly name = 'ForeignKeyViolation'
+}
+
+function applyAtomically(target: SqliteMigrationTarget, stale: readonly PlannedBundle[], pending: readonly PlannedMigration[]): readonly string[] {
+	const appliedAt = new Date().toISOString()
+	try {
+		target.transactionSync(() => {
+			target.exec(LEDGER_DDL)
+			for (const migration of pending) {
+				target.exec(migration.sql)
+				target.exec(
+					`INSERT INTO ${LEDGER} (bundle, name, checksum, applied_at) VALUES (?, ?, ?, ?)`,
+					migration.bundle,
+					migration.name,
+					migration.checksum,
+					appliedAt,
+				)
+			}
+			for (const bundle of stale) recordDigest(target, bundle)
+			if (target.exec('PRAGMA foreign_key_check').toArray().length > 0) {
+				throw new ForeignKeyViolation('a row violates a foreign key')
+			}
+		})
+	} catch (error) {
+		const files = pending.map((migration) => `${migration.bundle}/${migration.name}`).join(', ')
+		throw new SqliteMigrationError(
+			error instanceof ForeignKeyViolation
+				? `SQLite migrations ${files} left a row that violates a foreign key; none of them was applied`
+				: `SQLite migrations ${files} failed; none of them was applied`,
+			{ cause: error },
+		)
+	}
+	return pending.map((migration) => `${migration.bundle}/${migration.name}`)
 }

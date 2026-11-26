@@ -14,3 +14,9 @@ export const CLOUDFLARE_FILES_BINDING = 'FABRIKA_FILES'
  * the mount `/admin` serves `<directory>/admin/…`, the root mount `<directory>/…`.
  */
 export const CLOUDFLARE_ASSETS_BINDING = 'ASSETS'
+
+/**
+ * The Cloudflare version metadata binding (`version_metadata`): the id of the Worker version that runs, which a migration
+ * record names (ADR-0069 §3).
+ */
+export const CLOUDFLARE_VERSION_BINDING = 'FABRIKA_VERSION'
