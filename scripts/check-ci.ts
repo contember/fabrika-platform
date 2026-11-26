@@ -138,10 +138,10 @@ interface StepResult {
 
 class StepFailure extends Error {}
 
-const capture = async (command: readonly string[]): Promise<{ readonly exitCode: number; readonly stdout: string }> => {
+const capture = async (command: readonly string[]): Promise<{ readonly exitCode: number; readonly stdout: string; readonly stderr: string }> => {
 	const child = Bun.spawn([...command], { cwd: ROOT, stdout: 'pipe', stderr: 'pipe' })
-	const [exitCode, stdout] = await Promise.all([child.exited, new Response(child.stdout).text()])
-	return { exitCode, stdout }
+	const [exitCode, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()])
+	return { exitCode, stdout, stderr }
 }
 
 const succeeds = async (command: readonly string[]): Promise<boolean> => (await capture(command)).exitCode === 0
@@ -193,15 +193,29 @@ const freeLoopbackPort = (): number => {
 /** Another process may bind the free port before PostgreSQL does; the server then exits and a new port is tried. */
 const POSTGRES_PORT_ATTEMPTS = 3
 
-const containerRunning = async (name: string): Promise<boolean> =>
-	(await capture(['docker', 'inspect', '--format', '{{.State.Running}}', name])).stdout.trim() === 'true'
+/** Only when docker reports it stopped: a failed inspect (an interrupted run) says nothing about the container. */
+const containerExited = async (name: string): Promise<boolean> => {
+	const { exitCode, stdout } = await capture(['docker', 'inspect', '--format', '{{.State.Running}}', name])
+	return exitCode === 0 && stdout.trim() === 'false'
+}
 
-/** True once PostgreSQL answers on the port, false when its container exited first. */
+/** PostgreSQL logs to stderr, which `docker logs` replays on its own stderr. */
+const containerLogs = async (name: string, tail: string): Promise<string> => {
+	const { stdout, stderr } = await capture(['docker', 'logs', '--tail', tail, name])
+	return stdout + stderr
+}
+
+/** True once this container's server answers on the port, false when the container exited first. */
 const postgresReady = async (name: string, major: string, port: number): Promise<boolean> => {
+	// On the host network another server may hold the port; only the container's own log proves its server bound it.
+	const listening = `listening on IPv4 address "127.0.0.1", port ${port}`
 	for (let attempt = 1; attempt <= READINESS_ATTEMPTS; attempt += 1) {
-		// Over TCP: the entrypoint's temporary init server listens on the socket only, so it never answers this probe.
-		if (await succeeds(['docker', 'exec', name, 'pg_isready', '--host=127.0.0.1', `--port=${port}`, '--username=postgres'])) return true
-		if (!await containerRunning(name)) return false
+		if (
+			(await containerLogs(name, 'all')).includes(listening)
+			// Over TCP: the entrypoint's temporary init server listens on the socket only, so it never answers this probe.
+			&& await succeeds(['docker', 'exec', name, 'pg_isready', '--host=127.0.0.1', `--port=${port}`, '--username=postgres'])
+		) return true
+		if (await containerExited(name)) return false
 		await Bun.sleep(1000)
 	}
 	throw new StepFailure(`PostgreSQL ${major} was not ready after ${READINESS_ATTEMPTS} s`)
@@ -235,9 +249,10 @@ export const startPostgres = async (major: string): Promise<Backend> => {
 		if (await postgresReady(name, major, port)) {
 			return { env: { FABRIKA_TEST_POSTGRES_URL: `postgres://postgres:postgres@127.0.0.1:${port}/postgres` }, container: name }
 		}
+		console.warn(`PostgreSQL ${major} exited before it was ready on port ${port}:\n${await containerLogs(name, '20')}`)
 		await removeContainers([name])
 	}
-	throw new StepFailure(`PostgreSQL ${major} exited before it was ready, on ${POSTGRES_PORT_ATTEMPTS} free ports in a row`)
+	throw new StepFailure(`PostgreSQL ${major} exited before it was ready, ${POSTGRES_PORT_ATTEMPTS} times; its log is printed above`)
 }
 
 export const startSeaweedfs = async (): Promise<Backend> => {
