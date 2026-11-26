@@ -164,7 +164,8 @@ counter accept one.
 that finds it, before anything is compared, so a wrong answer spends it too. A person holds at most ten open challenges,
 and the cron removes expired ones. An assertion challenge carries a **binding**, an opaque string its issuer sets.
 Verification takes the binding it expects and refuses any other. A challenge for one purpose never verifies for
-another.
+another. Bindings starting with `iam:` are IAM's own pages': `passkeys.challenge` and `passkeys.verify` refuse one, and
+the step-up page never answers one.
 
 **Changing the set of passkeys takes a passkey already held.** The first passkey is registered with the session alone.
 Another one is registered only after an assertion bound to `iam:passkeys.register`: the creation challenge issued after
@@ -190,8 +191,9 @@ session (the console's token, never a `px_` key), which Control reaches through 
 
 The person answers the challenge on IAM's step-up page (`/auth/step-up?challenge=<id>`): the console opens it in a new
 tab, and the person confirms with a passkey there and comes back. The page finds the challenge only for the signed-in
-person, unanswered and unexpired, verifies the assertion as above whatever the binding, and records the answer on the
-challenge (the credential and the time) instead of spending it; a refused answer spends it. `verify` then spends the
+person, unanswered and unexpired, verifies the assertion as above whatever the binding (but an `iam:` one), and records the answer on
+the challenge (the credential and the time) instead of spending it; a refused answer spends an unanswered challenge, never
+one answered meanwhile. `verify` then spends the
 answered challenge and answers `{ principalId, credentialId, at }`: the person, the passkey's WebAuthn credential id, and
 the time of the answer in epoch seconds. It answers only for a challenge issued to the caller, answered, unexpired, with
 the same binding, by a passkey the person still holds; a challenge not yet answered stays open. `challenge` refuses a

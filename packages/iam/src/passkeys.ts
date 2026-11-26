@@ -4,6 +4,7 @@
 // nor a verifier's error message, which quotes the challenge.
 
 import {
+	IAM_BINDING_PREFIX,
 	MAX_PASSKEY_BINDING_LENGTH,
 	MAX_PASSKEY_LABEL_LENGTH,
 	MAX_PASSKEYS_PER_PERSON,
@@ -66,7 +67,12 @@ export type PasskeyOutcome<T> = { readonly ok: true; readonly value: T } | { rea
 const base64url = z.string().min(1).max(16_384).regex(/^[A-Za-z0-9_-]+$/)
 const transports = z.array(z.string().min(1).max(32)).max(8)
 
-export const passkeyBindingSchema = z.string().min(1).max(MAX_PASSKEY_BINDING_LENGTH)
+/** The binding another service asks a step-up with: never one of IAM's own. */
+export const stepUpBindingSchema = z
+	.string()
+	.min(1)
+	.max(MAX_PASSKEY_BINDING_LENGTH)
+	.refine((binding) => !binding.startsWith(IAM_BINDING_PREFIX), 'a binding starting with iam: is reserved for IAM')
 export const passkeyLabelSchema = z.string().trim().min(1).max(MAX_PASSKEY_LABEL_LENGTH)
 
 /** A credential's JSON encoding as the browser sends it; `id` and `rawId` must name the same credential. */
@@ -185,7 +191,7 @@ export async function openStepUp(
 	challengeId: string,
 ): Promise<PasskeyChallenge<PasskeyRequestOptions> | null> {
 	const issued = await services.repositories.passkeys.openAssertionChallenge(principalId, challengeId)
-	if (issued === null || issued.expires_at <= unixNow()) return null
+	if (issued === null || issued.expires_at <= unixNow() || issued.binding.startsWith(IAM_BINDING_PREFIX)) return null
 	const held = await services.repositories.passkeys.list(principalId)
 	if (held.length === 0) return null
 	return { challengeId, expiresAt: issued.expires_at, options: requestOptions(rp, issued.challenge, held) }
@@ -247,7 +253,7 @@ async function checkAssertion(
 
 /**
  * Answer a step-up challenge on IAM's page: verify the assertion as `verifyPasskeyAssertion` does, against the
- * principal's open assertion challenge whatever its binding, and record the answer on the challenge instead of spending
+ * principal's open assertion challenge whatever its binding (but one of IAM's own pages), and record the answer on the challenge instead of spending
  * it. Its issuer consumes it with `consumeStepUp`, which compares the binding. A refused answer spends the challenge.
  */
 export async function answerStepUp(
@@ -258,7 +264,7 @@ export async function answerStepUp(
 ): Promise<PasskeyOutcome<VerifiedPasskeyAssertion>> {
 	const repository = services.repositories.passkeys
 	const issued = await repository.openAssertionChallenge(principalId, assertion.challengeId)
-	if (issued === null) return refused('challenge_unknown')
+	if (issued === null || issued.binding.startsWith(IAM_BINDING_PREFIX)) return refused('challenge_unknown')
 	const outcome = await checkAssertion(services, rp, principalId, issued, assertion)
 	if (!outcome.ok) {
 		await repository.dropChallenge(principalId, assertion.challengeId)

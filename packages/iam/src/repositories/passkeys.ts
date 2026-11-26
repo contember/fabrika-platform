@@ -130,9 +130,9 @@ export class PasskeyRepository {
 		return row !== null
 	}
 
-	/** Spend one of the principal's challenges, answered or not. */
+	/** Spend one of the principal's unanswered challenges; an answer recorded meanwhile stays for its issuer. */
 	async dropChallenge(principalId: string, id: string): Promise<void> {
-		await this.db.prepare('DELETE FROM passkey_challenges WHERE id = ? AND principal_id = ?').bind(id, principalId).run()
+		await this.db.prepare('DELETE FROM passkey_challenges WHERE id = ? AND principal_id = ? AND answered_at IS NULL').bind(id, principalId).run()
 	}
 
 	/** Remove and answer the principal's answered assertion challenge; null when it is unanswered, spent or never issued. */

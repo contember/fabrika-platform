@@ -13,7 +13,7 @@ import { installationBrandSchema } from '@fabrika/proxy-core/brand'
 import { z } from 'zod'
 import type { IamAppContext } from '../app'
 import { logError } from '../log'
-import { passkeyBindingSchema } from '../passkeys'
+import { stepUpBindingSchema } from '../passkeys'
 import { recordAdminAccess, rpcProcedureOf } from './access'
 import { grantAppRole, listAdministeredApps, listAppPeople, revokeAppRole } from './app-people'
 import { listConnections, revokeConnection } from './connections'
@@ -391,9 +391,9 @@ export const adminRpcRouter: RpcRouterFor<IamAppContext, IamAdminRpcContract> = 
 	// reaches with the approver's console token. A person manages their own passkeys on IAM's account page. `listOf` and
 	// `reset` are an installation administrator's, the reset being the path for a person who lost every passkey.
 	passkeys: t.router({
-		challenge: t.procedure.input(z.object({ binding: passkeyBindingSchema })).mutation(({ ctx, input }) => issuePasskeyChallenge(ctx, input)),
+		challenge: t.procedure.input(z.object({ binding: stepUpBindingSchema })).mutation(({ ctx, input }) => issuePasskeyChallenge(ctx, input)),
 		verify: t.procedure
-			.input(z.object({ binding: passkeyBindingSchema, challengeId: z.string().min(1).max(64) }))
+			.input(z.object({ binding: stepUpBindingSchema, challengeId: z.string().min(1).max(64) }))
 			.mutation(({ ctx, input }) => verifyPasskeyChallenge(ctx, input)),
 		listOf: t.procedure.input(principalIdInput).require(ADMIN_ACTION).query(({ ctx, input }) => listPasskeysOf(context(ctx), input)),
 		reset: t.procedure

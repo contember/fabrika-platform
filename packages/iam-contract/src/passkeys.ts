@@ -17,12 +17,18 @@ export const MAX_PASSKEYS_PER_PERSON = 20
 /** The error `type` of `passkeys.challenge`'s refusal to a person with no passkey, so a caller tells it from other 409s. */
 export const NO_PASSKEY_ERROR = 'no_passkey'
 
+/**
+ * The prefix of the bindings IAM's own pages use. Another service never asks a step-up with one, and IAM's step-up page
+ * never answers one, so a check IAM asks for itself is answered only on the page that asked it.
+ */
+export const IAM_BINDING_PREFIX = 'iam:'
+
 /** The binding of the assertion that registering another passkey takes, when the person already has one. */
-export const PASSKEY_REGISTRATION_BINDING = 'iam:passkeys.register'
+export const PASSKEY_REGISTRATION_BINDING = `${IAM_BINDING_PREFIX}passkeys.register`
 
 /** The binding of the assertion that removing the passkey `passkeyId` takes. */
 export function passkeyRemovalBinding(passkeyId: string): string {
-	return `iam:passkeys.remove:${passkeyId}`
+	return `${IAM_BINDING_PREFIX}passkeys.remove:${passkeyId}`
 }
 
 /** A passkey as its owner and an installation administrator see it. No key material. */

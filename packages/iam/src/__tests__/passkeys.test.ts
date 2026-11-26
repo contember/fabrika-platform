@@ -248,7 +248,7 @@ async function challenged(i: Installation, principalId: string, binding: string)
 	return result(await i.as(principalId, 'passkeys.challenge', { binding }), isStepUp)
 }
 
-/** Answer a step-up challenge on IAM's page, as the popup the console opened does. */
+/** Answer a step-up challenge on IAM's page, in the tab the console links to. */
 async function answered(
 	i: Installation,
 	principalId: string,
@@ -497,6 +497,77 @@ for (const { name, engine, skip } of engines) {
 				const keyToken = await adminTokenFor(i.repositories, person, { issuer: ISSUER, session: false })
 				expect((await i.rpc(keyToken, 'passkeys.challenge', { binding: 'x' })).status).toBe(403)
 				expect((await i.rpc(keyToken, 'passkeys.verify', { binding: 'x', challengeId: 'y' })).status).toBe(403)
+			})
+
+			test('an answer posted from another origin records nothing and leaves the challenge to answer', async () => {
+				const i = await installation(engine())
+				const person = await i.person()
+				const authenticator = await TestAuthenticator.create()
+				expect(await added(i, person, authenticator)).toBe('passkey_added')
+				const issued = await challenged(i, person, 'approval:item-x')
+				const url = new URL(issued.url)
+				const page = await ceremonyOf(await i.get(person, `${url.pathname}${url.search}`))
+				const crossSite = await i.post(
+					person,
+					STEP_UP_PATH,
+					{ ...page.fields, credential: JSON.stringify(await authenticator.assert(request(page), ISSUER)) },
+					{ origin: 'https://evil.example.test', 'sec-fetch-site': 'cross-site' },
+				)
+				expect(crossSite.status).toBe(403)
+				expect(refusal(await verify(i, person, 'approval:item-x', issued.challengeId))).toEqual(NOT_COMPLETED)
+				expect((await answered(i, person, authenticator, issued)).status).toBe(200)
+				expect((await verify(i, person, 'approval:item-x', issued.challengeId)).status).toBe(200)
+			})
+
+			test('an answer verified after its challenge expired is refused and spent', async () => {
+				const i = await installation(engine())
+				const person = await i.person()
+				const authenticator = await TestAuthenticator.create()
+				expect(await added(i, person, authenticator)).toBe('passkey_added')
+				const issued = await challenged(i, person, 'approval:item-x')
+				expect((await answered(i, person, authenticator, issued)).status).toBe(200)
+				await i.run('UPDATE passkey_challenges SET expires_at = ? WHERE id = ?', unixNow() - 1, issued.challengeId)
+				expect(refusal(await verify(i, person, 'approval:item-x', issued.challengeId))).toEqual(NOT_COMPLETED)
+				expect(await i.repositories.passkeys.consumeAnswered(person, issued.challengeId)).toBeNull()
+			})
+
+			test('an answer by a passkey removed before the verification is not accepted', async () => {
+				const i = await installation(engine())
+				const person = await i.person()
+				const authenticator = await TestAuthenticator.create()
+				expect(await added(i, person, authenticator)).toBe('passkey_added')
+				const issued = await challenged(i, person, 'approval:item-x')
+				expect((await answered(i, person, authenticator, issued)).status).toBe(200)
+				await i.run('DELETE FROM passkeys WHERE principal_id = ?', person)
+				expect(refusal(await verify(i, person, 'approval:item-x', issued.challengeId))).toEqual([403, 'the passkey was not accepted'])
+			})
+
+			test("a recorded answer survives a later failing answer's clean-up", async () => {
+				const i = await installation(engine())
+				const person = await i.person()
+				const authenticator = await TestAuthenticator.create()
+				expect(await added(i, person, authenticator)).toBe('passkey_added')
+				const issued = await challenged(i, person, 'approval:item-x')
+				expect((await answered(i, person, authenticator, issued)).status).toBe(200)
+				await i.repositories.passkeys.dropChallenge(person, issued.challengeId)
+				expect((await verify(i, person, 'approval:item-x', issued.challengeId)).status).toBe(200)
+			})
+
+			test("IAM's own bindings are never asked over the seam nor answered on the step-up page", async () => {
+				const i = await installation(engine())
+				const person = await i.person()
+				const authenticator = await TestAuthenticator.create()
+				expect(await added(i, person, authenticator)).toBe('passkey_added')
+				expect((await i.as(person, 'passkeys.challenge', { binding: 'iam:passkeys.register' })).status).toBe(400)
+				expect((await i.as(person, 'passkeys.verify', { binding: 'iam:passkeys.register', challengeId: 'x' })).status).toBe(400)
+
+				const [passkey] = await i.repositories.passkeys.list(person)
+				const removal = await ceremonyOf(await i.post(person, PASSKEYS_PATH, { step: 'remove', passkey: passkey?.id ?? '' }))
+				const challengeId = removal.fields['challengeId'] ?? ''
+				expect((await i.get(person, `${STEP_UP_PATH}?challenge=${challengeId}`)).status).toBe(410)
+				const assertion = JSON.stringify(await authenticator.assert(request(removal), ISSUER))
+				expect((await i.post(person, STEP_UP_PATH, { challenge: challengeId, credential: assertion })).status).toBe(403)
+				expect(outcome(await i.post(person, PASSKEYS_PATH, { ...removal.fields, credential: assertion }))).toBe('passkey_removed')
 			})
 		})
 
