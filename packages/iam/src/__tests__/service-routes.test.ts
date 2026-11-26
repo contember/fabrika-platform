@@ -3,12 +3,12 @@
 
 import { describe, expect, test } from 'bun:test'
 import { iamServiceOptions } from '../app'
-import { MINT_DELEGATION_PATH, MINT_EXCHANGE_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
+import { MINT_DELEGATION_PATH, MINT_EXCHANGE_PATH, MINT_GRANT_PATH, MINT_KEY_PATH, MINT_SESSION_PATH } from '../rpc-http'
 import { iamServiceContract } from '../service'
 
 describe("IAM's service contract", () => {
 	test('names the mint paths the router serves', () => {
-		const live = [MINT_SESSION_PATH, MINT_KEY_PATH, MINT_EXCHANGE_PATH, MINT_DELEGATION_PATH]
+		const live = [MINT_SESSION_PATH, MINT_KEY_PATH, MINT_EXCHANGE_PATH, MINT_DELEGATION_PATH, MINT_GRANT_PATH]
 		const contract = iamServiceContract({ health: false, managementRpc: false, mintRpc: true, membershipTransport: false })
 		expect(contract.endpoints.filter((row) => row.id.startsWith('mint-')).map((row) => row.path)).toEqual(live)
 	})

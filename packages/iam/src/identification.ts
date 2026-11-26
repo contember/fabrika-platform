@@ -44,14 +44,26 @@ type CallerEnv = Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>
 
 /**
  * The application asking: the `app` the transport already pinned (the membership key, or the binding's props), which the
- * caller's token must also verify for. The token's audience alone is no proof of the caller.
+ * caller's token must also verify for. The token's audience alone is no proof of the caller. A `write` operation refuses
+ * a token an agent holds under a `read` scope (ADR-0090 §4).
  */
-async function askingApp(services: Services, env: CallerEnv, caller: TerminalCaller): Promise<{ ok: true; app: string } | TerminalFailure> {
+async function askingApp(
+	services: Services,
+	env: CallerEnv,
+	caller: TerminalCaller,
+	operation: 'read' | 'write',
+): Promise<{ ok: true; app: string } | TerminalFailure> {
 	if (caller.credential === null) {
 		return { ok: false, reason: 'missing_token' }
 	}
 	const claims = await verifyAccessToken(await getSigner(env), caller.credential, { issuer: services.config.issuer, audience: caller.app })
-	return claims === null ? { ok: false, reason: 'invalid_token' } : { ok: true, app: claims.aud }
+	if (claims === null) {
+		return { ok: false, reason: 'invalid_token' }
+	}
+	if (operation === 'write' && claims.act !== undefined && claims.act.scope.mode !== 'write') {
+		return { ok: false, reason: 'not_allowed' }
+	}
+	return { ok: true, app: claims.aud }
 }
 
 interface OpenIdentification {
@@ -92,7 +104,7 @@ export async function inspectIdentification(
 	env: CallerEnv,
 	input: InspectIdentificationInput,
 ): Promise<InspectIdentificationResult> {
-	const asking = await askingApp(services, env, input)
+	const asking = await askingApp(services, env, input, 'read')
 	if (!asking.ok) {
 		return asking
 	}
@@ -118,7 +130,7 @@ export interface AssertOutcome {
  * principal leaves the identification open, so the person can try again within its two minutes.
  */
 export async function assertIdentity(services: Services, env: CallerEnv, input: AssertIdentityInput): Promise<AssertOutcome> {
-	const asking = await askingApp(services, env, input)
+	const asking = await askingApp(services, env, input, 'write')
 	if (!asking.ok) {
 		return { result: asking, principalId: null, terminal: null }
 	}
@@ -173,7 +185,7 @@ export async function cancelIdentification(
 	env: CallerEnv,
 	input: CancelIdentificationInput,
 ): Promise<CancelIdentificationResult> {
-	const asking = await askingApp(services, env, input)
+	const asking = await askingApp(services, env, input, 'write')
 	if (!asking.ok) {
 		return asking
 	}

@@ -119,7 +119,7 @@ describe('the service tables come from the modules that own them', () => {
 
 	test("IAM's published table serves every transport the installation's IAM process mounts", () => {
 		const ids = byId.get(PLATFORM_IAM_APP_ID)?.table?.endpoints.map((row) => row.id) ?? []
-		for (const id of ['mint-session', 'mint-key', 'mint-exchange', 'mint-delegation', 'membership', 'rpc', 'admin-rpc', 'health']) {
+		for (const id of ['mint-session', 'mint-key', 'mint-exchange', 'mint-delegation', 'mint-grant', 'membership', 'rpc', 'admin-rpc', 'health']) {
 			expect(ids).toContain(id)
 		}
 	})

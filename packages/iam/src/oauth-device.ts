@@ -1,4 +1,4 @@
-import { OAUTH_CLI_CLIENT_ID, parseOAuthScopes } from '@fabrika/auth-core'
+import { AGENT_CLIENT_ID, agentScopeToken, OAUTH_CLI_CLIENT_ID, parseOAuthScopes } from '@fabrika/auth-core'
 import {
 	OAUTH_DEVICE_CODE_GRANT_TYPE,
 	type OAuthDeviceAuthorizationRequest,
@@ -8,14 +8,16 @@ import {
 	resolveOAuthScopeToken,
 } from '@fabrika/iam-contract'
 import { uuidv7 } from '@fabrika/platform'
+import { agentScopeDeclared, applicationResource, requestedAgentScope } from './agent-resource'
 import type { Env } from './env'
 import { parseJsonOrNull } from './json'
 import {
 	type EstablishedClient,
 	grantAuthority,
-	grantRevocation,
+	grantRecord,
 	mintForGrant,
 	type OAuthTokenOutcome,
+	revokeReplayed,
 	servesClient,
 	storedResourceList,
 } from './oauth'
@@ -103,7 +105,7 @@ async function spentBucket(services: Services, key: string, allowed: number, blo
 function requestedResources(config: OAuthConfig, uris: readonly string[]): OAuthResourceDto[] | null {
 	const resources: OAuthResourceDto[] = []
 	for (const uri of uris) {
-		const resource = config.resources.find((entry) => entry.resource === uri && servesClient(entry, true))
+		const resource = config.resources.find((entry) => entry.resource === uri && servesClient(entry, 'cli'))
 		const first = resources[0]
 		if (resource === undefined || (first !== undefined && resource.app !== first.app)) return null
 		resources.push(resource)
@@ -111,24 +113,53 @@ function requestedResources(config: OAuthConfig, uris: readonly string[]): OAuth
 	return resources
 }
 
-/** RFC 8628 §3.1–3.2: record an attempt for the CLI client and answer its codes. */
+const UNAUTHORIZED_CLIENT: DeviceStartOutcome = { ok: false, error: 'unauthorized_client' }
+
+/** What a device start records: the app, its resources, the scope tokens and the agent's label. */
+type DeviceRequestTarget = { app: string; resources: string[]; scopes: string[]; agentLabel: string | null }
+
+/** The CLI client's request: configured resources of one app it is served, each holding every requested scope. */
+function cliRequestTarget(config: OAuthConfig, request: OAuthDeviceAuthorizationRequest): DeviceRequestTarget | DeviceStartOutcome {
+	const resources = requestedResources(config, request.resources)
+	const app = resources?.[0]?.app
+	if (resources === null || app === undefined) return { ok: false, error: 'invalid_target' }
+	if (
+		request.scope.length === 0
+		|| !resources.every((resource) => request.scope.every((token) => resolveOAuthScopeToken(token, resource) !== null))
+	) {
+		return { ok: false, error: 'invalid_scope' }
+	}
+	return { app, resources: request.resources, scopes: request.scope, agentLabel: null }
+}
+
+/**
+ * The agent client's request (ADR-0090 §1–§2): exactly one application environment and one scope token, `read` when it
+ * names none, narrowed only to a dimension the environment declares.
+ */
+async function agentRequestTarget(services: Services, request: OAuthDeviceAuthorizationRequest): Promise<DeviceRequestTarget | DeviceStartOutcome> {
+	const [uri] = request.resources
+	const resource = uri === undefined || request.resources.length !== 1 ? null : await applicationResource(services, uri)
+	if (resource === null) return { ok: false, error: 'invalid_target' }
+	const scope = requestedAgentScope(request.scope)
+	if (scope === null || !await agentScopeDeclared(services, resource.app, scope)) return { ok: false, error: 'invalid_scope' }
+	return { app: resource.app, resources: [resource.resource], scopes: [agentScopeToken(scope)], agentLabel: request.agent_label ?? null }
+}
+
+/** RFC 8628 §3.1–3.2: record an attempt for the CLI or the agent client and answer its codes. */
 export async function startDeviceAuthorization(
 	services: Services,
 	config: OAuthConfig,
 	request: OAuthDeviceAuthorizationRequest,
 	clientAddress: string | null,
 ): Promise<DeviceStartOutcome> {
-	if (request.client_id !== OAUTH_CLI_CLIENT_ID) return { ok: false, error: 'unauthorized_client' }
-	const resources = requestedResources(config, request.resources)
-	const app = resources?.[0]?.app
-	if (resources === null || app === undefined) return { ok: false, error: 'invalid_target' }
-	if (!resources.every((resource) => request.scope.every((token) => resolveOAuthScopeToken(token, resource) !== null))) {
-		return { ok: false, error: 'invalid_scope' }
-	}
-	// The address bucket first: a start it refuses must not count against the bucket every other client shares.
+	if (request.client_id !== OAUTH_CLI_CLIENT_ID && request.client_id !== AGENT_CLIENT_ID) return UNAUTHORIZED_CLIENT
+	// The address bucket before the target, which the agent client resolves from the database, so a flood of refused
+	// targets is throttled too; and before the client bucket, so a start it refuses does not count against every client.
 	if (clientAddress !== null && await spentBucket(services, `oauth-device-start:address:${clientAddress}`, STARTS_PER_ADDRESS, START_WINDOW_SECONDS)) {
 		return { ok: false, error: 'temporarily_unavailable' }
 	}
+	const target = request.client_id === OAUTH_CLI_CLIENT_ID ? cliRequestTarget(config, request) : await agentRequestTarget(services, request)
+	if ('ok' in target) return target
 	if (await spentBucket(services, `oauth-device-start:client:${request.client_id}`, STARTS_PER_CLIENT, CLIENT_BLOCK_SECONDS)) {
 		return { ok: false, error: 'temporarily_unavailable' }
 	}
@@ -141,9 +172,10 @@ export async function startDeviceAuthorization(
 			device_code_hash: await hashToken(deviceCode),
 			user_code_hash: await userCodeHash(userCode),
 			client_id: request.client_id,
-			app,
-			resources: JSON.stringify(request.resources),
-			scopes: JSON.stringify(request.scope),
+			app: target.app,
+			resources: JSON.stringify(target.resources),
+			scopes: JSON.stringify(target.scopes),
+			agent_label: target.agentLabel,
 			interval_seconds: OAUTH_DEVICE_POLL_INTERVAL_SECONDS,
 			created_at: now,
 			expires_at: now + OAUTH_DEVICE_ATTEMPT_TTL_SECONDS,
@@ -206,7 +238,7 @@ export async function redeemDeviceCode(
 	input: Extract<OAuthTokenRequest, { grant_type: typeof OAUTH_DEVICE_CODE_GRANT_TYPE }>,
 	requestId: string,
 ): Promise<OAuthTokenOutcome> {
-	if (client.kind !== 'cli') return { ok: false, error: 'unauthorized_client' }
+	if (client.kind === 'managed') return { ok: false, error: 'unauthorized_client' }
 	const repository = services.repositories.oauth
 	const now = unixNow()
 	const hash = await hashToken(input.device_code)
@@ -214,9 +246,7 @@ export async function redeemDeviceCode(
 	if (attempt === null || attempt.client_id !== input.client_id) return { ok: false, error: 'invalid_grant' }
 	if (attempt.status === 'redeemed') {
 		// A spent device code presented again may have leaked: revoke what it gave, as for a replayed authorization code.
-		if (attempt.grant_id !== null) {
-			await repository.revokeGrant(attempt.grant_id, now, grantRevocation(requestId, attempt.grant_id, input.client_id, 'device_code_replay'))
-		}
+		if (attempt.grant_id !== null) await revokeReplayed(services, attempt.grant_id, now, requestId, 'device_code_replay')
 		return { ok: false, error: 'invalid_grant' }
 	}
 	if (attempt.expires_at <= now) return { ok: false, error: 'expired_token' }
@@ -244,6 +274,7 @@ export async function redeemDeviceCode(
 		created_at: now,
 		expires_at: attempt.grant_expires_at,
 		revoked_at: null,
+		agent_label: attempt.agent_label,
 	}
 	// The grant's whole authority (session, principal, configuration) is checked before anything is written.
 	if (await grantAuthority(services, grant, now, input.resource) === null) return { ok: false, error: 'invalid_grant' }
@@ -256,7 +287,7 @@ export async function redeemDeviceCode(
 		action: 'iam.oauth.grant.create',
 		resourceType: 'oauth_grant',
 		resourceId: grant.id,
-		metadata: { clientId: grant.client_id, app: grant.app, resources: request.resources, scopes: request.scopes, flow: 'device' },
+		metadata: { ...grantRecord(grant), resources: request.resources, scopes: request.scopes, flow: 'device' },
 	}, now)
 	if (claimed === null) return { ok: false, error: 'invalid_grant' }
 	const access = await mintForGrant(services, env, grant, input.resource, now)

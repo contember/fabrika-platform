@@ -123,7 +123,7 @@ async function checkAuthorization(services: Services, config: OAuthConfig, input
 	const identity = client.registration.identity
 	if (identity !== undefined) return checkIdentityAuthorization(issuer, attempt.request, client, identity)
 	// The command-line client's resources are served through the device grant only, never to a managed client.
-	const resource = config.resources.find((entry) => entry.resource === coordinates.resource && servesClient(entry, false))
+	const resource = config.resources.find((entry) => entry.resource === coordinates.resource && servesClient(entry, 'managed'))
 	if (resource === undefined) return { kind: 'redirect', response: clientRedirect(issuer, coordinates, { error: 'invalid_target' }) }
 	const scopes = resolveOAuthAuthorizationScopes(attempt.request.scope, resource)
 	const ceiling = scopes === null ? null : scopeCeiling(resource, scopes)

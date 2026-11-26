@@ -111,6 +111,7 @@ export function createIamApp(options: IamAppOptions = {}): FetchService<Env> {
 		'mint-key': mint,
 		'mint-exchange': mint,
 		'mint-delegation': mint,
+		'mint-grant': mint,
 		'admin-rpc': serve((ctx) => adminRpcAuth(ctx.request, ctx, () => dispatchRpcRequest({ router: adminRpcRouter, ctx, request: ctx.request }))),
 		'admin-root': admin,
 		'admin': admin,

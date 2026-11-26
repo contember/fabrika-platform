@@ -850,11 +850,11 @@ fails if that stops being true — it is the guard, not documentation of one.
   principal. A grant expires with the session it was given under and cascades with its row. One code
   per grant, so the grant IS the refresh-token family: a replayed code or a reused rotated refresh
   token revokes it. Resource tokens are signed with `typ: at+jwt` (`Signer.signResourceToken`).
-- **ONE CLIENT IS NO DOCUMENT: `fabrika-cli` (`OAUTH_CLI_CLIENT_ID`, `@fabrika/auth-core`).** Every installation's
-  command-line client is public, has no redirect URI and is never registered: it cannot complete `/oauth/authorize` or
-  redeem a code; it obtains a grant through the device flow, below, refreshes and revokes it, and is refused when it sends
-  an assertion.
-  It is the one client id that is not a CIMD URL (`isOAuthClientId`).
+- **TWO CLIENTS ARE NO DOCUMENT: `fabrika-cli` (`OAUTH_CLI_CLIENT_ID`) AND `agent-cli` (`AGENT_CLIENT_ID`, both
+  `@fabrika/auth-core`).** Both are public, have no redirect URI and are never registered: neither can complete
+  `/oauth/authorize` or redeem a code; each obtains a grant through the device flow, below, refreshes and revokes it, and
+  is refused when it sends an assertion (`EstablishedClient` kinds `cli` and `agent`). They are the only client ids that
+  are not CIMD URLs (`isOAuthClientId`).
 - **A GRANT MAY COVER SEVERAL RESOURCES OF ITS ONE APP** (`oauth_grants.resources`, NULL = `resource` alone). Each token
   names one of them, the `resource` of the exchange or refresh, and carries the ceiling of that resource's scopes;
   a resource the grant does not list is `invalid_grant`. A scope declared with a `parameter` (a scope dimension type)
@@ -896,10 +896,39 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A RESOURCE IS SERVED TO ONE KIND OF CLIENT** (`servesClient`, `oauth.ts`). `client: 'cli'` serves it to `fabrika-cli`
   alone, through the device grant; without it only the managed clients get it, through an authorization code. Every
   lookup (the authorization request, the device start, its consent page and each mint) filters by it, so an MCP client
-  never holds a token for the console's RPC, nor the CLI one for `/mcp`.
-- **A DEVICE GRANT IS THE CLI CLIENT'S ONLY WAY TO A GRANT, AND IT IS BOUND TO THE SESSION THAT APPROVED IT** (RFC 8628,
+  never holds a token for the console's RPC, nor the CLI one for `/mcp`. `agent-cli` is served no configured resource:
+  application environments alone, below.
+- **AN APPLICATION ENVIRONMENT IS A RESOURCE OF `agent-cli` ALONE, AND ITS RESOURCE TOKEN CARRIES NO PERMISSION**
+  (ADR-0090, `agent-resource.ts`). The resource is an origin with no path (`https://<host>`), registered in
+  `app_return_origins` by exactly one `<app>@<env>` id that is no platform audience and whose reconciled schema sets
+  `agentCallers` (`app_agents`, migration 0042); anything else is `invalid_target`, at the start and at every mint. The
+  grant holds one scope token (`read`, `write`, either narrowed to `<dimension>=<value>`; none asked is `read`), and a
+  narrowed dimension must be declared in `app_scopes`, at the start (`invalid_scope`) and at every mint. Its ceiling is
+  `{ kind: 'application' }`: the resource token is `perms: []`, and the person's live permissions are resolved only by
+  the exchange. The agent's `agent_label` (at most 64 characters, no control character, `isAgentLabel`) travels from the
+  attempt to the grant; every `iam.oauth.grant.create`/`revoke` record names the label, the approving login and the
+  expiry (`grantRecord`). Like every OAuth path, it needs `OAUTH_CONFIG`.
+- **`write` IS SERVED NOWHERE UNTIL CONTROL MIRRORS `agent-write`** (ADR-0090 §5). `agentModeServed`
+  (`agent-resource.ts`) is the one place that rule lives; the mirror replaces it. The device page offers `read` for a
+  `write` request and says why (`approvableAgentScopes`: never wider than asked, the narrowing never dropped or changed),
+  and the exchange answers `write_refused`.
+- **ONLY THE PROXY EXCHANGES AN AGENT'S GRANT, FOR THE PERSON'S APPLICATION TOKEN WITH `act`** (`mintFromGrant`,
+  `agent-grant.ts`; `POST /auth/mint/grant` behind `proxyKey`, the `mint-grant` row; on Cloudflare refused over a binding
+  marked `props.worker: 'application'`). It verifies the resource token (signature, `typ`, `aud` = the resource, `oauth.app`
+  = the app, client `agent-cli`), the grant row (client, app, person, resource) and `grantAuthority`, then signs the
+  person's live permissions at the app, narrowed with `narrowToValue` for a narrowed scope, with
+  `act: { sub, grant, scope, label? }` and no session, under the proxy-minted bound. It expires at the earliest of 300 s,
+  the resource token's `exp`, the grant, the login and the authority deadline. A revoked grant, an ended login or a
+  disabled person refuses the next exchange (`invalid_grant`).
+- **A TOKEN WITH `act` IS HELD TO ITS SCOPE AT IAM TOO** (`membership.ts`). A `read` token is refused
+  `requestDelegation` and every membership, scope and link write (`memberCallerOf` with `writes`); reads stay open. An
+  agent's `revokeLink` of its person's own link requires the token's entries to hold the mount's `issuedBy` on some value
+  of the link's chain (`issuesOnChain`), as `issueLink` checks. No admin path accepts it (`resolveAdmin` requires a
+  session token). `IamRpc.audit` reads `act` from the verified token, never from the event, and writes
+  `audit_events.actor_id` (`oauth:<grant id>`) and `actor_label`.
+- **A DEVICE GRANT IS EACH BUILT-IN CLIENT'S ONLY WAY TO A GRANT, AND IT IS BOUND TO THE SESSION THAT APPROVED IT** (RFC 8628,
   `oauth-device.ts`, `oauth-device-page.ts`, `oauth_device_authorizations`). `POST /oauth/device_authorization` takes
-  `fabrika-cli` only, at least one scope and one to eight resources of one app (`resource` is the one parameter that may
+  `agent-cli` (above) or `fabrika-cli`, the latter with at least one scope and one to eight resources of one app (`resource` is the one parameter that may
   repeat), each scope resolvable on every resource, and stores only the hashes of both codes; an attempt lives five
   minutes. Starts are counted per client address first, where the composition names one (30 per 10 minutes), and only
   an admitted start counts against the client's bucket (10 000 per 10 minutes, then one minute refused): with one client
@@ -907,8 +936,10 @@ fails if that stops being true — it is the guard, not documentation of one.
   `/oauth/device` needs an IAM login: GET only renders the code form, so a link neither decides nor spends anything; the
   same-origin POST counts the entry before it looks the code up, at most twenty entries per person per 10 minutes (then
   even a right code is refused), shows the scopes, the resulting actions narrowed by the person's live permissions, a warning for a scope bound
-  to no value, and a lifetime of 1 h, 24 h or 7 days. Approval records the person, the IAM session and
-  `min(lifetime, sessionEndsAt)` on the attempt. A redemption checks the grant's authority first, then writes the
+  to no value, and a lifetime of 1 h, 24 h or 7 days; for `agent-cli` it shows the application case (ADR-0090: the
+  environment and origin, the scope in words, the narrowing with the value's label or a notice that nothing checks it,
+  the agent's label as its own words). Approval records the person, the IAM session and `min(lifetime, sessionEndsAt)` on
+  the attempt, and for `agent-cli` the scope approved. A redemption checks the grant's authority first, then writes the
   claim, the grant, its `iam.oauth.grant.create` record and its first refresh token in one batch guarded by the claim,
   so exactly one poll gives a grant. Polls are admitted once per
   interval (`slow_down` adds five seconds, at most 60); a spent device code presented again revokes its grant.
@@ -921,12 +952,13 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **REVOCATION STOPS REFRESH, NOT AN ISSUED ACCESS TOKEN.** Revoking an OAuth grant or ending its
   session refuses the next code exchange or refresh; an access token already minted stays valid until
   its `exp`, at most `DEFAULT_TOKEN_TTL_SECONDS`. `verifyAccessToken` (every native caller) refuses a
-  resource token; only `verifyResourceAccessToken` reads one, and only for `/oauth/revoke`.
+  resource token; only `verifyResourceAccessToken` reads one, for `/oauth/revoke` and for the agent exchange.
 
 ## Patterns
 
 - Minting is two fronts over one resolve→sign core (`src/tokens.ts`): `mintToken` from the browser's
-  opaque `__Host-px_session` cookie, `mintFromKey` from a `px_` credential. Both end in `signAccessToken`,
+  opaque `__Host-px_session` cookie, `mintFromKey` from a `px_` credential; `mintFromGrant` (`src/agent-grant.ts`) signs
+  through the same `signAccessToken` for an agent's grant. Both end in `signAccessToken`,
   so this runs about once per TTL per app — not per request.
 - Human authentication methods compose (ADR-0020); password support is `src/password-*.ts` and its
   transient rows are pruned by the same cron as `auth_log`.

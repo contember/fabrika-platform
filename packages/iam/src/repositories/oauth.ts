@@ -17,6 +17,8 @@ export interface OAuthGrantRow {
 	created_at: number
 	expires_at: number
 	revoked_at: number | null
+	/** The name the agent gave itself at the device start (ADR-0090); null for an agent that gave none and any other client. */
+	agent_label: string | null
 }
 
 export interface OAuthCodeRow {
@@ -43,8 +45,10 @@ export interface OAuthDeviceAuthorizationRow {
 	app: string
 	/** JSON array of the resources the grant will cover, all of `app`. */
 	resources: string
-	/** JSON array of the requested scope tokens. */
+	/** JSON array of the requested scope tokens; the approval may replace them with narrower ones. */
 	scopes: string
+	/** The agent client's name for itself, from the request; null for none and for every other client. */
+	agent_label: string | null
 	interval_seconds: number
 	next_poll_at: number
 	created_at: number
@@ -58,7 +62,16 @@ export interface OAuthDeviceAuthorizationRow {
 
 export type NewOAuthDeviceAuthorization = Pick<
 	OAuthDeviceAuthorizationRow,
-	'device_code_hash' | 'user_code_hash' | 'client_id' | 'app' | 'resources' | 'scopes' | 'interval_seconds' | 'created_at' | 'expires_at'
+	| 'device_code_hash'
+	| 'user_code_hash'
+	| 'client_id'
+	| 'app'
+	| 'resources'
+	| 'scopes'
+	| 'agent_label'
+	| 'interval_seconds'
+	| 'created_at'
+	| 'expires_at'
 >
 
 /** A poll arriving this many seconds early still counts as on time, for a client whose timer runs a little fast. */
@@ -81,7 +94,7 @@ export class OAuthRepository {
 		}
 		await this.db.batch([
 			this.db.prepare(`INSERT INTO oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at,
-				revoked_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`).bind(
+				revoked_at, agent_label) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)`).bind(
 				grant.id,
 				grant.principal_id,
 				grant.session_id,
@@ -92,6 +105,7 @@ export class OAuthRepository {
 				grant.scopes,
 				grant.created_at,
 				grant.expires_at,
+				grant.agent_label,
 			),
 			this.db.prepare('INSERT INTO oauth_codes (token_hash, grant_id, redirect_uri, challenge, expires_at, used_at) VALUES (?, ?, ?, ?, ?, NULL)')
 				.bind(code.token_hash, grant.id, code.redirect_uri, code.challenge, code.expires_at),
@@ -142,8 +156,8 @@ export class OAuthRepository {
 	/** Record a device attempt. False when either code's hash is taken already, so the caller draws new codes. */
 	async startDeviceAuthorization(row: NewOAuthDeviceAuthorization): Promise<boolean> {
 		const inserted = await this.db.prepare(
-			`INSERT INTO oauth_device_authorizations (device_code_hash, user_code_hash, client_id, app, resources, scopes,
-			interval_seconds, next_poll_at, created_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+			`INSERT INTO oauth_device_authorizations (device_code_hash, user_code_hash, client_id, app, resources, scopes, agent_label,
+			interval_seconds, next_poll_at, created_at, expires_at, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
 			ON CONFLICT DO NOTHING RETURNING device_code_hash`,
 		).bind(
 			row.device_code_hash,
@@ -152,6 +166,7 @@ export class OAuthRepository {
 			row.app,
 			row.resources,
 			row.scopes,
+			row.agent_label,
 			row.interval_seconds,
 			row.created_at,
 			row.created_at,
@@ -171,17 +186,21 @@ export class OAuthRepository {
 			.bind(userCodeHash, now).first<OAuthDeviceAuthorizationRow>()
 	}
 
-	/** Approve a pending attempt under the approver's IAM session. False when it was decided, or expired, meanwhile. */
+	/**
+	 * Approve a pending attempt under the approver's IAM session. `scopes`, when given, replaces the requested scope tokens
+	 * with the ones the person approved. False when it was decided, or expired, meanwhile.
+	 */
 	async approveDeviceAuthorization(
 		userCodeHash: string,
-		approval: { principalId: string; sessionId: string; grantExpiresAt: number },
+		approval: { principalId: string; sessionId: string; grantExpiresAt: number; scopes?: string },
 		now: number,
 	): Promise<boolean> {
 		const row = await this.db.prepare(
-			`UPDATE oauth_device_authorizations SET status = 'approved', principal_id = ?, session_id = ?, grant_expires_at = ?
-			WHERE user_code_hash = ? AND status = 'pending' AND expires_at > ? RETURNING device_code_hash`,
+			`UPDATE oauth_device_authorizations SET status = 'approved', principal_id = ?, session_id = ?, grant_expires_at = ?,
+			scopes = COALESCE(?, scopes) WHERE user_code_hash = ? AND status = 'pending' AND expires_at > ? RETURNING device_code_hash`,
 		)
-			.bind(approval.principalId, approval.sessionId, approval.grantExpiresAt, userCodeHash, now).first<{ device_code_hash: string }>()
+			.bind(approval.principalId, approval.sessionId, approval.grantExpiresAt, approval.scopes ?? null, userCodeHash, now)
+			.first<{ device_code_hash: string }>()
 		return row !== null
 	}
 
@@ -234,8 +253,8 @@ export class OAuthRepository {
 			binds: [deviceCodeHash, grant.id],
 		}
 		const grantInsert = guardedInsert(
-			'oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at, revoked_at)',
-			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL',
+			'oauth_grants (id, principal_id, session_id, client_id, app, resource, resources, scopes, created_at, expires_at, revoked_at, agent_label)',
+			'?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?',
 			[
 				grant.id,
 				grant.principal_id,
@@ -247,6 +266,7 @@ export class OAuthRepository {
 				grant.scopes,
 				grant.created_at,
 				grant.expires_at,
+				grant.agent_label,
 			],
 			claimed,
 		)

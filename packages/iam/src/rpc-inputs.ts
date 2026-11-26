@@ -14,6 +14,9 @@ const caller = { app: z.string(), credential: z.string().nullable(), requestId: 
 // Field order preserves which error the HTTP transport reports first.
 export const mintTokenSchema = z.object({ app: z.string(), session: z.string().nullable(), requestId: z.string() }).catch(rejectRpcInput)
 export const mintFromKeySchema = z.object({ app: z.string(), key: z.string(), requestId: z.string() }).catch(rejectRpcInput)
+export const mintFromGrantSchema = z.object({ app: z.string(), resource: z.string(), token: z.string(), requestId: z.string() }).catch(
+	rejectRpcInput,
+)
 export const exchangeAuthCodeSchema = z.object({ app: z.string(), code: z.string(), verifier: z.string(), requestId: z.string() }).catch(
 	rejectRpcInput,
 )

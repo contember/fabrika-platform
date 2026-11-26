@@ -1,5 +1,6 @@
 import {
 	type AccessTokenClaims,
+	type AgentActClaims,
 	API_KEY_PREFIX,
 	isWorkloadKind,
 	type PermissionEntry,
@@ -88,6 +89,8 @@ export interface ResolvedCaller<T extends TokenPrincipalType = PrincipalType> {
 	 * through no OAuth client, no link and no terminal. Never a key.
 	 */
 	person?: true
+	/** The agent a person's token acts for (ADR-0090): its `act` claim, so an operation can hold the agent to its scope. */
+	act?: AgentActClaims
 }
 
 type CallerRefusal = { ok: false; reason: 'missing_token' | 'invalid_token' | 'unknown_principal' | 'disabled' }
@@ -191,6 +194,7 @@ async function resolveAnyCaller(services: Services, env: CallerEnv, input: Calle
 			permissions: claims.perms,
 			...(claims.terminal === undefined ? {} : { terminal: claims.terminal.id }),
 			...(isConsolePerson(services, claims) ? { person: true } : {}),
+			...(claims.act === undefined ? {} : { act: claims.act }),
 		},
 		verifiedApp: claims.aud,
 	}
@@ -210,21 +214,22 @@ export const AUDIT_TOKEN_EXPIRY_GRACE_SECONDS = 60 * 60
 
 /**
  * The app an `audit` event belongs to, read from the caller's own token rather than from the event: a
- * native access token's `aud`, or an OAuth resource token's signed `app`. Null when neither verifies.
+ * native access token's `aud`, or an OAuth resource token's signed `app`, and the agent a person's native token acts
+ * for (`act`, ADR-0090). Null when neither verifies.
  * Signature, issuer and token kind are checked as strictly as anywhere; only `exp` gets
  * `AUDIT_TOKEN_EXPIRY_GRACE_SECONDS`, because this decides where an event is filed, never what is allowed.
  */
-export async function verifiedTokenApp(
+export async function verifiedTokenAuthor(
 	services: Services,
 	env: Pick<Env, 'FABRIKA_IAM_SIGNING_KEYS' | 'ENVIRONMENT'>,
 	credential: string,
-): Promise<string | null> {
+): Promise<{ app: string; act?: AgentActClaims } | null> {
 	const signer = await getSigner(env)
 	const opts = { issuer: services.config.issuer, expiryGraceSeconds: AUDIT_TOKEN_EXPIRY_GRACE_SECONDS }
 	const native = await verifyAccessToken(signer, credential, opts)
 	if (native !== null) {
-		return native.aud
+		return native.act === undefined ? { app: native.aud } : { app: native.aud, act: native.act }
 	}
 	const resource = await verifyResourceAccessToken(signer, credential, opts)
-	return resource?.oauth?.app ?? null
+	return resource?.oauth === undefined ? null : { app: resource.oauth.app }
 }

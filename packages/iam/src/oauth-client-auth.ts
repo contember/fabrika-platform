@@ -1,4 +1,4 @@
-import { OAUTH_CLI_CLIENT_ID } from '@fabrika/auth-core'
+import { AGENT_CLIENT_ID, OAUTH_CLI_CLIENT_ID } from '@fabrika/auth-core'
 import type { OAuthClientCredential, OAuthClientMetadataDocument } from '@fabrika/iam-contract'
 import { createLocalJWKSet, errors, type JSONWebKeySet, type JWTPayload, jwtVerify } from 'jose'
 import type { EstablishedClient } from './oauth'
@@ -26,8 +26,9 @@ export async function authenticateOAuthClient(
 	config: OAuthConfig,
 	input: { clientId: string; credential: OAuthClientCredential; audiences: string[] },
 ): Promise<EstablishedClient | null> {
-	// The CLI client is public: it holds no key, so it sends no assertion.
+	// The CLI and agent clients are public: they hold no key, so they send no assertion.
 	if (input.clientId === OAUTH_CLI_CLIENT_ID) return input.credential.method === 'none' ? { kind: 'cli', clientId: input.clientId } : null
+	if (input.clientId === AGENT_CLIENT_ID) return input.credential.method === 'none' ? { kind: 'agent', clientId: AGENT_CLIENT_ID } : null
 	const registration = await registeredClient(services, config, input.clientId)
 	if (registration === null) return null
 	const metadata = await clientMetadata(registration)
@@ -50,7 +51,7 @@ export async function authenticateRevokingClient(
 	input: { clientId: string; credential: OAuthClientCredential; audiences: string[] },
 ): Promise<boolean> {
 	if (input.credential.method !== 'none') return await authenticateOAuthClient(services, config, input) !== null
-	if (input.clientId === OAUTH_CLI_CLIENT_ID) return true
+	if (input.clientId === OAUTH_CLI_CLIENT_ID || input.clientId === AGENT_CLIENT_ID) return true
 	const registration = await registeredClient(services, config, input.clientId)
 	if (registration === null) return false
 	const metadata = await clientMetadata(registration)

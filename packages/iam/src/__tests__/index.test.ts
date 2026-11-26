@@ -721,6 +721,7 @@ describe('the entrypoint an application binds', () => {
 		'listAppMembers',
 		'listMembers',
 		'listPrincipals',
+		'mintFromGrant',
 		'mintFromKey',
 		'mintToken',
 		'requestDelegation',
@@ -800,6 +801,30 @@ describe('the entrypoint an application binds', () => {
 		// The proxy's binding names only the application, as a binding deployed before the mark does.
 		expect(await bound({ app: APP }).requestDelegation(request)).toMatchObject({ ok: true, grant: expect.any(String) })
 		expect(db.query('SELECT 1 FROM delegation_grants').all()).toHaveLength(1)
+	})
+
+	// ADR-0090 §3: only the proxy exchanges an agent's grant, as only it obtains a delegation grant.
+	test("an agent grant exchange is refused to the application Worker's binding and reaches IAM over its proxy's", async () => {
+		const db = freshDb()
+		const env: Env = { ...makeEnv(db), ...TEST_SIGNING_ENV, ISSUER: ORIGIN }
+		const bound = (props: unknown): { worker: InstanceType<typeof PropustkaApplication>; ctx: FakeCtx } => {
+			const ctx = makeCtx()
+			const worker: unknown = Reflect.construct(PropustkaApplication, [{ ...ctx, props }, env])
+			if (!(worker instanceof PropustkaApplication)) throw new Error('failed to construct the mocked Worker entrypoint')
+			return { worker, ctx }
+		}
+		const input = { app: APP, resource: 'https://notes.example.test', token: 'not-a-resource-token', requestId: 'req-grant' }
+		const logged = () => db.query("SELECT reason FROM auth_log WHERE request_id = 'req-grant'").all()
+
+		const application = bound({ app: APP, worker: 'application' })
+		expect(await application.worker.mintFromGrant(input)).toEqual({ ok: false, reason: 'invalid_grant' })
+		await Promise.all(application.ctx.promises)
+		expect(logged()).toEqual([])
+		// The proxy's binding reaches IAM, which decides the exchange and records it.
+		const proxy = bound({ app: APP })
+		expect(await proxy.worker.mintFromGrant(input)).toEqual({ ok: false, reason: 'invalid_grant' })
+		await Promise.all(proxy.ctx.promises)
+		expect(logged()).toEqual([{ reason: 'invalid_grant' }])
 	})
 
 	test('the narrow class serves a call from its own bindings', async () => {

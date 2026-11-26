@@ -38,7 +38,8 @@
 // `/rpc/*`        — the MANAGEMENT surface (`IamRpc` and `IamMembershipRpc`), gated by `rpcKey`.
 // `/auth/mint/*`  — the PROXY surface, gated by `proxyKey`: `mintToken`, `mintFromKey`,
 //                   `exchangeAuthCode`, which redeems a cross-host handoff code for an app-bound
-//                   session, and `requestDelegation`, a grant spent by the caller's token. Paths and
+//                   session, `requestDelegation`, a grant spent by the caller's token, and
+//                   `mintFromGrant`, an agent's device grant exchanged for its person's token. Paths and
 //                   wire shapes are fixed by `packages/proxy-core/src/iam.ts` (`HttpIamGateway`); that
 //                   file is the contract.
 //
@@ -59,7 +60,7 @@
 // Each key is independent, and each unset key 404s only its own surface: a deployment with a proxy
 // and no control plane sets `proxyKey` alone, and vice versa.
 
-import type { IamHandoffRpc, IamMembershipRpc, IamRpc } from '@fabrika/auth-core'
+import type { IamGrantRpc, IamHandoffRpc, IamMembershipRpc, IamRpc } from '@fabrika/auth-core'
 import { parseApproveDeviceAuthorizationInput, parseInspectDeviceAuthorizationInput, parseListOwnDeviceAuthorizationsInput } from '@fabrika/auth-core'
 import {
 	assignMemberSchema,
@@ -72,6 +73,7 @@ import {
 	listAppMembersSchema,
 	listMembersSchema,
 	listPrincipalsSchema,
+	mintFromGrantSchema,
 	mintFromKeySchema,
 	mintTokenSchema,
 	requestDelegationSchema,
@@ -181,8 +183,8 @@ export async function handleRpcHttp(request: Request, rpc: IamRpc & IamMembershi
 
 // ── The proxy surface: `/auth/mint/*` ─────────────────────────────────────────
 //
-// Four endpoints, fixed by `packages/proxy-core/src/iam.ts`: `mintToken`, `mintFromKey`,
-// `exchangeAuthCode` and `requestDelegation`. They are the COLD PATH of every request the proxy handles — the first exchange
+// Five endpoints, fixed by `packages/proxy-core/src/iam.ts`: `mintToken`, `mintFromKey`,
+// `exchangeAuthCode`, `requestDelegation` and `mintFromGrant`. They are the COLD PATH of every request the proxy handles — the first exchange
 // of a browser session, a `px_` key, or an ADR-0022 handoff code for a short-lived signed token — and
 // everything after that is a local JWKS verification inside the project. Do not change a
 // path or a body shape here without changing `HttpIamGateway` in the same commit: a mismatch fails
@@ -206,10 +208,13 @@ export const MINT_EXCHANGE_PATH = `${MINT_PREFIX}exchange`
  * authority is the caller's token in the body, so the proxy key adds none.
  */
 export const MINT_DELEGATION_PATH = `${MINT_PREFIX}delegation`
+/** Exchange an agent's device grant for the approving person's application token (ADR-0090). Body: `MintFromGrantInput`. */
+export const MINT_GRANT_PATH = `${MINT_PREFIX}grant`
 
 /** True when `pathname` addresses the proxy mint surface. Checked BEFORE the public `/auth/*` routes. */
 export function isMintPath(pathname: string): boolean {
 	return pathname === MINT_SESSION_PATH || pathname === MINT_KEY_PATH || pathname === MINT_EXCHANGE_PATH || pathname === MINT_DELEGATION_PATH
+		|| pathname === MINT_GRANT_PATH
 }
 
 /**
@@ -237,7 +242,7 @@ export function isMintPath(pathname: string): boolean {
  */
 export async function handleMintHttp(
 	request: Request,
-	rpc: IamRpc & IamHandoffRpc & Pick<IamMembershipRpc, 'requestDelegation'>,
+	rpc: IamRpc & IamHandoffRpc & IamGrantRpc & Pick<IamMembershipRpc, 'requestDelegation'>,
 	proxyKey: string,
 ): Promise<Response> {
 	if (proxyKey.trim() === '') {
@@ -271,6 +276,9 @@ export async function handleMintHttp(
 		}
 		if (path === MINT_DELEGATION_PATH) {
 			return json(await rpc.requestDelegation(requestDelegationSchema.parse(body)))
+		}
+		if (path === MINT_GRANT_PATH) {
+			return json(await rpc.mintFromGrant(mintFromGrantSchema.parse(body)))
 		}
 		return problem(404, 'not found')
 	} catch (err) {

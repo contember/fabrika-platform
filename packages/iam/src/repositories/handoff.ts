@@ -26,6 +26,15 @@ export class HandoffRepository {
 		return results.map((row) => row.origin)
 	}
 
+	/** The apps that registered `origin`, at most two: a caller needs to know only whether exactly one did. */
+	async appsForReturnOrigin(origin: string): Promise<string[]> {
+		const { results } = await this.db
+			.prepare('SELECT app FROM app_return_origins WHERE origin = ? ORDER BY app LIMIT 2')
+			.bind(origin)
+			.all<{ app: string }>()
+		return results.map((row) => row.app)
+	}
+
 	/**
 	 * Replace an app's registered return origins. Declarative on purpose: the caller states the whole
 	 * set, so removing an origin is the same operation as adding one and a stale entry cannot survive

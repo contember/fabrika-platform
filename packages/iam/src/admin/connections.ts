@@ -1,5 +1,5 @@
 import type { CursorList, GrantIdInput, ListSessionsInput, OkResponse, UserConnectionDto } from '@fabrika/iam-contract'
-import { grantAuthority } from '../oauth'
+import { grantAuthority, grantRecord } from '../oauth'
 import { parseStoredPermissions } from '../stored-permissions'
 import { type AdminContext, adminEvent, fail } from './context'
 import { cursorOf, normalizeLimit } from './pagination'
@@ -41,7 +41,7 @@ export async function revokeConnection(c: AdminContext, input: GrantIdInput): Pr
 			action: 'iam.oauth.grant.revoke',
 			resourceType: 'oauth_grant',
 			resourceId: grant.id,
-			metadata: { principalId: grant.principal_id, clientId: grant.client_id, app: grant.app, reason: 'administrator' },
+			metadata: { principalId: grant.principal_id, ...grantRecord(grant), reason: 'administrator' },
 		}),
 	)
 	return { ok: true }

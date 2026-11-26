@@ -472,11 +472,11 @@ function credentialGrantToEntry(row: CredentialGrantRow): PermissionEntry[] {
 }
 
 /**
- * The size bound of a token the proxy mints from a session or a `px_` key: `MAX_APPLICATION_TOKEN_BYTES` at a contract
+ * The size bound of a token the proxy mints from a session, a `px_` key or an agent grant: `MAX_APPLICATION_TOKEN_BYTES` at a contract
  * application, whose token only the proxy injects toward the application; `MAX_ACCESS_TOKEN_BYTES` at an installation
  * service, whose Bun keeps its default header limit.
  */
-async function proxyMintedBound(services: Services, app: string): Promise<number> {
+export async function proxyMintedBound(services: Services, app: string): Promise<number> {
 	return (await services.repositories.appSchema.isContractApp(app)) ? MAX_APPLICATION_TOKEN_BYTES : MAX_ACCESS_TOKEN_BYTES
 }
 

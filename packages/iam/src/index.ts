@@ -15,6 +15,7 @@ import type {
 	ExchangeAuthCodeResult,
 	FindMemberInput,
 	FindMemberResult,
+	IamGrantRpc,
 	IamHandoffRpc,
 	IamMembershipRpc,
 	IamRpc,
@@ -37,6 +38,8 @@ import type {
 	ListPrincipalsInput,
 	ListPrincipalsResult,
 	MembershipFailure,
+	MintFromGrantInput,
+	MintFromGrantResult,
 	MintFromKeyInput,
 	MintFromKeyResult,
 	MintTokenInput,
@@ -149,9 +152,10 @@ export function iamEnv(bindings: WorkerBindings): Env {
 
 const NOT_ALLOWED: TerminalFailure = { ok: false, reason: 'not_allowed' }
 const DELEGATION_NOT_ALLOWED: MembershipFailure = { ok: false, reason: 'not_allowed' }
+const GRANT_NOT_ALLOWED: MintFromGrantResult = { ok: false, reason: 'invalid_grant' }
 
 /** Every call builds its surface from the Worker's own bindings; see `PropustkaApplication` for why it is no getter. */
-function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc & IamMembershipRpc & IamTerminalRpc {
+function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHandoffRpc & IamGrantRpc & IamMembershipRpc & IamTerminalRpc {
 	return createIamRpc(iamEnv(bindings), ctx)
 }
 
@@ -163,6 +167,7 @@ function iamRpc(bindings: WorkerBindings, ctx: ExecutionContext): IamRpc & IamHa
 export type IamApplicationRpc =
 	& Pick<IamRpc, 'getJwks' | 'mintToken' | 'mintFromKey' | 'listPrincipals' | 'audit'>
 	& IamHandoffRpc
+	& IamGrantRpc
 	& IamMembershipRpc
 	& IamTerminalRpc
 
@@ -183,6 +188,11 @@ export class PropustkaApplication extends WorkerEntrypoint<WorkerBindings> imple
 	/** Cross-host handoff redemption (ADR-0022), absent from `IamRpc`: the proxy Worker narrows this binding structurally. */
 	exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {
 		return iamRpc(this.env, this.ctx).exchangeAuthCode(input)
+	}
+
+	/** An agent's grant exchanged for its person's token (ADR-0090); like a delegation grant, only the proxy obtains one. */
+	mintFromGrant(input: MintFromGrantInput): Promise<MintFromGrantResult> {
+		return isApplicationWorkerBinding(this.ctx) ? Promise.resolve(GRANT_NOT_ALLOWED) : iamRpc(this.env, this.ctx).mintFromGrant(input)
 	}
 
 	getJwks(): Promise<Jwks> {
