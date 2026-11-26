@@ -95,18 +95,29 @@ function isoTime(seconds: number): string {
 /** `active` as a boolean, or the string Entra sent before its SCIM compliance fix ("True", "False"). */
 const activeValue = z.union([z.boolean(), z.string().regex(/^(true|false)$/i).transform((value) => value.toLowerCase() === 'true')])
 
-const stored = z.string().max(MAX_ATTRIBUTE_LENGTH)
+/** A control character, NUL included (Postgres refuses it in text), is no part of a name or an address. */
+export function hasControlCharacter(value: string): boolean {
+	for (const char of value) {
+		const code = char.codePointAt(0) ?? 0
+		if (code < 0x20 || code === 0x7f) return true
+	}
+	return false
+}
+
+const withoutControl = (value: string) => !hasControlCharacter(value)
+const plainText = z.string().refine(withoutControl, 'a control character')
+const stored = z.string().max(MAX_ATTRIBUTE_LENGTH).refine(withoutControl, 'a control character')
 const optionalStored = stored.nullish().transform((value) => value === undefined || value === null || value.trim() === '' ? null : value)
 
 const emailEntry = z.object({
-	value: z.string(),
+	value: plainText,
 	type: z.string().nullish(),
 	primary: activeValue.nullish(),
 }).passthrough()
 
 /** The User body after `lowerKeys`; anything not named is ignored. */
 const userBody = z.object({
-	username: stored.min(1),
+	username: z.string().min(1).max(MAX_ATTRIBUTE_LENGTH).refine(withoutControl, 'a control character'),
 	externalid: optionalStored,
 	displayname: optionalStored,
 	active: activeValue.optional(),
@@ -267,8 +278,8 @@ function activeOf(value: unknown): boolean {
 }
 
 function requiredString(value: unknown, attribute: string): string {
-	if (typeof value !== 'string' || value.trim() === '' || value.length > MAX_ATTRIBUTE_LENGTH) {
-		throw new ScimError(400, 'invalidValue', `${attribute} is a string of 1 to ${MAX_ATTRIBUTE_LENGTH} characters`)
+	if (typeof value !== 'string' || value.trim() === '' || value.length > MAX_ATTRIBUTE_LENGTH || hasControlCharacter(value)) {
+		throw new ScimError(400, 'invalidValue', `${attribute} is a string of 1 to ${MAX_ATTRIBUTE_LENGTH} characters, none a control character`)
 	}
 	return value
 }

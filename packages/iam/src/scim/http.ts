@@ -14,6 +14,7 @@ import { DISCOVERY } from './discovery'
 import {
 	applyPatch,
 	ERROR_SCHEMA,
+	hasControlCharacter,
 	LIST_RESPONSE_SCHEMA,
 	parseUserBody,
 	ScimError,
@@ -126,9 +127,9 @@ async function list(services: Services, url: URL): Promise<Response> {
 	let total: number
 	let records
 	if (filter === null) {
-		const page = await scim.listUsers(startIndex - 1, count)
+		const page = await scim.listUsers(startIndex - 1, count, [...services.config.bootstrapAdmins])
 		total = page.total
-		records = page.records.filter((record) => visible(services, record))
+		records = page.records
 	} else {
 		const match = FILTER.exec(filter)
 		if (match === null) throw new ScimError(400, 'invalidFilter', 'the filter supported is userName eq "…" or externalId eq "…"')
@@ -163,11 +164,11 @@ async function byUserName(services: Services, userName: string) {
 function unquoted(value: string): string {
 	try {
 		const parsed: unknown = JSON.parse(`"${value}"`)
-		if (typeof parsed === 'string') return parsed
+		if (typeof parsed === 'string' && !hasControlCharacter(parsed)) return parsed
 	} catch {
 		// fall through
 	}
-	throw new ScimError(400, 'invalidFilter', 'the filter value is not a valid string')
+	throw new ScimError(400, 'invalidFilter', 'the filter value is not a valid string, or holds a control character')
 }
 
 function positiveInteger(raw: string | null): number | null {

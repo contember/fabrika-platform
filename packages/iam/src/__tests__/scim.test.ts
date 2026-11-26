@@ -14,6 +14,8 @@ import { createIamApp } from '../app'
 import { createIamRepositories, createPostgresIamRepositories, type IamRepositories } from '../db'
 import type { Env } from '../env'
 import { prop } from '../json'
+import { stateOf } from '../scim/resource'
+import { saveUser } from '../scim/users'
 import { hashToken } from '../secret'
 import { mintFromKey, mintToken } from '../tokens'
 import { adminTokenFor, makeServicesFor, TEST_SIGNING_KEYS, TestSqlDatabase } from './helpers/harness'
@@ -23,6 +25,8 @@ import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from '.
 const ORIGIN = 'https://iam.example.test'
 const BASE = `${ORIGIN}/scim/v2`
 const ROOT = 'root@example.com'
+/** A bootstrap administrator no principal holds yet: its first password recovery creates it. */
+const BREAK_GLASS = 'breakglass@example.com'
 const APP = 'notes@prod'
 const MINT_ENV = { FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS, ENVIRONMENT: 'stage' }
 const exec = { waitUntil() {} }
@@ -136,7 +140,7 @@ function envOf(engine: Engine): Env {
 		REPOSITORIES: engine.repositories,
 		HUMAN_EMAIL_DOMAINS: '[]',
 		HUMAN_EMAILS: '[]',
-		IAM_BOOTSTRAP_ADMINS: JSON.stringify([ROOT]),
+		IAM_BOOTSTRAP_ADMINS: JSON.stringify([ROOT, BREAK_GLASS]),
 		ENVIRONMENT: 'stage',
 		ISSUER: ORIGIN,
 		FABRIKA_IAM_SIGNING_KEYS: TEST_SIGNING_KEYS,
@@ -247,6 +251,8 @@ for (const [name, engineOf, available] of engines) {
 						'credentials',
 						'sessions',
 						'password_action_tokens',
+						'password_credentials',
+						'password_accounts',
 						'grants',
 						'principal_email_claims',
 						'principals',
@@ -479,6 +485,100 @@ for (const [name, engineOf, available] of engines) {
 			expect((await iam.scim('POST', '/Users', entraCreateUser(ROOT, ROOT))).status).toBe(409)
 			const userId = String(prop(await json(await iam.scim('POST', '/Users', entraCreateUser('eve@testuser.com', 'eve@testuser.com'))), 'id'))
 			expect((await iam.scim('PATCH', `/Users/${userId}`, entraPatchMultiValued(ROOT))).status).toBe(409)
+		})
+
+		test('SCIM reaches no external person, and never creates the bootstrap administrator', async () => {
+			const iam = await fresh()
+			const guest = await seedUser(iam.engine, 'guest@partner.example')
+			await iam.engine.db.prepare(`UPDATE principals SET affiliation = 'external' WHERE id = ?`).bind(guest).run()
+			expect((await iam.scim('GET', `/Users/${guest}`)).status).toBe(404)
+			expect((await iam.scim('PATCH', `/Users/${guest}`, entraDisable)).status).toBe(404)
+			expect(await json(await iam.scim('GET', `/Users?filter=${encodeURIComponent('userName eq "guest@partner.example"')}`))).toMatchObject({
+				totalResults: 0,
+			})
+			const claimed = await iam.scim('POST', '/Users', entraCreateUser('guest@partner.example', 'guest@partner.example'))
+			expect(claimed.status).toBe(409)
+			expect(await iam.engine.repositories.principals.getPrincipalById(guest)).toMatchObject({ affiliation: 'external', disabled_at: null })
+			// A link an external principal holds anyway is neither listed nor counted.
+			await iam.engine.db
+				.prepare(`INSERT INTO scim_users (principal_id, user_name, user_name_key, created_at, updated_at) VALUES (?, 'guest', 'guest', ?, ?)`)
+				.bind(guest, now(), now())
+				.run()
+			expect(await json(await iam.scim('GET', '/Users'))).toMatchObject({ totalResults: 0, itemsPerPage: 0 })
+
+			const breakGlass = await iam.scim('POST', '/Users', { ...entraCreateUser(BREAK_GLASS, BREAK_GLASS), active: false })
+			expect(breakGlass.status).toBe(409)
+			expect(await iam.engine.repositories.principals.getUserByEmail(BREAK_GLASS)).toBeNull()
+		})
+
+		test('a moved mailbox ends the sessions and switches password login off; other attributes leave them', async () => {
+			const iam = await fresh()
+			const userId = String(prop(await json(await iam.scim('POST', '/Users', entraCreateUser('fay@testuser.com', 'fay@testuser.com'))), 'id'))
+			await iam.engine.db.prepare(`INSERT INTO password_accounts (principal_id, state, created_at, updated_at) VALUES (?, 'enabled', ?, ?)`)
+				.bind(userId, now(), now()).run()
+			await iam.engine.db
+				.prepare(`INSERT INTO password_credentials (principal_id, algorithm, parameters, salt, password_hash, created_at, updated_at)
+					VALUES (?, 'pbkdf2-sha256', '{}', 'salt', 'hash', ?, ?)`)
+				.bind(userId, now(), now())
+				.run()
+			const kept = await accessOf(iam.engine, userId)
+			const renamed = await iam.scim('PATCH', `/Users/${userId}`, entraPathless({ displayName: 'Fay' }))
+			expect(renamed.status).toBe(200)
+			expect(await mints(iam.engine, kept)).toMatchObject({ session: { ok: true }, key: { ok: true } })
+
+			const moved = await iam.scim('PATCH', `/Users/${userId}`, entraPatchMultiValued('fay.other@testuser.com'))
+			expect(moved.status).toBe(200)
+			expect(await json(moved)).toMatchObject({ active: true })
+			expect(await mints(iam.engine, kept)).toMatchObject({ session: { ok: false, reason: 'invalid_session' } })
+			const account = await iam.engine.db.prepare('SELECT state FROM password_accounts WHERE principal_id = ?').bind(userId).first<{ state: string }>()
+			expect(account?.state).toBe('disabled')
+			const verifiers = await iam.engine.db.prepare('SELECT COUNT(*) AS n FROM password_credentials WHERE principal_id = ?').bind(userId)
+				.first<{ n: number | string }>()
+			expect(Number(verifiers?.n)).toBe(0)
+			const pending = await iam.engine.db
+				.prepare('SELECT COUNT(*) AS n FROM password_action_tokens WHERE principal_id = ? AND consumed_at IS NULL')
+				.bind(userId)
+				.first<{ n: number | string }>()
+			expect(Number(pending?.n)).toBe(0)
+			const update = await iam.engine.db
+				.prepare(`SELECT metadata FROM audit_events WHERE action = 'iam.scim.user.update' AND resource_id = ? ORDER BY id DESC`)
+				.bind(userId)
+				.first<{ metadata: string }>()
+			expect(JSON.parse(update?.metadata ?? '{}')).toMatchObject({ via: 'scim', mailboxMoved: true })
+		})
+
+		test('a write that read the person active does not enable them after a concurrent active=false', async () => {
+			const iam = await fresh()
+			const userId = String(prop(await json(await iam.scim('POST', '/Users', entraCreateUser('gil@testuser.com', 'gil@testuser.com'))), 'id'))
+			const stale = await iam.engine.repositories.scim.getRecord(userId)
+			if (stale === null) throw new Error('no record')
+			expect((await iam.scim('PATCH', `/Users/${userId}`, entraDisable)).status).toBe(200)
+			const services = makeServicesFor(iam.engine.repositories, { issuer: ORIGIN, environment: 'stage', bootstrapAdmins: new Set([ROOT]) })
+			const written = await saveUser(services, { tokenId: 'tok', requestId: 'r' }, stale, { ...stateOf(stale), displayName: 'Late' })
+			expect(written).toMatchObject({ display_name: 'Late', disabled_at: expect.any(Number) })
+
+			// What a login racing the deprovisioning left behind ends when the person is enabled again.
+			const raced = await accessOf(iam.engine, userId)
+			const enabled = await iam.scim('PATCH', `/Users/${userId}`, { Operations: [{ op: 'replace', path: 'active', value: true }] })
+			expect(await json(enabled)).toMatchObject({ active: true })
+			expect(await mints(iam.engine, raced)).toEqual({
+				session: { ok: false, reason: 'invalid_session' },
+				key: { ok: false, reason: 'invalid_key' },
+			})
+		})
+
+		test('a control character in a value or a filter is a 400, on every engine', async () => {
+			const iam = await fresh()
+			for (const filter of ['userName eq "a\\u0000b"', 'userName eq "a\u0000b"', 'externalId eq "x\u0001"']) {
+				const answer = await iam.scim('GET', `/Users?filter=${encodeURIComponent(filter)}`)
+				expect(answer.status).toBe(400)
+				expect(await json(answer)).toMatchObject(scimError(400, 'invalidFilter'))
+			}
+			const created = await iam.scim('POST', '/Users', entraCreateUser('nul\u0000@testuser.com', 'nul@testuser.com'))
+			expect(await json(created)).toMatchObject(scimError(400, 'invalidValue'))
+			const userId = String(prop(await json(await iam.scim('POST', '/Users', entraCreateUser('hal@testuser.com', 'hal@testuser.com'))), 'id'))
+			const patched = await iam.scim('PATCH', `/Users/${userId}`, entraPathless({ displayName: 'H\u0000al' }))
+			expect(await json(patched)).toMatchObject(scimError(400, 'invalidValue'))
 		})
 
 		test('the list pages with startIndex and count; an unsupported filter or op is a 400', async () => {

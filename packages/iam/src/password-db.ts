@@ -207,6 +207,20 @@ export class PasswordRepository {
 		])
 	}
 
+	/**
+	 * Password login switched off, as changes an audited group composes: the account disabled and the verifier deleted.
+	 * Pending actions and sessions are the caller's to end in the same group.
+	 */
+	disableLoginChanges(principalId: string, now: number): SqlChange[] {
+		return [
+			{
+				sql: `UPDATE password_accounts SET state = 'disabled', updated_at = ? WHERE principal_id = ? AND state <> 'disabled' RETURNING principal_id`,
+				binds: [now, principalId],
+			},
+			{ sql: 'DELETE FROM password_credentials WHERE principal_id = ? RETURNING principal_id', binds: [principalId] },
+		]
+	}
+
 	async revokePasswordSessions(principalId: string): Promise<number> {
 		const result = await this.revokePasswordSessionsStatement(principalId, unixNow()).run()
 		return result.meta.changes

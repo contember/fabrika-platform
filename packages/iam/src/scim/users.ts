@@ -41,11 +41,13 @@ function scimEvent(actor: ScimActor, principalId: string, action: string, metada
 }
 
 /**
- * Whether SCIM sees a principal at all: a user, never the installation's bootstrap administrator (its break-glass
- * account stays out of the provider's reach), and not one the provider deleted.
+ * Whether SCIM sees a principal at all: an internal user (the organization's identity provider claims no external
+ * person, ADR-0051), never the installation's bootstrap administrator (its break-glass account stays out of the
+ * provider's reach), and not one the provider deleted.
  */
 export function visible(services: Services, record: ScimUserRecord): boolean {
 	return record.type === 'user'
+		&& record.affiliation === 'internal'
 		&& (record.email === null || !services.config.bootstrapAdmins.has(record.email))
 		&& (record.linked_at === null || record.deleted_at === null)
 }
@@ -69,11 +71,13 @@ function attributesOf(state: ScimUserState): ScimUserAttributes {
 export async function createUser(services: Services, actor: ScimActor, state: ScimUserState): Promise<{ record: ScimUserRecord; created: boolean }> {
 	const { scim } = services.repositories
 	const mailbox = normalizeEmailIdentity(state.email)
+	// Before anything is looked up: the bootstrap principal may not exist yet, and SCIM must not create it.
+	requireNotBootstrap(services, mailbox)
 	await requireFreeUserName(services, state.userName, null)
 	const existing = await scim.getByMailbox(mailbox)
 	if (existing !== null) {
-		if (existing.email !== null && services.config.bootstrapAdmins.has(existing.email)) {
-			throw new ScimError(409, 'uniqueness', "the mailbox is the installation's bootstrap administrator, which SCIM does not manage")
+		if (existing.affiliation !== 'internal') {
+			throw new ScimError(409, 'uniqueness', 'an external person holds this mailbox, and SCIM does not manage external people')
 		}
 		if (existing.linked_at !== null && existing.deleted_at === null) {
 			throw new ScimError(409, 'uniqueness', 'a user with this mailbox is already provisioned')
@@ -105,11 +109,10 @@ export async function saveUser(services: Services, actor: ScimActor, record: Sci
 	const { principals, scim, audit } = services.repositories
 	const current = stateOf(record)
 	const mailbox = normalizeEmailIdentity(next.email)
-	if (services.config.bootstrapAdmins.has(mailbox)) {
-		throw new ScimError(409, 'uniqueness', "the mailbox is the installation's bootstrap administrator, which SCIM does not manage")
-	}
+	requireNotBootstrap(services, mailbox)
 	await requireFreeUserName(services, next.userName, record.id)
-	if (mailbox !== record.email) {
+	const moving = mailbox !== record.email
+	if (moving) {
 		const holder = await scim.getByMailbox(mailbox)
 		if (holder !== null && holder.id !== record.id) throw new ScimError(409, 'uniqueness', 'another user holds this mailbox')
 	}
@@ -123,13 +126,11 @@ export async function saveUser(services: Services, actor: ScimActor, record: Sci
 	const statements = [
 		...principals.lockStatements(record.id),
 		...audit.writer.changed(
-			[moved.change, scim.linkChange(record.id, attributesOf(next), now)],
-			scimEvent(actor, record.id, 'iam.scim.user.update', { linked: record.linked_at === null || record.deleted_at !== null }),
+			[moved.change, scim.linkChange(record.id, attributesOf(next), now), ...(moving ? mailboxMoveChanges(services, record.id, now) : [])],
+			scimEvent(actor, record.id, 'iam.scim.user.update', { linked: record.linked_at === null || record.deleted_at !== null, mailboxMoved: moving }),
 		).statements,
 		moved.claim,
-		...(next.active
-			? audit.writer.changed([principals.enablePrincipalChange(record.id)], scimEvent(actor, record.id, 'iam.principal.enable')).statements
-			: audit.writer.changed(deprovisionChanges(services, record.id, now), scimEvent(actor, record.id, 'iam.principal.disable')).statements),
+		...activityStatements(services, actor, record.id, current.active, next.active, now),
 	]
 	try {
 		await audit.commit(statements)
@@ -160,16 +161,58 @@ export async function deleteUser(services: Services, actor: ScimActor, record: S
 	])
 }
 
+/**
+ * The write of `active`. Only a change of what the write read is written, so a write of other attributes that read the
+ * person active cannot enable them again after a concurrent `active=false`. Deprovisioning is idempotent and always
+ * runs for `active=false`. An enabling also ends whatever a login racing the deprovisioning left behind: a disabled
+ * person holds nothing, so re-enabling restores nothing.
+ */
+function activityStatements(services: Services, actor: ScimActor, principalId: string, was: boolean, next: boolean, now: number) {
+	const { principals, audit } = services.repositories
+	if (!next) {
+		return audit.writer.changed(deprovisionChanges(services, principalId, now), scimEvent(actor, principalId, 'iam.principal.disable')).statements
+	}
+	if (was) return []
+	return audit.writer.changed(
+		[principals.enablePrincipalChange(principalId), ...accessChanges(services, principalId, now)],
+		scimEvent(actor, principalId, 'iam.principal.enable'),
+	).statements
+}
+
 /** Everything that lets the person in, ended, and the principal disabled. Independent changes: one Postgres snapshot. */
 function deprovisionChanges(services: Services, principalId: string, now: number): SqlChange[] {
+	return [...accessChanges(services, principalId, now), services.repositories.principals.disablePrincipalChange(principalId)]
+}
+
+/** Every session, own `px_` key and OAuth grant of the person ended, and every pending password action spent. */
+function accessChanges(services: Services, principalId: string, now: number): SqlChange[] {
 	const { sessions, credentials, oauth, principals } = services.repositories
 	return [
 		sessions.revokeSessionsForPrincipalChange(principalId),
 		credentials.revokeCredentialsForPrincipalChange(principalId),
 		oauth.revokeGrantsForPrincipalChange(principalId, now),
 		principals.consumePasswordActionsChange(principalId),
-		principals.disablePrincipalChange(principalId),
 	]
+}
+
+/**
+ * A moved mailbox ends the person's sessions, spends their password actions and switches password login off: the
+ * provider vouches for the new address, not for whoever reads it, so a password reset sent there must not open the
+ * account. Single sign-on, which matches the person by subject first, is unaffected.
+ */
+function mailboxMoveChanges(services: Services, principalId: string, now: number): SqlChange[] {
+	const { sessions, principals, passwords } = services.repositories
+	return [
+		sessions.revokeSessionsForPrincipalChange(principalId),
+		principals.consumePasswordActionsChange(principalId),
+		...passwords.disableLoginChanges(principalId, now),
+	]
+}
+
+function requireNotBootstrap(services: Services, mailbox: string): void {
+	if (services.config.bootstrapAdmins.has(mailbox)) {
+		throw new ScimError(409, 'uniqueness', "the mailbox is the installation's bootstrap administrator, which SCIM does not manage")
+	}
 }
 
 async function requireFreeUserName(services: Services, userName: string, self: string | null): Promise<void> {

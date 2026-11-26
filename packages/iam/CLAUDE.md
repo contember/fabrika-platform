@@ -556,12 +556,16 @@ fails if that stops being true — it is the guard, not documentation of one.
   `src/scim/`, `repositories/scim.ts`, migration 0044). `/scim/v2` (rows `scim-root`, `scim`) authenticates the
   installation's one token (`scim_tokens`, hash only, `px_` format, no `credentials` row); none refuses every request.
   `scim.*` of `/admin/rpc` (get, rotateToken, revokeToken) need `iam.admin` from a person in a signed-in session. A SCIM
-  user is a `user` principal (SCIM id = principal id); the mailbox stays in `principals.email`, the provider's other
-  attributes in `scim_users`, never `principals.external_id`. `active=false` and DELETE (`scim/users.ts`
-  `deprovisionChanges`) disable the principal and revoke its sessions, its own `px_` keys and OAuth grants and spend its
-  password actions in one audited group, after the principal lock; re-enabling restores none and meets the `credentials`
-  mode as a machine caller. DELETE keeps the principal and marks the link `deleted_at`. A bootstrap mailbox is invisible
-  to SCIM (`visible`). Every change is recorded under `principal_label` `scim` with the token's id in its metadata.
+  user is an INTERNAL `user` principal (SCIM id = principal id); `visible` hides an external one and a bootstrap mailbox,
+  and `createUser` refuses a bootstrap mailbox before any lookup (its principal may not exist yet). The mailbox stays in
+  `principals.email`, the provider's other attributes in `scim_users`, never `principals.external_id`. A mailbox move
+  revokes the sessions, spends the password actions and switches password login off in its own group
+  (`mailboxMoveChanges`): a reset mailed to the new address must not open the account. `active=false` and DELETE
+  (`deprovisionChanges`) disable the principal and revoke its sessions, own `px_` keys and OAuth grants and spend its
+  password actions in one audited group, after the principal lock. `active` is written only when it differs from what
+  the write read (`activityStatements`); an enabling revokes the same set again and meets the `credentials` mode as a
+  machine caller. DELETE keeps the principal and marks the link `deleted_at`. Every change is recorded under
+  `principal_label` `scim` with the token's id in its metadata.
 - **The admin router percent-decodes its path segments** (`decodedSegments`): an application id
   `notes@prod` arrives as `notes%40prod`, and registering the encoded spelling would create a second app.
 - **IAM SIGNS NO ACCESS TOKEN ABOVE `MAX_ACCESS_TOKEN_BYTES` (8192, from `@fabrika/auth-core`)**, except a token

@@ -27,25 +27,34 @@ Entra ID is that provider; this decision is the Users part. Groups and their map
    `"True"`/`"False"`, a PATCH operation without a path whose value is an object, `emails[type eq "work"].value`. An
    attribute IAM does not store is accepted and ignored, because a provider that gets an error for a mapped attribute
    fails the whole user.
-2. **A SCIM user is a `user` principal, and its SCIM id is the principal's id.** The mailbox is the primary email (else
+2. **A SCIM user is an internal `user` principal, and its SCIM id is the principal's id.** SCIM reaches every internal
+   user principal but the bootstrap administrator (§6), by id or by its mailbox; an external principal is never found,
+   created, linked or written, because an organization's identity provider claims no external person (ADR-0051). The
+   list shows only the users the provider provisioned or took over. The mailbox is the primary email (else
    the work one, else the first, else `userName` when it is an address) and lives where every mailbox lives,
    `principals.email` (the one mailbox rule). A new user is internal and not yet activated, so its first OIDC login
    claims it like an invited one, and the allowlist's known-principal bypass admits it: being provisioned is being
    known. What the provider sent besides (`userName`, `externalId`, `displayName`, `name`) is kept in `scim_users`, which
    nothing reads for authorization. `externalId` never touches `principals.external_id`, which is the OIDC subject.
+   A write that moves the mailbox also revokes the person's sessions, spends their password actions and switches
+   password login off, in the same transaction: the provider vouches for the new address, not for whoever reads it,
+   so a password reset sent there must not open the account. Single sign-on matches the person by subject first.
 3. **The provider takes over a person who signed in before provisioning started.** A filter on a `userName` that no
    provisioned user has answers the unprovisioned user whose mailbox it is, and a POST of a mailbox an unprovisioned
    user holds links that principal instead of answering 409. A POST of a mailbox a provisioned user holds is 409.
 4. **Deprovisioning is immediate at IAM.** `active=false` and DELETE disable the principal and, in the same transaction,
    revoke every session (an application session with its parent, and by its own row), every `px_` key bound to the
    person, every OAuth grant, and spend every pending password action. The next mint, key exchange, refresh or
-   `/admin` call is refused. Re-enabling restores none of it: the person signs in again. Re-enabling meets the
-   `credentials` mode for the keys the person issued for others (ADR-0083 §8), as a machine caller.
+   `/admin` call is refused. Re-enabling restores none of it: the person signs in again. The enabling revokes the
+   same set again, so nothing a login racing the deprovisioning wrote survives it, and meets the `credentials` mode
+   for the keys the person issued for others (ADR-0083 §8), as a machine caller. A write changes `active` only when
+   it differs from what the write read, so a concurrent write of other attributes never enables a person again.
 5. **DELETE keeps the principal.** It deprovisions as above and marks the link deleted, so SCIM no longer finds the
    user; the principal, its grants and its audit history stay. A later POST of the same mailbox links the same principal
    again, active, with its grants.
 6. **The installation's bootstrap administrator is out of SCIM's reach.** A mailbox in `IAM_BOOTSTRAP_ADMINS` is never
-   found, created, linked or written: the break-glass account survives a provider that deprovisions everyone.
+   found, created, linked or written, whether or not its principal exists yet: the break-glass account survives a
+   provider that deprovisions everyone.
 7. **One bearer token per installation, kept by IAM.** `scim_tokens` holds one row or none, the SHA-256 of the secret
    only, compared by digest like every IAM credential. An installation administrator in a signed-in session creates,
    rotates and removes it (`scim.*` of `/admin/rpc`, the console's Settings → Provisioning); the secret is shown once,

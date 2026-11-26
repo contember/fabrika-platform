@@ -39,7 +39,8 @@ refuses every SCIM request; people already provisioned stay as they are.
 - **`GET /Users?filter=…`** takes `userName eq "…"` (case-insensitive; it falls back to an unprovisioned user with that
   mailbox) or `externalId eq "…"`. Without a filter it lists the provisioned users. Pages by `startIndex` and `count`
   (at most 100).
-- **`PATCH` and `PUT /Users/{id}`** update the stored attributes; a changed email moves the person's mailbox. A PUT
+- **`PATCH` and `PUT /Users/{id}`** update the stored attributes. A changed email moves the person's mailbox and, in
+  the same step, signs them out everywhere and switches their password login off; single sign-on keeps working. A PUT
   without `active` keeps it.
 - **`active=false`** disables the person and, in the same transaction, revokes every session, `px_` key and OAuth grant
   and spends pending password links. The next request with any of them is refused.
@@ -47,7 +48,9 @@ refuses every SCIM request; people already provisioned stay as they are.
 - **`DELETE /Users/{id}`** does what `active=false` does, and SCIM no longer finds the user. The principal, its grants
   and its history stay; a later `POST` of the same mailbox links it again.
 
-The installation's bootstrap administrators (`IAM_BOOTSTRAP_ADMINS`) are never found, created or changed over SCIM.
+SCIM reaches every internal user of the installation by id or mailbox, and lists those it provisioned or took over.
+External people (invited guests) and the installation's bootstrap administrators (`IAM_BOOTSTRAP_ADMINS`) are never
+found, created or changed over SCIM: a POST of such a mailbox is 409.
 Every change is in the Access audit log, recorded under `scim` with the token's id.
 
 A browser that already holds an application's token keeps it until the token expires, at most 300 seconds after it

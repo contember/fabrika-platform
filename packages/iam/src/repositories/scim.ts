@@ -14,6 +14,7 @@ export interface ScimTokenRow {
 export interface ScimUserRecord {
 	id: string
 	type: 'user' | 'service'
+	affiliation: 'internal' | 'external'
 	email: string | null
 	label: string
 	disabled_at: number | null
@@ -38,7 +39,7 @@ export interface ScimUserAttributes {
 	readonly familyName: string | null
 }
 
-const RECORD_COLUMNS = `p.id, p.type, p.email, p.label, p.disabled_at, p.created_at,
+const RECORD_COLUMNS = `p.id, p.type, p.affiliation, p.email, p.label, p.disabled_at, p.created_at,
 	s.user_name, s.external_id, s.display_name, s.given_name, s.family_name, s.deleted_at, s.created_at AS linked_at, s.updated_at`
 const FROM = 'FROM principals p LEFT JOIN scim_users s ON s.principal_id = p.id'
 
@@ -106,12 +107,20 @@ export class ScimRepository {
 		return this.db.prepare(`SELECT ${RECORD_COLUMNS} ${FROM} WHERE p.type = 'user' AND p.email = ?`).bind(mailbox).first<ScimUserRecord>()
 	}
 
-	/** One page of the provisioned, not deleted users in id order, and how many there are. */
-	async listUsers(offset: number, limit: number): Promise<{ total: number; records: ScimUserRecord[] }> {
-		const count = await this.db.prepare('SELECT COUNT(*) AS n FROM scim_users WHERE deleted_at IS NULL').first<{ n: number | string }>()
+	/**
+	 * One page of the provisioned, not deleted internal users in id order, and how many there are, leaving out the
+	 * `excluded` mailboxes (the bootstrap administrators, a handful) in the query, so the count is the listed set's.
+	 */
+	async listUsers(offset: number, limit: number, excluded: readonly string[]): Promise<{ total: number; records: ScimUserRecord[] }> {
+		const outside = excluded.length === 0 ? '' : ` AND (p.email IS NULL OR p.email NOT IN (${excluded.map(() => '?').join(', ')}))`
+		const where = `WHERE s.deleted_at IS NULL AND p.type = 'user' AND p.affiliation = 'internal'${outside}`
+		const count = await this.db
+			.prepare(`SELECT COUNT(*) AS n FROM scim_users s JOIN principals p ON p.id = s.principal_id ${where}`)
+			.bind(...excluded)
+			.first<{ n: number | string }>()
 		const { results } = await this.db
-			.prepare(`SELECT ${RECORD_COLUMNS} ${FROM} WHERE s.deleted_at IS NULL ORDER BY p.id LIMIT ? OFFSET ?`)
-			.bind(limit, offset)
+			.prepare(`SELECT ${RECORD_COLUMNS} FROM scim_users s JOIN principals p ON p.id = s.principal_id ${where} ORDER BY p.id LIMIT ? OFFSET ?`)
+			.bind(...excluded, limit, offset)
 			.all<ScimUserRecord>()
 		return { total: Number(count?.n ?? 0), records: results }
 	}
