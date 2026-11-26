@@ -260,9 +260,10 @@ this one import.
   provisioning key, as Control does, over `createIamAdminClient` (no redirect followed).
 - **This package is one of the four that relax two strict flags for oblaka** — see the root
   CLAUDE.md. Keep our own code strict; never work around oblaka with a cast.
-- **A failed deploy reports whether it changed nothing** (`untouched`, `ProviderTerminalOutcome`). The executor writes
-  `{ untouched: true }` to the outcome file when it failed before its first step, or when only `build`, `check` and
-  `provision-resources` ran (`changedNothing`, `src/plan.ts`, an allowlist); the runner sets it itself for a refused job,
+- **A failed deploy reports whether it changed nothing** (`untouched`, `ProviderTerminalOutcome`). The executor writes its
+  verdict to the outcome file on every failed, non-dry deploy (`failedDeployOutcome`, `src/cli.ts`): untouched when it failed
+  before its first step, or when only `build`, `check` and `provision-resources` ran (`changedNothing`, `src/plan.ts`, an
+  allowlist). The runner sets it itself for a refused job,
   a failed clone or install, and keeps the executor's only on a failed run. Control then reopens an object a migration
   deploy restricted. Absent means "may have changed something"; repository code could forge the report (backlog 86).
 - **The plan is ordered step kinds**, not free-form work: `build` → `check` → `provision-resources` →

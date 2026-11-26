@@ -2,8 +2,8 @@
 
 import type { DeployStepResult } from '@fabrika/provider-contract'
 import type { AppCli } from '@fabrika/provider-contract/app-cli'
-import { writeFile } from 'node:fs/promises'
 import { parseCloudflareArgs } from './cli-args'
+import { defaultCloudflareCollaborators } from './collaborators'
 import { deployCloudflareConfig } from './command'
 import { changedNothing } from './plan'
 import type { CloudflareDeployResult } from './provider'
@@ -80,22 +80,28 @@ export const runCloudflareCli = async (argv: readonly string[]): Promise<void> =
 			stateNamespace: process.env['CLOUDFLARE_STATE_NAMESPACE'],
 		})
 	} catch (error) {
-		// `runSteps` keeps every step's error in its result, so a throw here comes before the first step.
-		if (!args.dryRun) await reportOutcome({ untouched: true })
+		if (!args.dryRun) await reportOutcome(failedDeployOutcome('threw'))
 		throw error
 	}
-	if (result.status === 'failed' && !args.dryRun && changedNothing(result.steps)) await reportOutcome({ untouched: true })
+	if (result.status === 'failed' && !args.dryRun) await reportOutcome(failedDeployOutcome(result))
 	requireSuccessful(result)
 }
+
+/**
+ * What a failed deploy reports to the runner, always, so a file the checkout's build left at the path never speaks for
+ * it. `threw` is a deploy that failed before its first step: `runSteps` keeps every step's error in its result.
+ */
+export const failedDeployOutcome = (result: CloudflareDeployResult | 'threw'): RunnerOutcomeFile => ({
+	untouched: result === 'threw' || changedNothing(result.steps),
+})
 
 /**
  * Tell the runner what a failed deploy left alone, so Control can end the maintenance it entered for the deploy. Only a
  * runner names the file; a failed write leaves the report absent, which Control reads as "may have changed something".
  */
 const reportOutcome = async (outcome: RunnerOutcomeFile): Promise<void> => {
-	const path = process.env[RUNNER_OUTCOME_FILE_ENV]
-	if (path === undefined || path === '') return
-	await writeFile(path, JSON.stringify(outcome), 'utf8').catch(() => {})
+	if ((process.env[RUNNER_OUTCOME_FILE_ENV] ?? '') === '') return
+	await defaultCloudflareCollaborators.writeOutcome(outcome).catch(() => {})
 }
 
 /**

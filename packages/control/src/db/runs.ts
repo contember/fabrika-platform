@@ -598,10 +598,10 @@ export class RunRepository {
 	}
 
 	/**
-	 * Move a run to a terminal state (`succeeded` | `failed`): stamp `finished_at` + the exit code.
-	 * Returns true iff the row transitioned (it was still `running`/`pending`).
+	 * Move a run to a terminal state (`succeeded` | `failed`): stamp `finished_at` + the exit code, and `untouched` as the
+	 * `failure_cause` of a failed run the provider reports changed nothing. Returns true iff the row transitioned (it was
+	 * still `running`/`pending`).
 	 */
-	/** Finish a run; `untouched` records a failed run the provider reports changed nothing (`failure_cause`). */
 	async markRunFinished(id: string, status: 'succeeded' | 'failed', exitCode: number | null, fence: LeaseFence, untouched = false): Promise<boolean> {
 		return this.mutateRun(
 			id,
