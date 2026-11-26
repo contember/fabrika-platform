@@ -10,6 +10,7 @@ import { decodeJwt } from 'jose'
 import { IAM_APP } from '../admin/router'
 import { mintFromGrant } from '../agent-grant'
 import { createPostgresIamRepositories, type IamRepositories, type OAuthGrantRow } from '../db'
+import { prop } from '../json'
 import { mintForGrant } from '../oauth'
 import { startDeviceAuthorization } from '../oauth-device'
 import { unixNow } from '../repositories/sql'
@@ -17,7 +18,9 @@ import { hashToken } from '../secret'
 import { getSigner } from '../signing'
 import { createHarness } from './helpers/harness'
 import { ISSUER, oauthFixture, SIGNING_ENV } from './helpers/oauth'
+import { assertionOptionsOf, type Ceremony, ceremonyOf, registerTestPasskey } from './helpers/passkey-pages'
 import { createPostgres, hasPostgres, type PostgresFixture, skipReason } from './helpers/postgres'
+import { TestAuthenticator } from './helpers/webauthn'
 
 if (!hasPostgres) {
 	console.warn(`agent-grant.test.ts ${skipReason}`)
@@ -130,6 +133,7 @@ async function agentFixture(repositories: IamRepositories) {
 			expires_at: options.expiresAt ?? now + 1800,
 			revoked_at: null,
 			agent_label: options.label === undefined ? 'release bot' : options.label,
+			passkey_confirmed_at: null,
 		}
 		await repositories.oauth.createGrant(grant, {
 			token_hash: uuidv7(),
@@ -176,7 +180,22 @@ async function agentFixture(repositories: IamRepositories) {
 	const exchange = (token: string, overrides: { app?: string; resource?: string } = {}) =>
 		mintFromGrant(f.services, SIGNING_ENV, { app, resource: origin, token, requestId: 'req-agent', ...overrides }).then((outcome) => outcome.result)
 
-	return { f, repositories, app, origin, start, page, poll, started, approved, directGrant, fiveMinuteToken, exchange }
+	/** Mirror the environment's `agent-write` gate, as Control does under the next protection revision. */
+	let revision = 0
+	async function gate(agentWrite: AgentWriteGate): Promise<void> {
+		revision += 1
+		await repositories.grantRequests.setGates(app, { required: false, credentials: 'off', agentWrite }, revision, unixNow(), {
+			requestId: 'req-gate',
+			principalId: null,
+			principalLabel: 'control',
+			app: IAM_APP,
+			action: 'iam.grant_approval.set',
+			resourceType: 'app',
+			resourceId: app,
+		})
+	}
+
+	return { f, repositories, app, origin, start, page, poll, started, approved, directGrant, fiveMinuteToken, exchange, gate }
 }
 
 async function json(response: Response): Promise<unknown> {
@@ -358,19 +377,7 @@ for (const engine of engines) {
 
 		test("an environment serves write only where Control's `agent-write` gate is `open`, at the approval and at every exchange", async () => {
 			const a = await agentFixture(engine.repositories())
-			let revision = 0
-			const gate = async (agentWrite: AgentWriteGate) => {
-				revision += 1
-				await a.repositories.grantRequests.setGates(a.app, { required: false, credentials: 'off', agentWrite }, revision, unixNow(), {
-					requestId: 'req-gate',
-					principalId: null,
-					principalLabel: 'control',
-					app: IAM_APP,
-					action: 'iam.grant_approval.set',
-					resourceType: 'app',
-					resourceId: a.app,
-				})
-			}
+			const gate = a.gate
 			await gate('open')
 			const open = await a.started({ scope: 'write:project=b' })
 			const html = await (await a.page({ user_code: open.userCode })).text()
@@ -381,11 +388,12 @@ for (const engine of engines) {
 			const write = await a.directGrant('write:project=a')
 			expect((await a.exchange(write.token)).ok).toBe(true)
 
-			// A passkey gate fails closed until the device page asks the passkey: the page offers read, the exchange refuses write.
+			// Under a passkey gate, a person without a passkey is offered read, and a write grant no passkey confirmed is refused.
 			await gate('passkey')
 			const passkey = await a.started({ scope: 'write' })
 			const offered = await (await a.page({ user_code: passkey.userCode })).text()
-			expect(offered).toContain('only after a passkey confirmation')
+			expect(offered).toContain('only after a passkey confirmation, and you have no passkey')
+			expect(offered).toContain('<a href="/auth/account#passkeys">account page</a>')
 			expect(offered).toContain('name="scope" value="read"')
 			expect((await a.page({ user_code: passkey.userCode, decision: 'approve', lifetime: '3600', scope: 'write' })).status).toBe(400)
 			expect(await a.exchange(write.token)).toEqual({ ok: false, reason: 'write_refused' })
@@ -394,6 +402,82 @@ for (const engine of engines) {
 			expect(await a.exchange(write.token)).toEqual({ ok: false, reason: 'write_refused' })
 			const read = await a.directGrant('read')
 			expect((await a.exchange(read.token)).ok).toBe(true)
+		})
+
+		test('under a passkey gate, write is approved after a passkey bound to the attempt, scope and lifetime, and served while the gate holds', async () => {
+			const a = await agentFixture(engine.repositories())
+			const authenticator = await TestAuthenticator.create()
+			await registerTestPasskey(a.repositories, ISSUER, a.f.principal.id, authenticator)
+			await a.gate('passkey')
+			const { deviceCode, userCode } = await a.started({ scope: 'write:project=a' })
+			const consent = await (await a.page({ user_code: userCode })).text()
+			expect(consent).toContain('name="scope" value="write:project=a"')
+			expect(consent).toContain('Allow asks you to confirm with one of your passkeys')
+			expect(consent).not.toContain('role="alert"')
+
+			const decision = { user_code: userCode, decision: 'approve', lifetime: '3600', scope: 'write:project=a' }
+			const ask = async () => {
+				const page = await ceremonyOf(await a.page(decision))
+				expect(page.fields).toEqual({
+					...decision,
+					user_code: page.fields['user_code'] ?? '',
+					challengeId: page.fields['challengeId'] ?? '',
+					credential: '',
+				})
+				return page
+			}
+			const answer = async (page: Ceremony, fields: Record<string, string> = {}) =>
+				a.page({ ...page.fields, ...fields, credential: JSON.stringify(await authenticator.assert(assertionOptionsOf(page), ISSUER)) })
+
+			// The answer approves only what it was asked for, and a refused answer leaves the attempt pending.
+			const longer = await answer(await ask(), { lifetime: '86400' })
+			expect(longer.status).toBe(403)
+			expect(await longer.text()).toContain('The passkey was not accepted')
+			expect((await a.page({ ...(await ask()).fields, credential: 'not an answer' })).status).toBe(403)
+			const other = await a.started({ scope: 'write:project=a' })
+			const elsewhere = await answer(await ask(), { user_code: other.userCode })
+			expect(elsewhere.status).toBe(403)
+			expect((await a.repositories.oauth.deviceAuthorization(await hashToken(other.deviceCode)))?.status).toBe('pending')
+			expect((await a.repositories.oauth.deviceAuthorization(await hashToken(deviceCode)))?.status).toBe('pending')
+
+			const page = await ask()
+			expect((await answer(page)).status).toBe(200)
+			expect((await answer(page)).status).toBe(400)
+			const tokens = await json(await a.poll(deviceCode))
+			expect(field(tokens, 'scope')).toBe('write:project=a')
+			const access = field(tokens, 'access_token')
+			if (typeof access !== 'string') throw new Error('no access token')
+			const grantId = parseAccessClaims(decodeJwt(access))?.oauth?.grantId ?? ''
+			const confirmedAt = (await a.repositories.oauth.grant(grantId))?.passkey_confirmed_at
+			expect(confirmedAt).toBeNumber()
+			const [record] = await a.repositories.audit.listAuditEvents({ resourceType: 'oauth_grant', resourceId: grantId, limit: 5 })
+			expect(prop(JSON.parse(record?.metadata ?? 'null'), 'passkeyConfirmedAt')).toBe(confirmedAt)
+			expect((await a.exchange(access)).ok).toBe(true)
+
+			// A write grant no passkey confirmed is not served under the gate; a confirmed one ends when the gate refuses.
+			expect(await a.exchange((await a.directGrant('write:project=a')).token)).toEqual({ ok: false, reason: 'write_refused' })
+			await a.gate('refuse')
+			expect(await a.exchange(access)).toEqual({ ok: false, reason: 'write_refused' })
+		})
+
+		test('under a passkey gate, a person whose passkey is gone by the decision is told to add one, and nothing is approved', async () => {
+			const a = await agentFixture(engine.repositories())
+			const authenticator = await TestAuthenticator.create()
+			await registerTestPasskey(a.repositories, ISSUER, a.f.principal.id, authenticator)
+			await a.gate('passkey')
+			const { deviceCode, userCode } = await a.started({ scope: 'write' })
+			expect(await (await a.page({ user_code: userCode })).text()).toContain('name="scope" value="write"')
+			await a.repositories.passkeys.reset(a.f.principal.id, {
+				requestId: 'req-reset',
+				principalId: null,
+				principalLabel: 'admin',
+				app: IAM_APP,
+				action: 'iam.passkey.reset',
+				resourceType: 'principal',
+				resourceId: a.f.principal.id,
+			})
+			expect((await a.page({ user_code: userCode, decision: 'approve', lifetime: '3600', scope: 'write' })).status).toBe(400)
+			expect(field(await json(await a.poll(deviceCode)), 'error')).toBe('authorization_pending')
 		})
 
 		test('the exchange refuses another resource or app, another client, a write grant, and a grant that no longer holds', async () => {

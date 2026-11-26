@@ -44,7 +44,7 @@ export async function mintFromGrant(services: Services, env: MintEnv, input: Min
 	const authority = await grantAuthority(services, grant, now, input.resource)
 	const scope = authority?.agent
 	if (authority === null || scope === undefined) return refused
-	if (!agentModeServed(scope.mode, await agentWriteGate(services, grant.app))) {
+	if (!agentModeServed(scope.mode, await agentWriteGate(services, grant.app), grant.passkey_confirmed_at !== null)) {
 		return { result: { ok: false, reason: 'write_refused' }, principalId: claims.sub }
 	}
 	const live = await resolveAuthorityAt(services, authority.principal, grant.app)

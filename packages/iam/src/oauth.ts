@@ -115,6 +115,7 @@ export async function grantAuthorization(
 		expires_at: input.session.expires_at,
 		revoked_at: null,
 		agent_label: null,
+		passkey_confirmed_at: null,
 	}
 	await services.repositories.oauth.createGrant(
 		grant,

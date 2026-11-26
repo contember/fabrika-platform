@@ -70,7 +70,7 @@ function toLogin(back: string, post: boolean): Response {
 }
 
 /** A form's credential field, parsed from its JSON; undefined when it is no JSON. */
-function credentialField(form: URLSearchParams): unknown {
+export function credentialField(form: URLSearchParams): unknown {
 	try {
 		return JSON.parse(form.get('credential') ?? '')
 	} catch {
@@ -78,13 +78,21 @@ function credentialField(form: URLSearchParams): unknown {
 	}
 }
 
-async function page(p: Page, title: string, content: string, status = 200): Promise<Response> {
+/** What a ceremony page needs to render: the installation, the language and the passkey texts in it. */
+export type CeremonyContext = Pick<Page, 'services' | 'locale' | 'text'>
+
+/** The ceremony context of a page outside the account page's flows, in `locale`. */
+export function ceremonyContext(services: Services, locale: Locale): CeremonyContext {
+	return { services, locale, text: catalogFor(locale).pages.passkeys }
+}
+
+async function page(p: CeremonyContext, title: string, content: string, status = 200): Promise<Response> {
 	return htmlPage({ locale: p.locale, brand: await installationBrand(p.services), title, content, status, script: WEBAUTHN_SCRIPT })
 }
 
 /** A page that runs one ceremony and posts its answer with `fields` to `action`. */
-async function ceremonyPage(
-	p: Page,
+export async function ceremonyPage(
+	p: CeremonyContext,
 	input: {
 		readonly title: string
 		readonly text: string

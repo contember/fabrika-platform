@@ -89,10 +89,11 @@ The grant holds one scope:
 | `read:<dimension>=<value>`, `write:<dimension>=<value>` | as above, with the person's permissions narrowed to that one value       |
 
 The device page shows the scope, and the narrowed actions for a narrowed one; the person may approve `read` for a
-`write` request, never the reverse. An environment serves `write` only where Control's `agent-write` gate in IAM is
+`write` request, never the reverse. An environment serves `write` where Control's `agent-write` gate in IAM is
 `open`: unprotected, or protected with `agent-write` `off` and no passkey. Under the strict default (`off` with a
-passkey) a protected environment serves `read` only until the device page asks the passkey; an environment with no
-gate mirrored serves `read` only. IAM reads the gate at every exchange, so a tightened gate refuses a `write` grant's
+passkey) Allow on a `write` request asks the person's passkey first, bound to the attempt, the scope and the lifetime;
+the grant records it, and a `write` grant without it is not served there. A person without a passkey is offered `read`,
+with a link to add one on the IAM account page. An environment with no gate mirrored serves `read` only. IAM reads the gate at every exchange, so a tightened gate refuses a `write` grant's
 next token (`write_refused`).
 
 Any RFC 8628 client obtains it. The `fabrika` CLI has no command for an application grant yet; the requests below

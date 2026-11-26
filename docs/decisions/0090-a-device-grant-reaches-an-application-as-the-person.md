@@ -175,12 +175,16 @@ Several parts follow the spec unchanged:
 - the rollout across proxy releases.
 
 The spec's two later steps, the `agent-write` category of protected environments and the person's own grant list,
-follow this decision. IAM serves a `write` grant only at an environment whose `agent-write` gate Control has mirrored
-as `open`: unprotected, or protected with mode `off` and no passkey (ADR-0083 §1, §4). The strict default is `off` with
-`stepUp: webauthn`, a passkey bound to the device attempt; until the device page asks it, IAM refuses `write` there as
-under `refuse`. An environment with no gate mirrored reads `refuse`: the absence fails closed. IAM reads the gate on the
-device page and at every exchange, so a gate that tightens ends a `write` grant at its next exchange (`write_refused`).
-The device page offers `read` for a `write` request it cannot serve, and says why.
+follow this decision. IAM serves a `write` grant at an environment whose `agent-write` gate Control has mirrored as
+`open` (unprotected, or protected with mode `off` and no passkey), and at one mirrored as `passkey` when a passkey
+confirmed the grant's approval (ADR-0083 §1, §4). The strict default is `off` with `stepUp: webauthn`: approving
+`write` there asks the person's passkey on the device page, on IAM's host, bound to the attempt, the scope and the
+lifetime they chose. IAM records when it answered on the attempt and on the grant (`passkey_confirmed_at`); a `write`
+grant without it is refused there as under `refuse`. A person without a passkey is offered `read`, with a link to add
+one. An environment with no gate mirrored reads `refuse`: the absence fails closed. IAM reads the gate on the device
+page and at every exchange, so a gate that tightens refuses a `write` grant from its next exchange on
+(`write_refused`), for as long as it holds. The
+device page offers `read` for a `write` request it cannot serve, and says why.
 
 **ADR-0022, changed.** An OAuth resource token still reaches no application endpoint as a bearer. What reaches the
 application is the token the proxy exchanges it for, and only on a row that lists `agent`. ADR-0022's rule 3 (the
@@ -196,13 +200,15 @@ exchange in step 3, the scope's kinds in step 5) and "Principal kinds" say so.
   narrowed to that project. Granting them a role at the project, or approving an unnarrowed grant, are the ways out.
   The same holds for a person whose relation access comes only from a global role: a narrowed grant carries none of
   it. The device page shows the narrowed actions, so they see it before approving.
-- An agent writes at an unprotected environment, and at a protected one whose `agent-write` is `off` without a
-  passkey; under the strict default it reads until the device page asks the passkey.
+- An agent writes at an unprotected environment, at a protected one whose `agent-write` is `off` without a passkey,
+  and under the strict default once its person confirmed the approval with a passkey.
 - A grant names one resource and one scope. An agent that works on two projects holds two grants. Its credential
   helper keys its refresh tokens by origin and scope, an addition to the spec's custody step.
 - **Rollout.**
   - The narrowing adds no column: the scope token is stored in `oauth_grants.scopes` as every scope is. The spec's
-    migrations (the grant's label, the audit actor columns, the mirror) are additive.
+    migrations (the grant's label, the audit actor columns, the mirror, `passkey_confirmed_at`) are additive. A `write`
+    grant approved before `passkey_confirmed_at` existed carries NULL, so it keeps being served only where the gate is
+    `open`.
   - No generated file or environment variable changes. An application that does not declare `agent` is served
     exactly as before.
   - A framework release that declares `agent` needs a platform release that knows it. Control reads the contract with

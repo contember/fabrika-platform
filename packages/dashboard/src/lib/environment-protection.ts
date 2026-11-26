@@ -161,7 +161,7 @@ export const APPROVAL_CATEGORY_GROUPS: readonly { readonly title: string; readon
 				category: 'agent-write',
 				label: 'An agent writing as a person',
 				hint:
-					"a person lets an agent act as them with changes, on IAM's approval page; while that takes a passkey, IAM refuses writing until its page asks for one",
+					"a person lets an agent act as them with changes, on IAM's approval page; while that takes a passkey, the person confirms it there with one",
 			},
 		],
 	},
@@ -278,7 +278,7 @@ export function settingsSummary(settings: ApprovalSettings, policy: ApprovalPoli
 		...(others.length === 0 ? [] : [`Someone other than the requester's person decides: ${others.join(', ')}.`]),
 		...(passkey.length === 0 ? [] : [`A passkey confirms deciding: ${passkey.join(', ')}.`]),
 		...(policy['agent-write'] === 'off' && settings.stepUp['agent-write'] === 'webauthn'
-			? ["An agent writing as a person takes a passkey; until IAM's approval page asks for one, agents only read here."]
+			? ["An agent writing as a person takes a passkey, confirmed on IAM's approval page."]
 			: []),
 	].join(' ')
 }

@@ -51,19 +51,25 @@ export function agentWriteGate(services: Services, app: string): Promise<AgentWr
 
 /**
  * Whether an environment whose `agent-write` gate is `gate` serves an agent grant of `mode` (ADR-0090 §5). `read` is
- * served everywhere; `write` only where the gate is `open`. A `passkey` gate refuses it too until the device page asks
- * that passkey, so a protected environment fails closed. Read at the approval and at every exchange, so a gate that
- * tightens ends a `write` grant at its next exchange.
+ * served everywhere; `write` where the gate is `open`, and where it is `passkey` only when a passkey confirmed the
+ * grant's approval on the device page. Read at the approval and at every exchange, so a gate that tightens ends a
+ * `write` grant at its next exchange.
  */
-export function agentModeServed(mode: AgentScopeMode, gate: AgentWriteGate): boolean {
-	return mode === 'read' || gate === 'open'
+export function agentModeServed(mode: AgentScopeMode, gate: AgentWriteGate, passkeyConfirmed: boolean): boolean {
+	return mode === 'read' || gate === 'open' || (gate === 'passkey' && passkeyConfirmed)
+}
+
+/** Whether approving an agent grant of `mode` where the gate is `gate` takes a passkey confirmation on the device page. */
+export function agentModeTakesPasskey(mode: AgentScopeMode, gate: AgentWriteGate): boolean {
+	return mode === 'write' && gate === 'passkey'
 }
 
 /**
  * The scopes a person may approve for `requested`, widest first: the request, or `read` for `write`, with the same
- * narrowing, and only modes the environment serves. Never wider than the request, and the narrowing never changes.
+ * narrowing, and only modes the environment serves; under a `passkey` gate, `write` only for a person who holds a
+ * passkey to confirm it with. Never wider than the request, and the narrowing never changes.
  */
-export function approvableAgentScopes(requested: AgentScope, gate: AgentWriteGate): AgentScope[] {
+export function approvableAgentScopes(requested: AgentScope, gate: AgentWriteGate, holdsPasskey: boolean): AgentScope[] {
 	const modes: AgentScopeMode[] = requested.mode === 'write' ? ['write', 'read'] : ['read']
-	return modes.filter((mode) => agentModeServed(mode, gate)).map((mode) => ({ mode, within: requested.within }))
+	return modes.filter((mode) => agentModeServed(mode, gate, holdsPasskey)).map((mode) => ({ mode, within: requested.within }))
 }

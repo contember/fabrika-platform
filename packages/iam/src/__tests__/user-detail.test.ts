@@ -234,6 +234,7 @@ function suite(label: string, backend: () => { repositories: IamRepositories; db
 				expires_at: future(),
 				revoked_at: null,
 				agent_label: null,
+				passkey_confirmed_at: null,
 			}, { token_hash: crypto.randomUUID(), redirect_uri: 'https://client.example.test/callback', challenge: 'challenge', expires_at: future() })
 			expect((await listConnections(context, { principalId: f.user.id })).items[0]?.status).toBe('active')
 			expect((await listConnections(f.context, { principalId: f.user.id })).items[0]?.status).toBe('unavailable')
