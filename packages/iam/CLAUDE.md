@@ -756,7 +756,8 @@ fails if that stops being true — it is the guard, not documentation of one.
 - **A PASSKEY IS A PERSON'S OWN, ITS RELYING PARTY IS IAM, AND ONLY A PASSKEY THEY HOLD CHANGES THE SET** (`src/passkeys.ts`,
   `auth/passkey-pages.ts`, `admin/passkeys.ts`, `passkeys` and `passkey_challenges`, migrations 0039 and 0047). The RP ID
   is the issuer's host and the origin the issuer's (`relyingParty`), so every ceremony runs on IAM's own pages: the
-  account page adds and removes one, and `/auth/step-up` answers a step-up. Those pages post forms only (no fetch),
+  account page adds and removes one, `/auth/step-up` answers a step-up, and the device page asks one before an agent's
+  `write` under a `passkey` gate (`iam:device:` binding, `oauth-device-page.ts`). Those pages post forms only (no fetch),
   same-origin, with the person's IAM login. Verification is `@simplewebauthn/server`'s, never hand-rolled, with user
   presence and verification required. A challenge lives five minutes, bound to its principal and to an opaque binding
   set at issue, at most ten open per person; a ceremony of the account page spends it with the DELETE that reads it, and
@@ -936,7 +937,7 @@ fails if that stops being true — it is the guard, not documentation of one.
   when protected, `refuse` when chosen); no row, NULL, a gate this release does not know, or one written at another
   revision than the row's (`agent_write_revision`, which a rolled-back IAM does not move) reads `refuse`.
   `agentModeServed` (`agent-resource.ts`) is the one place the rule lives, read at the device page and at every exchange,
-  so a gate that tightens ends a `write` grant at its next exchange. Under `passkey`, Allow on `write` renders a ceremony
+  so a gate that tightens refuses a `write` grant from its next exchange on, while the gate holds. Under `passkey`, Allow on `write` renders a ceremony
   page (`confirmWithPasskey`, `oauth-device-page.ts`) whose assertion is bound to the attempt, the scope and the lifetime
   (`iam:device:<sha-256>`); its time is stored as `passkey_confirmed_at` on the attempt and copied to the grant, and a
   `write` grant without it is refused there. The device page offers `read` for a `write` request it cannot serve (no

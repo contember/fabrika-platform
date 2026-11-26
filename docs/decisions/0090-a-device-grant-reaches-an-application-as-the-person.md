@@ -182,7 +182,8 @@ confirmed the grant's approval (ADR-0083 §1, §4). The strict default is `off` 
 lifetime they chose. IAM records when it answered on the attempt and on the grant (`passkey_confirmed_at`); a `write`
 grant without it is refused there as under `refuse`. A person without a passkey is offered `read`, with a link to add
 one. An environment with no gate mirrored reads `refuse`: the absence fails closed. IAM reads the gate on the device
-page and at every exchange, so a gate that tightens ends a `write` grant at its next exchange (`write_refused`). The
+page and at every exchange, so a gate that tightens refuses a `write` grant from its next exchange on
+(`write_refused`), for as long as it holds. The
 device page offers `read` for a `write` request it cannot serve, and says why.
 
 **ADR-0022, changed.** An OAuth resource token still reaches no application endpoint as a bearer. What reaches the

@@ -140,8 +140,10 @@ step-up is ([Passkeys](#passkeys)), but it does not guard TOTP enrolment.
 
 ## Passkeys
 
-Any person can keep passkeys (WebAuthn credentials) at IAM. A passkey confirms a sensitive step in the console: a
-**step-up**. It does not sign anyone in. Sign-in stays as above.
+Any person can keep passkeys (WebAuthn credentials) at IAM. A passkey confirms a sensitive step: a **step-up** in the
+console, and on IAM's device page the approval of an agent's `write` grant where the environment's `agent-write` gate
+takes one (ADR-0090 §5; the binding is `iam:device:` and the SHA-256 of the attempt, the scope and the lifetime). It
+does not sign anyone in. Sign-in stays as above.
 
 **The relying party is IAM.** The RP ID is the host of IAM's issuer and the origin is the issuer's, so every ceremony runs
 on IAM's own pages, where the person signs in, and a passkey answers there and nowhere else. A person who uses only
