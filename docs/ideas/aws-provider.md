@@ -634,7 +634,15 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
        service pinned to a revision ARN; the platform proxy's group admits only the platform balancer's group; no
        Service Connect namespace a service of Control's could join; no platform security group ever associated with the
        applications' VPC (a security group VPC association would let a task there carry it, through the task runner
-       too).
+       too). Their images first (built, `installation/images.ts`): no release publishes an image, so the
+       operator's account builds them, as Zerops builds the platform from source. One CodeBuild project under the
+       platform's names fetches the release commit by its full id from the public repository, checks it is that
+       commit, and builds either the services' image (`packages/provider-aws/platform.Dockerfile`: IAM, Control with
+       the console, Operations, each started by its task definition's command; tagged by the commit) or the platform
+       proxy's (`packages/proxy/Dockerfile` with the platform's manifest, which the operator's command writes under
+       `platform/` of the sources bucket, and the platform VPC's balancer subnets as its trusted ranges; tagged by the
+       commit and the manifest's digest). Both on x86, in immutable repositories under `fabrika/platform/`, out of
+       Control's reach. Then the services themselves.
     6. **The commands**: `install`, `plan`, `deploy`, `upgrade`, `admin` and `guide`, the sidecar workflow and the
        GitHub OIDC role.
 
