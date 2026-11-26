@@ -14,8 +14,11 @@
 // - **The VPC's range is the operator's choice** (a /16, so it can avoid a range the operator peers with); the subnets
 //   are derived from it: the tasks' two /20s at its start, the balancers' two /24s near its end.
 //
-// UNVERIFIED: the resources' properties and that `Fn::GetAZs` answers at least two zones follow the CloudFormation
-// reference; none was checked against an account.
+// UNVERIFIED: the resources' properties follow the CloudFormation reference; none was checked against an account. So
+// does that `Fn::GetAZs` answers at least two zones, which it may not: it answers only the zones where the account's
+// default VPC keeps a default subnet (all of the region's when it keeps none), so an account whose default VPC has a
+// default subnet in one zone alone fails the stack at `Fn::Select [1, …]`. The operator guide names that; the zones can
+// become a layout parameter if an account needs it.
 
 import type { JsonValue } from '@fabrika/provider-contract'
 import { blockAt, blockContains, blockOf, blocksOverlap, isNetworkAddress, VPC_CIDR } from '../cidr'
@@ -39,9 +42,7 @@ export interface AwsNetworkLayout {
 
 /** The layout of `vpcCidr`, a /16 named by its network address; the tasks' and the balancers' subnets never overlap. */
 export function awsNetworkLayout(vpcCidr: string = AWS_DEFAULT_VPC_CIDR): AwsNetworkLayout {
-	if (!VPC_CIDR.test(vpcCidr) || !isNetworkAddress(vpcCidr) || blockOf(vpcCidr).prefix !== 16) {
-		throw new Error("aws: the installation's VPC range is not a /16 named by its network address")
-	}
+	checkVpcCidr(vpcCidr)
 	const zones = Array.from({ length: ZONES }, (_, zone) => zone)
 	return checkAwsNetworkLayout({
 		vpcCidr,
@@ -50,11 +51,18 @@ export function awsNetworkLayout(vpcCidr: string = AWS_DEFAULT_VPC_CIDR): AwsNet
 	})
 }
 
+function checkVpcCidr(vpcCidr: string): void {
+	if (!VPC_CIDR.test(vpcCidr) || !isNetworkAddress(vpcCidr) || blockOf(vpcCidr).prefix !== 16) {
+		throw new Error("aws: the installation's VPC range is not a /16 named by its network address")
+	}
+}
+
 /**
- * `layout` as given, or an error: one subnet per zone of each kind, each inside the VPC's range, and no two subnets
- * sharing an address, above all no task's subnet overlapping a balancer's.
+ * `layout` as given, or an error: the VPC's range a /16, one subnet per zone of each kind, each inside it, and no two
+ * subnets sharing an address, above all no task's subnet overlapping a balancer's.
  */
 export function checkAwsNetworkLayout(layout: AwsNetworkLayout): AwsNetworkLayout {
+	checkVpcCidr(layout.vpcCidr)
 	const subnets = [...layout.taskSubnetCidrs, ...layout.balancerSubnetCidrs]
 	if (
 		layout.taskSubnetCidrs.length !== ZONES || layout.balancerSubnetCidrs.length !== ZONES
@@ -104,58 +112,97 @@ export function awsNetworkStack(layout: AwsNetworkLayout): AwsStack {
 	}
 	layout.taskSubnetCidrs.forEach((cidr, index) => subnet(`TaskSubnet${index}`, cidr, index, `fabrika-tasks-${index}`))
 	layout.balancerSubnetCidrs.forEach((cidr, index) => subnet(`BalancerSubnet${index}`, cidr, index, `fabrika-balancers-${index}`))
-	const join = (prefix: string, count: number): JsonValue => ({
-		'Fn::Join': [',', Array.from({ length: count }, (_, index) => ({ Ref: `${prefix}${index}` }))],
+	const join = (prefix: string, count: number, value: (logical: string) => JsonValue): JsonValue => ({
+		'Fn::Join': [',', Array.from({ length: count }, (_, index) => value(`${prefix}${index}`))],
 	})
+	const ids = (logical: string): JsonValue => ({ Ref: logical })
+	const ranges = (logical: string): JsonValue => ({ 'Fn::GetAtt': [logical, 'CidrBlock'] })
 	return {
 		stackName: AWS_NETWORK_STACK,
 		template: {
 			AWSTemplateFormatVersion: '2010-09-09',
 			Description: "fabrika: the installation's network",
 			Resources: resources,
+			// The ranges as AWS created them, beside the ids: Control is told what the subnets are, checked again
+			// (`awsNetworkEnvironment`), never only what the layout meant them to be.
 			Outputs: {
 				VpcId: { Value: { Ref: 'Vpc' } },
-				TaskSubnetIds: { Value: join('TaskSubnet', layout.taskSubnetCidrs.length) },
-				BalancerSubnetIds: { Value: join('BalancerSubnet', layout.balancerSubnetCidrs.length) },
+				VpcCidr: { Value: { 'Fn::GetAtt': ['Vpc', 'CidrBlock'] } },
+				TaskSubnetIds: { Value: join('TaskSubnet', layout.taskSubnetCidrs.length, ids) },
+				TaskSubnetCidrs: { Value: join('TaskSubnet', layout.taskSubnetCidrs.length, ranges) },
+				BalancerSubnetIds: { Value: join('BalancerSubnet', layout.balancerSubnetCidrs.length, ids) },
+				BalancerSubnetCidrs: { Value: join('BalancerSubnet', layout.balancerSubnetCidrs.length, ranges) },
 			},
 		},
 		tags: { 'fabrika:platform': 'network' },
 	}
 }
 
-/** What the network's stack created under ids AWS chose. */
+/** What the network's stack created: the ids AWS chose, and each subnet's range as AWS reports it, in order. */
 export interface AwsNetworkOutputs {
 	readonly vpcId: string
+	readonly vpcCidr: string
 	readonly taskSubnetIds: readonly string[]
+	readonly taskSubnetCidrs: readonly string[]
 	readonly balancerSubnetIds: readonly string[]
+	readonly balancerSubnetCidrs: readonly string[]
 }
 
-/** The network's outputs as the stack answers them, or an error naming the output of another form. */
+const SUBNET_ID = /^subnet-[0-9a-f]{8,17}$/
+
+/**
+ * The network's outputs as the stack answers them, or an error naming the output of another form: one subnet id per
+ * zone of each kind, none twice and none of both kinds, and the ranges a layout of their own (`checkAwsNetworkLayout`),
+ * so no task's subnet overlaps a balancer's in what AWS created either.
+ */
 export function awsNetworkOutputs(outputs: Readonly<Record<string, string>>): AwsNetworkOutputs {
 	const vpcId = outputs['VpcId'] ?? ''
 	const list = (key: string): readonly string[] => (outputs[key] ?? '').split(',').filter((id) => id !== '')
+	if (!/^vpc-[0-9a-f]{8,17}$/.test(vpcId)) throw new Error("aws: the network stack's VpcId output is not a VPC id")
 	const taskSubnetIds = list('TaskSubnetIds')
 	const balancerSubnetIds = list('BalancerSubnetIds')
-	if (!/^vpc-[0-9a-f]{8,17}$/.test(vpcId)) throw new Error("aws: the network stack's VpcId output is not a VPC id")
 	for (const [key, ids] of [['TaskSubnetIds', taskSubnetIds], ['BalancerSubnetIds', balancerSubnetIds]] satisfies [string, readonly string[]][]) {
-		if (ids.length !== ZONES || !ids.every((id) => /^subnet-[0-9a-f]{8,17}$/.test(id))) {
+		if (ids.length !== ZONES || !ids.every((id) => SUBNET_ID.test(id))) {
 			throw new Error(`aws: the network stack's ${key} output is not ${ZONES} subnet ids`)
 		}
 	}
-	return { vpcId, taskSubnetIds, balancerSubnetIds }
+	const all = [...taskSubnetIds, ...balancerSubnetIds]
+	if (new Set(all).size !== all.length) {
+		throw new Error("aws: the network stack's outputs name one subnet twice, or one as both a task's and a balancer's")
+	}
+	const network: AwsNetworkOutputs = {
+		vpcId,
+		vpcCidr: outputs['VpcCidr'] ?? '',
+		taskSubnetIds,
+		taskSubnetCidrs: list('TaskSubnetCidrs'),
+		balancerSubnetIds,
+		balancerSubnetCidrs: list('BalancerSubnetCidrs'),
+	}
+	checkAwsNetworkLayout(network)
+	return network
 }
+
+const sameList = (a: readonly string[], b: readonly string[]): boolean => a.length === b.length && a.every((value, index) => value === b[index])
 
 /**
  * Control's variables for the network (`packages/control/src/aws/provider.ts`): where its tasks run, with a public
- * address, and the ranges a namespace proxy is scoped to and trusts. The balancers' subnets are never among the tasks'.
+ * address, and the ranges a namespace proxy is scoped to and trusts, all from what AWS created. Refused when those
+ * ranges are not the layout's: a stack that drifted, or was applied from another layout, never reaches Control.
  */
 export function awsNetworkEnvironment(layout: AwsNetworkLayout, outputs: AwsNetworkOutputs): Readonly<Record<string, string>> {
 	checkAwsNetworkLayout(layout)
+	checkAwsNetworkLayout(outputs)
+	if (
+		outputs.vpcCidr !== layout.vpcCidr || !sameList(outputs.taskSubnetCidrs, layout.taskSubnetCidrs)
+		|| !sameList(outputs.balancerSubnetCidrs, layout.balancerSubnetCidrs)
+	) {
+		throw new Error("aws: the network stack's ranges are not the installation's layout")
+	}
 	return {
 		FABRIKA_AWS_VPC_ID: outputs.vpcId,
 		FABRIKA_AWS_SUBNETS: outputs.taskSubnetIds.join(','),
 		FABRIKA_AWS_TASK_PUBLIC_IP: 'true',
-		FABRIKA_AWS_VPC_CIDR: layout.vpcCidr,
-		FABRIKA_AWS_BALANCER_SUBNET_CIDRS: layout.balancerSubnetCidrs.join(','),
+		FABRIKA_AWS_VPC_CIDR: outputs.vpcCidr,
+		FABRIKA_AWS_BALANCER_SUBNET_CIDRS: outputs.balancerSubnetCidrs.join(','),
 	}
 }

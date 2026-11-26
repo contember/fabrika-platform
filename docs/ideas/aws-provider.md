@@ -571,7 +571,10 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     own change:
     1. **The network** (built, `installation/network.ts`): one VPC of the operator's /16 (`10.80.0.0/16` by default)
        in two availability zones; the tasks' two /20s and the balancers' two /24s, all public through one internet
-       gateway, no NAT gateway (every task gets a public address); Control's network variables from its outputs.
+       gateway, no NAT gateway (every task gets a public address); Control's network variables from its outputs, which
+       carry each subnet's range as AWS created it: no subnet named twice or as both kinds, no task's range over a
+       balancer's, and the ranges the layout's, or nothing reaches Control. Any later subnet (the database's, an
+       interface endpoint's) stays out of the balancers' subnets too.
     2. **The balancers**: the applications' balancer (its group, the HTTPS listener with a fixed default answer and a
        default certificate, `xff_header_processing.mode` at `append`, the HTTP listener's redirect) and the
        platform's, with its rules for the installation's hosts to the platform proxy.

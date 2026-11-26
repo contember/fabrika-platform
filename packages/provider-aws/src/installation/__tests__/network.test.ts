@@ -15,8 +15,11 @@ import {
 
 const OUTPUTS = {
 	VpcId: 'vpc-0123456789abcdef0',
+	VpcCidr: '10.80.0.0/16',
 	TaskSubnetIds: 'subnet-0123456789abcdef0,subnet-0123456789abcdef1',
+	TaskSubnetCidrs: '10.80.0.0/20,10.80.16.0/20',
 	BalancerSubnetIds: 'subnet-0123456789abcdef2,subnet-0123456789abcdef3',
+	BalancerSubnetCidrs: '10.80.240.0/24,10.80.241.0/24',
 }
 
 describe("the installation's network", () => {
@@ -73,22 +76,56 @@ describe("the installation's network", () => {
 		for (const [logical] of subnets) {
 			expect(resources[`${logical}Routes`].Properties).toEqual({ SubnetId: { Ref: logical }, RouteTableId: { Ref: 'PublicRouteTable' } })
 		}
+		const range = (logical: string) => ({ 'Fn::GetAtt': [logical, 'CidrBlock'] })
 		expect(template.Outputs).toEqual({
 			VpcId: { Value: { Ref: 'Vpc' } },
+			VpcCidr: { Value: range('Vpc') },
 			TaskSubnetIds: { Value: { 'Fn::Join': [',', [{ Ref: 'TaskSubnet0' }, { Ref: 'TaskSubnet1' }]] } },
+			TaskSubnetCidrs: { Value: { 'Fn::Join': [',', [range('TaskSubnet0'), range('TaskSubnet1')]] } },
 			BalancerSubnetIds: { Value: { 'Fn::Join': [',', [{ Ref: 'BalancerSubnet0' }, { Ref: 'BalancerSubnet1' }]] } },
+			BalancerSubnetCidrs: { Value: { 'Fn::Join': [',', [range('BalancerSubnet0'), range('BalancerSubnet1')]] } },
 		})
 	})
 
 	test('the outputs are read back, and one of another form is refused', () => {
 		expect(awsNetworkOutputs(OUTPUTS)).toEqual({
 			vpcId: 'vpc-0123456789abcdef0',
+			vpcCidr: '10.80.0.0/16',
 			taskSubnetIds: ['subnet-0123456789abcdef0', 'subnet-0123456789abcdef1'],
+			taskSubnetCidrs: ['10.80.0.0/20', '10.80.16.0/20'],
 			balancerSubnetIds: ['subnet-0123456789abcdef2', 'subnet-0123456789abcdef3'],
+			balancerSubnetCidrs: ['10.80.240.0/24', '10.80.241.0/24'],
 		})
 		expect(() => awsNetworkOutputs({ ...OUTPUTS, VpcId: '' })).toThrow('VpcId')
 		expect(() => awsNetworkOutputs({ ...OUTPUTS, TaskSubnetIds: 'subnet-0123456789abcdef0' })).toThrow('TaskSubnetIds')
 		expect(() => awsNetworkOutputs({ ...OUTPUTS, BalancerSubnetIds: 'subnet-0123456789abcdef2,sg-0123456789abcdef3' })).toThrow('BalancerSubnetIds')
+	})
+
+	test("outputs that name a subnet twice, or as both a task's and a balancer's, or whose ranges overlap, are refused", () => {
+		expect(() => awsNetworkOutputs({ ...OUTPUTS, BalancerSubnetIds: 'subnet-0123456789abcdef1,subnet-0123456789abcdef3' })).toThrow('both')
+		expect(() => awsNetworkOutputs({ ...OUTPUTS, TaskSubnetIds: 'subnet-0123456789abcdef0,subnet-0123456789abcdef0' })).toThrow('twice')
+		// A task's subnet over a balancer's, as an adopted or drifted network could report it.
+		expect(() => awsNetworkOutputs({ ...OUTPUTS, TaskSubnetCidrs: '10.80.0.0/20,10.80.240.0/20' })).toThrow('overlap')
+		expect(() => awsNetworkOutputs({ ...OUTPUTS, BalancerSubnetCidrs: '10.80.240.0/24' })).toThrow('overlap')
+		expect(() => awsNetworkOutputs({ ...OUTPUTS, VpcCidr: '10.0.0.0/8' })).toThrow('not a /16')
+	})
+
+	test("outputs whose ranges are not the layout's never reach Control", () => {
+		const layout = awsNetworkLayout()
+		// A stack applied from another layout: valid on its own, but not this installation's.
+		const other = awsNetworkOutputs({
+			...OUTPUTS,
+			TaskSubnetCidrs: '10.80.32.0/20,10.80.48.0/20',
+			BalancerSubnetCidrs: '10.80.242.0/24,10.80.243.0/24',
+		})
+		expect(() => awsNetworkEnvironment(layout, other)).toThrow("not the installation's layout")
+		expect(() => awsNetworkEnvironment(awsNetworkLayout('10.81.0.0/16'), awsNetworkOutputs(OUTPUTS))).toThrow("not the installation's layout")
+	})
+
+	test("the layout's own check refuses a VPC range that is not a /16, however the layout was made", () => {
+		const layout = awsNetworkLayout()
+		expect(() => checkAwsNetworkLayout({ ...layout, vpcCidr: '10.0.0.0/8' })).toThrow('not a /16')
+		expect(() => checkAwsNetworkLayout({ ...layout, vpcCidr: '10.80.0.0/17' })).toThrow('not a /16')
 	})
 
 	test("Control's variables: tasks in the task subnets with a public address, and the balancers' ranges its proxies trust", () => {
