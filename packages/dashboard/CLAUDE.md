@@ -43,7 +43,7 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   ADR-0058) and `appPeople.apps`. `mayOpen` gives each rail page the rule its LOADER needs, so a page in the rail loads: the
   overview needs `app.manage`, `namespace.manage` and `deploy.read` globally, Applications `app.manage` globally,
   Deploy runs `deploy.read` in any scope, Operations `operations.read` in any scope, Access's Users any IAM administration, every other Access page (External applications included) and
-  Settings → Branding and Passwords the installation's. The root layout drops the rest,
+  Settings → Branding, Passwords and Provisioning the installation's. The root layout drops the rest,
   answers a hidden page reached by URL with "not available", and shows the no-access page when nothing is left. A
   part no service answered is `null` and reads as usable, so an outage still shows its own page. Controls use
   `mayDo` at the object's app and environment (`ConsoleAccessContext`). The action names come from the contracts:
@@ -57,6 +57,9 @@ bun run test         # bun test src/__tests__ (excluded from tsc; no DOM)
   IAM's `passwordPolicy.get` / `.set`; `lib/password-policy.ts` holds a typed value to the range IAM answers with
   (`minLengthFloor`–`maxLength`) and words the risk: a note below the default, a `notice-bad` warning below 8. IAM checks
   the value again.
+- **Settings → Provisioning holds the installation's SCIM token, which IAM keeps (ADR-0091).** The page calls IAM's
+  `scim.get` / `rotateToken` / `revokeToken`, shows the tenant URL, and shows a new token once (`SecretModal`). Rotation
+  and removal confirm first: both stop the identity provider until it holds the new token.
 - **Account → Passkeys is the person's own, and the console runs only the browser half** (`routes/account/passkeys.tsx`,
   `lib/webauthn.ts`). IAM issues every challenge and verifies every answer (`passkeys.*` of `/admin/rpc`); the console
   turns IAM's JSON options into `navigator.credentials` calls and the answer back, with no WebAuthn library. Adding a

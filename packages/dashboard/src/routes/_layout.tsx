@@ -68,6 +68,13 @@ const NAV: NavSection[] = [
 				icon: 'key',
 				match: '/settings/passwords',
 			},
+			{
+				to: 'settings/provisioning',
+				label: 'Provisioning',
+				description: 'The identity provider that manages people',
+				icon: 'users',
+				match: '/settings/provisioning',
+			},
 		],
 	},
 	{

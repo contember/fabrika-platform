@@ -54,7 +54,7 @@ describe('the console shows what its caller may use', () => {
 	test('an admin of the console and of IAM sees every section', () => {
 		expect(rail(caller({ global: EVERYTHING }, { iam: { kind: 'installation' } }))).toEqual([
 			'Overview',
-			'Delivery: Applications, Namespaces, Deploy runs, Approvals, Mail, Source connection, Branding, Passwords',
+			'Delivery: Applications, Namespaces, Deploy runs, Approvals, Mail, Source connection, Branding, Passwords, Provisioning',
 			'Access: Overview, Users, Credentials, Permissions, External applications, Audit',
 			'Operations: Overview, Errors, Sources, Releases, Health',
 		])
@@ -82,9 +82,9 @@ describe('the console shows what its caller may use', () => {
 		])
 	})
 
-	test('an IAM administrator with no console role sees Access, Approvals (its grant requests), Branding and Passwords, and an application administrator sees People and Approvals (its own requests)', () => {
+	test('an IAM administrator with no console role sees Access, Approvals (its grant requests), Branding, Passwords and Provisioning, and an application administrator sees People and Approvals (its own requests)', () => {
 		expect(rail(caller({}, { iam: { kind: 'installation' } }))).toEqual([
-			'Delivery: Approvals, Branding, Passwords',
+			'Delivery: Approvals, Branding, Passwords, Provisioning',
 			'Access: Overview, Users, Credentials, Permissions, External applications, Audit',
 		])
 		expect(rail(caller({}, { administersPeople: true }))).toEqual(['Delivery: Approvals', 'Your applications: People'])
