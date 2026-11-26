@@ -2,7 +2,7 @@
 // application's SQLite schema. Runs with `bun test --isolate`, and beside the generated endpoint access test in one
 // process: a later kit of the application takes its data layer over.
 
-import { createClient, RpcError } from '@fabrika/app/client'
+import { createClient, download, RpcError } from '@fabrika/app/client'
 import { statusOf, testKit } from '@fabrika/app/testing'
 import { testDatabase } from '@fabrika/db/testing-sqlite'
 import { MemoryFileObjects } from '@fabrika/platform/testing'
@@ -118,5 +118,22 @@ describe('notes', () => {
 		const stamp = reviewed.find((note) => note.id === id)?.reviewedAt
 		expect(await kit.runJob('review')).toEqual({ status: 'succeeded', attempts: 1 })
 		expect((await viewerApi.list({ projectId: 'demo' })).items.find((note) => note.id === id)?.reviewedAt).toBe(stamp)
+	})
+})
+
+describe("a person's agent (ADR-0090)", () => {
+	const OTHER = { type: 'project', value: 'other' } as const
+	const person = kit.testCaller([{ role: 'editor', scope: DEMO }, { role: 'editor', scope: OTHER }])
+	const own = createClient(contract, 'notes', { fetch: kit.browser(person) })
+
+	test('a grant narrowed to one project reads that project and nothing of another, and writes nothing', async () => {
+		const { id } = await own.create({ projectId: 'demo', title: 'for the agent' })
+		const elsewhere = await own.create({ projectId: 'other', title: 'not for the agent' })
+		const { token } = await kit.agentGrant(person, { scope: 'read:project=demo', label: 'summary script' })
+		const agent = createClient(contract, 'notes', { fetch: kit.fetch, key: token })
+		expect((await agent.list({ projectId: 'demo' })).items.map((note) => note.id)).toContain(id)
+		expect(await statusOf(agent.list({ projectId: 'other' }))).toBe(403)
+		expect(await statusOf(download(agent.attachment, { id: elsewhere.id }))).toBe(404)
+		expect(await statusOf(agent.create({ projectId: 'demo', title: 'refused' }))).toBe(403)
 	})
 })

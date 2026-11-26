@@ -2,6 +2,8 @@
 // object is strict and every field required, so a value that is not exactly an artifact is refused, not coerced.
 
 import {
+	AGENT_CALLER,
+	AGENT_SCOPE_KINDS,
 	ANY_ORIGIN_KINDS,
 	type ArrayShape,
 	type AttachmentShape,
@@ -168,8 +170,10 @@ function outputShapeSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<OutputSha
 
 export const outputShapeSchema: z.ZodType<OutputShape> = outputShapeSchemaOf(schemaShapeSchema)
 
-const caller = z.union([z.enum(['human', 'machine', 'link']), z.templateLiteral(['app:', z.string().min(1)])])
-const rpcCaller = z.enum(['human', 'machine'])
+const caller = z.union([z.enum(['human', 'machine', 'agent', 'link']), z.templateLiteral(['app:', z.string().min(1)])])
+const rpcCaller = z.enum(['human', 'machine', 'agent'])
+/** The kinds an agent's grant can reach at all: its widest scope's (ADR-0090 §2). */
+const AGENT_ROW_KINDS: readonly string[] = AGENT_SCOPE_KINDS.write
 
 const accessForm = z.discriminatedUnion('form', [
 	z.strictObject({ form: z.literal('over'), dimension: name }),
@@ -532,6 +536,9 @@ function artifactSchemaOf(shape: z.ZodType<SchemaShape>): z.ZodType<ContractArti
 			for (const [index, row] of rows.entries()) {
 				if (row.source.kind !== 'export' && row.callers.some((caller) => caller.startsWith('app:'))) {
 					context.addIssue({ code: 'custom', path: [index, 'callers'], message: 'an app:<id> caller reaches only an export row' })
+				}
+				if (row.callers.some((caller) => caller === AGENT_CALLER) && (row.source.kind !== 'mount' || !AGENT_ROW_KINDS.includes(row.kind))) {
+					context.addIssue({ code: 'custom', path: [index, 'callers'], message: 'an agent caller reaches only a procedure of an RPC mount (ADR-0090)' })
 				}
 				if (row.source.kind === 'export' && row.requirement?.kind !== 'action') {
 					context.addIssue({ code: 'custom', path: [index, 'requirement'], message: 'an export row requires an action' })

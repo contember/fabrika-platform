@@ -6,6 +6,8 @@
 
 import type { IamMembership, MembershipRequestCaller } from '@fabrika/auth'
 import {
+	AGENT_CALLER,
+	agentScopeAdmits,
 	answersFile,
 	type CapabilitiesRequirement,
 	type CompiledEndpointTable,
@@ -130,7 +132,7 @@ import {
 import { multipartBoundary, MultipartError, multipartParts, type MultipartReader } from './multipart'
 import { notifier, type Notify, type NotifyRules } from './notify'
 import { paramsObject, urlParams } from './params'
-import { globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
+import { type AgentGrant, globalHolds, pageCallerOf, presentedBy, type Principal } from './principal'
 import { project, ProjectionRefusedError } from './project'
 import { bucketsOf, DEFAULT_ADMISSION, type InFlightShare, type ProcedureAdmission, requestClient } from './public'
 import { pushInboxRequest, type PushSubscriptionAnswer, pushSubscriptionRequest } from './push-subscription'
@@ -445,6 +447,8 @@ export interface RuntimeParts {
 
 interface Caller {
 	readonly principal: Principal
+	/** The agent a person's token acts for (`ctx.agent`), or `null`. */
+	readonly agent: AgentGrant | null
 	/** The principal id a capability is granted to: the token's subject. */
 	readonly subject: string
 	readonly perms: PermissionEntry[]
@@ -709,12 +713,17 @@ export class ContractRuntime {
 			const caller = presented === 'no_caller' ? 'resource' : presented.caller
 			throw new ForbiddenError(`A ${caller} caller cannot call '${row.id}' (callers: ${row.callers.join(', ')})`)
 		}
+		// The proxy's scope check, repeated as authorization (ADR-0090 §3): a `read` grant reaches no mutation.
+		if (presented.agent !== null && !agentScopeAdmits(presented.agent.scope.mode, row.kind)) {
+			throw new ForbiddenError(`An agent's ${presented.agent.scope.mode} grant cannot call the ${row.kind} '${row.id}'`)
+		}
 		if (!satisfies(row.requirement, verified.claims.perms)) {
 			throw new ForbiddenError(`'${row.id}' needs ${describeRequirement(row)}, and the caller holds none`)
 		}
 		admit(row, request)
 		return {
 			principal: presented.principal,
+			agent: presented.agent,
 			subject: verified.claims.sub,
 			perms: verified.claims.perms,
 			token,
@@ -799,6 +808,8 @@ export class ContractRuntime {
 						}
 						const ctx = Object.freeze({
 							principal: caller.principal,
+							// Only a group that lists `agent` has `ctx.agent`, so its handler tells the person from the person's agent.
+							...(served.row.callers.includes(AGENT_CALLER) ? { agent: caller.agent } : {}),
 							requestId: frame.id,
 							signal,
 							client: requestClient(request, this.#parts.clientVouched),

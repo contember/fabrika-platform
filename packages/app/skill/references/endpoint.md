@@ -101,6 +101,10 @@ export const WorkloadRow = z.strictObject({
   its own read action is left out for every other action.
 - Never use `{ member: true }` for application data. `callers` is `['human']`, `['machine']` or both; every group of
   one mount names the same callers.
+- `'agent'` beside `'human'` lets a person's agent with a device grant call the group as that person (ADR-0090):
+  `ctx.principal` is the person, `ctx.agent` is `{ grant, label, scope }` (`null` when the person calls). A `read` grant
+  reaches queries and downloads only. Leave `agent` off a group whose procedures need the person in front of the screen,
+  or check `ctx.agent` in the handler.
 
 ### Data of the whole application: `app: true`
 

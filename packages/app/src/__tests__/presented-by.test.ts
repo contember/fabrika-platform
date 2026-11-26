@@ -15,9 +15,19 @@ const person = {
 }
 
 describe('presentedBy', () => {
-	test("a person's token presents the person; the same token acting for an agent presents no caller until contracts declare one", () => {
-		expect(presentedBy(buildAccessClaims(person))).toMatchObject({ caller: 'human', principal: { kind: 'user', id: 'user-1' } })
+	test("a person's token presents the person; acting for an agent, it presents the agent caller, the person and the grant", () => {
+		expect(presentedBy(buildAccessClaims(person))).toMatchObject({ caller: 'human', principal: { kind: 'user', id: 'user-1' }, agent: null })
+		const act: AgentActClaims = { sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: { mode: 'read', within: null }, label: 'my agent' }
+		expect(presentedBy(buildAccessClaims({ ...person, act }))).toEqual({
+			caller: 'agent',
+			principal: { kind: 'user', id: 'user-1', label: 'Ann', email: 'ann@example.com' },
+			agent: { grant: 'grant-1', label: 'my agent', scope: { mode: 'read', within: null } },
+		})
+	})
+
+	test('an agent token without the mailbox presents nobody, as a person token without one', () => {
+		const { email: _email, ...noMailbox } = person
 		const act: AgentActClaims = { sub: AGENT_CLIENT_ID, grant: 'grant-1', scope: { mode: 'read', within: null } }
-		expect(presentedBy(buildAccessClaims({ ...person, act }))).toBe('no_caller')
+		expect(presentedBy(buildAccessClaims({ ...noMailbox, act }))).toBe('no_mailbox')
 	})
 })

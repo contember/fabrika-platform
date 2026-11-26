@@ -62,12 +62,13 @@ export type CallerOptOutField<Row, Public extends boolean, Co> = Public extends 
 	: { readonly caller?: Co }
 
 /**
- * `ctx.caller` of a procedure of a group for `Caller`: the person's row, `null` for any other caller kind; a message
+ * `ctx.caller` of a procedure of a group for `Caller`: the person's row (also when the person's agent calls), `null` for any
+ * other caller kind; a message
  * where the kit declares no caller or the procedure opts out.
  */
 export type CallerContext<Row, Caller extends string, Co> = [Row] extends [never]
 	? { readonly caller: Unavailable<"declare caller in defineApp's options: { caller: { table, principal, missing } }"> }
-	: [Co] extends [never] ? { readonly caller: Caller extends 'human' ? Row : null }
+	: [Co] extends [never] ? { readonly caller: Caller extends 'human' | 'agent' ? Row : null }
 	: { readonly caller: Unavailable<'this procedure opts out of ctx.caller (caller: false)'> }
 
 const isRecord = (value: unknown): value is Readonly<Record<string, unknown>> => typeof value === 'object' && value !== null && !Array.isArray(value)

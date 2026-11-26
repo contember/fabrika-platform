@@ -54,7 +54,7 @@ export type {
 	MemberManagement,
 	MemberTarget,
 } from './membership'
-export type { AppPrincipal, LinkHolder, Principal, PrincipalOf, PublicPrincipal, ServicePrincipal, UserPrincipal } from './principal'
+export type { AgentGrant, AppPrincipal, LinkHolder, Principal, PrincipalOf, PublicPrincipal, ServicePrincipal, UserPrincipal } from './principal'
 export { type AppDeps, defineDeps, serve, type ServeOptions } from './serve'
 export type { AssertedIdentity, OpenIdentification, TerminalIdentification } from './terminals'
 export type {

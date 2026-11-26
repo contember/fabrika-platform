@@ -72,6 +72,37 @@ Some failures cannot be retried, and the CLI says so:
   arrive: IAM may have spent it. The grant is then gone, and `fabrika control auth device` starts a new one.
 - **A failed `store`** after a successful refresh leaves only the spent token behind, with the same outcome.
 
+## An application environment
+
+A person can also hand an agent a grant to one deployed application environment
+([ADR-0090](../decisions/0090-a-device-grant-reaches-an-application-as-the-person.md)). The client is `agent-cli`, a
+second public client without a metadata document, served application resources alone. The resource is the
+environment's origin, `https://<host>`, and it is one while a group of the environment's approved contract lists the
+caller `agent`. Its metadata is at `https://<host>/.well-known/oauth-protected-resource`.
+
+The grant holds one scope:
+
+| Scope                                                   | Reaches                                                                  |
+| ------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `read` (the default)                                    | the queries and downloads of every group that lists `agent`              |
+| `write`                                                 | their mutations and uploads too; refused until the environment allows it |
+| `read:<dimension>=<value>`, `write:<dimension>=<value>` | as above, with the person's permissions narrowed to that one value       |
+
+The device page shows the scope, and the narrowed actions for a narrowed one; the person may approve `read` for a
+`write` request, never the reverse. Every environment serves `read` grants only until its `agent-write` mode is
+mirrored into IAM.
+
+Any RFC 8628 client obtains it: the metadata names the authorization server, whose device authorization endpoint takes
+`client_id=agent-cli`, `resource=https://<host>`, the `scope` and an optional `agent_label` (the name the application
+shows for the agent, at most 64 characters). The refresh token rotates as above. The `fabrika` CLI has no command for an
+application grant yet. The agent presents the access token as a bearer to the application, `Authorization: Bearer <token>`. The proxy verifies
+it, exchanges it at IAM for the person's own application token, and calls the procedure with that: the application
+sees the person (`ctx.principal`) and the agent (`ctx.agent`). At each exchange IAM reads the person's live permissions
+and narrows them to the grant's value: a global grant becomes the same action at the value, a grant at the value stays,
+and everything else is dropped, a grant at a container of the value included. So a grant narrowed to project A reaches
+what the person's grants at A reach and nothing at project B, apart from what the application itself declares to cross
+values (a member reveal, a `readThrough` or `writeThrough` path, a member-bound access view, `unscoped` or `sql`).
+
 ## Ending a grant
 
 A grant is bound to the IAM session that approved it, and IAM mints nothing for it once that session has ended. Signing

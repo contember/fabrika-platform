@@ -36,7 +36,18 @@ export {
 	type DevSeed,
 	type DevSeedResult,
 } from './dev'
-export { type JobName, TEST_ENVIRONMENT, TEST_ISSUER, TEST_PUSH_KEY, type TestConnection, type TestKit, testKit, type TestKitOptions } from './kit'
+export {
+	type JobName,
+	TEST_ENVIRONMENT,
+	TEST_ISSUER,
+	TEST_PUSH_KEY,
+	type TestAgentGrant,
+	type TestAgentGrantOptions,
+	type TestConnection,
+	type TestKit,
+	testKit,
+	type TestKitOptions,
+} from './kit'
 export type { SentInvitation, TestMembership } from './membership'
 export { statusOf } from './status'
 export type { TestIdentification, TestIdentificationState } from './terminals'

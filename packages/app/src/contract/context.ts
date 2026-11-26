@@ -25,7 +25,7 @@ import type { AppCapability, Ref, Within } from '../implement/capability'
 import type { ApplicationDirectory, LinkIssuing, MemberDirectory, MemberLookup, MemberManagement } from '../implement/membership'
 import type { AppPrincipal, PrincipalOf, PublicPrincipal, ServicePrincipal } from '../implement/principal'
 import type { TerminalIdentification } from '../implement/terminals'
-import type { CapabilityOf, ConnectCall, RequestContext } from '../implement/types'
+import type { AgentContext, CapabilityOf, ConnectCall, RequestContext } from '../implement/types'
 import type { WebhookDelivery, WebhookPrincipal } from '../implement/webhook'
 import type { AppMail, JobContext } from '../jobs/types'
 import type { ConnectSnapshot } from './connect'
@@ -415,6 +415,7 @@ export type EndpointContext<
 	D extends Declared<SqlMode, unknown, readonly string[], string>,
 > =
 	& RequestContext<PrincipalOf<Caller>>
+	& AgentContext<Caller>
 	& HoldsContext<K>
 	& CapabilityContext<Acc>
 	& MembersContext<K, Acc>

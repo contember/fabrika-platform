@@ -6,6 +6,7 @@ import { z } from 'zod/v4'
 import { notesArtifact } from '../../../auth-core/src/__tests__/fixtures/notes-artifact'
 import { compileContract, defineApp, defineContract, parseContractArtifact } from '../contract'
 import { FILE_LIMITS } from '../contract/defaults'
+import { schemaFromContract } from '../contract/platform'
 import { contract } from './fixtures/notes-app/fabrika.contract'
 import { contract as scopedContract } from './fixtures/scoped-notes/fabrika.contract'
 import { tables as scopedTables } from './fixtures/scoped-notes/src/db/tables'
@@ -249,13 +250,17 @@ describe('parseContractArtifact', () => {
 		expect(() => parseContractArtifact({ ...artifact, mounts: { ...artifact.mounts, api: { ...api, callers: ['app:billing'] } } })).toThrow()
 	})
 
-	test('refuses the caller agent on a row, on a mount and in a contract, until a group may list it (ADR-0090)', () => {
-		const index = artifact.endpoints.findIndex((row) => row.source.kind === 'mount' && row.callers.length > 0)
+	test('admits the caller agent on an RPC procedure row and mount only, and compiles a group that lists it (ADR-0090)', () => {
+		const index = artifact.endpoints.findIndex((row) => row.source.kind === 'mount' && row.kind === 'query' && row.callers.length > 0)
 		const api = artifact.mounts['api']
 		if (index === -1 || api?.kind !== 'rpc') throw new Error('the notes fixture changed')
 		const endpoints = artifact.endpoints.map((each, at) => (at === index ? { ...each, callers: ['human', 'agent'] } : each))
-		expect(() => parseContractArtifact({ ...artifact, endpoints })).toThrow()
-		expect(() => parseContractArtifact({ ...artifact, mounts: { ...artifact.mounts, api: { ...api, callers: ['human', 'agent'] } } })).toThrow()
+		expect(() => parseContractArtifact({ ...artifact, endpoints })).not.toThrow()
+		expect(() => parseContractArtifact({ ...artifact, mounts: { ...artifact.mounts, api: { ...api, callers: ['human', 'agent'] } } })).not.toThrow()
+		const spa = artifact.endpoints.findIndex((row) => row.kind === 'spa')
+		if (spa === -1) throw new Error('the notes fixture has no SPA')
+		const onSpa = artifact.endpoints.map((each, at) => (at === spa ? { ...each, callers: ['human', 'agent'] } : each))
+		expect(() => parseContractArtifact({ ...artifact, endpoints: onSpa })).toThrow('an agent caller reaches only a procedure of an RPC mount')
 		const output = z.strictObject({ ok: z.boolean() })
 		const agentContract = defineContract(
 			{ app: 'tasks', dimensions: { workspace: {} }, actions: { 'tasks.read': 'Read tasks' }, roles: { reader: { grants: ['tasks.read'] } } },
@@ -263,7 +268,10 @@ describe('parseContractArtifact', () => {
 				api: c.rpc('/api', { callers: ['human', 'agent'] }, { a: c.query({ output, access: { action: 'tasks.read', over: 'workspace' } }) }),
 			}),
 		)
-		expect(() => compileContract(agentContract, {})).toThrow("'agent' is not a caller of an RPC mount")
+		const compiled = compileContract(agentContract, {})
+		expect(compiled.endpoints.find((row) => row.id === 'api.a')?.callers).toEqual(['agent', 'human'])
+		expect(schemaFromContract(compiled).agentCallers).toBe(true)
+		expect('agentCallers' in schemaFromContract(artifact)).toBe(false)
 	})
 
 	test('refuses a wildcard wherever the artifact names an action', () => {
