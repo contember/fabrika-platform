@@ -63,7 +63,7 @@ A narrowed scope has the following rules:
 
 - The dimension must be one the environment's approved schema declares. IAM checks it at the device start
   (`invalid_scope`) and again at every exchange. The value is opaque: IAM never checks that it exists (ADR-0022 rule 6).
-  The value is text of a parameterized scope, as the console's `deploy:<app>` already takes (`isScopeParameterText`: at
+  The value is text of a parameterized scope, as the command-line client's `deploy:<app>` on the console's resource already takes (`isScopeParameterText`: at
   most 100 characters of `[A-Za-z0-9._@-]`, starting with a letter or digit).
 - The device page names the dimension and the value. Where the dimension lists values
   ([ADR-0085](0085-a-grant-holds-a-set-of-scope-values.md)), the page also shows the value's label; otherwise it says that
@@ -129,11 +129,12 @@ The checks that decide it read the token's entries alone:
 - **The proxy.**
   - An `app` row and an `anyOf` row need the action held as a global grant, and the token holds none: 403.
   - An action row needs the action in some scope, so it passes, and the access form decides what it reaches.
-  - A `member` row passes with any entry. Its handler gets no capability, so it reads only reference tables and what
-    it declares `unscoped`.
+  - A `member` row passes with any entry. Its handler gets no capability, so it reads only reference tables, the
+    caller's own row (ADR-0079) and what it declares `unscoped` or through `sql`.
 - **The framework's access forms.**
-  - `in` and `on` mint a capability for an object in B only through an entry that matches B's chain, and the token has
-    none. Otherwise the data layer's own check refuses: 403 for `in`, 404 for `on`.
+  - Apart from what the application declares (below), `in` and `on` mint a capability for an object in B only through
+    an entry that matches B's chain, and the token has none. Otherwise the data layer's own check refuses: 403 for
+    `in`, 404 for `on`.
   - `over` gets a `Within` of A, and the data layer matches each row to it in the same statement.
 - **Relations.** Only relations the person holds inside A remain. The data layer re-reads the relation rows per
   statement.
@@ -186,8 +187,8 @@ exchange in step 3, the scope's kinds in step 5) and "Principal kinds" say so.
 
 - An agent works on one project with a grant a person approved in the browser, revocable within 300 s. It needs no
   service key and no machine-only group.
-- The application keeps every authorization check it runs for the person. The narrowing only removes entries and never
-  moves a relation, so nothing the person cannot do becomes possible.
+- The application keeps every authorization check it runs for the person. The narrowing only removes entries or narrows a
+  global one to the value, and never moves a relation, so nothing the person cannot do becomes possible.
 - A person who reaches a project only through a container grant (an organisation's role) gets nothing from a grant
   narrowed to that project. Granting them a role at the project, or approving an unnarrowed grant, are the ways out.
   The same holds for a person whose relation access comes only from a global role: a narrowed grant carries none of
