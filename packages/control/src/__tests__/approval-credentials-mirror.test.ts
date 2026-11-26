@@ -356,7 +356,7 @@ for (const backend of backends) {
 			const w = await world()
 			// A later revision IAM keeps, as a stale write of a deleted environment of the same id would leave it.
 			await w.grantApproval.set('shop@prod', { grants: false, credentials: 'off' }, 99)
-			await expect(w.register('shop', 'prod')).rejects.toMatchObject({ httpStatus: 503 })
+			await expect(w.register('shop', 'prod')).rejects.toMatchObject({ httpStatus: 503, message: expect.stringContaining('a later revision') })
 			expect(await w.db.registry.getApp('shop')).toBeNull()
 
 			await w.register('blog', 'stage')
@@ -367,6 +367,32 @@ for (const backend of backends) {
 			// One IAM holds as strictly as it starts is created.
 			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'person' }, 100)
 			expect((await w.putEnv('blog', 'prod')).env).toBe('prod')
+		})
+
+		test('an older IAM, which answers no mode, does not fail a new environment that starts at `refuse`', async () => {
+			const w = await world()
+			// A deleted environment leaves its protection, so one created again at its coordinates starts at `refuse`.
+			await w.setCredentials('refuse')
+			expect(await w.db.registry.deleteAppEnv('notes', 'prod')).toBe(true)
+			const older = olderIam()
+			const warn = spyOn(console, 'warn').mockImplementation(() => {})
+			try {
+				expect((await w.putEnv('notes', 'prod', older.port)).env).toBe('prod')
+			} finally {
+				warn.mockRestore()
+			}
+			// The grant gate reached IAM; the maintenance pass writes the mode once IAM takes it.
+			expect(older.writes).toContainEqual(expect.objectContaining({ app: APP }))
+		})
+
+		test('a looser mode IAM answers at the revision Control sent is refused (503) without claiming a later revision', async () => {
+			const w = await world()
+			const looser: GrantApprovalPort = { set: (_app, _gates, revision) => Promise.resolve({ revision, credentials: 'off' }) }
+			const refused = await w.register('shop', 'prod', looser).then(() => null, (cause: unknown) => cause)
+			expect(refused).toMatchObject({ httpStatus: 503 })
+			const message = refused instanceof Error ? refused.message : ''
+			expect([message.includes('looser'), message.includes('later revision')]).toEqual([true, false])
+			expect(await w.db.registry.getApp('shop')).toBeNull()
 		})
 
 		test('a protection change carries the mode to IAM, and a person in the console issues whatever it is', async () => {

@@ -800,7 +800,8 @@ other environment, before the provider prepares anything, and the write maps a r
   repairs it, and IAM ignores an older revision. A new environment's gates reach IAM before its row
   (`writeNewEnvironmentGates`, from `apps.register` and an `apps.environments.put` that creates one), as it starts
   (`getStartingProtection`); one that starts protected is not created when IAM does not take them, or answers a looser
-  `credentials` mode it holds at a later revision (503). The maintenance
+  `credentials` mode it holds, a later revision kept (503). An IAM older than the mirror answers no mode, holds none and
+  reads every environment as `person`, so its answer is not compared. The maintenance
   pass (`convergeIamGates`, `src/approval/iam-mirror.ts`) writes up to 200 environments whose `iam_gate_mirrors` row is
   missing or names another revision, which converges an upgraded installation, a new environment whose write failed and
   a failed write after Control's row. It records an environment only when IAM answers the revision and the mode it

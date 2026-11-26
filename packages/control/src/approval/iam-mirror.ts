@@ -14,8 +14,9 @@ import { iamGatesOf, looserCredentials } from './categories'
 /**
  * Write a new environment's gates to IAM, as it starts (`getStartingProtection`), before its row exists: until IAM knows
  * an environment, a key that acts in every environment of its application does not count it. One that starts protected
- * is not created when IAM does not take them, or answers a looser `credentials` mode it holds at a later revision (503);
- * one that does not start protected is, and the maintenance pass writes them later.
+ * is not created when IAM does not take them, or answers a looser `credentials` mode it holds (503), a later revision
+ * kept; an older IAM, which answers no mode, is not compared. One that does not start protected is created, and the
+ * maintenance pass writes them later.
  * Without the provisioning key there is nothing to write, and IAM reads every environment it knows as `person`.
  */
 export async function writeNewEnvironmentGates(
@@ -38,11 +39,10 @@ export async function writeNewEnvironmentGates(
 		return
 	}
 	// IAM keeps a later revision it already holds; a looser mode there would leave the new environment unguarded in IAM.
-	if (start.protected === 1 && looserCredentials(held.credentials, sent.credentials)) {
-		fail(
-			503,
-			`IAM holds a later revision of the approval settings of \`${env}\`, which starts protected, with a looser \`credentials\` mode, so nothing was created`,
-		)
+	// An older IAM answers no mode and holds none, reading every environment as `person`: nothing to compare.
+	if (start.protected === 1 && held.credentials !== null && looserCredentials(held.credentials, sent.credentials)) {
+		const which = held.revision > start.protection_revision ? 'a later revision of the approval settings' : 'the approval settings'
+		fail(503, `IAM holds ${which} of \`${env}\`, which starts protected, with a looser \`credentials\` mode, so nothing was created`)
 	}
 }
 
