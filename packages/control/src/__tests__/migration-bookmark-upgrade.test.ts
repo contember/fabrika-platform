@@ -75,9 +75,10 @@ describe("Control's migration 0048 over operations recorded before it", () => {
 			rewind_verified: 0,
 			rewind_outcome: null,
 			rewind_refusal: null,
+			recovery_rollback: 0,
 		})
 		if (row === null) throw new Error('the operation vanished')
-		expect(toDataOperationDto(row)).toMatchObject({ rewound: false, rewindRefusal: null })
+		expect(toDataOperationDto(row)).toMatchObject({ rewound: false, rewindRefusal: null, rollbackAndOpen: false })
 		expect(await recordedMaintenance({ repositories }, { appId: 'crm', env: 'prod' })).toBe('unsettled')
 		harness.sqlite.close()
 	})

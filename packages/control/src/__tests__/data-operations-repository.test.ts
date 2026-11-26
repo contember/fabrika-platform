@@ -152,6 +152,7 @@ for (const backend of backends) {
 				rewind_verified: 0,
 				rewind_outcome: null,
 				rewind_refusal: null,
+				recovery_rollback: 0,
 			})
 			expect(await operations.get(refused.id)).toEqual(created)
 		})

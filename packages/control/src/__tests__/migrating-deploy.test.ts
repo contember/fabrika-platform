@@ -17,13 +17,16 @@ import {
 	MIGRATION_REVERTED_CODE,
 	MIGRATION_UNCONFIRMED_CODE,
 	NEW_VERSION_DEADLINE_S,
+	NOT_REWOUND_CODE,
 	type OpsTarget,
 	recordedMaintenance,
 	REWIND_FAILED_CODE,
 	REWIND_UNRESOLVED_CODE,
 	REWOUND_BEFORE_ROLLBACK_CODE,
+	ROLLBACK_FAILED_CODE,
 	startMaintenance,
 	startRecovery,
+	toDataOperationDto,
 } from '../data-operations'
 import { type ControlRepositories, createControlRepositories } from '../db'
 import type { RunTrigger } from '../db/runs'
@@ -866,8 +869,8 @@ for (const backend of backends) {
 			})
 		}
 
-		test('a rewind_failed whose rewind a later verify confirms: a recovery resumes it through the rollback deploy, check and the open', async () => {
-			const { b, fake, state, deps, deployFirst, candidateRun, operations, dataDeps, timeline, clock } = await open()
+		test('a rewind_failed whose rewind a later verify confirms: a roll back and open of the refused open deploys afresh, waits, opens', async () => {
+			const { b, fake, state, deps, deployFirst, candidateRun, operations, dataDeps, timeline, clock, runStatus } = await open()
 			await deployFirst()
 			state.failure = 'committed'
 			fake.resets = false
@@ -879,34 +882,114 @@ for (const backend of backends) {
 			fake.rewinds.get('application')?.sentinels.delete(failed?.id ?? '')
 			const refused = await startMaintenance(dataDeps(), { ...TARGET, mode: 'open', actor: 'user:ada' })
 			expect(refused).toMatchObject({ kind: 'driven', operation: { state: 'failed', error_code: REWOUND_BEFORE_ROLLBACK_CODE } })
-			// Opening past it is refused for good; resuming it is what moves it on.
 			const openPast = await startRecovery(dataDeps(), { ...TARGET, operationId: failed?.id ?? '', resolution: 'open', actor: 'user:ops' })
-			expect(openPast).toMatchObject({ kind: 'driven', operation: { state: 'failed', error_code: REWOUND_BEFORE_ROLLBACK_CODE } })
+			if (openPast.kind !== 'driven') throw new Error(`recovery not driven: ${openPast.kind}`)
+			expect(openPast.operation).toMatchObject({ state: 'failed', error_code: REWOUND_BEFORE_ROLLBACK_CODE })
+			// Nothing resumes a failed migration; the refused recovery leads to the migration under it, which rolls back.
+			expect(await startRecovery(dataDeps(), { ...TARGET, operationId: failed?.id ?? '', resolution: 'resume', actor: 'user:ops' })).toEqual({
+				kind: 'refused',
+				reason: 'not_recoverable',
+			})
 			fake.sent.length = 0
 			state.deploys.length = 0
 			const before = clock()
-			const resumed = await startRecovery(dataDeps(), { ...TARGET, operationId: failed?.id ?? '', resolution: 'resume', actor: 'user:ops' })
-			if (resumed.kind !== 'driven') throw new Error(`recovery not driven: ${resumed.kind}`)
+			const rolled = await startRecovery(dataDeps(), { ...TARGET, operationId: openPast.operation.id, resolution: 'rollback', actor: 'user:ops' })
+			if (rolled.kind !== 'driven') throw new Error(`recovery not driven: ${rolled.kind}`)
+			expect(rolled.operation).toMatchObject({ kind: 'recovery', state: 'succeeded', recovers_operation_id: failed?.id, recovery_rollback: 1 })
 			expect(clock() - before).toBeGreaterThanOrEqual(NEW_VERSION_DEADLINE_S * 1000 - 1000)
 			expect(fake.requests().filter((request) => request.startsWith('restore'))).toEqual([])
-			expect(state.deploys.map((deploy) => deploy.rollback)).toEqual([true])
-			// The recovery's fence, then the migration's own inspect fence, rollback deploy, wait in inspect, and the open.
-			expect(timeline()).toEqual([
-				'inspect',
-				'state application closed @7',
-				'state application inspect @8',
-				'rollback deploy',
-				'state application open @9',
-				'migrate @9',
-			])
+			// The recovery's fence in inspect, a fresh rollback deploy, the wait in inspect, and the open.
+			expect(timeline()).toEqual(['inspect', 'state application inspect @7', 'rollback deploy', 'state application open @8'])
+			const rollback = rolled.operation.revert_run_id ?? ''
+			expect(await runStatus(rollback)).toBe('succeeded')
+			expect(state.deploys.map((deploy) => deploy.runId)).toEqual([rollback])
 			expect(await b.repositories.dataOperations.get(failed?.id ?? '')).toMatchObject({
 				state: 'failed',
-				error_code: MIGRATION_REVERTED_CODE,
-				step: 'check',
-				target_mode: 'open',
+				error_code: REWIND_FAILED_CODE,
 				rewind_outcome: 'rewound',
+				revert_run_id: null,
 			})
-			expect(fake.published.get(`${APP}/${ENV}/application`)).toEqual({ generation: 9, mode: 'open' })
+			expect(fake.published.get(`${APP}/${ENV}/application`)).toEqual({ generation: 8, mode: 'open' })
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
+			// The settled rollback is the recovery's: a later open of the environment passes the gate too.
+			const restricted = await startMaintenance(dataDeps(), { ...TARGET, mode: 'read-only', actor: 'user:ada' })
+			expect(restricted).toMatchObject({ kind: 'driven', operation: { state: 'succeeded' } })
+			const reopened = await startMaintenance(dataDeps(), { ...TARGET, mode: 'open', actor: 'user:ada' })
+			expect(reopened).toMatchObject({ kind: 'driven', operation: { state: 'succeeded' } })
+		})
+
+		test('a roll back and open past an outstanding arm verifies first: a present sentinel fails it as not_rewound, and open opens', async () => {
+			const { b, fake, state, deps, deployFirst, candidateRun, operations, dataDeps } = await open()
+			await deployFirst()
+			state.failure = 'committed'
+			fake.resets = false
+			const second = await candidateRun([FIRST, SECOND])
+			await executeDeploy(deps(), { runId: second })
+			const [failed] = await operations()
+			if (failed === undefined) throw new Error('no migration')
+			expect(failed).toMatchObject({ state: 'failed', error_code: REWIND_FAILED_CODE, rewind_outcome: null })
+			expect(toDataOperationDto(failed)).toMatchObject({ rollbackAndOpen: true })
+			fake.sent.length = 0
+			state.deploys.length = 0
+			const rolled = await startRecovery(dataDeps(), { ...TARGET, operationId: failed.id, resolution: 'rollback', actor: 'user:ops' })
+			expect(rolled).toMatchObject({ kind: 'driven', operation: { state: 'failed', error_code: NOT_REWOUND_CODE } })
+			expect(fake.requests()).toEqual(['inspect', 'state application inspect @3', 'restore application verify'])
+			expect(state.deploys).toEqual([])
+			const spent = await b.repositories.dataOperations.get(failed.id)
+			if (spent === null) throw new Error('the migration vanished')
+			expect(spent).toMatchObject({ rewind_outcome: null, rewind_verified: spent.rewind_arms })
+			expect(toDataOperationDto(spent)).toMatchObject({ rollbackAndOpen: false })
+			// Its exit is an open recovery of the failed recovery: nothing is armed any more.
+			const opened = await startRecovery(dataDeps(), {
+				...TARGET,
+				operationId: rolled.kind === 'driven' ? rolled.operation.id : '',
+				resolution: 'open',
+				actor: 'user:ops',
+			})
+			expect(opened).toMatchObject({ kind: 'driven', operation: { state: 'succeeded' } })
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
+		})
+
+		test('a roll back and open whose deploy fails stays inspect; the next one deploys a fresh run and opens', async () => {
+			const { b, fake, state, deps, locks, deployFirst, candidateRun, operations, dataDeps, runStatus } = await open()
+			await deployFirst()
+			expect((await fixtureProtect(b.repositories.registry, locks, TARGET, true))?.protected).toBe(1)
+			state.failure = 'rolled_back'
+			state.rollbackOutcome = { state: 'failed' }
+			const second = await candidateRun([FIRST, SECOND], 'webhook')
+			await executeDeploy(deps(), { runId: second })
+			const [failed] = await operations()
+			expect(failed).toMatchObject({ state: 'failed', error_code: MIGRATION_FAILED_CODE, step: 'restrict', target_mode: 'closed' })
+			const first = await startRecovery(dataDeps(), { ...TARGET, operationId: failed?.id ?? '', resolution: 'rollback', actor: 'user:ops' })
+			if (first.kind !== 'driven') throw new Error(`recovery not driven: ${first.kind}`)
+			expect(first.operation).toMatchObject({ state: 'failed', error_code: ROLLBACK_FAILED_CODE, step: 'revert', target_mode: 'inspect' })
+			expect(await recordedMaintenance(b, TARGET)).toBe('unsettled')
+			expect(fake.published.get(`${APP}/${ENV}/application`)).toMatchObject({ mode: 'inspect' })
+			state.rollbackOutcome = { state: 'succeeded' }
+			const again = await startRecovery(dataDeps(), { ...TARGET, operationId: first.operation.id, resolution: 'rollback', actor: 'user:ops' })
+			if (again.kind !== 'driven') throw new Error(`recovery not driven: ${again.kind}`)
+			expect(again.operation).toMatchObject({ state: 'succeeded', recovers_operation_id: failed?.id })
+			// A fresh run, never the failed one; the protected environment's deploy-request decision exempts it as the record names it.
+			expect(again.operation.revert_run_id).not.toBe(first.operation.revert_run_id)
+			expect(await runStatus(first.operation.revert_run_id ?? '')).toBe('failed')
+			expect(await b.repositories.runs.getRun(again.operation.revert_run_id ?? '')).toMatchObject({ status: 'succeeded', trigger: 'manual' })
+			expect(await recordedMaintenance(b, TARGET)).toBe('open')
+		})
+
+		test('roll back and open is refused for a committed migration that is not rewound and not armed', async () => {
+			const { fake, state, deps, deployFirst, candidateRun, operations, dataDeps } = await open()
+			await deployFirst()
+			state.failure = 'committed'
+			// A record without its bookmark is never rewound; with a `dataLoss` line the object closes for an operator.
+			fake.recordBookmark = null
+			const drops = await candidateRun([FIRST, DROPS])
+			await executeDeploy(deps(), { runId: drops })
+			const [failed] = await operations()
+			expect(failed).toMatchObject({ state: 'failed', step: 'restrict' })
+			expect(await startRecovery(dataDeps(), { ...TARGET, operationId: failed?.id ?? '', resolution: 'rollback', actor: 'user:ops' })).toEqual({
+				kind: 'refused',
+				reason: 'not_recoverable',
+			})
 		})
 
 		test('a recovery open while the rewound object waits out check is refused before the deadline and allowed after it', async () => {

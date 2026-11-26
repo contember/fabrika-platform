@@ -461,8 +461,8 @@ the undo bookmark brings the rewound writes back. So a rewind that fails once an
 `arm` is outstanding. Control first publishes a transition, which the object acknowledges only after the `arm`'s reset,
 since the `arm` holds the barrier's turn until it and `verify` takes none; then it `verify`s. A present sentinel spends
 the `arm`; an absent one is a rewound object, which opens, by any path, only once its rollback deploy succeeded and the
-wait after it passed, as the automatic path requires; a recovery resumes a stopped rewind to that rollback. No usable
-answer keeps it shut.
+wait after it passed, as the automatic path requires, or as a recovery that rolls back and opens requires
+(ADR-0069 §3), which is the way out of a stopped rewind. No usable answer keeps it shut.
 
 **Not built: an in-place restore of an object that served, and a whole-environment rollback.** Rewinding an object
 that served writes discards them, and restoring forward rests on the forward restore succeeding, which is unprobed.

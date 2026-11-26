@@ -678,15 +678,16 @@ export function operationDeploys(deps: RunDeps): OperationDeploys {
 
 /**
  * What a failed migration's rollback deploy returns to: the snapshot the run it redeploys published, which the
- * environment ran before the migration, found by the same selection that chose the run's commit.
+ * environment ran before the migration, found by the same selection that chose the run's commit. A recovery that rolls
+ * back and opens names no run of its own; the migration's run had failed before it.
  */
 async function rollbackReturn(
 	runs: ControlRepositories['runs'],
 	run: RunRow,
 	operation: DataOperationRow,
 ): Promise<{ readonly returnTo?: string }> {
-	if (operation.run_id === null) return {}
-	const source = await runs.getLatestDeployedRun({ appId: run.app_id, env: run.env, except: operation.run_id })
+	const except = operation.run_id === null ? {} : { except: operation.run_id }
+	const source = await runs.getLatestDeployedRun({ appId: run.app_id, env: run.env, ...except })
 	if (source === null || source.commit_sha !== run.commit_sha || source.snapshot_json === null) return {}
 	return { returnTo: snapshotDigest(parseSnapshot(await runs.document(source.snapshot_json))) }
 }

@@ -30,6 +30,7 @@ export { BuilderConnectionRepository } from './db/builder-connections'
 export { type ControlRepositories, type ControlRepositoryOptions, createControlRepositories } from './db/composition'
 export { defaultProtected } from './db/coordinate-lock'
 export {
+	DATA_OPERATION_STATES,
 	type DataOperationAdvance,
 	type DataOperationFields,
 	type DataOperationInput,
@@ -40,6 +41,9 @@ export {
 	type DataOperationState,
 	type DataOperationStep,
 	type MaintenanceMode,
+	recoveryResolution,
+	REWIND_OUTCOMES,
+	type RewindOutcome,
 } from './db/data-operations'
 export {
 	type DevSandboxBootstrapInput,

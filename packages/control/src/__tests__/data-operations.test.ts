@@ -735,6 +735,7 @@ describe('data RPC', () => {
 			'revertRunId',
 			'rewindRefusal',
 			'rewound',
+			'rollbackAndOpen',
 			'runId',
 			'state',
 			'step',

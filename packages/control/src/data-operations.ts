@@ -86,6 +86,7 @@ import type {
 	RestoreRow,
 	RunRow,
 } from './db'
+import { recoveryResolution } from './db'
 import { acquireLease, type Lease, type LeaseClock, runLeaseKey } from './lease'
 import type { OpsKey } from './ops-key'
 
@@ -276,10 +277,29 @@ export const MIGRATION_REVERTED_CODE = 'migration_reverted'
 /**
  * The codes an open of the environment is refused with after an in-place rewind (ADR-0070 §9): an outstanding `arm`
  * whose `verify` gave no usable answer, or a rewound object whose rollback has not settled (`rewoundMayOpen`), since the
- * failed version's boot would migrate again; the migration resumes through its rollback deploy instead.
+ * failed version's boot would migrate again; a recovery rolls back and opens instead.
  */
 export const REWIND_UNRESOLVED_CODE = 'rewind_unresolved'
 export const REWOUND_BEFORE_ROLLBACK_CODE = 'rewound_before_rollback'
+
+/**
+ * The codes a recovery that rolls back and opens fails with, leaving the object `inspect`: the `verify` of an
+ * outstanding `arm` found the sentinel, so the object still holds the migration (an `open` recovery opens it as it is),
+ * or its rollback deploy failed or was not accepted (another one may be tried).
+ */
+export const NOT_REWOUND_CODE = 'not_rewound'
+export const ROLLBACK_FAILED_CODE = 'rollback_failed'
+
+/** The steps of a bookmark migration (ADR-0069 §3), in order. */
+export const BOOKMARK_MIGRATION_STEPS = ['deploy', 'migrate', 'rewind', 'revert', 'check', 'restrict'] as const satisfies readonly DataOperationStep[]
+
+export type BookmarkMigrationStep = (typeof BOOKMARK_MIGRATION_STEPS)[number]
+
+function bookmarkMigrationStep(step: DataOperationStep): BookmarkMigrationStep {
+	const known = BOOKMARK_MIGRATION_STEPS.find((candidate) => candidate === step)
+	if (known === undefined) throw new Error(`a bookmark migration has no step ${step}`)
+	return known
+}
 
 /**
  * How long a bookmark migration waits for the new version's answer after a deploy: Cloudflare's `max_delay` of 300 s,
@@ -558,16 +578,20 @@ export interface StartRecoveryInput {
 }
 
 /**
- * Recover an environment whose operation is stuck: under a fresh lease, read the object's published state, fence it in
- * `closed` at a fresh generation, then resume the interrupted operation from its recorded step or open the object.
+ * Recover an environment whose operation is stuck: under a fresh lease, read the object's published state, fence it at a
+ * fresh generation, then resume the interrupted operation from its recorded step, open the object, or roll back and
+ * open. Only a running operation resumes; a failed one can be opened past. A roll back and open recovers the bookmark
+ * migration under the chain of recoveries that stopped on it, the environment's newest, once `rollbackOf` allows it.
  */
 export async function startRecovery(deps: DataOperationDeps, input: StartRecoveryInput): Promise<DataOperationOutcome> {
 	return await underLease(deps, input, async (driver) => {
-		const interrupted = await driver.read(input.operationId)
-		// Only a running operation can resume, or a migration stopped at a rewind confirmed later; a failed one can still be opened past.
-		const recoverable = interrupted !== null && interrupted.app_id === input.appId && interrupted.env === input.env
-			&& (interrupted.state === 'running' || (interrupted.state === 'failed' && input.resolution === 'open')
-				|| (resumableRewound(interrupted) && input.resolution === 'resume'))
+		const stuck = await driver.read(input.operationId)
+		if (stuck === null || stuck.app_id !== input.appId || stuck.env !== input.env) return { kind: 'refused', reason: 'not_recoverable' }
+		const interrupted = input.resolution === 'rollback' ? await driver.recovered(stuck.id) : stuck
+		const recoverable = input.resolution === 'rollback'
+			? rollbackOf(interrupted) !== 'ineligible'
+				&& (await deps.repositories.dataOperations.latestBookmarkMigration(input.appId, input.env))?.id === interrupted.id
+			: interrupted.state === 'running' || (interrupted.state === 'failed' && input.resolution === 'open')
 		if (!recoverable) return { kind: 'refused', reason: 'not_recoverable' }
 		const latest = await latestOperation(deps, input)
 		if (latest !== null && latest.id !== interrupted.id && latest.state === 'running') return { kind: 'refused', reason: 'operation_running' }
@@ -578,7 +602,8 @@ export async function startRecovery(deps: DataOperationDeps, input: StartRecover
 			env: input.env,
 			kind: 'recovery',
 			step: 'reconcile',
-			targetMode: 'closed',
+			// A rollback keeps the object `inspect` until the failed version's instance is gone, whose boot would migrate again.
+			targetMode: input.resolution === 'rollback' ? 'inspect' : 'closed',
 			generation,
 			actor: input.actor,
 			recovers: { operationId: interrupted.id, resolution: input.resolution },
@@ -668,7 +693,7 @@ export function toDataOperationDto(row: DataOperationRow): DataOperationDto {
 		updatedAt: row.updated_at,
 		finishedAt: row.finished_at,
 		recoversOperationId: row.recovers_operation_id,
-		resolution: row.resolution,
+		resolution: recoveryResolution(row),
 		runId: row.run_id,
 		recordsBookmark: row.records_bookmark === 1,
 		migrationFailure: row.migration_failure,
@@ -676,6 +701,7 @@ export function toDataOperationDto(row: DataOperationRow): DataOperationDto {
 		candidateRecovered: row.candidate_recovered === 1,
 		rewound: row.rewind_outcome === 'rewound',
 		rewindRefusal: row.rewind_refusal,
+		rollbackAndOpen: rollbackOf(row) !== 'ineligible',
 	}
 }
 
@@ -903,9 +929,16 @@ class OperationDriver {
 		throw new Error(`data operation step ${row.kind}/${row.step} is not driven by this release`)
 	}
 
+	/**
+	 * A recovery: `reconcile` reads the object; `restrict` fences it, then `open` opens it, or `resume` drives the
+	 * interrupted operation on. A roll back and open fences `inspect` and settles an outstanding `arm` there, as the open
+	 * gate does; `revert` deploys the last succeeded commit afresh, `check` waits in `inspect` to the deadline counted from
+	 * that deploy's success, and `open` opens through the gate, which a settled rollback of the rewound migration passes.
+	 */
 	private async recoveryStep(row: DataOperationRow): Promise<Step> {
 		const interruptedId = row.recovers_operation_id
-		if (interruptedId === null || row.resolution === null) throw new Error('a recovery names no operation')
+		const resolution = recoveryResolution(row)
+		if (interruptedId === null || resolution === null) throw new Error('a recovery names no operation')
 		switch (row.step) {
 			case 'reconcile': {
 				const probe = await this.inspect()
@@ -913,16 +946,28 @@ class OperationDriver {
 				return { kind: 'next', row: await this.advance(row, { step: 'restrict' }) }
 			}
 			case 'restrict': {
+				if (resolution === 'rollback') return await this.rollbackFence(row, interruptedId)
 				const recovered = await this.recovered(interruptedId)
-				if (recovered.kind === 'restore' && row.resolution === 'open') return await this.recoverRestore(row, recovered)
+				if (recovered.kind === 'restore' && resolution === 'open') return await this.recoverRestore(row, recovered)
 				const fenced = await this.publish(row, 'closed')
 				if (fenced.kind === 'refused') return await this.failed(row, fenced.code)
 				if (fenced.kind !== 'acked') return { kind: 'done', result: fenced.kind }
-				if (row.resolution === 'open') {
+				if (resolution === 'open') {
 					return { kind: 'next', row: await this.advance(fenced.row, { step: 'open', targetMode: 'open', generation: await this.allocate() }) }
 				}
 				const interrupted = await this.require(interruptedId)
 				return { kind: 'next', row: await this.advance(fenced.row, { step: 'resume', targetMode: interrupted.target_mode }) }
+			}
+			case 'revert': {
+				// A fresh run each time: a rollback run that failed is never resumed.
+				const reverted = await this.revertDeploy(row)
+				if (reverted === 'unsettled') return { kind: 'done', result: 'interrupted' }
+				if (reverted !== 'succeeded') return await this.failed(row, ROLLBACK_FAILED_CODE)
+				return { kind: 'next', row: await this.advance(row, { step: 'check', deadlineAt: this.deadline() }) }
+			}
+			case 'check': {
+				if ((await this.until(row.deadline_at)) === 'paused') return { kind: 'done', result: 'paused' }
+				return { kind: 'next', row: await this.advance(row, { step: 'open', targetMode: 'open', generation: await this.allocate() }) }
 			}
 			case 'open': {
 				const published = await this.publish(row, 'open')
@@ -933,9 +978,6 @@ class OperationDriver {
 				return { kind: 'done', result: 'succeeded' }
 			}
 			case 'resume': {
-				// A rewind a later `verify` confirmed goes on from its rollback deploy; no `arm` is sent again.
-				const stopped = await this.require(interruptedId)
-				if (resumableRewound(stopped)) this.lease.assertWritten(await this.records.resumeRewound(stopped.id, this.lease.fence()))
 				const resumed = await this.drive(interruptedId, true)
 				if (resumed === 'interrupted' || resumed === 'paused') return { kind: 'done', result: resumed }
 				if (resumed === 'failed') return await this.failed(row, 'resume_failed')
@@ -1110,7 +1152,7 @@ class OperationDriver {
 			await this.finishRun(from, 'failed')
 			return step
 		}
-		switch (row.step) {
+		switch (bookmarkMigrationStep(row.step)) {
 			case 'deploy': {
 				const deploy = this.runDeploy
 				this.runDeploy = undefined
@@ -1203,8 +1245,6 @@ class OperationDriver {
 				if (published.kind !== 'acked') return { kind: 'done', result: published.kind }
 				return await fail(published.row, MIGRATION_FAILED_CODE)
 			}
-			default:
-				throw new Error(`a bookmark migration has no step ${row.step}`)
 		}
 	}
 
@@ -2091,46 +2131,86 @@ class OperationDriver {
 
 	/**
 	 * Before the serving object is opened, by any operation (ADR-0070 §9): an outstanding in-place `arm` of the newest
-	 * bookmark migration may still restore at the object's next reset, which would discard what the open admits. `verify`
-	 * takes no barrier turn, so it may answer in the session that served the `arm`; a transition is acknowledged only
-	 * after the `arm`'s turn, which it holds until the reset. So a fence `inspect` at this record's generation first, then
-	 * `verify`: `present` spends the arm, `absent` is a rewound object, and no usable answer refuses the open. A rewound
-	 * object opens only once a deploy succeeded after its migration: the failed version would migrate again on its boot.
+	 * bookmark migration is settled first (`settleArm`), and no usable answer refuses the open. A rewound object opens only
+	 * once a rollback of its migration settled (`rewoundMayOpen`): the failed version would migrate again on its boot.
 	 */
 	private async openGate(start: DataOperationRow): Promise<Published> {
-		let migration = await this.records.latestBookmarkMigration(this.target.appId, this.target.env)
+		const latest = await this.records.latestBookmarkMigration(this.target.appId, this.target.env)
 		this.lease.assertHeld()
-		if (migration === null || migration.rewind_record === null) return { kind: 'acked', row: start }
+		if (latest === null || latest.rewind_record === null) return { kind: 'acked', row: start }
 		let row = start
+		let migration = latest
 		if (outstandingArm(migration)) {
-			const fenced = await this.publish(row, 'inspect')
-			if (fenced.kind !== 'acked') return fenced
-			row = fenced.row
-			const verified = await this.restoreRequest({
-				step: 'verify',
-				object: await this.serving(),
-				sentinel: migration.id,
-				record: migration.rewind_record,
-			})
-			if (verified.kind === 'paused' || verified.kind === 'interrupted') return { kind: 'interrupted' }
-			if (verified.kind === 'failed' || verified.value.step !== 'verify') return { kind: 'refused', code: REWIND_UNRESOLVED_CODE }
-			const arms = migration.rewind_arms
-			const fence = this.lease.fence()
-			this.lease.assertWritten(
-				verified.value.sentinel === 'present'
-					? await this.records.rewindVerified(migration.id, arms, fence)
-					: await this.records.rewindObserved(migration.id, arms, fence),
-			)
+			const settled = await this.settleArm(row, migration)
+			if (settled.kind !== 'acked') return settled
 			migration = await this.require(migration.id)
 			// The open goes out at a generation above the fence's.
-			row = await this.advance(row, { step: row.step, generation: await this.allocate() })
+			row = await this.advance(settled.row, { step: row.step, generation: await this.allocate() })
 		}
-		if (migration.rewind_outcome === 'rewound') {
-			const rollback = migration.revert_run_id === null ? null : await this.deps.repositories.runs.getRun(migration.revert_run_id)
-			this.lease.assertHeld()
-			if (!rewoundMayOpen(migration, rollback?.status === 'succeeded', this.now())) return { kind: 'refused', code: REWOUND_BEFORE_ROLLBACK_CODE }
+		if (migration.rewind_outcome === 'rewound' && !(await this.rollbackSettled(migration))) {
+			return { kind: 'refused', code: REWOUND_BEFORE_ROLLBACK_CODE }
 		}
 		return { kind: 'acked', row }
+	}
+
+	/**
+	 * An outstanding in-place `arm` of `migration` may still restore at the object's next reset, which would discard what
+	 * an open admits. `verify` takes no barrier turn, so it may answer in the session that served the `arm`; a transition
+	 * is acknowledged only after the `arm`'s turn, which it holds until the reset. So a fence `inspect` at this record's
+	 * generation first, then `verify`: `present` spends the arm, `absent` is a rewound object, and no usable answer
+	 * refuses with `rewind_unresolved`.
+	 */
+	private async settleArm(row: DataOperationRow, migration: DataOperationRow): Promise<Published> {
+		const record = migration.rewind_record
+		if (record === null) throw new Error('an outstanding arm names no migration record')
+		const fenced = await this.publish(row, 'inspect')
+		if (fenced.kind !== 'acked') return fenced
+		const verified = await this.restoreRequest({ step: 'verify', object: await this.serving(), sentinel: migration.id, record })
+		if (verified.kind === 'paused' || verified.kind === 'interrupted') return { kind: 'interrupted' }
+		if (verified.kind === 'failed' || verified.value.step !== 'verify') return { kind: 'refused', code: REWIND_UNRESOLVED_CODE }
+		const arms = migration.rewind_arms
+		const fence = this.lease.fence()
+		this.lease.assertWritten(
+			verified.value.sentinel === 'present'
+				? await this.records.rewindVerified(migration.id, arms, fence)
+				: await this.records.rewindObserved(migration.id, arms, fence),
+		)
+		return fenced
+	}
+
+	/** Whether a rollback of the rewound `migration` settled: its own, or that of a recovery that rolled it back. */
+	private async rollbackSettled(migration: DataOperationRow): Promise<boolean> {
+		const rollbacks = [migration, ...(await this.records.rollbacksOf(migration.id))]
+		this.lease.assertHeld()
+		for (const rollback of rollbacks) {
+			const run = rollback.revert_run_id === null ? null : await this.deps.repositories.runs.getRun(rollback.revert_run_id)
+			this.lease.assertHeld()
+			if (rewoundMayOpen(rollback, run?.status === 'succeeded', this.now())) return true
+		}
+		return false
+	}
+
+	/**
+	 * A roll back and open's fence: `inspect` at the recovery's generation, an outstanding `arm` settled there, and then
+	 * only a migration `rollbackOf` allows goes on to the rollback deploy. Its own run ends first, as an environment runs
+	 * one run at a time.
+	 */
+	private async rollbackFence(row: DataOperationRow, migrationId: string): Promise<Step> {
+		const fenced = await this.publish(row, 'inspect')
+		if (fenced.kind === 'refused') return await this.failed(row, fenced.code)
+		if (fenced.kind !== 'acked') return { kind: 'done', result: fenced.kind }
+		let fencedRow = fenced.row
+		let migration = await this.require(migrationId)
+		if (outstandingArm(migration)) {
+			const settled = await this.settleArm(fencedRow, migration)
+			if (settled.kind === 'refused') return await this.failed(fencedRow, settled.code)
+			if (settled.kind !== 'acked') return { kind: 'done', result: settled.kind }
+			fencedRow = settled.row
+			migration = await this.require(migrationId)
+		}
+		if (rollbackOf(migration) !== 'eligible') return await this.failed(fencedRow, NOT_REWOUND_CODE)
+		await this.finishRun(migration, 'failed')
+		return { kind: 'next', row: await this.advance(fencedRow, { step: 'revert' }) }
 	}
 
 	/**
@@ -2150,7 +2230,7 @@ class OperationDriver {
 	}
 
 	/** The operation a chain of recoveries starting at `id` recovers: through each interrupted recovery to what it recovers. */
-	private async recovered(id: string): Promise<DataOperationRow> {
+	async recovered(id: string): Promise<DataOperationRow> {
 		const seen = new Set<string>()
 		let operation = await this.require(id)
 		while (operation.kind === 'recovery' && operation.recovers_operation_id !== null && !seen.has(operation.id)) {
@@ -2207,19 +2287,28 @@ class OperationDriver {
 }
 
 /**
- * Whether a rewound object may open, by any path: only once its rollback settled as the automatic `check` requires. The
- * rollback deploy succeeded, and `check` waited in `inspect` to its recorded deadline, after which the failed version's
- * instance is gone, and moved on (to `open`, or to `restrict`). A successful deploy alone is not enough.
+ * Whether a rewound object may open after `rollback`, by any path: the migration's own rollback, or a recovery's that
+ * rolled it back and opens. Only once it settled as the automatic `check` requires: the rollback deploy succeeded, and
+ * `check` waited in `inspect` to its recorded deadline, after which the failed version's instance is gone, and moved on
+ * (to `open`, or to `restrict`). A successful deploy alone is not enough.
  */
-export function rewoundMayOpen(migration: DataOperationRow, rollbackSucceeded: boolean, nowMs: number): boolean {
+export function rewoundMayOpen(rollback: DataOperationRow, rollbackSucceeded: boolean, nowMs: number): boolean {
 	if (!rollbackSucceeded) return false
-	if (migration.step === 'restrict') return true
-	return migration.step === 'check' && (migration.target_mode === 'open' || (migration.deadline_at !== null && nowMs >= migration.deadline_at * 1000))
+	if (rollback.step === 'restrict' || rollback.step === 'open') return true
+	return rollback.step === 'check' && (rollback.target_mode === 'open' || (rollback.deadline_at !== null && nowMs >= rollback.deadline_at * 1000))
 }
 
-/** A migration that stopped at `rewind` and whose rewind a later `verify` confirmed: a recovery resumes it to its rollback. */
-export function resumableRewound(row: DataOperationRow): boolean {
-	return row.kind === 'migrate' && row.records_bookmark === 1 && row.state === 'failed' && row.step === 'rewind' && row.rewind_outcome === 'rewound'
+/**
+ * Whether a recovery may roll `operation` back and open: a failed bookmark migration of which nothing migrated stays.
+ * Its object is rewound, its migration rolled back in its own transaction, its record was never written, or its run
+ * never deployed. `arm` while an in-place `arm` is outstanding: the recovery's own fence and `verify` decide first.
+ */
+export function rollbackOf(operation: DataOperationRow): 'eligible' | 'arm' | 'ineligible' {
+	if (operation.kind !== 'migrate' || operation.records_bookmark !== 1 || operation.state !== 'failed') return 'ineligible'
+	if (outstandingArm(operation)) return 'arm'
+	if (operation.rewind_outcome === 'rewound') return 'eligible'
+	if (operation.migration_failure === 'rolled_back' || operation.migration_failure === 'record_unwritable') return 'eligible'
+	return operation.error_code === DEPLOY_NOT_STARTED_CODE ? 'eligible' : 'ineligible'
 }
 
 /** An in-place `arm` was counted, and no `verify` after a proven reset answered for it. */

@@ -5,7 +5,7 @@
 // a suspension is the registry's record and a republish.
 
 import type { ApplicationObjects } from '@fabrika/auth-core'
-import { type ApprovalRequestDescription, CONTROL_ACTIONS } from '@fabrika/control-contract'
+import { type ApprovalRequestDescription, CONTROL_ACTIONS, DATA_OPERATION_RESOLUTIONS } from '@fabrika/control-contract'
 import type { JsonValue } from '@fabrika/provider-contract'
 import { z } from 'zod'
 import { setBackupScheduleUseCase } from '../../../api/backup-schedule'
@@ -189,8 +189,15 @@ const startInput = z.discriminatedUnion('kind', [
 ])
 type StartInput = z.infer<typeof startInput>
 
-const recoverInput = z.object({ appId: appIdField, env: envField, operationId: z.string().min(1), resolution: z.enum(['resume', 'open']) })
+const recoverInput = z.object({ appId: appIdField, env: envField, operationId: z.string().min(1), resolution: z.enum(DATA_OPERATION_RESOLUTIONS) })
 type RecoverInput = z.infer<typeof recoverInput>
+
+/** What each resolution does, in an approval request's summary. */
+const RESOLUTION_TEXT: Readonly<Record<RecoverInput['resolution'], string>> = {
+	resume: 'resume it from its recorded step',
+	open: 'open the object past it',
+	rollback: 'roll the failed migration back with a fresh deploy of the last succeeded commit, then open the object',
+}
 
 const objectsField = z.object({ serving: z.string(), listed: z.array(z.string()) })
 
@@ -327,9 +334,7 @@ export const recoverDataOperationKind = requestKind<RecoverInput, RecoveryBefore
 	describe: (input, before) => ({
 		summary: [
 			ownText(
-				`Recover operation ${input.operationId} of ${input.appId}@${input.env}: ${
-					input.resolution === 'resume' ? 'resume it from its recorded step' : 'open the object past it'
-				}`,
+				`Recover operation ${input.operationId} of ${input.appId}@${input.env}: ${RESOLUTION_TEXT[input.resolution]}`,
 			),
 		],
 		facts: [

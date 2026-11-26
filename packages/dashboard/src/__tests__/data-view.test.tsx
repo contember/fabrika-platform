@@ -91,6 +91,7 @@ const operation = (id: string, overrides: Partial<DataOperationDto> = {}): DataO
 	candidateRecovered: false,
 	rewound: false,
 	rewindRefusal: null,
+	rollbackAndOpen: false,
 	...overrides,
 })
 

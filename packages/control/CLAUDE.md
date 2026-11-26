@@ -554,11 +554,24 @@ other environment, before the provider prepares anything, and the write maps a r
   `openGate`, in `publish` before every `open` of the serving object by any operation, first fences `inspect` (the object
   acknowledges no transition in the session that served an `arm`, which holds the barrier's turn until its reset, while
   `verify` takes no turn), then verifies: `present` spends the arm, `absent` records `rewound`, and no usable answer
-  refuses the open (`rewind_unresolved`). `rewoundMayOpen` alone decides whether a rewound object may open: its
-  rollback deploy succeeded and `check` waited in `inspect` to its recorded deadline (or moved past it); otherwise
-  `rewound_before_rollback`, and a recovery resumes the migration instead. A migration that failed `rewind_failed` and
-  whose rewind a later `verify` confirmed is `resumableRewound`: a resume recovery runs it again from `revert`
-  (`resumeRewound`), with no further `arm`.
+  refuses the open (`rewind_unresolved`); `settleArm` holds that fence and `verify`. `rewoundMayOpen` alone decides
+  whether a rewound object may open, over each rollback of the migration (its own, and each recovery's that rolled it
+  back, `rollbacksOf`): the rollback deploy succeeded and `check` waited in `inspect` to its recorded deadline (or moved
+  past it); otherwise `rewound_before_rollback`.
+- **Roll back and open is the one recovery out of a failed bookmark migration whose data holds nothing of it.** A
+  recovery with resolution `rollback` (stored as `open` with `recovery_rollback = 1`, since SQLite cannot widen the
+  resolution's CHECK; `recoveryResolution` reads it) recovers the migration under the chain of recoveries it is started
+  on, and only the environment's newest bookmark migration. `rollbackOf` allows a failed one that is rewound, whose
+  migration rolled back or whose record was unwritable, or whose run never deployed (`deploy_not_started`), and one
+  with an outstanding `arm`, which the recovery settles first. Its steps: `reconcile`; `restrict` publishes `inspect`
+  at its generation, settles an outstanding `arm` there (`settleArm`), fails `not_rewound` when `rollbackOf` no longer
+  allows it, and ends the migration's run; `revert` names its own `revert_run_id` and deploys `getLatestDeployedRun`
+  afresh (a failed rollback run is never resumed; a failure is `rollback_failed`, object `inspect`); `check` waits in
+  `inspect` to the deadline counted from that deploy's success; `open` publishes `open` through the gate, which this
+  recovery's settled rollback passes, and retires the chain. It never sends an `arm`. Nothing else resumes a failed
+  migration. The deploy-request exemption and `rollbackReturn` read the recovery's record as they read a migration's.
+  `migration-recovery-exits.test.ts` generates every terminal state from `BOOKMARK_MIGRATION_STEPS`, the failure reasons
+  and `REWIND_OUTCOMES`, and requires an exit to `open` from each.
   A refusal before any `arm` records `refused` and `rewind_refusal` and takes the branch below for a record it cannot
   rewind. `rolled_back`, `record_unwritable`, a rewound migration, and a `committed` one not rewound without
   `data_loss`, go to `revert`, the rollback deploy of `getLatestDeployedRun` (a succeeded run that recorded its
