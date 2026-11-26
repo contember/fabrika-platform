@@ -1,4 +1,4 @@
-import type { EnvironmentConfig } from '@fabrika/installation-init'
+import type { EnvironmentConfig, RepositorySecretsConfig } from '@fabrika/installation-init'
 import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { mkdtemp, rm } from 'node:fs/promises'
@@ -61,8 +61,26 @@ describe('Cloudflare init arguments', () => {
 			passwordEnabled: true,
 			email: { kind: 'none' },
 			bootstrapAdmins: [],
+			githubSecrets: 'environment',
 			unattended: true,
 		})
+	})
+
+	test('--github-secrets picks the repository store, from the flag or FABRIKA_GITHUB_SECRETS, and refuses anything else', () => {
+		expect(parse([...REQUIRED, '--github-secrets=repository']).githubSecrets).toBe('repository')
+		expect(parse(REQUIRED, { ...CREDENTIALS, FABRIKA_GITHUB_SECRETS: 'repository' }).githubSecrets).toBe('repository')
+		expect(parse([...REQUIRED, '--github-secrets=environment'], { ...CREDENTIALS, FABRIKA_GITHUB_SECRETS: 'repository' }).githubSecrets)
+			.toBe('environment')
+		expect(() => parse([...REQUIRED, '--github-secrets=organization'])).toThrow(
+			'--github-secrets / FABRIKA_GITHUB_SECRETS takes environment or repository, not `organization`',
+		)
+	})
+
+	test('the rerun command names --github-secrets only when it is not the default', () => {
+		expect(rerunCommand(parse(REQUIRED), 'cf-account')).not.toContain('--github-secrets')
+		expect(rerunCommand(parse([...REQUIRED, '--github-secrets=repository']), 'cf-account')).toContain(
+			`--github-secrets=repository --checkout=${join(CWD, 'fabrika-platform-acme')}`,
+		)
 	})
 
 	test('every value may come from the variable beside its flag, and a flag beats it', () => {
@@ -227,10 +245,23 @@ interface Recorded {
 	readonly effects: string[]
 	readonly scaffolds: ScaffoldInput[]
 	readonly environments: EnvironmentConfig[]
+	readonly repositories: RepositorySecretsConfig[]
 }
 
-const recorder = (options: { readonly confirms?: Record<string, boolean>; readonly verified?: boolean }) => {
-	const recorded: Recorded = { asked: [], effects: [], scaffolds: [], environments: [] }
+interface RecorderOptions {
+	readonly confirms?: Record<string, boolean>
+	readonly verified?: boolean
+	/** What the Environment already holds; null (the default) when it does not exist. */
+	readonly environment?: Readonly<Record<string, string>> | null | Error
+	/** What the repository's own variables already hold; null (the default) when the repository does not exist. */
+	readonly repository?: Readonly<Record<string, string>> | null | Error
+}
+
+const answer = (value: Readonly<Record<string, string>> | null | Error | undefined) =>
+	value instanceof Error ? Promise.reject(value) : Promise.resolve(value ?? null)
+
+const recorder = (options: RecorderOptions) => {
+	const recorded: Recorded = { asked: [], effects: [], scaffolds: [], environments: [], repositories: [] }
 	const collaborators: InitCollaborators = {
 		prompts: {
 			confirm: (question, defaultYes) => {
@@ -245,7 +276,11 @@ const recorder = (options: { readonly confirms?: Record<string, boolean>; readon
 			},
 			environmentVariables: (repo, environment) => {
 				recorded.effects.push(`environmentVariables ${repo} ${environment}`)
-				return Promise.resolve(null)
+				return answer(options.environment)
+			},
+			repositoryVariables: (repo) => {
+				recorded.effects.push(`repositoryVariables ${repo}`)
+				return answer(options.repository)
 			},
 			listAccounts: () => {
 				recorded.effects.push('listAccounts')
@@ -267,6 +302,11 @@ const recorder = (options: { readonly confirms?: Record<string, boolean>; readon
 			configureEnvironment: (config) => {
 				recorded.effects.push('configureEnvironment')
 				recorded.environments.push(config)
+				return Promise.resolve()
+			},
+			configureRepository: (config) => {
+				recorded.effects.push('configureRepository')
+				recorded.repositories.push(config)
 				return Promise.resolve()
 			},
 			triggerWorkflow: (repo) => {
@@ -319,13 +359,17 @@ describe('Cloudflare init flow', () => {
 			'verifyToken',
 			'findZone fabrika.example.com',
 			'findZone errors.example.com',
+			'repositoryVariables acme/fabrika-platform',
 			'environmentVariables acme/fabrika-platform acme',
 			'repositoryExists acme/fabrika-platform',
 			'scaffold',
 			'configureEnvironment',
 			'triggerWorkflow acme/fabrika-platform',
 		])
-		expect(recorded.scaffolds).toEqual([{ repo: 'acme/fabrika-platform', account: 'acme', dir: join(CWD, 'fabrika-platform-acme') }])
+		expect(recorded.scaffolds).toEqual([
+			{ repo: 'acme/fabrika-platform', account: 'acme', dir: join(CWD, 'fabrika-platform-acme'), githubSecrets: 'environment' },
+		])
+		expect(recorded.repositories).toEqual([])
 		const environment = recorded.environments[0]
 		expect(environment?.environment).toBe('acme')
 		expect(environment?.secrets['CLOUDFLARE_ACCOUNT_ID']).toBe('cf-account')
@@ -345,6 +389,7 @@ describe('Cloudflare init flow', () => {
 		expect(persisted['CLOUDFLARE_ACCOUNT_ID']).toBe('cf-account')
 		expect(persisted['FABRIKA_CLOUDFLARE_NAMES']).toBe('fabrika')
 		expect(persisted['FABRIKA_IAM_PASSWORD_ENABLED']).toBe('true')
+		expect(persisted['FABRIKA_GITHUB_SECRETS']).toBe('environment')
 		expect(output).not.toContain(API_TOKEN)
 	})
 
@@ -499,5 +544,122 @@ describe('Cloudflare init flow', () => {
 		})
 
 		expect(second.recorded.environments[0]?.secrets).toEqual(first.recorded.environments[0]?.secrets ?? {})
+	})
+})
+
+const REPOSITORY_QUESTION =
+	'Write them as repository secrets and variables of acme/fabrika-platform now (secret VALUES go to GitHub over `gh` stdin)?'
+
+describe('Cloudflare init flow with repository secrets', () => {
+	const REPOSITORY = [...REQUIRED, '--github-secrets=repository']
+
+	test('writes the same secrets and variables to the repository, creates no Environment, and scaffolds the matching workflow', async () => {
+		const environmentInput = parse([...REQUIRED, '--admins=ops@example.com'])
+		const repositoryInput = parse([...REPOSITORY, '--admins=ops@example.com'])
+		const environment = recorder({})
+		const repository = recorder({})
+		await withEnvFile(() => runInit(environmentInput, environment.collaborators))
+		const { output, persisted } = await withEnvFile(() => runInit(repositoryInput, repository.collaborators))
+
+		expect(repository.recorded.asked).toEqual([SCAFFOLD_QUESTION, REPOSITORY_QUESTION, TRIGGER_QUESTION])
+		expect(repository.recorded.effects).toEqual([
+			'listAccounts',
+			'verifyToken',
+			'findZone fabrika.example.com',
+			'findZone errors.example.com',
+			'environmentVariables acme/fabrika-platform acme',
+			'repositoryVariables acme/fabrika-platform',
+			'repositoryExists acme/fabrika-platform',
+			'scaffold',
+			'configureRepository',
+			'triggerWorkflow acme/fabrika-platform',
+		])
+		expect(repository.recorded.environments).toEqual([])
+		expect(repository.recorded.scaffolds[0]?.githubSecrets).toBe('repository')
+		const written = repository.recorded.repositories[0]
+		const before = environment.recorded.environments[0]
+		expect(written?.repo).toBe('acme/fabrika-platform')
+		// The same names under the same split; generated keys differ between two fresh env files, so compare names.
+		expect(written?.vars).toEqual(before?.vars ?? {})
+		expect(Object.keys(written?.secrets ?? {})).toEqual(Object.keys(before?.secrets ?? {}))
+		expect(written?.secrets['CLOUDFLARE_API_TOKEN']).toBe(API_TOKEN)
+		expect(persisted['FABRIKA_GITHUB_SECRETS']).toBe('repository')
+		expect(output).toContain('no GitHub Environment, no deployment protection rule')
+		expect(output).not.toContain('Environment deployment-branch policy')
+		expect(output).not.toContain(API_TOKEN)
+	})
+
+	test('a resumed run keeps the mode from the env file and reads the names back from the repository variables', async () => {
+		const first = recorder({})
+		const second = recorder({ repository: { FABRIKA_CLOUDFLARE_NAMES: 'fabrika', FABRIKA_CONTROL_DOMAIN: 'fabrika.example.com' } })
+		await withEnvFile(async () => {
+			await runInit(parse(REPOSITORY), first.collaborators)
+			// The resumed run names no --github-secrets: the env file it reopens carries the mode.
+			await runInit(parse(REQUIRED, { ...CREDENTIALS, ...process.env }), second.collaborators)
+		})
+
+		expect(second.recorded.effects).toContain('configureRepository')
+		expect(second.recorded.effects).not.toContain('configureEnvironment')
+		expect(second.recorded.repositories[0]?.secrets).toEqual(first.recorded.repositories[0]?.secrets ?? {})
+	})
+
+	test('a plan that refuses to read Environments does not stop a repository installation', async () => {
+		const { recorded, collaborators } = recorder({ environment: new Error('HTTP 403 — upgrade to enable this feature') })
+		await withEnvFile(() => runInit(parse(REPOSITORY), collaborators))
+
+		expect(recorded.effects).toContain('configureRepository')
+	})
+
+	test('an Environment that already holds the installation refuses the switch to repository secrets before any write', async () => {
+		const { recorded, collaborators } = recorder({ environment: { FABRIKA_CLOUDFLARE_NAMES: 'fabrika' } })
+		const run = withEnvFile(() => runInit(parse(REPOSITORY), collaborators))
+
+		await expect(run).rejects.toThrow(
+			"The acme Environment on acme/fabrika-platform already holds this installation's variables, so it is installed with --github-secrets=environment",
+		)
+		expect(recorded.effects).not.toContain('scaffold')
+		expect(recorded.effects).not.toContain('configureRepository')
+	})
+
+	test('a refused switch leaves the env file naming the store the installation is in', async () => {
+		const first = recorder({})
+		const second = recorder({ environment: { FABRIKA_CLOUDFLARE_NAMES: 'fabrika' } })
+		let refusal: unknown
+		const { persisted } = await withEnvFile(async () => {
+			await runInit(parse(REQUIRED), first.collaborators)
+			refusal = await runInit(parse(REPOSITORY, { ...CREDENTIALS, ...process.env }), second.collaborators).catch((error: unknown) => error)
+		})
+
+		expect(refusal).toBeInstanceOf(Error)
+		expect(persisted['FABRIKA_GITHUB_SECRETS']).toBe('environment')
+	})
+
+	test('repository variables that already hold the installation refuse the switch to an Environment before any write', async () => {
+		const { recorded, collaborators } = recorder({ repository: { FABRIKA_CLOUDFLARE_NAMES: 'fabrika' } })
+		const run = withEnvFile(() => runInit(parse(REQUIRED), collaborators))
+
+		await expect(run).rejects.toThrow(
+			"acme/fabrika-platform already holds this installation's variables at the repository level, so it is installed with --github-secrets=repository",
+		)
+		expect(recorded.effects).not.toContain('scaffold')
+		expect(recorded.effects).not.toContain('configureEnvironment')
+	})
+
+	test('an Environment installation is not stopped when the repository variables cannot be read', async () => {
+		const { recorded, collaborators } = recorder({ repository: new Error('HTTP 403') })
+		await withEnvFile(() => runInit(parse(REQUIRED), collaborators))
+
+		expect(recorded.effects).toContain('configureEnvironment')
+	})
+
+	test('declining the repository write stops before the trigger and repeats the flag', async () => {
+		const input = parse(REPOSITORY)
+		const { recorded, collaborators } = recorder({ confirms: { [REPOSITORY_QUESTION]: false } })
+		const { output } = await withEnvFile(() => runInit(input, collaborators))
+
+		expect(recorded.effects).not.toContain('configureRepository')
+		expect(recorded.effects).not.toContain('triggerWorkflow acme/fabrika-platform')
+		expect(output).toContain(rerunCommand(input, 'cf-account'))
+		expect(output).toContain('--github-secrets=repository')
 	})
 })
