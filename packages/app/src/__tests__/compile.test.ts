@@ -249,6 +249,23 @@ describe('parseContractArtifact', () => {
 		expect(() => parseContractArtifact({ ...artifact, mounts: { ...artifact.mounts, api: { ...api, callers: ['app:billing'] } } })).toThrow()
 	})
 
+	test('refuses the caller agent on a row, on a mount and in a contract, until a group may list it (ADR-0090)', () => {
+		const index = artifact.endpoints.findIndex((row) => row.source.kind === 'mount' && row.callers.length > 0)
+		const api = artifact.mounts['api']
+		if (index === -1 || api?.kind !== 'rpc') throw new Error('the notes fixture changed')
+		const endpoints = artifact.endpoints.map((each, at) => (at === index ? { ...each, callers: ['human', 'agent'] } : each))
+		expect(() => parseContractArtifact({ ...artifact, endpoints })).toThrow()
+		expect(() => parseContractArtifact({ ...artifact, mounts: { ...artifact.mounts, api: { ...api, callers: ['human', 'agent'] } } })).toThrow()
+		const output = z.strictObject({ ok: z.boolean() })
+		const agentContract = defineContract(
+			{ app: 'tasks', dimensions: { workspace: {} }, actions: { 'tasks.read': 'Read tasks' }, roles: { reader: { grants: ['tasks.read'] } } },
+			(c) => ({
+				api: c.rpc('/api', { callers: ['human', 'agent'] }, { a: c.query({ output, access: { action: 'tasks.read', over: 'workspace' } }) }),
+			}),
+		)
+		expect(() => compileContract(agentContract, {})).toThrow("'agent' is not a caller of an RPC mount")
+	})
+
 	test('refuses a wildcard wherever the artifact names an action', () => {
 		const owner = artifact.roles['owner']
 		const workspace = artifact.dimensions['workspace']

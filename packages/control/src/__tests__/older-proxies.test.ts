@@ -1,6 +1,6 @@
 // A Zerops namespace pinned to an older proxy source runs that release's strict manifest parser. A deploy is refused
 // only for a row or a CSP no older proxy reads (`entriesNeedingCurrentProxy`), judged by the parsers of 0.4.8, 0.5.5 and
-// 0.6.0: every row form and CSP directive 0.7 or 0.8 added is refused, and every entry a 0.4, 0.5 or 0.6 application
+// 0.6.0: every row form, caller and CSP directive 0.7 or a later release added is refused, and every entry a 0.4, 0.5 or 0.6 application
 // compiles to deploys.
 
 import { type BodyAdmission, type ContractArtifact, contractDigest, type EndpointRow } from '@fabrika/auth-core'
@@ -117,6 +117,18 @@ describe('the rows 0.7 added, for a namespace proxy pinned to an older source', 
 			input: empty,
 			output: empty,
 			requirement: { kind: 'anyOf', actions: ['notes.read', 'notes.write'], access: { form: 'app' } },
+		}],
+		['a procedure an agent may call with a device grant (ADR-0090)', {
+			id: 'api.notes.list',
+			source: mount,
+			kind: 'query',
+			method: 'POST',
+			path: '/api/notes.list',
+			callers: ['human', 'agent'],
+			admission: json,
+			input: empty,
+			output: empty,
+			requirement: { kind: 'member' },
 		}],
 		['a webhook that forwards its own Authorization to a basic or bearer verifier', {
 			id: 'billing',

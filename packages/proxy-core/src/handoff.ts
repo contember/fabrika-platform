@@ -24,8 +24,13 @@ export function unmatchedVerifier(): string {
 }
 
 /** S256, matching PKCE: the verifier never rides in a URL or reaches IAM through the browser. */
-export async function handoffChallenge(verifier: string): Promise<string> {
-	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(verifier))
+export function handoffChallenge(verifier: string): Promise<string> {
+	return sha256Base64url(verifier)
+}
+
+/** The SHA-256 of a text, base64url without padding. */
+export async function sha256Base64url(value: string): Promise<string> {
+	const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value))
 	return base64url(new Uint8Array(digest))
 }
 

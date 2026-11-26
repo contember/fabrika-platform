@@ -14,7 +14,10 @@
 import type {
 	ExchangeAuthCodeInput,
 	ExchangeAuthCodeResult,
+	IamGrantRpc,
 	Jwks,
+	MintFromGrantInput,
+	MintFromGrantResult,
 	MintFromKeyInput,
 	MintFromKeyResult,
 	MintTokenInput,
@@ -108,11 +111,12 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
  *
  *   POST {origin}/auth/mint/session   {app, session, requestId} -> MintTokenResult
  *   POST {origin}/auth/mint/key       {app, key, requestId}     -> MintFromKeyResult
+ *   POST {origin}/auth/mint/grant     {app, resource, token, requestId} -> MintFromGrantResult   (ADR-0090)
  *   POST {origin}/auth/mint/exchange  {app, code, requestId}    -> ExchangeAuthCodeResult   (ADR-0022)
  *   POST {origin}/auth/mint/delegation {app, credential, requestId, endpoint} -> a grant or a denial (rule 6)
  *   GET  {origin}/.well-known/jwks.json                         -> Jwks                     (public)
  *
- * The four POST endpoints are the `/auth/mint/*` PROXY surface, authenticated by IAM's `proxyKey` — the
+ * The five POST endpoints are the `/auth/mint/*` PROXY surface, authenticated by IAM's `proxyKey` — the
  * least-privilege split ADR-0022 requires, kept apart from the management `/rpc/*` surface. They
  * answer **200 on any decided outcome, including a denial**: `{ ok: false, reason }` is "IAM answered:
  * no", a non-200 is "IAM could not be consulted". Both deny; only the second is an incident.
@@ -120,7 +124,7 @@ export type FetchLike = (input: string, init: RequestInit) => Promise<Response>
  * Credentials always ride in the POST body, never in a URL — a URL ends up in access logs and error
  * strings; a body does not.
  */
-export class HttpIamGateway implements IamGateway, DelegationIssuer {
+export class HttpIamGateway implements IamGateway, DelegationIssuer, IamGrantRpc {
 	private readonly origin: string
 	private readonly timeoutMs: number
 	private readonly key: string | undefined
@@ -158,6 +162,18 @@ export class HttpIamGateway implements IamGateway, DelegationIssuer {
 			return parsed
 		}
 		return { ok: false, reason: reasonOf(parsed.reason, ['invalid_key', 'unknown_principal', 'disabled', 'token_too_large'], 'invalid_key') }
+	}
+
+	async mintFromGrant(input: MintFromGrantInput): Promise<MintFromGrantResult> {
+		const result = mintResultSchema.safeParse(await this.post('/auth/mint/grant', input, 'mintFromGrant'))
+		if (!result.success) {
+			throw new IamUnavailableError('mintFromGrant')
+		}
+		const parsed = result.data
+		if (parsed.ok) {
+			return parsed
+		}
+		return { ok: false, reason: reasonOf(parsed.reason, ['invalid_grant', 'write_refused', 'token_too_large'], 'invalid_grant') }
 	}
 
 	async exchangeAuthCode(input: ExchangeAuthCodeInput): Promise<ExchangeAuthCodeResult> {

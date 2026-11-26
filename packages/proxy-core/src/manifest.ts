@@ -262,7 +262,7 @@ function checkOAuthResources(app: Pick<InstallationProxyApp, 'hosts' | 'scheme' 
 
 const nameSchema = z.string().min(1)
 const callerSchema = z.custom<Caller>((value) =>
-	value === 'human' || value === 'machine' || value === 'link' || (typeof value === 'string' && /^app:[^\s@]+$/.test(value))
+	value === 'human' || value === 'machine' || value === 'agent' || value === 'link' || (typeof value === 'string' && /^app:[^\s@]+$/.test(value))
 )
 const accessFormSchema = z.discriminatedUnion('form', [
 	z.object({ form: z.literal('over'), dimension: nameSchema }).strict(),

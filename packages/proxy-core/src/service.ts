@@ -28,6 +28,7 @@ import {
 	DELEGATION_HEADER,
 	ENDPOINT_HEADER,
 	HANDOFF_COOKIE_TTL_SECONDS,
+	type IamGrantRpc,
 	isCanonicalPath,
 	planEndpoint,
 	SESSION_COOKIE,
@@ -67,7 +68,7 @@ import {
 import type { DelegationIssuer, IamGateway } from './iam'
 import { type LogFields, type ProxyLogger, redactPath, silentLogger } from './log'
 import { formatOAuthBearerChallenge, isApplicationEntry, type ManifestEndpointRow, type ProxyApp, type ProxyManifest } from './manifest'
-import { findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
+import { AGENT_METADATA_PATH, findOAuthMetadata, OAUTH_METADATA_VERIFY_PATH, oauthMetadataResponse } from './oauth'
 import { errorAnswer, isPageNavigation, type PageContent, pageResponse, renderPage } from './pages'
 
 export interface VerifyServiceConfig {
@@ -84,6 +85,8 @@ export interface VerifyServiceConfig {
 	now?: () => number
 	/** Issues delegation grants for membership and scope-creating endpoints; see `AuthorizerOptions.delegations`. */
 	delegations?: DelegationIssuer | null
+	/** Exchanges an agent's resource token for the person's application token; see `AuthorizerOptions.grants`. */
+	grants?: IamGrantRpc | null
 }
 
 export type VerifyService = (request: Request) => Promise<Response>
@@ -123,6 +126,9 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 	}
 	if (config.delegations !== undefined) {
 		authorizerOptions.delegations = config.delegations
+	}
+	if (config.grants !== undefined) {
+		authorizerOptions.grants = config.grants
 	}
 	const authorizer = new Authorizer(authorizerOptions)
 
@@ -166,10 +172,16 @@ export function createVerifyService(config: VerifyServiceConfig): VerifyService 
 			}
 
 			if (url.pathname === OAUTH_METADATA_VERIFY_PATH) {
-				const metadata = findOAuthMetadata(resolved.app, forwarded.url)
-				return metadata === null
-					? withPolicy(textResponse(404, 'not found'), policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
-					: oauthMetadataResponse(metadata, forwarded.method)
+				const metadata = findOAuthMetadata(resolved.app, forwarded.url, config.issuer)
+				const policy = policies.get(resolved.app.id) ?? BASE_HEADER_POLICY
+				if (metadata === null) return withPolicy(textResponse(404, 'not found'), policy)
+				const answer = oauthMetadataResponse(metadata, forwarded.method)
+				return isApplicationEntry(resolved.app) ? withPolicy(answer, policy) : answer
+			}
+			// An application environment's resource metadata (ADR-0090) is never the application's to serve: the metadata
+			// route answers it on an entry that admits `agent`, and every other application answers 404.
+			if (isApplicationEntry(resolved.app) && forwarded.url.pathname === AGENT_METADATA_PATH) {
+				return withPolicy(textResponse(404, 'not found'), policies.get(resolved.app.id) ?? BASE_HEADER_POLICY)
 			}
 
 			// The handoff callback is checked BEFORE the endpoint table: it is how a browser obtains a

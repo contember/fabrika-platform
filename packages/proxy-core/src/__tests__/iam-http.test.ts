@@ -4,7 +4,7 @@
  * of them may put a credential anywhere it can be read.
  */
 
-import type { IamMembershipRpc } from '@fabrika/auth-core'
+import type { IamMembershipRpc, MintFromGrantResult } from '@fabrika/auth-core'
 import { describe, expect, test } from 'bun:test'
 import { type DelegationIssuer, type FetchLike, HttpIamGateway, IamUnavailableError } from '../iam'
 import { TokenVerifier } from '../verifier'
@@ -83,6 +83,22 @@ describe('happy path', () => {
 		expect(recorded[0]?.method).toBe('POST')
 		// `packages/iam/src/rpc-http.ts` decodes exactly these four fields; anything else is a 400 there.
 		expect(JSON.parse(recorded[0]?.body ?? 'null')).toEqual({ app: 'a', code: 'handoff', verifier: 'verifier', requestId: 'r' })
+	})
+
+	test('mintFromGrant posts the resource token in the body to the grant endpoint and reads its reasons', async () => {
+		const input = { app: 'a@prod', resource: 'https://a.example.com', token: 'RESOURCETOKEN', requestId: 'r' }
+		const { gateway, recorded } = gatewayReturning(200, { ok: true, token: 'signed.jwt.here', expiresAt: 1234 })
+		expect(await gateway.mintFromGrant(input)).toEqual({ ok: true, token: 'signed.jwt.here', expiresAt: 1234 })
+		expect(recorded[0]?.url).toBe('https://iam.test/auth/mint/grant')
+		expect(recorded[0]?.method).toBe('POST')
+		expect(JSON.parse(recorded[0]?.body ?? 'null')).toEqual(input)
+		const refusals: Extract<MintFromGrantResult, { ok: false }>['reason'][] = ['invalid_grant', 'write_refused', 'token_too_large']
+		for (const reason of refusals) {
+			expect(await gatewayReturning(200, { ok: false, reason }).gateway.mintFromGrant(input)).toEqual({ ok: false, reason })
+		}
+		// A reason this release does not know is a refusal of the grant, never anything that admits.
+		expect(await gatewayReturning(200, { ok: false, reason: 'later' }).gateway.mintFromGrant(input)).toEqual({ ok: false, reason: 'invalid_grant' })
+		await expect(gatewayReturning(404, { error: 'not found' }).gateway.mintFromGrant(input)).rejects.toThrow(IamUnavailableError)
 	})
 
 	test('a spent code is a decided negative, not an error', async () => {

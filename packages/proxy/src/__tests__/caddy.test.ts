@@ -810,6 +810,51 @@ describe('OAuth protected resource metadata', () => {
 	})
 })
 
+describe("an application environment's resource metadata (ADR-0090)", () => {
+	const row = (callers: ['human', 'agent'] | ['human']) =>
+		endpointRow({
+			id: 'api.notes.list',
+			kind: 'query',
+			method: 'GET',
+			path: '/api/notes.list',
+			callers,
+			requirement: { kind: 'member' },
+			admission: null,
+		})
+	const contract = (callers: ['human', 'agent'] | ['human']): ContractProxyApp => ({
+		id: 'notes@prod',
+		hosts: ['notes.example.com'],
+		upstream: 'notes:3000',
+		scheme: 'https',
+		endpoints: [row(callers)],
+		reservedPrefixes: [],
+		snapshot: `sha256:${'0'.repeat(64)}`,
+		csp: NO_CSP_ORIGINS,
+	})
+	function appSteps(proxyApp: ProxyApp): CaddyRoute[] {
+		const route = buildCaddyConfig({ apps: [proxyApp] }, OPTIONS).apps.http.servers['proxy']?.routes[0]
+		if (route === undefined) throw new Error('expected an app route')
+		return subrouteOf(route).routes
+	}
+
+	test('an application that admits agent sends its well-known path to the metadata endpoint, before forward_auth', () => {
+		const steps = appSteps(contract(['human', 'agent']))
+		const metadata = steps.find((step) => step.match?.some((matcher) => 'path' in matcher))
+		expect(metadata?.match).toEqual([{ path: ['/.well-known/oauth-protected-resource'] }])
+		expect(metadata?.terminal).toBe(true)
+		expect(proxyHandler(metadata).rewrite).toEqual({ method: 'GET', uri: '/oauth-metadata?app=notes%40prod' })
+		const forwardAuth = steps.findIndex((step) =>
+			step.handle.some((handler) => handler.handler === 'reverse_proxy' && handler.rewrite?.uri?.startsWith('/verify'))
+		)
+		expect(metadata === undefined ? -1 : steps.indexOf(metadata)).toBeLessThan(forwardAuth)
+	})
+
+	test('an application that admits no agent gets no metadata route', () => {
+		const steps = appSteps(contract(['human']))
+		expect(steps.some((step) => step.match?.some((matcher) => 'path' in matcher))).toBe(false)
+	})
+})
+
 describe('a contract app — the response headers', () => {
 	const download = endpointRow({
 		id: 'files.avatar.download',

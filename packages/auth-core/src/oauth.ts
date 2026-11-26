@@ -33,9 +33,12 @@ export function isCimdClientId(value: unknown): value is string {
  */
 export const OAUTH_CLI_CLIENT_ID = 'fabrika-cli'
 
-/** A client id a token or revocation request may name: a CIMD document's URL, or the command-line client. */
+/** The public device client an agent obtains an application grant with (ADR-0090). It is never served Control's resources. */
+export const AGENT_CLIENT_ID = 'agent-cli'
+
+/** A client id a token or revocation request may name: a CIMD document's URL, or one of the two built-in clients. */
 export function isOAuthClientId(value: unknown): value is string {
-	return value === OAUTH_CLI_CLIENT_ID || isCimdClientId(value)
+	return value === OAUTH_CLI_CLIENT_ID || value === AGENT_CLIENT_ID || isCimdClientId(value)
 }
 
 /** RFC 6749 scope-token syntax; duplicates and empty sets are refused. */
