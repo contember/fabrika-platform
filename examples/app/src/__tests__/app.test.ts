@@ -125,13 +125,16 @@ describe("a person's agent (ADR-0090)", () => {
 	const OTHER = { type: 'project', value: 'other' } as const
 	const person = kit.testCaller([{ role: 'editor', scope: DEMO }, { role: 'editor', scope: OTHER }])
 	const own = createClient(contract, 'notes', { fetch: kit.browser(person) })
+	const readme = () => new File(['read me first'], 'readme.txt', { type: 'text/plain' })
 
 	test('a grant narrowed to one project reads that project and nothing of another, and writes nothing', async () => {
-		const { id } = await own.create({ projectId: 'demo', title: 'for the agent' })
-		const elsewhere = await own.create({ projectId: 'other', title: 'not for the agent' })
+		const { id } = await own.create({ projectId: 'demo', title: 'for the agent', attachment: readme() })
+		const elsewhere = await own.create({ projectId: 'other', title: 'not for the agent', attachment: readme() })
+		expect((await kit.browser(person)(own.attachment.url({ id: elsewhere.id }))).status).toBe(200)
 		const { token } = await kit.agentGrant(person, { scope: 'read:project=demo', label: 'summary script' })
 		const agent = createClient(contract, 'notes', { fetch: kit.fetch, key: token })
 		expect((await agent.list({ projectId: 'demo' })).items.map((note) => note.id)).toContain(id)
+		expect(await (await download(agent.attachment, { id })).text()).toBe('read me first')
 		expect(await statusOf(agent.list({ projectId: 'other' }))).toBe(403)
 		expect(await statusOf(download(agent.attachment, { id: elsewhere.id }))).toBe(404)
 		expect(await statusOf(agent.create({ projectId: 'demo', title: 'refused' }))).toBe(403)
