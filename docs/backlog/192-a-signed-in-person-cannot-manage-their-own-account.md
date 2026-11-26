@@ -20,8 +20,8 @@ Everything a person can do about their own credentials today goes through someon
 - **Sign-ins.** Listing and revoking sessions exists only as administration (`sessions.list`, `sessions.revoke`,
   `sessions.revokeAll` in `packages/iam/src/admin/rpc.ts:70-80`, gated by `administrationOf` and
   `requireActableTarget`). A person who left a session open on another computer cannot end it.
-- **No page.** IAM renders no page for a signed-in person outside a login handoff (`chooseAccountPage`,
-  `packages/iam/src/password-pages.ts:74`) and the logout confirmation (`:159`). The console's account menu therefore
+- **No password or sign-in section.** IAM's account page (`/auth/account`) lists only the person's OAuth grants; there
+  is no page for a password or for the person's sign-ins. The console's account menu therefore
   holds only sign-out, the theme and builder connections (`packages/dashboard/src/routes/_layout.tsx`).
 
 ADR-0020 decides that a person chooses a password only through the action flow ("the same short-lived, single-use
@@ -35,7 +35,9 @@ the decision comes first.
    current one. State what it does to other sessions (below), that it never enables a password for a principal without
    an enabled password account (the first invariant stands), and why re-proving the password is required although the
    session already authenticates the person.
-2. **The page lives on IAM's host** (`/auth/account`), because the password and the `__Host-px_session` cookie are
+2. **The page lives on IAM's host** (`/auth/account`), which exists: it lists the person's OAuth grants (the
+   command-line client's and each agent's) and revokes them (`packages/iam/src/auth/account.ts`); this item adds the
+   sections below to it, because the password and the `__Host-px_session` cookie are
    IAM's (ADR-0023); the console only links to it. It answers `currentLogin` (`packages/iam/src/auth/sessions.ts:49`)
    and sends anyone without one to sign-in with a same-origin `redirect` back. Server-rendered like the other pages
    (`htmlPage`, `password-pages.ts:296`), every POST behind `sameOrigin` (`packages/iam/src/auth/http.ts:30`),
