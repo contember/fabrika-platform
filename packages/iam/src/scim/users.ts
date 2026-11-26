@@ -162,17 +162,16 @@ export async function deleteUser(services: Services, actor: ScimActor, record: S
 }
 
 /**
- * The write of `active`. Only a change of what the write read is written, so a write of other attributes that read the
- * person active cannot enable them again after a concurrent `active=false`. Deprovisioning is idempotent and always
- * runs for `active=false`. An enabling also ends whatever a login racing the deprovisioning left behind: a disabled
- * person holds nothing, so re-enabling restores nothing.
+ * The write of `active`. Only a change of what the write read is written, so a write of other attributes never enables
+ * a person deactivated, nor disables one enabled, after it read them. An enabling also ends whatever a login racing
+ * the deprovisioning left behind: a disabled person holds nothing, so re-enabling restores nothing.
  */
 function activityStatements(services: Services, actor: ScimActor, principalId: string, was: boolean, next: boolean, now: number) {
 	const { principals, audit } = services.repositories
+	if (was === next) return []
 	if (!next) {
 		return audit.writer.changed(deprovisionChanges(services, principalId, now), scimEvent(actor, principalId, 'iam.principal.disable')).statements
 	}
-	if (was) return []
 	return audit.writer.changed(
 		[principals.enablePrincipalChange(principalId), ...accessChanges(services, principalId, now)],
 		scimEvent(actor, principalId, 'iam.principal.enable'),

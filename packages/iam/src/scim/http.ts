@@ -93,7 +93,8 @@ async function users(request: Request, services: Services, actor: ScimActor, url
 }
 
 async function user(request: Request, services: Services, actor: ScimActor, url: URL, id: string): Promise<Response> {
-	const record = await services.repositories.scim.getRecord(id)
+	// An id holding a control character names no principal, and Postgres refuses NUL in a text parameter.
+	const record = hasControlCharacter(id) ? null : await services.repositories.scim.getRecord(id)
 	if (record === null || !visible(services, record)) {
 		return errorResponse(new ScimError(404, null, `user ${id} not found`))
 	}

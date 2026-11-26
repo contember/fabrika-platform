@@ -38,7 +38,9 @@ Entra ID is that provider; this decision is the Users part. Groups and their map
    nothing reads for authorization. `externalId` never touches `principals.external_id`, which is the OIDC subject.
    A write that moves the mailbox also revokes the person's sessions, spends their password actions and switches
    password login off, in the same transaction: the provider vouches for the new address, not for whoever reads it,
-   so a password reset sent there must not open the account. Single sign-on matches the person by subject first.
+   so a password reset sent there must not open the account. Single sign-on matches the person by subject first; a
+   person who never signed in has no subject yet, so the first OIDC login presenting the new address claims them, as
+   the provider's own directory decides.
 3. **The provider takes over a person who signed in before provisioning started.** A filter on a `userName` that no
    provisioned user has answers the unprovisioned user whose mailbox it is, and a POST of a mailbox an unprovisioned
    user holds links that principal instead of answering 409. A POST of a mailbox a provisioned user holds is 409.
@@ -48,7 +50,7 @@ Entra ID is that provider; this decision is the Users part. Groups and their map
    `/admin` call is refused. Re-enabling restores none of it: the person signs in again. The enabling revokes the
    same set again, so nothing a login racing the deprovisioning wrote survives it, and meets the `credentials` mode
    for the keys the person issued for others (ADR-0083 §8), as a machine caller. A write changes `active` only when
-   it differs from what the write read, so a concurrent write of other attributes never enables a person again.
+   it differs from what the write read, so a concurrent write of other attributes never enables or disables a person.
 5. **DELETE keeps the principal.** It deprovisions as above and marks the link deleted, so SCIM no longer finds the
    user; the principal, its grants and its audit history stay. A later POST of the same mailbox links the same principal
    again, active, with its grants.

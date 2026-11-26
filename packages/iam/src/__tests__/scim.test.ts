@@ -565,6 +565,10 @@ for (const [name, engineOf, available] of engines) {
 				session: { ok: false, reason: 'invalid_session' },
 				key: { ok: false, reason: 'invalid_key' },
 			})
+
+			// Nor does a write that read the person inactive disable them after a concurrent enabling.
+			const enabledAgain = await saveUser(services, { tokenId: 'tok', requestId: 'r' }, written, { ...stateOf(written), displayName: 'Later' })
+			expect(enabledAgain).toMatchObject({ display_name: 'Later', disabled_at: null })
 		})
 
 		test('a control character in a value or a filter is a 400, on every engine', async () => {
@@ -579,6 +583,7 @@ for (const [name, engineOf, available] of engines) {
 			const userId = String(prop(await json(await iam.scim('POST', '/Users', entraCreateUser('hal@testuser.com', 'hal@testuser.com'))), 'id'))
 			const patched = await iam.scim('PATCH', `/Users/${userId}`, entraPathless({ displayName: 'H\u0000al' }))
 			expect(await json(patched)).toMatchObject(scimError(400, 'invalidValue'))
+			expect((await iam.scim('GET', '/Users/a%00b')).status).toBe(404)
 		})
 
 		test('the list pages with startIndex and count; an unsupported filter or op is a 400', async () => {
