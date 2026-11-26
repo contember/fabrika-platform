@@ -45,6 +45,7 @@ import {
 	runnerApprovedAccessSchema,
 	type RunnerIamReconcile,
 } from './runner-protocol'
+import { type CloudflareApiFetch, writeApplicationSecrets } from './worker-secrets'
 
 export * from './runner-protocol'
 
@@ -234,6 +235,8 @@ export interface CloudflareControlOptions {
 	recoverRun?(runId: string): Promise<CloudflareRunRecovery>
 	/** Overridable for tests; the wait between two reads of Control's step boundary. */
 	readonly sleep?: (ms: number, signal: AbortSignal) => Promise<void>
+	/** Overridable for tests; the Cloudflare API calls Control makes itself (`managedCredentials`). */
+	readonly cloudflareFetch?: CloudflareApiFetch
 }
 
 const BOUNDARY_INTERVAL_MS = 10_000
@@ -405,6 +408,16 @@ export const createCloudflareControlProvider = (options: CloudflareControlOption
 	// From the release whose object holds the barrier; the 0.9.0 prereleases before it serve only `inspect`.
 	dataOperations: (access) => servesOps(applicationRelease(access)) && servesDataOperations(applicationRelease(access)),
 	normalizeRegistration,
+	// A key Control re-issues reaches the application Worker as a secret of a new version, without a deploy.
+	managedCredentials: {
+		write: (input) =>
+			writeApplicationSecrets({
+				accountId: options.accountId,
+				apiToken: options.apiToken,
+				// Wrapped: a Worker refuses the global `fetch` called with another `this`.
+				fetch: options.cloudflareFetch ?? ((url, init) => fetch(url, init)),
+			}, input),
+	},
 	applicationRoot: (source) => checkoutRelativeDirectory(source.workerDir),
 	applicationDialect: 'sqlite',
 	source: { binding: 'connection' },

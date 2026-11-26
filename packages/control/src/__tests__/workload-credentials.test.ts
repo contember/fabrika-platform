@@ -110,6 +110,8 @@ describe('VaultWorkloadCredentials', () => {
 			{
 				list: (appId, env) => records.list(appId, env),
 				delete: (appId, env, kind, name) => records.delete(appId, env, kind, name),
+				markHandedBy: (appId, env, kind, name, credentialId, run) => records.markHandedBy(appId, env, kind, name, credentialId, run),
+				confirm: (appId, env, kind, name, credentialId) => records.confirm(appId, env, kind, name, credentialId),
 				put: (row) => {
 					if (failNextPut) {
 						failNextPut = false

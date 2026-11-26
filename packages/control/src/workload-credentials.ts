@@ -57,6 +57,26 @@ export interface WorkloadCredentialsPort {
 	 * public procedure or import needs none.
 	 */
 	reconcile(appId: string, env: string, artifact: ContractArtifact | null, options?: KeyReconcileOptions): Promise<HandedWorkloadKeys>
+	/**
+	 * Without a deploy: re-issue every recorded key of `artifact` with no more than `WORKLOAD_KEY_ROTATE_BELOW_SECONDS`
+	 * left, and answer each recorded key the running version may not hold yet, the re-issued ones included. IAM keeps the
+	 * replaced key valid until its own expiry (`keep`), so the running version works on until it holds the new one.
+	 */
+	renew(appId: string, env: string, artifact: ContractArtifact | null): Promise<readonly PendingWorkloadKey[]>
+	/** Record that the running version holds these keys; a record since replaced by another key is left as it is. */
+	confirm(appId: string, env: string, keys: readonly PendingWorkloadKey[]): Promise<void>
+}
+
+/** A recorded key the running version may not hold yet. Carries the key: never log one. */
+export interface PendingWorkloadKey {
+	readonly kind: CredentialKind
+	readonly name: string
+	readonly credentialId: string
+	/** The newest run that handed it, or null when none did (a key the maintenance pass re-issued). */
+	readonly handedBy: string | null
+	/** The framework variables it travels under. */
+	readonly variables: readonly string[]
+	readonly key: string
 }
 
 /** The keys a deploy hands, by framework variable, and when the first of them expires (null when it hands none). */
@@ -72,6 +92,8 @@ export interface HandedWorkloadKeys {
  */
 export interface KeyReconcileOptions {
 	readonly additive?: boolean
+	/** The run that hands the keys: a key it issues or reads back while pending is recorded as handed by it. */
+	readonly handedBy?: string
 }
 
 /** The `{ scope, label }` a workload key is sealed under — the only record of which workload owns its vault row. */
@@ -143,7 +165,7 @@ function credentialSlots(appId: string, env: string, artifact: ContractArtifact 
 
 export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 	constructor(
-		private readonly records: Pick<WorkloadCredentialRepository, 'list' | 'put' | 'delete'>,
+		private readonly records: Pick<WorkloadCredentialRepository, 'list' | 'put' | 'delete' | 'markHandedBy' | 'confirm'>,
 		private readonly vault: () => Promise<Vault>,
 		private readonly issuer: WorkloadKeyIssuer,
 		private readonly now: () => number = () => Math.floor(Date.now() / 1000),
@@ -166,7 +188,7 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		const vault = await this.vault()
 		const now = this.now()
 		for (const slot of slots) {
-			const handed = await this.#keyOf(vault, appId, env, slot, recorded, now)
+			const handed = await this.#keyOf(vault, appId, env, slot, recorded, now, options)
 			for (const variable of slot.variables) {
 				keys[variable] = handed.key
 			}
@@ -188,6 +210,42 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		return { variables: keys, expiresAt }
 	}
 
+	async renew(appId: string, env: string, artifact: ContractArtifact | null): Promise<readonly PendingWorkloadKey[]> {
+		const recorded = await this.records.list(appId, env)
+		const slots = credentialSlots(appId, env, artifact).flatMap((slot) => {
+			// A key no deploy recorded is not the running version's: the next deploy issues it.
+			const row = recorded.find((candidate) => candidate.kind === slot.kind && candidate.name === slot.name)
+			return row === undefined ? [] : [{ slot, row }]
+		})
+		if (slots.length === 0) return []
+		const vault = await this.vault()
+		const now = this.now()
+		const pending: PendingWorkloadKey[] = []
+		for (const { slot, row } of slots) {
+			const purpose = workloadKeyPurpose(appId, env, slot.kind, slot.name)
+			// A pending key this old outlived the key it replaced, which had less than the threshold left: `keep` loses nothing.
+			const current = row.expires_at - now > WORKLOAD_KEY_ROTATE_BELOW_SECONDS
+				? { row, key: row.pending === 1 ? await vault.getSecretForPurpose(row.value_ref, purpose) : null }
+				: await this.#issue(vault, appId, env, slot, row, now, { pending: true, handedBy: null })
+			if (current.row.pending !== 1 || current.key === null) continue
+			pending.push({
+				kind: slot.kind,
+				name: slot.name,
+				credentialId: current.row.credential_id,
+				handedBy: current.row.handed_by,
+				variables: slot.variables,
+				key: current.key,
+			})
+		}
+		return pending
+	}
+
+	async confirm(appId: string, env: string, keys: readonly PendingWorkloadKey[]): Promise<void> {
+		for (const key of keys) {
+			await this.records.confirm(appId, env, key.kind, key.name, key.credentialId)
+		}
+	}
+
 	async #keyOf(
 		vault: Vault,
 		appId: string,
@@ -195,14 +253,36 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		slot: CredentialSlot,
 		recorded: readonly WorkloadCredentialRow[],
 		now: number,
+		options: KeyReconcileOptions,
 	): Promise<{ readonly key: string; readonly expiresAt: number }> {
 		const purpose = workloadKeyPurpose(appId, env, slot.kind, slot.name)
 		const row = recorded.find((candidate) => candidate.kind === slot.kind && candidate.name === slot.name)
+		const handedBy = options.handedBy ?? null
 		if (row !== undefined && row.expires_at - now > WORKLOAD_KEY_ROTATE_BELOW_SECONDS) {
+			if (row.pending === 1 && handedBy !== null) {
+				await this.records.markHandedBy(appId, env, row.kind, row.name, row.credential_id, handedBy)
+			}
 			return { key: await vault.getSecretForPurpose(row.value_ref, purpose), expiresAt: row.expires_at }
 		}
-		// The recorded key stays IAM's active one until the record below names the new key; a failure in between
-		// leaves the new key an orphan, which the next issuance revokes.
+		// A dev sandbox's deploy is not the environment's running version: its sandboxes are bootstrapped before expiry.
+		const issued = await this.#issue(vault, appId, env, slot, row, now, { pending: options.additive !== true, handedBy })
+		return { key: issued.key, expiresAt: issued.row.expires_at }
+	}
+
+	/**
+	 * Issue the slot's next key and record it, replacing `row`. The recorded key stays IAM's active one until the record
+	 * names the new key; a failure in between leaves the new key an orphan, which the next issuance revokes.
+	 */
+	async #issue(
+		vault: Vault,
+		appId: string,
+		env: string,
+		slot: CredentialSlot,
+		row: WorkloadCredentialRow | undefined,
+		now: number,
+		handoff: { readonly pending: boolean; readonly handedBy: string | null },
+	): Promise<{ readonly row: WorkloadCredentialRow; readonly key: string }> {
+		const purpose = workloadKeyPurpose(appId, env, slot.kind, slot.name)
 		const issued = await this.issuer.issue({
 			app: slot.iamApp,
 			kind: slot.kind,
@@ -211,16 +291,22 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 			keep: row?.credential_id ?? null,
 		})
 		const ref = await vault.putSecret(purpose.scope, purpose.label, issued.key)
+		// The key the running version holds: the replaced one, or, when that one was never handed either, the one before.
+		const held = row === undefined ? null : row.pending === 1 ? row.held_expires_at : row.expires_at
+		const next: WorkloadCredentialRow = {
+			app_id: appId,
+			env,
+			kind: slot.kind,
+			name: slot.name,
+			value_ref: ref,
+			credential_id: issued.credentialId,
+			expires_at: issued.expiresAt,
+			pending: handoff.pending ? 1 : 0,
+			handed_by: handoff.pending ? handoff.handedBy : null,
+			held_expires_at: handoff.pending ? held : null,
+		}
 		try {
-			await this.records.put({
-				app_id: appId,
-				env,
-				kind: slot.kind,
-				name: slot.name,
-				value_ref: ref,
-				credential_id: issued.credentialId,
-				expires_at: issued.expiresAt,
-			})
+			await this.records.put(next)
 		} catch (error) {
 			await vault.delete(ref)
 			throw error
@@ -228,7 +314,7 @@ export class VaultWorkloadCredentials implements WorkloadCredentialsPort {
 		if (row !== undefined) {
 			await vault.delete(row.value_ref)
 		}
-		return { key: issued.key, expiresAt: issued.expiresAt }
+		return { row: next, key: issued.key }
 	}
 }
 

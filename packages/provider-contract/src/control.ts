@@ -321,6 +321,23 @@ export interface ProviderManagedSecrets {
 	version?(input: ProviderSecretDeleteInput): Promise<string | null>
 }
 
+/** Managed credentials, by framework variable, for the version an environment runs. Carries keys: never log one. */
+export interface ProviderManagedCredentialsInput {
+	readonly environment: ProviderEnvironment
+	readonly values: Readonly<Record<string, string>>
+	readonly signal: AbortSignal
+}
+
+/**
+ * Writes managed credentials to the version an environment runs, without a deploy: Control's maintenance pass hands it
+ * a workload key it re-issued before the one the version holds expires. A write lands whole or throws, and repeating one
+ * is harmless. The running version may take the values up later (on Cloudflare, once the object restarts on the new
+ * version), so Control keeps the replaced key valid meanwhile.
+ */
+export interface ProviderManagedCredentials {
+	write(input: ProviderManagedCredentialsInput): Promise<void>
+}
+
 /**
  * A namespace lifecycle failure an operator can act on.
  *
@@ -718,6 +735,8 @@ export interface ControlProvider {
 	cancel?(input: ProviderCancelInput): Promise<ProviderCancelOutcome>
 	reconcile?(input: ProviderReconcileInput): Promise<ProviderReconcileOutcome>
 	readonly secrets?: ProviderManagedSecrets
+	/** Absent means a managed credential reaches an environment only with a deploy. */
+	readonly managedCredentials?: ProviderManagedCredentials
 	readonly namespaces?: ProviderNamespaceCapabilities
 	/** MCP authoring (ADR-0049): an environment of this provider can be an authoring target. Absent means none can. */
 	readonly authoring?: ProviderAuthoring

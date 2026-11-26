@@ -924,7 +924,7 @@ async function deployUnder(
 		Object.assign(managedEnvironment, mailEnvironment)
 		const workloadKeys = dryRun
 			? NO_WORKLOAD_KEYS
-			: await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract, { additive: sandbox !== null })
+			: await reconcileWorkloadKeys(deps.workloadCredentials, app.id, appEnv.env, approvedContract, { additive: sandbox !== null, handedBy: runId })
 		Object.assign(managedEnvironment, workloadKeys.variables, await connectorAddresses(deps.repositories.registry, appEnv.env, approvedContract))
 		const membership = dryRun
 			? null
