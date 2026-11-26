@@ -163,7 +163,9 @@ export type Matrix = [
 	Expect<Equal<Returned<OverQuery['db']['within']['companies']['list']>['items'][number]['name'], string>>,
 	Expect<Equal<Reached<OverQuery['db']['within']>, 'orgs' | 'companies' | 'deals' | 'deal_activities'>>,
 	Expect<Equal<OverQuery['within'], Within<'org', 'crm.read'>>>,
-	Expect<Equal<Reached<OverCompany['db']['within']>, 'deals' | 'deal_activities'>>,
+	// A contained dimension's own table is listed under over of that dimension: a company's own row by its key.
+	Expect<Equal<Reached<OverCompany['db']['within']>, 'companies' | 'deals' | 'deal_activities'>>,
+	Expect<Equal<Returned<OverCompany['db']['within']['companies']['list']>['items'][number]['name'], string>>,
 	// A table the form does not reach names itself, the form, and the form that reaches it.
 	Expect<Equal<OverCompany['db']['within']['orgs'], Unavailable<"orgs is not under over: 'company' (it lies in org): declare over: 'org'">>>,
 	Expect<Equal<OverQuery['db']['within']['countries'], Unavailable<'countries is a reference table: read it through ctx.db.reference.countries'>>>,

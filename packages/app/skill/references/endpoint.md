@@ -226,7 +226,8 @@ containing it count; a grant held only below it does not.
 - The dimension is part of the endpoint's requirement, and the approver's diff shows any change of a requirement as a
   widening. Choose it by this rule when you write the endpoint; do not change it to pass a test.
 - `ctx.db.within` reaches every table whose chain holds the dimension, so `over: 'org'` also types tasks two levels
-  down. The rule still names `project` for a list of tasks.
+  down, and the dimension's own table: `over: 'project'` lists the projects the caller holds the action in, or in
+  whose org it holds it (a dimension's value source labels its values from there). The rule still names `project` for a list of tasks.
 
 ### The caller's scopes: `ctx.within.values`
 
