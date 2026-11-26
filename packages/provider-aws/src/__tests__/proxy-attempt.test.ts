@@ -15,7 +15,7 @@ import type { S3PartWriter } from '../aws/s3'
 import { AwsError } from '../aws/transport'
 import { awsAppArtifactCodec, type AwsAppTarget, type AwsNamespaceTarget, awsNamespaceTargetCodec } from '../codecs'
 import { awsNamespaceTargetEnvelope } from '../namespace'
-import { AWS_PROXY_BUILD_FAILED, awsProxyManifestFile, followAwsProxyBuild, sha256Hex, startAwsProxyBuild } from '../proxy-attempt'
+import { AWS_PROXY_BUILD_FAILED, awsProxyManifestFile, followAwsProxyBuild, sha256Hex, startAwsProxyBuild, withProxyPin } from '../proxy-attempt'
 import { AWS_PROXY_BUILDSPEC } from '../proxy-build'
 
 const installation: AwsAppTarget = {
@@ -364,6 +364,42 @@ describe('followAwsProxyBuild', () => {
 			// The pin stays; the attempt is cleared, so a new start builds again.
 			expect(fake.checkpoints).toEqual([PINNED])
 		}
+	})
+
+	test('a failed build keeps the image an earlier build recorded, so the proxy keeps running it', async () => {
+		const prior = `sha256:${'d'.repeat(64)}`
+		const fake = follow({ ...build(BUILD_ID), status: 'failed' })
+		const building = namespaceOf({
+			...PINNED,
+			proxyImageDigest: prior,
+			proxyImageManifestSha256: 'e'.repeat(64),
+			proxyBuildToken: TOKEN,
+			proxyBuildManifestSha256: MANIFEST,
+			proxyBuildId: BUILD_ID,
+		})
+		await expect(fake.run(building)).rejects.toMatchObject({ code: AWS_PROXY_BUILD_FAILED })
+		expect(fake.checkpoints).toEqual([{ ...PINNED, proxyImageDigest: prior, proxyImageManifestSha256: 'e'.repeat(64) }])
+	})
+
+	test('a moved pin drops the attempt and the image, so the next start builds the new commit', async () => {
+		const older = 'fedcba9876543210fedcba9876543210fedcba98'
+		const manifestSha256 = await sha256Hex(awsProxyManifestFile('shared', MEMBERS))
+		const target: AwsNamespaceTarget = {
+			...PINNED,
+			proxyCommitSha: older,
+			proxyImageDigest: `sha256:${'d'.repeat(64)}`,
+			proxyImageManifestSha256: manifestSha256,
+			proxyBuildToken: TOKEN,
+			proxyBuildManifestSha256: manifestSha256,
+			proxyBuildId: BUILD_ID,
+		}
+		expect(withProxyPin(target, older)).toEqual(target)
+		const moved = withProxyPin(target, PROXY_SOURCE.commitSha)
+		expect(moved).toEqual(PINNED)
+		// The same manifest: without the drop the start would skip the build. With it, the new commit is built.
+		const start = new Fake()
+		await startAwsProxyBuild(start.input(namespaceOf(moved)))
+		expect(start.calls).toContain(`upload contember/fabrika-platform@${PROXY_SOURCE.commitSha} proxy.manifest.json`)
 	})
 
 	test('a namespace with no build started and no image is refused, calling nothing', async () => {

@@ -118,6 +118,18 @@ function withoutBuild(target: AwsNamespaceTarget): AwsNamespaceTarget {
 }
 
 /**
+ * `target` pinned to `commitSha`. The attempt and the image are keyed by the manifest alone, because the pin is theirs:
+ * a moved pin drops both, so the next start builds the new commit instead of skipping it (an image of the same
+ * manifest) or resuming an attempt of the old one. Every move of a pin goes through here (the operator's update, not
+ * built, is to); an unchanged pin keeps both.
+ */
+export function withProxyPin(target: AwsNamespaceTarget, commitSha: string): AwsNamespaceTarget {
+	if (commitSha === target.proxyCommitSha) return target
+	const { proxyImageDigest: _digest, proxyImageManifestSha256: _manifest, ...rest } = withoutBuild(target)
+	return { ...rest, proxyCommitSha: commitSha }
+}
+
+/**
  * Starts the build of the namespace's proxy from its pin and its members' manifest, and answers the namespace with the
  * attempt recorded; a namespace whose build of this manifest already started is answered as it is.
  */
@@ -160,6 +172,8 @@ async function start(input: AwsProxyBuildAttemptInput): Promise<ProviderDeployme
 		attempt = await record({ ...withoutBuild(stored), proxyBuildToken: token, proxyBuildManifestSha256: manifestSha256 })
 		// The attempt it replaces is of an older manifest, and its token is recorded nowhere once replaced: its URL
 		// parameter goes now. Best effort; a build of it still queued then fails to fetch, and its image would be stale.
+		// That build is not stopped: one already past its fetch runs to its end and pushes an image under its own tag, which
+		// nothing reads (only the recorded attempt's tag is followed) and the repository's lifecycle rule expires.
 		if (stored.proxyBuildToken !== undefined) {
 			await clients.ssm.deleteSecret(sourceUrlParameterOf(resources, stored.proxyBuildToken), AbortSignal.timeout(CLEANUP_TIMEOUT_MS)).catch(() => false)
 		}

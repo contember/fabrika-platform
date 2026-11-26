@@ -64,6 +64,7 @@ export {
 	type AwsProxySourceUpload,
 	followAwsProxyBuild,
 	startAwsProxyBuild,
+	withProxyPin,
 } from './proxy-attempt'
 export {
 	AWS_PROXY_BUILD_IMAGE,

@@ -453,7 +453,8 @@ the RDS bundle; N5's credential source reads the container credentials endpoint
     it is (a new start builds again). Either end deletes the attempt's URL parameter: Parameter Store keeps one until it
     is deleted. A replaced attempt's goes when the start replaces it, its token being recorded nowhere after. A
     namespace whose image is of the current manifest starts nothing, and `normalize` refuses a submitted image as it
-    refuses a submitted build.
+    refuses a submitted build. The attempt and the image are keyed by the manifest alone because the pin is theirs:
+    every move of a pin goes through `withProxyPin`, which drops both, so the moved pin's commit is built next.
     Not yet: the proxy service (relaying the build's log into an operator's view; its ECS service in the Service Connect
     namespace, on X86_64, running the recorded image; `republish`, which will start and follow the build),
     the balancer's host rules and certificates, and the database (one instance for `cheap` namespaces, a database per
