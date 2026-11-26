@@ -204,9 +204,10 @@ migration bookmark, does all of it inside the `blockConcurrencyWhile` that holds
 1. It runs every boot check that does not read the migrated schema: the module, the contract digest, the variables,
    the bindings, the handlers.
 2. It reads `getCurrentBookmark()` and writes the **migration record**, `__fabrika/ops/<object>.migration.json` in the
-   environment's bucket, by a put conditioned on the version it read: the bookmark, the ledger digest it starts from,
-   the pending files of both bundles with their checksums, and the time. A failed put migrates nothing: the event
-   answers 503, and the next one tries again.
+   environment's bucket, by a put conditioned on the version it read: the bookmark, the version (its contract digest),
+   the ledger digest it starts from, the pending files of both bundles with their checksums, and the time. A failed put
+   migrates nothing: the event answers 503, `migrate` answers `migration_failed` with `record_unwritable`, and the next
+   event tries again.
 3. It applies every pending file of both bundles, the framework's then the application's, with their ledger rows, in
    one `transactionSync` that ends with `PRAGMA foreign_key_check`; a row it returns rolls the whole set back. A
    failure, or a reset past the 30 s bound, leaves the ledger the boot started from.
@@ -228,19 +229,23 @@ the ledger and the migration record.
 accepting requests, ops requests included, until it hibernates or `max_delay` passes (300 s by default). An answer from
 an object that booted and whose ledger lacks the candidate's files therefore comes from the old version still running.
 It is never a rollback. Control asks again until an answer holds every candidate file with its checksum, or until
-`max_delay` plus a margin has passed. Only the new version answers `migration_failed` (422) with its record's outcome,
-and only that answer is a failure. Past the deadline with no answer from the new version, the run fails as
-`migration_unconfirmed`, with nothing restricted, and the console says to read the view.
+`max_delay` plus a margin has passed. Only the new version answers `migration_failed` (422), with its record's outcome
+or `record_unwritable`, and only that answer is a failure. Past the deadline with no answer from the new version, the
+run fails as `migration_unconfirmed`, with nothing restricted, and the console says to read the view. A recovery's
+redeploy is a deferred code update too: Control waits, to the same deadline, for an `ok` answer, which the failing
+version never gives.
 
 **When it fails**, the operation recovers on its own, under the same lease:
 
-- **`rolled_back`.** Control redeploys the last succeeded run's commit. The ledger is the old one, so the old version
+- **`rolled_back`, or `record_unwritable`.** Nothing migrated. Control redeploys the last succeeded run's commit, which
   boots over the schema it knows.
-- **`committed`, never `booted`, and the migration has no `dataLoss` line.** Control redeploys the last succeeded run's
-  commit, which boots over a superset of its schema.
-- **`committed`, never `booted`, and a `dataLoss` line.** Control publishes the object `inspect` and rewinds it in
-  place to the record's bookmark (ADR-0070 §9). It then redeploys the last succeeded run's commit and opens the object
-  at a new generation. Until the rewind is built, the object stays `closed` for an operator to fix forward.
+- **`committed`, never `booted`.** Control publishes the object `inspect` and rewinds it in place to the record's
+  bookmark (ADR-0070 §9), so the old code meets exactly its own schema. It then redeploys the last succeeded run's
+  commit and opens the object at a new generation.
+- **Until the in-place rewind is built**, a `committed`, never-`booted` migration without a `dataLoss` line gets the
+  redeploy alone: the runner tolerates a ledger ahead of the code. With a `dataLoss` line, or when the redeployed commit
+  does not answer `ok` by the deadline, Control publishes the object `closed`, and the run fails as `migration_failed`
+  for an operator to fix forward.
 - **`committed` and `booted`.** There is nothing to recover: the run succeeded. A migration found wrong later is undone
   by a side restore to the record's bookmark (ADR-0070 §9).
 
@@ -281,10 +286,11 @@ new generation.
 | An alarm fires in `read-only` or `closed`                              | It runs nothing and writes nothing                                                                    |
 | A webhook arrives while not `open`                                     | 503; the sender retries                                                                               |
 | A restricted cold start finds a pending migration                      | The application does not boot until the operation's migrate request                                   |
-| The migration record cannot be written                                 | Nothing migrates; 503 until a later event writes it; past the deadline the run is unconfirmed         |
+| The migration record cannot be written                                 | Nothing migrates; `migrate` answers `record_unwritable`; Control redeploys the last succeeded commit  |
 | The `migrate` answer comes from the old version                        | Its ledger lacks the candidate's files; Control asks again until the new version answers              |
 | The migration rolls back, or resets past 30 s                          | The ledger is unchanged; Control redeploys the last succeeded commit                                  |
-| The migration commits and the new version does not boot                | The redeploy; with a `dataLoss` line, the in-place rewind to the bookmark first                       |
+| The migration commits and the new version does not boot                | The in-place rewind to the record's bookmark, then the redeploy                                       |
+| The redeployed commit does not answer `ok` by the deadline             | Control publishes `closed`; the run fails as `migration_failed`, for an operator                      |
 | A migrate request carries a generation that is not the published one   | Refused                                                                                               |
 | Control dies mid-operation                                             | The environment stays in its published mode; a successor fences and resumes from the recorded step    |
 | Two Control instances drive one environment                            | Only the lease holder records progress; at the object the higher published generation wins            |

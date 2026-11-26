@@ -339,15 +339,16 @@ The read-only migration phase (ADR-0069 §3) verifies its backup with this rehea
   no dump and no window. The operation's deploy, the version check of the `migrate` answer, and the automatic recovery
   are ADR-0069 §3's. A candidate before that release gets the read-only migration phase: `read-only`, the backup, its
   rehearsal, the operation's own deploy, the migration request, then `open` at a new generation; a failed backup or
-  rehearsal reopens the object and does not deploy. A migration is pending when one of the candidate's application migration files is missing from the object's
-  ledger, which Control reads with `inspect`; the published snapshot proves nothing, because a published file has not
-  run while its version never booted. The rule applies once the version running installed the ops channel, which
-  Control knows from the last succeeded deploy, not from the latest publication: a publication precedes the provider,
-  and a run that failed after it changed nothing that runs. A version without the channel (an older release, or a gated
-  one deployed without a domain) gets a plain deploy, and the object migrates on its cold start. An object whose
-  installed channel does not answer gets no deploy. A migration that may change stored data (any `dataLoss` statement) gets no plain deploy: without an
-  installed barrier Control refuses the run ([ADR-0050](0050-approved-access.md)). The operation's deploy is the run's
-  own. In the read-only phase, a deploy or a migration that fails leaves the object restricted, for a recovery, except a deploy that no
+  rehearsal reopens the object and does not deploy. A migration is pending when one of the candidate's application
+  migration files is missing from the object's ledger, which Control reads with `inspect`; the published snapshot
+  proves nothing, because a published file has not run while its version never booted. The rule applies once the
+  version running installed the ops channel, which Control knows from the last succeeded deploy, not from the latest
+  publication: a publication precedes the provider, and a run that failed after it changed nothing that runs. A
+  version without the channel (an older release, or a gated one deployed without a domain) gets a plain deploy, and
+  the object migrates on its cold start. An object whose installed channel does not answer gets no deploy. A migration
+  that may change stored data (any `dataLoss` statement) gets no plain deploy: without an installed barrier Control
+  refuses the run ([ADR-0050](0050-approved-access.md)). The operation's deploy is the run's own. In the read-only
+  phase, a deploy or a migration that fails leaves the object restricted, for a recovery, except a deploy that no
   provider accepted or whose provider reports it failed before its first migration or deploy (`untouched`: a failed
   build, check or provisioning): nothing that runs changed, so Control opens the object again.
 - **Opting out** stops the daily backup only. A migrating deploy's bookmark, and the read-only phase's backup, belong
@@ -382,8 +383,8 @@ write; Control's maintenance pass owns it and drives it a bounded stretch at a t
    - **`prepare`** writes the sentinel, the operation's id, into the original's KV storage, and answers the current
      bookmark and the bookmark of T (`getBookmarkForTime`). When the operation restores to a migration's record, it
      names the record's bookmark instead of a time, and `prepare` answers it as the target: `getBookmarkForTime` is
-     approximate, and the record's bookmark is the exact point before the migration's transaction. Control persists the target bookmark, the pre-restore
-     bookmark and the sentinel before it arms anything.
+     approximate, and the record's bookmark is the exact point before the migration's transaction. Control persists
+     the target bookmark, the pre-restore bookmark and the sentinel before it arms anything.
    - **`arm`** calls `onNextSessionRestoreBookmark(target)`, answers the undo bookmark, and then aborts the object, so
      its next session starts restored. The answer may be lost to the reset.
    - **`verify`**, after the reset, answers whether the sentinel is still there. Absent means restored. Present means
@@ -435,13 +436,16 @@ steps. The object accepts `prepare` and `arm` on itself only when all of these h
 - it is published `inspect` under the operation's generation, so nothing boots or writes;
 - its migration record says `committed` and has no `booted`, so no ordinary event ran since the commit, and the rewind
   loses no write;
+- the record names the version now running, which writes `booted` before its first ordinary event. A redeploy of
+  another commit may serve writes without touching the record, so after it the rewind is refused;
 - the target is the record's bookmark before the migration, and nothing else.
 
 Control then redeploys the last succeeded run's commit and opens the object at a new generation. The undo bookmark
 `arm` answers is recorded like a side restore's. If `verify` finds the sentinel three times, the object stays `inspect`
 for an operator, and nothing was lost. This rewind is built only once probe 7 has exercised the in-place restore's
-failure boundaries on a live account: a lost `arm` answer, a reset that does not come, and the undo bookmark. Until then,
-such an object stays `closed` for an operator to fix forward.
+failure boundaries on a live account: a lost `arm` answer, a reset that does not come, and the undo bookmark. Until
+then, ADR-0069 §3 redeploys without a rewind where no `dataLoss` line forbids it, and otherwise leaves the object
+`closed` for an operator to fix forward.
 
 **Not built: an in-place restore of an object that served, and a whole-environment rollback.** Rewinding an object
 that served writes discards them, and restoring forward rests on the forward restore succeeding, which is unprobed.

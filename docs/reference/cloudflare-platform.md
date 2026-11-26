@@ -62,6 +62,15 @@ it to fact without a probe.
   provider's `new_sqlite_classes` step (tag `v0001`) to an application Worker deployed without a Durable Object leaves
   it with migration tag `v0001` and a SQLite-backed namespace. _Not verified live:_ a Worker whose own config already
   used that tag (backlog 216 item 3).
+- **A code update reaches an active object deferred.** Documented, not verified live: the default
+  `code_update_strategy` is `deferred` with a `max_delay` of 300 s, and an active object keeps running and accepting
+  requests on its old code until it hibernates or the delay passes, then resets onto the new code
+  ([code updates](https://developers.cloudflare.com/durable-objects/deployments/durable-objects-code-updates/)). An
+  event still running on a replaced instance gets an exception when it reads or writes storage, so two versions never
+  write one object ([known issues](https://developers.cloudflare.com/durable-objects/platform/known-issues/)).
+- **Point-in-time recovery covers SQL and KV.** Documented: it restores both the SQLite data and the KV data of the
+  object, to any point in the last 30 days; `getCurrentBookmark()` names the current point. Whether a bookmark
+  survives `deleteAll()` is not documented and not probed.
 - **Point-in-time recovery rewinds an object and resets it.** Probed live (2026-11-20), through a side restore
   (ADR-0070 §9): `getBookmarkForTime` answers a bookmark for a time seven minutes back, `onNextSessionRestoreBookmark`
   then an abort restores the object at its next session, and a KV sentinel written after that time is gone. A bookmark

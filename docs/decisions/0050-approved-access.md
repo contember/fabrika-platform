@@ -330,7 +330,8 @@ for a candidate whose release does not record it, the read-only migration phase 
 ([ADR-0070](0070-data-protection-of-an-application-environment-on-cloudflare.md) §8). Either way Control must read the
 object's ledger and confirm the migration, so such a migration deploys only once the version running holds the
 barrier; without it Control refuses the run before any deploy and says what to do: give the environment a domain,
-raise the framework pin, or deploy once without that migration. A dev environment's database is its workspace sandbox's, and nothing backs it up. A missing record
+raise the framework pin, or deploy once without that migration. A dev environment's database is its workspace
+sandbox's, and nothing backs it up. A missing record
 never reads as "nothing changes data": a run parked by a release before the classifier stored no `dataLoss`, so when it
 resumes Control classifies its commit again, and when the commit no longer reads, every migration file the last
 succeeded run did not hold counts. A side restore's deploys redeploy what runs, under the restore's lease and with the
