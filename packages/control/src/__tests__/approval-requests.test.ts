@@ -20,6 +20,7 @@ import type { JsonValue } from '@fabrika/provider-contract'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 import { ControlApiError } from '../api/domain'
+import type { GrantApprovalPort } from '../approval/api'
 import { storedPolicy, storedSettings } from '../approval/categories'
 import {
 	type ApprovalRequestContext,
@@ -31,6 +32,7 @@ import {
 } from '../approval/requests/api'
 import { executeApprovedRequest, sweepApprovalRequests } from '../approval/requests/execute'
 import { requestKind, type RequestKindRegistry, type RequestOutcome } from '../approval/requests/kind'
+import { registryContext } from '../approval/requests/kinds/shared'
 import { REFUSED_KINDS } from '../approval/requests/refused'
 import { iamPasskeyStepUp, requestStepUpBinding } from '../approval/step-up'
 import { type ControlRpcContext, controlRpcRouter } from '../control-rpc'
@@ -66,6 +68,8 @@ interface Notes {
 	followed: string[]
 	/** The requests whose held state the kind released, refused or expired. */
 	discarded: string[]
+	/** IAM's gate mirror the registry use cases of each execution write a new environment through, if any. */
+	readonly mirrors: (GrantApprovalPort | undefined)[]
 }
 
 const noteInput = z.object({ appId: z.string().min(1), env: z.string().min(1), name: z.string().min(1), value: z.string() })
@@ -88,6 +92,7 @@ function notesKind(notes: Notes, input: z.ZodType<z.infer<typeof noteInput>, z.Z
 				recorded: row?.operation_id ?? null,
 				approver: c.auth.principal?.id ?? null,
 			})
+			notes.mirrors.push(registryContext(c, execution).grantApproval)
 			if (notes.execute === 'throw') throw new Error('the provider did not answer: https://token@example.test')
 			if (notes.execute === 'fail') return { state: 'failed', error: 'the provider refused the note' }
 			notes.values.set(input.name, input.value)
@@ -183,7 +188,7 @@ for (const backend of backends) {
 			const clock = { now: T0 }
 			const { repositories, locks, close } = await backend.open(() => clock.now)
 			closing = close
-			const notes: Notes = { values: new Map(), effects: [], execute: 'ok', follow: { state: 'unknown' }, followed: [], discarded: [] }
+			const notes: Notes = { values: new Map(), effects: [], execute: 'ok', follow: { state: 'unknown' }, followed: [], discarded: [], mirrors: [] }
 			const w: World = {
 				db: repositories,
 				locks,
@@ -241,7 +246,11 @@ for (const backend of backends) {
 		}
 
 		/** `kinds: null` serves the production registry. */
-		function context(w: World, who: Who, options: { kinds?: RequestKindRegistry | null; consoleOrigin?: string | null } = {}): ApprovalRequestContext {
+		function context(
+			w: World,
+			who: Who,
+			options: { kinds?: RequestKindRegistry | null; consoleOrigin?: string | null; grantApproval?: GrantApprovalPort } = {},
+		): ApprovalRequestContext {
 			const headers: Record<string, string> = { 'Sec-Fetch-Site': 'same-origin', ...consoleTokenHeaders(who.id ?? 'p-ada') }
 			if (who.credential !== 'console') headers.Authorization = 'Bearer px_test'
 			const request = new Request(`${ORIGIN}/api/rpc`, { method: 'POST', headers })
@@ -255,6 +264,7 @@ for (const backend of backends) {
 				...(stepUp === null ? {} : { stepUp }),
 				...(options.kinds === null ? {} : { kinds: options.kinds ?? w.kinds }),
 				...(options.consoleOrigin === null ? {} : { consoleOrigin: options.consoleOrigin ?? ORIGIN }),
+				...(options.grantApproval === undefined ? {} : { grantApproval: options.grantApproval }),
 				now: () => w.now,
 			}
 		}
@@ -288,6 +298,17 @@ for (const backend of backends) {
 		}
 
 		describe('the lifecycle', () => {
+			test("an execution's registry use cases carry IAM's gate mirror, so an environment one creates reaches IAM before its row", async () => {
+				const w = await world()
+				const mirror: GrantApprovalPort = { set: () => Promise.reject(new Error('the test kind creates no environment')) }
+				const created = await ask(w)
+				const request = await getApprovalRequestUseCase(context(w, BOB), created.id)
+				const options = { grantApproval: mirror }
+				expect(await decideApprovalRequestUseCase(context(w, BOB, options), { id: created.id, decision: 'approve', inputDigest: request.inputDigest }))
+					.toMatchObject({ state: 'executed' })
+				expect(w.notes.mirrors).toEqual([mirror])
+			})
+
 			test('created pending with its link, approved by a person, executed with that person under an operation id recorded first', async () => {
 				const w = await world()
 				const created = await ask(w)

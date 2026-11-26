@@ -9,11 +9,13 @@ import {
 	type PrincipalListItem,
 	type UpdatePrincipalInput,
 } from '@fabrika/iam-contract'
+import { issuedKeysReach } from '../credentials-gate'
 import { type PrincipalRow, principalStatus } from '../db'
 import { normalizeEmailIdentity } from '../email-identity'
 import { resolvePermissionsAt } from '../resolve'
+import { heldReach } from './api-keys'
 import { listRolesUseCase } from './app-schema'
-import { type AdminContext, adminEvent, fail } from './context'
+import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 import { grantAuthorLabels, toGrantDtos } from './grant-support'
 import { cursorOf, normalizeLimit } from './pagination'
 import { canManagePrincipal, managesApp, requireActableTarget, requireInvitableMailbox } from './user-admin'
@@ -177,6 +179,15 @@ export async function updatePrincipalUseCase(c: AdminContext, input: UpdatePrinc
 			adminEvent(c, { action: 'iam.principal.disable', resourceType: 'principal', resourceId: id }),
 		)
 	} else {
+		// Re-enabling gives back what a key holds, a workload's being what the schema declares at its own environment, and
+		// what every key the principal issued for others holds (no more than its issuer covers); disabling narrows and is
+		// never judged (ADR-0083 §8).
+		if (row.disabled_at !== null) {
+			const workload = await c.services.repositories.workloads.getByPrincipal(id)
+			if (workload !== null) await requireCredentialsMode(c, [{ app: workload.app, scope: null }], 'enable')
+			else if (row.type === 'service') await requireCredentialsMode(c, await heldReach(c, id), 'enable')
+			await requireCredentialsMode(c, await issuedKeysReach(c.services, id, { kind: 'all' }), 'enable')
+		}
 		await c.services.repositories.principals.enablePrincipal(
 			id,
 			adminEvent(c, { action: 'iam.principal.enable', resourceType: 'principal', resourceId: id }),

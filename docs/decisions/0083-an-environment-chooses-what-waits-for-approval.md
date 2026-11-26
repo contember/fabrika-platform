@@ -340,21 +340,40 @@ principal's grants), `shareLinks.issue`, `workloads.issueKey`, `membershipKeys.i
 someone else (a self-bound key is the caller's own identity). A key at an application environment takes its mode. A key
 at Control's console audience acts in every environment of the application its `app` scope names, or of every
 application under any other scope, and a cross-app key in every environment: such a key takes the strictest mode among
-them. An environment IAM holds no mode for reads as `person`. Under `person` IAM answers 403 naming Control's request
-path (`approvals.requests.create` of kind `iam.apiKeys.provision`, or `fabrika control access request-key`); under
-`refuse`, 403. A person in the console issues as before. A key at IAM itself or Operations reaches no application and
+them. An environment IAM holds no mode for reads as `person`. Among them is each application's `prod`, whether it exists
+or not: `prod` starts protected, and a key issued before it exists would act in it for up to 30 days. For the same
+reason a key reaching every application (a Control key with no `app` scope, or a cross-app key) reads as `person` at
+least, whatever the modes of the environments IAM knows: IAM cannot know an application registered later. The cost: a
+machine caller other than the provisioning key issues no Control key scoped to an application whose `prod` IAM holds no
+mode for (Control has not mirrored one), and no global or cross-app key at all; a person issues it in the console, or
+the agent asks through Control. A key at one environment is judged by that environment
+alone. Under `person` IAM answers 403 naming Control's request path (`approvals.requests.create` of kind
+`iam.apiKeys.provision`, or `fabrika control access request-key`); under `refuse`, 403. A person in the console issues as before. A key at IAM itself or Operations reaches no application and
 keeps the installation's rule (§9). This is authorization in IAM's use cases, not an enforcement decision (ADR-0022).
 
 A machine caller's grant to a key meets `credentials` too, since it widens a live credential as issuing one would:
 `grants.create` and `grants.update` to a service principal judge the grant's reach by the same rules, before the grant
-applies or waits as a grant request (§4). `policies.update` and `PUT /admin/apps/:app/schema` widen every holder of a
-role at once; IAM does not judge whether one widens a key, so a machine caller is refused there wherever the
-application's mode is `person` or `refuse`. A person and the provisioning key keep their rule on all four.
+applies or waits as a grant request (§4). `policies.create`, `policies.update` and `PUT /admin/apps/:app/schema` widen
+every holder of a role at once: a grant names its role by key alone, so a policy created under the key of a role deleted
+or dropped by a reconcile reaches every key still naming it. IAM does not judge whether one widens a key, so a machine
+caller is refused there wherever the application's mode is `person` or `refuse`. Re-enabling a disabled key
+(`principals.update`) gives back its grants, so it judges their reach as a rotation does. A workload principal (a job,
+a webhook, a connector) holds no grant but what its schema declares at its own environment, so re-enabling one judges
+that environment. Disabling narrows and is not judged. A key one principal issued for another holds no more than its issuer covers: nothing while the issuer is
+disabled, its whole set while the issuer holds `iam.admin` at IAM, and otherwise what the issuer holds at the key's
+application. So re-enabling any principal, a user included, judges the reach of every live key it issued for someone
+else (a share link aside, whose issuance through its mount the mode does not judge), and a grant to any principal judges
+the keys it widens: a global `iam.admin` grant at IAM, or its extension, every key bound to another principal; a grant at
+an application what those keys hold there; a cross-app grant all of them. A person and the provisioning key keep their
+rule on all six.
 
 Two issuances keep their rule, both made with the provisioning key, the operator's own credential, which the check
 exempts on every path: Control's own workload, membership and connector keys, which every deploy issues, and the
 bootstrap `POST /admin/api-keys`, which makes the first machine caller before any console or key exists. A
-non-provisioning key on that REST path meets the mode like any other caller.
+non-provisioning key on that REST path meets the mode like any other caller. The deploy exemption gives workload keys to
+whoever may deploy, so an environment's `deploy-request` should be at least as strict as its `credentials`, and a
+connector key lands at the owner environment from a consumer's deploy, bounded by the export the owner approved
+([backlog 305](../backlog/305-deploy-request-looser-than-credentials.md)).
 
 `apiKeys.provision` takes an expiry at most 30 days ahead, as every other issuance does; a later one or none is refused
 (400), not clamped, so the caller sees what it gets. The provisioning key is exempt: the local stack's machine key is
@@ -382,12 +401,12 @@ could read. A request of such a kind is refused when it is created (400 naming t
 
 Every mutation of Control's router and of IAM's `/admin/rpc` is either gated by a category or listed as exempt with its
 reason. A table test over both routers fails when a new mutation is neither. IAM's table gates every issuing mutation,
-a grant to a key and the change of a role or policy by `credentials` (§8), a grant beside its `grants`, and lists the
+a grant to a key or to a key's issuer, re-enabling a principal and the change of a role or policy by `credentials` (§8), a grant beside its `grants`, and lists the
 provisioning key's two exceptions with their reason, and it checks that each gated one refuses a machine `iam.admin`
 key under `person`. No mode applies to the installation's own
 resources, which keep their rule: namespaces and the mail gate (`namespace.manage` and `mail.manage`, global, which no
 command-line preset carries), and IAM's named policies and an application's return origins (`iam.admin`), save that a
-machine caller's edit of a policy meets `credentials` (§8).
+machine caller's creation or edit of a policy meets `credentials` (§8).
 
 ### Rollout
 
@@ -404,8 +423,10 @@ environment's mode: the window fails closed, and no operator step is needed. One
 so convergence takes one pass per 200 environments; an environment IAM keeps refusing, or answers at a later revision
 than Control's, is not recorded as taken and takes a slot on every pass until it converges. Both upgrade workflows
 deploy IAM before Control, but IAM can still be older than Control: rolled back alone, or with Control deployed alone.
-Such an IAM refuses the `credentials` field as unknown; Control then writes the grant gate without it, logs one line,
-and records nothing, so the pass writes the mode once IAM is upgraded (ADR-0062). An installation without the provisioning
+Such an IAM refuses the `credentials` field as unknown; Control then writes the grant gates without it, logs one line
+per pass, and records nothing, so the pass writes the mode once IAM is upgraded (ADR-0062). After an IAM rollback and
+re-upgrade, a tightening made while IAM was older is missing from IAM, which reads the mode it held before, until the
+next pass writes it. An installation without the provisioning
 key cannot write the mirror, and its IAM keeps reading `person`; an installation with IAM and no Control has the operator
 write it with the provisioning key ([`security-deployment.md`](../reference/security-deployment.md)). From then on, `apiKeys.provision` takes an expiry at
 most 30 days ahead; existing keys keep theirs.

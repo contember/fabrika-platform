@@ -46,9 +46,15 @@ const REGISTRATION: { target: ProviderEnvelope; artifact: ProviderEnvelope } = {
 const PROVIDER: ControlProvider = { id: 'harbor', deploy: () => Promise.resolve({ state: 'succeeded' }) }
 /**
  * IAM released before the `credentials` mirror, served by the real RPC dispatcher: its `grantApproval.set` input is
- * strict and has no `credentials`, and it answers the grant gate it holds.
+ * strict and has no `credentials`, and it answers the grant gate it holds. `pass()` is a new port over the same IAM, as
+ * each maintenance pass builds one; `requests` counts every call that reached IAM, refused ones included.
  */
-function olderIam(): { readonly port: GrantApprovalPort; readonly writes: unknown[] } {
+function olderIam(): {
+	readonly port: GrantApprovalPort
+	pass(): GrantApprovalPort
+	readonly writes: unknown[]
+	readonly requests: { count: number }
+} {
 	const t = initRpc<Record<string, never>>()
 	const held = new Map<string, { required: boolean; revision: number }>()
 	const writes: unknown[] = []
@@ -65,12 +71,17 @@ function olderIam(): { readonly port: GrantApprovalPort; readonly writes: unknow
 				}),
 		}),
 	})
-	const port = grantApprovalPort(iamProvisioningClient({
-		origin: IAM_ORIGIN,
-		provisioningKey: PROVISIONING_KEY,
-		fetch: (input, init) => dispatchRpcRequest({ router, ctx: {}, request: new Request(input, init) }),
-	}))
-	return { port, writes }
+	const requests = { count: 0 }
+	const pass = () =>
+		grantApprovalPort(iamProvisioningClient({
+			origin: IAM_ORIGIN,
+			provisioningKey: PROVISIONING_KEY,
+			fetch: (input, init) => {
+				requests.count += 1
+				return dispatchRpcRequest({ router, ctx: {}, request: new Request(input, init) })
+			},
+		}))
+	return { port: pass(), pass, writes, requests }
 }
 
 /** IAM down: every write of the mirror fails. */
@@ -262,7 +273,10 @@ for (const backend of backends) {
 				registerAppUseCase(registry(port), { id, repoUrl: `https://github.com/acme/${id}`, env, ...REGISTRATION })
 			const putEnv = (appId: string, env: string, port?: GrantApprovalPort | null) => putAppEnvUseCase(registry(port), appId, env, REGISTRATION)
 
-			return { db, grantApproval, machine, provision, provisionAtControl, setCredentials, converge, adaToken, knownToIam, register, putEnv }
+			/** The `credentials` mode IAM holds of each environment. */
+			const iamModes = () => opened.iam.grantRequests.credentialsModes()
+
+			return { db, grantApproval, machine, provision, provisionAtControl, setCredentials, converge, adaToken, knownToIam, register, putEnv, iamModes }
 		}
 
 		test('after an upgrade IAM refuses the machine key everywhere until the maintenance pass mirrors each mode', async () => {
@@ -294,9 +308,12 @@ for (const backend of backends) {
 				expect(older.writes.length).toBeGreaterThan(0)
 				expect(older.writes.every((write) => typeof write === 'object' && write !== null && !('credentials' in write))).toBe(true)
 				// The pass writes every environment the same way and records none, so a pass after IAM's upgrade writes them.
-				expect(await w.converge(older.port)).toEqual({ written: 0, failed: 2 })
-				expect(await w.converge(older.port)).toEqual({ written: 0, failed: 2 })
-				expect(warn.mock.calls.length).toBeGreaterThan(0)
+				// It finds the older IAM once: one refused call and one line per pass, then one call per environment.
+				for (let pass = 0; pass < 2; pass += 1) {
+					const [requests, lines] = [older.requests.count, warn.mock.calls.length]
+					expect(await w.converge(older.pass())).toEqual({ written: 0, failed: 2 })
+					expect([older.requests.count - requests, warn.mock.calls.length - lines]).toEqual([3, 1])
+				}
 				expect(warn.mock.calls.every((call) => call.length === 1 && typeof call[0] === 'string')).toBe(true)
 			} finally {
 				warn.mockRestore()
@@ -305,19 +322,22 @@ for (const backend of backends) {
 			expect(await w.provision(w.machine, APP)).toBe(403)
 		})
 
-		test('a new environment reaches IAM before its row: a registered or put `prod` is judged at once', async () => {
+		test('an application without `prod` counts it as `person`, and a registered or put `prod` reaches IAM before its row', async () => {
 			const w = await world()
-			// Registration: IAM knows shop@stage as `off`; Control registers shop at prod.
+			// IAM knows shop@stage as `off` and no shop@prod: `prod` starts protected, so a machine caller issues no key
+			// reading every environment of shop, before or after Control registers it there.
 			await w.knownToIam('shop@stage')
-			expect(await w.provisionAtControl(w.machine, 'shop')).toBe(200)
+			expect(await w.provisionAtControl(w.machine, 'shop')).toBe(403)
 			await w.register('shop', 'prod')
+			expect((await w.iamModes()).get('shop@prod')).toBe('person')
 			expect(await w.provisionAtControl(w.machine, 'shop')).toBe(403)
 
 			// `apps.environments.put` that creates one.
 			await w.knownToIam('blog@stage')
 			await w.register('blog', 'stage')
-			expect(await w.provisionAtControl(w.machine, 'blog')).toBe(200)
+			expect(await w.provisionAtControl(w.machine, 'blog')).toBe(403)
 			await w.putEnv('blog', 'prod')
+			expect((await w.iamModes()).get('blog@prod')).toBe('person')
 			expect(await w.provisionAtControl(w.machine, 'blog')).toBe(403)
 		})
 
@@ -330,6 +350,49 @@ for (const backend of backends) {
 			expect(await w.db.registry.getAppEnv('down', 'prod')).toBeNull()
 			// The maintenance pass stays the backstop for the one that was created.
 			expect(await w.converge()).toMatchObject({ failed: 0 })
+		})
+
+		test('IAM holding a looser mode at a later revision: an environment that starts protected is not created (503)', async () => {
+			const w = await world()
+			// A later revision IAM keeps, as a stale write of a deleted environment of the same id would leave it.
+			await w.grantApproval.set('shop@prod', { grants: false, credentials: 'off' }, 99)
+			await expect(w.register('shop', 'prod')).rejects.toMatchObject({ httpStatus: 503, message: expect.stringContaining('a later revision') })
+			expect(await w.db.registry.getApp('shop')).toBeNull()
+
+			await w.register('blog', 'stage')
+			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'off' }, 99)
+			await expect(w.putEnv('blog', 'prod')).rejects.toMatchObject({ httpStatus: 503 })
+			expect(await w.db.registry.getAppEnv('blog', 'prod')).toBeNull()
+
+			// One IAM holds as strictly as it starts is created.
+			await w.grantApproval.set('blog@prod', { grants: false, credentials: 'person' }, 100)
+			expect((await w.putEnv('blog', 'prod')).env).toBe('prod')
+		})
+
+		test('an older IAM, which answers no mode, does not fail a new environment that starts at `refuse`', async () => {
+			const w = await world()
+			// A deleted environment leaves its protection, so one created again at its coordinates starts at `refuse`.
+			await w.setCredentials('refuse')
+			expect(await w.db.registry.deleteAppEnv('notes', 'prod')).toBe(true)
+			const older = olderIam()
+			const warn = spyOn(console, 'warn').mockImplementation(() => {})
+			try {
+				expect((await w.putEnv('notes', 'prod', older.port)).env).toBe('prod')
+			} finally {
+				warn.mockRestore()
+			}
+			// The grant gate reached IAM; the maintenance pass writes the mode once IAM takes it.
+			expect(older.writes).toContainEqual(expect.objectContaining({ app: APP }))
+		})
+
+		test('a looser mode IAM answers at the revision Control sent is refused (503) without claiming a later revision', async () => {
+			const w = await world()
+			const looser: GrantApprovalPort = { set: (_app, _gates, revision) => Promise.resolve({ revision, credentials: 'off' }) }
+			const refused = await w.register('shop', 'prod', looser).then(() => null, (cause: unknown) => cause)
+			expect(refused).toMatchObject({ httpStatus: 503 })
+			const message = refused instanceof Error ? refused.message : ''
+			expect([message.includes('looser'), message.includes('later revision')]).toEqual([true, false])
+			expect(await w.db.registry.getApp('shop')).toBeNull()
 		})
 
 		test('a protection change carries the mode to IAM, and a person in the console issues whatever it is', async () => {

@@ -79,6 +79,9 @@ export async function createPolicyUseCase(c: AdminContext, input: CreatePolicyIn
 	if (existing) {
 		return fail(409, `a role with key '${key}' already exists`)
 	}
+	// A grant names a role by key alone, so a grant left naming a deleted role holds whatever is created under its key:
+	// a machine caller meets the application's `credentials` mode here as on an update (ADR-0083 §8).
+	await requireCredentialsMode(c, [{ app, scope: null }], 'role')
 	const row = await c.services.repositories.appSchema.upsertRole(
 		{ app, roleKey: key, name: parsed.name, description: parsed.description, permissions: parsed.permissions, origin: 'custom' },
 		adminEvent(c, {

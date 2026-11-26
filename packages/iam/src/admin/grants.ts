@@ -1,19 +1,22 @@
+import { type PermissionEntry, permits } from '@fabrika/auth-core'
 import {
 	type CreateGrantRequest,
 	type GrantApprovalRequestRef,
 	type GrantChangeResponse,
 	type GrantDto,
+	IAM_ACTIONS,
+	IAM_APP_ID,
 	type OkResponse,
 	type PendingGrantChange,
 	type UpdateGrantInput,
 } from '@fabrika/iam-contract'
 import { contractGrantProblem, externalGrantProblem } from '../contract-rules'
-import { type KeyReach } from '../credentials-gate'
+import { issuedKeysReach, type IssuerCover, type KeyReach } from '../credentials-gate'
 import { ExternalGrantError, type GrantRow, type PrincipalRow } from '../db'
 import { parseStoredPermissions } from '../stored-permissions'
 import { type AdminContext, adminEvent, fail, requireCredentialsMode } from './context'
 import { type GrantChangeRequest, grantsWait, requestGrantChange } from './grant-requests'
-import { appField, grantIdOf, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } from './grant-support'
+import { appField, grantIdOf, grantPatterns, parseRoleOrInline, parseScope, RoleKnownCache, toGrantDto } from './grant-support'
 import { requireGrantablePrincipal, requireManagedApp } from './user-admin'
 
 export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequest): Promise<GrantChangeResponse> {
@@ -56,7 +59,7 @@ export async function createGrantUseCase(c: AdminContext, input: CreateGrantRequ
 		return fail(409, external)
 	}
 	const { scopeType, scopeValues } = scope
-	await requireKeyGrantMode(c, principal, app, scopeType, scopeValues)
+	await requireKeyGrantMode(c, principal, app, roleOrInline, scopeType, scopeValues)
 	const values = { principalId, app, scopeType, grantedBy: c.admin.id, expiresAt }
 	const roleKey = roleOrInline.roleKey
 	if (app !== null && await grantsWait(c.services, app)) {
@@ -237,7 +240,7 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 		? 'This user already has that role in this scope. Edit the existing access instead.'
 		: 'This key already has that role in this scope. Edit the existing grant instead.'
 	if (await duplicate()) return fail(409, held)
-	await requireKeyGrantMode(c, principal, grant.app, scopeType, scopeValues)
+	await requireKeyGrantMode(c, principal, grant.app, authorization, scopeType, scopeValues)
 	if (grant.app !== null && await grantsWait(c.services, grant.app)) {
 		return await pendingChange(c, {
 			app: grant.app,
@@ -301,21 +304,44 @@ export async function updateGrantUseCase(c: AdminContext, input: UpdateGrantInpu
 }
 
 /**
- * A grant to a key widens what a live credential holds, so a machine caller's grant meets the `credentials` mode of where
- * it acts, as issuing that key would (ADR-0083 §8), before it applies or waits as a grant request.
+ * A grant to a key widens what a live credential holds, and a grant to any principal widens what the keys it issued for
+ * others hold, each no more than its issuer covers. So a machine caller's grant meets the `credentials` mode of where
+ * either acts, as issuing that key would (ADR-0083 §8), before it applies or waits as a grant request.
  */
 async function requireKeyGrantMode(
 	c: AdminContext,
-	principal: Pick<PrincipalRow, 'type'>,
+	principal: Pick<PrincipalRow, 'id' | 'type'>,
 	app: string | null,
+	grant: { readonly roleKey: string | null; readonly permissions: readonly string[] | null },
 	scopeType: string | null,
 	scopeValues: readonly string[] | null,
 ): Promise<void> {
-	if (principal.type !== 'service') return
-	const reach: KeyReach[] = scopeType === null || scopeValues === null
-		? [{ app, scope: null }]
-		: scopeValues.map((value) => ({ app, scope: { type: scopeType, value } }))
-	await requireCredentialsMode(c, reach, 'grant')
+	if (principal.type === 'service') {
+		const reach: KeyReach[] = scopeType === null || scopeValues === null
+			? [{ app, scope: null }]
+			: scopeValues.map((value) => ({ app, scope: { type: scopeType, value } }))
+		await requireCredentialsMode(c, reach, 'grant')
+	}
+	const cover = await issuerCoverOf(c, app, grant, scopeType)
+	if (cover !== null) await requireCredentialsMode(c, await issuedKeysReach(c.services, principal.id, cover), 'cover')
+}
+
+/**
+ * Which keys of its holder's a grant at `app` widens (`issuerCoverage`, `issuerAuthority`): a cross-app grant every one,
+ * a grant at an application what they hold there, and at IAM only a global grant of `iam.admin`, under which a key bound
+ * to another principal keeps its whole set.
+ */
+async function issuerCoverOf(
+	c: AdminContext,
+	app: string | null,
+	grant: { readonly roleKey: string | null; readonly permissions: readonly string[] | null },
+	scopeType: string | null,
+): Promise<IssuerCover | null> {
+	if (app === null) return { kind: 'all' }
+	if (app !== IAM_APP_ID) return { kind: 'app', app }
+	if (scopeType !== null) return null
+	const entries: PermissionEntry[] = (await grantPatterns(c, app, grant)).map((action) => ({ action, scope: null, source: 'grant' }))
+	return permits(entries, IAM_ACTIONS.ADMIN) ? { kind: 'admin' } : null
 }
 
 /** The sorted values of a grant's rows; null for a global grant. */

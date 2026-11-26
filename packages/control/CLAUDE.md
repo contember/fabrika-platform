@@ -799,13 +799,16 @@ other environment, before the provider prepares anything, and the write maps a r
   after it. A failed Control write never reverts IAM (the caller may have lost the lease); the next protection change
   repairs it, and IAM ignores an older revision. A new environment's gates reach IAM before its row
   (`writeNewEnvironmentGates`, from `apps.register` and an `apps.environments.put` that creates one), as it starts
-  (`getStartingProtection`); one that starts protected is not created when IAM does not take them (503). The maintenance
+  (`getStartingProtection`); one that starts protected is not created when IAM does not take them, or answers a looser
+  `credentials` mode it holds, a later revision kept (503). An IAM older than the mirror answers no mode, holds none and
+  reads every environment as `person`, so its answer is not compared. The maintenance
   pass (`convergeIamGates`, `src/approval/iam-mirror.ts`) writes up to 200 environments whose `iam_gate_mirrors` row is
   missing or names another revision, which converges an upgraded installation, a new environment whose write failed and
   a failed write after Control's row. It records an environment only when IAM answers the revision and the mode it
   sent; `GrantApprovalPort.set` parses IAM's answer. An IAM older than the mirror refuses `credentials` as an unknown
-  key: the port writes the grant gate again without it and logs one line, and its answer carries no mode, so nothing is
-  recorded and the pass writes the mode once IAM takes it.
+  key: the port writes the grant gate again without it, and from then on writes without it and logs one line (once per
+  port, which the pass builds once per pass), and its answer carries no mode, so nothing is recorded and the pass writes
+  the mode once IAM takes it.
 - **Only a person in the console approves (`src/approval/api.ts`).** `approvals.complete` and
   `apps.environments.protect` need `access.approve` at the coordinates (outside `deploy.*`) from a `user`
   principal with no OAuth claims, no link claims and no `Authorization` header (`src/approval/human.ts`); the

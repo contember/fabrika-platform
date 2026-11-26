@@ -175,4 +175,6 @@ rest of custom domains, a client address on a dedicated IPv4, a release and reco
 - [302](302-scope-value-keys-pile-up-unbounded.md): Each scope-value call writes a 60-second key that is never pruned, and nothing bounds how often an administrator asks.
 - [303](303-approval-request-follow-and-exactness-edges.md): Approval requests after D8: follows that misread an interrupted put or suspension, per-input edges, an app-wide write before `prod` exists, and coverage-table gaps.
 - [304](304-a-requested-key-can-outlive-its-request.md): A key an agent asked for can stay valid unheld after a mid-call lease expiry or a used-up delivery; IAM never clears its encrypted copy; three paths untested.
+- [305](305-deploy-request-looser-than-credentials.md): A deploy hands out workload and connector keys with the provisioning key, so a `credentials` mode stricter than `deploy-request` does not hold against whoever may deploy.
+- [306](306-an-iam-policy-edit-can-restore-an-issuers-cover.md): A machine's edit of an IAM-level policy that gives an issuer `iam.admin` again restores what the issuer's keys hold, past the `credentials` mode.
 - [10](10-app-scope-secrets-on-zerops.md) — Control refuses an `app`-scoped secret on Zerops today; record that as the decision, or replicate per service.

@@ -26,14 +26,16 @@ const INSTALLATION = 'installation administration keeps its rule (ADR-0083 §9)'
 
 const IAM: Readonly<Record<string, Judged>> = {
 	'principals.invite': { exempt: INSTALLATION },
-	'principals.update': { exempt: INSTALLATION },
+	// Re-enabling a disabled principal gives back what its keys hold (a workload's at its own environment) and what the keys
+	// it issued for others hold, so a machine caller meets the mode of where they act; disabling narrows.
+	'principals.update': { category: 'credentials' },
 	'principals.promote': { exempt: INSTALLATION },
 	'sessions.revoke': { exempt: NARROWS },
 	'sessions.revokeAll': { exempt: NARROWS },
 	'passwords.issueEnrollment': { exempt: INSTALLATION },
 	'passwords.issueReset': { exempt: INSTALLATION },
 	'passwords.disable': { exempt: NARROWS },
-	// A machine caller's grant to a key meets `credentials` before it applies or waits.
+	// A machine caller's grant to a key, or to a key's issuer, meets `credentials` before it applies or waits.
 	'grants.create': { category: 'grants', also: 'credentials' },
 	'grants.update': { category: 'grants', also: 'credentials' },
 	'grants.delete': { category: 'grants' },
@@ -42,9 +44,10 @@ const IAM: Readonly<Record<string, Judged>> = {
 	'scopeValues.list': { exempt: 'a read served as a mutation; writes nothing' },
 	'apps.setReturnOrigins': { exempt: `where IAM returns an application's sign-in: ${INSTALLATION}` },
 	'connections.revoke': { exempt: NARROWS },
-	'policies.create': { exempt: `a named policy under \`iam.admin\`: ${INSTALLATION}` },
 	// A named policy keeps the installation's rule for a person; its holders gain what it gains, keys among them, so a
-	// machine caller meets the application's `credentials` (ADR-0083 §8).
+	// machine caller meets the application's `credentials` (ADR-0083 §8). A grant names a role by key alone, so a policy
+	// created under a deleted role's key reaches every key still naming it.
+	'policies.create': { category: 'credentials' },
 	'policies.update': { category: 'credentials' },
 	'policies.delete': { exempt: `a named policy under \`iam.admin\`: ${INSTALLATION}` },
 	'apiKeys.provision': { category: 'credentials' },
@@ -165,6 +168,11 @@ describe('every IAM administration mutation is judged by an approval category or
 			JSON.parse((await send(provisioningKey, '/admin/api-keys', { label: 'export', type: 'service', app: APP, roleKey: 'support' })).message)
 				.principalId,
 		)
+		const dormant = String(
+			JSON.parse((await send(provisioningKey, '/admin/api-keys', { label: 'dormant', type: 'service', app: APP, roleKey: 'support' })).message)
+				.principalId,
+		)
+		expect((await rpc(provisioningKey, 'principals.update', { principalId: dormant, disabled: true })).status).toBe(200)
 		const [existingGrant] = await h.repositories.grants.listGrants(existing)
 		if (existingGrant === undefined) throw new Error('the key holds no grant')
 		const policy = { key: 'reviewer', name: 'Reviewer', permissions: ['notes.read'] }
@@ -191,6 +199,8 @@ describe('every IAM administration mutation is judged by an approval category or
 			'grants.create': { principalId: existing, app: APP, roleKey: 'staff' },
 			'grants.update': { id: grantIdOf(existingGrant), roleKey: 'staff' },
 			'policies.update': { app: APP, key: policy.key, policy: { name: policy.name, permissions: ['notes.read', 'notes.admin'] } },
+			'policies.create': { app: APP, policy: { key: 'auditor', name: 'Auditor', permissions: ['notes.read'] } },
+			'principals.update': { principalId: dormant, disabled: false },
 		}
 		const credentials = MUTATIONS.filter((method) => meets(IAM[method], 'credentials'))
 		const admitted: string[] = []
